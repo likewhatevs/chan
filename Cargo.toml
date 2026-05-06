@@ -1,0 +1,37 @@
+[package]
+name = "chan-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0"
+description = "Filesystem, search, and graph primitives for chan-writer drives"
+repository = "https://github.com/chan-writer/chan-core"
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5"
+fs4 = { version = "0.9", features = ["sync"] }
+notify = { version = "6", default-features = false, features = ["macos_fsevent"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tantivy = { version = "0.22", optional = true }
+tempfile = "3"
+thiserror = "1"
+toml = "0.8"
+tracing = "0.1"
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+default = ["search"]
+# Search uses tantivy; turn off for builds that only need FS + graph
+# (mobile minimal builds, embedded clients).
+search = ["dep:tantivy"]
+
+[lib]
+name = "chan_core"
+crate-type = ["lib"]
