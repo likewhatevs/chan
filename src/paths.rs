@@ -123,6 +123,121 @@ pub fn drive_paths(drive_root: &Path) -> DrivePaths {
     }
 }
 
+/// One cloud-storage provider's root the first-launch picker can
+/// suggest as a chan drive location. The `suggested_root` is the
+/// concrete directory chan would land its drive in (provider root
+/// joined with "Chan" by convention so iOS / Android Files-app
+/// users see a recognizable folder name across devices).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetectedCloud {
+    /// User-facing label for the picker (e.g. "iCloud Drive",
+    /// "Google Drive (alex@example.com)", "Dropbox").
+    pub provider: String,
+    /// Absolute path to the provider's mount point on this OS.
+    pub provider_root: PathBuf,
+    /// Recommended drive location: provider_root joined with
+    /// "Chan". Not created here; the picker decides whether to
+    /// auto-init or prompt.
+    pub suggested_root: PathBuf,
+}
+
+/// Probe the OS for known cloud-storage mount points and return
+/// the ones that exist. Used by the first-launch drive picker so
+/// users on iCloud / Google Drive / Dropbox can land their drive
+/// somewhere syncing across devices instead of in a local-only
+/// `~/Documents/Chan`.
+///
+/// Per-OS coverage:
+///
+///   - macOS: iCloud Drive
+///     (`~/Library/Mobile Documents/com~apple~CloudDocs`),
+///     Google Drive
+///     (`~/Library/CloudStorage/GoogleDrive-*/My Drive`, one
+///     entry per signed-in account), Dropbox (`~/Dropbox`).
+///   - Windows: iCloud Drive (`%USERPROFILE%\iCloudDrive`),
+///     Google Drive (`G:\My Drive`, the default mapped drive),
+///     Dropbox (`%USERPROFILE%\Dropbox`).
+///   - Linux: Dropbox (`~/Dropbox`); iCloud isn't available and
+///     Google Drive on Linux ships through third-party tools
+///     (Insync, rclone) with user-chosen paths chan can't predict.
+///   - iOS / Android: empty list. The platform's own document
+///     picker handles cloud-storage discovery.
+///
+/// Empty list = no cloud drives detected; the picker should fall
+/// back to "Local only" with `default_drive_root()`.
+pub fn detected_cloud_drives() -> Vec<DetectedCloud> {
+    let mut out = Vec::new();
+    let Some(home) = dirs::home_dir() else {
+        return out;
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        let icloud = home
+            .join("Library")
+            .join("Mobile Documents")
+            .join("com~apple~CloudDocs");
+        if icloud.is_dir() {
+            out.push(DetectedCloud {
+                provider: "iCloud Drive".into(),
+                suggested_root: icloud.join("Chan"),
+                provider_root: icloud,
+            });
+        }
+        // Google Drive for Desktop mounts each signed-in account
+        // under ~/Library/CloudStorage/GoogleDrive-<email>/My Drive.
+        // Multiple accounts -> multiple picker entries.
+        let cloud_storage = home.join("Library").join("CloudStorage");
+        if let Ok(rd) = std::fs::read_dir(&cloud_storage) {
+            for entry in rd.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if let Some(rest) = name.strip_prefix("GoogleDrive-") {
+                    let my_drive = entry.path().join("My Drive");
+                    if my_drive.is_dir() {
+                        out.push(DetectedCloud {
+                            provider: format!("Google Drive ({rest})"),
+                            suggested_root: my_drive.join("Chan"),
+                            provider_root: my_drive,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let icloud = home.join("iCloudDrive");
+        if icloud.is_dir() {
+            out.push(DetectedCloud {
+                provider: "iCloud Drive".into(),
+                suggested_root: icloud.join("Chan"),
+                provider_root: icloud,
+            });
+        }
+        // Default G:\ mapping for Google Drive for Desktop.
+        let g_my_drive = PathBuf::from("G:\\My Drive");
+        if g_my_drive.is_dir() {
+            out.push(DetectedCloud {
+                provider: "Google Drive".into(),
+                suggested_root: g_my_drive.join("Chan"),
+                provider_root: g_my_drive,
+            });
+        }
+    }
+
+    let dropbox = home.join("Dropbox");
+    if dropbox.is_dir() {
+        out.push(DetectedCloud {
+            provider: "Dropbox".into(),
+            suggested_root: dropbox.join("Chan"),
+            provider_root: dropbox,
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,5 +273,25 @@ mod tests {
             assert!(path.to_string_lossy().contains(&key));
         }
         assert!(p.graph_db.to_string_lossy().contains(&key));
+    }
+
+    #[test]
+    fn detected_cloud_drives_returns_a_list() {
+        // Smoke test: just exercises the probe paths. Result depends
+        // on the test machine's actual cloud-drive setup so we only
+        // assert structural invariants (each entry has a non-empty
+        // provider and a suggested_root that ends in "Chan" sitting
+        // directly under provider_root).
+        let drives = detected_cloud_drives();
+        for d in &drives {
+            assert!(!d.provider.is_empty());
+            assert_eq!(
+                d.suggested_root.file_name().and_then(|s| s.to_str()),
+                Some("Chan"),
+                "suggested_root should end in Chan: {:?}",
+                d.suggested_root,
+            );
+            assert_eq!(d.suggested_root.parent(), Some(d.provider_root.as_path()));
+        }
     }
 }
