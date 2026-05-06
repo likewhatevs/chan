@@ -89,51 +89,82 @@ impl Drive {
     }
 
     // ---- filesystem primitives (path-based, rel-only) ----
+    //
+    // Every entry point here goes through `resolve_safe_strict`
+    // (lexical sandbox + canonical-form check that the deepest
+    // existing ancestor stays under the drive root). Reads
+    // additionally call `ensure_regular_file` (lstat-based) so we
+    // never block on a FIFO, drain a device, or follow a symlink
+    // off the drive. Writes that target an existing path do the
+    // same check; writes to a fresh path skip it because there's
+    // nothing to inspect yet (the strict resolve already guarded
+    // the parent).
 
     /// Read raw bytes from a file relative to the drive root. No
     /// editable-text gate: callers like image previews need binary
-    /// reads.
+    /// reads. The path must resolve to a regular file under the
+    /// drive root; symlinks, FIFOs, sockets, and devices are
+    /// rejected.
     pub fn read(&self, rel: &str) -> Result<Vec<u8>> {
-        let abs = fs_ops::resolve_safe(self.root(), rel)?;
+        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
+        fs_ops::ensure_regular_file(&abs)?;
         Ok(std::fs::read(&abs)?)
     }
 
     /// Read UTF-8 text. Errors if the file isn't on the editable-
-    /// text whitelist.
+    /// text whitelist or isn't a regular file.
     pub fn read_text(&self, rel: &str) -> Result<String> {
         if !fs_ops::is_editable_text(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
-        let abs = fs_ops::resolve_safe(self.root(), rel)?;
+        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
+        fs_ops::ensure_regular_file(&abs)?;
         Ok(std::fs::read_to_string(&abs)?)
     }
 
     /// Atomically write UTF-8 text. Editable-text gate applies.
+    /// Refuses to write through a path whose final component is a
+    /// non-regular file (symlink, device, FIFO, socket); the user
+    /// must remove the existing entry first if they intend to
+    /// replace it.
     pub fn write_text(&self, rel: &str, content: &str) -> Result<()> {
         if !fs_ops::is_editable_text(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
-        let abs = fs_ops::resolve_safe(self.root(), rel)?;
+        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
+        ensure_writable(&abs)?;
         fs_ops::atomic_write(&abs, content.as_bytes())
     }
 
     /// Atomically write raw bytes. NOT gated by editable-text;
     /// used by attachments and the future media browser. Callers
     /// that surface this to the editor must apply their own gate.
+    /// Same special-file refusal as `write_text`.
     pub fn write_bytes(&self, rel: &str, content: &[u8]) -> Result<()> {
-        let abs = fs_ops::resolve_safe(self.root(), rel)?;
+        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
+        ensure_writable(&abs)?;
         fs_ops::atomic_write(&abs, content)
     }
 
+    /// True iff the path resolves under the drive and refers to a
+    /// regular file. Matches the gate `read` / `read_text` apply,
+    /// so a `true` return is a strong signal that a read will
+    /// succeed.
     pub fn exists(&self, rel: &str) -> bool {
-        fs_ops::resolve_safe(self.root(), rel)
-            .map(|p| p.exists())
+        let Ok(abs) = fs_ops::resolve_safe_strict(self.root(), rel) else {
+            return false;
+        };
+        std::fs::symlink_metadata(&abs)
+            .map(|m| m.is_file() && !m.file_type().is_symlink())
             .unwrap_or(false)
     }
 
+    /// Stat the path using `lstat` semantics (so a symlink reports
+    /// as such, not as its target). Refuses paths that escape the
+    /// drive root through a mid-path symlink.
     pub fn stat(&self, rel: &str) -> Result<FileStat> {
-        let abs = fs_ops::resolve_safe(self.root(), rel)?;
-        let meta = std::fs::metadata(&abs)?;
+        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
+        let meta = std::fs::symlink_metadata(&abs)?;
         let mtime = meta
             .modified()
             .ok()
@@ -147,24 +178,35 @@ impl Drive {
     }
 
     /// One-level directory listing. Use `list_tree` for the
-    /// recursive variant.
+    /// recursive variant. Skips drive-internal noise (`.chan/`,
+    /// `.git/`) at the top level and drops non-regular non-dir
+    /// entries (symlinks, FIFOs, sockets, devices) at every level.
     pub fn list(&self, rel: &str) -> Result<Vec<DirEntry>> {
         let abs = if rel.is_empty() || rel == "." || rel == "/" {
             self.root().to_path_buf()
         } else {
-            fs_ops::resolve_safe(self.root(), rel)?
+            fs_ops::resolve_safe_strict(self.root(), rel)?
         };
         let mut out = Vec::new();
         for entry in std::fs::read_dir(&abs)? {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().into_owned();
-            // Filter at the top level of the drive only; deeper
-            // listings return whatever's there.
             if abs == self.root() && (name == ".chan" || name == ".git") {
                 continue;
             }
-            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            out.push(DirEntry { name, is_dir });
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            // Drop non-regular non-dir entries from the listing.
+            // We could instead surface them with a marker, but
+            // every consumer today treats them as junk.
+            if !(ft.is_dir() || (ft.is_file() && !ft.is_symlink())) {
+                continue;
+            }
+            out.push(DirEntry {
+                name,
+                is_dir: ft.is_dir(),
+            });
         }
         Ok(out)
     }
@@ -174,18 +216,24 @@ impl Drive {
     }
 
     pub fn create_dir(&self, rel: &str) -> Result<()> {
-        let abs = fs_ops::resolve_safe(self.root(), rel)?;
+        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
         std::fs::create_dir_all(&abs)?;
         Ok(())
     }
 
-    /// Remove a file or empty directory. For non-empty directory
-    /// removal, callers must walk and delete explicitly; chan-core
-    /// won't recursive-delete on behalf of the user (foot-gun guard).
+    /// Remove a file, symlink, or empty directory. Branches on
+    /// `lstat` so a symlink-to-directory removes the link itself
+    /// (via `remove_file`) rather than failing on `remove_dir`.
+    /// For non-empty directory removal, callers walk and delete
+    /// explicitly; chan-core won't recursive-delete on behalf of
+    /// the user (foot-gun guard).
     pub fn remove(&self, rel: &str) -> Result<()> {
-        let abs = fs_ops::resolve_safe(self.root(), rel)?;
-        let meta = std::fs::metadata(&abs)?;
-        if meta.is_dir() {
+        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
+        let meta = std::fs::symlink_metadata(&abs)?;
+        let ft = meta.file_type();
+        // `is_dir` here is from lstat: a real directory, not a
+        // symlink-to-dir. Symlinks always go through remove_file.
+        if ft.is_dir() {
             std::fs::remove_dir(&abs)?;
         } else {
             std::fs::remove_file(&abs)?;
@@ -194,8 +242,21 @@ impl Drive {
     }
 
     pub fn rename(&self, from: &str, to: &str) -> Result<()> {
-        let from_abs = fs_ops::resolve_safe(self.root(), from)?;
-        let to_abs = fs_ops::resolve_safe(self.root(), to)?;
+        let from_abs = fs_ops::resolve_safe_strict(self.root(), from)?;
+        let to_abs = fs_ops::resolve_safe_strict(self.root(), to)?;
+        // Source must exist as a regular file or directory; refuse
+        // to move a symlink or special file. (renaming a symlink
+        // is well-defined at the syscall level but not something
+        // the editor should ever do silently.)
+        let src_meta = std::fs::symlink_metadata(&from_abs)?;
+        let src_ft = src_meta.file_type();
+        if !(src_ft.is_dir() || (src_ft.is_file() && !src_ft.is_symlink())) {
+            return Err(ChanError::SpecialFile {
+                kind: fs_ops::describe_file_kind(&src_ft).to_string(),
+                path: from_abs,
+            });
+        }
+        ensure_writable(&to_abs)?;
         if let Some(parent) = to_abs.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -300,6 +361,29 @@ impl Drive {
     /// and `.git/` are filtered out.
     pub fn watch(self: &Arc<Self>, cb: Arc<dyn WatchCallback>) -> Result<WatchHandle> {
         WatchHandle::start(self.root(), cb)
+    }
+}
+
+/// Refuse to write at `abs` if its final component already exists
+/// as something other than a regular file (symlink, FIFO, socket,
+/// device, directory). Returning Ok when the path is missing is
+/// intentional: a fresh write is always safe; the strict resolve
+/// already vetted the parent.
+fn ensure_writable(abs: &std::path::Path) -> Result<()> {
+    match std::fs::symlink_metadata(abs) {
+        Ok(meta) => {
+            let ft = meta.file_type();
+            if ft.is_file() && !ft.is_symlink() {
+                Ok(())
+            } else {
+                Err(ChanError::SpecialFile {
+                    kind: fs_ops::describe_file_kind(&ft).to_string(),
+                    path: abs.to_path_buf(),
+                })
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(ChanError::Io(e.to_string())),
     }
 }
 
@@ -460,6 +544,99 @@ mod tests {
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         let err = lib.open_drive(root.path()).unwrap_err();
         assert!(matches!(err, ChanError::DriveLocked));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_text_rejects_symlink_target() {
+        use std::os::unix::fs::symlink;
+        let (_cfg, root, drive) = fixture();
+        std::fs::write(root.path().join("real.md"), "hi").unwrap();
+        symlink("real.md", root.path().join("alias.md")).unwrap();
+        let err = drive.read_text("alias.md").unwrap_err();
+        assert!(matches!(err, ChanError::SpecialFile { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_rejects_unix_socket() {
+        use std::os::unix::net::UnixListener;
+        let (_cfg, root, drive) = fixture();
+        let _l = UnixListener::bind(root.path().join("s")).unwrap();
+        let err = drive.read("s").unwrap_err();
+        assert!(matches!(err, ChanError::SpecialFile { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_text_refuses_to_clobber_symlink() {
+        use std::os::unix::fs::symlink;
+        let (_cfg, root, drive) = fixture();
+        std::fs::write(root.path().join("target.md"), "v1").unwrap();
+        symlink("target.md", root.path().join("today.md")).unwrap();
+        let err = drive.write_text("today.md", "v2").unwrap_err();
+        assert!(matches!(err, ChanError::SpecialFile { .. }));
+        // Both the symlink and its target are intact.
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("target.md")).unwrap(),
+            "v1"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_refuses_through_midpath_symlink_to_outside() {
+        use std::os::unix::fs::symlink;
+        let outside = TempDir::new().unwrap();
+        let (_cfg, root, drive) = fixture();
+        symlink(outside.path(), root.path().join("Backup")).unwrap();
+        let err = drive.write_text("Backup/today.md", "x").unwrap_err();
+        assert!(matches!(err, ChanError::SymlinkEscape(_)));
+        // The escape path was never written.
+        assert!(!outside.path().join("today.md").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_tree_drops_symlinks_and_sockets() {
+        use std::os::unix::fs::symlink;
+        use std::os::unix::net::UnixListener;
+        let (_cfg, root, drive) = fixture();
+        std::fs::write(root.path().join("note.md"), "hi").unwrap();
+        symlink("note.md", root.path().join("alias.md")).unwrap();
+        let _l = UnixListener::bind(root.path().join("sock")).unwrap();
+        let entries = drive.list_tree().unwrap();
+        let paths: Vec<_> = entries.iter().map(|e| e.path.clone()).collect();
+        assert!(paths.contains(&"note.md".to_string()));
+        assert!(!paths.iter().any(|p| p == "alias.md"));
+        assert!(!paths.iter().any(|p| p == "sock"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_on_symlink_drops_the_link_only() {
+        use std::os::unix::fs::symlink;
+        let (_cfg, root, drive) = fixture();
+        std::fs::write(root.path().join("real.md"), "hi").unwrap();
+        symlink("real.md", root.path().join("alias.md")).unwrap();
+        drive.remove("alias.md").unwrap();
+        // Target survives; only the link is gone.
+        assert!(root.path().join("real.md").exists());
+        assert!(root.path().join("alias.md").symlink_metadata().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stat_uses_lstat_for_symlinks() {
+        use std::os::unix::fs::symlink;
+        let (_cfg, root, drive) = fixture();
+        std::fs::create_dir(root.path().join("d")).unwrap();
+        symlink("d", root.path().join("link_to_dir")).unwrap();
+        // lstat reports the symlink itself, which is a symlink (not
+        // a directory). is_dir is false because symlink_metadata
+        // does not follow.
+        let st = drive.stat("link_to_dir").unwrap();
+        assert!(!st.is_dir);
     }
 
     #[test]

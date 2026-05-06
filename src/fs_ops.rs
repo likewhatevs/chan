@@ -2,11 +2,28 @@
 //   - atomic_write: tmpfile + fsync + rename. Used everywhere that
 //     touches a file on behalf of the user. We never want a half-
 //     written note.
-//   - resolve_safe: normalize a request path and reject anything
-//     that escapes the drive root via `..` etc.
+//   - resolve_safe / resolve_safe_strict: normalize a request path
+//     and reject anything that escapes the drive root via `..` or
+//     a symlink pointing outside.
+//   - ensure_regular_file: lstat-based gate that rejects symlinks,
+//     FIFOs, sockets, char/block devices, and directories before
+//     we open a path for read or write. Without it, opening a FIFO
+//     blocks waiting for a writer; opening /dev/zero never returns;
+//     opening through a symlink can escape the drive sandbox.
 //   - is_editable_text: extension whitelist gate.
 //   - walk_drive / list_tree: recursive listing scoped to the drive,
-//     skipping `.git/` and `.chan/` at any depth.
+//     skipping `.git/` and `.chan/` at any depth and dropping non-
+//     regular non-dir entries (symlinks, devices, sockets) so the
+//     UI tree and the indexer never see them.
+//
+// Symlink policy: we never traverse a symlink that points outside
+// the drive's canonical root. Symlinks that resolve back inside
+// the drive are also rejected by default for the read/write API
+// (final-component check via lstat) so a user's intentional
+// `today.md -> 2026-05-06.md` doesn't silently get clobbered by
+// atomic_write, and so reads always see real files. A future
+// follower-mode could relax this once we've thought through the
+// editor UX.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -35,11 +52,21 @@ pub fn is_editable_text(rel: &str) -> bool {
     matches!(ext.to_ascii_lowercase().as_str(), "md" | "txt")
 }
 
-/// Recursive walker rooted at `root` that skips `.git/` and `.chan/`
-/// at any depth. Per-entry errors are logged and skipped.
+/// Recursive walker rooted at `root` that:
+///   - skips `.git/` and `.chan/` at any depth;
+///   - never follows symlinks (`walkdir` default; we set it
+///     explicitly so a future maintainer cannot flip it without
+///     understanding what they're trading away);
+///   - drops non-regular non-directory entries (symlinks, FIFOs,
+///     sockets, char/block devices) at iteration time so the
+///     listing and the indexer only ever see real files and dirs.
+///
+/// Per-entry errors are logged and skipped.
 pub fn walk_drive(root: &Path) -> impl Iterator<Item = DirEntry> {
     WalkDir::new(root)
         .min_depth(1)
+        .follow_links(false)
+        .same_file_system(true)
         .into_iter()
         .filter_entry(|e| {
             let n = e.file_name().to_string_lossy();
@@ -51,6 +78,13 @@ pub fn walk_drive(root: &Path) -> impl Iterator<Item = DirEntry> {
                 tracing::warn!("walkdir error: {e}");
                 None
             }
+        })
+        .filter(|e| {
+            let ft = e.file_type();
+            // Keep dirs (we descend into them) and regular files.
+            // Drop symlinks (regardless of where they point),
+            // devices, sockets, and FIFOs.
+            ft.is_dir() || ft.is_file()
         })
 }
 
@@ -74,9 +108,112 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Human-readable name for a file type, used in error messages and
+/// log lines. Covers the unix-only special types behind cfg(unix);
+/// other platforms collapse them under "unknown" since std doesn't
+/// surface them through `FileType` directly.
+pub fn describe_file_kind(ft: &std::fs::FileType) -> &'static str {
+    if ft.is_dir() {
+        return "directory";
+    }
+    if ft.is_symlink() {
+        return "symlink";
+    }
+    if ft.is_file() {
+        return "regular";
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        if ft.is_fifo() {
+            return "fifo";
+        }
+        if ft.is_socket() {
+            return "socket";
+        }
+        if ft.is_char_device() {
+            return "char_device";
+        }
+        if ft.is_block_device() {
+            return "block_device";
+        }
+    }
+    "unknown"
+}
+
+/// Reject anything that isn't a regular file. Uses `lstat` semantics
+/// (`symlink_metadata`) so a symlink target's kind cannot mask the
+/// link itself. Call this before opening a path for read or write
+/// so the layer never:
+///
+///   - blocks forever on a FIFO with no writer;
+///   - drains `/dev/zero` or the like into a buffer;
+///   - sends ioctl-shaped reads to a char/block device;
+///   - follows a symlink and writes through it (atomic_write
+///     replaces the symlink itself, but `read_text` and friends
+///     would happily resolve through one).
+///
+/// Returns `Ok(())` when the path is a regular file. `ENOENT`
+/// propagates as a normal `Io` error so callers can distinguish
+/// "no file" from "wrong file type".
+pub fn ensure_regular_file(path: &Path) -> Result<()> {
+    let meta = std::fs::symlink_metadata(path)?;
+    let ft = meta.file_type();
+    if ft.is_file() && !ft.is_symlink() {
+        return Ok(());
+    }
+    Err(ChanError::SpecialFile {
+        kind: describe_file_kind(&ft).to_string(),
+        path: path.to_path_buf(),
+    })
+}
+
+/// Stricter resolve: lexical `resolve_safe` plus a canonical-form
+/// check that the deepest existing ancestor still lives under the
+/// canonical drive root. Catches the case where a mid-path
+/// component is a symlink pointing outside the drive (e.g. a user
+/// has `Backup -> /Volumes/external` inside their drive, and a
+/// caller asks to write `Backup/today.md`; we refuse).
+///
+/// For paths that don't exist yet (typical for create/write), we
+/// canonicalize the deepest existing ancestor instead of the leaf.
+/// This mirrors what the kernel will do when it walks the path
+/// during the actual open call.
+pub fn resolve_safe_strict(root: &Path, requested: &str) -> Result<PathBuf> {
+    let joined = resolve_safe(root, requested)?;
+    let root_canon = root
+        .canonicalize()
+        .map_err(|e| ChanError::Io(format!("canonicalize drive root: {e}")))?;
+
+    // Find the deepest ancestor of `joined` that already exists,
+    // canonicalize it, and check it stays under root_canon.
+    let mut probe: &Path = &joined;
+    let canon_ancestor = loop {
+        match probe.canonicalize() {
+            Ok(c) => break c,
+            Err(_) => match probe.parent() {
+                Some(p) => probe = p,
+                // We walked past the drive root without finding
+                // anything that canonicalizes; treat as escape.
+                None => return Err(ChanError::SymlinkEscape(joined)),
+            },
+        }
+    };
+
+    if !canon_ancestor.starts_with(&root_canon) {
+        return Err(ChanError::SymlinkEscape(joined));
+    }
+    Ok(joined)
+}
+
 /// Take an untrusted request path (`notes/x.md` or `../etc/passwd`)
 /// and join it onto the drive root, rejecting any traversal that
 /// escapes the root. Returns the absolute joined path.
+///
+/// This is a LEXICAL check only: it does not detect mid-path
+/// symlinks pointing outside the drive. Use `resolve_safe_strict`
+/// for that. We keep this as a fast-path for tests and for the
+/// strict variant's first leg.
 pub fn resolve_safe(root: &Path, requested: &str) -> Result<PathBuf> {
     let requested = requested.trim_start_matches('/');
     if requested.is_empty() {
@@ -204,5 +341,103 @@ mod tests {
         assert!(!is_editable_text("image.png"));
         assert!(!is_editable_text(""));
         assert!(!is_editable_text(".gitignore"));
+    }
+
+    #[test]
+    fn ensure_regular_file_accepts_regular() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("a.md");
+        std::fs::write(&p, b"hi").unwrap();
+        ensure_regular_file(&p).unwrap();
+    }
+
+    #[test]
+    fn ensure_regular_file_rejects_directory() {
+        let tmp = TempDir::new().unwrap();
+        let err = ensure_regular_file(tmp.path()).unwrap_err();
+        match err {
+            ChanError::SpecialFile { kind, .. } => assert_eq!(kind, "directory"),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_regular_file_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("real.md");
+        let link = tmp.path().join("link.md");
+        std::fs::write(&target, b"hi").unwrap();
+        symlink(&target, &link).unwrap();
+        let err = ensure_regular_file(&link).unwrap_err();
+        match err {
+            ChanError::SpecialFile { kind, .. } => assert_eq!(kind, "symlink"),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_regular_file_rejects_unix_socket() {
+        use std::os::unix::net::UnixListener;
+        let tmp = TempDir::new().unwrap();
+        let sock = tmp.path().join("s");
+        let _l = UnixListener::bind(&sock).unwrap();
+        let err = ensure_regular_file(&sock).unwrap_err();
+        match err {
+            ChanError::SpecialFile { kind, .. } => assert_eq!(kind, "socket"),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_safe_strict_rejects_midpath_symlink_to_outside() {
+        use std::os::unix::fs::symlink;
+        let outside = TempDir::new().unwrap();
+        let drive = TempDir::new().unwrap();
+        // Backup -> outside dir.
+        symlink(outside.path(), drive.path().join("Backup")).unwrap();
+        let err = resolve_safe_strict(drive.path(), "Backup/today.md").unwrap_err();
+        assert!(matches!(err, ChanError::SymlinkEscape(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_safe_strict_allows_symlink_pointing_inside() {
+        use std::os::unix::fs::symlink;
+        let drive = TempDir::new().unwrap();
+        std::fs::create_dir(drive.path().join("real")).unwrap();
+        // alias -> ./real, both under the drive. The strict resolve
+        // doesn't reject in-drive symlinks; the per-path lstat gate
+        // in Drive::read_text / write_text is what catches them as
+        // a final-component policy.
+        symlink("real", drive.path().join("alias")).unwrap();
+        resolve_safe_strict(drive.path(), "alias/x.md").unwrap();
+    }
+
+    #[test]
+    fn resolve_safe_strict_passes_normal_path() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join("notes")).unwrap();
+        resolve_safe_strict(tmp.path(), "notes/x.md").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walk_drive_drops_symlinks_and_special_files() {
+        use std::os::unix::fs::symlink;
+        use std::os::unix::net::UnixListener;
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("note.md"), b"hi").unwrap();
+        symlink("note.md", tmp.path().join("alias.md")).unwrap();
+        let _l = UnixListener::bind(tmp.path().join("sock")).unwrap();
+        let names: Vec<_> = walk_drive(tmp.path())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"note.md".to_string()));
+        assert!(!names.contains(&"alias.md".to_string()));
+        assert!(!names.contains(&"sock".to_string()));
     }
 }

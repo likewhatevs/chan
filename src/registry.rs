@@ -99,7 +99,7 @@ impl Registry {
             });
         }
         self.drives
-            .sort_by(|a, b| b.last_opened.cmp(&a.last_opened));
+            .sort_by_key(|d| std::cmp::Reverse(d.last_opened));
         self.drives
             .iter()
             .position(|d| {

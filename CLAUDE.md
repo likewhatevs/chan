@@ -165,6 +165,21 @@ as static dependencies.
   `fs_ops::atomic_write`. A crash mid-write produces zero state
   for the writer plus an intact previous version, never a torn
   file.
+- **Path resolution always strict**: every Drive entry point
+  uses `fs_ops::resolve_safe_strict` (lexical sandbox plus a
+  canonical-form check on the deepest existing ancestor). New
+  entry points must do the same; never call `resolve_safe` or
+  `Path::join` directly on user-supplied input. The strict
+  variant catches mid-path symlinks pointing outside the drive
+  (e.g. `Backup -> /Volumes/external` inside the drive) that
+  the lexical check would miss.
+- **lstat, never stat, on user paths**: read/write/stat/remove
+  all use `fs_ops::ensure_regular_file` or
+  `std::fs::symlink_metadata` so a symlink's target can't mask
+  the link itself. This is the gate that keeps the layer from
+  blocking on a FIFO with no writer, draining `/dev/zero`, or
+  silently traversing a symlink off the drive. New ops that
+  touch user content must apply the same gate.
 - **Editable-text gate**: `fs_ops::is_editable_text(rel)` is the
   single predicate for "the editor can safely round-trip this file
   through a UTF-8 buffer." `Drive::read_text` and `Drive::write_text`

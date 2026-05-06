@@ -170,7 +170,10 @@ Drive::rename(from: &str, to: &str) -> Result<()>
 
 All `rel` arguments are POSIX-style relative paths. Path traversal
 (`..`, absolute roots, Windows drive prefixes) is rejected via
-`fs_ops::resolve_safe`. The editable-text gate (`.md`, `.txt`)
+`fs_ops::resolve_safe`, then `fs_ops::resolve_safe_strict` adds a
+canonical-form check that the deepest existing ancestor stays
+under the canonical drive root (catches mid-path symlinks
+escaping the sandbox). The editable-text gate (`.md`, `.txt`)
 applies to `read_text` / `write_text` only; binary I/O routes
 around it because attachments and future media browsing need it.
 
@@ -178,6 +181,44 @@ around it because attachments and future media browsing need it.
 caller walks and deletes explicitly. This is a foot-gun guard:
 the editor never has reason to recursive-rm, and the LLM tool
 sandbox should not be able to either.
+
+### Symlink and special-file policy
+
+The Drive entry points enforce three rules so the layer never
+accidentally hangs on, follows, or mutates a non-regular file:
+
+1. **Mid-path symlinks**: rejected when their canonical target
+   leaves the drive. In-drive symlinks (`alias -> ./real`) pass
+   the path-resolve leg.
+2. **Final-component symlinks**: rejected by every read / write
+   op. Atomic rename would otherwise replace the link with a
+   regular file (silently breaking the user's intentional
+   alias), and reads would traverse the link off-disk. Users
+   who want to write through a symlink delete the link first.
+3. **FIFOs, sockets, char/block devices**: rejected by every op
+   via the `lstat`-based gate. These types can't appear in a
+   note workflow; if they do, it's either a misconfiguration or
+   abuse of the read/write API. Without the gate, opening a
+   FIFO blocks waiting for a writer; opening `/dev/zero` never
+   returns; opening a device sends ioctl-shaped reads.
+
+Walker invariants:
+
+- `walkdir::follow_links(false)` and `same_file_system(true)` so
+  symlink loops can't occur and a misregistered drive that
+  spans onto a network mount won't drag the indexer into it.
+- Iteration drops non-regular non-dir entries, so the UI tree
+  and the indexer only ever see real files and dirs.
+
+What's NOT closed today:
+
+- **TOCTOU between resolve and open**: a path that passes the
+  strict resolve could be swapped for a symlink before the
+  actual open syscall. Closing this requires `openat2(2)` with
+  `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS` (Linux 5.6+) or per-
+  component `O_NOFOLLOW` on platforms without openat2. Tracked
+  as future hardening; current threat model (single user,
+  single machine, no concurrent attacker) makes this acceptable.
 
 ### Drive (search and graph)
 

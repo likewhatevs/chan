@@ -16,6 +16,10 @@ pub enum ChanError {
     PathEscape,
     #[error("path is not editable text: {0}")]
     NotEditableText(String),
+    #[error("refusing to operate on non-regular file ({kind}): {path}")]
+    SpecialFile { kind: String, path: PathBuf },
+    #[error("path resolves through a symlink that escapes drive root: {0}")]
+    SymlinkEscape(PathBuf),
     #[error("drive not registered: {0}")]
     DriveNotRegistered(PathBuf),
     #[error("drive root does not exist: {0}")]
