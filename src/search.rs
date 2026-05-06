@@ -20,6 +20,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "search")]
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -34,9 +35,13 @@ use tantivy::{
     Index as TantivyIndex, IndexReader, ReloadPolicy, TantivyDocument, Term,
 };
 
-use crate::error::{ChanError, Result};
+#[cfg(feature = "search")]
+use crate::error::ChanError;
+use crate::error::Result;
 
+#[cfg(feature = "search")]
 const SCHEMA_VERSION: u32 = 2;
+#[cfg(feature = "search")]
 const VERSION_FILE: &str = ".schema_version";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -319,6 +324,7 @@ fn write_doc(w: &mut tantivy::IndexWriter<TantivyDocument>, f: &SchemaFields, d:
     let _ = w.add_document(td);
 }
 
+#[cfg(feature = "search")]
 fn path_under(path: &str, scope: &str) -> bool {
     let scope = scope.trim_matches('/');
     if scope.is_empty() {
@@ -332,6 +338,7 @@ fn path_under(path: &str, scope: &str) -> bool {
 /// nuke everything in `index_dir` (except the version file itself,
 /// which we rewrite). The next caller's tantivy open then sees a
 /// clean directory.
+#[cfg(feature = "search")]
 fn ensure_schema_version(index_dir: &Path) -> Result<()> {
     let vfile = index_dir.join(VERSION_FILE);
     let observed: Option<u32> = fs::read_to_string(&vfile)
@@ -397,7 +404,7 @@ impl Index {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "search"))]
 mod tests {
     use super::*;
     use tempfile::TempDir;
@@ -410,7 +417,6 @@ mod tests {
         assert!(path_under("notes/x.md", ""));
     }
 
-    #[cfg(feature = "search")]
     #[test]
     fn upsert_then_search_finds_doc() {
         let drive_root = TempDir::new().unwrap();
@@ -428,7 +434,6 @@ mod tests {
         assert_eq!(res.hits[0].path, "intro.md");
     }
 
-    #[cfg(feature = "search")]
     #[test]
     fn remove_drops_doc() {
         let drive_root = TempDir::new().unwrap();
@@ -446,7 +451,6 @@ mod tests {
         assert_eq!(res.hits.len(), 0);
     }
 
-    #[cfg(feature = "search")]
     #[test]
     fn scope_filters_results() {
         let drive_root = TempDir::new().unwrap();
@@ -473,7 +477,6 @@ mod tests {
         assert_eq!(res.hits[0].path, "recipes/pasta.md");
     }
 
-    #[cfg(feature = "search")]
     #[test]
     fn schema_version_wipe_rebuilds_clean() {
         let drive_root = TempDir::new().unwrap();
