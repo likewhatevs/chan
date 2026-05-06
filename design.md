@@ -13,18 +13,25 @@ crates/
   chan         the binary. Subcommands (add, list, remove, rename,
                serve, index, search). Embeds the frontend.
   chan-server  HTTP + WebSocket surface. Wraps chan-core in axum
-               routes.
-  chan-llm     LLM backends (Anthropic, Gemini, Ollama) + the
-               tool sandbox.
+               routes; consumes chan-llm for assistant routes.
 
 web/           Svelte frontend, embedded into the binary at build
                time. Wires in a follow-up commit.
 ```
 
-`chan-core` (filesystem, search, graph, drive registry) lives at
-the sibling repo `chan-writer/chan-core`. We depend on it as a
-path dep that assumes a sibling checkout layout. Switch to git
-or crates.io when the repos go public.
+Two sibling repos depended on as path deps:
+
+- `chan-writer/chan-core`: filesystem, search, graph, drive
+  registry.
+- `chan-writer/chan-llm`: LLM backends, embedded prompts, tool
+  sandbox, API-key resolution. Owns its own repo so native
+  shells (iOS / Android, future) can link it via uniffi
+  alongside chan-core, without dragging in this repo's axum /
+  tower / reqwest stack. chan-server is just one of two
+  consumer shapes.
+
+Both are pulled in via path deps that assume a sibling-checkout
+layout. Switch to git or crates.io when the repos go public.
 
 ## Crate responsibilities
 
@@ -44,14 +51,28 @@ watcher subscription. Depends on `chan-core` for filesystem +
 search + graph + watch primitives, and on `chan-llm` for the
 assistant routes.
 
-### chan-llm
+### chan-llm (sibling repo, not in this workspace)
 
-Owns: LLM backends (Anthropic, Gemini, Ollama), tool execution
-sandbox (`read_file`, `write_file`, `list_files`, `search_content`
-implemented against `chan-core`), key resolution (env / OS
-keychain via `keyring` crate / `~/.config/chan/api-keys.toml`).
+Owns: LLM backends (Anthropic, Gemini, Ollama), embedded prompts,
+the tool execution sandbox (`read_file`, `write_file`,
+`list_files`, `search_content` implemented against `chan-core`),
+and key resolution (env / OS keychain / `<config>/chan/llm.toml`).
 Tool reads / writes always go through `chan-core::Drive` so the
 filesystem gates apply.
+
+Lives at `chan-writer/chan-llm`, NOT in this workspace, because
+chan-server is one of two consumer shapes:
+
+  - chan-server (here) wraps `LlmSession` in axum routes and
+    forwards `SessionListener` events over WebSocket.
+  - Native shells (iOS / Android, future) link chan-llm via
+    uniffi alongside chan-core and implement `SessionListener`
+    in Swift / Kotlin.
+
+Putting chan-llm in this workspace would force native shells to
+either drag in axum / tower / reqwest's HTTP stack or
+reimplement the LLM logic. Both are worse than a small extra
+repo.
 
 ## On-disk layout
 
@@ -107,11 +128,19 @@ in phases that each end with a working `chan` binary:
    - Search (`/api/search/*`, `/api/index/*`).
    - Graph (`/api/graph`, `/api/links`).
    - Watcher WebSocket (`/ws`).
-3. **Port LLM** into `chan-llm`:
-   - Tool sandbox + key resolution + Anthropic / Gemini / Ollama
-     backends.
-   - Wire `/api/llm/*` and `/api/answers` and `/api/attachments`
-     into chan-server.
+3. **Port LLM into the sibling `chan-writer/chan-llm` repo**:
+   - Public API contract (LlmConfig, LlmSession, SessionListener,
+     tool sandbox, key resolution) already shipped at
+     chan-llm@14162fc.
+   - Backends (Anthropic / Gemini / Ollama) port from the old
+     `fiorix/chan/crates/chan-core/src/llm/{claude,gemini,ollama}.rs`
+     in chan-llm.
+   - Real prompts replace the placeholders in chan-llm's
+     `prompts.rs`.
+   - chan-server wires `/api/llm/*` to `chan_llm::LlmSession`,
+     bridging `SessionListener` events to the WebSocket. Answers
+     dir + attachments dir live as chan-server-side helpers
+     (they're persistence concerns, not LLM-layer concerns).
 4. **Port the frontend**: copy `web/` from fiorix/chan, wire
    rust-embed in the binary so `chan serve` ships a working
    editor.

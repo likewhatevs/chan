@@ -1,6 +1,6 @@
 # Workspace manifest for chan: notes app with embedded web editor.
 #
-# Three crates:
+# Two crates:
 #
 #   - chan         the binary. Parses CLI args; dispatches subcommands
 #                  (add, list, remove, rename, serve, index, search).
@@ -13,22 +13,17 @@
 #                  chan-core/src/server.rs in fiorix/chan; routes
 #                  port in follow-up commits.
 #
-#   - chan-llm     LLM backends (Anthropic, Gemini, Ollama), tool
-#                  execution sandbox, key resolution (env / keychain /
-#                  ~/.config/chan/api-keys.toml). Migration target
-#                  for the old chan-core/src/llm/ in fiorix/chan.
-#
-# chan-core (filesystem, search, graph) lives at the sibling repo
-# `chan-writer/chan-core`. The path dep below assumes a sibling
-# checkout layout (`~/dev/github.com/chan-writer/{chan,chan-core}`).
-# When the repos go public the path becomes a git dep.
+# chan-core (filesystem, search, graph) and chan-llm (LLM backends,
+# prompts, tool sandbox, key resolution) live at sibling repos
+# under chan-writer. Both are pulled in as path deps that assume a
+# sibling-checkout layout (`~/dev/github.com/chan-writer/{chan,chan-core,chan-llm}`).
+# Switch to git or crates.io deps when the repos go public.
 
 [workspace]
 resolver = "2"
 members = [
     "crates/chan",
     "crates/chan-server",
-    "crates/chan-llm",
 ]
 
 [workspace.package]
@@ -39,22 +34,18 @@ license = "Apache-2.0"
 repository = "https://github.com/chan-writer/chan"
 
 [workspace.dependencies]
-# Core: filesystem, search, graph. Sibling checkout of
-# https://github.com/chan-writer/chan-core. Switch to a git or
-# crates.io dep when chan-core publishes.
 chan-core = { path = "../chan-core" }
+chan-llm = { path = "../chan-llm" }
 
 anyhow = "1"
 axum = { version = "0.7", features = ["ws", "macros"] }
 clap = { version = "4", features = ["derive"] }
-keyring = "3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
 thiserror = "1"
 tokio = { version = "1", features = ["full"] }
-toml = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "trace"] }
 tracing = "0.1"

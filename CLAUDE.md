@@ -22,16 +22,22 @@ crates/
   chan         the binary. Parses CLI args, dispatches subcommands,
                mounts the embedded frontend.
   chan-server  HTTP + WebSocket surface. Wraps chan-core in axum
-               routes.
-  chan-llm     LLM backends (Anthropic, Gemini, Ollama) + the
-               tool sandbox.
+               routes; uses chan-llm for assistant routes.
 
 web/           Svelte frontend (wires in a follow-up commit).
 ```
 
-`chan-core` (filesystem, search, graph, drive registry) lives at
-`chan-writer/chan-core`. We depend on it as a sibling-checkout
-path dep; switch to git or crates.io when the repos go public.
+Two sibling repos pulled in as path deps:
+
+- `chan-writer/chan-core` (filesystem, search, graph, drive
+  registry).
+- `chan-writer/chan-llm` (LLM backends, embedded prompts, tool
+  sandbox, key resolution). Lives in its own repo so native
+  shells (iOS / Android) can link it via uniffi alongside
+  chan-core, without dragging in this repo's HTTP stack.
+
+We depend on both as sibling-checkout path deps; switch to git
+or crates.io when the repos go public.
 
 ## Build & Test
 
@@ -103,9 +109,10 @@ When in doubt, read `../chan-core/design.md`.
   and calls `chan_server::serve`. Port routes from the old
   `chan-core/src/server.rs` in `fiorix/chan` one cluster at a
   time.
-- **LLM lives in chan-llm**: backends, tools, and key resolution
-  all stay in the chan-llm crate. The `chan` binary never
-  directly invokes a backend.
+- **LLM lives in chan-writer/chan-llm**: backends, tools, prompts,
+  and key resolution all live in the sibling repo. chan-server's
+  /api/llm/* routes wrap `chan_llm::LlmSession`. The `chan`
+  binary never directly invokes a backend.
 - **Pinned toolchain**: do not introduce code that requires a
   newer Rust than `rust-toolchain.toml` declares without bumping
   the pin in the same commit.

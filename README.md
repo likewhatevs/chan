@@ -13,18 +13,22 @@ crates/
                serve, index, search). Embeds the web frontend at
                build time.
   chan-server  HTTP + WebSocket surface. Wraps chan-core in axum
-               routes.
-  chan-llm     LLM backends (Anthropic, Gemini, Ollama) and the
-               tool sandbox the assistant uses to call into the
-               drive.
+               routes; uses chan-llm for assistant routes.
 web/           Svelte frontend, embedded into the binary at build
                time. Wires in a later commit.
 ```
 
-`chan-core` (filesystem, search, graph) lives at the sibling repo
-`chan-writer/chan-core`. The workspace currently uses a path dep
-that assumes a sibling checkout layout
-(`~/dev/github.com/chan-writer/{chan,chan-core}`).
+Two sibling crates pulled in as path deps:
+
+- `chan-writer/chan-core` (filesystem, search, graph, drive
+  registry).
+- `chan-writer/chan-llm` (LLM backends, embedded prompts, tool
+  sandbox, key resolution). Lives in its own repo so native
+  shells (iOS / Android) can link it via uniffi without
+  dragging in chan-server's HTTP stack.
+
+The workspace assumes the sibling-checkout layout
+`~/dev/github.com/chan-writer/{chan,chan-core,chan-llm}`.
 
 ## Status
 
@@ -40,6 +44,7 @@ in app-level config files once `chan-server` and `chan-llm` land.
 
 ```bash
 git clone git@github.com:chan-writer/chan-core ../chan-core
+git clone git@github.com:chan-writer/chan-llm ../chan-llm
 cargo build
 cargo test
 cargo run -- list
