@@ -17,7 +17,7 @@
 
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -29,6 +29,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use chan_core::{
     paths::DrivePaths, Drive, EdgeKind, Library, SearchOpts, WatchCallback, WatchEvent, WatchHandle,
+};
+use chan_llm::{
+    BackendKind, Delta, LlmConfig, LlmError, LlmSession, SessionListener, StopReason, ToolCall,
+    ToolResult,
 };
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -89,24 +93,33 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
     let handle = ServeHandle { addr, token };
     eprintln!("chan listening on {}", handle.launch_url());
 
-    // Filesystem watcher: chan-core's Drive::watch is callback-
-    // shaped, so we bridge into a tokio broadcast channel that any
-    // number of WebSocket subscribers can read from. The handle
-    // must stay alive for the watcher's life; we park it in
-    // AppState. Buffer of 256 is enough headroom for typical
-    // bursts (mass rename, save-all). Slow subscribers see Lagged
-    // and skip ahead rather than blocking the sender.
-    let (events_tx, _) = broadcast::channel::<WatchEvent>(256);
+    // Unified event stream: every /ws subscriber gets watcher
+    // events AND assistant streaming events from the same channel.
+    // Producers serialize to JSON strings (with a `type` field as
+    // the discriminator); the WS pump just forwards strings as
+    // text frames. Buffer of 256 is enough headroom for typical
+    // bursts (mass rename, LLM token-stream); slow subscribers
+    // see Lagged and skip ahead rather than blocking the sender.
+    let (events_tx, _) = broadcast::channel::<String>(256);
     let bridge: Arc<dyn WatchCallback> = Arc::new(WatchBroadcast {
         tx: events_tx.clone(),
     });
     let watch_handle = drive.watch(bridge)?;
+
+    // LLM config: load once at boot. Falling back to defaults on
+    // a malformed file keeps the server bootable; user fixes the
+    // TOML and restarts.
+    let llm_config = LlmConfig::load().unwrap_or_else(|e| {
+        tracing::warn!("malformed llm config, falling back to defaults: {e}");
+        LlmConfig::default()
+    });
 
     let state = Arc::new(AppState {
         library,
         drive,
         token: handle.token,
         events_tx,
+        llm_config: Mutex::new(llm_config),
         _watch_handle: watch_handle,
     });
     let app = router(state);
@@ -121,7 +134,15 @@ struct AppState {
     library: Library,
     drive: Arc<Drive>,
     token: Option<String>,
-    events_tx: broadcast::Sender<WatchEvent>,
+    /// Pre-serialized JSON-envelope frames: `{"type": "watch",
+    /// "event": ...}`, `{"type": "llm.delta", "session_id": ...,
+    /// "text": ...}`, etc. One channel; the `type` field tells
+    /// the frontend what to do.
+    events_tx: broadcast::Sender<String>,
+    /// Loaded at boot; mutable for future PATCH /api/llm/config
+    /// (backend selection, auto_apply_writes toggle). Currently
+    /// only read by the status route and the complete handler.
+    llm_config: Mutex<LlmConfig>,
     /// Held so the underlying notify watcher keeps running for the
     /// server's lifetime. Field is `_`-prefixed because nothing
     /// reads it; dropping AppState drops the handle, which stops
@@ -130,17 +151,66 @@ struct AppState {
 }
 
 /// Bridge from chan-core's callback-shaped watcher into the
-/// broadcast channel that backs every /ws subscriber. Send errors
-/// (no current subscribers) are intentionally swallowed; broadcast
-/// returns `Err(SendError)` only when the channel is closed, which
-/// can't happen while AppState is alive.
+/// broadcast channel that backs every /ws subscriber. Each event
+/// goes out as a `{"type": "watch", "event": {...}}` envelope so
+/// the frontend can multiplex with LLM events on the same socket.
 struct WatchBroadcast {
-    tx: broadcast::Sender<WatchEvent>,
+    tx: broadcast::Sender<String>,
 }
 
 impl WatchCallback for WatchBroadcast {
     fn on_event(&self, event: WatchEvent) {
-        let _ = self.tx.send(event);
+        let frame = serde_json::json!({"type": "watch", "event": event});
+        if let Ok(s) = serde_json::to_string(&frame) {
+            let _ = self.tx.send(s);
+        }
+    }
+}
+
+/// Bridge from chan-llm's SessionListener into the same broadcast
+/// channel. One listener instance per /api/llm/complete call;
+/// dropped when the session emits `Done` or when the consumer
+/// drops the `Arc` at the end of the request handler.
+///
+/// `session_id` is client-supplied so the frontend can correlate
+/// streaming events to its in-flight assistant turn (multiple
+/// turns can interleave on the same socket).
+struct LlmBroadcastListener {
+    tx: broadcast::Sender<String>,
+    session_id: String,
+}
+
+impl LlmBroadcastListener {
+    fn send(&self, ty: &str, body: serde_json::Value) {
+        let mut frame = serde_json::Map::new();
+        frame.insert("type".into(), ty.into());
+        frame.insert("session_id".into(), self.session_id.clone().into());
+        if let serde_json::Value::Object(map) = body {
+            for (k, v) in map {
+                frame.insert(k, v);
+            }
+        }
+        if let Ok(s) = serde_json::to_string(&serde_json::Value::Object(frame)) {
+            let _ = self.tx.send(s);
+        }
+    }
+}
+
+impl SessionListener for LlmBroadcastListener {
+    fn on_delta(&self, d: Delta) {
+        self.send("llm.delta", serde_json::json!({"text": d.text}));
+    }
+    fn on_tool_call(&self, c: ToolCall) {
+        self.send("llm.tool_call", serde_json::json!({"call": c}));
+    }
+    fn on_tool_result(&self, r: ToolResult) {
+        self.send("llm.tool_result", serde_json::json!({"result": r}));
+    }
+    fn on_done(&self, r: StopReason) {
+        self.send("llm.done", serde_json::json!({"reason": r}));
+    }
+    fn on_error(&self, e: String) {
+        self.send("llm.error", serde_json::json!({"error": e}));
     }
 }
 
@@ -165,6 +235,20 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/links", get(api_links))
         .route("/api/graph", get(api_graph))
         .route("/api/backlinks/*path", get(api_backlinks))
+        .route("/api/llm/status", get(api_llm_status))
+        .route("/api/llm/tools", get(api_llm_tools))
+        .route("/api/llm/complete", post(api_llm_complete))
+        .route(
+            "/api/llm/anthropic/key",
+            axum::routing::put(api_llm_set_anthropic_key).delete(api_llm_clear_anthropic_key),
+        )
+        .route(
+            "/api/llm/gemini/key",
+            axum::routing::put(api_llm_set_gemini_key).delete(api_llm_clear_gemini_key),
+        )
+        .route("/api/llm/anthropic/models", get(api_llm_anthropic_models))
+        .route("/api/llm/gemini/models", get(api_llm_gemini_models))
+        .route("/api/llm/ollama/models", get(api_llm_ollama_models))
         .route("/api/health", get(api_health))
         .route("/ws", get(ws_upgrade));
     Router::new()
@@ -276,22 +360,16 @@ async fn ws_upgrade(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) ->
     ws.on_upgrade(move |socket| ws_pump(socket, rx))
 }
 
-/// Forward filesystem events to one WebSocket client until either
-/// side hangs up. Lagged subscribers (the server fills the buffer
-/// faster than the client drains it) skip ahead and continue
-/// rather than tearing down the connection.
-async fn ws_pump(mut socket: WebSocket, mut rx: broadcast::Receiver<WatchEvent>) {
+/// Forward pre-serialized JSON envelope frames to one WebSocket
+/// client until either side hangs up. Producers (WatchBroadcast,
+/// LlmBroadcastListener) build the JSON once; this pump just
+/// fans out. Lagged subscribers skip ahead rather than tearing
+/// down the connection.
+async fn ws_pump(mut socket: WebSocket, mut rx: broadcast::Receiver<String>) {
     loop {
         match rx.recv().await {
-            Ok(event) => {
-                let json = match serde_json::to_string(&event) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        tracing::warn!("ws event serialize error: {e}");
-                        continue;
-                    }
-                };
-                if socket.send(Message::Text(json)).await.is_err() {
+            Ok(frame) => {
+                if socket.send(Message::Text(frame)).await.is_err() {
                     break;
                 }
             }
@@ -741,6 +819,195 @@ async fn api_backlinks(
         Ok(edges) => Json(edges).into_response(),
         Err(e) => err_from(&e),
     }
+}
+
+// ----- llm ----------------------------------------------------------------
+//
+// Routes wrap chan_llm::LlmSession. Streaming events flow over the
+// shared /ws so the frontend has one socket to read from. The
+// route surface stays valid even though chan-llm's backends are
+// stubs at this point: complete() emits an immediate
+// llm.error + llm.done frame for the configured backend.
+
+#[derive(Serialize)]
+struct LlmStatus {
+    /// Currently configured backend, if any. None = first-run state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backend: Option<BackendKind>,
+    /// Effective model per backend (config override or default).
+    models: LlmModels,
+    /// Where each backend's API key was found (env / keychain /
+    /// file fallback / missing). Lets the frontend show a status
+    /// badge without exposing the key itself.
+    keys: LlmKeyStatuses,
+    auto_apply_writes: bool,
+}
+
+#[derive(Serialize)]
+struct LlmModels {
+    anthropic: String,
+    gemini: String,
+    ollama: String,
+}
+
+#[derive(Serialize)]
+struct LlmKeyStatuses {
+    anthropic: chan_llm::KeyStatus,
+    gemini: chan_llm::KeyStatus,
+    ollama: chan_llm::KeyStatus,
+}
+
+async fn api_llm_status(State(state): State<Arc<AppState>>) -> Response {
+    let cfg = state.llm_config.lock().unwrap().clone();
+    let pick = |k: BackendKind| {
+        cfg.models
+            .for_backend(k)
+            .map(str::to_owned)
+            .unwrap_or_else(|| k.default_model().to_string())
+    };
+    Json(LlmStatus {
+        backend: cfg.backend,
+        models: LlmModels {
+            anthropic: pick(BackendKind::Anthropic),
+            gemini: pick(BackendKind::Gemini),
+            ollama: pick(BackendKind::Ollama),
+        },
+        keys: LlmKeyStatuses {
+            anthropic: chan_llm::keys::status(BackendKind::Anthropic, &cfg),
+            gemini: chan_llm::keys::status(BackendKind::Gemini, &cfg),
+            ollama: chan_llm::keys::status(BackendKind::Ollama, &cfg),
+        },
+        auto_apply_writes: cfg.auto_apply_writes,
+    })
+    .into_response()
+}
+
+#[derive(Serialize)]
+struct LlmToolSchema {
+    name: &'static str,
+    description: &'static str,
+}
+
+async fn api_llm_tools() -> Response {
+    Json([
+        LlmToolSchema {
+            name: "read_file",
+            description: chan_llm::prompts::READ_FILE_DESC,
+        },
+        LlmToolSchema {
+            name: "write_file",
+            description: chan_llm::prompts::WRITE_FILE_DESC,
+        },
+        LlmToolSchema {
+            name: "list_files",
+            description: chan_llm::prompts::LIST_FILES_DESC,
+        },
+        LlmToolSchema {
+            name: "search_content",
+            description: chan_llm::prompts::SEARCH_CONTENT_DESC,
+        },
+    ])
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct CompleteBody {
+    /// Client-generated correlation id. The server echoes it on
+    /// every emitted llm.* frame so the frontend can match
+    /// streaming events to its pending turn (multiple turns can
+    /// interleave on the same socket).
+    session_id: String,
+    message: String,
+}
+
+#[derive(Serialize)]
+struct CompleteAck {
+    session_id: String,
+    /// Always true today; the body is non-empty so the frontend
+    /// can rely on a JSON shape rather than a 204.
+    started: bool,
+}
+
+async fn api_llm_complete(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CompleteBody>,
+) -> Response {
+    let config = state.llm_config.lock().unwrap().clone();
+    let session = LlmSession::new(state.drive.clone(), config);
+    let listener: Arc<dyn SessionListener> = Arc::new(LlmBroadcastListener {
+        tx: state.events_tx.clone(),
+        session_id: body.session_id.clone(),
+    });
+    // chan-llm's send is fire-and-forget; events flow into the
+    // listener (which fans out to /ws). When real backends land
+    // they'll spawn onto chan-llm's internal runtime; the route
+    // doesn't need to await anything.
+    session.send(body.message, listener);
+    Json(CompleteAck {
+        session_id: body.session_id,
+        started: true,
+    })
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct SetKeyBody {
+    key: String,
+}
+
+async fn api_llm_set_anthropic_key(Json(body): Json<SetKeyBody>) -> Response {
+    match chan_llm::keys::set(BackendKind::Anthropic, &body.key) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_llm(&e),
+    }
+}
+
+async fn api_llm_clear_anthropic_key() -> Response {
+    match chan_llm::keys::clear(BackendKind::Anthropic) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_llm(&e),
+    }
+}
+
+async fn api_llm_set_gemini_key(Json(body): Json<SetKeyBody>) -> Response {
+    match chan_llm::keys::set(BackendKind::Gemini, &body.key) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_llm(&e),
+    }
+}
+
+async fn api_llm_clear_gemini_key() -> Response {
+    match chan_llm::keys::clear(BackendKind::Gemini) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_llm(&e),
+    }
+}
+
+async fn api_llm_anthropic_models() -> Response {
+    // Real catalogs port from the old chan when chan-llm's
+    // backends do; placeholder empty list for now so the route
+    // surface compiles for the frontend.
+    Json::<Vec<&str>>(Vec::new()).into_response()
+}
+
+async fn api_llm_gemini_models() -> Response {
+    Json::<Vec<&str>>(Vec::new()).into_response()
+}
+
+async fn api_llm_ollama_models() -> Response {
+    Json::<Vec<&str>>(Vec::new()).into_response()
+}
+
+fn err_llm(e: &LlmError) -> Response {
+    let status = match e {
+        LlmError::MissingApiKey(_) => StatusCode::BAD_REQUEST,
+        LlmError::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
+        LlmError::BackendError { status, .. } => {
+            StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)
+        }
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    err(status, e.to_string())
 }
 
 // ----- error mapping ------------------------------------------------------

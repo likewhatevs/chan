@@ -12,6 +12,7 @@ name = "chan_server"
 
 [dependencies]
 chan-core = { workspace = true }
+chan-llm = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
 rand = "0.8"
