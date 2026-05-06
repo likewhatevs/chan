@@ -1,0 +1,14 @@
+/target
+Cargo.lock
+
+# Editor swap / backup files
+*.swp
+*.swo
+*.swn
+*~
+.DS_Store
+
+# Frontend artifacts (web/ ports in a later iteration)
+node_modules/
+web/dist/
+web/pkg/
