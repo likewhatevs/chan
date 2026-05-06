@@ -58,3 +58,15 @@ cargo test
 cargo fmt
 cargo clippy --all-targets -- -D warnings
 ```
+
+## Contributing
+
+Install the pre-push hook once per clone:
+
+```
+./scripts/install-hooks
+```
+
+The hook runs `cargo fmt --check`, `cargo clippy -- -D warnings`,
+and `cargo test --all-targets` before every push, mirroring CI.
+A passing local push therefore won't fail in GitHub Actions.
