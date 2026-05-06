@@ -21,13 +21,15 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chan_core::{paths::DrivePaths, Drive, Library, WatchCallback, WatchEvent, WatchHandle};
+use chan_core::{
+    paths::DrivePaths, Drive, Library, SearchOpts, WatchCallback, WatchEvent, WatchHandle,
+};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
@@ -154,6 +156,12 @@ fn router(state: Arc<AppState>) -> Router {
                 .delete(api_delete_file),
         )
         .route("/api/move", post(api_move))
+        .route("/api/search/files", get(api_search_files))
+        .route("/api/search/content", get(api_search_content))
+        .route("/api/index/status", get(api_index_status))
+        .route("/api/index/rebuild", post(api_index_rebuild))
+        .route("/api/link-targets", get(api_link_targets))
+        .route("/api/headings/*path", get(api_headings))
         .route("/api/health", get(api_health))
         .route("/ws", get(ws_upgrade));
     Router::new()
@@ -466,6 +474,163 @@ struct MoveBody {
 async fn api_move(State(state): State<Arc<AppState>>, Json(body): Json<MoveBody>) -> Response {
     match state.drive.rename(&body.from, &body.to) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_from(&e),
+    }
+}
+
+// ----- search + index -----------------------------------------------------
+
+/// Filename search params. Empty `q` returns the first `limit`
+/// files in the tree, mirroring the [[ picker's empty state.
+#[derive(Deserialize)]
+struct FileSearchParams {
+    #[serde(default)]
+    q: String,
+    #[serde(default = "default_search_limit")]
+    limit: usize,
+}
+
+fn default_search_limit() -> usize {
+    50
+}
+
+/// Server-side filename match: walk the tree, keep regular files
+/// whose basename contains `q` (case-insensitive). chan-core has
+/// no built-in filename index since the cost (scan list_tree) is
+/// linear and the drive size budget is small. Revisit if profiles
+/// show this hot.
+async fn api_search_files(
+    State(state): State<Arc<AppState>>,
+    Query(p): Query<FileSearchParams>,
+) -> Response {
+    let tree = match state.drive.list_tree() {
+        Ok(t) => t,
+        Err(e) => return err_from(&e),
+    };
+    let needle = p.q.to_lowercase();
+    let mut hits = Vec::new();
+    for entry in tree {
+        if entry.is_dir {
+            continue;
+        }
+        let basename = std::path::Path::new(&entry.path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if needle.is_empty() || basename.contains(&needle) {
+            hits.push(entry);
+            if hits.len() >= p.limit {
+                break;
+            }
+        }
+    }
+    Json(hits).into_response()
+}
+
+#[derive(Deserialize)]
+struct ContentSearchParams {
+    #[serde(default)]
+    q: String,
+    #[serde(default = "default_content_limit")]
+    limit: u32,
+    /// Optional subdir scope (POSIX rel path under the drive root).
+    /// Mirrors chan-core's `SearchOpts::scope`.
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+fn default_content_limit() -> u32 {
+    20
+}
+
+async fn api_search_content(
+    State(state): State<Arc<AppState>>,
+    Query(p): Query<ContentSearchParams>,
+) -> Response {
+    if p.q.trim().is_empty() {
+        return Json(serde_json::json!({"hits": [], "total": 0, "mode_used": "Bm25"}))
+            .into_response();
+    }
+    let opts = SearchOpts {
+        limit: p.limit,
+        scope: p.scope.clone(),
+        ..Default::default()
+    };
+    match state.drive.search(&p.q, &opts) {
+        Ok(res) => Json(res).into_response(),
+        Err(e) => err_from(&e),
+    }
+}
+
+/// Minimal index-status placeholder. chan-core's index opens
+/// lazily and is always ready once a drive is open; meaningful
+/// progress reporting (files indexed, last rebuild time) requires
+/// chan-core surfacing the IndexStats from the most recent
+/// reindex, which it does not today. Returning a small JSON shape
+/// so the frontend can show a "ready" / "rebuilding" state.
+async fn api_index_status() -> Response {
+    Json(serde_json::json!({"ready": true})).into_response()
+}
+
+/// Trigger a full reindex of the drive (search + graph). chan-core's
+/// reindex is synchronous and blocking, so we run it on the blocking
+/// thread pool and return when it completes. For very large drives
+/// this can take seconds; consider adding a job-handle abstraction
+/// to chan-core if the wait becomes painful in practice.
+async fn api_index_rebuild(State(state): State<Arc<AppState>>) -> Response {
+    let drive = state.drive.clone();
+    let result = tokio::task::spawn_blocking(move || drive.reindex()).await;
+    match result {
+        Ok(Ok(stats)) => Json(stats).into_response(),
+        Ok(Err(e)) => err_from(&e),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("rebuild task: {e}"),
+        ),
+    }
+}
+
+// ----- [[ typeahead -------------------------------------------------------
+//
+// Two-phase UX. Phase 1: as the user types `[[Re...`, the picker
+// hits /api/link-targets to surface candidate files. Phase 2:
+// after the user picks a file (`[[recipes/pasta.md`), they may
+// type `#` to jump to a heading; the picker hits
+// /api/headings/<rel> to enumerate the file's anchors.
+
+#[derive(Deserialize)]
+struct LinkTargetsParams {
+    #[serde(default)]
+    q: String,
+    #[serde(default = "default_link_limit")]
+    limit: u32,
+}
+
+fn default_link_limit() -> u32 {
+    20
+}
+
+async fn api_link_targets(
+    State(state): State<Arc<AppState>>,
+    Query(p): Query<LinkTargetsParams>,
+) -> Response {
+    match state.drive.link_targets(&p.q, p.limit) {
+        Ok(targets) => Json(targets).into_response(),
+        Err(e) => err_from(&e),
+    }
+}
+
+async fn api_headings(
+    State(state): State<Arc<AppState>>,
+    AxumPath(path): AxumPath<String>,
+) -> Response {
+    let graph = match state.drive.graph() {
+        Ok(g) => g,
+        Err(e) => return err_from(&e),
+    };
+    match graph.headings_of(&path) {
+        Ok(headings) => Json(headings).into_response(),
         Err(e) => err_from(&e),
     }
 }
