@@ -11,12 +11,14 @@ repository = "https://github.com/chan-writer/chan-core"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 fs4 = { version = "0.9", features = ["sync"] }
+gray_matter = { version = "0.2", default-features = false, features = ["yaml"] }
 notify = { version = "6", default-features = false, features = ["macos_fsevent"] }
+pulldown-cmark = { version = "0.12", default-features = false }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tantivy = { version = "0.22", optional = true }
+tantivy = { version = "0.24", optional = true }
 tempfile = "3"
 thiserror = "1"
 toml = "0.8"

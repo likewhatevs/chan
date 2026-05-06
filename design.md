@@ -279,27 +279,47 @@ with the tantivy wiring). Mismatched versions trigger a full
 rebuild on next open. Model swaps (when hybrid lands) force a
 rebuild because embedding dimensions differ.
 
-## What's NOT here yet
+## What's wired vs. what's still ahead
 
-The skeleton is committed; the following sit behind clearly
-marked stubs:
+Wired and tested:
 
-  - **Search**: tantivy `Index` is allocated on first call but
-    `search` returns empty results, `reindex` is a no-op,
-    `upsert` / `remove` are no-ops. Wiring tantivy is the next
-    deliverable; the schema is sketched in `src/search.rs`.
-  - **Graph reads**: `neighbors`, `backlinks`, `tags`,
-    `files_with_tag` return empty. Schema and migration are real
-    and tested; `replace_file` and `forget_file` perform the
-    delete legs but do not insert outgoing edges or headings yet.
-  - **Markdown parsing for the indexer**: not in chan-core. The
-    in-tree `chan-shared` crate (in the parent `fiorix/chan` repo)
-    has frontmatter / heading / link extraction; it is dual-built
-    native + wasm because the editor's wasm bridge consumes it.
-    Plan: pull a slim native-only parser into chan-core
-    (`src/markdown.rs`) when the indexer wires in. The wasm-only
-    smart-node serialization stays in the chan repo as an
-    editor-side concern.
+  - **Markdown parser** (`src/markdown/`): native-only port of
+    `chan-shared`'s frontmatter, ATX heading, link, and reference-
+    token extractors. Powers both the search title/body extraction
+    and the graph indexer. The wasm-only smart-node serialization
+    stays in the chan repo as an editor concern.
+  - **Search index** (`src/search.rs`): tantivy 0.24, BM25 only,
+    one document per file at v1. Schema versioned via
+    `<index_dir>/.schema_version`; mismatches wipe and rebuild on
+    next open. `Drive::search`, `Drive::index_file`,
+    `Drive::reindex`, `Drive::forget_file` all functional.
+  - **Graph reads + writes** (`src/graph.rs`): `neighbors`,
+    `backlinks`, `tags`, `files_with_tag`, `files`, `headings_of`
+    return real data. `replace_file` inserts outgoing edges
+    (links + tag/mention tokens) and headings with computed
+    anchors. `clear` wipes everything for a full rebuild.
+
+Still ahead:
+
+  - **Per-section search chunking**: hits return per-file
+    snippets. Adding section-level chunking would let
+    `Snippet::heading_path` carry the breadcrumb to the matched
+    section and would tighten relevance for long files. Bumps
+    `SCHEMA_VERSION` when it lands, triggers a forced rebuild.
+  - **Wiki-link resolution**: graph stores link targets as
+    written (`recipes/pasta`, no extension). A resolver step
+    that maps each target to a real file path (with `.md`
+    extension lookup, prefix-match, etc.) lives at the consumer
+    layer for now. Could move into chan-core if every consumer
+    needs the same logic.
+  - **Watcher consumer**: `Drive::watch` is wired and the
+    watcher filters drive-internal noise, but no built-in
+    consumer feeds events into `index_file` / `forget_file`.
+    Apps run their own loop.
+  - **Hybrid (BM25 + dense) search**: `SearchMode::Hybrid` is
+    a placeholder that falls through to BM25. Wiring an
+    embedder (fastembed-rs on desktop, CoreML on iOS, NNAPI on
+    Android) is gated behind a future `embeddings` feature.
 
 ## Future API extensions (sketch, not committed)
 

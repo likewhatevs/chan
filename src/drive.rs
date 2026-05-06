@@ -12,9 +12,10 @@ use crate::error::{ChanError, Result};
 use crate::fs_ops;
 use crate::graph::GraphView;
 use crate::lock::DriveLock;
+use crate::markdown;
 use crate::paths::{drive_paths, DrivePaths};
 use crate::registry::KnownDrive;
-use crate::search::{Index, SearchOpts, SearchResults};
+use crate::search::{Index, IndexDoc, SearchOpts, SearchResults};
 use crate::watch::{WatchCallback, WatchHandle};
 
 pub use fs_ops::TreeEntry;
@@ -211,10 +212,64 @@ impl Drive {
         self.index()?.search(query, opts)
     }
 
-    /// Re-index the whole drive from scratch. Useful after a
-    /// rename or restoring from backup.
+    /// Re-index the whole drive from scratch: walks the tree,
+    /// parses every editable-text file, and rebuilds both the
+    /// search index and the graph DB. Synchronous and blocking;
+    /// the caller decides whether to spawn a worker.
     pub fn reindex(&self) -> Result<crate::search::IndexStats> {
-        self.index()?.reindex()
+        let entries = self.list_tree()?;
+        let mut docs = Vec::new();
+        let mut skipped = 0u32;
+        let graph = self.graph()?;
+        // Wipe the graph for a clean rebuild. We rely on the per-
+        // drive lock + the Mutex<Connection> inside GraphView to
+        // serialize; no other writer can race us.
+        graph.clear()?;
+        for e in &entries {
+            if e.is_dir {
+                continue;
+            }
+            if !fs_ops::is_editable_text(&e.path) {
+                skipped += 1;
+                continue;
+            }
+            let content = match self.read_text(&e.path) {
+                Ok(s) => s,
+                Err(_) => {
+                    skipped += 1;
+                    continue;
+                }
+            };
+            let (doc, headings, edges) = parse_for_index(&e.path, &content, e.mtime);
+            docs.push(doc);
+            graph.replace_file(&e.path, e.mtime, &edges, &headings)?;
+        }
+        let mut stats = self.index()?.reindex_iter(docs)?;
+        stats.files_skipped = skipped;
+        Ok(stats)
+    }
+
+    /// Re-index a single file. Reads, parses, updates the search
+    /// index and graph for just this path. Used by the watcher
+    /// consumer when a file changes.
+    pub fn index_file(&self, rel: &str) -> Result<()> {
+        if !fs_ops::is_editable_text(rel) {
+            return Ok(());
+        }
+        let content = self.read_text(rel)?;
+        let mtime = self.stat(rel).ok().and_then(|s| s.mtime);
+        let (doc, headings, edges) = parse_for_index(rel, &content, mtime);
+        self.index()?.upsert(&doc)?;
+        self.graph()?.replace_file(rel, mtime, &edges, &headings)?;
+        Ok(())
+    }
+
+    /// Drop a single file from the search index and graph. Used
+    /// when the watcher reports a deletion.
+    pub fn forget_file(&self, rel: &str) -> Result<()> {
+        self.index()?.remove(rel)?;
+        self.graph()?.forget_file(rel)?;
+        Ok(())
     }
 
     fn index(&self) -> Result<&Index> {
@@ -245,6 +300,98 @@ impl Drive {
     /// and `.git/` are filtered out.
     pub fn watch(self: &Arc<Self>, cb: Arc<dyn WatchCallback>) -> Result<WatchHandle> {
         WatchHandle::start(self.root(), cb)
+    }
+}
+
+/// Parse a file's content into the structures the search index
+/// and graph need: an `IndexDoc` (for tantivy), the heading list
+/// (for graph::headings), and the outgoing edges (links + tokens).
+fn parse_for_index(
+    rel: &str,
+    raw: &str,
+    mtime: Option<i64>,
+) -> (IndexDoc, Vec<markdown::Heading>, Vec<crate::graph::Edge>) {
+    let fm = markdown::parse_frontmatter(raw);
+    let body_src = &raw[fm.body_offset..];
+    let headings = markdown::parse_headings(body_src);
+    let title = fm
+        .data
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned)
+        .or_else(|| {
+            headings
+                .iter()
+                .find(|h| h.level == 1)
+                .map(|h| h.text.clone())
+        });
+    let links = markdown::extract_links(body_src);
+    let tokens = markdown::extract_tokens(body_src);
+    let edges = build_edges(rel, &links, &tokens);
+
+    let doc = IndexDoc {
+        path: rel.to_string(),
+        title,
+        body: body_src.to_string(),
+        mtime,
+    };
+    (doc, headings, edges)
+}
+
+/// Convert links + tokens into graph edges. Wiki links and
+/// internal markdown links produce `Link` edges; tokens produce
+/// `Tag` / `Mention` edges. External links (http://, mailto:) are
+/// dropped because they don't connect to anything else in the
+/// drive's graph.
+fn build_edges(
+    src: &str,
+    links: &[markdown::Link],
+    tokens: &[markdown::Token],
+) -> Vec<crate::graph::Edge> {
+    use crate::graph::{Edge, EdgeKind};
+    let mut out = Vec::new();
+    for l in links {
+        if !l.is_internal() {
+            continue;
+        }
+        let (target, anchor) = split_anchor(&l.target);
+        out.push(Edge {
+            src: src.to_string(),
+            dst: target,
+            kind: EdgeKind::Link,
+            anchor,
+        });
+    }
+    for t in tokens {
+        match t {
+            markdown::Token::Tag { name } => out.push(Edge {
+                src: src.to_string(),
+                dst: format!("#{name}"),
+                kind: EdgeKind::Tag,
+                anchor: None,
+            }),
+            markdown::Token::Mention { name } => out.push(Edge {
+                src: src.to_string(),
+                dst: format!("@@{name}"),
+                kind: EdgeKind::Mention,
+                anchor: None,
+            }),
+            // Dates aren't graph edges yet; the graph view groups
+            // files by date through a future query rather than a
+            // stored edge. Skip for now.
+            markdown::Token::Date { .. } => {}
+        }
+    }
+    out
+}
+
+/// Split a link target into (path, anchor). `path#section` becomes
+/// `("path", Some("section"))`; a target without `#` returns
+/// `(target, None)`.
+fn split_anchor(target: &str) -> (String, Option<String>) {
+    match target.split_once('#') {
+        Some((p, a)) if !a.is_empty() => (p.to_string(), Some(a.to_string())),
+        _ => (target.to_string(), None),
     }
 }
 

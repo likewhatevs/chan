@@ -7,13 +7,13 @@
 //
 // Two top-level handles:
 //
-//   Library  — owns the per-machine registry (~/.chan/config.toml) of known
-//              drives and resolves OS state/cache locations. Process-wide
-//              singleton in practice; cheap to clone (Arc inside).
+//   Library: owns the per-machine registry (~/.chan/config.toml) of known
+//   drives and resolves OS state/cache locations. Process-wide singleton
+//   in practice; cheap to clone (Arc inside).
 //
-//   Drive    — handle to one registered directory. Exposes filesystem
-//              primitives (read/write/stat/list), search, graph, and watch.
-//              Holds a per-drive cross-process lock for the index writer.
+//   Drive: handle to one registered directory. Exposes filesystem
+//   primitives (read/write/stat/list), search, graph, and watch. Holds a
+//   per-drive cross-process lock for the index writer.
 //
 // What is intentionally NOT here:
 //   - HTTP server, WebSocket transport, frontend bundle. Those live in
@@ -27,6 +27,7 @@ pub mod fs_ops;
 pub mod graph;
 pub mod library;
 pub mod lock;
+pub mod markdown;
 pub mod paths;
 pub mod registry;
 pub mod search;
@@ -34,8 +35,8 @@ pub mod watch;
 
 pub use drive::{DirEntry, Drive, FileStat, TreeEntry};
 pub use error::{ChanError, Result};
-pub use graph::{Edge, EdgeKind, GraphView, Tag};
+pub use graph::{Edge, EdgeKind, GraphView, HeadingRow, Tag};
 pub use library::Library;
 pub use registry::{KnownDrive, Registry};
-pub use search::{Hit, SearchMode, SearchOpts, SearchResults, Snippet};
+pub use search::{Hit, IndexDoc, IndexStats, SearchMode, SearchOpts, SearchResults, Snippet};
 pub use watch::{WatchCallback, WatchEvent, WatchHandle, WatchKind};

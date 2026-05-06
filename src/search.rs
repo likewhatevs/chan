@@ -1,25 +1,43 @@
-// Search API surface and (initially) BM25-only implementation.
+// Search index, BM25-only at v1, backed by tantivy.
 //
-// The public types live here even when the `search` feature is off
-// so callers can keep referring to `SearchOpts` etc. without
-// cfg-guards everywhere; only the index implementation is gated.
+// Schema (one document per file at v1; per-section chunking is a
+// follow-up that adds heading_path and a chunk-id field):
 //
-// Rough plan once the impl lands:
-//   - tantivy schema: path (TEXT, stored), heading_path (TEXT),
-//     body (TEXT, indexed), mtime (I64), file_id (TEXT, kept).
-//   - chunking is per-section (split on ATX headings) so a hit
-//     can carry the heading-stack as breadcrumb context.
-//   - schema_version field on disk; mismatched versions trigger a
-//     full rebuild on next open.
+//   path   STRING | STORED            POSIX rel path; primary key
+//   title  TEXT   | STORED            top-level h1 if present
+//   body   TEXT   | STORED            full file body (post-frontmatter)
+//   mtime  I64    | STORED | FAST     Unix seconds; for rebuild
+//                                     hints and future filtering
 //
-// Hybrid (BM25 + dense) lives behind a future `embeddings` feature
-// when fastembed-rs (or a CoreML / NNAPI alternative) is wired in.
+// Schema versioning lives in `<index_dir>/.schema_version` (single
+// integer, as text). On `Index::open`, a missing or mismatched
+// version wipes the index dir before tantivy opens it. This lets us
+// add fields, switch tokenizers, or change chunking and have stale
+// indexes rebuild on next open without manual intervention.
+//
+// We bumped this once already from a no-op stub to the real schema.
+// SCHEMA_VERSION = 2 below.
 
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+#[cfg(feature = "search")]
+use tantivy::{
+    collector::TopDocs,
+    doc,
+    query::QueryParser,
+    schema::{Field, Schema, Value, FAST, STORED, STRING, TEXT},
+    snippet::SnippetGenerator,
+    Index as TantivyIndex, IndexReader, ReloadPolicy, TantivyDocument, Term,
+};
+
+use crate::error::{ChanError, Result};
+
+const SCHEMA_VERSION: u32 = 2;
+const VERSION_FILE: &str = ".schema_version";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SearchMode {
@@ -57,40 +75,319 @@ pub struct Hit {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snippet {
-    /// ATX heading stack leading to this snippet, e.g.
-    /// `["Recipes", "Pasta", "Carbonara"]`. Empty for top-of-file
-    /// content.
+    /// ATX heading stack leading to this snippet. Empty for v1
+    /// (per-file granularity). Filled once per-section chunking
+    /// lands.
     pub heading_path: Vec<String>,
-    /// Highlighted excerpt around the match. Plain text; the UI
-    /// is responsible for rendering markdown.
+    /// Excerpt with the match. Plain text; UI renders.
     pub text: String,
 }
 
-/// Index handle. One per Drive open; not Clone (carries the
-/// writer lock lifecycle internally).
-pub struct Index {
-    /// Drive root, kept for scoping/file-id purposes.
-    #[allow(dead_code)]
-    drive_root: std::path::PathBuf,
-    /// Index dir from `paths::drive_paths`.
-    #[allow(dead_code)]
-    index_dir: std::path::PathBuf,
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexStats {
+    pub files_indexed: u32,
+    pub files_skipped: u32,
+    pub elapsed_ms: u64,
 }
 
+/// One document fed into the index. Built by Drive::index_file,
+/// passed to `Index::reindex_iter` for bulk rebuilds.
+#[derive(Debug, Clone)]
+pub struct IndexDoc {
+    pub path: String,
+    pub title: Option<String>,
+    pub body: String,
+    pub mtime: Option<i64>,
+}
+
+/// Index handle. One per Drive open.
+#[cfg(feature = "search")]
+pub struct Index {
+    /// Drive root, kept for diagnostics. Not used at query time;
+    /// tantivy works against the index dir we passed to `open`.
+    #[allow(dead_code)]
+    drive_root: PathBuf,
+    inner: TantivyIndex,
+    reader: IndexReader,
+    /// Serializes writer construction. Tantivy's writer holds a
+    /// directory-level lock; this Mutex prevents two threads in
+    /// the same process from racing to grab it.
+    writer_slot: Mutex<()>,
+    schema_fields: SchemaFields,
+}
+
+#[cfg(feature = "search")]
+#[derive(Clone)]
+struct SchemaFields {
+    path: Field,
+    title: Field,
+    body: Field,
+    mtime: Field,
+}
+
+#[cfg(feature = "search")]
 impl Index {
-    /// Open or create the search index for this drive. Schema
-    /// mismatches trigger a full rebuild on the next `reindex()`.
     pub fn open(drive_root: &Path, index_dir: &Path) -> Result<Self> {
-        std::fs::create_dir_all(index_dir)?;
+        fs::create_dir_all(index_dir)?;
+        ensure_schema_version(index_dir)?;
+
+        let (schema, fields) = build_schema();
+        let inner = TantivyIndex::open_or_create(
+            tantivy::directory::MmapDirectory::open(index_dir)
+                .map_err(|e| ChanError::Search(e.to_string()))?,
+            schema,
+        )
+        .map_err(|e| ChanError::Search(e.to_string()))?;
+        let reader = inner
+            .reader_builder()
+            .reload_policy(ReloadPolicy::OnCommitWithDelay)
+            .try_into()
+            .map_err(|e| ChanError::Search(e.to_string()))?;
+        Ok(Self {
+            drive_root: drive_root.to_path_buf(),
+            inner,
+            reader,
+            writer_slot: Mutex::new(()),
+            schema_fields: fields,
+        })
+    }
+
+    /// Replace the document for `rel` in the index. Single commit.
+    /// For bulk operations use `reindex_iter`.
+    pub fn upsert(&self, doc: &IndexDoc) -> Result<()> {
+        let _g = self.writer_slot.lock().unwrap();
+        let mut w = self
+            .inner
+            .writer::<TantivyDocument>(50_000_000)
+            .map_err(|e| ChanError::Search(e.to_string()))?;
+        write_doc(&mut w, &self.schema_fields, doc);
+        w.commit().map_err(|e| ChanError::Search(e.to_string()))?;
+        self.reader
+            .reload()
+            .map_err(|e| ChanError::Search(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Drop a file from the index.
+    pub fn remove(&self, rel: &str) -> Result<()> {
+        let _g = self.writer_slot.lock().unwrap();
+        let mut w = self
+            .inner
+            .writer::<TantivyDocument>(50_000_000)
+            .map_err(|e| ChanError::Search(e.to_string()))?;
+        w.delete_term(Term::from_field_text(self.schema_fields.path, rel));
+        w.commit().map_err(|e| ChanError::Search(e.to_string()))?;
+        self.reader
+            .reload()
+            .map_err(|e| ChanError::Search(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Wipe everything and rebuild from `docs`. Single commit at
+    /// the end; tantivy fsyncs once.
+    pub fn reindex_iter<I>(&self, docs: I) -> Result<IndexStats>
+    where
+        I: IntoIterator<Item = IndexDoc>,
+    {
+        let start = std::time::Instant::now();
+        let _g = self.writer_slot.lock().unwrap();
+        let mut w = self
+            .inner
+            .writer::<TantivyDocument>(50_000_000)
+            .map_err(|e| ChanError::Search(e.to_string()))?;
+        w.delete_all_documents()
+            .map_err(|e| ChanError::Search(e.to_string()))?;
+        let mut indexed = 0u32;
+        for d in docs {
+            write_doc(&mut w, &self.schema_fields, &d);
+            indexed += 1;
+        }
+        w.commit().map_err(|e| ChanError::Search(e.to_string()))?;
+        self.reader
+            .reload()
+            .map_err(|e| ChanError::Search(e.to_string()))?;
+        Ok(IndexStats {
+            files_indexed: indexed,
+            files_skipped: 0,
+            elapsed_ms: start.elapsed().as_millis() as u64,
+        })
+    }
+
+    pub fn search(&self, query: &str, opts: &SearchOpts) -> Result<SearchResults> {
+        let limit = if opts.limit == 0 { 50 } else { opts.limit } as usize;
+        // When scope filtering is on, over-fetch so post-filter has
+        // material to return up to `limit` results.
+        let fetch = if opts.scope.is_some() {
+            limit * 4
+        } else {
+            limit
+        };
+
+        let searcher = self.reader.searcher();
+        let qp = QueryParser::for_index(
+            &self.inner,
+            vec![self.schema_fields.title, self.schema_fields.body],
+        );
+        let parsed = qp
+            .parse_query(query)
+            .map_err(|e| ChanError::Search(e.to_string()))?;
+        let top = searcher
+            .search(&parsed, &TopDocs::with_limit(fetch))
+            .map_err(|e| ChanError::Search(e.to_string()))?;
+
+        let snippet_gen = SnippetGenerator::create(&searcher, &parsed, self.schema_fields.body)
+            .map_err(|e| ChanError::Search(e.to_string()))?;
+
+        let mut hits = Vec::with_capacity(limit);
+        for (score, addr) in top {
+            let doc: TantivyDocument = searcher
+                .doc::<TantivyDocument>(addr)
+                .map_err(|e| ChanError::Search(e.to_string()))?;
+            let path = doc
+                .get_first(self.schema_fields.path)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if let Some(scope) = &opts.scope {
+                if !path_under(&path, scope) {
+                    continue;
+                }
+            }
+            let snippet = snippet_gen.snippet_from_doc(&doc);
+            let text = if snippet.is_empty() {
+                doc.get_first(self.schema_fields.body)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .chars()
+                    .take(200)
+                    .collect()
+            } else {
+                snippet.to_html()
+            };
+            hits.push(Hit {
+                path,
+                score,
+                snippets: vec![Snippet {
+                    heading_path: Vec::new(),
+                    text,
+                }],
+            });
+            if hits.len() >= limit {
+                break;
+            }
+        }
+
+        let total = hits.len() as u32;
+        Ok(SearchResults {
+            hits,
+            total,
+            mode_used: SearchMode::Bm25,
+        })
+    }
+}
+
+#[cfg(feature = "search")]
+fn build_schema() -> (Schema, SchemaFields) {
+    let mut sb = Schema::builder();
+    let path = sb.add_text_field("path", STRING | STORED);
+    let title = sb.add_text_field("title", TEXT | STORED);
+    let body = sb.add_text_field("body", TEXT | STORED);
+    let mtime = sb.add_i64_field("mtime", FAST | STORED);
+    let schema = sb.build();
+    (
+        schema,
+        SchemaFields {
+            path,
+            title,
+            body,
+            mtime,
+        },
+    )
+}
+
+#[cfg(feature = "search")]
+fn write_doc(w: &mut tantivy::IndexWriter<TantivyDocument>, f: &SchemaFields, d: &IndexDoc) {
+    w.delete_term(Term::from_field_text(f.path, &d.path));
+    let mut td = doc!(
+        f.path => d.path.clone(),
+        f.body => d.body.clone(),
+        f.mtime => d.mtime.unwrap_or(0),
+    );
+    if let Some(t) = &d.title {
+        td.add_text(f.title, t);
+    }
+    let _ = w.add_document(td);
+}
+
+fn path_under(path: &str, scope: &str) -> bool {
+    let scope = scope.trim_matches('/');
+    if scope.is_empty() {
+        return true;
+    }
+    let prefix = format!("{scope}/");
+    path == scope || path.starts_with(&prefix)
+}
+
+/// Read `<index_dir>/.schema_version`. If missing or mismatched,
+/// nuke everything in `index_dir` (except the version file itself,
+/// which we rewrite). The next caller's tantivy open then sees a
+/// clean directory.
+fn ensure_schema_version(index_dir: &Path) -> Result<()> {
+    let vfile = index_dir.join(VERSION_FILE);
+    let observed: Option<u32> = fs::read_to_string(&vfile)
+        .ok()
+        .and_then(|s| s.trim().parse().ok());
+    if observed == Some(SCHEMA_VERSION) {
+        return Ok(());
+    }
+    // Wipe everything in the dir, then rewrite the version file.
+    if let Ok(rd) = fs::read_dir(index_dir) {
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                let _ = fs::remove_dir_all(&p);
+            } else {
+                let _ = fs::remove_file(&p);
+            }
+        }
+    }
+    crate::fs_ops::atomic_write(&vfile, SCHEMA_VERSION.to_string().as_bytes())?;
+    Ok(())
+}
+
+#[cfg(not(feature = "search"))]
+pub struct Index {
+    #[allow(dead_code)]
+    drive_root: PathBuf,
+    #[allow(dead_code)]
+    index_dir: PathBuf,
+}
+
+#[cfg(not(feature = "search"))]
+impl Index {
+    pub fn open(drive_root: &Path, index_dir: &Path) -> Result<Self> {
+        fs::create_dir_all(index_dir)?;
         Ok(Self {
             drive_root: drive_root.to_path_buf(),
             index_dir: index_dir.to_path_buf(),
         })
     }
 
-    /// Run a query. The current implementation is a no-op stub
-    /// (always returns empty results); wiring tantivy is the next
-    /// session's work.
+    pub fn upsert(&self, _doc: &IndexDoc) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn remove(&self, _rel: &str) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn reindex_iter<I>(&self, _docs: I) -> Result<IndexStats>
+    where
+        I: IntoIterator<Item = IndexDoc>,
+    {
+        Ok(IndexStats::default())
+    }
+
     pub fn search(&self, _query: &str, opts: &SearchOpts) -> Result<SearchResults> {
         Ok(SearchResults {
             hits: Vec::new(),
@@ -98,26 +395,106 @@ impl Index {
             mode_used: opts.mode,
         })
     }
-
-    /// Re-index the whole drive from scratch. Stub for now.
-    pub fn reindex(&self) -> Result<IndexStats> {
-        Ok(IndexStats::default())
-    }
-
-    /// Incrementally update the index for a single file. Stub for now.
-    pub fn upsert(&self, _rel: &str) -> Result<()> {
-        Ok(())
-    }
-
-    /// Drop a file from the index.
-    pub fn remove(&self, _rel: &str) -> Result<()> {
-        Ok(())
-    }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct IndexStats {
-    pub files_indexed: u32,
-    pub chunks_indexed: u32,
-    pub elapsed_ms: u64,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn path_under_matches_prefix() {
+        assert!(path_under("recipes/pasta.md", "recipes"));
+        assert!(path_under("recipes", "recipes"));
+        assert!(!path_under("recipes-old/pasta.md", "recipes"));
+        assert!(path_under("notes/x.md", ""));
+    }
+
+    #[cfg(feature = "search")]
+    #[test]
+    fn upsert_then_search_finds_doc() {
+        let drive_root = TempDir::new().unwrap();
+        let idx_dir = TempDir::new().unwrap();
+        let idx = Index::open(drive_root.path(), idx_dir.path()).unwrap();
+        idx.upsert(&IndexDoc {
+            path: "intro.md".into(),
+            title: Some("Hello".into()),
+            body: "Welcome to the carbonara recipe collection.".into(),
+            mtime: Some(1000),
+        })
+        .unwrap();
+        let res = idx.search("carbonara", &SearchOpts::default()).unwrap();
+        assert_eq!(res.hits.len(), 1);
+        assert_eq!(res.hits[0].path, "intro.md");
+    }
+
+    #[cfg(feature = "search")]
+    #[test]
+    fn remove_drops_doc() {
+        let drive_root = TempDir::new().unwrap();
+        let idx_dir = TempDir::new().unwrap();
+        let idx = Index::open(drive_root.path(), idx_dir.path()).unwrap();
+        idx.upsert(&IndexDoc {
+            path: "a.md".into(),
+            title: None,
+            body: "carbonara".into(),
+            mtime: None,
+        })
+        .unwrap();
+        idx.remove("a.md").unwrap();
+        let res = idx.search("carbonara", &SearchOpts::default()).unwrap();
+        assert_eq!(res.hits.len(), 0);
+    }
+
+    #[cfg(feature = "search")]
+    #[test]
+    fn scope_filters_results() {
+        let drive_root = TempDir::new().unwrap();
+        let idx_dir = TempDir::new().unwrap();
+        let idx = Index::open(drive_root.path(), idx_dir.path()).unwrap();
+        for (path, body) in [
+            ("recipes/pasta.md", "carbonara"),
+            ("notes/cooking.md", "carbonara"),
+        ] {
+            idx.upsert(&IndexDoc {
+                path: path.into(),
+                title: None,
+                body: body.into(),
+                mtime: None,
+            })
+            .unwrap();
+        }
+        let opts = SearchOpts {
+            scope: Some("recipes".into()),
+            ..Default::default()
+        };
+        let res = idx.search("carbonara", &opts).unwrap();
+        assert_eq!(res.hits.len(), 1);
+        assert_eq!(res.hits[0].path, "recipes/pasta.md");
+    }
+
+    #[cfg(feature = "search")]
+    #[test]
+    fn schema_version_wipe_rebuilds_clean() {
+        let drive_root = TempDir::new().unwrap();
+        let idx_dir = TempDir::new().unwrap();
+        // Open + write a doc.
+        {
+            let idx = Index::open(drive_root.path(), idx_dir.path()).unwrap();
+            idx.upsert(&IndexDoc {
+                path: "a.md".into(),
+                title: None,
+                body: "stale data".into(),
+                mtime: None,
+            })
+            .unwrap();
+        }
+        // Bump the on-disk version to something else, simulating a
+        // schema migration.
+        std::fs::write(idx_dir.path().join(VERSION_FILE), "999").unwrap();
+        // Re-open: should wipe and start clean.
+        let idx = Index::open(drive_root.path(), idx_dir.path()).unwrap();
+        let res = idx.search("stale", &SearchOpts::default()).unwrap();
+        assert_eq!(res.hits.len(), 0);
+    }
 }

@@ -20,10 +20,11 @@
 //            ord      INTEGER NOT NULL,
 //            PRIMARY KEY (rel_path, ord))
 //
-// All public methods are stubs at this point; the API shape is
-// what we're committing to. The first real implementation lives
-// behind `Drive::graph()` which constructs a `GraphView` against
-// the per-drive sqlite handle.
+// `Drive::graph()` constructs a `GraphView` against the per-drive
+// sqlite handle. Reads (neighbors / backlinks / tags / files_with_tag
+// / headings_of / files) and writes (replace_file / forget_file /
+// clear) are both wired; `Drive::reindex` calls `clear` then
+// `replace_file` per file as it walks the tree.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -32,19 +33,39 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
+use crate::markdown;
 
 /// Edge kind. Mirrors the wiki-link / mention / tag distinction
 /// that the editor already exposes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EdgeKind {
-    /// `[[wiki-link]]` from src to dst. Includes optional anchor.
+    /// `[[wiki-link]]` or markdown `[label](path)` from src to dst.
+    /// Anchor is the optional `#section` fragment on dst.
     Link,
-    /// `@mention` of a person / project / topic. Mentions resolve
-    /// to a target file when one exists; otherwise to a placeholder
-    /// node so the graph stays connected.
+    /// `@@mention`. dst is `@@name` until the mention resolves to
+    /// a real file.
     Mention,
-    /// `#tag` applied to src. dst is the tag node.
+    /// `#tag` applied to src. dst is `#name`.
     Tag,
+}
+
+impl EdgeKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            EdgeKind::Link => "link",
+            EdgeKind::Mention => "mention",
+            EdgeKind::Tag => "tag",
+        }
+    }
+
+    fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "link" => Some(EdgeKind::Link),
+            "mention" => Some(EdgeKind::Mention),
+            "tag" => Some(EdgeKind::Tag),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,35 +135,106 @@ impl GraphView {
         Ok(())
     }
 
-    /// Outgoing edges from `rel`.
-    pub fn neighbors(&self, _rel: &str) -> Result<Vec<Edge>> {
-        Ok(Vec::new())
+    /// Outgoing edges from `rel`. Document order is not preserved;
+    /// callers that need stable order should sort by (kind, dst).
+    pub fn neighbors(&self, rel: &str) -> Result<Vec<Edge>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare_cached(
+            "SELECT dst, kind, anchor FROM edges WHERE src = ? ORDER BY kind, dst",
+        )?;
+        let rows = stmt.query_map(params![rel], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (dst, kind_str, anchor) = row?;
+            if let Some(kind) = EdgeKind::from_str(&kind_str) {
+                out.push(Edge {
+                    src: rel.to_string(),
+                    dst,
+                    kind,
+                    anchor,
+                });
+            }
+        }
+        Ok(out)
     }
 
-    /// Incoming edges into `rel`.
-    pub fn backlinks(&self, _rel: &str) -> Result<Vec<Edge>> {
-        Ok(Vec::new())
+    /// Incoming edges into `rel` (other files that link to it).
+    pub fn backlinks(&self, rel: &str) -> Result<Vec<Edge>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare_cached(
+            "SELECT src, kind, anchor FROM edges WHERE dst = ? AND kind = 'link' ORDER BY src",
+        )?;
+        let rows = stmt.query_map(params![rel], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (src, kind_str, anchor) = row?;
+            if let Some(kind) = EdgeKind::from_str(&kind_str) {
+                out.push(Edge {
+                    src,
+                    dst: rel.to_string(),
+                    kind,
+                    anchor,
+                });
+            }
+        }
+        Ok(out)
     }
 
-    /// All tags in the drive with their reference counts.
+    /// All tags in the drive with their reference counts. Tag dst
+    /// nodes are stored as `#name`; we strip the prefix in the result.
     pub fn tags(&self) -> Result<Vec<Tag>> {
-        Ok(Vec::new())
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare_cached(
+            "SELECT dst, COUNT(*) FROM edges WHERE kind = 'tag' GROUP BY dst ORDER BY 2 DESC, 1",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u32))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (dst, count) = row?;
+            let name = dst.strip_prefix('#').unwrap_or(&dst).to_string();
+            out.push(Tag { name, count });
+        }
+        Ok(out)
     }
 
-    /// Files tagged with `tag`.
-    pub fn files_with_tag(&self, _tag: &str) -> Result<Vec<String>> {
-        Ok(Vec::new())
+    /// Files tagged with `tag` (without the leading `#`).
+    pub fn files_with_tag(&self, tag: &str) -> Result<Vec<String>> {
+        let dst = format!("#{tag}");
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare_cached(
+            "SELECT DISTINCT src FROM edges WHERE kind = 'tag' AND dst = ? ORDER BY src",
+        )?;
+        let rows = stmt.query_map(params![dst], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     /// Replace the graph data for one file: removes existing
-    /// edges/headings owned by `rel` and inserts the supplied ones.
-    /// The full-update semantic keeps incremental indexing simple.
+    /// edges/headings owned by `rel` and inserts the supplied ones
+    /// in a single transaction.
     pub fn replace_file(
         &self,
         rel: &str,
         mtime: Option<i64>,
-        _outgoing: &[Edge],
-        _headings: &[Heading],
+        outgoing: &[Edge],
+        headings: &[markdown::Heading],
     ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
@@ -152,12 +244,27 @@ impl GraphView {
         )?;
         tx.execute("DELETE FROM edges WHERE src = ?", params![rel])?;
         tx.execute("DELETE FROM headings WHERE rel_path = ?", params![rel])?;
-        // TODO: insert _outgoing and _headings once chunking lands.
+        {
+            let mut ins_edge = tx.prepare_cached(
+                "INSERT OR IGNORE INTO edges(src, dst, kind, anchor) VALUES (?, ?, ?, ?)",
+            )?;
+            for e in outgoing {
+                ins_edge.execute(params![rel, e.dst, e.kind.as_str(), e.anchor])?;
+            }
+            let mut ins_heading = tx.prepare_cached(
+                "INSERT INTO headings(rel_path, level, text, anchor, ord) VALUES (?, ?, ?, ?, ?)",
+            )?;
+            for h in headings {
+                let anchor = markdown::heading_anchor(&h.text);
+                ins_heading.execute(params![rel, h.level as i64, h.text, anchor, h.ord as i64])?;
+            }
+        }
         tx.commit()?;
         Ok(())
     }
 
-    /// Drop a file from the graph entirely.
+    /// Drop a file from the graph entirely. Edges with `rel` as
+    /// either endpoint go too; no dangling references.
     pub fn forget_file(&self, rel: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
@@ -170,11 +277,60 @@ impl GraphView {
         tx.commit()?;
         Ok(())
     }
+
+    /// Wipe every file, edge, and heading. Used by `Drive::reindex`
+    /// before rebuilding from scratch.
+    pub fn clear(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM edges", [])?;
+        tx.execute("DELETE FROM headings", [])?;
+        tx.execute("DELETE FROM nodes", [])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// All files known to the graph, sorted by path.
+    pub fn files(&self) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare_cached("SELECT rel_path FROM nodes WHERE kind = 'file' ORDER BY rel_path")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Headings of one file in document order.
+    pub fn headings_of(&self, rel: &str) -> Result<Vec<HeadingRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare_cached(
+            "SELECT level, text, anchor, ord FROM headings \
+             WHERE rel_path = ? ORDER BY ord",
+        )?;
+        let rows = stmt.query_map(params![rel], |row| {
+            Ok(HeadingRow {
+                level: row.get::<_, i64>(0)? as u8,
+                text: row.get::<_, String>(1)?,
+                anchor: row.get::<_, String>(2)?,
+                ord: row.get::<_, i64>(3)? as u32,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
 }
 
-/// One ATX heading inside a file. Order is the document order.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Heading {
+/// A heading as stored in the graph DB. Differs from
+/// `markdown::Heading` by carrying the computed anchor and not the
+/// source line number (we don't need it for graph queries).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeadingRow {
     pub level: u8,
     pub text: String,
     pub anchor: String,
