@@ -24,10 +24,12 @@
 // invariants (atomic writes, path sandbox, special-file refusal,
 // cross-process writer lock) apply uniformly.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use chan_core::{Library, SearchOpts};
+use chan_server::ServeConfig;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
@@ -100,7 +102,15 @@ fn main() -> Result<()> {
             path,
             port,
             no_token,
-        } => cmd_serve(path, port, no_token),
+        } => {
+            // serve is the only async subcommand; everything else
+            // stays sync so the CLI starts up without a runtime.
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .context("building tokio runtime")?;
+            rt.block_on(cmd_serve(path, port, no_token))
+        }
         Command::Index { path } => cmd_index(path),
         Command::Search { path, query, limit } => cmd_search(path, query, limit),
     }
@@ -185,15 +195,29 @@ fn cmd_rename(path: PathBuf, name: String) -> Result<()> {
     Ok(())
 }
 
-fn cmd_serve(_path: Option<PathBuf>, _port: u16, _no_token: bool) -> Result<()> {
-    // Once chan-server lands its routes this will resolve the drive,
-    // build the ServeConfig, and call chan_server::serve. For now the
-    // crate is a stub; hand back a clear error so users / scripts
-    // know to wait.
-    anyhow::bail!(
-        "chan serve: not implemented yet. \
-         Routes port in follow-up commits to chan-server."
-    )
+async fn cmd_serve(path: Option<PathBuf>, port: u16, no_token: bool) -> Result<()> {
+    let lib = library()?;
+    // Resolve the drive root: explicit arg first, then the registry
+    // default, then the platform default. Auto-register so users
+    // can `chan serve /some/dir` without a prior `chan add`.
+    let root = path
+        .or_else(|| lib.default_drive_root())
+        .unwrap_or_else(|| lib.effective_default_drive_root());
+    if !root.exists() {
+        std::fs::create_dir_all(&root)
+            .with_context(|| format!("creating drive root {}", root.display()))?;
+    }
+    lib.register_drive(&root, None)
+        .with_context(|| format!("registering {}", root.display()))?;
+    let drive = lib.open_drive(&root)?;
+
+    let addr: SocketAddr = format!("127.0.0.1:{port}")
+        .parse()
+        .context("parsing bind address")?;
+    let config = ServeConfig { addr, no_token };
+    chan_server::serve(drive, config)
+        .await
+        .context("running server")
 }
 
 fn cmd_index(path: PathBuf) -> Result<()> {

@@ -12,11 +12,14 @@ name = "chan_server"
 
 [dependencies]
 chan-core = { workspace = true }
+anyhow = { workspace = true }
 axum = { workspace = true }
+rand = "0.8"
 tokio = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
