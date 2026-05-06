@@ -215,7 +215,7 @@ async fn cmd_serve(path: Option<PathBuf>, port: u16, no_token: bool) -> Result<(
         .parse()
         .context("parsing bind address")?;
     let config = ServeConfig { addr, no_token };
-    chan_server::serve(drive, config)
+    chan_server::serve(lib, drive, config)
         .await
         .context("running server")
 }

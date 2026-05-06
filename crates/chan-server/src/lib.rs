@@ -20,16 +20,18 @@ use std::path::Path;
 use std::sync::Arc;
 
 use axum::body::Body;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chan_core::{paths::DrivePaths, Drive};
+use chan_core::{paths::DrivePaths, Drive, Library, WatchCallback, WatchEvent, WatchHandle};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
+use tokio::sync::broadcast;
 use tower_http::trace::TraceLayer;
 
 /// Configuration the binary hands the server at boot. Kept terse on
@@ -70,7 +72,11 @@ pub enum Error {
 
 /// Spawn the listener, build the router, and serve forever.
 /// Returns when the server stops (e.g. on SIGINT).
-pub async fn serve(drive: Arc<Drive>, config: ServeConfig) -> Result<(), Error> {
+///
+/// `library` is held alongside `drive` so handlers that mutate
+/// the registry (rename, etc.) operate against the same state the
+/// CLI sees. Both are `Arc`-able and cheap to clone.
+pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> Result<(), Error> {
     let listener = TcpListener::bind(config.addr).await?;
     let addr = listener.local_addr()?;
     let token = if config.no_token {
@@ -80,9 +86,26 @@ pub async fn serve(drive: Arc<Drive>, config: ServeConfig) -> Result<(), Error> 
     };
     let handle = ServeHandle { addr, token };
     eprintln!("chan listening on {}", handle.launch_url());
+
+    // Filesystem watcher: chan-core's Drive::watch is callback-
+    // shaped, so we bridge into a tokio broadcast channel that any
+    // number of WebSocket subscribers can read from. The handle
+    // must stay alive for the watcher's life; we park it in
+    // AppState. Buffer of 256 is enough headroom for typical
+    // bursts (mass rename, save-all). Slow subscribers see Lagged
+    // and skip ahead rather than blocking the sender.
+    let (events_tx, _) = broadcast::channel::<WatchEvent>(256);
+    let bridge: Arc<dyn WatchCallback> = Arc::new(WatchBroadcast {
+        tx: events_tx.clone(),
+    });
+    let watch_handle = drive.watch(bridge)?;
+
     let state = Arc::new(AppState {
+        library,
         drive,
         token: handle.token,
+        events_tx,
+        _watch_handle: watch_handle,
     });
     let app = router(state);
     axum::serve(listener, app)
@@ -93,12 +116,36 @@ pub async fn serve(drive: Arc<Drive>, config: ServeConfig) -> Result<(), Error> 
 
 /// Server state shared across all handlers.
 struct AppState {
+    library: Library,
     drive: Arc<Drive>,
     token: Option<String>,
+    events_tx: broadcast::Sender<WatchEvent>,
+    /// Held so the underlying notify watcher keeps running for the
+    /// server's lifetime. Field is `_`-prefixed because nothing
+    /// reads it; dropping AppState drops the handle, which stops
+    /// the watcher.
+    _watch_handle: WatchHandle,
+}
+
+/// Bridge from chan-core's callback-shaped watcher into the
+/// broadcast channel that backs every /ws subscriber. Send errors
+/// (no current subscribers) are intentionally swallowed; broadcast
+/// returns `Err(SendError)` only when the channel is closed, which
+/// can't happen while AppState is alive.
+struct WatchBroadcast {
+    tx: broadcast::Sender<WatchEvent>,
+}
+
+impl WatchCallback for WatchBroadcast {
+    fn on_event(&self, event: WatchEvent) {
+        let _ = self.tx.send(event);
+    }
 }
 
 fn router(state: Arc<AppState>) -> Router {
     let api = Router::new()
+        .route("/api/drive", get(api_get_drive).patch(api_patch_drive))
+        .route("/api/cloud-drives", get(api_cloud_drives))
         .route("/api/files", get(api_list_files).post(api_create_file))
         .route(
             "/api/files/*path",
@@ -107,7 +154,8 @@ fn router(state: Arc<AppState>) -> Router {
                 .delete(api_delete_file),
         )
         .route("/api/move", post(api_move))
-        .route("/api/health", get(api_health));
+        .route("/api/health", get(api_health))
+        .route("/ws", get(ws_upgrade));
     Router::new()
         .merge(api)
         .layer(TraceLayer::new_for_http())
@@ -133,18 +181,12 @@ fn random_token() -> String {
 }
 
 /// Load the persisted server token, generating one on first run.
-/// Lives at `<state>/tokens/<drive-key>` (mode 0600 on Unix). The
-/// token survives a binary rebuild so the browser's cached
-/// sessionStorage token stays valid across `cargo build && chan
-/// serve` cycles.
+/// Lives at `<paths.tokens>/token` (mode 0600 on Unix). The token
+/// survives a binary rebuild so the browser's cached sessionStorage
+/// token stays valid across `cargo build && chan serve` cycles.
 fn load_or_create_token(paths: &DrivePaths) -> std::io::Result<String> {
-    // Tokens live under <state>/tokens/<drive-key>. The DrivePaths
-    // exposes per-drive subdirs already; we reuse the lock dir's
-    // parent layout by appending "tokens" alongside the existing
-    // sessions/assistant/index/locks subtrees.
-    let token_dir = state_tokens_dir(paths);
-    std::fs::create_dir_all(&token_dir)?;
-    let token_path = token_dir.join("token");
+    std::fs::create_dir_all(&paths.tokens)?;
+    let token_path = paths.tokens.join("token");
     if let Ok(s) = std::fs::read_to_string(&token_path) {
         let s = s.trim();
         if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -174,27 +216,6 @@ fn write_token_atomic(token_path: &Path, token: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Per-drive token directory. Mirrors the layout chan-core uses for
-/// sessions / assistant / locks: `<state>/tokens/<drive-key>/`.
-fn state_tokens_dir(paths: &DrivePaths) -> std::path::PathBuf {
-    // paths.lock is `<state>/locks/<drive-key>`; swap the segment
-    // to land on the sibling tokens dir without recomputing the
-    // drive-key. Future chan-core versions could expose this
-    // directly via DrivePaths.
-    let lock_parent = paths
-        .lock
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|state| state.join("tokens"))
-        .unwrap_or_else(|| std::path::PathBuf::from(".chan-state").join("tokens"));
-    let key = paths
-        .lock
-        .file_name()
-        .map(|s| s.to_owned())
-        .unwrap_or_default();
-    lock_parent.join(key)
-}
-
 /// Reject requests that don't carry the right token.
 ///
 /// Auth scope: only `/api/*` routes are gated. Static assets (when
@@ -210,7 +231,7 @@ async fn auth_middleware(
         return next.run(req).await;
     };
     let path = req.uri().path();
-    if !path.starts_with("/api") {
+    if !(path.starts_with("/api") || path == "/ws") {
         return next.run(req).await;
     }
     if extract_token(req.uri().query(), req.headers()) == Some(expected) {
@@ -237,6 +258,111 @@ fn extract_token<'a>(query: Option<&'a str>, headers: &'a HeaderMap) -> Option<&
 
 async fn api_health() -> Response {
     Json(serde_json::json!({"status": "ok"})).into_response()
+}
+
+async fn ws_upgrade(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) -> Response {
+    let rx = state.events_tx.subscribe();
+    ws.on_upgrade(move |socket| ws_pump(socket, rx))
+}
+
+/// Forward filesystem events to one WebSocket client until either
+/// side hangs up. Lagged subscribers (the server fills the buffer
+/// faster than the client drains it) skip ahead and continue
+/// rather than tearing down the connection.
+async fn ws_pump(mut socket: WebSocket, mut rx: broadcast::Receiver<WatchEvent>) {
+    loop {
+        match rx.recv().await {
+            Ok(event) => {
+                let json = match serde_json::to_string(&event) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!("ws event serialize error: {e}");
+                        continue;
+                    }
+                };
+                if socket.send(Message::Text(json)).await.is_err() {
+                    break;
+                }
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct DriveInfo {
+    /// User-facing display name from the registry. None when the
+    /// drive has no name set; the frontend falls back to the
+    /// basename of `root` for display.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    /// Absolute drive root, POSIX-style on every platform so the
+    /// JSON shape stays stable.
+    root: String,
+    // Future: a `preferences` field carrying app-level prefs (font,
+    // theme, attachments dir) once the chan-server preference layer
+    // lands. Held off here so we don't ship a partial schema.
+}
+
+async fn api_get_drive(State(state): State<Arc<AppState>>) -> Response {
+    Json(drive_info(&state)).into_response()
+}
+
+#[derive(Deserialize)]
+struct PatchDriveBody {
+    /// Empty string clears the name (the basename takes over for
+    /// display). Field absent in the body is a no-op so the same
+    /// PATCH endpoint can grow other fields later without each
+    /// caller having to pass them.
+    #[serde(default)]
+    name: Option<String>,
+}
+
+async fn api_patch_drive(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<PatchDriveBody>,
+) -> Response {
+    if let Some(name) = body.name {
+        let new_name = if name.is_empty() { None } else { Some(name) };
+        if let Err(e) = state.library.rename_drive(state.drive.root(), new_name) {
+            return err_from(&e);
+        }
+    }
+    Json(drive_info(&state)).into_response()
+}
+
+#[derive(Serialize)]
+struct CloudDriveJson {
+    provider: String,
+    provider_root: String,
+    suggested_root: String,
+}
+
+async fn api_cloud_drives() -> Response {
+    let out: Vec<CloudDriveJson> = chan_core::paths::detected_cloud_drives()
+        .into_iter()
+        .map(|c| CloudDriveJson {
+            provider: c.provider,
+            provider_root: c.provider_root.to_string_lossy().into_owned(),
+            suggested_root: c.suggested_root.to_string_lossy().into_owned(),
+        })
+        .collect();
+    Json(out).into_response()
+}
+
+/// Build a `DriveInfo` from current registry state. Re-reads the
+/// registry on every call so a CLI-side `chan rename` immediately
+/// reflects in the next /api/drive response.
+fn drive_info(state: &AppState) -> DriveInfo {
+    let drives = state.library.list_drives();
+    let entry = drives
+        .iter()
+        .find(|d| d.path.as_path() == state.drive.root());
+    DriveInfo {
+        name: entry.and_then(|e| e.name.clone()),
+        root: state.drive.root().to_string_lossy().into_owned(),
+    }
 }
 
 async fn api_list_files(State(state): State<Arc<AppState>>) -> Response {
