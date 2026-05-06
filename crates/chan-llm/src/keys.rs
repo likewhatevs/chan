@@ -15,6 +15,8 @@
 // for a key to land there is the user editing the TOML by hand.
 // This keeps us from silently rewriting a user-managed file.
 
+use serde::{Deserialize, Serialize};
+
 use crate::backends::BackendKind;
 use crate::config::LlmConfig;
 use crate::error::Result;
@@ -23,7 +25,8 @@ const SERVICE: &str = "chan";
 
 /// Where the resolved key came from. Useful for status UIs that
 /// want to render "key from keychain" / "key from env" badges.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum KeyStatus {
     Env,
     Keychain,
