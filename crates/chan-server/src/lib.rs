@@ -28,7 +28,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chan_core::{
-    paths::DrivePaths, Drive, Library, SearchOpts, WatchCallback, WatchEvent, WatchHandle,
+    paths::DrivePaths, Drive, EdgeKind, Library, SearchOpts, WatchCallback, WatchEvent, WatchHandle,
 };
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -162,6 +162,9 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/index/rebuild", post(api_index_rebuild))
         .route("/api/link-targets", get(api_link_targets))
         .route("/api/headings/*path", get(api_headings))
+        .route("/api/links", get(api_links))
+        .route("/api/graph", get(api_graph))
+        .route("/api/backlinks/*path", get(api_backlinks))
         .route("/api/health", get(api_health))
         .route("/ws", get(ws_upgrade));
     Router::new()
@@ -631,6 +634,111 @@ async fn api_headings(
     };
     match graph.headings_of(&path) {
         Ok(headings) => Json(headings).into_response(),
+        Err(e) => err_from(&e),
+    }
+}
+
+// ----- graph --------------------------------------------------------------
+//
+// chan-core's GraphView exposes per-file accessors (neighbors,
+// backlinks, headings_of) and bulk reads (files, tags). It does
+// NOT expose an "all edges" call, so /api/links and /api/graph
+// walk the file list and accumulate. For typical drive sizes the
+// O(n) sqlite round-trip is fine; if profiles show this hot we
+// add a chan-core helper.
+
+/// All link-kind edges in the drive. Mention and tag edges are
+/// excluded; the graph view fetches those via /api/graph. The
+/// shape is `[Edge]` so the frontend can render the link-only
+/// view without a follow-up request.
+async fn api_links(State(state): State<Arc<AppState>>) -> Response {
+    let graph = match state.drive.graph() {
+        Ok(g) => g,
+        Err(e) => return err_from(&e),
+    };
+    let files = match graph.files() {
+        Ok(f) => f,
+        Err(e) => return err_from(&e),
+    };
+    let mut edges = Vec::new();
+    for f in &files {
+        match graph.neighbors(f) {
+            Ok(es) => edges.extend(es.into_iter().filter(|e| matches!(e.kind, EdgeKind::Link))),
+            Err(e) => return err_from(&e),
+        }
+    }
+    Json(edges).into_response()
+}
+
+/// Typed nodes + edges payload for the graph view.
+///
+///   files     [String]                file rel paths
+///   tags      [{name, count}]         tag dst nodes with usage counts
+///   mentions  [String]                distinct mention dst nodes
+///   edges     [Edge]                  every edge in the drive
+///
+/// The frontend joins `files` to /api/files for size / mtime when
+/// it needs them; we don't denormalize that here to keep the
+/// payload small for big drives.
+#[derive(Serialize)]
+struct GraphPayload {
+    files: Vec<String>,
+    tags: Vec<chan_core::Tag>,
+    mentions: Vec<String>,
+    edges: Vec<chan_core::Edge>,
+}
+
+async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
+    let graph = match state.drive.graph() {
+        Ok(g) => g,
+        Err(e) => return err_from(&e),
+    };
+    let files = match graph.files() {
+        Ok(f) => f,
+        Err(e) => return err_from(&e),
+    };
+    let tags = match graph.tags() {
+        Ok(t) => t,
+        Err(e) => return err_from(&e),
+    };
+    let mut edges = Vec::new();
+    for f in &files {
+        match graph.neighbors(f) {
+            Ok(es) => edges.extend(es),
+            Err(e) => return err_from(&e),
+        }
+    }
+    // Distinct mention dst nodes. Sorted so the response is stable
+    // (the frontend can diff snapshots without re-key churn).
+    let mut mentions: Vec<String> = edges
+        .iter()
+        .filter(|e| matches!(e.kind, EdgeKind::Mention))
+        .map(|e| e.dst.clone())
+        .collect();
+    mentions.sort();
+    mentions.dedup();
+    Json(GraphPayload {
+        files,
+        tags,
+        mentions,
+        edges,
+    })
+    .into_response()
+}
+
+/// Incoming link edges for one file. The frontend uses this for
+/// the "linked from" panel. chan-core's `backlinks` filters to
+/// link-kind edges already; we just pass through.
+async fn api_backlinks(
+    State(state): State<Arc<AppState>>,
+    AxumPath(path): AxumPath<String>,
+) -> Response {
+    let graph = match state.drive.graph() {
+        Ok(g) => g,
+        Err(e) => return err_from(&e),
+    };
+    match graph.backlinks(&path) {
+        Ok(edges) => Json(edges).into_response(),
         Err(e) => err_from(&e),
     }
 }
