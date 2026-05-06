@@ -61,6 +61,14 @@ cargo clippy --all-targets -- -D warnings
 
 ## Contributing
 
+The Rust toolchain is pinned in `rust-toolchain.toml`. Install
+[rustup](https://rustup.rs/); it picks up the pin automatically
+the first time you run `cargo` in this directory and downloads
+the matching compiler. CI uses the same file, so local and cloud
+clippy lint sets stay locked together. Bumping Rust means editing
+`rust-toolchain.toml` and fixing any new clippy findings in the
+same commit.
+
 Install the pre-push hook once per clone:
 
 ```
@@ -68,5 +76,6 @@ Install the pre-push hook once per clone:
 ```
 
 The hook runs `cargo fmt --check`, `cargo clippy -- -D warnings`,
-and `cargo test --all-targets` before every push, mirroring CI.
-A passing local push therefore won't fail in GitHub Actions.
+`cargo test --all-targets`, and `cargo build --no-default-features`
+with `RUSTFLAGS=-D warnings` before every push, mirroring CI. A
+passing local push therefore will not fail in GitHub Actions.

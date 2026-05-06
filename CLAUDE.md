@@ -34,6 +34,17 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 ```
 
+The Rust toolchain is pinned in `rust-toolchain.toml`. `cargo`
+auto-installs the pinned version through rustup on first use, so
+contributor and CI clippy lint sets stay locked together. The pre-
+push hook (`./scripts/install-hooks` to install) runs the same
+gate as CI under the pinned compiler, with `RUSTFLAGS=-D warnings`
+plus the `--no-default-features` build, so a passing local push
+will not fail in the cloud.
+
+Bumping Rust = edit `rust-toolchain.toml` + fix new clippy
+findings in the same commit. Don't drift between local and CI.
+
 The crate has no external runtime dependencies beyond the OS:
 `tantivy` (search), `rusqlite` with the `bundled` feature (graph),
 `notify` (filesystem watcher), `fs4` (cross-process locks). All ship
