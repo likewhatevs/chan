@@ -179,6 +179,19 @@ jobs:
       - run: npm run build
         working-directory: chan/web
 
+      # Pre-fetch the default embedding model so chan-server's
+      # rust-embed bundles it into the release binary. Adds ~140
+      # MB to every artifact but means end users get hybrid search
+      # with no network round-trip on first launch (and works in
+      # restricted-egress / proxy-only environments). Runs on the
+      # host arch (no --target), since fetch-models is just a
+      # downloader; the per-target cross-compile below picks up
+      # the populated `crates/chan-server/resources/models/` dir
+      # at link time. Idempotent: re-running with the model
+      # already cached locally is a fast no-op.
+      - run: cargo run --release -p fetch-models
+        working-directory: chan
+
       - run: cargo build --release --target ${{ matrix.target }} -p chan
         working-directory: chan
 

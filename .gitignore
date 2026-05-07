@@ -20,9 +20,11 @@ web/pkg/
 .vite/
 
 # Embedding model bundle. Populated by `make models` for release
-# builds; large (~130 MB) and a moving target as upstream model
-# weights revise, so we keep it out of git and rely on fetch-models
-# to seed it before linking. .gitkeep ensures the directory itself
-# stays in the tree so rust-embed has a target.
-crates/chan-server/resources/models/*
-!crates/chan-server/resources/models/.gitkeep
+# builds (~80 MB tar.zst); a moving target as upstream weights
+# revise, so we keep it out of git and rely on fetch-models to
+# write it before linking. build.rs creates an empty stub on a
+# fresh clone so `cargo build` doesn't fail before the first
+# `make models`. The .gitkeep under resources/ keeps the dir in
+# the tree so build.rs and include_bytes! resolve cleanly.
+crates/chan-server/resources/models.tar.zst
+crates/chan-server/resources/models/

@@ -64,31 +64,24 @@ use tower_http::trace::TraceLayer;
 #[folder = "../../web/dist/"]
 struct WebAssets;
 
-/// Embedded copy of the default embedding model, populated by the
-/// `fetch-models` crate writing into `resources/models/` before the
-/// release build. Bundle is empty for plain `cargo build` so dev
-/// contributors don't pay a 130 MB download; in that case the
-/// runtime falls back to fastembed's HuggingFace download path the
-/// first time the embedder opens. Gated on the same `embeddings`
-/// feature as chan-core so a `--no-default-features` build has no
-/// model bundle and no model loader to read it.
+/// Compressed copy of the default embedding model, baked at
+/// build time. The bundle is a zstd-encoded tar archive of the
+/// hf-hub cache layout that `fetch-models` writes into
+/// `resources/models.tar.zst`. The seeder at first launch
+/// zstd-decodes + untars it into the per-machine cache.
 ///
-/// Excludes:
-///   - `blobs/`: hf-hub's cache stores file bytes there and creates
-///     symlinks under `snapshots/<rev>/` pointing back into blobs.
-///     rust-embed follows the symlinks, so the snapshot files
-///     already carry the bytes; without this exclusion blobs/ would
-///     be included verbatim and the binary would carry every model
-///     file twice (~280 MB instead of ~140 MB).
-///   - `.lock`, `.no_exists`: hf-hub bookkeeping files only used
-///     during download. Useless at runtime.
+/// Plain `cargo build` from a fresh clone gets an empty stub
+/// (created by build.rs) so `include_bytes!` always succeeds; the
+/// runtime seeder treats an empty bundle as "no embedded model"
+/// and falls back to fastembed's HuggingFace download path. Real
+/// release builds run `make models` first, which writes the
+/// actual ~80 MB tarball to the same path and the link picks it
+/// up.
+///
+/// Gated on the `embeddings` feature so a `--no-default-features`
+/// build carries neither the bundle bytes nor the decoder code.
 #[cfg(feature = "embeddings")]
-#[derive(RustEmbed)]
-#[folder = "resources/models/"]
-#[exclude = "**/blobs/**"]
-#[exclude = "**/*.lock"]
-#[exclude = "**/*.no_exists"]
-struct ModelAssets;
+static MODEL_BUNDLE: &[u8] = include_bytes!("../resources/models.tar.zst");
 
 /// Configuration the binary hands the server at boot. Kept terse on
 /// purpose; expand only when a route demands it.
@@ -180,26 +173,38 @@ pub enum Error {
     Config(String),
 }
 
-/// Spawn the listener, build the router, and serve forever.
-/// Returns when the server stops (e.g. on SIGINT).
-///
-/// `library` is held alongside `drive` so handlers that mutate
-/// the registry (rename, etc.) operate against the same state the
-/// CLI sees. Both are `Arc`-able and cheap to clone.
-pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> Result<(), Error> {
-    let listener = TcpListener::bind(config.addr).await?;
-    let addr = listener.local_addr()?;
+/// Bundle returned by `build_app`: the prefixed axum app plus the
+/// pieces `serve()` needs out-of-band (token for the launch URL,
+/// last_activity for the idle watcher). The watch handle and
+/// indexer live inside the router's state, so dropping the router
+/// drops them; callers do not need to keep a separate handle.
+struct AppArtifacts {
+    app: Router,
+    token: Option<String>,
+    last_activity: Arc<AtomicU64>,
+}
+
+/// Build the full axum app: state assembly, channels, watcher,
+/// indexer, config loads, router. Shared by `serve()` (local TCP
+/// listener) and `serve_via_tunnel()` (chan-tunnel-client transport)
+/// so the two paths serve byte-identical request handling.
+async fn build_app(
+    library: Library,
+    drive: Arc<Drive>,
+    config: &ServeConfig,
+) -> Result<AppArtifacts, Error> {
     let token = if config.no_token {
         None
     } else {
         Some(load_or_create_token(drive.paths())?)
     };
-    let handle = ServeHandle {
-        addr,
-        prefix: config.prefix.clone(),
-        token,
-    };
-    eprintln!("chan listening on {}", handle.launch_url());
+
+    // Seed the per-machine model cache from the embedded bundle if
+    // a default-model build (release) shipped one. Cheap on every
+    // launch: skipped if any file is already present at the target.
+    // No-op when the binary was built without `embeddings`.
+    #[cfg(feature = "embeddings")]
+    seed_models_from_bundle();
 
     // Unified event stream: every /ws subscriber gets watcher
     // events AND assistant streaming events from the same channel.
@@ -208,13 +213,6 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
     // text frames. Buffer of 256 is enough headroom for typical
     // bursts (mass rename, LLM token-stream); slow subscribers
     // see Lagged and skip ahead rather than blocking the sender.
-    // Seed the per-machine model cache from the embedded bundle if
-    // a default-model build (release) shipped one. Cheap on every
-    // launch: skipped if any file is already present at the target.
-    // No-op when the binary was built without `embeddings`.
-    #[cfg(feature = "embeddings")]
-    seed_models_from_bundle();
-
     let (events_tx, _) = broadcast::channel::<String>(256);
     // Indexer feed: raw WatchEvent for the background indexer
     // task. Larger buffer than the JSON channel because the
@@ -274,7 +272,7 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
             watch_handle: Some(watch_handle),
             indexer,
         })),
-        token: handle.token,
+        token: token.clone(),
         prefix: config.prefix.clone(),
         events_tx,
         index_events_tx,
@@ -294,6 +292,33 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
     } else {
         Router::new().nest(&config.prefix, inner)
     };
+
+    Ok(AppArtifacts {
+        app,
+        token,
+        last_activity,
+    })
+}
+
+/// Spawn the listener, build the router, and serve forever.
+/// Returns when the server stops (e.g. on SIGINT).
+///
+/// `library` is held alongside `drive` so handlers that mutate
+/// the registry (rename, etc.) operate against the same state the
+/// CLI sees. Both are `Arc`-able and cheap to clone.
+pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> Result<(), Error> {
+    let listener = TcpListener::bind(config.addr).await?;
+    let addr = listener.local_addr()?;
+    let artifacts = build_app(library, drive, &config).await?;
+    let handle = ServeHandle {
+        addr,
+        prefix: config.prefix.clone(),
+        token: artifacts.token.clone(),
+    };
+    eprintln!("chan listening on {}", handle.launch_url());
+
+    let app = artifacts.app;
+    let last_activity = artifacts.last_activity;
 
     // Single shutdown channel fed by both the idle-timeout watcher
     // (when --timeout is set) and SIGINT/SIGTERM. axum's
@@ -333,58 +358,145 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
     Ok(())
 }
 
-/// Extract the embedded default-model bundle into the per-machine
+/// Build the same axum app as `serve()` but hand it to
+/// `chan_tunnel_client::run` instead of binding a local TCP listener.
+/// `chan serve --tunnel-token ...` calls this; the tunnel client
+/// dials `tunnel_url`, runs Hello/HelloAck, and serves yamux
+/// substreams with our router until the future is dropped.
+///
+/// Tunnel mode forces `no_token=true`: the gateway in front of
+/// drive.chan.app is the trust boundary, and the per-launch bearer
+/// would otherwise have to be embedded in any URL the user shares.
+/// Auth gating at the gateway is tracked in follow-up issues.
+pub async fn serve_via_tunnel(
+    library: Library,
+    drive: Arc<Drive>,
+    tunnel_url: &str,
+    token: String,
+    drive_name: String,
+) -> Result<(), Error> {
+    // The addr field is unused in tunnel mode (no local listener);
+    // any parseable SocketAddr works. Prefix is empty: the public
+    // gateway strips /{user}/{drive} before forwarding, so handlers
+    // see drive-relative paths just like the local case.
+    let server_config = ServeConfig {
+        addr: SocketAddr::from(([127, 0, 0, 1], 0)),
+        no_token: true,
+        prefix: String::new(),
+        idle_timeout: None,
+    };
+    let artifacts = build_app(library, drive, &server_config).await?;
+
+    // Lifecycle events from chan-tunnel-client: drained on a side
+    // task so we can print a human-readable "your drive is at ..."
+    // line on first connect and a reconnect notice on disconnect.
+    // The channel is bounded; chan-tunnel-client uses try_send so a
+    // slow drainer drops events instead of stalling the run loop.
+    let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(8);
+    tokio::spawn(async move {
+        while let Some(ev) = events_rx.recv().await {
+            match ev {
+                chan_tunnel_client::TunnelEvent::Connected(reg) => {
+                    eprintln!(
+                        "chan tunnel connected: https://drive.chan.app{}",
+                        reg.prefix
+                    );
+                }
+                chan_tunnel_client::TunnelEvent::Disconnected { retry_in } => {
+                    eprintln!("chan tunnel disconnected; reconnecting in {retry_in:?}");
+                }
+                chan_tunnel_client::TunnelEvent::DialFailed { error, retry_in } => {
+                    eprintln!("chan tunnel dial failed: {error} (retry in {retry_in:?})");
+                }
+            }
+        }
+    });
+
+    let cfg = chan_tunnel_client::ClientConfig {
+        tunnel_url: tunnel_url
+            .parse()
+            .map_err(|e: url::ParseError| Error::Config(format!("invalid tunnel URL: {e}")))?,
+        token,
+        drive: drive_name,
+        client_version: format!("chan/{}", env!("CARGO_PKG_VERSION")),
+        initial_backoff: Duration::from_millis(500),
+        max_backoff: Duration::from_secs(30),
+        events: Some(events_tx),
+    };
+    chan_tunnel_client::run(cfg, artifacts.app)
+        .await
+        .map_err(|e| Error::Config(e.to_string()))
+}
+
+/// Extract the compressed default-model bundle into the per-machine
 /// model cache (resolved by chan-core's `global_models_dir`) the
 /// first time the server boots on this machine. Skipped on every
-/// subsequent boot: the presence of any non-temp file under the
-/// target dir is taken as "already seeded".
+/// subsequent boot: the presence of any file under the target dir
+/// is taken as "already seeded".
 ///
 /// The bundle is empty for plain `cargo build`, which makes this
 /// function a no-op in dev. Release builds run `make models`
 /// (a.k.a. `cargo run -p fetch-models`) before linking, which
-/// populates `resources/models/` and feeds the rust-embed bundle.
+/// writes the real ~80 MB `resources/models.tar.zst` and the
+/// `include_bytes!` in MODEL_BUNDLE picks it up.
 ///
 /// Errors are logged but do not block startup: if the seed fails
 /// the runtime path falls back to fastembed's HuggingFace
 /// download, the same UX as a dev build.
 #[cfg(feature = "embeddings")]
 fn seed_models_from_bundle() {
-    let target = chan_core::index::embeddings::global_models_dir();
-    if bundle_already_seeded(&target) {
+    if MODEL_BUNDLE.is_empty() {
+        // Dev build (or --no-default-features upstream of release):
+        // nothing to extract. Runtime download path applies.
         return;
     }
-    let count = ModelAssets::iter().count();
-    if count == 0 {
-        // Dev build: no bundle. Runtime download path applies.
+    let target = chan_core::index::embeddings::global_models_dir();
+    if bundle_already_seeded(&target) {
         return;
     }
     if let Err(e) = std::fs::create_dir_all(&target) {
         tracing::warn!("seed-models: create {}: {e}", target.display());
         return;
     }
-    let mut written = 0usize;
-    for filename in ModelAssets::iter() {
-        let entry = match ModelAssets::get(&filename) {
-            Some(e) => e,
-            None => continue,
-        };
-        let dest = target.join(filename.as_ref());
-        if let Some(parent) = dest.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                tracing::warn!("seed-models: mkdir {}: {e}", parent.display());
-                continue;
-            }
-        }
-        if let Err(e) = std::fs::write(&dest, entry.data.as_ref()) {
-            tracing::warn!("seed-models: write {}: {e}", dest.display());
+    match extract_bundle(&target) {
+        Ok(count) => tracing::info!(
+            "seed-models: extracted {count} files into {}",
+            target.display()
+        ),
+        Err(e) => tracing::warn!("seed-models: extract failed: {e}"),
+    }
+}
+
+/// zstd-decode + untar `MODEL_BUNDLE` into `target`. Returns the
+/// number of files written. Reports any error verbatim; the caller
+/// downgrades it to a warning so a corrupt bundle never blocks
+/// server start.
+#[cfg(feature = "embeddings")]
+fn extract_bundle(target: &Path) -> std::io::Result<usize> {
+    let zr = zstd::Decoder::new(MODEL_BUNDLE)?;
+    let mut tar = tar::Archive::new(zr);
+    // Default unpack semantics are correct for the hf-hub layout:
+    // creates intermediate dirs, preserves file mode, doesn't
+    // follow symlinks (tar's encode side already resolved them
+    // into regular files when fetch-models built the bundle).
+    let mut count = 0usize;
+    for entry in tar.entries()? {
+        let mut entry = entry?;
+        // Sanity: refuse path traversal. tar::Archive::unpack does
+        // this implicitly; we replicate by skipping entries whose
+        // post-cleanup path would escape `target`.
+        let path = entry.path()?.into_owned();
+        if path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            tracing::warn!("seed-models: skipping suspicious entry {path:?}");
             continue;
         }
-        written += 1;
+        entry.unpack_in(target)?;
+        count += 1;
     }
-    tracing::info!(
-        "seed-models: extracted {written}/{count} files into {}",
-        target.display()
-    );
+    Ok(count)
 }
 
 /// Treat the cache as seeded if any file is already present

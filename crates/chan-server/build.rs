@@ -23,6 +23,22 @@ fn main() {
     let _ = std::fs::create_dir_all(dist);
     println!("cargo:rerun-if-changed={}", dist.display());
     walk(dist);
+
+    // Embedded model bundle. Real bundle is written by
+    // `cargo run -p fetch-models` (a.k.a. `make models`); empty
+    // stub is enough for a fresh-clone `cargo build` to succeed,
+    // since the runtime seeder treats an empty bundle as "no
+    // embedded model" and falls back to fastembed's HuggingFace
+    // download path. rerun-if-changed pins the build to the
+    // bundle's mtime so a subsequent `make models` re-links.
+    let model_bundle = Path::new("resources/models.tar.zst");
+    if let Some(parent) = model_bundle.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if !model_bundle.exists() {
+        let _ = std::fs::write(model_bundle, []);
+    }
+    println!("cargo:rerun-if-changed={}", model_bundle.display());
 }
 
 fn walk(dir: &Path) {

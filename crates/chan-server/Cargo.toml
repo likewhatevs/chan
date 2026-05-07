@@ -15,16 +15,19 @@ default = ["embeddings"]
 # Forwards to chan-core's `embeddings` feature so the about-pane's
 # "embeddings on" badge reflects the actual build. Opt out via
 # `--no-default-features` along the rest of the stack.
-embeddings = ["chan-core/embeddings"]
+embeddings = ["chan-core/embeddings", "dep:tar", "dep:zstd"]
 
 [dependencies]
 chan-core = { workspace = true, default-features = false }
+tar = { workspace = true, optional = true }
+zstd = { workspace = true, optional = true }
 chan-llm = { workspace = true }
+chan-tunnel-client = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
 dirs = "5"
 rand = "0.8"
-rust-embed = { version = "8", features = ["include-exclude"] }
+rust-embed = "8"
 tokio = { workspace = true }
 toml = { workspace = true }
 tower = { workspace = true }
@@ -34,3 +37,4 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+url = "2"

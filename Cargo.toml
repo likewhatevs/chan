@@ -42,13 +42,15 @@ repository = "https://github.com/chan-writer/chan"
 # silently ignored by Cargo.
 chan-core = { path = "../chan-core", default-features = false }
 chan-llm = { path = "../chan-llm" }
+chan-tunnel-client = { path = "../chan-tunnel/crates/chan-tunnel-client" }
 
 anyhow = "1"
 axum = { version = "0.7", features = ["ws", "macros", "multipart"] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tar = "0.4"
 tempfile = "3"
 thiserror = "1"
 tokio = { version = "1", features = ["full"] }
@@ -57,6 +59,11 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Defaults pull `zstdmt` for parallel encode, fine on the build
+# host (fetch-models). The runtime decode path in chan-server
+# only needs single-threaded decode, but pulling the same crate
+# avoids two separate native libraries.
+zstd = "0.13"
 
 [profile.release]
 lto = "thin"

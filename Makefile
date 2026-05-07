@@ -18,7 +18,10 @@
 #   make test      cargo test --workspace
 #   make lint      cargo fmt + cargo clippy (mirrors pre-push)
 #   make hooks     install the pre-push git hook (one-time)
-#   make install   copy the release binary to PREFIX/bin
+#   make install   build-release + copy the binary to PREFIX/bin
+#                  (default PREFIX = $XDG_BIN_HOME or ~/.local; no
+#                  sudo). Override for a system-wide install:
+#                    make install PREFIX=/usr/local
 #   make uninstall remove it from PREFIX/bin
 #   make rpm       build an .rpm for RPM_TARGET (default
 #                  x86_64-unknown-linux-musl, matches release.yml).
@@ -31,10 +34,13 @@
 #   make dev       run `chan serve /tmp/chan-dev --no-token` against
 #                  a fresh dev drive
 #
-# PREFIX defaults to /usr/local. Override per invocation:
-#   make install PREFIX=$$HOME/.local
+# PREFIX defaults to $XDG_BIN_HOME or ~/.local; the install target
+# drops the binary at $(PREFIX)/bin/chan, so the default lands at
+# ~/.local/bin/chan and avoids needing sudo. Override per
+# invocation for a system-wide install:
+#   make install PREFIX=/usr/local
 
-PREFIX ?= /usr/local
+PREFIX ?= $(if $(XDG_BIN_HOME),$(XDG_BIN_HOME:/bin=),$(HOME)/.local)
 CARGO ?= cargo
 NPM ?= npm
 RPM_TARGET ?= x86_64-unknown-linux-musl
@@ -82,10 +88,13 @@ hooks:
 	./scripts/install-hooks
 
 .PHONY: install
-install: build
+install: build-release
 	install -d $(PREFIX)/bin
 	install -m 755 $(BIN) $(PREFIX)/bin/chan
 	@echo "installed to $(PREFIX)/bin/chan"
+	@case ":$$PATH:" in *":$(PREFIX)/bin:"*) ;; \
+		*) echo "note: $(PREFIX)/bin is not in PATH; add it to your shell rc";; \
+	esac
 
 .PHONY: uninstall
 uninstall:
@@ -93,7 +102,7 @@ uninstall:
 	@echo "removed $(PREFIX)/bin/chan"
 
 .PHONY: rpm
-rpm: web
+rpm: models web
 	$(CARGO) zigbuild --release --target $(RPM_TARGET) -p chan
 	# cargo-generate-rpm reads asset paths verbatim from the
 	# [package.metadata.generate-rpm] block (../../target/release/chan)
