@@ -158,7 +158,27 @@ Library::unregister_drive(root: &Path) -> Result<bool>
 Library::rename_drive(root: &Path, name: Option<String>) -> Result<bool>
 
 Library::open_drive(root: &Path) -> Result<Arc<Drive>>
+
+Library::reset_drive(root: &Path, mode: ResetMode) -> Result<ResetReport>
 ```
+
+`reset_drive` wipes per-drive chan-managed state (search index,
+graph DB, session and assistant blobs, app tokens). It never
+touches the user's notes tree. The trash is preserved (it holds
+user-deleted files, recoverable user data, not chan-managed
+cache). The lock dir is preserved (cross-process coordination,
+no data). `ResetMode::Everything` additionally drops the
+registry entry, so the next `open_drive` against the path
+treats it as a fresh, never-seen drive.
+
+Precondition: caller must drop any open `Arc<Drive>` for the
+target root first. `reset_drive` acquires the writer lock to
+verify exclusive access; if any process (including the caller)
+holds it, the call fails with `DriveLocked`. On Unix this is
+defense-in-depth (open files survive unlink); on Windows it is
+load-bearing because removing files-in-use fails. Skeleton
+recreation happens lazily on the next `open_drive` plus first
+`index()` / `graph()` access; no explicit init step.
 
 Registration is idempotent: re-registering an existing drive only
 updates `last_opened` and never clobbers a user-set name. Rename is

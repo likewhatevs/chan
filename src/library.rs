@@ -7,10 +7,33 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use serde::{Deserialize, Serialize};
+
 use crate::drive::Drive;
 use crate::error::{ChanError, Result};
+use crate::lock::DriveLock;
 use crate::paths;
 use crate::registry::{KnownDrive, Registry};
+
+/// Selects how aggressive `Library::reset_drive` is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResetMode {
+    /// Wipe per-drive chan-managed state (search index, graph DB,
+    /// session blobs, assistant blobs, app tokens). Keep the
+    /// registry entry, the user's notes tree, and the trash.
+    State,
+    /// `State` plus drop the registry entry. The next `open_drive`
+    /// against this path treats it as a fresh, never-seen drive.
+    Everything,
+}
+
+/// What `Library::reset_drive` removed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResetReport {
+    /// Total file + subdirectory entries removed across the wiped
+    /// state directories. Useful as a "removed N items" toast.
+    pub removed_entries: usize,
+}
 
 /// Per-machine handle to the chan-core registry + paths.
 #[derive(Clone)]
@@ -122,6 +145,84 @@ impl Library {
         drop(reg);
         Drive::open(entry)
     }
+
+    /// Wipe per-drive chan-managed state for `root`. The user's
+    /// notes tree is never touched (chan-core never writes inside
+    /// it). The trash is preserved (it holds user-deleted files,
+    /// recoverable user data). The lock dir is preserved (it holds
+    /// no data, only cross-process coordination).
+    ///
+    /// Wipe set:
+    ///   - search index (`<cache>/chan/index/<key>/`)
+    ///   - graph DB and sqlite sidecars (`<state>/chan/graph/<key>/`)
+    ///   - session blobs (`<state>/chan/sessions/<key>/`)
+    ///   - assistant blobs (`<state>/chan/assistant/<key>/`)
+    ///   - app tokens (`<state>/chan/tokens/<key>/`)
+    ///
+    /// `ResetMode::Everything` additionally drops the registry
+    /// entry so the next `open_drive` treats this path as fresh.
+    ///
+    /// Preconditions:
+    ///   - The caller MUST drop any open `Arc<Drive>` for `root`
+    ///     before calling. We acquire the writer lock briefly to
+    ///     verify exclusive access; if any process (including this
+    ///     one) holds it, we fail with `ChanError::DriveLocked`.
+    ///   - On Unix this is mostly defense-in-depth (open files
+    ///     survive unlink). On Windows the lock check is load-
+    ///     bearing because removing files-in-use fails.
+    ///
+    /// Idempotent: calling on a never-opened drive (no state dirs
+    /// on disk) returns `removed_entries = 0` without erroring.
+    /// Re-creation of the skeleton happens lazily on the next
+    /// `open_drive` + first `index()` / `graph()` access.
+    pub fn reset_drive(&self, root: &Path, mode: ResetMode) -> Result<ResetReport> {
+        let drive_paths = paths::drive_paths(root);
+        let _lock = DriveLock::acquire(&drive_paths.lock)?;
+        let mut removed = 0;
+        let graph_dir = drive_paths
+            .graph_db
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| drive_paths.graph_db.clone());
+        for dir in [
+            &drive_paths.index,
+            &graph_dir,
+            &drive_paths.sessions,
+            &drive_paths.assistant,
+            &drive_paths.tokens,
+        ] {
+            removed += wipe_dir(dir)?;
+        }
+        // Release the lock before mutating the registry: the
+        // registry mutex is independent and shouldn't compose
+        // with the per-drive flock.
+        drop(_lock);
+        if matches!(mode, ResetMode::Everything) {
+            let mut reg = self.inner.registry.lock().unwrap();
+            if reg.remove(root) {
+                reg.save_to(&self.inner.config_path)?;
+            }
+        }
+        Ok(ResetReport {
+            removed_entries: removed,
+        })
+    }
+}
+
+/// Recursively delete `dir` and return the number of entries
+/// (files + subdirectories, not counting `dir` itself) that were
+/// inside it. Missing dir contributes 0.
+fn wipe_dir(dir: &Path) -> Result<usize> {
+    if !dir.exists() {
+        return Ok(0);
+    }
+    let count = walkdir::WalkDir::new(dir)
+        .min_depth(1)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .count();
+    std::fs::remove_dir_all(dir)?;
+    Ok(count)
 }
 
 #[cfg(test)]
@@ -185,5 +286,138 @@ mod tests {
         let (lib, _cfg, drive) = lib();
         let err = lib.open_drive(drive.path()).unwrap_err();
         assert!(matches!(err, ChanError::DriveNotRegistered(_)));
+    }
+
+    /// Populate per-drive state so we have something to wipe:
+    /// reindex (creates index segments + graph DB), put a session
+    /// blob, put an assistant blob, drop a fake token. Also writes
+    /// a markdown file inside the drive so the test can verify
+    /// reset doesn't touch the user's notes.
+    fn populate_state(lib: &Library, root: &Path) {
+        let drive = lib.open_drive(root).unwrap();
+        drive
+            .write_text("notes/keep.md", "kept across reset")
+            .unwrap();
+        drive.reindex().unwrap();
+        drive.put_session("win-1", b"layout").unwrap();
+        drive.put_assistant("conv-a", b"chat").unwrap();
+        let p = drive.paths();
+        std::fs::create_dir_all(&p.tokens).unwrap();
+        std::fs::write(p.tokens.join("server.token"), b"deadbeef").unwrap();
+    }
+
+    fn paths_of(root: &Path) -> paths::DrivePaths {
+        paths::drive_paths(root)
+    }
+
+    #[test]
+    fn reset_state_wipes_chan_state_and_keeps_user_notes_and_registry() {
+        let (lib, _cfg, drive) = lib();
+        lib.register_drive(drive.path(), Some("Notes".into()))
+            .unwrap();
+        populate_state(&lib, drive.path());
+
+        let p = paths_of(drive.path());
+        // Sanity: state dirs populated.
+        assert!(p.index.exists());
+        assert!(p.graph_db.exists());
+        assert!(p.sessions.exists());
+        assert!(p.assistant.exists());
+        assert!(p.tokens.exists());
+
+        let report = lib.reset_drive(drive.path(), ResetMode::State).unwrap();
+        assert!(report.removed_entries > 0);
+
+        // State dirs gone.
+        assert!(!p.index.exists());
+        assert!(!p.graph_db.parent().unwrap().exists());
+        assert!(!p.sessions.exists());
+        assert!(!p.assistant.exists());
+        assert!(!p.tokens.exists());
+
+        // User's notes and the registry survive.
+        assert!(drive.path().join("notes/keep.md").exists());
+        let drives = lib.list_drives();
+        assert_eq!(drives.len(), 1);
+        assert_eq!(drives[0].name.as_deref(), Some("Notes"));
+    }
+
+    #[test]
+    fn reset_everything_also_drops_registry_entry() {
+        let (lib, _cfg, drive) = lib();
+        lib.register_drive(drive.path(), None).unwrap();
+        populate_state(&lib, drive.path());
+
+        lib.reset_drive(drive.path(), ResetMode::Everything)
+            .unwrap();
+
+        assert!(lib.list_drives().is_empty());
+        // User's notes still survive (chan-core never owns them).
+        assert!(drive.path().join("notes/keep.md").exists());
+    }
+
+    #[test]
+    fn reset_drive_returns_locked_when_drive_is_open() {
+        let (lib, _cfg, drive) = lib();
+        lib.register_drive(drive.path(), None).unwrap();
+        let _open = lib.open_drive(drive.path()).unwrap();
+        let err = lib.reset_drive(drive.path(), ResetMode::State).unwrap_err();
+        assert!(matches!(err, ChanError::DriveLocked));
+    }
+
+    #[test]
+    fn reset_is_idempotent_on_never_opened_drive() {
+        let (lib, _cfg, drive) = lib();
+        lib.register_drive(drive.path(), None).unwrap();
+        let report = lib.reset_drive(drive.path(), ResetMode::State).unwrap();
+        assert_eq!(report.removed_entries, 0);
+        // Registry still has it.
+        assert_eq!(lib.list_drives().len(), 1);
+    }
+
+    #[test]
+    fn reset_does_not_touch_other_drives_state() {
+        let (lib, _cfg, drive_a) = lib();
+        let drive_b = TempDir::new().unwrap();
+        lib.register_drive(drive_a.path(), None).unwrap();
+        lib.register_drive(drive_b.path(), None).unwrap();
+        populate_state(&lib, drive_a.path());
+        populate_state(&lib, drive_b.path());
+
+        let pa = paths_of(drive_a.path());
+        let pb = paths_of(drive_b.path());
+
+        lib.reset_drive(drive_a.path(), ResetMode::State).unwrap();
+
+        // A wiped.
+        assert!(!pa.index.exists());
+        assert!(!pa.sessions.exists());
+        // B intact.
+        assert!(pb.index.exists());
+        assert!(pb.sessions.exists());
+
+        // Cleanup B so we don't leak state for the next run.
+        let _ = lib.reset_drive(drive_b.path(), ResetMode::State);
+    }
+
+    #[test]
+    fn reset_state_preserves_trash() {
+        let (lib, _cfg, drive) = lib();
+        lib.register_drive(drive.path(), None).unwrap();
+        {
+            let d = lib.open_drive(drive.path()).unwrap();
+            d.write_text("doomed.md", "bye").unwrap();
+            d.remove("doomed.md").unwrap();
+            assert_eq!(d.trash_list().unwrap().len(), 1);
+        }
+        let p = paths_of(drive.path());
+        assert!(p.trash.exists());
+
+        lib.reset_drive(drive.path(), ResetMode::State).unwrap();
+
+        // Trash survives a State-mode reset.
+        assert!(p.trash.exists());
+        let d = lib.open_drive(drive.path()).unwrap();
+        assert_eq!(d.trash_list().unwrap().len(), 1);
     }
 }
