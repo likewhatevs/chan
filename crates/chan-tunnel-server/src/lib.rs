@@ -126,6 +126,10 @@ where
 }
 
 mod driver;
+mod public;
 mod registry;
+mod tunnel;
 
+pub use public::public_router;
 pub use registry::{OpenError, Registry, TunnelHandle};
+pub use tunnel::serve_tunnel_listener;

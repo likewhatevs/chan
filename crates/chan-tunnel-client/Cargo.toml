@@ -12,13 +12,14 @@ chan-tunnel-proto = { workspace = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+axum = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
-hyper-util = { workspace = true }
+hyper-util = { workspace = true, features = ["server", "server-auto", "service", "tokio"] }
 pin-project-lite = { workspace = true }
 rustls = { workspace = true }
 thiserror = { workspace = true }

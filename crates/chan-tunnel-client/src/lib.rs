@@ -11,12 +11,17 @@
 
 #![forbid(unsafe_code)]
 
+use std::pin::Pin;
 use std::time::Duration;
 
 use chan_tunnel_proto::{read_frame, write_frame, Hello, HelloAck, ProtocolVersion};
+use futures::AsyncRead as FutAsyncRead;
+use futures::AsyncWrite as FutAsyncWrite;
+use hyper_util::rt::TokioIo;
+use hyper_util::service::TowerToHyperService;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_util::compat::{Compat, TokioAsyncReadCompatExt};
+use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use url::Url;
 use yamux::{Config as YamuxConfig, Connection as YamuxConnection, Mode};
 
@@ -141,3 +146,62 @@ where
     let yamux = YamuxConnection::new(socket.compat(), YamuxConfig::default(), Mode::Client);
     Ok((registration, yamux))
 }
+
+/// Serve every inbound yamux substream with `router` until the
+/// connection closes. Each substream is one HTTP/1.1 request from
+/// the public side; we run hyper's h1 server over it with the
+/// user-supplied axum router as the service.
+///
+/// `with_upgrades()` is enabled so the substream stays alive after
+/// a WebSocket 101 response — the bytes ride the existing yamux
+/// substream until either end closes.
+pub async fn serve_substreams<S>(
+    mut conn: YamuxConnection<S>,
+    router: axum::Router,
+) -> Result<(), ClientError>
+where
+    S: FutAsyncRead + FutAsyncWrite + Unpin + Send + 'static,
+{
+    loop {
+        let next = futures::future::poll_fn(|cx| Pin::new(&mut conn).poll_next_inbound(cx)).await;
+        match next {
+            Some(Ok(stream)) => {
+                let router = router.clone();
+                tokio::spawn(async move {
+                    serve_one_substream(stream, router).await;
+                });
+            }
+            Some(Err(_)) | None => return Ok(()),
+        }
+    }
+}
+
+async fn serve_one_substream(stream: yamux::Stream, router: axum::Router) {
+    let io = TokioIo::new(stream.compat());
+    // The router takes Request<axum::body::Body>; hyper hands us
+    // Request<hyper::body::Incoming>. Wrap the incoming body into
+    // axum's so we can call the router. axum 0.7's serve helper
+    // does the same internally.
+    let service = tower::service_fn(move |req: http::Request<hyper::body::Incoming>| {
+        let router = router.clone();
+        async move {
+            let (parts, body) = req.into_parts();
+            let req = http::Request::from_parts(parts, axum::body::Body::new(body));
+            Ok::<_, std::convert::Infallible>(
+                tower::ServiceExt::oneshot(router, req)
+                    .await
+                    .into_response(),
+            )
+        }
+    });
+    let service = TowerToHyperService::new(service);
+    if let Err(e) = hyper::server::conn::http1::Builder::new()
+        .serve_connection(io, service)
+        .with_upgrades()
+        .await
+    {
+        tracing::debug!(error = %e, "substream serve_connection ended");
+    }
+}
+
+use axum::response::IntoResponse;
