@@ -14,6 +14,13 @@
 #   make hooks     install the pre-push git hook (one-time)
 #   make install   copy the release binary to PREFIX/bin
 #   make uninstall remove it from PREFIX/bin
+#   make rpm       build an .rpm for RPM_TARGET (default
+#                  x86_64-unknown-linux-musl, matches release.yml).
+#                  Uses cargo-zigbuild so the host arch doesn't have
+#                  to match the target arch. One-time setup:
+#                    rustup target add $(RPM_TARGET)
+#                    cargo install cargo-zigbuild cargo-generate-rpm
+#                    # plus zig in PATH (https://ziglang.org)
 #   make clean     wipe target/, web/dist/, web/node_modules/
 #   make dev       run `chan serve /tmp/chan-dev --no-token` against
 #                  a fresh dev drive
@@ -24,6 +31,7 @@
 PREFIX ?= /usr/local
 CARGO ?= cargo
 NPM ?= npm
+RPM_TARGET ?= x86_64-unknown-linux-musl
 
 BIN := target/release/chan
 
@@ -61,6 +69,22 @@ install: build
 uninstall:
 	rm -f $(PREFIX)/bin/chan
 	@echo "removed $(PREFIX)/bin/chan"
+
+.PHONY: rpm
+rpm: web
+	$(CARGO) zigbuild --release --target $(RPM_TARGET) -p chan
+	# cargo-generate-rpm reads asset paths verbatim from the
+	# [package.metadata.generate-rpm] block (../../target/release/chan)
+	# and does not rewrite them when --target is passed, so stage
+	# the cross-built binary at the un-prefixed location it expects.
+	mkdir -p target/release
+	cp target/$(RPM_TARGET)/release/chan target/release/chan
+	# --auto-req no: skip the ldd-based shared-lib scan. Required when
+	# cross-compiling (host ldd can't read foreign-arch ELF) and
+	# correct anyway since musl binaries are statically linked.
+	cd crates/chan && $(CARGO) generate-rpm --target $(RPM_TARGET) --auto-req no
+	@find . -path '*/generate-rpm/*.rpm' -type f 2>/dev/null | head -1 | \
+		xargs -I{} echo "built {}"
 
 .PHONY: clean
 clean:
