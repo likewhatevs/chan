@@ -158,13 +158,20 @@ jobs:
       - name: Install cargo-generate-rpm
         if: matrix.rpm
         run: cargo install cargo-generate-rpm --locked
+      - name: Stage binary for cargo-generate-rpm
+        if: matrix.rpm
+        # cargo-generate-rpm reads asset paths verbatim from the
+        # [package.metadata.generate-rpm] block; passing --target
+        # changes the OUTPUT dir but does NOT swap `target/release`
+        # into `target/<target>/release` in the source paths.
+        # Stage the cross-compiled binary at the default location
+        # so the metadata's `../../target/release/chan` resolves.
+        run: |
+          mkdir -p target/release
+          cp target/${{ matrix.target }}/release/chan target/release/chan
+        working-directory: chan
       - name: Build .rpm
         if: matrix.rpm
-        # cargo-generate-rpm doesn't accept --manifest-path or
-        # workspace `-p`; invoking it from inside the package dir
-        # is the supported entry point. cargo metadata still
-        # resolves the workspace target_directory correctly so
-        # the binary is found at <workspace>/target/<target>/...
         run: cargo generate-rpm --target ${{ matrix.target }}
         working-directory: chan/crates/chan
       - name: Locate .rpm
