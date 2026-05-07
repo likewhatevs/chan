@@ -23,12 +23,16 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - run: cargo fmt --check
 
+  # Linux-only on every push/PR to keep GitHub Actions minutes
+  # within budget (macOS bills at 10x). macOS validation happens
+  # downstream in chan-writer/chan's release.yml when a tag is
+  # cut; test locally on macOS before tagging chan.
   test:
     name: clippy + test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
