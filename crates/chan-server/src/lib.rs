@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path as AxumPath, Query, State};
+use axum::extract::{Multipart, Path as AxumPath, Query, State};
 use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -301,6 +301,7 @@ fn router(state: Arc<AppState>) -> Router {
             get(api_list_assistant).delete(api_clear_assistant),
         )
         .route("/api/answers", post(api_post_answer))
+        .route("/api/attachments", post(api_post_attachment))
         .route("/api/health", get(api_health))
         .route("/ws", get(ws_upgrade));
     Router::new()
@@ -600,17 +601,28 @@ async fn api_read_file(
     State(state): State<Arc<AppState>>,
     AxumPath(path): AxumPath<String>,
 ) -> Response {
-    let content = match state.drive.read_text(&path) {
-        Ok(c) => c,
-        Err(e) => return err_from(&e),
-    };
-    let mtime = state.drive.stat(&path).ok().and_then(|s| s.mtime);
-    Json(FileResponse {
-        path,
-        content,
-        mtime,
-    })
-    .into_response()
+    // Editable-text files (.md / .txt) come back as FileResponse
+    // JSON since the frontend's editor wants the content as a
+    // string. Anything else (images, attachments) comes back as
+    // raw bytes with a sniffed Content-Type so `<img src=...>`
+    // pointing at /api/files/<path> resolves correctly.
+    if chan_core::fs_ops::is_editable_text(&path) {
+        let content = match state.drive.read_text(&path) {
+            Ok(c) => c,
+            Err(e) => return err_from(&e),
+        };
+        let mtime = state.drive.stat(&path).ok().and_then(|s| s.mtime);
+        return Json(FileResponse {
+            path,
+            content,
+            mtime,
+        })
+        .into_response();
+    }
+    match state.drive.read(&path) {
+        Ok(bytes) => ([(header::CONTENT_TYPE, content_type_for(&path))], bytes).into_response(),
+        Err(e) => err_from(&e),
+    }
 }
 
 #[derive(Deserialize)]
@@ -1296,6 +1308,105 @@ struct AnswerBody {
 struct AnswerSaved {
     /// Drive-relative POSIX path the answer landed at.
     path: String,
+}
+
+/// POST /api/attachments. Multipart upload from the editor's
+/// `![...]` picker / drag-and-drop / clipboard paste. The
+/// frontend sends one part named `file`; we slugify the original
+/// filename, prefix with the unix timestamp (collision
+/// resistance), and write under `attachments_dir` via
+/// Drive::write_bytes (so the path sandbox + special-file
+/// refusal apply). Returns the drive-relative path the file
+/// landed at, matching the frontend's `uploadAttachment`
+/// contract.
+async fn api_post_attachment(
+    State(state): State<Arc<AppState>>,
+    mut multipart: Multipart,
+) -> Response {
+    let dir = state.server_config.lock().unwrap().attachments_dir.clone();
+
+    // First part named "file" wins; later parts (extra form
+    // fields the frontend may add for captions etc.) are ignored
+    // for now. Errors from the multipart stream become 400 since
+    // they typically mean the client framed the request wrong.
+    let mut chosen: Option<(String, Vec<u8>)> = None;
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => {
+                if field.name() != Some("file") {
+                    continue;
+                }
+                let filename = field.file_name().unwrap_or("").to_owned();
+                let bytes = match field.bytes().await {
+                    Ok(b) => b.to_vec(),
+                    Err(e) => {
+                        return err(StatusCode::BAD_REQUEST, format!("multipart read: {e}"));
+                    }
+                };
+                chosen = Some((filename, bytes));
+                break;
+            }
+            Ok(None) => break,
+            Err(e) => {
+                return err(StatusCode::BAD_REQUEST, format!("multipart parse: {e}"));
+            }
+        }
+    }
+
+    let Some((original, bytes)) = chosen else {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "missing `file` part in multipart body".into(),
+        );
+    };
+
+    if bytes.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "empty file".into());
+    }
+
+    // Filename: <unix_ts>-<slugified-stem>.<ext>. Keeping the
+    // unix timestamp at the front gives natural sort + collision
+    // resistance without committing to a date format the frontend
+    // would parse. Extension is preserved (lowercased) so the
+    // browser's content-type sniffer agrees with what the editor
+    // wrote.
+    let (stem, ext) = split_filename(&original);
+    let stem_slug = slugify_for_filename(stem);
+    let stem_or_default = if stem_slug.is_empty() {
+        "file"
+    } else {
+        &stem_slug
+    };
+    let ext = ext.map(|e| e.to_ascii_lowercase()).unwrap_or_default();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let saved = if ext.is_empty() {
+        format!("{ts}-{stem_or_default}")
+    } else {
+        format!("{ts}-{stem_or_default}.{ext}")
+    };
+    let rel = format!("{dir}/{saved}");
+
+    if let Err(e) = state.drive.write_bytes(&rel, &bytes) {
+        return err_from(&e);
+    }
+    Json(serde_json::json!({ "path": rel })).into_response()
+}
+
+/// Split `foo.bar.PNG` into (`"foo.bar"`, Some("PNG")). Bare
+/// names with no `.` return (input, None). Hidden files like
+/// `.gitignore` are treated as having no extension (`.gitignore`,
+/// None) so we don't produce a garbage extension.
+fn split_filename(name: &str) -> (&str, Option<&str>) {
+    if name.starts_with('.') {
+        return (name, None);
+    }
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => (stem, Some(ext)),
+        _ => (name, None),
+    }
 }
 
 async fn api_post_answer(
