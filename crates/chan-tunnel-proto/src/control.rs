@@ -13,20 +13,20 @@ impl ProtocolVersion {
 }
 
 /// First frame, client -> server. Sent right after the HTTP/2
-/// stream opens. The token itself rides in the `Authorization`
-/// header on the POST; Hello carries client-identifying metadata
-/// that helps with logs and future capability negotiation.
+/// stream opens. The token in the `Authorization` header
+/// authenticates the user; this frame names the drive the client
+/// wants to expose. Tokens are user-scoped, not drive-scoped, so
+/// the same token can register `(user, notes)` and `(user,
+/// journal)` from two separate `chan serve` instances.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hello {
     pub protocol: ProtocolVersion,
     /// chan version string (e.g. "chan/0.4.0"). Server-side logs
     /// only; not used for routing.
     pub client_version: String,
-    /// Optional drive name hint. The token is the source of truth;
-    /// when both are present and disagree, the server rejects the
-    /// connection rather than silently picking one.
-    #[serde(default)]
-    pub drive_hint: Option<String>,
+    /// Drive name to register under. Combined with the token's
+    /// user to form the public path `/{user}/{drive}/...`.
+    pub drive: String,
 }
 
 /// First frame, server -> client. Tells the client where on the

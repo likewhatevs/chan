@@ -61,10 +61,10 @@ impl From<chan_tunnel_proto::IoFrameError> for ClientError {
 pub struct ClientConfig {
     pub tunnel_url: Url,
     pub token: String,
-    /// Hint sent in the Hello frame; logged server-side and used
-    /// only to fail fast when it disagrees with the token's bound
-    /// drive.
-    pub drive_hint: Option<String>,
+    /// Drive name sent in the Hello frame. Combined server-side
+    /// with the token's user to form the public path
+    /// `/{user}/{drive}/...`. Required.
+    pub drive: String,
     /// `chan` version reported in the Hello frame; logs only.
     pub client_version: String,
     /// Initial reconnect backoff. Doubled up to `max_backoff`.
@@ -78,7 +78,7 @@ impl Default for ClientConfig {
             tunnel_url: Url::parse("https://tunnel.chan.app/v1/tunnel")
                 .expect("hard-coded url is valid"),
             token: String::new(),
-            drive_hint: None,
+            drive: String::new(),
             client_version: format!("chan-tunnel-client/{}", env!("CARGO_PKG_VERSION")),
             initial_backoff: Duration::from_millis(500),
             max_backoff: Duration::from_secs(30),
@@ -111,10 +111,17 @@ pub async fn handshake<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    if !chan_tunnel_proto::is_valid_drive_name(&cfg.drive) {
+        return Err(ClientError::Handshake(format!(
+            "invalid drive name {:?}; expected lowercase [a-z0-9-], 1-{} chars, no leading/trailing hyphen",
+            cfg.drive,
+            chan_tunnel_proto::MAX_DRIVE_NAME_LEN,
+        )));
+    }
     let hello = Hello {
         protocol: ProtocolVersion::V1,
         client_version: cfg.client_version.clone(),
-        drive_hint: cfg.drive_hint.clone(),
+        drive: cfg.drive.clone(),
     };
     write_frame(&mut socket, &hello).await?;
 

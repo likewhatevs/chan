@@ -68,11 +68,11 @@ mod tests {
         let h = Hello {
             protocol: ProtocolVersion::V1,
             client_version: "chan/test".into(),
-            drive_hint: Some("notes".into()),
+            drive: "notes".into(),
         };
         write_frame(&mut a, &h).await.unwrap();
         let got: Hello = read_frame(&mut b).await.unwrap();
         assert_eq!(got.client_version, "chan/test");
-        assert_eq!(got.drive_hint.as_deref(), Some("notes"));
+        assert_eq!(got.drive, "notes");
     }
 }

@@ -12,8 +12,6 @@
 
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use chan_tunnel_proto::{read_frame, write_frame, Hello, HelloAck, ProtocolVersion};
 use thiserror::Error;
@@ -28,9 +26,6 @@ pub enum ServerError {
 
     #[error("token does not have tunnel scope")]
     MissingScope,
-
-    #[error("token bound to a different drive than the client claims")]
-    DriveMismatch,
 
     #[error("upstream identity service: {0}")]
     Identity(String),
@@ -58,14 +53,14 @@ impl From<chan_tunnel_proto::IoFrameError> for ServerError {
 }
 
 /// Result of validating a bearer token. Returned by `Validator`
-/// and used to populate the HelloAck plus the (user, drive) entry
-/// in the registry.
+/// and used to populate the HelloAck plus the registry key.
+/// Tokens are user-scoped: one validated token can register any
+/// number of `(username, drive)` tunnels, each from a separate
+/// `chan serve` instance.
 #[derive(Debug, Clone)]
 pub struct Validated {
     pub user_id: uuid::Uuid,
     pub username: String,
-    pub drive_id: Option<uuid::Uuid>,
-    pub drive_name: String,
     pub scopes: Vec<String>,
 }
 
@@ -77,17 +72,18 @@ pub trait Validator: Send + Sync + 'static {
     async fn validate(&self, token: &str) -> Result<Validated, ServerError>;
 }
 
-/// Public path prefix shape: `/u/{username}/{drive}`. Stable so
-/// chan-gateway's drive-proxy can route to the same scheme without
-/// having to know per-tunnel state. No trailing slash; rest of the
+/// Public path prefix shape: `/{username}/{drive}`. nginx splits
+/// drive.chan.app traffic between drive-proxy (its own SPA + API
+/// routes) and chan-tunneld; reserved usernames (api, admin, ...)
+/// keep the two from colliding. No trailing slash; rest of the
 /// path is the drive-relative request.
 fn make_prefix(username: &str, drive: &str) -> String {
-    format!("/u/{username}/{drive}")
+    format!("/{username}/{drive}")
 }
 
 /// Drive the Hello/HelloAck round-trip over `socket`. Validates
-/// the bearer `token` via `validator`, asserts any client-side
-/// drive hint matches the token's binding, and returns the yamux
+/// the bearer `token` via `validator` and uses the drive name from
+/// the client's Hello to build the public path. Returns the yamux
 /// server connection ready to open outbound substreams.
 pub async fn handshake<S, V>(
     mut socket: S,
@@ -105,22 +101,23 @@ where
             hello.protocol
         )));
     }
+    if !chan_tunnel_proto::is_valid_drive_name(&hello.drive) {
+        return Err(ServerError::Handshake(format!(
+            "invalid drive name {:?}",
+            hello.drive
+        )));
+    }
 
     let validated = validator.validate(token).await?;
     if !validated.scopes.iter().any(|s| s == "tunnel") {
         return Err(ServerError::MissingScope);
     }
-    if let Some(hint) = &hello.drive_hint {
-        if hint != &validated.drive_name {
-            return Err(ServerError::DriveMismatch);
-        }
-    }
 
     let ack = HelloAck {
         protocol: ProtocolVersion::V1,
-        prefix: make_prefix(&validated.username, &validated.drive_name),
+        prefix: make_prefix(&validated.username, &hello.drive),
         user: validated.username.clone(),
-        drive: validated.drive_name.clone(),
+        drive: hello.drive.clone(),
     };
     write_frame(&mut socket, &ack).await?;
 
@@ -128,16 +125,7 @@ where
     Ok((hello, validated, yamux))
 }
 
-/// Shared registry of live tunnels keyed by `(user, drive)`.
-/// Public requests look up a tunnel here and open a yamux
-/// substream. Implementation lands with the proxy logic.
-#[derive(Default)]
-pub struct Registry {
-    _private: (),
-}
+mod driver;
+mod registry;
 
-impl Registry {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self::default())
-    }
-}
+pub use registry::{OpenError, Registry, TunnelHandle};

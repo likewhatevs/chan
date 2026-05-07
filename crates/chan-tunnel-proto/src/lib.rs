@@ -11,11 +11,13 @@
 #![forbid(unsafe_code)]
 
 mod control;
+mod drive_name;
 mod frame;
 mod h2_duplex;
 mod io;
 
 pub use control::{Hello, HelloAck, ProtocolVersion};
+pub use drive_name::{is_valid_drive_name, sanitize_drive_name, MAX_DRIVE_NAME_LEN};
 pub use frame::{decode_frame, encode_frame, FrameError};
 pub use h2_duplex::H2Duplex;
 pub use io::{read_frame, write_frame, IoFrameError};
