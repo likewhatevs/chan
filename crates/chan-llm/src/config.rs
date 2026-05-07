@@ -55,6 +55,10 @@ pub struct LlmConfig {
     /// are treated as unset.
     #[serde(default, skip_serializing_if = "Keys::is_empty")]
     pub keys: Keys,
+    /// Settings for the ClaudeCli backend (subprocess command,
+    /// extra args). Empty for any other backend.
+    #[serde(default, skip_serializing_if = "ClaudeCli::is_empty")]
+    pub claude_cli: ClaudeCli,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,11 +86,19 @@ pub struct Models {
     pub gemini: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama: Option<String>,
+    /// Override for the `--model` flag passed to the `claude` CLI.
+    /// When unset, claude picks whichever model its own config
+    /// selects (we don't impose chan-llm defaults on it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_cli: Option<String>,
 }
 
 impl Models {
     fn is_empty(&self) -> bool {
-        self.anthropic.is_none() && self.gemini.is_none() && self.ollama.is_none()
+        self.anthropic.is_none()
+            && self.gemini.is_none()
+            && self.ollama.is_none()
+            && self.claude_cli.is_none()
     }
 
     pub fn for_backend(&self, kind: BackendKind) -> Option<&str> {
@@ -94,7 +106,33 @@ impl Models {
             BackendKind::Anthropic => self.anthropic.as_deref(),
             BackendKind::Gemini => self.gemini.as_deref(),
             BackendKind::Ollama => self.ollama.as_deref(),
+            BackendKind::ClaudeCli => self.claude_cli.as_deref(),
         }
+    }
+}
+
+/// Subprocess settings for the ClaudeCli backend. The default
+/// `cmd` is `["claude"]` (resolved on PATH); set it to a fully
+/// qualified path when claude is installed somewhere non-standard
+/// or when wrapping a different agentic CLI that speaks the same
+/// stream-json protocol.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaudeCli {
+    /// Command + leading args used to launch claude. None falls
+    /// back to `["claude"]`. Stored as a vec so users can wrap with
+    /// `nix shell` / `flatpak run` / similar without quoting hell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cmd: Option<Vec<String>>,
+    /// Extra args appended after chan-llm's own flags. Useful for
+    /// forwarding things like `--add-dir` or claude permission
+    /// flags that aren't covered by chan-llm's contract.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_args: Vec<String>,
+}
+
+impl ClaudeCli {
+    fn is_empty(&self) -> bool {
+        self.cmd.is_none() && self.extra_args.is_empty()
     }
 }
 
@@ -115,8 +153,9 @@ impl Keys {
         match kind {
             BackendKind::Anthropic => self.anthropic.as_deref(),
             BackendKind::Gemini => self.gemini.as_deref(),
-            // Ollama is keyless (local server).
-            BackendKind::Ollama => None,
+            // Ollama is keyless (local server). ClaudeCli pulls
+            // its own auth from the user's ~/.claude/ install.
+            BackendKind::Ollama | BackendKind::ClaudeCli => None,
         }
     }
 }
@@ -212,6 +251,7 @@ mod tests {
                 anthropic: Some("sk-ant-...".into()),
                 ..Default::default()
             },
+            claude_cli: ClaudeCli::default(),
         };
         cfg.save_to(&p).unwrap();
         let loaded = LlmConfig::load_from(&p).unwrap();
@@ -249,6 +289,36 @@ mod tests {
         let raw = std::fs::read_to_string(&p).unwrap();
         assert!(!raw.contains("[urls]"), "got: {raw}");
         assert!(!raw.contains("ollama"), "got: {raw}");
+    }
+
+    #[test]
+    fn claude_cli_round_trips() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("llm.toml");
+        let cfg = LlmConfig {
+            backend: Some(BackendKind::ClaudeCli),
+            models: Models {
+                claude_cli: Some("claude-sonnet-4-6".into()),
+                ..Default::default()
+            },
+            claude_cli: ClaudeCli {
+                cmd: Some(vec!["/usr/local/bin/claude".into()]),
+                extra_args: vec!["--add-dir".into(), "/extra".into()],
+            },
+            ..Default::default()
+        };
+        cfg.save_to(&p).unwrap();
+        let loaded = LlmConfig::load_from(&p).unwrap();
+        assert_eq!(cfg, loaded);
+    }
+
+    #[test]
+    fn empty_claude_cli_skipped_in_serialized_output() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("llm.toml");
+        LlmConfig::default().save_to(&p).unwrap();
+        let raw = std::fs::read_to_string(&p).unwrap();
+        assert!(!raw.contains("[claude_cli]"), "got: {raw}");
     }
 
     #[test]

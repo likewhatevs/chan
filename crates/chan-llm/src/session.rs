@@ -181,7 +181,7 @@ impl LlmSession {
             return;
         };
 
-        let backend = match backends::build(kind, &self.config) {
+        let backend = match backends::build(kind, &self.config, self.drive.root()) {
             Ok(b) => b,
             Err(e) => {
                 listener.on_error(e.to_string());
@@ -200,8 +200,24 @@ impl LlmSession {
         }
         history.extend(messages);
 
-        let tool_ctx = self.tool_context();
-        let tool_schemas = crate::tools::standard_tool_schemas();
+        // ClaudeCli is a black-box agent: its own tool loop runs
+        // against the drive directly, so chan-llm's tool schemas
+        // and the auto_apply_writes gate never fire for it.
+        // Force-enable auto_apply on the ToolContext to reflect
+        // that contract gap honestly (no chan-llm-side staging is
+        // possible) and pass an empty schema list so the backend
+        // doesn't get a confusing tool-use directive it can't honor.
+        // Tracked as project memory: claude-cli backend v2.
+        let tool_ctx = if kind == BackendKind::ClaudeCli {
+            crate::tools::ToolContext::new(self.drive.clone(), true)
+        } else {
+            self.tool_context()
+        };
+        let tool_schemas = if kind == BackendKind::ClaudeCli {
+            Vec::new()
+        } else {
+            crate::tools::standard_tool_schemas()
+        };
 
         spawn(async move {
             run_loop(backend, history, tool_schemas, tool_ctx, listener).await;

@@ -26,6 +26,8 @@ pub enum LlmError {
     Core(String),
     #[error("io: {0}")]
     Io(String),
+    #[error("subprocess: {0}")]
+    Subprocess(String),
     #[error("keychain: {0}")]
     Keychain(String),
 }

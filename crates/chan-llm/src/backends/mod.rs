@@ -1,27 +1,41 @@
 // Backend dispatch.
 //
-// Three backends in scope today:
-//   - Anthropic (Claude)        - stub; ports next
-//   - Gemini (Google)           - stub; ports next
-//   - Ollama (local server)     - real
+// Backends in scope today:
+//   - Anthropic (Claude)        - HTTP, streaming SSE
+//   - Gemini (Google)           - HTTP, streaming SSE
+//   - Ollama (local server)     - HTTP, streaming JSON
+//   - ClaudeCli                 - shell-executor wrapper around the
+//                                 `claude` CLI; v1 runs claude as a
+//                                 black-box agent (its own tools, its
+//                                 own permission decisions). The
+//                                 chan-llm tool sandbox does NOT
+//                                 mediate writes from this backend;
+//                                 see claude_cli.rs for the
+//                                 contract gap and the v2 path.
 //
-// Each provides a `Backend` impl that owns its HTTP client config
-// (auth header style, base URL, model defaults) and translates
-// chan-llm's internal `Message` list into the backend's wire format,
-// then drives the streaming response, dispatching events into the
-// `SessionListener` the caller supplied.
+// Each provides a `Backend` impl that owns its transport config
+// (auth header style, base URL, model defaults, or subprocess args)
+// and translates chan-llm's internal `Message` list into the
+// backend's wire format, then drives the streaming response,
+// dispatching events into the `SessionListener` the caller supplied.
 //
-// Backends DO NOT touch the filesystem or chan-core directly. The
-// tool sandbox sits between them and disk: the assistant proposes
-// a tool call, chan-llm relays it to the host via on_tool_call,
-// the host runs `tools::execute` against chan-core::Drive, and the
-// next turn's transcript carries the tool result. Backends only
-// translate one HTTP exchange per turn.
+// HTTP backends DO NOT touch the filesystem or chan-core directly.
+// The tool sandbox sits between them and disk: the assistant
+// proposes a tool call, chan-llm relays it to the host via
+// on_tool_call, the host runs `tools::execute` against
+// chan-core::Drive, and the next turn's transcript carries the
+// tool result. Backends only translate one HTTP exchange per turn.
+//
+// The ClaudeCli backend is the deliberate exception: it shells out
+// to a full agent, so claude's own tool loop runs against the
+// drive root directly. This is logged as a v1 limitation.
 
 pub mod anthropic;
+pub mod claude_cli;
 pub mod gemini;
 pub mod ollama;
 
+use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -38,6 +52,7 @@ pub enum BackendKind {
     Anthropic,
     Gemini,
     Ollama,
+    ClaudeCli,
 }
 
 impl BackendKind {
@@ -46,6 +61,7 @@ impl BackendKind {
             BackendKind::Anthropic => "anthropic",
             BackendKind::Gemini => "gemini",
             BackendKind::Ollama => "ollama",
+            BackendKind::ClaudeCli => "claude_cli",
         }
     }
 
@@ -54,6 +70,10 @@ impl BackendKind {
             BackendKind::Anthropic => "claude-opus-4-7",
             BackendKind::Gemini => "gemini-2.5-pro",
             BackendKind::Ollama => "llama3.1",
+            // Empty default: claude CLI picks its own configured
+            // model when --model is omitted. We only override when
+            // the user explicitly sets Models::claude_cli.
+            BackendKind::ClaudeCli => "",
         }
     }
 }
@@ -113,7 +133,14 @@ impl Outcome {
 /// model (config override or default). Errors out with a clear
 /// message when the key is missing for an http-shaped backend;
 /// Ollama needs no key.
-pub fn build(kind: BackendKind, config: &LlmConfig) -> Result<Arc<dyn Backend>> {
+///
+/// `drive_root` is the absolute path of the chan drive the session
+/// is bound to. Most backends ignore it (HTTP transports don't
+/// care about the local filesystem). The ClaudeCli backend uses
+/// it as the subprocess `cwd` so claude's filesystem tools
+/// resolve paths relative to the user's drive, not the host
+/// process's cwd.
+pub fn build(kind: BackendKind, config: &LlmConfig, drive_root: &Path) -> Result<Arc<dyn Backend>> {
     let model = config
         .models
         .for_backend(kind)
@@ -128,19 +155,35 @@ pub fn build(kind: BackendKind, config: &LlmConfig) -> Result<Arc<dyn Backend>> 
                 .ok()
                 .or_else(|| config.urls.ollama.clone())
                 .unwrap_or_else(|| ollama::DEFAULT_URL.to_string());
+            let _ = drive_root;
             Ok(Arc::new(ollama::OllamaBackend::new(base, model)))
         }
         BackendKind::Anthropic => {
             let key = keys::resolve(kind, config)
                 .0
                 .ok_or_else(|| LlmError::MissingApiKey("anthropic".into()))?;
+            let _ = drive_root;
             Ok(Arc::new(anthropic::AnthropicBackend::new(key, model)))
         }
         BackendKind::Gemini => {
             let key = keys::resolve(kind, config)
                 .0
                 .ok_or_else(|| LlmError::MissingApiKey("gemini".into()))?;
+            let _ = drive_root;
             Ok(Arc::new(gemini::GeminiBackend::new(key, model)))
+        }
+        BackendKind::ClaudeCli => {
+            let cli = config.claude_cli.clone();
+            // Empty Models::claude_cli means "let claude pick its
+            // configured default"; we only forward --model when the
+            // user explicitly set one.
+            let model = if model.is_empty() { None } else { Some(model) };
+            Ok(Arc::new(claude_cli::ClaudeCliBackend::new(
+                cli.cmd.unwrap_or_else(claude_cli::default_cmd),
+                cli.extra_args,
+                model,
+                drive_root.to_path_buf(),
+            )))
         }
     }
 }
