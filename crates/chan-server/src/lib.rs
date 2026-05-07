@@ -283,6 +283,24 @@ fn router(state: Arc<AppState>) -> Router {
             "/api/server/config",
             get(api_get_server_config).patch(api_patch_server_config),
         )
+        .route(
+            "/api/session/:key",
+            get(api_get_session)
+                .put(api_put_session)
+                .delete(api_delete_session),
+        )
+        .route("/api/sessions", get(api_list_sessions))
+        .route(
+            "/api/assistant/conversation/:key",
+            get(api_get_assistant)
+                .put(api_put_assistant)
+                .delete(api_delete_assistant),
+        )
+        .route(
+            "/api/assistant/conversation",
+            get(api_list_assistant).delete(api_clear_assistant),
+        )
+        .route("/api/answers", post(api_post_answer))
         .route("/api/health", get(api_health))
         .route("/ws", get(ws_upgrade));
     Router::new()
@@ -1162,6 +1180,212 @@ async fn api_patch_server_config(
         return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
     Json(cfg.clone()).into_response()
+}
+
+// ----- sessions / assistant blobs / answers ------------------------------
+//
+// chan-core owns the I/O (Drive::{put,get,list,delete}_session +
+// _assistant + clear_assistant). chan-server is a thin HTTP shell;
+// the JSON schema of session blobs (window/pane layout) and
+// assistant blobs (chat turns) lives in the frontend, not here.
+//
+// Answers are different: the user picks a directory inside the
+// drive (`server.toml` -> answers_dir) and we land each saved
+// answer as a `.md` file there via Drive::write_text. Same path
+// sandbox + special-file refusal apply.
+
+async fn api_get_session(
+    State(state): State<Arc<AppState>>,
+    AxumPath(key): AxumPath<String>,
+) -> Response {
+    match state.drive.get_session(&key) {
+        Ok(Some(bytes)) => raw_json_response(bytes),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => err_from(&e),
+    }
+}
+
+async fn api_put_session(
+    State(state): State<Arc<AppState>>,
+    AxumPath(key): AxumPath<String>,
+    body: axum::body::Bytes,
+) -> Response {
+    match state.drive.put_session(&key, &body) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_from(&e),
+    }
+}
+
+async fn api_delete_session(
+    State(state): State<Arc<AppState>>,
+    AxumPath(key): AxumPath<String>,
+) -> Response {
+    match state.drive.delete_session(&key) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_from(&e),
+    }
+}
+
+async fn api_list_sessions(State(state): State<Arc<AppState>>) -> Response {
+    match state.drive.list_sessions() {
+        Ok(keys) => Json(keys).into_response(),
+        Err(e) => err_from(&e),
+    }
+}
+
+async fn api_get_assistant(
+    State(state): State<Arc<AppState>>,
+    AxumPath(key): AxumPath<String>,
+) -> Response {
+    match state.drive.get_assistant(&key) {
+        Ok(Some(bytes)) => raw_json_response(bytes),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => err_from(&e),
+    }
+}
+
+async fn api_put_assistant(
+    State(state): State<Arc<AppState>>,
+    AxumPath(key): AxumPath<String>,
+    body: axum::body::Bytes,
+) -> Response {
+    match state.drive.put_assistant(&key, &body) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_from(&e),
+    }
+}
+
+async fn api_delete_assistant(
+    State(state): State<Arc<AppState>>,
+    AxumPath(key): AxumPath<String>,
+) -> Response {
+    match state.drive.delete_assistant(&key) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_from(&e),
+    }
+}
+
+async fn api_list_assistant(State(state): State<Arc<AppState>>) -> Response {
+    match state.drive.list_assistant() {
+        Ok(keys) => Json(keys).into_response(),
+        Err(e) => err_from(&e),
+    }
+}
+
+async fn api_clear_assistant(State(state): State<Arc<AppState>>) -> Response {
+    match state.drive.clear_assistant() {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_from(&e),
+    }
+}
+
+#[derive(Deserialize)]
+struct AnswerBody {
+    /// Markdown content to save. Becomes a new `.md` file under
+    /// the configured `answers_dir`. Filename is derived from the
+    /// body's first heading or, failing that, a timestamp slug.
+    content: String,
+    /// Optional override for the filename stem (no extension; the
+    /// server appends `.md`). Useful when the frontend generates
+    /// its own stable id for a saved answer.
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AnswerSaved {
+    /// Drive-relative POSIX path the answer landed at.
+    path: String,
+}
+
+async fn api_post_answer(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<AnswerBody>,
+) -> Response {
+    let dir = state.server_config.lock().unwrap().answers_dir.clone();
+    let stem = body
+        .name
+        .as_deref()
+        .map(slugify_for_filename)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            body.content
+                .lines()
+                .find_map(extract_h1)
+                .map(|s| slugify_for_filename(&s))
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or_else(timestamp_slug);
+    let rel = format!("{dir}/{stem}.md");
+    match state.drive.write_text(&rel, &body.content) {
+        Ok(()) => Json(AnswerSaved { path: rel }).into_response(),
+        Err(e) => err_from(&e),
+    }
+}
+
+/// Wrap an opaque blob in an `application/json` response. We don't
+/// re-parse + re-serialize because the blob may be large and we
+/// trust whoever wrote it (Drive::put_*) handed back exactly what
+/// they got. If the blob isn't JSON the client sees the raw bytes
+/// with the wrong content-type, which is acceptable for opaque
+/// storage that the frontend writes itself.
+fn raw_json_response(bytes: Vec<u8>) -> Response {
+    (
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        bytes,
+    )
+        .into_response()
+}
+
+fn extract_h1(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let stripped = trimmed.strip_prefix("# ")?;
+    let s = stripped.trim().trim_end_matches('#').trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// Strip a string into a filesystem-safe slug. Keeps ASCII alnum,
+/// '-', '_'; collapses everything else to '-'; trims leading and
+/// trailing dashes; clamps to 80 chars (safe under chan-core's
+/// blob key length and most filesystems' name limits).
+fn slugify_for_filename(s: &str) -> String {
+    let mut out = String::with_capacity(s.len().min(80));
+    let mut last_dash = true;
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            out.push(c);
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+        if out.len() >= 80 {
+            break;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    while out.starts_with('-') {
+        out.remove(0);
+    }
+    out
+}
+
+/// Fallback name when no header / explicit name was provided:
+/// `answer-YYYYMMDD-HHMMSS`. Uses the system clock; tests should
+/// pass `name` to keep filenames deterministic.
+fn timestamp_slug() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("answer-{secs}")
 }
 
 fn err_llm(e: &LlmError) -> Response {
