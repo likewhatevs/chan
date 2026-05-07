@@ -48,11 +48,11 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    font-size: 13px;
+    font-size: 15px;
   }
   .title {
     padding: 0.4rem 0.6rem;
-    font-size: 12px;
+    font-size: 14px;
     color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.05em;

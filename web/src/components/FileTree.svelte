@@ -303,7 +303,7 @@
     align-items: center;
     gap: 4px;
     height: 22px;
-    font-size: 13px;
+    font-size: 15px;
     color: var(--text);
   }
   /* Zebra striping: subtle alternating tint so the eye can track
@@ -345,7 +345,7 @@
   .row.selected > .name { color: var(--text); font-weight: 600; }
   /* Same look as the tab-strip dirty indicator so the two views agree. */
   .dirty-dot {
-    font-size: 14px;
+    font-size: 16px;
     line-height: 1;
     margin-left: 4px;
   }
@@ -359,7 +359,7 @@
     color: var(--text);
     font-weight: 600;
     margin-bottom: .35rem;
-    font-size: 13px;
+    font-size: 15px;
   }
   .empty-actions {
     display: flex;
@@ -373,7 +373,7 @@
     color: var(--link);
     cursor: pointer;
     font: inherit;
-    font-size: 12px;
+    font-size: 14px;
     padding: 2px 4px;
   }
   .empty-actions button:hover { text-decoration: underline; }

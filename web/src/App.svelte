@@ -406,6 +406,11 @@
   }
   :global(body) {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    /* Baseline; chrome / file tree / overlays inherit this where
+       no explicit size is set. Component-level font-sizes are
+       in the 12-16 px range; baseline 15 keeps the small ones
+       readable on 4k panels at 100% scale. */
+    font-size: 15px;
     color: var(--text);
     background: var(--bg);
     overflow: hidden;
@@ -441,7 +446,7 @@
     background: var(--bg-card);
     color: var(--warn-text);
     padding: .25rem .5rem;
-    font-size: 12px;
+    font-size: 14px;
     border-top: 1px solid var(--border);
   }
 </style>

@@ -998,7 +998,7 @@
     border-radius: 4px;
     box-shadow: 0 4px 12px rgba(0,0,0,.4);
     padding: .5rem;
-    font-size: 13px;
+    font-size: 15px;
   }
   /* Format dropdown row at the top of the calendar popover. The
      preview span on the right shows what the cursor's date will
@@ -1009,7 +1009,7 @@
     align-items: center;
     gap: .35rem;
     margin-bottom: .35rem;
-    font-size: 12px;
+    font-size: 14px;
   }
   :global(.md-cal-fmt-label) {
     color: var(--text-secondary);
@@ -1039,7 +1039,7 @@
     background: none;
     border: 1px solid transparent;
     cursor: pointer;
-    font-size: 13px;
+    font-size: 15px;
     color: var(--text-secondary);
     padding: 0 .35rem;
     height: 1.4rem;
@@ -1066,7 +1066,7 @@
     gap: 2px;
     margin-bottom: 2px;
     color: var(--text-secondary);
-    font-size: 10px;
+    font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
@@ -1137,7 +1137,7 @@
     padding: 4px 8px;
     cursor: pointer;
     font: inherit;
-    font-size: 12px;
+    font-size: 14px;
   }
   :global(.md-pick-action:hover:not(:disabled)) { border-color: var(--btn-hover); }
   :global(.md-pick-action:disabled) { opacity: 0.6; cursor: default; }
@@ -1148,7 +1148,7 @@
     border-radius: 3px;
     padding: 4px 6px;
     font: inherit;
-    font-size: 12px;
+    font-size: 14px;
     outline: none;
   }
   :global(.md-pick-url:focus) { border-color: var(--link); }

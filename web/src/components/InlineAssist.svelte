@@ -1200,7 +1200,7 @@
     gap: 8px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--border);
-    font-size: 12px;
+    font-size: 14px;
     color: var(--text-secondary);
   }
   header .title {
@@ -1221,7 +1221,7 @@
     border-radius: 3px;
     padding: 2px 6px;
     font: inherit;
-    font-size: 12px;
+    font-size: 14px;
     max-width: 320px;
   }
   header .context-select:focus { outline: none; border-color: var(--link); }
@@ -1230,7 +1230,7 @@
     color: var(--text);
     padding: 1px 6px;
     border-radius: 3px;
-    font-size: 11px;
+    font-size: 13px;
   }
   /* Scrollable chat history; takes the remaining vertical space. */
   .scroll {
@@ -1279,14 +1279,14 @@
   }
   .bubble.user .role-line { flex-direction: row-reverse; }
   .bubble .role {
-    font-size: 10px;
+    font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--text-secondary);
   }
   /* Softer than the role label; same baseline. */
   .bubble .ts {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-secondary);
     opacity: 0.65;
     font-variant-numeric: tabular-nums;
@@ -1315,7 +1315,7 @@
     background: var(--bg-card);
     padding: 6px 10px;
     border-radius: 8px;
-    font-size: 13px;
+    font-size: 15px;
     line-height: 1.5;
     white-space: pre-wrap;
     word-break: break-word;
@@ -1338,7 +1338,7 @@
   .bubble .body.md :global(h1) { font-size: 16px; }
   .bubble .body.md :global(h2) { font-size: 15px; }
   .bubble .body.md :global(h3),
-  .bubble .body.md :global(h4) { font-size: 14px; }
+  .bubble .body.md :global(h4) { font-size: 16px; }
   .bubble .body.md :global(ul),
   .bubble .body.md :global(ol) {
     margin: 0.2em 0;
@@ -1364,7 +1364,7 @@
     background: transparent;
     padding: 0;
     border-radius: 0;
-    font-size: 12px;
+    font-size: 14px;
   }
   .bubble .body.md :global(a) {
     color: var(--link);
@@ -1396,7 +1396,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 11px;
+    font-size: 13px;
     color: var(--text-secondary);
   }
   .edit-head .kind-chip {
@@ -1407,18 +1407,18 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-weight: 600;
-    font-size: 10px;
+    font-size: 12px;
   }
   .edit-head .path { color: var(--text); font-family: ui-monospace, monospace; }
   .edit-head .size { margin-left: auto; font-variant-numeric: tabular-nums; }
   .edit-card .summary {
     color: var(--text);
-    font-size: 13px;
+    font-size: 15px;
   }
   .edit-card details summary {
     cursor: pointer;
     color: var(--text-secondary);
-    font-size: 11px;
+    font-size: 13px;
   }
   .edit-card .proposal {
     margin: 6px 0 0 0;
@@ -1446,7 +1446,7 @@
     padding: 4px 12px;
     cursor: pointer;
     font: inherit;
-    font-size: 12px;
+    font-size: 14px;
   }
   .edit-card .actions button:hover { border-color: var(--btn-hover); }
   .edit-card .actions button.primary {
@@ -1464,7 +1464,7 @@
     gap: 5px;
   }
   .edit-card .status-tag {
-    font-size: 11px;
+    font-size: 13px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
@@ -1473,7 +1473,7 @@
 
   .status-line {
     padding: 4px 12px;
-    font-size: 11px;
+    font-size: 13px;
     color: var(--text-secondary);
     border-top: 1px solid var(--border);
     display: flex;
@@ -1534,12 +1534,12 @@
     border-radius: 4px;
     padding: 6px 10px;
     background: var(--bg-card);
-    font-size: 12px;
+    font-size: 14px;
     line-height: 1.45;
     color: var(--text);
   }
   .hint-title {
-    font-size: 10px;
+    font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--text-secondary);
@@ -1584,7 +1584,7 @@
     background: var(--bg-card);
     border-top: 1px solid var(--border);
     border-bottom: 1px solid var(--border);
-    font-size: 12px;
+    font-size: 14px;
     color: var(--text-secondary);
     flex-shrink: 0;
     min-height: 28px;
@@ -1616,13 +1616,13 @@
     border-radius: 3px;
     padding: 1px 4px;
     font: inherit;
-    font-size: 11px;
+    font-size: 13px;
     height: 20px;
   }
   .prompt-bar .fmtbtn { min-width: 22px; text-align: center; }
   .prompt-bar .fmtbtn b,
   .prompt-bar .fmtbtn i,
   .prompt-bar .fmtbtn s,
-  .prompt-bar .fmtbtn code { font-size: 12px; }
+  .prompt-bar .fmtbtn code { font-size: 14px; }
   .prompt-bar .fmtbtn code { font-family: ui-monospace, monospace; }
 </style>

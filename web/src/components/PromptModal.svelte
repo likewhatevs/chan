@@ -82,7 +82,7 @@
     gap: 0.65rem;
   }
   .title {
-    font-size: 13px;
+    font-size: 15px;
     color: var(--text-secondary);
   }
   input {

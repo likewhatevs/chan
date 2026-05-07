@@ -220,7 +220,7 @@
     border-bottom: 1px solid var(--border);
     background: var(--bg-card);
     font-weight: 600;
-    font-size: 13px;
+    font-size: 15px;
     color: var(--text-heading);
     flex-shrink: 0;
   }
@@ -258,7 +258,7 @@
     border-radius: 6px;
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
     min-width: 140px;
-    font-size: 13px;
+    font-size: 15px;
   }
   .new-popover li { margin: 0; }
   .new-popover button {

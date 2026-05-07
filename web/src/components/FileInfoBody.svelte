@@ -137,7 +137,7 @@
   }
   .empty-hint {
     font-style: italic;
-    font-size: 12px;
+    font-size: 14px;
     opacity: 0.85;
   }
   .head {
@@ -149,7 +149,7 @@
   .kind-chip {
     color: #fff;
     text-transform: uppercase;
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 600;
     letter-spacing: 0.05em;
     padding: 1px 6px;
@@ -162,7 +162,7 @@
   .kind-chip.dir { background: var(--accent); }
   .view-only-hint {
     color: var(--text-secondary);
-    font-size: 12px;
+    font-size: 14px;
     font-style: italic;
     margin: .4rem 0 0 0;
   }
@@ -178,13 +178,13 @@
   .close:hover { color: var(--text); }
   .title {
     margin: 0 0 0.15rem 0;
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 600;
     word-break: break-word;
   }
   .path {
     color: var(--text-secondary);
-    font-size: 11px;
+    font-size: 13px;
     margin-bottom: 0.5rem;
     word-break: break-all;
   }
@@ -194,7 +194,7 @@
     grid-template-columns: 6.5em 1fr;
     gap: 2px 0.5rem;
     margin: 0.4rem 0 0.6rem 0;
-    font-size: 12px;
+    font-size: 14px;
   }
   .meta-grid .k { color: var(--text-secondary); }
   .meta-grid .v {

@@ -37,7 +37,7 @@
     border: 1px solid var(--border);
     border-radius: 999px;
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
-    font-size: 12px;
+    font-size: 14px;
     color: var(--text);
     max-width: calc(100vw - 16px);
     overflow-x: auto;

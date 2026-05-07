@@ -1020,7 +1020,7 @@
     padding: 0.25rem 0.5rem;
     background: var(--bg-card);
     border-bottom: 1px solid var(--border);
-    font-size: 12px;
+    font-size: 14px;
     color: var(--text-secondary);
     flex-shrink: 0;
   }
@@ -1033,7 +1033,7 @@
     border-radius: 4px;
     padding: 2px 6px;
     font: inherit;
-    font-size: 12px;
+    font-size: 14px;
     max-width: 280px;
     cursor: pointer;
   }
@@ -1043,7 +1043,7 @@
     align-items: center;
     gap: 4px;
     color: var(--text-secondary);
-    font-size: 11px;
+    font-size: 13px;
   }
   .depth input[type="range"] {
     width: 80px;
@@ -1084,7 +1084,7 @@
     padding: 0.25rem 0.5rem;
     background: var(--bg-card);
     border-top: 1px solid var(--border);
-    font-size: 11px;
+    font-size: 13px;
     color: var(--text-secondary);
     flex-shrink: 0;
     min-height: 22px;
@@ -1184,7 +1184,7 @@
   }
   .details .empty-hint {
     font-style: italic;
-    font-size: 12px;
+    font-size: 14px;
     opacity: 0.85;
   }
   .details .head {
@@ -1196,7 +1196,7 @@
   .kind-chip {
     color: #fff;
     text-transform: uppercase;
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 600;
     letter-spacing: 0.05em;
     padding: 1px 6px;
@@ -1216,13 +1216,13 @@
   .details .close:hover { color: var(--text); }
   .details .title {
     margin: 0 0 0.15rem 0;
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 600;
     word-break: break-word;
   }
   .details .path {
     color: var(--text-secondary);
-    font-size: 11px;
+    font-size: 13px;
     margin-bottom: 0.5rem;
     word-break: break-all;
   }
@@ -1238,7 +1238,7 @@
     grid-template-columns: 6.5em 1fr;
     gap: 2px 0.5rem;
     margin: 0.4rem 0 0.6rem 0;
-    font-size: 12px;
+    font-size: 14px;
   }
   .details .meta-grid .k { color: var(--text-secondary); }
   .details .meta-grid .v {
@@ -1260,7 +1260,7 @@
   .details section { margin-top: 0.55rem; }
   .details h4 {
     margin: 0 0 0.2rem 0;
-    font-size: 11px;
+    font-size: 13px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--text-secondary);
@@ -1307,7 +1307,7 @@
     color: var(--text-secondary);
     border-radius: 3px;
     padding: 1px 6px;
-    font-size: 10px;
+    font-size: 12px;
     cursor: pointer;
   }
   .details .row-open:hover {

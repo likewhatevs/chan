@@ -120,11 +120,11 @@
     gap: 10px;
   }
   .title {
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 600;
   }
   .subline {
-    font-size: 12px;
+    font-size: 14px;
     color: var(--text-secondary);
     line-height: 1.4;
   }

@@ -89,7 +89,7 @@
     gap: 0.6rem;
   }
   .title {
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 600;
     color: var(--text);
   }
@@ -113,7 +113,7 @@
     color: var(--text);
     cursor: pointer;
     font: inherit;
-    font-size: 12px;
+    font-size: 14px;
   }
   .actions button:hover { border-color: var(--btn-hover); }
   .actions .primary {
@@ -130,7 +130,7 @@
     border: 1px solid #d33;
     border-radius: 4px;
     padding: 0.5rem 0.6rem;
-    font-size: 12px;
+    font-size: 14px;
     color: #d33;
     line-height: 1.4;
     word-break: break-word;

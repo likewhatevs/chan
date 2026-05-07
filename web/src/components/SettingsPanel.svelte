@@ -1166,7 +1166,7 @@
     padding: 0.25rem 0.5rem;
     background: var(--bg-card);
     border-bottom: 1px solid var(--border);
-    font-size: 12px;
+    font-size: 14px;
     color: var(--text-secondary);
     flex-shrink: 0;
     min-height: 28px;
@@ -1206,7 +1206,7 @@
   section:last-of-type { border-bottom: 0; }
   h3 {
     margin: 0;
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 600;
     color: var(--text-secondary);
     text-transform: uppercase;
@@ -1217,7 +1217,7 @@
     grid-template-columns: 7em 1fr;
     align-items: center;
     gap: 0.5rem;
-    font-size: 13px;
+    font-size: 15px;
   }
   label > span { color: var(--text-secondary); }
   input, select {
@@ -1227,7 +1227,7 @@
     border-radius: 4px;
     padding: 4px 7px;
     font: inherit;
-    font-size: 13px;
+    font-size: 15px;
     outline: none;
     width: 100%;
   }
@@ -1237,7 +1237,7 @@
     display: grid;
     grid-template-columns: 7em 1fr;
     gap: 4px 0.5rem;
-    font-size: 13px;
+    font-size: 15px;
   }
   .grid .k { color: var(--text-secondary); }
   .grid .v { color: var(--text); }
@@ -1250,7 +1250,7 @@
   }
   .hint code {
     font-family: ui-monospace, monospace;
-    font-size: 11px;
+    font-size: 13px;
     background: var(--bg-card);
     padding: 0 4px;
     border-radius: 3px;
@@ -1270,7 +1270,7 @@
     border-radius: 4px;
     background: var(--btn-bg);
     cursor: pointer;
-    font-size: 12px;
+    font-size: 14px;
   }
   .theme-opt input[type="radio"] {
     width: auto;
@@ -1341,19 +1341,19 @@
     width: 28px;
     height: 28px;
     cursor: pointer;
-    font-size: 13px;
+    font-size: 15px;
   }
   .model-row .refresh:hover:not(:disabled) { border-color: var(--btn-hover); }
   .model-row .refresh:disabled { opacity: 0.55; cursor: default; }
   .err-line {
     color: var(--warn-text);
-    font-size: 11px;
+    font-size: 13px;
     margin: 0.25rem 0;
   }
   /* Recent drives list under the Drives section. */
   .recents-head {
     margin: 0.5rem 0 0.25rem 0;
-    font-size: 11px;
+    font-size: 13px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--text-secondary);
@@ -1370,7 +1370,7 @@
     display: grid;
     grid-template-columns: 12em auto 1fr;
     gap: 0.6rem;
-    font-size: 12px;
+    font-size: 14px;
     color: var(--text);
     align-items: baseline;
   }
@@ -1396,7 +1396,7 @@
     align-items: center;
     gap: 6px;
     margin: 0.4rem 0;
-    font-size: 12px;
+    font-size: 14px;
   }
   .keychain-label { flex-basis: 100%; color: var(--text-secondary); }
   .keychain-label .ok { color: var(--accent); }
@@ -1409,7 +1409,7 @@
     border-radius: 3px;
     padding: 4px 6px;
     font: inherit;
-    font-size: 12px;
+    font-size: 14px;
     outline: none;
   }
   .keychain input[type="password"]:focus { border-color: var(--link); }
@@ -1421,11 +1421,11 @@
     padding: 4px 10px;
     cursor: pointer;
     font: inherit;
-    font-size: 12px;
+    font-size: 14px;
   }
   .keychain button:hover:not(:disabled) { border-color: var(--btn-hover); }
   .keychain button:disabled { opacity: 0.55; cursor: default; }
-  .keychain-err { flex-basis: 100%; color: var(--warn-text); font-size: 11px; }
+  .keychain-err { flex-basis: 100%; color: var(--warn-text); font-size: 13px; }
   .font-row {
     grid-template-columns: 7em 1fr 2.5em 5em auto;
     align-items: center;
@@ -1445,10 +1445,10 @@
     line-height: 1.1;
     font-size: 16px;
   }
-  .size-suffix { color: var(--text-secondary); font-size: 12px; }
+  .size-suffix { color: var(--text-secondary); font-size: 14px; }
   /* Tab-bar autosave indicator. Sits between the title and the
      actions strip. Empty when idle (no extra padding). */
-  .save-status { font-size: 12px; min-width: 60px; text-align: right; }
+  .save-status { font-size: 14px; min-width: 60px; text-align: right; }
   .save-status .ok { color: var(--accent); }
   .save-status .err { color: #d33; }
   .save-status .muted { color: var(--text-secondary); }

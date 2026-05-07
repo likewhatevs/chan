@@ -389,7 +389,7 @@
     padding: 0.25rem 0.5rem;
     background: var(--bg-card);
     border-bottom: 1px solid var(--border);
-    font-size: 12px;
+    font-size: 14px;
     color: var(--text-secondary);
     flex-shrink: 0;
     min-height: 28px;
@@ -424,7 +424,7 @@
     border: 1px solid var(--border);
     border-radius: 999px;
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
-    font-size: 14px;
+    font-size: 16px;
     color: var(--text);
     /* Pointer-target spacing only; the editor canvas underneath
        remains clickable around the pill. */
@@ -443,7 +443,7 @@
     border-radius: 14px;
     padding: 1px 8px;
     font: inherit;
-    font-size: 13px;
+    font-size: 15px;
     height: 28px;
   }
   .fbtn {
@@ -464,7 +464,7 @@
     background: var(--hover-bg);
     border-color: var(--btn-hover);
   }
-  .fbtn b, .fbtn i, .fbtn s, .fbtn code { font-size: 14px; }
+  .fbtn b, .fbtn i, .fbtn s, .fbtn code { font-size: 16px; }
   .fbtn code { font-family: ui-monospace, monospace; }
   .hbtn {
     background: none;
@@ -491,7 +491,7 @@
     padding: 0.25rem 0.5rem;
     background: var(--bg-card);
     border-bottom: 1px solid var(--border);
-    font-size: 12px;
+    font-size: 14px;
     color: #d33;
   }
   .placeholder {
@@ -526,7 +526,7 @@
     color: var(--text-secondary);
     cursor: pointer;
     font: inherit;
-    font-size: 11px;
+    font-size: 13px;
     text-align: left;
     padding: 0.4rem 0.6rem;
     display: flex;

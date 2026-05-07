@@ -149,7 +149,7 @@
     padding: 4px 6px;
     background: var(--bg-card);
     border-bottom: 1px solid var(--border);
-    font-size: 12px;
+    font-size: 14px;
     color: var(--text);
     flex-shrink: 0;
   }

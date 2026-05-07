@@ -201,7 +201,7 @@
   .head input:focus { border-color: var(--link); }
   .status-line {
     padding: 4px 10px;
-    font-size: 11px;
+    font-size: 13px;
     color: var(--text-secondary);
     border-top: 1px solid var(--border);
   }
@@ -228,7 +228,7 @@
     display: flex;
     gap: 6px;
     align-items: baseline;
-    font-size: 12px;
+    font-size: 14px;
   }
   .path { font-weight: 600; color: var(--text); }
   .heading { color: var(--text-secondary); }
@@ -236,11 +236,11 @@
     margin-left: auto;
     color: var(--text-secondary);
     font-family: ui-monospace, monospace;
-    font-size: 11px;
+    font-size: 13px;
   }
   .snippet {
     margin-top: 2px;
-    font-size: 12px;
+    font-size: 14px;
     color: var(--text-secondary);
     line-height: 1.45;
     overflow: hidden;

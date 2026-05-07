@@ -407,7 +407,7 @@
     {#if active}
       <FileEditorTab tab={active} />
     {:else}
-      <div class="placeholder">no tab open</div>
+      <div class="placeholder" aria-label="no tab open"></div>
     {/if}
   </div>
 </div>
@@ -449,7 +449,7 @@
     padding: .25rem .5rem;
     border-right: 1px solid var(--border);
     cursor: pointer;
-    font-size: 12px;
+    font-size: 14px;
     color: var(--text-secondary);
     background: var(--tab-inactive-bg);
     user-select: none;
@@ -460,22 +460,35 @@
     font-weight: 500;
   }
   .tab .close {
-    background: none; border: 0; cursor: pointer; font-size: 14px;
+    background: none; border: 0; cursor: pointer; font-size: 16px;
     color: var(--text-secondary); padding: 0 2px;
   }
   .tab .close:hover { color: var(--text); }
-  .dirty { font-size: 14px; }
+  .dirty { font-size: 16px; }
   .dirty.unsaved { color: var(--info-text); }
   .path { white-space: nowrap; }
   .actions { margin-left: auto; display: flex; }
   .actions button {
     background: none; border: 0; cursor: pointer; padding: .25rem .5rem;
-    font-size: 14px; color: var(--text-secondary);
+    font-size: 16px; color: var(--text-secondary);
   }
   .actions button:hover { color: var(--text); }
   .editor-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  /* Empty pane: muted chan logo watermark, centered. CSS mask
+     paints the silhouette in the current text-secondary color so
+     it adapts to light / dark themes automatically. The image
+     itself (web/public/chan-mark.png) is alpha-only; the visible
+     color comes from background-color. */
   .placeholder {
     flex: 1; display: flex; align-items: center; justify-content: center;
-    color: var(--text-secondary); font-style: italic;
+  }
+  .placeholder::before {
+    content: '';
+    width: 200px;
+    height: 200px;
+    background-color: var(--text-secondary);
+    -webkit-mask: url('/chan-mark.png') center / contain no-repeat;
+            mask: url('/chan-mark.png') center / contain no-repeat;
+    opacity: 0.18;
   }
 </style>
