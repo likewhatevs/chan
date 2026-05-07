@@ -171,27 +171,44 @@ interface BlockEntry {
 
 type Entry = FileEntry | HeadingEntry | BlockEntry;
 
-/// Split the bubble query into `(filePart, sigil, sigilPart)`. The
-/// sigil is the first occurrence of `#`, `^`, or `|`. Sigil and
-/// sigilPart are empty when the query carries none of them. The
-/// modifier modes consume only ONE sigil; subsequent ones are part
-/// of the sigilPart text (e.g. block ids may contain `^`).
+/// Split the bubble query into its three logical sections:
+///   filePart     - text before any sigil (file selector)
+///   anchorSigil  - "#" or "^" if present, else ""
+///   anchorPart   - text between the anchor sigil and `|` (or end)
+///   displayPart  - text after `|`; null when no `|` is in the query
+///
+/// `|` is independent of `#` / `^` and always means "override the
+/// link's display text", so the three sections compose:
+///   `foo`          -> file
+///   `foo#sec`      -> heading
+///   `foo|label`    -> file + display
+///   `foo#sec|lbl`  -> heading + display
+///   `foo^id|lbl`   -> block + display
 function splitQuery(q: string): {
   filePart: string;
-  sigil: "" | "#" | "^" | "|";
-  sigilPart: string;
+  anchorSigil: "" | "#" | "^";
+  anchorPart: string;
+  displayPart: string | null;
 } {
-  for (let i = 0; i < q.length; i++) {
-    const c = q[i];
-    if (c === "#" || c === "^" || c === "|") {
-      return {
-        filePart: q.slice(0, i),
-        sigil: c as "#" | "^" | "|",
-        sigilPart: q.slice(i + 1),
-      };
+  const pipeIdx = q.indexOf("|");
+  const head = pipeIdx === -1 ? q : q.slice(0, pipeIdx);
+  const displayPart = pipeIdx === -1 ? null : q.slice(pipeIdx + 1);
+  let anchorSigil: "" | "#" | "^" = "";
+  let anchorIdx = -1;
+  for (let i = 0; i < head.length; i++) {
+    const c = head[i];
+    if (c === "#" || c === "^") {
+      anchorIdx = i;
+      anchorSigil = c;
+      break;
     }
   }
-  return { filePart: q, sigil: "", sigilPart: "" };
+  return {
+    filePart: anchorIdx === -1 ? head : head.slice(0, anchorIdx),
+    anchorSigil,
+    anchorPart: anchorIdx === -1 ? "" : head.slice(anchorIdx + 1),
+    displayPart,
+  };
 }
 
 function fileLabel(target: string): string {
@@ -232,6 +249,28 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
   preview.className = "md-wiki-bubble-preview is-hidden";
   wrap.appendChild(preview);
 
+  // Display-text row. Shown whenever the query carries `|`. Layout
+  // is a faded "Display text" placeholder, a forward-arrow glyph,
+  // and a live echo of the typed override. Independent of file /
+  // heading / block mode: composes with all of them.
+  const display = document.createElement("div");
+  display.className = "md-wiki-bubble-display is-hidden";
+  const displayPlaceholder = document.createElement("span");
+  displayPlaceholder.className = "md-wiki-bubble-display-label";
+  displayPlaceholder.textContent = "Display text";
+  const displayArrow = document.createElement("span");
+  displayArrow.className = "md-wiki-bubble-display-arrow";
+  // U+2937: arrow with corner (down then right). Reads as
+  // "indented forward" which matches the spec's "bottom-to-forward
+  // arrow" intent.
+  displayArrow.textContent = "⤷";
+  const displayValue = document.createElement("span");
+  displayValue.className = "md-wiki-bubble-display-value";
+  display.appendChild(displayPlaceholder);
+  display.appendChild(displayArrow);
+  display.appendChild(displayValue);
+  wrap.appendChild(display);
+
   const accept = document.createElement("div");
   accept.className = "md-wiki-bubble-accept";
   accept.textContent = "⏎  to accept"; // U+23CE return symbol
@@ -262,31 +301,57 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
   let entries: Entry[] = [];
   let active = 0;
   let lastQuery = "";
+  /// Cached `filePart` of the last query the file search ran for.
+  /// Editing only the `|displayText` tail must not refetch files.
+  let lastFileQuery = "";
   let alive = true;
   let searchToken = 0;
   let headingToken = 0;
   let blockToken = 0;
 
   const renderHead = (q: string): void => {
-    const { filePart, sigil } = splitQuery(q);
+    const { filePart, anchorSigil } = splitQuery(q);
     let label: string;
     if ((mode === "heading" || mode === "block") && lockedFile) {
       // In heading / block mode the header reflects the file we
       // are anchoring into plus the typed sigil suffix so the user
-      // sees the link they are building.
-      const sigilPart = q.slice(filePart.length);
-      label = `${fileLabel(lockedFile)}${sigilPart}`;
+      // sees the link they are building. We strip the `|...` tail
+      // (it shows in the dedicated display row instead) so the head
+      // stays focused on the link target.
+      const tail = q.slice(filePart.length);
+      const pipeIdx = tail.indexOf("|");
+      const targetTail = pipeIdx === -1 ? tail : tail.slice(0, pipeIdx);
+      label = `${fileLabel(lockedFile)}${targetTail}`;
     } else if (q.trim().length === 0) {
       label = "Linked note";
-    } else if (sigil) {
+    } else if (anchorSigil) {
       // File-mode rendering of a query that already has a sigil but
       // didn't transition (e.g. `#` typed before any file matched).
       label = q;
     } else {
-      label = q;
+      // File mode. Strip the `|...` tail from the head so the
+      // display preview owns it.
+      const pipeIdx = q.indexOf("|");
+      label = pipeIdx === -1 ? q : q.slice(0, pipeIdx);
     }
     head.textContent = label;
     head.classList.toggle("is-empty", q.trim().length === 0);
+  };
+
+  /// Toggle and populate the display-text row. Visible iff the
+  /// query carries a `|`; populated with whatever follows it.
+  const renderDisplay = (displayPart: string | null): void => {
+    if (displayPart === null) {
+      display.classList.add("is-hidden");
+      displayValue.textContent = "";
+      return;
+    }
+    display.classList.remove("is-hidden");
+    displayValue.textContent = displayPart;
+    displayPlaceholder.classList.toggle(
+      "is-active",
+      displayPart.trim().length > 0,
+    );
   };
 
   const renderResults = (): void => {
@@ -490,7 +555,8 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
   return {
     setQuery(query: string): void {
       if (!alive) return;
-      const { filePart, sigil, sigilPart } = splitQuery(query);
+      const { filePart, anchorSigil, anchorPart, displayPart } =
+        splitQuery(query);
 
       // Heading / block mode transitions. We only enter when there
       // IS a file to lock onto: with no resolved file, `#` or `^`
@@ -506,50 +572,61 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
         return null;
       };
 
-      if (sigil === "#") {
+      if (anchorSigil === "#") {
         if (mode === "block") exitBlockMode();
         if (mode !== "heading") {
           const candidate = pickLockCandidate();
           if (candidate) {
-            void enterHeadingMode(candidate, sigilPart);
+            void enterHeadingMode(candidate, anchorPart);
             renderHead(query);
+            renderDisplay(displayPart);
             lastQuery = query;
             return;
           }
         } else if (lockedFile) {
-          filterHeadings(sigilPart);
+          filterHeadings(anchorPart);
           renderHead(query);
+          renderDisplay(displayPart);
           lastQuery = query;
           return;
         }
-      } else if (sigil === "^") {
+      } else if (anchorSigil === "^") {
         if (mode === "heading") exitHeadingMode();
         if (mode !== "block") {
           const candidate = pickLockCandidate();
           if (candidate) {
-            void enterBlockMode(candidate, sigilPart);
+            void enterBlockMode(candidate, anchorPart);
             renderHead(query);
+            renderDisplay(displayPart);
             lastQuery = query;
             return;
           }
         } else if (lockedFile) {
-          renderBlockEntries(sigilPart);
+          renderBlockEntries(anchorPart);
           renderHead(query);
+          renderDisplay(displayPart);
           lastQuery = query;
           return;
         }
       } else {
-        // No sigil: we're in file mode. Reset any locked state.
+        // No anchor sigil: we're in file mode. Reset any locked state.
         if (mode === "heading") exitHeadingMode();
         if (mode === "block") exitBlockMode();
       }
 
       renderHead(query);
-      if (query === lastQuery) return;
+      renderDisplay(displayPart);
+      // File search depends only on `filePart`, not on whether the
+      // user has typed a `|` after it. Cache against (filePart) so
+      // editing only the display tail does not refetch.
+      const fileQuery = filePart || query;
+      if (fileQuery === lastFileQuery) {
+        lastQuery = query;
+        return;
+      }
+      lastFileQuery = fileQuery;
       lastQuery = query;
-      // File-mode: search on the part before any sigil so a stray
-      // `|` (handled in later commits) doesn't poison the query.
-      void runFileSearch(filePart || query);
+      void runFileSearch(fileQuery);
     },
     moveActive(delta: number): void {
       if (!alive || entries.length === 0) return;
@@ -561,11 +638,21 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
       if (!alive || entries.length === 0) return null;
       const entry = entries[active];
       if (!entry) return null;
+      // Display-text override: when the user typed `|...` the
+      // trimmed tail wins over the default file-stem label. Empty
+      // override (just `|` typed) falls back to the default; an
+      // empty intentional label is rare and a sensible default
+      // beats a blank link.
+      const { displayPart } = splitQuery(lastQuery);
+      const overrideLabel =
+        displayPart !== null && displayPart.trim().length > 0
+          ? displayPart
+          : null;
       if (entry.kind === "file") {
         return {
           kind: "file",
           target: entry.path,
-          label: fileLabel(entry.path),
+          label: overrideLabel ?? fileLabel(entry.path),
         };
       }
       if (entry.kind === "heading") {
@@ -574,7 +661,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
           kind: "heading",
           target: lockedFile,
           anchor: entry.row.anchor,
-          label: fileLabel(lockedFile),
+          label: overrideLabel ?? fileLabel(lockedFile),
         };
       }
       // block
@@ -588,7 +675,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
           kind: "block",
           target: lockedFile,
           anchor: entry.block.existingAnchor,
-          label: fileLabel(lockedFile),
+          label: overrideLabel ?? fileLabel(lockedFile),
           pendingFileWrite: null,
         };
       }
@@ -598,7 +685,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
         kind: "block",
         target: lockedFile,
         anchor: `^${id}`,
-        label: fileLabel(lockedFile),
+        label: overrideLabel ?? fileLabel(lockedFile),
         pendingFileWrite: { content: newContent, expectedMtime: lockedMtime },
       };
     },

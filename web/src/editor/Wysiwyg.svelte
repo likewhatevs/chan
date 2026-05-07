@@ -1351,6 +1351,35 @@
     padding: 0 1px;
     border-radius: 2px;
   }
+  /* Display-text row. Faded code-block-ish background so the user
+     sees this is a transient input preview, not part of the
+     persisted note. The label fades to muted when populated so the
+     typed value reads as the active content. */
+  :global(.md-wiki-bubble-display) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: .35rem .55rem;
+    border-top: 1px solid var(--border);
+    background: color-mix(in srgb, var(--hover-bg) 60%, transparent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+  :global(.md-wiki-bubble-display.is-hidden) { display: none; }
+  :global(.md-wiki-bubble-display-label) {
+    color: var(--muted);
+    opacity: 0.85;
+    font-style: italic;
+  }
+  :global(.md-wiki-bubble-display-label.is-active) { opacity: 0.45; }
+  :global(.md-wiki-bubble-display-arrow) { color: var(--muted); }
+  :global(.md-wiki-bubble-display-value) {
+    color: var(--text);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   /* Faded separator + accept hint. Hidden when there are no
      results to commit so an empty bubble doesn't claim Enter
      does something it cannot. */
