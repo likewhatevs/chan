@@ -60,5 +60,7 @@ pub use backends::BackendKind;
 pub use config::LlmConfig;
 pub use error::LlmError;
 pub use keys::KeyStatus;
-pub use session::{Delta, LlmSession, SessionListener, StopReason, ToolCall, ToolResult};
+pub use session::{
+    Delta, LlmSession, Message, Role, SessionListener, StopReason, ToolCall, ToolResult,
+};
 pub use tools::{StandardTool, Tool, ToolContext};
