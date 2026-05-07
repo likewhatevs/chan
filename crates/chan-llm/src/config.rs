@@ -128,11 +128,22 @@ pub struct ClaudeCli {
     /// flags that aren't covered by chan-llm's contract.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_args: Vec<String>,
+    /// Host-injected MCP server command. When `Some`, the backend
+    /// runs claude in v2 MCP-mediated mode: writes a temp
+    /// `--mcp-config` pointing at this command, allowlists only
+    /// chan-llm's MCP tools (plus claude's read-only tools), and
+    /// drops `--permission-mode bypassPermissions`. The vector is
+    /// the full argv (e.g. `["chan", "__mcp", "/path/to/drive"]`).
+    /// Skipped from TOML so the host can re-inject the right
+    /// binary path on every launch without stale paths leaking
+    /// into config files.
+    #[serde(skip)]
+    pub mcp_command: Option<Vec<String>>,
 }
 
 impl ClaudeCli {
     fn is_empty(&self) -> bool {
-        self.cmd.is_none() && self.extra_args.is_empty()
+        self.cmd.is_none() && self.extra_args.is_empty() && self.mcp_command.is_none()
     }
 }
 
@@ -304,6 +315,7 @@ mod tests {
             claude_cli: ClaudeCli {
                 cmd: Some(vec!["/usr/local/bin/claude".into()]),
                 extra_args: vec!["--add-dir".into(), "/extra".into()],
+                mcp_command: None,
             },
             ..Default::default()
         };

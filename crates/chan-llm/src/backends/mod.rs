@@ -178,11 +178,20 @@ pub fn build(kind: BackendKind, config: &LlmConfig, drive_root: &Path) -> Result
             // configured default"; we only forward --model when the
             // user explicitly set one.
             let model = if model.is_empty() { None } else { Some(model) };
+            // v2 MCP-mediated mode kicks in when the host supplied
+            // `mcp_command`. The auto-apply flag rides along so the
+            // subprocess we spawn (chan-llm-mcp / `chan __mcp`)
+            // honors the user's confirmation preference.
+            let mcp = cli.mcp_command.map(|command| claude_cli::McpWiring {
+                command,
+                auto_apply_writes: config.auto_apply_writes,
+            });
             Ok(Arc::new(claude_cli::ClaudeCliBackend::new(
                 cli.cmd.unwrap_or_else(claude_cli::default_cmd),
                 cli.extra_args,
                 model,
                 drive_root.to_path_buf(),
+                mcp,
             )))
         }
     }
