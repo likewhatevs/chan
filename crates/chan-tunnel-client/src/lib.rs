@@ -25,6 +25,7 @@ use hyper_util::rt::TokioIo;
 use hyper_util::service::TowerToHyperService;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::mpsc;
 use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use url::Url;
 use yamux::{Config as YamuxConfig, Connection as YamuxConnection, Mode};
@@ -79,6 +80,12 @@ pub struct ClientConfig {
     /// Initial reconnect backoff. Doubled up to `max_backoff`.
     pub initial_backoff: Duration,
     pub max_backoff: Duration,
+    /// Optional channel for `run` to publish lifecycle events on.
+    /// Useful when the caller wants to surface "connected", "lost
+    /// connection", "retrying in Xs" to its own UI. Backpressure:
+    /// `run` uses `try_send`, so a slow consumer drops events
+    /// rather than blocking the tunnel.
+    pub events: Option<mpsc::Sender<TunnelEvent>>,
 }
 
 impl Default for ClientConfig {
@@ -91,6 +98,7 @@ impl Default for ClientConfig {
             client_version: format!("chan-tunnel-client/{}", env!("CARGO_PKG_VERSION")),
             initial_backoff: Duration::from_millis(500),
             max_backoff: Duration::from_secs(30),
+            events: None,
         }
     }
 }
@@ -103,6 +111,24 @@ pub struct Registration {
     pub prefix: String,
     pub user: String,
     pub drive: String,
+}
+
+/// Lifecycle events emitted by `run`. Callers subscribe via
+/// `ClientConfig::events`. Cloning these is cheap; they're meant
+/// to be tee'd to logs and a UI.
+#[derive(Debug, Clone)]
+pub enum TunnelEvent {
+    /// A successful registration. Carries the server-assigned
+    /// public prefix.
+    Connected(Registration),
+    /// The currently-registered tunnel ended (clean close from the
+    /// server, or substream-loop error). `run` will sleep for
+    /// `retry_in` then dial again.
+    Disconnected { retry_in: Duration },
+    /// Dial failed before registration (TLS error, h2 error, 401,
+    /// network unreachable, etc.). `run` will sleep for `retry_in`
+    /// then try again. `error` is best-effort human-readable.
+    DialFailed { error: String, retry_in: Duration },
 }
 
 /// Drive the Hello/HelloAck round-trip over `socket` and return a
@@ -215,19 +241,36 @@ pub async fn run(cfg: ClientConfig, router: axum::Router) -> Result<(), ClientEr
                     prefix = %registration.prefix,
                     "tunnel connected",
                 );
+                emit(&cfg.events, TunnelEvent::Connected(registration.clone()));
                 backoff = cfg.initial_backoff;
                 if let Err(e) = serve_substreams(yconn, router.clone()).await {
                     tracing::warn!(error = %e, "tunnel substream loop ended");
                 } else {
                     tracing::info!("tunnel disconnected");
                 }
+                emit(&cfg.events, TunnelEvent::Disconnected { retry_in: backoff });
             }
             Err(e) => {
                 tracing::warn!(error = %e, ?backoff, "tunnel dial failed; retrying");
+                emit(
+                    &cfg.events,
+                    TunnelEvent::DialFailed {
+                        error: e.to_string(),
+                        retry_in: backoff,
+                    },
+                );
             }
         }
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(cfg.max_backoff);
+    }
+}
+
+/// Best-effort send. Drops the event if the receiver is gone or
+/// full so a slow consumer can't stall the dial loop.
+fn emit(tx: &Option<mpsc::Sender<TunnelEvent>>, ev: TunnelEvent) {
+    if let Some(tx) = tx {
+        let _ = tx.try_send(ev);
     }
 }
 
