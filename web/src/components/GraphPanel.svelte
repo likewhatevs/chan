@@ -1005,13 +1005,6 @@
     min-height: 0;
     min-width: 0;
     background: var(--bg);
-    /* Force the OverlayShell panel to fill its declared maxHeight.
-       The inner SVG canvas has no intrinsic height; without this
-       min-height the panel collapses to just the top bar + status
-       bar and the graph reads as a tiny strip. Slightly under the
-       panel's max-height (92vh) so the cap still wins on short
-       viewports. */
-    min-height: 90vh;
   }
   .bar {
     display: flex;

@@ -13,10 +13,14 @@
   // and renders inside the panel; the wrapped overlay owns its
   // own header + body + footer.
   //
-  // Size is per-overlay because each has different content density:
-  // search is a list, assistant is a conversation + composer, graph
-  // is a sphere visualization. The defaults match the assistant's
-  // current dimensions; pass `width` / `maxHeight` to override.
+  // Size: every overlay fills the full viewport vertically with a
+  // uniform margin (reserved by .overlay's padding) on every side.
+  // The panel grows to take all the height available between the
+  // top and bottom paddings rather than hugging the bottom of the
+  // viewport. The width prop caps the cross-axis (search / settings
+  // can stay narrower; assistant / graph go wide). Defaults are
+  // wide enough for assistant + graph; overrides land in the
+  // narrower panels.
 
   import { onDestroy, onMount } from "svelte";
 
@@ -25,14 +29,12 @@
   let {
     open,
     onClose,
-    width = "min(1200px, 96vw)",
-    maxHeight = "92vh",
+    width = "min(1200px, calc(100vw - 48px))",
     children,
   }: {
     open: boolean;
     onClose: () => void;
     width?: string;
-    maxHeight?: string;
     children: Snippet;
   } = $props();
 
@@ -68,7 +70,7 @@
     >×</button>
     <div
       class="panel"
-      style="width: {width}; max-height: {maxHeight};"
+      style="width: {width};"
       onclick={(e) => e.stopPropagation()}
       role="dialog"
       tabindex="-1"
@@ -79,16 +81,18 @@
 {/if}
 
 <style>
-  /* Centered, anchored near the bottom of the viewport to keep an
-     input row close to the user's typing reach. The same recipe as
-     search and assistant before the extraction, just shared. */
+  /* Full-viewport panel with uniform margin on every side. The
+     panel itself is bound by .overlay's padding; .panel's flex:1
+     in the cross axis (height) lets it grow to fill the available
+     vertical space between top and bottom paddings rather than
+     hugging the viewport bottom. */
   .overlay {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.45);
     display: flex;
     justify-content: center;
-    align-items: flex-end;
+    align-items: stretch;
     /* iOS draws the status bar OVER the WebView (viewport-fit=
        cover), so the panel's top edge needs to clear both the
        safe-area inset AND a comfortable buffer before any tap
@@ -96,7 +100,14 @@
        device the +44px floor keeps the always-on close button
        visible and reachable. */
     padding-top: calc(env(safe-area-inset-top, 0px) + 44px);
-    padding-bottom: max(env(safe-area-inset-bottom, 0px), 16px);
+    padding-bottom: max(env(safe-area-inset-bottom, 0px), 24px);
+    /* Side padding is set narrow on the .overlay; the panel's
+       width prop (capped at 1200px) handles wide-viewport
+       letterboxing. The padding here just guarantees a minimum
+       gutter on phones / narrow windows where the width prop
+       would otherwise hit 100vw. */
+    padding-left: 16px;
+    padding-right: 16px;
     z-index: 25000;
     box-sizing: border-box;
     /* iOS WKWebView only fires `click` on non-button elements that

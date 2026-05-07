@@ -229,10 +229,12 @@
   /// App-level keyboard shortcuts. Lifted out of the deleted
   /// Toolbar component so they keep working without a top bar:
   ///
-  ///   Cmd/Ctrl+,                   -> Settings
-  ///   Cmd/Ctrl+Shift+E             -> Files (file browser overlay)
+  ///   Cmd/Ctrl+,                   -> Settings (open)
+  ///   Cmd/Ctrl+Shift+E             -> Files (toggle)
+  ///   Cmd/Ctrl+H                   -> Assistant (toggle)
   ///   Cmd/Ctrl+Shift+[ / ]         -> previous / next tab (native)
   ///   Alt+Shift+[ / ]              -> previous / next tab (web)
+  ///   Alt+1..9                     -> jump to tab N (web + native)
   ///   Cmd/Ctrl+1..9                -> jump to tab N (native only)
   ///
   /// Tab navigation has two chords because the obvious one
@@ -240,6 +242,15 @@
   /// switching browser tabs. Native desktop keeps the natural chord;
   /// web (chan serve) uses Alt+Shift+[/] so the browser's own tab
   /// nav stays untouched. Both wrap around at the edges.
+  ///
+  /// Cmd+H on macOS is "Hide window" at the OS level. The browser
+  /// catches it before the page sees it on web; preventDefault is
+  /// best-effort and doesn't always win. Native (Tauri) intercepts
+  /// the event at the webview boundary so the binding works there.
+  /// Ctrl+H on Linux/Windows browsers shows history; same caveat.
+  /// We register the binding regardless and let preventDefault do
+  /// what it can; if a particular OS+browser swallows the chord, the
+  /// user can still reach the assistant from the bottom pill.
   function onWindowKey(e: KeyboardEvent): void {
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === ",") {
       e.preventDefault();
@@ -252,7 +263,22 @@
       e.key.toLowerCase() === "e"
     ) {
       e.preventDefault();
-      openBrowser();
+      browserOverlay.open = !browserOverlay.open;
+      if (browserOverlay.open) openBrowser();
+      return;
+    }
+    if (
+      (e.metaKey || e.ctrlKey) &&
+      !e.shiftKey &&
+      !e.altKey &&
+      e.key.toLowerCase() === "h"
+    ) {
+      e.preventDefault();
+      if (assistantOverlay.open) {
+        assistantOverlay.open = false;
+      } else {
+        openAssistant();
+      }
       return;
     }
     // Tab nav: pick the chord matching the platform. e.code rather
@@ -271,6 +297,18 @@
       e.preventDefault();
       selectNextTabInActivePane();
       return;
+    }
+    // Alt+1..9 jump-to-tab works on both web and native (no
+    // browser conflict; Alt+digit isn't a standard chord). We use
+    // e.code === "Digit<N>" so the comparison survives modifiers
+    // changing e.key to a glyph on non-US layouts.
+    if (e.altKey && !e.shiftKey && !(e.metaKey || e.ctrlKey)) {
+      const m = e.code.match(/^Digit([1-9])$/);
+      if (m) {
+        e.preventDefault();
+        selectTabAtIndexInActivePane(Number(m[1]) - 1);
+        return;
+      }
     }
     if (!nativeDesktop) return;
     const meta = e.metaKey || e.ctrlKey;
