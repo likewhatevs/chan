@@ -1068,23 +1068,98 @@ fn default_content_limit() -> u32 {
     20
 }
 
+/// `/api/search/content` view. Frontend's `ContentSearchResponse`
+/// is a flat hit list; chan-core's `SearchResults` wraps per-file
+/// hits with a sub-array of snippets. We expand each snippet to its
+/// own ContentHit so the result palette can show one row per
+/// matching section. start_line isn't surfaced by chan-core today;
+/// synthesized as 0 (the frontend sorts by score, not line).
+#[derive(Serialize)]
+struct ContentSearchResponse {
+    /// True when the index is ready to serve queries. chan-core
+    /// opens the index lazily and is always ready once a drive is
+    /// open; kept as an explicit field so a future "rebuilding"
+    /// state can land without a contract break.
+    ready: bool,
+    /// Mode actually used. "bm25" today (chan-core's tantivy
+    /// search); "hybrid" / "semantic" reserved for the dense
+    /// retrieval that lands with the embeddings feature.
+    mode: &'static str,
+    hits: Vec<ContentHit>,
+}
+
+#[derive(Serialize)]
+struct ContentHit {
+    path: String,
+    chunk_id: String,
+    heading: String,
+    start_line: u32,
+    snippet: String,
+    score: f32,
+}
+
+fn search_mode_tag(m: chan_core::SearchMode) -> &'static str {
+    match m {
+        chan_core::SearchMode::Bm25 => "bm25",
+        chan_core::SearchMode::Hybrid => "hybrid",
+    }
+}
+
 async fn api_search_content(
     State(state): State<Arc<AppState>>,
     Query(p): Query<ContentSearchParams>,
 ) -> Response {
     if p.q.trim().is_empty() {
-        return Json(serde_json::json!({"hits": [], "total": 0, "mode_used": "Bm25"}))
-            .into_response();
+        return Json(ContentSearchResponse {
+            ready: true,
+            mode: "bm25",
+            hits: Vec::new(),
+        })
+        .into_response();
     }
     let opts = SearchOpts {
         limit: p.limit,
         scope: p.scope.clone(),
         ..Default::default()
     };
-    match state.drive().search(&p.q, &opts) {
-        Ok(res) => Json(res).into_response(),
-        Err(e) => err_from(&e),
+    let results = match state.drive().search(&p.q, &opts) {
+        Ok(r) => r,
+        Err(e) => return err_from(&e),
+    };
+    let mode = search_mode_tag(results.mode_used);
+    let mut flat: Vec<ContentHit> = Vec::new();
+    for hit in results.hits {
+        if hit.snippets.is_empty() {
+            // No section-level snippets (older index entries, very
+            // short files); emit one row per hit so the path still
+            // shows up.
+            flat.push(ContentHit {
+                path: hit.path.clone(),
+                chunk_id: format!("{}#0", hit.path),
+                heading: String::new(),
+                start_line: 0,
+                snippet: String::new(),
+                score: hit.score,
+            });
+            continue;
+        }
+        for (idx, sn) in hit.snippets.iter().enumerate() {
+            flat.push(ContentHit {
+                path: hit.path.clone(),
+                chunk_id: format!("{}#{}", hit.path, idx),
+                heading: sn.heading_path.join(" / "),
+                start_line: 0,
+                snippet: sn.text.clone(),
+                score: hit.score,
+            });
+        }
     }
+    Json(ContentSearchResponse {
+        ready: true,
+        mode,
+        hits: flat,
+    })
+    .into_response()
 }
 
 /// Minimal index-status placeholder. chan-core's index opens
@@ -1222,15 +1297,74 @@ async fn api_links(State(state): State<Arc<AppState>>) -> Response {
 ///   mentions  [String]                distinct mention dst nodes
 ///   edges     [Edge]                  every edge in the drive
 ///
-/// The frontend joins `files` to /api/files for size / mtime when
-/// it needs them; we don't denormalize that here to keep the
-/// payload small for big drives.
+/// `/api/graph` view. Frontend's `GraphView` type is unified
+/// `{ nodes, edges }`; chan-core exposes per-kind primitives
+/// (files / tags / neighbors). This handler walks the graph DB and
+/// emits the unified shape so the visualization can render without
+/// per-kind glue on the frontend side.
+///
+/// Node kinds: file (one per indexed path), tag (#name), mention
+/// (@@name). Date nodes from the typescript type aren't emitted;
+/// chan-core's EdgeKind has no date variant today.
 #[derive(Serialize)]
-struct GraphPayload {
-    files: Vec<String>,
-    tags: Vec<chan_core::Tag>,
-    mentions: Vec<String>,
-    edges: Vec<chan_core::Edge>,
+struct GraphViewResponse {
+    nodes: Vec<GraphNodeView>,
+    edges: Vec<GraphEdgeView>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum GraphNodeView {
+    File {
+        id: String,
+        label: String,
+        path: String,
+        /// True for ghost nodes synthesized as the target of a
+        /// broken link. Frontend renders them muted.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        missing: bool,
+    },
+    Tag {
+        id: String,
+        label: String,
+    },
+    Mention {
+        id: String,
+        label: String,
+    },
+}
+
+#[derive(Serialize)]
+struct GraphEdgeView {
+    source: String,
+    target: String,
+    /// "link" | "tag" | "mention". Lowercase to match the
+    /// frontend's GraphViewEdgeKind type.
+    kind: &'static str,
+    /// Only meaningful for link edges: true when the link resolves
+    /// to a missing file. Other kinds skip the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    broken: Option<bool>,
+}
+
+fn edge_kind_tag(k: EdgeKind) -> &'static str {
+    match k {
+        EdgeKind::Link => "link",
+        EdgeKind::Tag => "tag",
+        EdgeKind::Mention => "mention",
+    }
+}
+
+/// Derive the file-node label from a drive-relative path. Strips
+/// the `.md` / `.txt` extension and uses the basename so the graph
+/// renders "recipes/pasta" as just "pasta" without losing the path
+/// (the file node carries the full path on its `path` field).
+fn file_label(rel: &str) -> String {
+    let stem = std::path::Path::new(rel)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| rel.to_string());
+    stem
 }
 
 async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
@@ -1247,29 +1381,82 @@ async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
         Ok(t) => t,
         Err(e) => return err_from(&e),
     };
-    let mut edges = Vec::new();
+    let mut all_edges = Vec::new();
     for f in &files {
         match graph.neighbors(f) {
-            Ok(es) => edges.extend(es),
+            Ok(es) => all_edges.extend(es),
             Err(e) => return err_from(&e),
         }
     }
-    // Distinct mention dst nodes. Sorted so the response is stable
-    // (the frontend can diff snapshots without re-key churn).
-    let mut mentions: Vec<String> = edges
+
+    let file_set: std::collections::BTreeSet<&str> = files.iter().map(String::as_str).collect();
+
+    // Build the node list. File nodes for every indexed path; tag
+    // nodes per #tag; mention nodes per distinct @@name. Ghost
+    // file nodes for unresolved link targets so the graph shows
+    // broken links as dangling muted nodes.
+    let mut nodes: Vec<GraphNodeView> = Vec::new();
+    for path in &files {
+        nodes.push(GraphNodeView::File {
+            id: path.clone(),
+            label: file_label(path),
+            path: path.clone(),
+            missing: false,
+        });
+    }
+    for tag in &tags {
+        nodes.push(GraphNodeView::Tag {
+            id: format!("#{}", tag.name),
+            label: format!("#{}", tag.name),
+        });
+    }
+    let mut mention_set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut ghost_set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for e in &all_edges {
+        match e.kind {
+            EdgeKind::Mention => {
+                mention_set.insert(e.dst.clone());
+            }
+            EdgeKind::Link => {
+                if !file_set.contains(e.dst.as_str()) {
+                    ghost_set.insert(e.dst.clone());
+                }
+            }
+            EdgeKind::Tag => {}
+        }
+    }
+    for m in &mention_set {
+        nodes.push(GraphNodeView::Mention {
+            id: m.clone(),
+            label: m.clone(),
+        });
+    }
+    for ghost in &ghost_set {
+        nodes.push(GraphNodeView::File {
+            id: ghost.clone(),
+            label: file_label(ghost),
+            path: ghost.clone(),
+            missing: true,
+        });
+    }
+
+    let edges: Vec<GraphEdgeView> = all_edges
         .iter()
-        .filter(|e| matches!(e.kind, EdgeKind::Mention))
-        .map(|e| e.dst.clone())
+        .map(|e| GraphEdgeView {
+            source: e.src.clone(),
+            target: match e.kind {
+                EdgeKind::Tag => format!("#{}", e.dst),
+                _ => e.dst.clone(),
+            },
+            kind: edge_kind_tag(e.kind),
+            broken: match e.kind {
+                EdgeKind::Link => Some(!file_set.contains(e.dst.as_str())),
+                _ => None,
+            },
+        })
         .collect();
-    mentions.sort();
-    mentions.dedup();
-    Json(GraphPayload {
-        files,
-        tags,
-        mentions,
-        edges,
-    })
-    .into_response()
+
+    Json(GraphViewResponse { nodes, edges }).into_response()
 }
 
 /// Incoming link edges for one file. The frontend uses this for
@@ -1298,57 +1485,151 @@ async fn api_backlinks(
 // stubs at this point: complete() emits an immediate
 // llm.error + llm.done frame for the configured backend.
 
+/// `/api/llm/status` view shape. Frontend's `LlmStatus` type is a
+/// flat one-active-backend snapshot; the previous per-backend dict
+/// shape didn't match (and threw at render time when SettingsPanel
+/// reached for `key.set` on the missing field). One source of truth
+/// per request: the configured backend, its effective model, and
+/// the resolution status of its key.
 #[derive(Serialize)]
 struct LlmStatus {
-    /// Currently configured backend, if any. None = first-run state.
+    /// Frontend's display tag for the active backend.
+    /// "claude" | "ollama" | "gemini". The "embedded" variant in
+    /// the typescript type is reserved for a future on-device
+    /// backend; not surfaced here yet.
+    backend: &'static str,
+    /// Effective model for the active backend (config override or
+    /// the chan-llm default).
+    model: Option<String>,
+    /// Key resolution snapshot for the active backend.
+    key: LlmKeyView,
+    /// Whether a request would succeed today (active backend
+    /// configured + key resolves, or Ollama which is keyless).
+    ready: bool,
+    /// Human-readable explanation when `ready = false`. Absent on
+    /// the happy path so the UI knows there's nothing to surface.
     #[serde(skip_serializing_if = "Option::is_none")]
-    backend: Option<BackendKind>,
-    /// Effective model per backend (config override or default).
-    models: LlmModels,
-    /// Where each backend's API key was found (env / keychain /
-    /// file fallback / missing). Lets the frontend show a status
-    /// badge without exposing the key itself.
-    keys: LlmKeyStatuses,
-    auto_apply_writes: bool,
+    reason: Option<String>,
+    /// Mirror of LlmConfig.backend.is_some(). Settings hides the
+    /// assistant button when this flips off.
+    enabled: bool,
+    /// Backend supports tool use. All three current backends do;
+    /// retained as a typed field so future "chat-only" variants
+    /// don't break the contract.
+    supports_tools: bool,
 }
 
 #[derive(Serialize)]
-struct LlmModels {
-    anthropic: String,
-    gemini: String,
-    ollama: String,
+struct LlmKeyView {
+    /// True iff the key resolved through any of env / keychain /
+    /// file. Settings disables the "refresh models" buttons when
+    /// this is false.
+    set: bool,
+    /// Lowercase tag for where the key came from. None when not
+    /// set (the union with `set: false`).
+    source: Option<&'static str>,
+    /// Where the on-disk fallback would land. Constant per machine;
+    /// surfaced so the Settings tab can point the user at the file
+    /// to edit on a headless box.
+    path: Option<String>,
+    /// True when the OS keychain backend is reachable. Settings
+    /// hides keychain controls on headless boxes (no Secret
+    /// Service / DBus session, locked keychain, etc.).
+    keychain_available: bool,
 }
 
-#[derive(Serialize)]
-struct LlmKeyStatuses {
-    anthropic: chan_llm::KeyStatus,
-    gemini: chan_llm::KeyStatus,
-    ollama: chan_llm::KeyStatus,
+/// Map the active chan-llm BackendKind to the frontend's display
+/// tag. Anthropic surfaces as "claude" because that's the brand the
+/// user picks from the dropdown.
+fn backend_tag(kind: BackendKind) -> &'static str {
+    match kind {
+        BackendKind::Anthropic => "claude",
+        BackendKind::Ollama => "ollama",
+        BackendKind::Gemini => "gemini",
+    }
+}
+
+fn key_status_tag(s: chan_llm::KeyStatus) -> Option<&'static str> {
+    match s {
+        chan_llm::KeyStatus::Env => Some("env"),
+        chan_llm::KeyStatus::Keychain => Some("keychain"),
+        chan_llm::KeyStatus::File => Some("file"),
+        chan_llm::KeyStatus::Missing => None,
+    }
+}
+
+/// Whether the OS keychain backend is reachable on this machine.
+/// chan-llm doesn't expose a probe today; we report `true`
+/// optimistically and let actual set / clear calls surface errors
+/// through `/api/llm/keys/<provider>` when the backend isn't
+/// usable. macOS Keychain, Windows Credential Manager, and
+/// gnome-keyring / KWallet on a desktop Linux session all work
+/// out of the box; the field is reserved as a future hook for
+/// detecting headless boxes.
+fn keychain_available() -> bool {
+    true
 }
 
 async fn api_llm_status(State(state): State<Arc<AppState>>) -> Response {
     let cfg = state.llm_config.lock().unwrap().clone();
-    let pick = |k: BackendKind| {
-        cfg.models
-            .for_backend(k)
-            .map(str::to_owned)
-            .unwrap_or_else(|| k.default_model().to_string())
+    let active = cfg.backend.unwrap_or(BackendKind::Anthropic);
+    let model = cfg
+        .models
+        .for_backend(active)
+        .map(str::to_owned)
+        .or_else(|| Some(active.default_model().to_string()));
+    let (active_key, status) = chan_llm::keys::resolve(active, &cfg);
+    let key_set = active_key.is_some();
+    let enabled = cfg.backend.is_some();
+    // Ollama is keyless, so a missing-key status doesn't block
+    // ready. The other backends need a key to issue a request.
+    let ready = enabled
+        && match active {
+            BackendKind::Ollama => true,
+            _ => key_set,
+        };
+    let reason = if !enabled {
+        Some("no backend selected; pick one in Settings".to_string())
+    } else if !ready {
+        Some(format!(
+            "{} key not configured; set ANTHROPIC_API_KEY / GEMINI_API_KEY \
+             or store via Settings",
+            backend_tag(active),
+        ))
+    } else {
+        None
     };
     Json(LlmStatus {
-        backend: cfg.backend,
-        models: LlmModels {
-            anthropic: pick(BackendKind::Anthropic),
-            gemini: pick(BackendKind::Gemini),
-            ollama: pick(BackendKind::Ollama),
+        backend: backend_tag(active),
+        model,
+        key: LlmKeyView {
+            set: key_set,
+            source: key_status_tag(status),
+            path: Some(api_keys_path_string()),
+            keychain_available: keychain_available(),
         },
-        keys: LlmKeyStatuses {
-            anthropic: chan_llm::keys::status(BackendKind::Anthropic, &cfg),
-            gemini: chan_llm::keys::status(BackendKind::Gemini, &cfg),
-            ollama: chan_llm::keys::status(BackendKind::Ollama, &cfg),
-        },
-        auto_apply_writes: cfg.auto_apply_writes,
+        ready,
+        reason,
+        enabled,
+        supports_tools: true,
     })
     .into_response()
+}
+
+/// `<config>/chan/api-keys.toml`-style path the on-disk fallback
+/// uses. Hardcoded here because chan-llm doesn't expose a public
+/// path helper; the Settings UI surfaces this so users on headless
+/// boxes know which file to edit. Stays in lockstep with chan-llm's
+/// internal `default_path()` for keys.
+fn api_keys_path_string() -> String {
+    dirs::config_dir()
+        .map(|p| {
+            p.join("chan")
+                .join("api-keys.toml")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_else(|| "<config>/chan/api-keys.toml".to_string())
 }
 
 #[derive(Serialize)]
