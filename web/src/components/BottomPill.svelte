@@ -46,18 +46,18 @@
   .bottom-pill {
     position: fixed;
     left: 50%;
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 22px);
     transform: translateX(-50%);
     z-index: 4500;
     display: flex;
-    gap: 4px;
+    gap: 6px;
     align-items: center;
-    padding: 6px 8px;
+    padding: 9px 12px;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: 999px;
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
-    font-size: 14px;
+    font-size: 15px;
     color: var(--text);
     max-width: calc(100vw - 16px);
     overflow-x: auto;

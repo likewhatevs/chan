@@ -94,17 +94,17 @@
 
 <style>
   .fbtn {
-    min-width: 30px;
-    height: 26px;
+    min-width: 34px;
+    height: 30px;
     text-align: center;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 13px;
+    border-radius: 15px;
     color: var(--text);
     cursor: pointer;
     font: inherit;
-    padding: 0 7px;
-    line-height: 24px;
+    padding: 0 8px;
+    line-height: 28px;
   }
   .fbtn:hover { background: var(--hover-bg); }
   .fbtn.on {
@@ -112,8 +112,8 @@
     border-color: var(--btn-hover);
   }
   .fbtn svg {
-    width: 15px;
-    height: 15px;
+    width: 17px;
+    height: 17px;
     fill: currentColor;
     display: block;
     margin: auto;
@@ -127,15 +127,15 @@
      still uses the neutral hover-bg. */
   .fbtn.enso {
     color: var(--assistant-accent);
-    min-width: 38px;
-    height: 32px;
-    border-radius: 16px;
+    min-width: 44px;
+    height: 36px;
+    border-radius: 18px;
     margin: 0 2px;
   }
   .fbtn.enso svg {
     fill: none;
-    width: 20px;
-    height: 20px;
+    width: 22px;
+    height: 22px;
   }
   .fbtn.enso:hover { color: var(--assistant-accent); }
   .fbtn.enso.on {

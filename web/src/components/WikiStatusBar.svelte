@@ -15,6 +15,7 @@
 
   import { onDestroy } from "svelte";
   import { api } from "../api/client";
+  import { idle } from "../state/idle.svelte";
 
   let {
     path,
@@ -89,7 +90,12 @@
   }
 </script>
 
-<div class="wiki-statusbar" class:collapsed class:read-mode={readMode}>
+<div
+  class="wiki-statusbar"
+  class:collapsed
+  class:read-mode={readMode}
+  class:idle={idle.active}
+>
   <button
     class="collapse"
     title={collapsed ? "show stats" : "hide stats"}
@@ -136,19 +142,29 @@
     z-index: 5;
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 4px 8px;
+    gap: 10px;
+    padding: 6px 10px;
     background: color-mix(in srgb, var(--bg-elev) 88%, transparent);
     border: 1px solid var(--border);
     border-radius: 999px;
     box-shadow: 0 2px 6px rgba(0,0,0,.18);
-    font-size: 11px;
+    font-size: 12px;
     color: var(--muted);
     user-select: none;
+    transition: opacity 200ms ease;
   }
   .wiki-statusbar.collapsed {
-    padding: 4px;
+    padding: 6px;
     gap: 0;
+  }
+  /* Idle: fade out + drop pointer events so the status bar
+     disappears alongside the floating fmt-bar and bottom-pill,
+     keeping the writing surface clean while the user reads.
+     Pinning isn't needed: hover over the surrounding canvas wakes
+     the global tracker before the user can reach this bar. */
+  .wiki-statusbar.idle {
+    opacity: 0;
+    pointer-events: none;
   }
   .wiki-statusbar.read-mode {
     /* Grey-out the whole bar in read mode so the lamp's grey state
