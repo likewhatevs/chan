@@ -17,6 +17,13 @@ name: CI
 # binary just serves a "build the frontend first" 404 for the
 # SPA shell. Adding `npm install + npm run build` to CI is a
 # follow-up if we want to gate on bundle-build success too.
+#
+# Layout note: every cargo job checks the main repo into a
+# subdir (so cross-repo `path = "../chan-core"` deps resolve to
+# a sibling clone). That moves rust-toolchain.toml off the
+# workspace root, where setup-rust-toolchain looks. We `cp` the
+# toolchain file to the workspace root before the action runs
+# so the pinned components (rustfmt, clippy) get installed.
 
 on:
   push:
@@ -35,9 +42,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: chan
+      - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain-file: chan/rust-toolchain.toml
       - run: cargo fmt --check
         working-directory: chan
 
@@ -62,9 +68,8 @@ jobs:
           repository: chan-writer/chan-llm
           path: chan-llm
           token: ${{ secrets.chan_ci }}
+      - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain-file: chan/rust-toolchain.toml
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: chan
@@ -90,9 +95,8 @@ jobs:
           repository: chan-writer/chan-llm
           path: chan-llm
           token: ${{ secrets.chan_ci }}
+      - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain-file: chan/rust-toolchain.toml
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: chan
