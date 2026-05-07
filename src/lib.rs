@@ -21,6 +21,7 @@
 //   - LLM/assistant code, API key storage. App-level concern.
 //   - Editor preferences (fonts, theme). App-level concern.
 
+mod blob;
 pub mod drive;
 pub mod error;
 pub mod fs_ops;

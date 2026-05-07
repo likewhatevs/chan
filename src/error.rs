@@ -20,6 +20,8 @@ pub enum ChanError {
     SpecialFile { kind: String, path: PathBuf },
     #[error("path resolves through a symlink that escapes drive root: {0}")]
     SymlinkEscape(PathBuf),
+    #[error("invalid blob key: {0}")]
+    InvalidKey(String),
     #[error("drive not registered: {0}")]
     DriveNotRegistered(PathBuf),
     #[error("drive root does not exist: {0}")]

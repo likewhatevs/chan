@@ -25,14 +25,21 @@ In scope:
   - Cross-process advisory writer lock (fs4 / flock / LockFileEx).
   - Path-traversal sandboxing and editable-text whitelist.
   - Atomic writes for every chan-core-managed file.
+  - Per-drive blob storage for opaque host JSON: window/pane
+    sessions and assistant chat history. chan-core stores bytes
+    keyed by a flat identifier; the schema is the host's choice.
+    Native shells (iOS / Android) link these via uniffi and share
+    persistence semantics with the chan-server desktop app
+    without reimplementing the atomic-write story per platform.
 
 Out of scope:
 
   - HTTP, WebSocket, frontend bundle. Those live in
     `chan-writer/chan`.
-  - LLM tool calls, API key storage, assistant chat history I/O.
-    chan-core only allocates the per-drive directory; the consumer
-    decides the schema.
+  - LLM tool calls, API key storage, prompt content. The blob
+    storage above gives a place to PUT chat history; chan-llm
+    decides the schema and chan-server (or a native shell) is
+    the orchestrator that calls put_assistant.
   - Editor preferences (fonts, theme, keybindings, attachments dir).
     Those are app-level and live in a config file the consumer owns.
   - User authentication, multi-user collaboration, cloud sync of
@@ -181,6 +188,17 @@ Drive::trash_list() -> Result<Vec<TrashEntry>>
 Drive::trash_restore(id: &str) -> Result<()>
 Drive::trash_purge(id: &str) -> Result<()>
 Drive::trash_empty() -> Result<()>
+
+Drive::put_session(key: &str, content: &[u8]) -> Result<()>
+Drive::get_session(key: &str) -> Result<Option<Vec<u8>>>
+Drive::list_sessions() -> Result<Vec<String>>
+Drive::delete_session(key: &str) -> Result<()>
+
+Drive::put_assistant(key: &str, content: &[u8]) -> Result<()>
+Drive::get_assistant(key: &str) -> Result<Option<Vec<u8>>>
+Drive::list_assistant() -> Result<Vec<String>>
+Drive::delete_assistant(key: &str) -> Result<()>
+Drive::clear_assistant() -> Result<()>
 ```
 
 All `rel` arguments are POSIX-style relative paths. Path traversal

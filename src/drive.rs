@@ -280,6 +280,66 @@ impl Drive {
         trash::purge_all(&self.paths.trash)
     }
 
+    // ---- session blobs ----
+    //
+    // Per-window opaque JSON owned by the host (window/pane
+    // layout, active tabs, scroll positions). chan-core stores
+    // bytes; the host decides the schema. Native shells link these
+    // via uniffi and avoid reimplementing the atomic-write story
+    // per platform.
+
+    /// Atomically write `content` to the session bucket under
+    /// `key`. Bucket dir is created on first call.
+    pub fn put_session(&self, key: &str, content: &[u8]) -> Result<()> {
+        crate::blob::put(&self.paths.sessions, key, content)
+    }
+
+    /// Read a session blob; returns `Ok(None)` when missing.
+    pub fn get_session(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        crate::blob::get(&self.paths.sessions, key)
+    }
+
+    /// Sorted flat session keys for this drive.
+    pub fn list_sessions(&self) -> Result<Vec<String>> {
+        crate::blob::list(&self.paths.sessions)
+    }
+
+    /// Idempotent delete; missing key is `Ok(())`.
+    pub fn delete_session(&self, key: &str) -> Result<()> {
+        crate::blob::delete(&self.paths.sessions, key)
+    }
+
+    // ---- assistant blobs ----
+    //
+    // Per-conversation opaque JSON (typically keyed by sha256 of
+    // the related file's drive-relative path). Same shape as
+    // sessions; separate bucket so listing one doesn't bleed the
+    // other.
+
+    /// Atomically write an assistant conversation blob.
+    pub fn put_assistant(&self, key: &str, content: &[u8]) -> Result<()> {
+        crate::blob::put(&self.paths.assistant, key, content)
+    }
+
+    pub fn get_assistant(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        crate::blob::get(&self.paths.assistant, key)
+    }
+
+    pub fn list_assistant(&self) -> Result<Vec<String>> {
+        crate::blob::list(&self.paths.assistant)
+    }
+
+    pub fn delete_assistant(&self, key: &str) -> Result<()> {
+        crate::blob::delete(&self.paths.assistant, key)
+    }
+
+    /// Wipe every assistant conversation for this drive (the
+    /// `/clear` UX). Does not touch the search index; that comes
+    /// when the assistant-content indexing piece lands.
+    pub fn clear_assistant(&self) -> Result<()> {
+        crate::blob::clear(&self.paths.assistant)
+    }
+
     pub fn rename(&self, from: &str, to: &str) -> Result<()> {
         let from_abs = fs_ops::resolve_safe_strict(self.root(), from)?;
         let to_abs = fs_ops::resolve_safe_strict(self.root(), to)?;
@@ -810,5 +870,47 @@ mod tests {
         // updates from the watcher.
         let _g1 = drive.graph().unwrap();
         let _g2 = drive.graph().unwrap();
+    }
+
+    #[test]
+    fn session_blob_round_trip() {
+        let (_cfg, _root, drive) = fixture();
+        drive.put_session("win-1", b"layout-v1").unwrap();
+        assert_eq!(drive.get_session("win-1").unwrap().unwrap(), b"layout-v1");
+        drive.put_session("win-1", b"layout-v2").unwrap();
+        drive.put_session("win-2", b"other").unwrap();
+        let mut keys = drive.list_sessions().unwrap();
+        keys.sort();
+        assert_eq!(keys, vec!["win-1", "win-2"]);
+        drive.delete_session("win-1").unwrap();
+        assert!(drive.get_session("win-1").unwrap().is_none());
+        // Idempotent.
+        drive.delete_session("win-1").unwrap();
+    }
+
+    #[test]
+    fn assistant_blob_round_trip_and_clear() {
+        let (_cfg, _root, drive) = fixture();
+        drive.put_assistant("conv-a", b"chat-1").unwrap();
+        drive.put_assistant("conv-b", b"chat-2").unwrap();
+        assert_eq!(drive.list_assistant().unwrap().len(), 2);
+        drive.clear_assistant().unwrap();
+        assert!(drive.list_assistant().unwrap().is_empty());
+    }
+
+    #[test]
+    fn session_and_assistant_buckets_are_separate() {
+        let (_cfg, _root, drive) = fixture();
+        drive.put_session("k", b"in-sessions").unwrap();
+        drive.put_assistant("k", b"in-assistant").unwrap();
+        assert_eq!(drive.get_session("k").unwrap().unwrap(), b"in-sessions");
+        assert_eq!(drive.get_assistant("k").unwrap().unwrap(), b"in-assistant");
+    }
+
+    #[test]
+    fn blob_key_validation_blocks_traversal() {
+        let (_cfg, _root, drive) = fixture();
+        let err = drive.put_session("../escape", b"x").unwrap_err();
+        assert!(matches!(err, ChanError::InvalidKey(_)));
     }
 }
