@@ -298,6 +298,16 @@ export type WatchEvent =
   | { kind: "modified"; path: string }
   | { kind: "deleted"; path: string };
 
+/// One heading row from GET /api/headings/{path}. Mirrors
+/// chan-core's graph::HeadingRow: `anchor` is the slug used in
+/// `[link](file.md#anchor)` markdown URLs.
+export type HeadingRow = {
+  level: number;
+  text: string;
+  anchor: string;
+  ord: number;
+};
+
 /// Snapshot returned by GET /api/index/status. Field set matches
 /// chan-core::index::indexer::IndexStatus.
 export type IndexStatus =

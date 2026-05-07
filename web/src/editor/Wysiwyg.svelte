@@ -739,13 +739,17 @@
     const picked = wikiBubble.accept();
     if (!picked) return;
     dismissWikiBubble();
+    // anchor is "" for file picks; only heading / block picks
+    // populate it. The wikiLink node carries it onto the markdown
+    // serialization so the on-disk link is `[label](path#anchor)`.
+    const anchor = picked.kind === "file" ? "" : picked.anchor;
     editor
       .chain()
       .focus()
       .deleteRange({ from: range.start, to: range.end })
       .insertContent({
         type: "wikiLink",
-        attrs: { target: picked.target, label: picked.label },
+        attrs: { target: picked.target, label: picked.label, anchor },
       })
       .insertContent(" ")
       .run();
@@ -1288,6 +1292,12 @@
   }
   :global(.md-wiki-bubble-results li.active),
   :global(.md-wiki-bubble-results li:hover) { background: var(--hover-bg); }
+  /* Heading rows: monospace so the leading `#`s line up and the
+     text is visually distinct from the file-path rows. */
+  :global(.md-wiki-bubble-results li.is-heading) {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
   /* Faded separator + accept hint. Hidden when there are no
      results to commit so an empty bubble doesn't claim Enter
      does something it cannot. */

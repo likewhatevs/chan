@@ -41,6 +41,10 @@ export const WikiLinkNode = Node.create({
     return {
       target: { default: "", parseHTML: (el) => el.getAttribute("data-target") ?? "" },
       label: { default: "", parseHTML: (el) => el.getAttribute("data-label") ?? "" },
+      // Anchor inside the target file. Heading anchors are slugs
+      // (`section-name`); block anchors carry the leading `^`
+      // (`^abc123`). Empty when the link points at a whole file.
+      anchor: { default: "", parseHTML: (el) => el.getAttribute("data-anchor") ?? "" },
     };
   },
 
@@ -49,14 +53,17 @@ export const WikiLinkNode = Node.create({
   },
 
   renderHTML({ HTMLAttributes, node }) {
+    const anchor = (node.attrs.anchor as string) ?? "";
+    const titleSuffix = anchor ? `#${anchor}` : "";
     return [
       "span",
       mergeAttributes(HTMLAttributes, {
         "data-md-wiki": "true",
         "data-target": node.attrs.target,
         "data-label": node.attrs.label,
+        "data-anchor": anchor,
         class: "md-smart md-smart-wiki",
-        title: `→ ${node.attrs.target}`,
+        title: `→ ${node.attrs.target}${titleSuffix}`,
       }),
       (node.attrs.label as string) || (node.attrs.target as string),
     ];
@@ -65,8 +72,15 @@ export const WikiLinkNode = Node.create({
   addStorage() {
     return {
       markdown: {
-        serialize(state: unknown, node: { attrs: { target: string; label: string } }) {
-          const md = wikiLinkToMarkdown(node.attrs.target, node.attrs.label || undefined);
+        serialize(
+          state: unknown,
+          node: { attrs: { target: string; label: string; anchor: string } },
+        ) {
+          const md = wikiLinkToMarkdown(
+            node.attrs.target,
+            node.attrs.label || undefined,
+            node.attrs.anchor || undefined,
+          );
           (state as { write(s: string): void }).write(md);
         },
         parse: { setup() {} },
@@ -85,7 +99,8 @@ export function handleWikiClick(target: string): void {
 // ---------------------------------------------------------------------------
 
 export type WikiBubbleAccept =
-  | { kind: "file"; target: string; label: string };
+  | { kind: "file"; target: string; label: string }
+  | { kind: "heading"; target: string; anchor: string; label: string };
 
 export interface WikiBubbleOpts {
   /// Element to anchor the bubble to (for positioning). Typically
@@ -115,6 +130,49 @@ export interface WikiBubble {
   accept(): WikiBubbleAccept | null;
   /// Tear down the DOM + listeners. Idempotent.
   dismiss(): void;
+}
+
+import type { HeadingRow } from "../../api/types";
+
+type Mode = "file" | "heading";
+
+interface FileEntry {
+  kind: "file";
+  path: string;
+}
+
+interface HeadingEntry {
+  kind: "heading";
+  row: HeadingRow;
+}
+
+type Entry = FileEntry | HeadingEntry;
+
+/// Split the bubble query into `(filePart, sigil, sigilPart)`. The
+/// sigil is the first occurrence of `#`, `^`, or `|`. Sigil and
+/// sigilPart are empty when the query carries none of them. The
+/// modifier modes consume only ONE sigil; subsequent ones are part
+/// of the sigilPart text (e.g. block ids may contain `^`).
+function splitQuery(q: string): {
+  filePart: string;
+  sigil: "" | "#" | "^" | "|";
+  sigilPart: string;
+} {
+  for (let i = 0; i < q.length; i++) {
+    const c = q[i];
+    if (c === "#" || c === "^" || c === "|") {
+      return {
+        filePart: q.slice(0, i),
+        sigil: c as "#" | "^" | "|",
+        sigilPart: q.slice(i + 1),
+      };
+    }
+  }
+  return { filePart: q, sigil: "", sigilPart: "" };
+}
+
+function fileLabel(target: string): string {
+  return (target.split("/").pop() ?? target).replace(/\.md$/, "");
 }
 
 export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
@@ -149,20 +207,42 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
 
   document.body.appendChild(wrap);
 
+  let mode: Mode = "file";
+  /// File picked when transitioning into heading mode. Held while
+  /// the query keeps a `#`; cleared when the user backspaces past
+  /// the sigil and we revert to file mode.
+  let lockedFile: string | null = null;
+  /// All headings of `lockedFile`, fetched once on transition. The
+  /// user's post-`#` text filters this in-memory (no per-keystroke
+  /// HTTP call).
+  let lockedHeadings: HeadingRow[] = [];
+  let entries: Entry[] = [];
   let active = 0;
-  let entries: string[] = [];
   let lastQuery = "";
   let alive = true;
   let searchToken = 0;
+  let headingToken = 0;
 
   const renderHead = (q: string): void => {
-    if (q.trim().length === 0) {
-      head.textContent = "Linked note";
-      head.classList.add("is-empty");
+    const { filePart, sigil } = splitQuery(q);
+    let label: string;
+    if (mode === "heading" && lockedFile) {
+      // In heading mode the header reflects the file we're
+      // anchoring into, with the typed heading suffix so the user
+      // sees the link they're building.
+      const sigilPart = q.slice(filePart.length);
+      label = `${fileLabel(lockedFile)}${sigilPart}`;
+    } else if (q.trim().length === 0) {
+      label = "Linked note";
+    } else if (sigil) {
+      // File-mode rendering of a query that already has a sigil but
+      // didn't transition (e.g. `#` typed before any file matched).
+      label = q;
     } else {
-      head.textContent = q;
-      head.classList.remove("is-empty");
+      label = q;
     }
+    head.textContent = label;
+    head.classList.toggle("is-empty", q.trim().length === 0);
   };
 
   const renderResults = (): void => {
@@ -170,16 +250,24 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
     if (entries.length === 0) {
       list.classList.add("is-empty");
       accept.classList.add("is-hidden");
-      // Re-position even when empty: the bubble height changes.
       if (wrap.isConnected) positionPopover(opts.host, wrap);
       return;
     }
     list.classList.remove("is-empty");
     accept.classList.remove("is-hidden");
-    entries.forEach((path, i) => {
+    entries.forEach((entry, i) => {
       const li = document.createElement("li");
-      li.textContent = path;
-      li.className = i === active ? "active" : "";
+      if (entry.kind === "file") {
+        li.textContent = entry.path;
+      } else {
+        // Heading rows render as `## Heading text` so the user can
+        // see the level at a glance. Indent by level after the
+        // hashes for outline shape.
+        const hashes = "#".repeat(Math.min(6, Math.max(1, entry.row.level)));
+        li.textContent = `${hashes} ${entry.row.text}`;
+        li.classList.add("is-heading");
+      }
+      li.className += i === active ? " active" : "";
       // mousedown (not click) so the editor doesn't lose focus
       // before the picker can run; keep the editor selection alive
       // while the bubble commits.
@@ -193,9 +281,9 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
     if (wrap.isConnected) positionPopover(opts.host, wrap);
   };
 
-  const runSearch = async (q: string): Promise<void> => {
+  const runFileSearch = async (filePart: string): Promise<void> => {
     const token = ++searchToken;
-    const trimmed = q.trim();
+    const trimmed = filePart.trim();
     if (!trimmed) {
       entries = [];
       active = 0;
@@ -205,7 +293,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
     try {
       const hits = await api.search(trimmed, 5, opts.prefix ?? undefined);
       if (!alive || token !== searchToken) return;
-      entries = hits.map((h) => h.path);
+      entries = hits.map((h) => ({ kind: "file", path: h.path }));
       active = 0;
       renderResults();
     } catch {
@@ -213,6 +301,51 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
       entries = [];
       renderResults();
     }
+  };
+
+  /// Filter `lockedHeadings` against the post-`#` text. Substring
+  /// match on text, case-insensitive. Top 5 only so the bubble
+  /// stays compact.
+  const filterHeadings = (sigilPart: string): void => {
+    const needle = sigilPart.trim().toLowerCase();
+    const matches = needle
+      ? lockedHeadings.filter((h) => h.text.toLowerCase().includes(needle))
+      : lockedHeadings.slice();
+    entries = matches.slice(0, 5).map((row) => ({ kind: "heading", row }));
+    active = 0;
+    renderResults();
+  };
+
+  /// Switch into heading mode with `lockedFile = path`. Loads the
+  /// heading list once; subsequent keystrokes filter in-memory.
+  const enterHeadingMode = async (path: string, sigilPart: string): Promise<void> => {
+    const token = ++headingToken;
+    mode = "heading";
+    lockedFile = path;
+    lockedHeadings = [];
+    // Show an empty list until the fetch completes; first paint
+    // also re-renders the head with the locked file name.
+    entries = [];
+    active = 0;
+    renderResults();
+    try {
+      const headings = await api.headings(path);
+      if (!alive || token !== headingToken) return;
+      lockedHeadings = headings;
+      filterHeadings(sigilPart);
+    } catch {
+      if (!alive || token !== headingToken) return;
+      lockedHeadings = [];
+      entries = [];
+      renderResults();
+    }
+  };
+
+  const exitHeadingMode = (): void => {
+    mode = "file";
+    lockedFile = null;
+    lockedHeadings = [];
+    headingToken++; // invalidate any in-flight fetch
   };
 
   positionPopover(opts.host, wrap);
@@ -225,10 +358,50 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
   return {
     setQuery(query: string): void {
       if (!alive) return;
+      const { filePart, sigil, sigilPart } = splitQuery(query);
+
+      // Heading-mode transitions. We only enter heading mode when
+      // there IS a file to lock onto: with no resolved file, `#` in
+      // the query keeps file mode and just gets searched literally
+      // (which is fine; usually returns nothing).
+      if (sigil === "#") {
+        if (mode !== "heading") {
+          // Pick the file to lock: prefer the currently-active file
+          // entry if we're already showing file results; otherwise
+          // take the top hit. If there is no file at all, stay in
+          // file mode and let the literal `#` filter below.
+          let candidate: string | null = null;
+          if (entries.length > 0 && entries[active]?.kind === "file") {
+            candidate = (entries[active] as FileEntry).path;
+          } else if (entries.length > 0 && entries[0]?.kind === "file") {
+            candidate = (entries[0] as FileEntry).path;
+          }
+          if (candidate) {
+            void enterHeadingMode(candidate, sigilPart);
+            renderHead(query);
+            lastQuery = query;
+            return;
+          }
+        } else if (lockedFile) {
+          // Already in heading mode: just re-filter in memory.
+          filterHeadings(sigilPart);
+          renderHead(query);
+          lastQuery = query;
+          return;
+        }
+      } else if (mode === "heading") {
+        // No `#` in query but we're in heading mode: the user
+        // backspaced past the sigil. Revert to file mode.
+        exitHeadingMode();
+      }
+
       renderHead(query);
       if (query === lastQuery) return;
       lastQuery = query;
-      void runSearch(query);
+      // File-mode: search on the part before any sigil so a stray
+      // `^` or `|` (handled in later commits) doesn't poison the
+      // search query.
+      void runFileSearch(filePart || query);
     },
     moveActive(delta: number): void {
       if (!alive || entries.length === 0) return;
@@ -237,10 +410,23 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
     },
     accept(): WikiBubbleAccept | null {
       if (!alive || entries.length === 0) return null;
-      const target = entries[active];
-      if (!target) return null;
-      const label = (target.split("/").pop() ?? target).replace(/\.md$/, "");
-      return { kind: "file", target, label };
+      const entry = entries[active];
+      if (!entry) return null;
+      if (entry.kind === "file") {
+        return {
+          kind: "file",
+          target: entry.path,
+          label: fileLabel(entry.path),
+        };
+      }
+      // heading
+      if (!lockedFile) return null;
+      return {
+        kind: "heading",
+        target: lockedFile,
+        anchor: entry.row.anchor,
+        label: fileLabel(lockedFile),
+      };
     },
     dismiss(): void {
       if (!alive) return;

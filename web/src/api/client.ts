@@ -13,6 +13,7 @@ import type {
   GlobalConfig,
   GraphSnapshot,
   GraphView,
+  HeadingRow,
   IndexStatus,
   LlmCompletionRequest,
   LlmCompletionResponse,
@@ -208,6 +209,11 @@ export const api = {
       `/api/search/content?${params.toString()}`,
     );
   },
+  /// Headings of a single file. The wiki-link bubble fetches this
+  /// when the user types `#` after a resolved file target so
+  /// suggestions filter against the file's outline.
+  headings: (path: string) =>
+    req<HeadingRow[]>("GET", `/api/headings/${encPath(path)}`),
   indexStatus: () => req<IndexStatus>("GET", "/api/index/status"),
   /// Wipe and rebuild the search index from scratch. Returns when
   /// the rebuild has been kicked off; status moves through

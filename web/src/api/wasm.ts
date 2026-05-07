@@ -11,7 +11,11 @@ type ExtractLinks = (markdown: string) => Array<{
   wiki: boolean;
 }>;
 
-type WikiLinkToMarkdown = (target: string, label?: string) => string;
+type WikiLinkToMarkdown = (
+  target: string,
+  label?: string,
+  anchor?: string,
+) => string;
 
 let extractLinksImpl: ExtractLinks | null = null;
 let wikiLinkToMarkdownImpl: WikiLinkToMarkdown | null = null;
@@ -48,8 +52,16 @@ export function extractLinks(markdown: string) {
   return (extractLinksImpl ?? fallbackExtractLinks)(markdown);
 }
 
-export function wikiLinkToMarkdown(target: string, label?: string) {
-  return (wikiLinkToMarkdownImpl ?? fallbackWikiLinkToMarkdown)(target, label);
+export function wikiLinkToMarkdown(
+  target: string,
+  label?: string,
+  anchor?: string,
+) {
+  return (wikiLinkToMarkdownImpl ?? fallbackWikiLinkToMarkdown)(
+    target,
+    label,
+    anchor,
+  );
 }
 
 // ----- TS fallbacks -------------------------------------------------------
@@ -70,11 +82,20 @@ function fallbackExtractLinks(markdown: string): ReturnType<ExtractLinks> {
   return out;
 }
 
-function fallbackWikiLinkToMarkdown(target: string, label?: string): string {
+function fallbackWikiLinkToMarkdown(
+  target: string,
+  label?: string,
+  anchor?: string,
+): string {
   const stem = (label ?? target.split("/").pop() ?? target).replace(/\.md$/, "");
   const enc = target
     .split("/")
     .map((s) => encodeURIComponent(s).replace(/%2F/g, "/"))
     .join("/");
-  return `[${stem}](${enc})`;
+  // Anchor is appended verbatim. Heading anchors are already
+  // slugged by chan-core (kebab-case ASCII); block anchors are
+  // `^id` and round-trip cleanly through encodeURIComponent's
+  // identity for `^`.
+  const frag = anchor ? `#${anchor}` : "";
+  return `[${stem}](${enc}${frag})`;
 }
