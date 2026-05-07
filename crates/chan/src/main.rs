@@ -100,6 +100,21 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         limit: u32,
     },
+    /// Internal: run the chan-llm MCP server on stdio against a
+    /// drive. Spawned as a subprocess by the ClaudeCli backend
+    /// (chan-llm v2 path, chan-llm issue #1) so claude routes its
+    /// file edits through chan-core's gates instead of touching the
+    /// drive directly. Not for end-user invocation.
+    #[command(name = "__mcp", hide = true)]
+    Mcp {
+        /// Drive root to expose. Must already be registered.
+        path: PathBuf,
+        /// Apply write_file calls without producing a "deferred"
+        /// error. Off by default; chan-llm flips it on per session
+        /// when the user has enabled auto-apply in settings.
+        #[arg(long)]
+        auto_apply: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -127,6 +142,16 @@ fn main() -> Result<()> {
         }
         Command::Index { path } => cmd_index(path),
         Command::Search { path, query, limit } => cmd_search(path, query, limit),
+        Command::Mcp { path, auto_apply } => {
+            // Same shape as serve: stdio MCP needs a tokio runtime
+            // for the async server, but everything outside it stays
+            // sync.
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .context("building tokio runtime")?;
+            rt.block_on(cmd_mcp(path, auto_apply))
+        }
     }
 }
 
@@ -392,6 +417,25 @@ fn cmd_index(path: PathBuf) -> Result<()> {
         stats.files_indexed, stats.files_skipped, stats.elapsed_ms,
     );
     Ok(())
+}
+
+/// Run chan-llm's MCP server on stdio against `path`. Spawned by
+/// the ClaudeCli backend through `--mcp-config`; not user-facing.
+///
+/// We deliberately do NOT auto-register the drive here: the host
+/// (chan-server) has already gone through `ensure_drive_named` for
+/// this drive when the session started, and the MCP subprocess
+/// inherits that registry. If the drive isn't registered when the
+/// agent invokes the subcommand, that's a wiring bug worth
+/// surfacing rather than silently fixing.
+async fn cmd_mcp(path: PathBuf, auto_apply: bool) -> Result<()> {
+    let drive = library()?
+        .open_drive(&path)
+        .with_context(|| format!("opening drive {}", path.display()))?;
+    chan_llm::mcp::Server::new(drive, auto_apply)
+        .serve_stdio()
+        .await
+        .context("running MCP server")
 }
 
 fn cmd_search(path: PathBuf, query: String, limit: u32) -> Result<()> {

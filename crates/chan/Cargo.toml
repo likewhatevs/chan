@@ -14,6 +14,12 @@ path = "src/main.rs"
 [dependencies]
 chan-core = { workspace = true }
 chan-server = { path = "../chan-server" }
+# Pulled in directly (not just transitively through chan-server) so
+# the `__mcp` subcommand can run chan-llm's MCP server in-process.
+# The `mcp` feature pulls rmcp + schemars; that's the cost of paying
+# the v2 ClaudeCli wiring (issue chan-llm#1) into the single static
+# binary instead of shipping a separate `chan-llm-mcp` companion.
+chan-llm = { workspace = true, features = ["mcp"] }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
