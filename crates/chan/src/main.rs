@@ -24,8 +24,9 @@
 // invariants (atomic writes, path sandbox, special-file refusal,
 // cross-process writer lock) apply uniformly.
 
+use std::io::{IsTerminal, Write};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use chan_core::{Library, SearchOpts};
@@ -141,6 +142,126 @@ fn library() -> Result<Library> {
     Library::open().context("opening chan registry")
 }
 
+/// Resolve the display name to register for `root`. Behavior:
+///
+///   - When the caller passed an explicit name (non-empty), use it
+///     verbatim. The user's choice always wins.
+///   - When the drive is already registered with a non-empty name,
+///     keep it. Re-registration is a no-op for the name field.
+///   - Otherwise default to the directory's basename. If that
+///     basename collides with another already-registered drive's
+///     name, prompt the user on a TTY for an alternative; on a
+///     non-TTY (chan-app embedding, scripts, CI) fall back to a
+///     `<basename> (<parent-dir>)` disambiguator so the registry
+///     stays unambiguous without blocking startup.
+fn resolve_drive_name(lib: &Library, root: &Path, requested: Option<String>) -> Result<String> {
+    if let Some(n) = requested
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        return Ok(n.to_string());
+    }
+    let drives = lib.list_drives();
+    if let Some(existing) = drives
+        .iter()
+        .find(|d| same_path(&d.path, root))
+        .and_then(|d| d.name.as_deref())
+        .filter(|s| !s.is_empty())
+    {
+        return Ok(existing.to_string());
+    }
+    let basename = root
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "drive".to_string());
+    let conflict = drives
+        .iter()
+        .any(|d| !same_path(&d.path, root) && d.name.as_deref() == Some(basename.as_str()));
+    if !conflict {
+        return Ok(basename);
+    }
+    let auto = disambiguate_name(&basename, root);
+    if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
+        Ok(prompt_drive_name(&basename, root, &auto))
+    } else {
+        eprintln!(
+            "chan: drive name '{basename}' already in use; auto-naming as '{auto}'. \
+             Rename later with `chan rename {} <name>`.",
+            root.display(),
+        );
+        Ok(auto)
+    }
+}
+
+/// "Notes (Documents)" style disambiguator: append the immediate
+/// parent directory name in parens. Stable per path so re-running
+/// chan against the same drive lands the same name.
+fn disambiguate_name(basename: &str, root: &Path) -> String {
+    let parent = root
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if parent.is_empty() {
+        basename.to_string()
+    } else {
+        format!("{basename} ({parent})")
+    }
+}
+
+fn prompt_drive_name(basename: &str, root: &Path, default: &str) -> String {
+    eprintln!("Drive name '{basename}' is already used by another drive in the registry.");
+    eprintln!("Path: {}", root.display());
+    eprint!("Pick a different name (or press Enter for '{default}'): ");
+    let _ = std::io::stderr().flush();
+    let mut buf = String::new();
+    let _ = std::io::stdin().read_line(&mut buf);
+    let trimmed = buf.trim();
+    if trimmed.is_empty() {
+        default.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    let ca = a.canonicalize().unwrap_or_else(|_| a.to_path_buf());
+    let cb = b.canonicalize().unwrap_or_else(|_| b.to_path_buf());
+    ca == cb
+}
+
+/// Register the drive AND make sure it ends up with a non-empty
+/// display name. `register_drive` only sets the name on first
+/// insert (chan-core's "never clobber a user-set name" policy),
+/// so a previously-unnamed entry stays unnamed on subsequent
+/// `chan serve` calls. We backfill via `rename_drive` so users
+/// who already had a drive registered before the auto-name change
+/// still see a real name in the file browser without typing
+/// `chan rename` first.
+fn ensure_drive_named(
+    lib: &Library,
+    root: &Path,
+    requested: Option<String>,
+) -> Result<chan_core::KnownDrive> {
+    let resolved = resolve_drive_name(lib, root, requested)?;
+    let entry = lib
+        .register_drive(root, Some(resolved.clone()))
+        .with_context(|| format!("registering {}", root.display()))?;
+    if entry.name.as_deref().unwrap_or("").is_empty() {
+        lib.rename_drive(root, Some(resolved.clone()))
+            .with_context(|| format!("renaming {}", root.display()))?;
+        // rename_drive returned ok; reflect the new name in the
+        // returned struct without a re-fetch round-trip.
+        return Ok(chan_core::KnownDrive {
+            name: Some(resolved),
+            ..entry
+        });
+    }
+    Ok(entry)
+}
+
 fn cmd_add(path: PathBuf, name: Option<String>) -> Result<()> {
     // Mirror `chan serve`'s behavior: create the directory if it
     // doesn't exist yet. Single verb covers both "register an
@@ -151,9 +272,8 @@ fn cmd_add(path: PathBuf, name: Option<String>) -> Result<()> {
         std::fs::create_dir_all(&path)
             .with_context(|| format!("creating drive root {}", path.display()))?;
     }
-    let entry = library()?
-        .register_drive(&path, name)
-        .with_context(|| format!("registering {}", path.display()))?;
+    let lib = library()?;
+    let entry = ensure_drive_named(&lib, &path, name)?;
     println!(
         "registered: {} ({})",
         entry.path.display(),
@@ -221,8 +341,7 @@ async fn cmd_serve(path: Option<PathBuf>, port: u16, no_token: bool) -> Result<(
         std::fs::create_dir_all(&root)
             .with_context(|| format!("creating drive root {}", root.display()))?;
     }
-    lib.register_drive(&root, None)
-        .with_context(|| format!("registering {}", root.display()))?;
+    ensure_drive_named(&lib, &root, None)?;
     let drive = lib.open_drive(&root)?;
 
     let addr: SocketAddr = format!("127.0.0.1:{port}")
@@ -238,9 +357,10 @@ fn cmd_index(path: PathBuf) -> Result<()> {
     let lib = library()?;
     // Idempotent: registering an already-known drive only touches
     // last_opened. CLI users expect `chan index /some/path` to work
-    // without a prior `chan add`.
-    lib.register_drive(&path, None)
-        .with_context(|| format!("registering {}", path.display()))?;
+    // without a prior `chan add`. First-touch defaults the name to
+    // the directory's basename (or prompts on conflict) so the
+    // file browser doesn't show "(unnamed)" later.
+    ensure_drive_named(&lib, &path, None)?;
     let drive = lib.open_drive(&path)?;
     let stats = drive.reindex().context("reindex")?;
     println!(
@@ -252,8 +372,7 @@ fn cmd_index(path: PathBuf) -> Result<()> {
 
 fn cmd_search(path: PathBuf, query: String, limit: u32) -> Result<()> {
     let lib = library()?;
-    lib.register_drive(&path, None)
-        .with_context(|| format!("registering {}", path.display()))?;
+    ensure_drive_named(&lib, &path, None)?;
     let drive = lib.open_drive(&path)?;
     let opts = SearchOpts {
         limit,
