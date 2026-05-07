@@ -1,20 +1,24 @@
 //! chan-tunnel client library.
 //!
-//! Used by `chan serve --tunnel-url ... --tunnel-token ...`. Dials
-//! the public tunnel endpoint over h2/TLS, completes the
-//! Hello/HelloAck handshake, runs yamux over the duplex, and serves
-//! every incoming substream with a user-supplied `tower::Service`
-//! (typically an `axum::Router`) via hyper.
+//! Used by `chan serve --tunnel-url ... --tunnel-token ...`. The
+//! eventual entry point dials the public tunnel endpoint over
+//! h2/TLS, runs `handshake` over the resulting bidirectional
+//! stream, and serves every yamux substream with a user-supplied
+//! `tower::Service` (typically an `axum::Router`) via hyper.
 //!
-//! Skeleton only; the dial / serve loop lands in a follow-up commit
-//! tracked by the chan-tunnel-client task.
+//! For the wire test and for unit testing in isolation, the
+//! handshake is exposed as a free function over any tokio duplex.
 
 #![forbid(unsafe_code)]
 
 use std::time::Duration;
 
+use chan_tunnel_proto::{read_frame, write_frame, Hello, HelloAck, ProtocolVersion};
 use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_util::compat::{Compat, TokioAsyncReadCompatExt};
 use url::Url;
+use yamux::{Config as YamuxConfig, Connection as YamuxConnection, Mode};
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -34,7 +38,22 @@ pub enum ClientError {
     TransportClosed,
 }
 
-/// Configuration for `Client::run`. The token is intentionally a
+impl From<chan_tunnel_proto::FrameError> for ClientError {
+    fn from(e: chan_tunnel_proto::FrameError) -> Self {
+        ClientError::Handshake(e.to_string())
+    }
+}
+
+impl From<chan_tunnel_proto::IoFrameError> for ClientError {
+    fn from(e: chan_tunnel_proto::IoFrameError) -> Self {
+        match e {
+            chan_tunnel_proto::IoFrameError::Io(e) => ClientError::Io(e),
+            chan_tunnel_proto::IoFrameError::Frame(e) => ClientError::Handshake(e.to_string()),
+        }
+    }
+}
+
+/// Configuration for the dial loop. The token is intentionally a
 /// `String` rather than borrowed: the dial loop may reconnect, and
 /// holding a borrow across reconnects forces the caller into
 /// awkward lifetimes.
@@ -46,6 +65,8 @@ pub struct ClientConfig {
     /// only to fail fast when it disagrees with the token's bound
     /// drive.
     pub drive_hint: Option<String>,
+    /// `chan` version reported in the Hello frame; logs only.
+    pub client_version: String,
     /// Initial reconnect backoff. Doubled up to `max_backoff`.
     pub initial_backoff: Duration,
     pub max_backoff: Duration,
@@ -58,18 +79,58 @@ impl Default for ClientConfig {
                 .expect("hard-coded url is valid"),
             token: String::new(),
             drive_hint: None,
+            client_version: format!("chan-tunnel-client/{}", env!("CARGO_PKG_VERSION")),
             initial_backoff: Duration::from_millis(500),
             max_backoff: Duration::from_secs(30),
         }
     }
 }
 
-/// Result of a successful Hello/HelloAck round-trip. Returned to
-/// the caller before the substream-serving loop starts so `chan
-/// serve` can wire `--prefix` from the assigned public path.
+/// What the server told the client during HelloAck. `chan serve`
+/// uses `prefix` to wire its router so the user does not pass
+/// `--prefix` manually.
 #[derive(Debug, Clone)]
 pub struct Registration {
     pub prefix: String,
     pub user: String,
     pub drive: String,
+}
+
+/// Drive the Hello/HelloAck round-trip over `socket` and return a
+/// yamux client connection ready to accept inbound substreams.
+///
+/// Generic in `S` so the wire test can pass a `tokio::io::duplex`
+/// half and the real client can pass an h2-bidi-stream adapter
+/// later. The yamux `Connection` returned holds ownership of the
+/// socket via a `tokio-util` compat shim; substreams it produces
+/// also use futures-io traits.
+pub async fn handshake<S>(
+    cfg: &ClientConfig,
+    mut socket: S,
+) -> Result<(Registration, YamuxConnection<Compat<S>>), ClientError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let hello = Hello {
+        protocol: ProtocolVersion::V1,
+        client_version: cfg.client_version.clone(),
+        drive_hint: cfg.drive_hint.clone(),
+    };
+    write_frame(&mut socket, &hello).await?;
+
+    let ack: HelloAck = read_frame(&mut socket).await?;
+    if ack.protocol != ProtocolVersion::V1 {
+        return Err(ClientError::Handshake(format!(
+            "server returned unsupported protocol {:?}",
+            ack.protocol
+        )));
+    }
+
+    let registration = Registration {
+        prefix: ack.prefix,
+        user: ack.user,
+        drive: ack.drive,
+    };
+    let yamux = YamuxConnection::new(socket.compat(), YamuxConfig::default(), Mode::Client);
+    Ok((registration, yamux))
 }

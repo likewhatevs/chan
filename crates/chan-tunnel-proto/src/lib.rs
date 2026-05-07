@@ -12,9 +12,11 @@
 
 mod control;
 mod frame;
+mod io;
 
 pub use control::{Hello, HelloAck, ProtocolVersion};
 pub use frame::{decode_frame, encode_frame, FrameError};
+pub use io::{read_frame, write_frame, IoFrameError};
 
 /// Path the client POSTs to on the public tunnel host. Stable
 /// across versions; protocol version is negotiated inside the Hello
