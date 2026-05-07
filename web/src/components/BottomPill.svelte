@@ -5,19 +5,39 @@
   // viewport. Web + native desktop only — mobile uses MobileFloatBar
   // which has its own keyboard-aware position flip.
   //
-  // Idle hide: when `idle.active` flips on (2.5s of no input), the
+  // Idle hide: when `idle.active` flips on (5s of no input), the
   // pill fades to transparent + drops pointer events. Any scroll /
-  // click / keypress flips it back via the global tracker.
+  // click / keypress flips it back via the global tracker. While
+  // the mouse is over the pill itself, pinAccessory() keeps it
+  // visible so the user can't have it fade from under their cursor.
 
   import AccessoryPill from "./AccessoryPill.svelte";
-  import { idle } from "../state/idle.svelte";
+  import { idle, pinAccessory } from "../state/idle.svelte";
+
+  let release: (() => void) | null = null;
+  function onEnter(): void {
+    release?.();
+    release = pinAccessory();
+  }
+  function onLeave(): void {
+    release?.();
+    release = null;
+  }
 </script>
 
+<!-- svelte-ignore a11y_interactive_supports_focus -->
+<!-- The container itself is non-tabbable; focusable controls live
+     inside (the AccessoryPill buttons). The mouseenter/leave are
+     pure visual hints (pin the bar so it doesn't fade under the
+     cursor); tabindex on the wrapper would create a no-op focus
+     stop. -->
 <div
   class="bottom-pill"
   class:idle={idle.active}
   role="toolbar"
   aria-label="Navigation"
+  onmouseenter={onEnter}
+  onmouseleave={onLeave}
 >
   <AccessoryPill />
 </div>

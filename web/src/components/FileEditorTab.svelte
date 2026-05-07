@@ -20,7 +20,20 @@
   import { setMode, type FileTab } from "../state/tabs.svelte";
   import { isMobile } from "../api/native";
   import { activeEditor } from "../state/editorRef.svelte";
-  import { idle } from "../state/idle.svelte";
+  import { idle, pinAccessory } from "../state/idle.svelte";
+
+  // Hover pin: while the cursor is over the floating fmt-bar, the
+  // idle tracker won't fade it out. Refcounted so a second hover
+  // doesn't leak a release fn.
+  let fmtBarRelease: (() => void) | null = null;
+  function fmtBarEnter(): void {
+    fmtBarRelease?.();
+    fmtBarRelease = pinAccessory();
+  }
+  function fmtBarLeave(): void {
+    fmtBarRelease?.();
+    fmtBarRelease = null;
+  }
   import {
     assistantOverlay,
     browserOverlay,
@@ -240,11 +253,15 @@
   </div>
 
   {#if !tab.loading && !overlayOpen && tab.mode === "wysiwyg"}
+    <!-- svelte-ignore a11y_interactive_supports_focus -->
+    <!-- Wrapper isn't tabbable; the formatting buttons inside are. -->
     <div
       class="fmt-bar"
       class:idle={idle.active}
       role="toolbar"
       aria-label="Formatting"
+      onmouseenter={fmtBarEnter}
+      onmouseleave={fmtBarLeave}
     >
       <select
         class="block-kind"
