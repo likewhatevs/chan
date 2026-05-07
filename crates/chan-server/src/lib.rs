@@ -701,16 +701,19 @@ struct OllamaPrefsView {
 }
 
 /// Frontend uses "claude" (display label) for what chan-llm types
-/// internally as `BackendKind::Anthropic`. The "embedded" variant is
-/// reserved for a future on-device backend (qwen2.5 via candle); it
-/// has no chan-llm counterpart yet, so PATCHing it is treated as a
-/// no-op when read back the value falls through to the default.
+/// internally as `BackendKind::Anthropic`. The "claude_cli" variant
+/// covers the new shell-executor backend that wraps the local
+/// `claude` CLI. The "embedded" variant is reserved for a future
+/// on-device backend (qwen2.5 via candle); it has no chan-llm
+/// counterpart yet, so PATCHing it is treated as a no-op when read
+/// back the value falls through to the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 enum AssistantBackendKind {
     Claude,
     Ollama,
     Gemini,
+    ClaudeCli,
     Embedded,
 }
 
@@ -720,6 +723,7 @@ impl AssistantBackendKind {
             BackendKind::Anthropic => AssistantBackendKind::Claude,
             BackendKind::Ollama => AssistantBackendKind::Ollama,
             BackendKind::Gemini => AssistantBackendKind::Gemini,
+            BackendKind::ClaudeCli => AssistantBackendKind::ClaudeCli,
         }
     }
 
@@ -728,6 +732,7 @@ impl AssistantBackendKind {
             AssistantBackendKind::Claude => Some(BackendKind::Anthropic),
             AssistantBackendKind::Ollama => Some(BackendKind::Ollama),
             AssistantBackendKind::Gemini => Some(BackendKind::Gemini),
+            AssistantBackendKind::ClaudeCli => Some(BackendKind::ClaudeCli),
             AssistantBackendKind::Embedded => None,
         }
     }
@@ -1546,6 +1551,7 @@ fn backend_tag(kind: BackendKind) -> &'static str {
         BackendKind::Anthropic => "claude",
         BackendKind::Ollama => "ollama",
         BackendKind::Gemini => "gemini",
+        BackendKind::ClaudeCli => "claude_cli",
     }
 }
 
@@ -1581,12 +1587,14 @@ async fn api_llm_status(State(state): State<Arc<AppState>>) -> Response {
     let (active_key, status) = chan_llm::keys::resolve(active, &cfg);
     let key_set = active_key.is_some();
     let enabled = cfg.backend.is_some();
-    // Ollama is keyless, so a missing-key status doesn't block
-    // ready. The other backends need a key to issue a request.
+    // Ollama and ClaudeCli are keyless from chan-llm's view (Ollama
+    // is local; ClaudeCli inherits auth from the user's installed
+    // `claude` install), so a missing-key status doesn't block
+    // ready. Anthropic and Gemini need a key to issue a request.
     let ready = enabled
         && match active {
-            BackendKind::Ollama => true,
-            _ => key_set,
+            BackendKind::Ollama | BackendKind::ClaudeCli => true,
+            BackendKind::Anthropic | BackendKind::Gemini => key_set,
         };
     let reason = if !enabled {
         Some("no backend selected; pick one in Settings".to_string())
@@ -1598,10 +1606,13 @@ async fn api_llm_status(State(state): State<Arc<AppState>>) -> Response {
         let env = match active {
             BackendKind::Anthropic => "ANTHROPIC_API_KEY",
             BackendKind::Gemini => "GEMINI_API_KEY",
-            // Ollama is keyless; if !ready triggered for it, we'd
-            // have a different problem. Keep a fallback name to
-            // satisfy the exhaustive match without panicking.
+            // Ollama and ClaudeCli are keyless from chan-llm's
+            // perspective (Ollama is local; ClaudeCli inherits auth
+            // from the user's installed `claude` install). The
+            // !ready branch shouldn't fire for them; keep a
+            // sensible env var so the exhaustive match compiles.
             BackendKind::Ollama => "OLLAMA_HOST",
+            BackendKind::ClaudeCli => "CLAUDE_CLI",
         };
         Some(format!(
             "{} key not configured. Set {env} in your shell, or save the \
@@ -1674,11 +1685,13 @@ async fn api_llm_tools() -> Response {
 
 #[derive(Deserialize)]
 struct CompleteBody {
-    /// Client-generated correlation id. The server echoes it on
-    /// every emitted llm.* frame so the frontend can match
-    /// streaming events to its pending turn (multiple turns can
-    /// interleave on the same socket).
-    session_id: String,
+    /// Client-generated correlation id. Echoed on every llm.* WS
+    /// frame so the frontend can match streaming events to its
+    /// pending turn. Optional: when absent, the server generates
+    /// a random one (callers that consume only the synchronous
+    /// JSON response don't need to track an id at all).
+    #[serde(default)]
+    session_id: Option<String>,
     /// Convenience: a single user message. The server wraps this
     /// in a one-element Vec<Message> for the LLM. Use
     /// `messages` instead when the host needs to pass full
@@ -1687,11 +1700,29 @@ struct CompleteBody {
     message: Option<String>,
     /// Full conversation transcript. Wins over `message` when
     /// both are set. The frontend builds this from its persisted
-    /// assistant blob (see /api/assistant/conversation/:key) and
+    /// assistant blob (see /api/assistant/conversation) and
     /// passes the full history each turn so chan-llm stays
     /// stateless.
     #[serde(default)]
     messages: Vec<ApiMessage>,
+    /// Tools the caller wants to expose to this turn. Optional;
+    /// chan-llm prepends its own standard tool schemas
+    /// internally. Today this field is observed for forward
+    /// compatibility but not actually plumbed (chan-llm's send()
+    /// uses standard_tool_schemas unconditionally).
+    #[serde(default)]
+    #[allow(dead_code)]
+    tools: Option<serde_json::Value>,
+    /// Output cap. Per-backend defaults are sane; passed through
+    /// for forward compatibility but currently ignored.
+    #[serde(default)]
+    #[allow(dead_code)]
+    max_tokens: Option<u32>,
+    /// Sampling temperature. Ignored today (extended-thinking
+    /// models reject explicit values; we let backends pick).
+    #[serde(default)]
+    #[allow(dead_code)]
+    temperature: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -1728,12 +1759,114 @@ impl From<ApiMessage> for LlmMessage {
     }
 }
 
+/// Frontend's expected response shape for /api/llm/complete:
+/// the full assistant turn returned synchronously. Streaming
+/// deltas still flow over /ws as a side channel, but the simple
+/// non-streaming caller (InlineAssist's submit path) just awaits
+/// the JSON body and reads it once.
 #[derive(Serialize)]
-struct CompleteAck {
-    session_id: String,
-    /// Always true today; the body is non-empty so the frontend
-    /// can rely on a JSON shape rather than a 204.
-    started: bool,
+struct LlmCompletionResponse {
+    content: String,
+    tool_calls: Vec<LlmToolCallView>,
+    /// Frontend's LlmStopReason: "end_turn" | "max_tokens" |
+    /// "tool_use" | "stop_sequence" | "other".
+    stop_reason: &'static str,
+    model: String,
+}
+
+#[derive(Serialize)]
+struct LlmToolCallView {
+    id: String,
+    name: String,
+    /// chan-llm's struct uses `args`; the frontend types the same
+    /// JSON value as `input` per Anthropic's convention. Renamed
+    /// at the seam so neither side needs to know about the other.
+    input: serde_json::Value,
+}
+
+fn stop_reason_tag(r: chan_llm::StopReason) -> &'static str {
+    match r {
+        chan_llm::StopReason::EndOfTurn => "end_turn",
+        chan_llm::StopReason::MaxTokens => "max_tokens",
+        chan_llm::StopReason::StopSequence => "stop_sequence",
+        chan_llm::StopReason::ToolUse => "tool_use",
+        chan_llm::StopReason::Error => "other",
+    }
+}
+
+/// Listener that forwards events to the broadcast channel (so /ws
+/// subscribers see them live) AND collects the final assistant
+/// text + tool calls in memory so the HTTP handler can return
+/// them synchronously. Completion is signalled via a Notify that
+/// the handler awaits before responding.
+struct CollectListener {
+    forward: LlmBroadcastListener,
+    state: Mutex<CollectState>,
+    done: tokio::sync::Notify,
+}
+
+struct CollectState {
+    text: String,
+    tool_calls: Vec<chan_llm::ToolCall>,
+    stop_reason: Option<chan_llm::StopReason>,
+    error: Option<String>,
+    finished: bool,
+}
+
+impl CollectListener {
+    fn new(forward: LlmBroadcastListener) -> Self {
+        Self {
+            forward,
+            state: Mutex::new(CollectState {
+                text: String::new(),
+                tool_calls: Vec::new(),
+                stop_reason: None,
+                error: None,
+                finished: false,
+            }),
+            done: tokio::sync::Notify::new(),
+        }
+    }
+}
+
+impl SessionListener for CollectListener {
+    fn on_delta(&self, delta: chan_llm::Delta) {
+        self.state
+            .lock()
+            .expect("collect state poisoned")
+            .text
+            .push_str(&delta.text);
+        self.forward.on_delta(delta);
+    }
+    fn on_tool_call(&self, call: chan_llm::ToolCall) {
+        self.state
+            .lock()
+            .expect("collect state poisoned")
+            .tool_calls
+            .push(call.clone());
+        self.forward.on_tool_call(call);
+    }
+    fn on_tool_result(&self, result: chan_llm::ToolResult) {
+        self.forward.on_tool_result(result);
+    }
+    fn on_done(&self, reason: chan_llm::StopReason) {
+        {
+            let mut s = self.state.lock().expect("collect state poisoned");
+            s.stop_reason = Some(reason);
+            s.finished = true;
+        }
+        self.done.notify_waiters();
+        self.forward.on_done(reason);
+    }
+    fn on_error(&self, error: String) {
+        {
+            let mut s = self.state.lock().expect("collect state poisoned");
+            if s.error.is_none() {
+                s.error = Some(error.clone());
+            }
+        }
+        self.forward.on_error(error);
+    }
 }
 
 async fn api_llm_complete(
@@ -1741,11 +1874,26 @@ async fn api_llm_complete(
     Json(body): Json<CompleteBody>,
 ) -> Response {
     let config = state.llm_config.lock().unwrap().clone();
+    // Active backend determines the model echoed back in the
+    // response. Falls through the same way /api/llm/status does
+    // (config override > backend default).
+    let active = config.backend.unwrap_or(BackendKind::Anthropic);
+    let model = config
+        .models
+        .for_backend(active)
+        .map(str::to_owned)
+        .unwrap_or_else(|| active.default_model().to_string());
+
+    // session_id is optional now; generate one when absent so the
+    // /ws side channel still has a correlatable id without
+    // requiring the simple sync caller to track one.
+    let session_id = body.session_id.clone().unwrap_or_else(random_session_id);
+
     let session = LlmSession::new(state.drive().clone(), config);
-    let listener: Arc<dyn SessionListener> = Arc::new(LlmBroadcastListener {
+    let collect = Arc::new(CollectListener::new(LlmBroadcastListener {
         tx: state.events_tx.clone(),
-        session_id: body.session_id.clone(),
-    });
+        session_id,
+    }));
 
     // Prefer the full `messages` array; fall back to wrapping a
     // single `message` string as one user turn. The frontend
@@ -1762,17 +1910,57 @@ async fn api_llm_complete(
         );
     };
 
-    // chan-llm's send is fire-and-forget; events flow into the
-    // listener (which fans out to /ws). chan-llm picks up the
-    // ambient tokio runtime (this very task's runtime) for its
-    // background work, so no extra runtime is spawned.
+    // chan-llm's send is fire-and-forget (spawns the run_loop on
+    // the ambient runtime); we wait on CollectListener's Notify
+    // for the on_done signal. Events still fan out to /ws live;
+    // this handler just blocks until the turn completes.
+    let listener: Arc<dyn SessionListener> = collect.clone();
     session.send(messages, listener);
+    collect.done.notified().await;
 
-    Json(CompleteAck {
-        session_id: body.session_id,
-        started: true,
+    let snapshot = collect.state.lock().expect("collect state poisoned");
+    if let Some(err_msg) = snapshot.error.clone() {
+        // chan-llm reports backend / network failures via on_error
+        // before on_done(Error). Surface the original message at
+        // 502 so the chat UI can show "anthropic 401: ..." instead
+        // of a vague "other".
+        return err(StatusCode::BAD_GATEWAY, err_msg);
+    }
+    let stop = snapshot
+        .stop_reason
+        .unwrap_or(chan_llm::StopReason::EndOfTurn);
+    let tool_calls = snapshot
+        .tool_calls
+        .iter()
+        .map(|c| LlmToolCallView {
+            id: c.id.clone(),
+            name: c.name.clone(),
+            input: c.args.clone(),
+        })
+        .collect();
+    Json(LlmCompletionResponse {
+        content: snapshot.text.clone(),
+        tool_calls,
+        stop_reason: stop_reason_tag(stop),
+        model,
     })
     .into_response()
+}
+
+/// Random session id for the WS correlation channel. Used when the
+/// caller didn't supply one. Same alphabet as the auth token; the
+/// id is opaque so the exact shape doesn't matter as long as it's
+/// unlikely to collide on the same socket.
+fn random_session_id() -> String {
+    let mut bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes
+        .iter()
+        .map(|b| {
+            const A: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+            A[(*b as usize) % A.len()] as char
+        })
+        .collect()
 }
 
 #[derive(Deserialize)]

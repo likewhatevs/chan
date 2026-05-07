@@ -1307,7 +1307,7 @@
   }
   .bubble .copy-btn:hover { color: var(--text); border-color: var(--btn-hover); }
   .bubble .body {
-    background: var(--bg-card);
+    background: var(--assistant-bubble-bg);
     padding: 6px 10px;
     border-radius: 8px;
     font-size: 15px;
@@ -1315,7 +1315,7 @@
     white-space: pre-wrap;
     word-break: break-word;
   }
-  .bubble.user .body { background: var(--smart-bg); }
+  .bubble.user .body { background: var(--assistant-user-bubble-bg); }
   /* Rendered markdown inside an assistant bubble. The body
      itself drops white-space:pre-wrap because the rendered HTML
      handles its own paragraph breaks; tighten margins so multi-

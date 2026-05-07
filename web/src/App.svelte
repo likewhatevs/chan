@@ -406,6 +406,15 @@
     --tab-inactive-bg: #232325;
     --smart-bg: rgba(88, 166, 255, 0.18);
     --pane-focus: #388bfd;
+    /* Assistant chat bubbles. The user bubble takes a stronger blue
+       tint so it stands out against the panel; the assistant bubble
+       sits on a subtle off-bg shade so two adjacent assistant turns
+       still read as discrete messages. Dark-mode values keep enough
+       contrast over the dark panel; light-mode overrides below pick
+       Apple-Messages-style pastels so the bubbles don't disappear
+       into white. */
+    --assistant-bubble-bg: #2a2a2c;
+    --assistant-user-bubble-bg: rgba(88, 166, 255, 0.28);
     /* Brand accent for the assistant button (Notes-style yellow).
        Single source for the ensō tint across desktop toolbar,
        editor floating bar, and mobile float bar. Same value in
@@ -441,6 +450,12 @@
     --tab-inactive-bg: #ececec;
     --smart-bg: rgba(80, 120, 200, 0.12);
     --pane-focus: #b9c8e8;
+    /* Light-mode bubble tints: assistant on a warmer gray so it
+       sits clearly above the white panel; user on Apple-Messages
+       blue (#dbeafe-ish, slightly more saturated) so the two
+       sides are distinguishable at a glance. */
+    --assistant-bubble-bg: #ececef;
+    --assistant-user-bubble-bg: #cfe1fb;
     --assistant-accent: #d2a700;
   }
 
