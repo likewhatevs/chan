@@ -290,15 +290,75 @@ What's NOT closed today:
 ```rust
 Drive::search(query: &str, opts: &SearchOpts) -> Result<SearchResults>
 Drive::reindex() -> Result<IndexStats>
+Drive::link_targets(q: &str, limit: u32) -> Result<Vec<LinkTarget>>
 
 Drive::graph() -> Result<&GraphView>
 GraphView::neighbors(rel: &str) -> Result<Vec<Edge>>
 GraphView::backlinks(rel: &str) -> Result<Vec<Edge>>
 GraphView::tags() -> Result<Vec<Tag>>
 GraphView::files_with_tag(tag: &str) -> Result<Vec<String>>
-GraphView::replace_file(rel, mtime, outgoing, headings) -> Result<()>
+GraphView::replace_file(rel, title, mtime, outgoing, headings) -> Result<()>
 GraphView::forget_file(rel: &str) -> Result<()>
+GraphView::link_targets(q: &str, limit: u32) -> Result<Vec<LinkTarget>>
 ```
+
+#### Link autocomplete (`[[`)
+
+`link_targets` drives the editor's `[[` typeahead: the user types a
+fragment and gets back files plus headings to anchor a wiki link to.
+The graph DB is the source of truth (`nodes` for files, `headings`
+for in-file anchors); BM25 over filename and heading text in the
+search index serves a parallel purpose for free-text search but is
+not used for the picker.
+
+```rust
+pub enum LinkTargetKind { File, Heading }
+
+pub struct LinkTarget {
+    pub kind: LinkTargetKind,
+    pub path: String,            // rel path of the file (both kinds)
+    pub title: Option<String>,   // file title; None for headings
+    pub heading: Option<String>, // heading text; None for files
+    pub anchor: Option<String>,  // heading anchor; None for files
+    pub level: Option<u8>,       // heading depth 1..=6; None for files
+    pub mtime: Option<i64>,      // file mtime; None for headings
+}
+```
+
+  - **Empty `q`**: most-recently-edited files first, up to `limit`.
+    Useful as the picker's initial state before any keystroke.
+  - **Non-empty `q`**: four-tier ASCII case-insensitive match.
+
+      rank 1  basename starts with q   ("carb" -> "carbonara.md")
+      rank 2  basename contains q      ("bona" -> "carbonara.md")
+      rank 3  title contains q         (h1 / frontmatter title hit)
+      rank 4  heading text contains q  (in-file anchor target)
+
+    Within a rank, files sort by `mtime DESC NULLS LAST, rel_path
+    ASC`; headings sort by `rel_path, ord`. Heading hits are
+    capped at `limit / 2` so a single TOC-heavy file cannot drown
+    out file matches.
+
+  - **Wildcard escaping**: `%`, `_`, and `\` in `q` are escaped
+    against SQLite's LIKE engine so a filename "100%off.md" is not
+    matched by a raw `%` query.
+  - **Case folding**: ASCII only. SQLite's `LOWER` does not fold
+    Unicode without ICU; non-ASCII queries match case-sensitively.
+    Acceptable for v1; revisit when a Unicode-aware backend
+    becomes a priority.
+
+After picking a file, the editor calls `GraphView::headings_of(rel)`
+to populate the `[[file#` second phase from that file alone.
+
+##### Free-text search and the new index fields
+
+The search index gained `filename` (basename stem, tokenized) and
+`headings` (newline-joined heading texts, tokenized) at
+`SCHEMA_VERSION = 3`. They make `Drive::search("carbonara")` find
+both `recipes/carbonara.md` (filename match) and any file whose
+section heading mentions it, even when the body never does. The
+schema version bump triggers an automatic wipe + rebuild on next
+open; user data is unaffected.
 
 Search is BM25-only at v1. The `SearchMode` enum reserves a
 `Hybrid` variant for the future when an embedder is wired in

@@ -36,7 +36,7 @@ pub mod watch;
 
 pub use drive::{DirEntry, Drive, FileStat, TreeEntry};
 pub use error::{ChanError, Result};
-pub use graph::{Edge, EdgeKind, GraphView, HeadingRow, Tag};
+pub use graph::{Edge, EdgeKind, GraphView, HeadingRow, LinkTarget, LinkTargetKind, Tag};
 pub use library::Library;
 pub use registry::{KnownDrive, Registry};
 pub use search::{Hit, IndexDoc, IndexStats, SearchMode, SearchOpts, SearchResults, Snippet};

@@ -3,10 +3,22 @@
 // Schema (one document per file at v1; per-section chunking is a
 // follow-up that adds heading_path and a chunk-id field):
 //
-//   path   STRING | STORED            POSIX rel path; primary key
-//   title  TEXT   | STORED            top-level h1 if present
-//   body   TEXT   | STORED            full file body (post-frontmatter)
-//   mtime  I64    | STORED | FAST     Unix seconds; for rebuild
+//   path     STRING | STORED          POSIX rel path; primary key
+//   filename TEXT                     basename stem of path; lets
+//                                     "carbonara" match
+//                                     `recipes/carbonara.md` even
+//                                     when the body never mentions
+//                                     it. Not stored: the path
+//                                     field already carries the
+//                                     display value.
+//   title    TEXT   | STORED          top-level h1 if present
+//   body     TEXT   | STORED          full file body (post-frontmatter)
+//   headings TEXT                     newline-joined heading texts;
+//                                     surfaces section titles in
+//                                     general search hits without
+//                                     duplicating the body. Not
+//                                     stored.
+//   mtime    I64    | STORED | FAST   Unix seconds; for rebuild
 //                                     hints and future filtering
 //
 // Schema versioning lives in `<index_dir>/.schema_version` (single
@@ -15,8 +27,10 @@
 // add fields, switch tokenizers, or change chunking and have stale
 // indexes rebuild on next open without manual intervention.
 //
-// We bumped this once already from a no-op stub to the real schema.
-// SCHEMA_VERSION = 2 below.
+// SCHEMA_VERSION history:
+//   1 -> 2  no-op stub to real schema (path/title/body/mtime).
+//   2 -> 3  added `filename` and `headings` for the [[ link picker
+//           and broader free-text findability.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -40,7 +54,7 @@ use crate::error::ChanError;
 use crate::error::Result;
 
 #[cfg(feature = "search")]
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 #[cfg(feature = "search")]
 const VERSION_FILE: &str = ".schema_version";
 
@@ -100,9 +114,19 @@ pub struct IndexStats {
 #[derive(Debug, Clone)]
 pub struct IndexDoc {
     pub path: String,
+    /// File's display title (h1 / frontmatter `title`).
     pub title: Option<String>,
+    /// Full file body (post-frontmatter).
     pub body: String,
+    /// Last modification time, Unix seconds.
     pub mtime: Option<i64>,
+    /// Basename of `path` with the extension stripped. Indexed as
+    /// a text field so users typing the filename find the file even
+    /// when the body never mentions it.
+    pub filename: String,
+    /// Newline-joined heading texts. Indexed as a text field so
+    /// section titles surface in general queries.
+    pub headings: String,
 }
 
 /// Index handle. One per Drive open.
@@ -125,8 +149,10 @@ pub struct Index {
 #[derive(Clone)]
 struct SchemaFields {
     path: Field,
+    filename: Field,
     title: Field,
     body: Field,
+    headings: Field,
     mtime: Field,
 }
 
@@ -229,9 +255,18 @@ impl Index {
         };
 
         let searcher = self.reader.searcher();
+        // Free-text search runs across filename, title, headings,
+        // and body. Field boosts could weight filename / title above
+        // body for typeahead-style queries; left at 1.0 for v1, the
+        // BM25 length normalization already tilts short fields up.
         let qp = QueryParser::for_index(
             &self.inner,
-            vec![self.schema_fields.title, self.schema_fields.body],
+            vec![
+                self.schema_fields.filename,
+                self.schema_fields.title,
+                self.schema_fields.headings,
+                self.schema_fields.body,
+            ],
         );
         let parsed = qp
             .parse_query(query)
@@ -295,16 +330,23 @@ impl Index {
 fn build_schema() -> (Schema, SchemaFields) {
     let mut sb = Schema::builder();
     let path = sb.add_text_field("path", STRING | STORED);
+    // filename + headings are indexed but not stored: the path
+    // field already carries the display value, and storing the
+    // joined heading list would duplicate the body.
+    let filename = sb.add_text_field("filename", TEXT);
     let title = sb.add_text_field("title", TEXT | STORED);
     let body = sb.add_text_field("body", TEXT | STORED);
+    let headings = sb.add_text_field("headings", TEXT);
     let mtime = sb.add_i64_field("mtime", FAST | STORED);
     let schema = sb.build();
     (
         schema,
         SchemaFields {
             path,
+            filename,
             title,
             body,
+            headings,
             mtime,
         },
     )
@@ -315,7 +357,9 @@ fn write_doc(w: &mut tantivy::IndexWriter<TantivyDocument>, f: &SchemaFields, d:
     w.delete_term(Term::from_field_text(f.path, &d.path));
     let mut td = doc!(
         f.path => d.path.clone(),
+        f.filename => d.filename.clone(),
         f.body => d.body.clone(),
+        f.headings => d.headings.clone(),
         f.mtime => d.mtime.unwrap_or(0),
     );
     if let Some(t) = &d.title {
@@ -417,17 +461,31 @@ mod tests {
         assert!(path_under("notes/x.md", ""));
     }
 
+    fn doc(path: &str, title: Option<&str>, body: &str) -> IndexDoc {
+        IndexDoc {
+            path: path.to_string(),
+            title: title.map(str::to_owned),
+            body: body.to_string(),
+            mtime: None,
+            filename: std::path::Path::new(path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string(),
+            headings: String::new(),
+        }
+    }
+
     #[test]
     fn upsert_then_search_finds_doc() {
         let drive_root = TempDir::new().unwrap();
         let idx_dir = TempDir::new().unwrap();
         let idx = Index::open(drive_root.path(), idx_dir.path()).unwrap();
-        idx.upsert(&IndexDoc {
-            path: "intro.md".into(),
-            title: Some("Hello".into()),
-            body: "Welcome to the carbonara recipe collection.".into(),
-            mtime: Some(1000),
-        })
+        idx.upsert(&doc(
+            "intro.md",
+            Some("Hello"),
+            "Welcome to the carbonara recipe collection.",
+        ))
         .unwrap();
         let res = idx.search("carbonara", &SearchOpts::default()).unwrap();
         assert_eq!(res.hits.len(), 1);
@@ -439,13 +497,7 @@ mod tests {
         let drive_root = TempDir::new().unwrap();
         let idx_dir = TempDir::new().unwrap();
         let idx = Index::open(drive_root.path(), idx_dir.path()).unwrap();
-        idx.upsert(&IndexDoc {
-            path: "a.md".into(),
-            title: None,
-            body: "carbonara".into(),
-            mtime: None,
-        })
-        .unwrap();
+        idx.upsert(&doc("a.md", None, "carbonara")).unwrap();
         idx.remove("a.md").unwrap();
         let res = idx.search("carbonara", &SearchOpts::default()).unwrap();
         assert_eq!(res.hits.len(), 0);
@@ -460,13 +512,7 @@ mod tests {
             ("recipes/pasta.md", "carbonara"),
             ("notes/cooking.md", "carbonara"),
         ] {
-            idx.upsert(&IndexDoc {
-                path: path.into(),
-                title: None,
-                body: body.into(),
-                mtime: None,
-            })
-            .unwrap();
+            idx.upsert(&doc(path, None, body)).unwrap();
         }
         let opts = SearchOpts {
             scope: Some("recipes".into()),
@@ -478,19 +524,44 @@ mod tests {
     }
 
     #[test]
+    fn search_matches_filename_without_body_mention() {
+        // The body never mentions "carbonara"; the filename does.
+        // The filename field is what makes the hit possible.
+        let drive_root = TempDir::new().unwrap();
+        let idx_dir = TempDir::new().unwrap();
+        let idx = Index::open(drive_root.path(), idx_dir.path()).unwrap();
+        idx.upsert(&doc(
+            "recipes/carbonara.md",
+            Some("Pasta night"),
+            "tonight we tried something different.",
+        ))
+        .unwrap();
+        let res = idx.search("carbonara", &SearchOpts::default()).unwrap();
+        assert_eq!(res.hits.len(), 1);
+        assert_eq!(res.hits[0].path, "recipes/carbonara.md");
+    }
+
+    #[test]
+    fn search_matches_heading_text() {
+        let drive_root = TempDir::new().unwrap();
+        let idx_dir = TempDir::new().unwrap();
+        let idx = Index::open(drive_root.path(), idx_dir.path()).unwrap();
+        let mut d = doc("notes/2026-05-06.md", Some("Pasta night"), "the body.");
+        d.headings = "Intro\nCarbonara variant\nLeftovers".into();
+        idx.upsert(&d).unwrap();
+        let res = idx.search("variant", &SearchOpts::default()).unwrap();
+        assert_eq!(res.hits.len(), 1);
+        assert_eq!(res.hits[0].path, "notes/2026-05-06.md");
+    }
+
+    #[test]
     fn schema_version_wipe_rebuilds_clean() {
         let drive_root = TempDir::new().unwrap();
         let idx_dir = TempDir::new().unwrap();
         // Open + write a doc.
         {
             let idx = Index::open(drive_root.path(), idx_dir.path()).unwrap();
-            idx.upsert(&IndexDoc {
-                path: "a.md".into(),
-                title: None,
-                body: "stale data".into(),
-                mtime: None,
-            })
-            .unwrap();
+            idx.upsert(&doc("a.md", None, "stale data")).unwrap();
         }
         // Bump the on-disk version to something else, simulating a
         // schema migration.

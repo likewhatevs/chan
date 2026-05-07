@@ -341,8 +341,8 @@ impl Drive {
                 }
             };
             let (doc, headings, edges) = parse_for_index(&e.path, &content, e.mtime);
+            graph.replace_file(&e.path, doc.title.as_deref(), e.mtime, &edges, &headings)?;
             docs.push(doc);
-            graph.replace_file(&e.path, e.mtime, &edges, &headings)?;
         }
         let mut stats = self.index()?.reindex_iter(docs)?;
         stats.files_skipped = skipped;
@@ -360,8 +360,18 @@ impl Drive {
         let mtime = self.stat(rel).ok().and_then(|s| s.mtime);
         let (doc, headings, edges) = parse_for_index(rel, &content, mtime);
         self.index()?.upsert(&doc)?;
-        self.graph()?.replace_file(rel, mtime, &edges, &headings)?;
+        self.graph()?
+            .replace_file(rel, doc.title.as_deref(), mtime, &edges, &headings)?;
         Ok(())
+    }
+
+    /// Link-autocomplete lookup. Pass-through to
+    /// `GraphView::link_targets`. The editor's `[[` typeahead binds
+    /// to this: an empty `q` returns recent files; a non-empty `q`
+    /// returns ranked file + heading matches. See `GraphView::link_targets`
+    /// for the ranking and case-folding rules.
+    pub fn link_targets(&self, q: &str, limit: u32) -> Result<Vec<crate::graph::LinkTarget>> {
+        self.graph()?.link_targets(q, limit)
     }
 
     /// Drop a single file from the search index and graph. Used
@@ -452,11 +462,31 @@ fn parse_for_index(
     let tokens = markdown::extract_tokens(body_src);
     let edges = build_edges(rel, &links, &tokens);
 
+    // filename feeds the search index's filename field. We strip
+    // the extension so "recipes/carbonara.md" -> "carbonara"; the
+    // dot-and-extension never carry signal worth indexing and would
+    // pollute the term dictionary with "md" / "txt".
+    let filename = std::path::Path::new(rel)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    // headings feeds the search index's headings field. Newline-
+    // joined so tantivy's default tokenizer treats each heading as
+    // an independent term sequence.
+    let headings_joined = headings
+        .iter()
+        .map(|h| h.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
     let doc = IndexDoc {
         path: rel.to_string(),
         title,
         body: body_src.to_string(),
         mtime,
+        filename,
+        headings: headings_joined,
     };
     (doc, headings, edges)
 }
@@ -750,6 +780,26 @@ mod tests {
         // does not follow.
         let st = drive.stat("link_to_dir").unwrap();
         assert!(!st.is_dir);
+    }
+
+    #[test]
+    fn link_targets_finds_file_after_index() {
+        let (_cfg, _root, drive) = fixture();
+        drive
+            .write_text("recipes/carbonara.md", "# Carbonara\n\n## Ingredients\n")
+            .unwrap();
+        drive.index_file("recipes/carbonara.md").unwrap();
+        let hits = drive.link_targets("carb", 10).unwrap();
+        assert!(hits
+            .iter()
+            .any(|h| h.path == "recipes/carbonara.md"
+                && h.kind == crate::graph::LinkTargetKind::File));
+        // Heading is also searchable by the same surface.
+        let hits = drive.link_targets("ingred", 10).unwrap();
+        assert!(hits
+            .iter()
+            .any(|h| h.kind == crate::graph::LinkTargetKind::Heading
+                && h.heading.as_deref() == Some("Ingredients")));
     }
 
     #[test]
