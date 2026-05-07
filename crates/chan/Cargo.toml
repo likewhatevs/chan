@@ -46,8 +46,13 @@ assets = [
 [package.metadata.generate-rpm]
 license = "Apache-2.0"
 summary = "Notes app with embedded web editor"
+# cargo-generate-rpm resolves asset `source` paths relative to
+# the package directory (`crates/chan/`), unlike cargo-deb which
+# is workspace-aware. The binary lives at the workspace target
+# (`../../target/...`); we climb out of crates/chan/ to find it.
+# `--target X` swaps in `target/X/release/chan` automatically.
 assets = [
-    { source = "target/release/chan", dest = "/usr/bin/chan", mode = "755" },
+    { source = "../../target/release/chan", dest = "/usr/bin/chan", mode = "755" },
     { source = "../../LICENSE", dest = "/usr/share/doc/chan/LICENSE", mode = "644", doc = true },
     { source = "../../README.md", dest = "/usr/share/doc/chan/README.md", mode = "644", doc = true },
 ]
