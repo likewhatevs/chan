@@ -1,0 +1,224 @@
+name: Release
+
+# Triggered on `v*` tag pushes (e.g. `v0.1.0`) and via manual
+# dispatch for testing. Builds five static-leaning binaries +
+# .deb + .rpm + .pkg, attaches all artifacts to a GitHub
+# release on tag push.
+#
+# Targets:
+#   linux x86_64       musl-static
+#   linux aarch64      musl-static
+#   windows x86_64     +crt-static
+#   windows aarch64    +crt-static (cross-compiled from x86_64
+#                                   runner if the arm runner
+#                                   isn't available)
+#   macos aarch64      Apple Silicon native (Intel intentionally
+#                                            excluded)
+#
+# Artifacts are unsigned. Apple Gatekeeper will warn on the
+# .pkg until you sign + notarize it with a Developer ID; same
+# for Windows authenticode. Signing is a separate post-build
+# step gated on having the certificates loaded as repo secrets.
+#
+# Cross-repo auth: same chan_ci PAT pattern as ci.yml.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            archive: tar.gz
+            binname: chan
+            deb_arch: amd64
+            rpm: true
+            apt: musl-tools
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            archive: tar.gz
+            binname: chan
+            deb_arch: arm64
+            rpm: true
+            apt: musl-tools
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+            binname: chan.exe
+            rustflags: -C target-feature=+crt-static
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            archive: zip
+            binname: chan.exe
+            rustflags: -C target-feature=+crt-static
+            cross_windows_arm: true
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+            binname: chan
+            pkg: true
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: chan
+      - uses: actions/checkout@v4
+        with:
+          repository: chan-writer/chan-core
+          path: chan-core
+          token: ${{ secrets.chan_ci }}
+      - uses: actions/checkout@v4
+        with:
+          repository: chan-writer/chan-llm
+          path: chan-llm
+          token: ${{ secrets.chan_ci }}
+
+      - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+
+      # Linux musl needs the C cross-compile + static C runtime
+      # bits. cc-rs (rusqlite-bundled, etc.) picks up musl-gcc
+      # via CC_x86_64_unknown_linux_musl / aarch64 env vars.
+      - if: matrix.apt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.apt }}
+
+      # Frontend bundle is required for the release binary
+      # (rust-embed bakes web/dist/ into the artifact). Debug
+      # builds tolerate an empty dist; release builds need the
+      # real bundle so `chan serve` ships the editor.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: chan/web/package-lock.json
+      - run: npm ci
+        working-directory: chan/web
+      - run: npm run build
+        working-directory: chan/web
+
+      - run: cargo build --release --target ${{ matrix.target }} -p chan
+        working-directory: chan
+
+      # ----- archive -----
+      # tar.gz on linux/mac, zip on windows. Bundle the binary
+      # plus LICENSE + README so the user has the legal +
+      # quickstart text alongside.
+      - name: Archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          mkdir -p staging
+          cp chan/target/${{ matrix.target }}/release/${{ matrix.binname }} staging/
+          cp chan/LICENSE chan/README.md staging/
+          tar -czf chan-${{ matrix.target }}.tar.gz -C staging .
+
+      - name: Archive (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
+          Copy-Item chan/target/${{ matrix.target }}/release/${{ matrix.binname }} staging/
+          Copy-Item chan/LICENSE staging/
+          Copy-Item chan/README.md staging/
+          Compress-Archive -Path staging/* -DestinationPath chan-${{ matrix.target }}.zip
+
+      # ----- linux .deb -----
+      - name: Install cargo-deb
+        if: matrix.deb_arch
+        run: cargo install cargo-deb --locked
+      - name: Build .deb
+        if: matrix.deb_arch
+        run: cargo deb --no-build --no-strip --target ${{ matrix.target }} -p chan
+        working-directory: chan
+      - name: Locate .deb
+        if: matrix.deb_arch
+        id: locate_deb
+        run: |
+          file=$(ls chan/target/${{ matrix.target }}/debian/*.deb | head -1)
+          cp "$file" "./chan-${{ matrix.deb_arch }}.deb"
+          echo "path=chan-${{ matrix.deb_arch }}.deb" >> "$GITHUB_OUTPUT"
+
+      # ----- linux .rpm -----
+      - name: Install cargo-generate-rpm
+        if: matrix.rpm
+        run: cargo install cargo-generate-rpm --locked
+      - name: Build .rpm
+        if: matrix.rpm
+        run: cargo generate-rpm --target ${{ matrix.target }} -p chan
+        working-directory: chan
+      - name: Locate .rpm
+        if: matrix.rpm
+        id: locate_rpm
+        run: |
+          file=$(ls chan/target/${{ matrix.target }}/generate-rpm/*.rpm | head -1)
+          cp "$file" "./chan-${{ matrix.deb_arch }}.rpm"
+          echo "path=chan-${{ matrix.deb_arch }}.rpm" >> "$GITHUB_OUTPUT"
+
+      # ----- macOS .pkg -----
+      # Plain pkgbuild with no signing. Lands the binary at
+      # /usr/local/bin/chan and the docs under
+      # /usr/local/share/doc/chan/. Identifier is reverse-DNS so
+      # a future signed/notarized version can replace this one
+      # cleanly.
+      - name: Build .pkg
+        if: matrix.pkg
+        run: |
+          mkdir -p pkgroot/usr/local/bin pkgroot/usr/local/share/doc/chan
+          cp chan/target/${{ matrix.target }}/release/${{ matrix.binname }} pkgroot/usr/local/bin/chan
+          chmod 755 pkgroot/usr/local/bin/chan
+          cp chan/LICENSE chan/README.md pkgroot/usr/local/share/doc/chan/
+          version=$(awk -F'"' '/^version/ {print $2; exit}' chan/Cargo.toml)
+          pkgbuild \
+            --root pkgroot \
+            --identifier app.chan.cli \
+            --version "$version" \
+            --install-location / \
+            chan-aarch64-macos.pkg
+
+      # ----- upload -----
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chan-${{ matrix.target }}
+          path: |
+            chan-${{ matrix.target }}.${{ matrix.archive }}
+            chan-${{ matrix.deb_arch }}.deb
+            chan-${{ matrix.deb_arch }}.rpm
+            chan-aarch64-macos.pkg
+          if-no-files-found: ignore
+
+  # Tag-pushed runs end with a GitHub release. workflow_dispatch
+  # runs skip this so manual tests don't cut releases.
+  release:
+    name: github release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: List artifacts
+        run: find artifacts -type f
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          fail_on_unmatched_files: false

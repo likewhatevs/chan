@@ -19,3 +19,35 @@ anyhow = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+# ----- packaging metadata --------------------------------------
+#
+# Linux .deb (cargo-deb) and .rpm (cargo-generate-rpm) bake from
+# these blocks. macOS .pkg is built ad-hoc in the release
+# workflow via pkgbuild; no Cargo metadata for it.
+
+[package.metadata.deb]
+maintainer = "Alexandre Fiori <fiorix@gmail.com>"
+copyright = "2026 Alexandre Fiori"
+license-file = ["../../LICENSE", "0"]
+extended-description = """
+chan is a notes app with an embedded web editor: a CLI plus an
+HTTP server that serves a Svelte WYSIWYG editor for plain
+markdown drives. Cross-file [[wiki-link]] autocomplete and
+BM25 content search included."""
+section = "utility"
+priority = "optional"
+assets = [
+    ["target/release/chan", "usr/bin/", "755"],
+    ["../../LICENSE", "usr/share/doc/chan/LICENSE", "644"],
+    ["../../README.md", "usr/share/doc/chan/README.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+license = "Apache-2.0"
+summary = "Notes app with embedded web editor"
+assets = [
+    { source = "target/release/chan", dest = "/usr/bin/chan", mode = "755" },
+    { source = "../../LICENSE", dest = "/usr/share/doc/chan/LICENSE", mode = "644", doc = true },
+    { source = "../../README.md", dest = "/usr/share/doc/chan/README.md", mode = "644", doc = true },
+]
