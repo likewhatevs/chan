@@ -86,6 +86,16 @@ $DATA_DIR/chan/                   (state_dir; persistent)
   assistant/<key>/                per-drive assistant chat history
   graph/<key>/graph.sqlite        per-drive graph DB
   locks/<key>/writer.lock         per-drive cross-process lock
+  tokens/<key>/                   per-drive bearer-token store
+                                  (chan-core allocates the dir; the
+                                  app, e.g. chan-server, owns the
+                                  contents)
+  trash/<key>/<id>/               per-drive Trash. Each entry holds
+    payload | payload/            the moved file or directory and
+    meta.json                     a JSON sidecar (original_path,
+                                  deleted_at, is_dir, size). meta is
+                                  written last; sweep treats meta-
+                                  less entries as crash leftovers.
 
 $CACHE_DIR/chan/                  (cache_dir; rebuildable)
   index/<key>/                    per-drive tantivy segments
@@ -164,8 +174,13 @@ Drive::stat(rel: &str) -> Result<FileStat>
 Drive::list(rel: &str) -> Result<Vec<DirEntry>>
 Drive::list_tree() -> Result<Vec<TreeEntry>>
 Drive::create_dir(rel: &str) -> Result<()>
-Drive::remove(rel: &str) -> Result<()>                 // file or empty dir
+Drive::remove(rel: &str) -> Result<()>                 // soft-delete to trash
 Drive::rename(from: &str, to: &str) -> Result<()>
+
+Drive::trash_list() -> Result<Vec<TrashEntry>>
+Drive::trash_restore(id: &str) -> Result<()>
+Drive::trash_purge(id: &str) -> Result<()>
+Drive::trash_empty() -> Result<()>
 ```
 
 All `rel` arguments are POSIX-style relative paths. Path traversal
@@ -177,10 +192,60 @@ escaping the sandbox). The editable-text gate (`.md`, `.txt`)
 applies to `read_text` / `write_text` only; binary I/O routes
 around it because attachments and future media browsing need it.
 
-`remove` will not recursively delete a non-empty directory. The
-caller walks and deletes explicitly. This is a foot-gun guard:
-the editor never has reason to recursive-rm, and the LLM tool
-sandbox should not be able to either.
+`remove` is a soft-delete: it moves the entry into the per-drive
+Trash (see below). Recursive directory removal is allowed because
+the operation is reversible; the foot-gun guard against accidental
+recursive-rm is satisfied by the restore path. Symlinks, FIFOs,
+sockets, and char/block devices are rejected with `SpecialFile`;
+the trash format only models regular files and directories, and
+chan-core never creates the other types itself.
+
+### Trash
+
+The Trash gives the editor and the LLM tool sandbox a safe
+delete: every `remove` is reversible until either the user
+explicitly purges or the retention window elapses.
+
+```rust
+pub struct TrashEntry {
+    pub id: String,            // opaque, monotone
+    pub original_path: String, // POSIX rel from drive root
+    pub deleted_at: i64,       // unix seconds
+    pub is_dir: bool,
+    pub size: u64,             // file len, or summed for dirs
+}
+```
+
+  - **Location**: `state_dir/trash/<key>/<id>/{payload[/], meta.json}`.
+    Trash lives outside the user's drive directory because chan-
+    core stores zero state inside the drive. Trade-off: the trash
+    does not sync via iCloud / Dropbox / git. Acceptable; trash is
+    per-machine recovery, not collaboration. A user who relocates
+    a drive to a new path also leaves their old trash behind
+    (drive_key is sha256 of the canonical path).
+  - **Atomicity**: same-fs path is one atomic `rename` from drive
+    root into the trash payload. Cross-fs path falls back to
+    `copy + remove`, writing `meta.json` AFTER the copy and BEFORE
+    the source removal, so a remove failure leaves a complete
+    trash entry plus a partial source the user can clean up.
+  - **Restore conflicts**: refused with `TrashOccupied`. The
+    caller renames the live entry first, or `trash_purge` to give
+    up. We never silently overwrite live content.
+  - **Auto-expiration**: lazy GC. `Drive::open` and every `trash_*`
+    call sweep entries older than `TRASH_RETENTION_SECS` (30 days
+    at v1). No background thread; matches the codebase's sync-only
+    rule. Promote to a `Library` setting later if users want to
+    tune it.
+  - **Crash recovery**: a half-written entry has no `meta.json`.
+    Sweep treats meta-less entries as junk and reclaims them.
+
+What's NOT in v1 (deliberately):
+
+  - Cross-drive trash. Each drive has its own.
+  - Sync to cloud storage (deliberate; trash is local-only state).
+  - Background timer (lazy GC is enough for an editor that opens
+    drives sporadically).
+  - Configurable retention. Hardcoded 30 days; revisit if needed.
 
 ### Symlink and special-file policy
 

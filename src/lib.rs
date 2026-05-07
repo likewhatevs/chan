@@ -31,6 +31,7 @@ pub mod markdown;
 pub mod paths;
 pub mod registry;
 pub mod search;
+pub mod trash;
 pub mod watch;
 
 pub use drive::{DirEntry, Drive, FileStat, TreeEntry};
@@ -39,4 +40,5 @@ pub use graph::{Edge, EdgeKind, GraphView, HeadingRow, Tag};
 pub use library::Library;
 pub use registry::{KnownDrive, Registry};
 pub use search::{Hit, IndexDoc, IndexStats, SearchMode, SearchOpts, SearchResults, Snippet};
+pub use trash::{TrashEntry, TRASH_RETENTION_SECS};
 pub use watch::{WatchCallback, WatchEvent, WatchHandle, WatchKind};

@@ -36,6 +36,12 @@ pub enum ChanError {
     Graph(String),
     #[error("watch error: {0}")]
     Watch(String),
+    #[error("trash entry not found: {0}")]
+    TrashEntryNotFound(String),
+    #[error("trash entry corrupt ({id}): {message}")]
+    TrashCorrupt { id: String, message: String },
+    #[error("trash restore target already exists: {0}")]
+    TrashOccupied(String),
     #[error("io error: {0}")]
     Io(String),
 }

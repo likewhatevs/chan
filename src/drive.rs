@@ -16,6 +16,7 @@ use crate::markdown;
 use crate::paths::{drive_paths, DrivePaths};
 use crate::registry::KnownDrive;
 use crate::search::{Index, IndexDoc, SearchOpts, SearchResults};
+use crate::trash::{self, TrashEntry, TRASH_RETENTION_SECS};
 use crate::watch::{WatchCallback, WatchHandle};
 
 pub use fs_ops::TreeEntry;
@@ -64,6 +65,11 @@ impl Drive {
         }
         let paths = drive_paths(&entry.path);
         let lock = DriveLock::acquire(&paths.lock)?;
+        // Lazy GC: reclaim expired trash entries on every open. No
+        // background thread, matches the codebase's sync-only rule.
+        // Errors are swallowed: a corrupt trash dir must never block
+        // a legitimate drive open.
+        let _ = trash::sweep_expired(&paths.trash, TRASH_RETENTION_SECS);
         Ok(Arc::new(Self {
             entry,
             paths,
@@ -221,24 +227,57 @@ impl Drive {
         Ok(())
     }
 
-    /// Remove a file, symlink, or empty directory. Branches on
-    /// `lstat` so a symlink-to-directory removes the link itself
-    /// (via `remove_file`) rather than failing on `remove_dir`.
-    /// For non-empty directory removal, callers walk and delete
-    /// explicitly; chan-core won't recursive-delete on behalf of
-    /// the user (foot-gun guard).
+    /// Soft-delete a file or directory: move it into the per-drive
+    /// trash. `trash_list` / `trash_restore` / `trash_purge` /
+    /// `trash_empty` operate on the trash. Expired entries are
+    /// GC'd lazily on `Drive::open` and on every `trash_*` call;
+    /// retention is `TRASH_RETENTION_SECS` (30 days at v1).
+    ///
+    /// Accepted: regular files and real directories (recursively;
+    /// the foot-gun guard against recursive delete is satisfied by
+    /// the soft-delete + restore path). Rejected with `SpecialFile`:
+    /// symlinks, FIFOs, sockets, char/block devices. Users who
+    /// really want those gone can `rm` them out-of-band.
     pub fn remove(&self, rel: &str) -> Result<()> {
         let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
         let meta = std::fs::symlink_metadata(&abs)?;
         let ft = meta.file_type();
-        // `is_dir` here is from lstat: a real directory, not a
-        // symlink-to-dir. Symlinks always go through remove_file.
-        if ft.is_dir() {
-            std::fs::remove_dir(&abs)?;
-        } else {
-            std::fs::remove_file(&abs)?;
+        let is_dir = ft.is_dir();
+        let is_regular_file = ft.is_file() && !ft.is_symlink();
+        if !(is_dir || is_regular_file) {
+            return Err(ChanError::SpecialFile {
+                kind: fs_ops::describe_file_kind(&ft).to_string(),
+                path: abs,
+            });
         }
-        Ok(())
+        let _ = trash::sweep_expired(&self.paths.trash, TRASH_RETENTION_SECS);
+        trash::move_into(&self.paths.trash, &abs, rel, is_dir)
+    }
+
+    /// List trashed entries for this drive, most-recent-first.
+    pub fn trash_list(&self) -> Result<Vec<TrashEntry>> {
+        let _ = trash::sweep_expired(&self.paths.trash, TRASH_RETENTION_SECS);
+        trash::list(&self.paths.trash)
+    }
+
+    /// Restore a trashed entry to its original path. Errors with
+    /// `TrashOccupied` if the destination already exists; the caller
+    /// can rename the live entry first or `trash_purge` the trash
+    /// entry to give up.
+    pub fn trash_restore(&self, id: &str) -> Result<()> {
+        let _ = trash::sweep_expired(&self.paths.trash, TRASH_RETENTION_SECS);
+        trash::restore(&self.paths.trash, self.root(), id)
+    }
+
+    /// Permanently delete a single trash entry.
+    pub fn trash_purge(&self, id: &str) -> Result<()> {
+        let _ = trash::sweep_expired(&self.paths.trash, TRASH_RETENTION_SECS);
+        trash::purge_one(&self.paths.trash, id)
+    }
+
+    /// Permanently delete every trash entry for this drive.
+    pub fn trash_empty(&self) -> Result<()> {
+        trash::purge_all(&self.paths.trash)
     }
 
     pub fn rename(&self, from: &str, to: &str) -> Result<()> {
@@ -614,15 +653,89 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn remove_on_symlink_drops_the_link_only() {
+    fn remove_rejects_symlink_with_special_file_error() {
         use std::os::unix::fs::symlink;
         let (_cfg, root, drive) = fixture();
         std::fs::write(root.path().join("real.md"), "hi").unwrap();
         symlink("real.md", root.path().join("alias.md")).unwrap();
-        drive.remove("alias.md").unwrap();
-        // Target survives; only the link is gone.
+        // Trash refuses to swallow non-regular non-directory entries:
+        // restoring a symlink across a cross-fs trash is fragile, and
+        // chan-core never creates them on its own. Users delete them
+        // out-of-band if they really want them gone.
+        let err = drive.remove("alias.md").unwrap_err();
+        assert!(matches!(err, ChanError::SpecialFile { .. }));
+        // Both the symlink and its target are intact.
+        assert!(root.path().join("alias.md").symlink_metadata().is_ok());
         assert!(root.path().join("real.md").exists());
-        assert!(root.path().join("alias.md").symlink_metadata().is_err());
+    }
+
+    #[test]
+    fn remove_then_restore_round_trips() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("notes/a.md", "hello").unwrap();
+        drive.remove("notes/a.md").unwrap();
+        assert!(!drive.exists("notes/a.md"));
+        let entries = drive.trash_list().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].original_path, "notes/a.md");
+        drive.trash_restore(&entries[0].id).unwrap();
+        assert_eq!(drive.read_text("notes/a.md").unwrap(), "hello");
+        assert!(drive.trash_list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn remove_recursive_directory() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("notes/a.md", "a").unwrap();
+        drive.write_text("notes/sub/b.md", "bb").unwrap();
+        drive.remove("notes").unwrap();
+        assert!(!drive.exists("notes/a.md"));
+        let entries = drive.trash_list().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].is_dir);
+        drive.trash_restore(&entries[0].id).unwrap();
+        assert_eq!(drive.read_text("notes/a.md").unwrap(), "a");
+        assert_eq!(drive.read_text("notes/sub/b.md").unwrap(), "bb");
+    }
+
+    #[test]
+    fn trash_restore_refuses_when_dest_exists() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "v1").unwrap();
+        drive.remove("a.md").unwrap();
+        drive.write_text("a.md", "v2").unwrap();
+        let id = drive.trash_list().unwrap()[0].id.clone();
+        let err = drive.trash_restore(&id).unwrap_err();
+        assert!(matches!(err, ChanError::TrashOccupied(_)));
+        assert_eq!(drive.read_text("a.md").unwrap(), "v2");
+        assert_eq!(drive.trash_list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn trash_purge_and_empty() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "x").unwrap();
+        drive.write_text("b.md", "y").unwrap();
+        drive.remove("a.md").unwrap();
+        drive.remove("b.md").unwrap();
+        let entries = drive.trash_list().unwrap();
+        assert_eq!(entries.len(), 2);
+        drive.trash_purge(&entries[0].id).unwrap();
+        assert_eq!(drive.trash_list().unwrap().len(), 1);
+        drive.trash_empty().unwrap();
+        assert!(drive.trash_list().unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_rejects_unix_socket() {
+        use std::os::unix::net::UnixListener;
+        let (_cfg, root, drive) = fixture();
+        let _l = UnixListener::bind(root.path().join("s")).unwrap();
+        let err = drive.remove("s").unwrap_err();
+        assert!(matches!(err, ChanError::SpecialFile { .. }));
+        // Socket survives the rejected remove.
+        assert!(root.path().join("s").symlink_metadata().is_ok());
     }
 
     #[cfg(unix)]
