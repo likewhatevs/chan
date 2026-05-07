@@ -308,21 +308,31 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/config", get(api_get_config).patch(api_patch_config))
         .route("/api/build-info", get(api_build_info))
+        // Session blob keyed by window id (?w=<id>). The frontend
+        // sends the window id as a query string (path-segment encode
+        // would force special-character escaping for free-form ids);
+        // the server matches that contract. GET on a missing key
+        // returns 204, not 404, since "no session yet" is the normal
+        // first-launch state.
         .route(
-            "/api/session/:key",
+            "/api/session",
             get(api_get_session)
                 .put(api_put_session)
                 .delete(api_delete_session),
         )
         .route("/api/sessions", get(api_list_sessions))
+        // Assistant per-conversation blob keyed by file path or group
+        // key (?path=<key>). Same query-string contract as /api/session
+        // for the same reason. The plural sibling endpoint covers
+        // listing and clearing all conversations at once.
         .route(
-            "/api/assistant/conversation/:key",
+            "/api/assistant/conversation",
             get(api_get_assistant)
                 .put(api_put_assistant)
                 .delete(api_delete_assistant),
         )
         .route(
-            "/api/assistant/conversation",
+            "/api/assistant/conversations",
             get(api_list_assistant).delete(api_clear_assistant),
         )
         .route("/api/answers", post(api_post_answer))
@@ -648,7 +658,7 @@ fn preferences_view(state: &AppState) -> PreferencesView {
                 model: llm.models.anthropic.clone(),
             },
             ollama: OllamaPrefsView {
-                url: None,
+                url: llm.urls.ollama.clone(),
                 model: llm.models.ollama.clone(),
             },
             gemini: ProviderPrefsView {
@@ -1552,10 +1562,16 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
         llm.models.anthropic = view.assistant.claude.model;
         llm.models.gemini = view.assistant.gemini.model;
         llm.models.ollama = view.assistant.ollama.model;
-        // Ollama URL on the view is a passthrough today; chan-llm
-        // doesn't persist it (the backend reads OLLAMA_URL or its
-        // hardcoded default at request time). Drop it on the floor
-        // until a per-backend URL field lands in chan-llm.
+        // Empty string from the form clears the override (back to
+        // env or the hardcoded default). Trim before storing so a
+        // copy-pasted URL with whitespace doesn't break the http
+        // client.
+        llm.urls.ollama = view
+            .assistant
+            .ollama
+            .url
+            .map(|u| u.trim().to_string())
+            .filter(|u| !u.is_empty());
         llm.save()
             .map_err(|e| Error::Config(format!("save llm config: {e}")))?;
     }
@@ -1614,23 +1630,42 @@ async fn api_build_info() -> Response {
 // answer as a `.md` file there via Drive::write_text. Same path
 // sandbox + special-file refusal apply.
 
+/// Window id query param (`?w=<id>`) for session routes.
+#[derive(Deserialize)]
+struct SessionQuery {
+    w: String,
+}
+
+/// Conversation key query param (`?path=<key>`) for the assistant
+/// blob routes. The key is either a file path (per-file
+/// conversation) or a synthetic group key (per-window-pane group);
+/// the server treats it as opaque since the chunking is the
+/// frontend's concern.
+#[derive(Deserialize)]
+struct ConversationQuery {
+    path: String,
+}
+
 async fn api_get_session(
     State(state): State<Arc<AppState>>,
-    AxumPath(key): AxumPath<String>,
+    Query(q): Query<SessionQuery>,
 ) -> Response {
-    match state.drive.get_session(&key) {
+    match state.drive.get_session(&q.w) {
         Ok(Some(bytes)) => raw_json_response(bytes),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        // 204 NO_CONTENT, not 404: "no session yet" is the normal
+        // first-launch state. transport.ts treats an empty 2xx body
+        // as `undefined`; the api wrapper coerces that to `null`.
+        Ok(None) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err_from(&e),
     }
 }
 
 async fn api_put_session(
     State(state): State<Arc<AppState>>,
-    AxumPath(key): AxumPath<String>,
+    Query(q): Query<SessionQuery>,
     body: axum::body::Bytes,
 ) -> Response {
-    match state.drive.put_session(&key, &body) {
+    match state.drive.put_session(&q.w, &body) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err_from(&e),
     }
@@ -1638,9 +1673,9 @@ async fn api_put_session(
 
 async fn api_delete_session(
     State(state): State<Arc<AppState>>,
-    AxumPath(key): AxumPath<String>,
+    Query(q): Query<SessionQuery>,
 ) -> Response {
-    match state.drive.delete_session(&key) {
+    match state.drive.delete_session(&q.w) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err_from(&e),
     }
@@ -1655,21 +1690,22 @@ async fn api_list_sessions(State(state): State<Arc<AppState>>) -> Response {
 
 async fn api_get_assistant(
     State(state): State<Arc<AppState>>,
-    AxumPath(key): AxumPath<String>,
+    Query(q): Query<ConversationQuery>,
 ) -> Response {
-    match state.drive.get_assistant(&key) {
+    match state.drive.get_assistant(&q.path) {
         Ok(Some(bytes)) => raw_json_response(bytes),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        // 204 NO_CONTENT, not 404: same reasoning as get_session.
+        Ok(None) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err_from(&e),
     }
 }
 
 async fn api_put_assistant(
     State(state): State<Arc<AppState>>,
-    AxumPath(key): AxumPath<String>,
+    Query(q): Query<ConversationQuery>,
     body: axum::body::Bytes,
 ) -> Response {
-    match state.drive.put_assistant(&key, &body) {
+    match state.drive.put_assistant(&q.path, &body) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err_from(&e),
     }
@@ -1677,9 +1713,9 @@ async fn api_put_assistant(
 
 async fn api_delete_assistant(
     State(state): State<Arc<AppState>>,
-    AxumPath(key): AxumPath<String>,
+    Query(q): Query<ConversationQuery>,
 ) -> Response {
-    match state.drive.delete_assistant(&key) {
+    match state.drive.delete_assistant(&q.path) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err_from(&e),
     }
