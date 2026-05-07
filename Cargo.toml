@@ -24,6 +24,7 @@ resolver = "2"
 members = [
     "crates/chan",
     "crates/chan-server",
+    "crates/fetch-models",
 ]
 
 [workspace.package]

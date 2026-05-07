@@ -18,3 +18,11 @@ web/dist/
 web/pkg/
 .svelte-kit/
 .vite/
+
+# Embedding model bundle. Populated by `make models` for release
+# builds; large (~130 MB) and a moving target as upstream model
+# weights revise, so we keep it out of git and rely on fetch-models
+# to seed it before linking. .gitkeep ensures the directory itself
+# stays in the tree so rust-embed has a target.
+crates/chan-server/resources/models/*
+!crates/chan-server/resources/models/.gitkeep

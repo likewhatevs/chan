@@ -64,6 +64,32 @@ use tower_http::trace::TraceLayer;
 #[folder = "../../web/dist/"]
 struct WebAssets;
 
+/// Embedded copy of the default embedding model, populated by the
+/// `fetch-models` crate writing into `resources/models/` before the
+/// release build. Bundle is empty for plain `cargo build` so dev
+/// contributors don't pay a 130 MB download; in that case the
+/// runtime falls back to fastembed's HuggingFace download path the
+/// first time the embedder opens. Gated on the same `embeddings`
+/// feature as chan-core so a `--no-default-features` build has no
+/// model bundle and no model loader to read it.
+///
+/// Excludes:
+///   - `blobs/`: hf-hub's cache stores file bytes there and creates
+///     symlinks under `snapshots/<rev>/` pointing back into blobs.
+///     rust-embed follows the symlinks, so the snapshot files
+///     already carry the bytes; without this exclusion blobs/ would
+///     be included verbatim and the binary would carry every model
+///     file twice (~280 MB instead of ~140 MB).
+///   - `.lock`, `.no_exists`: hf-hub bookkeeping files only used
+///     during download. Useless at runtime.
+#[cfg(feature = "embeddings")]
+#[derive(RustEmbed)]
+#[folder = "resources/models/"]
+#[exclude = "**/blobs/**"]
+#[exclude = "**/*.lock"]
+#[exclude = "**/*.no_exists"]
+struct ModelAssets;
+
 /// Configuration the binary hands the server at boot. Kept terse on
 /// purpose; expand only when a route demands it.
 #[derive(Debug, Clone)]
@@ -182,6 +208,13 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
     // text frames. Buffer of 256 is enough headroom for typical
     // bursts (mass rename, LLM token-stream); slow subscribers
     // see Lagged and skip ahead rather than blocking the sender.
+    // Seed the per-machine model cache from the embedded bundle if
+    // a default-model build (release) shipped one. Cheap on every
+    // launch: skipped if any file is already present at the target.
+    // No-op when the binary was built without `embeddings`.
+    #[cfg(feature = "embeddings")]
+    seed_models_from_bundle();
+
     let (events_tx, _) = broadcast::channel::<String>(256);
     // Indexer feed: raw WatchEvent for the background indexer
     // task. Larger buffer than the JSON channel because the
@@ -298,6 +331,89 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
         }
     }
     Ok(())
+}
+
+/// Extract the embedded default-model bundle into the per-machine
+/// model cache (resolved by chan-core's `global_models_dir`) the
+/// first time the server boots on this machine. Skipped on every
+/// subsequent boot: the presence of any non-temp file under the
+/// target dir is taken as "already seeded".
+///
+/// The bundle is empty for plain `cargo build`, which makes this
+/// function a no-op in dev. Release builds run `make models`
+/// (a.k.a. `cargo run -p fetch-models`) before linking, which
+/// populates `resources/models/` and feeds the rust-embed bundle.
+///
+/// Errors are logged but do not block startup: if the seed fails
+/// the runtime path falls back to fastembed's HuggingFace
+/// download, the same UX as a dev build.
+#[cfg(feature = "embeddings")]
+fn seed_models_from_bundle() {
+    let target = chan_core::index::embeddings::global_models_dir();
+    if bundle_already_seeded(&target) {
+        return;
+    }
+    let count = ModelAssets::iter().count();
+    if count == 0 {
+        // Dev build: no bundle. Runtime download path applies.
+        return;
+    }
+    if let Err(e) = std::fs::create_dir_all(&target) {
+        tracing::warn!("seed-models: create {}: {e}", target.display());
+        return;
+    }
+    let mut written = 0usize;
+    for filename in ModelAssets::iter() {
+        let entry = match ModelAssets::get(&filename) {
+            Some(e) => e,
+            None => continue,
+        };
+        let dest = target.join(filename.as_ref());
+        if let Some(parent) = dest.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::warn!("seed-models: mkdir {}: {e}", parent.display());
+                continue;
+            }
+        }
+        if let Err(e) = std::fs::write(&dest, entry.data.as_ref()) {
+            tracing::warn!("seed-models: write {}: {e}", dest.display());
+            continue;
+        }
+        written += 1;
+    }
+    tracing::info!(
+        "seed-models: extracted {written}/{count} files into {}",
+        target.display()
+    );
+}
+
+/// Treat the cache as seeded if any file is already present
+/// underneath the target dir. Checks recursively because hf-hub's
+/// layout is `<target>/models--<org>--<name>/{blobs,snapshots}/...`;
+/// a top-level read_dir would find the wrapping directory and miss
+/// a partial seed. A single regular file is enough proof.
+#[cfg(feature = "embeddings")]
+fn bundle_already_seeded(target: &Path) -> bool {
+    fn any_file(dir: &Path) -> bool {
+        let it = match std::fs::read_dir(dir) {
+            Ok(it) => it,
+            Err(_) => return false,
+        };
+        for entry in it.flatten() {
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if ft.is_file() {
+                return true;
+            }
+            if ft.is_dir() && any_file(&entry.path()) {
+                return true;
+            }
+        }
+        false
+    }
+    target.exists() && any_file(target)
 }
 
 /// Current wall-clock unix timestamp in seconds. Saturates at 0 on

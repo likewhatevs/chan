@@ -8,7 +8,13 @@
 #   make           default; builds frontend + binary (alias for `all`)
 #   make all       same as `make`
 #   make web       npm install + npm run build (frontend bundle)
+#   make models    pre-fetch the default embedding model into
+#                  crates/chan-server/resources/models/ so the
+#                  release binary can bundle it (idempotent; reads
+#                  HTTPS_PROXY / HTTP_PROXY for restricted networks)
 #   make build     cargo build --release -p chan
+#   make build-release  models + web + build (single command for a
+#                  fully-bundled release binary)
 #   make test      cargo test --workspace
 #   make lint      cargo fmt + cargo clippy (mirrors pre-push)
 #   make hooks     install the pre-push git hook (one-time)
@@ -45,6 +51,22 @@ web:
 .PHONY: build
 build:
 	$(CARGO) build --release -p chan
+
+# Pre-fetch the default embedding model into chan-server's
+# resources/models/. fetch-models is idempotent: re-runs with the
+# model already cached are fast no-ops. Honors HTTPS_PROXY /
+# HTTP_PROXY for restricted networks.
+.PHONY: models
+models:
+	$(CARGO) run --release -p fetch-models
+
+# One-shot release build: ensures the embedding model is on disk
+# AND the frontend bundle is fresh AND the binary is rebuilt with
+# both included. Use this for distribution; `make build` alone
+# will pick up whatever models/web bundle happen to be present
+# from a prior run.
+.PHONY: build-release
+build-release: models web build
 
 .PHONY: test
 test:
