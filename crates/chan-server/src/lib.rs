@@ -72,22 +72,67 @@ pub struct ServeConfig {
     /// same process. Loopback bind is the only check left; do not
     /// flip this in production.
     pub no_token: bool,
+    /// URL path prefix all routes are served under. Canonical form:
+    /// empty (no prefix) or `/seg[/seg...]` (leading slash, no
+    /// trailing). Use `sanitize_prefix` to canonicalize untrusted
+    /// input.
+    pub prefix: String,
 }
 
 /// Resolved at boot for the launch banner / browser handoff.
 #[derive(Debug, Clone)]
 pub struct ServeHandle {
     pub addr: SocketAddr,
+    /// Canonical prefix (matches `ServeConfig::prefix`).
+    pub prefix: String,
     pub token: Option<String>,
 }
 
 impl ServeHandle {
     pub fn launch_url(&self) -> String {
         match &self.token {
-            Some(t) => format!("http://{}/?t={}", self.addr, t),
-            None => format!("http://{}/", self.addr),
+            Some(t) => format!("http://{}{}/?t={}", self.addr, self.prefix, t),
+            None => format!("http://{}{}/", self.addr, self.prefix),
         }
     }
+}
+
+/// Canonicalize a user-supplied URL path prefix.
+///
+/// Returns `Ok("")` for the empty / "no prefix" case, or
+/// `Ok("/seg[/seg...]")` for a non-empty prefix with leading slash
+/// and no trailing slash. Each segment must match `[A-Za-z0-9-]+`.
+///
+/// Strict on purpose: the whole point is that a reverse proxy in
+/// front of `chan serve` can pin the location to a simple, unambiguous
+/// path. Anything that needs URL encoding, `..` traversal, or
+/// non-ASCII gets rejected up front.
+pub fn sanitize_prefix(input: &str) -> Result<String, String> {
+    let trimmed = input.trim();
+    // Strip leading and trailing slashes; collapse internal `//` runs
+    // implicitly via the segment split that drops empty pieces.
+    let core = trimmed.trim_matches('/');
+    if core.is_empty() {
+        return Ok(String::new());
+    }
+    let mut out = String::with_capacity(core.len() + 1);
+    for segment in core.split('/') {
+        if segment.is_empty() {
+            // From a `//` run inside the prefix: collapse silently.
+            continue;
+        }
+        if !segment
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        {
+            return Err(format!(
+                "invalid prefix segment {segment:?}: only [A-Za-z0-9-] allowed"
+            ));
+        }
+        out.push('/');
+        out.push_str(segment);
+    }
+    Ok(out)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -114,7 +159,11 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
     } else {
         Some(load_or_create_token(drive.paths())?)
     };
-    let handle = ServeHandle { addr, token };
+    let handle = ServeHandle {
+        addr,
+        prefix: config.prefix.clone(),
+        token,
+    };
     eprintln!("chan listening on {}", handle.launch_url());
 
     // Unified event stream: every /ws subscriber gets watcher
@@ -168,13 +217,23 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
             watch_handle: Some(watch_handle),
         })),
         token: handle.token,
+        prefix: config.prefix.clone(),
         events_tx,
         llm_config: Mutex::new(llm_config),
         server_config: Mutex::new(server_config),
         editor_prefs: Mutex::new(editor_prefs),
         self_writes,
     });
-    let app = router(state);
+    // Nest under the prefix so `--prefix=/foo` makes every existing
+    // route reachable at `/foo<route>` without changing any handler.
+    // axum strips the prefix from the inner URI, so handlers continue
+    // to see paths starting with `/api`, `/ws`, etc.
+    let inner = router(state);
+    let app = if config.prefix.is_empty() {
+        inner
+    } else {
+        Router::new().nest(&config.prefix, inner)
+    };
     axum::serve(listener, app)
         .await
         .map_err(|e| Error::Io(std::io::Error::other(e.to_string())))?;
@@ -195,6 +254,12 @@ struct AppState {
     /// `state.drive()` which clones it under a read lock.
     drive_cell: RwLock<Option<DriveCell>>,
     token: Option<String>,
+    /// Canonical URL prefix all routes are served under (matches
+    /// `ServeConfig::prefix`). Empty when no `--prefix`. Read by
+    /// `serve_static` to inject a `<meta name="chan-prefix">` tag
+    /// into the SPA shell so the frontend can prepend it to fetch
+    /// and WebSocket URLs.
+    prefix: String,
     /// Pre-serialized JSON-envelope frames: `{"type": "watch",
     /// "event": ...}`, `{"type": "llm.delta", "session_id": ...,
     /// "text": ...}`, etc. One channel; the `type` field tells
@@ -451,7 +516,7 @@ fn router(state: Arc<AppState>) -> Router {
 // we return a real 404 instead of the SPA shell so callers don't
 // silently get HTML when they expected JSON.
 
-async fn serve_static(uri: axum::http::Uri) -> Response {
+async fn serve_static(State(state): State<Arc<AppState>>, uri: axum::http::Uri) -> Response {
     let path = uri.path();
     // Refuse to serve the SPA shell for /api or /ws misses; those
     // are programmatic surfaces, not browser navigation.
@@ -459,25 +524,24 @@ async fn serve_static(uri: axum::http::Uri) -> Response {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
     let candidate = path.trim_start_matches('/');
+    let is_index = candidate.is_empty() || candidate == "index.html";
     let candidate = if candidate.is_empty() {
         "index.html"
     } else {
         candidate
     };
     if let Some(file) = WebAssets::get(candidate) {
-        return (
-            [(header::CONTENT_TYPE, content_type_for(candidate))],
-            file.data.into_owned(),
-        )
-            .into_response();
+        let body = if is_index {
+            inject_chan_prefix(&file.data, &state.prefix)
+        } else {
+            file.data.into_owned()
+        };
+        return ([(header::CONTENT_TYPE, content_type_for(candidate))], body).into_response();
     }
     // SPA fallback: route paths the frontend handles client-side.
     if let Some(file) = WebAssets::get("index.html") {
-        return (
-            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-            file.data.into_owned(),
-        )
-            .into_response();
+        let body = inject_chan_prefix(&file.data, &state.prefix);
+        return ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response();
     }
     // No bundle baked / on disk yet (fresh clone, npm not run).
     (
@@ -485,6 +549,33 @@ async fn serve_static(uri: axum::http::Uri) -> Response {
         "frontend bundle not built; run `cd web && npm install && npm run build`",
     )
         .into_response()
+}
+
+/// Inject `<meta name="chan-prefix" content="<prefix>">` after the
+/// opening `<head>` tag of the SPA shell so the frontend transport
+/// layer can read it at boot and prepend the prefix to fetch and
+/// WebSocket URLs.
+///
+/// No-op when `prefix` is empty (the meta tag isn't needed; the
+/// frontend defaults to "" when absent). When `<head>` isn't found,
+/// returns the original bytes unchanged.
+fn inject_chan_prefix(html: &[u8], prefix: &str) -> Vec<u8> {
+    if prefix.is_empty() {
+        return html.to_vec();
+    }
+    let needle = b"<head>";
+    let Some(pos) = html.windows(needle.len()).position(|w| w == needle) else {
+        return html.to_vec();
+    };
+    // Prefix is canonical (`/seg[/seg...]` with `[A-Za-z0-9-]+`
+    // segments) so it cannot contain HTML-attribute-special bytes.
+    let insert = format!("<meta name=\"chan-prefix\" content=\"{prefix}\">");
+    let mut out = Vec::with_capacity(html.len() + insert.len());
+    let after_head = pos + needle.len();
+    out.extend_from_slice(&html[..after_head]);
+    out.extend_from_slice(insert.as_bytes());
+    out.extend_from_slice(&html[after_head..]);
+    out
 }
 
 /// Conservative MIME map for the file types the SPA bundle ships:
@@ -3055,5 +3146,70 @@ mod tests {
     fn extract_token_missing() {
         let h = HeaderMap::new();
         assert_eq!(extract_token(None, &h), None);
+    }
+
+    #[test]
+    fn sanitize_prefix_empty_inputs() {
+        assert_eq!(sanitize_prefix("").unwrap(), "");
+        assert_eq!(sanitize_prefix("   ").unwrap(), "");
+        assert_eq!(sanitize_prefix("/").unwrap(), "");
+        assert_eq!(sanitize_prefix("///").unwrap(), "");
+    }
+
+    #[test]
+    fn sanitize_prefix_canonicalizes() {
+        assert_eq!(sanitize_prefix("foo").unwrap(), "/foo");
+        assert_eq!(sanitize_prefix("/foo").unwrap(), "/foo");
+        assert_eq!(sanitize_prefix("/foo/").unwrap(), "/foo");
+        assert_eq!(sanitize_prefix("foo/").unwrap(), "/foo");
+        assert_eq!(sanitize_prefix("/foo/bar").unwrap(), "/foo/bar");
+        assert_eq!(sanitize_prefix("//foo//bar//").unwrap(), "/foo/bar");
+        assert_eq!(sanitize_prefix("  /foo/  ").unwrap(), "/foo");
+    }
+
+    #[test]
+    fn sanitize_prefix_allowed_chars() {
+        assert_eq!(sanitize_prefix("/abc-123").unwrap(), "/abc-123");
+        assert_eq!(sanitize_prefix("/A-B/c-D").unwrap(), "/A-B/c-D");
+    }
+
+    #[test]
+    fn sanitize_prefix_rejects_bad_segments() {
+        for bad in [
+            "/foo/..",
+            "/foo bar",
+            "/foo?",
+            "/foo#",
+            "/a%20b",
+            "/foo.bar",
+            "/foo_bar",
+            "/foo~bar",
+            "/cafe\u{0301}",
+            "/foo\\bar",
+        ] {
+            assert!(sanitize_prefix(bad).is_err(), "expected error for {bad:?}");
+        }
+    }
+
+    #[test]
+    fn inject_chan_prefix_inserts_meta_after_head() {
+        let html = b"<!doctype html><html><head><title>x</title></head></html>";
+        let out = inject_chan_prefix(html, "/foo");
+        let s = std::str::from_utf8(&out).unwrap();
+        assert!(s.contains("<head><meta name=\"chan-prefix\" content=\"/foo\"><title>"));
+    }
+
+    #[test]
+    fn inject_chan_prefix_noop_on_empty_prefix() {
+        let html = b"<head></head>";
+        let out = inject_chan_prefix(html, "");
+        assert_eq!(out, html);
+    }
+
+    #[test]
+    fn inject_chan_prefix_noop_when_head_missing() {
+        let html = b"<html></html>";
+        let out = inject_chan_prefix(html, "/foo");
+        assert_eq!(out, html);
     }
 }

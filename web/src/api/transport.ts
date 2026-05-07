@@ -28,6 +28,32 @@ export type WsStatus = "connecting" | "open" | "reconnecting" | "closed";
 
 const TOKEN_KEY = "chan.token";
 
+/// Server URL prefix when `chan serve --prefix=/foo` mounts the
+/// API under a path. Read once at module load from the
+/// `<meta name="chan-prefix">` tag the server injects into the SPA
+/// shell. Empty string when no prefix.
+const PREFIX = readPrefix();
+
+function readPrefix(): string {
+  const m = document.querySelector('meta[name="chan-prefix"]');
+  const v = m?.getAttribute("content")?.trim() ?? "";
+  // The server only injects the tag when a prefix is set, but be
+  // defensive: a stray empty / non-canonical value collapses to "".
+  if (!v || !v.startsWith("/")) return "";
+  return v.replace(/\/+$/, "");
+}
+
+/// Prepend the server URL prefix to an in-app path. Pass paths with
+/// a leading slash (`/api/foo`); the result is the absolute path the
+/// browser should fetch. Used by `request`, `withTokenQuery`, and
+/// any direct `fetch` outside the request helper (multipart upload,
+/// `<img>` URLs).
+export function apiPath(path: string): string {
+  if (!PREFIX) return path;
+  if (!path.startsWith("/")) return `${PREFIX}/${path}`;
+  return `${PREFIX}${path}`;
+}
+
 function loadToken(): string | null {
   const url = new URL(window.location.href);
   const t = url.searchParams.get("t");
@@ -42,13 +68,14 @@ function loadToken(): string | null {
 
 const token = loadToken();
 
-/// Append the auth token as a `?t=...` query. Use only for paths
-/// that can't carry an Authorization header (WebSocket upgrade,
-/// `<img src>` rendered by the browser).
+/// Append the auth token as a `?t=...` query and apply the server
+/// URL prefix. Use only for paths that can't carry an Authorization
+/// header (WebSocket upgrade, `<img src>` rendered by the browser).
 export function withTokenQuery(path: string): string {
-  if (!token) return path;
-  const sep = path.includes("?") ? "&" : "?";
-  return `${path}${sep}t=${encodeURIComponent(token)}`;
+  const full = apiPath(path);
+  if (!token) return full;
+  const sep = full.includes("?") ? "&" : "?";
+  return `${full}${sep}t=${encodeURIComponent(token)}`;
 }
 
 /// Raw auth token. Exposed for the few call sites that build URLs
@@ -103,7 +130,7 @@ export async function request<T>(
   if (sigs.length > 0) init.signal = AbortSignal.any(sigs);
 
   try {
-    const res = await fetch(path, init);
+    const res = await fetch(apiPath(path), init);
     if (!res.ok) {
       const text = await res.text().catch(() => res.statusText);
       // Try to parse the body as JSON so structured error responses
@@ -181,7 +208,10 @@ export function openWatch(
     if (closed) return;
     onStatus("connecting");
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = withTokenQuery(`${proto}//${window.location.host}/ws`);
+    // withTokenQuery applies the server prefix and the ?t= token to
+    // the path; the caller stitches on proto+host to produce the
+    // absolute WS URL.
+    const url = `${proto}//${window.location.host}${withTokenQuery("/ws")}`;
     ws = new WebSocket(url);
     ws.onopen = () => {
       backoff = 500;

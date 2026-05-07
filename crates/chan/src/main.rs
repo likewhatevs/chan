@@ -93,6 +93,14 @@ enum Command {
         ipv6: bool,
         #[arg(long, default_value_t = 8787)]
         port: u16,
+        /// URL path prefix to mount the server under. Lets a reverse
+        /// proxy multiplex many `chan serve` instances under one host
+        /// (e.g. `drive.example.com/{user}/`). Canonicalized to
+        /// `/seg[/seg...]` with `[A-Za-z0-9-]+` segments; trailing
+        /// slashes and `//` runs are tolerated. Anything else is
+        /// rejected.
+        #[arg(long)]
+        prefix: Option<String>,
         /// Skip the per-launch bearer-token gate. For tests and the
         /// desktop shell only; never expose a no-token server on a
         /// shared machine.
@@ -140,16 +148,19 @@ fn main() -> Result<()> {
             ipv4,
             ipv6,
             port,
+            prefix,
             no_token,
         } => {
             let addr = resolve_listen_addr(host, ipv4, ipv6, port)?;
+            let prefix = chan_server::sanitize_prefix(prefix.as_deref().unwrap_or(""))
+                .map_err(|e| anyhow::anyhow!("invalid --prefix: {e}"))?;
             // serve is the only async subcommand; everything else
             // stays sync so the CLI starts up without a runtime.
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .context("building tokio runtime")?;
-            rt.block_on(cmd_serve(addr, path, no_token))
+            rt.block_on(cmd_serve(addr, prefix, path, no_token))
         }
         Command::Index { path } => cmd_index(path),
         Command::Search { path, query, limit } => cmd_search(path, query, limit),
@@ -400,7 +411,12 @@ fn resolve_listen_addr(
     Ok(SocketAddr::new(ip, port))
 }
 
-async fn cmd_serve(addr: SocketAddr, path: Option<PathBuf>, no_token: bool) -> Result<()> {
+async fn cmd_serve(
+    addr: SocketAddr,
+    prefix: String,
+    path: Option<PathBuf>,
+    no_token: bool,
+) -> Result<()> {
     let lib = library()?;
     // Resolve the drive root: explicit arg first, then the registry
     // default, then the platform default. Auto-register so users
@@ -434,7 +450,11 @@ async fn cmd_serve(addr: SocketAddr, path: Option<PathBuf>, no_token: bool) -> R
         }
     }
 
-    let config = ServeConfig { addr, no_token };
+    let config = ServeConfig {
+        addr,
+        no_token,
+        prefix,
+    };
     chan_server::serve(lib, drive, config)
         .await
         .context("running server")

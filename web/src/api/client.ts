@@ -27,6 +27,7 @@ import type {
 } from "./types";
 import { ApiError } from "./errors";
 import {
+  apiPath,
   authToken as transportAuthToken,
   openWatch,
   request,
@@ -161,7 +162,7 @@ export const api = {
     const headers: Record<string, string> = {};
     const tk = transportAuthToken();
     if (tk) headers.authorization = `Bearer ${tk}`;
-    const res = await fetch("/api/attachments", { method: "POST", headers, body: form });
+    const res = await fetch(apiPath("/api/attachments"), { method: "POST", headers, body: form });
     if (!res.ok) {
       const text = await res.text().catch(() => res.statusText);
       throw new ApiError(res.status, text || res.statusText);
