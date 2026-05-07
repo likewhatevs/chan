@@ -59,6 +59,11 @@ enum Command {
     /// directory or its content; only forgets it on this machine.
     Remove { path: PathBuf },
     /// Set or clear a drive's display name.
+    ///
+    /// Both PATH and NAME are required: defaulting PATH to the
+    /// default drive would silently rename the wrong drive when
+    /// multiple are registered. Explicit beats friendly here. To
+    /// rename the drive you're standing in: `chan rename . NEWNAME`.
     Rename {
         path: PathBuf,
         /// Pass `""` to clear the name.
@@ -137,6 +142,15 @@ fn library() -> Result<Library> {
 }
 
 fn cmd_add(path: PathBuf, name: Option<String>) -> Result<()> {
+    // Mirror `chan serve`'s behavior: create the directory if it
+    // doesn't exist yet. Single verb covers both "register an
+    // existing dir" and "make a fresh drive here". A separate
+    // `chan init` would be a synonym; not worth the mental
+    // overhead.
+    if !path.exists() {
+        std::fs::create_dir_all(&path)
+            .with_context(|| format!("creating drive root {}", path.display()))?;
+    }
     let entry = library()?
         .register_drive(&path, name)
         .with_context(|| format!("registering {}", path.display()))?;
