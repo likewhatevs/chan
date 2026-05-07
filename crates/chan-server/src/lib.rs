@@ -16,8 +16,10 @@
 #![forbid(unsafe_code)]
 
 mod config;
+mod preferences;
 
 pub use config::ServerConfig;
+pub use preferences::{EditorPrefs, FontPrefs, FontSpec, LineSpacing, PaneWidths, ThemeChoice};
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -139,6 +141,16 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
         ServerConfig::default()
     });
 
+    // Editor preferences: fonts / theme / pane widths / line spacing /
+    // date format. The remaining "preferences" surfaced by the
+    // Settings UI live in LlmConfig (assistant) and ServerConfig
+    // (attachments / answers dirs); the unified view returned over
+    // /api/drive and /api/config joins all three.
+    let editor_prefs = EditorPrefs::load().unwrap_or_else(|e| {
+        tracing::warn!("malformed editor preferences, falling back to defaults: {e}");
+        EditorPrefs::default()
+    });
+
     let state = Arc::new(AppState {
         library,
         drive,
@@ -146,6 +158,7 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
         events_tx,
         llm_config: Mutex::new(llm_config),
         server_config: Mutex::new(server_config),
+        editor_prefs: Mutex::new(editor_prefs),
         _watch_handle: watch_handle,
     });
     let app = router(state);
@@ -173,6 +186,11 @@ struct AppState {
     /// answers_dir, etc). Mutable via PATCH /api/server/config;
     /// reads route through the get handler.
     server_config: Mutex<ServerConfig>,
+    /// Editor preferences: fonts / theme / pane widths / line
+    /// spacing / date format. Persisted to
+    /// `<config>/chan/preferences.toml`; mutated through the
+    /// /api/config PATCH path.
+    editor_prefs: Mutex<EditorPrefs>,
     /// Held so the underlying notify watcher keeps running for the
     /// server's lifetime. Field is `_`-prefixed because nothing
     /// reads it; dropping AppState drops the handle, which stops
@@ -269,12 +287,16 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/llm/status", get(api_llm_status))
         .route("/api/llm/tools", get(api_llm_tools))
         .route("/api/llm/complete", post(api_llm_complete))
+        // Per-provider key writes. Path shape matches the frontend's
+        // /api/llm/keys/<provider> (a stable contract across the
+        // chan-writer surfaces); the older /api/llm/<provider>/key
+        // form was a port artifact and is gone.
         .route(
-            "/api/llm/anthropic/key",
+            "/api/llm/keys/anthropic",
             axum::routing::put(api_llm_set_anthropic_key).delete(api_llm_clear_anthropic_key),
         )
         .route(
-            "/api/llm/gemini/key",
+            "/api/llm/keys/gemini",
             axum::routing::put(api_llm_set_gemini_key).delete(api_llm_clear_gemini_key),
         )
         .route("/api/llm/anthropic/models", get(api_llm_anthropic_models))
@@ -284,6 +306,8 @@ fn router(state: Arc<AppState>) -> Router {
             "/api/server/config",
             get(api_get_server_config).patch(api_patch_server_config),
         )
+        .route("/api/config", get(api_get_config).patch(api_patch_config))
+        .route("/api/build-info", get(api_build_info))
         .route(
             "/api/session/:key",
             get(api_get_session)
@@ -514,14 +538,129 @@ struct DriveInfo {
     /// User-facing display name from the registry. None when the
     /// drive has no name set; the frontend falls back to the
     /// basename of `root` for display.
-    #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     /// Absolute drive root, POSIX-style on every platform so the
     /// JSON shape stays stable.
     root: String,
-    // Future: a `preferences` field carrying app-level prefs (font,
-    // theme, attachments dir) once the chan-server preference layer
-    // lands. Held off here so we don't ship a partial schema.
+    /// Per-device preferences view. The frontend uses this to seed
+    /// the editor (fonts, theme, line spacing) without a follow-up
+    /// /api/config round-trip. Same shape as
+    /// `GlobalConfig.preferences`; assembled by joining
+    /// EditorPrefs + ServerConfig + LlmConfig.
+    preferences: PreferencesView,
+}
+
+/// Unified Preferences shape returned over /api/drive and
+/// /api/config. The fields are owned by three different stores:
+///
+/// - fonts / theme / pane_widths / line_spacing / date_format:
+///   EditorPrefs (preferences.toml)
+/// - attachments_dir: ServerConfig (server.toml; the answers_dir
+///   field there is mirrored into the assistant subtree below)
+/// - assistant: LlmConfig (llm.toml) + ServerConfig.answers_dir
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PreferencesView {
+    fonts: FontPrefs,
+    assistant: AssistantPrefsView,
+    attachments_dir: String,
+    theme: ThemeChoice,
+    pane_widths: PaneWidths,
+    line_spacing: LineSpacing,
+    date_format: String,
+}
+
+/// Frontend's `AssistantPrefs` view. The subtables (claude / ollama /
+/// gemini) carry only model overrides today; per-backend ollama URL
+/// is stubbed out (Some(None)) since chan-llm doesn't persist it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AssistantPrefsView {
+    enabled: bool,
+    backend: AssistantBackendKind,
+    answers_dir: String,
+    auto_apply_writes: bool,
+    claude: ProviderPrefsView,
+    ollama: OllamaPrefsView,
+    gemini: ProviderPrefsView,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProviderPrefsView {
+    #[serde(default)]
+    model: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct OllamaPrefsView {
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// Frontend uses "claude" (display label) for what chan-llm types
+/// internally as `BackendKind::Anthropic`. The "embedded" variant is
+/// reserved for a future on-device backend (qwen2.5 via candle); it
+/// has no chan-llm counterpart yet, so PATCHing it is treated as a
+/// no-op when read back the value falls through to the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum AssistantBackendKind {
+    Claude,
+    Ollama,
+    Gemini,
+    Embedded,
+}
+
+impl AssistantBackendKind {
+    fn from_chan_llm(kind: BackendKind) -> Self {
+        match kind {
+            BackendKind::Anthropic => AssistantBackendKind::Claude,
+            BackendKind::Ollama => AssistantBackendKind::Ollama,
+            BackendKind::Gemini => AssistantBackendKind::Gemini,
+        }
+    }
+
+    fn to_chan_llm(self) -> Option<BackendKind> {
+        match self {
+            AssistantBackendKind::Claude => Some(BackendKind::Anthropic),
+            AssistantBackendKind::Ollama => Some(BackendKind::Ollama),
+            AssistantBackendKind::Gemini => Some(BackendKind::Gemini),
+            AssistantBackendKind::Embedded => None,
+        }
+    }
+}
+
+/// Build the unified Preferences view for the current state. Reads
+/// each backing store under its own lock.
+fn preferences_view(state: &AppState) -> PreferencesView {
+    let editor = state.editor_prefs.lock().expect("editor prefs poisoned");
+    let server = state.server_config.lock().expect("server config poisoned");
+    let llm = state.llm_config.lock().expect("llm config poisoned");
+    let backend_kind = llm.backend.unwrap_or(BackendKind::Anthropic);
+    PreferencesView {
+        fonts: editor.fonts.clone(),
+        assistant: AssistantPrefsView {
+            enabled: llm.backend.is_some(),
+            backend: AssistantBackendKind::from_chan_llm(backend_kind),
+            answers_dir: server.answers_dir.clone(),
+            auto_apply_writes: llm.auto_apply_writes,
+            claude: ProviderPrefsView {
+                model: llm.models.anthropic.clone(),
+            },
+            ollama: OllamaPrefsView {
+                url: None,
+                model: llm.models.ollama.clone(),
+            },
+            gemini: ProviderPrefsView {
+                model: llm.models.gemini.clone(),
+            },
+        },
+        attachments_dir: server.attachments_dir.clone(),
+        theme: editor.theme,
+        pane_widths: editor.pane_widths,
+        line_spacing: editor.line_spacing,
+        date_format: editor.date_format.clone(),
+    }
 }
 
 async fn api_get_drive(State(state): State<Arc<AppState>>) -> Response {
@@ -581,6 +720,7 @@ fn drive_info(state: &AppState) -> DriveInfo {
     DriveInfo {
         name: entry.and_then(|e| e.name.clone()),
         root: state.drive.root().to_string_lossy().into_owned(),
+        preferences: preferences_view(state),
     }
 }
 
@@ -1278,6 +1418,188 @@ async fn api_patch_server_config(
         return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
     Json(cfg.clone()).into_response()
+}
+
+// ----- unified preferences (/api/config) ---------------------------------
+//
+// Frontend treats Settings as a single round-trip surface: GET the
+// whole GlobalConfig (preferences + drives + default_drive_root),
+// PATCH the same shape on save. We assemble the view from three
+// underlying stores (EditorPrefs, ServerConfig, LlmConfig) plus the
+// chan-core registry and route the writes back the same way.
+
+#[derive(Serialize)]
+struct GlobalConfigView {
+    preferences: PreferencesView,
+    /// Empty string serializes as None (the resolver falls back to
+    /// the platform default).
+    default_drive_root: Option<String>,
+    drives: Vec<KnownDriveView>,
+}
+
+#[derive(Serialize)]
+struct KnownDriveView {
+    path: String,
+    name: Option<String>,
+    /// RFC3339 timestamp.
+    last_opened: String,
+}
+
+#[derive(Deserialize)]
+struct PatchConfigBody {
+    /// Whole-block replacement. Frontend sends the entire
+    /// GlobalConfig on every save.
+    #[serde(default)]
+    preferences: Option<PreferencesView>,
+    #[serde(default)]
+    default_drive_root: Option<Option<String>>,
+    /// Read-only on PATCH: drives are managed via /api/drive PATCH
+    /// (rename) and the CLI (`chan add` / `remove`). Frontend sends
+    /// the field for round-tripping; we just ignore it.
+    #[serde(default)]
+    #[allow(dead_code)]
+    drives: Option<serde_json::Value>,
+}
+
+fn global_config_view(state: &AppState) -> GlobalConfigView {
+    let drives = state
+        .library
+        .list_drives()
+        .into_iter()
+        .map(|d| KnownDriveView {
+            path: d.path.to_string_lossy().into_owned(),
+            name: d.name,
+            last_opened: d.last_opened.to_rfc3339(),
+        })
+        .collect();
+    GlobalConfigView {
+        preferences: preferences_view(state),
+        default_drive_root: state
+            .library
+            .default_drive_root()
+            .map(|p| p.to_string_lossy().into_owned()),
+        drives,
+    }
+}
+
+async fn api_get_config(State(state): State<Arc<AppState>>) -> Response {
+    Json(global_config_view(&state)).into_response()
+}
+
+async fn api_patch_config(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<PatchConfigBody>,
+) -> Response {
+    if let Some(prefs) = body.preferences {
+        if let Err(e) = apply_preferences(&state, prefs) {
+            return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+        }
+    }
+    if let Some(opt) = body.default_drive_root {
+        let trimmed = opt.as_ref().map(|s| s.trim().to_string());
+        let value = match trimmed {
+            Some(s) if s.is_empty() => None,
+            other => other,
+        };
+        if let Err(e) = state
+            .library
+            .set_default_drive_root(value.map(std::path::PathBuf::from))
+        {
+            return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+        }
+    }
+    Json(global_config_view(&state)).into_response()
+}
+
+/// Split the unified Preferences body across the three backing
+/// stores. Each store saves itself; a partial failure leaves the
+/// caller with whatever wrote successfully (no two-phase commit).
+fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Error> {
+    {
+        let mut editor = state.editor_prefs.lock().expect("editor prefs poisoned");
+        editor.fonts = view.fonts;
+        editor.theme = view.theme;
+        editor.pane_widths = view.pane_widths;
+        editor.line_spacing = view.line_spacing;
+        editor.date_format = view.date_format;
+        editor.save()?;
+    }
+    {
+        let mut server = state.server_config.lock().expect("server config poisoned");
+        if !view.attachments_dir.is_empty() {
+            server.attachments_dir = view.attachments_dir;
+        }
+        if !view.assistant.answers_dir.is_empty() {
+            server.answers_dir = view.assistant.answers_dir;
+        }
+        server.save()?;
+    }
+    {
+        let mut llm = state.llm_config.lock().expect("llm config poisoned");
+        // The "embedded" backend has no chan-llm counterpart yet; a
+        // PATCH carrying it is a no-op (the field round-trips as
+        // the previous backend on the next read).
+        if let Some(kind) = view.assistant.backend.to_chan_llm() {
+            llm.backend = if view.assistant.enabled {
+                Some(kind)
+            } else {
+                None
+            };
+        } else if !view.assistant.enabled {
+            llm.backend = None;
+        }
+        llm.auto_apply_writes = view.assistant.auto_apply_writes;
+        llm.models.anthropic = view.assistant.claude.model;
+        llm.models.gemini = view.assistant.gemini.model;
+        llm.models.ollama = view.assistant.ollama.model;
+        // Ollama URL on the view is a passthrough today; chan-llm
+        // doesn't persist it (the backend reads OLLAMA_URL or its
+        // hardcoded default at request time). Drop it on the floor
+        // until a per-backend URL field lands in chan-llm.
+        llm.save()
+            .map_err(|e| Error::Config(format!("save llm config: {e}")))?;
+    }
+    Ok(())
+}
+
+// ----- build identity -----------------------------------------------------
+//
+// Compile-time identity for the running chan binary. The frontend's
+// Settings "About" footer reads this so users can tell at a glance
+// which version they're on and whether semantic search is available.
+// The values come from CARGO_PKG_VERSION and cfg!(feature = ...) at
+// build time; nothing is computed at runtime.
+
+#[derive(Serialize)]
+struct BuildInfo {
+    version: &'static str,
+    features: BuildFeatures,
+}
+
+#[derive(Serialize)]
+struct BuildFeatures {
+    /// Hybrid (BM25 + dense) search depends on the embeddings cargo
+    /// feature being on at build time. When false, search falls back
+    /// to BM25-only and the Settings "Search" section reflects that.
+    /// chan-server itself doesn't gate on this feature; we forward
+    /// chan-core's compile-time flag as exposed through the
+    /// `chan_core::has_embeddings` helper.
+    embeddings: bool,
+}
+
+async fn api_build_info() -> Response {
+    Json(BuildInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        features: BuildFeatures {
+            // chan-core today is BM25-only (tantivy gated by the
+            // `search` feature). Dense embeddings are a future v0.2
+            // feature; the field stays in the contract so the
+            // frontend's "Settings -> Search" section can render
+            // accurate copy without a v0.2-incompatible refactor.
+            embeddings: false,
+        },
+    })
+    .into_response()
 }
 
 // ----- sessions / assistant blobs / answers ------------------------------
