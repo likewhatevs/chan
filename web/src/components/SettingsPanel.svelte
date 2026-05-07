@@ -141,19 +141,27 @@
     keychainBusy = true;
     keychainError = null;
     try {
-      // Flush any pending autosave first so the server's view of
-      // `enabled` and the active backend reflects the form before
-      // we ask /api/llm/status to compute readiness. Without this
-      // a user typing a key into the Anthropic section before the
-      // 800 ms autosave debounce expires would see "ready: false"
-      // because cfg.backend on the server is still None / stale.
+      // Saving a key is an implicit "I want to use this backend".
+      // Commit that intent BEFORE we hit the keychain so /api/llm/
+      // status reports ready=true on the immediate refetch. The
+      // previous version only flushed pending autosaves, which
+      // didn't help when the form was clean (e.g. fresh Settings
+      // open: backend dropdown shows "Claude" but cfg.backend on
+      // the server is still None until the user touches anything).
+      if (editing) {
+        editing.assistant.enabled = true;
+        editing.assistant.backend = provider === "anthropic" ? "claude" : "gemini";
+      }
       if (autosaveTimer) {
         clearTimeout(autosaveTimer);
         autosaveTimer = null;
       }
-      if (dirty()) {
-        await save();
-      }
+      // Always save: the implicit edits above may not register as
+      // dirty if the user previously saw the same backend selected
+      // in editing (e.g. they're refreshing the key on an already-
+      // configured backend). save() short-circuits cleanly when
+      // there's nothing to send.
+      await save();
       // Server verifies the round trip (write then read-back) before
       // returning 204; on a read-back failure it surfaces a precise
       // error here in the catch arm. So the input only clears on a

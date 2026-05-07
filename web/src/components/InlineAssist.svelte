@@ -1549,8 +1549,15 @@
      ProseMirror chrome. Cap the height so a long prompt doesn't
      push the chat history out of view; user can drag the divider
      in the future if we add one. */
+  /* Prompt input surface. Distinct from the panel via a top
+     border + slightly off-bg fill so the area where the user
+     types is visible against the chat scrollback above and
+     against the panel chrome below. The previous all-white
+     light-mode look made the input invisible until the user
+     started typing (and even then the cursor blended in). */
   .prompt-wrap {
-    background: var(--bg);
+    background: var(--bg-card);
+    border-top: 1px solid var(--border);
     max-height: 30vh;
     min-height: 80px;
     display: flex;
@@ -1581,10 +1588,15 @@
     gap: 4px;
     padding: 6px 10px;
     margin: 8px auto 4px;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
+    /* Use --bg-elev (panel) so the pill stands out against
+       --prompt-wrap's --bg-card. Inverting the relationship from
+       the original (pill darker than panel in dark mode) keeps
+       the pill discoverable against EITHER surface, light and
+       dark, without splitting into per-mode tokens. */
+    background: var(--bg-elev);
+    border: 1px solid var(--btn-hover);
     border-radius: 999px;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
     color: var(--text);
     flex-shrink: 0;
     width: max-content;

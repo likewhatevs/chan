@@ -20,7 +20,14 @@
     search,
     setSearchQuery,
   } from "@codemirror/search";
-  import { ui } from "../state/store.svelte";
+  import { drive, ui } from "../state/store.svelte";
+
+  // Editor density follows the user's line_spacing pref. Same hook
+  // the Wysiwyg side uses (see Wysiwyg.svelte:820), exposed here as
+  // a `data-density` attribute on .md-source so the CSS rules below
+  // can dial line-height between tight (gdocs-like) and standard
+  // (older roomier) without rebuilding the CodeMirror editor.
+  const density = $derived(drive.info?.preferences?.line_spacing ?? "tight");
 
   let { value = $bindable("") }: { value: string } = $props();
 
@@ -205,7 +212,7 @@
   });
 </script>
 
-<div class="md-source" bind:this={host}></div>
+<div class="md-source" data-density={density} bind:this={host}></div>
 
 <style>
   /* Keep the CodeMirror chrome wrapper themed. The CM6 editor itself
@@ -245,4 +252,11 @@
   :global(.md-source .cm-editor .cm-activeLine) {
     background-color: transparent !important;
   }
+  /* Line-spacing pref. Mirrors the Wysiwyg's data-density rules so
+     toggling between tight (default, gdocs-like) and standard
+     (older, roomier) flips both editors in lockstep. CodeMirror's
+     default line-height (1.4) becomes the tight value; standard
+     bumps to 1.7 to match the WYSIWYG's normal-mode feel. */
+  :global(.md-source[data-density="tight"] .cm-line) { line-height: 1.4; }
+  :global(.md-source[data-density="standard"] .cm-line) { line-height: 1.7; }
 </style>
