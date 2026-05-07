@@ -141,6 +141,19 @@
     keychainBusy = true;
     keychainError = null;
     try {
+      // Flush any pending autosave first so the server's view of
+      // `enabled` and the active backend reflects the form before
+      // we ask /api/llm/status to compute readiness. Without this
+      // a user typing a key into the Anthropic section before the
+      // 800 ms autosave debounce expires would see "ready: false"
+      // because cfg.backend on the server is still None / stale.
+      if (autosaveTimer) {
+        clearTimeout(autosaveTimer);
+        autosaveTimer = null;
+      }
+      if (dirty()) {
+        await save();
+      }
       // Server verifies the round trip (write then read-back) before
       // returning 204; on a read-back failure it surfaces a precise
       // error here in the catch arm. So the input only clears on a

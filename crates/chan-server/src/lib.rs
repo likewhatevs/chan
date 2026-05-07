@@ -1591,9 +1591,21 @@ async fn api_llm_status(State(state): State<Arc<AppState>>) -> Response {
     let reason = if !enabled {
         Some("no backend selected; pick one in Settings".to_string())
     } else if !ready {
+        // Per-backend env var so the message matches the active
+        // selection (the previous "ANTHROPIC_API_KEY / GEMINI_API_KEY"
+        // dual-string was confusing when only one of them was the
+        // active backend).
+        let env = match active {
+            BackendKind::Anthropic => "ANTHROPIC_API_KEY",
+            BackendKind::Gemini => "GEMINI_API_KEY",
+            // Ollama is keyless; if !ready triggered for it, we'd
+            // have a different problem. Keep a fallback name to
+            // satisfy the exhaustive match without panicking.
+            BackendKind::Ollama => "OLLAMA_HOST",
+        };
         Some(format!(
-            "{} key not configured; set ANTHROPIC_API_KEY / GEMINI_API_KEY \
-             or store via Settings",
+            "{} key not configured. Set {env} in your shell, or save the \
+             key from this Settings panel.",
             backend_tag(active),
         ))
     } else {
@@ -1931,14 +1943,52 @@ async fn api_llm_gemini_models(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-async fn api_llm_ollama_models() -> Response {
-    // Ollama doesn't go through chan-llm's HTTP key story (local
-    // server, keyless). The frontend already passes a per-server
-    // URL via ?url= so the same route can probe a remote box from
-    // the Settings UI without persisting the URL first.
-    // Today: empty list. Live discovery via /api/tags lands when
-    // the per-backend Ollama URL probe is wired (chan-llm side).
-    Json::<Vec<LlmModelEntryOwned>>(Vec::new()).into_response()
+/// Ollama URL probe query: the Settings UI passes the user's typed
+/// URL so the dropdown can refresh against a remote daemon without
+/// persisting the URL first. Empty / absent falls through to the
+/// same precedence chan-llm uses at request time
+/// (env OLLAMA_HOST > config > hardcoded default).
+#[derive(Deserialize)]
+struct OllamaModelsQuery {
+    #[serde(default)]
+    url: Option<String>,
+}
+
+async fn api_llm_ollama_models(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<OllamaModelsQuery>,
+) -> Response {
+    let cfg = state.llm_config.lock().unwrap().clone();
+    // Resolution mirrors backends::build's Ollama branch:
+    //   1. ?url= query (the user's typed value in Settings)
+    //   2. OLLAMA_HOST env (per-shell override)
+    //   3. config.urls.ollama (Settings UI persistence)
+    //   4. hardcoded default
+    let url = q
+        .url
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("OLLAMA_HOST").ok().filter(|s| !s.is_empty()))
+        .or_else(|| cfg.urls.ollama.clone())
+        .unwrap_or_else(|| chan_llm::backends::ollama::DEFAULT_URL.to_string());
+    match chan_llm::backends::ollama::list_models(&url).await {
+        Ok(models) => Json(
+            models
+                .into_iter()
+                .map(|name| LlmModelEntryOwned {
+                    name,
+                    supports_tools: true,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        // The frontend types ollamaModels as `LlmModelEntry[]` (no
+        // wrapper) and treats request errors as "daemon unreachable".
+        // Surface a 503 so the Settings UI's catch arm fires the
+        // standard error toast with the upstream message.
+        Err(e) => err(StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
+    }
 }
 
 // ----- server preferences -------------------------------------------------
