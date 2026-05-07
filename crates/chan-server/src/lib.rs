@@ -17,9 +17,12 @@
 
 mod config;
 mod preferences;
+mod self_writes;
 
 pub use config::ServerConfig;
 pub use preferences::{EditorPrefs, FontPrefs, FontSpec, LineSpacing, PaneWidths, ThemeChoice};
+
+use self_writes::SelfWrites;
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -120,8 +123,14 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
     // bursts (mass rename, LLM token-stream); slow subscribers
     // see Lagged and skip ahead rather than blocking the sender.
     let (events_tx, _) = broadcast::channel::<String>(256);
+    // Shared dedupe queue: server writes note their path here, the
+    // watcher bridge consults it before forwarding so save->reload
+    // echoes don't fire spurious external-edit prompts in the
+    // editor.
+    let self_writes = Arc::new(SelfWrites::new());
     let bridge: Arc<dyn WatchCallback> = Arc::new(WatchBroadcast {
         tx: events_tx.clone(),
+        self_writes: self_writes.clone(),
     });
     let watch_handle = drive.watch(bridge)?;
 
@@ -159,6 +168,7 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
         llm_config: Mutex::new(llm_config),
         server_config: Mutex::new(server_config),
         editor_prefs: Mutex::new(editor_prefs),
+        self_writes,
         _watch_handle: watch_handle,
     });
     let app = router(state);
@@ -191,6 +201,11 @@ struct AppState {
     /// `<config>/chan/preferences.toml`; mutated through the
     /// /api/config PATCH path.
     editor_prefs: Mutex<EditorPrefs>,
+    /// Recently-written paths for the watcher dedupe. Every server-
+    /// side write notes its target here; WatchBroadcast checks the
+    /// queue before forwarding so an editor save doesn't bounce
+    /// back as an "external edit" event.
+    self_writes: Arc<SelfWrites>,
     /// Held so the underlying notify watcher keeps running for the
     /// server's lifetime. Field is `_`-prefixed because nothing
     /// reads it; dropping AppState drops the handle, which stops
@@ -202,17 +217,41 @@ struct AppState {
 /// broadcast channel that backs every /ws subscriber. Each event
 /// goes out as a `{"type": "watch", "event": {...}}` envelope so
 /// the frontend can multiplex with LLM events on the same socket.
+///
+/// Drops events that match a recent server-side write so the editor
+/// doesn't see its own save as an external edit (the
+/// "you wrote, OS told us, we tell you, you reload" loop). For
+/// rename events both `from` and `to` are checked since both sides
+/// land as separate notify events on most kernels.
 struct WatchBroadcast {
     tx: broadcast::Sender<String>,
+    self_writes: Arc<SelfWrites>,
 }
 
 impl WatchCallback for WatchBroadcast {
     fn on_event(&self, event: WatchEvent) {
+        if event_is_self_echo(&event, &self.self_writes) {
+            return;
+        }
         let frame = serde_json::json!({"type": "watch", "event": event});
         if let Ok(s) = serde_json::to_string(&frame) {
             let _ = self.tx.send(s);
         }
     }
+}
+
+fn event_is_self_echo(event: &WatchEvent, sw: &SelfWrites) -> bool {
+    if let Some(p) = event.path.as_deref() {
+        if sw.should_suppress(p) {
+            return true;
+        }
+    }
+    if let Some(p) = event.to.as_deref() {
+        if sw.should_suppress(p) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Bridge from chan-llm's SessionListener into the same broadcast
@@ -779,6 +818,33 @@ async fn api_read_file(
 #[derive(Deserialize)]
 struct WriteBody {
     content: String,
+    /// CAS token: the mtime the client thinks the file currently
+    /// has on disk. When present, the server uses
+    /// Drive::write_text_if_unchanged and rejects with 409 if the
+    /// disk-side mtime differs. When absent, the write is
+    /// last-write-wins (Drive::write_text), preserving the
+    /// pre-CAS contract for callers that don't care
+    /// (bulk imports, scripts).
+    #[serde(default)]
+    expected_mtime: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct WriteResponse {
+    /// Mtime after the write. Frontend stores this as the next
+    /// CAS token for subsequent saves so the client and disk stay
+    /// in lock-step without an extra stat round-trip.
+    mtime: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct WriteConflictBody {
+    /// Mtime currently on disk, returned so the client knows what
+    /// token to use on a follow-up "overwrite" attempt without a
+    /// separate stat call. None when the file disappeared between
+    /// the client's last fetch and now (rare; treat as "create
+    /// fresh" on the retry).
+    current_mtime: Option<i64>,
 }
 
 async fn api_write_file(
@@ -786,10 +852,25 @@ async fn api_write_file(
     AxumPath(path): AxumPath<String>,
     Json(body): Json<WriteBody>,
 ) -> Response {
-    if let Err(e) = state.drive.write_text(&path, &body.content) {
+    let result = match body.expected_mtime {
+        Some(_) => state
+            .drive
+            .write_text_if_unchanged(&path, body.expected_mtime, &body.content),
+        None => state.drive.write_text(&path, &body.content),
+    };
+    if let Err(e) = result {
+        if let chan_core::ChanError::WriteConflict { current_mtime } = e {
+            return (
+                StatusCode::CONFLICT,
+                Json(WriteConflictBody { current_mtime }),
+            )
+                .into_response();
+        }
         return err_from(&e);
     }
-    StatusCode::NO_CONTENT.into_response()
+    state.self_writes.note(&path);
+    let mtime = state.drive.stat(&path).ok().and_then(|s| s.mtime);
+    Json(WriteResponse { mtime }).into_response()
 }
 
 #[derive(Deserialize)]
@@ -809,13 +890,19 @@ async fn api_create_file(
     }
     if body.is_dir {
         match state.drive.create_dir(&body.path) {
-            Ok(()) => StatusCode::CREATED.into_response(),
+            Ok(()) => {
+                state.self_writes.note(&body.path);
+                StatusCode::CREATED.into_response()
+            }
             Err(e) => err_from(&e),
         }
     } else {
         let content = body.content.unwrap_or_default();
         match state.drive.write_text(&body.path, &content) {
-            Ok(()) => StatusCode::CREATED.into_response(),
+            Ok(()) => {
+                state.self_writes.note(&body.path);
+                StatusCode::CREATED.into_response()
+            }
             Err(e) => err_from(&e),
         }
     }
@@ -832,7 +919,10 @@ async fn api_delete_file(
     // that issues per-leaf removes. Tracked for a follow-up; current
     // behavior is "error out, frontend resolves the leaves itself".
     match state.drive.remove(&path) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            state.self_writes.note(&path);
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => err_from(&e),
     }
 }
@@ -845,7 +935,15 @@ struct MoveBody {
 
 async fn api_move(State(state): State<Arc<AppState>>, Json(body): Json<MoveBody>) -> Response {
     match state.drive.rename(&body.from, &body.to) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            // Rename emits two notify events on most kernels (a
+            // Removed at `from` and a Created at `to`); note both
+            // so neither half of the pair fires an external-edit
+            // prompt.
+            state.self_writes.note(&body.from);
+            state.self_writes.note(&body.to);
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => err_from(&e),
     }
 }
@@ -1836,6 +1934,7 @@ async fn api_post_attachment(
     if let Err(e) = state.drive.write_bytes(&rel, &bytes) {
         return err_from(&e);
     }
+    state.self_writes.note(&rel);
     Json(serde_json::json!({ "path": rel })).into_response()
 }
 
@@ -1873,7 +1972,10 @@ async fn api_post_answer(
         .unwrap_or_else(timestamp_slug);
     let rel = format!("{dir}/{stem}.md");
     match state.drive.write_text(&rel, &body.content) {
-        Ok(()) => Json(AnswerSaved { path: rel }).into_response(),
+        Ok(()) => {
+            state.self_writes.note(&rel);
+            Json(AnswerSaved { path: rel }).into_response()
+        }
         Err(e) => err_from(&e),
     }
 }
