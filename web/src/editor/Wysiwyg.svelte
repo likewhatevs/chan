@@ -30,7 +30,12 @@
     showImagePicker,
     uploadImageFile,
   } from "./extensions/image";
-  import { WikiLinkNode, showWikiPicker, handleWikiClick } from "./extensions/wikiLink";
+  import {
+    WikiLinkNode,
+    handleWikiClick,
+    openWikiBubble,
+    type WikiBubble,
+  } from "./extensions/wikiLink";
   import { drive } from "../state/store.svelte";
 
   let {
@@ -66,6 +71,15 @@
 
   let host: HTMLDivElement | undefined;
   let editor: Editor | undefined;
+
+  /// Wiki-link bubble. Open while the caret sits between an
+  /// auto-paired `[[ ]]` in the editor. The bubble is informational
+  /// (no focus); the caret stays inside the brackets and the user's
+  /// typing IS the search query. Wysiwyg owns the keyboard and
+  /// selection-tracking; the bubble owns its own DOM and result
+  /// list. Cleared when the caret leaves the bracket range, on
+  /// Escape, on accept, or on editor destroy.
+  let wikiBubble: WikiBubble | undefined;
 
   /// Scroll the editor to the i-th heading (0-based, document order).
   /// Called by the inspector (outline view) via `bind:this` from
@@ -184,16 +198,45 @@
       // and clipboard paste flows all share one upload + node-
       // insert path.
       editorProps: {
-        handleKeyDown: onSubmit
-          ? (_view, event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                event.preventDefault();
-                onSubmit();
-                return true;
-              }
-              return false;
+        handleKeyDown: (_view, event) => {
+          // Wiki bubble owns Enter / Escape / Arrow keys while the
+          // caret is inside `[[ ]]`. We check bubble state instead
+          // of just findBracketRange() so that an empty `[[ ]]`
+          // typed by the user without going through the trigger
+          // path doesn't accidentally swallow Enter.
+          if (wikiBubble) {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              acceptWikiBubble();
+              return true;
             }
-          : undefined,
+            if (event.key === "Escape") {
+              event.preventDefault();
+              dismissWikiBubble();
+              return true;
+            }
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              wikiBubble.moveActive(1);
+              return true;
+            }
+            if (event.key === "ArrowUp") {
+              event.preventDefault();
+              wikiBubble.moveActive(-1);
+              return true;
+            }
+          }
+          if (
+            onSubmit &&
+            (event.metaKey || event.ctrlKey) &&
+            event.key === "Enter"
+          ) {
+            event.preventDefault();
+            onSubmit();
+            return true;
+          }
+          return false;
+        },
         handleDrop: (view, event, _slice, moved) => {
           // `moved` is true for in-editor drag-rearrange; we let
           // ProseMirror's default handler take that case.
@@ -268,9 +311,11 @@
         lastSyncedValue = md;
         value = md;
         tagHeadings();
+        syncWikiBubble();
         onSelectionChange?.();
       },
       onSelectionUpdate: () => {
+        syncWikiBubble();
         onSelectionChange?.();
       },
     });
@@ -307,6 +352,7 @@
   }
 
   onDestroy(() => {
+    dismissWikiBubble();
     editor?.destroy();
   });
 
@@ -544,28 +590,19 @@
       });
       return;
     }
-    if (before.endsWith("[[")) {
-      replaceTrailingTrigger("[[", () => {
-        const anchor = window.getSelection()?.focusNode?.parentElement ?? host!;
-        // wikiPickerPrefix scopes file suggestions to the source
-        // file's git repo when set; the file editor passes the
-        // open file's repoRoot so `[[note]]` autocomplete stays
-        // project-bound rather than spanning the whole drive.
-        showWikiPicker(
-          anchor as HTMLElement,
-          (target) => {
-            if (!target || !editor) return;
-            const label = (target.split("/").pop() ?? target).replace(/\.md$/, "");
-            editor
-              .chain()
-              .focus()
-              .insertContent({ type: "wikiLink", attrs: { target, label } })
-              .insertContent(" ")
-              .run();
-          },
-          wikiPickerPrefix,
-        );
-      });
+    if (before.endsWith("[[") && !wikiBubble) {
+      // Auto-pair: insert `]]` after the caret and step the caret
+      // back into the middle. The leading `[[` the user typed stays;
+      // their next keystroke goes between the brackets and IS the
+      // search query. The bubble below the caret renders results
+      // without taking focus.
+      const pos = editor.state.selection.from;
+      editor
+        .chain()
+        .insertContentAt(pos, "]]", { updateSelection: false })
+        .setTextSelection(pos)
+        .run();
+      openWikiBubbleForCurrentCaret();
       return;
     }
     if (before.endsWith("![")) {
@@ -631,6 +668,107 @@
         // eslint-disable-next-line no-console
         console.error("image upload failed:", e);
       }
+    }
+  }
+
+  /// Locate the `[[ ... ]]` text range that surrounds the current
+  /// caret, if any. Returns positions in the prosemirror document
+  /// (start = `[`, end = position AFTER second `]`) plus the query
+  /// text between the brackets. Constraints:
+  ///   - Selection must be collapsed (no range select).
+  ///   - The brackets must live in the same textblock as the caret.
+  ///   - There must be no other `]]` between the open `[[` and the
+  ///     caret, and no other `[[` between the caret and the close
+  ///     `]]`. This handles the common case of a single in-progress
+  ///     wiki entry without false matches across nearby brackets.
+  function findBracketRange(
+    ed: Editor,
+  ): { start: number; end: number; query: string } | null {
+    const sel = ed.state.selection;
+    if (!sel.empty) return null;
+    const resolved = ed.state.doc.resolve(sel.from);
+    const block = resolved.parent;
+    if (!block.isTextblock) return null;
+    const blockStart = resolved.start();
+    const offset = sel.from - blockStart;
+    const text = block.textContent;
+    const leftIdx = text.lastIndexOf("[[", Math.max(0, offset - 1));
+    if (leftIdx === -1) return null;
+    const between = text.slice(leftIdx + 2, offset);
+    if (between.includes("]]")) return null;
+    const rightIdx = text.indexOf("]]", offset);
+    if (rightIdx === -1) return null;
+    const after = text.slice(offset, rightIdx);
+    if (after.includes("[[")) return null;
+    return {
+      start: blockStart + leftIdx,
+      end: blockStart + rightIdx + 2,
+      query: text.slice(leftIdx + 2, rightIdx),
+    };
+  }
+
+  /// Mount the wiki bubble anchored at the caret's parent element.
+  /// The selection-update hook keeps it in sync; this function just
+  /// handles the open path. Caller must ensure the editor has the
+  /// `[[ ]]` brackets in place (the caret should sit inside them).
+  function openWikiBubbleForCurrentCaret(): void {
+    if (!editor || wikiBubble) return;
+    const anchor =
+      (window.getSelection()?.focusNode?.parentElement as HTMLElement | null) ??
+      host!;
+    wikiBubble = openWikiBubble({
+      host: anchor,
+      prefix: wikiPickerPrefix,
+      onClickAccept: () => acceptWikiBubble(),
+    });
+    wikiBubble.setQuery("");
+  }
+
+  /// Pull the current bracket query off the doc, ask the bubble to
+  /// commit, and replace the entire `[[query]]` range with a
+  /// wikiLink atom node. No-op when the bubble has no result to
+  /// commit (empty query, no matches): the user must type or
+  /// dismiss with Escape.
+  function acceptWikiBubble(): void {
+    if (!editor || !wikiBubble) return;
+    const range = findBracketRange(editor);
+    if (!range) {
+      dismissWikiBubble();
+      return;
+    }
+    const picked = wikiBubble.accept();
+    if (!picked) return;
+    dismissWikiBubble();
+    editor
+      .chain()
+      .focus()
+      .deleteRange({ from: range.start, to: range.end })
+      .insertContent({
+        type: "wikiLink",
+        attrs: { target: picked.target, label: picked.label },
+      })
+      .insertContent(" ")
+      .run();
+  }
+
+  function dismissWikiBubble(): void {
+    wikiBubble?.dismiss();
+    wikiBubble = undefined;
+  }
+
+  /// Re-evaluate bubble lifecycle on every selection / doc update.
+  /// Open: keep alive while caret stays between the brackets, push
+  /// the latest query in. Closed: open if a `[[ ]]` range now
+  /// surrounds the caret (covers undo / redo into bracket state).
+  function syncWikiBubble(): void {
+    if (!editor) return;
+    const range = findBracketRange(editor);
+    if (wikiBubble) {
+      if (!range) {
+        dismissWikiBubble();
+        return;
+      }
+      wikiBubble.setQuery(range.query);
     }
   }
 
@@ -1103,6 +1241,64 @@
     outline: none;
   }
   :global(.md-pick-url:focus) { border-color: var(--link); }
+
+  /* Wiki-link bubble. Anchored under the caret while the user
+     types between `[[ ]]`. Non-focus-stealing: no inputs, no
+     tab targets, only mousedown handlers that preserve the
+     editor selection. */
+  :global(.md-wiki-bubble) {
+    background: var(--bg-elev);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.4);
+    width: 360px;
+    font-size: 13px;
+    user-select: none;
+  }
+  :global(.md-wiki-bubble-head) {
+    padding: .35rem .55rem;
+    border-bottom: 1px solid var(--border);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  :global(.md-wiki-bubble-head.is-empty) { color: var(--muted); }
+  :global(.md-wiki-bubble-hint) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .35rem .9rem;
+    padding: .25rem .55rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 11px;
+  }
+  :global(.md-wiki-bubble-hint b) { color: var(--text); font-weight: 600; }
+  :global(.md-wiki-bubble-results) {
+    list-style: none; margin: 0; padding: 0;
+    max-height: 180px; overflow-y: auto;
+  }
+  :global(.md-wiki-bubble-results.is-empty) { display: none; }
+  :global(.md-wiki-bubble-results li) {
+    padding: .3rem .55rem; cursor: pointer;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  :global(.md-wiki-bubble-results li.active),
+  :global(.md-wiki-bubble-results li:hover) { background: var(--hover-bg); }
+  /* Faded separator + accept hint. Hidden when there are no
+     results to commit so an empty bubble doesn't claim Enter
+     does something it cannot. */
+  :global(.md-wiki-bubble-accept) {
+    padding: .3rem .55rem;
+    border-top: 1px dashed var(--border);
+    color: var(--muted);
+    font-size: 11px;
+    text-align: right;
+  }
+  :global(.md-wiki-bubble-accept.is-hidden) { display: none; }
 
   /* Inline images: keep them from blowing the editor column out
      by capping max-width. The native size renders if it fits.

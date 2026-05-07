@@ -1,15 +1,27 @@
-// [[wiki link]] smart node + popover.
+// [[wiki link]] smart node + non-focus-stealing bubble.
 //
-// Behavior:
-//   - Typing `[[` opens a fuzzy file-search popover (queries /api/search).
-//   - Picking a file inserts a `wikiLink` node with the chosen target +
-//     visible label.
-//   - Markdown serialization emits a standard markdown link `[label](path)`
-//     so the file on disk stays portable to any markdown reader.
-//   - Clicking an existing node opens the linked file in a new tab.
+// UX:
+//   - Typing `[[` autopairs to `[[]]` with the caret between the
+//     brackets. The trigger is NOT consumed: the literal brackets
+//     stay in the editor and the caret stays inside.
+//   - A bubble opens under the caret showing a header (the typed
+//     query / doc name), a hint row advertising `# ^ |` modifiers,
+//     a results list (top 5 file matches), and a "<enter> to accept"
+//     row that appears once results are present.
+//   - The bubble does not take focus. The editor's caret remains
+//     active; the user types into the brackets and the bubble
+//     re-renders on each keystroke. Enter / Escape / Arrow keys
+//     are routed to the bubble by Wysiwyg.svelte's keydown handler
+//     while the caret is inside the bracket range.
 //
-// The popover triggers + filtering logic live alongside this node so the
-// extension is self-contained.
+// Markdown:
+//   - On accept the literal `[[query]]` text range is replaced
+//     with a `wikiLink` atom node carrying `target` + `label`.
+//   - The wikiLink node serializes to `[label](path)` so files on
+//     disk stay portable across markdown readers.
+//
+// `#`, `^`, `|` modifier modes are added in follow-up commits;
+// the bubble shell here is shaped to host them.
 
 import { Node, mergeAttributes } from "@tiptap/core";
 
@@ -63,125 +75,178 @@ export const WikiLinkNode = Node.create({
   },
 });
 
-/// Open a popover anchored at `host`. Resolves with the chosen
-/// path or null. `prefix`, when set, scopes the file-search to
-/// that directory: the wiki-link picker for a file inside a git
-/// repo passes the repo root so suggestions stay project-bound
-/// (see scope.svelte.ts and FileResponse.repo_root).
-export function showWikiPicker(
-  host: HTMLElement,
-  pick: (target: string | null) => void,
-  prefix?: string | null,
-): void {
+/// Click handler for existing wiki nodes. Open the target in a new tab.
+export function handleWikiClick(target: string): void {
+  void openInActivePane(target);
+}
+
+// ---------------------------------------------------------------------------
+// Bubble controller
+// ---------------------------------------------------------------------------
+
+export type WikiBubbleAccept =
+  | { kind: "file"; target: string; label: string };
+
+export interface WikiBubbleOpts {
+  /// Element to anchor the bubble to (for positioning). Typically
+  /// the cursor's parent element so the bubble sits under the caret.
+  host: HTMLElement;
+  /// Optional path prefix passed to `/api/search/files`. When set,
+  /// suggestions stay scoped to that subdirectory (used to keep
+  /// project-internal links project-bound).
+  prefix?: string | null;
+  /// Fires when the user clicks a result. The host commits the
+  /// selection the same way it would on Enter (call `accept()` and
+  /// replace the bracket range).
+  onClickAccept?: () => void;
+}
+
+export interface WikiBubble {
+  /// Update the query string (the text between the brackets) and
+  /// re-render. The bubble debounces network calls; safe to call
+  /// on every keystroke.
+  setQuery(query: string): void;
+  /// Move the active result selection by `delta` (+1 / -1), clamping
+  /// to the result list bounds.
+  moveActive(delta: number): void;
+  /// Resolve the currently-highlighted result, or `null` if there
+  /// are no results to commit. Caller is responsible for replacing
+  /// the bracket range in the editor with a wikiLink node.
+  accept(): WikiBubbleAccept | null;
+  /// Tear down the DOM + listeners. Idempotent.
+  dismiss(): void;
+}
+
+export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
   const wrap = document.createElement("div");
-  wrap.className = "md-pick";
+  wrap.className = "md-wiki-bubble";
   wrap.style.position = "absolute";
   // Above any overlay (InlineAssist + SearchPanel sit at 25000),
-  // so [[ inside the assistant prompt's Wysiwyg shows the picker
+  // so [[ inside the assistant prompt's Wysiwyg shows the bubble
   // ABOVE the chat backdrop instead of behind it.
   wrap.style.zIndex = "30000";
 
-  const input = document.createElement("input");
-  input.placeholder = "search files...";
-  input.className = "md-pick-input";
-  wrap.appendChild(input);
+  const head = document.createElement("div");
+  head.className = "md-wiki-bubble-head";
+  wrap.appendChild(head);
+
+  const hint = document.createElement("div");
+  hint.className = "md-wiki-bubble-hint";
+  hint.innerHTML =
+    '<span><b>type #</b> to link heading</span>' +
+    '<span><b>type ^</b> to link blocks</span>' +
+    '<span><b>type |</b> to change display text</span>';
+  wrap.appendChild(hint);
+
   const list = document.createElement("ul");
-  list.className = "md-pick-list";
+  list.className = "md-wiki-bubble-results";
   wrap.appendChild(list);
+
+  const accept = document.createElement("div");
+  accept.className = "md-wiki-bubble-accept";
+  accept.textContent = "⏎  to accept"; // U+23CE return symbol
+  wrap.appendChild(accept);
+
+  document.body.appendChild(wrap);
 
   let active = 0;
   let entries: string[] = [];
+  let lastQuery = "";
+  let alive = true;
+  let searchToken = 0;
 
-  const renderList = () => {
+  const renderHead = (q: string): void => {
+    if (q.trim().length === 0) {
+      head.textContent = "Linked note";
+      head.classList.add("is-empty");
+    } else {
+      head.textContent = q;
+      head.classList.remove("is-empty");
+    }
+  };
+
+  const renderResults = (): void => {
     list.innerHTML = "";
+    if (entries.length === 0) {
+      list.classList.add("is-empty");
+      accept.classList.add("is-hidden");
+      // Re-position even when empty: the bubble height changes.
+      if (wrap.isConnected) positionPopover(opts.host, wrap);
+      return;
+    }
+    list.classList.remove("is-empty");
+    accept.classList.remove("is-hidden");
     entries.forEach((path, i) => {
       const li = document.createElement("li");
       li.textContent = path;
       li.className = i === active ? "active" : "";
-      li.onmousedown = (ev) => {
+      // mousedown (not click) so the editor doesn't lose focus
+      // before the picker can run; keep the editor selection alive
+      // while the bubble commits.
+      li.addEventListener("mousedown", (ev) => {
         ev.preventDefault();
-        cleanup();
-        pick(path);
-      };
+        active = i;
+        opts.onClickAccept?.();
+      });
       list.appendChild(li);
     });
-    // The list-driven height swings between empty (just the input
-    // box) and ~220px (a full result list). Re-position so a
-    // popover that fit below an empty state but won't fit a full
-    // list flips up rather than overflowing the viewport.
-    if (wrap.isConnected) positionPopover(host, wrap);
+    if (wrap.isConnected) positionPopover(opts.host, wrap);
   };
 
-  const search = async (q: string) => {
-    if (!q.trim()) {
+  const runSearch = async (q: string): Promise<void> => {
+    const token = ++searchToken;
+    const trimmed = q.trim();
+    if (!trimmed) {
       entries = [];
-      renderList();
+      active = 0;
+      renderResults();
       return;
     }
     try {
-      const hits = await api.search(q, 10, prefix ?? undefined);
+      const hits = await api.search(trimmed, 5, opts.prefix ?? undefined);
+      if (!alive || token !== searchToken) return;
       entries = hits.map((h) => h.path);
       active = 0;
-      renderList();
+      renderResults();
     } catch {
+      if (!alive || token !== searchToken) return;
       entries = [];
-      renderList();
+      renderResults();
     }
   };
 
-  input.addEventListener("input", () => void search(input.value));
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "ArrowDown") {
-      active = Math.min(active + 1, entries.length - 1);
-      renderList();
-      e.preventDefault();
-    } else if (e.key === "ArrowUp") {
-      active = Math.max(active - 1, 0);
-      renderList();
-      e.preventDefault();
-    } else if (e.key === "Enter") {
-      const sel = entries[active];
-      if (sel) {
-        cleanup();
-        pick(sel);
-      }
-      e.preventDefault();
-    } else if (e.key === "Escape") {
-      cleanup();
-      pick(null);
-      e.preventDefault();
-      // The InlineAssist overlay also listens for Escape at
-      // window level; stop the bubble so dismissing the picker
-      // does not also close the chat dialog around it.
-      e.stopPropagation();
-    }
-  });
+  positionPopover(opts.host, wrap);
+  const stopWatch = watchViewport(opts.host, wrap);
 
-  const onAway = (ev: MouseEvent) => {
-    // Qualify the DOM Node type: this file imports tiptap's Node
-    // for its node spec, which shadows the global one.
-    if (!wrap.contains(ev.target as globalThis.Node)) {
-      cleanup();
-      pick(null);
-    }
-  };
-  document.body.appendChild(wrap);
-  // After append + initial empty list, place the popover. The
-  // search results may grow the popover height as the user types;
-  // viewport-watch + a re-position on every renderList() keeps the
-  // flip direction in sync.
-  positionPopover(host, wrap);
-  const stopWatch = watchViewport(host, wrap);
-  const cleanup = () => {
-    document.removeEventListener("mousedown", onAway);
-    stopWatch();
-    wrap.remove();
-  };
-  document.addEventListener("mousedown", onAway);
-  setTimeout(() => input.focus(), 0);
-}
+  // Initial paint
+  renderHead("");
+  renderResults();
 
-/// Click handler for existing wiki nodes. Open the target in a new tab.
-export function handleWikiClick(target: string): void {
-  void openInActivePane(target);
+  return {
+    setQuery(query: string): void {
+      if (!alive) return;
+      renderHead(query);
+      if (query === lastQuery) return;
+      lastQuery = query;
+      void runSearch(query);
+    },
+    moveActive(delta: number): void {
+      if (!alive || entries.length === 0) return;
+      active = Math.max(0, Math.min(entries.length - 1, active + delta));
+      renderResults();
+    },
+    accept(): WikiBubbleAccept | null {
+      if (!alive || entries.length === 0) return null;
+      const target = entries[active];
+      if (!target) return null;
+      const label = (target.split("/").pop() ?? target).replace(/\.md$/, "");
+      return { kind: "file", target, label };
+    },
+    dismiss(): void {
+      if (!alive) return;
+      alive = false;
+      stopWatch();
+      wrap.remove();
+    },
+  };
 }
