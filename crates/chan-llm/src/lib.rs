@@ -52,6 +52,8 @@ pub mod backends;
 pub mod config;
 pub mod error;
 pub mod keys;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod prompts;
 pub mod session;
 pub mod tools;

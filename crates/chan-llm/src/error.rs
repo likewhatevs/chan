@@ -30,6 +30,8 @@ pub enum LlmError {
     Subprocess(String),
     #[error("keychain: {0}")]
     Keychain(String),
+    #[error("mcp: {0}")]
+    Mcp(String),
 }
 
 impl From<std::io::Error> for LlmError {
