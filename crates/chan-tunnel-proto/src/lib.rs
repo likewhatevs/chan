@@ -12,10 +12,12 @@
 
 mod control;
 mod frame;
+mod h2_duplex;
 mod io;
 
 pub use control::{Hello, HelloAck, ProtocolVersion};
 pub use frame::{decode_frame, encode_frame, FrameError};
+pub use h2_duplex::H2Duplex;
 pub use io::{read_frame, write_frame, IoFrameError};
 
 /// Path the client POSTs to on the public tunnel host. Stable
