@@ -52,7 +52,12 @@ export type FontPrefs = {
   quote: FontSpec;
 };
 
-export type AssistantBackendKind = "claude" | "ollama" | "gemini" | "embedded";
+export type AssistantBackendKind =
+  | "claude"
+  | "ollama"
+  | "gemini"
+  | "claude_cli"
+  | "embedded";
 
 export type ClaudePrefs = {
   /// Optional model override; backend default applies when null.

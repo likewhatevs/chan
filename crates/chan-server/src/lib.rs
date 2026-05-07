@@ -1968,32 +1968,90 @@ struct SetKeyBody {
     key: String,
 }
 
-async fn api_llm_set_anthropic_key(Json(body): Json<SetKeyBody>) -> Response {
-    match chan_llm::keys::set(BackendKind::Anthropic, &body.key) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => err_llm(&e),
+/// Set a per-backend key with a verify + file-fallback flow:
+///
+///   1. Try keychain set. On Linux / Windows / signed-binary macOS
+///      this is the secure path and is what we want to land.
+///   2. Verify the keychain actually persisted: a known macOS issue
+///      with unsigned dev binaries is that Security.framework
+///      silently no-ops some operations (set_password returns Ok
+///      but get_password returns NoEntry afterward). We
+///      `keychain_lookup` to detect that case.
+///   3. When the keychain didn't stick, write to the on-disk file
+///      tier (`<config>/chan/llm.toml`'s [keys] section, mode 0600).
+///      That tier is keyed off LlmConfig.keys and walked by
+///      `keys::resolve` last; either way the key reaches the
+///      backend.
+///
+/// On a properly-signed install the file tier never gets touched;
+/// on dev binaries it's the working path until signing lands.
+async fn set_backend_key(state: &Arc<AppState>, kind: BackendKind, key: String) -> Response {
+    if let Err(e) = chan_llm::keys::set(kind, &key) {
+        return err_llm(&e);
     }
+    let kept = chan_llm::keys::keychain_lookup(kind).is_some();
+    if !kept {
+        let mut cfg = state.llm_config.lock().expect("llm config poisoned");
+        match kind {
+            BackendKind::Anthropic => cfg.keys.anthropic = Some(key),
+            BackendKind::Gemini => cfg.keys.gemini = Some(key),
+            // Ollama and ClaudeCli are keyless; the routes shouldn't
+            // call this path for them, but if they do we drop the
+            // value silently rather than poison the file.
+            BackendKind::Ollama | BackendKind::ClaudeCli => {}
+        }
+        if let Err(e) = cfg.save() {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("save llm config: {e}"),
+            );
+        }
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 
-async fn api_llm_clear_anthropic_key() -> Response {
-    match chan_llm::keys::clear(BackendKind::Anthropic) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => err_llm(&e),
+/// Clear a per-backend key. Mirrors set_backend_key: drop the
+/// keychain entry AND zero the file fallback so the next
+/// resolve() walks back to env-or-missing.
+async fn clear_backend_key(state: &Arc<AppState>, kind: BackendKind) -> Response {
+    if let Err(e) = chan_llm::keys::clear(kind) {
+        return err_llm(&e);
     }
+    let mut cfg = state.llm_config.lock().expect("llm config poisoned");
+    match kind {
+        BackendKind::Anthropic => cfg.keys.anthropic = None,
+        BackendKind::Gemini => cfg.keys.gemini = None,
+        BackendKind::Ollama | BackendKind::ClaudeCli => {}
+    }
+    if let Err(e) = cfg.save() {
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("save llm config: {e}"),
+        );
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 
-async fn api_llm_set_gemini_key(Json(body): Json<SetKeyBody>) -> Response {
-    match chan_llm::keys::set(BackendKind::Gemini, &body.key) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => err_llm(&e),
-    }
+async fn api_llm_set_anthropic_key(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SetKeyBody>,
+) -> Response {
+    set_backend_key(&state, BackendKind::Anthropic, body.key).await
 }
 
-async fn api_llm_clear_gemini_key() -> Response {
-    match chan_llm::keys::clear(BackendKind::Gemini) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => err_llm(&e),
-    }
+async fn api_llm_clear_anthropic_key(State(state): State<Arc<AppState>>) -> Response {
+    clear_backend_key(&state, BackendKind::Anthropic).await
+}
+
+async fn api_llm_set_gemini_key(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SetKeyBody>,
+) -> Response {
+    set_backend_key(&state, BackendKind::Gemini, body.key).await
+}
+
+async fn api_llm_clear_gemini_key(State(state): State<Arc<AppState>>) -> Response {
+    clear_backend_key(&state, BackendKind::Gemini).await
 }
 
 /// One model entry in a catalog response. `supports_tools` is
