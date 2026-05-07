@@ -12,6 +12,7 @@
 // actions instead.
 
 import { api } from "../api/client";
+import { ApiError } from "../api/errors";
 import { isMobile, isTablet } from "../api/native";
 import { isEditableText } from "./fileTypes";
 import { notify } from "./notify.svelte";
@@ -35,6 +36,13 @@ export type FileTab = {
   content: string;
   /// Last persisted content (for dirty detection).
   saved: string;
+  /// Mtime returned by the last successful read or save. Used as
+  /// the CAS token (expected_mtime) on subsequent saves so an
+  /// external edit between reads is detected as a 409 conflict
+  /// rather than silently overwriting the disk-side change.
+  /// Null when the file didn't exist yet (saved-from-empty); the
+  /// server treats Some(None) as "expecting a fresh file".
+  savedMtime: number | null;
   mode: Mode;
   loading: boolean;
   error: string | null;
@@ -131,6 +139,7 @@ async function loadTabContent(
     if (t) {
       t.content = r.content;
       t.saved = r.content;
+      t.savedMtime = r.mtime ?? null;
       t.repoRoot = r.repo_root ?? null;
     }
   } catch (e) {
@@ -161,6 +170,7 @@ export async function openInPane(paneId: string, path: string): Promise<void> {
     path,
     content: "",
     saved: "",
+    savedMtime: null,
     mode: "wysiwyg",
     loading: true,
     error: null,
@@ -277,6 +287,7 @@ function cloneTab(src: Tab): Tab {
     path: src.path,
     content: src.content,
     saved: src.saved,
+    savedMtime: src.savedMtime,
     mode: src.mode,
     loading: src.loading,
     error: src.error,
@@ -409,13 +420,98 @@ export function isDirty(t: Tab): boolean {
   return t.content !== t.saved;
 }
 
-// ---- autosave -----------------------------------------------------------
+// ---- autosave + CAS conflict prompt -------------------------------------
 
 // Debounce window for idle autosave. Picked short enough that data loss
 // from a crash is small, long enough that bursty typing doesn't
 // hammer the disk + watcher.
 const AUTOSAVE_DEBOUNCE_MS = 800;
 const autosaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/// Conflict dialog state. Populated when a save returns 409 (an
+/// external edit landed since we last read this tab). Mounted by
+/// ConflictModal.svelte; closed via reloadConflictedTab,
+/// overwriteConflictedTab, or dismissConflict.
+export const conflictDialog = $state<{
+  open: boolean;
+  /// Tab the conflict is for. Null when the dialog is closed.
+  tabId: string | null;
+  /// Tab path for display in the dialog (the user shouldn't have to
+  /// guess which tab triggered the prompt).
+  path: string;
+  /// Mtime currently on disk per the server's 409 body. Used as the
+  /// next CAS token whether the user reloads (refetch with this
+  /// token) or overwrites (write with this token; another conflict
+  /// re-prompts if a third edit landed in the meantime).
+  currentMtime: number | null;
+}>({ open: false, tabId: null, path: "", currentMtime: null });
+
+export function dismissConflict(): void {
+  conflictDialog.open = false;
+  conflictDialog.tabId = null;
+  conflictDialog.path = "";
+  conflictDialog.currentMtime = null;
+}
+
+function findFileTabById(tabId: string): { paneId: string; tab: FileTab } | null {
+  for (const [paneId, node] of Object.entries(layout.nodes)) {
+    if (node.kind !== "leaf") continue;
+    const tab = node.tabs.find((t) => t.id === tabId);
+    if (tab && tab.kind === "file") return { paneId, tab };
+  }
+  return null;
+}
+
+/// Discard the in-memory buffer for the conflicted tab and re-fetch
+/// from disk. The user picked Reload: their unsaved edits go away,
+/// the disk version takes over.
+export async function reloadConflictedTab(): Promise<void> {
+  const tabId = conflictDialog.tabId;
+  dismissConflict();
+  if (!tabId) return;
+  const found = findFileTabById(tabId);
+  if (!found) return;
+  await loadTabContent(found.paneId, found.tab.id, found.tab.path);
+}
+
+/// Adopt the server-reported on-disk mtime as the new CAS token and
+/// save the in-memory buffer. The CAS check matches, so the write
+/// goes through (unless ANOTHER external edit landed since the 409
+/// was issued, in which case we re-prompt).
+export async function overwriteConflictedTab(): Promise<void> {
+  const tabId = conflictDialog.tabId;
+  const currentMtime = conflictDialog.currentMtime;
+  dismissConflict();
+  if (!tabId) return;
+  const found = findFileTabById(tabId);
+  if (!found) return;
+  found.tab.savedMtime = currentMtime;
+  await performSave(found.tab);
+}
+
+/// Single source of truth for "send this tab's content to the
+/// server". Both autosave and explicit saveTab funnel through here.
+/// On 409, opens the conflict dialog and returns; the dialog's
+/// Reload / Overwrite buttons drive the recovery.
+async function performSave(t: FileTab): Promise<void> {
+  try {
+    const r = await api.write(t.path, t.content, t.savedMtime);
+    t.saved = t.content;
+    t.savedMtime = r.mtime ?? null;
+    t.error = null;
+    mirrorToSiblings(t.path, t.content, t.id);
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 409) {
+      const data = e.data as { current_mtime?: number | null } | null;
+      conflictDialog.open = true;
+      conflictDialog.tabId = t.id;
+      conflictDialog.path = t.path;
+      conflictDialog.currentMtime = data?.current_mtime ?? null;
+      return;
+    }
+    throw e;
+  }
+}
 
 /// Schedule (or reschedule) a save for `tab` in `pane`. Multiple
 /// rapid calls coalesce: only the last one's timer fires.
@@ -430,10 +526,7 @@ export function scheduleAutosave(paneId: string, tabId: string): void {
     if (!t || t.kind !== "file") return;
     if (t.loading || t.content === t.saved) return;
     try {
-      await api.write(t.path, t.content);
-      t.saved = t.content;
-      t.error = null;
-      mirrorToSiblings(t.path, t.content, t.id);
+      await performSave(t);
     } catch (e) {
       t.error = `autosave failed: ${(e as Error).message}`;
     }
@@ -572,6 +665,7 @@ export async function restoreLayout(s: SerNode): Promise<void> {
           path: sertab.p ?? "",
           content: "",
           saved: "",
+          savedMtime: null,
           mode: sertab.m ?? "wysiwyg",
           loading: true,
           error: null,
@@ -622,7 +716,33 @@ function firstLeafId(nodeId: string): string {
 }
 
 export async function saveTab(t: Tab): Promise<void> {
-  await api.write(t.path, t.content);
-  t.saved = t.content;
-  mirrorToSiblings(t.path, t.content, t.id);
+  if (t.kind !== "file") return;
+  await performSave(t);
+}
+
+/// Refresh a non-dirty tab's content from disk. Called when the
+/// watcher fires an event for an open file's path. If the buffer
+/// is dirty we leave it alone; the user's next save will hit a 409
+/// and the conflict dialog will surface the situation.
+export async function refreshTabFromDisk(tabId: string): Promise<void> {
+  const found = findFileTabById(tabId);
+  if (!found) return;
+  if (found.tab.content !== found.tab.saved) return;
+  await loadTabContent(found.paneId, found.tab.id, found.tab.path);
+}
+
+/// Look up every open tab for `path`, regardless of pane. The
+/// watcher subscriber uses this to fan an external-edit event out
+/// to the (potentially multiple) tabs viewing the same file.
+export function tabsForPath(path: string): { paneId: string; tabId: string }[] {
+  const out: { paneId: string; tabId: string }[] = [];
+  for (const [paneId, node] of Object.entries(layout.nodes)) {
+    if (node.kind !== "leaf") continue;
+    for (const t of node.tabs) {
+      if (t.kind === "file" && t.path === path) {
+        out.push({ paneId, tabId: t.id });
+      }
+    }
+  }
+  return out;
 }

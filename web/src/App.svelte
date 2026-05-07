@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from "svelte";
   import BottomPill from "./components/BottomPill.svelte";
   import CloseGuardModal from "./components/CloseGuardModal.svelte";
+  import ConflictModal from "./components/ConflictModal.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
   import FileBrowserOverlay from "./components/FileBrowserOverlay.svelte";
   import GraphPanel from "./components/GraphPanel.svelte";
@@ -353,6 +354,10 @@
 <SettingsPanel />
 <FileBrowserOverlay />
 <CloseGuardModal />
+<!-- CAS conflict prompt: surfaces when a save returns 409. Mounted
+     once per window so any pane can trigger it; the dialog itself
+     keys off `conflictDialog.tabId`. -->
+<ConflictModal />
 <!-- Disconnect overlay applies in every mode: any window is just
      as broken when the watcher dies, regardless of layout. -->
 <DisconnectOverlay />

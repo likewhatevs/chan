@@ -171,8 +171,16 @@ export const api = {
   },
   list: () => req<TreeEntry[]>("GET", "/api/files"),
   read: (path: string) => req<FileResponse>("GET", `/api/files/${encPath(path)}`),
-  write: (path: string, content: string) =>
-    req<void>("PUT", `/api/files/${encPath(path)}`, { content }),
+  /// Persist `content` at `path`. When `expectedMtime` is provided,
+  /// the server CAS-writes via Drive::write_text_if_unchanged and
+  /// rejects with 409 + { current_mtime } if the on-disk mtime
+  /// differs (an external edit landed since the client last read).
+  /// Returns the new mtime so callers store it as the next CAS token.
+  write: (path: string, content: string, expectedMtime?: number | null) =>
+    req<{ mtime: number | null }>("PUT", `/api/files/${encPath(path)}`, {
+      content,
+      ...(expectedMtime !== undefined ? { expected_mtime: expectedMtime } : {}),
+    }),
   create: (path: string, isDir: boolean, content?: string) =>
     req<void>("POST", "/api/files", { path, is_dir: isDir, content }),
   remove: (path: string) => req<void>("DELETE", `/api/files/${encPath(path)}`),

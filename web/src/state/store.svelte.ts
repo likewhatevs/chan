@@ -17,6 +17,7 @@ import {
   defaultScopeId,
   type ScopeOption,
 } from "./scope.svelte";
+import { refreshTabFromDisk, tabsForPath } from "./tabs.svelte";
 export const drive = $state<{ info: DriveInfo | null }>({ info: null });
 
 export const tree = $state<{ entries: TreeEntry[]; loading: boolean }>({
@@ -169,10 +170,28 @@ function onWatchEvent(e: unknown): void {
     // siblings. Anything we'd react to here is a no-op today.
     return;
   }
-  // Filesystem events: refresh the tree (file set may have changed)
-  // AND the drive payload (any preference edit ripples through).
+  // Filesystem event from chan-server's WatchBroadcast. Server-side
+  // dedupe already drops echoes of our own writes (1500 ms window),
+  // so anything that lands here is an actual external edit.
+  //
+  // Two reactions:
+  //   1. Refresh the tree + drive payload (file set / preferences
+  //      may have changed).
+  //   2. Refresh the buffer of any open tab pointing at the changed
+  //      path so the editor view doesn't drift behind disk. Dirty
+  //      buffers are left alone; the next save's CAS check surfaces
+  //      the conflict via ConflictModal.
   void refreshTree();
   scheduleDriveRefresh();
+  const inner = (e as { event?: { path?: string; to?: string } } | null)?.event;
+  const paths = [inner?.path, inner?.to].filter(
+    (p): p is string => typeof p === "string" && p.length > 0,
+  );
+  for (const p of paths) {
+    for (const { tabId } of tabsForPath(p)) {
+      void refreshTabFromDisk(tabId);
+    }
+  }
 }
 
 function onWatchStatus(status: WsStatus): void {

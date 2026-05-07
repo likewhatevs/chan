@@ -4,10 +4,17 @@
 // pulling in the rest of `client.ts` and creating a cycle.
 
 export class ApiError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-  ) {
+  public status: number;
+  /// Parsed JSON body when the server returned one (e.g. the 409
+  /// conflict body { current_mtime } from the CAS write path).
+  /// Null when the body wasn't JSON or was empty. Callers that
+  /// care about a specific status code branch on it without paying
+  /// the parse on the happy path.
+  public data: unknown | null;
+
+  constructor(status: number, message: string, data?: unknown) {
     super(message);
+    this.status = status;
+    this.data = data ?? null;
   }
 }

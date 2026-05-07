@@ -106,7 +106,28 @@ export async function request<T>(
     const res = await fetch(path, init);
     if (!res.ok) {
       const text = await res.text().catch(() => res.statusText);
-      throw new ApiError(res.status, text || res.statusText);
+      // Try to parse the body as JSON so structured error responses
+      // (the 409 { current_mtime } conflict body, the standard
+      // { error } wrapper) reach the caller as ApiError.data. Any
+      // non-JSON body falls back to the textual message.
+      let data: unknown = null;
+      let message = text || res.statusText;
+      if (text) {
+        try {
+          data = JSON.parse(text);
+          if (
+            data &&
+            typeof data === "object" &&
+            "error" in (data as Record<string, unknown>) &&
+            typeof (data as { error: unknown }).error === "string"
+          ) {
+            message = (data as { error: string }).error;
+          }
+        } catch {
+          // Not JSON; keep the raw text as the message.
+        }
+      }
+      throw new ApiError(res.status, message, data);
     }
     const text = await res.text();
     if (!text) return undefined as T;
