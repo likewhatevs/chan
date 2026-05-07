@@ -10,11 +10,12 @@
 //                                   (filesystem contents untouched)
 //   chan rename <path> <name>       set / clear a drive's display
 //                                   name
-//   chan serve [--port N]           run the HTTP server bound to
-//                                   127.0.0.1; the embedded web
-//                                   editor talks to this. NOT
-//                                   IMPLEMENTED YET; routes port
-//                                   in follow-up commits.
+//   chan serve [--host H --port N]  run the HTTP server. Defaults
+//                                   to 127.0.0.1 (loopback only);
+//                                   the embedded web editor talks
+//                                   to this. NOT IMPLEMENTED YET;
+//                                   routes port in follow-up
+//                                   commits.
 //   chan index <path>               rebuild the search index +
 //                                   graph for the drive
 //   chan search <path> <query>      query the BM25 index
@@ -25,7 +26,7 @@
 // cross-process writer lock) apply uniformly.
 
 use std::io::{IsTerminal, Write};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -70,12 +71,18 @@ enum Command {
         /// Pass `""` to clear the name.
         name: String,
     },
-    /// Run the HTTP server bound to 127.0.0.1.
+    /// Run the HTTP server. Defaults to 127.0.0.1 (loopback only).
     ///
     /// NOT IMPLEMENTED YET. Routes are being ported from the old
     /// chan-core in follow-up commits.
     Serve {
         path: Option<PathBuf>,
+        /// Host address to bind. Default 127.0.0.1 (loopback). Use
+        /// 0.0.0.0 to listen on all interfaces. chan has no TLS and
+        /// only a bearer-token gate, so any non-loopback host
+        /// exposes your drive in plaintext on that network.
+        #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
+        host: IpAddr,
         #[arg(long, default_value_t = 8787)]
         port: u16,
         /// Skip the per-launch bearer-token gate. For tests and the
@@ -106,6 +113,7 @@ fn main() -> Result<()> {
         Command::Rename { path, name } => cmd_rename(path, name),
         Command::Serve {
             path,
+            host,
             port,
             no_token,
         } => {
@@ -115,7 +123,7 @@ fn main() -> Result<()> {
                 .enable_all()
                 .build()
                 .context("building tokio runtime")?;
-            rt.block_on(cmd_serve(path, port, no_token))
+            rt.block_on(cmd_serve(host, port, path, no_token))
         }
         Command::Index { path } => cmd_index(path),
         Command::Search { path, query, limit } => cmd_search(path, query, limit),
@@ -329,7 +337,7 @@ fn cmd_rename(path: PathBuf, name: String) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_serve(path: Option<PathBuf>, port: u16, no_token: bool) -> Result<()> {
+async fn cmd_serve(host: IpAddr, port: u16, path: Option<PathBuf>, no_token: bool) -> Result<()> {
     let lib = library()?;
     // Resolve the drive root: explicit arg first, then the registry
     // default, then the platform default. Auto-register so users
@@ -344,9 +352,25 @@ async fn cmd_serve(path: Option<PathBuf>, port: u16, no_token: bool) -> Result<(
     ensure_drive_named(&lib, &root, None)?;
     let drive = lib.open_drive(&root)?;
 
-    let addr: SocketAddr = format!("127.0.0.1:{port}")
-        .parse()
-        .context("parsing bind address")?;
+    // Loud warning: the auth model assumes loopback. No TLS, only a
+    // bearer token. Binding off-loopback exposes the drive in the
+    // clear to anyone on that network, including unauthenticated
+    // probes if --no-token is also set.
+    if !host.is_loopback() {
+        eprintln!(
+            "WARNING: binding to {host} exposes chan on a non-loopback \
+             interface. There is no TLS; the bearer token is sent in \
+             plaintext. Do not use this on an untrusted network."
+        );
+        if no_token {
+            eprintln!(
+                "WARNING: --no-token + non-loopback host = open read/write \
+                 access to your drive for anyone who can reach this port."
+            );
+        }
+    }
+
+    let addr = SocketAddr::new(host, port);
     let config = ServeConfig { addr, no_token };
     chan_server::serve(lib, drive, config)
         .await
