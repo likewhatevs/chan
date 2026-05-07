@@ -74,7 +74,27 @@ Install the pre-push hook once per clone:
 ```
 
 The hook runs `cargo fmt --check`, `cargo clippy -- -D warnings`,
-and `cargo test --all-targets` before every push, mirroring CI.
-A passing local push will not fail in GitHub Actions once CI
-lands (cross-repo auth between two private repos is the open
-item; tracked in `design.md`).
+`cargo test --all-targets`, and `cargo build --no-default-features`
+with `RUSTFLAGS=-D warnings` before every push, mirroring CI. A
+passing local push therefore will not fail in GitHub Actions.
+
+### CI cross-repo auth
+
+CI needs to clone two private sibling repos to resolve path deps:
+
+  chan-writer/chan-core  (`path = "../chan-core"`)
+  chan-writer/chan-llm   (`path = "../chan-llm"`)
+
+One-time setup:
+
+1. Create a fine-grained GitHub Personal Access Token at
+   https://github.com/settings/personal-access-tokens with
+   `Contents: Read` access on `chan-writer/chan-core` and
+   `chan-writer/chan-llm`. One PAT covers both.
+2. On `chan-writer/chan`'s `Settings -> Secrets and
+   variables -> Actions`, add a secret named
+   `CHAN_REPO_TOKEN` with the PAT as its value.
+
+Until the secret is set, CI's checkout-of-the-siblings step
+fails. The `fmt` job runs without it (no cross-repo dep needed
+for rustfmt).

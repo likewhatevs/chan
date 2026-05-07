@@ -1,0 +1,100 @@
+name: CI
+
+# Toolchain version is pinned in rust-toolchain.toml; CI uses
+# actions-rust-lang/setup-rust-toolchain to read it.
+#
+# Cross-repo auth: this repo depends on two private siblings via
+# path deps:
+#   chan-writer/chan-core  (path = "../chan-core")
+#   chan-writer/chan-llm   (path = "../chan-llm")
+# CI clones both into sibling directories using a fine-scoped
+# Personal Access Token stored as the CHAN_REPO_TOKEN repo
+# secret. See README's "Contributing" section for the PAT setup.
+#
+# The frontend bundle (web/dist/) is NOT built in CI today.
+# rust-embed accepts an empty dist (build.rs creates the dir if
+# missing) so the cargo build still succeeds; the `chan serve`
+# binary just serves a "build the frontend first" 404 for the
+# SPA shell. Adding `npm install + npm run build` to CI is a
+# follow-up if we want to gate on bundle-build success too.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: chan
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain-file: chan/rust-toolchain.toml
+      - run: cargo fmt --check
+        working-directory: chan
+
+  test:
+    name: clippy + test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: chan
+      - uses: actions/checkout@v4
+        with:
+          repository: chan-writer/chan-core
+          path: chan-core
+          token: ${{ secrets.CHAN_REPO_TOKEN }}
+      - uses: actions/checkout@v4
+        with:
+          repository: chan-writer/chan-llm
+          path: chan-llm
+          token: ${{ secrets.CHAN_REPO_TOKEN }}
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain-file: chan/rust-toolchain.toml
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: chan
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: chan
+      - run: cargo test --all-targets
+        working-directory: chan
+
+  no-default-features:
+    name: build (no default features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: chan
+      - uses: actions/checkout@v4
+        with:
+          repository: chan-writer/chan-core
+          path: chan-core
+          token: ${{ secrets.CHAN_REPO_TOKEN }}
+      - uses: actions/checkout@v4
+        with:
+          repository: chan-writer/chan-llm
+          path: chan-llm
+          token: ${{ secrets.CHAN_REPO_TOKEN }}
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain-file: chan/rust-toolchain.toml
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: chan
+      - run: cargo build --no-default-features
+        working-directory: chan
