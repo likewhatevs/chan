@@ -1,0 +1,83 @@
+name: CI
+
+# Toolchain version is pinned in rust-toolchain.toml; CI uses
+# actions-rust-lang/setup-rust-toolchain to read it. Bumping
+# Rust = edit rust-toolchain.toml in this repo + chan-core's;
+# CI follows automatically.
+#
+# Cross-repo auth: chan-llm depends on chan-writer/chan-core
+# via `path = "../chan-core"`. CI clones chan-core into a
+# sibling directory using a fine-scoped Personal Access Token
+# stored as the CHAN_REPO_TOKEN repo secret. See README's
+# "Contributing" section for the PAT setup.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: chan-llm
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain-file: chan-llm/rust-toolchain.toml
+      - run: cargo fmt --check
+        working-directory: chan-llm
+
+  test:
+    name: clippy + test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: chan-llm
+      - uses: actions/checkout@v4
+        with:
+          repository: chan-writer/chan-core
+          path: chan-core
+          token: ${{ secrets.CHAN_REPO_TOKEN }}
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain-file: chan-llm/rust-toolchain.toml
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: chan-llm
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: chan-llm
+      - run: cargo test --all-targets
+        working-directory: chan-llm
+
+  no-default-features:
+    name: build (no default features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: chan-llm
+      - uses: actions/checkout@v4
+        with:
+          repository: chan-writer/chan-core
+          path: chan-core
+          token: ${{ secrets.CHAN_REPO_TOKEN }}
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain-file: chan-llm/rust-toolchain.toml
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: chan-llm
+      - run: cargo build --no-default-features
+        working-directory: chan-llm

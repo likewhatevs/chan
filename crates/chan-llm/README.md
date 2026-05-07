@@ -60,3 +60,25 @@ Install the pre-push hook once per clone:
 Same gate as the rest of the chan-writer org: `cargo fmt --check`,
 `cargo clippy --all-targets -- -D warnings`, `cargo test`, and a
 no-default-features build under `RUSTFLAGS=-D warnings`.
+
+### CI cross-repo auth
+
+CI needs to clone `chan-writer/chan-core` (a private repo) to
+resolve the `path = "../chan-core"` dep. One-time setup:
+
+1. Create a fine-grained GitHub Personal Access Token at
+   https://github.com/settings/personal-access-tokens with
+   `Contents: Read` access on `chan-writer/chan-core` and
+   `chan-writer/chan-llm` (one PAT covers both downstream
+   repos so you don't have to manage three).
+2. On each downstream repo's `Settings -> Secrets and
+   variables -> Actions`, add a secret named
+   `CHAN_REPO_TOKEN` with the PAT as its value.
+   - `chan-writer/chan-llm`     needs read on chan-core.
+   - `chan-writer/chan`         needs read on chan-core +
+                                chan-llm.
+   - `chan-writer/chan-core`    standalone; no secret needed.
+
+Until the secret is set, CI's checkout-of-the-sibling step
+fails with a 404. The `fmt` job still runs (no cross-repo
+dep needed for rustfmt).
