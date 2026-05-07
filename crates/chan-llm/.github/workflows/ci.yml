@@ -8,7 +8,7 @@ name: CI
 # Cross-repo auth: chan-llm depends on chan-writer/chan-core
 # via `path = "../chan-core"`. CI clones chan-core into a
 # sibling directory using a fine-scoped Personal Access Token
-# stored as the CHAN_REPO_TOKEN repo secret. See README's
+# stored as the chan_ci repo secret. See README's
 # "Contributing" section for the PAT setup.
 
 on:
@@ -49,7 +49,7 @@ jobs:
         with:
           repository: chan-writer/chan-core
           path: chan-core
-          token: ${{ secrets.CHAN_REPO_TOKEN }}
+          token: ${{ secrets.chan_ci }}
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain-file: chan-llm/rust-toolchain.toml
@@ -72,7 +72,7 @@ jobs:
         with:
           repository: chan-writer/chan-core
           path: chan-core
-          token: ${{ secrets.CHAN_REPO_TOKEN }}
+          token: ${{ secrets.chan_ci }}
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain-file: chan-llm/rust-toolchain.toml

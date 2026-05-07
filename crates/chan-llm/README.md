@@ -73,7 +73,7 @@ resolve the `path = "../chan-core"` dep. One-time setup:
    repos so you don't have to manage three).
 2. On each downstream repo's `Settings -> Secrets and
    variables -> Actions`, add a secret named
-   `CHAN_REPO_TOKEN` with the PAT as its value.
+   `chan_ci` with the PAT as its value.
    - `chan-writer/chan-llm`     needs read on chan-core.
    - `chan-writer/chan`         needs read on chan-core +
                                 chan-llm.
