@@ -1,31 +1,48 @@
 //! ClaudeCli backend: shell-executor wrapper around the `claude` CLI.
 //!
-//! v1 design: claude is a full agent, so we run it as a black box.
-//! We hand it a prompt and read its stream-json NDJSON output; we
-//! do NOT mediate its tool calls. Concretely this means:
+//! Two modes, selected at construction time:
 //!
-//!   - claude edits files directly under `cwd` (the drive root)
+//! ### v1: black-box (legacy, `mcp = None`)
+//!
+//! Claude runs as a full agent. We hand it a prompt and read its
+//! stream-json NDJSON output; we do NOT mediate its tool calls.
+//! Concretely:
+//!
+//!   - Claude edits files directly under `cwd` (the drive root)
 //!     using its own Read / Write / Edit / Bash tools.
 //!   - chan-llm's tool sandbox (path scope, editable-text gate,
 //!     auto_apply_writes confirmation) is NOT applied to those
-//!     edits. That gap is honest: this backend is a subprocess
-//!     that does its own thing.
+//!     edits.
 //!   - We launch claude with `--permission-mode bypassPermissions`
 //!     because there is no human in front of claude's stdin to
-//!     answer its native permission prompts. The permission UI
-//!     belongs in the host (chan-server / native shell) wrapping
-//!     chan-llm, not inside claude.
+//!     answer its native permission prompts.
 //!
-//! `LlmSession::send` reflects this by force-enabling
-//! `auto_apply_writes` on the `ToolContext` and skipping
-//! `tool_schemas` when the backend is `ClaudeCli`. There is no way
-//! to honor `auto_apply_writes = false` for this backend in v1.
+//! v1 stays available for hosts that don't ship a chan-llm-mcp
+//! capable binary; tests cover this path.
 //!
-//! v2 (saved as project memory) closes the gap by exposing
-//! chan-llm's tools as an MCP server and disabling claude's own
-//! write/edit tools via `--allowedTools`, so the agent's tool
-//! calls flow back through `tools::execute` and stage as
-//! `Pending` when the user hasn't enabled auto-apply.
+//! ### v2: MCP-mediated (`mcp = Some(McpWiring { .. })`)
+//!
+//! Closes the gap by routing claude's writes through chan-llm's
+//! MCP server. The host (chan-server, future native shell) supplies
+//! an `mcp_command` (e.g. `["chan", "__mcp", "/drive/path"]`); we
+//! write a one-shot `--mcp-config` JSON pointing at it and launch
+//! claude with:
+//!
+//!   - `--mcp-config <tmp>.json` pointing at the chan-llm MCP
+//!     server (the host binary in stdio mode).
+//!   - `--allowedTools` enumerating chan-llm's MCP tools plus
+//!     claude's read-only natives (Read / Glob / Grep). Claude
+//!     auto-approves these without an interactive prompt.
+//!   - `--disallowedTools Write,Edit,MultiEdit,NotebookEdit,Bash`
+//!     so writes are forced through chan-llm's tools, where
+//!     chan-core's path sandbox + editable-text gate apply.
+//!   - `--permission-mode default` (we drop `bypassPermissions`):
+//!     anything not allow-listed blocks, which matches the contract.
+//!
+//! The MCP subprocess receives `--auto-apply` only when the user
+//! enabled it; otherwise `write_file` returns a "deferred" error
+//! to claude (the host-approval side channel for resuming claude
+//! mid-call is tracked in chan-llm issue #1).
 //!
 //! Wire format:
 //!
@@ -59,6 +76,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::Value as Json;
+use tempfile::NamedTempFile;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
@@ -75,12 +93,51 @@ pub fn default_cmd() -> Vec<String> {
     vec!["claude".to_string()]
 }
 
+/// Host-supplied wiring that switches the backend into v2
+/// MCP-mediated mode. `command` is the full argv used to spawn the
+/// MCP server (typically the host binary plus a hidden subcommand
+/// and the drive path); `auto_apply_writes` mirrors `LlmConfig`'s
+/// flag and decides whether the MCP subprocess is launched with
+/// `--auto-apply`.
+#[derive(Debug, Clone)]
+pub struct McpWiring {
+    pub command: Vec<String>,
+    pub auto_apply_writes: bool,
+}
+
+/// MCP server name as it appears under `mcpServers` in the
+/// generated `--mcp-config` JSON. Surfaced to claude as the
+/// `mcp__<server>__<tool>` tool prefix and used by the
+/// `--allowedTools` allowlist below.
+const MCP_SERVER_KEY: &str = "chan";
+
+/// Tools claude is allowed to call without an interactive prompt.
+/// Read / Glob / Grep are claude's native read-only tools; they
+/// can touch any file under cwd but don't write. The `mcp__`
+/// entries are the chan-llm MCP server's tools (their dispatch
+/// runs through chan-core's gates).
+const ALLOWED_TOOLS: &str = concat!(
+    "Read,Glob,Grep,",
+    "mcp__chan__read_file,",
+    "mcp__chan__write_file,",
+    "mcp__chan__list_files,",
+    "mcp__chan__search_content",
+);
+
+/// Tools claude is explicitly NOT allowed to use in v2 mode.
+/// Forces every mutation through chan-llm's MCP `write_file`,
+/// where chan-core's path sandbox and editable-text gate apply.
+/// Bash is denied because it would otherwise let the agent
+/// reach around the gates.
+const DISALLOWED_TOOLS: &str = "Write,Edit,MultiEdit,NotebookEdit,Bash";
+
 #[derive(Debug)]
 pub struct ClaudeCliBackend {
     cmd: Vec<String>,
     extra_args: Vec<String>,
     model: Option<String>,
     cwd: PathBuf,
+    mcp: Option<McpWiring>,
 }
 
 impl ClaudeCliBackend {
@@ -89,12 +146,14 @@ impl ClaudeCliBackend {
         extra_args: Vec<String>,
         model: Option<String>,
         cwd: PathBuf,
+        mcp: Option<McpWiring>,
     ) -> Self {
         Self {
             cmd,
             extra_args,
             model,
             cwd,
+            mcp,
         }
     }
 }
@@ -123,12 +182,41 @@ impl Backend for ClaudeCliBackend {
             .arg("--input-format")
             .arg("text")
             .arg("--verbose")
-            .arg("--permission-mode")
-            .arg("bypassPermissions")
             .current_dir(&self.cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
+        // v1 black-box mode: no host-supplied MCP wiring, so we
+        // bypass claude's per-tool prompts and let it use its own
+        // write/edit/bash tools against the drive directly. v2
+        // mode: --allowedTools auto-approves the chan-llm MCP
+        // tools (and read-only natives) while --disallowedTools
+        // blocks claude's native writes; the default permission
+        // mode applies to everything else.
+        let mcp_config_file = match self.mcp.as_ref() {
+            None => {
+                command.arg("--permission-mode").arg("bypassPermissions");
+                None
+            }
+            Some(wiring) => {
+                let file = match write_mcp_config(wiring) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        listener.on_error(format!("claude_cli mcp-config: {e}"));
+                        return Outcome::error();
+                    }
+                };
+                command
+                    .arg("--mcp-config")
+                    .arg(file.path())
+                    .arg("--allowedTools")
+                    .arg(ALLOWED_TOOLS)
+                    .arg("--disallowedTools")
+                    .arg(DISALLOWED_TOOLS);
+                Some(file)
+            }
+        };
 
         if let Some(sys) = system.as_deref() {
             command.arg("--append-system-prompt").arg(sys);
@@ -294,15 +382,55 @@ impl Backend for ClaudeCliBackend {
             listener.on_error("claude_cli: stream ended without a result event".into());
         }
 
+        // Drop the temp config now that claude has exited; named
+        // explicit so the lifetime tie is obvious to readers.
+        drop(mcp_config_file);
+
         Outcome {
             assistant_text,
-            // v1: claude runs its own tool loop. We don't surface
-            // tool calls upward for the orchestrator to execute,
-            // so the loop terminates after this turn.
+            // Claude runs its own tool loop in both modes. We
+            // surface tool calls / results to the listener for
+            // visibility but don't ask the orchestrator to execute
+            // them, so this loop terminates after one backend turn.
             tool_calls: Vec::new(),
             stop_reason: stop,
         }
     }
+}
+
+/// Write a temporary `--mcp-config` JSON for claude. Format:
+///
+/// ```json
+/// { "mcpServers": { "chan": { "command": "...", "args": [...] } } }
+/// ```
+///
+/// The host-supplied `wiring.command` is split into argv[0] (the
+/// binary) and the rest (its args); we tack on `--auto-apply` only
+/// when the user opted in, so the MCP subprocess defers writes
+/// (returns a "deferred" tool error to claude) when auto-apply is
+/// off. The returned `NamedTempFile` must outlive the claude
+/// subprocess so the path remains valid.
+fn write_mcp_config(wiring: &McpWiring) -> std::io::Result<NamedTempFile> {
+    let (bin, base_args) = wiring.command.split_first().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "empty mcp_command")
+    })?;
+    let mut args: Vec<String> = base_args.to_vec();
+    if wiring.auto_apply_writes {
+        args.push("--auto-apply".to_string());
+    }
+    let body = serde_json::json!({
+        "mcpServers": {
+            MCP_SERVER_KEY: {
+                "command": bin,
+                "args": args,
+            }
+        }
+    });
+    let mut file = NamedTempFile::with_suffix(".json")?;
+    use std::io::Write;
+    file.write_all(serde_json::to_string(&body)?.as_bytes())?;
+    file.flush()?;
+    Ok(file)
 }
 
 /// Split the chan-llm transcript into:
@@ -488,6 +616,7 @@ mod tests {
             Vec::new(),
             None,
             tmp.path().to_path_buf(),
+            None,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -552,6 +681,7 @@ mod tests {
             Vec::new(),
             None,
             tmp.path().to_path_buf(),
+            None,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -593,5 +723,39 @@ mod tests {
         assert!(body.contains("[user]\nfirst"));
         assert!(body.contains("[assistant]\nok"));
         assert!(body.contains("[user]\nsecond"));
+    }
+
+    #[test]
+    fn mcp_config_omits_auto_apply_when_off() {
+        let f = write_mcp_config(&McpWiring {
+            command: vec!["chan".into(), "__mcp".into(), "/d".into()],
+            auto_apply_writes: false,
+        })
+        .unwrap();
+        let body = std::fs::read_to_string(f.path()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let entry = &v["mcpServers"]["chan"];
+        assert_eq!(entry["command"], "chan");
+        let args = entry["args"].as_array().unwrap();
+        assert_eq!(
+            args.iter().map(|a| a.as_str().unwrap()).collect::<Vec<_>>(),
+            vec!["__mcp", "/d"]
+        );
+    }
+
+    #[test]
+    fn mcp_config_appends_auto_apply_when_on() {
+        let f = write_mcp_config(&McpWiring {
+            command: vec!["chan".into(), "__mcp".into(), "/d".into()],
+            auto_apply_writes: true,
+        })
+        .unwrap();
+        let body = std::fs::read_to_string(f.path()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let args = v["mcpServers"]["chan"]["args"].as_array().unwrap();
+        assert_eq!(
+            args.iter().map(|a| a.as_str().unwrap()).collect::<Vec<_>>(),
+            vec!["__mcp", "/d", "--auto-apply"]
+        );
     }
 }

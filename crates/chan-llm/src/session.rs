@@ -200,15 +200,22 @@ impl LlmSession {
         }
         history.extend(messages);
 
-        // ClaudeCli is a black-box agent: its own tool loop runs
-        // against the drive directly, so chan-llm's tool schemas
-        // and the auto_apply_writes gate never fire for it.
-        // Force-enable auto_apply on the ToolContext to reflect
-        // that contract gap honestly (no chan-llm-side staging is
-        // possible) and pass an empty schema list so the backend
-        // doesn't get a confusing tool-use directive it can't honor.
-        // Tracked as project memory: claude-cli backend v2.
-        let tool_ctx = if kind == BackendKind::ClaudeCli {
+        // ClaudeCli runs claude as a full agent in both modes. The
+        // chan-llm orchestration loop never executes tool calls
+        // for it (claude does its own), so we always pass empty
+        // schemas. The auto-apply story differs by mode:
+        //
+        //   - v1 (mcp_command = None): claude writes through its
+        //     own tools, bypassing chan-llm's gate entirely. We
+        //     force-enable auto_apply so the (unused) ToolContext
+        //     reflects the contract gap honestly.
+        //   - v2 (mcp_command = Some): writes flow through the
+        //     chan-llm MCP subprocess, which applies the user's
+        //     auto_apply_writes flag itself. The orchestrator's
+        //     ToolContext is irrelevant here too.
+        let claude_cli_v1 =
+            kind == BackendKind::ClaudeCli && self.config.claude_cli.mcp_command.is_none();
+        let tool_ctx = if claude_cli_v1 {
             crate::tools::ToolContext::new(self.drive.clone(), true)
         } else {
             self.tool_context()
