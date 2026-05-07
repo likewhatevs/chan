@@ -10,8 +10,15 @@ description = "HTTP + WebSocket surface for chan, wrapping chan-core in axum rou
 [lib]
 name = "chan_server"
 
+[features]
+default = ["embeddings"]
+# Forwards to chan-core's `embeddings` feature so the about-pane's
+# "embeddings on" badge reflects the actual build. Opt out via
+# `--no-default-features` along the rest of the stack.
+embeddings = ["chan-core/embeddings"]
+
 [dependencies]
-chan-core = { workspace = true }
+chan-core = { workspace = true, default-features = false }
 chan-llm = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }

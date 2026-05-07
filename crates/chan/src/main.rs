@@ -508,11 +508,17 @@ fn cmd_index(path: PathBuf) -> Result<()> {
     // file browser doesn't show "(unnamed)" later.
     ensure_drive_named(&lib, &path, None)?;
     let drive = lib.open_drive(&path)?;
-    let stats = drive.reindex().context("reindex")?;
+    let summary = drive.reindex().context("reindex")?;
     println!(
-        "indexed {} files (skipped {}) in {} ms",
-        stats.files_indexed, stats.files_skipped, stats.elapsed_ms,
+        "indexed {}/{} files, {} chunks ({} errors)",
+        summary.indexed,
+        summary.files,
+        summary.chunks,
+        summary.errors.len(),
     );
+    for (path, e) in &summary.errors {
+        eprintln!("  error: {path}: {e}");
+    }
     Ok(())
 }
 
@@ -549,9 +555,15 @@ fn cmd_search(path: PathBuf, query: String, limit: u32) -> Result<()> {
         return Ok(());
     }
     for hit in res.hits {
-        println!("{:<6.3}  {}", hit.score, hit.path);
-        if let Some(snippet) = hit.snippets.first() {
-            println!("        {}", snippet.text.lines().next().unwrap_or(""));
+        let where_ = if hit.heading.is_empty() {
+            hit.path.clone()
+        } else {
+            format!("{}#{}", hit.path, hit.heading)
+        };
+        println!("{:<6.3}  {}", hit.score, where_);
+        let first = hit.snippet.lines().next().unwrap_or("");
+        if !first.is_empty() {
+            println!("        {first}");
         }
     }
     Ok(())

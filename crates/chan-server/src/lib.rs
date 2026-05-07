@@ -16,6 +16,7 @@
 #![forbid(unsafe_code)]
 
 mod config;
+mod indexer;
 mod preferences;
 mod self_writes;
 
@@ -182,14 +183,28 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
     // bursts (mass rename, LLM token-stream); slow subscribers
     // see Lagged and skip ahead rather than blocking the sender.
     let (events_tx, _) = broadcast::channel::<String>(256);
+    // Indexer feed: raw WatchEvent for the background indexer
+    // task. Larger buffer than the JSON channel because the
+    // indexer's debounce loop drains every 200ms; bursts during
+    // git pull / mass rsync land here without lagging.
+    let (index_events_tx, _) = broadcast::channel::<WatchEvent>(1024);
     // Shared dedupe queue: server writes note their path here, the
     // watcher bridge consults it before forwarding so save->reload
     // echoes don't fire spurious external-edit prompts in the
-    // editor.
+    // editor. Indexer is NOT subject to this gate; in-app saves
+    // must reindex.
     let self_writes = Arc::new(SelfWrites::new());
-    let bridge = make_watch_bridge(&events_tx, &self_writes);
+    let bridge = make_watch_bridge(&events_tx, &index_events_tx, &self_writes);
     let watch_handle = drive.watch(bridge)?;
     let drive_root = drive.root().to_path_buf();
+    // Background indexer: subscribes to index_events_tx, runs the
+    // initial build if the index is empty, debounces incremental
+    // reindexes 1s per path. Lives for the server's lifetime.
+    let indexer = Arc::new(indexer::Indexer::spawn(
+        drive.clone(),
+        index_events_tx.subscribe(),
+        true,
+    ));
 
     // LLM config: load once at boot. Falling back to defaults on
     // a malformed file keeps the server bootable; user fixes the
@@ -224,10 +239,12 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
         drive_cell: RwLock::new(Some(DriveCell {
             drive,
             watch_handle: Some(watch_handle),
+            indexer,
         })),
         token: handle.token,
         prefix: config.prefix.clone(),
         events_tx,
+        index_events_tx,
         llm_config: Mutex::new(llm_config),
         server_config: Mutex::new(server_config),
         editor_prefs: Mutex::new(editor_prefs),
@@ -387,6 +404,11 @@ struct AppState {
     /// "text": ...}`, etc. One channel; the `type` field tells
     /// the frontend what to do.
     events_tx: broadcast::Sender<String>,
+    /// Raw watcher events feeding the background indexer. Lives at
+    /// AppState scope (not just inside DriveCell) so the bridge
+    /// constructor at /api/storage/reset time can reuse the same
+    /// channel without resubscribing the indexer to a fresh one.
+    index_events_tx: broadcast::Sender<WatchEvent>,
     /// Loaded at boot; mutable for future PATCH /api/llm/config
     /// (backend selection, auto_apply_writes toggle). Currently
     /// only read by the status route and the complete handler.
@@ -416,6 +438,10 @@ struct AppState {
 struct DriveCell {
     drive: Arc<Drive>,
     watch_handle: Option<WatchHandle>,
+    /// Background indexer for the live drive. Replaced wholesale
+    /// on /api/storage/reset (the new drive needs a fresh indexer
+    /// pinned to its `Arc<Drive>`). Drop = abort = workers stop.
+    indexer: Arc<indexer::Indexer>,
 }
 
 impl AppState {
@@ -438,38 +464,64 @@ impl AppState {
             .drive
             .clone()
     }
+
+    /// Snapshot the live indexer Arc. Same RwLock pattern as
+    /// `drive()`: held only for the duration of the clone.
+    fn indexer(&self) -> Arc<indexer::Indexer> {
+        self.drive_cell
+            .read()
+            .expect("drive cell poisoned")
+            .as_ref()
+            .expect("drive cell missing outside reset window")
+            .indexer
+            .clone()
+    }
 }
 
 /// Construct a watcher bridge. Extracted so /api/storage/reset can
 /// rebuild one cheaply when re-attaching the watcher to a fresh
 /// Drive instance.
+///
+/// The bridge fans out every event to two consumers:
+///
+///   - `events_tx`: pre-serialized JSON frames forwarded to /ws
+///     subscribers. Self-write echoes (the editor saving through
+///     /api/markdown PUT and then seeing its own save) are
+///     suppressed here so the UI doesn't show a phantom external-
+///     edit toast.
+///   - `index_tx`: raw `WatchEvent` for the background indexer.
+///     Self-write suppression DOES NOT apply here: in-app saves
+///     must reindex, otherwise search drifts every time the user
+///     types. The indexer applies its own debounce.
 fn make_watch_bridge(
     events_tx: &broadcast::Sender<String>,
+    index_tx: &broadcast::Sender<WatchEvent>,
     self_writes: &Arc<SelfWrites>,
 ) -> Arc<dyn WatchCallback> {
     Arc::new(WatchBroadcast {
         tx: events_tx.clone(),
+        index_tx: index_tx.clone(),
         self_writes: self_writes.clone(),
     })
 }
 
-/// Bridge from chan-core's callback-shaped watcher into the
-/// broadcast channel that backs every /ws subscriber. Each event
-/// goes out as a `{"type": "watch", "event": {...}}` envelope so
-/// the frontend can multiplex with LLM events on the same socket.
-///
-/// Drops events that match a recent server-side write so the editor
-/// doesn't see its own save as an external edit (the
-/// "you wrote, OS told us, we tell you, you reload" loop). For
-/// rename events both `from` and `to` are checked since both sides
-/// land as separate notify events on most kernels.
+/// Bridge from chan-core's callback-shaped watcher into the WS
+/// broadcast channel and the indexer channel. Every event goes
+/// out to both; the WS forward also passes a self-write dedupe so
+/// the editor doesn't see its own save as an external edit.
 struct WatchBroadcast {
     tx: broadcast::Sender<String>,
+    index_tx: broadcast::Sender<WatchEvent>,
     self_writes: Arc<SelfWrites>,
 }
 
 impl WatchCallback for WatchBroadcast {
     fn on_event(&self, event: WatchEvent) {
+        // Indexer always sees the event. Send-error means there are
+        // no subscribers (indexer not spawned yet, or shut down);
+        // safe to drop because a no-subscriber channel just keeps
+        // events in the ring until one connects.
+        let _ = self.index_tx.send(event.clone());
         if event_is_self_echo(&event, &self.self_writes) {
             return;
         }
@@ -1338,13 +1390,6 @@ struct ContentHit {
     score: f32,
 }
 
-fn search_mode_tag(m: chan_core::SearchMode) -> &'static str {
-    match m {
-        chan_core::SearchMode::Bm25 => "bm25",
-        chan_core::SearchMode::Hybrid => "hybrid",
-    }
-}
-
 async fn api_search_content(
     State(state): State<Arc<AppState>>,
     Query(p): Query<ContentSearchParams>,
@@ -1352,7 +1397,7 @@ async fn api_search_content(
     if p.q.trim().is_empty() {
         return Json(ContentSearchResponse {
             ready: true,
-            mode: "bm25",
+            mode: "hybrid",
             hits: Vec::new(),
         })
         .into_response();
@@ -1360,74 +1405,58 @@ async fn api_search_content(
     let opts = SearchOpts {
         limit: p.limit,
         scope: p.scope.clone(),
+        // Mode defaults to Hybrid via SearchOpts::default; the
+        // facade's BM25 fallback kicks in when the binary is built
+        // without `embeddings`.
         ..Default::default()
     };
     let results = match state.drive().search(&p.q, &opts) {
         Ok(r) => r,
         Err(e) => return err_from(&e),
     };
-    let mode = search_mode_tag(results.mode_used);
-    let mut flat: Vec<ContentHit> = Vec::new();
-    for hit in results.hits {
-        if hit.snippets.is_empty() {
-            // No section-level snippets (older index entries, very
-            // short files); emit one row per hit so the path still
-            // shows up.
-            flat.push(ContentHit {
-                path: hit.path.clone(),
-                chunk_id: format!("{}#0", hit.path),
-                heading: String::new(),
-                start_line: 0,
-                snippet: String::new(),
-                score: hit.score,
-            });
-            continue;
-        }
-        for (idx, sn) in hit.snippets.iter().enumerate() {
-            flat.push(ContentHit {
-                path: hit.path.clone(),
-                chunk_id: format!("{}#{}", hit.path, idx),
-                heading: sn.heading_path.join(" / "),
-                start_line: 0,
-                snippet: sn.text.clone(),
-                score: hit.score,
-            });
-        }
-    }
+    let hits = results
+        .hits
+        .into_iter()
+        .map(|h| ContentHit {
+            path: h.path,
+            chunk_id: h.chunk_id,
+            heading: h.heading,
+            start_line: u32::try_from(h.start_line).unwrap_or(u32::MAX),
+            snippet: h.snippet,
+            score: h.score,
+        })
+        .collect();
     Json(ContentSearchResponse {
-        ready: true,
-        mode,
-        hits: flat,
+        ready: results.ready,
+        mode: results.mode,
+        hits,
     })
     .into_response()
 }
 
-/// Minimal index-status placeholder. chan-core's index opens
-/// lazily and is always ready once a drive is open; meaningful
-/// progress reporting (files indexed, last rebuild time) requires
-/// chan-core surfacing the IndexStats from the most recent
-/// reindex, which it does not today. Returning a small JSON shape
-/// so the frontend can show a "ready" / "rebuilding" state.
-async fn api_index_status() -> Response {
-    Json(serde_json::json!({"ready": true})).into_response()
+/// Index status snapshot. Reads the live `IndexStatus` from the
+/// background indexer; shape mirrors the frontend's IndexStatus
+/// tagged union (Settings -> Search index). The indexer flips
+/// the snapshot to Building / Reindexing while a pass is in
+/// flight and to Idle (with chunk + vector counts plus the
+/// embedding model id) when it settles.
+async fn api_index_status(State(state): State<Arc<AppState>>) -> Response {
+    Json(state.indexer().snapshot()).into_response()
 }
 
-/// Trigger a full reindex of the drive (search + graph). chan-core's
-/// reindex is synchronous and blocking, so we run it on the blocking
-/// thread pool and return when it completes. For very large drives
-/// this can take seconds; consider adding a job-handle abstraction
-/// to chan-core if the wait becomes painful in practice.
+/// Trigger a full reindex of the drive (search + graph). Routed
+/// through the background indexer's coordinator so the request
+/// coalesces with anything already queued and the status
+/// snapshot transitions cleanly through Building -> Idle.
+/// Returns 202 Accepted: the work runs in the background and
+/// progress is observable via `/api/index/status`.
 async fn api_index_rebuild(State(state): State<Arc<AppState>>) -> Response {
-    let drive = state.drive().clone();
-    let result = tokio::task::spawn_blocking(move || drive.reindex()).await;
-    match result {
-        Ok(Ok(stats)) => Json(stats).into_response(),
-        Ok(Err(e)) => err_from(&e),
-        Err(e) => err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("rebuild task: {e}"),
-        ),
-    }
+    state.indexer().request_rebuild();
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({"queued": true})),
+    )
+        .into_response()
 }
 
 // ----- [[ typeahead -------------------------------------------------------
@@ -2735,12 +2764,11 @@ async fn api_build_info() -> Response {
     Json(BuildInfo {
         version: env!("CARGO_PKG_VERSION"),
         features: BuildFeatures {
-            // chan-core today is BM25-only (tantivy gated by the
-            // `search` feature). Dense embeddings are a future v0.2
-            // feature; the field stays in the contract so the
-            // frontend's "Settings -> Search" section can render
-            // accurate copy without a v0.2-incompatible refactor.
-            embeddings: false,
+            // Mirrors chan-core's `embeddings` cargo feature. ON in
+            // default builds; OFF on platforms without a prebuilt
+            // onnxruntime (currently iOS) which build with
+            // `--no-default-features`.
+            embeddings: cfg!(feature = "embeddings"),
         },
     })
     .into_response()
@@ -3130,15 +3158,22 @@ fn perform_reset(state: &AppState, mode: ResetMode) -> Result<chan_core::ResetRe
             .library
             .open_drive(&state.drive_root)
             .map_err(ResetError::Core)?;
-        let bridge = make_watch_bridge(&state.events_tx, &state.self_writes);
+        let bridge =
+            make_watch_bridge(&state.events_tx, &state.index_events_tx, &state.self_writes);
         let watch_handle = drive.watch(bridge).map_err(ResetError::Core)?;
+        let indexer = Arc::new(indexer::Indexer::spawn(
+            drive.clone(),
+            state.index_events_tx.subscribe(),
+            true,
+        ));
         *cell_guard = Some(DriveCell {
             drive,
             watch_handle: Some(watch_handle),
+            indexer,
         });
         return Err(ResetError::Busy);
     }
-    // Clean. Run the actual wipe, reopen, restart watcher.
+    // Clean. Run the actual wipe, reopen, restart watcher + indexer.
     let report = state
         .library
         .reset_drive(&state.drive_root, mode)
@@ -3147,11 +3182,20 @@ fn perform_reset(state: &AppState, mode: ResetMode) -> Result<chan_core::ResetRe
         .library
         .open_drive(&state.drive_root)
         .map_err(ResetError::Core)?;
-    let bridge = make_watch_bridge(&state.events_tx, &state.self_writes);
+    let bridge = make_watch_bridge(&state.events_tx, &state.index_events_tx, &state.self_writes);
     let watch_handle = drive.watch(bridge).map_err(ResetError::Core)?;
+    // Fresh indexer pinned to the new Drive Arc. Reset wiped the
+    // index dir if `mode` includes Index, so initial_build=true
+    // will catch zero docs and kick a rebuild.
+    let indexer = Arc::new(indexer::Indexer::spawn(
+        drive.clone(),
+        state.index_events_tx.subscribe(),
+        true,
+    ));
     *cell_guard = Some(DriveCell {
         drive,
         watch_handle: Some(watch_handle),
+        indexer,
     });
     Ok(report)
 }
