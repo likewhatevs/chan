@@ -236,6 +236,11 @@
   }
   :global(.md-source .cm-content) {
     font-family: var(--chan-font-code-family);
+    /* Center content within the cap when --chan-page-max-width is
+       set (per-device pref written by state/pageWidth). When unset,
+       max-width: none restores the original full-width behavior. */
+    max-width: var(--chan-page-max-width, none);
+    margin-inline: auto;
   }
   /* Force every CM internal that could paint a background to
      transparent so `.md-source`'s `var(--bg)` shows uniformly,

@@ -43,6 +43,13 @@
     searchPanel,
     settingsOverlay,
   } from "../state/store.svelte";
+  import {
+    PAGE_WIDTH_MAX,
+    PAGE_WIDTH_MIN,
+    PAGE_WIDTH_STEP,
+    pageWidth,
+    setPageWidth,
+  } from "../state/pageWidth.svelte";
 
   let { tab }: { tab: FileTab } = $props();
 
@@ -231,7 +238,38 @@
     onClose={closeFind}
   />
   <div class="tab-bar">
-    <span class="left"></span>
+    <span class="left">
+      <!-- Page-width adjuster. Hover + wheel, or focus + Up/Down,
+           or focus + Shift+Up/Down for a 5x step. Above the cap
+           range falls off into `null` (unbounded / full width).
+           No click-drag: a wheel-/key-only control plays nicer with
+           trackpads and keyboard navigation than a draggable knob. -->
+      <button
+        type="button"
+        class="hbtn page-width-btn"
+        title="page width — scroll or arrow keys; Shift = bigger step"
+        aria-label="page width"
+        onwheel={(e) => {
+          e.preventDefault();
+          // Wheel up (deltaY < 0) widens toward `full`; wheel down narrows.
+          const dir = e.deltaY > 0 ? -1 : 1;
+          const cur = pageWidth.value ?? PAGE_WIDTH_MAX;
+          const next = cur + dir * PAGE_WIDTH_STEP;
+          setPageWidth(next >= PAGE_WIDTH_MAX ? null : next);
+        }}
+        onkeydown={(e) => {
+          if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+          e.preventDefault();
+          const dir = e.key === "ArrowUp" ? 1 : -1;
+          const step = e.shiftKey ? PAGE_WIDTH_STEP * 5 : PAGE_WIDTH_STEP;
+          const cur = pageWidth.value ?? PAGE_WIDTH_MAX;
+          const next = cur + dir * step;
+          setPageWidth(next >= PAGE_WIDTH_MAX ? null : next);
+        }}
+      >{pageWidth.value == null
+          ? "100%"
+          : `${Math.round((pageWidth.value / PAGE_WIDTH_MAX) * 100)}%`}</button>
+    </span>
     <span class="actions">
       <!-- Assistant button moved to the global toolbar (top-right,
            ensō glyph). Cmd/Ctrl+H from anywhere on this tab still
@@ -411,8 +449,16 @@
     flex-shrink: 0;
     min-height: 28px;
   }
-  .tab-bar .left { flex: 1; }
+  .tab-bar .left { flex: 1; display: flex; align-items: center; }
   .tab-bar .actions { display: flex; gap: 2px; }
+  /* Page-width button: same visual as .hbtn, just wide enough for
+     a 4-digit number ("1200") or "full". Tabular-nums so the width
+     doesn't jiggle as digits change. */
+  .page-width-btn {
+    min-width: 40px;
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+  }
   /* Mobile: pin the tab-bar to the top of the editor area so the
      mode + inspector controls stay reachable even if iOS lifts the
      visual viewport on input focus or a flex parent unexpectedly
@@ -490,6 +536,12 @@
     cursor: pointer;
     color: var(--text-secondary);
     font: inherit;
+    /* Fixed min-width keeps the hit area constant when the glyph
+       swaps (e.g. </> -> ¶ for the source/wysiwyg toggle): a single
+       narrow character would otherwise collapse the button to a
+       hard-to-click sliver. */
+    min-width: 28px;
+    text-align: center;
     padding: 0 5px;
     line-height: 18px;
     height: 20px;

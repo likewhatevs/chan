@@ -44,6 +44,10 @@
     selectTabAtIndexInActivePane,
   } from "./state/tabs.svelte";
   import { applyFontPrefs, DEFAULT_FONT_PREFS } from "./state/fontPrefs";
+  import {
+    applyInitialPageWidth,
+    watchPageWidth,
+  } from "./state/pageWidth.svelte";
   import { installIdleTracker } from "./state/idle.svelte";
   import { loadShared } from "./api/wasm";
   import {
@@ -143,9 +147,12 @@
     // immediately, before any component renders, to avoid a flash.
     applyInitialTheme();
     applyFontPrefs(DEFAULT_FONT_PREFS);
+    applyInitialPageWidth();
     // While in "system" mode, follow OS-level theme changes live.
     // The listener stays alive for the whole app's lifetime.
     watchSystemTheme();
+    // Cross-window sync of the page-width setting via the storage event.
+    watchPageWidth();
     // Idle tracker: after 2.5s without scroll/click/keypress, the
     // floating pills fade. Any input flips them back on.
     installIdleTracker();

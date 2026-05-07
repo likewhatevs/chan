@@ -847,6 +847,13 @@
   }
   :global(.md-wysiwyg .ProseMirror) {
     outline: none;
+    /* Center content within the cap when --chan-page-max-width is
+       set (per-device pref written by state/pageWidth). When unset,
+       max-width: none restores the original full-width behavior.
+       The scroll container .md-wysiwyg stays full-width so the
+       scrollbar and overlays remain at the viewport edges. */
+    max-width: var(--chan-page-max-width, none);
+    margin-inline: auto;
   }
   /* Heading text uses the drive's heading-{1,2,3} prefs. h4..h6
      fall through to the normal text style; calling them out
