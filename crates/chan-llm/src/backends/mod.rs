@@ -131,20 +131,16 @@ pub fn build(kind: BackendKind, config: &LlmConfig) -> Result<Arc<dyn Backend>> 
             Ok(Arc::new(ollama::OllamaBackend::new(base, model)))
         }
         BackendKind::Anthropic => {
-            let _key = keys::resolve(kind, config)
+            let key = keys::resolve(kind, config)
                 .0
                 .ok_or_else(|| LlmError::MissingApiKey("anthropic".into()))?;
-            Err(LlmError::NotImplemented(
-                "anthropic backend ports in a follow-up commit".into(),
-            ))
+            Ok(Arc::new(anthropic::AnthropicBackend::new(key, model)))
         }
         BackendKind::Gemini => {
-            let _key = keys::resolve(kind, config)
+            let key = keys::resolve(kind, config)
                 .0
                 .ok_or_else(|| LlmError::MissingApiKey("gemini".into()))?;
-            Err(LlmError::NotImplemented(
-                "gemini backend ports in a follow-up commit".into(),
-            ))
+            Ok(Arc::new(gemini::GeminiBackend::new(key, model)))
         }
     }
 }
