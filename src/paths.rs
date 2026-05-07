@@ -107,6 +107,14 @@ pub struct DrivePaths {
     /// Per-drive lock dir. Holds the index-writer lockfile that
     /// prevents two processes from writing the same drive's index.
     pub lock: PathBuf,
+    /// Per-drive tokens dir. App-level surface (chan-server stores
+    /// its bearer token here, mode 0600). chan-core only allocates
+    /// the directory; it does not read or write inside.
+    pub tokens: PathBuf,
+    /// Per-drive trash dir. Holds soft-deleted files / dirs as
+    /// `<id>/{meta.json, payload[/]}`. Lazily GC'd on Drive::open
+    /// and on every trash_* call.
+    pub trash: PathBuf,
 }
 
 /// Resolve the per-drive global paths for `drive_root`.
@@ -120,6 +128,8 @@ pub fn drive_paths(drive_root: &Path) -> DrivePaths {
         index: cache.join("index").join(&key),
         graph_db: state.join("graph").join(&key).join("graph.sqlite"),
         lock: state.join("locks").join(&key),
+        tokens: state.join("tokens").join(&key),
+        trash: state.join("trash").join(&key),
     }
 }
 
@@ -269,7 +279,14 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let key = drive_key(tmp.path());
         let p = drive_paths(tmp.path());
-        for path in [&p.sessions, &p.assistant, &p.index, &p.lock] {
+        for path in [
+            &p.sessions,
+            &p.assistant,
+            &p.index,
+            &p.lock,
+            &p.tokens,
+            &p.trash,
+        ] {
             assert!(path.to_string_lossy().contains(&key));
         }
         assert!(p.graph_db.to_string_lossy().contains(&key));
