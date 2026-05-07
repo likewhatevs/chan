@@ -141,9 +141,13 @@ in phases that each end with a working `chan` binary:
      bridging `SessionListener` events to the WebSocket. Answers
      dir + attachments dir live as chan-server-side helpers
      (they're persistence concerns, not LLM-layer concerns).
-4. **Port the frontend**: copy `web/` from fiorix/chan, wire
-   rust-embed in the binary so `chan serve` ships a working
-   editor.
+4. ~~**Port the frontend**~~ done. `web/` ported from
+   fiorix/chan; rust-embed in chan-server bakes `web/dist/` at
+   release-build time (debug reads from disk). `build.rs`
+   invalidates Cargo's cache on bundle changes. SPA fallback
+   serves `index.html` for any non-API non-asset path so
+   client-side routes work; `/api` and `/ws` misses return a
+   real 404 instead of HTML.
 5. **Sessions / preferences / assistant history**: app-level
    storage paths land here, not in chan-core.
 6. **Deprecate fiorix/chan**: once feature-equivalent, archive
@@ -161,8 +165,10 @@ server.
   only quality gate at the moment; CI lands once we have a
   story for the auth (deploy key, PAT in secrets, or making
   chan-core public).
-- Embedded frontend. `chan serve` errors out so the missing
-  frontend is impossible to miss.
-- HTTP server. Bare scaffold in `chan-server`; routes port in
-  follow-up commits.
-- LLM backends. Stub crate; backends port in follow-up commits.
+- HTTP routes for sessions / answers / attachments / assistant
+  conversation history. App-level persistence; phase 7.
+- LLM backends. chan-llm's Anthropic / Gemini / Ollama modules
+  are still stubs; the route surface in chan-server is locked
+  and the real port drops in without surface changes here.
+- Real prompts in chan-llm. Placeholders today; bumping them is
+  a chan-llm-side commit that doesn't touch this repo.

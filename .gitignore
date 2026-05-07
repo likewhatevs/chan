@@ -8,7 +8,9 @@ Cargo.lock
 *~
 .DS_Store
 
-# Frontend artifacts (web/ ports in a later iteration)
+# Frontend build artifacts
 node_modules/
 web/dist/
 web/pkg/
+.svelte-kit/
+.vite/

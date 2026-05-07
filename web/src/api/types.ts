@@ -1,0 +1,336 @@
+// API types: the JSON shapes returned by chan-core's HTTP handlers.
+// Keep in lockstep with crates/chan-core/src/server.rs.
+
+export type DriveInfo = {
+  name: string | null;
+  root: string;
+  /// Mirror of GlobalConfig.preferences. Per-drive overrides
+  /// were removed; settings are always per-device-global. Carried
+  /// here so a single `/api/drive` round-trip is enough to
+  /// render the editor with the right fonts / assistant config
+  /// without a follow-up `/api/config` fetch.
+  preferences: Preferences;
+};
+
+/// Global per-user config. Lives at `paths::global_config_path()`
+/// on the server side and applies to every drive (no per-
+/// drive override anymore — settings are always device-global).
+export type GlobalConfig = {
+  preferences: Preferences;
+  /// When set, the resolver's fallback path becomes this; when
+  /// unset, it falls back to the platform convention
+  /// (`~/Documents/Chan` on macOS, `$XDG_DATA_HOME/chan/default`
+  /// on Linux, `%USERPROFILE%\Documents\Chan` on Windows).
+  default_drive_root?: string | null;
+  /// Known drives the user has opened on this machine. Updated
+  /// by the server on every spawn (touch existing or append).
+  /// Sorted most-recent first.
+  drives?: KnownDrive[];
+};
+
+export type KnownDrive = {
+  path: string;
+  /// User-editable display name from the registry. Null when the
+  /// drive was registered without one (e.g. legacy entries) or
+  /// after the user explicitly cleared it.
+  name?: string | null;
+  /// RFC3339 timestamp.
+  last_opened: string;
+};
+
+export type FontSpec = {
+  family: string;
+  size: number;
+};
+
+export type FontPrefs = {
+  heading1: FontSpec;
+  heading2: FontSpec;
+  heading3: FontSpec;
+  normal: FontSpec;
+  code: FontSpec;
+  quote: FontSpec;
+};
+
+export type AssistantBackendKind = "claude" | "ollama" | "gemini" | "embedded";
+
+export type ClaudePrefs = {
+  /// Optional model override; backend default applies when null.
+  model?: string | null;
+};
+
+export type OllamaPrefs = {
+  /// Server URL; standard local port applies when null.
+  url?: string | null;
+  /// Model name (must be installed on the Ollama server).
+  model?: string | null;
+};
+
+export type GeminiPrefs = {
+  /// Optional model override; backend default (gemini-2.5-flash)
+  /// applies when null.
+  model?: string | null;
+};
+
+export type AssistantPrefs = {
+  /// Master switch. When false, the inline-assist overlay and the
+  /// search palette's "ask" mode are hidden. Defaults to true on
+  /// the server side for drives that predate this field.
+  enabled: boolean;
+  backend: AssistantBackendKind;
+  answers_dir: string;
+  auto_apply_writes: boolean;
+  /// Per-provider configuration. The server normalizes legacy
+  /// flat-shape TOML (`model`, `ollama_url`, `ollama_model` at the
+  /// top level) into these subtables on read; the next save
+  /// rewrites the TOML in the new shape.
+  claude: ClaudePrefs;
+  ollama: OllamaPrefs;
+  gemini: GeminiPrefs;
+};
+
+export type LlmModelEntry = {
+  name: string;
+  supports_tools: boolean;
+};
+
+/// Wrapped response for `GET /api/llm/anthropic/models`.
+/// `source` carries provenance: "live" when fetched from
+/// Anthropic, "curated" when no key was set, "fallback" when the
+/// live fetch failed (in which case `error` carries the upstream
+/// reason). The frontend uses this to surface why a hand-rolled
+/// list is showing instead of the user's account catalog.
+export type AnthropicModelsResponse = {
+  models: LlmModelEntry[];
+  source: "live" | "curated" | "fallback";
+  error?: string | null;
+};
+
+/// Wrapped response for `GET /api/llm/gemini/models`. Same shape
+/// as the Anthropic catalog so both dropdowns share their render
+/// path; only the source URL differs.
+export type GeminiModelsResponse = {
+  models: LlmModelEntry[];
+  source: "live" | "curated" | "fallback";
+  error?: string | null;
+};
+
+export type LlmKeyStatus = {
+  set: boolean;
+  /// Where the active key is read from. "env" wins over the rest
+  /// (always treated as a per-shell override); "keychain" is
+  /// the recommended desktop / CLI path; "file" is the legacy
+  /// `~/.config/chan/api-keys.toml` fallback.
+  source: "env" | "keychain" | "file" | null;
+  path: string | null;
+  /// True when the OS keychain backend is reachable on this
+  /// machine. False on headless boxes (no Secret Service / DBus
+  /// session on Linux, locked keychain on macOS, etc.); the
+  /// Settings UI hides keychain controls when false.
+  keychain_available: boolean;
+};
+
+export type LlmStatus = {
+  backend: string;
+  model: string | null;
+  key: LlmKeyStatus;
+  ready: boolean;
+  /// Human-readable explanation of why `ready = false`. Absent
+  /// when the assistant is ready.
+  reason?: string | null;
+  enabled: boolean;
+  supports_tools: boolean;
+};
+
+/// Mirror of chan-core's Message / ToolSpec / etc. Kept loose
+/// (unknown JSON for tool inputs) since the schema is owned by
+/// the backend.
+export type LlmRole = "system" | "user" | "assistant" | "tool";
+
+export type LlmMessage = {
+  role: LlmRole;
+  content: string;
+  tool_call_id?: string;
+  tool_calls?: LlmToolCall[];
+};
+
+export type LlmToolSpec = {
+  name: string;
+  description: string;
+  input_schema: unknown;
+};
+
+export type LlmToolCall = {
+  id: string;
+  name: string;
+  input: unknown;
+};
+
+export type LlmCompletionRequest = {
+  messages: LlmMessage[];
+  tools?: LlmToolSpec[];
+  max_tokens?: number;
+  temperature?: number;
+};
+
+export type LlmStopReason =
+  | "end_turn"
+  | "max_tokens"
+  | "tool_use"
+  | "stop_sequence"
+  | "other";
+
+export type LlmCompletionResponse = {
+  content: string;
+  tool_calls: LlmToolCall[];
+  stop_reason: LlmStopReason;
+  model: string;
+};
+
+export type ThemeChoice = "system" | "light" | "dark";
+
+export type PaneWidths = {
+  inspector: number;
+  graph: number;
+  browser: number;
+};
+
+/// Vertical density for paragraphs and lists in the editor.
+/// `tight` matches Google Docs spacing; `standard` keeps the older
+/// roomier spacing. Default is `tight`.
+export type LineSpacing = "tight" | "standard";
+
+export type Preferences = {
+  fonts: FontPrefs;
+  assistant: AssistantPrefs;
+  /// Where image uploads land (relative to drive root). Default
+  /// `attachments/`. Not exposed in the Settings UI; round-tripped
+  /// here so save() doesn't accidentally reset the value when the
+  /// user has overridden it via the global config.
+  attachments_dir: string;
+  /// Editor theme. Lives server-side so changes propagate to every
+  /// open window over the WS config_changed event.
+  theme: ThemeChoice;
+  /// Sidebar widths shared across all panes (file editor inspector,
+  /// graph details, file browser). Per-machine.
+  pane_widths: PaneWidths;
+  /// Editor density for paragraphs and lists.
+  line_spacing: LineSpacing;
+  /// Default format used by @date / @today and as the initial
+  /// selection in the calendar picker's format dropdown.
+  /// Format ids are defined in `web/src/editor/dateFormats.ts`.
+  date_format: string;
+};
+
+export type TreeEntry = {
+  path: string;
+  is_dir: boolean;
+  mtime: number | null;
+  size: number;
+};
+
+export type FileResponse = {
+  path: string;
+  content: string;
+  mtime: number | null;
+  /// Path of the enclosing git repo, relative to the drive root.
+  /// Absent when the file is not inside a git repo (or when the
+  /// repo coincides with the drive root). Drives the per-file
+  /// scope indicator in the overlay picker.
+  repo_root?: string | null;
+};
+
+export type SearchHit = { path: string; score: number };
+
+export type LinkEdge = {
+  source: string;
+  target: string;
+  resolved: string | null;
+  wiki: boolean;
+};
+
+export type GraphSnapshot = {
+  edges: LinkEdge[];
+  broken: LinkEdge[];
+  file_count: number;
+};
+
+/// Typed nodes returned by GET /api/graph. The discriminated union
+/// matches `chan-core::link_index::GraphNode`; `path` is only present
+/// on file nodes (clicking them opens the file in the active pane).
+export type GraphViewNode =
+  | {
+      kind: "file";
+      id: string;
+      label: string;
+      path: string;
+      /// True for ghost nodes synthesized as the target of a broken
+      /// link. Rendered muted; clicking is a no-op (the file doesn't
+      /// exist yet).
+      missing?: boolean;
+    }
+  | { kind: "tag"; id: string; label: string }
+  | { kind: "mention"; id: string; label: string }
+  | { kind: "date"; id: string; label: string };
+
+export type GraphViewEdgeKind = "link" | "tag" | "mention" | "date";
+
+export type GraphViewEdge = {
+  source: string;
+  target: string;
+  kind: GraphViewEdgeKind;
+  /// Only meaningful for `link` edges; missing/false for the others.
+  broken?: boolean;
+};
+
+export type GraphView = {
+  nodes: GraphViewNode[];
+  edges: GraphViewEdge[];
+};
+
+export type WatchEvent =
+  | { kind: "created"; path: string }
+  | { kind: "modified"; path: string }
+  | { kind: "deleted"; path: string };
+
+/// Snapshot returned by GET /api/index/status. Field set matches
+/// chan-core::index::indexer::IndexStatus.
+export type IndexStatus =
+  | { state: "idle"; indexed_docs: number; indexed_vectors: number; model: string }
+  | { state: "building"; current: number; total: number; file: string }
+  | { state: "reindexing"; file: string }
+  | { state: "error"; message: string };
+
+/// Hybrid / BM25 / semantic content search hit.
+export type ContentHit = {
+  path: string;
+  chunk_id: string;
+  heading: string;
+  start_line: number;
+  snippet: string;
+  score: number;
+};
+
+export type ContentSearchResponse = {
+  ready: boolean;
+  mode: "hybrid" | "bm25" | "semantic";
+  hits: ContentHit[];
+};
+
+/// Compile-time identity of the running chan binary. Powers the
+/// Settings "About" footer so users can tell at a glance which
+/// version they're on and whether semantic search is available.
+export type BuildInfo = {
+  version: string;
+  features: {
+    embeddings: boolean;
+  };
+};
+
+/// Drive reset modes, in increasing destructiveness. See
+/// `crates/chan-core/src/storage.rs` for the per-mode contract.
+export type ResetMode = "drive" | "everything";
+
+export type ResetResponse = {
+  removed_entries: number;
+};

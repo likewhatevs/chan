@@ -1,0 +1,224 @@
+// Shared scope picker for the floating overlays (search, assistant,
+// graph). All three surfaces care about the same question — "what
+// part of my world are we working on right now?" — and render the
+// same dropdown:
+//
+//   - one entry per file currently visible in any leaf pane
+//     (file scope; the most common pick),
+//   - a "all N visible files" entry when 2+ files are visible
+//     (group scope; same key for the same set so a re-arrange
+//     doesn't fragment state),
+//   - a "directory" entry when the active browser tab has a
+//     folder selected (dir scope; a subtree of the drive narrower
+//     than the drive but broader than a single file),
+//   - a "git repo" entry per repo covering visible files (git_repo
+//     scope; a project subset of the drive),
+//   - a "whole drive" entry that always exists (drive scope;
+//     each surface labels it differently — assistant says
+//     "Drive Q&A", graph says "Whole drive"),
+//   - a "global" entry for cross-drive scope (every chan drive
+//     this user has touched). Surfaced as a placeholder for now;
+//     enabled flips on once backend cross-drive indexing exists.
+//
+// The id format is the discriminator the consumer stores:
+// `file:<path>`, `group:<key>`, `dir:<path>`, `git_repo:<root>`,
+// `drive`, or `global`. Per-surface state objects (e.g.
+// `assistantOverlay.contextId`, `graphOverlay.scopeId`) hold the
+// chosen id; the helpers here turn it into a typed ScopeOption.
+
+import { layout } from "./tabs.svelte";
+// The `dir` scope reads the file browser overlay's current
+// selection and looks the entry up in the tree to distinguish
+// folder from file. store.svelte imports from this module too, so
+// the cycle is real; both reads happen lazily inside functions
+// (not at module init), which Vite resolves cleanly.
+import { browserOverlay, browserSelection, tree } from "./store.svelte";
+
+/// Picker option, as a discriminated union so consumers can
+/// pattern-match on `kind` and access the kind-specific fields
+/// (path for file/dir, repo path for git_repo, key+paths for
+/// group, nothing extra for drive or global). `enabled` defaults
+/// true; consumers render it as disabled in the dropdown when
+/// false (e.g. global before cross-drive indexing ships).
+export type ScopeOption =
+  | { id: string; kind: "file"; label: string; path: string; enabled?: boolean }
+  | {
+      id: string;
+      kind: "dir";
+      label: string;
+      /// Directory path relative to the drive root. Empty string
+      /// means the drive root itself; consumers should treat that
+      /// case the same as `drive` scope.
+      path: string;
+      enabled?: boolean;
+    }
+  | {
+      id: string;
+      kind: "git_repo";
+      label: string;
+      /// Repo path relative to the drive root.
+      root: string;
+      enabled?: boolean;
+    }
+  | {
+      id: string;
+      kind: "group";
+      label: string;
+      key: string;
+      paths: string[];
+      enabled?: boolean;
+    }
+  | { id: "drive"; kind: "drive"; label: string; enabled?: boolean }
+  | { id: "global"; kind: "global"; label: string; enabled?: boolean };
+
+/// Stable group key from a list of paths: sorted + joined with `|`
+/// so two groups with the same set produce the same key. Used to
+/// detect "the same group as before" across layout shuffles.
+export function scopeKey(paths: readonly string[]): string {
+  return [...paths].sort().join("|");
+}
+
+/// Paths for every file tab currently active in any leaf pane.
+/// Returns each path at most once, sorted alphabetically. Drives
+/// every overlay's "context dropdown" + the cleanup pass that
+/// prunes group state whose context no longer exists.
+export function visibleFilePaths(): string[] {
+  const out = new Set<string>();
+  for (const node of Object.values(layout.nodes)) {
+    if (node.kind !== "leaf") continue;
+    const active = node.tabs.find((t) => t.id === node.activeTabId);
+    if (active && active.path) out.add(active.path);
+  }
+  return [...out].sort();
+}
+
+/// Path of the directory the file browser overlay has selected,
+/// or `null` if the overlay is closed, has no selection, or the
+/// selection is a file rather than a folder. Drives the
+/// `dir:<path>` scope option and `defaultScopeId`'s browser-aware
+/// branch.
+export function selectedDirPath(): string | null {
+  if (!browserOverlay.open) return null;
+  const path = browserSelection.path;
+  if (!path) return null;
+  // The tree entry tells us whether the selection is a folder.
+  // Missing entry: drop the option rather than mis-categorize.
+  const entry = tree.entries.find((e) => e.path === path);
+  if (!entry || !entry.is_dir) return null;
+  return path;
+}
+
+/// Distinct git repo roots covered by the currently visible files.
+/// Each entry is a relative path under the drive root. Drives the
+/// "git repo: <name>" entry in the overlay scope picker: a file
+/// that lives inside a git repo (Sentinel-only file when the user
+/// has chosen the drive's chan-marked folder, or git-repo files
+/// when nested) gets a project-bound scope option. Files outside
+/// any repo contribute nothing here.
+export function visibleRepoRoots(): string[] {
+  const out = new Set<string>();
+  for (const node of Object.values(layout.nodes)) {
+    if (node.kind !== "leaf") continue;
+    const active = node.tabs.find((t) => t.id === node.activeTabId);
+    if (active && active.kind === "file" && active.repoRoot) {
+      out.add(active.repoRoot);
+    }
+  }
+  return [...out].sort();
+}
+
+/// Build the dropdown options from the current layout. Each
+/// overlay supplies its own label for the "drive" entry (the
+/// other scope kinds are derived from the layout and need no
+/// per-surface customization). Pass a `global` entry to surface
+/// the cross-drive scope as the broadest pick; pass
+/// `enabled: false` to render it as a disabled "coming soon"
+/// row until backend cross-drive support lands.
+///
+/// Order in the returned list (narrow → broad): individual files,
+/// group of all visible files, git repos covering visible files
+/// (when applicable), drive, global. The picker renders them in
+/// this order so "narrower" picks land at the top where the
+/// keyboard cursor naturally falls.
+export function availableScopeOptions(opts: {
+  driveLabel: string;
+  global?: { label: string; enabled?: boolean };
+}): ScopeOption[] {
+  const files = visibleFilePaths();
+  const out: ScopeOption[] = files.map((path) => ({
+    id: `file:${path}`,
+    kind: "file",
+    label: path,
+    path,
+  }));
+  if (files.length >= 2) {
+    const key = scopeKey(files);
+    out.push({
+      id: `group:${key}`,
+      kind: "group",
+      label: `all ${files.length} visible files`,
+      key,
+      paths: files,
+    });
+  }
+  const dirPath = selectedDirPath();
+  if (dirPath) {
+    const slash = dirPath.lastIndexOf("/");
+    const name = slash >= 0 ? dirPath.slice(slash + 1) : dirPath;
+    out.push({
+      id: `dir:${dirPath}`,
+      kind: "dir",
+      label: `directory: ${name}/`,
+      path: dirPath,
+    });
+  }
+  for (const root of visibleRepoRoots()) {
+    // Display label: just the repo's basename (the rightmost
+    // path segment) since the path is relative to the drive
+    // and the user already knows which drive they're in.
+    const slash = root.lastIndexOf("/");
+    const name = slash >= 0 ? root.slice(slash + 1) : root;
+    out.push({
+      id: `git_repo:${root}`,
+      kind: "git_repo",
+      label: `git repo: ${name}`,
+      root,
+    });
+  }
+  out.push({ id: "drive", kind: "drive", label: opts.driveLabel });
+  if (opts.global) {
+    out.push({
+      id: "global",
+      kind: "global",
+      label: opts.global.label,
+      enabled: opts.global.enabled ?? true,
+    });
+  }
+  return out;
+}
+
+/// Pick a default scope id matching what's "in front of" the user
+/// right now: the active pane's active file when it's a file tab,
+/// the selected file or folder when the active tab is a browser,
+/// else "drive" (always present). Shared between every overlay's
+/// open-from-toolbar entry point and global keybinding so both
+/// snap to the same pick.
+export function defaultScopeId(): string {
+  // File browser overlay open: its selection wins (the user just
+  // picked something, so route the next overlay action at it).
+  if (browserOverlay.open) {
+    const sel = browserSelection.path;
+    if (sel) {
+      const entry = tree.entries.find((e) => e.path === sel);
+      if (entry?.is_dir) return `dir:${sel}`;
+      if (entry && !entry.is_dir) return `file:${sel}`;
+    }
+  }
+  // Otherwise: the active pane's active file.
+  const node = layout.nodes[layout.activePaneId];
+  if (node && node.kind === "leaf") {
+    const t = node.tabs.find((tab) => tab.id === node.activeTabId);
+    if (t && t.path) return `file:${t.path}`;
+  }
+  return "drive";
+}

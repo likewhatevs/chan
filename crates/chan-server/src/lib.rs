@@ -35,10 +35,21 @@ use chan_llm::{
     ToolResult,
 };
 use rand::RngCore;
+use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tower_http::trace::TraceLayer;
+
+// Frontend bundle baked at compile time. The path is relative to
+// this crate's manifest. In debug builds rust-embed reads files
+// from disk on each request (so `npm run build` updates take
+// effect without a cargo rebuild). In release builds the bundle
+// is embedded; build.rs emits cargo:rerun-if-changed for every
+// file under web/dist so a re-bundled frontend triggers a relink.
+#[derive(RustEmbed)]
+#[folder = "../../web/dist/"]
+struct WebAssets;
 
 /// Configuration the binary hands the server at boot. Kept terse on
 /// purpose; expand only when a route demands it.
@@ -253,12 +264,88 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/ws", get(ws_upgrade));
     Router::new()
         .merge(api)
+        .fallback(serve_static)
         .layer(TraceLayer::new_for_http())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
         ))
         .with_state(state)
+}
+
+// ----- static frontend ----------------------------------------------------
+//
+// Single-page-app fallback: any path that doesn't match an /api or
+// /ws route, and doesn't correspond to a baked asset, returns
+// index.html so client-side routes work. For unknown /api paths
+// we return a real 404 instead of the SPA shell so callers don't
+// silently get HTML when they expected JSON.
+
+async fn serve_static(uri: axum::http::Uri) -> Response {
+    let path = uri.path();
+    // Refuse to serve the SPA shell for /api or /ws misses; those
+    // are programmatic surfaces, not browser navigation.
+    if path.starts_with("/api") || path == "/ws" {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    let candidate = path.trim_start_matches('/');
+    let candidate = if candidate.is_empty() {
+        "index.html"
+    } else {
+        candidate
+    };
+    if let Some(file) = WebAssets::get(candidate) {
+        return (
+            [(header::CONTENT_TYPE, content_type_for(candidate))],
+            file.data.into_owned(),
+        )
+            .into_response();
+    }
+    // SPA fallback: route paths the frontend handles client-side.
+    if let Some(file) = WebAssets::get("index.html") {
+        return (
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            file.data.into_owned(),
+        )
+            .into_response();
+    }
+    // No bundle baked / on disk yet (fresh clone, npm not run).
+    (
+        StatusCode::NOT_FOUND,
+        "frontend bundle not built; run `cd web && npm install && npm run build`",
+    )
+        .into_response()
+}
+
+/// Conservative MIME map for the file types the SPA bundle ships:
+/// hashed JS / CSS, source maps, fonts, images, and a couple of
+/// well-known toplevel files. Falls back to
+/// `application/octet-stream` so unknown extensions never get the
+/// wrong type assigned.
+fn content_type_for(path: &str) -> &'static str {
+    let ext = match path.rsplit_once('.') {
+        Some((_, e)) => e.to_ascii_lowercase(),
+        None => return "application/octet-stream",
+    };
+    match ext.as_str() {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "map" => "application/json; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "ico" => "image/x-icon",
+        "wasm" => "application/wasm",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "txt" | "md" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
 }
 
 // ----- token + auth -------------------------------------------------------

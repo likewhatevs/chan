@@ -1,0 +1,13 @@
+# Build artifacts; rebuild via `npm run build` (and `npm run wasm`
+# when the wasm bridge wires in for [[ link autocomplete).
+node_modules/
+dist/
+pkg/
+.svelte-kit/
+
+# Vite cache
+.vite/
+
+# Editor swap
+*.swp
+*.swo

@@ -45,10 +45,21 @@ in app-level config files once `chan-server` and `chan-llm` land.
 ```bash
 git clone git@github.com:chan-writer/chan-core ../chan-core
 git clone git@github.com:chan-writer/chan-llm ../chan-llm
+
+# Frontend bundle. Required before `chan serve` shows the editor.
+cd web && npm install && npm run build && cd ..
+
 cargo build
 cargo test
 cargo run -- list
+cargo run -- serve --port 8787 --no-token   # open http://127.0.0.1:8787/
 ```
+
+In debug builds, rust-embed reads files from `web/dist/` on each
+request, so a re-run of `npm run build` updates the served bundle
+without a `cargo build`. In release builds, the bundle is baked
+into the binary at compile time; `build.rs` re-links chan-server
+whenever any file under `web/dist/` changes.
 
 ## Contributing
 

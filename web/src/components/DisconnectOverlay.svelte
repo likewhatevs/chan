@@ -1,0 +1,142 @@
+<script lang="ts">
+  // Full-app overlay surfaced when the watcher channel drops. The
+  // watcher is the only push channel between the server and the UI;
+  // without it, file changes from outside the editor stop
+  // propagating, so silently letting the user keep typing risks
+  // divergence between the buffer and disk.
+  //
+  // Replaces the previous toolbar WS pill, which named the problem
+  // but offered nothing actionable. The overlay greys out the entire
+  // UI and gives the user one button: retry now (skip the auto-
+  // reconnect backoff). The auto-reconnect still runs underneath, so
+  // doing nothing eventually heals on its own.
+
+  import { isMobile, isNativeDesktop } from "../api/native";
+  import { reconnectWatcher, ui } from "../state/store.svelte";
+
+  /// True when the chan-app shell hosts the server in-process (any
+  /// Tauri build, desktop or mobile). Drives the subline copy: the
+  /// "open the terminal where you ran chan serve" hint only makes
+  /// sense for users running `chan serve` from a real shell.
+  const inApp = isNativeDesktop() || isMobile();
+
+  /// Show the overlay only AFTER the watcher channel has been open
+  /// at least once during this session. The "connecting" state at
+  /// app boot is unbounded in length: on iOS it can stall behind the
+  /// Local Network permission prompt, on slow networks it can take
+  /// several seconds. Blocking the UI during cold boot would make
+  /// the app appear unresponsive ("nothing clicks") with no useful
+  /// signal to the user.
+  ///
+  /// Once we've seen "open" once, any later transition to a
+  /// non-open state is a real disconnect that's worth surfacing -
+  /// file changes won't propagate, autosave can't reach the server,
+  /// etc. A 600 ms grace still hides the overlay through brief
+  /// reconnects.
+  ///
+  /// Done with an $effect that owns the timer rather than a $derived
+  /// computing on Date.now: $derived must be pure, and recording
+  /// state transitions is a side effect.
+  const STARTUP_GRACE_MS = 600;
+  let visible = $state(false);
+  let hasBeenOpen = $state(false);
+
+  $effect(() => {
+    if (ui.ws === "open") {
+      hasBeenOpen = true;
+      visible = false;
+      return;
+    }
+    if (!hasBeenOpen) {
+      // Cold boot still in progress. Stay invisible so the user
+      // can interact with the app while the watcher catches up.
+      visible = false;
+      return;
+    }
+    const t = setTimeout(() => {
+      visible = true;
+    }, STARTUP_GRACE_MS);
+    return () => clearTimeout(t);
+  });
+
+  const message = $derived.by(() => {
+    switch (ui.ws) {
+      case "connecting":
+        return "connecting to the chan server";
+      case "reconnecting":
+        return "reconnecting to the chan server";
+      case "closed":
+        return "disconnected from the chan server";
+      default:
+        return "";
+    }
+  });
+
+  const subline = $derived.by(() => {
+    if (ui.ws === "closed") {
+      return inApp
+        ? "the in-app server has stopped responding; tap Retry now or relaunch chan"
+        : "the server may have stopped; check the terminal where you ran `chan serve`";
+    }
+    return "this usually clears on its own; press Retry to skip the wait";
+  });
+</script>
+
+{#if visible}
+  <div class="overlay" role="alert" aria-live="assertive">
+    <div class="card">
+      <div class="title">{message}</div>
+      <div class="subline">{subline}</div>
+      <button class="retry" onclick={reconnectWatcher}>Retry now</button>
+    </div>
+  </div>
+{/if}
+
+<style>
+  /* Cover the entire viewport with a semi-opaque backdrop so the
+     UI underneath visibly greys out. Pointer-events on so clicks
+     don't reach controls behind. */
+  .overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 30000;
+    backdrop-filter: blur(2px);
+  }
+  .card {
+    background: var(--bg-elev);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 14px 44px rgba(0, 0, 0, 0.5);
+    padding: 18px 22px;
+    max-width: 420px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .title {
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .subline {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+  }
+  .retry {
+    align-self: center;
+    background: var(--link);
+    color: #fff;
+    border: 1px solid var(--link);
+    border-radius: 4px;
+    padding: 6px 14px;
+    font: inherit;
+    cursor: pointer;
+  }
+  .retry:hover { filter: brightness(1.1); }
+</style>

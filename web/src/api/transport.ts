@@ -1,0 +1,205 @@
+// API transport: HTTP+WebSocket against the local chan-core server.
+//
+// `chan serve` runs a real loopback server. The Tauri desktop and
+// (eventual) iOS shells spawn the same server in-process and point
+// their WebView at it via the same loopback URL. One transport
+// implementation, one wire format, one auth model — there is no
+// platform-specific path.
+//
+// The seam exists as a single module so client.ts can stay focused
+// on the typed API surface (file ops, search, llm, ...) and leave
+// wire mechanics (token plumbing, fetch shape, WebSocket reconnect)
+// here.
+//
+// We considered routing native shells through Tauri's custom URI
+// scheme + event bus to avoid binding a port. That doesn't work as
+// cleanly as it sounds: HTTP request/response would map fine, but
+// WebSocket can't go through a custom scheme (the browser spec
+// requires `ws:` / `wss:` URLs) and Tauri events are pub/sub with
+// none of WebSocket's ordering or connection-state semantics.
+// Splitting just HTTP over a custom scheme while leaving WS on
+// loopback was also evaluated: since we'd still bind a port for
+// /ws, the partial scheme switch added complexity without removing
+// the open port. We stay on plain loopback everywhere.
+
+import { ApiError } from "./errors";
+
+export type WsStatus = "connecting" | "open" | "reconnecting" | "closed";
+
+const TOKEN_KEY = "chan.token";
+
+function loadToken(): string | null {
+  const url = new URL(window.location.href);
+  const t = url.searchParams.get("t");
+  if (t) {
+    sessionStorage.setItem(TOKEN_KEY, t);
+    url.searchParams.delete("t");
+    window.history.replaceState({}, "", url.toString());
+    return t;
+  }
+  return sessionStorage.getItem(TOKEN_KEY);
+}
+
+const token = loadToken();
+
+/// Append the auth token as a `?t=...` query. Use only for paths
+/// that can't carry an Authorization header (WebSocket upgrade,
+/// `<img src>` rendered by the browser).
+export function withTokenQuery(path: string): string {
+  if (!token) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}t=${encodeURIComponent(token)}`;
+}
+
+/// Raw auth token. Exposed for the few call sites that build URLs
+/// outside the request helper (image src, multipart upload).
+/// Returns null on a `--no-token` server.
+export function authToken(): string | null {
+  return token;
+}
+
+/// Issue a JSON-shaped request. Returns parsed JSON, or undefined
+/// for 204 / empty responses. Throws ApiError on non-2xx, or on
+/// the wall-clock timeout (10 s by default) so the UI never
+/// deadlocks behind a hung fetch.
+///
+/// The timeout matters specifically on iOS WKWebView: the first
+/// connect attempt to loopback can occasionally stall indefinitely
+/// (we've seen "Network is down" recoverable errors that the
+/// underlying NSURLSession doesn't always surface back to fetch).
+/// Without an upper bound, restoreLayout's `await
+/// loadTabContent(...)` for a stuck tab would block bootstrap
+/// forever and the user would see "loading…" with no way out.
+///
+/// Pass `timeoutMs: 0` to disable the cap. Reserve that for
+/// endpoints that legitimately run for minutes (assistant
+/// completions with tool-use loops, etc.) and rely on the
+/// caller-supplied AbortSignal for user-initiated cancel.
+export async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
+): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (token) headers.authorization = `Bearer ${token}`;
+  const init: RequestInit = { method, headers };
+  if (body !== undefined) {
+    init.body = JSON.stringify(body);
+    headers["content-type"] = "application/json";
+  }
+
+  // Compose the caller's signal (if any) with our timeout signal so
+  // either an explicit caller abort or the timeout cancels the
+  // fetch. AbortSignal.any was added in Safari 17.4 / Chrome 124;
+  // both are below the WebViews chan targets.
+  const timeoutCtl = new AbortController();
+  const timer =
+    timeoutMs > 0 ? setTimeout(() => timeoutCtl.abort(), timeoutMs) : null;
+  const sigs: AbortSignal[] = [];
+  if (timer !== null) sigs.push(timeoutCtl.signal);
+  if (signal) sigs.push(signal);
+  if (sigs.length > 0) init.signal = AbortSignal.any(sigs);
+
+  try {
+    const res = await fetch(path, init);
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText);
+      throw new ApiError(res.status, text || res.statusText);
+    }
+    const text = await res.text();
+    if (!text) return undefined as T;
+    return JSON.parse(text) as T;
+  } catch (e) {
+    // Differentiate between the caller's abort, our timeout, and
+    // any other fetch error. The caller's AbortError stays opaque;
+    // our own timeout becomes a dedicated message so the UI can
+    // surface "request timed out" instead of "AbortError".
+    if (timeoutCtl.signal.aborted && (signal === undefined || !signal.aborted)) {
+      throw new ApiError(0, `request timed out after ${timeoutMs} ms: ${method} ${path}`);
+    }
+    throw e;
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
+
+/// Default wall-clock cap on a single request. Generous so
+/// legitimately slow operations (large file read, model download
+/// on first search) still complete, tight enough that a hung
+/// fetch on loopback fails the UI fast instead of locking it up.
+/// Callers that need a different cap pass `timeoutMs` to
+/// `request`; `0` disables.
+const REQUEST_TIMEOUT_MS = 10_000;
+
+/// Open the watcher subscription. Auto-reconnects with capped
+/// exponential backoff (500 ms ramping to 8 s). The status callback
+/// fires on connect/reconnect transitions so the UI can show the
+/// disconnect overlay when the channel drops. Returns a disposer
+/// that closes the socket and stops reconnecting.
+///
+/// The disposer detaches every WS event handler before calling
+/// `close()`. Without that, `reconnectWatcher` (which calls the
+/// disposer and immediately opens a fresh socket) would race: the
+/// old socket's async `onclose` fires after the new socket has
+/// already pushed `"connecting"` to the status callback, and the
+/// stale handler would clobber it back to a disconnected state.
+/// This was the cause of the "Retry now" button appearing to do
+/// nothing on iOS lock/unlock: the new socket WAS connecting, the
+/// old socket's onclose was just stomping the status afterwards.
+export function openWatch(
+  onEvent: (e: unknown) => void,
+  onStatus: (s: WsStatus) => void = () => {},
+): () => void {
+  let closed = false;
+  let ws: WebSocket | null = null;
+  let backoff = 500;
+
+  const connect = () => {
+    if (closed) return;
+    onStatus("connecting");
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const url = withTokenQuery(`${proto}//${window.location.host}/ws`);
+    ws = new WebSocket(url);
+    ws.onopen = () => {
+      backoff = 500;
+      onStatus("open");
+    };
+    ws.onmessage = (m) => {
+      try {
+        onEvent(JSON.parse(m.data));
+      } catch {
+        // Drop malformed frames; the server controls the wire format.
+      }
+    };
+    ws.onclose = () => {
+      if (closed) return;
+      onStatus("reconnecting");
+      const delay = backoff;
+      backoff = Math.min(backoff * 2, 8000);
+      setTimeout(connect, delay);
+    };
+  };
+  connect();
+  return () => {
+    closed = true;
+    const w = ws;
+    ws = null;
+    if (w) {
+      // Defuse the handlers BEFORE close() so a queued `onclose`
+      // event doesn't fire after the next `connect()` already set
+      // the status to "connecting".
+      w.onopen = null;
+      w.onclose = null;
+      w.onerror = null;
+      w.onmessage = null;
+      try {
+        w.close();
+      } catch {
+        // close() can throw if the socket is already in CLOSED
+        // state; that's exactly what we wanted, swallow it.
+      }
+    }
+  };
+}
