@@ -1070,82 +1070,77 @@
         {/if}
       </div>
 
-      <!-- Formatting toolbar above the prompt input. Mirrors the
-           file editor's tab-bar (heading dropdown + B/I/S/Code on
-           the left, mode toggle on the right) so the prompt feels
-           like a first-class markdown editor and not a special
-           "chat input". Source mode renders a textarea instead of
-           the WYSIWYG editor; the formatting buttons hide in
-           source mode because they can't act on a textarea. -->
-      <div class="prompt-bar">
-        <span class="left fmt">
-          {#if promptMode === "wysiwyg"}
-            <select
-              class="block-kind"
-              value={blockKind}
-              onchange={onBlockKindChange}
-              title="block style"
-            >
-              <option value="h1">h1</option>
-              <option value="h2">h2</option>
-              <option value="h3">h3</option>
-              <option value="normal">text</option>
-              <option value="code">code</option>
-              <option value="quote">quote</option>
-            </select>
-            <button
-              class="hbtn fmtbtn"
-              class:on={isBold}
-              title="bold (Cmd/Ctrl+B)"
-              onmousedown={(e) => e.preventDefault()}
-              onclick={() => wysiwygRef?.toggleBold()}
-            ><b>B</b></button>
-            <button
-              class="hbtn fmtbtn"
-              class:on={isItalic}
-              title="italic (Cmd/Ctrl+I)"
-              onmousedown={(e) => e.preventDefault()}
-              onclick={() => wysiwygRef?.toggleItalic()}
-            ><i>I</i></button>
-            <button
-              class="hbtn fmtbtn"
-              class:on={isStrike}
-              title="strikethrough"
-              onmousedown={(e) => e.preventDefault()}
-              onclick={() => wysiwygRef?.toggleStrike()}
-            ><s>S</s></button>
-            <button
-              class="hbtn fmtbtn"
-              class:on={isInlineCode}
-              title="inline code"
-              onmousedown={(e) => e.preventDefault()}
-              onclick={() => wysiwygRef?.toggleInlineCode()}
-            ><code>{`<>`}</code></button>
-            <button
-              class="hbtn fmtbtn"
-              class:on={isBulletList}
-              title="bullet list"
-              aria-label="bullet list"
-              onmousedown={(e) => e.preventDefault()}
-              onclick={() => wysiwygRef?.toggleBulletList()}
-            >•</button>
-            <button
-              class="hbtn fmtbtn"
-              class:on={isOrderedList}
-              title="ordered list"
-              aria-label="ordered list"
-              onmousedown={(e) => e.preventDefault()}
-              onclick={() => wysiwygRef?.toggleOrderedList()}
-            >1.</button>
-          {/if}
-        </span>
-        <span class="actions">
+      <!-- Floating accessory bar above the prompt input. Same pill
+           treatment as the editor canvas's .fmt-bar so the prompt
+           feels like a first-class markdown editor; source mode
+           drops the formatting controls (a textarea can't act on
+           them) and keeps just the mode toggle. -->
+      <div class="prompt-bar" role="toolbar" aria-label="Prompt">
+        {#if promptMode === "wysiwyg"}
+          <select
+            class="block-kind"
+            value={blockKind}
+            onchange={onBlockKindChange}
+            title="block style"
+          >
+            <option value="h1">h1</option>
+            <option value="h2">h2</option>
+            <option value="h3">h3</option>
+            <option value="normal">text</option>
+            <option value="code">code</option>
+            <option value="quote">quote</option>
+          </select>
           <button
-            class="hbtn"
-            title={promptMode === "wysiwyg" ? "view source" : "view rendered"}
-            onclick={() => (promptMode = promptMode === "wysiwyg" ? "source" : "wysiwyg")}
-          >{promptMode === "wysiwyg" ? "</>" : "¶"}</button>
-        </span>
+            class="fbtn"
+            class:on={isBold}
+            title="bold (Cmd/Ctrl+B)"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => wysiwygRef?.toggleBold()}
+          ><b>B</b></button>
+          <button
+            class="fbtn"
+            class:on={isItalic}
+            title="italic (Cmd/Ctrl+I)"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => wysiwygRef?.toggleItalic()}
+          ><i>I</i></button>
+          <button
+            class="fbtn"
+            class:on={isStrike}
+            title="strikethrough"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => wysiwygRef?.toggleStrike()}
+          ><s>S</s></button>
+          <button
+            class="fbtn"
+            class:on={isInlineCode}
+            title="inline code (Cmd/Ctrl+E)"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => wysiwygRef?.toggleInlineCode()}
+          ><code>{`<>`}</code></button>
+          <button
+            class="fbtn"
+            class:on={isBulletList}
+            title="bullet list"
+            aria-label="bullet list"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => wysiwygRef?.toggleBulletList()}
+          >•</button>
+          <button
+            class="fbtn"
+            class:on={isOrderedList}
+            title="ordered list"
+            aria-label="ordered list"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => wysiwygRef?.toggleOrderedList()}
+          >1.</button>
+          <span class="sep" aria-hidden="true"></span>
+        {/if}
+        <button
+          class="fbtn mode"
+          title={promptMode === "wysiwyg" ? "view source" : "view rendered"}
+          onclick={() => (promptMode = promptMode === "wysiwyg" ? "source" : "wysiwyg")}
+        >{promptMode === "wysiwyg" ? "</>" : "¶"}</button>
       </div>
 
       <div class="prompt-wrap" class:disabled={!currentContext}>
@@ -1571,58 +1566,70 @@
     line-height: 1.5;
   }
 
-  /* Toolbar above the prompt input. Same dimensions and treatment
-     as the file editor's tab-bar so the visual language stays
-     consistent across editors. The bar sits between the chat
-     scrollback and the input area; both edges get a border so
-     it reads as its own strip. */
+  /* Floating accessory bar above the prompt input. Same pill
+     treatment as the editor canvas's .fmt-bar (centered pill,
+     rounded background, soft shadow) so the prompt reads as a
+     first-class editor surface, not a chat input. The mode toggle
+     sits inside the same pill (separated by a hairline) instead of
+     a sibling control: keeps everything in one floating affordance.
+     Sits between the chat scrollback and the input area; the
+     scrollback's flex-shrink keeps the pill from pushing the input
+     row off the bottom on tall conversations. */
   .prompt-bar {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.25rem 0.5rem;
+    gap: 4px;
+    padding: 6px 10px;
+    margin: 8px auto 4px;
     background: var(--bg-card);
-    border-top: 1px solid var(--border);
-    border-bottom: 1px solid var(--border);
-    font-size: 14px;
-    color: var(--text-secondary);
-    flex-shrink: 0;
-    min-height: 28px;
-  }
-  .prompt-bar .left { flex: 1; }
-  .prompt-bar .left.fmt { display: flex; gap: 4px; align-items: center; }
-  .prompt-bar .actions { display: flex; gap: 2px; }
-  .prompt-bar .hbtn {
-    background: none;
-    border: 1px solid transparent;
-    border-radius: 3px;
-    cursor: pointer;
-    color: var(--text-secondary);
-    font: inherit;
-    padding: 0 5px;
-    line-height: 18px;
-    height: 20px;
-  }
-  .prompt-bar .hbtn:hover { color: var(--text); border-color: var(--btn-border); }
-  .prompt-bar .hbtn.on {
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
     color: var(--text);
-    border-color: var(--btn-hover);
-    background: var(--hover-bg);
+    flex-shrink: 0;
+    width: max-content;
+    max-width: calc(100% - 24px);
   }
   .prompt-bar .block-kind {
     background: var(--bg-card);
     color: var(--text);
     border: 1px solid var(--btn-border);
-    border-radius: 3px;
-    padding: 1px 4px;
+    border-radius: 14px;
+    padding: 1px 8px;
     font: inherit;
-    font-size: 13px;
-    height: 20px;
+    font-size: 14px;
+    height: 26px;
   }
-  .prompt-bar .fmtbtn { min-width: 22px; text-align: center; }
-  .prompt-bar .fmtbtn b,
-  .prompt-bar .fmtbtn i,
-  .prompt-bar .fmtbtn s,
-  .prompt-bar .fmtbtn code { font-size: 14px; }
-  .prompt-bar .fmtbtn code { font-family: ui-monospace, monospace; }
+  .prompt-bar .fbtn {
+    min-width: 30px;
+    height: 26px;
+    text-align: center;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 13px;
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+    padding: 0 7px;
+    line-height: 24px;
+  }
+  .prompt-bar .fbtn:hover { background: var(--hover-bg); }
+  .prompt-bar .fbtn.on {
+    background: var(--hover-bg);
+    border-color: var(--btn-hover);
+  }
+  .prompt-bar .fbtn b,
+  .prompt-bar .fbtn i,
+  .prompt-bar .fbtn s,
+  .prompt-bar .fbtn code { font-size: 15px; }
+  .prompt-bar .fbtn code { font-family: ui-monospace, monospace; }
+  /* Hairline divider between the formatting controls and the
+     mode-toggle group, so they read as related-but-distinct in
+     the same pill. */
+  .prompt-bar .sep {
+    width: 1px;
+    height: 18px;
+    background: var(--border);
+    margin: 0 4px;
+  }
 </style>
