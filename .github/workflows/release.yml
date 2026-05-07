@@ -160,12 +160,13 @@ jobs:
         run: cargo install cargo-generate-rpm --locked
       - name: Build .rpm
         if: matrix.rpm
-        # cargo-generate-rpm constructs the package's manifest
-        # path as `<cwd>/<package-name>/Cargo.toml`. Our binary
-        # crate lives at `crates/chan/Cargo.toml`, not `chan/`,
-        # so we point at it explicitly via --manifest-path.
-        run: cargo generate-rpm --target ${{ matrix.target }} --manifest-path crates/chan/Cargo.toml
-        working-directory: chan
+        # cargo-generate-rpm doesn't accept --manifest-path or
+        # workspace `-p`; invoking it from inside the package dir
+        # is the supported entry point. cargo metadata still
+        # resolves the workspace target_directory correctly so
+        # the binary is found at <workspace>/target/<target>/...
+        run: cargo generate-rpm --target ${{ matrix.target }}
+        working-directory: chan/crates/chan
       - name: Locate .rpm
         if: matrix.rpm
         id: locate_rpm
