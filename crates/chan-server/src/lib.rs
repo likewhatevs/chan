@@ -35,8 +35,8 @@ use chan_core::{
     paths::DrivePaths, Drive, EdgeKind, Library, SearchOpts, WatchCallback, WatchEvent, WatchHandle,
 };
 use chan_llm::{
-    BackendKind, Delta, LlmConfig, LlmError, LlmSession, SessionListener, StopReason, ToolCall,
-    ToolResult,
+    BackendKind, Delta, LlmConfig, LlmError, LlmSession, Message as LlmMessage, Role as LlmRole,
+    SessionListener, StopReason, ToolCall, ToolResult,
 };
 use rand::RngCore;
 use rust_embed::RustEmbed;
@@ -1057,7 +1057,53 @@ struct CompleteBody {
     /// streaming events to its pending turn (multiple turns can
     /// interleave on the same socket).
     session_id: String,
-    message: String,
+    /// Convenience: a single user message. The server wraps this
+    /// in a one-element Vec<Message> for the LLM. Use
+    /// `messages` instead when the host needs to pass full
+    /// transcript / tool-result turns.
+    #[serde(default)]
+    message: Option<String>,
+    /// Full conversation transcript. Wins over `message` when
+    /// both are set. The frontend builds this from its persisted
+    /// assistant blob (see /api/assistant/conversation/:key) and
+    /// passes the full history each turn so chan-llm stays
+    /// stateless.
+    #[serde(default)]
+    messages: Vec<ApiMessage>,
+}
+
+#[derive(Deserialize)]
+struct ApiMessage {
+    role: ApiRole,
+    content: String,
+    #[serde(default)]
+    tool_call_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ApiRole {
+    System,
+    User,
+    Assistant,
+    Tool,
+}
+
+impl From<ApiMessage> for LlmMessage {
+    fn from(m: ApiMessage) -> Self {
+        let role = match m.role {
+            ApiRole::System => LlmRole::System,
+            ApiRole::User => LlmRole::User,
+            ApiRole::Assistant => LlmRole::Assistant,
+            ApiRole::Tool => LlmRole::Tool,
+        };
+        LlmMessage {
+            role,
+            content: m.content,
+            tool_call_id: m.tool_call_id,
+            tool_calls: Vec::new(),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -1078,11 +1124,28 @@ async fn api_llm_complete(
         tx: state.events_tx.clone(),
         session_id: body.session_id.clone(),
     });
+
+    // Prefer the full `messages` array; fall back to wrapping a
+    // single `message` string as one user turn. The frontend
+    // sends the array form once it has chat history; the simpler
+    // form is for one-shot prompts without context.
+    let messages: Vec<LlmMessage> = if !body.messages.is_empty() {
+        body.messages.into_iter().map(LlmMessage::from).collect()
+    } else if let Some(text) = body.message {
+        vec![LlmMessage::user(text)]
+    } else {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "either `message` or `messages` is required".into(),
+        );
+    };
+
     // chan-llm's send is fire-and-forget; events flow into the
-    // listener (which fans out to /ws). When real backends land
-    // they'll spawn onto chan-llm's internal runtime; the route
-    // doesn't need to await anything.
-    session.send(body.message, listener);
+    // listener (which fans out to /ws). chan-llm picks up the
+    // ambient tokio runtime (this very task's runtime) for its
+    // background work, so no extra runtime is spawned.
+    session.send(messages, listener);
+
     Json(CompleteAck {
         session_id: body.session_id,
         started: true,
