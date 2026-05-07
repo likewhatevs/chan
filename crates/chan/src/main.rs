@@ -28,6 +28,7 @@
 use std::io::{IsTerminal, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chan_core::{Library, SearchOpts};
@@ -101,6 +102,13 @@ enum Command {
         /// rejected.
         #[arg(long)]
         prefix: Option<String>,
+        /// Idle timeout before the server triggers a graceful
+        /// shutdown. Accepts `30s`, `5m`, `1h`. Useful for systemd
+        /// socket-activated deployments where many idle instances
+        /// stack on one host. Without this flag the server stays
+        /// resident indefinitely.
+        #[arg(long, value_parser = parse_idle_timeout)]
+        timeout: Option<Duration>,
         /// Skip the per-launch bearer-token gate. For tests and the
         /// desktop shell only; never expose a no-token server on a
         /// shared machine.
@@ -149,6 +157,7 @@ fn main() -> Result<()> {
             ipv6,
             port,
             prefix,
+            timeout,
             no_token,
         } => {
             let addr = resolve_listen_addr(host, ipv4, ipv6, port)?;
@@ -160,7 +169,7 @@ fn main() -> Result<()> {
                 .enable_all()
                 .build()
                 .context("building tokio runtime")?;
-            rt.block_on(cmd_serve(addr, prefix, path, no_token))
+            rt.block_on(cmd_serve(addr, prefix, timeout, path, no_token))
         }
         Command::Index { path } => cmd_index(path),
         Command::Search { path, query, limit } => cmd_search(path, query, limit),
@@ -384,6 +393,34 @@ fn cmd_rename(path: PathBuf, name: String) -> Result<()> {
     Ok(())
 }
 
+/// Parse a `--timeout` value: an unsigned integer plus a `s` / `m`
+/// / `h` suffix. Reject zero so a typo doesn't get the server killed
+/// on the first activity check. We deliberately don't pull the
+/// `humantime` crate for this; the accepted shapes are the only ones
+/// that matter for systemd service files (`OnInactiveSec=` style).
+fn parse_idle_timeout(s: &str) -> Result<Duration, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("empty timeout".into());
+    }
+    let (num, unit) = match s.as_bytes().last() {
+        Some(b's' | b'm' | b'h') => s.split_at(s.len() - 1),
+        _ => return Err(format!("expected suffix s|m|h, got {s:?}")),
+    };
+    let n: u64 = num
+        .parse()
+        .map_err(|e| format!("invalid timeout number {num:?}: {e}"))?;
+    if n == 0 {
+        return Err("timeout must be > 0".into());
+    }
+    Ok(match unit {
+        "s" => Duration::from_secs(n),
+        "m" => Duration::from_secs(n * 60),
+        "h" => Duration::from_secs(n * 60 * 60),
+        _ => unreachable!("suffix already validated"),
+    })
+}
+
 /// Resolve final listen address from the user's flags.
 ///
 /// `--host` is authoritative when given; `-4` / `-6` only validate
@@ -414,6 +451,7 @@ fn resolve_listen_addr(
 async fn cmd_serve(
     addr: SocketAddr,
     prefix: String,
+    idle_timeout: Option<Duration>,
     path: Option<PathBuf>,
     no_token: bool,
 ) -> Result<()> {
@@ -454,6 +492,7 @@ async fn cmd_serve(
         addr,
         no_token,
         prefix,
+        idle_timeout,
     };
     chan_server::serve(lib, drive, config)
         .await
@@ -575,5 +614,28 @@ mod tests {
     fn ipv6_flag_accepts_matching_v6_host() {
         let addr = resolve_listen_addr(Some(ipv6("::")), false, true, 8787).unwrap();
         assert_eq!(addr, SocketAddr::new(ipv6("::"), 8787));
+    }
+
+    #[test]
+    fn parse_idle_timeout_units() {
+        assert_eq!(parse_idle_timeout("30s").unwrap(), Duration::from_secs(30));
+        assert_eq!(parse_idle_timeout("5m").unwrap(), Duration::from_secs(300));
+        assert_eq!(parse_idle_timeout("1h").unwrap(), Duration::from_secs(3600));
+        assert_eq!(
+            parse_idle_timeout("  10s  ").unwrap(),
+            Duration::from_secs(10)
+        );
+    }
+
+    #[test]
+    fn parse_idle_timeout_rejects_bad_inputs() {
+        assert!(parse_idle_timeout("").is_err());
+        assert!(parse_idle_timeout("0s").is_err());
+        assert!(parse_idle_timeout("0m").is_err());
+        assert!(parse_idle_timeout("10").is_err()); // no unit
+        assert!(parse_idle_timeout("10x").is_err()); // bad unit
+        assert!(parse_idle_timeout("-5s").is_err()); // negative
+        assert!(parse_idle_timeout("five s").is_err());
+        assert!(parse_idle_timeout("1.5m").is_err()); // no fractional
     }
 }

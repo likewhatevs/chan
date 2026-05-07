@@ -26,8 +26,9 @@ use self_writes::SelfWrites;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -77,6 +78,13 @@ pub struct ServeConfig {
     /// trailing). Use `sanitize_prefix` to canonicalize untrusted
     /// input.
     pub prefix: String,
+    /// Idle-shutdown window. When set, the server triggers a
+    /// graceful shutdown if no HTTP request or WebSocket frame is
+    /// observed inside the window. Intended for systemd
+    /// socket-activated deployments where many idle instances
+    /// stack on one host. `None` keeps the server resident
+    /// indefinitely (today's default).
+    pub idle_timeout: Option<Duration>,
 }
 
 /// Resolved at boot for the launch banner / browser handoff.
@@ -209,6 +217,7 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
         EditorPrefs::default()
     });
 
+    let last_activity = Arc::new(AtomicU64::new(now_unix_secs()));
     let state = Arc::new(AppState {
         library,
         drive_root,
@@ -223,6 +232,7 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
         server_config: Mutex::new(server_config),
         editor_prefs: Mutex::new(editor_prefs),
         self_writes,
+        last_activity: last_activity.clone(),
     });
     // Nest under the prefix so `--prefix=/foo` makes every existing
     // route reachable at `/foo<route>` without changing any handler.
@@ -234,10 +244,115 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
     } else {
         Router::new().nest(&config.prefix, inner)
     };
-    axum::serve(listener, app)
-        .await
-        .map_err(|e| Error::Io(std::io::Error::other(e.to_string())))?;
+
+    // Single shutdown channel fed by both the idle-timeout watcher
+    // (when --timeout is set) and SIGINT/SIGTERM. axum's
+    // with_graceful_shutdown awaits a `changed()` on it, then stops
+    // accepting new connections and drains in-flight ones.
+    let (signal_tx, mut signal_rx) = tokio::sync::watch::channel(false);
+    let signal_tx = Arc::new(signal_tx);
+
+    if let Some(timeout) = config.idle_timeout {
+        spawn_idle_watcher(timeout, last_activity.clone(), signal_tx.clone());
+    }
+    spawn_signal_watcher(signal_tx.clone());
+
+    let mut graceful_rx = signal_rx.clone();
+    let server_future = axum::serve(listener, app).with_graceful_shutdown(async move {
+        let _ = graceful_rx.changed().await;
+    });
+
+    // Hard deadline after the shutdown signal: long-lived WebSocket
+    // subscribers won't return on their own, so axum's graceful
+    // drain alone could hang forever. We `select!` the server
+    // future against "signal fired, then sleep GRACE seconds" and
+    // force exit on grace expiry. tokio drops in-flight tasks when
+    // we return.
+    const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
+    tokio::select! {
+        res = server_future => {
+            res.map_err(|e| Error::Io(std::io::Error::other(e.to_string())))?;
+        }
+        _ = async move {
+            let _ = signal_rx.changed().await;
+            tokio::time::sleep(SHUTDOWN_GRACE).await;
+        } => {
+            eprintln!("chan: graceful shutdown exceeded {SHUTDOWN_GRACE:?}; forcing exit");
+        }
+    }
     Ok(())
+}
+
+/// Current wall-clock unix timestamp in seconds. Saturates at 0 on
+/// the impossible-but-cheap-to-handle case where the system clock
+/// is set before 1970.
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Spawn the idle-timeout watcher. Compares `last_activity` against
+/// `now` on each tick; on a window expiry, signals shutdown.
+///
+/// Tick interval is `min(timeout / 4, 30s)` so short timeouts (the
+/// systemd socket-activation case) get tight precision while long
+/// timeouts don't burn CPU on a hot loop.
+fn spawn_idle_watcher(
+    timeout: Duration,
+    last_activity: Arc<AtomicU64>,
+    signal_tx: Arc<tokio::sync::watch::Sender<bool>>,
+) {
+    tokio::spawn(async move {
+        let tick = std::cmp::min(timeout / 4, Duration::from_secs(30)).max(Duration::from_secs(1));
+        let timeout_secs = timeout.as_secs().max(1);
+        loop {
+            tokio::time::sleep(tick).await;
+            let last = last_activity.load(Ordering::Relaxed);
+            let now = now_unix_secs();
+            if now.saturating_sub(last) >= timeout_secs {
+                eprintln!("chan: idle for {timeout_secs}s; shutting down");
+                let _ = signal_tx.send(true);
+                return;
+            }
+        }
+    });
+}
+
+/// Spawn a SIGINT / SIGTERM (unix) or Ctrl-C (windows) watcher that
+/// signals shutdown when the first signal arrives. Subsequent signals
+/// are ignored; the runtime cleans up on return from `serve`.
+fn spawn_signal_watcher(signal_tx: Arc<tokio::sync::watch::Sender<bool>>) {
+    tokio::spawn(async move {
+        wait_for_signal().await;
+        eprintln!("chan: signal received; shutting down");
+        let _ = signal_tx.send(true);
+    });
+}
+
+#[cfg(unix)]
+async fn wait_for_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut sigterm = match signal(SignalKind::terminate()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("failed to install SIGTERM handler: {e}");
+            // Fall back to SIGINT only.
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        }
+    };
+    let ctrl_c = tokio::signal::ctrl_c();
+    tokio::select! {
+        _ = sigterm.recv() => {}
+        _ = ctrl_c => {}
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_signal() {
+    let _ = tokio::signal::ctrl_c().await;
 }
 
 /// Server state shared across all handlers.
@@ -260,6 +375,13 @@ struct AppState {
     /// into the SPA shell so the frontend can prepend it to fetch
     /// and WebSocket URLs.
     prefix: String,
+    /// Last activity timestamp (unix seconds). Bumped by HTTP
+    /// middleware on every request, by `ws_upgrade` on connect,
+    /// and by `ws_pump` on every successful frame send. The idle
+    /// watcher task compares this against `now` to decide when to
+    /// trigger a graceful shutdown. Always present; the watcher
+    /// task only runs when `--timeout` is set.
+    last_activity: Arc<AtomicU64>,
     /// Pre-serialized JSON-envelope frames: `{"type": "watch",
     /// "event": ...}`, `{"type": "llm.delta", "session_id": ...,
     /// "text": ...}`, etc. One channel; the `type` field tells
@@ -670,14 +792,25 @@ async fn auth_middleware(
     req: Request<Body>,
     next: Next,
 ) -> Response {
+    // The activity bump lives here so it only fires on requests we
+    // actually serve: a brute-forcing client with bad tokens keeps
+    // hitting the 401 path below and won't pin the idle timer open.
+    let bump = || {
+        state
+            .last_activity
+            .store(now_unix_secs(), Ordering::Relaxed)
+    };
     let Some(expected) = state.token.as_deref() else {
+        bump();
         return next.run(req).await;
     };
     let path = req.uri().path();
     if !(path.starts_with("/api") || path == "/ws") {
+        bump();
         return next.run(req).await;
     }
     if extract_token(req.uri().query(), req.headers()) == Some(expected) {
+        bump();
         return next.run(req).await;
     }
     (StatusCode::UNAUTHORIZED, "missing or invalid token").into_response()
@@ -705,7 +838,8 @@ async fn api_health() -> Response {
 
 async fn ws_upgrade(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) -> Response {
     let rx = state.events_tx.subscribe();
-    ws.on_upgrade(move |socket| ws_pump(socket, rx))
+    let last_activity = state.last_activity.clone();
+    ws.on_upgrade(move |socket| ws_pump(socket, rx, last_activity))
 }
 
 /// Forward pre-serialized JSON envelope frames to one WebSocket
@@ -713,13 +847,23 @@ async fn ws_upgrade(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) ->
 /// LlmBroadcastListener) build the JSON once; this pump just
 /// fans out. Lagged subscribers skip ahead rather than tearing
 /// down the connection.
-async fn ws_pump(mut socket: WebSocket, mut rx: broadcast::Receiver<String>) {
+///
+/// Each successful send bumps `last_activity` so that LLM token
+/// streams and watcher events keep the idle-timeout window open
+/// (otherwise a long generation could be killed by `--timeout`).
+/// Idle subscribers with no traffic do not bump the timer.
+async fn ws_pump(
+    mut socket: WebSocket,
+    mut rx: broadcast::Receiver<String>,
+    last_activity: Arc<AtomicU64>,
+) {
     loop {
         match rx.recv().await {
             Ok(frame) => {
                 if socket.send(Message::Text(frame)).await.is_err() {
                     break;
                 }
+                last_activity.store(now_unix_secs(), Ordering::Relaxed);
             }
             Err(broadcast::error::RecvError::Closed) => break,
             Err(broadcast::error::RecvError::Lagged(_)) => continue,
