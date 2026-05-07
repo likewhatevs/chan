@@ -11,6 +11,10 @@
 
 #![forbid(unsafe_code)]
 
+mod dial;
+
+pub use dial::dial;
+
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -173,6 +177,57 @@ where
             }
             Some(Err(_)) | None => return Ok(()),
         }
+    }
+}
+
+/// Run the tunnel client until cancelled: dial, register, serve
+/// substreams, reconnect on disconnect with exponential backoff.
+///
+/// Designed for `chan serve` to call as a long-lived future;
+/// dropping it cancels everything cleanly. Returns only on
+/// configuration errors that retrying cannot recover from
+/// (invalid URL, invalid drive name, missing token).
+pub async fn run(cfg: ClientConfig, router: axum::Router) -> Result<(), ClientError> {
+    if cfg.token.is_empty() {
+        return Err(ClientError::Handshake(
+            "ClientConfig.token is empty; nothing to authenticate with".into(),
+        ));
+    }
+    if !chan_tunnel_proto::is_valid_drive_name(&cfg.drive) {
+        return Err(ClientError::Handshake(format!(
+            "invalid drive name {:?}",
+            cfg.drive
+        )));
+    }
+    if cfg.tunnel_url.scheme() != "https" {
+        return Err(ClientError::InvalidUrl(
+            "tunnel URL must be https://".into(),
+        ));
+    }
+
+    let mut backoff = cfg.initial_backoff;
+    loop {
+        match dial(&cfg).await {
+            Ok((registration, yconn)) => {
+                tracing::info!(
+                    user = %registration.user,
+                    drive = %registration.drive,
+                    prefix = %registration.prefix,
+                    "tunnel connected",
+                );
+                backoff = cfg.initial_backoff;
+                if let Err(e) = serve_substreams(yconn, router.clone()).await {
+                    tracing::warn!(error = %e, "tunnel substream loop ended");
+                } else {
+                    tracing::info!("tunnel disconnected");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, ?backoff, "tunnel dial failed; retrying");
+            }
+        }
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(cfg.max_backoff);
     }
 }
 
