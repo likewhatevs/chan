@@ -38,6 +38,53 @@ use super::{Backend, Outcome};
 
 pub const DEFAULT_URL: &str = "http://localhost:11434";
 
+/// Hit the Ollama daemon's `/api/tags` endpoint and return every
+/// installed model's name. Used by the Settings UI to populate the
+/// Ollama model dropdown without the user having to type a model
+/// name by hand. `base_url` is whatever the caller resolved (env
+/// `OLLAMA_HOST` > `LlmConfig.urls.ollama` > `DEFAULT_URL`).
+///
+/// Returns an empty list when the daemon is reachable but has no
+/// models installed; errors when the daemon isn't reachable so
+/// the Settings UI can surface "ollama: connection refused" copy
+/// instead of an unexplained empty dropdown.
+pub async fn list_models(base_url: &str) -> Result<Vec<String>, crate::error::LlmError> {
+    let base = base_url.trim_end_matches('/');
+    let client = reqwest::Client::builder()
+        // Tags is a tiny list response; fail fast so the Settings
+        // UI doesn't hang for 5 minutes when ollama isn't running.
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("reqwest client builds with default rustls config");
+    let url = format!("{base}/api/tags");
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| crate::error::LlmError::Http(format!("ollama tags: {e}")))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(crate::error::LlmError::Http(format!(
+            "ollama tags {status}: {body}"
+        )));
+    }
+    #[derive(Deserialize)]
+    struct TagsResponse {
+        #[serde(default)]
+        models: Vec<TagEntry>,
+    }
+    #[derive(Deserialize)]
+    struct TagEntry {
+        name: String,
+    }
+    let parsed: TagsResponse = resp
+        .json()
+        .await
+        .map_err(|e| crate::error::LlmError::Http(format!("ollama tags decode: {e}")))?;
+    Ok(parsed.models.into_iter().map(|m| m.name).collect())
+}
+
 #[derive(Debug)]
 pub struct OllamaBackend {
     base_url: String,
