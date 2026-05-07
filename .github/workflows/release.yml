@@ -177,8 +177,24 @@ jobs:
       - name: Locate .rpm
         if: matrix.rpm
         id: locate_rpm
+        # cargo-generate-rpm's output path varies based on
+        # whether --target was honored (our version writes to
+        # the workspace target dir, not under target/<target>/).
+        # Search under chan/ broadly and copy whichever .rpm we
+        # find. Dump diagnostics if missing so we can fix it
+        # without another round trip.
         run: |
-          file=$(ls chan/target/${{ matrix.target }}/generate-rpm/*.rpm | head -1)
+          set -e
+          file=$(find chan -path '*/generate-rpm/*.rpm' -type f | head -1)
+          if [ -z "$file" ]; then
+            echo "::error::no .rpm produced anywhere"
+            echo "--- chan/target tree ---"
+            find chan -type d -name 'generate-rpm' -exec ls -la {} \; || true
+            echo "--- any *.rpm under chan ---"
+            find chan -name '*.rpm' || true
+            exit 1
+          fi
+          echo "located rpm at: $file"
           cp "$file" "./chan-${{ matrix.deb_arch }}.rpm"
           echo "path=chan-${{ matrix.deb_arch }}.rpm" >> "$GITHUB_OUTPUT"
 
