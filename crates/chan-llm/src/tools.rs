@@ -166,6 +166,75 @@ pub trait Tool: Send + Sync {
     fn execute(&self, args: &Json, ctx: &ToolContext) -> Result<ToolOutcome>;
 }
 
+/// JSON-schema descriptor for one tool, in the OpenAI-shaped
+/// `{name, description, parameters}` form most backends accept
+/// directly (Anthropic / Ollama use it verbatim; Gemini wraps it
+/// in its own `functionDeclarations` object). Backends translate
+/// from this to their wire format.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ToolSchema {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub parameters: Json,
+}
+
+/// Return JSON-schema descriptors for the four built-in tools.
+/// Backends call this once per request to populate their
+/// vendor-specific `tools` field.
+pub fn standard_tool_schemas() -> Vec<ToolSchema> {
+    vec![
+        ToolSchema {
+            name: "read_file",
+            description: crate::prompts::READ_FILE_DESC,
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "POSIX rel path under the drive root."
+                    }
+                },
+                "required": ["path"],
+            }),
+        },
+        ToolSchema {
+            name: "write_file",
+            description: crate::prompts::WRITE_FILE_DESC,
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "content": { "type": "string" }
+                },
+                "required": ["path", "content"],
+            }),
+        },
+        ToolSchema {
+            name: "list_files",
+            description: crate::prompts::LIST_FILES_DESC,
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
+        ToolSchema {
+            name: "search_content",
+            description: crate::prompts::SEARCH_CONTENT_DESC,
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Hard cap on hits returned. Default 20."
+                    }
+                },
+                "required": ["query"],
+            }),
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

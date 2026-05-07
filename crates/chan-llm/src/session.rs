@@ -167,9 +167,13 @@ impl LlmSession {
     /// spawning the background task; events flow into the
     /// listener.
     ///
-    /// Today: text-only. Tool calls in a follow-up commit; this
-    /// build's `on_tool_call` hook on the listener is unused by
-    /// any backend.
+    /// Tool-call orchestration: the loop runs the backend, runs
+    /// any tool calls the assistant proposed (auto-executable
+    /// reads / search; pauses on un-confirmed writes when
+    /// auto_apply_writes is off), appends results to the
+    /// transcript, and runs the backend again. Loops until the
+    /// assistant returns text only or hits MAX_TOOL_ITERATIONS
+    /// (defense against runaway loops).
     pub fn send(&self, messages: Vec<Message>, listener: Arc<dyn SessionListener>) {
         let Some(kind) = self.config.backend else {
             listener.on_error(LlmError::MissingApiKey("no backend configured".into()).to_string());
@@ -190,17 +194,119 @@ impl LlmSession {
         // already provided one (a few editor surfaces want a
         // chat-only variant; passing the system message
         // explicitly overrides the default).
-        let mut prepared: Vec<Message> = Vec::with_capacity(messages.len() + 1);
+        let mut history: Vec<Message> = Vec::with_capacity(messages.len() + 1);
         if !messages.first().is_some_and(|m| m.role == Role::System) {
-            prepared.push(Message::system(crate::prompts::SYSTEM_PROMPT));
+            history.push(Message::system(crate::prompts::SYSTEM_PROMPT));
         }
-        prepared.extend(messages);
+        history.extend(messages);
 
-        let listener_for_task = listener.clone();
+        let tool_ctx = self.tool_context();
+        let tool_schemas = crate::tools::standard_tool_schemas();
+
         spawn(async move {
-            backend.run(prepared, listener_for_task.clone()).await;
+            run_loop(backend, history, tool_schemas, tool_ctx, listener).await;
         });
     }
+}
+
+/// Maximum tool-call rounds in a single `send`. Defense against
+/// the assistant looping on a buggy tool call (e.g. read_file on
+/// a non-existent path, then read_file on a similar non-existent
+/// path, etc.). When the cap fires we emit `on_done(Error)` with
+/// a clear message; the host can offer the user a "try again"
+/// affordance.
+const MAX_TOOL_ITERATIONS: usize = 12;
+
+/// Drive the assistant loop. Backend produces text + tool calls;
+/// we run the auto-executable tools and append their results,
+/// then call the backend again. Pauses (emitting `on_done(ToolUse)`)
+/// when a tool returns `Pending` (write_file with auto_apply
+/// off): the host shows a confirmation UI and resumes by sending
+/// the next turn with the tool result message appended.
+async fn run_loop(
+    backend: Arc<dyn backends::Backend>,
+    mut history: Vec<Message>,
+    tool_schemas: Vec<crate::tools::ToolSchema>,
+    tool_ctx: crate::tools::ToolContext,
+    listener: Arc<dyn SessionListener>,
+) {
+    for _ in 0..MAX_TOOL_ITERATIONS {
+        let outcome = backend
+            .run(history.clone(), tool_schemas.clone(), listener.clone())
+            .await;
+
+        if outcome.stop_reason == StopReason::Error {
+            // Backend already emitted on_error; we just close out.
+            listener.on_done(StopReason::Error);
+            return;
+        }
+
+        if outcome.tool_calls.is_empty() {
+            listener.on_done(outcome.stop_reason);
+            return;
+        }
+
+        // Assistant proposed tool calls. Append the assistant
+        // turn (with tool_calls) to history so the next backend
+        // call sees the conversation including the proposed
+        // calls; then run each tool, appending its result as a
+        // Tool message.
+        history.push(Message {
+            role: Role::Assistant,
+            content: outcome.assistant_text.clone(),
+            tool_call_id: None,
+            tool_calls: outcome.tool_calls.clone(),
+        });
+
+        let mut paused = false;
+        for call in outcome.tool_calls {
+            listener.on_tool_call(call.clone());
+            match crate::tools::execute(&call.name, &call.args, &tool_ctx) {
+                Ok(crate::tools::ToolOutcome::Ok(result)) => {
+                    listener.on_tool_result(ToolResult {
+                        id: call.id.clone(),
+                        output: result.clone(),
+                    });
+                    history.push(Message::tool(
+                        call.id.clone(),
+                        serde_json::to_string(&result).unwrap_or_else(|_| "{}".into()),
+                    ));
+                }
+                Ok(crate::tools::ToolOutcome::Pending { .. }) => {
+                    // auto_apply_writes is off and the tool was
+                    // write_file. Pause; the host's UI confirms
+                    // and resumes by re-sending with the tool
+                    // result appended.
+                    paused = true;
+                    break;
+                }
+                Err(e) => {
+                    let err_text = e.to_string();
+                    let err_json = serde_json::json!({"error": err_text});
+                    listener.on_tool_result(ToolResult {
+                        id: call.id.clone(),
+                        output: err_json.clone(),
+                    });
+                    history.push(Message::tool(
+                        call.id.clone(),
+                        serde_json::to_string(&err_json).unwrap_or_default(),
+                    ));
+                }
+            }
+        }
+
+        if paused {
+            listener.on_done(StopReason::ToolUse);
+            return;
+        }
+        // else: loop continues; backend gets the assistant +
+        // tool messages we just appended on the next iteration.
+    }
+
+    listener.on_error(format!(
+        "max tool iterations ({MAX_TOOL_ITERATIONS}) reached without a final answer"
+    ));
+    listener.on_done(StopReason::Error);
 }
 
 /// Spawn a future onto whichever runtime is appropriate. When

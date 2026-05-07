@@ -59,15 +59,53 @@ impl BackendKind {
 }
 
 /// What every backend implements. `run` drives one HTTP exchange:
-/// translate `messages` to wire format, stream the response,
-/// dispatch text deltas + tool calls + the final stop reason
-/// into the listener, then return. Errors are dispatched via
-/// `on_error` followed by `on_done(StopReason::Error)`; the
-/// signature returns nothing because every consumer-facing
-/// outcome is on the listener.
+/// translate `messages` + `tools` to wire format, stream the
+/// response, emit text deltas via `on_delta` (and `on_error` on
+/// failure) into the listener, then return an `Outcome` so the
+/// session-level orchestration loop can decide whether to
+/// dispatch tool calls and continue.
+///
+/// Backends do NOT emit `on_tool_call`, `on_tool_result`, or
+/// `on_done` themselves. Those are the orchestration loop's
+/// concern (in `session.rs::send`); a backend is just one HTTP
+/// turn translated to chan-llm's event vocabulary.
 #[async_trait]
 pub trait Backend: Send + Sync {
-    async fn run(&self, messages: Vec<Message>, listener: Arc<dyn SessionListener>);
+    async fn run(
+        &self,
+        messages: Vec<Message>,
+        tools: Vec<crate::tools::ToolSchema>,
+        listener: Arc<dyn SessionListener>,
+    ) -> Outcome;
+}
+
+/// What the backend collected during one HTTP exchange. The
+/// session-level loop consumes this to decide the next step:
+///   - tool_calls non-empty -> run them, append results to the
+///     transcript, call backend.run again
+///   - tool_calls empty     -> emit `on_done(stop_reason)`, end
+#[derive(Debug, Clone)]
+pub struct Outcome {
+    /// Accumulated assistant text (the concatenation of every
+    /// streaming delta this turn). Backends emit each chunk via
+    /// `on_delta` AND keep a running buffer here so the loop can
+    /// reconstruct the full assistant message for the next turn's
+    /// transcript.
+    pub assistant_text: String,
+    /// Tool calls the assistant proposed. Empty when the
+    /// assistant produced text only.
+    pub tool_calls: Vec<crate::session::ToolCall>,
+    pub stop_reason: crate::session::StopReason,
+}
+
+impl Outcome {
+    pub fn error() -> Self {
+        Self {
+            assistant_text: String::new(),
+            tool_calls: Vec::new(),
+            stop_reason: crate::session::StopReason::Error,
+        }
+    }
 }
 
 /// Build a backend for `kind` from the live config. Resolves the

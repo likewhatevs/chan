@@ -4,19 +4,25 @@
 //! http://localhost:11434, overridable via the `OLLAMA_HOST` env
 //! var (matches the Ollama CLI's convention).
 //!
-//! Wire format mirrors OpenAI more than Anthropic: messages are
-//! `{role, content}`. We POST to `/api/chat` with `stream: true`
-//! and receive newline-delimited JSON; each line is one chunk
-//! whose `message.content` is the next bit of text. The final
-//! line carries `done: true` and a `done_reason` we map to
-//! `StopReason`.
+//! Wire format is OpenAI-shaped: messages are `{role, content}`,
+//! tools are `{type: "function", function: {name, description,
+//! parameters}}`, and tool calls come back as
+//! `message.tool_calls = [{function: {name, arguments}}]` with
+//! `arguments` already JSON-decoded.
 //!
-//! Tool support is omitted in this initial port. qwen2.5:14b
-//! and llama3.1 both support it via the `tools` array on the
-//! request, but the orchestration loop (assistant proposes
-//! call -> host executes -> next turn carries the tool result)
-//! lands in the follow-up commit. For now the backend handles
-//! plain text completions.
+//! Streaming: POST `/api/chat` with `stream: true`. Response is
+//! NDJSON; each line is one chunk whose `message.content` is the
+//! next bit of text. The final line carries `done: true`, a
+//! `done_reason`, and (when the assistant proposed tool calls)
+//! `message.tool_calls`. We accumulate text into `assistant_text`,
+//! collect tool_calls from the final chunk, and let the
+//! session-level orchestration loop drive the next turn.
+//!
+//! Tool support is per-model. qwen2.5 / llama3.1 (and most modern
+//! models in the Ollama catalog) handle tools; older models
+//! ignore the array and return text only. We unconditionally
+//! send tools and let the model decide; if your model doesn't
+//! support them, you just get text-only completions.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,9 +31,10 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use crate::session::{Delta, Message, Role, SessionListener, StopReason};
+use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall};
+use crate::tools::ToolSchema;
 
-use super::Backend;
+use super::{Backend, Outcome};
 
 pub const DEFAULT_URL: &str = "http://localhost:11434";
 
@@ -59,7 +66,12 @@ impl OllamaBackend {
 
 #[async_trait]
 impl Backend for OllamaBackend {
-    async fn run(&self, messages: Vec<Message>, listener: Arc<dyn SessionListener>) {
+    async fn run(
+        &self,
+        messages: Vec<Message>,
+        tools: Vec<ToolSchema>,
+        listener: Arc<dyn SessionListener>,
+    ) -> Outcome {
         let body = ChatRequest {
             model: &self.model,
             messages: messages
@@ -67,6 +79,27 @@ impl Backend for OllamaBackend {
                 .map(|m| ChatMessage {
                     role: role_str(m.role),
                     content: &m.content,
+                    tool_calls: m
+                        .tool_calls
+                        .iter()
+                        .map(|c| OutToolCall {
+                            function: OutFunction {
+                                name: &c.name,
+                                arguments: &c.args,
+                            },
+                        })
+                        .collect(),
+                })
+                .collect(),
+            tools: tools
+                .iter()
+                .map(|t| ToolWire {
+                    kind: "function",
+                    function: ToolFnWire {
+                        name: t.name,
+                        description: t.description,
+                        parameters: &t.parameters,
+                    },
                 })
                 .collect(),
             stream: true,
@@ -77,8 +110,7 @@ impl Backend for OllamaBackend {
             Ok(r) => r,
             Err(e) => {
                 listener.on_error(format!("ollama request: {e}"));
-                listener.on_done(StopReason::Error);
-                return;
+                return Outcome::error();
             }
         };
 
@@ -86,16 +118,13 @@ impl Backend for OllamaBackend {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             listener.on_error(format!("ollama {status}: {body}"));
-            listener.on_done(StopReason::Error);
-            return;
+            return Outcome::error();
         }
 
-        // Streaming: NDJSON. Each chunk is a complete JSON line.
-        // Reqwest's bytes_stream yields arbitrary-sized chunks,
-        // so we accumulate into a buffer and pull complete lines
-        // out as they appear. The final line carries `done:true`.
         let mut stream = resp.bytes_stream();
         let mut buf: Vec<u8> = Vec::new();
+        let mut assistant_text = String::new();
+        let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut stop = StopReason::EndOfTurn;
 
         while let Some(chunk) = stream.next().await {
@@ -103,14 +132,13 @@ impl Backend for OllamaBackend {
                 Ok(b) => b,
                 Err(e) => {
                     listener.on_error(format!("ollama stream: {e}"));
-                    listener.on_done(StopReason::Error);
-                    return;
+                    return Outcome::error();
                 }
             };
             buf.extend_from_slice(&chunk);
             while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
                 let line: Vec<u8> = buf.drain(..=pos).collect();
-                let line = &line[..line.len().saturating_sub(1)]; // strip trailing \n
+                let line = &line[..line.len().saturating_sub(1)];
                 if line.is_empty() {
                     continue;
                 }
@@ -118,30 +146,50 @@ impl Backend for OllamaBackend {
                     Ok(p) => p,
                     Err(e) => {
                         listener.on_error(format!("ollama parse: {e}"));
-                        listener.on_done(StopReason::Error);
-                        return;
+                        return Outcome::error();
                     }
                 };
                 if let Some(msg) = parsed.message.as_ref() {
                     if !msg.content.is_empty() {
                         listener.on_delta(Delta {
-                            text: msg.content.to_owned(),
+                            text: msg.content.clone(),
+                        });
+                        assistant_text.push_str(&msg.content);
+                    }
+                    // Tool calls only appear in the final chunk
+                    // for streaming responses, but we accumulate
+                    // defensively in case a future Ollama version
+                    // streams them too.
+                    for (idx, tc) in msg.tool_calls.iter().enumerate() {
+                        let id = format!("call-{}", tool_calls.len() + idx);
+                        tool_calls.push(ToolCall {
+                            id,
+                            name: tc.function.name.clone(),
+                            args: tc.function.arguments.clone(),
                         });
                     }
                 }
                 if parsed.done {
-                    stop = match parsed.done_reason.as_deref() {
-                        Some("stop") | Some("end") => StopReason::EndOfTurn,
-                        Some("length") => StopReason::MaxTokens,
-                        Some("stop_sequence") => StopReason::StopSequence,
-                        _ => StopReason::EndOfTurn,
+                    stop = if !tool_calls.is_empty() {
+                        StopReason::ToolUse
+                    } else {
+                        match parsed.done_reason.as_deref() {
+                            Some("stop") | Some("end") | None => StopReason::EndOfTurn,
+                            Some("length") => StopReason::MaxTokens,
+                            Some("stop_sequence") => StopReason::StopSequence,
+                            _ => StopReason::EndOfTurn,
+                        }
                     };
                     break;
                 }
             }
         }
 
-        listener.on_done(stop);
+        Outcome {
+            assistant_text,
+            tool_calls,
+            stop_reason: stop,
+        }
     }
 }
 
@@ -160,6 +208,8 @@ fn role_str(r: Role) -> &'static str {
 struct ChatRequest<'a> {
     model: &'a str,
     messages: Vec<ChatMessage<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<ToolWire<'a>>,
     stream: bool,
 }
 
@@ -167,6 +217,33 @@ struct ChatRequest<'a> {
 struct ChatMessage<'a> {
     role: &'a str,
     content: &'a str,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tool_calls: Vec<OutToolCall<'a>>,
+}
+
+#[derive(Serialize)]
+struct OutToolCall<'a> {
+    function: OutFunction<'a>,
+}
+
+#[derive(Serialize)]
+struct OutFunction<'a> {
+    name: &'a str,
+    arguments: &'a serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct ToolWire<'a> {
+    #[serde(rename = "type")]
+    kind: &'a str,
+    function: ToolFnWire<'a>,
+}
+
+#[derive(Serialize)]
+struct ToolFnWire<'a> {
+    name: &'a str,
+    description: &'a str,
+    parameters: &'a serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -183,4 +260,20 @@ struct ChatChunk {
 struct ChunkMessage {
     #[serde(default)]
     content: String,
+    #[serde(default)]
+    tool_calls: Vec<InToolCall>,
+}
+
+#[derive(Deserialize)]
+struct InToolCall {
+    function: InFunction,
+}
+
+#[derive(Deserialize)]
+struct InFunction {
+    name: String,
+    /// Ollama returns arguments as a parsed JSON value (not a
+    /// string), so we accept whatever serde_json gives us.
+    #[serde(default)]
+    arguments: serde_json::Value,
 }
