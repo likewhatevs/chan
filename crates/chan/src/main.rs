@@ -10,12 +10,12 @@
 //                                   (filesystem contents untouched)
 //   chan rename <path> <name>       set / clear a drive's display
 //                                   name
-//   chan serve [--host H --port N]  run the HTTP server. Defaults
+//   chan serve [-4|-6] [--host H --port N]
+//                                   run the HTTP server. Defaults
 //                                   to 127.0.0.1 (loopback only);
-//                                   the embedded web editor talks
-//                                   to this. NOT IMPLEMENTED YET;
-//                                   routes port in follow-up
-//                                   commits.
+//                                   -6 picks ::1 instead. The
+//                                   embedded web editor talks to
+//                                   this.
 //   chan index <path>               rebuild the search index +
 //                                   graph for the drive
 //   chan search <path> <query>      query the BM25 index
@@ -26,7 +26,7 @@
 // cross-process writer lock) apply uniformly.
 
 use std::io::{IsTerminal, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -77,12 +77,20 @@ enum Command {
     /// chan-core in follow-up commits.
     Serve {
         path: Option<PathBuf>,
-        /// Host address to bind. Default 127.0.0.1 (loopback). Use
-        /// 0.0.0.0 to listen on all interfaces. chan has no TLS and
-        /// only a bearer-token gate, so any non-loopback host
+        /// Host address to bind. Default 127.0.0.1 (or ::1 with -6).
+        /// Use 0.0.0.0 / :: to listen on all interfaces. chan has no
+        /// TLS and only a bearer-token gate, so any non-loopback host
         /// exposes your drive in plaintext on that network.
-        #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
-        host: IpAddr,
+        #[arg(long)]
+        host: Option<IpAddr>,
+        /// Force IPv4-only listening. With no --host, binds 127.0.0.1.
+        /// Mutually exclusive with -6.
+        #[arg(short = '4', long = "ipv4", conflicts_with = "ipv6")]
+        ipv4: bool,
+        /// Force IPv6-only listening. With no --host, binds ::1.
+        /// Mutually exclusive with -4.
+        #[arg(short = '6', long = "ipv6")]
+        ipv6: bool,
         #[arg(long, default_value_t = 8787)]
         port: u16,
         /// Skip the per-launch bearer-token gate. For tests and the
@@ -129,16 +137,19 @@ fn main() -> Result<()> {
         Command::Serve {
             path,
             host,
+            ipv4,
+            ipv6,
             port,
             no_token,
         } => {
+            let addr = resolve_listen_addr(host, ipv4, ipv6, port)?;
             // serve is the only async subcommand; everything else
             // stays sync so the CLI starts up without a runtime.
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .context("building tokio runtime")?;
-            rt.block_on(cmd_serve(host, port, path, no_token))
+            rt.block_on(cmd_serve(addr, path, no_token))
         }
         Command::Index { path } => cmd_index(path),
         Command::Search { path, query, limit } => cmd_search(path, query, limit),
@@ -362,7 +373,34 @@ fn cmd_rename(path: PathBuf, name: String) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_serve(host: IpAddr, port: u16, path: Option<PathBuf>, no_token: bool) -> Result<()> {
+/// Resolve final listen address from the user's flags.
+///
+/// `--host` is authoritative when given; `-4` / `-6` only validate
+/// its family. With no `--host`, `-4` selects 127.0.0.1, `-6` selects
+/// ::1, and neither selects 127.0.0.1 (the historical default).
+fn resolve_listen_addr(
+    host: Option<IpAddr>,
+    ipv4: bool,
+    ipv6: bool,
+    port: u16,
+) -> Result<SocketAddr> {
+    let ip = match host {
+        Some(ip) => {
+            if ipv4 && !ip.is_ipv4() {
+                anyhow::bail!("-4 requires an IPv4 --host, got {ip}");
+            }
+            if ipv6 && !ip.is_ipv6() {
+                anyhow::bail!("-6 requires an IPv6 --host, got {ip}");
+            }
+            ip
+        }
+        None if ipv6 => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        None => IpAddr::V4(Ipv4Addr::LOCALHOST),
+    };
+    Ok(SocketAddr::new(ip, port))
+}
+
+async fn cmd_serve(addr: SocketAddr, path: Option<PathBuf>, no_token: bool) -> Result<()> {
     let lib = library()?;
     // Resolve the drive root: explicit arg first, then the registry
     // default, then the platform default. Auto-register so users
@@ -381,6 +419,7 @@ async fn cmd_serve(host: IpAddr, port: u16, path: Option<PathBuf>, no_token: boo
     // bearer token. Binding off-loopback exposes the drive in the
     // clear to anyone on that network, including unauthenticated
     // probes if --no-token is also set.
+    let host = addr.ip();
     if !host.is_loopback() {
         eprintln!(
             "WARNING: binding to {host} exposes chan on a non-loopback \
@@ -395,7 +434,6 @@ async fn cmd_serve(host: IpAddr, port: u16, path: Option<PathBuf>, no_token: boo
         }
     }
 
-    let addr = SocketAddr::new(host, port);
     let config = ServeConfig { addr, no_token };
     chan_server::serve(lib, drive, config)
         .await
@@ -458,4 +496,64 @@ fn cmd_search(path: PathBuf, query: String, limit: u32) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ipv4(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+    fn ipv6(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn default_is_v4_loopback() {
+        let addr = resolve_listen_addr(None, false, false, 8787).unwrap();
+        assert_eq!(addr, SocketAddr::new(ipv4("127.0.0.1"), 8787));
+    }
+
+    #[test]
+    fn ipv4_flag_with_no_host_gives_v4_loopback() {
+        let addr = resolve_listen_addr(None, true, false, 8787).unwrap();
+        assert_eq!(addr, SocketAddr::new(ipv4("127.0.0.1"), 8787));
+    }
+
+    #[test]
+    fn ipv6_flag_with_no_host_gives_v6_loopback() {
+        let addr = resolve_listen_addr(None, false, true, 8787).unwrap();
+        assert_eq!(addr, SocketAddr::new(ipv6("::1"), 8787));
+    }
+
+    #[test]
+    fn explicit_host_overrides_default() {
+        let addr = resolve_listen_addr(Some(ipv4("0.0.0.0")), false, false, 9000).unwrap();
+        assert_eq!(addr, SocketAddr::new(ipv4("0.0.0.0"), 9000));
+    }
+
+    #[test]
+    fn ipv4_flag_rejects_v6_host() {
+        let err = resolve_listen_addr(Some(ipv6("::1")), true, false, 8787).unwrap_err();
+        assert!(err.to_string().contains("-4"));
+    }
+
+    #[test]
+    fn ipv6_flag_rejects_v4_host() {
+        let err = resolve_listen_addr(Some(ipv4("127.0.0.1")), false, true, 8787).unwrap_err();
+        assert!(err.to_string().contains("-6"));
+    }
+
+    #[test]
+    fn ipv4_flag_accepts_matching_v4_host() {
+        let addr = resolve_listen_addr(Some(ipv4("0.0.0.0")), true, false, 8787).unwrap();
+        assert_eq!(addr, SocketAddr::new(ipv4("0.0.0.0"), 8787));
+    }
+
+    #[test]
+    fn ipv6_flag_accepts_matching_v6_host() {
+        let addr = resolve_listen_addr(Some(ipv6("::")), false, true, 8787).unwrap();
+        assert_eq!(addr, SocketAddr::new(ipv6("::"), 8787));
+    }
 }
