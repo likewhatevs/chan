@@ -32,8 +32,74 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Tag-time validation. ci.yml runs Linux on every PR/push, but
+  # tag-only breakage (e.g. tag cut from a state that wasn't on
+  # main) can still slip through, and macOS isn't covered by
+  # ci.yml at all. So we run Linux first, then macOS, then the
+  # build matrix. Linux fails fast and cheap; macOS only spins
+  # up if Linux passes (saves 10x minutes on tag-time breakage).
+  test-linux:
+    name: clippy + test (ubuntu-latest)
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: chan
+      - uses: actions/checkout@v4
+        with:
+          repository: chan-writer/chan-core
+          path: chan-core
+          token: ${{ secrets.chan_ci }}
+      - uses: actions/checkout@v4
+        with:
+          repository: chan-writer/chan-llm
+          path: chan-llm
+          token: ${{ secrets.chan_ci }}
+      - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: chan
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: chan
+      - run: cargo test --all-targets
+        working-directory: chan
+
+  test-macos:
+    name: clippy + test (macos-latest)
+    needs: test-linux
+    runs-on: macos-latest
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: chan
+      - uses: actions/checkout@v4
+        with:
+          repository: chan-writer/chan-core
+          path: chan-core
+          token: ${{ secrets.chan_ci }}
+      - uses: actions/checkout@v4
+        with:
+          repository: chan-writer/chan-llm
+          path: chan-llm
+          token: ${{ secrets.chan_ci }}
+      - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: chan
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: chan
+      - run: cargo test --all-targets
+        working-directory: chan
+
   build:
     name: build (${{ matrix.target }})
+    needs: test-macos
     strategy:
       fail-fast: false
       matrix:

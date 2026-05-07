@@ -62,12 +62,16 @@ jobs:
       - run: cargo fmt --check
         working-directory: chan
 
+  # macOS test/clippy moved to release.yml (gates the macOS
+  # artifact build on tag push). Per-PR CI is Linux-only to keep
+  # GitHub Actions minutes within budget; macOS minutes bill at
+  # 10x. Test locally on macOS before tagging.
   test:
     name: clippy + test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
