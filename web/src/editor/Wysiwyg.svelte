@@ -73,6 +73,17 @@
   let host: HTMLDivElement | undefined;
   let editor: Editor | undefined;
 
+  // Reactive read-only: tiptap caches `editable` from the initial
+  // EditorOptions, so once-only constructor wiring doesn't follow
+  // a parent prop flip. Mirror it through setEditable on every
+  // prop change. Also dismiss the wiki bubble: it cannot commit
+  // edits in a non-editable doc.
+  $effect(() => {
+    if (!editor) return;
+    editor.setEditable(!readonly);
+    if (readonly) dismissWikiBubble();
+  });
+
   /// Wiki-link bubble. Open while the caret sits between an
   /// auto-paired `[[ ]]` in the editor. The bubble is informational
   /// (no focus); the caret stays inside the brackets and the user's
@@ -911,7 +922,12 @@
   const density = $derived(drive.info?.preferences?.line_spacing ?? "tight");
 </script>
 
-<div class="md-wysiwyg" bind:this={host} data-density={density}></div>
+<div
+  class="md-wysiwyg"
+  class:is-readonly={readonly}
+  bind:this={host}
+  data-density={density}
+></div>
 
 <style>
   /* Fill the parent flex slot and scroll internally. We deliberately
@@ -957,6 +973,11 @@
     font-size: var(--chan-font-heading3-size, 18px);
   }
   :global(.md-wysiwyg ::selection) { background: var(--selection-bg); }
+  /* Read-only mode: hide the caret entirely (the user toggled into
+     "maximize for reading"). ProseMirror still lets you click to
+     position selection for copy-paste; only the visible caret is
+     suppressed. */
+  :global(.md-wysiwyg.is-readonly .ProseMirror) { caret-color: transparent; }
 
   /* Smart nodes inherit the text caret from .ProseMirror by default;
      override unconditionally. !important wins over the inherited cursor

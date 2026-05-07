@@ -11,6 +11,7 @@ import type {
   FileResponse,
   GeminiModelsResponse,
   GlobalConfig,
+  GraphEdge,
   GraphSnapshot,
   GraphView,
   HeadingRow,
@@ -214,6 +215,12 @@ export const api = {
   /// suggestions filter against the file's outline.
   headings: (path: string) =>
     req<HeadingRow[]>("GET", `/api/headings/${encPath(path)}`),
+  /// Incoming link edges (other files that link to `path`). Used by
+  /// the editor's bottom-right status bar to show a backlink count;
+  /// `.length` is enough for the count, but the full edge list is
+  /// available for future "linked from" panels.
+  backlinks: (path: string) =>
+    req<GraphEdge[]>("GET", `/api/backlinks/${encPath(path)}`),
   indexStatus: () => req<IndexStatus>("GET", "/api/index/status"),
   /// Wipe and rebuild the search index from scratch. Returns when
   /// the rebuild has been kicked off; status moves through

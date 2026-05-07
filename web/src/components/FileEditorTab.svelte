@@ -16,7 +16,8 @@
   import OutlineBody, { type Heading } from "./OutlineBody.svelte";
   import FileInfoBody from "./FileInfoBody.svelte";
   import { setMode, type FileTab } from "../state/tabs.svelte";
-  import { idle, pinAccessory } from "../state/idle.svelte";
+  import { idle, pinAccessory, setReadMode } from "../state/idle.svelte";
+  import WikiStatusBar from "./WikiStatusBar.svelte";
 
   // Hover pin: while the cursor is over the floating fmt-bar, the
   // idle tracker won't fade it out. Refcounted so a second hover
@@ -71,6 +72,17 @@
   /// for a small UI affordance and the disclosure starts collapsed
   /// every tab restore is fine).
   let showInfo = $state(false);
+
+  /// Read-only mode for this tab. The status bar's lamp toggle
+  /// drives this; Wysiwyg becomes non-editable + caret-hidden, and
+  /// the floating fmt-bar is removed from the DOM. Mirrors the
+  /// global readMode flag while this tab is the focused one so
+  /// the bottom-pill auto-hide accelerates accordingly.
+  let readMode = $state(false);
+  $effect(() => {
+    setReadMode(readMode);
+    return () => setReadMode(false);
+  });
 
   // Bumped on every selection / doc change in the WYSIWYG editor
   // so the active-mark / current-block derivations re-run. The
@@ -183,7 +195,7 @@
     </span>
   </div>
 
-  {#if !tab.loading && !overlayOpen && tab.mode === "wysiwyg"}
+  {#if !tab.loading && !overlayOpen && tab.mode === "wysiwyg" && !readMode}
     <!-- svelte-ignore a11y_interactive_supports_focus -->
     <!-- Wrapper isn't tabbable; the formatting buttons inside are. -->
     <div
@@ -281,6 +293,7 @@
         <Wysiwyg
           bind:this={wysiwygRef}
           bind:value={tab.content}
+          readonly={readMode}
           onSelectionChange={() => (selVer = selVer + 1)}
           wikiPickerPrefix={tab.repoRoot}
         />
@@ -310,6 +323,13 @@
         </Inspector>
       {/if}
     </div>
+    {#if tab.mode === "wysiwyg"}
+      <WikiStatusBar
+        path={tab.path}
+        content={tab.content}
+        bind:readMode
+      />
+    {/if}
   {/if}
 </div>
 

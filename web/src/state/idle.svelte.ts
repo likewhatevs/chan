@@ -17,10 +17,21 @@
 // pinAccessory() and the returned release fn so the pill doesn't fade
 // from under the user's cursor.
 
-const IDLE_MS = 5000;
+const IDLE_MS_DEFAULT = 5000;
+/// Idle window in read-only mode. Half the write-mode default so
+/// the floating pills get out of the way faster while the user is
+/// reading.
+const IDLE_MS_READMODE = 2500;
 
 export const idle = $state<{ active: boolean }>({ active: false });
 
+/// Global read-mode flag. Mirrored by whichever editor tab is
+/// currently focused and in read-only. Toggled via setReadMode().
+/// Consumers (BottomPill, fmt-bar) read this to apply a faded
+/// look on top of the regular idle fade.
+export const readMode = $state<{ active: boolean }>({ active: false });
+
+let currentIdleMs = IDLE_MS_DEFAULT;
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 let pinCount = 0;
 
@@ -32,7 +43,18 @@ function arm(): void {
   if (pinCount > 0) return;
   idleTimer = setTimeout(() => {
     idle.active = true;
-  }, IDLE_MS);
+  }, currentIdleMs);
+}
+
+/// Flip the global read-mode flag. Re-arms the idle timer at the
+/// new window so the bottom pill auto-hides faster while reading.
+export function setReadMode(active: boolean): void {
+  if (readMode.active === active) return;
+  readMode.active = active;
+  currentIdleMs = active ? IDLE_MS_READMODE : IDLE_MS_DEFAULT;
+  // Re-arm so the new window kicks in immediately rather than
+  // waiting for the next user activity event.
+  arm();
 }
 
 function onActivity(): void {

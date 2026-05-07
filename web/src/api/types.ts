@@ -254,6 +254,17 @@ export type LinkEdge = {
   wiki: boolean;
 };
 
+/// Graph edge as returned by /api/backlinks/{path}. Mirrors
+/// chan-core's graph::Edge: `kind` is "link" / "mention" / "tag";
+/// `anchor` is the heading slug or block id (with leading `^`)
+/// when the link points inside a file, else null.
+export type GraphEdge = {
+  src: string;
+  dst: string;
+  kind: "link" | "mention" | "tag";
+  anchor: string | null;
+};
+
 export type GraphSnapshot = {
   edges: LinkEdge[];
   broken: LinkEdge[];

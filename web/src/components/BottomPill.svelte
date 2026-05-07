@@ -11,7 +11,7 @@
   // visible so the user can't have it fade from under their cursor.
 
   import AccessoryPill from "./AccessoryPill.svelte";
-  import { idle, pinAccessory } from "../state/idle.svelte";
+  import { idle, pinAccessory, readMode } from "../state/idle.svelte";
 
   let release: (() => void) | null = null;
   function onEnter(): void {
@@ -33,6 +33,7 @@
 <div
   class="bottom-pill"
   class:idle={idle.active}
+  class:read-mode={readMode.active}
   role="toolbar"
   aria-label="Navigation"
   onmouseenter={onEnter}
@@ -71,5 +72,16 @@
   .bottom-pill.idle {
     opacity: 0;
     pointer-events: none;
+  }
+  /* Read mode: fade the bar so it reads as ambient chrome rather
+     than an active control surface. The grayscale filter desaturates
+     the assistant attractor (yellow stroke in AccessoryPill) into
+     the same muted palette; combined with the lower opacity the
+     entire bar reads as "you're reading; controls are still there
+     if you reach for them". The .idle rule still wins when both
+     are active. */
+  .bottom-pill.read-mode {
+    opacity: 0.55;
+    filter: grayscale(0.8);
   }
 </style>
