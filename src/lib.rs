@@ -26,20 +26,23 @@ pub mod drive;
 pub mod error;
 pub mod fs_ops;
 pub mod graph;
+pub mod index;
 pub mod library;
 pub mod lock;
 pub mod markdown;
 pub mod paths;
 pub mod registry;
-pub mod search;
 pub mod trash;
 pub mod watch;
 
-pub use drive::{DirEntry, Drive, FileStat, ResolvedLink, TreeEntry};
+pub use drive::{DirEntry, Drive, FileStat, ResolvedLink, SearchOpts, TreeEntry};
 pub use error::{ChanError, Result};
 pub use graph::{Edge, EdgeKind, GraphView, HeadingRow, LinkTarget, LinkTargetKind, Tag};
+pub use index::{
+    BuildOptions, BuildSummary, Chunking, Hit, IndexConfig, IndexStats, Mode as SearchMode,
+    SearchResult, DEFAULT_MODEL,
+};
 pub use library::{Library, ResetMode, ResetReport};
 pub use registry::{KnownDrive, Registry};
-pub use search::{Hit, IndexDoc, IndexStats, SearchMode, SearchOpts, SearchResults, Snippet};
 pub use trash::{TrashEntry, TRASH_RETENTION_SECS};
 pub use watch::{WatchCallback, WatchEvent, WatchHandle, WatchKind};

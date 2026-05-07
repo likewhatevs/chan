@@ -82,3 +82,9 @@ impl From<notify::Error> for ChanError {
         ChanError::Watch(e.to_string())
     }
 }
+
+impl From<crate::index::IndexError> for ChanError {
+    fn from(e: crate::index::IndexError) -> Self {
+        ChanError::Search(e.to_string())
+    }
+}

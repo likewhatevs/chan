@@ -34,9 +34,10 @@ fn end_to_end_register_open_write_index_search_graph() {
     assert!(paths.iter().any(|p| p == "recipes/pasta.md"));
 
     // Reindex builds both the search index and the graph.
-    let stats = drive.reindex().unwrap();
-    assert_eq!(stats.files_indexed, 2);
-    assert_eq!(stats.files_skipped, 0);
+    let summary = drive.reindex().unwrap();
+    assert_eq!(summary.files, 2);
+    assert_eq!(summary.indexed, 2);
+    assert!(summary.errors.is_empty());
 
     // Full-text search hits the body content.
     let res = drive.search("carbonara", &SearchOpts::default()).unwrap();

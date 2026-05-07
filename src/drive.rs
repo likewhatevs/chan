@@ -11,13 +11,28 @@ use serde::{Deserialize, Serialize};
 use crate::error::{ChanError, Result};
 use crate::fs_ops;
 use crate::graph::GraphView;
+use crate::index::{BuildOptions, BuildSummary, Index, Mode as SearchMode, SearchResult};
 use crate::lock::DriveLock;
 use crate::markdown;
 use crate::paths::{drive_paths, DrivePaths};
 use crate::registry::KnownDrive;
-use crate::search::{Index, IndexDoc, SearchOpts, SearchResults};
 use crate::trash::{self, TrashEntry, TRASH_RETENTION_SECS};
 use crate::watch::{WatchCallback, WatchHandle};
+
+/// User-facing search knobs. The mode defaults to Hybrid (BM25 +
+/// dense, RRF-fused) when the binary is built with `embeddings`,
+/// otherwise the facade falls back to BM25 with `ready: false`.
+#[derive(Debug, Clone, Default)]
+pub struct SearchOpts {
+    pub mode: SearchMode,
+    /// Hard cap on results returned. Defaults to 50 when 0.
+    pub limit: u32,
+    /// Optional subdir scope (relative to drive root). When set,
+    /// only paths under this prefix are returned. None = whole
+    /// drive. Filtering is post-rank: the index doesn't track
+    /// scope, the Drive does.
+    pub scope: Option<String>,
+}
 
 pub use fs_ops::TreeEntry;
 
@@ -447,48 +462,70 @@ impl Drive {
 
     // ---- search ----
 
-    /// Run a search query against this drive. The first call
-    /// initializes the index (creating it if needed); subsequent
-    /// calls reuse the same handle.
-    pub fn search(&self, query: &str, opts: &SearchOpts) -> Result<SearchResults> {
-        self.index()?.search(query, opts)
+    /// Run a search query against this drive. Routes through the
+    /// hybrid index facade; opens the index lazily on first call.
+    /// Scope filtering is applied post-rank: the index doesn't
+    /// track scope, so a buffered top-N is fetched and pruned to
+    /// the requested limit after the prefix check.
+    pub fn search(&self, query: &str, opts: &SearchOpts) -> Result<SearchResult> {
+        let limit = if opts.limit == 0 { 50 } else { opts.limit } as usize;
+        let fetch = if opts.scope.is_some() {
+            limit * 4
+        } else {
+            limit
+        };
+        let mut res = self.index()?.search(query, opts.mode, fetch)?;
+        if let Some(scope) = &opts.scope {
+            res.hits.retain(|h| path_under(&h.path, scope));
+        }
+        res.hits.truncate(limit);
+        Ok(res)
     }
 
     /// Re-index the whole drive from scratch: walks the tree,
     /// parses every editable-text file, and rebuilds both the
     /// search index and the graph DB. Synchronous and blocking;
-    /// the caller decides whether to spawn a worker.
-    pub fn reindex(&self) -> Result<crate::search::IndexStats> {
+    /// the caller decides whether to spawn a worker. Returns the
+    /// search-side build summary; graph-side errors short-circuit
+    /// the rebuild.
+    pub fn reindex(&self) -> Result<BuildSummary> {
+        // Graph rebuild walks the tree once for headings + edges.
+        // The search facade walks again for chunking + embeddings.
+        // Two passes is the trade for a clean separation; per-file
+        // I/O cost is trivial against the embedding work.
+        self.rebuild_graph()?;
+        let summary = self.index()?.build_all(BuildOptions::default(), |_| {})?;
+        Ok(summary)
+    }
+
+    fn rebuild_graph(&self) -> Result<()> {
         let entries = self.list_tree()?;
-        let mut docs = Vec::new();
-        let mut skipped = 0u32;
         let graph = self.graph()?;
-        // Wipe the graph for a clean rebuild. We rely on the per-
-        // drive lock + the Mutex<Connection> inside GraphView to
-        // serialize; no other writer can race us.
         graph.clear()?;
         for e in &entries {
-            if e.is_dir {
-                continue;
-            }
-            if !fs_ops::is_editable_text(&e.path) {
-                skipped += 1;
+            if e.is_dir || !fs_ops::is_editable_text(&e.path) {
                 continue;
             }
             let content = match self.read_text(&e.path) {
                 Ok(s) => s,
-                Err(_) => {
-                    skipped += 1;
-                    continue;
-                }
+                Err(_) => continue,
             };
-            let (doc, headings, edges) = parse_for_index(&e.path, &content, e.mtime);
-            graph.replace_file(&e.path, doc.title.as_deref(), e.mtime, &edges, &headings)?;
-            docs.push(doc);
+            let (title, headings, edges) = parse_for_graph(&e.path, &content);
+            graph.replace_file(&e.path, title.as_deref(), e.mtime, &edges, &headings)?;
         }
-        let mut stats = self.index()?.reindex_iter(docs)?;
-        stats.files_skipped = skipped;
-        Ok(stats)
+        Ok(())
+    }
+
+    /// How many BM25 chunks are currently in the search index.
+    /// Lazily opens the index on first call.
+    pub fn num_indexed(&self) -> Result<u64> {
+        Ok(self.index()?.stats().indexed_docs)
+    }
+
+    /// Snapshot of the search index. Used by the server's status
+    /// endpoint.
+    pub fn index_stats(&self) -> Result<crate::index::IndexStats> {
+        Ok(self.index()?.stats())
     }
 
     /// Re-index a single file. Reads, parses, updates the search
@@ -500,10 +537,10 @@ impl Drive {
         }
         let content = self.read_text(rel)?;
         let mtime = self.stat(rel).ok().and_then(|s| s.mtime);
-        let (doc, headings, edges) = parse_for_index(rel, &content, mtime);
-        self.index()?.upsert(&doc)?;
+        let (title, headings, edges) = parse_for_graph(rel, &content);
+        self.index()?.index_one(rel)?;
         self.graph()?
-            .replace_file(rel, doc.title.as_deref(), mtime, &edges, &headings)?;
+            .replace_file(rel, title.as_deref(), mtime, &edges, &headings)?;
         Ok(())
     }
 
@@ -567,7 +604,7 @@ impl Drive {
     /// Drop a single file from the search index and graph. Used
     /// when the watcher reports a deletion.
     pub fn forget_file(&self, rel: &str) -> Result<()> {
-        self.index()?.remove(rel)?;
+        self.index()?.forget(rel)?;
         self.graph()?.forget_file(rel)?;
         Ok(())
     }
@@ -633,14 +670,18 @@ fn ensure_writable(abs: &std::path::Path) -> Result<()> {
     }
 }
 
-/// Parse a file's content into the structures the search index
-/// and graph need: an `IndexDoc` (for tantivy), the heading list
-/// (for graph::headings), and the outgoing edges (links + tokens).
-fn parse_for_index(
+/// Parse a file's content into the graph-side structures: the
+/// title (for the graph node), the heading list (for graph
+/// headings), and the outgoing edges (links + tokens). The
+/// search-side chunking is done separately by the index facade.
+fn parse_for_graph(
     rel: &str,
     raw: &str,
-    mtime: Option<i64>,
-) -> (IndexDoc, Vec<markdown::Heading>, Vec<crate::graph::Edge>) {
+) -> (
+    Option<String>,
+    Vec<markdown::Heading>,
+    Vec<crate::graph::Edge>,
+) {
     let fm = markdown::parse_frontmatter(raw);
     let body_src = &raw[fm.body_offset..];
     let headings = markdown::parse_headings(body_src);
@@ -658,34 +699,22 @@ fn parse_for_index(
     let links = markdown::extract_links(body_src);
     let tokens = markdown::extract_tokens(body_src);
     let edges = build_edges(rel, &links, &tokens);
+    (title, headings, edges)
+}
 
-    // filename feeds the search index's filename field. We strip
-    // the extension so "recipes/carbonara.md" -> "carbonara"; the
-    // dot-and-extension never carry signal worth indexing and would
-    // pollute the term dictionary with "md" / "txt".
-    let filename = std::path::Path::new(rel)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_string();
-    // headings feeds the search index's headings field. Newline-
-    // joined so tantivy's default tokenizer treats each heading as
-    // an independent term sequence.
-    let headings_joined = headings
-        .iter()
-        .map(|h| h.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let doc = IndexDoc {
-        path: rel.to_string(),
-        title,
-        body: body_src.to_string(),
-        mtime,
-        filename,
-        headings: headings_joined,
-    };
-    (doc, headings, edges)
+/// Whether `path` lies under the `prefix` directory. POSIX
+/// separators on both sides; case-sensitive. Used by the post-
+/// filter for `SearchOpts::scope`.
+fn path_under(path: &str, prefix: &str) -> bool {
+    let prefix = prefix.trim_end_matches('/');
+    if prefix.is_empty() {
+        return true;
+    }
+    if path == prefix {
+        return true;
+    }
+    let with_slash = format!("{prefix}/");
+    path.starts_with(&with_slash)
 }
 
 /// Convert links + tokens into graph edges. Wiki links and

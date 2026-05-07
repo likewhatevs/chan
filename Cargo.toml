@@ -8,8 +8,15 @@ description = "Filesystem, search, and graph primitives for chan-writer drives"
 repository = "https://github.com/chan-writer/chan-core"
 
 [dependencies]
+bincode = { version = "2", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
+# fastembed bundles tokenizers + ONNX runtime via `ort`. Default
+# features pull in a prebuilt onnxruntime that's downloaded at build
+# time and statically linked on supported platforms (macos arm/x64,
+# linux x64, win x64). Optional + gated by the `embeddings` feature
+# so iOS / minimal builds can opt out via `--no-default-features`.
+fastembed = { version = "5", default-features = false, features = ["ort-download-binaries", "hf-hub"], optional = true }
 fs4 = { version = "0.9", features = ["sync"] }
 gray_matter = { version = "0.2", default-features = false, features = ["yaml"] }
 notify = { version = "6", default-features = false, features = ["macos_fsevent"] }
@@ -18,7 +25,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tantivy = { version = "0.24", optional = true }
+tantivy = "0.24"
 tempfile = "3"
 thiserror = "1"
 toml = "0.8"
@@ -29,10 +36,12 @@ walkdir = "2"
 tempfile = "3"
 
 [features]
-default = ["search"]
-# Search uses tantivy; turn off for builds that only need FS + graph
-# (mobile minimal builds, embedded clients).
-search = ["dep:tantivy"]
+default = ["embeddings"]
+# Hybrid search (BM25 + dense). Pulls fastembed + a prebuilt
+# onnxruntime. Opt out (`--no-default-features`) on platforms
+# without a prebuilt onnxruntime binary (currently iOS); the
+# resulting binary still has BM25-only search via tantivy.
+embeddings = ["dep:fastembed"]
 
 [lib]
 name = "chan_core"
