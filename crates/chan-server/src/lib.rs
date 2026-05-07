@@ -261,6 +261,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/index/status", get(api_index_status))
         .route("/api/index/rebuild", post(api_index_rebuild))
         .route("/api/link-targets", get(api_link_targets))
+        .route("/api/resolve-link", get(api_resolve_link))
         .route("/api/headings/*path", get(api_headings))
         .route("/api/links", get(api_links))
         .route("/api/graph", get(api_graph))
@@ -839,6 +840,28 @@ async fn api_link_targets(
     match state.drive.link_targets(&p.q, p.limit) {
         Ok(targets) => Json(targets).into_response(),
         Err(e) => err_from(&e),
+    }
+}
+
+#[derive(Deserialize)]
+struct ResolveLinkParams {
+    /// Wiki-link target as written, e.g. `recipes/pasta` or
+    /// `recipes/pasta#ingredients`. Pass through verbatim from
+    /// the editor; chan-core handles the .md / .txt extension
+    /// fallback and the anchor split.
+    target: String,
+}
+
+/// Resolve a wiki-link target to an existing drive file. 404
+/// when no file matches the candidates; this lets the editor's
+/// click handler render a "broken link / create?" affordance.
+async fn api_resolve_link(
+    State(state): State<Arc<AppState>>,
+    Query(p): Query<ResolveLinkParams>,
+) -> Response {
+    match state.drive.resolve_link(&p.target) {
+        Some(resolved) => Json(resolved).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
