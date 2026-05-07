@@ -121,8 +121,13 @@ pub fn build(kind: BackendKind, config: &LlmConfig) -> Result<Arc<dyn Backend>> 
         .unwrap_or_else(|| kind.default_model().to_string());
     match kind {
         BackendKind::Ollama => {
-            let base =
-                std::env::var("OLLAMA_HOST").unwrap_or_else(|_| ollama::DEFAULT_URL.to_string());
+            // Precedence: OLLAMA_HOST env (per-shell override) wins
+            // over config.urls.ollama (Settings UI persistence) wins
+            // over the hardcoded default. Mirrors the keys story.
+            let base = std::env::var("OLLAMA_HOST")
+                .ok()
+                .or_else(|| config.urls.ollama.clone())
+                .unwrap_or_else(|| ollama::DEFAULT_URL.to_string());
             Ok(Arc::new(ollama::OllamaBackend::new(base, model)))
         }
         BackendKind::Anthropic => {

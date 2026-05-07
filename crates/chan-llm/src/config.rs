@@ -37,6 +37,12 @@ pub struct LlmConfig {
     /// default model when unset.
     #[serde(default, skip_serializing_if = "Models::is_empty")]
     pub models: Models,
+    /// Per-backend endpoint URL override. Today only Ollama
+    /// surfaces a URL knob (cloud backends use fixed endpoints);
+    /// shape is per-backend so adding self-hosted Anthropic-
+    /// compatible gateways later is just a new field.
+    #[serde(default, skip_serializing_if = "Urls::is_empty")]
+    pub urls: Urls,
     /// When true, the assistant's `write_file` tool calls go to disk
     /// without a per-call confirmation. When false, the consumer
     /// (web frontend, native shell) must surface a confirmation UI
@@ -49,6 +55,23 @@ pub struct LlmConfig {
     /// are treated as unset.
     #[serde(default, skip_serializing_if = "Keys::is_empty")]
     pub keys: Keys,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Urls {
+    /// Override for the Ollama server URL. Falls back to the
+    /// `OLLAMA_HOST` env var when unset, then the hardcoded
+    /// `http://localhost:11434` default. Env wins over the file
+    /// the same way it does for keys: a per-shell override should
+    /// keep working even when a different URL is persisted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ollama: Option<String>,
+}
+
+impl Urls {
+    fn is_empty(&self) -> bool {
+        self.ollama.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,6 +206,7 @@ mod tests {
                 anthropic: Some("claude-opus-4-7".into()),
                 ..Default::default()
             },
+            urls: Urls::default(),
             auto_apply_writes: true,
             keys: Keys {
                 anthropic: Some("sk-ant-...".into()),
@@ -192,6 +216,39 @@ mod tests {
         cfg.save_to(&p).unwrap();
         let loaded = LlmConfig::load_from(&p).unwrap();
         assert_eq!(cfg, loaded);
+    }
+
+    #[test]
+    fn ollama_url_round_trips() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("llm.toml");
+        let cfg = LlmConfig {
+            backend: Some(BackendKind::Ollama),
+            urls: Urls {
+                ollama: Some("http://192.168.1.10:11434".into()),
+            },
+            ..Default::default()
+        };
+        cfg.save_to(&p).unwrap();
+        let loaded = LlmConfig::load_from(&p).unwrap();
+        assert_eq!(
+            loaded.urls.ollama.as_deref(),
+            Some("http://192.168.1.10:11434")
+        );
+    }
+
+    #[test]
+    fn empty_urls_skipped_in_serialized_output() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("llm.toml");
+        let cfg = LlmConfig::default();
+        cfg.save_to(&p).unwrap();
+        // Default is empty; serializer should skip the [urls] table
+        // entirely so a fresh chan install doesn't grow noise in
+        // llm.toml.
+        let raw = std::fs::read_to_string(&p).unwrap();
+        assert!(!raw.contains("[urls]"), "got: {raw}");
+        assert!(!raw.contains("ollama"), "got: {raw}");
     }
 
     #[test]
