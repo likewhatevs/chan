@@ -25,8 +25,9 @@ pub use preferences::{EditorPrefs, FontPrefs, FontSpec, LineSpacing, PaneWidths,
 use self_writes::SelfWrites;
 
 use std::net::SocketAddr;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -37,7 +38,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chan_core::{
-    paths::DrivePaths, Drive, EdgeKind, Library, SearchOpts, WatchCallback, WatchEvent, WatchHandle,
+    paths::DrivePaths, Drive, EdgeKind, Library, ResetMode, SearchOpts, WatchCallback, WatchEvent,
+    WatchHandle,
 };
 use chan_llm::{
     BackendKind, Delta, LlmConfig, LlmError, LlmSession, Message as LlmMessage, Role as LlmRole,
@@ -128,11 +130,9 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
     // echoes don't fire spurious external-edit prompts in the
     // editor.
     let self_writes = Arc::new(SelfWrites::new());
-    let bridge: Arc<dyn WatchCallback> = Arc::new(WatchBroadcast {
-        tx: events_tx.clone(),
-        self_writes: self_writes.clone(),
-    });
+    let bridge = make_watch_bridge(&events_tx, &self_writes);
     let watch_handle = drive.watch(bridge)?;
+    let drive_root = drive.root().to_path_buf();
 
     // LLM config: load once at boot. Falling back to defaults on
     // a malformed file keeps the server bootable; user fixes the
@@ -162,14 +162,17 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
 
     let state = Arc::new(AppState {
         library,
-        drive,
+        drive_root,
+        drive_cell: RwLock::new(Some(DriveCell {
+            drive,
+            watch_handle: Some(watch_handle),
+        })),
         token: handle.token,
         events_tx,
         llm_config: Mutex::new(llm_config),
         server_config: Mutex::new(server_config),
         editor_prefs: Mutex::new(editor_prefs),
         self_writes,
-        _watch_handle: watch_handle,
     });
     let app = router(state);
     axum::serve(listener, app)
@@ -181,7 +184,16 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
 /// Server state shared across all handlers.
 struct AppState {
     library: Library,
-    drive: Arc<Drive>,
+    /// Drive root resolved at boot. Stays stable for the server's
+    /// lifetime even when `drive_cell` is swapped during a reset
+    /// (the swap reopens against the same root).
+    drive_root: PathBuf,
+    /// Live drive + its watcher, behind an RwLock so /api/storage/
+    /// reset can drop and reopen them without restarting the
+    /// process. Always `Some` outside the brief swap window inside
+    /// reset itself; handlers reach the inner Arc<Drive> via
+    /// `state.drive()` which clones it under a read lock.
+    drive_cell: RwLock<Option<DriveCell>>,
     token: Option<String>,
     /// Pre-serialized JSON-envelope frames: `{"type": "watch",
     /// "event": ...}`, `{"type": "llm.delta", "session_id": ...,
@@ -206,11 +218,52 @@ struct AppState {
     /// queue before forwarding so an editor save doesn't bounce
     /// back as an "external edit" event.
     self_writes: Arc<SelfWrites>,
-    /// Held so the underlying notify watcher keeps running for the
-    /// server's lifetime. Field is `_`-prefixed because nothing
-    /// reads it; dropping AppState drops the handle, which stops
-    /// the watcher.
-    _watch_handle: WatchHandle,
+}
+
+/// Drive + its notify watcher. Replaced wholesale by /api/storage/
+/// reset: drop the cell, run chan-core's reset_drive, reopen, store
+/// a fresh cell. The watch_handle is `Option` only because reset
+/// must take it out before dropping the inner Drive (the watcher
+/// holds a callback that references the same broadcast channel; we
+/// keep it tidy by dropping the handle first).
+struct DriveCell {
+    drive: Arc<Drive>,
+    watch_handle: Option<WatchHandle>,
+}
+
+impl AppState {
+    /// Snapshot the current drive Arc. Acquires the RwLock read
+    /// guard for the duration of the clone (microseconds). The
+    /// returned Arc keeps the drive alive even if a reset swaps
+    /// the cell out a moment later, so callers don't need to hold
+    /// the lock through their I/O.
+    ///
+    /// Panics if called while the cell is in the brief
+    /// "between drop and reopen" state inside reset itself; the
+    /// reset path holds the write lock end-to-end so handlers can
+    /// never observe `None` (they wait on the read lock).
+    fn drive(&self) -> Arc<Drive> {
+        self.drive_cell
+            .read()
+            .expect("drive cell poisoned")
+            .as_ref()
+            .expect("drive cell missing outside reset window")
+            .drive
+            .clone()
+    }
+}
+
+/// Construct a watcher bridge. Extracted so /api/storage/reset can
+/// rebuild one cheaply when re-attaching the watcher to a fresh
+/// Drive instance.
+fn make_watch_bridge(
+    events_tx: &broadcast::Sender<String>,
+    self_writes: &Arc<SelfWrites>,
+) -> Arc<dyn WatchCallback> {
+    Arc::new(WatchBroadcast {
+        tx: events_tx.clone(),
+        self_writes: self_writes.clone(),
+    })
 }
 
 /// Bridge from chan-core's callback-shaped watcher into the
@@ -376,6 +429,7 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/answers", post(api_post_answer))
         .route("/api/attachments", post(api_post_attachment))
+        .route("/api/storage/reset", post(api_storage_reset))
         .route("/api/health", get(api_health))
         .route("/ws", get(ws_upgrade));
     Router::new()
@@ -732,7 +786,7 @@ async fn api_patch_drive(
 ) -> Response {
     if let Some(name) = body.name {
         let new_name = if name.is_empty() { None } else { Some(name) };
-        if let Err(e) = state.library.rename_drive(state.drive.root(), new_name) {
+        if let Err(e) = state.library.rename_drive(state.drive().root(), new_name) {
             return err_from(&e);
         }
     }
@@ -765,16 +819,16 @@ fn drive_info(state: &AppState) -> DriveInfo {
     let drives = state.library.list_drives();
     let entry = drives
         .iter()
-        .find(|d| d.path.as_path() == state.drive.root());
+        .find(|d| d.path.as_path() == state.drive().root());
     DriveInfo {
         name: entry.and_then(|e| e.name.clone()),
-        root: state.drive.root().to_string_lossy().into_owned(),
+        root: state.drive().root().to_string_lossy().into_owned(),
         preferences: preferences_view(state),
     }
 }
 
 async fn api_list_files(State(state): State<Arc<AppState>>) -> Response {
-    match state.drive.list_tree() {
+    match state.drive().list_tree() {
         Ok(tree) => Json(tree).into_response(),
         Err(e) => err_from(&e),
     }
@@ -797,11 +851,11 @@ async fn api_read_file(
     // raw bytes with a sniffed Content-Type so `<img src=...>`
     // pointing at /api/files/<path> resolves correctly.
     if chan_core::fs_ops::is_editable_text(&path) {
-        let content = match state.drive.read_text(&path) {
+        let content = match state.drive().read_text(&path) {
             Ok(c) => c,
             Err(e) => return err_from(&e),
         };
-        let mtime = state.drive.stat(&path).ok().and_then(|s| s.mtime);
+        let mtime = state.drive().stat(&path).ok().and_then(|s| s.mtime);
         return Json(FileResponse {
             path,
             content,
@@ -809,7 +863,7 @@ async fn api_read_file(
         })
         .into_response();
     }
-    match state.drive.read(&path) {
+    match state.drive().read(&path) {
         Ok(bytes) => ([(header::CONTENT_TYPE, content_type_for(&path))], bytes).into_response(),
         Err(e) => err_from(&e),
     }
@@ -854,9 +908,9 @@ async fn api_write_file(
 ) -> Response {
     let result = match body.expected_mtime {
         Some(_) => state
-            .drive
+            .drive()
             .write_text_if_unchanged(&path, body.expected_mtime, &body.content),
-        None => state.drive.write_text(&path, &body.content),
+        None => state.drive().write_text(&path, &body.content),
     };
     if let Err(e) = result {
         if let chan_core::ChanError::WriteConflict { current_mtime } = e {
@@ -869,7 +923,7 @@ async fn api_write_file(
         return err_from(&e);
     }
     state.self_writes.note(&path);
-    let mtime = state.drive.stat(&path).ok().and_then(|s| s.mtime);
+    let mtime = state.drive().stat(&path).ok().and_then(|s| s.mtime);
     Json(WriteResponse { mtime }).into_response()
 }
 
@@ -885,11 +939,11 @@ async fn api_create_file(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateBody>,
 ) -> Response {
-    if state.drive.exists(&body.path) {
+    if state.drive().exists(&body.path) {
         return err(StatusCode::CONFLICT, "already exists".into());
     }
     if body.is_dir {
-        match state.drive.create_dir(&body.path) {
+        match state.drive().create_dir(&body.path) {
             Ok(()) => {
                 state.self_writes.note(&body.path);
                 StatusCode::CREATED.into_response()
@@ -898,7 +952,7 @@ async fn api_create_file(
         }
     } else {
         let content = body.content.unwrap_or_default();
-        match state.drive.write_text(&body.path, &content) {
+        match state.drive().write_text(&body.path, &content) {
             Ok(()) => {
                 state.self_writes.note(&body.path);
                 StatusCode::CREATED.into_response()
@@ -918,7 +972,7 @@ async fn api_delete_file(
     // chan-core API (`Drive::remove_recursive`) or a server-side walk
     // that issues per-leaf removes. Tracked for a follow-up; current
     // behavior is "error out, frontend resolves the leaves itself".
-    match state.drive.remove(&path) {
+    match state.drive().remove(&path) {
         Ok(()) => {
             state.self_writes.note(&path);
             StatusCode::NO_CONTENT.into_response()
@@ -934,7 +988,7 @@ struct MoveBody {
 }
 
 async fn api_move(State(state): State<Arc<AppState>>, Json(body): Json<MoveBody>) -> Response {
-    match state.drive.rename(&body.from, &body.to) {
+    match state.drive().rename(&body.from, &body.to) {
         Ok(()) => {
             // Rename emits two notify events on most kernels (a
             // Removed at `from` and a Created at `to`); note both
@@ -973,7 +1027,7 @@ async fn api_search_files(
     State(state): State<Arc<AppState>>,
     Query(p): Query<FileSearchParams>,
 ) -> Response {
-    let tree = match state.drive.list_tree() {
+    let tree = match state.drive().list_tree() {
         Ok(t) => t,
         Err(e) => return err_from(&e),
     };
@@ -1027,7 +1081,7 @@ async fn api_search_content(
         scope: p.scope.clone(),
         ..Default::default()
     };
-    match state.drive.search(&p.q, &opts) {
+    match state.drive().search(&p.q, &opts) {
         Ok(res) => Json(res).into_response(),
         Err(e) => err_from(&e),
     }
@@ -1049,7 +1103,7 @@ async fn api_index_status() -> Response {
 /// this can take seconds; consider adding a job-handle abstraction
 /// to chan-core if the wait becomes painful in practice.
 async fn api_index_rebuild(State(state): State<Arc<AppState>>) -> Response {
-    let drive = state.drive.clone();
+    let drive = state.drive().clone();
     let result = tokio::task::spawn_blocking(move || drive.reindex()).await;
     match result {
         Ok(Ok(stats)) => Json(stats).into_response(),
@@ -1085,7 +1139,7 @@ async fn api_link_targets(
     State(state): State<Arc<AppState>>,
     Query(p): Query<LinkTargetsParams>,
 ) -> Response {
-    match state.drive.link_targets(&p.q, p.limit) {
+    match state.drive().link_targets(&p.q, p.limit) {
         Ok(targets) => Json(targets).into_response(),
         Err(e) => err_from(&e),
     }
@@ -1107,7 +1161,7 @@ async fn api_resolve_link(
     State(state): State<Arc<AppState>>,
     Query(p): Query<ResolveLinkParams>,
 ) -> Response {
-    match state.drive.resolve_link(&p.target) {
+    match state.drive().resolve_link(&p.target) {
         Some(resolved) => Json(resolved).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
@@ -1117,7 +1171,8 @@ async fn api_headings(
     State(state): State<Arc<AppState>>,
     AxumPath(path): AxumPath<String>,
 ) -> Response {
-    let graph = match state.drive.graph() {
+    let drive = state.drive();
+    let graph = match drive.graph() {
         Ok(g) => g,
         Err(e) => return err_from(&e),
     };
@@ -1141,7 +1196,8 @@ async fn api_headings(
 /// shape is `[Edge]` so the frontend can render the link-only
 /// view without a follow-up request.
 async fn api_links(State(state): State<Arc<AppState>>) -> Response {
-    let graph = match state.drive.graph() {
+    let drive = state.drive();
+    let graph = match drive.graph() {
         Ok(g) => g,
         Err(e) => return err_from(&e),
     };
@@ -1178,7 +1234,8 @@ struct GraphPayload {
 }
 
 async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
-    let graph = match state.drive.graph() {
+    let drive = state.drive();
+    let graph = match drive.graph() {
         Ok(g) => g,
         Err(e) => return err_from(&e),
     };
@@ -1222,7 +1279,8 @@ async fn api_backlinks(
     State(state): State<Arc<AppState>>,
     AxumPath(path): AxumPath<String>,
 ) -> Response {
-    let graph = match state.drive.graph() {
+    let drive = state.drive();
+    let graph = match drive.graph() {
         Ok(g) => g,
         Err(e) => return err_from(&e),
     };
@@ -1390,7 +1448,7 @@ async fn api_llm_complete(
     Json(body): Json<CompleteBody>,
 ) -> Response {
     let config = state.llm_config.lock().unwrap().clone();
-    let session = LlmSession::new(state.drive.clone(), config);
+    let session = LlmSession::new(state.drive().clone(), config);
     let listener: Arc<dyn SessionListener> = Arc::new(LlmBroadcastListener {
         tx: state.events_tx.clone(),
         session_id: body.session_id.clone(),
@@ -1748,7 +1806,7 @@ async fn api_get_session(
     State(state): State<Arc<AppState>>,
     Query(q): Query<SessionQuery>,
 ) -> Response {
-    match state.drive.get_session(&q.w) {
+    match state.drive().get_session(&q.w) {
         Ok(Some(bytes)) => raw_json_response(bytes),
         // 204 NO_CONTENT, not 404: "no session yet" is the normal
         // first-launch state. transport.ts treats an empty 2xx body
@@ -1763,7 +1821,7 @@ async fn api_put_session(
     Query(q): Query<SessionQuery>,
     body: axum::body::Bytes,
 ) -> Response {
-    match state.drive.put_session(&q.w, &body) {
+    match state.drive().put_session(&q.w, &body) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err_from(&e),
     }
@@ -1773,14 +1831,14 @@ async fn api_delete_session(
     State(state): State<Arc<AppState>>,
     Query(q): Query<SessionQuery>,
 ) -> Response {
-    match state.drive.delete_session(&q.w) {
+    match state.drive().delete_session(&q.w) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err_from(&e),
     }
 }
 
 async fn api_list_sessions(State(state): State<Arc<AppState>>) -> Response {
-    match state.drive.list_sessions() {
+    match state.drive().list_sessions() {
         Ok(keys) => Json(keys).into_response(),
         Err(e) => err_from(&e),
     }
@@ -1790,7 +1848,7 @@ async fn api_get_assistant(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ConversationQuery>,
 ) -> Response {
-    match state.drive.get_assistant(&q.path) {
+    match state.drive().get_assistant(&q.path) {
         Ok(Some(bytes)) => raw_json_response(bytes),
         // 204 NO_CONTENT, not 404: same reasoning as get_session.
         Ok(None) => StatusCode::NO_CONTENT.into_response(),
@@ -1803,7 +1861,7 @@ async fn api_put_assistant(
     Query(q): Query<ConversationQuery>,
     body: axum::body::Bytes,
 ) -> Response {
-    match state.drive.put_assistant(&q.path, &body) {
+    match state.drive().put_assistant(&q.path, &body) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err_from(&e),
     }
@@ -1813,21 +1871,21 @@ async fn api_delete_assistant(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ConversationQuery>,
 ) -> Response {
-    match state.drive.delete_assistant(&q.path) {
+    match state.drive().delete_assistant(&q.path) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err_from(&e),
     }
 }
 
 async fn api_list_assistant(State(state): State<Arc<AppState>>) -> Response {
-    match state.drive.list_assistant() {
+    match state.drive().list_assistant() {
         Ok(keys) => Json(keys).into_response(),
         Err(e) => err_from(&e),
     }
 }
 
 async fn api_clear_assistant(State(state): State<Arc<AppState>>) -> Response {
-    match state.drive.clear_assistant() {
+    match state.drive().clear_assistant() {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err_from(&e),
     }
@@ -1931,7 +1989,7 @@ async fn api_post_attachment(
     };
     let rel = format!("{dir}/{saved}");
 
-    if let Err(e) = state.drive.write_bytes(&rel, &bytes) {
+    if let Err(e) = state.drive().write_bytes(&rel, &bytes) {
         return err_from(&e);
     }
     state.self_writes.note(&rel);
@@ -1971,13 +2029,159 @@ async fn api_post_answer(
         })
         .unwrap_or_else(timestamp_slug);
     let rel = format!("{dir}/{stem}.md");
-    match state.drive.write_text(&rel, &body.content) {
+    match state.drive().write_text(&rel, &body.content) {
         Ok(()) => {
             state.self_writes.note(&rel);
             Json(AnswerSaved { path: rel }).into_response()
         }
         Err(e) => err_from(&e),
     }
+}
+
+// ----- storage reset ------------------------------------------------------
+//
+// Drops the drive's writer lock by replacing the active DriveCell,
+// runs chan-core's Library::reset_drive (which acquires the lock
+// briefly to verify exclusive access), then reopens the drive and
+// re-attaches the watcher in a fresh cell. Frontend reloads the
+// window after a successful reset, so any in-flight handler clones
+// of the old Arc<Drive> drain naturally.
+
+/// Body of `POST /api/storage/reset`. Two modes mirror the chan-
+/// core enum; the JSON tag is lowercased for the frontend's
+/// `ResetMode` type.
+#[derive(Deserialize)]
+struct ResetBody {
+    mode: ResetModeView,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ResetModeView {
+    /// Map -> chan-core ResetMode::State (keep the registry entry).
+    Drive,
+    /// Map -> chan-core ResetMode::Everything.
+    Everything,
+}
+
+impl From<ResetModeView> for ResetMode {
+    fn from(m: ResetModeView) -> Self {
+        match m {
+            ResetModeView::Drive => ResetMode::State,
+            ResetModeView::Everything => ResetMode::Everything,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct ResetResponse {
+    removed_entries: usize,
+}
+
+/// How long the reset path waits for outstanding `Arc<Drive>` clones
+/// (in-flight handler tasks) to drop before giving up. Editor-side
+/// I/O is fast (markdown reads / writes); 5 s is comfortable
+/// headroom without making a misclick feel like a hang.
+const RESET_DRAIN_DEADLINE: Duration = Duration::from_secs(5);
+
+async fn api_storage_reset(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ResetBody>,
+) -> Response {
+    let mode: ResetMode = body.mode.into();
+    // Run the reset on a blocking-thread: the drain spin-wait sleeps
+    // and the chan-core wipe walks the filesystem; neither belongs
+    // on the async runtime's worker thread.
+    let state_clone = state.clone();
+    let result = tokio::task::spawn_blocking(move || perform_reset(&state_clone, mode)).await;
+    match result {
+        Ok(Ok(report)) => Json(ResetResponse {
+            removed_entries: report.removed_entries,
+        })
+        .into_response(),
+        Ok(Err(e)) => err_from_reset(&e),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("reset task: {e}"),
+        ),
+    }
+}
+
+#[derive(Debug)]
+enum ResetError {
+    Busy,
+    Core(chan_core::ChanError),
+}
+
+fn err_from_reset(e: &ResetError) -> Response {
+    match e {
+        ResetError::Busy => err(
+            StatusCode::CONFLICT,
+            "drive busy: in-flight requests still hold the writer lock; \
+             retry in a moment"
+                .into(),
+        ),
+        ResetError::Core(c) => err_from(c),
+    }
+}
+
+/// Replace `state.drive_cell` end-to-end. Holds the write lock the
+/// entire time so handlers waiting on the read lock see exactly one
+/// transition (old drive -> new drive); they never observe the
+/// `None` middle state.
+fn perform_reset(state: &AppState, mode: ResetMode) -> Result<chan_core::ResetReport, ResetError> {
+    let mut cell_guard = state.drive_cell.write().expect("drive cell poisoned");
+    let mut cell = cell_guard
+        .take()
+        .expect("drive cell missing outside reset window");
+    // Stop the watcher first so nothing notify-side keeps a Drive
+    // ref alive past our drop.
+    cell.watch_handle.take();
+    let drive_weak = Arc::downgrade(&cell.drive);
+    drop(cell);
+    // Wait for in-flight handler tasks to drop their Arc<Drive>
+    // clones; the cell can't be reborrowed while we hold the write
+    // lock so the count strictly decreases. Spin-sleep on a
+    // blocking thread (we're in spawn_blocking).
+    let deadline = Instant::now() + RESET_DRAIN_DEADLINE;
+    while drive_weak.upgrade().is_some() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    if drive_weak.upgrade().is_some() {
+        // Outstanding clones never dropped. Restore the original
+        // cell so handlers can proceed; reset has to be retried.
+        // We need the strong ref back; the simplest path is to
+        // reopen against the same root, since the cell was already
+        // dropped from our side. The user retry is the same UX
+        // either way.
+        let drive = state
+            .library
+            .open_drive(&state.drive_root)
+            .map_err(ResetError::Core)?;
+        let bridge = make_watch_bridge(&state.events_tx, &state.self_writes);
+        let watch_handle = drive.watch(bridge).map_err(ResetError::Core)?;
+        *cell_guard = Some(DriveCell {
+            drive,
+            watch_handle: Some(watch_handle),
+        });
+        return Err(ResetError::Busy);
+    }
+    // Clean. Run the actual wipe, reopen, restart watcher.
+    let report = state
+        .library
+        .reset_drive(&state.drive_root, mode)
+        .map_err(ResetError::Core)?;
+    let drive = state
+        .library
+        .open_drive(&state.drive_root)
+        .map_err(ResetError::Core)?;
+    let bridge = make_watch_bridge(&state.events_tx, &state.self_writes);
+    let watch_handle = drive.watch(bridge).map_err(ResetError::Core)?;
+    *cell_guard = Some(DriveCell {
+        drive,
+        watch_handle: Some(watch_handle),
+    });
+    Ok(report)
 }
 
 /// Wrap an opaque blob in an `application/json` response. We don't
