@@ -101,6 +101,16 @@ fn keychain_get(kind: BackendKind) -> Result<String> {
     Ok(entry.get_password()?)
 }
 
+/// Public probe: does the keychain currently hold a key for `kind`?
+/// Used by the chan-server set route to verify that a write actually
+/// landed (macOS Security.framework silently no-ops on unsigned dev
+/// binaries; the set returns Ok even though the keychain didn't
+/// store anything). Caller falls back to the file tier when this
+/// returns None.
+pub fn keychain_lookup(kind: BackendKind) -> Option<String> {
+    keychain_get(kind).ok().filter(|s| !s.is_empty())
+}
+
 fn account(kind: BackendKind) -> &'static str {
     match kind {
         BackendKind::Anthropic => "anthropic",
