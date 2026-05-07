@@ -36,6 +36,7 @@
     openWikiBubble,
     type WikiBubble,
   } from "./extensions/wikiLink";
+  import { api } from "../api/client";
   import { drive } from "../state/store.svelte";
 
   let {
@@ -728,7 +729,10 @@
   /// commit, and replace the entire `[[query]]` range with a
   /// wikiLink atom node. No-op when the bubble has no result to
   /// commit (empty query, no matches): the user must type or
-  /// dismiss with Escape.
+  /// dismiss with Escape. Block picks may carry a pending file
+  /// write (the chosen block had no `^id` yet); we persist it
+  /// before committing the link so the on-disk anchor exists by
+  /// the time the user clicks through.
   function acceptWikiBubble(): void {
     if (!editor || !wikiBubble) return;
     const range = findBracketRange(editor);
@@ -743,16 +747,35 @@
     // populate it. The wikiLink node carries it onto the markdown
     // serialization so the on-disk link is `[label](path#anchor)`.
     const anchor = picked.kind === "file" ? "" : picked.anchor;
-    editor
-      .chain()
-      .focus()
-      .deleteRange({ from: range.start, to: range.end })
-      .insertContent({
-        type: "wikiLink",
-        attrs: { target: picked.target, label: picked.label, anchor },
-      })
-      .insertContent(" ")
-      .run();
+    const pending =
+      picked.kind === "block" ? picked.pendingFileWrite : null;
+    const ed = editor;
+    const insertNode = (): void => {
+      ed.chain()
+        .focus()
+        .deleteRange({ from: range.start, to: range.end })
+        .insertContent({
+          type: "wikiLink",
+          attrs: { target: picked.target, label: picked.label, anchor },
+        })
+        .insertContent(" ")
+        .run();
+    };
+    if (pending) {
+      // CAS-write the rewritten target file body, then insert the
+      // link. On 409 (external edit beat us), drop the link rather
+      // than committing a dangling anchor; the user can retype the
+      // bracket once they have re-resolved the conflict.
+      void api
+        .write(picked.target, pending.content, pending.expectedMtime)
+        .then(() => insertNode())
+        .catch((e: unknown) => {
+          // eslint-disable-next-line no-console
+          console.error("wiki block write failed:", e);
+        });
+      return;
+    }
+    insertNode();
   }
 
   function dismissWikiBubble(): void {
@@ -1297,6 +1320,36 @@
   :global(.md-wiki-bubble-results li.is-heading) {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 12px;
+  }
+  /* Block rows: same monospace as headings but italic to suggest
+     "raw text". The expanded preview below carries the full body. */
+  :global(.md-wiki-bubble-results li.is-block) {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    font-style: italic;
+    color: var(--muted);
+  }
+  :global(.md-wiki-bubble-results li.is-block.active) { color: var(--text); }
+  /* Block preview: shows the active block expanded with the typed
+     query highlighted. Whitespace is preserved (multi-line blocks
+     are visible) and a max height keeps long blocks scrollable. */
+  :global(.md-wiki-bubble-preview) {
+    padding: .35rem .55rem;
+    border-top: 1px solid var(--border);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  :global(.md-wiki-bubble-preview.is-hidden) { display: none; }
+  :global(.md-wiki-bubble-preview mark) {
+    background: var(--hover-bg);
+    color: var(--link);
+    padding: 0 1px;
+    border-radius: 2px;
   }
   /* Faded separator + accept hint. Hidden when there are no
      results to commit so an empty bubble doesn't claim Enter

@@ -100,7 +100,18 @@ export function handleWikiClick(target: string): void {
 
 export type WikiBubbleAccept =
   | { kind: "file"; target: string; label: string }
-  | { kind: "heading"; target: string; anchor: string; label: string };
+  | { kind: "heading"; target: string; anchor: string; label: string }
+  | {
+      kind: "block";
+      target: string;
+      anchor: string;
+      label: string;
+      /// When set, the host must persist this rewritten file body
+      /// before inserting the wikiLink node: the chosen block did
+      /// not have an existing `^id`, so we generated one and need
+      /// to write it back to the target file.
+      pendingFileWrite: { content: string; expectedMtime: number | null } | null;
+    };
 
 export interface WikiBubbleOpts {
   /// Element to anchor the bubble to (for positioning). Typically
@@ -133,8 +144,15 @@ export interface WikiBubble {
 }
 
 import type { HeadingRow } from "../../api/types";
+import {
+  filterBlocks,
+  insertBlockAnchor,
+  makeBlockId,
+  parseBlocks,
+  type ParsedBlock,
+} from "./wikiBlocks";
 
-type Mode = "file" | "heading";
+type Mode = "file" | "heading" | "block";
 
 interface FileEntry {
   kind: "file";
@@ -146,7 +164,12 @@ interface HeadingEntry {
   row: HeadingRow;
 }
 
-type Entry = FileEntry | HeadingEntry;
+interface BlockEntry {
+  kind: "block";
+  block: ParsedBlock;
+}
+
+type Entry = FileEntry | HeadingEntry | BlockEntry;
 
 /// Split the bubble query into `(filePart, sigil, sigilPart)`. The
 /// sigil is the first occurrence of `#`, `^`, or `|`. Sigil and
@@ -200,6 +223,15 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
   list.className = "md-wiki-bubble-results";
   wrap.appendChild(list);
 
+  // Block-mode preview. Hidden until the bubble enters block mode;
+  // shows the active block expanded inline with the user's query
+  // highlighted. Sits between the result list and the accept row
+  // so the spec's "shows the part of the document in the bubble,
+  // highlighting it" is visible without scrolling.
+  const preview = document.createElement("div");
+  preview.className = "md-wiki-bubble-preview is-hidden";
+  wrap.appendChild(preview);
+
   const accept = document.createElement("div");
   accept.className = "md-wiki-bubble-accept";
   accept.textContent = "⏎  to accept"; // U+23CE return symbol
@@ -208,28 +240,40 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
   document.body.appendChild(wrap);
 
   let mode: Mode = "file";
-  /// File picked when transitioning into heading mode. Held while
-  /// the query keeps a `#`; cleared when the user backspaces past
-  /// the sigil and we revert to file mode.
+  /// File picked when transitioning into heading or block mode.
+  /// Held while the query keeps a `#` or `^`; cleared when the
+  /// user backspaces past the sigil and we revert to file mode.
   let lockedFile: string | null = null;
   /// All headings of `lockedFile`, fetched once on transition. The
   /// user's post-`#` text filters this in-memory (no per-keystroke
   /// HTTP call).
   let lockedHeadings: HeadingRow[] = [];
+  /// All blocks of `lockedFile`, parsed once on transition into
+  /// block mode. The user's post-`^` text filters in memory.
+  let lockedBlocks: ParsedBlock[] = [];
+  /// Original file body + mtime captured when block mode loads.
+  /// Used at accept time to compute the rewritten content with the
+  /// new `^id` marker and CAS-write it back.
+  let lockedContent = "";
+  let lockedMtime: number | null = null;
+  /// Latest sigilPart string, kept so the active-block preview can
+  /// re-render with up-to-date highlight markup on arrow navigation.
+  let lastSigilPart = "";
   let entries: Entry[] = [];
   let active = 0;
   let lastQuery = "";
   let alive = true;
   let searchToken = 0;
   let headingToken = 0;
+  let blockToken = 0;
 
   const renderHead = (q: string): void => {
     const { filePart, sigil } = splitQuery(q);
     let label: string;
-    if (mode === "heading" && lockedFile) {
-      // In heading mode the header reflects the file we're
-      // anchoring into, with the typed heading suffix so the user
-      // sees the link they're building.
+    if ((mode === "heading" || mode === "block") && lockedFile) {
+      // In heading / block mode the header reflects the file we
+      // are anchoring into plus the typed sigil suffix so the user
+      // sees the link they are building.
       const sigilPart = q.slice(filePart.length);
       label = `${fileLabel(lockedFile)}${sigilPart}`;
     } else if (q.trim().length === 0) {
@@ -250,6 +294,8 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
     if (entries.length === 0) {
       list.classList.add("is-empty");
       accept.classList.add("is-hidden");
+      preview.classList.add("is-hidden");
+      preview.innerHTML = "";
       if (wrap.isConnected) positionPopover(opts.host, wrap);
       return;
     }
@@ -259,18 +305,22 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
       const li = document.createElement("li");
       if (entry.kind === "file") {
         li.textContent = entry.path;
-      } else {
+      } else if (entry.kind === "heading") {
         // Heading rows render as `## Heading text` so the user can
         // see the level at a glance. Indent by level after the
         // hashes for outline shape.
         const hashes = "#".repeat(Math.min(6, Math.max(1, entry.row.level)));
         li.textContent = `${hashes} ${entry.row.text}`;
         li.classList.add("is-heading");
+      } else {
+        // Block rows: 1-line summary (first line of the block,
+        // truncated). Active block is expanded in the preview area
+        // below for the spec's "highlights as you type" UX.
+        const first = entry.block.text.split("\n")[0] ?? "";
+        li.textContent = first.length > 80 ? `${first.slice(0, 80)}...` : first;
+        li.classList.add("is-block");
       }
       li.className += i === active ? " active" : "";
-      // mousedown (not click) so the editor doesn't lose focus
-      // before the picker can run; keep the editor selection alive
-      // while the bubble commits.
       li.addEventListener("mousedown", (ev) => {
         ev.preventDefault();
         active = i;
@@ -278,6 +328,42 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
       });
       list.appendChild(li);
     });
+
+    // Block-mode preview: render the active block with the typed
+    // term wrapped in <mark>. We rebuild the preview DOM safely by
+    // splitting on the needle and creating text/mark nodes (no
+    // innerHTML for user content).
+    const activeEntry = entries[active];
+    if (activeEntry && activeEntry.kind === "block") {
+      preview.classList.remove("is-hidden");
+      preview.innerHTML = "";
+      const text = activeEntry.block.text;
+      const needle = lastSigilPart.trim();
+      if (!needle) {
+        preview.appendChild(document.createTextNode(text));
+      } else {
+        const lc = text.toLowerCase();
+        const lcNeedle = needle.toLowerCase();
+        let cursor = 0;
+        while (cursor < text.length) {
+          const idx = lc.indexOf(lcNeedle, cursor);
+          if (idx === -1) {
+            preview.appendChild(document.createTextNode(text.slice(cursor)));
+            break;
+          }
+          if (idx > cursor) {
+            preview.appendChild(document.createTextNode(text.slice(cursor, idx)));
+          }
+          const m = document.createElement("mark");
+          m.textContent = text.slice(idx, idx + needle.length);
+          preview.appendChild(m);
+          cursor = idx + needle.length;
+        }
+      }
+    } else {
+      preview.classList.add("is-hidden");
+      preview.innerHTML = "";
+    }
     if (wrap.isConnected) positionPopover(opts.host, wrap);
   };
 
@@ -348,6 +434,52 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
     headingToken++; // invalidate any in-flight fetch
   };
 
+  /// Filter `lockedBlocks` against the post-`^` text, top 5.
+  const renderBlockEntries = (sigilPart: string): void => {
+    const matches = filterBlocks(lockedBlocks, sigilPart, 5);
+    entries = matches.map((block) => ({ kind: "block", block }));
+    active = 0;
+    lastSigilPart = sigilPart;
+    renderResults();
+  };
+
+  /// Switch into block mode: fetch the file body once, parse it
+  /// into blocks, then filter in-memory on each keystroke.
+  const enterBlockMode = async (path: string, sigilPart: string): Promise<void> => {
+    const token = ++blockToken;
+    mode = "block";
+    lockedFile = path;
+    lockedBlocks = [];
+    lockedContent = "";
+    lockedMtime = null;
+    entries = [];
+    active = 0;
+    lastSigilPart = sigilPart;
+    renderResults();
+    try {
+      const file = await api.read(path);
+      if (!alive || token !== blockToken) return;
+      lockedContent = file.content;
+      lockedMtime = file.mtime ?? null;
+      lockedBlocks = parseBlocks(file.content);
+      renderBlockEntries(sigilPart);
+    } catch {
+      if (!alive || token !== blockToken) return;
+      lockedBlocks = [];
+      entries = [];
+      renderResults();
+    }
+  };
+
+  const exitBlockMode = (): void => {
+    mode = "file";
+    lockedFile = null;
+    lockedBlocks = [];
+    lockedContent = "";
+    lockedMtime = null;
+    blockToken++;
+  };
+
   positionPopover(opts.host, wrap);
   const stopWatch = watchViewport(opts.host, wrap);
 
@@ -360,22 +492,24 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
       if (!alive) return;
       const { filePart, sigil, sigilPart } = splitQuery(query);
 
-      // Heading-mode transitions. We only enter heading mode when
-      // there IS a file to lock onto: with no resolved file, `#` in
-      // the query keeps file mode and just gets searched literally
-      // (which is fine; usually returns nothing).
+      // Heading / block mode transitions. We only enter when there
+      // IS a file to lock onto: with no resolved file, `#` or `^`
+      // in the query keeps file mode and gets searched literally
+      // (typically yields nothing, harmless).
+      const pickLockCandidate = (): string | null => {
+        if (entries.length > 0 && entries[active]?.kind === "file") {
+          return (entries[active] as FileEntry).path;
+        }
+        if (entries.length > 0 && entries[0]?.kind === "file") {
+          return (entries[0] as FileEntry).path;
+        }
+        return null;
+      };
+
       if (sigil === "#") {
+        if (mode === "block") exitBlockMode();
         if (mode !== "heading") {
-          // Pick the file to lock: prefer the currently-active file
-          // entry if we're already showing file results; otherwise
-          // take the top hit. If there is no file at all, stay in
-          // file mode and let the literal `#` filter below.
-          let candidate: string | null = null;
-          if (entries.length > 0 && entries[active]?.kind === "file") {
-            candidate = (entries[active] as FileEntry).path;
-          } else if (entries.length > 0 && entries[0]?.kind === "file") {
-            candidate = (entries[0] as FileEntry).path;
-          }
+          const candidate = pickLockCandidate();
           if (candidate) {
             void enterHeadingMode(candidate, sigilPart);
             renderHead(query);
@@ -383,29 +517,44 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
             return;
           }
         } else if (lockedFile) {
-          // Already in heading mode: just re-filter in memory.
           filterHeadings(sigilPart);
           renderHead(query);
           lastQuery = query;
           return;
         }
-      } else if (mode === "heading") {
-        // No `#` in query but we're in heading mode: the user
-        // backspaced past the sigil. Revert to file mode.
-        exitHeadingMode();
+      } else if (sigil === "^") {
+        if (mode === "heading") exitHeadingMode();
+        if (mode !== "block") {
+          const candidate = pickLockCandidate();
+          if (candidate) {
+            void enterBlockMode(candidate, sigilPart);
+            renderHead(query);
+            lastQuery = query;
+            return;
+          }
+        } else if (lockedFile) {
+          renderBlockEntries(sigilPart);
+          renderHead(query);
+          lastQuery = query;
+          return;
+        }
+      } else {
+        // No sigil: we're in file mode. Reset any locked state.
+        if (mode === "heading") exitHeadingMode();
+        if (mode === "block") exitBlockMode();
       }
 
       renderHead(query);
       if (query === lastQuery) return;
       lastQuery = query;
       // File-mode: search on the part before any sigil so a stray
-      // `^` or `|` (handled in later commits) doesn't poison the
-      // search query.
+      // `|` (handled in later commits) doesn't poison the query.
       void runFileSearch(filePart || query);
     },
     moveActive(delta: number): void {
       if (!alive || entries.length === 0) return;
       active = Math.max(0, Math.min(entries.length - 1, active + delta));
+      // Re-render so the block-mode preview tracks arrow navigation.
       renderResults();
     },
     accept(): WikiBubbleAccept | null {
@@ -419,13 +568,38 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
           label: fileLabel(entry.path),
         };
       }
-      // heading
+      if (entry.kind === "heading") {
+        if (!lockedFile) return null;
+        return {
+          kind: "heading",
+          target: lockedFile,
+          anchor: entry.row.anchor,
+          label: fileLabel(lockedFile),
+        };
+      }
+      // block
       if (!lockedFile) return null;
+      // If the block already has an `^id`, reuse it: no file write
+      // needed. Otherwise generate a fresh id and emit the rewritten
+      // file content for the host to CAS-write before the link
+      // commit lands.
+      if (entry.block.existingAnchor) {
+        return {
+          kind: "block",
+          target: lockedFile,
+          anchor: entry.block.existingAnchor,
+          label: fileLabel(lockedFile),
+          pendingFileWrite: null,
+        };
+      }
+      const id = makeBlockId();
+      const newContent = insertBlockAnchor(lockedContent, entry.block, id);
       return {
-        kind: "heading",
+        kind: "block",
         target: lockedFile,
-        anchor: entry.row.anchor,
+        anchor: `^${id}`,
         label: fileLabel(lockedFile),
+        pendingFileWrite: { content: newContent, expectedMtime: lockedMtime },
       };
     },
     dismiss(): void {
