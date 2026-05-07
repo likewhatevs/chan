@@ -28,6 +28,8 @@ pub enum ChanError {
     DriveRootMissing(PathBuf),
     #[error("drive is locked by another process")]
     DriveLocked,
+    #[error("write conflict: file changed on disk (current mtime: {current_mtime:?})")]
+    WriteConflict { current_mtime: Option<i64> },
     #[error("config decode error in {path}: {message}")]
     ConfigDecode { path: PathBuf, message: String },
     #[error("config encode error: {0}")]

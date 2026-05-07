@@ -173,7 +173,12 @@ Drive::paths() -> &DrivePaths
 
 Drive::read(rel: &str) -> Result<Vec<u8>>
 Drive::read_text(rel: &str) -> Result<String>          // gated
+Drive::read_text_with_stat(rel: &str) -> Result<(String, FileStat)>  // gated
 Drive::write_text(rel: &str, content: &str) -> Result<()>  // gated
+Drive::write_text_if_unchanged(rel: &str,                    // gated, CAS
+    expected_mtime: Option<i64>,
+    content: &str,
+) -> Result<()>
 Drive::write_bytes(rel: &str, content: &[u8]) -> Result<()>
 
 Drive::exists(rel: &str) -> bool
@@ -207,8 +212,23 @@ All `rel` arguments are POSIX-style relative paths. Path traversal
 canonical-form check that the deepest existing ancestor stays
 under the canonical drive root (catches mid-path symlinks
 escaping the sandbox). The editable-text gate (`.md`, `.txt`)
-applies to `read_text` / `write_text` only; binary I/O routes
-around it because attachments and future media browsing need it.
+applies to `read_text` / `read_text_with_stat` / `write_text` /
+`write_text_if_unchanged` only; binary I/O routes around it
+because attachments and future media browsing need it.
+
+`read_text_with_stat` and `write_text_if_unchanged` are the
+optimistic-concurrency pair the editor uses to detect external
+edits. The editor reads `(content, stat)`, the user types, and
+the save round-trips through `write_text_if_unchanged(rel,
+stat.mtime, new_content)`. If another process (terminal, sync
+daemon, second pane) has since modified the file, the write
+fails with `WriteConflict { current_mtime }` and the editor
+prompts to reload, merge, or overwrite. `write_text` (no CAS)
+remains for chan-core's own reindex helpers, bulk imports, and
+LLM-tool calls where last-write-wins is the intent. Residual
+race: between the mtime check and the atomic rename a foreign
+write can land; the watcher event for the foreign change fires
+on the next dispatch and the editor re-prompts.
 
 `remove` is a soft-delete: it moves the entry into the per-drive
 Trash (see below). Recursive directory removal is allowed because

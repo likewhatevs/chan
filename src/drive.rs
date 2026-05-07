@@ -139,6 +139,32 @@ impl Drive {
         Ok(std::fs::read_to_string(&abs)?)
     }
 
+    /// Read UTF-8 text and return the file's stat alongside the
+    /// content. The stat is taken from the open file handle (fstat)
+    /// so the returned mtime corresponds to the bytes returned, with
+    /// no second-syscall race window. Pair with `write_text_if_unchanged`
+    /// for optimistic-concurrency editor saves.
+    pub fn read_text_with_stat(&self, rel: &str) -> Result<(String, FileStat)> {
+        use std::io::Read;
+        if !fs_ops::is_editable_text(rel) {
+            return Err(ChanError::NotEditableText(rel.to_string()));
+        }
+        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
+        // lstat-gate before opening: File::open follows symlinks, so
+        // refuse if the path is a symlink / FIFO / device.
+        fs_ops::ensure_regular_file(&abs)?;
+        let mut f = std::fs::File::open(&abs)?;
+        let meta = f.metadata()?;
+        let mut content = String::new();
+        f.read_to_string(&mut content)?;
+        let stat = FileStat {
+            size: meta.len(),
+            mtime: mtime_secs(&meta),
+            is_dir: false,
+        };
+        Ok((content, stat))
+    }
+
     /// Atomically write UTF-8 text. Editable-text gate applies.
     /// Refuses to write through a path whose final component is a
     /// non-regular file (symlink, device, FIFO, socket); the user
@@ -150,6 +176,56 @@ impl Drive {
         }
         let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
         ensure_writable(&abs)?;
+        fs_ops::atomic_write(&abs, content.as_bytes())
+    }
+
+    /// Optimistic-concurrency write: succeeds only when the file's
+    /// current mtime matches `expected_mtime`. The editor pairs this
+    /// with `read_text_with_stat`: it reads (content, stat), the user
+    /// edits, then it writes back with `expected_mtime = stat.mtime`.
+    /// If the file changed under the editor (another process, another
+    /// pane), the write fails with `ChanError::WriteConflict` and the
+    /// editor can prompt to reload, merge, or overwrite.
+    ///
+    /// Conventions for `expected_mtime`:
+    ///   - `None` + missing file: create.
+    ///   - `None` + existing file: `WriteConflict`. The caller did
+    ///     not know a file was there; treating that as a silent
+    ///     overwrite would be the bug we're trying to prevent.
+    ///   - `Some(m)` + current mtime == m: write.
+    ///   - any other case: `WriteConflict { current_mtime }`.
+    ///
+    /// Residual race: between the mtime check and the atomic rename,
+    /// another writer can land. The window is small (no syscalls
+    /// between the two) and the next watcher event will surface the
+    /// foreign change so the editor can re-prompt. Callers that need
+    /// stronger semantics must serialize at a higher level.
+    pub fn write_text_if_unchanged(
+        &self,
+        rel: &str,
+        expected_mtime: Option<i64>,
+        content: &str,
+    ) -> Result<()> {
+        if !fs_ops::is_editable_text(rel) {
+            return Err(ChanError::NotEditableText(rel.to_string()));
+        }
+        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
+        ensure_writable(&abs)?;
+        let (current, exists) = match std::fs::symlink_metadata(&abs) {
+            Ok(meta) => (mtime_secs(&meta), true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (None, false),
+            Err(e) => return Err(ChanError::Io(e.to_string())),
+        };
+        let conflict = match (expected_mtime, exists) {
+            (None, false) => false,
+            (Some(m), true) => current != Some(m),
+            _ => true,
+        };
+        if conflict {
+            return Err(ChanError::WriteConflict {
+                current_mtime: current,
+            });
+        }
         fs_ops::atomic_write(&abs, content.as_bytes())
     }
 
@@ -182,14 +258,9 @@ impl Drive {
     pub fn stat(&self, rel: &str) -> Result<FileStat> {
         let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
         let meta = std::fs::symlink_metadata(&abs)?;
-        let mtime = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64);
         Ok(FileStat {
             size: if meta.is_dir() { 0 } else { meta.len() },
-            mtime,
+            mtime: mtime_secs(&meta),
             is_dir: meta.is_dir(),
         })
     }
@@ -532,6 +603,13 @@ impl Drive {
     }
 }
 
+fn mtime_secs(meta: &std::fs::Metadata) -> Option<i64> {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+}
+
 /// Refuse to write at `abs` if its final component already exists
 /// as something other than a regular file (symlink, FIFO, socket,
 /// device, directory). Returning Ok when the path is missing is
@@ -695,6 +773,84 @@ mod tests {
         let (_cfg, _root, drive) = fixture();
         let err = drive.write_text("img.png", "x").unwrap_err();
         assert!(matches!(err, ChanError::NotEditableText(_)));
+    }
+
+    #[test]
+    fn read_text_with_stat_returns_content_and_mtime() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "hello").unwrap();
+        let (content, stat) = drive.read_text_with_stat("a.md").unwrap();
+        assert_eq!(content, "hello");
+        assert_eq!(stat.size, 5);
+        assert!(stat.mtime.is_some());
+        assert!(!stat.is_dir);
+    }
+
+    #[test]
+    fn write_text_if_unchanged_creates_when_missing_with_none() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text_if_unchanged("a.md", None, "v1").unwrap();
+        assert_eq!(drive.read_text("a.md").unwrap(), "v1");
+    }
+
+    #[test]
+    fn write_text_if_unchanged_conflicts_when_none_but_file_exists() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "v1").unwrap();
+        let err = drive
+            .write_text_if_unchanged("a.md", None, "v2")
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ChanError::WriteConflict {
+                current_mtime: Some(_)
+            }
+        ));
+        assert_eq!(drive.read_text("a.md").unwrap(), "v1");
+    }
+
+    #[test]
+    fn write_text_if_unchanged_conflicts_when_expected_but_missing() {
+        let (_cfg, _root, drive) = fixture();
+        let err = drive
+            .write_text_if_unchanged("a.md", Some(0), "v1")
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ChanError::WriteConflict {
+                current_mtime: None
+            }
+        ));
+        assert!(!drive.exists("a.md"));
+    }
+
+    #[test]
+    fn write_text_if_unchanged_succeeds_with_matching_mtime() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "v1").unwrap();
+        let (_, stat) = drive.read_text_with_stat("a.md").unwrap();
+        drive
+            .write_text_if_unchanged("a.md", stat.mtime, "v2")
+            .unwrap();
+        assert_eq!(drive.read_text("a.md").unwrap(), "v2");
+    }
+
+    #[test]
+    fn write_text_if_unchanged_conflicts_with_stale_mtime() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "v1").unwrap();
+        let stale = Some(0i64);
+        let err = drive
+            .write_text_if_unchanged("a.md", stale, "v2")
+            .unwrap_err();
+        match err {
+            ChanError::WriteConflict { current_mtime } => {
+                assert!(current_mtime.is_some());
+                assert_ne!(current_mtime, stale);
+            }
+            other => panic!("expected WriteConflict, got {other:?}"),
+        }
+        assert_eq!(drive.read_text("a.md").unwrap(), "v1");
     }
 
     #[test]
