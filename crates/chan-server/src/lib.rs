@@ -1515,19 +1515,149 @@ async fn api_llm_clear_gemini_key() -> Response {
     }
 }
 
-async fn api_llm_anthropic_models() -> Response {
-    // Real catalogs port from the old chan when chan-llm's
-    // backends do; placeholder empty list for now so the route
-    // surface compiles for the frontend.
-    Json::<Vec<&str>>(Vec::new()).into_response()
+/// One model entry in a catalog response. `supports_tools` is
+/// hardcoded true for Anthropic and Gemini today (their entire
+/// chat catalog supports function calling); future non-tool
+/// variants would narrow this by name.
+#[derive(Serialize)]
+struct LlmModelEntry {
+    name: &'static str,
+    supports_tools: bool,
 }
 
-async fn api_llm_gemini_models() -> Response {
-    Json::<Vec<&str>>(Vec::new()).into_response()
+#[derive(Serialize)]
+struct LlmModelEntryOwned {
+    name: String,
+    supports_tools: bool,
+}
+
+#[derive(Serialize)]
+struct CatalogResponse {
+    models: Vec<LlmModelEntryOwned>,
+    /// Provenance tag for the Settings UI's "why is this list
+    /// short" copy. live = fetched from upstream, curated = no
+    /// key set so we returned a static shortlist, fallback = key
+    /// set but live fetch failed.
+    source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Curated Anthropic shortlist. Used when no key is configured
+/// (so the dropdown isn't empty) and as the fallback when the
+/// `/v1/models` call fails. Sorted newest-first; trim when older
+/// generations stop being recommended.
+const CURATED_ANTHROPIC: &[LlmModelEntry] = &[
+    LlmModelEntry {
+        name: "claude-opus-4-7",
+        supports_tools: true,
+    },
+    LlmModelEntry {
+        name: "claude-sonnet-4-6",
+        supports_tools: true,
+    },
+    LlmModelEntry {
+        name: "claude-haiku-4-5",
+        supports_tools: true,
+    },
+];
+
+/// Curated Gemini shortlist. Same purpose as the Anthropic one.
+const CURATED_GEMINI: &[LlmModelEntry] = &[
+    LlmModelEntry {
+        name: "gemini-2.5-pro",
+        supports_tools: true,
+    },
+    LlmModelEntry {
+        name: "gemini-2.5-flash",
+        supports_tools: true,
+    },
+];
+
+fn curated_to_owned(curated: &[LlmModelEntry]) -> Vec<LlmModelEntryOwned> {
+    curated
+        .iter()
+        .map(|e| LlmModelEntryOwned {
+            name: e.name.to_string(),
+            supports_tools: e.supports_tools,
+        })
+        .collect()
+}
+
+async fn api_llm_anthropic_models(State(state): State<Arc<AppState>>) -> Response {
+    let cfg = state.llm_config.lock().unwrap().clone();
+    let (key, _) = chan_llm::keys::resolve(BackendKind::Anthropic, &cfg);
+    let Some(key) = key else {
+        return Json(CatalogResponse {
+            models: curated_to_owned(CURATED_ANTHROPIC),
+            source: "curated",
+            error: None,
+        })
+        .into_response();
+    };
+    match chan_llm::backends::anthropic::list_models(&key).await {
+        Ok(models) => Json(CatalogResponse {
+            models: models
+                .into_iter()
+                .map(|name| LlmModelEntryOwned {
+                    name,
+                    supports_tools: true,
+                })
+                .collect(),
+            source: "live",
+            error: None,
+        })
+        .into_response(),
+        Err(e) => Json(CatalogResponse {
+            models: curated_to_owned(CURATED_ANTHROPIC),
+            source: "fallback",
+            error: Some(e.to_string()),
+        })
+        .into_response(),
+    }
+}
+
+async fn api_llm_gemini_models(State(state): State<Arc<AppState>>) -> Response {
+    let cfg = state.llm_config.lock().unwrap().clone();
+    let (key, _) = chan_llm::keys::resolve(BackendKind::Gemini, &cfg);
+    let Some(key) = key else {
+        return Json(CatalogResponse {
+            models: curated_to_owned(CURATED_GEMINI),
+            source: "curated",
+            error: None,
+        })
+        .into_response();
+    };
+    match chan_llm::backends::gemini::list_models(&key).await {
+        Ok(models) => Json(CatalogResponse {
+            models: models
+                .into_iter()
+                .map(|name| LlmModelEntryOwned {
+                    name,
+                    supports_tools: true,
+                })
+                .collect(),
+            source: "live",
+            error: None,
+        })
+        .into_response(),
+        Err(e) => Json(CatalogResponse {
+            models: curated_to_owned(CURATED_GEMINI),
+            source: "fallback",
+            error: Some(e.to_string()),
+        })
+        .into_response(),
+    }
 }
 
 async fn api_llm_ollama_models() -> Response {
-    Json::<Vec<&str>>(Vec::new()).into_response()
+    // Ollama doesn't go through chan-llm's HTTP key story (local
+    // server, keyless). The frontend already passes a per-server
+    // URL via ?url= so the same route can probe a remote box from
+    // the Settings UI without persisting the URL first.
+    // Today: empty list. Live discovery via /api/tags lands when
+    // the per-backend Ollama URL probe is wired (chan-llm side).
+    Json::<Vec<LlmModelEntryOwned>>(Vec::new()).into_response()
 }
 
 // ----- server preferences -------------------------------------------------

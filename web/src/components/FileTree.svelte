@@ -9,6 +9,7 @@
   import { isEditableText } from "../state/fileTypes";
   import { dirtyPaths, openInActivePane } from "../state/tabs.svelte";
   import {
+    browserOverlay,
     browserSelection,
     fileOps,
     persistTreeExpanded,
@@ -140,6 +141,10 @@
 
   async function onOpen(path: string): Promise<void> {
     await openInActivePane(path);
+    // The user wanted to read or edit the file, not keep the picker
+    // hovering over the editor. Mirrors the inspector's "Open"
+    // button behaviour in FileBrowserOverlay.openSelected().
+    if (browserOverlay.open) browserOverlay.open = false;
   }
 
   /// Single-click selects an entry; the FileBrowserTab side panel
