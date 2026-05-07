@@ -624,10 +624,10 @@
           disabled={!editing.assistant.enabled}
         >
           <option value="claude">claude (Anthropic API)</option>
-          <option value="gemini">gemini (Google API)</option>
-          <option value="ollama">ollama (local)</option>
           <option value="claude_cli">claude CLI (shell-executor)</option>
+          <option value="gemini">gemini (Google API)</option>
           <option value="embedded" disabled>local: coming soon (embedded model)</option>
+          <option value="ollama">ollama (local)</option>
         </select>
       </label>
 

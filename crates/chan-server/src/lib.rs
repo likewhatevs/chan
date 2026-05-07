@@ -1869,11 +1869,28 @@ impl SessionListener for CollectListener {
     }
 }
 
+/// Build the argv chan-llm hands to claude as `--mcp-config`.
+/// Resolves to the running chan binary plus the hidden `__mcp`
+/// subcommand and the drive root, so claude's writes round-trip
+/// through chan-core's gates instead of touching the drive
+/// directly.
+///
+/// Returns `None` when `current_exe()` fails (we don't know how to
+/// re-invoke ourselves) or when the drive root is non-UTF-8 (the
+/// MCP config JSON is text). Callers fall back to v1 black-box
+/// mode in that case; chan-llm's claude_cli backend handles the
+/// `None` path explicitly.
+fn mcp_subcommand_for(drive_root: &Path) -> Option<Vec<String>> {
+    let exe = std::env::current_exe().ok()?;
+    let drive = drive_root.to_str()?.to_string();
+    Some(vec![exe.to_str()?.to_string(), "__mcp".to_string(), drive])
+}
+
 async fn api_llm_complete(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CompleteBody>,
 ) -> Response {
-    let config = state.llm_config.lock().unwrap().clone();
+    let mut config = state.llm_config.lock().unwrap().clone();
     // Active backend determines the model echoed back in the
     // response. Falls through the same way /api/llm/status does
     // (config override > backend default).
@@ -1888,6 +1905,19 @@ async fn api_llm_complete(
     // /ws side channel still has a correlatable id without
     // requiring the simple sync caller to track one.
     let session_id = body.session_id.clone().unwrap_or_else(random_session_id);
+
+    // For ClaudeCli only, point the backend at our own binary as
+    // the chan-llm MCP server. chan-llm's claude_cli code launches
+    // claude with `--mcp-config` pointing here so writes flow back
+    // through chan-core's gates (chan-llm issue #1, v0.5.0). On any
+    // failure to resolve the current exe path we leave mcp_command
+    // empty: chan-llm falls back to v1 black-box mode (auto-apply
+    // forced on) and the user still gets a working assistant.
+    if active == BackendKind::ClaudeCli {
+        if let Some(cmd) = mcp_subcommand_for(state.drive().root()) {
+            config.claude_cli.mcp_command = Some(cmd);
+        }
+    }
 
     let session = LlmSession::new(state.drive().clone(), config);
     let collect = Arc::new(CollectListener::new(LlmBroadcastListener {
