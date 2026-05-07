@@ -224,7 +224,8 @@ export function showCalendar(
     // Weekday header. Locale-aware short names; rendered Sun..Sat
     // because the day grid below also uses Sunday=0 (matches
     // JavaScript's getDay()). Switching to Mon-first would also
-    // require offsetting `startDow` below.
+    // require offsetting `startDow` below. Goes into the centered
+    // gridWrap below alongside the day grid.
     const dowRow = document.createElement("div");
     dowRow.className = "md-cal-dow";
     for (let i = 0; i < 7; i++) {
@@ -233,7 +234,6 @@ export function showCalendar(
       el.textContent = d.toLocaleString(undefined, { weekday: "short" }).slice(0, 2);
       dowRow.appendChild(el);
     }
-    wrap.appendChild(dowRow);
 
     const grid = document.createElement("div");
     grid.className = "md-cal-grid";
@@ -257,7 +257,52 @@ export function showCalendar(
       };
       grid.appendChild(cell);
     }
-    wrap.appendChild(grid);
+    // Wrap the dow header + day grid in a centered container so the
+    // narrow seven-column grid (~11rem) sits middle-aligned inside
+    // the wider popover (~16rem to fit the format-row preview pill)
+    // instead of hugging the left edge.
+    const gridWrap = document.createElement("div");
+    gridWrap.className = "md-cal-gridwrap";
+    gridWrap.append(dowRow, grid);
+    wrap.appendChild(gridWrap);
+
+    // Action row: Today on the left for quick reset, Cancel + OK
+    // on the right. OK is the primary action (mirrors PromptModal /
+    // ConflictModal). Provides an explicit click-to-confirm path
+    // for users who don't know to press Enter, and gives the
+    // popover a deliberate dismiss button instead of relying on
+    // click-outside.
+    const actions = document.createElement("div");
+    actions.className = "md-cal-actions";
+    const todayBtn = document.createElement("button");
+    todayBtn.className = "md-cal-action today";
+    todayBtn.textContent = "Today";
+    todayBtn.title = "jump cursor to today (T)";
+    todayBtn.onclick = () => {
+      cursor = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      render();
+    };
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "md-cal-action cancel";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.title = "dismiss without inserting (Esc)";
+    cancelBtn.onclick = () => {
+      cleanup();
+      pick(null);
+    };
+    const okBtn = document.createElement("button");
+    okBtn.className = "md-cal-action ok";
+    okBtn.textContent = "OK";
+    okBtn.title = "insert the highlighted date (Enter)";
+    okBtn.onclick = () => {
+      cleanup();
+      pick({ iso: isoOf(cursor), format: activeFormat });
+    };
+    const spacer = document.createElement("span");
+    spacer.className = "md-cal-spacer";
+    actions.append(todayBtn, spacer, cancelBtn, okBtn);
+    wrap.appendChild(actions);
+
     // Re-position after every render: the grid height shifts
     // between 5 and 6 rows when navigating months, so what fit
     // below the host on January might no longer fit on February.

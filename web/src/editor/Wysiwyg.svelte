@@ -1096,6 +1096,45 @@
     border-color: var(--link);
     background: var(--hover-bg);
   }
+  /* Center the dow header + day grid horizontally inside the panel.
+     The grid itself is fixed at 7 * 1.6rem; the wrapping flex
+     centers it so the calendar reads as a deliberate block instead
+     of hugging the left edge of the wider format / nav rows. */
+  :global(.md-cal-gridwrap) {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  /* Action row at the bottom: [Today] [spacer] [Cancel] [OK].
+     Mirrors PromptModal's button styling (rounded, accented OK)
+     so the date popover feels like a sibling of the other modals. */
+  :global(.md-cal-actions) {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+    padding-top: 0.4rem;
+    border-top: 1px solid var(--border);
+  }
+  :global(.md-cal-spacer) { flex: 1; }
+  :global(.md-cal-action) {
+    background: var(--btn-bg);
+    color: var(--text);
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    padding: 0.3rem 0.75rem;
+    font: inherit;
+    cursor: pointer;
+  }
+  :global(.md-cal-action:hover) { border-color: var(--btn-hover); }
+  :global(.md-cal-action.ok) {
+    background: var(--link);
+    border-color: var(--link);
+    color: #fff;
+  }
+  :global(.md-cal-action.today) {
+    color: var(--text-secondary);
+  }
 
   :global(.md-pick) {
     background: var(--bg-elev);
