@@ -12,14 +12,6 @@
   import { markdown } from "@codemirror/lang-markdown";
   import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
   import { oneDark } from "@codemirror/theme-one-dark";
-  import {
-    SearchQuery,
-    findNext as cmFindNext,
-    findPrevious as cmFindPrev,
-    getSearchQuery,
-    search,
-    setSearchQuery,
-  } from "@codemirror/search";
   import { drive, ui } from "../state/store.svelte";
 
   // Editor density follows the user's line_spacing pref. Same hook
@@ -35,87 +27,6 @@
   let view: EditorView | undefined;
   let applyingExternal = false;
   const themeCompartment = new Compartment();
-
-  /// In-document find API. Mirrors the Wysiwyg side so FileEditorTab
-  /// can drive either editor through a single FindBar. CodeMirror's
-  /// own panel UI is suppressed (we don't add searchKeymap to the
-  /// extensions); we just feed it `setSearchQuery` and step through
-  /// matches with cmFindNext / cmFindPrev. CM6 owns the highlight
-  /// rendering via the `search()` extension.
-  ///
-  /// Returns `{ matches, current }` for the FindBar's "n of total"
-  /// indicator. CM6 doesn't expose total match count directly, so
-  /// we count by scanning the doc with the same query the panel
-  /// would have used.
-  export type FindSnapshot = { matches: number; current: number };
-
-  function snapshot(): FindSnapshot {
-    if (!view) return { matches: 0, current: 0 };
-    const q = getSearchQuery(view.state);
-    if (!q.search) return { matches: 0, current: 0 };
-    const re = q.caseSensitive
-      ? new RegExp(escapeRe(q.search), "g")
-      : new RegExp(escapeRe(q.search), "gi");
-    const text = view.state.doc.toString();
-    let total = 0;
-    let current = 0;
-    const cursorPos = view.state.selection.main.from;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) {
-      total += 1;
-      if (m.index <= cursorPos) current = total;
-      // Defend against zero-length matches (unlikely with plain
-      // text; `setSearchQuery` rejects them) by advancing manually.
-      if (m.index === re.lastIndex) re.lastIndex += 1;
-    }
-    return { matches: total, current: total === 0 ? 0 : Math.max(1, current) };
-  }
-
-  function escapeRe(s: string): string {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  }
-
-  export function findSetQuery(query: string, caseSensitive: boolean): FindSnapshot {
-    if (!view) return { matches: 0, current: 0 };
-    view.dispatch({
-      effects: setSearchQuery.of(
-        new SearchQuery({
-          search: query,
-          caseSensitive,
-          // Plain text only; FindBar exposes a single Aa toggle
-          // and no regex switch yet.
-          regexp: false,
-          // Wrap so Enter at the bottom comes back around to top.
-          wholeWord: false,
-        }),
-      ),
-    });
-    if (query) {
-      // Move the selection to the first match without opening
-      // CM6's own search panel. cmFindNext returns true if a
-      // match was found.
-      cmFindNext(view);
-    }
-    return snapshot();
-  }
-
-  export function findStep(delta: number): FindSnapshot {
-    if (!view) return { matches: 0, current: 0 };
-    if (delta > 0) cmFindNext(view);
-    else cmFindPrev(view);
-    return snapshot();
-  }
-
-  export function findClear(): void {
-    if (!view) return;
-    view.dispatch({
-      effects: setSearchQuery.of(new SearchQuery({ search: "" })),
-    });
-  }
-
-  export function findFocus(): void {
-    view?.focus();
-  }
 
   /// Scroll to a specific line (0-based). Called by the inspector
   /// (outline view) when the user picks a heading and this tab is
@@ -166,12 +77,6 @@
         history(),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         markdown(),
-        // Highlight machinery for FindBar. We deliberately
-        // omit `searchKeymap` and don't show CM6's built-in
-        // panel: the bar lives in FileEditorTab and routes Cmd+F
-        // through `findSetQuery` etc. to keep the WYSIWYG and
-        // Source experiences visually identical.
-        search(),
         themeCompartment.of(themeExtensions(ui.theme)),
         EditorView.lineWrapping,
         EditorView.updateListener.of((u) => {
@@ -221,11 +126,6 @@
     height: 100%;
     overflow: auto;
     background: var(--bg);
-    /* Reserve room for the mobile floating bar on whichever edge
-       it currently sits; vars set on `.mobile-shell`, default to
-       0px on desktop. */
-    padding-top: var(--mobile-bar-pad-top, 0px);
-    padding-bottom: var(--mobile-bar-pad-bottom, 0px);
     box-sizing: border-box;
   }
   /* Source mode uses the drive's "code" font preference (it is

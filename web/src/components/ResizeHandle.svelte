@@ -22,8 +22,6 @@
   // That keeps the URL hash + localStorage in sync with what the
   // user sees, even if the page closes mid-drag.
 
-  import { isMobile } from "../api/native";
-
   let {
     width = $bindable(),
     min = 140,
@@ -37,8 +35,6 @@
     side?: "right" | "left";
     onChange?: (w: number) => void;
   } = $props();
-
-  const mobile = isMobile();
 
   let activePointer: number | null = null;
   let startX = 0;
@@ -78,7 +74,6 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="handle"
-  class:mobile
   onpointerdown={onPointerDown}
   onpointermove={onPointerMove}
   onpointerup={endDrag}
@@ -101,21 +96,5 @@
   .handle:hover {
     width: 6px;
     background: var(--separator-hover);
-  }
-  /* On mobile, widen the visible bar (no hover state to hint
-     "draggable"). 5px reads as a clear seam between the inspector
-     and the canvas without eating canvas width. The invisible
-     ::before extends the touch target so a finger anywhere within
-     ~16px hits the handle. */
-  .handle.mobile {
-    width: 5px;
-  }
-  .handle.mobile::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: -6px;
-    right: -6px;
   }
 </style>

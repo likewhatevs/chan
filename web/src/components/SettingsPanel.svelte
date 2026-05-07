@@ -33,13 +33,6 @@
     drive,
   } from "../state/store.svelte";
   import OverlayShell from "./OverlayShell.svelte";
-  import { isMobile } from "../api/native";
-
-  /// Mobile collapses the Settings overlay to the user-meaningful
-  /// subset: name, theme, fonts, assistant. The drive path
-  /// hides because there's no terminal or path-browsing affordance
-  /// to do anything with it; desktop still shows it.
-  const mobile = isMobile();
 
   const visible = $derived(settingsOverlay.open);
 
@@ -583,16 +576,14 @@
         <span>Name</span>
         <input bind:value={editedName} placeholder="(unnamed)" />
       </label>
-      {#if !mobile}
-        <label>
-          <span>Folder</span>
-          <input
-            value={drive.info.root}
-            readonly
-            title="folder where these notes live on disk"
-          />
-        </label>
-      {/if}
+      <label>
+        <span>Folder</span>
+        <input
+          value={drive.info.root}
+          readonly
+          title="folder where these notes live on disk"
+        />
+      </label>
     </section>
 
     <section>
@@ -603,7 +594,7 @@
         <input type="checkbox" bind:checked={editing.assistant.enabled} />
         <span>Enable assistant</span>
         <span class="hint-text">
-          turn off to hide Cmd+H, the assistant button in the editor
+          turn off to hide Cmd+P, the assistant button in the editor
           toolbar, and the search palette's "ask" tab
         </span>
       </label>
@@ -1101,47 +1092,45 @@
       {/if}
     </section>
 
-    {#if !mobile}
-      <section>
-        <h3>Notes folders</h3>
-        <p class="hint">
-          Your default notes folder is where chan opens when launched
-          without a specific one in mind. Leave empty to use the
-          platform default
-          (<code>~/Documents/Chan</code> on macOS,
-          <code>$XDG_DATA_HOME/chan/default</code> on Linux,
-          <code>%USERPROFILE%\Documents\Chan</code> on Windows).
-        </p>
-        <label>
-          <span>Default</span>
-          <input
-            bind:value={editedDefaultRoot}
-            placeholder="(platform default)"
-            spellcheck="false"
-            autocomplete="off"
-          />
-        </label>
+    <section>
+      <h3>Notes folders</h3>
+      <p class="hint">
+        Your default notes folder is where chan opens when launched
+        without a specific one in mind. Leave empty to use the
+        platform default
+        (<code>~/Documents/Chan</code> on macOS,
+        <code>$XDG_DATA_HOME/chan/default</code> on Linux,
+        <code>%USERPROFILE%\Documents\Chan</code> on Windows).
+      </p>
+      <label>
+        <span>Default</span>
+        <input
+          bind:value={editedDefaultRoot}
+          placeholder="(platform default)"
+          spellcheck="false"
+          autocomplete="off"
+        />
+      </label>
 
-        {#if globalConfig?.drives && globalConfig.drives.length > 0}
-          <h4 class="recents-head">Recent</h4>
-          <ul class="recents">
-            {#each globalConfig.drives as u (u.path)}
-              <li>
-                <span class="recents-time">{formatLastOpened(u.last_opened)}</span>
-                {#if u.name}
-                  <span class="recents-name">{u.name}</span>
-                {/if}
-                <span class="recents-path mono" title={u.path}>{u.path}</span>
-              </li>
-            {/each}
-          </ul>
-          <p class="hint">
-            Updated every time you open a folder. In-app open-from-list
-            lands in a follow-up; for now use the menu's Open Folder.
-          </p>
-        {/if}
-      </section>
-    {/if}
+      {#if globalConfig?.drives && globalConfig.drives.length > 0}
+        <h4 class="recents-head">Recent</h4>
+        <ul class="recents">
+          {#each globalConfig.drives as u (u.path)}
+            <li>
+              <span class="recents-time">{formatLastOpened(u.last_opened)}</span>
+              {#if u.name}
+                <span class="recents-name">{u.name}</span>
+              {/if}
+              <span class="recents-path mono" title={u.path}>{u.path}</span>
+            </li>
+          {/each}
+        </ul>
+        <p class="hint">
+          Updated every time you open a folder. In-app open-from-list
+          lands in a follow-up; for now use the menu's Open Folder.
+        </p>
+      {/if}
+    </section>
 
     <section class="about">
       <h3>About</h3>

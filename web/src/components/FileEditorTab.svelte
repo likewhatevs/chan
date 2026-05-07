@@ -8,18 +8,14 @@
   //           inline-code). Shown only in WYSIWYG mode; the
   //           buttons can't act on a textarea source view.
   //   right : wysiwyg/source toggle, inspector toggle, assistant
-  //           button (same trigger as Cmd+H).
+  //           button (same trigger as Cmd+P).
 
-  import { onDestroy, onMount } from "svelte";
   import Wysiwyg, { type BlockKind } from "../editor/Wysiwyg.svelte";
   import Source from "../editor/Source.svelte";
-  import FindBar from "./FindBar.svelte";
   import Inspector from "./Inspector.svelte";
   import OutlineBody, { type Heading } from "./OutlineBody.svelte";
   import FileInfoBody from "./FileInfoBody.svelte";
   import { setMode, type FileTab } from "../state/tabs.svelte";
-  import { isMobile } from "../api/native";
-  import { activeEditor } from "../state/editorRef.svelte";
   import { idle, pinAccessory } from "../state/idle.svelte";
 
   // Hover pin: while the cursor is over the floating fmt-bar, the
@@ -53,11 +49,6 @@
 
   let { tab }: { tab: FileTab } = $props();
 
-  /// True on iOS / Android. On mobile the floating bar sits at the
-  /// bottom and tracks the visual viewport so it stays just above
-  /// the on-screen keyboard.
-  const mobile = isMobile();
-
   /// Overlay is up: hide the floating formatting bar so it doesn't
   /// peek out from behind the modal. Cheaper than a stacking-context
   /// dance.
@@ -68,27 +59,6 @@
       browserOverlay.open ||
       graphOverlay.open,
   );
-
-  /// On mobile, the floating bar lives at the shell level
-  /// (MobileFloatBar.svelte). Register / unregister this tab's
-  /// Wysiwyg ref into the shared `activeEditor` state so the
-  /// shell-level bar can drive the formatting commands.
-  $effect(() => {
-    if (!mobile) return;
-    activeEditor.wysiwyg = wysiwygRef ?? null;
-  });
-  // Mirror selection-version updates so the shell bar's derived
-  // isActive() readers refresh on cursor moves.
-  $effect(() => {
-    if (!mobile) return;
-    activeEditor.selVer = selVer;
-  });
-  onDestroy(() => {
-    if (!mobile) return;
-    if (activeEditor.wysiwyg === wysiwygRef) {
-      activeEditor.wysiwyg = null;
-    }
-  });
 
   // Editor refs so the outline body can call scrollToHeading /
   // scrollToLine on whichever editor variant is showing, and so
@@ -154,89 +124,12 @@
     wysiwygRef?.setBlockKind(v);
   }
 
-  // ---- in-document find ------------------------------------------------
-  // Cmd/Ctrl+F opens a thin bar above the editor body. The bar
-  // is per-tab state; switching tabs doesn't preserve the query
-  // (matches gdocs / browser behavior). We listen for Cmd+F on
-  // the tab's container so the shortcut only fires when the
-  // editor pane is focused, not when an overlay (search panel,
-  // settings) is up.
-
-  let findOpen = $state(false);
-  let findBarRef: FindBar | undefined = $state();
-  let tabRoot: HTMLDivElement | undefined = $state();
-
-  function isFindShortcut(e: KeyboardEvent): boolean {
-    const meta = e.metaKey || e.ctrlKey;
-    return meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f";
-  }
-
-  function onTabKeyDown(e: KeyboardEvent): void {
-    if (!isFindShortcut(e)) return;
-    e.preventDefault();
-    if (findOpen) {
-      // Already open: re-focus + select-all so a second Cmd+F
-      // lets the user replace the query, matching browser UX.
-      void findBarRef?.focusAndSelect();
-      return;
-    }
-    findOpen = true;
-  }
-
-  // Close any open find bar when the user toggles between WYSIWYG
-  // and Source modes: each editor owns its own match state, so
-  // keeping the bar visible would show stale "n of total" counts
-  // until the user types something. Easier to just dismiss.
-  $effect(() => {
-    void tab.mode;
-    if (findOpen) closeFind();
-  });
-
-  function findSetQuery(query: string, caseSensitive: boolean): { matches: number; current: number } {
-    if (tab.mode === "wysiwyg") {
-      const s = wysiwygRef?.findSetQuery(query, caseSensitive);
-      const total = s?.matches.length ?? 0;
-      return { matches: total, current: total === 0 ? 0 : (s?.current ?? -1) + 1 };
-    }
-    return sourceRef?.findSetQuery(query, caseSensitive) ?? { matches: 0, current: 0 };
-  }
-
-  function findStep(delta: number): { matches: number; current: number } {
-    if (tab.mode === "wysiwyg") {
-      const s = wysiwygRef?.findStep(delta);
-      const total = s?.matches.length ?? 0;
-      return { matches: total, current: total === 0 ? 0 : (s?.current ?? -1) + 1 };
-    }
-    return sourceRef?.findStep(delta) ?? { matches: 0, current: 0 };
-  }
-
-  function closeFind(): void {
-    findOpen = false;
-    if (tab.mode === "wysiwyg") wysiwygRef?.findClear();
-    else sourceRef?.findClear();
-  }
-
-  onMount(() => {
-    // Listen at the tab container level (not window) so two open
-    // tabs don't both react to a single Cmd+F. Capture phase so
-    // we win against anything inside the editor that might have
-    // bound Cmd+F (CodeMirror's defaults already drop Cmd+F when
-    // we omit searchKeymap, but belt-and-suspenders).
-    tabRoot?.addEventListener("keydown", onTabKeyDown, true);
-  });
-  onDestroy(() => {
-    tabRoot?.removeEventListener("keydown", onTabKeyDown, true);
-  });
+  // In-tab find was removed; the browser's native ⌘F applies. The
+  // editor's selectable text (WYSIWYG and source) is plain DOM, so
+  // browser find lights up matches the way users already expect.
 </script>
 
-<div class="editor-tab" class:mobile bind:this={tabRoot}>
-  <FindBar
-    bind:this={findBarRef}
-    bind:open={findOpen}
-    onSetQuery={findSetQuery}
-    onStep={findStep}
-    onClose={closeFind}
-  />
+<div class="editor-tab">
   <div class="tab-bar">
     <span class="left">
       <!-- Page-width adjuster. Hover + wheel, or focus + Up/Down,
@@ -429,9 +322,7 @@
     min-width: 0;
     background: var(--bg);
     color: var(--text);
-    /* Anchor for the absolutely-positioned floating format bar on
-       desktop. Mobile uses position: fixed (set inline) so the
-       anchor doesn't apply there. */
+    /* Anchor for the absolutely-positioned floating format bar. */
     position: relative;
   }
   /* Same look + dimensions as the other tab kinds' headers
@@ -459,20 +350,8 @@
     font-variant-numeric: tabular-nums;
     font-size: 12px;
   }
-  /* Mobile: pin the tab-bar to the top of the editor area so the
-     mode + inspector controls stay reachable even if iOS lifts the
-     visual viewport on input focus or a flex parent unexpectedly
-     allows scroll. Desktop keeps the plain flex-item behaviour. */
-  .editor-tab.mobile .tab-bar {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-  }
-  /* Floating formatting pill. Desktop: anchored near the top of
-     the editor area, centered, hovering over the canvas like
-     Apple Notes. Mobile: position: fixed; bottom: <kb-aware>;
-     written inline so the script's keyboard tracking can update
-     without a CSS variable plumbing dance. */
+  /* Floating formatting pill anchored near the top of the editor
+     area, centered, hovering over the canvas like Apple Notes. */
   .fmt-bar {
     position: absolute;
     top: 12px;
@@ -494,7 +373,7 @@
     transition: opacity 200ms ease;
   }
   /* Idle: fade out + drop pointer events. Same recipe as
-     BottomPill / MobileFloatBar so all three pills idle together. */
+     BottomPill so both pills idle together. */
   .fmt-bar.idle {
     opacity: 0;
     pointer-events: none;

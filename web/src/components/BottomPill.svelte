@@ -2,8 +2,7 @@
   // Window-level floating bottom pill. Single instance per window;
   // hosts the navigation button list (AccessoryPill) inside a
   // rounded-pill chrome anchored at the bottom-center of the
-  // viewport. Web + native desktop only — mobile uses MobileFloatBar
-  // which has its own keyboard-aware position flip.
+  // viewport.
   //
   // Idle hide: when `idle.active` flips on (5s of no input), the
   // pill fades to transparent + drops pointer events. Any scroll /

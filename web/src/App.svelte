@@ -1,18 +1,15 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import BottomPill from "./components/BottomPill.svelte";
-  import CloseGuardModal from "./components/CloseGuardModal.svelte";
   import ConflictModal from "./components/ConflictModal.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
   import FileBrowserOverlay from "./components/FileBrowserOverlay.svelte";
   import GraphPanel from "./components/GraphPanel.svelte";
   import InlineAssist from "./components/InlineAssist.svelte";
-  import MobileFloatBar from "./components/MobileFloatBar.svelte";
   import PromptModal from "./components/PromptModal.svelte";
   import SearchPanel from "./components/SearchPanel.svelte";
   import SettingsPanel from "./components/SettingsPanel.svelte";
   import Workspace from "./components/Workspace.svelte";
-  import { setupCloseGuard } from "./state/closeGuard.svelte";
   import {
     applyInitialTheme,
     assistantOverlay,
@@ -50,28 +47,6 @@
   } from "./state/pageWidth.svelte";
   import { installIdleTracker } from "./state/idle.svelte";
   import { loadShared } from "./api/wasm";
-  import {
-    isMobile,
-    isNativeDesktop,
-    listenMenuAction,
-    listenOpenSettings,
-    readAndConsumeOpenFile,
-  } from "./api/native";
-
-  /// Mobile shell mode: chan-app's iOS / Android boot appends
-  /// `?platform=ios` (or android). The shell is identical to the
-  /// desktop one (Workspace + window-level overlays) plus a mobile-
-  /// only floating bar with a keyboard-aware position flip. iPhone
-  /// stays single-pane; iPad allows one split (capped in
-  /// `tabs.svelte.ts::splitActive`).
-  const mobile = isMobile();
-
-  /// True in the chan-app desktop shell. The bare workspace
-  /// (no top toolbar) is now the single layout; this flag only
-  /// gates the Settings entry on the floating bar (web shows it
-  /// because there is no native menubar; native hides it because
-  /// macOS exposes Settings through Cmd+, on the App submenu).
-  const nativeDesktop = isNativeDesktop();
 
   // Keep the URL hash in sync with the current layout so reload (and
   // copy-paste of the URL) restores the same panes/tabs. We touch
@@ -117,10 +92,10 @@
     }
   });
 
-  // Mirror overlay open-state + per-overlay knobs + mobile recents
-  // into the session payload so close-and-quit restores everything
-  // on the next launch. Same debounce mechanism as the layout
-  // effect; the helpers in store.svelte.ts already coalesce.
+  // Mirror overlay open-state + per-overlay knobs into the session
+  // payload so close-and-quit restores everything on the next
+  // launch. Same debounce mechanism as the layout effect; the
+  // helpers in store.svelte.ts already coalesce.
   $effect(() => {
     if (!bootstrapped) return;
     void settingsOverlay.open;
@@ -156,21 +131,6 @@
     // Idle tracker: after 2.5s without scroll/click/keypress, the
     // floating pills fade. Any input flips them back on.
     installIdleTracker();
-    if (mobile) {
-      // iOS Safari / WKWebView auto-zooms when tapping into an input
-      // whose computed font-size is < 16 px, and the zoom often
-      // pushes the bottom action bar and parts of the top bar
-      // off-screen. Pinning maximum-scale to 1 disables that
-      // behaviour. Apply only on mobile so a desktop browser hitting
-      // the same SPA keeps normal pinch-zoom.
-      const meta = document.querySelector('meta[name="viewport"]');
-      if (meta) {
-        meta.setAttribute(
-          "content",
-          "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover",
-        );
-      }
-    }
     await Promise.all([loadShared(), bootstrap()]);
     // First-launch experience: if the URL hash didn't restore any
     // tabs, the pane stays empty and the file browser overlay
@@ -179,47 +139,12 @@
       (n) => n.kind === "leaf" && n.tabs.length > 0,
     );
     if (!hasTabs) openBrowser();
-    void listenOpenSettings(() => {
-      openSettings();
-    });
-    // Native menubar entries (View > Files / Search / Graph /
-    // Assistant) route here. Each maps to the same overlay helpers
-    // the floating pill uses, so menu and button trigger identical
-    // behaviour.
-    void listenMenuAction((action) => {
-      switch (action) {
-        case "files":
-          openBrowser();
-          break;
-        case "search":
-          searchPanel.open = true;
-          break;
-        case "graph":
-          openGraph();
-          break;
-        case "assistant":
-          openAssistant();
-          break;
-      }
-    });
-    const pending = readAndConsumeOpenFile();
-    if (pending) void openInActivePane(pending);
     bootstrapped = true;
-    // Tauri-only hook. No-op in the browser; the Tauri JS API
-    // is dynamically imported only when we detect the runtime.
-    // Note: window-level shortcuts (Cmd+N, Cmd+O) live on the
-    // native menubar in the desktop app; they don't need a JS
-    // handler.
-    void setupCloseGuard();
-    // Visibility-change resume hook. iOS / Android suspend the
-    // WebView when the app goes to background, which severs every
-    // open WebSocket. The watcher's exponential-backoff reconnect
-    // gets stretched to seconds by the time the user returns, so
-    // a manual nudge here lands the connection immediately. We
-    // also re-fetch the drive info + tree because any filesystem
-    // events that arrived during the suspend were dropped on the
-    // floor (no live WS to deliver them). Debounced 300 ms so a
-    // quick app-switch flicker doesn't fire the reconnect twice.
+    // Visibility-change resume hook. Browsers throttle / suspend
+    // backgrounded tabs and the WebSocket reconnect can stretch
+    // to seconds before the user returns; a manual nudge here
+    // lands the connection immediately. Debounced 300 ms so a
+    // quick tab-switch flicker doesn't fire the reconnect twice.
     let resumeTimer: ReturnType<typeof setTimeout> | null = null;
     function onVisibility(): void {
       if (document.visibilityState !== "visible") return;
@@ -234,53 +159,46 @@
     document.addEventListener("visibilitychange", onVisibility);
   });
 
-  /// App-level keyboard shortcuts. Lifted out of the deleted
-  /// Toolbar component so they keep working without a top bar:
+  /// App-level keyboard shortcuts:
   ///
-  ///   Cmd/Ctrl+,                   -> Settings (open)
-  ///   Cmd/Ctrl+Shift+E             -> Files (toggle)
-  ///   Cmd/Ctrl+H                   -> Assistant (toggle)
-  ///   Cmd/Ctrl+Shift+[ / ]         -> previous / next tab (native)
-  ///   Alt+Shift+[ / ]              -> previous / next tab (web)
-  ///   Alt+1..9                     -> jump to tab N (web + native)
-  ///   Cmd/Ctrl+1..9                -> jump to tab N (native only)
+  ///   Cmd/Ctrl+,           -> Settings (open)
+  ///   Cmd/Ctrl+Shift+O     -> Files (toggle)
+  ///   Cmd/Ctrl+P           -> Assistant (toggle)
+  ///   Cmd/Ctrl+K           -> Search (toggle)
+  ///   Alt+G                -> Graph (toggle)
+  ///   Alt+Shift+[ / ]      -> previous / next tab
+  ///   Alt+1..9             -> jump to tab N
   ///
-  /// Tab navigation has two chords because the obvious one
-  /// (Cmd+Shift+[/]) is reserved by browsers (Safari / Chrome) for
-  /// switching browser tabs. Native desktop keeps the natural chord;
-  /// web (chan serve) uses Alt+Shift+[/] so the browser's own tab
-  /// nav stays untouched. Both wrap around at the edges.
-  ///
-  /// Cmd+H on macOS is "Hide window" at the OS level. The browser
-  /// catches it before the page sees it on web; preventDefault is
-  /// best-effort and doesn't always win. Native (Tauri) intercepts
-  /// the event at the webview boundary so the binding works there.
-  /// Ctrl+H on Linux/Windows browsers shows history; same caveat.
-  /// We register the binding regardless and let preventDefault do
-  /// what it can; if a particular OS+browser swallows the chord, the
-  /// user can still reach the assistant from the bottom pill.
+  /// Chord choices avoid browser-reserved combinations where
+  /// preventDefault can't reliably win:
+  ///   - Cmd+O (system file picker) -> Cmd+Shift+O instead.
+  ///   - Cmd+P (browser print) -> intercepted; tolerable because
+  ///     the assistant is a primary-use surface.
+  ///   - Cmd+Shift+P would clash with Firefox's private window
+  ///     (OS-level), so search uses Cmd+K (palette convention).
+  ///   - Cmd+G (browser find next) avoided; graph uses Alt+G.
+  ///   - Cmd+Shift+[ / ] is the browser's own tab nav, so we use
+  ///     Alt+Shift+[ / ] for in-app tab nav. e.code rather than
+  ///     e.key so the comparison stays stable when shift is held
+  ///     (browsers report "{"/"}" for e.key on US layout).
   function onWindowKey(e: KeyboardEvent): void {
-    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === ",") {
+    const meta = e.metaKey || e.ctrlKey;
+    if (meta && !e.shiftKey && !e.altKey && e.key === ",") {
       e.preventDefault();
       openSettings();
       return;
     }
-    if (
-      (e.metaKey || e.ctrlKey) &&
-      e.shiftKey &&
-      e.key.toLowerCase() === "e"
-    ) {
+    if (meta && e.shiftKey && !e.altKey && e.key.toLowerCase() === "o") {
       e.preventDefault();
       browserOverlay.open = !browserOverlay.open;
       if (browserOverlay.open) openBrowser();
       return;
     }
-    if (
-      (e.metaKey || e.ctrlKey) &&
-      !e.shiftKey &&
-      !e.altKey &&
-      e.key.toLowerCase() === "h"
-    ) {
+    if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "p") {
+      // Assistant master switch: when disabled in Settings, the
+      // chord falls through and the user gets no visible response,
+      // matching the hidden bottom-pill button.
+      if (!(drive.info?.preferences.assistant.enabled ?? true)) return;
       e.preventDefault();
       if (assistantOverlay.open) {
         assistantOverlay.open = false;
@@ -289,47 +207,47 @@
       }
       return;
     }
-    // Tab nav: pick the chord matching the platform. e.code rather
-    // than e.key so the comparison stays stable when shift is held
-    // (browsers report the shifted glyph "{"/"}" for e.key with
-    // shift down on a US layout).
-    const tabChord = nativeDesktop
-      ? (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey
-      : e.altKey && e.shiftKey && !(e.metaKey || e.ctrlKey);
-    if (tabChord && (e.code === "BracketLeft" || e.key === "[")) {
+    if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
       e.preventDefault();
-      selectPrevTabInActivePane();
+      searchPanel.open = !searchPanel.open;
       return;
     }
-    if (tabChord && (e.code === "BracketRight" || e.key === "]")) {
+    if (e.altKey && !e.shiftKey && !meta && e.key.toLowerCase() === "g") {
       e.preventDefault();
-      selectNextTabInActivePane();
+      if (graphOverlay.open) {
+        graphOverlay.open = false;
+      } else {
+        openGraph();
+      }
       return;
     }
-    // Alt+1..9 jump-to-tab works on both web and native (no
-    // browser conflict; Alt+digit isn't a standard chord). We use
-    // e.code === "Digit<N>" so the comparison survives modifiers
-    // changing e.key to a glyph on non-US layouts.
-    if (e.altKey && !e.shiftKey && !(e.metaKey || e.ctrlKey)) {
+    if (e.altKey && e.shiftKey && !meta) {
+      if (e.code === "BracketLeft" || e.key === "[") {
+        e.preventDefault();
+        selectPrevTabInActivePane();
+        return;
+      }
+      if (e.code === "BracketRight" || e.key === "]") {
+        e.preventDefault();
+        selectNextTabInActivePane();
+        return;
+      }
+    }
+    // Alt+1..9 jump-to-tab. e.code === "Digit<N>" so the comparison
+    // survives modifiers changing e.key to a glyph on non-US layouts.
+    if (e.altKey && !e.shiftKey && !meta) {
       const m = e.code.match(/^Digit([1-9])$/);
       if (m) {
         e.preventDefault();
         selectTabAtIndexInActivePane(Number(m[1]) - 1);
-        return;
       }
-    }
-    if (!nativeDesktop) return;
-    const meta = e.metaKey || e.ctrlKey;
-    if (meta && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
-      e.preventDefault();
-      selectTabAtIndexInActivePane(Number(e.key) - 1);
     }
   }
   onMount(() => document.addEventListener("keydown", onWindowKey));
   onDestroy(() => document.removeEventListener("keydown", onWindowKey));
 </script>
 
-<div class="app" class:mobile>
+<div class="app">
   <main>
     <Workspace />
     {#if ui.status}
@@ -337,30 +255,17 @@
     {/if}
   </main>
 </div>
-{#if mobile}
-  <!-- Mobile floating bar: nav buttons in reading mode, formatting
-       buttons in editing mode (when the soft keyboard is up). The
-       reading-mode nav set mirrors the desktop BottomPill so the
-       four primary overlays (files / search / graph / assistant)
-       are reachable identically across surfaces. -->
-  <MobileFloatBar />
-{:else}
-  <!-- Window-level navigation pill. Web + native desktop share the
-       same floating bottom bar so every overlay (files / search /
-       graph / settings / assistant) is reachable from anywhere in
-       the workspace. -->
-  <BottomPill />
-{/if}
-<!-- Window-level overlays. Mounted once per window; the same set
-     applies to web, native desktop, and mobile so every surface has
-     the same set of overlays available. -->
+<!-- Floating navigation pill: every overlay (files / search /
+     graph / settings / assistant) is reachable from anywhere in
+     the workspace. -->
+<BottomPill />
+<!-- Window-level overlays. Mounted once. -->
 <PromptModal />
 <SearchPanel />
 <InlineAssist />
 <GraphPanel />
 <SettingsPanel />
 <FileBrowserOverlay />
-<CloseGuardModal />
 <!-- CAS conflict prompt: surfaces when a save returns 409. Mounted
      once per window so any pane can trigger it; the dialog itself
      keys off `conflictDialog.tabId`. -->
@@ -405,8 +310,8 @@
        (especially in light mode where --bg-card is close to --bg). */
     --inspector-bg: #232325;
     /* Resize-handle bar color. Brighter than --border so the 4px bar
-       between inspector and canvas is findable on mobile (no hover
-       cue) and in light mode (where --border can blend with bg). */
+       between inspector and canvas is findable in light mode (where
+       --border can blend with bg). */
     --separator: #4a4a4d;
     --separator-hover: #98989d;
     --tab-active-bg: #1c1c1e;
@@ -423,9 +328,8 @@
     --assistant-bubble-bg: #2a2a2c;
     --assistant-user-bubble-bg: rgba(88, 166, 255, 0.28);
     /* Brand accent for the assistant button (Notes-style yellow).
-       Single source for the ensō tint across desktop toolbar,
-       editor floating bar, and mobile float bar. Same value in
-       light/dark; the icon is a stroke and reads on both. */
+       Single source for the ensō tint. Same value in light/dark;
+       the icon is a stroke and reads on both. */
     --assistant-accent: #ffd60a;
   }
   :global([data-theme="light"]) {
@@ -484,18 +388,6 @@
     display: flex;
     height: 100vh;
     width: 100vw;
-  }
-  /* Mobile: respect iOS safe areas (notch, home indicator) and
-     reserve room at the bottom of the editor canvas so the floating
-     MobileFloatBar doesn't sit on top of the last lines of content.
-     The Wysiwyg / Source editors read --mobile-bar-pad-bottom into
-     their padding-bottom; on desktop the var is unset and the
-     editor pads only its natural 1rem. */
-  .app.mobile {
-    padding-top: env(safe-area-inset-top);
-    padding-bottom: env(safe-area-inset-bottom);
-    box-sizing: border-box;
-    --mobile-bar-pad-bottom: 56px;
   }
   main {
     flex: 1;

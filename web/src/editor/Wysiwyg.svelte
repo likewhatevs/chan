@@ -32,7 +32,6 @@
   } from "./extensions/image";
   import { WikiLinkNode, showWikiPicker, handleWikiClick } from "./extensions/wikiLink";
   import { drive } from "../state/store.svelte";
-  import { FindExtension, findKey, type FindSnapshot } from "./extensions/find";
 
   let {
     value = $bindable(""),
@@ -141,78 +140,6 @@
     return "normal";
   }
 
-  // ---- in-document find ------------------------------------------------
-  // Drives the FindExtension via tr.setMeta(findKey, ...). The
-  // extension owns the decoration set; we just push commands and
-  // read back match counts. Cmd+F lives at the FileEditorTab level
-  // and dispatches into here; this component doesn't own a UI.
-
-  const EMPTY_FIND: FindSnapshot = {
-    query: "",
-    caseSensitive: false,
-    matches: [],
-    current: -1,
-  };
-
-  /// Set the active query. Returns the snapshot of match state so
-  /// the caller (FindBar) can render `n of total`. Empty query
-  /// clears the highlights.
-  export function findSetQuery(query: string, caseSensitive: boolean): FindSnapshot {
-    if (!editor) return { ...EMPTY_FIND, caseSensitive };
-    if (!query) {
-      editor.view.dispatch(editor.state.tr.setMeta(findKey, { kind: "clear" }));
-    } else {
-      editor.view.dispatch(
-        editor.state.tr.setMeta(findKey, { kind: "set", query, caseSensitive }),
-      );
-    }
-    return findSnapshot();
-  }
-
-  /// Step forward (`+1`) or backward (`-1`) through matches and
-  /// scroll the new current match into view. Returns the new state.
-  export function findStep(delta: number): FindSnapshot {
-    if (!editor) return EMPTY_FIND;
-    editor.view.dispatch(editor.state.tr.setMeta(findKey, { kind: "step", delta }));
-    const s = findSnapshot();
-    scrollCurrentIntoView(s);
-    return s;
-  }
-
-  export function findClear(): void {
-    if (!editor) return;
-    editor.view.dispatch(editor.state.tr.setMeta(findKey, { kind: "clear" }));
-  }
-
-  /// Read the plugin state without dispatching a transaction. Used
-  /// by FindBar to render the `n of total` indicator.
-  export function findSnapshot(): FindSnapshot {
-    if (!editor) return EMPTY_FIND;
-    const s = findKey.getState(editor.state);
-    if (!s) return EMPTY_FIND;
-    return {
-      query: s.query,
-      caseSensitive: s.caseSensitive,
-      matches: s.matches,
-      current: s.current,
-    };
-  }
-
-  function scrollCurrentIntoView(s: FindSnapshot): void {
-    if (!editor || s.current < 0 || s.current >= s.matches.length) return;
-    const m = s.matches[s.current];
-    // domAtPos returns { node, offset } where node may be a text
-    // node; scrollIntoView lives on Element so we walk up to the
-    // nearest Element parent. We deliberately don't move the
-    // selection: that would change the cursor when the user
-    // closes the find bar and resumes typing.
-    const dom = editor.view.domAtPos(m.from);
-    const el =
-      dom.node.nodeType === Node.ELEMENT_NODE
-        ? (dom.node as Element)
-        : dom.node.parentElement;
-    el?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }
 
   /// Two-flag guard against bind:value feedback loops:
   ///
@@ -249,7 +176,6 @@
         DateNode,
         WikiLinkNode,
         ImageNode,
-        FindExtension,
       ],
       content: value,
       // Cmd/Ctrl+Enter -> parent's onSubmit (assistant prompt
@@ -831,12 +757,6 @@
     flex: 1;
     min-height: 0;
     padding: 1rem 1.25rem;
-    /* Mobile reserves room for the floating bar on whichever edge
-       it currently sits: top in editing mode, bottom in nav mode.
-       Vars are set on `.mobile-shell` (only one is non-zero at a
-       time); on desktop they're unset, falling back to 0px. */
-    padding-top: calc(1rem + var(--mobile-bar-pad-top, 0px));
-    padding-bottom: calc(1rem + var(--mobile-bar-pad-bottom, 0px));
     line-height: 1.6;
     /* Body text uses the drive's "normal" font preference. */
     font-family: var(--chan-font-normal-family);
@@ -893,21 +813,6 @@
   }
   :global(.md-wysiwyg .md-smart-date)  { color: var(--warn-text); }
   :global(.md-wysiwyg .md-smart-wiki)  { color: var(--link); text-decoration: underline; }
-  /* In-document find highlights. Emitted by FindExtension as
-     inline decorations; the "current" hit gets a stronger ring so
-     the user can see where prev/next navigation lands. We use a
-     yellow tint + dark text so the highlight stays legible in
-     both light and dark themes (CSS theme vars carry the rest). */
-  :global(.md-wysiwyg .md-find-match) {
-    background: #fef08a;
-    color: #1f2937;
-    border-radius: 2px;
-  }
-  :global(.md-wysiwyg .md-find-current) {
-    background: #fb923c;
-    color: #1f2937;
-    box-shadow: 0 0 0 1px var(--text);
-  }
   /* Plain markdown links: pointer too (we hijack internal ones in onClick). */
   :global(.md-wysiwyg a) {
     cursor: pointer !important;

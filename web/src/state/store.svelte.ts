@@ -399,10 +399,9 @@ function serializeSession(): SessionPayload | null {
   }
   // We persist per-overlay knobs (assistant context, graph scope
   // and depth) but NOT the `open` flag. Auto-opening an overlay on
-  // app launch is hostile UX, especially on mobile where the
-  // floating bar is hidden whenever an overlay is up: a session
-  // saved while an overlay was open used to trap the user with no
-  // visible way to dismiss it on the next launch.
+  // app launch is hostile UX: a session saved while an overlay was
+  // open used to trap the user with no visible way to dismiss it
+  // on the next launch.
   const overlays = {
     assistant: { contextId: assistantOverlay.contextId },
     graph: {

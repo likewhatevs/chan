@@ -11,19 +11,11 @@
   // reconnect backoff). The auto-reconnect still runs underneath, so
   // doing nothing eventually heals on its own.
 
-  import { isMobile, isNativeDesktop } from "../api/native";
   import { reconnectWatcher, ui } from "../state/store.svelte";
-
-  /// True when the chan-app shell hosts the server in-process (any
-  /// Tauri build, desktop or mobile). Drives the subline copy: the
-  /// "open the terminal where you ran chan serve" hint only makes
-  /// sense for users running `chan serve` from a real shell.
-  const inApp = isNativeDesktop() || isMobile();
 
   /// Show the overlay only AFTER the watcher channel has been open
   /// at least once during this session. The "connecting" state at
-  /// app boot is unbounded in length: on iOS it can stall behind the
-  /// Local Network permission prompt, on slow networks it can take
+  /// app boot is unbounded in length: on slow networks it can take
   /// several seconds. Blocking the UI during cold boot would make
   /// the app appear unresponsive ("nothing clicks") with no useful
   /// signal to the user.
@@ -74,9 +66,7 @@
 
   const subline = $derived.by(() => {
     if (ui.ws === "closed") {
-      return inApp
-        ? "the in-app server has stopped responding; tap Retry now or relaunch chan"
-        : "the server may have stopped; check the terminal where you ran `chan serve`";
+      return "the server may have stopped; check the terminal where you ran `chan serve`";
     }
     return "this usually clears on its own; press Retry to skip the wait";
   });

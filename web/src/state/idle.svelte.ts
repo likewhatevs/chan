@@ -1,7 +1,7 @@
 // Window-level idle tracker. After IDLE_MS without a "user is doing
 // something" event, `idle.active` flips to true and the floating pills
-// (BottomPill, MobileFloatBar, the editor's top formatting bar) fade
-// out so they don't sit on top of content while the user is reading.
+// (BottomPill, the editor's top formatting bar) fade out so they
+// don't sit on top of content while the user is reading.
 // Any of the watched events flips it back to false and restarts the
 // timer.
 //

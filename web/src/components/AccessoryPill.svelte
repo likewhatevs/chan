@@ -37,7 +37,7 @@
 <button
   class="fbtn"
   class:on={browserOverlay.open}
-  title="Files (⌘⇧E)"
+  title="Files (⌘⇧O)"
   aria-label="Files"
   onclick={openBrowser}
 >
@@ -47,7 +47,7 @@
 </button>
 <button
   class="fbtn"
-  title="Search (⌘P)"
+  title="Search (⌘K)"
   aria-label="Search"
   onclick={() => (searchPanel.open = true)}
 >
@@ -61,7 +61,7 @@
   <button
     class="fbtn enso"
     class:on={assistantOverlay.open}
-    title="Assistant (⌘H)"
+    title="Assistant (⌘P)"
     aria-label="Assistant"
     onclick={openAssistant}
   >
@@ -72,7 +72,7 @@
 {/if}
 <button
   class="fbtn"
-  title="Graph (⌘⇧G)"
+  title="Graph (⌥G)"
   aria-label="Graph"
   onclick={openGraph}
 >

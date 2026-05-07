@@ -26,7 +26,6 @@ import type {
   DriveInfo,
 } from "./types";
 import { ApiError } from "./errors";
-import { windowId } from "./native";
 import {
   authToken as transportAuthToken,
   openWatch,
@@ -222,22 +221,19 @@ export const api = {
   /// the work but in-app state still references the pre-reset world.
   storageReset: (mode: ResetMode) =>
     req<ResetResponse>("POST", "/api/storage/reset", { mode }),
-  /// Read the persisted session payload for THIS window. Server
-  /// keys by `?w=<window-id>` so each Tauri window restores its
-  /// own pane/tab/overlay layout. Returns `null` when the window
-  /// has none yet (server returns 204 → req() yields undefined →
-  /// we coerce to null for the caller's convenience).
+  /// Read the persisted session payload. Server keys by `?w=<id>`;
+  /// the browser frontend always uses "default" so a single drive
+  /// has one session file. Returns `null` when none exists yet
+  /// (server returns 204 → req() yields undefined → coerced to
+  /// null for the caller's convenience).
   getSession: async (): Promise<unknown | null> => {
-    const v = await req<unknown | undefined>(
-      "GET",
-      `/api/session?w=${encodeURIComponent(windowId())}`,
-    );
+    const v = await req<unknown | undefined>("GET", "/api/session?w=default");
     return v ?? null;
   },
-  /// Persist this window's session payload. Body shape is opaque
-  /// to the server; the frontend sends `serializeLayout()` output.
+  /// Persist the session payload. Body shape is opaque to the
+  /// server; the frontend sends `serializeLayout()` output.
   putSession: (body: unknown) =>
-    req<void>("PUT", `/api/session?w=${encodeURIComponent(windowId())}`, body),
+    req<void>("PUT", "/api/session?w=default", body),
   links: () => req<GraphSnapshot>("GET", "/api/links"),
   /// Typed graph payload powering the graph view tab.
   graph: () => req<GraphView>("GET", "/api/graph"),

@@ -13,7 +13,6 @@
 
 import { api } from "../api/client";
 import { ApiError } from "../api/errors";
-import { isMobile, isTablet } from "../api/native";
 import { isEditableText } from "./fileTypes";
 import { notify } from "./notify.svelte";
 
@@ -358,20 +357,12 @@ function collapseEmptyPane(emptyId: string): void {
 }
 
 
-/// True when adding another split would exceed the platform's cap:
-/// iPhone (mobile + non-tablet) caps at zero (no splits at all);
-/// iPad (mobile + tablet) caps at one split (two panes total).
-/// Desktop / web are uncapped. Used by Pane.svelte to disable the
-/// split buttons + by `splitActive` as a hard guard.
+/// Splits are uncapped. Kept as a function (rather than removing
+/// every call site) because Pane.svelte and `splitActive` both go
+/// through it; if a future surface needs a cap, this is the choke
+/// point.
 export function canSplit(): boolean {
-  if (!isMobile()) return true;
-  if (!isTablet()) return false;
-  // Tablet: allow exactly one split. We count split nodes in the
-  // layout; a single split means one root SplitNode and two leaves.
-  const splits = Object.values(layout.nodes).filter(
-    (n): n is SplitNode => n.kind === "split",
-  ).length;
-  return splits === 0;
+  return true;
 }
 
 export function splitActive(direction: "row" | "column"): void {

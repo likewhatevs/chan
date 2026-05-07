@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Global assistant overlay. Bound to Cmd+H (Ctrl+H on non-Mac),
+  // Global assistant overlay. Bound to Cmd+P (Ctrl+H on non-Mac),
   // matching VSCode / Cursor's inline-chat convention.
   //
   // v3 contract: one overlay, three contexts, picked via a
@@ -196,18 +196,6 @@
     '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true">' +
     '<path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"></path>' +
     "</svg>";
-  /// Octicon `paper-airplane`: send icon for the in-overlay
-  /// primary action. 14px so it sits a touch larger than the
-  /// 12px copy/check icons in the chat bubbles.
-  const ICON_SEND =
-    '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">' +
-    '<path d="M.989 8 .064 2.68a1.342 1.342 0 0 1 1.85-1.462l13.402 5.744a1.13 1.13 0 0 1 0 2.076L1.913 14.782a1.343 1.343 0 0 1-1.85-1.463L.99 8Zm.603-5.288L2.38 7.25h4.87a.75.75 0 0 1 0 1.5H2.38l-.788 4.538L13.929 8Z"></path>' +
-    "</svg>";
-  /// Octicon `square-fill`: stop icon, universally read as "halt".
-  const ICON_STOP =
-    '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">' +
-    '<path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25Z"></path>' +
-    "</svg>";
 
   /// Index of the most recently copied turn; the matching button
   /// briefly says "copied" so the user gets feedback. Reset to
@@ -346,7 +334,7 @@
   let serverTools: LlmToolSpec[] = $state([]);
   /// Backend status, refreshed on every overlay open so a user
   /// who flips backends in Settings sees the new capability the
-  /// next time Cmd+H fires (no need to restart the app).
+  /// next time Cmd+P fires (no need to restart the app).
   let llmStatus = $state<LlmStatus | null>(null);
 
   async function ensureToolsLoaded(): Promise<void> {
@@ -831,37 +819,7 @@
   }
 
   function onWindowKey(e: KeyboardEvent): void {
-    if (
-      (e.metaKey || e.ctrlKey) &&
-      !e.shiftKey &&
-      !e.altKey &&
-      e.key.toLowerCase() === "h"
-    ) {
-      // Cmd/Ctrl+H opens / toggles the assistant overlay. Picked
-      // for the "Help" mnemonic and to leave Cmd+I for the
-      // editor's native italic. Note: on macOS Cmd+H is also the
-      // system "Hide app" shortcut; the Tauri WKWebView's keydown
-      // handler runs before the OS forwards the chord, so this
-      // intercept fires reliably inside chan, while desktop apps
-      // outside chan keep the OS Hide.
-      // Master switch. When the assistant is disabled in Settings
-      // we let the keypress fall through (browsers don't bind
-      // Cmd+H globally; nothing to clobber). The user gets no
-      // visible response, matching the hidden toolbar button.
-      const enabled = drive.info?.preferences.assistant.enabled ?? true;
-      if (!enabled) return;
-      e.preventDefault();
-      if (visible) {
-        // Toggle off: same as clicking the toolbar button while
-        // the overlay is already open.
-        assistantOverlay.open = false;
-      } else {
-        // Snap to a sensible context whenever we open via the
-        // shared helper so the toolbar button + Cmd+H behave
-        // identically.
-        openAssistant();
-      }
-    } else if (visible && (e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    if (visible && (e.metaKey || e.ctrlKey) && e.key === "Enter") {
       // Cmd/Ctrl+Enter sends from anywhere in the overlay
       // (prompt editor, source view, even chat scrollback). The
       // window-level handler covers both prompt modes; the
@@ -1175,7 +1133,7 @@
             onclick={cancel}
             title="stop the in-flight request (Esc also cancels)"
             aria-label="stop"
-          >{@html ICON_STOP}</button>
+          >×</button>
         {:else}
           <button
             class="action-btn send"
@@ -1183,7 +1141,7 @@
             disabled={!currentContext || !prompt.trim()}
             title="send (Cmd/Ctrl+Enter)"
             aria-label="send"
-          >{@html ICON_SEND}</button>
+          >→</button>
         {/if}
       </div>
 </OverlayShell>
@@ -1494,6 +1452,12 @@
     cursor: pointer;
     flex: 0 0 auto;
     font: inherit;
+    /* Glyph buttons (→ / ×): scale up so the character reads at the
+       same visual weight as the surrounding 14px hint text but with
+       a clearer hit-area. line-height pinned so the glyph centers
+       vertically inside the 22px button. */
+    font-size: 16px;
+    line-height: 1;
     border: 1px solid var(--btn-border);
     background: transparent;
     color: var(--text);

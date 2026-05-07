@@ -9,7 +9,6 @@
   // share one panel and one context picker. This file is search-
   // only now.
 
-  import { onDestroy, onMount } from "svelte";
   import { api } from "../api/client";
   import type { ContentHit } from "../api/types";
   import { openInActivePane } from "../state/tabs.svelte";
@@ -115,19 +114,6 @@
       .replace(/&lt;\/b&gt;/g, "</mark>");
   }
 
-  function onWindowKey(e: KeyboardEvent): void {
-    // Cmd+P (mac) or Ctrl+P (others) toggles the panel from
-    // anywhere, including when this panel is closed. Same letter
-    // as VSCode's quick-open. We avoid Cmd+K because the editor
-    // binds it to the readline-style "delete to end of line".
-    // preventDefault stops the browser's print dialog.
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "p") {
-      e.preventDefault();
-      searchPanel.open = !searchPanel.open;
-    }
-  }
-  onMount(() => document.addEventListener("keydown", onWindowKey));
-  onDestroy(() => document.removeEventListener("keydown", onWindowKey));
 </script>
 
 <OverlayShell open={searchPanel.open} onClose={close}>
@@ -171,7 +157,7 @@
       bind:value={query}
       oninput={scheduleSearch}
       onkeydown={onKeyDown}
-      placeholder="search content (Cmd+P)"
+      placeholder="search content (Cmd+K)"
       spellcheck="false"
       autocomplete="off"
     />
