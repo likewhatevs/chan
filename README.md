@@ -93,7 +93,7 @@ One-time setup:
    `chan-writer/chan-llm`. One PAT covers both.
 2. On `chan-writer/chan`'s `Settings -> Secrets and
    variables -> Actions`, add a secret named
-   `CHAN_REPO_TOKEN` with the PAT as its value.
+   `chan_ci` with the PAT as its value.
 
 Until the secret is set, CI's checkout-of-the-siblings step
 fails. The `fmt` job runs without it (no cross-repo dep needed

@@ -8,7 +8,7 @@ name: CI
 #   chan-writer/chan-core  (path = "../chan-core")
 #   chan-writer/chan-llm   (path = "../chan-llm")
 # CI clones both into sibling directories using a fine-scoped
-# Personal Access Token stored as the CHAN_REPO_TOKEN repo
+# Personal Access Token stored as the chan_ci repo
 # secret. See README's "Contributing" section for the PAT setup.
 #
 # The frontend bundle (web/dist/) is NOT built in CI today.
@@ -56,12 +56,12 @@ jobs:
         with:
           repository: chan-writer/chan-core
           path: chan-core
-          token: ${{ secrets.CHAN_REPO_TOKEN }}
+          token: ${{ secrets.chan_ci }}
       - uses: actions/checkout@v4
         with:
           repository: chan-writer/chan-llm
           path: chan-llm
-          token: ${{ secrets.CHAN_REPO_TOKEN }}
+          token: ${{ secrets.chan_ci }}
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain-file: chan/rust-toolchain.toml
@@ -84,12 +84,12 @@ jobs:
         with:
           repository: chan-writer/chan-core
           path: chan-core
-          token: ${{ secrets.CHAN_REPO_TOKEN }}
+          token: ${{ secrets.chan_ci }}
       - uses: actions/checkout@v4
         with:
           repository: chan-writer/chan-llm
           path: chan-llm
-          token: ${{ secrets.CHAN_REPO_TOKEN }}
+          token: ${{ secrets.chan_ci }}
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain-file: chan/rust-toolchain.toml
