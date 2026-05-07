@@ -160,7 +160,11 @@ jobs:
         run: cargo install cargo-generate-rpm --locked
       - name: Build .rpm
         if: matrix.rpm
-        run: cargo generate-rpm --target ${{ matrix.target }} -p chan
+        # cargo-generate-rpm constructs the package's manifest
+        # path as `<cwd>/<package-name>/Cargo.toml`. Our binary
+        # crate lives at `crates/chan/Cargo.toml`, not `chan/`,
+        # so we point at it explicitly via --manifest-path.
+        run: cargo generate-rpm --target ${{ matrix.target }} --manifest-path crates/chan/Cargo.toml
         working-directory: chan
       - name: Locate .rpm
         if: matrix.rpm
