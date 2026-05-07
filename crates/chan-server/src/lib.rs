@@ -15,6 +15,10 @@
 
 #![forbid(unsafe_code)]
 
+mod config;
+
+pub use config::ServerConfig;
+
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -85,6 +89,8 @@ pub enum Error {
     Core(#[from] chan_core::ChanError),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    #[error("config: {0}")]
+    Config(String),
 }
 
 /// Spawn the listener, build the router, and serve forever.
@@ -125,12 +131,21 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
         LlmConfig::default()
     });
 
+    // Server config: same fall-back-on-malformed policy as the
+    // LLM config. Holds chan-server-specific paths
+    // (attachments_dir, answers_dir).
+    let server_config = ServerConfig::load().unwrap_or_else(|e| {
+        tracing::warn!("malformed server config, falling back to defaults: {e}");
+        ServerConfig::default()
+    });
+
     let state = Arc::new(AppState {
         library,
         drive,
         token: handle.token,
         events_tx,
         llm_config: Mutex::new(llm_config),
+        server_config: Mutex::new(server_config),
         _watch_handle: watch_handle,
     });
     let app = router(state);
@@ -154,6 +169,10 @@ struct AppState {
     /// (backend selection, auto_apply_writes toggle). Currently
     /// only read by the status route and the complete handler.
     llm_config: Mutex<LlmConfig>,
+    /// chan-server's own preferences (attachments_dir,
+    /// answers_dir, etc). Mutable via PATCH /api/server/config;
+    /// reads route through the get handler.
+    server_config: Mutex<ServerConfig>,
     /// Held so the underlying notify watcher keeps running for the
     /// server's lifetime. Field is `_`-prefixed because nothing
     /// reads it; dropping AppState drops the handle, which stops
@@ -260,6 +279,10 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/llm/anthropic/models", get(api_llm_anthropic_models))
         .route("/api/llm/gemini/models", get(api_llm_gemini_models))
         .route("/api/llm/ollama/models", get(api_llm_ollama_models))
+        .route(
+            "/api/server/config",
+            get(api_get_server_config).patch(api_patch_server_config),
+        )
         .route("/api/health", get(api_health))
         .route("/ws", get(ws_upgrade));
     Router::new()
@@ -1083,6 +1106,62 @@ async fn api_llm_gemini_models() -> Response {
 
 async fn api_llm_ollama_models() -> Response {
     Json::<Vec<&str>>(Vec::new()).into_response()
+}
+
+// ----- server preferences -------------------------------------------------
+//
+// Holds chan-server-specific paths and toggles that aren't user
+// content (those live in the drive) and aren't LLM-shaped (those
+// live in chan-llm). See `config.rs`. The split:
+//
+//   /api/drive             chan-core registry: name, root
+//   /api/llm/status        chan-llm config: backend, model, keys
+//   /api/server/config     this: attachments_dir, answers_dir
+
+async fn api_get_server_config(State(state): State<Arc<AppState>>) -> Response {
+    let cfg = state.server_config.lock().unwrap().clone();
+    Json(cfg).into_response()
+}
+
+#[derive(Deserialize)]
+struct PatchServerConfigBody {
+    /// Drive-relative POSIX path. Empty string is rejected
+    /// because the path is used as a prefix; an empty prefix
+    /// would land attachments in the drive root, surprising
+    /// the user.
+    #[serde(default)]
+    attachments_dir: Option<String>,
+    #[serde(default)]
+    answers_dir: Option<String>,
+}
+
+async fn api_patch_server_config(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<PatchServerConfigBody>,
+) -> Response {
+    let mut cfg = state.server_config.lock().unwrap();
+    if let Some(p) = body.attachments_dir {
+        if p.is_empty() {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "attachments_dir must be non-empty".into(),
+            );
+        }
+        cfg.attachments_dir = p;
+    }
+    if let Some(p) = body.answers_dir {
+        if p.is_empty() {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "answers_dir must be non-empty".into(),
+            );
+        }
+        cfg.answers_dir = p;
+    }
+    if let Err(e) = cfg.save() {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    }
+    Json(cfg.clone()).into_response()
 }
 
 fn err_llm(e: &LlmError) -> Response {
