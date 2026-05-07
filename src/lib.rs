@@ -35,7 +35,7 @@ pub mod search;
 pub mod trash;
 pub mod watch;
 
-pub use drive::{DirEntry, Drive, FileStat, TreeEntry};
+pub use drive::{DirEntry, Drive, FileStat, ResolvedLink, TreeEntry};
 pub use error::{ChanError, Result};
 pub use graph::{Edge, EdgeKind, GraphView, HeadingRow, LinkTarget, LinkTargetKind, Tag};
 pub use library::Library;

@@ -34,6 +34,17 @@ pub struct FileStat {
     pub is_dir: bool,
 }
 
+/// A wiki-link resolved to an actual drive file. `path` is the
+/// POSIX rel path of the file that exists today; `anchor` is the
+/// `#section` fragment from the original target, passed through
+/// unchanged. See `Drive::resolve_link` for the resolution rules.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedLink {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
+}
+
 /// One open drive. Holds the writer lock for as long as it lives,
 /// so two processes can't both write the same drive's index/graph.
 /// Cheap reads are unlocked; writes go through the locked handle.
@@ -432,6 +443,54 @@ impl Drive {
     /// for the ranking and case-folding rules.
     pub fn link_targets(&self, q: &str, limit: u32) -> Result<Vec<crate::graph::LinkTarget>> {
         self.graph()?.link_targets(q, limit)
+    }
+
+    /// Resolve a wiki-link target string to an existing drive
+    /// file. The graph stores link dst nodes verbatim from
+    /// markdown (e.g. `[[recipes/pasta]]` -> `dst="recipes/pasta"`),
+    /// so backlinks queries match the stored form. Consumers that
+    /// want to navigate to or read the actual file (the editor's
+    /// click-on-link, the assistant's `read_file` tool when given
+    /// a wiki target) call this to find the real path.
+    ///
+    /// Algorithm:
+    ///   1. Split off `#anchor` (everything after the first `#`).
+    ///      An empty anchor (target ends in `#`) becomes None.
+    ///   2. Try `path.md`, then `path.txt`, then the exact `path`
+    ///      (rare case: a file with no extension that matches by
+    ///      name). Return the first hit as a regular file.
+    ///   3. None when no candidate exists.
+    ///
+    /// Anchor strings are passed through unchanged; chan-core
+    /// doesn't validate them against the file's headings (callers
+    /// can do that via `GraphView::headings_of`).
+    pub fn resolve_link(&self, target: &str) -> Option<ResolvedLink> {
+        if target.is_empty() {
+            return None;
+        }
+        let (path, anchor) = match target.split_once('#') {
+            Some((p, a)) if !a.is_empty() => (p, Some(a.to_string())),
+            // Trailing `#` (empty anchor): strip it; path is the
+            // prefix, anchor None.
+            Some((p, _)) => (p, None),
+            None => (target, None),
+        };
+        if path.is_empty() {
+            return None;
+        }
+        for candidate in [
+            format!("{path}.md"),
+            format!("{path}.txt"),
+            path.to_string(),
+        ] {
+            if self.exists(&candidate) {
+                return Some(ResolvedLink {
+                    path: candidate,
+                    anchor,
+                });
+            }
+        }
+        None
     }
 
     /// Drop a single file from the search index and graph. Used
@@ -912,5 +971,96 @@ mod tests {
         let (_cfg, _root, drive) = fixture();
         let err = drive.put_session("../escape", b"x").unwrap_err();
         assert!(matches!(err, ChanError::InvalidKey(_)));
+    }
+
+    // ---- resolve_link ----
+
+    fn link_fixture() -> (TempDir, TempDir, Arc<Drive>) {
+        let (cfg, root, drive) = fixture();
+        std::fs::create_dir_all(root.path().join("recipes")).unwrap();
+        std::fs::write(root.path().join("recipes").join("pasta.md"), "# Pasta\n").unwrap();
+        std::fs::write(root.path().join("intro.md"), "# Intro\n").unwrap();
+        std::fs::write(root.path().join("note.txt"), "plain\n").unwrap();
+        std::fs::write(root.path().join("README"), "no ext\n").unwrap();
+        (cfg, root, drive)
+    }
+
+    #[test]
+    fn resolve_link_md_extension() {
+        let (_cfg, _root, drive) = link_fixture();
+        let r = drive.resolve_link("recipes/pasta").unwrap();
+        assert_eq!(r.path, "recipes/pasta.md");
+        assert_eq!(r.anchor, None);
+    }
+
+    #[test]
+    fn resolve_link_with_anchor() {
+        let (_cfg, _root, drive) = link_fixture();
+        let r = drive.resolve_link("recipes/pasta#ingredients").unwrap();
+        assert_eq!(r.path, "recipes/pasta.md");
+        assert_eq!(r.anchor.as_deref(), Some("ingredients"));
+    }
+
+    #[test]
+    fn resolve_link_txt_fallback() {
+        let (_cfg, _root, drive) = link_fixture();
+        let r = drive.resolve_link("note").unwrap();
+        assert_eq!(r.path, "note.txt");
+    }
+
+    #[test]
+    fn resolve_link_exact_match_no_extension() {
+        let (_cfg, _root, drive) = link_fixture();
+        let r = drive.resolve_link("README").unwrap();
+        assert_eq!(r.path, "README");
+    }
+
+    #[test]
+    fn resolve_link_prefers_md_over_txt() {
+        let (_cfg, root, drive) = link_fixture();
+        // both intro.md AND intro.txt exist -> .md wins
+        std::fs::write(root.path().join("intro.txt"), "plain\n").unwrap();
+        let r = drive.resolve_link("intro").unwrap();
+        assert_eq!(r.path, "intro.md");
+    }
+
+    #[test]
+    fn resolve_link_nonexistent_returns_none() {
+        let (_cfg, _root, drive) = link_fixture();
+        assert!(drive.resolve_link("does/not/exist").is_none());
+    }
+
+    #[test]
+    fn resolve_link_empty_target_returns_none() {
+        let (_cfg, _root, drive) = link_fixture();
+        assert!(drive.resolve_link("").is_none());
+    }
+
+    #[test]
+    fn resolve_link_trailing_hash_drops_anchor() {
+        let (_cfg, _root, drive) = link_fixture();
+        // `target#` (empty anchor) resolves the path with anchor None.
+        let r = drive.resolve_link("recipes/pasta#").unwrap();
+        assert_eq!(r.path, "recipes/pasta.md");
+        assert_eq!(r.anchor, None);
+    }
+
+    #[test]
+    fn resolve_link_path_escape_rejected() {
+        let (_cfg, _root, drive) = link_fixture();
+        // resolve_link goes through Drive::exists which rejects
+        // path traversal. Should return None, not panic.
+        assert!(drive.resolve_link("../etc/passwd").is_none());
+    }
+
+    #[test]
+    fn resolve_link_path_with_md_extension_unchanged() {
+        let (_cfg, _root, drive) = link_fixture();
+        // If the user already wrote `[[recipes/pasta.md]]`, our
+        // first probe is `recipes/pasta.md.md` which doesn't
+        // exist; second is `.txt`; third is the exact path which
+        // does. Resolves to the original verbatim.
+        let r = drive.resolve_link("recipes/pasta.md").unwrap();
+        assert_eq!(r.path, "recipes/pasta.md");
     }
 }
