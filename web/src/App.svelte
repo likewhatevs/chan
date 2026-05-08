@@ -46,7 +46,6 @@
     watchPageWidth,
   } from "./state/pageWidth.svelte";
   import { installIdleTracker, setReadMode } from "./state/idle.svelte";
-  import { loadShared } from "./api/wasm";
 
   // Keep the URL hash in sync with the current layout so reload (and
   // copy-paste of the URL) restores the same panes/tabs. We touch
@@ -137,7 +136,7 @@
     // Idle tracker: after 2.5s without scroll/click/keypress, the
     // floating pills fade. Any input flips them back on.
     installIdleTracker();
-    await Promise.all([loadShared(), bootstrap()]);
+    await bootstrap();
     // First-launch experience: if the URL hash didn't restore any
     // tabs, the pane stays empty and the file browser overlay
     // auto-opens so the user has somewhere to start.

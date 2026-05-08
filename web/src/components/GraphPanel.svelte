@@ -1,35 +1,24 @@
 <script lang="ts">
-  // Graph view overlay: 2D force-directed (Obsidian-style) layout.
+  // Graph view overlay: Cytoscape.js renderer over chan's GraphView
+  // payload. fcose handles force-directed layout; pan / zoom / node
+  // drag / hover / selection all come from Cytoscape's built-ins.
   //
-  // d3-force simulates charge / link / center / collision forces;
-  // we read the resulting (x, y) on each tick and re-render. When
-  // the scope is "file" (or "group"), the seed file(s) are pinned
-  // (fx/fy) to the canvas center so the user's note sits in the
-  // middle and its neighbours orbit around it. When the scope is
-  // "drive" or "global", no node is pinned and the whole graph
-  // floats.
+  // Scope (top-bar dropdown) drives a BFS over the full graph that
+  // produces a visible-id set; the per-edge-kind chips compose with
+  // it. Both filters are applied as a `display: none` toggle on the
+  // existing Cytoscape elements, so layout positions are stable
+  // across filter changes.
   //
-  // Interaction:
-  //   - drag empty space to pan (translate the canvas).
-  //   - scroll wheel to zoom (uniform scale around the cursor).
-  //   - drag a node to reposition it; release pins it back to the
-  //     simulation. Hold while moving for a fluid drag.
-  //   - click (no drag) selects: the side panel's Open button
-  //     routes via openInActivePane and closes the overlay.
-  //   - per-edge-kind filter chips toggle which edges (and the
-  //     non-file nodes attached only to filtered edges) are drawn.
+  // Pinning: in file / group / git_repo / dir scope, the seed file
+  // nodes are repositioned to the canvas center (or fanned around
+  // it for multi-seed) and locked, then a gentle fcose pass relaxes
+  // neighbours. Drive / global scope leaves all nodes free.
 
   import { onDestroy, onMount } from "svelte";
-  import {
-    forceCenter,
-    forceCollide,
-    forceLink,
-    forceManyBody,
-    forceSimulation,
-    type Simulation,
-    type SimulationLinkDatum,
-    type SimulationNodeDatum,
-  } from "d3-force";
+  import cytoscape from "cytoscape";
+  import type { Core, ElementDefinition, EventObject } from "cytoscape";
+  // @ts-expect-error fcose ships no .d.ts; the layout name is enough
+  import fcose from "cytoscape-fcose";
 
   import { api } from "../api/client";
   import type { GraphView, GraphViewEdge, GraphViewNode } from "../api/types";
@@ -45,6 +34,9 @@
   import { formatMtime } from "../state/format";
   import ResizeHandle from "./ResizeHandle.svelte";
   import OverlayShell from "./OverlayShell.svelte";
+
+  // cytoscape.use is idempotent across module reloads.
+  cytoscape.use(fcose);
 
   // Visibility of the details aside lives on the overlay; per-window
   // session, not persisted to disk. Defaults closed.
@@ -74,58 +66,18 @@
 
   // ---- types -------------------------------------------------------------
 
-  /// One simulation node. Carries the original GraphViewNode fields
-  /// plus the d3-force position fields (`x`, `y`, `vx`, `vy`,
-  /// `fx`, `fy`). d3-force mutates these in place every tick.
-  type LayoutNode = GraphViewNode &
-    SimulationNodeDatum & {
-      /// True when this node is currently pinned (fx/fy set). Used
-      /// to apply a slightly different visual (no fade) so the user
-      /// can spot the focal node at a glance.
-      pinned?: boolean;
-    };
-
-  /// Edge with `source` / `target` re-typed as the live LayoutNode
-  /// references d3-force populates after `forceLink` resolves them
-  /// from string IDs. Keep `kind` and `broken` from the wire shape.
-  type LayoutEdge = SimulationLinkDatum<LayoutNode> & {
-    source: string | LayoutNode;
-    target: string | LayoutNode;
-    kind: GraphViewEdge["kind"];
-    broken: boolean;
-  };
-
   type EdgeKind = GraphViewEdge["kind"];
 
   // ---- state -------------------------------------------------------------
 
-  let svgEl: SVGSVGElement | undefined = $state();
-  let width = $state(800);
-  let height = $state(600);
+  let containerEl: HTMLDivElement | undefined = $state();
+  let cy: Core | null = null;
+  let resizeObs: ResizeObserver | null = null;
 
-  // Pan / zoom on the canvas. `tx`, `ty` are translation in screen
-  // pixels (relative to top-left of the SVG); `k` is the uniform
-  // scale around the cursor. mousedown on empty space drags pan;
-  // wheel adjusts zoom anchored on the cursor position.
-  let tx = $state(0);
-  let ty = $state(0);
-  let k = $state(1);
-
-  let nodes: LayoutNode[] = $state([]);
-  let edges: LayoutEdge[] = $state([]);
+  let nodes: GraphViewNode[] = $state([]);
+  let edges: GraphViewEdge[] = $state([]);
   let loading = $state(true);
   let error: string | null = $state(null);
-
-  /// Tick counter bumped on every simulation step. Reading it inside
-  /// derivations (drawNodes / drawEdges) keeps the SVG in sync with
-  /// d3-force's in-place position mutations without the bookkeeping
-  /// of replacing the array on every frame.
-  let tick = $state(0);
-
-  /// d3-force handle. Recreated on every `load()`; stopped on the
-  /// component destroy hook so the rAF loop doesn't outlive the
-  /// overlay.
-  let sim: Simulation<LayoutNode, LayoutEdge> | null = null;
 
   let show = $state<Record<EdgeKind, boolean>>({
     link: true,
@@ -134,16 +86,11 @@
     date: true,
   });
 
-  let hoverId = $state<string | null>(null);
-  // Visibility of the details aside lives on the tab struct so it
-  // round-trips through session.json. Defaults closed for new tabs;
-  // a user who left it open in this tab gets it back next launch.
   // Currently inspected node, surfaced in the side details panel.
-  // Click a node to set this; click empty space to clear it; nodes
-  // never auto-open on click any more (the panel's Open button is
-  // the only path to opening a file from here).
+  // Tap a node to set this; tap empty space to clear it. Nodes never
+  // auto-open on click; the panel's Open button is the only path to
+  // opening a file from here.
   let selectedId = $state<string | null>(null);
-  let resizeObs: ResizeObserver | null = null;
 
   // ---- derived: scope-filtered render set --------------------------------
   //
@@ -171,12 +118,6 @@
     if (currentScope.kind === "drive" || currentScope.kind === "global") {
       return null;
     }
-    // git_repo and dir scopes: seed BFS from every file node whose
-    // path lives under the prefix. Both walk the same `depth`
-    // neighbourhood as file/group scopes, just with a wider seed
-    // set. Empty dir path collapses to the drive root and would
-    // match every file, so currentScope.kind === "drive" already
-    // handled that branch above.
     let seedPaths: string[];
     if (currentScope.kind === "git_repo" || currentScope.kind === "dir") {
       const root =
@@ -206,14 +147,12 @@
     for (let i = 0; i < graphOverlay.depth; i++) {
       const next = new Set<string>();
       for (const e of edges) {
-        const s = edgeSourceId(e);
-        const t = edgeTargetId(e);
-        if (frontier.has(s) && !visited.has(t)) {
-          next.add(t);
-          visited.add(t);
-        } else if (frontier.has(t) && !visited.has(s)) {
-          next.add(s);
-          visited.add(s);
+        if (frontier.has(e.source) && !visited.has(e.target)) {
+          next.add(e.target);
+          visited.add(e.target);
+        } else if (frontier.has(e.target) && !visited.has(e.source)) {
+          next.add(e.source);
+          visited.add(e.source);
         }
       }
       if (next.size === 0) break;
@@ -222,24 +161,12 @@
     return visited;
   });
 
-  /// d3-force replaces edge.source / edge.target with live node
-  /// references after the first tick. Until then they're the
-  /// string ids we passed in. Both branches surface as plain
-  /// strings here.
-  function edgeSourceId(e: LayoutEdge): string {
-    return typeof e.source === "string" ? e.source : e.source.id;
-  }
-  function edgeTargetId(e: LayoutEdge): string {
-    return typeof e.target === "string" ? e.target : e.target.id;
-  }
-
   const visibleEdges = $derived(
     edges.filter(
       (e) =>
         show[e.kind] &&
         (scopedNodeIds === null ||
-          (scopedNodeIds.has(edgeSourceId(e)) &&
-            scopedNodeIds.has(edgeTargetId(e)))),
+          (scopedNodeIds.has(e.source) && scopedNodeIds.has(e.target))),
     ),
   );
   const visibleNodeIds = $derived.by(() => {
@@ -249,8 +176,8 @@
       if (n.kind === "file") ids.add(n.id);
     }
     for (const e of visibleEdges) {
-      ids.add(edgeSourceId(e));
-      ids.add(edgeTargetId(e));
+      ids.add(e.source);
+      ids.add(e.target);
     }
     return ids;
   });
@@ -262,10 +189,6 @@
   });
 
   // ---- side-panel derived state ------------------------------------------
-  //
-  // Looking up nodes by id is O(1) via this Map; same for mtime/size of
-  // a file's tree entry. Both rebuild only when the underlying source
-  // changes (graph payload or file tree refresh), not per render.
 
   const nodeById = $derived(new Map(nodes.map((n) => [n.id, n])));
 
@@ -291,36 +214,28 @@
       mentions: [] as GraphViewNode[],
       dates: [] as GraphViewNode[],
       links: [] as GraphViewNode[],
-      // Documents are always file nodes (we filter on push), so
-      // typing the array narrowly lets the template access
-      // `path` / `missing` without re-narrowing every read.
       documents: [] as Extract<GraphViewNode, { kind: "file" }>[],
     };
     if (!selectedId) return out;
     const sel = nodeById.get(selectedId);
     if (!sel) return out;
     for (const e of edges) {
-      const s = edgeSourceId(e);
-      const t = edgeTargetId(e);
-      if (sel.kind === "file" && s === selectedId) {
-        const target = nodeById.get(t);
+      if (sel.kind === "file" && e.source === selectedId) {
+        const target = nodeById.get(e.target);
         if (!target) continue;
         if (e.kind === "tag") out.tags.push(target);
         else if (e.kind === "mention") out.mentions.push(target);
         else if (e.kind === "date") out.dates.push(target);
         else if (e.kind === "link") out.links.push(target);
-      } else if (sel.kind !== "file" && t === selectedId) {
-        const source = nodeById.get(s);
+      } else if (sel.kind !== "file" && e.target === selectedId) {
+        const source = nodeById.get(e.source);
         if (source && source.kind === "file") out.documents.push(source);
       }
     }
     return out;
   });
 
-  // Compact byte-count formatting tuned for the dense graph aside;
-  // strips the unit letter so a 12.3K row stays narrow next to a row
-  // labeled `size`. The verbose `formatSize` from `state/format` is
-  // used everywhere else.
+  // Compact byte-count formatting tuned for the dense graph aside.
   function formatSizeCompact(bytes: number): string {
     if (bytes < 1024) return `${bytes}`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}K`;
@@ -331,380 +246,24 @@
   function openSelectedFile(): void {
     if (selectedNode && selectedNode.kind === "file" && !selectedNode.missing) {
       void openInActivePane(selectedNode.path);
-      // Close the overlay so the workspace pane gets the focus
-      // immediately rather than the user clicking through a dim
-      // backdrop to start editing.
       close();
     }
   }
 
   function selectFromList(n: GraphViewNode): void {
     selectedId = n.id;
-  }
-
-  // ---- d3-force layout helpers ------------------------------------------
-
-  /// Visible nodes alone (the simulation runs on the full graph;
-  /// rendering only shows what scope/chip filters allow). Reading
-  /// `tick` ties the renderer to the simulation's per-frame state
-  /// mutations so the SVG stays in sync without the bookkeeping
-  /// of replacing the array on every tick.
-  const drawNodes = $derived.by<LayoutNode[]>(() => {
-    void tick;
-    return nodes.filter((n) => visibleNodeIds.has(n.id));
-  });
-
-  /// Visible edges with `source` / `target` resolved to live nodes
-  /// for the SVG <line>'s x1/y1/x2/y2 coords. d3-force overwrites
-  /// these from string ids on first tick; until then we resolve
-  /// against `nodes` ourselves.
-  const drawEdges = $derived.by(() => {
-    void tick;
-    const idIndex = new Map(nodes.map((n) => [n.id, n]));
-    return visibleEdges
-      .map((e) => {
-        const a = typeof e.source === "string" ? idIndex.get(e.source) : e.source;
-        const b = typeof e.target === "string" ? idIndex.get(e.target) : e.target;
-        if (!a || !b) return null;
-        return { e, a, b };
-      })
-      .filter((x): x is { e: LayoutEdge; a: LayoutNode; b: LayoutNode } => !!x);
-  });
-
-  // Re-pin the focal node(s) whenever the scope changes. For "file"
-  // / "group" / "git_repo" / "dir" scope, the seed file(s) get
-  // pinned to the canvas center (or fanned out evenly when there
-  // are several). For "drive" / "global", no pinning — the whole
-  // graph floats in the force field.
-  $effect(() => {
-    void currentScope;
-    void width;
-    void height;
-    if (!sim) return;
-    pinFocalNodes();
-    sim.alpha(0.6).restart();
-  });
-
-  // ---- mount: fetch + layout --------------------------------------------
-
-  onMount(async () => {
-    if (svgEl) {
-      const r = svgEl.getBoundingClientRect();
-      width = Math.max(200, r.width);
-      height = Math.max(200, r.height);
-      resizeObs = new ResizeObserver((entries) => {
-        for (const ent of entries) {
-          const nextW = Math.max(200, ent.contentRect.width);
-          const nextH = Math.max(200, ent.contentRect.height);
-          // Translate every node by the centre delta so the
-          // existing layout slides with the viewport instead of
-          // sticking to its old (now-off-centre) coordinates and
-          // waiting for the centre force to drag it back. The
-          // delta also moves the focal pin since pinFocalNodes
-          // re-runs below.
-          const dx = (nextW - width) / 2;
-          const dy = (nextH - height) / 2;
-          if (sim && (dx !== 0 || dy !== 0)) {
-            for (const n of nodes) {
-              if (n.x != null) n.x += dx;
-              if (n.y != null) n.y += dy;
-              if (n.fx != null) n.fx += dx;
-              if (n.fy != null) n.fy += dy;
-            }
-            tick = (tick + 1) | 0;
-          }
-          width = nextW;
-          height = nextH;
-          if (sim) {
-            sim.force("center", forceCenter(width / 2, height / 2));
-            pinFocalNodes();
-            sim.alpha(0.4).restart();
-          }
-        }
-      });
-      resizeObs.observe(svgEl);
-    }
-    // Defer one frame so the OverlayShell's growth-to-fullscreen
-    // transition has settled before we measure the SVG and seed
-    // the simulation. Without this the first measurement can land
-    // mid-animation and the layout settles around an off-centre
-    // point.
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => resolve()),
-    );
-    await load();
-  });
-
-  onDestroy(() => {
-    resizeObs?.disconnect();
-    sim?.stop();
-    sim = null;
-  });
-
-  async function load(): Promise<void> {
-    loading = true;
-    error = null;
-    try {
-      const g: GraphView = await api.graph();
-      buildSimulation(g);
-    } catch (e) {
-      error = (e as Error).message;
-    } finally {
-      loading = false;
-    }
-  }
-
-  /// Build (or rebuild) the d3-force simulation over `g`. Stops the
-  /// previous simulation if any. Initial node positions are seeded
-  /// in a small jittered cluster around the canvas center so the
-  /// first frame doesn't show a starburst from (0, 0); the forces
-  /// then settle them into place over a couple of seconds.
-  function buildSimulation(g: GraphView): void {
-    sim?.stop();
-    // Re-measure the SVG before laying anything out: when the
-    // overlay is opened mid-transition the cached `width`/`height`
-    // can still be the $state defaults (800x600), and seeding
-    // around that wrong centre leaves the graph stuck near the
-    // top of the canvas after the OverlayShell finishes growing
-    // to fill the viewport.
-    if (svgEl) {
-      const r = svgEl.getBoundingClientRect();
-      if (r.width >= 200) width = r.width;
-      if (r.height >= 200) height = r.height;
-    }
-    const cx = width / 2;
-    const cy = height / 2;
-    const layoutNodes: LayoutNode[] = g.nodes.map((n) => ({
-      ...n,
-      x: cx + (Math.random() - 0.5) * 80,
-      y: cy + (Math.random() - 0.5) * 80,
-    }));
-    // d3-force's `forceLink` throws "node not found" when an edge
-    // references an id that isn't in the node set. The graph DB
-    // can hand us dangling edges (e.g. a `## glutenfree` heading
-    // mis-tokenised as the tag `##glutenfree` whose node never
-    // got created), and we don't want a single bad row to take
-    // down the whole panel. Drop edges with unknown endpoints
-    // before handing the array to the simulation; the rest of
-    // the graph still renders.
-    const nodeIds = new Set(layoutNodes.map((n) => n.id));
-    const layoutEdges: LayoutEdge[] = [];
-    let dropped = 0;
-    for (const e of g.edges) {
-      if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) {
-        dropped += 1;
-        continue;
-      }
-      layoutEdges.push({
-        source: e.source,
-        target: e.target,
-        kind: e.kind,
-        broken: e.broken ?? false,
-      });
-    }
-    if (dropped > 0) {
-      console.warn(`graph: dropped ${dropped} edges with unknown endpoints`);
-    }
-    nodes = layoutNodes;
-    edges = layoutEdges;
-
-    sim = forceSimulation<LayoutNode>(layoutNodes)
-      .force(
-        "link",
-        forceLink<LayoutNode, LayoutEdge>(layoutEdges)
-          .id((n) => n.id)
-          // Slightly longer links for file<->file (the dominant
-          // edge kind) so the dense recipe-cluster still has room
-          // to breathe; tighter for tag/mention/date so satellites
-          // sit close to their owner.
-          .distance((e) => (e.kind === "link" ? 70 : 40))
-          .strength(0.6),
-      )
-      .force("charge", forceManyBody<LayoutNode>().strength(-180))
-      .force("center", forceCenter(cx, cy))
-      .force("collide", forceCollide<LayoutNode>().radius(18).strength(0.7))
-      .alphaDecay(0.03)
-      .on("tick", () => {
-        // Bumping `tick` is what tells the reactive renderer to
-        // re-read the in-place-mutated x/y on each node. Cheap;
-        // d3-force ticks ~30 times before settling.
-        tick = (tick + 1) | 0;
-      });
-
-    pinFocalNodes();
-  }
-
-  /// Pin the focal-scope file node(s) at fixed positions so the
-  /// "selected file" sits in the middle and its neighbours orbit.
-  /// Multiple seed paths (group / dir scope) fan out evenly on a
-  /// circle around the center. Drive / global scope leaves all
-  /// nodes free to move; pin state is cleared on the way out.
-  function pinFocalNodes(): void {
-    const cx = width / 2;
-    const cy = height / 2;
-    // Identify seed paths from the current scope.
-    let seedPaths: string[] | null = null;
-    if (currentScope) {
-      if (currentScope.kind === "file") seedPaths = [currentScope.path];
-      else if (currentScope.kind === "group") seedPaths = [...currentScope.paths];
-      else if (currentScope.kind === "dir") seedPaths = filesUnder(currentScope.path);
-      else if (currentScope.kind === "git_repo")
-        seedPaths = filesUnder(currentScope.root);
-    }
-    // Clear any prior pinning first so swapping scopes never leaves
-    // stale fixed positions behind.
-    for (const n of nodes) {
-      n.fx = null;
-      n.fy = null;
-      n.pinned = false;
-    }
-    if (!seedPaths || seedPaths.length === 0) return;
-    const seedNodes = nodes.filter(
-      (n) => n.kind === "file" && seedPaths!.includes(n.path),
-    );
-    if (seedNodes.length === 1) {
-      const n = seedNodes[0]!;
-      n.fx = cx;
-      n.fy = cy;
-      n.pinned = true;
-    } else {
-      const r = Math.min(width, height) * 0.18;
-      seedNodes.forEach((n, i) => {
-        const angle = (i / seedNodes.length) * Math.PI * 2 - Math.PI / 2;
-        n.fx = cx + Math.cos(angle) * r;
-        n.fy = cy + Math.sin(angle) * r;
-        n.pinned = true;
-      });
-    }
-  }
-
-  /// Helper used by `pinFocalNodes` for the dir / git_repo scopes:
-  /// every file node whose path lives under the prefix.
-  function filesUnder(prefix: string): string[] {
-    const root = prefix.replace(/\/+$/, "");
-    const withSlash = root + "/";
-    return nodes
-      .filter(
-        (n) =>
-          n.kind === "file" && (n.path === root || n.path.startsWith(withSlash)),
-      )
-      .map((n) => (n.kind === "file" ? n.path : ""))
-      .filter((p) => p);
-  }
-
-  // ---- interaction: pan + zoom + node drag ------------------------------
-
-  /// Pan drag on empty SVG: translates the canvas. Anchored to
-  /// the cursor so the user "grabs" the graph at the click point.
-  let panStart: { mx: number; my: number; tx: number; ty: number } | null = null;
-  /// Node drag: temporarily pins the dragged node so the simulation
-  /// follows the cursor without yanking the rest of the graph.
-  /// `moved` discriminates click vs drag for selection semantics.
-  const DRAG_THRESHOLD = 4;
-  let nodeDown:
-    | { node: LayoutNode; mx: number; my: number; moved: boolean }
-    | null = null;
-
-  function onSvgMouseDown(e: MouseEvent): void {
-    panStart = { mx: e.clientX, my: e.clientY, tx, ty };
-    window.addEventListener("mousemove", onPanMove);
-    window.addEventListener("mouseup", onPanUp);
-  }
-
-  function onPanMove(e: MouseEvent): void {
-    if (!panStart) return;
-    tx = panStart.tx + (e.clientX - panStart.mx);
-    ty = panStart.ty + (e.clientY - panStart.my);
-  }
-
-  function onPanUp(): void {
-    panStart = null;
-    window.removeEventListener("mousemove", onPanMove);
-    window.removeEventListener("mouseup", onPanUp);
-  }
-
-  function onWheel(e: WheelEvent): void {
-    e.preventDefault();
-    const factor = Math.exp(-e.deltaY * 0.0015);
-    const next = Math.max(0.25, Math.min(4, k * factor));
-    if (next === k) return;
-    // Zoom anchored on the cursor: keep the world-point under
-    // the pointer fixed by adjusting tx/ty alongside k.
-    const rect = svgEl?.getBoundingClientRect();
-    if (!rect) {
-      k = next;
-      return;
-    }
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
-    tx = px - ((px - tx) * next) / k;
-    ty = py - ((py - ty) * next) / k;
-    k = next;
-  }
-
-  function onNodeMouseDown(e: MouseEvent, n: LayoutNode): void {
-    e.stopPropagation();
-    nodeDown = { node: n, mx: e.clientX, my: e.clientY, moved: false };
-    window.addEventListener("mousemove", onNodeMove);
-    window.addEventListener("mouseup", onNodeUp);
-  }
-
-  function onNodeMove(e: MouseEvent): void {
-    if (!nodeDown || !sim || !svgEl) return;
-    const dx = e.clientX - nodeDown.mx;
-    const dy = e.clientY - nodeDown.my;
-    if (!nodeDown.moved && Math.hypot(dx, dy) >= DRAG_THRESHOLD) {
-      nodeDown.moved = true;
-      sim.alphaTarget(0.3).restart();
-    }
-    if (!nodeDown.moved) return;
-    const rect = svgEl.getBoundingClientRect();
-    // Convert client coords -> SVG coords by undoing the world
-    // transform (translate(tx, ty) scale(k)).
-    const sx = e.clientX - rect.left;
-    const sy = e.clientY - rect.top;
-    nodeDown.node.fx = (sx - tx) / k;
-    nodeDown.node.fy = (sy - ty) / k;
-  }
-
-  function onNodeUp(): void {
-    if (!nodeDown) return;
-    if (!nodeDown.moved) {
-      selectedId = nodeDown.node.id;
-      // Auto-open the details panel on any click. Without this
-      // the user has to hit the ≡ toggle separately to see what
-      // they just clicked, which makes the click feel inert. If
-      // the user explicitly closed the panel and clicks again
-      // they expect it to surface; the panel toggle button is
-      // still there to dismiss.
-      panelOpen = true;
-    } else {
-      sim?.alphaTarget(0);
-      // Release the drag pin UNLESS this node is the focal pin
-      // (kept pinned by `pinFocalNodes`); the `pinned` flag
-      // discriminates.
-      if (!nodeDown.node.pinned) {
-        nodeDown.node.fx = null;
-        nodeDown.node.fy = null;
-      }
-    }
-    nodeDown = null;
-    window.removeEventListener("mousemove", onNodeMove);
-    window.removeEventListener("mouseup", onNodeUp);
-  }
-
-  function resetView(): void {
-    tx = 0;
-    ty = 0;
-    k = 1;
-    if (sim) {
-      pinFocalNodes();
-      sim.alpha(0.6).restart();
+    if (cy) {
+      cy.$(":selected").unselect();
+      const ele = cy.getElementById(n.id);
+      if (ele.nonempty()) ele.select();
     }
   }
 
   // ---- presentation ------------------------------------------------------
 
+  /// Used by the inspector's kind chip background. Cytoscape itself
+  /// resolves these via getComputedStyle at buildCytoscape time, so
+  /// theme changes propagate next reload.
   const NODE_COLORS: Record<GraphViewNode["kind"], string> = {
     file: "var(--link)",
     tag: "var(--accent)",
@@ -719,14 +278,439 @@
     date: "var(--info-text)",
   };
 
-  /// Visual radius. Files read larger than tag/mention/date
-  /// satellites so the dominant content type is unmistakable;
-  /// the focal-pinned node gets a small extra so the user sees
-  /// the "you are here" anchor at a glance.
-  function nodeRadius(n: LayoutNode): number {
-    const base = n.kind === "file" ? 7 : 4;
-    return n.pinned ? base + 2 : base;
+  // ---- cytoscape glue ----------------------------------------------------
+
+  /// Stable edge id, used to address elements after add/remove. The
+  /// graph is small enough that collisions are rare; the counter
+  /// suffix makes it safe regardless.
+  function makeEdgeIds(g: GraphView): Map<GraphViewEdge, string> {
+    const map = new Map<GraphViewEdge, string>();
+    const seen = new Map<string, number>();
+    for (const e of g.edges) {
+      const base = `${e.source}|${e.target}|${e.kind}`;
+      const n = (seen.get(base) ?? 0) + 1;
+      seen.set(base, n);
+      map.set(e, n === 1 ? base : `${base}#${n}`);
+    }
+    return map;
   }
+
+  function readThemeColors(host: HTMLElement) {
+    const cs = getComputedStyle(host);
+    const v = (n: string, fb: string) => cs.getPropertyValue(n).trim() || fb;
+    return {
+      link: v("--link", "#4a90e2"),
+      accent: v("--accent", "#9b6dff"),
+      warn: v("--warn-text", "#e0a93b"),
+      info: v("--info-text", "#7eaecc"),
+      text: v("--text", "#e8e8e8"),
+      textSec: v("--text-secondary", "#9a9a9a"),
+      bg: v("--bg", "#1e1e1e"),
+      bgCard: v("--bg-card", "#252525"),
+    };
+  }
+
+  function buildStylesheet(host: HTMLElement): cytoscape.StylesheetJson {
+    const c = readThemeColors(host);
+    return [
+      {
+        selector: "node",
+        style: {
+          label: "data(label)",
+          color: c.text,
+          "font-size": 11,
+          "text-halign": "right",
+          "text-valign": "center",
+          "text-margin-x": 5,
+          "text-outline-color": c.bg,
+          "text-outline-width": 2,
+          "border-width": 1.5,
+          "border-color": c.bg,
+          "min-zoomed-font-size": 8,
+        },
+      },
+      {
+        selector: 'node[kind = "file"]',
+        style: {
+          "background-color": c.link,
+          width: 14,
+          height: 14,
+        },
+      },
+      {
+        selector: 'node[kind = "tag"]',
+        style: {
+          "background-color": c.accent,
+          width: 8,
+          height: 8,
+          "font-size": 10,
+        },
+      },
+      {
+        selector: 'node[kind = "mention"]',
+        style: {
+          "background-color": c.warn,
+          width: 8,
+          height: 8,
+          "font-size": 10,
+        },
+      },
+      {
+        selector: 'node[kind = "date"]',
+        style: {
+          "background-color": c.info,
+          width: 8,
+          height: 8,
+          "font-size": 10,
+        },
+      },
+      {
+        selector: "node[?missing]",
+        style: {
+          "background-color": c.bgCard,
+          "border-style": "dashed",
+          "border-color": c.textSec,
+          opacity: 0.6,
+        },
+      },
+      {
+        selector: "node.hover",
+        style: {
+          "border-color": c.text,
+          "border-width": 1.5,
+        },
+      },
+      {
+        selector: "node.focal",
+        style: {
+          "border-color": c.accent,
+          "border-width": 2,
+        },
+      },
+      {
+        selector: "node:selected",
+        style: {
+          "border-color": c.accent,
+          "border-width": 3,
+          "overlay-color": c.accent,
+          "overlay-opacity": 0.12,
+          "overlay-padding": 2,
+        },
+      },
+      {
+        selector: "edge",
+        style: {
+          "curve-style": "bezier",
+          "line-cap": "round",
+          opacity: 0.7,
+        },
+      },
+      {
+        selector: 'edge[kind = "link"]',
+        style: { "line-color": c.textSec, width: 1.6 },
+      },
+      {
+        selector: 'edge[kind = "tag"]',
+        style: { "line-color": c.accent, width: 1.1 },
+      },
+      {
+        selector: 'edge[kind = "mention"]',
+        style: { "line-color": c.warn, width: 1.1 },
+      },
+      {
+        selector: 'edge[kind = "date"]',
+        style: { "line-color": c.info, width: 1.1 },
+      },
+      {
+        selector: "edge[?broken]",
+        style: { "line-style": "dashed", opacity: 0.45 },
+      },
+      {
+        selector: ".hidden",
+        style: { display: "none" },
+      },
+    ];
+  }
+
+  /// fcose options. Edge length differs by kind so the dense file
+  /// cluster has room to breathe while satellites sit close to their
+  /// owner; mirrors the d3-force `distance` configuration we used
+  /// before.
+  function fcoseOptions(opts: { randomize: boolean; animate: boolean }) {
+    return {
+      name: "fcose",
+      quality: "default",
+      randomize: opts.randomize,
+      animate: opts.animate,
+      animationDuration: opts.animate ? 350 : 0,
+      fit: opts.randomize,
+      padding: 30,
+      nodeSeparation: 75,
+      idealEdgeLength: (e: cytoscape.EdgeSingular) =>
+        e.data("kind") === "link" ? 70 : 40,
+      edgeElasticity: 0.45,
+      nestingFactor: 0.1,
+      numIter: 2500,
+      gravity: 0.25,
+      packComponents: true,
+      // fcose honours node.locked() — focal pins stick across runs.
+    } as cytoscape.LayoutOptions;
+  }
+
+  function buildElements(g: GraphView): {
+    elements: ElementDefinition[];
+    dropped: number;
+  } {
+    const nodeIds = new Set(g.nodes.map((n) => n.id));
+    const edgeIds = makeEdgeIds(g);
+    const els: ElementDefinition[] = [];
+    for (const n of g.nodes) {
+      const data: Record<string, unknown> = {
+        id: n.id,
+        kind: n.kind,
+        label: n.label,
+      };
+      if (n.kind === "file") {
+        data.path = n.path;
+        if (n.missing) data.missing = true;
+      }
+      els.push({ group: "nodes", data });
+    }
+    let dropped = 0;
+    for (const e of g.edges) {
+      // forceLink-style preflight: drop edges whose endpoints aren't
+      // in the node set so a single dangling row doesn't poison the
+      // whole render.
+      if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) {
+        dropped++;
+        continue;
+      }
+      const data: Record<string, unknown> = {
+        id: edgeIds.get(e)!,
+        source: e.source,
+        target: e.target,
+        kind: e.kind,
+      };
+      if (e.broken) data.broken = true;
+      els.push({ group: "edges", data });
+    }
+    return { elements: els, dropped };
+  }
+
+  function buildCytoscape(g: GraphView): void {
+    if (!containerEl) return;
+    cy?.destroy();
+    const { elements, dropped } = buildElements(g);
+    if (dropped > 0) {
+      console.warn(`graph: dropped ${dropped} edges with unknown endpoints`);
+    }
+    cy = cytoscape({
+      container: containerEl,
+      elements,
+      style: buildStylesheet(containerEl),
+      layout: fcoseOptions({ randomize: true, animate: false }),
+      wheelSensitivity: 0.2,
+      minZoom: 0.15,
+      maxZoom: 4,
+      boxSelectionEnabled: false,
+      selectionType: "single",
+    });
+
+    cy.on("tap", "node", (ev: EventObject) => {
+      const id = ev.target.id() as string;
+      selectedId = id;
+      panelOpen = true;
+    });
+    cy.on("tap", (ev: EventObject) => {
+      if (ev.target === cy) selectedId = null;
+    });
+    cy.on("mouseover", "node", (ev: EventObject) => {
+      ev.target.addClass("hover");
+    });
+    cy.on("mouseout", "node", (ev: EventObject) => {
+      ev.target.removeClass("hover");
+    });
+
+    // Initial filter pass: scope/edge-kind chips might be non-defaults.
+    syncVisibility();
+    pinFocalNodes(false);
+  }
+
+  /// Apply current scope + edge-kind filters by toggling the
+  /// `.hidden` class on cytoscape elements. Layout positions are
+  /// preserved, so re-enabling a filter snaps elements back to
+  /// where they were.
+  function syncVisibility(): void {
+    if (!cy) return;
+    const visN = visibleNodeIds;
+    const visE = new Set<string>();
+    // Mirror makeEdgeIds: walk edges in order and key by base; the
+    // visibleEdges array is a subset of `edges` in the same order,
+    // so we recompute counters the same way.
+    const counters = new Map<string, number>();
+    for (const e of edges) {
+      const base = `${e.source}|${e.target}|${e.kind}`;
+      const n = (counters.get(base) ?? 0) + 1;
+      counters.set(base, n);
+      const id = n === 1 ? base : `${base}#${n}`;
+      const wantVisible =
+        show[e.kind] &&
+        (scopedNodeIds === null ||
+          (scopedNodeIds.has(e.source) && scopedNodeIds.has(e.target)));
+      if (wantVisible) visE.add(id);
+    }
+    cy.batch(() => {
+      cy!.nodes().forEach((n) => {
+        const id = n.id();
+        if (visN.has(id)) n.removeClass("hidden");
+        else n.addClass("hidden");
+      });
+      cy!.edges().forEach((e) => {
+        const id = e.id();
+        if (visE.has(id)) e.removeClass("hidden");
+        else e.addClass("hidden");
+      });
+    });
+  }
+
+  /// Pin the focal-scope file node(s) at fixed positions so the
+  /// "selected file" sits in the middle and its neighbours orbit.
+  /// Multiple seed paths (group / dir / git_repo scope) fan out
+  /// evenly on a circle around the centre. Drive / global scope
+  /// leaves all nodes free to move; pin state is cleared on the way
+  /// out.
+  function pinFocalNodes(relax: boolean): void {
+    if (!cy) return;
+    cy.nodes().unlock();
+    cy.nodes().removeClass("focal");
+    let seedPaths: string[] | null = null;
+    if (currentScope) {
+      if (currentScope.kind === "file") seedPaths = [currentScope.path];
+      else if (currentScope.kind === "group") seedPaths = [...currentScope.paths];
+      else if (currentScope.kind === "dir") seedPaths = filesUnder(currentScope.path);
+      else if (currentScope.kind === "git_repo")
+        seedPaths = filesUnder(currentScope.root);
+    }
+    if (!seedPaths || seedPaths.length === 0) return;
+    const seeds = cy.nodes().filter((n) => {
+      if (n.data("kind") !== "file") return false;
+      const p = n.data("path") as string | undefined;
+      return p != null && seedPaths!.includes(p);
+    });
+    if (seeds.length === 0) return;
+    const ext = cy.extent();
+    const cx = (ext.x1 + ext.x2) / 2;
+    const cyc = (ext.y1 + ext.y2) / 2;
+    if (seeds.length === 1) {
+      const n = seeds[0]!;
+      n.position({ x: cx, y: cyc });
+      n.lock();
+      n.addClass("focal");
+    } else {
+      const r = Math.min(ext.x2 - ext.x1, ext.y2 - ext.y1) * 0.18;
+      seeds.forEach((n, i) => {
+        const angle = (i / seeds.length) * Math.PI * 2 - Math.PI / 2;
+        n.position({ x: cx + Math.cos(angle) * r, y: cyc + Math.sin(angle) * r });
+        n.lock();
+        n.addClass("focal");
+      });
+    }
+    if (relax) {
+      cy.layout(fcoseOptions({ randomize: false, animate: true })).run();
+    }
+  }
+
+  function filesUnder(prefix: string): string[] {
+    const root = prefix.replace(/\/+$/, "");
+    const withSlash = root + "/";
+    return nodes
+      .filter(
+        (n) =>
+          n.kind === "file" && (n.path === root || n.path.startsWith(withSlash)),
+      )
+      .map((n) => (n.kind === "file" ? n.path : ""))
+      .filter((p) => p);
+  }
+
+  function resetView(): void {
+    if (!cy) return;
+    cy.fit(undefined, 30);
+  }
+
+  // ---- mount: fetch + layout --------------------------------------------
+
+  onMount(async () => {
+    if (containerEl) {
+      resizeObs = new ResizeObserver(() => {
+        cy?.resize();
+      });
+      resizeObs.observe(containerEl);
+    }
+    // Defer one frame so the OverlayShell's growth-to-fullscreen
+    // transition has settled before we measure the canvas and seed
+    // the layout. Without this the first measurement can land
+    // mid-animation and the layout settles around an off-centre
+    // point.
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
+    await load();
+  });
+
+  onDestroy(() => {
+    resizeObs?.disconnect();
+    cy?.destroy();
+    cy = null;
+  });
+
+  async function load(): Promise<void> {
+    loading = true;
+    error = null;
+    try {
+      const g: GraphView = await api.graph();
+      nodes = g.nodes;
+      edges = g.edges;
+      buildCytoscape(g);
+    } catch (e) {
+      error = (e as Error).message;
+    } finally {
+      loading = false;
+    }
+  }
+
+  // Re-pin when scope changes (focal node set or pin policy may
+  // shift). Skip while cy isn't built yet; load() does the first
+  // pass.
+  $effect(() => {
+    void currentScope;
+    if (!cy) return;
+    pinFocalNodes(true);
+  });
+
+  // Re-apply visibility filters when scope/depth/edge-kind chips
+  // change. Cheap; just toggles a class.
+  $effect(() => {
+    void visibleNodeIds;
+    void visibleEdges;
+    if (!cy) return;
+    syncVisibility();
+  });
+
+  // Mirror external selection back into cytoscape so the
+  // `:selected` style follows clicks made via the side panel.
+  $effect(() => {
+    if (!cy) return;
+    const want = selectedId;
+    cy.batch(() => {
+      cy!.$(":selected").forEach((n) => {
+        if (n.id() !== want) n.unselect();
+      });
+      if (want) {
+        const ele = cy!.getElementById(want);
+        if (ele.nonempty() && !ele.selected()) ele.select();
+      }
+    });
+  });
 </script>
 
 <OverlayShell open={visible} onClose={close}>
@@ -748,8 +732,7 @@
     {#if currentScope && currentScope.kind !== "drive" && currentScope.kind !== "global"}
       <!-- Depth slider only matters when the scope is anchored to
            specific files; the drive (and eventual global) scopes
-           always show everything
-           regardless of hop count. -->
+           always show everything regardless of hop count. -->
       <label class="depth" title="hops to expand from the seed file(s)">
         <span>depth</span>
         <input
@@ -772,7 +755,6 @@
         </label>
       {/each}
     </div>
-    <!-- Right-aligned actions, mirrors the other overlay headers. -->
     <span class="actions">
       <button class="reload" onclick={() => void load()} title="Reload graph">↻</button>
       <button class="reload" onclick={resetView} title="Reset view">⌖</button>
@@ -794,73 +776,11 @@
     {:else if nodes.length === 0}
       <div class="placeholder">no markdown files in this drive yet</div>
     {/if}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <svg
-      bind:this={svgEl}
+    <div
+      bind:this={containerEl}
+      class="cy"
       class:dim={loading || !!error}
-      onmousedown={onSvgMouseDown}
-      onwheel={onWheel}
-    >
-      <!-- World group: a single translate(tx, ty) scale(k) parents
-           every node + edge so the canvas pans and zooms uniformly
-           without re-running the simulation. -->
-      <g transform={`translate(${tx}, ${ty}) scale(${k})`}>
-        {#each drawEdges as { e, a, b } (`${a.id}->${b.id}-${e.kind}`)}
-          <line
-            x1={a.x ?? 0}
-            y1={a.y ?? 0}
-            x2={b.x ?? 0}
-            y2={b.y ?? 0}
-            stroke={EDGE_COLORS[e.kind]}
-            stroke-opacity={e.broken ? 0.45 : 0.7}
-            stroke-dasharray={e.broken ? "3 3" : undefined}
-            stroke-width={e.kind === "link" ? 1.6 : 1.1}
-            stroke-linecap="round"
-          />
-        {/each}
-
-        {#each drawNodes as n (n.id)}
-          <g
-            class="node"
-            class:file={n.kind === "file"}
-            class:missing={n.kind === "file" && n.missing}
-            class:focal={n.pinned}
-            transform={`translate(${n.x ?? 0}, ${n.y ?? 0})`}
-            onmousedown={(ev) => onNodeMouseDown(ev, n)}
-            onmouseenter={() => (hoverId = n.id)}
-            onmouseleave={() => (hoverId = hoverId === n.id ? null : hoverId)}
-            role="button"
-            tabindex="0"
-          >
-            {#if selectedId === n.id}
-              <!-- Selection ring: draws underneath the node body so
-                   the colored fill stays visible. -->
-              <circle
-                r={nodeRadius(n) + 4}
-                fill="none"
-                stroke="var(--accent)"
-                stroke-width="2"
-              />
-            {/if}
-            <circle r={nodeRadius(n)} fill={NODE_COLORS[n.kind]} />
-            <text
-              class="label-bg"
-              x={nodeRadius(n) + 5}
-              y={3}
-              font-size={n.kind === "file" ? 11 : 10}
-              pointer-events="none"
-            >{n.label}</text>
-            <text
-              class="label"
-              x={nodeRadius(n) + 5}
-              y={3}
-              font-size={n.kind === "file" ? 11 : 10}
-              pointer-events="none"
-            >{n.label}</text>
-          </g>
-        {/each}
-      </g>
-    </svg>
+    ></div>
   </div>
 
   {#if panelOpen}
@@ -1015,8 +935,6 @@
     color: var(--text-secondary);
     flex-shrink: 0;
   }
-  /* Scope picker mirrors the assistant overlay's context-select so
-     the two surfaces feel like siblings. */
   .scope-select {
     background: var(--bg);
     color: var(--text);
@@ -1064,10 +982,6 @@
     border-color: var(--btn-hover);
     background: var(--hover-bg);
   }
-  /* Bottom status bar. Carries the node/edge counts (left) and the
-     interaction hint (right) so they don't compete with scope and
-     filters in the top bar. Mirrors the .bar treatment so the panel
-     reads as toolbar + canvas + statusbar. */
   .statusbar {
     display: flex;
     align-items: center;
@@ -1097,8 +1011,6 @@
     align-items: center;
     flex-wrap: wrap;
   }
-  /* Push the action buttons (reload, reset-view, panel-toggle) to
-     the right edge of the bar, matching the other tab kinds. */
   .bar > .actions {
     margin-left: auto;
     display: flex;
@@ -1132,9 +1044,6 @@
     font-variant-numeric: tabular-nums;
     opacity: 0.75;
   }
-  /* Row containing the globe canvas (flex:1) and the details aside
-     (fixed width). Sits below the toolbar and above any future
-     status row. */
   .body {
     flex: 1;
     display: flex;
@@ -1148,13 +1057,17 @@
     position: relative;
     overflow: hidden;
   }
-  /* Details panel: equivalent to a file tab's inspector. Holds
-     selection metadata and edge lists; clicks inside the panel
-     either re-select another node (chains exploration) or open a
-     file via the explicit button. */
+  /* Cytoscape mount: fills the canvas area. The library handles
+     pan / zoom / node drag internally; we just give it a sized
+     box and listen for ResizeObserver to call cy.resize(). */
+  .cy {
+    width: 100%;
+    height: 100%;
+  }
+  .cy.dim {
+    opacity: 0.4;
+  }
   .details {
-    /* width is set inline by the parent (paneWidths.graph) so the
-       resize handle updates apply without a CSS rule rewrite. */
     flex-shrink: 0;
     border-left: 1px solid var(--border);
     background: var(--bg-card);
@@ -1261,9 +1174,6 @@
     margin: 0;
     padding: 0;
   }
-  /* Reference rows: a list item containing a single button. The
-     button reset matches the file tree's `.name` style so visited
-     rows look identical regardless of which surface they live in. */
   .details button.ref {
     width: 100%;
     background: none;
@@ -1304,56 +1214,6 @@
   .details .row-open:hover {
     color: var(--text);
     border-color: var(--btn-hover);
-  }
-  svg {
-    width: 100%;
-    height: 100%;
-    display: block;
-    cursor: grab;
-    user-select: none;
-  }
-  svg.dim {
-    opacity: 0.4;
-  }
-  svg:active {
-    cursor: grabbing;
-  }
-  .node {
-    cursor: pointer;
-  }
-  /* Focal node: subtly brighter halo so the user can spot the
-     "you are here" anchor amid an otherwise uniform colour set.
-     Drawn as a stroke on the inner circle (not the selection
-     ring, which is reserved for click-selection). */
-  .node.focal circle:last-of-type {
-    stroke: var(--accent);
-    stroke-width: 1.5;
-  }
-  .node.file circle {
-    stroke: var(--bg);
-    stroke-width: 1.5;
-  }
-  .node.missing circle {
-    fill: var(--bg-card);
-    stroke: var(--text-secondary);
-    stroke-dasharray: 2 2;
-  }
-  .node.missing {
-    cursor: not-allowed;
-    opacity: 0.6;
-  }
-  .node:hover circle {
-    stroke: var(--text);
-    stroke-width: 1.5;
-  }
-  .label {
-    fill: var(--text);
-  }
-  .label-bg {
-    fill: var(--bg);
-    stroke: var(--bg);
-    stroke-width: 3;
-    paint-order: stroke fill;
   }
   .placeholder {
     position: absolute;

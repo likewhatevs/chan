@@ -26,7 +26,7 @@
 import { Node, mergeAttributes } from "@tiptap/core";
 
 import { api } from "../../api/client";
-import { wikiLinkToMarkdown } from "../../api/wasm";
+import { wikiLinkToMarkdown } from "../links";
 import { openInActivePane } from "../../state/tabs.svelte";
 import { positionPopover, watchViewport } from "./popover";
 

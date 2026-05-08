@@ -37,7 +37,7 @@
     type WikiBubble,
   } from "./extensions/wikiLink";
   import { api } from "../api/client";
-  import { resolveRelativePath } from "../api/wasm";
+  import { resolveRelativePath } from "./links";
   import { drive } from "../state/store.svelte";
 
   let {
