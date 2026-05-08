@@ -28,7 +28,7 @@ fn main() {
     // `cargo run -p fetch-models` (a.k.a. `make models`); empty
     // stub is enough for a fresh-clone `cargo build` to succeed,
     // since the runtime seeder treats an empty bundle as "no
-    // embedded model" and falls back to fastembed's HuggingFace
+    // embedded model" and falls back to hf-hub's HuggingFace
     // download path. rerun-if-changed pins the build to the
     // bundle's mtime so a subsequent `make models` re-links.
     let model_bundle = Path::new("resources/models.tar.zst");

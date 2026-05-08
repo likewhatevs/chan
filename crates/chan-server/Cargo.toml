@@ -16,6 +16,11 @@ default = ["embeddings"]
 # "embeddings on" badge reflects the actual build. Opt out via
 # `--no-default-features` along the rest of the stack.
 embeddings = ["chan-drive/embeddings", "dep:tar", "dep:zstd"]
+# Pass-throughs for chan-drive's GPU backends. The chan binary's
+# target-conditional dep wiring auto-flips `metal` on macOS; `cuda`
+# stays opt-in on Linux.
+metal = ["chan-drive/metal"]
+cuda = ["chan-drive/cuda"]
 
 [dependencies]
 chan-drive = { workspace = true, default-features = false }

@@ -73,7 +73,7 @@ struct WebAssets;
 /// Plain `cargo build` from a fresh clone gets an empty stub
 /// (created by build.rs) so `include_bytes!` always succeeds; the
 /// runtime seeder treats an empty bundle as "no embedded model"
-/// and falls back to fastembed's HuggingFace download path. Real
+/// and falls back to hf-hub's HuggingFace download path. Real
 /// release builds run `make models` first, which writes the
 /// actual ~80 MB tarball to the same path and the link picks it
 /// up.
@@ -459,8 +459,8 @@ pub async fn serve_via_tunnel(
 /// `include_bytes!` in MODEL_BUNDLE picks it up.
 ///
 /// Errors are logged but do not block startup: if the seed fails
-/// the runtime path falls back to fastembed's HuggingFace
-/// download, the same UX as a dev build.
+/// the runtime path falls back to hf-hub's HuggingFace download,
+/// the same UX as a dev build.
 #[cfg(feature = "embeddings")]
 fn seed_models_from_bundle() {
     if MODEL_BUNDLE.is_empty() {
@@ -3041,9 +3041,8 @@ async fn api_build_info() -> Response {
         version: env!("CARGO_PKG_VERSION"),
         features: BuildFeatures {
             // Mirrors chan-drive's `embeddings` cargo feature. ON in
-            // default builds; OFF on platforms without a prebuilt
-            // onnxruntime (currently iOS) which build with
-            // `--no-default-features`.
+            // default builds; OFF on platforms where candle won't
+            // build (currently iOS), which use `--no-default-features`.
             embeddings: cfg!(feature = "embeddings"),
         },
     })

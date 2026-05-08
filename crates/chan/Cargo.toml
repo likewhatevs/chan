@@ -14,14 +14,28 @@ path = "src/main.rs"
 [features]
 default = ["embeddings"]
 # Forwards to chan-server / chan-drive's `embeddings` feature so a
-# top-level `--no-default-features` build disables fastembed all
-# the way down. Default-on; opt-out is for platforms without a
-# prebuilt onnxruntime binary.
+# top-level `--no-default-features` build disables the candle stack
+# all the way down. Default-on; opt out (`--no-default-features`)
+# only for platforms where candle-core won't build (currently iOS).
 embeddings = ["chan-server/embeddings", "chan-drive/embeddings"]
+# Linux-only opt-in: build with `--features cuda` to wire candle's
+# CUDA backend for embeddings. Errors at resolve time on macOS
+# (cudarc requires the CUDA toolkit). `CHAN_DISABLE_GPU=1` falls
+# back to CPU at runtime without rebuilding.
+cuda = ["chan-drive/cuda"]
 
 [dependencies]
 chan-drive = { workspace = true, default-features = false }
 chan-server = { path = "../chan-server", default-features = false }
+
+# macOS auto-wires candle's Metal backend so the default release
+# binary uses the GPU for embeddings without a feature flag. The
+# `metal` feature is target-gated on chan-drive (objc2-metal is
+# Apple-only); declaring it here keeps Linux/Windows builds clean
+# while macOS gets it transparently.
+[target.'cfg(target_os = "macos")'.dependencies]
+chan-drive = { workspace = true, default-features = false, features = ["metal"] }
+chan-server = { path = "../chan-server", default-features = false, features = ["metal"] }
 # Pulled in directly (not just transitively through chan-server) so
 # the `__mcp` subcommand can run chan-llm's MCP server in-process.
 # The `mcp` feature pulls rmcp + schemars; that's the cost of paying

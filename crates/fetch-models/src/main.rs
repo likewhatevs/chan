@@ -8,20 +8,21 @@
 //
 // Two-stage:
 //
-//   1. Run fastembed against a stable staging dir under
-//      `target/fetch-models-cache/` so re-runs are fast (HF cache
-//      hit-or-skip). cargo-clean wipes it; that's intentional, the
-//      next build re-downloads.
+//   1. Open the candle embedder against a stable staging dir under
+//      `target/fetch-models-cache/`. hf-hub downloads the model
+//      there if missing; a re-run with the cache populated skips
+//      the network. cargo-clean wipes the dir; that's intentional,
+//      the next build re-downloads.
 //   2. tar+zstd encode the staging dir into the embed bundle.
-//      Drops `*.lock` and `**/blobs/**` along the way so the
-//      bundle doesn't carry every model file twice (snapshots/
-//      symlinks already follow into blobs at copy time).
+//      Drops `*.lock` and `**/blobs/**` along the way; tar follows
+//      the snapshots/ symlinks into the blob bytes, so dropping
+//      blobs/ outright would otherwise double the archive.
 //
 // Run from the workspace root via `make models` or
 // `cargo run -p fetch-models`. Idempotent: re-running with the
 // model already cached AND the tarball up-to-date is a fast
 // no-op. Honors `HTTPS_PROXY` / `HTTP_PROXY` for restricted
-// networks; fastembed's underlying HTTP client picks them up.
+// networks; hf-hub's underlying HTTP client picks them up.
 
 use std::path::{Path, PathBuf};
 
@@ -52,7 +53,7 @@ fn main() -> Result<()> {
         staging.display()
     );
 
-    // Open the embedder pointing at the staging dir. fastembed
+    // Open the embedder pointing at the staging dir. hf-hub
     // downloads the model there if missing; if already present
     // from a prior run it skips the network and returns instantly.
     Embedder::open(DEFAULT_MODEL, &staging).context("download default embedding model")?;
@@ -85,7 +86,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Stable staging dir for fastembed's HF cache. Lives under
+/// Stable staging dir for the hf-hub cache. Lives under
 /// `target/` so cargo-clean wipes it; survives normal builds so
 /// re-runs of fetch-models hit the on-disk cache and skip the
 /// network. Keep this OUT of `crates/chan-server/resources/` so
@@ -231,7 +232,7 @@ fn humanize(bytes: u64) -> String {
 }
 
 /// Report which (if any) HTTP proxy env var is in effect, with
-/// HTTPS_PROXY taking precedence (fastembed uses HTTPS to hit the
+/// HTTPS_PROXY taking precedence (hf-hub uses HTTPS to hit the
 /// HuggingFace CDN).
 fn active_proxy() -> Option<(&'static str, String)> {
     for var in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
