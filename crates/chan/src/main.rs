@@ -573,7 +573,39 @@ fn cmd_index(path: PathBuf) -> Result<()> {
     // file browser doesn't show "(unnamed)" later.
     ensure_drive_named(&lib, &path, None)?;
     let drive = lib.open_drive(&path)?;
-    let summary = drive.reindex(None).context("reindex")?;
+
+    // Live progress on stderr so the user can see the embed pass
+    // is making progress; on a big drive it can run for tens of
+    // minutes. Use a TTY-friendly carriage return rewrite when
+    // stderr is interactive; fall back to plain lines (one per
+    // file) when redirected so logs stay readable.
+    use std::io::{IsTerminal, Write};
+    let tty = std::io::stderr().is_terminal();
+    let summary = drive
+        .reindex_with(None, |p| {
+            let line = match p.stage {
+                chan_drive::BuildStage::File => {
+                    format!("[{}/{}] {}", p.index + 1, p.total, p.path)
+                }
+                chan_drive::BuildStage::EmbedBatch { chunks, files } => format!(
+                    "[{}/{}] embedding {chunks} chunks across {files} files...",
+                    p.index + 1,
+                    p.total
+                ),
+            };
+            if tty {
+                let mut err = std::io::stderr().lock();
+                let _ = write!(err, "\r\x1b[2K{line}");
+                let _ = err.flush();
+            } else {
+                eprintln!("{line}");
+            }
+        })
+        .context("reindex")?;
+    if tty {
+        eprintln!();
+    }
+
     println!(
         "indexed {}/{} files, {} chunks ({} errors)",
         summary.indexed,
