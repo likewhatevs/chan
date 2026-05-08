@@ -32,6 +32,13 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # candle-kernels' build.rs calls nvidia-smi at compile time to
+  # detect the host GPU's compute capability and pass it as
+  # --gpu-architecture to nvcc. CI runners have no GPU; setting
+  # the env var skips the probe. 75 = Turing; PTX forward-compat
+  # makes the resulting kernels run on Turing, Ampere, Ada,
+  # Hopper. Older GPUs (Pascal etc.) drop to CPU at runtime.
+  CUDA_COMPUTE_CAP: '75'
 
 jobs:
   fmt:
