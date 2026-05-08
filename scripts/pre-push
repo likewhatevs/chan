@@ -17,5 +17,5 @@ cargo clippy --all-targets -- -D warnings
 echo "==> cargo test --all-targets"
 cargo test --all-targets
 
-echo "==> cargo build --no-default-features"
-cargo build --no-default-features
+echo "==> cargo build -p chan-core --no-default-features"
+cargo build -p chan-core --no-default-features

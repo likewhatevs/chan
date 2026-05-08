@@ -1,19 +1,78 @@
-# Workspace manifest for chan-core. The repo started as a single
-# crate; converting to a workspace makes room for sibling crates
-# (the chan-tunnel-* libraries) without each needing its own repo.
+# Workspace manifest for chan-core. Members live under crates/.
 #
-# Members live under crates/. The library crate keeps the bare name
-# `chan-core` so existing consumers (notably the chan editor) only
-# need to update their dep path, not the import name.
+# Crate roles:
+#
+#   - chan-core            filesystem, search, and graph primitives
+#                          for chan drives.
+#
+#   - chan-tunnel-proto    framing types and control frames shared
+#                          by client and server. Pure data plus a
+#                          minimal codec; no I/O.
+#
+#   - chan-tunnel-client   embeddable in `chan serve` (and future
+#                          native clients) to dial a tunnel terminator
+#                          over h2/TLS, run the Hello handshake, and
+#                          serve yamux substreams with an axum router.
+#
+#   - chan-tunnel-server   library form of the tunnel terminator.
+#                          Consumed in-process by chan-gateway's
+#                          drive-proxy: exposes a Validator trait, a
+#                          tunnel listener, and a Registry that maps
+#                          (user, drive) -> live yamux connection.
+#
+# All library crates target tokio + rustls + yamux + h2 and build for
+# Linux, macOS, and (with --no-default-features on chan-core) iOS.
 
 [workspace]
 resolver = "2"
-members = ["crates/chan-core"]
+members = [
+    "crates/chan-core",
+    "crates/chan-tunnel-proto",
+    "crates/chan-tunnel-client",
+    "crates/chan-tunnel-server",
+]
 
 [workspace.package]
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.80"
 license = "Apache-2.0"
 repository = "https://github.com/chan-writer/chan-core"
 
 [workspace.dependencies]
+chan-tunnel-proto = { path = "crates/chan-tunnel-proto" }
+chan-tunnel-server = { path = "crates/chan-tunnel-server" }
+
+anyhow = "1"
+async-trait = "0.1"
+axum = "0.7"
+bytes = "1"
+futures = "0.3"
+h2 = "0.4"
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http2", "client", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+parking_lot = "0.12"
+pin-project-lite = "0.2"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+rustls-native-certs = "0.8"
+rustls-pki-types = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+tracing = "0.1"
+url = "2"
+uuid = { version = "1", features = ["serde", "v4"] }
+yamux = "0.13"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

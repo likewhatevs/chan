@@ -1,11 +1,11 @@
 [package]
 name = "chan-core"
-version = "0.2.0"
-edition = "2021"
-rust-version = "1.80"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Filesystem, search, and graph primitives for chan-writer drives"
-repository = "https://github.com/chan-writer/chan-core"
 
 [dependencies]
 bincode = { version = "2", features = ["serde"] }
