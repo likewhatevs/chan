@@ -52,11 +52,6 @@ jobs:
           repository: chan-writer/chan-core
           path: chan-core
           token: ${{ secrets.chan_ci }}
-      - uses: actions/checkout@v4
-        with:
-          repository: chan-writer/chan-llm
-          path: chan-llm
-          token: ${{ secrets.chan_ci }}
       - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
@@ -81,11 +76,6 @@ jobs:
         with:
           repository: chan-writer/chan-core
           path: chan-core
-          token: ${{ secrets.chan_ci }}
-      - uses: actions/checkout@v4
-        with:
-          repository: chan-writer/chan-llm
-          path: chan-llm
           token: ${{ secrets.chan_ci }}
       - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -145,11 +135,6 @@ jobs:
         with:
           repository: chan-writer/chan-core
           path: chan-core
-          token: ${{ secrets.chan_ci }}
-      - uses: actions/checkout@v4
-        with:
-          repository: chan-writer/chan-llm
-          path: chan-llm
           token: ${{ secrets.chan_ci }}
 
       - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml

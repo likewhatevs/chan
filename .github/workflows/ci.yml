@@ -3,11 +3,10 @@ name: CI
 # Toolchain version is pinned in rust-toolchain.toml; CI uses
 # actions-rust-lang/setup-rust-toolchain to read it.
 #
-# Cross-repo auth: this repo depends on two private siblings via
+# Cross-repo auth: this repo depends on one private sibling via
 # path deps:
-#   chan-writer/chan-core  (path = "../chan-core/crates/chan-drive")
-#   chan-writer/chan-llm   (path = "../chan-llm")
-# CI clones both into sibling directories using a fine-scoped
+#   chan-writer/chan-core  (hosts chan-drive, chan-llm, chan-tunnel-*)
+# CI clones it into a sibling directory using a fine-scoped
 # Personal Access Token stored as the chan_ci repo
 # secret. See README's "Contributing" section for the PAT setup.
 #
@@ -52,11 +51,6 @@ jobs:
           repository: chan-writer/chan-core
           path: chan-core
           token: ${{ secrets.chan_ci }}
-      - uses: actions/checkout@v4
-        with:
-          repository: chan-writer/chan-llm
-          path: chan-llm
-          token: ${{ secrets.chan_ci }}
       - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - run: cargo fmt --check
@@ -82,11 +76,6 @@ jobs:
           repository: chan-writer/chan-core
           path: chan-core
           token: ${{ secrets.chan_ci }}
-      - uses: actions/checkout@v4
-        with:
-          repository: chan-writer/chan-llm
-          path: chan-llm
-          token: ${{ secrets.chan_ci }}
       - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
@@ -108,11 +97,6 @@ jobs:
         with:
           repository: chan-writer/chan-core
           path: chan-core
-          token: ${{ secrets.chan_ci }}
-      - uses: actions/checkout@v4
-        with:
-          repository: chan-writer/chan-llm
-          path: chan-llm
           token: ${{ secrets.chan_ci }}
       - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@v1
