@@ -466,13 +466,15 @@
         wikiType.create({ target: r.target, label: r.label }),
       );
     }
-    // Same flags decorateSmartNodes uses: keep this transaction
-    // out of undo and out of the bind:value loop. preventUpdate
-    // suppresses onUpdate so the post-decoration document doesn't
-    // race the parent's value sync.
-    editor.view.dispatch(
-      tr.setMeta("addToHistory", false).setMeta("preventUpdate", true),
-    );
+    // Keep this transaction out of the undo stack but DO let it
+    // emit an update. preventUpdate would suppress the post-
+    // decoration value sync that bind:value relies on, leaving
+    // the editor's rendered DOM out of step with the doc state on
+    // tab swap (the symptom: link text shows but the wikiLink
+    // pill is gone). The decorated doc serializes back to the
+    // same `[label](path)` markdown the parser fed in, so no
+    // value-sync loop.
+    editor.view.dispatch(tr.setMeta("addToHistory", false));
   }
 
   /// Round-trip recovery for smart nodes that markdown can't carry.
@@ -582,9 +584,9 @@
     }
     if (before.endsWith("@date")) {
       replaceTrailingTrigger("@date", () => {
-        const anchor = window.getSelection()?.focusNode?.parentElement ?? host!;
+        const anchor = caretAnchorHost();
         showCalendar(
-          anchor as HTMLElement,
+          anchor,
           (picked) => {
             if (!picked || !editor) return;
             editor
@@ -623,8 +625,8 @@
       // null (cancel). Alt text comes from the filename so the
       // markdown round-trip carries something readable.
       replaceTrailingTrigger("![", () => {
-        const anchor = window.getSelection()?.focusNode?.parentElement ?? host!;
-        showImagePicker(anchor as HTMLElement, (src) => {
+        const anchor = caretAnchorHost();
+        showImagePicker(anchor, (src) => {
           if (!src || !editor) return;
           const last = src.split("/").pop() ?? src;
           const alt = last.replace(/\.[^./]+$/, "");
@@ -719,21 +721,72 @@
     };
   }
 
-  /// Mount the wiki bubble anchored at the caret's parent element.
-  /// The selection-update hook keeps it in sync; this function just
-  /// handles the open path. Caller must ensure the editor has the
-  /// `[[ ]]` brackets in place (the caret should sit inside them).
+  /// Mount the wiki bubble anchored at the caret's actual screen
+  /// position. The selection-update hook keeps it in sync; this
+  /// function just handles the open path. Caller must ensure the
+  /// editor has the `[[ ]]` brackets in place (the caret should sit
+  /// inside them).
   function openWikiBubbleForCurrentCaret(): void {
     if (!editor || wikiBubble) return;
-    const anchor =
-      (window.getSelection()?.focusNode?.parentElement as HTMLElement | null) ??
-      host!;
     wikiBubble = openWikiBubble({
-      host: anchor,
+      host: caretAnchorHost(),
       prefix: wikiPickerPrefix,
       onClickAccept: () => acceptWikiBubble(),
     });
     wikiBubble.setQuery("");
+  }
+
+  /// Build a synthetic "host" element that reports the caret's
+  /// viewport-relative bounding rect. `positionPopover` only ever
+  /// reads `getBoundingClientRect()` from the host, so we can
+  /// shim the result without attaching the element to the DOM.
+  ///
+  /// Why not pass a real DOM element: the previous implementation
+  /// used `window.getSelection().focusNode.parentElement`, which
+  /// returns the paragraph (or block) containing the caret rather
+  /// than a per-character rect. Long lines pulled the picker to
+  /// the line's leftmost edge; an unreliable selection (right
+  /// after the `[[` autopair flushes a transaction) returned the
+  /// editor host itself, landing the picker at the editor's
+  /// top-left corner — which is roughly the top-left of the
+  /// viewport in a single-pane layout.
+  ///
+  /// `editor.view.coordsAtPos(pos)` gives us the cursor's actual
+  /// viewport rect; we wrap it in an element shim so the
+  /// shared positioning helper does not need to learn a second
+  /// shape.
+  function caretAnchorHost(): HTMLElement {
+    if (!editor) return host!;
+    const pos = editor.state.selection.from;
+    let coords: { left: number; right: number; top: number; bottom: number };
+    try {
+      coords = editor.view.coordsAtPos(pos);
+    } catch {
+      // Position out of range can throw; fall back to the editor
+      // container so the bubble still appears, just less precisely.
+      return host!;
+    }
+    // A 0-width rect at the caret. `positionPopover` flips above
+    // the rect when below would clip; using the actual line
+    // bottom as `bottom` keeps the popover from overlapping the
+    // caret line.
+    const rect = {
+      left: coords.left,
+      right: coords.left,
+      top: coords.top,
+      bottom: coords.bottom,
+      width: 0,
+      height: coords.bottom - coords.top,
+      x: coords.left,
+      y: coords.top,
+      toJSON() {
+        return rect;
+      },
+    } as DOMRect;
+    const shim: HTMLElement = {
+      getBoundingClientRect: () => rect,
+    } as unknown as HTMLElement;
+    return shim;
   }
 
   /// Pull the current bracket query off the doc, ask the bubble to
