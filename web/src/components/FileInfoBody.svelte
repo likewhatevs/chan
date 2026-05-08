@@ -6,30 +6,49 @@
   // and the host's body slot stays empty).
   //
   // Used by:
-  //   - FileBrowserTab: shows the current selection (browserSelection.path)
-  //     plus an Open / × pair so the panel doubles as the action
-  //     surface for the tree.
+  //   - FileBrowserOverlay: shows the current selection
+  //     (browserSelection.path) plus an Open / × pair so the panel
+  //     doubles as the action surface for the tree. References
+  //     section (tags / mentions / dates / links / backlinks) is
+  //     enabled here via showRefs.
   //   - FileEditorTab: shown inside a "show info" disclosure for the
-  //     currently-edited file; no Open/Close buttons (the file is
-  //     already open; the inspector itself is closed via the toggle).
+  //     currently-edited file; lean layout (no Open/Close, no refs).
   //
   // Folder mode walks the flat tree to compute aggregate counts +
   // size + most-recent mtime. The walk is O(N) in tree size and only
   // re-runs when the selected path changes ($derived dependency
   // tracking does the gating).
 
+  import { api } from "../api/client";
+  import type { GraphEdge } from "../api/types";
   import { isEditableText } from "../state/fileTypes";
   import { basename, formatMtime, formatSize } from "../state/format";
+  import {
+    ensureGraphLoaded,
+    graphData,
+    selectionEdgesFor,
+  } from "../state/graphData.svelte";
   import { tree } from "../state/store.svelte";
 
   let {
     path,
     onOpen,
     onClose,
+    showRefs = false,
+    onNavigate,
   }: {
     path: string | null;
     onOpen?: () => void;
     onClose?: () => void;
+    /// When true, fetch + render tags / mentions / dates / links /
+    /// backlinks for files. Off by default so the file editor's
+    /// inline disclosure stays compact.
+    showRefs?: boolean;
+    /// Click handler for a link / backlink target. Receives the
+    /// peer file path. Hosts decide whether to open it in the active
+    /// pane and close themselves; absent = entries render as
+    /// non-clickable.
+    onNavigate?: (path: string) => void;
   } = $props();
 
   const entryByPath = $derived(
@@ -59,6 +78,57 @@
     }
     return { files, dirs, bytes, latest };
   });
+
+  /// Outgoing edges (tags / mentions / dates / links) come straight
+  /// out of the shared graph store; null while the graph hasn't
+  /// loaded yet so the template can render a "loading" line.
+  const refs = $derived.by(() => {
+    if (!showRefs || !entry || entry.is_dir) return null;
+    if (!graphData.view) return null;
+    return selectionEdgesFor(entry.path);
+  });
+
+  /// Backlinks (incoming `link` edges) live behind a separate
+  /// endpoint (/api/backlinks/{path}) since the graph snapshot only
+  /// records outgoing edges per file node. Refetched whenever the
+  /// selected path changes; stale responses are dropped via the
+  /// request-id guard.
+  let backlinks = $state<GraphEdge[]>([]);
+  let backlinksLoading = $state(false);
+  let backlinksError = $state<string | null>(null);
+  let backlinkReq = 0;
+
+  $effect(() => {
+    if (!showRefs || !entry || entry.is_dir) {
+      backlinks = [];
+      backlinksLoading = false;
+      backlinksError = null;
+      return;
+    }
+    void ensureGraphLoaded();
+    const req = ++backlinkReq;
+    const target = entry.path;
+    backlinksLoading = true;
+    backlinksError = null;
+    void api
+      .backlinks(target)
+      .then((edges) => {
+        if (req !== backlinkReq) return;
+        backlinks = edges.filter((e) => e.kind === "link");
+        backlinksLoading = false;
+      })
+      .catch((err: unknown) => {
+        if (req !== backlinkReq) return;
+        backlinks = [];
+        backlinksLoading = false;
+        backlinksError = (err as Error).message;
+      });
+  });
+
+  function navigate(targetPath: string): void {
+    if (!targetPath) return;
+    onNavigate?.(targetPath);
+  }
 </script>
 
 {#if !entry}
@@ -107,6 +177,18 @@
       <span class="v">{formatSize(entry.size)}</span>
       <span class="k">modified</span>
       <span class="v">{formatMtime(entry.mtime)}</span>
+      {#if showRefs}
+        <span class="k">tags</span>
+        <span class="v">{refs ? refs.tags.length : "…"}</span>
+        <span class="k">mentions</span>
+        <span class="v">{refs ? refs.mentions.length : "…"}</span>
+        <span class="k">dates</span>
+        <span class="v">{refs ? refs.dates.length : "…"}</span>
+        <span class="k">links out</span>
+        <span class="v">{refs ? refs.links.length : "…"}</span>
+        <span class="k">backlinks</span>
+        <span class="v">{backlinksLoading ? "…" : backlinks.length}</span>
+      {/if}
     </div>
     {#if onOpen}
       {#if editable}
@@ -115,6 +197,78 @@
         <p class="view-only-hint">
           Not an editable text file. Only .md and .txt open in the editor.
         </p>
+      {/if}
+    {/if}
+    {#if showRefs}
+      {#if !graphData.view && graphData.loading}
+        <div class="refs-loading">loading references…</div>
+      {:else if graphData.error}
+        <div class="refs-error">references unavailable: {graphData.error}</div>
+      {:else if refs}
+        {#if refs.tags.length > 0}
+          <section class="refs">
+            <h4>Tags</h4>
+            <ul>
+              {#each refs.tags as t (t.id)}
+                <li><span class="ref tag">{t.label}</span></li>
+              {/each}
+            </ul>
+          </section>
+        {/if}
+        {#if refs.mentions.length > 0}
+          <section class="refs">
+            <h4>Mentions</h4>
+            <ul>
+              {#each refs.mentions as m (m.id)}
+                <li><span class="ref mention">{m.label}</span></li>
+              {/each}
+            </ul>
+          </section>
+        {/if}
+        {#if refs.dates.length > 0}
+          <section class="refs">
+            <h4>Dates</h4>
+            <ul>
+              {#each refs.dates as d (d.id)}
+                <li><span class="ref date">{d.label}</span></li>
+              {/each}
+            </ul>
+          </section>
+        {/if}
+        {#if refs.links.length > 0}
+          <section class="refs">
+            <h4>Links to</h4>
+            <ul>
+              {#each refs.links as l (l.id)}
+                <li>
+                  {#if l.kind === "file" && !l.missing && onNavigate}
+                    <button class="ref file" onclick={() => navigate(l.path)}>{l.label}</button>
+                  {:else}
+                    <span class="ref file" class:missing={l.kind === "file" && l.missing}>{l.label}</span>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          </section>
+        {/if}
+        {#if backlinks.length > 0}
+          <section class="refs">
+            <h4>Backlinks</h4>
+            <ul>
+              {#each backlinks as b (b.src)}
+                <li>
+                  {#if onNavigate}
+                    <button class="ref file" onclick={() => navigate(b.src)}>{b.src}</button>
+                  {:else}
+                    <span class="ref file">{b.src}</span>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          </section>
+        {:else if backlinksError}
+          <div class="refs-error">backlinks unavailable: {backlinksError}</div>
+        {/if}
       {/if}
     {/if}
   </div>
@@ -212,4 +366,62 @@
     font: inherit;
   }
   .open:hover { border-color: var(--btn-hover); }
+  /* Reference sections (tags / mentions / dates / links / backlinks).
+     Visual style mirrors the graph panel's aside so the two
+     inspectors feel like one feature. */
+  .refs {
+    margin: 0.6rem 0 0 0;
+  }
+  .refs h4 {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    margin: 0 0 0.25rem 0;
+  }
+  .refs ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .refs li { margin: 0; }
+  .ref {
+    display: inline-block;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: default;
+    font: inherit;
+    line-height: 1.5;
+  }
+  button.ref {
+    cursor: pointer;
+  }
+  button.ref:hover {
+    border-color: var(--btn-hover);
+    background: var(--hover-bg);
+  }
+  .ref.tag { color: var(--accent); }
+  .ref.mention { color: var(--warn-text); }
+  .ref.date { color: var(--info-text); }
+  .ref.file { color: var(--link); word-break: break-all; }
+  .ref.file.missing {
+    color: var(--text-secondary);
+    font-style: italic;
+  }
+  .refs-loading,
+  .refs-error {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  .refs-error { color: var(--warn-text); font-style: normal; }
 </style>

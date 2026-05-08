@@ -6,6 +6,7 @@
   // mobile). Replaces the previous `BrowserTab` tab kind and the
   // native-only special-tab WebviewWindow.
 
+  import { tick } from "svelte";
   import FileTree from "./FileTree.svelte";
   import Inspector from "./Inspector.svelte";
   import FileInfoBody from "./FileInfoBody.svelte";
@@ -14,7 +15,10 @@
   import {
     browserOverlay,
     browserSelection,
+    collapseAllFolders,
+    expandAllFolders,
     fileOps,
+    isFullyExpanded,
     paneWidths,
     persistPaneWidths,
     tree,
@@ -23,6 +27,30 @@
   import { openInActivePane } from "../state/tabs.svelte";
 
   const visible = $derived(browserOverlay.open);
+
+  /// Drives the expand-all / collapse-all glyph + title. Reads
+  /// reactive state directly so the button label flips as soon as
+  /// the user toggles a single folder twirl.
+  const fullyExpanded = $derived.by(() => {
+    void tree.entries;
+    return isFullyExpanded();
+  });
+
+  function toggleAll(): void {
+    if (fullyExpanded) collapseAllFolders();
+    else expandAllFolders();
+  }
+
+  /// FileTree exposes `focusTree()` for keyboard nav. Pull it on
+  /// every open of the overlay so arrows / Enter are immediately
+  /// live. `tick()` waits for the OverlayShell mount so the tree
+  /// element exists in the DOM before we focus it.
+  let treeRef: { focusTree(): void } | undefined = $state();
+  $effect(() => {
+    if (browserOverlay.open) {
+      void tick().then(() => treeRef?.focusTree());
+    }
+  });
 
   function close(): void {
     browserOverlay.open = false;
@@ -43,15 +71,6 @@
   function clearSelection(): void {
     browserSelection.path = null;
   }
-
-  /// Auto-open the inspector when the user picks a row in the tree.
-  /// Same behaviour as the previous browser tab: every click on a
-  /// file or folder surfaces its metadata, so an explicitly-closed
-  /// inspector is not a "stay closed" sticky state; the next click
-  /// re-opens it.
-  $effect(() => {
-    if (browserSelection.path) browserOverlay.inspectorOpen = true;
-  });
 
   /// "+" popover state. Closes on outside click via the
   /// click-capture handler on the popover root.
@@ -145,6 +164,12 @@
         </span>
         <button
           class="hbtn"
+          title={fullyExpanded ? "collapse all folders" : "expand all folders"}
+          onclick={toggleAll}
+          aria-label="toggle expand all"
+        >{fullyExpanded ? "⊟" : "⊞"}</button>
+        <button
+          class="hbtn"
           class:on={browserOverlay.inspectorOpen}
           title={browserOverlay.inspectorOpen ? "hide inspector" : "show inspector"}
           onclick={() => (browserOverlay.inspectorOpen = !browserOverlay.inspectorOpen)}
@@ -154,7 +179,7 @@
     </header>
     <div class="body">
       <div class="tree-wrap">
-        <FileTree />
+        <FileTree bind:this={treeRef} />
       </div>
       {#if browserOverlay.inspectorOpen}
         <Inspector
@@ -166,6 +191,11 @@
             path={browserSelection.path}
             onOpen={openSelected}
             onClose={clearSelection}
+            showRefs
+            onNavigate={(p) => {
+              void openInActivePane(p);
+              close();
+            }}
           />
         </Inspector>
       {/if}

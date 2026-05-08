@@ -18,6 +18,7 @@ import {
   type ScopeOption,
 } from "./scope.svelte";
 import { refreshTabFromDisk, tabsForPath } from "./tabs.svelte";
+import { invalidateGraph, ensureGraphLoaded } from "./graphData.svelte";
 export const drive = $state<{ info: DriveInfo | null }>({ info: null });
 
 export const tree = $state<{ entries: TreeEntry[]; loading: boolean }>({
@@ -183,6 +184,15 @@ function onWatchEvent(e: unknown): void {
   //      the conflict via ConflictModal.
   void refreshTree();
   scheduleDriveRefresh();
+  // Tags / wiki-links / mentions may have changed. Invalidate the
+  // cached graph so the next inspector view sees fresh data, and if
+  // an overlay is currently open re-fetch eagerly so the user sees
+  // updates without re-clicking. The fetch is idempotent and
+  // de-duped via `ensureGraphLoaded`.
+  invalidateGraph();
+  if (browserOverlay.open || graphOverlay.open) {
+    void ensureGraphLoaded();
+  }
   const inner = (e as { event?: { path?: string; to?: string } } | null)?.event;
   const paths = [inner?.path, inner?.to].filter(
     (p): p is string => typeof p === "string" && p.length > 0,
@@ -269,6 +279,7 @@ export async function refreshTree(): Promise<void> {
       return a.path.localeCompare(b.path);
     });
     tree.entries = entries;
+    seedTreeExpansionIfFresh();
   } finally {
     tree.loading = false;
   }
@@ -428,6 +439,7 @@ async function restoreSession(p: SessionPayload): Promise<void> {
   // next launch.
   if (p.treeExpanded && typeof p.treeExpanded === "object") {
     treeExpanded.map = { "": true, ...p.treeExpanded };
+    markTreeExpansionRestored();
   }
   const ov = p.overlays ?? {};
   if (ov.assistant?.contextId) {
@@ -875,10 +887,20 @@ export function openSettings(): void {
 // inspector toggle is window-scoped now (was per-tab when the
 // browser was a tab kind) since there's only ever one instance.
 
+/// On viewports >= this width the browser inspector defaults open.
+/// Below it, the inspector starts closed so a phone-sized layout
+/// gets the full screen for the tree. The user can always toggle.
+const BROWSER_INSPECTOR_BREAKPOINT_PX = 768;
+
+function defaultInspectorOpen(): boolean {
+  if (typeof window === "undefined") return true;
+  return window.innerWidth >= BROWSER_INSPECTOR_BREAKPOINT_PX;
+}
+
 export const browserOverlay = $state<{
   open: boolean;
   inspectorOpen: boolean;
-}>({ open: false, inspectorOpen: false });
+}>({ open: false, inspectorOpen: defaultInspectorOpen() });
 
 export function openBrowser(): void {
   browserOverlay.open = true;
@@ -973,6 +995,65 @@ export const treeExpanded = $state<{ map: Record<string, boolean> }>({
 /// the call site at the toggle point semantically clear.
 export function persistTreeExpanded(): void {
   scheduleSessionSave();
+}
+
+/// True once we've established the initial tree-expansion state for
+/// this session (either from session.json or from the fresh-session
+/// auto-expand seed). Skips the auto-expand on subsequent
+/// `refreshTree` calls so a user who collapsed everything doesn't
+/// have it re-expanded behind their back on the next watcher tick.
+let treeExpansionSeeded = false;
+
+/// Mark the expansion state as "owned" by the user (or the
+/// session-restore path). Called by restoreSession when a
+/// treeExpanded payload is present so the auto-seed doesn't
+/// override it.
+export function markTreeExpansionRestored(): void {
+  treeExpansionSeeded = true;
+}
+
+/// First-paint default: expand every directory so a new user
+/// doesn't land on a single collapsed root. Idempotent; only seeds
+/// when no prior state exists. Called from `refreshTree` after
+/// entries arrive.
+function seedTreeExpansionIfFresh(): void {
+  if (treeExpansionSeeded) return;
+  treeExpansionSeeded = true;
+  const map: Record<string, boolean> = { "": true };
+  for (const e of tree.entries) {
+    if (e.is_dir) map[e.path] = true;
+  }
+  treeExpanded.map = map;
+}
+
+/// Expand every directory in the current tree. Wired to the file
+/// browser's expand-all header button.
+export function expandAllFolders(): void {
+  const map: Record<string, boolean> = { "": true };
+  for (const e of tree.entries) {
+    if (e.is_dir) map[e.path] = true;
+  }
+  treeExpanded.map = map;
+  treeExpansionSeeded = true;
+  persistTreeExpanded();
+}
+
+/// Collapse every directory (top-level rows still render; their
+/// children are hidden). Keeps the implicit root key alive so
+/// FileTree's pre-order walk stays consistent.
+export function collapseAllFolders(): void {
+  treeExpanded.map = { "": true };
+  treeExpansionSeeded = true;
+  persistTreeExpanded();
+}
+
+/// True when every directory in the current tree is expanded.
+/// Drives the header toggle's glyph + title.
+export function isFullyExpanded(): boolean {
+  for (const e of tree.entries) {
+    if (e.is_dir && !treeExpanded.map[e.path]) return false;
+  }
+  return true;
 }
 
 /// Poll cadence: fast while the indexer is doing work or has errored,

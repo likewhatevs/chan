@@ -53,7 +53,34 @@
   const expanded = treeExpanded.map;
   let menu = $state<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
 
+  /// `<ul>` element handles keyboard navigation. Focused at mount
+  /// so arrows / Enter are live as soon as the browser opens; the
+  /// host overlay also re-focuses it on open via `focusTree`.
+  let treeRootEl: HTMLUListElement | undefined = $state();
+
+  /// Row -> DOM element map, populated via `bind:this` on each row.
+  /// Used to scroll the active selection into view after keyboard
+  /// movement so long lists don't lose the cursor off-screen.
+  const rowEls = new Map<string, HTMLElement>();
+
   const root = $derived<Folder>(buildTree(tree.entries));
+
+  /// Visible-row list in display order. Mirrors the walk in
+  /// `rowIndexByPath` but keeps the per-node depth + isDir bits we
+  /// need for keyboard navigation. Recomputed when the tree or the
+  /// expansion set changes.
+  type VisibleRow = { path: string; isDir: boolean; depth: number };
+  const visibleRows = $derived.by(() => {
+    const rows: VisibleRow[] = [];
+    function walk(nodes: Node[], depth: number): void {
+      for (const n of nodes) {
+        rows.push({ path: n.path, isDir: n.kind === "dir", depth });
+        if (n.kind === "dir" && expanded[n.path]) walk(n.children, depth + 1);
+      }
+    }
+    walk(root.children, 0);
+    return rows;
+  });
 
   /// Visible row index by path, in display order. Walked the same
   /// way the renderer walks (pre-order, recursing into folders that
@@ -176,11 +203,180 @@
     await fileOps.remove(path);
     menu = null;
   }
+
+  /// Move the selection by one row in the visible list. Wraps
+  /// nothing: stops at the ends. Scrolls the new row into view.
+  function moveSelection(delta: number): void {
+    const rows = visibleRows;
+    if (rows.length === 0) return;
+    const cur = browserSelection.path;
+    const idx = cur ? rows.findIndex((r) => r.path === cur) : -1;
+    let next: number;
+    if (idx === -1) {
+      next = delta > 0 ? 0 : rows.length - 1;
+    } else {
+      next = Math.max(0, Math.min(rows.length - 1, idx + delta));
+    }
+    const target = rows[next];
+    if (!target) return;
+    browserSelection.path = target.path;
+    queueScrollIntoView(target.path);
+  }
+
+  function moveToFirst(): void {
+    const rows = visibleRows;
+    if (rows.length === 0) return;
+    browserSelection.path = rows[0].path;
+    queueScrollIntoView(rows[0].path);
+  }
+
+  function moveToLast(): void {
+    const rows = visibleRows;
+    if (rows.length === 0) return;
+    browserSelection.path = rows[rows.length - 1].path;
+    queueScrollIntoView(rows[rows.length - 1].path);
+  }
+
+  function queueScrollIntoView(path: string): void {
+    // After Svelte re-renders the row (selection class swap), pull
+    // it into view. requestAnimationFrame defers past the current
+    // microtask so the DOM has the latest layout.
+    requestAnimationFrame(() => {
+      const el = rowEls.get(path);
+      if (el) el.scrollIntoView({ block: "nearest" });
+    });
+  }
+
+  /// Walk to the parent folder of `path`. Returns "" for top-level
+  /// rows; the caller decides whether to act on root selection.
+  function parentOf(path: string): string {
+    const i = path.lastIndexOf("/");
+    return i === -1 ? "" : path.slice(0, i);
+  }
+
+  function findFirstChildOf(path: string): string | null {
+    const rows = visibleRows;
+    const idx = rows.findIndex((r) => r.path === path);
+    if (idx === -1 || idx + 1 >= rows.length) return null;
+    const parent = rows[idx];
+    const next = rows[idx + 1];
+    return next.depth > parent.depth ? next.path : null;
+  }
+
+  function onTreeKeydown(e: KeyboardEvent): void {
+    // Ignore composing IME input and any modifier-laden chord we
+    // don't bind: lets ⌘/Ctrl+arrow combos fall through to the
+    // browser / OS.
+    if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+    const rows = visibleRows;
+    const cur = browserSelection.path;
+    const curRow = cur ? rows.find((r) => r.path === cur) : undefined;
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        moveSelection(1);
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        moveSelection(-1);
+        break;
+      case "ArrowRight": {
+        if (!curRow) {
+          e.preventDefault();
+          moveToFirst();
+          break;
+        }
+        if (curRow.isDir) {
+          e.preventDefault();
+          if (!expanded[curRow.path]) {
+            expanded[curRow.path] = true;
+            persistTreeExpanded();
+          } else {
+            const child = findFirstChildOf(curRow.path);
+            if (child) {
+              browserSelection.path = child;
+              queueScrollIntoView(child);
+            }
+          }
+        }
+        break;
+      }
+      case "ArrowLeft": {
+        if (!curRow) {
+          e.preventDefault();
+          moveToFirst();
+          break;
+        }
+        if (curRow.isDir && expanded[curRow.path]) {
+          e.preventDefault();
+          expanded[curRow.path] = false;
+          persistTreeExpanded();
+        } else {
+          e.preventDefault();
+          const parent = parentOf(curRow.path);
+          if (parent) {
+            browserSelection.path = parent;
+            queueScrollIntoView(parent);
+          }
+        }
+        break;
+      }
+      case "Enter": {
+        if (!curRow) break;
+        e.preventDefault();
+        if (curRow.isDir) {
+          expanded[curRow.path] = !expanded[curRow.path];
+          persistTreeExpanded();
+        } else if (isEditableText(curRow.path)) {
+          // Same flow as a double-click on the row: open in the
+          // active pane and close the browser overlay so the user
+          // lands on the editor.
+          void onOpen(curRow.path);
+        }
+        break;
+      }
+      case "Home":
+        e.preventDefault();
+        moveToFirst();
+        break;
+      case "End":
+        e.preventDefault();
+        moveToLast();
+        break;
+      // Delete is intentionally NOT bound. Removing a file should
+      // require an explicit context-menu pick; a stray keystroke
+      // shouldn't be able to wipe the user's notes.
+    }
+  }
+
+  /// Pull keyboard focus to the tree. Called by the browser overlay
+  /// when it opens so arrows are live without an extra click.
+  export function focusTree(): void {
+    treeRootEl?.focus();
+  }
+
+  /// Svelte action: register / unregister a row's DOM element in
+  /// `rowEls` so `queueScrollIntoView` can find it without a global
+  /// query. Cleans up on unmount.
+  function trackRow(node: HTMLElement, path: string): { destroy(): void } {
+    rowEls.set(path, node);
+    return {
+      destroy() {
+        if (rowEls.get(path) === node) rowEls.delete(path);
+      },
+    };
+  }
 </script>
 
 <svelte:window onclick={() => (menu = null)} />
 
-<ul class="tree" role="tree">
+<ul
+  class="tree"
+  role="tree"
+  tabindex="0"
+  bind:this={treeRootEl}
+  onkeydown={onTreeKeydown}
+>
   {#each root.children as node (node.path)}
     {@render renderNode(node, 0)}
   {/each}
@@ -209,6 +405,7 @@
         tabindex="-1"
         aria-expanded={!!expanded[node.path]}
         aria-selected={browserSelection.path === node.path}
+        use:trackRow={node.path}
       >
         <button class="twirl" onclick={() => toggle(node.path)}>
           {expanded[node.path] ? "▾" : "▸"}
@@ -247,6 +444,7 @@
         draggable="true"
         ondragstart={(e) => onFileDragStart(e, node.path)}
         title={editable ? undefined : "view-only (not an editable text file)"}
+        use:trackRow={node.path}
       >
         <!-- Single click selects (mirrors graph tab semantics);
              double click opens. Both stop propagation so the row's
@@ -302,6 +500,12 @@
     list-style: none;
     margin: 0;
     padding: 0;
+  }
+  .tree:focus {
+    outline: none;
+  }
+  .tree:focus-visible .row.selected {
+    box-shadow: inset 2px 0 0 var(--accent);
   }
   .row {
     display: flex;

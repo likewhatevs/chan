@@ -136,21 +136,91 @@
   // In-tab find was removed; the browser's native ⌘F applies. The
   // editor's selectable text (WYSIWYG and source) is plain DOM, so
   // browser find lights up matches the way users already expect.
+
+  /// Vertical click-drag on the page-width button. Up = wider, down
+  /// = narrower. Coexists with the existing wheel + arrow-key
+  /// affordances; the drag is the discoverable one for new users.
+  ///
+  /// `dragMoved` flips true once the pointer travels enough to count
+  /// as a drag, and is consulted by the click handler so a drag
+  /// release doesn't also fire an implicit click.
+  const PAGE_WIDTH_DRAG_PX_PER_PX = 4;
+  const DRAG_THRESHOLD_PX = 3;
+  let pwDragStartY = 0;
+  let pwDragStart = 0;
+  let pwDragging = $state(false);
+  let pwDragMoved = false;
+
+  function pwPointerDown(e: PointerEvent): void {
+    // Only react to the primary mouse / pen / touch contact. Wheel
+    // and the existing keyboard handlers cover the other paths.
+    if (e.button !== 0) return;
+    const target = e.currentTarget as HTMLButtonElement;
+    target.setPointerCapture(e.pointerId);
+    pwDragging = true;
+    pwDragMoved = false;
+    pwDragStartY = e.clientY;
+    pwDragStart = pageWidth.value ?? PAGE_WIDTH_MAX;
+    document.body.classList.add("page-width-dragging");
+  }
+
+  function pwPointerMove(e: PointerEvent): void {
+    if (!pwDragging) return;
+    const dy = pwDragStartY - e.clientY;
+    if (!pwDragMoved && Math.abs(dy) >= DRAG_THRESHOLD_PX) pwDragMoved = true;
+    if (!pwDragMoved) return;
+    const raw = pwDragStart + dy * PAGE_WIDTH_DRAG_PX_PER_PX;
+    const snapped = Math.round(raw / PAGE_WIDTH_STEP) * PAGE_WIDTH_STEP;
+    if (snapped >= PAGE_WIDTH_MAX) {
+      setPageWidth(null);
+    } else if (snapped < PAGE_WIDTH_MIN) {
+      setPageWidth(PAGE_WIDTH_MIN);
+    } else {
+      setPageWidth(snapped);
+    }
+  }
+
+  function pwPointerUp(e: PointerEvent): void {
+    if (!pwDragging) return;
+    const target = e.currentTarget as HTMLButtonElement;
+    if (target.hasPointerCapture(e.pointerId)) {
+      target.releasePointerCapture(e.pointerId);
+    }
+    pwDragging = false;
+    document.body.classList.remove("page-width-dragging");
+  }
+
+  function pwClick(e: MouseEvent): void {
+    // Suppress the implicit click that follows a drag release. A
+    // bare click (no drag motion) falls through and stays a no-op,
+    // matching the previous wheel / keys-only design.
+    if (pwDragMoved) {
+      e.preventDefault();
+      e.stopPropagation();
+      pwDragMoved = false;
+    }
+  }
 </script>
 
 <div class="editor-tab">
   <div class="tab-bar">
     <span class="left">
-      <!-- Page-width adjuster. Hover + wheel, or focus + Up/Down,
-           or focus + Shift+Up/Down for a 5x step. Above the cap
-           range falls off into `null` (unbounded / full width).
-           No click-drag: a wheel-/key-only control plays nicer with
-           trackpads and keyboard navigation than a draggable knob. -->
+      <!-- Page-width adjuster. Vertical click-drag (up = wider,
+           down = narrower) is the discoverable affordance; hover +
+           wheel and focus + Up/Down/Shift+Up/Down still work for
+           power users. Above the cap range falls off into `null`
+           (unbounded / full width). -->
       <button
         type="button"
         class="hbtn page-width-btn"
-        title="page width — scroll or arrow keys; Shift = bigger step"
+        class:dragging={pwDragging}
+        title="page width — drag, scroll, or arrow keys; Shift = bigger step"
         aria-label="page width"
+        onpointerdown={pwPointerDown}
+        onpointermove={pwPointerMove}
+        onpointerup={pwPointerUp}
+        onpointercancel={pwPointerUp}
+        onclick={pwClick}
         onwheel={(e) => {
           e.preventDefault();
           // Wheel up (deltaY < 0) widens toward `full`; wheel down narrows.
@@ -368,6 +438,19 @@
     min-width: 40px;
     font-variant-numeric: tabular-nums;
     font-size: 12px;
+    cursor: ns-resize;
+    touch-action: none;
+  }
+  .page-width-btn.dragging {
+    color: var(--text);
+    border-color: var(--btn-hover);
+    background: var(--hover-bg);
+  }
+  /* While dragging, lock the cursor and suppress text selection
+     so a long upward sweep over the editor doesn't highlight prose. */
+  :global(body.page-width-dragging) {
+    cursor: ns-resize !important;
+    user-select: none;
   }
   /* Floating formatting pill anchored near the top of the editor
      area, centered, hovering over the canvas like Apple Notes. */
