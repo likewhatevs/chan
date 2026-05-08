@@ -15,7 +15,7 @@ default = []
 mcp = ["dep:rmcp", "dep:schemars"]
 
 [dependencies]
-chan-core = { path = "../chan-core" }
+chan-core = { path = "../chan-core/crates/chan-core" }
 async-trait = "0.1"
 dirs = "5"
 futures-util = { version = "0.3", default-features = false }

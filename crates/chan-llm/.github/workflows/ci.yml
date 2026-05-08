@@ -6,13 +6,13 @@ name: CI
 # CI follows automatically.
 #
 # Cross-repo auth: chan-llm depends on chan-writer/chan-core
-# via `path = "../chan-core"`. CI clones chan-core into a
+# via `path = "../chan-core/crates/chan-core"`. CI clones chan-core into a
 # sibling directory using a fine-scoped Personal Access Token
 # stored as the chan_ci repo secret. See README's
 # "Contributing" section for the PAT setup.
 #
 # Layout note: every cargo job checks the main repo into a
-# subdir (so cross-repo `path = "../chan-core"` deps resolve to
+# subdir (so cross-repo `path = "../chan-core/..."` deps resolve to
 # a sibling clone). That moves rust-toolchain.toml off the
 # workspace root, where setup-rust-toolchain looks. We `cp` the
 # toolchain file to the workspace root before the action runs

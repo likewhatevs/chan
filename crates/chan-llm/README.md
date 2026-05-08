@@ -64,7 +64,7 @@ no-default-features build under `RUSTFLAGS=-D warnings`.
 ### CI cross-repo auth
 
 CI needs to clone `chan-writer/chan-core` (a private repo) to
-resolve the `path = "../chan-core"` dep. One-time setup:
+resolve the `path = "../chan-core/crates/chan-core"` dep. One-time setup:
 
 1. Create a fine-grained GitHub Personal Access Token at
    https://github.com/settings/personal-access-tokens with
