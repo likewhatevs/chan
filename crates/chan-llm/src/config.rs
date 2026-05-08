@@ -198,15 +198,13 @@ impl LlmConfig {
     }
 }
 
-/// Default config path: `<config_dir>/chan/llm.toml`. Uses the same
-/// `dirs::config_dir` chan-drive does, so the layout stays predictable
-/// across desktop targets. iOS / Android callers pass an explicit
-/// path via `load_from` / `save_to` since their sandbox dir isn't
-/// `dirs::config_dir`.
+/// Default config path: `~/.chan/llm.toml` on desktop, co-located
+/// under the platform sandbox dir on iOS / Android. Routed through
+/// `chan_drive::paths::config_dir` so the on-disk layout matches
+/// chan-drive's registry (`~/.chan/config.toml`). iOS / Android
+/// callers pass an explicit path via `load_from` / `save_to`.
 fn default_path() -> PathBuf {
-    dirs::config_dir()
-        .map(|p| p.join("chan").join("llm.toml"))
-        .unwrap_or_else(|| PathBuf::from("chan-llm.toml"))
+    chan_drive::paths::config_dir().join("llm.toml")
 }
 
 /// Atomic write + 0600 perms on Unix. The file may hold API keys,
