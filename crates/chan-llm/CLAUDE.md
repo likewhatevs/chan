@@ -6,28 +6,20 @@ working on `chan-llm`.
 ## What This Project Is
 
 `chan-llm` is the cross-platform LLM layer for chan: backends
-(Anthropic, Gemini, Ollama), embedded prompts, the tool sandbox
-the assistant uses to read and edit chan drives, and the API-key
-resolution policy. Two consumer shapes: `chan-server` over HTTP,
-and native shells (iOS / Android) via uniffi.
+(Anthropic, Gemini, Ollama, Claude CLI), embedded prompts, the
+tool sandbox the assistant uses to read and edit chan drives,
+and the API-key resolution policy. Two consumer shapes:
+`chan-server` over HTTP, and native shells (iOS / Android) via
+uniffi.
 
-The crate exists separately from both `chan-core` and `chan` so
-neither consumer has to drag the other's deps. chan-server gets
-an axum-shaped wrapper; a native shell gets a uniffi-shaped
-binding. Both link the same prompts, tools, and edit-control
-rules.
+It lives as a workspace member alongside chan-core in this repo
+so the LLM layer and the filesystem primitives it sandboxes
+through can move in lockstep. chan-server gets an axum-shaped
+wrapper; a native shell gets a uniffi-shaped binding. Both link
+the same prompts, tools, and edit-control rules.
 
-## Build & Test
-
-```bash
-cargo build
-cargo test
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-```
-
-Toolchain pinned in `rust-toolchain.toml`. Install rustup; the
-pin picks up automatically. Pre-push hook: `./scripts/install-hooks`.
+Build, test, toolchain, and pre-push hook setup are documented
+at the workspace root (`../../CLAUDE.md`).
 
 ## Project Principles
 
@@ -98,6 +90,9 @@ restructure rather than punt.
 
 - **Design**: [`design.md`](design.md). Crate layout, public API
   shape, FFI plan, prompt sourcing.
-- **chan-core contract**: `../chan-core/design.md`.
-- **chan repo contract**: `../chan/design.md`.
-- **Issue tracker**: GitHub `chan-writer/chan-llm`.
+- **chan-core contract**: `../chan-core/design.md` (sibling crate
+  in the same workspace).
+- **chan repo contract**: `../../../chan/design.md` (sibling
+  checkout).
+- **Issue tracker**: GitHub `chan-writer/chan-core` (chan-llm's
+  former repo at `chan-writer/chan-llm` is archived).

@@ -1,9 +1,0 @@
-/target
-Cargo.lock
-
-# Editor swap / backup files
-*.swp
-*.swo
-*.swn
-*~
-.DS_Store

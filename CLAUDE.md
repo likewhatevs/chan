@@ -5,13 +5,25 @@ on `chan-core`.
 
 ## What This Project Is
 
-`chan-core` is the low-level Rust library extracted from the chan
-markdown editor. It owns the per-machine registry of known drives,
-exposes a path-based, sandboxed filesystem API rooted at each drive,
-and wraps the per-drive search index and graph database.
+This repo is a Cargo workspace. The headline crate is `chan-core`,
+the low-level Rust library extracted from the chan markdown editor:
+it owns the per-machine registry of known drives, exposes a
+path-based, sandboxed filesystem API rooted at each drive, and
+wraps the per-drive search index and graph database. The contract
+documented below is for the `chan-core` crate specifically.
 
-It does NOT contain HTTP, WebSocket, LLM, frontend, or UI code.
-Those are app-level concerns that build on top:
+Sibling crates in the same workspace add layers that build on
+chan-core's primitives:
+
+  - `chan-tunnel-{proto,client,server}` — h2/yamux drive tunnel
+    used by the gateway terminator and embedded into `chan serve`.
+  - `chan-llm` — LLM backends, embedded prompts, the tool sandbox
+    the assistant uses to read/edit chan drives via the chan-core
+    API, and the `chan-llm-mcp` MCP server binary.
+
+Each sibling crate has its own `CLAUDE.md` for crate-specific
+guidance. The `chan-core` crate itself stays HTTP/WS/LLM/UI free;
+those concerns live in the sibling crates and in downstream apps:
 
   - `chan-writer/chan`        CLI + embedded web editor (HTTP, WS,
                               frontend bundle, LLM tool calls,
