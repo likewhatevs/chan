@@ -108,12 +108,8 @@ impl Indexer {
         // leave the index stale.
         let cancel = Arc::new(AtomicBool::new(false));
         let (rebuild_tx, rebuild_rx) = mpsc::unbounded_channel::<()>();
-        let coordinator_task = spawn_coordinator(
-            drive.clone(),
-            status.clone(),
-            rebuild_rx,
-            cancel.clone(),
-        );
+        let coordinator_task =
+            spawn_coordinator(drive.clone(), status.clone(), rebuild_rx, cancel.clone());
         if initial_build && stats.indexed_docs == 0 {
             // Best-effort: if the channel is full we already
             // queued a rebuild and the redundant request is fine
