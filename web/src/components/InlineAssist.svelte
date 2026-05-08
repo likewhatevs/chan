@@ -123,6 +123,10 @@
     void selVer;
     return wysiwygRef?.isActive("orderedList") ?? false;
   });
+  const isTaskList = $derived.by(() => {
+    void selVer;
+    return wysiwygRef?.isActive("taskList") ?? false;
+  });
   const blockKind = $derived.by<BlockKind>(() => {
     void selVer;
     return wysiwygRef?.currentBlockKind() ?? "normal";
@@ -1028,16 +1032,35 @@
         {/if}
       </div>
 
-      <!-- Separator bar between chat history and the prompt input.
-           Mirrors the file editor's split: a horizontal rule with
-           the formatting pill centered on it (like .fmt-bar over the
-           editor canvas) and the mode-toggle action sitting on the
-           right edge (like .tab-bar .actions in FileEditorTab). The
-           formatting pill drops in source mode (textarea can't act
-           on B/I/S); the right-side action stays put. -->
-      <div class="prompt-divider" role="toolbar" aria-label="Prompt">
+      <!-- Bar above the prompt input + the prompt input itself live
+           inside .prompt-area so the floating fmt-bar can anchor
+           on a non-clipping parent (prompt-wrap has overflow:auto
+           and would clip a pill that straddles its top edge). -->
+      <div class="prompt-area">
+        <!-- Bar above the prompt input. Mirrors FileEditorTab's
+             .tab-bar: a flat horizontal strip with the source-mode
+             toggle on the right. The page-width control from the
+             file editor's bar is intentionally absent here: prompt
+             margins aren't a thing the user adjusts. -->
+        <div class="prompt-bar" role="toolbar" aria-label="Prompt">
+          <span class="left"></span>
+          <span class="actions">
+            <button
+              class="hbtn"
+              title={promptMode === "wysiwyg" ? "view source" : "view rendered"}
+              aria-label={promptMode === "wysiwyg" ? "view source" : "view rendered"}
+              onclick={() => (promptMode = promptMode === "wysiwyg" ? "source" : "wysiwyg")}
+            >{promptMode === "wysiwyg" ? "</>" : "¶"}</button>
+          </span>
+        </div>
+
         {#if promptMode === "wysiwyg"}
-          <div class="prompt-bar">
+          <!-- Floating formatting pill, anchored on .prompt-area so
+               it can straddle the prompt-bar/prompt-wrap boundary
+               without being clipped by the wrap's overflow:auto.
+               Same recipe as the editor canvas's .fmt-bar. Drops in
+               source mode (textarea can't act on B/I/S). -->
+          <div class="fmt-bar" role="toolbar" aria-label="Formatting">
             <select
               class="block-kind"
               value={blockKind}
@@ -1095,28 +1118,28 @@
               onmousedown={(e) => e.preventDefault()}
               onclick={() => wysiwygRef?.toggleOrderedList()}
             >1.</button>
+            <button
+              class="fbtn"
+              class:on={isTaskList}
+              title="task list"
+              aria-label="task list"
+              onmousedown={(e) => e.preventDefault()}
+              onclick={() => wysiwygRef?.toggleTaskList()}
+            >☐</button>
           </div>
         {/if}
-        <span class="actions">
-          <button
-            class="hbtn"
-            title={promptMode === "wysiwyg" ? "view source" : "view rendered"}
-            aria-label={promptMode === "wysiwyg" ? "view source" : "view rendered"}
-            onclick={() => (promptMode = promptMode === "wysiwyg" ? "source" : "wysiwyg")}
-          >{promptMode === "wysiwyg" ? "</>" : "¶"}</button>
-        </span>
-      </div>
 
-      <div class="prompt-wrap" class:disabled={!currentContext}>
-        {#if promptMode === "wysiwyg"}
-          <Wysiwyg
-            bind:this={wysiwygRef}
-            bind:value={prompt}
-            onSelectionChange={() => (selVer = selVer + 1)}
-          />
-        {:else}
-          <Source bind:value={prompt} />
-        {/if}
+        <div class="prompt-wrap" class:disabled={!currentContext}>
+          {#if promptMode === "wysiwyg"}
+            <Wysiwyg
+              bind:this={wysiwygRef}
+              bind:value={prompt}
+              onSelectionChange={() => (selVer = selVer + 1)}
+            />
+          {:else}
+            <Source bind:value={prompt} />
+          {/if}
+        </div>
       </div>
 
       <!-- Status line moved below the prompt so the status text
@@ -1526,6 +1549,7 @@
      light-mode look made the input invisible until the user
      started typing (and even then the cursor blended in). */
   .prompt-wrap {
+    position: relative;
     background: var(--bg-card);
     max-height: 30vh;
     min-height: 80px;
@@ -1536,35 +1560,38 @@
   .prompt-wrap.disabled { opacity: 0.55; pointer-events: none; }
   /* Trim the file editor's generous default padding so the
      prompt feels compact in the chat dialog. The :global is
-     required because Wysiwyg's CSS lives in its own scope. */
+     required because Wysiwyg's CSS lives in its own scope.
+     Top padding leaves room for the floating fmt-bar so the
+     first line of text doesn't sit under the pill. */
   .prompt-wrap :global(.md-wysiwyg) {
-    padding: 8px 12px;
+    padding: 28px 12px 8px;
     line-height: 1.5;
   }
 
-  /* Separator bar between chat scrollback and the prompt input.
-     The bar itself is a thin horizontal rule; the .prompt-bar pill
-     overlaps the rule (centered) and the .actions strip sits on the
-     right edge. Same shape as the file editor: .fmt-bar pill above
-     the canvas, .tab-bar .actions on the right of the tab header. */
-  .prompt-divider {
-    position: relative;
+  /* Bar above the prompt input. Same shape as FileEditorTab's
+     .tab-bar so the assistant's prompt reads as a first-class
+     editor surface: bg-card fill, top border separating it from
+     the chat scrollback above, source-mode toggle on the right.
+     The page-width control from the file editor's bar is dropped
+     here: prompt margins aren't a thing the user adjusts. */
+  .prompt-bar {
     flex-shrink: 0;
-    height: 28px;
-    margin-top: 6px;
-    border-top: 1px solid var(--border);
-  }
-  .prompt-divider .actions {
-    position: absolute;
-    top: 4px;
-    right: 8px;
     display: flex;
-    gap: 2px;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    background: var(--bg-card);
+    border-top: 1px solid var(--border);
+    font-size: 14px;
+    color: var(--text-secondary);
+    min-height: 28px;
   }
+  .prompt-bar .left { flex: 1; display: flex; align-items: center; }
+  .prompt-bar .actions { display: flex; gap: 2px; }
   /* hbtn parity with FileEditorTab's tab-bar buttons: same minimum
      hit area, same hover treatment, so </> reads as the same
      control across the editor and the assistant. */
-  .prompt-divider .hbtn {
+  .prompt-bar .hbtn {
     background: none;
     border: 1px solid transparent;
     border-radius: 3px;
@@ -1577,30 +1604,40 @@
     line-height: 18px;
     height: 20px;
   }
-  .prompt-divider .hbtn:hover { color: var(--text); border-color: var(--btn-border); }
-  /* Floating formatting pill, centered on the divider. Same visual
-     recipe as the editor canvas's .fmt-bar (--bg-card fill, --border
-     ring, rounded 999px, soft shadow) so the assistant prompt reads
-     as a first-class editor surface. */
-  .prompt-bar {
+  .prompt-bar .hbtn:hover { color: var(--text); border-color: var(--btn-border); }
+  /* Container that holds the prompt-bar, the floating fmt-bar, and
+     the scrollable prompt-wrap. Anchors the absolutely-positioned
+     fmt-bar so it can straddle the bar/wrap boundary without being
+     clipped by .prompt-wrap's overflow:auto. */
+  .prompt-area {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  /* Floating formatting pill, centered on the boundary between the
+     prompt-bar and the prompt-wrap. Same recipe as the editor
+     canvas's .fmt-bar (--bg-card fill, --border ring, rounded
+     999px, soft shadow). z-index keeps the pill above the bar. */
+  .prompt-area .fmt-bar {
     position: absolute;
-    top: 50%;
+    top: 8px;
     left: 50%;
-    transform: translate(-50%, -50%);
+    transform: translateX(-50%);
+    z-index: 5;
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 8px 12px;
+    padding: 6px 10px;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: 999px;
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
     color: var(--text);
     width: max-content;
-    max-width: calc(100% - 80px);
-    z-index: 2;
+    max-width: calc(100% - 24px);
   }
-  .prompt-bar .block-kind {
+  .prompt-area .fmt-bar .block-kind {
     background: var(--bg-card);
     color: var(--text);
     border: 1px solid var(--btn-border);
@@ -1608,29 +1645,29 @@
     padding: 1px 8px;
     font: inherit;
     font-size: 15px;
-    height: 28px;
+    height: 26px;
   }
-  .prompt-bar .fbtn {
-    min-width: 34px;
-    height: 28px;
+  .prompt-area .fmt-bar .fbtn {
+    min-width: 30px;
+    height: 26px;
     text-align: center;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 14px;
+    border-radius: 13px;
     color: var(--text);
     cursor: pointer;
     font: inherit;
-    padding: 0 8px;
-    line-height: 26px;
+    padding: 0 6px;
+    line-height: 24px;
   }
-  .prompt-bar .fbtn:hover { background: var(--hover-bg); }
-  .prompt-bar .fbtn.on {
+  .prompt-area .fmt-bar .fbtn:hover { background: var(--hover-bg); }
+  .prompt-area .fmt-bar .fbtn.on {
     background: var(--hover-bg);
     border-color: var(--btn-hover);
   }
-  .prompt-bar .fbtn b,
-  .prompt-bar .fbtn i,
-  .prompt-bar .fbtn s,
-  .prompt-bar .fbtn code { font-size: 16px; }
-  .prompt-bar .fbtn code { font-family: ui-monospace, monospace; }
+  .prompt-area .fmt-bar .fbtn b,
+  .prompt-area .fmt-bar .fbtn i,
+  .prompt-area .fmt-bar .fbtn s,
+  .prompt-area .fmt-bar .fbtn code { font-size: 15px; }
+  .prompt-area .fmt-bar .fbtn code { font-family: ui-monospace, monospace; }
 </style>

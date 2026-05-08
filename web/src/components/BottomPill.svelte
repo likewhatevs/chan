@@ -50,9 +50,9 @@
     transform: translateX(-50%);
     z-index: 4500;
     display: flex;
-    gap: 6px;
+    gap: 4px;
     align-items: center;
-    padding: 9px 12px;
+    padding: 5px 10px;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: 999px;
@@ -60,11 +60,9 @@
     font-size: 15px;
     color: var(--text);
     max-width: calc(100vw - 16px);
-    overflow-x: auto;
-    scrollbar-width: none;
+    overflow: visible;
     transition: opacity 200ms ease;
   }
-  .bottom-pill::-webkit-scrollbar { display: none; }
   /* Idle: fade out + drop pointer events so the pill doesn't catch
      the click that would otherwise bring it back through the global
      idle tracker. The first such click reactivates the tracker and

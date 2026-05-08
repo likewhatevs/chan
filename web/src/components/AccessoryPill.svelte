@@ -92,17 +92,20 @@
 
 <style>
   .fbtn {
-    min-width: 34px;
-    height: 30px;
+    min-width: 38px;
+    height: 38px;
     text-align: center;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 15px;
+    border-radius: 19px;
     color: var(--text);
     cursor: pointer;
     font: inherit;
-    padding: 0 8px;
-    line-height: 28px;
+    padding: 0 9px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
   .fbtn:hover { background: var(--hover-bg); }
   .fbtn.on {
@@ -110,30 +113,28 @@
     border-color: var(--btn-hover);
   }
   .fbtn svg {
-    width: 17px;
-    height: 17px;
+    width: 19px;
+    height: 19px;
     fill: currentColor;
     display: block;
-    margin: auto;
   }
   /* The ensō uses the same chan-mark.png artwork as the empty-pane
      watermark, painted via CSS mask so the silhouette can take the
-     theme accent. The button is visibly larger than its neighbours:
-     it's the brand action and the most actionable surface in the
-     pill. Yellow tint = Notes-style accent. */
+     theme accent. Yellow tint = Notes-style accent. Bigger circle
+     than the neighbours so it still reads as the primary attractor,
+     but everything in the bar scales together so nothing looks like
+     an afterthought. */
   .fbtn.enso {
-    min-width: 72px;
-    height: 57px;
-    border-radius: 28px;
+    width: 52px;
+    height: 52px;
+    min-width: 52px;
+    border-radius: 50%;
     margin: 0 4px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
     padding: 0;
   }
   .fbtn.enso .enso-mark {
-    width: 40px;
-    height: 40px;
+    width: 38px;
+    height: 38px;
     background-color: var(--assistant-accent);
     -webkit-mask: url('/chan-mark.png') center / contain no-repeat;
             mask: url('/chan-mark.png') center / contain no-repeat;
