@@ -5,7 +5,7 @@ name: CI
 #
 # Cross-repo auth: this repo depends on two private siblings via
 # path deps:
-#   chan-writer/chan-core  (path = "../chan-core")
+#   chan-writer/chan-core  (path = "../chan-core/crates/chan-core")
 #   chan-writer/chan-llm   (path = "../chan-llm")
 # CI clones both into sibling directories using a fine-scoped
 # Personal Access Token stored as the chan_ci repo
@@ -19,7 +19,7 @@ name: CI
 # follow-up if we want to gate on bundle-build success too.
 #
 # Layout note: every cargo job checks the main repo into a
-# subdir (so cross-repo `path = "../chan-core"` deps resolve to
+# subdir (so cross-repo `path = "../chan-core/..."` deps resolve to
 # a sibling clone). That moves rust-toolchain.toml off the
 # workspace root, where setup-rust-toolchain looks. We `cp` the
 # toolchain file to the workspace root before the action runs

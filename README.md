@@ -104,7 +104,7 @@ passing local push therefore will not fail in GitHub Actions.
 
 CI needs to clone two private sibling repos to resolve path deps:
 
-  chan-writer/chan-core  (`path = "../chan-core"`)
+  chan-writer/chan-core  (`path = "../chan-core/crates/chan-core"`)
   chan-writer/chan-llm   (`path = "../chan-llm"`)
 
 One-time setup:

@@ -40,9 +40,9 @@ repository = "https://github.com/chan-writer/chan"
 # declare their own `embeddings` feature that enables this one).
 # Without `default-features = false` here, per-crate overrides are
 # silently ignored by Cargo.
-chan-core = { path = "../chan-core", default-features = false }
+chan-core = { path = "../chan-core/crates/chan-core", default-features = false }
 chan-llm = { path = "../chan-llm" }
-chan-tunnel-client = { path = "../chan-tunnel/crates/chan-tunnel-client" }
+chan-tunnel-client = { path = "../chan-core/crates/chan-tunnel-client" }
 
 anyhow = "1"
 axum = { version = "0.7", features = ["ws", "macros", "multipart"] }
