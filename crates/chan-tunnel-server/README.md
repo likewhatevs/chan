@@ -1,7 +1,8 @@
 # chan-tunnel-server
 
-Server library for chan-tunnel. Powers `chan-tunneld` and is
-consumed in-process by `chan-gateway`'s drive-proxy.
+Server-side of the chan-tunnel implementation. A library that
+terminates tunnels dialed by `chan serve` and exposes the
+drive-side substreams to a public-facing router.
 
 ## What it does
 

@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Server library for chan-tunnel; powers chan-tunneld."
+description = "Server-side of the chan-tunnel implementation; library that terminates tunnels from `chan serve`."
 
 [dependencies]
 chan-tunnel-proto = { workspace = true }

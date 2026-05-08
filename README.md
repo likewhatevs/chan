@@ -31,8 +31,10 @@ chan-tunnel-proto     Wire types and control frames. Pure data,
 chan-tunnel-client    Dial + Hello handshake; embedded into
                       `chan serve` to expose a drive on a public
                       URL via the tunnel terminator.
-chan-tunnel-server    Terminator library; powers `chan-tunneld`
-                      and is consumed by `chan-gateway`.
+chan-tunnel-server    Server-side of the tunnel implementation.
+                      Library that terminates tunnels dialed by
+                      `chan serve` and exposes the drive-side
+                      substreams to a public-facing router.
 chan-llm              LLM backends (Anthropic, Gemini, Ollama,
                       Claude CLI), embedded prompts, and the tool
                       sandbox routed through chan-drive. Optional

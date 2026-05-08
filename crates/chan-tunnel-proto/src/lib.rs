@@ -1,9 +1,10 @@
 //! chan-tunnel wire types.
 //!
-//! The transport between `chan serve` (client) and chan-tunneld
-//! (server) is a single HTTP/2 bidirectional stream. The first
-//! message in each direction is a length-prefixed JSON control
-//! frame; after that, both sides hand the byte stream to yamux.
+//! The transport between `chan serve` (client) and the tunnel
+//! terminator (server) is a single HTTP/2 bidirectional stream.
+//! The first message in each direction is a length-prefixed JSON
+//! control frame; after that, both sides hand the byte stream to
+//! yamux.
 //!
 //! This crate is pure data: framing helpers and serde types. No
 //! I/O, no async. Both client and server depend on it.

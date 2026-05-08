@@ -64,19 +64,18 @@ pub struct Validated {
     pub scopes: Vec<String>,
 }
 
-/// Token validation hook. Implemented by `chan-tunneld` against
-/// identity-service's `/internal/v1/tokens/validate`; tests use a
-/// stub.
+/// Token validation hook. Implemented by the consumer (e.g. an
+/// identity-service client); tests use a stub.
 #[async_trait]
 pub trait Validator: Send + Sync + 'static {
     async fn validate(&self, token: &str) -> Result<Validated, ServerError>;
 }
 
-/// Public path prefix shape: `/{username}/{drive}`. nginx splits
-/// drive.chan.app traffic between drive-proxy (its own SPA + API
-/// routes) and chan-tunneld; reserved usernames (api, admin, ...)
-/// keep the two from colliding. No trailing slash; rest of the
-/// path is the drive-relative request.
+/// Public path prefix shape: `/{username}/{drive}`. The fronting
+/// proxy splits drive.chan.app traffic between its own SPA / API
+/// routes and this tunnel terminator; reserved usernames (api,
+/// admin, ...) keep the two from colliding. No trailing slash;
+/// rest of the path is the drive-relative request.
 fn make_prefix(username: &str, drive: &str) -> String {
     format!("/{username}/{drive}")
 }
