@@ -26,6 +26,14 @@ pub enum OpenError {
     Disconnected,
 }
 
+/// One row of `Registry::list_drives_for`. Pairs the drive name
+/// with the `public` bit captured at handshake time.
+#[derive(Debug, Clone)]
+pub struct DriveInfo {
+    pub drive: Arc<str>,
+    pub public: bool,
+}
+
 pub(crate) type OpenReply = oneshot::Sender<Result<yamux::Stream, OpenError>>;
 
 /// Sent through `TunnelHandle::open_tx` to ask the per-tunnel
@@ -42,6 +50,10 @@ pub struct TunnelHandle {
     open_tx: mpsc::Sender<OpenRequest>,
     pub user: Arc<str>,
     pub drive: Arc<str>,
+    /// When true the drive-proxy auth gate skips the OAuth check;
+    /// the tunneled `chan serve` is exposed to anonymous public
+    /// traffic. Set from the client's Hello frame at handshake.
+    pub public: bool,
 }
 
 impl TunnelHandle {
@@ -83,6 +95,7 @@ impl Registry {
         self: &Arc<Self>,
         user: Arc<str>,
         drive: Arc<str>,
+        public: bool,
     ) -> (
         TunnelHandle,
         mpsc::Receiver<OpenRequest>,
@@ -94,6 +107,7 @@ impl Registry {
             open_tx,
             user: user.clone(),
             drive: drive.clone(),
+            public,
         };
         let entry = Entry {
             handle: handle.clone(),
@@ -120,15 +134,20 @@ impl Registry {
 
     /// Drives currently registered for `user`, sorted by name.
     /// Used by the public dashboard to enumerate "drives I have
-    /// online" without needing a separate metadata service.
-    pub fn list_drives_for(&self, user: &str) -> Vec<Arc<str>> {
+    /// online" without needing a separate metadata service. Each
+    /// entry carries the `public` bit so callers can render the
+    /// public/private badge without a second lookup.
+    pub fn list_drives_for(&self, user: &str) -> Vec<DriveInfo> {
         let g = self.inner.lock();
-        let mut drives: Vec<Arc<str>> = g
-            .keys()
-            .filter(|(u, _)| u.as_ref() == user)
-            .map(|(_, d)| d.clone())
+        let mut drives: Vec<DriveInfo> = g
+            .iter()
+            .filter(|((u, _), _)| u.as_ref() == user)
+            .map(|((_, d), e)| DriveInfo {
+                drive: d.clone(),
+                public: e.handle.public,
+            })
             .collect();
-        drives.sort();
+        drives.sort_by(|a, b| a.drive.cmp(&b.drive));
         drives
     }
 
@@ -160,10 +179,10 @@ mod tests {
         let user: Arc<str> = Arc::from("alice");
         let drive: Arc<str> = Arc::from("notes");
 
-        let (h1, _rx1, mut shutdown1) = reg.register(user.clone(), drive.clone());
+        let (h1, _rx1, mut shutdown1) = reg.register(user.clone(), drive.clone(), false);
         // Re-register the same pair: old entry is dropped, its
         // shutdown receiver fires.
-        let (_h2, _rx2, _shutdown2) = reg.register(user.clone(), drive.clone());
+        let (_h2, _rx2, _shutdown2) = reg.register(user.clone(), drive.clone(), false);
         assert!(shutdown1.try_recv().is_ok() || shutdown1.try_recv().is_err());
         // Either Ok(()) (sender closed cleanly via Drop) or Err
         // (channel dropped). The signal-via-drop semantics give us
@@ -174,7 +193,7 @@ mod tests {
     #[tokio::test]
     async fn lookup_returns_current_handle() {
         let reg = Registry::new();
-        let (_h, _rx, _sd) = reg.register(Arc::from("alice"), Arc::from("notes"));
+        let (_h, _rx, _sd) = reg.register(Arc::from("alice"), Arc::from("notes"), false);
         assert!(reg.get("alice", "notes").is_some());
         assert!(reg.get("alice", "other").is_none());
         assert!(reg.get("bob", "notes").is_none());
@@ -183,21 +202,27 @@ mod tests {
     #[tokio::test]
     async fn list_drives_for_returns_sorted_names_per_user() {
         let reg = Registry::new();
-        let (_h1, _rx1, _sd1) = reg.register(Arc::from("alice"), Arc::from("notes"));
-        let (_h2, _rx2, _sd2) = reg.register(Arc::from("alice"), Arc::from("ideas"));
-        let (_h3, _rx3, _sd3) = reg.register(Arc::from("bob"), Arc::from("notes"));
+        let (_h1, _rx1, _sd1) = reg.register(Arc::from("alice"), Arc::from("notes"), false);
+        let (_h2, _rx2, _sd2) = reg.register(Arc::from("alice"), Arc::from("ideas"), true);
+        let (_h3, _rx3, _sd3) = reg.register(Arc::from("bob"), Arc::from("notes"), false);
 
-        let alice: Vec<String> = reg
+        let alice: Vec<(String, bool)> = reg
             .list_drives_for("alice")
             .into_iter()
-            .map(|d| d.as_ref().to_string())
+            .map(|d| (d.drive.as_ref().to_string(), d.public))
             .collect();
-        assert_eq!(alice, vec!["ideas".to_string(), "notes".to_string()]);
+        assert_eq!(
+            alice,
+            vec![
+                ("ideas".to_string(), true),
+                ("notes".to_string(), false),
+            ]
+        );
 
         let bob: Vec<String> = reg
             .list_drives_for("bob")
             .into_iter()
-            .map(|d| d.as_ref().to_string())
+            .map(|d| d.drive.as_ref().to_string())
             .collect();
         assert_eq!(bob, vec!["notes".to_string()]);
 

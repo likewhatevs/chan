@@ -35,6 +35,9 @@ pub enum ServerError {
 
     #[error("handshake: {0}")]
     Handshake(String),
+
+    #[error("user {user} reached max concurrent drives ({max})")]
+    TooManyDrives { user: String, max: usize },
 }
 
 impl From<chan_tunnel_proto::FrameError> for ServerError {
@@ -84,14 +87,21 @@ fn make_prefix(username: &str, drive: &str) -> String {
 /// the bearer `token` via `validator` and uses the drive name from
 /// the client's Hello to build the public path. Returns the yamux
 /// server connection ready to open outbound substreams.
-pub async fn handshake<S, V>(
+///
+/// `pre_ack` runs after the token is validated and before the
+/// HelloAck is written. Returning an error from it aborts the
+/// handshake without registering anything; the caller uses it for
+/// post-validate policy checks (per-user drive limits, etc.).
+pub async fn handshake<S, V, F>(
     mut socket: S,
     token: &str,
     validator: &V,
+    pre_ack: F,
 ) -> Result<(Hello, Validated, YamuxConnection<Compat<S>>), ServerError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     V: Validator + ?Sized,
+    F: FnOnce(&Hello, &Validated) -> Result<(), ServerError>,
 {
     let hello: Hello = read_frame(&mut socket).await?;
     if hello.protocol != ProtocolVersion::V1 {
@@ -112,6 +122,8 @@ where
         return Err(ServerError::MissingScope);
     }
 
+    pre_ack(&hello, &validated)?;
+
     let ack = HelloAck {
         protocol: ProtocolVersion::V1,
         prefix: make_prefix(&validated.username, &hello.drive),
@@ -130,5 +142,5 @@ mod registry;
 mod tunnel;
 
 pub use public::public_router;
-pub use registry::{OpenError, Registry, TunnelHandle};
+pub use registry::{DriveInfo, OpenError, Registry, TunnelHandle};
 pub use tunnel::serve_tunnel_listener;

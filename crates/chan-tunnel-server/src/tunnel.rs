@@ -26,17 +26,26 @@ use crate::{handshake, ServerError, Validator};
 /// Accept loop for a TCP listener bound to a tunnel-only port.
 /// Returns only when the listener errors; per-connection failures
 /// are logged and never bubble up.
+///
+/// `max_drives_per_user` caps the number of distinct drives a
+/// single user may have registered concurrently. `0` disables the
+/// limit. A reconnect of a drive the user already has registered is
+/// always allowed; the registry's last-writer-wins policy evicts
+/// the stale entry before the count is checked again.
 pub async fn serve_tunnel_listener(
     listener: TcpListener,
     validator: Arc<dyn Validator>,
     registry: Arc<Registry>,
+    max_drives_per_user: usize,
 ) -> std::io::Result<()> {
     loop {
         let (tcp, peer) = listener.accept().await?;
         let validator = validator.clone();
         let registry = registry.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_tunnel_conn(tcp, validator, registry).await {
+            if let Err(e) =
+                handle_tunnel_conn(tcp, validator, registry, max_drives_per_user).await
+            {
                 tracing::warn!(%peer, error = %e, "tunnel connection ended with error");
             } else {
                 tracing::debug!(%peer, "tunnel connection closed");
@@ -51,6 +60,7 @@ async fn handle_tunnel_conn(
     tcp: TcpStream,
     validator: Arc<dyn Validator>,
     registry: Arc<Registry>,
+    max_drives_per_user: usize,
 ) -> Result<(), ServerError> {
     let _ = tcp.set_nodelay(true);
     let mut conn = h2::server::handshake(tcp)
@@ -115,12 +125,36 @@ async fn handle_tunnel_conn(
     });
 
     let duplex = H2Duplex::new(send, recv_body);
-    let (hello, validated, yconn) = handshake(duplex, &token, validator.as_ref()).await?;
+    let registry_for_check = registry.clone();
+    let (hello, validated, yconn) = handshake(
+        duplex,
+        &token,
+        validator.as_ref(),
+        |hello, validated| {
+            if max_drives_per_user == 0 {
+                return Ok(());
+            }
+            let drives = registry_for_check.list_drives_for(&validated.username);
+            let already_present = drives
+                .iter()
+                .any(|d| d.drive.as_ref() == hello.drive.as_str());
+            if !already_present && drives.len() >= max_drives_per_user {
+                return Err(ServerError::TooManyDrives {
+                    user: validated.username.clone(),
+                    max: max_drives_per_user,
+                });
+            }
+            Ok(())
+        },
+    )
+    .await?;
 
     let user: Arc<str> = Arc::from(validated.username.as_str());
     let drive: Arc<str> = Arc::from(hello.drive.as_str());
-    let (handle, open_rx, shutdown_rx) = registry.register(user.clone(), drive.clone());
-    tracing::info!(%user, %drive, "tunnel registered");
+    let public = hello.public;
+    let (handle, open_rx, shutdown_rx) =
+        registry.register(user.clone(), drive.clone(), public);
+    tracing::info!(%user, %drive, public, "tunnel registered");
 
     drive_tunnel(yconn, open_rx, shutdown_rx, registry.clone(), handle).await;
     tracing::info!(%user, %drive, "tunnel driver exited");

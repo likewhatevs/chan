@@ -27,6 +27,12 @@ pub struct Hello {
     /// Drive name to register under. Combined with the token's
     /// user to form the public path `/{user}/{drive}/...`.
     pub drive: String,
+    /// When true, the public proxy lets anonymous visitors reach
+    /// this drive without an OAuth round-trip. When false (default),
+    /// only the drive owner's signed-in session can reach it.
+    /// Additive field; older clients omitting it default to false.
+    #[serde(default)]
+    pub public: bool,
 }
 
 /// First frame, server -> client. Tells the client where on the
