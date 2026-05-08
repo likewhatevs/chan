@@ -132,6 +132,13 @@ enum Command {
         /// [a-z0-9-], 1-32 chars, no leading/trailing hyphen.
         #[arg(long)]
         tunnel_drive: Option<String>,
+        /// Expose the tunneled drive without an OAuth gate. By
+        /// default, drive.chan.app/{user}/{drive} bounces anonymous
+        /// visitors to id.chan.app. With --public, anyone with the
+        /// URL can reach the drive over the same tunnel. Only takes
+        /// effect together with --tunnel-token.
+        #[arg(long)]
+        tunnel_public: bool,
     },
     /// Rebuild the search index + graph for a drive.
     Index { path: PathBuf },
@@ -180,6 +187,7 @@ fn main() -> Result<()> {
             tunnel_url,
             tunnel_token,
             tunnel_drive,
+            tunnel_public,
         } => {
             let addr = resolve_listen_addr(host, ipv4, ipv6, port)?;
             let prefix = chan_server::sanitize_prefix(prefix.as_deref().unwrap_or(""))
@@ -199,6 +207,7 @@ fn main() -> Result<()> {
                 tunnel_url,
                 tunnel_token,
                 tunnel_drive,
+                tunnel_public,
             ));
             // Don't block on blocking-pool tasks (e.g. an in-flight
             // initial reindex on a large drive): chan-drive's reindex
@@ -496,6 +505,7 @@ async fn cmd_serve(
     tunnel_url: String,
     tunnel_token: Option<String>,
     tunnel_drive: Option<String>,
+    tunnel_public: bool,
 ) -> Result<()> {
     let lib = library()?;
     // Resolve the drive root: explicit arg first, then the registry
@@ -523,15 +533,23 @@ async fn cmd_serve(
             );
         }
         let drive_name = tunnel_drive.unwrap_or_else(|| known.name.clone().unwrap_or_default());
-        eprintln!(
-            "WARNING: tunnel mode publishes this drive at \
-             drive.chan.app/<user>/{drive_name} with no auth gate today. \
-             Anyone with the URL has read/write access. Tracking \
-             gateway-side OAuth gating in follow-up issues."
-        );
-        return chan_server::serve_via_tunnel(lib, drive, &tunnel_url, token, drive_name)
-            .await
-            .context("running tunnel client");
+        if tunnel_public {
+            eprintln!(
+                "WARNING: --public exposes this drive at \
+                 drive.chan.app/<user>/{drive_name} with no auth gate. \
+                 Anyone with the URL has read/write access."
+            );
+        }
+        return chan_server::serve_via_tunnel(
+            lib,
+            drive,
+            &tunnel_url,
+            token,
+            drive_name,
+            tunnel_public,
+        )
+        .await
+        .context("running tunnel client");
     }
 
     // Loud warning: the auth model assumes loopback. No TLS, only a

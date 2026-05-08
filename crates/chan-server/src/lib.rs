@@ -385,13 +385,19 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
 /// Tunnel mode forces `no_token=true`: the gateway in front of
 /// drive.chan.app is the trust boundary, and the per-launch bearer
 /// would otherwise have to be embedded in any URL the user shares.
-/// Auth gating at the gateway is tracked in follow-up issues.
+///
+/// `public` is forwarded to drive-proxy via the Hello frame. When
+/// false (the default), drive-proxy bounces anonymous visitors to
+/// id.chan.app; only the drive owner's signed-in session can reach
+/// the tunneled drive. When true, drive-proxy skips the OAuth gate
+/// and anyone with the URL can read/write.
 pub async fn serve_via_tunnel(
     library: Library,
     drive: Arc<Drive>,
     tunnel_url: &str,
     token: String,
     drive_name: String,
+    public: bool,
 ) -> Result<(), Error> {
     // The addr field is unused in tunnel mode (no local listener);
     // any parseable SocketAddr works. Prefix is empty: the public
@@ -437,6 +443,7 @@ pub async fn serve_via_tunnel(
         token,
         drive: drive_name,
         client_version: format!("chan/{}", env!("CARGO_PKG_VERSION")),
+        public,
         initial_backoff: Duration::from_millis(500),
         max_backoff: Duration::from_secs(30),
         events: Some(events_tx),
@@ -2179,20 +2186,16 @@ async fn api_llm_status(State(state): State<Arc<AppState>>) -> Response {
     .into_response()
 }
 
-/// `<config>/chan/api-keys.toml`-style path the on-disk fallback
-/// uses. Hardcoded here because chan-llm doesn't expose a public
-/// path helper; the Settings UI surfaces this so users on headless
+/// `~/.chan/api-keys.toml`-style path the on-disk fallback uses.
+/// Hardcoded here because chan-llm doesn't expose a public path
+/// helper; the Settings UI surfaces this so users on headless
 /// boxes know which file to edit. Stays in lockstep with chan-llm's
 /// internal `default_path()` for keys.
 fn api_keys_path_string() -> String {
-    dirs::config_dir()
-        .map(|p| {
-            p.join("chan")
-                .join("api-keys.toml")
-                .to_string_lossy()
-                .into_owned()
-        })
-        .unwrap_or_else(|| "<config>/chan/api-keys.toml".to_string())
+    chan_drive::paths::config_dir()
+        .join("api-keys.toml")
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[derive(Serialize)]
