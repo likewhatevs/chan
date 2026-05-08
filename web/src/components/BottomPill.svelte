@@ -46,7 +46,7 @@
   .bottom-pill {
     position: fixed;
     left: 50%;
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 22px);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 56px);
     transform: translateX(-50%);
     z-index: 4500;
     display: flex;

@@ -367,6 +367,37 @@
         onSelectionChange?.();
       },
     });
+    // Override the paragraph node's markdown serializer so empty
+    // paragraphs round-trip. prosemirror-markdown's default rule
+    // writes nothing for an empty <p></p> (renderInline emits no
+    // content, and the block separator is only flushed before the
+    // *next* block), so a doc like [A, empty, B] collapses to
+    // "A\n\nB" on serialize and the blank line is gone after a tab
+    // swap. Emitting a single space turns empty paragraphs into
+    // " \n\n" markers, which `stripBlankParagraphs` and
+    // `preserveBlankParagraphs` already understand.
+    type PMState = {
+      write: (content?: string) => void;
+      renderInline: (node: { content: { size: number } }) => void;
+      closeBlock: (node: unknown) => void;
+    };
+    type PMNode = { content: { size: number } };
+    const pStorage = (editor.extensionStorage as Record<string, unknown>).paragraph as
+      | { markdown?: { serialize: (s: PMState, n: PMNode) => void; parse: object } }
+      | undefined;
+    if (pStorage) {
+      pStorage.markdown = {
+        serialize(state, node) {
+          if (node.content.size === 0) {
+            state.write(" ");
+          } else {
+            state.renderInline(node);
+          }
+          state.closeBlock(node);
+        },
+        parse: {},
+      };
+    }
     // Set initial markdown explicitly (StarterKit treats `content` as HTML
     // by default). Markdown extension exposes setContent via commands.
     // Wrapped in the same guard the sync $effect uses: setContent's
@@ -1072,7 +1103,10 @@
   .md-wysiwyg {
     flex: 1;
     min-height: 0;
-    padding: 1rem 1.25rem;
+    /* Extra bottom slack so the last line can scroll above the
+       floating bottom pill (~92px tall counting offset + chrome).
+       8rem clears it with breathing room without feeling empty. */
+    padding: 1rem 1.25rem 8rem;
     line-height: 1.6;
     /* Body text uses the drive's "normal" font preference. */
     font-family: var(--chan-font-normal-family);

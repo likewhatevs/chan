@@ -1621,7 +1621,7 @@
      999px, soft shadow). z-index keeps the pill above the bar. */
   .prompt-area .fmt-bar {
     position: absolute;
-    top: 8px;
+    top: 12px;
     left: 50%;
     transform: translateX(-50%);
     z-index: 5;

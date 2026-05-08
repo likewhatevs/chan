@@ -32,6 +32,7 @@
   const STARTUP_GRACE_MS = 600;
   let visible = $state(false);
   let hasBeenOpen = $state(false);
+  let retryBtn: HTMLButtonElement | null = $state(null);
 
   $effect(() => {
     if (ui.ws === "open") {
@@ -50,6 +51,31 @@
     }, STARTUP_GRACE_MS);
     return () => clearTimeout(t);
   });
+
+  /// Steal focus when the overlay appears. The backdrop's
+  /// pointer-events stop *clicks* from reaching the editor, but
+  /// keystrokes still flow to whatever was focused before the
+  /// disconnect (typically the WYSIWYG / CodeMirror surface), so a
+  /// user mid-edit could keep typing into a buffer the watcher
+  /// can't observe. Moving focus to the Retry button parks input
+  /// somewhere harmless until the channel comes back. Paired with
+  /// the keydown trap below, Tab can't leak focus back to the
+  /// background.
+  $effect(() => {
+    if (!visible) return;
+    const active = document.activeElement as HTMLElement | null;
+    active?.blur();
+    queueMicrotask(() => retryBtn?.focus());
+  });
+
+  function trapTab(e: KeyboardEvent): void {
+    // Single focusable element inside the dialog: any Tab/Shift+Tab
+    // just keeps focus where it is.
+    if (e.key === "Tab") {
+      e.preventDefault();
+      retryBtn?.focus();
+    }
+  }
 
   const message = $derived.by(() => {
     switch (ui.ws) {
@@ -73,11 +99,21 @@
 </script>
 
 {#if visible}
-  <div class="overlay" role="alert" aria-live="assertive">
+  <div
+    class="overlay"
+    role="alertdialog"
+    aria-modal="true"
+    aria-live="assertive"
+    aria-label={message}
+    tabindex="-1"
+    onkeydown={trapTab}
+  >
     <div class="card">
       <div class="title">{message}</div>
       <div class="subline">{subline}</div>
-      <button class="retry" onclick={reconnectWatcher}>Retry now</button>
+      <button class="retry" bind:this={retryBtn} onclick={reconnectWatcher}>
+        Retry now
+      </button>
     </div>
   </div>
 {/if}
