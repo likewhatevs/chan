@@ -127,8 +127,9 @@ pub struct Index {
     config: IndexConfig,
     bm25: Bm25Index,
     vectors: VectorStore,
-    /// Lazily loaded: opening fastembed touches a large model file
-    /// and we don't want `chan search --mode bm25` to pay that cost.
+    /// Lazily loaded: opening the embedder mmaps the safetensors
+    /// weights and warms the device, and we don't want
+    /// `chan search --mode bm25` to pay that cost.
     #[cfg(feature = "embeddings")]
     embedder: OnceLock<Embedder>,
 }
@@ -212,7 +213,7 @@ impl Index {
     }
 
     /// Get-or-init the embedder. Errors propagate (e.g. unknown
-    /// model id, model download failure, ONNX runtime missing).
+    /// model id, model download failure, candle device init).
     #[cfg(feature = "embeddings")]
     fn embedder(&self) -> Result<&Embedder, IndexError> {
         if let Some(e) = self.embedder.get() {
@@ -244,14 +245,14 @@ impl Index {
         let mut chunks_total = 0usize;
         let mut errors: Vec<(String, IndexError)> = Vec::new();
 
-        // Embedding throughput is dominated by ONNX session +
-        // intra-batch parallelism overhead. Per-file embed calls on
-        // a drive of small markdown files (typical: ~30 chunks per
-        // file) leave that overhead unamortized and run an order of
-        // magnitude slower than the hardware can do. Accumulate
-        // chunks across files and flush in `EMBED_BATCH_CHUNKS`-sized
-        // groups so each embed call gets enough work for fastembed's
-        // internal batcher.
+        // Embedding throughput is dominated by per-call dispatch
+        // and kernel-launch overhead on the GPU side. Per-file
+        // embed calls on a drive of small markdown files (typical:
+        // ~30 chunks per file) leave that overhead unamortized and
+        // run an order of magnitude slower than the hardware can
+        // do. Accumulate chunks across files and flush in
+        // `EMBED_BATCH_CHUNKS`-sized groups so each forward pass
+        // gets enough work to fill the device.
         #[cfg(feature = "embeddings")]
         let do_vectors = opts.include_vectors;
         #[cfg(not(feature = "embeddings"))]
@@ -315,7 +316,11 @@ impl Index {
                             files: pending.len(),
                         },
                     });
-                    errors.extend(self.flush_embed_batch(&mut pending));
+                    match self.flush_embed_batch(&mut pending, cancel) {
+                        Ok(errs) => errors.extend(errs),
+                        Err(IndexError::Cancelled) => return Err(IndexError::Cancelled),
+                        Err(e) => return Err(e),
+                    }
                     pending_chunks = 0;
                 }
             }
@@ -339,7 +344,11 @@ impl Index {
                     files: pending.len(),
                 },
             });
-            errors.extend(self.flush_embed_batch(&mut pending));
+            match self.flush_embed_batch(&mut pending, cancel) {
+                Ok(errs) => errors.extend(errs),
+                Err(IndexError::Cancelled) => return Err(IndexError::Cancelled),
+                Err(e) => return Err(e),
+            }
         }
 
         if let Some(c) = cancel {
@@ -360,24 +369,26 @@ impl Index {
     /// back per file and write each file's vectors. Drains `pending`.
     /// On batch failure, falls back to per-file embedding so errors
     /// can be attributed to the offending file rather than poisoning
-    /// the whole batch.
+    /// the whole batch. Returns `Cancelled` (without writing partial
+    /// vectors) if `cancel` flips during one of the inner sub-batches.
     #[cfg(feature = "embeddings")]
     fn flush_embed_batch(
         &self,
         pending: &mut Vec<(String, Vec<chunking::Chunk>)>,
-    ) -> Vec<(String, IndexError)> {
+        cancel: Option<&AtomicBool>,
+    ) -> Result<Vec<(String, IndexError)>, IndexError> {
         let mut errors = Vec::new();
         if pending.is_empty() {
-            return errors;
+            return Ok(errors);
         }
         let embedder = match self.embedder() {
             Ok(e) => e,
             Err(e) => {
                 let msg = e.to_string();
                 for (rel, _) in pending.drain(..) {
-                    errors.push((rel, IndexError::Embed(EmbedError::Fastembed(msg.clone()))));
+                    errors.push((rel, IndexError::Embed(EmbedError::Candle(msg.clone()))));
                 }
-                return errors;
+                return Ok(errors);
             }
         };
         let dim = embedder.dim();
@@ -385,8 +396,9 @@ impl Index {
             .iter()
             .flat_map(|(_, chunks)| chunks.iter().map(|c| c.body.as_str()))
             .collect();
-        let raw = match embedder.embed_documents(&bodies) {
+        let raw = match embedder.embed_documents_cancelable(&bodies, cancel) {
             Ok(v) => v,
+            Err(EmbedError::Cancelled) => return Err(IndexError::Cancelled),
             Err(_) => {
                 // Per-file fallback so a single bad file doesn't
                 // discard the rest of the batch's vectors.
@@ -395,7 +407,7 @@ impl Index {
                         errors.push((rel, e));
                     }
                 }
-                return errors;
+                return Ok(errors);
             }
         };
         let mut cursor = 0usize;
@@ -411,7 +423,7 @@ impl Index {
                 errors.push((rel, e.into()));
             }
         }
-        errors
+        Ok(errors)
     }
 
     #[cfg(feature = "embeddings")]
@@ -577,11 +589,11 @@ impl Index {
     }
 }
 
-// Cross-file embedding batch size, in chunks. Tuned for fastembed
-// + bge-small on CPU: large enough that ONNX session overhead is
-// amortized over a useful work unit, small enough that working
-// memory stays modest (~12 MB at 384-dim) on big drives. Only used
-// when the `embeddings` feature is on; harmless otherwise.
+// Cross-file embedding batch size, in chunks. Tuned for candle +
+// bge-small on Metal: large enough to amortize forward-pass setup
+// over a useful work unit, small enough that working memory stays
+// modest (~12 MB at 384-dim) on big drives. Only used when the
+// `embeddings` feature is on; harmless otherwise.
 #[cfg(feature = "embeddings")]
 const EMBED_BATCH_CHUNKS: usize = 4096;
 

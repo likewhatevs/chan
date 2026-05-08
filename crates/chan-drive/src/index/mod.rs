@@ -5,7 +5,7 @@
 //   bm25       lexical side, tantivy-backed
 //   chunking   markdown -> Chunk[]
 //   config     on-disk index config (model, chunking strategy, …)
-//   embeddings fastembed-rs wrapper (gated by `embeddings`)
+//   embeddings candle BertModel wrapper (gated by `embeddings`)
 //   facade     high-level Index: build / search / forget
 //   fusion     reciprocal-rank fusion (BM25 + semantic)
 //   vectors    on-disk vector store + brute-force cosine

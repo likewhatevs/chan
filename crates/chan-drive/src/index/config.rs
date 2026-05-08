@@ -20,7 +20,12 @@ pub const DEFAULT_MODEL: &str = "BAAI/bge-small-en-v1.5";
 ///
 /// v1: per-heading chunking with hybrid (BM25 + dense) retrieval,
 ///     replacing the old per-file BM25 schema.
-pub const SCHEMA_VERSION: u32 = 1;
+/// v2: candle-backed embedder replaces fastembed/ort. Vector tensors
+///     are byte-compatible (same f32 layout, same BGE checkpoints)
+///     but small numerical drift between ONNX and the pure-Rust
+///     transformer kernel can shift cosine scores by epsilon, so
+///     wipe and re-embed on first open after upgrade.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// How a markdown file is split into indexable units.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
