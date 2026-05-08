@@ -443,12 +443,32 @@
       x: cx + (Math.random() - 0.5) * 80,
       y: cy + (Math.random() - 0.5) * 80,
     }));
-    const layoutEdges: LayoutEdge[] = g.edges.map((e) => ({
-      source: e.source,
-      target: e.target,
-      kind: e.kind,
-      broken: e.broken ?? false,
-    }));
+    // d3-force's `forceLink` throws "node not found" when an edge
+    // references an id that isn't in the node set. The graph DB
+    // can hand us dangling edges (e.g. a `## glutenfree` heading
+    // mis-tokenised as the tag `##glutenfree` whose node never
+    // got created), and we don't want a single bad row to take
+    // down the whole panel. Drop edges with unknown endpoints
+    // before handing the array to the simulation; the rest of
+    // the graph still renders.
+    const nodeIds = new Set(layoutNodes.map((n) => n.id));
+    const layoutEdges: LayoutEdge[] = [];
+    let dropped = 0;
+    for (const e of g.edges) {
+      if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) {
+        dropped += 1;
+        continue;
+      }
+      layoutEdges.push({
+        source: e.source,
+        target: e.target,
+        kind: e.kind,
+        broken: e.broken ?? false,
+      });
+    }
+    if (dropped > 0) {
+      console.warn(`graph: dropped ${dropped} edges with unknown endpoints`);
+    }
     nodes = layoutNodes;
     edges = layoutEdges;
 
@@ -927,7 +947,7 @@
   </div>
   <div class="statusbar">
     <span class="stat">{visibleNodeIds.size}/{nodes.length} nodes · {visibleEdges.length}/{edges.length} edges</span>
-    <span class="hint">drag to rotate · scroll to zoom · click a node to inspect</span>
+    <span class="hint">drag to pan · scroll to zoom · drag a node to move · click to inspect</span>
   </div>
   </div>
 </OverlayShell>
