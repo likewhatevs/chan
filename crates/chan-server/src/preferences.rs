@@ -182,13 +182,11 @@ impl EditorPrefs {
     }
 }
 
-/// `<config>/chan/preferences.toml`. iOS / Android pass an explicit
-/// path via `load_from` / `save_to` since their sandbox dir isn't
-/// `dirs::config_dir`.
+/// `~/.chan/preferences.toml` on desktop. iOS / Android pass an
+/// explicit path via `load_from` / `save_to` since their sandbox
+/// dir isn't `chan_drive::paths::config_dir`.
 pub fn default_path() -> PathBuf {
-    dirs::config_dir()
-        .map(|p| p.join("chan").join("preferences.toml"))
-        .unwrap_or_else(|| PathBuf::from("chan-preferences.toml"))
+    chan_drive::paths::config_dir().join("preferences.toml")
 }
 
 #[cfg(test)]
