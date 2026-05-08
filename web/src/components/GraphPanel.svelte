@@ -74,6 +74,14 @@
   let cy: Core | null = null;
   let resizeObs: ResizeObserver | null = null;
 
+  /// Gates the currentScope $effect: scopeOptions re-derives any
+  /// time the file tree updates, producing a fresh array (and thus
+  /// a fresh currentScope object reference) even when the user
+  /// hasn't actually changed scope. Without this gate every tree
+  /// tick would kick off a relayout. Tracked by id, not by object
+  /// identity, so the effect only acts on real transitions.
+  let lastScopeId: string | null = null;
+
   let nodes: GraphViewNode[] = $state([]);
   let edges: GraphViewEdge[] = $state([]);
   let loading = $state(true);
@@ -319,9 +327,15 @@
           label: "data(label)",
           color: c.text,
           "font-size": 11,
-          "text-halign": "right",
-          "text-valign": "center",
-          "text-margin-x": 5,
+          // Labels above the node, ellipsised at a fixed width.
+          // Right-of-node placement (the prior layout) bled long
+          // file names into neighbouring nodes once fcose packed
+          // anything close together.
+          "text-halign": "center",
+          "text-valign": "top",
+          "text-margin-y": -4,
+          "text-wrap": "ellipsis",
+          "text-max-width": "110px",
           "text-outline-color": c.bg,
           "text-outline-width": 2,
           "border-width": 1.5,
@@ -436,16 +450,46 @@
   /// cluster has room to breathe while satellites sit close to their
   /// owner; mirrors the d3-force `distance` configuration we used
   /// before.
-  function fcoseOptions(opts: { randomize: boolean; animate: boolean }) {
+  ///
+  /// `focalIds` pins one or more file nodes at known model
+  /// coordinates via fcose's `fixedNodeConstraint`. Pinning has to
+  /// happen during the layout, not after: post-layout repositioning
+  /// fights fcose's spring system and leaves neighbours stuck where
+  /// the unconstrained run originally placed them, which is why the
+  /// first version of this code drew empty canvases on first open.
+  function fcoseOptions(opts: {
+    randomize: boolean;
+    animate: boolean;
+    focalIds?: string[];
+  }) {
+    const constraints =
+      opts.focalIds && opts.focalIds.length > 0
+        ? opts.focalIds.length === 1
+          ? [{ nodeId: opts.focalIds[0]!, position: { x: 0, y: 0 } }]
+          : opts.focalIds.map((id, i, all) => {
+              const angle = (i / all.length) * Math.PI * 2 - Math.PI / 2;
+              const r = 120;
+              return {
+                nodeId: id,
+                position: { x: Math.cos(angle) * r, y: Math.sin(angle) * r },
+              };
+            })
+        : undefined;
     return {
       name: "fcose",
       quality: "default",
       randomize: opts.randomize,
       animate: opts.animate,
       animationDuration: opts.animate ? 350 : 0,
-      fit: opts.randomize,
+      fit: false, // we fit ourselves on layoutstop against the
+      // actually-rendered container; fcose's built-in fit can
+      // anchor on a too-small viewport when the panel is still
+      // settling.
       padding: 30,
-      nodeSeparation: 75,
+      // Wider separation now that labels render above nodes; 75
+      // packed satellites tight enough that ellipsised labels still
+      // overlapped on dense clusters.
+      nodeSeparation: 140,
       idealEdgeLength: (e: cytoscape.EdgeSingular) =>
         e.data("kind") === "link" ? 70 : 40,
       edgeElasticity: 0.45,
@@ -453,8 +497,27 @@
       numIter: 2500,
       gravity: 0.25,
       packComponents: true,
-      // fcose honours node.locked() — focal pins stick across runs.
+      fixedNodeConstraint: constraints,
     } as cytoscape.LayoutOptions;
+  }
+
+  /// File-node ids matching the current scope's seed path(s). Used
+  /// to pin the focal-anchor inside the fcose run. Returns an empty
+  /// array for drive / global scope (no anchor wanted).
+  function computeFocalNodeIds(): string[] {
+    if (!currentScope) return [];
+    let seedPaths: string[];
+    if (currentScope.kind === "file") seedPaths = [currentScope.path];
+    else if (currentScope.kind === "group") seedPaths = [...currentScope.paths];
+    else if (currentScope.kind === "dir") seedPaths = filesUnder(currentScope.path);
+    else if (currentScope.kind === "git_repo")
+      seedPaths = filesUnder(currentScope.root);
+    else return [];
+    const ids: string[] = [];
+    for (const n of nodes) {
+      if (n.kind === "file" && seedPaths.includes(n.path)) ids.push(n.id);
+    }
+    return ids;
   }
 
   function buildElements(g: GraphView): {
@@ -504,12 +567,17 @@
     if (dropped > 0) {
       console.warn(`graph: dropped ${dropped} edges with unknown endpoints`);
     }
+    const focalIds = computeFocalNodeIds();
+    // Build cytoscape WITHOUT a layout option: passing `layout` to
+    // the constructor lets fcose start (and potentially fire
+    // layoutstop) before any of our event handlers are registered,
+    // which is exactly how the first-open empty-canvas bug was
+    // sneaking past every fix attempt. Run the layout explicitly
+    // below, after handlers are wired.
     cy = cytoscape({
       container: containerEl,
       elements,
       style: buildStylesheet(containerEl),
-      layout: fcoseOptions({ randomize: true, animate: false }),
-      wheelSensitivity: 0.2,
       minZoom: 0.15,
       maxZoom: 4,
       boxSelectionEnabled: false,
@@ -531,9 +599,39 @@
       ev.target.removeClass("hover");
     });
 
-    // Initial filter pass: scope/edge-kind chips might be non-defaults.
-    syncVisibility();
-    pinFocalNodes(false);
+    // Run the layout BEFORE applying the visibility filter:
+    // cytoscape layouts skip hidden nodes, so syncing visibility
+    // first leaves the off-scope nodes stranded at (0,0). With
+    // the focal also pinned at (0,0) the visible bounding box
+    // collapses and the fit zooms to a single point — exactly the
+    // "empty canvas" symptom we kept chasing. Position everything
+    // first; hide afterwards.
+    const layout = cy.layout(
+      fcoseOptions({ randomize: true, animate: false, focalIds }),
+    );
+    layout.one("layoutstop", () => {
+      // Apply the visibility filter now that every node has a real
+      // position; hidden ones won't pull the bounding box around.
+      syncVisibility();
+      requestAnimationFrame(() => {
+        if (!cy) return;
+        cy.resize();
+        const vis = cy.elements(":visible");
+        if (vis.nonempty()) cy.fit(vis, 30);
+        for (const id of focalIds) {
+          const ele = cy.getElementById(id);
+          if (ele.nonempty()) {
+            ele.addClass("focal");
+            ele.lock();
+          }
+        }
+      });
+    });
+    layout.run();
+
+    // Suppress the first re-firing of the currentScope effect: the
+    // current scope IS the one we just built for.
+    lastScopeId = currentScope?.id ?? null;
   }
 
   /// Apply current scope + edge-kind filters by toggling the
@@ -573,52 +671,6 @@
     });
   }
 
-  /// Pin the focal-scope file node(s) at fixed positions so the
-  /// "selected file" sits in the middle and its neighbours orbit.
-  /// Multiple seed paths (group / dir / git_repo scope) fan out
-  /// evenly on a circle around the centre. Drive / global scope
-  /// leaves all nodes free to move; pin state is cleared on the way
-  /// out.
-  function pinFocalNodes(relax: boolean): void {
-    if (!cy) return;
-    cy.nodes().unlock();
-    cy.nodes().removeClass("focal");
-    let seedPaths: string[] | null = null;
-    if (currentScope) {
-      if (currentScope.kind === "file") seedPaths = [currentScope.path];
-      else if (currentScope.kind === "group") seedPaths = [...currentScope.paths];
-      else if (currentScope.kind === "dir") seedPaths = filesUnder(currentScope.path);
-      else if (currentScope.kind === "git_repo")
-        seedPaths = filesUnder(currentScope.root);
-    }
-    if (!seedPaths || seedPaths.length === 0) return;
-    const seeds = cy.nodes().filter((n) => {
-      if (n.data("kind") !== "file") return false;
-      const p = n.data("path") as string | undefined;
-      return p != null && seedPaths!.includes(p);
-    });
-    if (seeds.length === 0) return;
-    const ext = cy.extent();
-    const cx = (ext.x1 + ext.x2) / 2;
-    const cyc = (ext.y1 + ext.y2) / 2;
-    if (seeds.length === 1) {
-      const n = seeds[0]!;
-      n.position({ x: cx, y: cyc });
-      n.lock();
-      n.addClass("focal");
-    } else {
-      const r = Math.min(ext.x2 - ext.x1, ext.y2 - ext.y1) * 0.18;
-      seeds.forEach((n, i) => {
-        const angle = (i / seeds.length) * Math.PI * 2 - Math.PI / 2;
-        n.position({ x: cx + Math.cos(angle) * r, y: cyc + Math.sin(angle) * r });
-        n.lock();
-        n.addClass("focal");
-      });
-    }
-    if (relax) {
-      cy.layout(fcoseOptions({ randomize: false, animate: true })).run();
-    }
-  }
 
   function filesUnder(prefix: string): string[] {
     const root = prefix.replace(/\/+$/, "");
@@ -632,29 +684,36 @@
       .filter((p) => p);
   }
 
-  function resetView(): void {
-    if (!cy) return;
-    cy.fit(undefined, 30);
-  }
 
   // ---- mount: fetch + layout --------------------------------------------
 
-  onMount(async () => {
-    if (containerEl) {
-      resizeObs = new ResizeObserver(() => {
-        cy?.resize();
-      });
-      resizeObs.observe(containerEl);
+  // GraphPanel itself mounts at app boot, but the canvas div lives
+  // inside OverlayShell's {#if open} block, so containerEl doesn't
+  // bind until the user actually opens the overlay. We can't drive
+  // the load() from onMount — by then containerEl is undefined and
+  // every build attempt bails. Drive it from a visibility effect
+  // instead: build on open, tear down on close. Each open gets a
+  // fresh container (Svelte mounts a new div each time), so we
+  // rebuild from scratch each time, which also keeps the data
+  // current.
+  $effect(() => {
+    if (!visible) {
+      // Overlay just closed (or hasn't opened yet). Tear down so
+      // the next open can build against the freshly-mounted DOM.
+      resizeObs?.disconnect();
+      resizeObs = null;
+      cy?.destroy();
+      cy = null;
+      lastScopeId = null;
+      return;
     }
-    // Defer one frame so the OverlayShell's growth-to-fullscreen
-    // transition has settled before we measure the canvas and seed
-    // the layout. Without this the first measurement can land
-    // mid-animation and the layout settles around an off-centre
-    // point.
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => resolve()),
-    );
-    await load();
+    if (!containerEl) return; // wait for bind:this to fire
+    if (cy) return; // already built for this open
+    resizeObs = new ResizeObserver(() => {
+      cy?.resize();
+    });
+    resizeObs.observe(containerEl);
+    void load();
   });
 
   onDestroy(() => {
@@ -670,7 +729,7 @@
       const g: GraphView = await api.graph();
       nodes = g.nodes;
       edges = g.edges;
-      buildCytoscape(g);
+      await buildCytoscapeWhenSized(g);
     } catch (e) {
       error = (e as Error).message;
     } finally {
@@ -678,13 +737,42 @@
     }
   }
 
-  // Re-pin when scope changes (focal node set or pin policy may
-  // shift). Skip while cy isn't built yet; load() does the first
-  // pass.
+  /// Defer buildCytoscape until containerEl actually has non-zero
+  /// dimensions. The panel's flex sizing can still be settling on
+  /// the first frame after mount; mounting cytoscape against a
+  /// 0x0 container leaves its internal canvas sized wrong, and
+  /// even cy.resize() afterwards can't always recover the first
+  /// fit. Falls through after ~500ms regardless so we never hang.
+  async function buildCytoscapeWhenSized(g: GraphView): Promise<void> {
+    for (let i = 0; i < 30; i++) {
+      if (!containerEl) return;
+      const r = containerEl.getBoundingClientRect();
+      if (r.width >= 80 && r.height >= 80) {
+        buildCytoscape(g);
+        return;
+      }
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+    }
+    console.warn("[graph] container never reached usable size; building anyway");
+    buildCytoscape(g);
+  }
+
+  // Scope change → full rebuild. fcose's `fixedNodeConstraint`
+  // only takes effect at layout time; soft repositioning after the
+  // fact would leave neighbours where the previous layout placed
+  // them, around the *old* anchor. A rebuild is cheap at our scale
+  // (low hundreds of nodes) and keeps the focal node visually
+  // centred. Gated on the scope id so the tree-derived scopeOptions
+  // array re-deriving doesn't trigger a rebuild when the user
+  // hasn't actually changed scope.
   $effect(() => {
-    void currentScope;
+    const id = currentScope?.id ?? null;
     if (!cy) return;
-    pinFocalNodes(true);
+    if (id === lastScopeId) return;
+    lastScopeId = id;
+    if (nodes.length > 0) void buildCytoscapeWhenSized({ nodes, edges });
   });
 
   // Re-apply visibility filters when scope/depth/edge-kind chips
@@ -757,7 +845,6 @@
     </div>
     <span class="actions">
       <button class="reload" onclick={() => void load()} title="Reload graph">↻</button>
-      <button class="reload" onclick={resetView} title="Reset view">⌖</button>
       <button
         class="reload"
         class:on={panelOpen}
@@ -1057,12 +1144,13 @@
     position: relative;
     overflow: hidden;
   }
-  /* Cytoscape mount: fills the canvas area. The library handles
-     pan / zoom / node drag internally; we just give it a sized
-     box and listen for ResizeObserver to call cy.resize(). */
+  /* Cytoscape mount: positioned absolute inside the relative
+     .canvas parent. Cytoscape's example pattern; without explicit
+     positioning its internal canvases can resolve their absolute
+     positioning to the wrong ancestor and end up sized wrong. */
   .cy {
-    width: 100%;
-    height: 100%;
+    position: absolute;
+    inset: 0;
   }
   .cy.dim {
     opacity: 0.4;
