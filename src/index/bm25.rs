@@ -178,34 +178,52 @@ impl Bm25Index {
         let parser =
             QueryParser::for_index(&self.index, vec![self.fields.body, self.fields.heading]);
         let prefix_query = self.try_build_prefix_query(q)?;
-        // Two parses: the search query (uses the prefix path when
-        // applicable so "beet" finds "beetroot"), and a snippet
-        // query (always the QueryParser parse) so the snippet
-        // generator's term-based highlighting still produces
-        // `<b>...</b>` markers for whole-token matches. Prefix-only
-        // matches won't get highlighted because there's no exact
-        // term to highlight; that's the trade-off for the better
-        // typeahead recall.
+        // Search query uses the prefix path when applicable so
+        // typed `beet` matches stored `beetroot`. Snippet uses the
+        // QueryParser parse for whole-token highlights.
         let search_query: Box<dyn Query> = match &prefix_query {
             Some(pq) => pq.box_clone(),
             None => parser.parse_query(q)?,
         };
-        let snippet_query: Box<dyn Query> = parser.parse_query(q).unwrap_or_else(|_| {
-            // QueryParser can fail (rare; e.g. unbalanced quotes
-            // mid-typing). Fall back to the search query so the
-            // snippet generator still gets something Query-shaped;
-            // worst case it produces no highlight.
-            match &prefix_query {
-                Some(pq) => pq.box_clone(),
-                None => unreachable!("query trimmed empty handled above"),
-            }
-        });
+        let snippet_query: Box<dyn Query> =
+            parser
+                .parse_query(q)
+                .unwrap_or_else(|_| match &prefix_query {
+                    Some(pq) => pq.box_clone(),
+                    None => unreachable!("query trimmed empty handled above"),
+                });
         let top = searcher.search(&*search_query, &TopDocs::with_limit(limit))?;
         let snippet_gen = SnippetGenerator::create(&searcher, &*snippet_query, self.fields.body)?;
+        // Lowercase prefixes pulled out of the user's query for the
+        // manual fallback highlighter below. Empty when we routed
+        // through the QueryParser path (operators / phrases).
+        let prefix_terms: Vec<String> = if prefix_query.is_some() {
+            q.split_whitespace().map(|t| t.to_lowercase()).collect()
+        } else {
+            Vec::new()
+        };
         let mut hits = Vec::with_capacity(top.len());
         for (score, doc_addr) in top {
             let doc: TantivyDocument = searcher.doc(doc_addr)?;
-            let snippet = snippet_gen.snippet_from_doc(&doc).to_html();
+            let body_text = get_text(&doc, self.fields.body);
+            let term_snippet = snippet_gen.snippet_from_doc(&doc);
+            let snippet = if !term_snippet.is_empty() {
+                term_snippet.to_html()
+            } else if !prefix_terms.is_empty() {
+                // SnippetGenerator returns empty when the
+                // QueryParser-parsed terms aren't found as exact
+                // tokens (the common case for typed-prefix
+                // queries: typing `lem` while the index has
+                // `lemon`). Fall back to a manual
+                // case-insensitive prefix highlighter that
+                // surrounds matched substrings with the same
+                // `<b>...</b>` markup. Picks an excerpt centered
+                // on the first match so the user sees relevant
+                // context.
+                manual_prefix_snippet(&body_text, &prefix_terms)
+            } else {
+                String::new()
+            };
             hits.push(Hit {
                 path: get_text(&doc, self.fields.path),
                 chunk_id: get_text(&doc, self.fields.chunk_id),
@@ -275,6 +293,94 @@ fn has_operator(tok: &str) -> bool {
             b':' | b'*' | b'?' | b'~' | b'+' | b'"' | b'(' | b')' | b'-'
         )
     })
+}
+
+/// Build a snippet for a body whose match is a prefix of an
+/// indexed token (the path tantivy's term-based SnippetGenerator
+/// does not cover). Walks `body` once with case-insensitive
+/// substring search per prefix, wraps every match in
+/// `<b>...</b>`, and excerpts ~200 chars centered on the first
+/// hit so the user sees relevant context. Returns an empty
+/// string when no prefix is found.
+fn manual_prefix_snippet(body: &str, prefixes: &[String]) -> String {
+    if prefixes.is_empty() || body.is_empty() {
+        return String::new();
+    }
+    let lc = body.to_lowercase();
+    // First-match position (byte offset in `lc`/`body`; ASCII
+    // prefixes only — non-ASCII case folding is approximate but
+    // good enough for English typeahead).
+    let first_idx = prefixes.iter().filter_map(|p| lc.find(p.as_str())).min();
+    let first_idx = match first_idx {
+        Some(i) => i,
+        None => return String::new(),
+    };
+    // Excerpt window: ~200 chars wide, anchored on the first
+    // match. Skip past the previous word boundary so the snippet
+    // starts cleanly.
+    const WINDOW: usize = 200;
+    let half = WINDOW / 2;
+    let start = first_idx.saturating_sub(half);
+    let start = nudge_to_char_boundary(body, start, false);
+    let end = (first_idx + half).min(body.len());
+    let end = nudge_to_char_boundary(body, end, true);
+    let mut excerpt = String::with_capacity(WINDOW + 32);
+    if start > 0 {
+        excerpt.push('…');
+    }
+    let segment = &body[start..end];
+    let lc_segment = &lc[start..end];
+    // Multi-prefix highlight: scan once, at each position pick
+    // the longest matching prefix and wrap it.
+    let mut cursor = 0usize;
+    while cursor < segment.len() {
+        // Find the next prefix match starting at or after cursor.
+        let next = prefixes
+            .iter()
+            .filter_map(|p| {
+                let needle = p.as_str();
+                lc_segment[cursor..]
+                    .find(needle)
+                    .map(|rel| (cursor + rel, needle.len()))
+            })
+            .min_by_key(|&(idx, _)| idx);
+        match next {
+            Some((idx, len)) => {
+                excerpt.push_str(&segment[cursor..idx]);
+                excerpt.push_str("<b>");
+                excerpt.push_str(&segment[idx..idx + len]);
+                excerpt.push_str("</b>");
+                cursor = idx + len;
+            }
+            None => {
+                excerpt.push_str(&segment[cursor..]);
+                break;
+            }
+        }
+    }
+    if end < body.len() {
+        excerpt.push('…');
+    }
+    excerpt
+}
+
+/// Move `idx` to the nearest UTF-8 char boundary so a slice with
+/// `body[start..end]` doesn't panic on multibyte text. `forward`
+/// chooses which side to drift toward; we use it to expand the
+/// window slightly rather than truncating the match.
+fn nudge_to_char_boundary(s: &str, idx: usize, forward: bool) -> usize {
+    if idx >= s.len() {
+        return s.len();
+    }
+    let mut i = idx;
+    while i > 0 && i < s.len() && !s.is_char_boundary(i) {
+        if forward {
+            i += 1;
+        } else {
+            i -= 1;
+        }
+    }
+    i
 }
 
 /// Escape regex metacharacters so a literal token can be embedded
@@ -453,6 +559,35 @@ mod tests {
         idx.commit().unwrap();
         assert!(idx.search("", 10).unwrap().is_empty());
         assert!(idx.search("   ", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn prefix_match_carries_a_snippet() {
+        // Regression: typing "lem" used to return hits with empty
+        // snippet bodies (tantivy's term-based SnippetGenerator
+        // can't highlight a prefix that isn't a real indexed
+        // token). The manual prefix highlighter in
+        // `manual_prefix_snippet` must produce a `<b>...</b>`
+        // wrapped excerpt.
+        let (_tmp, idx) = fresh();
+        idx.index_file(
+            "a.md",
+            "# h\n## Ingredients\n- 1 lemon\n- 1 garlic\n",
+            &Chunking::Headings,
+        )
+        .unwrap();
+        idx.commit().unwrap();
+        let hits = idx.search("lem", 10).unwrap();
+        assert!(!hits.is_empty());
+        let h = hits
+            .iter()
+            .find(|h| h.chunk_id != "h-0")
+            .unwrap_or(&hits[0]);
+        assert!(
+            h.snippet.contains("<b>lem"),
+            "expected highlighted prefix in {:?}",
+            h.snippet
+        );
     }
 
     #[test]
