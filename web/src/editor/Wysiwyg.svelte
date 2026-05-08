@@ -197,7 +197,25 @@
         // GitHub-flavored markdown task list semantics.
         TaskList,
         TaskItem.configure({ nested: true }),
-        Link.configure({ openOnClick: false }),
+        // `isAllowedUri` overridden so relative URLs land as Link
+        // marks: the default validator only accepts known schemes
+        // (http, https, mailto, etc.) and silently drops the mark
+        // for anything else. Without this override, tiptap-markdown
+        // parses `[Brazilian Rice](Recipes/Brazilian%20Rice.md)`
+        // back from disk as plain text on tab swap because
+        // `Recipes/...` has no protocol; `decorateWikiLinks` then
+        // finds nothing to convert into a wikiLink pill, and the
+        // editor renders the link as flat text. Accepting any
+        // URI here is safe because we drive-rooted internal links
+        // do not embed in `<a href>` for users to click — they
+        // round-trip into wikiLink atom nodes whose own click
+        // handler routes through `openInActivePane`.
+        Link.configure({
+          openOnClick: false,
+          autolink: false,
+          isAllowedUri: () => true,
+          validate: () => true,
+        }),
         Markdown.configure({ html: false, linkify: false, breaks: true }),
         DateNode,
         WikiLinkNode,
@@ -466,15 +484,16 @@
         wikiType.create({ target: r.target, label: r.label }),
       );
     }
-    // Keep this transaction out of the undo stack but DO let it
-    // emit an update. preventUpdate would suppress the post-
-    // decoration value sync that bind:value relies on, leaving
-    // the editor's rendered DOM out of step with the doc state on
-    // tab swap (the symptom: link text shows but the wikiLink
-    // pill is gone). The decorated doc serializes back to the
-    // same `[label](path)` markdown the parser fed in, so no
-    // value-sync loop.
-    editor.view.dispatch(tr.setMeta("addToHistory", false));
+    // Same flags as decorateSmartNodes: out of undo, out of the
+    // bind:value loop. preventUpdate keeps tiptap's onUpdate from
+    // firing, so the post-decoration markdown serialization
+    // doesn't bounce back into the parent's `value` and re-fire
+    // the $effect. Decoration is applied to the editor view
+    // synchronously regardless of the meta flag, so the wikiLink
+    // pill renders immediately.
+    editor.view.dispatch(
+      tr.setMeta("addToHistory", false).setMeta("preventUpdate", true),
+    );
   }
 
   /// Round-trip recovery for smart nodes that markdown can't carry.
