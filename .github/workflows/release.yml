@@ -57,6 +57,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: chan
+      # See ci.yml for the full rationale; mirrored here so the
+      # tag-time gate matches the per-PR gate.
+      - uses: Jimver/cuda-toolkit@v0.2.21
+        with:
+          cuda: '12.6.0'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart-dev"]'
       - run: cargo clippy --all-targets -- -D warnings
         working-directory: chan
       - run: cargo test --all-targets
@@ -100,6 +107,7 @@ jobs:
             binname: chan
             deb_arch: amd64
             rpm: true
+            cuda: true
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             archive: tar.gz
@@ -140,15 +148,28 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      # Linux uses gnu (not musl) so we get the prebuilt onnxruntime
-      # binaries shipped by ort-sys. Trade-off: the binary dynamically
-      # links glibc (modern distros, glibc >= 2.31 in practice). A
-      # static musl build is tracked as a follow-up that requires
-      # switching ort to a pure-Rust backend (ort-tract).
+      # Linux uses gnu (not musl) so we can dynamically link glibc
+      # against the host (modern distros, glibc >= 2.31 in practice).
+      # candle is pure Rust on CPU; the only external runtime
+      # dependency is libcuda, which cudarc 0.19 dlopens with a
+      # graceful CPU fallback when absent.
       - if: matrix.apt
         run: |
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.apt }}
+
+      # x86_64 Linux artifacts bundle candle's CUDA backend (see
+      # chan/Cargo.toml). nvcc is needed at build time to compile
+      # candle-kernels into PTX; the produced binary dlopens libcuda
+      # at runtime so end-user hosts without an NVIDIA driver still
+      # launch (CHAN_DISABLE_GPU=1 is also honored). Lightweight
+      # install: only nvcc + cudart-dev, ~500 MB.
+      - if: matrix.cuda
+        uses: Jimver/cuda-toolkit@v0.2.21
+        with:
+          cuda: '12.6.0'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart-dev"]'
 
       # Frontend bundle is required for the release binary
       # (rust-embed bakes web/dist/ into the artifact). Debug

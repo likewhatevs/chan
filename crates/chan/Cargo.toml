@@ -18,24 +18,10 @@ default = ["embeddings"]
 # all the way down. Default-on; opt out (`--no-default-features`)
 # only for platforms where candle-core won't build (currently iOS).
 embeddings = ["chan-server/embeddings", "chan-drive/embeddings"]
-# Linux-only opt-in: build with `--features cuda` to wire candle's
-# CUDA backend for embeddings. Errors at resolve time on macOS
-# (cudarc requires the CUDA toolkit). `CHAN_DISABLE_GPU=1` falls
-# back to CPU at runtime without rebuilding.
-cuda = ["chan-drive/cuda"]
 
 [dependencies]
 chan-drive = { workspace = true, default-features = false }
 chan-server = { path = "../chan-server", default-features = false }
-
-# macOS auto-wires candle's Metal backend so the default release
-# binary uses the GPU for embeddings without a feature flag. The
-# `metal` feature is target-gated on chan-drive (objc2-metal is
-# Apple-only); declaring it here keeps Linux/Windows builds clean
-# while macOS gets it transparently.
-[target.'cfg(target_os = "macos")'.dependencies]
-chan-drive = { workspace = true, default-features = false, features = ["metal"] }
-chan-server = { path = "../chan-server", default-features = false, features = ["metal"] }
 # Pulled in directly (not just transitively through chan-server) so
 # the `__mcp` subcommand can run chan-llm's MCP server in-process.
 # The `mcp` feature pulls rmcp + schemars; that's the cost of paying
@@ -47,6 +33,34 @@ anyhow = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+# macOS auto-wires candle's Metal backend so the default release
+# binary uses the GPU for embeddings without a feature flag. The
+# `metal` feature is target-gated on chan-drive (objc2-metal is
+# Apple-only); declaring it here keeps Linux/Windows builds clean
+# while macOS gets it transparently.
+[target.'cfg(target_os = "macos")'.dependencies]
+chan-drive = { workspace = true, default-features = false, features = ["metal"] }
+chan-server = { path = "../chan-server", default-features = false, features = ["metal"] }
+
+# Linux x86_64 auto-wires candle's CUDA backend so the shipped
+# release binary uses the GPU for embeddings without a feature flag.
+# cudarc 0.19's `fallback-dynamic-loading` is on by default: the
+# binary dlopens libcuda at runtime and falls back to CPU when no
+# NVIDIA driver is present, so the same artifact runs on hosts
+# without a GPU. CHAN_DISABLE_GPU=1 forces CPU at runtime.
+#
+# Excluded on linux/aarch64 since NVIDIA's Linux ARM CUDA targets
+# datacenter (Grace, Jetson) rather than the desktops/servers chan
+# runs on; bundling kernels on ARM would be all cost no value.
+# Build host needs nvcc to compile candle-kernels; the runtime
+# binary doesn't need any CUDA libs installed.
+#
+# Opt-out: `--no-default-features --features embeddings` for a
+# Linux build without the ~30 MB of CUDA PTX blobs.
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+chan-drive = { workspace = true, default-features = false, features = ["cuda"] }
+chan-server = { path = "../chan-server", default-features = false, features = ["cuda"] }
 
 # ----- packaging metadata --------------------------------------
 #
