@@ -120,7 +120,7 @@
   }
   /* The ensō uses the same chan-mark.png artwork as the empty-pane
      watermark, painted via CSS mask so the silhouette can take the
-     theme accent. Yellow tint = Notes-style accent. Bigger circle
+     theme accent (brand orange, matches chan.app). Bigger circle
      than the neighbours so it still reads as the primary attractor,
      but everything in the bar scales together so nothing looks like
      an afterthought. */
