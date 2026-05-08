@@ -1,5 +1,5 @@
 [package]
-name = "chan-core"
+name = "chan-drive"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -44,5 +44,5 @@ default = ["embeddings"]
 embeddings = ["dep:fastembed"]
 
 [lib]
-name = "chan_core"
+name = "chan_drive"
 crate-type = ["lib"]

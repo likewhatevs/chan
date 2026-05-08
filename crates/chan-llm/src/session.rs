@@ -9,7 +9,7 @@
 //
 // Async stays inside. Public methods don't return `Future`; they
 // kick off background work and return immediately. This is the
-// same pattern `chan_core::Drive::watch` uses, for the same reason:
+// same pattern `chan_drive::Drive::watch` uses, for the same reason:
 // a foreign-language consumer shouldn't have to negotiate an async
 // runtime across the FFI boundary.
 //
@@ -22,7 +22,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use chan_core::Drive;
+use chan_drive::Drive;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 use tokio::runtime::Runtime;
@@ -362,7 +362,7 @@ fn shared_runtime() -> &'static Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chan_core::Library;
+    use chan_drive::Library;
     use std::sync::Mutex;
     use tempfile::TempDir;
 

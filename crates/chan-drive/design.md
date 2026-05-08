@@ -1,6 +1,6 @@
-# chan-core - design
+# chan-drive - design
 
-This document describes the design of `chan-core`, the low-level
+This document describes the design of `chan-drive`, the low-level
 Rust library extracted from the chan markdown editor. It owns the
 per-machine registry of known drives, exposes a path-based
 sandboxed filesystem API rooted at each drive, and wraps the per-
@@ -24,9 +24,9 @@ In scope:
   - Filesystem watcher (callback-based, drive-scoped).
   - Cross-process advisory writer lock (fs4 / flock / LockFileEx).
   - Path-traversal sandboxing and editable-text whitelist.
-  - Atomic writes for every chan-core-managed file.
+  - Atomic writes for every chan-drive-managed file.
   - Per-drive blob storage for opaque host JSON: window/pane
-    sessions and assistant chat history. chan-core stores bytes
+    sessions and assistant chat history. chan-drive stores bytes
     keyed by a flat identifier; the schema is the host's choice.
     Native shells (iOS / Android) link these via uniffi and share
     persistence semantics with the chan-server desktop app
@@ -43,7 +43,7 @@ Out of scope:
   - Editor preferences (fonts, theme, keybindings, attachments dir).
     Those are app-level and live in a config file the consumer owns.
   - User authentication, multi-user collaboration, cloud sync of
-    chan-core state. Single-user, single-machine, local-first.
+    chan-drive state. Single-user, single-machine, local-first.
   - Cross-drive linking. One drive at a time; explicit non-goal.
 
 ## Architecture overview
@@ -94,7 +94,7 @@ $DATA_DIR/chan/                   (state_dir; persistent)
   graph/<key>/graph.sqlite        per-drive graph DB
   locks/<key>/writer.lock         per-drive cross-process lock
   tokens/<key>/                   per-drive bearer-token store
-                                  (chan-core allocates the dir; the
+                                  (chan-drive allocates the dir; the
                                   app, e.g. chan-server, owns the
                                   contents)
   trash/<key>/<id>/               per-drive Trash. Each entry holds
@@ -132,12 +132,12 @@ the rest of the per-app state.
 
 ### Drive contents
 
-chan-core stores ZERO files inside the user's drive directory. The
+chan-drive stores ZERO files inside the user's drive directory. The
 drive is purely user content (markdown, attachments). This makes it
 safe to drop a drive inside an existing git repo, an iCloud /
 Google Drive / Dropbox folder, or anywhere else. A stray `.chan/`
 left over from an older install or created by a third-party tool
-is filtered out by `walk_drive` and `dispatch`; chan-core never
+is filtered out by `walk_drive` and `dispatch`; chan-drive never
 emits events for it or includes it in `list_tree`.
 
 ## Public API surface
@@ -244,7 +244,7 @@ stat.mtime, new_content)`. If another process (terminal, sync
 daemon, second pane) has since modified the file, the write
 fails with `WriteConflict { current_mtime }` and the editor
 prompts to reload, merge, or overwrite. `write_text` (no CAS)
-remains for chan-core's own reindex helpers, bulk imports, and
+remains for chan-drive's own reindex helpers, bulk imports, and
 LLM-tool calls where last-write-wins is the intent. Residual
 race: between the mtime check and the atomic rename a foreign
 write can land; the watcher event for the foreign change fires
@@ -256,7 +256,7 @@ the operation is reversible; the foot-gun guard against accidental
 recursive-rm is satisfied by the restore path. Symlinks, FIFOs,
 sockets, and char/block devices are rejected with `SpecialFile`;
 the trash format only models regular files and directories, and
-chan-core never creates the other types itself.
+chan-drive never creates the other types itself.
 
 ### Trash
 
@@ -431,7 +431,7 @@ the FFI boundary.
 
 The graph indexer is a separate concern from the search indexer:
 the indexer that updates them lives at a higher layer (the file-
-system watcher feeds both). chan-core exposes `replace_file` and
+system watcher feeds both). chan-drive exposes `replace_file` and
 `forget_file` as the write-side primitives; the indexer driving
 them is an app-level component (or a future companion crate).
 
@@ -534,7 +534,7 @@ Still ahead:
     written (`recipes/pasta`, no extension). A resolver step
     that maps each target to a real file path (with `.md`
     extension lookup, prefix-match, etc.) lives at the consumer
-    layer for now. Could move into chan-core if every consumer
+    layer for now. Could move into chan-drive if every consumer
     needs the same logic.
   - **Watcher consumer**: `Drive::watch` is wired and the
     watcher filters drive-internal noise, but no built-in
@@ -553,7 +553,7 @@ Still ahead:
     watcher channel.
   - Remote-backed `Drive` impl: a future trait split could let a
     thin client call `read` / `write` / `search` against an HTTP
-    endpoint while the server runs the real chan-core. Not
+    endpoint while the server runs the real chan-drive. Not
     designed for now; the API surface is shaped to allow it
     later.
   - Background reindex job handle: if synchronous reindex turns

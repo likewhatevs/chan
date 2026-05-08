@@ -13,7 +13,7 @@ Two consumers, neither contains the other:
 - `chan-server` (in `chan-writer/chan`) wraps `LlmSession` in axum
   routes and forwards events over WebSocket to the web frontend.
 - Native shells (iOS / Android, future) link this crate via uniffi
-  alongside `chan-core` and receive events through callback
+  alongside `chan-drive` and receive events through callback
   objects implemented in Swift / Kotlin.
 
 If chan-llm lived inside `chan-writer/chan`, native shells would
@@ -21,7 +21,7 @@ either drag in axum / tower / tokio's HTTP stack to consume the
 LLM logic, or reimplement it in their native language. Both are
 worse than a small extra repo.
 
-`chan-llm` depends on `chan-core` (for `Drive` and `SearchOpts`).
+`chan-llm` depends on `chan-drive` (for `Drive` and `SearchOpts`).
 It does NOT depend on `chan-server` or `chan`. That's the
 inversion: the LLM layer is "lower" than the HTTP layer, even
 though the HTTP layer is the more visible consumer today.
@@ -91,13 +91,13 @@ trait SessionListener: Send + Sync {
 iOS and Android callers pass an explicit path via `load_from` /
 `save_to` since their sandbox dir isn't `dirs::config_dir`.
 
-The chan-core registry at `~/.chan/config.toml` is a separate
+The chan-drive registry at `~/.chan/config.toml` is a separate
 file with a separate purpose; chan-llm doesn't read or write it.
 
 ## Tool sandbox
 
 Four built-in tools dispatched by name. Every tool routes through
-`chan_core::Drive`, so the filesystem invariants apply
+`chan_drive::Drive`, so the filesystem invariants apply
 automatically: path sandbox (no `..` escapes, no mid-path symlinks
 out of the drive), special-file refusal (no FIFOs, sockets,
 devices), atomic writes, the `.md` / `.txt` editable-text gate.
@@ -126,7 +126,7 @@ calls, and the stop reason fire into the listener as they arrive.
 Why not return `impl Stream` or a channel: uniffi can't cross those
 boundaries without a costly bridge layer. Callback objects work
 identically in Swift, Kotlin, and Rust. Same pattern as
-`chan_core::Drive::watch`.
+`chan_drive::Drive::watch`.
 
 ## Prompt sourcing
 
@@ -183,9 +183,10 @@ make that mechanical:
 - uniffi bindings. Crate is shaped for them; bindings produce when
   the first native shell lands.
 - CI workflow file. Cross-repo auth between two private repos
-  (chan-llm depending on chan-core via path) is the open issue;
-  the pre-push hook is the only gate today, same situation as
-  `chan-writer/chan`.
+  (chan-llm depending on chan-drive via path) was the open issue;
+  resolved when chan-llm was folded into the chan-core workspace.
+  The workspace-level CI now covers this crate; the pre-push hook
+  mirrors it locally.
 - An assistant chat history schema. The session is stateless on
   this crate's side; consumers persist whatever conversation
   state they want however they want.

@@ -22,7 +22,7 @@ pub enum LlmError {
     BackendError { status: u16, message: String },
     #[error("tool error: {0}")]
     Tool(String),
-    #[error("chan-core: {0}")]
+    #[error("chan-drive: {0}")]
     Core(String),
     #[error("io: {0}")]
     Io(String),
@@ -46,8 +46,8 @@ impl From<reqwest::Error> for LlmError {
     }
 }
 
-impl From<chan_core::ChanError> for LlmError {
-    fn from(e: chan_core::ChanError) -> Self {
+impl From<chan_drive::ChanError> for LlmError {
+    fn from(e: chan_drive::ChanError) -> Self {
         LlmError::Core(e.to_string())
     }
 }

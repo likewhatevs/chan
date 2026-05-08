@@ -115,7 +115,7 @@ impl Drive {
 
     /// Per-drive paths (sessions, assistant history, index dir,
     /// graph DB, lock). Exposed for apps that want to put their
-    /// own state alongside chan-core's.
+    /// own state alongside chan-drive's.
     pub fn paths(&self) -> &DrivePaths {
         &self.paths
     }
@@ -380,7 +380,7 @@ impl Drive {
     // ---- session blobs ----
     //
     // Per-window opaque JSON owned by the host (window/pane
-    // layout, active tabs, scroll positions). chan-core stores
+    // layout, active tabs, scroll positions). chan-drive stores
     // bytes; the host decides the schema. Native shells link these
     // via uniffi and avoid reimplementing the atomic-write story
     // per platform.
@@ -569,7 +569,7 @@ impl Drive {
     ///      name). Return the first hit as a regular file.
     ///   3. None when no candidate exists.
     ///
-    /// Anchor strings are passed through unchanged; chan-core
+    /// Anchor strings are passed through unchanged; chan-drive
     /// doesn't validate them against the file's headings (callers
     /// can do that via `GraphView::headings_of`).
     pub fn resolve_link(&self, target: &str) -> Option<ResolvedLink> {
@@ -994,7 +994,7 @@ mod tests {
         symlink("real.md", root.path().join("alias.md")).unwrap();
         // Trash refuses to swallow non-regular non-directory entries:
         // restoring a symlink across a cross-fs trash is fragile, and
-        // chan-core never creates them on its own. Users delete them
+        // chan-drive never creates them on its own. Users delete them
         // out-of-band if they really want them gone.
         let err = drive.remove("alias.md").unwrap_err();
         assert!(matches!(err, ChanError::SpecialFile { .. }));

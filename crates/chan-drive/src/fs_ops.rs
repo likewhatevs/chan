@@ -32,7 +32,7 @@ use walkdir::{DirEntry, WalkDir};
 
 use crate::error::{ChanError, Result};
 
-/// True for paths inside the drive-internal `.chan/` dir. chan-core
+/// True for paths inside the drive-internal `.chan/` dir. chan-drive
 /// never writes there now (per-drive state lives outside the user's
 /// notes tree). The check stays as a defensive filter so a stray
 /// `.chan/` from an older install or a third-party tool never

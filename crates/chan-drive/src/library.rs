@@ -35,7 +35,7 @@ pub struct ResetReport {
     pub removed_entries: usize,
 }
 
-/// Per-machine handle to the chan-core registry + paths.
+/// Per-machine handle to the chan-drive registry + paths.
 #[derive(Clone)]
 pub struct Library {
     inner: Arc<LibraryInner>,
@@ -147,7 +147,7 @@ impl Library {
     }
 
     /// Wipe per-drive chan-managed state for `root`. The user's
-    /// notes tree is never touched (chan-core never writes inside
+    /// notes tree is never touched (chan-drive never writes inside
     /// it). The trash is preserved (it holds user-deleted files,
     /// recoverable user data). The lock dir is preserved (it holds
     /// no data, only cross-process coordination).
@@ -352,7 +352,7 @@ mod tests {
             .unwrap();
 
         assert!(lib.list_drives().is_empty());
-        // User's notes still survive (chan-core never owns them).
+        // User's notes still survive (chan-drive never owns them).
         assert!(drive.path().join("notes/keep.md").exists());
     }
 

@@ -15,7 +15,7 @@ default = []
 mcp = ["dep:rmcp", "dep:schemars"]
 
 [dependencies]
-chan-core = { path = "../chan-core" }
+chan-drive = { path = "../chan-drive" }
 
 async-trait = { workspace = true }
 dirs = { workspace = true }
@@ -47,7 +47,7 @@ crate-type = ["lib"]
 
 # Standalone MCP server binary. Any MCP client (Claude Desktop,
 # Claude Code, Cursor, ...) can spawn this process to get
-# chan-core-sandboxed read/write/list/search access to a chan
+# chan-drive-sandboxed read/write/list/search access to a chan
 # drive. `auto_apply_writes` is forced to true here: confirmation
 # UI is the MCP client's responsibility, not ours.
 [[bin]]

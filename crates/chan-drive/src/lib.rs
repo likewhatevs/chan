@@ -1,4 +1,4 @@
-// chan-core: filesystem, search, and graph primitives for chan-writer drives.
+// chan-drive: filesystem, search, and graph primitives for chan-writer drives.
 //
 // Public surface is path-based, all relative paths POSIX-style ("/" separator)
 // and rooted at a Drive's `root`. Designed to be FFI-safe via uniffi later:

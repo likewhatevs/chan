@@ -1,7 +1,7 @@
 // Per-drive blob storage. Two kinds today: opaque per-window
 // session blobs (`paths.sessions`) and per-conversation assistant
 // chat history (`paths.assistant`). The schema of the stored bytes
-// is the host's concern; chan-core treats every blob as opaque
+// is the host's concern; chan-drive treats every blob as opaque
 // and just guarantees:
 //
 //   - atomic writes (tmpfile + fsync + rename);
@@ -14,8 +14,8 @@
 // blob is opaque. Hosts that want a `.json` suffix include it in
 // the key.
 //
-// Why blobs in chan-core: native shells (iOS / Android, future)
-// link chan-core via uniffi and use these methods directly to
+// Why blobs in chan-drive: native shells (iOS / Android, future)
+// link chan-drive via uniffi and use these methods directly to
 // persist editor state and assistant conversations. Pushing the
 // I/O up to host code would force every shell to reimplement the
 // safety story (atomic writes, path sandbox); centralising here

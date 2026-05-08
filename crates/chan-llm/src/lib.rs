@@ -9,7 +9,7 @@
 //!     the web frontend over WebSocket.
 //!
 //!   - **Native shells** (iOS / Android, future) link this crate via
-//!     uniffi alongside `chan-core`. They construct `LlmSession`
+//!     uniffi alongside `chan-drive`. They construct `LlmSession`
 //!     directly, implement `SessionListener` in Swift / Kotlin, and
 //!     receive streaming deltas + tool calls + tool results without
 //!     a network hop.
@@ -38,12 +38,12 @@
 //!
 //!   Tool               trait for the assistant's read/write/list/
 //!                      search tools. Default impls call into
-//!                      chan-core::Drive.
+//!                      chan-drive::Drive.
 //! ```
 //!
 //! Async stays internal: `LlmSession::send` spawns onto the runtime
 //! and dispatches into the listener. Callers never see a `Future`.
-//! Same callback pattern as `chan-core::Drive::watch`, for the same
+//! Same callback pattern as `chan-drive::Drive::watch`, for the same
 //! reason: uniffi doesn't cross async boundaries cleanly.
 
 #![forbid(unsafe_code)]

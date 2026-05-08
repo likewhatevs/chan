@@ -199,7 +199,7 @@ impl LlmConfig {
 }
 
 /// Default config path: `<config_dir>/chan/llm.toml`. Uses the same
-/// `dirs::config_dir` chan-core does, so the layout stays predictable
+/// `dirs::config_dir` chan-drive does, so the layout stays predictable
 /// across desktop targets. iOS / Android callers pass an explicit
 /// path via `load_from` / `save_to` since their sandbox dir isn't
 /// `dirs::config_dir`.

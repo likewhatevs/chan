@@ -5,19 +5,19 @@
 //!
 //!   - The `chan-llm-mcp` binary, which any MCP client (Claude
 //!     Desktop, Claude Code, Cursor, Continue, ...) can spawn against
-//!     a chan drive to gain chan-core-sandboxed file access.
+//!     a chan drive to gain chan-drive-sandboxed file access.
 //!   - The ClaudeCli backend (v2 follow-up; see issue #1): chan-llm
 //!     writes a temporary `--mcp-config` file pointing at
 //!     chan-llm-mcp and disallows claude's native Read / Write /
 //!     Edit / Glob / Grep tools, so the agent's edits flow through
-//!     `tools::execute` and chan-core's gates fire.
+//!     `tools::execute` and chan-drive's gates fire.
 //!
 //! v1 ships tools-only. Resources (binary content like images,
 //! browse-style discovery) are deferred to issue #2.
 
 use std::sync::Arc;
 
-use chan_core::Drive;
+use chan_drive::Drive;
 use rmcp::{
     handler::server::wrapper::Parameters, model::ErrorData, schemars, tool, tool_handler,
     tool_router, transport::stdio, ServerHandler, ServiceExt,
@@ -34,7 +34,7 @@ use crate::tools::{self, ToolContext, ToolOutcome};
 // bound. Use fully qualified `crate::error::Result` where needed.
 
 /// MCP server handle. Owns a `ToolContext` (drive + auto-apply flag);
-/// each tool dispatch routes through `tools::execute`, so chan-core's
+/// each tool dispatch routes through `tools::execute`, so chan-drive's
 /// path sandbox, special-file refusal, and editable-text gate apply
 /// to MCP-driven calls the same way they apply to in-process backends.
 ///
@@ -84,7 +84,7 @@ pub struct ReadFileParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct WriteFileParams {
     /// POSIX-style relative path under the drive root. Must end in
-    /// `.md` or `.txt`; chan-core's editable-text gate refuses other
+    /// `.md` or `.txt`; chan-drive's editable-text gate refuses other
     /// extensions.
     pub path: String,
     /// Full new file content. Partial diffs are not supported.
@@ -154,7 +154,7 @@ impl Server {
 
 #[tool_handler(
     name = "chan",
-    instructions = "Tools for reading, writing, listing, and searching files in a chan markdown drive. All file operations are sandboxed under the drive root by chan-core."
+    instructions = "Tools for reading, writing, listing, and searching files in a chan markdown drive. All file operations are sandboxed under the drive root by chan-drive."
 )]
 impl ServerHandler for Server {}
 
@@ -185,7 +185,7 @@ fn run_tool(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chan_core::Library;
+    use chan_drive::Library;
     use tempfile::TempDir;
 
     fn fixture(auto_apply: bool) -> (TempDir, TempDir, Server) {
@@ -254,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn write_file_rejects_non_text_via_chan_core() {
+    fn write_file_rejects_non_text_via_chan_drive() {
         let (_cfg, _root, server) = fixture(true);
         let err = server
             .write_file(Parameters(WriteFileParams {
@@ -262,7 +262,7 @@ mod tests {
                 content: "x".into(),
             }))
             .unwrap_err();
-        // chan-core's editable-text gate fires; the assistant cannot
+        // chan-drive's editable-text gate fires; the assistant cannot
         // bypass it through the MCP surface.
         assert!(
             err.message.to_lowercase().contains("png")

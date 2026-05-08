@@ -12,11 +12,11 @@ and the API-key resolution policy. Two consumer shapes:
 `chan-server` over HTTP, and native shells (iOS / Android) via
 uniffi.
 
-It lives as a workspace member alongside chan-core in this repo
-so the LLM layer and the filesystem primitives it sandboxes
-through can move in lockstep. chan-server gets an axum-shaped
-wrapper; a native shell gets a uniffi-shaped binding. Both link
-the same prompts, tools, and edit-control rules.
+It lives as a workspace member alongside chan-drive in the
+chan-core repo so the LLM layer and the filesystem primitives it
+sandboxes through can move in lockstep. chan-server gets an
+axum-shaped wrapper; a native shell gets a uniffi-shaped binding.
+Both link the same prompts, tools, and edit-control rules.
 
 Build, test, toolchain, and pre-push hook setup are documented
 at the workspace root (`../../CLAUDE.md`).
@@ -30,10 +30,10 @@ the auto-apply policy all live here. Bumping any of them changes
 every consumer in lockstep. Don't fork "the prompts the web app
 uses" vs "the prompts iOS uses".
 
-### Tools route through chan-core
+### Tools route through chan-drive
 
 Every tool (read_file, write_file, list_files, search_content)
-calls into `chan_core::Drive`. The filesystem invariants (path
+calls into `chan_drive::Drive`. The filesystem invariants (path
 sandbox, special-file refusal, atomic writes, editable-text gate)
 apply automatically; there is no escape hatch. A backend cannot
 invent a tool that bypasses these gates.
@@ -71,7 +71,7 @@ restructure rather than punt.
 
 ## Contributor Patterns
 
-- **Backends never touch chan-core directly**: a backend only
+- **Backends never touch chan-drive directly**: a backend only
   builds wire-format requests and parses streaming responses.
   Anything filesystem goes through the tool sandbox.
 - **Streaming is callback-based**: backends emit
@@ -81,7 +81,7 @@ restructure rather than punt.
   methods; that breaks the FFI shape.
 - **Errors are uniffi-friendly**: every `LlmError` variant
   carries primitives only. Don't store `reqwest::Error` or
-  `chan_core::ChanError` directly; flatten via `Display`.
+  `chan_drive::ChanError` directly; flatten via `Display`.
 - **Tests use a `Collector` listener**: `Vec<Event>` collector
   pattern, see `session::tests`. Don't reach for tokio test
   utilities until the runtime actually does work.
@@ -90,8 +90,8 @@ restructure rather than punt.
 
 - **Design**: [`design.md`](design.md). Crate layout, public API
   shape, FFI plan, prompt sourcing.
-- **chan-core contract**: `../chan-core/design.md` (sibling crate
-  in the same workspace).
+- **chan-drive contract**: `../chan-drive/design.md` (sibling
+  crate in the same workspace).
 - **chan repo contract**: `../../../chan/design.md` (sibling
   checkout).
 - **Issue tracker**: GitHub `chan-writer/chan-core` (chan-llm's

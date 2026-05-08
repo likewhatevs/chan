@@ -7,9 +7,9 @@
 //   all          ~/.chan          $XDG_DATA_HOME/chan  $XDG_CACHE_HOME/chan
 //
 // `~/.chan/config.toml` holds the registry of known drives and the
-// default-drive setting (chan-core's responsibility). Editor / UI
+// default-drive setting (chan-drive's responsibility). Editor / UI
 // preferences (fonts, theme, API keys) live elsewhere and are an
-// app-level concern; chan-core does not read or write them.
+// app-level concern; chan-drive does not read or write them.
 //
 // State and cache stay XDG-shaped because they hold per-drive blobs
 // where OS conventions help (Time Machine semantics on macOS,
@@ -90,7 +90,7 @@ pub fn drive_key(drive_root: &Path) -> String {
 /// Per-drive global paths. Computed once per Drive open.
 #[derive(Debug, Clone)]
 pub struct DrivePaths {
-    /// Per-drive sessions directory. Opaque JSON; chan-core does
+    /// Per-drive sessions directory. Opaque JSON; chan-drive does
     /// not interpret. Apps put window/pane layout files here.
     pub sessions: PathBuf,
     /// Per-drive assistant conversation directory. Each file keyed
@@ -108,7 +108,7 @@ pub struct DrivePaths {
     /// prevents two processes from writing the same drive's index.
     pub lock: PathBuf,
     /// Per-drive tokens dir. App-level surface (chan-server stores
-    /// its bearer token here, mode 0600). chan-core only allocates
+    /// its bearer token here, mode 0600). chan-drive only allocates
     /// the directory; it does not read or write inside.
     pub tokens: PathBuf,
     /// Per-drive trash dir. Holds soft-deleted files / dirs as

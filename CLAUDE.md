@@ -1,36 +1,37 @@
 # CLAUDE.md
 
 Contribution guidelines for Claude Code (claude.ai/code) when working
-on `chan-core`.
+on the chan-core workspace.
 
 ## What This Project Is
 
-This repo is a Cargo workspace. The headline crate is `chan-core`,
-the low-level Rust library extracted from the chan markdown editor:
-it owns the per-machine registry of known drives, exposes a
-path-based, sandboxed filesystem API rooted at each drive, and
-wraps the per-drive search index and graph database. The contract
-documented below is for the `chan-core` crate specifically.
+This repo (`chan-writer/chan-core`) is a Cargo workspace. The
+headline crate is `chan-drive`, the low-level Rust library
+extracted from the chan markdown editor: it owns the per-machine
+registry of known drives, exposes a path-based, sandboxed
+filesystem API rooted at each drive, and wraps the per-drive
+search index and graph database. The contract documented below
+is for the `chan-drive` crate specifically.
 
 Sibling crates in the same workspace add layers that build on
-chan-core's primitives:
+chan-drive's primitives:
 
   - `chan-tunnel-{proto,client,server}` — h2/yamux drive tunnel
     used by the gateway terminator and embedded into `chan serve`.
   - `chan-llm` — LLM backends, embedded prompts, the tool sandbox
-    the assistant uses to read/edit chan drives via the chan-core
+    the assistant uses to read/edit chan drives via the chan-drive
     API, and the `chan-llm-mcp` MCP server binary.
 
 Each sibling crate has its own `CLAUDE.md` for crate-specific
-guidance. The `chan-core` crate itself stays HTTP/WS/LLM/UI free;
+guidance. The `chan-drive` crate itself stays HTTP/WS/LLM/UI free;
 those concerns live in the sibling crates and in downstream apps:
 
   - `chan-writer/chan`        CLI + embedded web editor (HTTP, WS,
                               frontend bundle, LLM tool calls,
                               editor preferences, API keys).
-  - `chan-writer/chan-ios`    SwiftUI app linking chan-core via FFI
+  - `chan-writer/chan-ios`    SwiftUI app linking chan-drive via FFI
                               (later).
-  - `chan-writer/chan-android` Compose app linking chan-core via FFI
+  - `chan-writer/chan-android` Compose app linking chan-drive via FFI
                               (later).
 
 The release artifact is a Rust library crate. FFI bindings to Swift
@@ -86,7 +87,7 @@ as static dependencies.
   directly to the target.
 - `fs_ops::resolve_safe` rejects `..` components, absolute roots,
   and Windows drive prefixes. Use it for any path that arrived
-  from outside chan-core's trust boundary (HTTP request, link
+  from outside chan-drive's trust boundary (HTTP request, link
   target, FFI argument).
 - `fs_ops::list_tree` and `walk_drive` skip `.chan/` and `.git/`
   at any depth.
@@ -106,7 +107,7 @@ as static dependencies.
 - Discovery is registry-driven: a path is a drive iff
   `Library::register_drive` has been called for it. There is no
   per-file walk, no upward search, no auto-discovery.
-- chan-core stores ZERO chan-managed files inside the user's drive
+- chan-drive stores ZERO chan-managed files inside the user's drive
   directory. The registry, per-drive index, graph DB, sessions,
   assistant history, and locks all live outside the user's notes
   tree. Dropping a drive inside an existing git repo (or anywhere
@@ -183,7 +184,7 @@ as static dependencies.
 
 ## Contributor Patterns
 
-- **Atomic writes for any chan-core-managed file**: registry,
+- **Atomic writes for any chan-drive-managed file**: registry,
   per-drive sessions, graph DB control records. Use
   `fs_ops::atomic_write`. A crash mid-write produces zero state
   for the writer plus an intact previous version, never a torn
@@ -208,7 +209,7 @@ as static dependencies.
   through a UTF-8 buffer." `Drive::read_text` and `Drive::write_text`
   enforce it. Binary callers (attachments, future media browser)
   use `read` / `write_bytes` and own their own gate.
-- **Watcher drops `.chan/` events unconditionally**: chan-core
+- **Watcher drops `.chan/` events unconditionally**: chan-drive
   never writes inside the user's drive directory, so any `.chan/`
   activity is foreign noise. The filter chain in `watch::dispatch`
   short-circuits the whole subtree alongside `.git/`.

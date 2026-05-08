@@ -1,12 +1,18 @@
 # chan-core
 
-Filesystem, search, and graph primitives for chan-writer drives.
+Cargo workspace for the cross-platform Rust core of chan-writer.
+The headline crate is `chan-drive` (filesystem, search, and graph
+primitives, named for its public API: a `Library` registry of
+`Drive` handles); sibling crates add the tunnel transport
+(`chan-tunnel-{proto,client,server}`) and the LLM layer
+(`chan-llm`).
 
-This crate is the low-level core extracted from the chan editor. It
-owns the registry of known drives, exposes a path-based, sandboxed
-filesystem API rooted at each drive, and wraps the per-drive search
-index and graph database. It does not contain HTTP, WebSocket,
-LLM, or UI code; those are app-level concerns that build on top.
+`chan-drive` is the low-level core extracted from the chan editor.
+It owns the registry of known drives, exposes a path-based,
+sandboxed filesystem API rooted at each drive, and wraps the
+per-drive search index and graph database. It does not contain
+HTTP, WebSocket, LLM, or UI code; those are app-level concerns
+that build on top.
 
 ## Status
 

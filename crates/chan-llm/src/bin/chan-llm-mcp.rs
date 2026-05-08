@@ -1,7 +1,7 @@
 //! `chan-llm-mcp`: standalone MCP server binary.
 //!
 //! Any MCP client (Claude Desktop, Claude Code, Cursor, Continue,
-//! ...) can spawn this process to gain chan-core-sandboxed access
+//! ...) can spawn this process to gain chan-drive-sandboxed access
 //! to a chan drive's read/write/list/search tools.
 //!
 //! Usage:
@@ -22,7 +22,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use chan_core::Library;
+use chan_drive::Library;
 use chan_llm::mcp::Server;
 
 fn main() -> ExitCode {
@@ -106,7 +106,7 @@ USAGE:
 OPTIONS:
     --drive <path>     Absolute path of the chan drive to expose.
                        Must already be registered (use `chan drive add`).
-    --config <path>    Override for the chan-core registry config
+    --config <path>    Override for the chan-drive registry config
                        (defaults to ~/.chan/config.toml).
     --auto-apply       Apply write_file tool calls without producing
                        a 'deferred' error. Off by default: the MCP

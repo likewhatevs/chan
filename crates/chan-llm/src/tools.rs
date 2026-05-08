@@ -7,9 +7,9 @@
 //   list_files()          -> tree
 //   search_content(query) -> hits
 //
-// All four route through `chan_core::Drive` so the filesystem
+// All four route through `chan_drive::Drive` so the filesystem
 // invariants (path sandbox, special-file refusal, atomic writes)
-// apply automatically. There's no escape hatch from chan-core's
+// apply automatically. There's no escape hatch from chan-drive's
 // gates: even if a backend invents a novel tool call, our
 // `StandardTool::execute` never bypasses Drive.
 //
@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use chan_core::Drive;
+use chan_drive::Drive;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
@@ -133,7 +133,7 @@ fn exec_search_content(args: &Json, ctx: &ToolContext) -> Result<Json> {
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as u32;
     let res = ctx.drive.search(
         query,
-        &chan_core::SearchOpts {
+        &chan_drive::SearchOpts {
             limit,
             ..Default::default()
         },
@@ -238,7 +238,7 @@ pub fn standard_tool_schemas() -> Vec<ToolSchema> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chan_core::Library;
+    use chan_drive::Library;
     use tempfile::TempDir;
 
     fn fixture() -> (TempDir, TempDir, ToolContext) {
@@ -302,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn write_file_rejects_non_text_via_chan_core() {
+    fn write_file_rejects_non_text_via_chan_drive() {
         let (_cfg, _root, mut ctx) = fixture();
         ctx.auto_apply_writes = true;
         let err = execute(
@@ -311,7 +311,7 @@ mod tests {
             &ctx,
         )
         .unwrap_err();
-        // chan-core's editable-text gate fires; the assistant cannot
+        // chan-drive's editable-text gate fires; the assistant cannot
         // bypass it through the tool sandbox.
         assert!(matches!(err, LlmError::Core(_)));
     }

@@ -2,8 +2,9 @@
 #
 # Crate roles:
 #
-#   - chan-core            filesystem, search, and graph primitives
-#                          for chan drives.
+#   - chan-drive           filesystem, search, and graph primitives
+#                          for chan drives. Headline crate; named
+#                          for the public API (Library + Drive).
 #
 #   - chan-tunnel-proto    framing types and control frames shared
 #                          by client and server. Pure data plus a
@@ -29,12 +30,12 @@
 #
 # Library crates target tokio + rustls. The tunnel crates also pull
 # yamux + h2. All build for Linux, macOS, and (with
-# --no-default-features on chan-core) iOS.
+# --no-default-features on chan-drive) iOS.
 
 [workspace]
 resolver = "2"
 members = [
-    "crates/chan-core",
+    "crates/chan-drive",
     "crates/chan-tunnel-proto",
     "crates/chan-tunnel-client",
     "crates/chan-tunnel-server",

@@ -291,7 +291,7 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
             fs::copy(&src_path, &dst_path)?;
         }
         // Symlinks / FIFOs / sockets / devices inside a trashed
-        // directory are dropped on the cross-fs path. chan-core
+        // directory are dropped on the cross-fs path. chan-drive
         // never creates them, and the same-fs rename path preserves
         // them anyway.
     }

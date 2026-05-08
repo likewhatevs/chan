@@ -35,7 +35,7 @@
 //!     auto-approves these without an interactive prompt.
 //!   - `--disallowedTools Write,Edit,MultiEdit,NotebookEdit,Bash`
 //!     so writes are forced through chan-llm's tools, where
-//!     chan-core's path sandbox + editable-text gate apply.
+//!     chan-drive's path sandbox + editable-text gate apply.
 //!   - `--permission-mode default` (we drop `bypassPermissions`):
 //!     anything not allow-listed blocks, which matches the contract.
 //!
@@ -115,7 +115,7 @@ const MCP_SERVER_KEY: &str = "chan";
 /// Read / Glob / Grep are claude's native read-only tools; they
 /// can touch any file under cwd but don't write. The `mcp__`
 /// entries are the chan-llm MCP server's tools (their dispatch
-/// runs through chan-core's gates).
+/// runs through chan-drive's gates).
 const ALLOWED_TOOLS: &str = concat!(
     "Read,Glob,Grep,",
     "mcp__chan__read_file,",
@@ -126,7 +126,7 @@ const ALLOWED_TOOLS: &str = concat!(
 
 /// Tools claude is explicitly NOT allowed to use in v2 mode.
 /// Forces every mutation through chan-llm's MCP `write_file`,
-/// where chan-core's path sandbox and editable-text gate apply.
+/// where chan-drive's path sandbox and editable-text gate apply.
 /// Bash is denied because it would otherwise let the agent
 /// reach around the gates.
 const DISALLOWED_TOOLS: &str = "Write,Edit,MultiEdit,NotebookEdit,Bash";

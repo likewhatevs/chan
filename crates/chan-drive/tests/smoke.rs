@@ -1,7 +1,7 @@
 // End-to-end smoke test for the public API. Uses an isolated
 // config dir so it doesn't touch the developer's real ~/.chan.
 
-use chan_core::{Library, SearchOpts};
+use chan_drive::{Library, SearchOpts};
 use tempfile::TempDir;
 
 #[test]

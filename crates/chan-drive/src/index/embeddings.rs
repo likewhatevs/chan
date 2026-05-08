@@ -28,7 +28,7 @@ pub enum EmbedError {
 }
 
 /// Stringify anything that fastembed returns (it surfaces
-/// anyhow::Error). Avoids pulling anyhow as a chan-core dep just
+/// anyhow::Error). Avoids pulling anyhow as a chan-drive dep just
 /// for this one boundary.
 fn stringify<E: std::fmt::Display>(e: E) -> EmbedError {
     EmbedError::Fastembed(e.to_string())

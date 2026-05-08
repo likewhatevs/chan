@@ -19,11 +19,11 @@
 // backend's wire format, then drives the streaming response,
 // dispatching events into the `SessionListener` the caller supplied.
 //
-// HTTP backends DO NOT touch the filesystem or chan-core directly.
+// HTTP backends DO NOT touch the filesystem or chan-drive directly.
 // The tool sandbox sits between them and disk: the assistant
 // proposes a tool call, chan-llm relays it to the host via
 // on_tool_call, the host runs `tools::execute` against
-// chan-core::Drive, and the next turn's transcript carries the
+// chan-drive::Drive, and the next turn's transcript carries the
 // tool result. Backends only translate one HTTP exchange per turn.
 //
 // The ClaudeCli backend is the deliberate exception: it shells out

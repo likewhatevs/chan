@@ -1,7 +1,7 @@
 // Drive registry: the per-machine list of directories the user has
 // registered as chan drives. Persisted to ~/.chan/config.toml.
 //
-// This file holds ONLY chan-core's own state: the registry and
+// This file holds ONLY chan-drive's own state: the registry and
 // default-drive setting. Editor preferences (fonts, theme, API
 // keys) are an app-level concern and live in a separate file
 // owned by the consuming app.
@@ -15,7 +15,7 @@ use crate::error::{ChanError, Result};
 use crate::fs_ops;
 use crate::paths;
 
-/// On-disk shape of the chan-core config TOML.
+/// On-disk shape of the chan-drive config TOML.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Registry {
     /// Default drive root for the no-arg launch. When None, the
