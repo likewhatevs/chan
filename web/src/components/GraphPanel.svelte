@@ -1,30 +1,35 @@
 <script lang="ts">
-  // Graph view overlay: spherical / globe layout.
+  // Graph view overlay: 2D force-directed (Obsidian-style) layout.
   //
-  // Nodes are distributed on a unit sphere via the Fibonacci spiral
-  // (even-ish coverage independent of N), then rotated by the user
-  // and orthographically projected to 2D SVG. Edges are straight
-  // lines between projected endpoints; their opacity fades with the
-  // average depth so back edges don't visually clutter the front.
+  // d3-force simulates charge / link / center / collision forces;
+  // we read the resulting (x, y) on each tick and re-render. When
+  // the scope is "file" (or "group"), the seed file(s) are pinned
+  // (fx/fy) to the canvas center so the user's note sits in the
+  // middle and its neighbours orbit around it. When the scope is
+  // "drive" or "global", no node is pinned and the whole graph
+  // floats.
   //
   // Interaction:
-  //   - drag empty space to rotate the globe (yaw + pitch).
-  //   - scroll wheel to zoom (changes the on-screen radius).
-  //   - click a file node to inspect; the side panel's Open button
-  //     routes via openInActivePane and closes the overlay so the
-  //     workspace pane gets focus.
-  //   - per-edge-type filter chips toggle which edges (and the
+  //   - drag empty space to pan (translate the canvas).
+  //   - scroll wheel to zoom (uniform scale around the cursor).
+  //   - drag a node to reposition it; release pins it back to the
+  //     simulation. Hold while moving for a fluid drag.
+  //   - click (no drag) selects: the side panel's Open button
+  //     routes via openInActivePane and closes the overlay.
+  //   - per-edge-kind filter chips toggle which edges (and the
   //     non-file nodes attached only to filtered edges) are drawn.
-  //
-  // Scope picker (header) gates which nodes are even candidates for
-  // rendering: file scope = the chosen file plus its `depth`-hop
-  // neighborhood; group scope = the same applied to the union of
-  // visible files; drive = no filter (the full graph). Filtering
-  // happens client-side; /api/graph still returns the whole graph
-  // for v1 — TODO: add a server-side scope/paths/depth param so
-  // huge drives don't ship megabytes of edges to skip.
 
   import { onDestroy, onMount } from "svelte";
+  import {
+    forceCenter,
+    forceCollide,
+    forceLink,
+    forceManyBody,
+    forceSimulation,
+    type Simulation,
+    type SimulationLinkDatum,
+    type SimulationNodeDatum,
+  } from "d3-force";
 
   import { api } from "../api/client";
   import type { GraphView, GraphViewEdge, GraphViewNode } from "../api/types";
@@ -69,13 +74,25 @@
 
   // ---- types -------------------------------------------------------------
 
-  /// Position on the unit sphere, computed once at load and never
-  /// mutated thereafter. Rotation is applied in the projection step.
-  type SphereNode = GraphViewNode & {
-    /// Base (unrotated) position on the unit sphere.
-    bx: number;
-    by: number;
-    bz: number;
+  /// One simulation node. Carries the original GraphViewNode fields
+  /// plus the d3-force position fields (`x`, `y`, `vx`, `vy`,
+  /// `fx`, `fy`). d3-force mutates these in place every tick.
+  type LayoutNode = GraphViewNode &
+    SimulationNodeDatum & {
+      /// True when this node is currently pinned (fx/fy set). Used
+      /// to apply a slightly different visual (no fade) so the user
+      /// can spot the focal node at a glance.
+      pinned?: boolean;
+    };
+
+  /// Edge with `source` / `target` re-typed as the live LayoutNode
+  /// references d3-force populates after `forceLink` resolves them
+  /// from string IDs. Keep `kind` and `broken` from the wire shape.
+  type LayoutEdge = SimulationLinkDatum<LayoutNode> & {
+    source: string | LayoutNode;
+    target: string | LayoutNode;
+    kind: GraphViewEdge["kind"];
+    broken: boolean;
   };
 
   type EdgeKind = GraphViewEdge["kind"];
@@ -86,22 +103,29 @@
   let width = $state(800);
   let height = $state(600);
 
-  // Rotation in radians. rotY is yaw (mouse X drag), rotX is pitch
-  // (mouse Y drag). We compose Y first then X so horizontal drags
-  // spin the globe like a record and vertical drags tilt it.
-  let rotY = $state(0);
-  let rotX = $state(0);
+  // Pan / zoom on the canvas. `tx`, `ty` are translation in screen
+  // pixels (relative to top-left of the SVG); `k` is the uniform
+  // scale around the cursor. mousedown on empty space drags pan;
+  // wheel adjusts zoom anchored on the cursor position.
+  let tx = $state(0);
+  let ty = $state(0);
+  let k = $state(1);
 
-  // Globe radius in screen pixels and pan offsets. Wheel adjusts
-  // radius for zoom; mousedown on empty space rotates rather than
-  // pans, so panning isn't user-controllable in this layout; we
-  // rely on the SVG center.
-  let radius = $state(220);
-
-  let nodes: SphereNode[] = $state([]);
-  let edges: GraphViewEdge[] = $state([]);
+  let nodes: LayoutNode[] = $state([]);
+  let edges: LayoutEdge[] = $state([]);
   let loading = $state(true);
   let error: string | null = $state(null);
+
+  /// Tick counter bumped on every simulation step. Reading it inside
+  /// derivations (drawNodes / drawEdges) keeps the SVG in sync with
+  /// d3-force's in-place position mutations without the bookkeeping
+  /// of replacing the array on every frame.
+  let tick = $state(0);
+
+  /// d3-force handle. Recreated on every `load()`; stopped on the
+  /// component destroy hook so the rAF loop doesn't outlive the
+  /// overlay.
+  let sim: Simulation<LayoutNode, LayoutEdge> | null = null;
 
   let show = $state<Record<EdgeKind, boolean>>({
     link: true,
@@ -182,12 +206,14 @@
     for (let i = 0; i < graphOverlay.depth; i++) {
       const next = new Set<string>();
       for (const e of edges) {
-        if (frontier.has(e.source) && !visited.has(e.target)) {
-          next.add(e.target);
-          visited.add(e.target);
-        } else if (frontier.has(e.target) && !visited.has(e.source)) {
-          next.add(e.source);
-          visited.add(e.source);
+        const s = edgeSourceId(e);
+        const t = edgeTargetId(e);
+        if (frontier.has(s) && !visited.has(t)) {
+          next.add(t);
+          visited.add(t);
+        } else if (frontier.has(t) && !visited.has(s)) {
+          next.add(s);
+          visited.add(s);
         }
       }
       if (next.size === 0) break;
@@ -196,12 +222,24 @@
     return visited;
   });
 
+  /// d3-force replaces edge.source / edge.target with live node
+  /// references after the first tick. Until then they're the
+  /// string ids we passed in. Both branches surface as plain
+  /// strings here.
+  function edgeSourceId(e: LayoutEdge): string {
+    return typeof e.source === "string" ? e.source : e.source.id;
+  }
+  function edgeTargetId(e: LayoutEdge): string {
+    return typeof e.target === "string" ? e.target : e.target.id;
+  }
+
   const visibleEdges = $derived(
     edges.filter(
       (e) =>
         show[e.kind] &&
         (scopedNodeIds === null ||
-          (scopedNodeIds.has(e.source) && scopedNodeIds.has(e.target))),
+          (scopedNodeIds.has(edgeSourceId(e)) &&
+            scopedNodeIds.has(edgeTargetId(e)))),
     ),
   );
   const visibleNodeIds = $derived.by(() => {
@@ -211,8 +249,8 @@
       if (n.kind === "file") ids.add(n.id);
     }
     for (const e of visibleEdges) {
-      ids.add(e.source);
-      ids.add(e.target);
+      ids.add(edgeSourceId(e));
+      ids.add(edgeTargetId(e));
     }
     return ids;
   });
@@ -262,15 +300,17 @@
     const sel = nodeById.get(selectedId);
     if (!sel) return out;
     for (const e of edges) {
-      if (sel.kind === "file" && e.source === selectedId) {
-        const target = nodeById.get(e.target);
+      const s = edgeSourceId(e);
+      const t = edgeTargetId(e);
+      if (sel.kind === "file" && s === selectedId) {
+        const target = nodeById.get(t);
         if (!target) continue;
         if (e.kind === "tag") out.tags.push(target);
         else if (e.kind === "mention") out.mentions.push(target);
         else if (e.kind === "date") out.dates.push(target);
         else if (e.kind === "link") out.links.push(target);
-      } else if (sel.kind !== "file" && e.target === selectedId) {
-        const source = nodeById.get(e.source);
+      } else if (sel.kind !== "file" && t === selectedId) {
+        const source = nodeById.get(s);
         if (source && source.kind === "file") out.documents.push(source);
       }
     }
@@ -302,215 +342,47 @@
     selectedId = n.id;
   }
 
-  // ---- projection --------------------------------------------------------
+  // ---- d3-force layout helpers ------------------------------------------
 
-  /// Focal length (in sphere radii) for the perspective division.
-  /// Lower → more dramatic foreshortening; higher → closer to
-  /// orthographic. 2.6 sells "globe" without the back hemisphere
-  /// pinching to nothing.
-  const FOCAL = 2.6;
-
-  /// Rotate (bx, by, bz) by the current (rotY, rotX), apply
-  /// perspective, and project to the SVG center. Returns screen
-  /// coords plus the rotated z and the perspective scale (used for
-  /// node size and label scaling).
-  function project(n: { bx: number; by: number; bz: number }): {
-    sx: number;
-    sy: number;
-    z: number;
-    persp: number;
-  } {
-    const cosY = Math.cos(rotY);
-    const sinY = Math.sin(rotY);
-    const cosX = Math.cos(rotX);
-    const sinX = Math.sin(rotX);
-    // Yaw around the Y axis (mixes x & z).
-    const x1 = n.bx * cosY + n.bz * sinY;
-    const z1 = -n.bx * sinY + n.bz * cosY;
-    // Pitch around the X axis (mixes y & z1).
-    const y2 = n.by * cosX - z1 * sinX;
-    const z2 = n.by * sinX + z1 * cosX;
-    const persp = FOCAL / (FOCAL - z2);
-    return {
-      sx: width / 2 + x1 * radius * persp,
-      sy: height / 2 + y2 * radius * persp,
-      z: z2,
-      persp,
-    };
-  }
-
-  // Project + cache by node id, recomputed whenever rotation, radius,
-  // or canvas size changes (those are all reactive $state reads).
-  type Proj = { sx: number; sy: number; z: number; persp: number };
-  const projected = $derived.by(() => {
-    const m = new Map<string, Proj>();
-    for (const n of nodes) m.set(n.id, project(n));
-    return m;
+  /// Visible nodes alone (the simulation runs on the full graph;
+  /// rendering only shows what scope/chip filters allow). Reading
+  /// `tick` ties the renderer to the simulation's per-frame state
+  /// mutations so the SVG stays in sync without the bookkeeping
+  /// of replacing the array on every tick.
+  const drawNodes = $derived.by<LayoutNode[]>(() => {
+    void tick;
+    return nodes.filter((n) => visibleNodeIds.has(n.id));
   });
 
-  // ---- great-circle arcs and wireframe ----------------------------------
-
-  /// Sample a great-circle arc between two points on the unit sphere.
-  /// Uses spherical linear interpolation (slerp); samples are
-  /// uniform in arc-length so the resulting polyline curves smoothly
-  /// regardless of how far apart the endpoints are.
-  function arcPoints(
-    a: { bx: number; by: number; bz: number },
-    b: { bx: number; by: number; bz: number },
-    segments: number,
-  ): Proj[] {
-    // Dot product on the unit sphere = cos(angle between them).
-    const dot = Math.max(-1, Math.min(1, a.bx * b.bx + a.by * b.by + a.bz * b.bz));
-    const omega = Math.acos(dot);
-    const sinO = Math.sin(omega);
-    const out: Proj[] = [];
-    // Antipodal-ish endpoints have an undefined arc; fall back to a
-    // straight chord to avoid divide-by-zero. (Practically unreachable
-    // for our data but cheap to guard.)
-    if (sinO < 1e-6) {
-      out.push(project(a));
-      out.push(project(b));
-      return out;
-    }
-    for (let i = 0; i <= segments; i++) {
-      const t = i / segments;
-      const k1 = Math.sin((1 - t) * omega) / sinO;
-      const k2 = Math.sin(t * omega) / sinO;
-      out.push(
-        project({
-          bx: k1 * a.bx + k2 * b.bx,
-          by: k1 * a.by + k2 * b.by,
-          bz: k1 * a.bz + k2 * b.bz,
-        }),
-      );
-    }
-    return out;
-  }
-
-  /// SVG path for a list of projected points. Front-facing segments
-  /// are emitted as `M`/`L` commands; gaps where the arc dips behind
-  /// the sphere become `M` jumps so the back portion stays hidden.
-  function arcPath(pts: Proj[], hideBack: boolean): string {
-    let d = "";
-    let inSegment = false;
-    for (const p of pts) {
-      if (hideBack && p.z < -0.05) {
-        inSegment = false;
-        continue;
-      }
-      d += inSegment ? `L${p.sx.toFixed(1)} ${p.sy.toFixed(1)}` : `M${p.sx.toFixed(1)} ${p.sy.toFixed(1)}`;
-      inSegment = true;
-    }
-    return d;
-  }
-
-  /// Companion to `arcPath`: returns just the back-facing portion
-  /// of the arc so it can render as a dashed / dimmed stroke. Pairs
-  /// with `arcPath(pts, true)` for the visible front segments. Used
-  /// for graph edges so connections that pass behind the globe stay
-  /// visible (helps the user see that node A actually links to node
-  /// B even when B is on the far side).
-  function arcPathBack(pts: Proj[]): string {
-    let d = "";
-    let inSegment = false;
-    for (const p of pts) {
-      if (p.z >= -0.05) {
-        inSegment = false;
-        continue;
-      }
-      d += inSegment ? `L${p.sx.toFixed(1)} ${p.sy.toFixed(1)}` : `M${p.sx.toFixed(1)} ${p.sy.toFixed(1)}`;
-      inSegment = true;
-    }
-    return d;
-  }
-
-  /// Background wireframe: a few latitude rings and meridians,
-  /// projected through the same rotation. Computed once per
-  /// rotation/radius change via $derived; back portions are hidden
-  /// so the sphere reads as a solid (if translucent) globe.
-  const wireframe = $derived.by(() => {
-    void rotX;
-    void rotY;
-    void radius;
-    void width;
-    void height;
-    const SEG = 64;
-    const lats: string[] = [];
-    // Latitudes at -60°, -30°, 0°, 30°, 60° (skip the poles).
-    for (const latDeg of [-60, -30, 0, 30, 60]) {
-      const lat = (latDeg * Math.PI) / 180;
-      const r = Math.cos(lat);
-      const y = Math.sin(lat);
-      const pts: Proj[] = [];
-      for (let i = 0; i <= SEG; i++) {
-        const a = (i / SEG) * Math.PI * 2;
-        pts.push(project({ bx: r * Math.cos(a), by: y, bz: r * Math.sin(a) }));
-      }
-      lats.push(arcPath(pts, true));
-    }
-    const merids: string[] = [];
-    // Six meridians evenly around the globe.
-    for (let m = 0; m < 6; m++) {
-      const lon = (m / 6) * Math.PI * 2;
-      const cosL = Math.cos(lon);
-      const sinL = Math.sin(lon);
-      const pts: Proj[] = [];
-      for (let i = 0; i <= SEG; i++) {
-        const lat = (i / SEG - 0.5) * Math.PI;
-        const r = Math.cos(lat);
-        pts.push(project({ bx: r * cosL, by: Math.sin(lat), bz: r * sinL }));
-      }
-      merids.push(arcPath(pts, true));
-    }
-    return { lats, merids };
-  });
-
-  /// Visible nodes in render order (back-to-front, so near nodes
-  /// overlap far ones).
-  const drawOrder = $derived.by(() => {
-    const arr = nodes
-      .filter((n) => visibleNodeIds.has(n.id))
-      .map((n) => ({ n, p: projected.get(n.id)! }));
-    arr.sort((a, b) => a.p.z - b.p.z);
-    return arr;
-  });
-
-  /// Visible edges as great-circle arcs. The polyline follows the
-  /// sphere surface so the rendering reads as a globe rather than a
-  /// flat chord diagram. Back portions are hidden via gap-jumps in
-  /// the path so the sphere visually occludes its own far side.
+  /// Visible edges with `source` / `target` resolved to live nodes
+  /// for the SVG <line>'s x1/y1/x2/y2 coords. d3-force overwrites
+  /// these from string ids on first tick; until then we resolve
+  /// against `nodes` ourselves.
   const drawEdges = $derived.by(() => {
-    void rotX;
-    void rotY;
-    void radius;
-    void width;
-    void height;
-    const nodeById = new Map(nodes.map((n) => [n.id, n]));
+    void tick;
+    const idIndex = new Map(nodes.map((n) => [n.id, n]));
     return visibleEdges
       .map((e) => {
-        const a = nodeById.get(e.source);
-        const b = nodeById.get(e.target);
+        const a = typeof e.source === "string" ? idIndex.get(e.source) : e.source;
+        const b = typeof e.target === "string" ? idIndex.get(e.target) : e.target;
         if (!a || !b) return null;
-        const pts = arcPoints(a, b, 24);
-        const avgZ = (pts[0]!.z + pts[pts.length - 1]!.z) / 2;
-        const opacity = 0.18 + 0.62 * ((avgZ + 1) / 2);
-        return {
-          e,
-          d: arcPath(pts, true),
-          dBack: arcPathBack(pts),
-          opacity,
-        };
+        return { e, a, b };
       })
-      .filter(
-        (
-          x,
-        ): x is {
-          e: GraphViewEdge;
-          d: string;
-          dBack: string;
-          opacity: number;
-        } => !!x,
-      );
+      .filter((x): x is { e: LayoutEdge; a: LayoutNode; b: LayoutNode } => !!x);
+  });
+
+  // Re-pin the focal node(s) whenever the scope changes. For "file"
+  // / "group" / "git_repo" / "dir" scope, the seed file(s) get
+  // pinned to the canvas center (or fanned out evenly when there
+  // are several). For "drive" / "global", no pinning — the whole
+  // graph floats in the force field.
+  $effect(() => {
+    void currentScope;
+    void width;
+    void height;
+    if (!sim) return;
+    pinFocalNodes();
+    sim.alpha(0.6).restart();
   });
 
   // ---- mount: fetch + layout --------------------------------------------
@@ -524,8 +396,13 @@
         for (const ent of entries) {
           width = Math.max(200, ent.contentRect.width);
           height = Math.max(200, ent.contentRect.height);
-          // Keep the globe inside the viewport when the pane shrinks.
-          radius = Math.min(radius, Math.min(width, height) * 0.45);
+          if (sim) {
+            sim.force("center", forceCenter(width / 2, height / 2));
+            // Re-pin so the focal node stays centered when the
+            // viewport changes.
+            pinFocalNodes();
+            sim.alpha(0.4).restart();
+          }
         }
       });
       resizeObs.observe(svgEl);
@@ -535,6 +412,8 @@
 
   onDestroy(() => {
     resizeObs?.disconnect();
+    sim?.stop();
+    sim = null;
   });
 
   async function load(): Promise<void> {
@@ -542,7 +421,7 @@
     error = null;
     try {
       const g: GraphView = await api.graph();
-      layoutFibonacci(g);
+      buildSimulation(g);
     } catch (e) {
       error = (e as Error).message;
     } finally {
@@ -550,124 +429,215 @@
     }
   }
 
-  /// Place every node on a unit sphere via the Fibonacci spiral.
-  /// Sorting nodes by (kind, label) before assigning indices keeps
-  /// same-kind nodes adjacent on the spiral; colors band visibly
-  /// rather than scattering.
-  function layoutFibonacci(g: GraphView): void {
-    const KIND_ORDER: Record<GraphViewNode["kind"], number> = {
-      file: 0,
-      tag: 1,
-      mention: 2,
-      date: 3,
-    };
-    const sorted = [...g.nodes].sort((a, b) => {
-      const k = KIND_ORDER[a.kind] - KIND_ORDER[b.kind];
-      if (k !== 0) return k;
-      return a.label.localeCompare(b.label);
-    });
+  /// Build (or rebuild) the d3-force simulation over `g`. Stops the
+  /// previous simulation if any. Initial node positions are seeded
+  /// in a small jittered cluster around the canvas center so the
+  /// first frame doesn't show a starburst from (0, 0); the forces
+  /// then settle them into place over a couple of seconds.
+  function buildSimulation(g: GraphView): void {
+    sim?.stop();
+    const cx = width / 2;
+    const cy = height / 2;
+    const layoutNodes: LayoutNode[] = g.nodes.map((n) => ({
+      ...n,
+      x: cx + (Math.random() - 0.5) * 80,
+      y: cy + (Math.random() - 0.5) * 80,
+    }));
+    const layoutEdges: LayoutEdge[] = g.edges.map((e) => ({
+      source: e.source,
+      target: e.target,
+      kind: e.kind,
+      broken: e.broken ?? false,
+    }));
+    nodes = layoutNodes;
+    edges = layoutEdges;
 
-    const N = sorted.length;
-    const phi = Math.PI * (3 - Math.sqrt(5)); // golden angle
-    const out: SphereNode[] = sorted.map((n, i) => {
-      // y in [-1, 1], radius_at_y = sqrt(1 - y*y), angle stepping
-      // by the golden angle gives a uniform distribution.
-      const y = N === 1 ? 0 : 1 - (i / (N - 1)) * 2;
-      const r = Math.sqrt(Math.max(0, 1 - y * y));
-      const theta = i * phi;
-      return {
-        ...n,
-        bx: Math.cos(theta) * r,
-        by: y,
-        bz: Math.sin(theta) * r,
-      };
-    });
-    nodes = out;
-    edges = g.edges;
+    sim = forceSimulation<LayoutNode>(layoutNodes)
+      .force(
+        "link",
+        forceLink<LayoutNode, LayoutEdge>(layoutEdges)
+          .id((n) => n.id)
+          // Slightly longer links for file<->file (the dominant
+          // edge kind) so the dense recipe-cluster still has room
+          // to breathe; tighter for tag/mention/date so satellites
+          // sit close to their owner.
+          .distance((e) => (e.kind === "link" ? 70 : 40))
+          .strength(0.6),
+      )
+      .force("charge", forceManyBody<LayoutNode>().strength(-180))
+      .force("center", forceCenter(cx, cy))
+      .force("collide", forceCollide<LayoutNode>().radius(18).strength(0.7))
+      .alphaDecay(0.03)
+      .on("tick", () => {
+        // Bumping `tick` is what tells the reactive renderer to
+        // re-read the in-place-mutated x/y on each node. Cheap;
+        // d3-force ticks ~30 times before settling.
+        tick = (tick + 1) | 0;
+      });
+
+    pinFocalNodes();
   }
 
-  // ---- interaction: rotate + zoom + click -------------------------------
+  /// Pin the focal-scope file node(s) at fixed positions so the
+  /// "selected file" sits in the middle and its neighbours orbit.
+  /// Multiple seed paths (group / dir scope) fan out evenly on a
+  /// circle around the center. Drive / global scope leaves all
+  /// nodes free to move; pin state is cleared on the way out.
+  function pinFocalNodes(): void {
+    const cx = width / 2;
+    const cy = height / 2;
+    // Identify seed paths from the current scope.
+    let seedPaths: string[] | null = null;
+    if (currentScope) {
+      if (currentScope.kind === "file") seedPaths = [currentScope.path];
+      else if (currentScope.kind === "group") seedPaths = [...currentScope.paths];
+      else if (currentScope.kind === "dir") seedPaths = filesUnder(currentScope.path);
+      else if (currentScope.kind === "git_repo")
+        seedPaths = filesUnder(currentScope.root);
+    }
+    // Clear any prior pinning first so swapping scopes never leaves
+    // stale fixed positions behind.
+    for (const n of nodes) {
+      n.fx = null;
+      n.fy = null;
+      n.pinned = false;
+    }
+    if (!seedPaths || seedPaths.length === 0) return;
+    const seedNodes = nodes.filter(
+      (n) => n.kind === "file" && seedPaths!.includes(n.path),
+    );
+    if (seedNodes.length === 1) {
+      const n = seedNodes[0]!;
+      n.fx = cx;
+      n.fy = cy;
+      n.pinned = true;
+    } else {
+      const r = Math.min(width, height) * 0.18;
+      seedNodes.forEach((n, i) => {
+        const angle = (i / seedNodes.length) * Math.PI * 2 - Math.PI / 2;
+        n.fx = cx + Math.cos(angle) * r;
+        n.fy = cy + Math.sin(angle) * r;
+        n.pinned = true;
+      });
+    }
+  }
 
-  let rotateStart: { x: number; y: number; rotX: number; rotY: number } | null = null;
-  // mousedown bookkeeping for "click vs drag" on a node.
+  /// Helper used by `pinFocalNodes` for the dir / git_repo scopes:
+  /// every file node whose path lives under the prefix.
+  function filesUnder(prefix: string): string[] {
+    const root = prefix.replace(/\/+$/, "");
+    const withSlash = root + "/";
+    return nodes
+      .filter(
+        (n) =>
+          n.kind === "file" && (n.path === root || n.path.startsWith(withSlash)),
+      )
+      .map((n) => (n.kind === "file" ? n.path : ""))
+      .filter((p) => p);
+  }
+
+  // ---- interaction: pan + zoom + node drag ------------------------------
+
+  /// Pan drag on empty SVG: translates the canvas. Anchored to
+  /// the cursor so the user "grabs" the graph at the click point.
+  let panStart: { mx: number; my: number; tx: number; ty: number } | null = null;
+  /// Node drag: temporarily pins the dragged node so the simulation
+  /// follows the cursor without yanking the rest of the graph.
+  /// `moved` discriminates click vs drag for selection semantics.
   const DRAG_THRESHOLD = 4;
-  let nodeDown: { node: SphereNode; x: number; y: number; moved: boolean } | null = null;
+  let nodeDown:
+    | { node: LayoutNode; mx: number; my: number; moved: boolean }
+    | null = null;
 
   function onSvgMouseDown(e: MouseEvent): void {
-    rotateStart = { x: e.clientX, y: e.clientY, rotX, rotY };
-    window.addEventListener("mousemove", onRotateMove);
-    window.addEventListener("mouseup", onRotateUp);
+    panStart = { mx: e.clientX, my: e.clientY, tx, ty };
+    window.addEventListener("mousemove", onPanMove);
+    window.addEventListener("mouseup", onPanUp);
   }
 
-  function onRotateMove(e: MouseEvent): void {
-    if (!rotateStart) return;
-    // 0.0085 rad/px ≈ a half-turn for a ~370 px drag, comfortable
-    // on most laptop trackpads without overshooting.
-    const k = 0.0085;
-    rotY = rotateStart.rotY + (e.clientX - rotateStart.x) * k;
-    // Clamp pitch so the globe never flips upside-down (avoids a
-    // disorienting "label suddenly mirrored" jump).
-    const nextX = rotateStart.rotX + (e.clientY - rotateStart.y) * k;
-    rotX = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, nextX));
+  function onPanMove(e: MouseEvent): void {
+    if (!panStart) return;
+    tx = panStart.tx + (e.clientX - panStart.mx);
+    ty = panStart.ty + (e.clientY - panStart.my);
   }
 
-  function onRotateUp(): void {
-    rotateStart = null;
-    window.removeEventListener("mousemove", onRotateMove);
-    window.removeEventListener("mouseup", onRotateUp);
+  function onPanUp(): void {
+    panStart = null;
+    window.removeEventListener("mousemove", onPanMove);
+    window.removeEventListener("mouseup", onPanUp);
   }
 
   function onWheel(e: WheelEvent): void {
     e.preventDefault();
     const factor = Math.exp(-e.deltaY * 0.0015);
-    const minR = 60;
-    const maxR = Math.min(width, height) * 0.48;
-    radius = Math.max(minR, Math.min(maxR, radius * factor));
+    const next = Math.max(0.25, Math.min(4, k * factor));
+    if (next === k) return;
+    // Zoom anchored on the cursor: keep the world-point under
+    // the pointer fixed by adjusting tx/ty alongside k.
+    const rect = svgEl?.getBoundingClientRect();
+    if (!rect) {
+      k = next;
+      return;
+    }
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    tx = px - ((px - tx) * next) / k;
+    ty = py - ((py - ty) * next) / k;
+    k = next;
   }
 
-  function onNodeMouseDown(e: MouseEvent, n: SphereNode): void {
+  function onNodeMouseDown(e: MouseEvent, n: LayoutNode): void {
     e.stopPropagation();
-    nodeDown = { node: n, x: e.clientX, y: e.clientY, moved: false };
+    nodeDown = { node: n, mx: e.clientX, my: e.clientY, moved: false };
     window.addEventListener("mousemove", onNodeMove);
     window.addEventListener("mouseup", onNodeUp);
   }
 
   function onNodeMove(e: MouseEvent): void {
-    if (!nodeDown) return;
-    const dx = e.clientX - nodeDown.x;
-    const dy = e.clientY - nodeDown.y;
+    if (!nodeDown || !sim || !svgEl) return;
+    const dx = e.clientX - nodeDown.mx;
+    const dy = e.clientY - nodeDown.my;
     if (!nodeDown.moved && Math.hypot(dx, dy) >= DRAG_THRESHOLD) {
       nodeDown.moved = true;
-      // Promote to a globe rotation drag: hand off to the rotate
-      // handlers as if the user had pressed on empty space.
-      rotateStart = { x: nodeDown.x, y: nodeDown.y, rotX, rotY };
-      window.addEventListener("mousemove", onRotateMove);
-      window.addEventListener("mouseup", onRotateUp);
+      sim.alphaTarget(0.3).restart();
     }
-    if (nodeDown.moved) onRotateMove(e);
+    if (!nodeDown.moved) return;
+    const rect = svgEl.getBoundingClientRect();
+    // Convert client coords -> SVG coords by undoing the world
+    // transform (translate(tx, ty) scale(k)).
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    nodeDown.node.fx = (sx - tx) / k;
+    nodeDown.node.fy = (sy - ty) / k;
   }
 
-  function onNodeUp(e: MouseEvent): void {
-    if (nodeDown && !nodeDown.moved) {
-      // Selection rather than open: file vs tag/mention/date all
-      // route through the side panel. Clicking the same node twice
-      // doesn't toggle (deselect) because that would feel
-      // accidental during normal browsing; use the panel's close
-      // affordance to clear instead.
+  function onNodeUp(): void {
+    if (!nodeDown) return;
+    if (!nodeDown.moved) {
       selectedId = nodeDown.node.id;
+    } else {
+      sim?.alphaTarget(0);
+      // Release the drag pin UNLESS this node is the focal pin
+      // (kept pinned by `pinFocalNodes`); the `pinned` flag
+      // discriminates.
+      if (!nodeDown.node.pinned) {
+        nodeDown.node.fx = null;
+        nodeDown.node.fy = null;
+      }
     }
     nodeDown = null;
     window.removeEventListener("mousemove", onNodeMove);
     window.removeEventListener("mouseup", onNodeUp);
-    // If we promoted to a rotation, let onRotateUp run via the
-    // window mouseup it registered; otherwise nothing to do.
-    void e;
   }
 
   function resetView(): void {
-    rotX = 0;
-    rotY = 0;
-    radius = Math.min(width, height) * 0.4;
+    tx = 0;
+    ty = 0;
+    k = 1;
+    if (sim) {
+      pinFocalNodes();
+      sim.alpha(0.6).restart();
+    }
   }
 
   // ---- presentation ------------------------------------------------------
@@ -686,19 +656,13 @@
     date: "var(--info-text)",
   };
 
-  function nodeRadius(n: SphereNode, p: Proj): number {
-    const base = n.kind === "file" ? 6 : 4;
-    // Use the perspective scale directly so node size tracks the
-    // same projection as position. Clamp so back nodes don't
-    // disappear and front nodes don't blow up.
-    return Math.max(2.5, Math.min(12, base * p.persp));
-  }
-
-  function nodeOpacity(p: Proj): number {
-    // Stronger fade on the back so the sphere visually occludes
-    // its own far side without fully hiding it (drag-to-rotate
-    // discoverability).
-    return 0.3 + 0.7 * ((p.z + 1) / 2);
+  /// Visual radius. Files read larger than tag/mention/date
+  /// satellites so the dominant content type is unmistakable;
+  /// the focal-pinned node gets a small extra so the user sees
+  /// the "you are here" anchor at a glance.
+  function nodeRadius(n: LayoutNode): number {
+    const base = n.kind === "file" ? 7 : 4;
+    return n.pinned ? base + 2 : base;
   }
 </script>
 
@@ -774,94 +738,65 @@
       onmousedown={onSvgMouseDown}
       onwheel={onWheel}
     >
-      <!-- Globe silhouette: a faint disc behind the wireframe so
-           the sphere reads as a translucent ball rather than a wire
-           cage in vacuum. -->
-      <circle
-        class="globe-fill"
-        cx={width / 2}
-        cy={height / 2}
-        r={radius}
-      />
-      <!-- Latitude / longitude wireframe. Drawn under the edges so
-           reference grid stays out of the way of the data. -->
-      <g class="wireframe">
-        {#each wireframe.lats as d, i (`lat-${i}`)}
-          <path d={d} fill="none" stroke="var(--border)" />
-        {/each}
-        {#each wireframe.merids as d, i (`mer-${i}`)}
-          <path d={d} fill="none" stroke="var(--border)" />
-        {/each}
-      </g>
-
-      {#each drawEdges as { e, d, dBack, opacity } (`${e.source}->${e.target}-${e.kind}`)}
-        {#if dBack}
-          <!-- Back-of-globe portion: dashed + dimmed so the user
-               sees that the edge continues but the front of the
-               sphere is still visually solid in front of it. -->
-          <path
-            d={dBack}
-            fill="none"
+      <!-- World group: a single translate(tx, ty) scale(k) parents
+           every node + edge so the canvas pans and zooms uniformly
+           without re-running the simulation. -->
+      <g transform={`translate(${tx}, ${ty}) scale(${k})`}>
+        {#each drawEdges as { e, a, b } (`${a.id}->${b.id}-${e.kind}`)}
+          <line
+            x1={a.x ?? 0}
+            y1={a.y ?? 0}
+            x2={b.x ?? 0}
+            y2={b.y ?? 0}
             stroke={EDGE_COLORS[e.kind]}
-            stroke-opacity={opacity * (e.broken ? 0.6 : 1) * 0.35}
-            stroke-dasharray="2 4"
-            stroke-width={e.kind === "link" ? 1.5 : 1}
+            stroke-opacity={e.broken ? 0.45 : 0.7}
+            stroke-dasharray={e.broken ? "3 3" : undefined}
+            stroke-width={e.kind === "link" ? 1.6 : 1.1}
             stroke-linecap="round"
           />
-        {/if}
-        <path
-          d={d}
-          fill="none"
-          stroke={EDGE_COLORS[e.kind]}
-          stroke-opacity={opacity * (e.broken ? 0.6 : 1)}
-          stroke-dasharray={e.broken ? "3 3" : undefined}
-          stroke-width={e.kind === "link" ? 1.5 : 1}
-          stroke-linecap="round"
-        />
-      {/each}
+        {/each}
 
-      {#each drawOrder as { n, p } (n.id)}
-        <g
-          class="node"
-          class:file={n.kind === "file"}
-          class:missing={n.kind === "file" && n.missing}
-          transform={`translate(${p.sx}, ${p.sy})`}
-          opacity={nodeOpacity(p)}
-          onmousedown={(ev) => onNodeMouseDown(ev, n)}
-          onmouseenter={() => (hoverId = n.id)}
-          onmouseleave={() => (hoverId = hoverId === n.id ? null : hoverId)}
-          role="button"
-          tabindex="0"
-        >
-          {#if selectedId === n.id}
-            <!-- Selection ring: draws underneath the node body so
-                 the colored fill stays visible. -->
-            <circle
-              r={nodeRadius(n, p) + 4}
-              fill="none"
-              stroke="var(--accent)"
-              stroke-width="2"
-            />
-          {/if}
-          <circle r={nodeRadius(n, p)} fill={NODE_COLORS[n.kind]} />
-          {#if p.z > -0.4}
+        {#each drawNodes as n (n.id)}
+          <g
+            class="node"
+            class:file={n.kind === "file"}
+            class:missing={n.kind === "file" && n.missing}
+            class:focal={n.pinned}
+            transform={`translate(${n.x ?? 0}, ${n.y ?? 0})`}
+            onmousedown={(ev) => onNodeMouseDown(ev, n)}
+            onmouseenter={() => (hoverId = n.id)}
+            onmouseleave={() => (hoverId = hoverId === n.id ? null : hoverId)}
+            role="button"
+            tabindex="0"
+          >
+            {#if selectedId === n.id}
+              <!-- Selection ring: draws underneath the node body so
+                   the colored fill stays visible. -->
+              <circle
+                r={nodeRadius(n) + 4}
+                fill="none"
+                stroke="var(--accent)"
+                stroke-width="2"
+              />
+            {/if}
+            <circle r={nodeRadius(n)} fill={NODE_COLORS[n.kind]} />
             <text
               class="label-bg"
-              x={nodeRadius(n, p) + 5}
+              x={nodeRadius(n) + 5}
               y={3}
               font-size={n.kind === "file" ? 11 : 10}
               pointer-events="none"
             >{n.label}</text>
             <text
               class="label"
-              x={nodeRadius(n, p) + 5}
+              x={nodeRadius(n) + 5}
               y={3}
               font-size={n.kind === "file" ? 11 : 10}
               pointer-events="none"
             >{n.label}</text>
-          {/if}
-        </g>
-      {/each}
+          </g>
+        {/each}
+      </g>
     </svg>
   </div>
 
@@ -1320,16 +1255,16 @@
   svg:active {
     cursor: grabbing;
   }
-  .globe-fill {
-    fill: var(--bg-card);
-    opacity: 0.35;
-  }
-  .wireframe path {
-    opacity: 0.45;
-    stroke-width: 0.75;
-  }
   .node {
     cursor: pointer;
+  }
+  /* Focal node: subtly brighter halo so the user can spot the
+     "you are here" anchor amid an otherwise uniform colour set.
+     Drawn as a stroke on the inner circle (not the selection
+     ring, which is reserved for click-selection). */
+  .node.focal circle:last-of-type {
+    stroke: var(--accent);
+    stroke-width: 1.5;
   }
   .node.file circle {
     stroke: var(--bg);
