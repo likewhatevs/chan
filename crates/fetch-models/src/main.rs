@@ -57,6 +57,21 @@ fn main() -> Result<()> {
     // from a prior run it skips the network and returns instantly.
     Embedder::open(DEFAULT_MODEL, &staging).context("download default embedding model")?;
 
+    // Skip the (slow) zstd-19 re-encode when the existing bundle is
+    // already newer than every file under staging. Force a rebuild
+    // by deleting the bundle (or running `cargo clean`).
+    if bundle_up_to_date(&bundle, &staging)? {
+        let size = std::fs::metadata(&bundle)
+            .map(|m| m.len())
+            .unwrap_or_default();
+        eprintln!(
+            "fetch-models: bundle up-to-date ({}, {})",
+            bundle.display(),
+            humanize(size)
+        );
+        return Ok(());
+    }
+
     eprintln!("fetch-models: encoding bundle to {}", bundle.display());
     encode_tar_zst(&staging, &bundle)?;
     let size = std::fs::metadata(&bundle)
@@ -89,6 +104,36 @@ fn bundle_path() -> PathBuf {
         .join("chan-server")
         .join("resources")
         .join("models.tar.zst")
+}
+
+/// True if `bundle` exists and its mtime is at least as new as
+/// every non-skipped file under `staging`. Mirrors the filter set
+/// used by `encode_tar_zst` so newly-arrived `*.lock` / `blobs/`
+/// files don't force a re-encode.
+fn bundle_up_to_date(bundle: &Path, staging: &Path) -> Result<bool> {
+    let Ok(meta) = std::fs::metadata(bundle) else {
+        return Ok(false);
+    };
+    if meta.len() == 0 {
+        return Ok(false);
+    }
+    let bundle_mtime = meta.modified().context("bundle mtime")?;
+    for entry in walk_files(staging)? {
+        let rel = entry
+            .strip_prefix(staging)
+            .with_context(|| format!("strip {}", entry.display()))?;
+        if should_skip(rel) {
+            continue;
+        }
+        let m = std::fs::metadata(&entry)
+            .with_context(|| format!("stat {}", entry.display()))?
+            .modified()
+            .with_context(|| format!("mtime {}", entry.display()))?;
+        if m > bundle_mtime {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Walk `src` and emit a zstd-compressed tar archive at `dst`.
