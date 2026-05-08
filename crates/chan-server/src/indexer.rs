@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chan_core::{Drive, WatchEvent, WatchKind};
+use chan_drive::{Drive, WatchEvent, WatchKind};
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
@@ -78,11 +78,11 @@ impl Indexer {
     ) -> Self {
         let stats = drive.index_stats().unwrap_or_else(|e| {
             tracing::warn!("indexer: initial stats failed: {e}");
-            chan_core::IndexStats {
+            chan_drive::IndexStats {
                 ready: false,
                 indexed_docs: 0,
                 indexed_vectors: 0,
-                model: chan_core::DEFAULT_MODEL.to_owned(),
+                model: chan_drive::DEFAULT_MODEL.to_owned(),
             }
         });
         let status = Arc::new(Mutex::new(IndexStatus::Idle {
@@ -135,7 +135,7 @@ impl Indexer {
 /// Coordinator task: blocks on the rebuild channel and runs one
 /// full reindex per request. Updates the status mutex through
 /// `Drive::reindex`'s own progress hook by polling stats after the
-/// fact (chan-core's reindex is one-shot; the per-file progress
+/// fact (chan-drive's reindex is one-shot; the per-file progress
 /// callback path is a future enhancement).
 fn spawn_coordinator(
     drive: Arc<Drive>,

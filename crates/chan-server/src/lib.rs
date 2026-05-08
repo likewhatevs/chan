@@ -1,9 +1,9 @@
 //! HTTP + WebSocket surface for chan.
 //!
-//! Phase 1 ports the files cluster (`/api/files`, `/api/move`) plus
-//! per-launch bearer-token auth from the old `chan-core/src/server.rs`
-//! in `fiorix/chan`. Subsequent phases add drive metadata, search,
-//! graph, watcher WS, LLM, and the embedded frontend.
+//! Wraps `chan-drive`'s Library / Drive handles in axum routes,
+//! gates every `/api/*` route behind a per-launch bearer token,
+//! exposes a watcher WebSocket, and serves the embedded
+//! frontend.
 //!
 //! Auth: every `/api/*` route is gated by a per-launch token. The
 //! token is persisted at `<state>/tokens/<drive-key>` (mode 0600 on
@@ -39,7 +39,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chan_core::{
+use chan_drive::{
     paths::DrivePaths, Drive, EdgeKind, Library, ResetMode, SearchOpts, WatchCallback, WatchEvent,
     WatchHandle,
 };
@@ -165,8 +165,8 @@ pub fn sanitize_prefix(input: &str) -> Result<String, String> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("chan-core: {0}")]
-    Core(#[from] chan_core::ChanError),
+    #[error("chan-drive: {0}")]
+    Core(#[from] chan_drive::ChanError),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("config: {0}")]
@@ -429,7 +429,7 @@ pub async fn serve_via_tunnel(
 }
 
 /// Extract the compressed default-model bundle into the per-machine
-/// model cache (resolved by chan-core's `global_models_dir`) the
+/// model cache (resolved by chan-drive's `global_models_dir`) the
 /// first time the server boots on this machine. Skipped on every
 /// subsequent boot: the presence of any file under the target dir
 /// is taken as "already seeded".
@@ -450,7 +450,7 @@ fn seed_models_from_bundle() {
         // nothing to extract. Runtime download path applies.
         return;
     }
-    let target = chan_core::index::embeddings::global_models_dir();
+    let target = chan_drive::index::embeddings::global_models_dir();
     if bundle_already_seeded(&target) {
         return;
     }
@@ -658,7 +658,7 @@ struct AppState {
 }
 
 /// Drive + its notify watcher. Replaced wholesale by /api/storage/
-/// reset: drop the cell, run chan-core's reset_drive, reopen, store
+/// reset: drop the cell, run chan-drive's reset_drive, reopen, store
 /// a fresh cell. The watch_handle is `Option` only because reset
 /// must take it out before dropping the inner Drive (the watcher
 /// holds a callback that references the same broadcast channel; we
@@ -733,7 +733,7 @@ fn make_watch_bridge(
     })
 }
 
-/// Bridge from chan-core's callback-shaped watcher into the WS
+/// Bridge from chan-drive's callback-shaped watcher into the WS
 /// broadcast channel and the indexer channel. Every event goes
 /// out to both; the WS forward also passes a self-write dedupe so
 /// the editor doesn't see its own save as an external edit.
@@ -1321,7 +1321,7 @@ struct CloudDriveJson {
 }
 
 async fn api_cloud_drives() -> Response {
-    let out: Vec<CloudDriveJson> = chan_core::paths::detected_cloud_drives()
+    let out: Vec<CloudDriveJson> = chan_drive::paths::detected_cloud_drives()
         .into_iter()
         .map(|c| CloudDriveJson {
             provider: c.provider,
@@ -1370,7 +1370,7 @@ async fn api_read_file(
     // string. Anything else (images, attachments) comes back as
     // raw bytes with a sniffed Content-Type so `<img src=...>`
     // pointing at /api/files/<path> resolves correctly.
-    if chan_core::fs_ops::is_editable_text(&path) {
+    if chan_drive::fs_ops::is_editable_text(&path) {
         let content = match state.drive().read_text(&path) {
             Ok(c) => c,
             Err(e) => return err_from(&e),
@@ -1433,7 +1433,7 @@ async fn api_write_file(
         None => state.drive().write_text(&path, &body.content),
     };
     if let Err(e) = result {
-        if let chan_core::ChanError::WriteConflict { current_mtime } = e {
+        if let chan_drive::ChanError::WriteConflict { current_mtime } = e {
             return (
                 StatusCode::CONFLICT,
                 Json(WriteConflictBody { current_mtime }),
@@ -1486,10 +1486,10 @@ async fn api_delete_file(
     State(state): State<Arc<AppState>>,
     AxumPath(path): AxumPath<String>,
 ) -> Response {
-    // chan-core's Drive::remove handles files and EMPTY directories.
+    // chan-drive's Drive::remove handles files and EMPTY directories.
     // Recursive deletion of a non-empty directory is a deliberate
     // foot-gun guard; supporting it here would require either a new
-    // chan-core API (`Drive::remove_recursive`) or a server-side walk
+    // chan-drive API (`Drive::remove_recursive`) or a server-side walk
     // that issues per-leaf removes. Tracked for a follow-up; current
     // behavior is "error out, frontend resolves the leaves itself".
     match state.drive().remove(&path) {
@@ -1539,7 +1539,7 @@ fn default_search_limit() -> usize {
 }
 
 /// Server-side filename match: walk the tree, keep regular files
-/// whose basename contains `q` (case-insensitive). chan-core has
+/// whose basename contains `q` (case-insensitive). chan-drive has
 /// no built-in filename index since the cost (scan list_tree) is
 /// linear and the drive size budget is small. Revisit if profiles
 /// show this hot.
@@ -1579,7 +1579,7 @@ struct ContentSearchParams {
     #[serde(default = "default_content_limit")]
     limit: u32,
     /// Optional subdir scope (POSIX rel path under the drive root).
-    /// Mirrors chan-core's `SearchOpts::scope`.
+    /// Mirrors chan-drive's `SearchOpts::scope`.
     #[serde(default)]
     scope: Option<String>,
 }
@@ -1589,19 +1589,19 @@ fn default_content_limit() -> u32 {
 }
 
 /// `/api/search/content` view. Frontend's `ContentSearchResponse`
-/// is a flat hit list; chan-core's `SearchResults` wraps per-file
+/// is a flat hit list; chan-drive's `SearchResults` wraps per-file
 /// hits with a sub-array of snippets. We expand each snippet to its
 /// own ContentHit so the result palette can show one row per
-/// matching section. start_line isn't surfaced by chan-core today;
+/// matching section. start_line isn't surfaced by chan-drive today;
 /// synthesized as 0 (the frontend sorts by score, not line).
 #[derive(Serialize)]
 struct ContentSearchResponse {
-    /// True when the index is ready to serve queries. chan-core
+    /// True when the index is ready to serve queries. chan-drive
     /// opens the index lazily and is always ready once a drive is
     /// open; kept as an explicit field so a future "rebuilding"
     /// state can land without a contract break.
     ready: bool,
-    /// Mode actually used. "bm25" today (chan-core's tantivy
+    /// Mode actually used. "bm25" today (chan-drive's tantivy
     /// search); "hybrid" / "semantic" reserved for the dense
     /// retrieval that lands with the embeddings feature.
     mode: &'static str,
@@ -1721,7 +1721,7 @@ async fn api_link_targets(
 struct ResolveLinkParams {
     /// Wiki-link target as written, e.g. `recipes/pasta` or
     /// `recipes/pasta#ingredients`. Pass through verbatim from
-    /// the editor; chan-core handles the .md / .txt extension
+    /// the editor; chan-drive handles the .md / .txt extension
     /// fallback and the anchor split.
     target: String,
 }
@@ -1756,12 +1756,12 @@ async fn api_headings(
 
 // ----- graph --------------------------------------------------------------
 //
-// chan-core's GraphView exposes per-file accessors (neighbors,
+// chan-drive's GraphView exposes per-file accessors (neighbors,
 // backlinks, headings_of) and bulk reads (files, tags). It does
 // NOT expose an "all edges" call, so /api/links and /api/graph
 // walk the file list and accumulate. For typical drive sizes the
 // O(n) sqlite round-trip is fine; if profiles show this hot we
-// add a chan-core helper.
+// add a chan-drive helper.
 
 /// All link-kind edges in the drive. Mention and tag edges are
 /// excluded; the graph view fetches those via /api/graph. The
@@ -1795,14 +1795,14 @@ async fn api_links(State(state): State<Arc<AppState>>) -> Response {
 ///   edges     [Edge]                  every edge in the drive
 ///
 /// `/api/graph` view. Frontend's `GraphView` type is unified
-/// `{ nodes, edges }`; chan-core exposes per-kind primitives
+/// `{ nodes, edges }`; chan-drive exposes per-kind primitives
 /// (files / tags / neighbors). This handler walks the graph DB and
 /// emits the unified shape so the visualization can render without
 /// per-kind glue on the frontend side.
 ///
 /// Node kinds: file (one per indexed path), tag (#name), mention
 /// (@@name). Date nodes from the typescript type aren't emitted;
-/// chan-core's EdgeKind has no date variant today.
+/// chan-drive's EdgeKind has no date variant today.
 #[derive(Serialize)]
 struct GraphViewResponse {
     nodes: Vec<GraphNodeView>,
@@ -1941,7 +1941,7 @@ async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
         .iter()
         .map(|e| GraphEdgeView {
             source: e.src.clone(),
-            // chan-core stores the leading `#` / `@@` sigil on the
+            // chan-drive stores the leading `#` / `@@` sigil on the
             // tag/mention edge's dst already (Drive::build_edges
             // does the formatting), and the matching tag node ids
             // we emit above use the same `#name` shape. So the
@@ -1962,7 +1962,7 @@ async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
 }
 
 /// Incoming link edges for one file. The frontend uses this for
-/// the "linked from" panel. chan-core's `backlinks` filters to
+/// the "linked from" panel. chan-drive's `backlinks` filters to
 /// link-kind edges already; we just pass through.
 async fn api_backlinks(
     State(state): State<Arc<AppState>>,
@@ -2369,7 +2369,7 @@ impl SessionListener for CollectListener {
 /// Build the argv chan-llm hands to claude as `--mcp-config`.
 /// Resolves to the running chan binary plus the hidden `__mcp`
 /// subcommand and the drive root, so claude's writes round-trip
-/// through chan-core's gates instead of touching the drive
+/// through chan-drive's gates instead of touching the drive
 /// directly.
 ///
 /// Returns `None` when `current_exe()` fails (we don't know how to
@@ -2406,7 +2406,7 @@ async fn api_llm_complete(
     // For ClaudeCli only, point the backend at our own binary as
     // the chan-llm MCP server. chan-llm's claude_cli code launches
     // claude with `--mcp-config` pointing here so writes flow back
-    // through chan-core's gates (chan-llm issue #1, v0.5.0). On any
+    // through chan-drive's gates (chan-llm issue #1, v0.5.0). On any
     // failure to resolve the current exe path we leave mcp_command
     // empty: chan-llm falls back to v1 black-box mode (auto-apply
     // forced on) and the user still gets a working assistant.
@@ -2770,7 +2770,7 @@ async fn api_llm_ollama_models(
 // content (those live in the drive) and aren't LLM-shaped (those
 // live in chan-llm). See `config.rs`. The split:
 //
-//   /api/drive             chan-core registry: name, root
+//   /api/drive             chan-drive registry: name, root
 //   /api/llm/status        chan-llm config: backend, model, keys
 //   /api/server/config     this: attachments_dir, answers_dir
 
@@ -2826,7 +2826,7 @@ async fn api_patch_server_config(
 // whole GlobalConfig (preferences + drives + default_drive_root),
 // PATCH the same shape on save. We assemble the view from three
 // underlying stores (EditorPrefs, ServerConfig, LlmConfig) plus the
-// chan-core registry and route the writes back the same way.
+// chan-drive registry and route the writes back the same way.
 
 #[derive(Serialize)]
 struct GlobalConfigView {
@@ -2988,8 +2988,8 @@ struct BuildFeatures {
     /// feature being on at build time. When false, search falls back
     /// to BM25-only and the Settings "Search" section reflects that.
     /// chan-server itself doesn't gate on this feature; we forward
-    /// chan-core's compile-time flag as exposed through the
-    /// `chan_core::has_embeddings` helper.
+    /// chan-drive's compile-time flag as exposed through the
+    /// `chan_drive::has_embeddings` helper.
     embeddings: bool,
 }
 
@@ -2997,7 +2997,7 @@ async fn api_build_info() -> Response {
     Json(BuildInfo {
         version: env!("CARGO_PKG_VERSION"),
         features: BuildFeatures {
-            // Mirrors chan-core's `embeddings` cargo feature. ON in
+            // Mirrors chan-drive's `embeddings` cargo feature. ON in
             // default builds; OFF on platforms without a prebuilt
             // onnxruntime (currently iOS) which build with
             // `--no-default-features`.
@@ -3009,7 +3009,7 @@ async fn api_build_info() -> Response {
 
 // ----- sessions / assistant blobs / answers ------------------------------
 //
-// chan-core owns the I/O (Drive::{put,get,list,delete}_session +
+// chan-drive owns the I/O (Drive::{put,get,list,delete}_session +
 // _assistant + clear_assistant). chan-server is a thin HTTP shell;
 // the JSON schema of session blobs (window/pane layout) and
 // assistant blobs (chat turns) lives in the frontend, not here.
@@ -3274,7 +3274,7 @@ async fn api_post_answer(
 // ----- storage reset ------------------------------------------------------
 //
 // Drops the drive's writer lock by replacing the active DriveCell,
-// runs chan-core's Library::reset_drive (which acquires the lock
+// runs chan-drive's Library::reset_drive (which acquires the lock
 // briefly to verify exclusive access), then reopens the drive and
 // re-attaches the watcher in a fresh cell. Frontend reloads the
 // window after a successful reset, so any in-flight handler clones
@@ -3291,9 +3291,9 @@ struct ResetBody {
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum ResetModeView {
-    /// Map -> chan-core ResetMode::State (keep the registry entry).
+    /// Map -> chan-drive ResetMode::State (keep the registry entry).
     Drive,
-    /// Map -> chan-core ResetMode::Everything.
+    /// Map -> chan-drive ResetMode::Everything.
     Everything,
 }
 
@@ -3323,7 +3323,7 @@ async fn api_storage_reset(
 ) -> Response {
     let mode: ResetMode = body.mode.into();
     // Run the reset on a blocking-thread: the drain spin-wait sleeps
-    // and the chan-core wipe walks the filesystem; neither belongs
+    // and the chan-drive wipe walks the filesystem; neither belongs
     // on the async runtime's worker thread.
     let state_clone = state.clone();
     let result = tokio::task::spawn_blocking(move || perform_reset(&state_clone, mode)).await;
@@ -3343,7 +3343,7 @@ async fn api_storage_reset(
 #[derive(Debug)]
 enum ResetError {
     Busy,
-    Core(chan_core::ChanError),
+    Core(chan_drive::ChanError),
 }
 
 fn err_from_reset(e: &ResetError) -> Response {
@@ -3362,7 +3362,7 @@ fn err_from_reset(e: &ResetError) -> Response {
 /// entire time so handlers waiting on the read lock see exactly one
 /// transition (old drive -> new drive); they never observe the
 /// `None` middle state.
-fn perform_reset(state: &AppState, mode: ResetMode) -> Result<chan_core::ResetReport, ResetError> {
+fn perform_reset(state: &AppState, mode: ResetMode) -> Result<chan_drive::ResetReport, ResetError> {
     let mut cell_guard = state.drive_cell.write().expect("drive cell poisoned");
     let mut cell = cell_guard
         .take()
@@ -3460,7 +3460,7 @@ fn extract_h1(line: &str) -> Option<String> {
 
 /// Strip a string into a filesystem-safe slug. Keeps ASCII alnum,
 /// '-', '_'; collapses everything else to '-'; trims leading and
-/// trailing dashes; clamps to 80 chars (safe under chan-core's
+/// trailing dashes; clamps to 80 chars (safe under chan-drive's
 /// blob key length and most filesystems' name limits).
 fn slugify_for_filename(s: &str) -> String {
     let mut out = String::with_capacity(s.len().min(80));
@@ -3516,10 +3516,10 @@ fn err(status: StatusCode, msg: String) -> Response {
     (status, Json(serde_json::json!({"error": msg}))).into_response()
 }
 
-/// Map chan-core errors to HTTP statuses. The shape of the JSON
+/// Map chan-drive errors to HTTP statuses. The shape of the JSON
 /// matches the old server so frontend error handling stays unchanged.
-fn err_from(e: &chan_core::ChanError) -> Response {
-    use chan_core::ChanError as C;
+fn err_from(e: &chan_drive::ChanError) -> Response {
+    use chan_drive::ChanError as C;
     let (status, msg) = match e {
         C::PathEmpty | C::PathEscape | C::SymlinkEscape(_) => {
             (StatusCode::BAD_REQUEST, e.to_string())

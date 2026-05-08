@@ -5,20 +5,20 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "HTTP + WebSocket surface for chan, wrapping chan-core in axum routes."
+description = "HTTP + WebSocket surface for chan, wrapping chan-drive in axum routes."
 
 [lib]
 name = "chan_server"
 
 [features]
 default = ["embeddings"]
-# Forwards to chan-core's `embeddings` feature so the about-pane's
+# Forwards to chan-drive's `embeddings` feature so the about-pane's
 # "embeddings on" badge reflects the actual build. Opt out via
 # `--no-default-features` along the rest of the stack.
-embeddings = ["chan-core/embeddings", "dep:tar", "dep:zstd"]
+embeddings = ["chan-drive/embeddings", "dep:tar", "dep:zstd"]
 
 [dependencies]
-chan-core = { workspace = true, default-features = false }
+chan-drive = { workspace = true, default-features = false }
 tar = { workspace = true, optional = true }
 zstd = { workspace = true, optional = true }
 chan-llm = { workspace = true }

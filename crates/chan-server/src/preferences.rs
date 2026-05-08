@@ -9,8 +9,8 @@
 //! - `answers_dir`: ServerConfig, mirrored into the assistant
 //!   subtree of the unified view because the frontend types it as
 //!   a sibling of `backend`
-//! - `default_drive_root`: chan-core's Registry (config.toml)
-//! - `drives`: chan-core's Registry
+//! - `default_drive_root`: chan-drive's Registry (config.toml)
+//! - `drives`: chan-drive's Registry
 //!
 //! What's left lives here, persisted to
 //! `<config>/chan/preferences.toml`:
@@ -176,7 +176,7 @@ impl EditorPrefs {
             std::fs::create_dir_all(parent)?;
         }
         let body = toml::to_string_pretty(self).map_err(|e| Error::Config(e.to_string()))?;
-        chan_core::fs_ops::atomic_write(path, body.as_bytes())
+        chan_drive::fs_ops::atomic_write(path, body.as_bytes())
             .map_err(|e| Error::Config(e.to_string()))?;
         Ok(())
     }

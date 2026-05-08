@@ -7,13 +7,11 @@
 #                  Embeds the web frontend at build time via rust-embed
 #                  (wired in a later iteration).
 #
-#   - chan-server  HTTP + WebSocket surface. Wraps chan-core's Library
+#   - chan-server  HTTP + WebSocket surface. Wraps chan-drive's Library
 #                  / Drive handles in axum routes and serves the
-#                  embedded frontend. Migration target for the old
-#                  chan-core/src/server.rs in fiorix/chan; routes
-#                  port in follow-up commits.
+#                  embedded frontend.
 #
-# chan-core (filesystem, search, graph), chan-llm (LLM backends,
+# chan-drive (filesystem, search, graph), chan-llm (LLM backends,
 # prompts, tool sandbox, key resolution), and chan-tunnel-client
 # all live as workspace member crates inside the chan-core repo.
 # They are pulled in as path deps that assume a sibling-checkout
@@ -36,12 +34,12 @@ license = "Apache-2.0"
 repository = "https://github.com/chan-writer/chan"
 
 [workspace.dependencies]
-# default-features off so each consumer crate can forward chan-core's
+# default-features off so each consumer crate can forward chan-drive's
 # `embeddings` feature through its own gate (chan-server / chan
 # declare their own `embeddings` feature that enables this one).
 # Without `default-features = false` here, per-crate overrides are
 # silently ignored by Cargo.
-chan-core = { path = "../chan-core/crates/chan-core", default-features = false }
+chan-drive = { path = "../chan-core/crates/chan-drive", default-features = false }
 chan-llm = { path = "../chan-core/crates/chan-llm" }
 chan-tunnel-client = { path = "../chan-core/crates/chan-tunnel-client" }
 

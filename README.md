@@ -12,23 +12,22 @@ crates/
   chan         the binary. Subcommands (add, list, remove, rename,
                serve, index, search). Embeds the web frontend at
                build time.
-  chan-server  HTTP + WebSocket surface. Wraps chan-core in axum
+  chan-server  HTTP + WebSocket surface. Wraps chan-drive in axum
                routes; uses chan-llm for assistant routes.
 web/           Svelte frontend, embedded into the binary at build
                time. Wires in a later commit.
 ```
 
-Two sibling crates pulled in as path deps:
-
-- `chan-writer/chan-core` (filesystem, search, graph, drive
-  registry).
-- `chan-writer/chan-llm` (LLM backends, embedded prompts, tool
-  sandbox, key resolution). Lives in its own repo so native
-  shells (iOS / Android) can link it via uniffi without
-  dragging in chan-server's HTTP stack.
+The chan-core sibling repo (a Cargo workspace) provides
+`chan-drive` (filesystem, search, graph, drive registry),
+`chan-llm` (LLM backends, embedded prompts, tool sandbox, key
+resolution), and `chan-tunnel-client` (h2/yamux drive tunnel),
+all as path deps. Native shells (iOS / Android) link
+`chan-drive` and `chan-llm` via uniffi without dragging in
+chan-server's HTTP stack.
 
 The workspace assumes the sibling-checkout layout
-`~/dev/github.com/chan-writer/{chan,chan-core,chan-llm}`.
+`~/dev/github.com/chan-writer/{chan,chan-core}`.
 
 ## Status
 
@@ -42,7 +41,6 @@ chan-llm and chan-server config files. Tunnel publishing
 
 ```bash
 git clone git@github.com:chan-writer/chan-core ../chan-core
-git clone git@github.com:chan-writer/chan-llm  ../chan-llm
 
 make            # frontend bundle + release binary
 make install    # copy target/release/chan to /usr/local/bin
@@ -102,21 +100,19 @@ passing local push therefore will not fail in GitHub Actions.
 
 ### CI cross-repo auth
 
-CI needs to clone two private sibling repos to resolve path deps:
-
-  chan-writer/chan-core  (`path = "../chan-core/crates/chan-core"`)
-  chan-writer/chan-llm   (`path = "../chan-llm"`)
+CI needs to clone the chan-core sibling repo (private) to
+resolve the `chan-drive`, `chan-llm`, and `chan-tunnel-client`
+path deps.
 
 One-time setup:
 
 1. Create a fine-grained GitHub Personal Access Token at
    https://github.com/settings/personal-access-tokens with
-   `Contents: Read` access on `chan-writer/chan-core` and
-   `chan-writer/chan-llm`. One PAT covers both.
+   `Contents: Read` access on `chan-writer/chan-core`.
 2. On `chan-writer/chan`'s `Settings -> Secrets and
    variables -> Actions`, add a secret named
    `chan_ci` with the PAT as its value.
 
-Until the secret is set, CI's checkout-of-the-siblings step
-fails. The `fmt` job runs without it (no cross-repo dep needed
-for rustfmt).
+Until the secret is set, CI's sibling-checkout step fails. The
+`fmt` job runs without it (no cross-repo dep needed for
+rustfmt).

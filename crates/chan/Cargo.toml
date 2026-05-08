@@ -13,14 +13,14 @@ path = "src/main.rs"
 
 [features]
 default = ["embeddings"]
-# Forwards to chan-server / chan-core's `embeddings` feature so a
+# Forwards to chan-server / chan-drive's `embeddings` feature so a
 # top-level `--no-default-features` build disables fastembed all
 # the way down. Default-on; opt-out is for platforms without a
 # prebuilt onnxruntime binary.
-embeddings = ["chan-server/embeddings", "chan-core/embeddings"]
+embeddings = ["chan-server/embeddings", "chan-drive/embeddings"]
 
 [dependencies]
-chan-core = { workspace = true, default-features = false }
+chan-drive = { workspace = true, default-features = false }
 chan-server = { path = "../chan-server", default-features = false }
 # Pulled in directly (not just transitively through chan-server) so
 # the `__mcp` subcommand can run chan-llm's MCP server in-process.

@@ -26,8 +26,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use chan_core::index::embeddings::Embedder;
-use chan_core::DEFAULT_MODEL;
+use chan_drive::index::embeddings::Embedder;
+use chan_drive::DEFAULT_MODEL;
 
 /// Compression level. zstd's range is 1..=22; 19 sits at the
 /// "max ratio with reasonable encode time" sweet spot for blobs

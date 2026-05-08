@@ -21,7 +21,7 @@
 //   chan search <path> <query>      query the BM25 index
 //
 // Anything that touches the registry / drive contents goes through
-// `chan_core::Library` and `chan_core::Drive` so the library's
+// `chan_drive::Library` and `chan_drive::Drive` so the library's
 // invariants (atomic writes, path sandbox, special-file refusal,
 // cross-process writer lock) apply uniformly.
 
@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chan_core::{Library, SearchOpts};
+use chan_drive::{Library, SearchOpts};
 use chan_server::ServeConfig;
 use clap::{Parser, Subcommand};
 
@@ -75,7 +75,7 @@ enum Command {
     /// Run the HTTP server. Defaults to 127.0.0.1 (loopback only).
     ///
     /// NOT IMPLEMENTED YET. Routes are being ported from the old
-    /// chan-core in follow-up commits.
+    /// chan-drive in follow-up commits.
     Serve {
         path: Option<PathBuf>,
         /// Host address to bind. Default 127.0.0.1 (or ::1 with -6).
@@ -145,7 +145,7 @@ enum Command {
     /// Internal: run the chan-llm MCP server on stdio against a
     /// drive. Spawned as a subprocess by the ClaudeCli backend
     /// (chan-llm v2 path, chan-llm issue #1) so claude routes its
-    /// file edits through chan-core's gates instead of touching the
+    /// file edits through chan-drive's gates instead of touching the
     /// drive directly. Not for end-user invocation.
     #[command(name = "__mcp", hide = true)]
     Mcp {
@@ -328,7 +328,7 @@ fn same_path(a: &Path, b: &Path) -> bool {
 
 /// Register the drive AND make sure it ends up with a non-empty
 /// display name. `register_drive` only sets the name on first
-/// insert (chan-core's "never clobber a user-set name" policy),
+/// insert (chan-drive's "never clobber a user-set name" policy),
 /// so a previously-unnamed entry stays unnamed on subsequent
 /// `chan serve` calls. We backfill via `rename_drive` so users
 /// who already had a drive registered before the auto-name change
@@ -338,7 +338,7 @@ fn ensure_drive_named(
     lib: &Library,
     root: &Path,
     requested: Option<String>,
-) -> Result<chan_core::KnownDrive> {
+) -> Result<chan_drive::KnownDrive> {
     let resolved = resolve_drive_name(lib, root, requested)?;
     let entry = lib
         .register_drive(root, Some(resolved.clone()))
@@ -348,7 +348,7 @@ fn ensure_drive_named(
             .with_context(|| format!("renaming {}", root.display()))?;
         // rename_drive returned ok; reflect the new name in the
         // returned struct without a re-fetch round-trip.
-        return Ok(chan_core::KnownDrive {
+        return Ok(chan_drive::KnownDrive {
             name: Some(resolved),
             ..entry
         });

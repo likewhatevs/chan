@@ -5,7 +5,7 @@ name: CI
 #
 # Cross-repo auth: this repo depends on two private siblings via
 # path deps:
-#   chan-writer/chan-core  (path = "../chan-core/crates/chan-core")
+#   chan-writer/chan-core  (path = "../chan-core/crates/chan-drive")
 #   chan-writer/chan-llm   (path = "../chan-llm")
 # CI clones both into sibling directories using a fine-scoped
 # Personal Access Token stored as the chan_ci repo

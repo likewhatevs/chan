@@ -7,14 +7,14 @@
 //!
 //! Today: `attachments_dir` and `answers_dir`. Both are
 //! drive-relative POSIX paths; the actual file I/O routes
-//! through `chan_core::Drive::write_bytes` / `write_text` so
+//! through `chan_drive::Drive::write_bytes` / `write_text` so
 //! the path sandbox + special-file refusal + atomic-write
 //! invariants apply.
 //!
 //! New fields land here when a route surfaces a server-shaped
 //! setting (e.g. a future "open-in-browser on launch" toggle).
 //! Anything filesystem-shaped on the drive itself stays in
-//! chan-core; anything LLM-shaped stays in chan-llm.
+//! chan-drive; anything LLM-shaped stays in chan-llm.
 
 use std::path::{Path, PathBuf};
 
@@ -77,7 +77,7 @@ impl ServerConfig {
             std::fs::create_dir_all(parent)?;
         }
         let body = toml::to_string_pretty(self).map_err(|e| Error::Config(e.to_string()))?;
-        chan_core::fs_ops::atomic_write(path, body.as_bytes())
+        chan_drive::fs_ops::atomic_write(path, body.as_bytes())
             .map_err(|e| Error::Config(e.to_string()))?;
         Ok(())
     }
