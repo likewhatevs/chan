@@ -65,7 +65,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -87,8 +87,9 @@ jobs:
       # dlopens libcuda at runtime so the host doesn't need a GPU.
       # Jimver/cuda-toolkit installs only nvcc + cudart-dev (~500 MB)
       # which is enough for candle-kernels' build.rs to compile and
-      # embed PTX kernels.
-      - uses: Jimver/cuda-toolkit@v0.2.21
+      # embed PTX kernels. Windows is CPU-only so no nvcc step.
+      - if: matrix.os == 'ubuntu-latest'
+        uses: Jimver/cuda-toolkit@v0.2.21
         with:
           cuda: '12.6.0'
           method: 'network'
@@ -97,6 +98,18 @@ jobs:
         working-directory: chan
       - run: cargo test --all-targets
         working-directory: chan
+
+      # release.yml builds Windows with `-C target-feature=+crt-static`
+      # for a self-contained MSVC binary. v0.5.0..v0.5.4 broke at link
+      # time because ort-sys's prebuilt objects expected the dynamic
+      # CRT (`__imp_tolower` etc); candle is pure Rust so the link
+      # should succeed, but mirror the release flags here so we catch
+      # any future regression per-PR instead of per-tag.
+      - if: matrix.os == 'windows-latest'
+        run: cargo build --release -p chan
+        working-directory: chan
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
 
   no-default-features:
     name: build (no default features)
