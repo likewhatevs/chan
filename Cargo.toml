@@ -13,11 +13,12 @@
 #                  chan-core/src/server.rs in fiorix/chan; routes
 #                  port in follow-up commits.
 #
-# chan-core (filesystem, search, graph) and chan-llm (LLM backends,
-# prompts, tool sandbox, key resolution) live at sibling repos
-# under chan-writer. Both are pulled in as path deps that assume a
-# sibling-checkout layout (`~/dev/github.com/chan-writer/{chan,chan-core,chan-llm}`).
-# Switch to git or crates.io deps when the repos go public.
+# chan-core (filesystem, search, graph), chan-llm (LLM backends,
+# prompts, tool sandbox, key resolution), and chan-tunnel-client
+# all live as workspace member crates inside the chan-core repo.
+# They are pulled in as path deps that assume a sibling-checkout
+# layout (`~/dev/github.com/chan-writer/{chan,chan-core}`). Switch
+# to git or crates.io deps when the repos go public.
 
 [workspace]
 resolver = "2"
@@ -41,7 +42,7 @@ repository = "https://github.com/chan-writer/chan"
 # Without `default-features = false` here, per-crate overrides are
 # silently ignored by Cargo.
 chan-core = { path = "../chan-core/crates/chan-core", default-features = false }
-chan-llm = { path = "../chan-llm" }
+chan-llm = { path = "../chan-core/crates/chan-llm" }
 chan-tunnel-client = { path = "../chan-core/crates/chan-tunnel-client" }
 
 anyhow = "1"
