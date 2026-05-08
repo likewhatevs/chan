@@ -1019,30 +1019,34 @@ export function markTreeExpansionRestored(): void {
 function seedTreeExpansionIfFresh(): void {
   if (treeExpansionSeeded) return;
   treeExpansionSeeded = true;
-  const map: Record<string, boolean> = { "": true };
+  treeExpanded.map[""] = true;
   for (const e of tree.entries) {
-    if (e.is_dir) map[e.path] = true;
+    if (e.is_dir) treeExpanded.map[e.path] = true;
   }
-  treeExpanded.map = map;
 }
 
 /// Expand every directory in the current tree. Wired to the file
-/// browser's expand-all header button.
+/// browser's expand-all header button. Mutates the existing map
+/// proxy in place so consumers that captured `treeExpanded.map` at
+/// mount time (FileTree.svelte) keep seeing the live state.
 export function expandAllFolders(): void {
-  const map: Record<string, boolean> = { "": true };
+  treeExpanded.map[""] = true;
   for (const e of tree.entries) {
-    if (e.is_dir) map[e.path] = true;
+    if (e.is_dir) treeExpanded.map[e.path] = true;
   }
-  treeExpanded.map = map;
   treeExpansionSeeded = true;
   persistTreeExpanded();
 }
 
 /// Collapse every directory (top-level rows still render; their
 /// children are hidden). Keeps the implicit root key alive so
-/// FileTree's pre-order walk stays consistent.
+/// FileTree's pre-order walk stays consistent. Mutates in place
+/// for the same reason as `expandAllFolders`.
 export function collapseAllFolders(): void {
-  treeExpanded.map = { "": true };
+  for (const k of Object.keys(treeExpanded.map)) {
+    if (k !== "") delete treeExpanded.map[k];
+  }
+  treeExpanded.map[""] = true;
   treeExpansionSeeded = true;
   persistTreeExpanded();
 }
