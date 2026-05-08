@@ -95,19 +95,17 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
+            target: x86_64-unknown-linux-gnu
             archive: tar.gz
             binname: chan
             deb_arch: amd64
             rpm: true
-            apt: musl-tools
           - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
+            target: aarch64-unknown-linux-gnu
             archive: tar.gz
             binname: chan
             deb_arch: arm64
             rpm: true
-            apt: musl-tools
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
@@ -142,9 +140,11 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      # Linux musl needs the C cross-compile + static C runtime
-      # bits. cc-rs (rusqlite-bundled, etc.) picks up musl-gcc
-      # via CC_x86_64_unknown_linux_musl / aarch64 env vars.
+      # Linux uses gnu (not musl) so we get the prebuilt onnxruntime
+      # binaries shipped by ort-sys. Trade-off: the binary dynamically
+      # links glibc (modern distros, glibc >= 2.31 in practice). A
+      # static musl build is tracked as a follow-up that requires
+      # switching ort to a pure-Rust backend (ort-tract).
       - if: matrix.apt
         run: |
           sudo apt-get update
