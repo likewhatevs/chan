@@ -331,7 +331,12 @@
       },
       onUpdate: ({ editor }) => {
         if (applyingExternal) return;
-        const md = (editor.storage.markdown as { getMarkdown(): string }).getMarkdown();
+        const raw = (editor.storage.markdown as { getMarkdown(): string }).getMarkdown();
+        // Strip the NBSP-paragraph markers we injected on parse so
+        // the file on disk stays clean (plain blank lines, no
+        // invisible characters). The next reload re-injects them
+        // through `preserveBlankParagraphs`.
+        const md = stripBlankParagraphs(raw);
         // Pin lastSyncedValue to the same string we're writing to
         // value, so the external-sync $effect (which fires from the
         // bind:value round-trip) sees no work to do and skips
@@ -413,9 +418,41 @@
     // Second positional arg is `emitUpdate: boolean` in this tiptap
     // version; the older `{ emitUpdate: false }` object form was
     // dropped.
-    editor.commands.setContent(md, false);
+    editor.commands.setContent(preserveBlankParagraphs(md), false);
     decorateSmartNodes();
     decorateWikiLinks();
+  }
+
+  /// markdown-it (and CommonMark in general) treats blank lines as
+  /// block separators, not as content. Two paragraphs separated by
+  /// any number of blank lines parse to two adjacent paragraph
+  /// nodes; the editor's bullet-list-then-paragraph rendering loses
+  /// the visual gap the user typed. We can't change the parser
+  /// from outside, so we pre-process: every run of 3+ newlines (a
+  /// paragraph break plus N blank-paragraph rows) is replaced with
+  /// a sequence of NBSP paragraphs that markdown-it parses as
+  /// real paragraph nodes. The NBSP renders as a thin invisible
+  /// gap, restoring the spacing.
+  ///
+  /// On save we run `stripBlankParagraphs` so the file on disk stays
+  /// clean (plain blank lines, no NBSP characters); the next
+  /// re-parse re-injects the NBSPs.
+  function preserveBlankParagraphs(md: string): string {
+    return md.replace(/\n{3,}/g, (m) => {
+      const empties = m.length - 2;
+      return "\n\n" + " \n\n".repeat(empties);
+    });
+  }
+
+  /// Inverse of `preserveBlankParagraphs`. Removes NBSP-only
+  /// paragraphs (the editor's internal gap markers) so the
+  /// markdown going to disk has plain blank lines instead of
+  /// invisible characters. Each ` \n\n` substring (an NBSP
+  /// paragraph followed by its block separator) collapses to a
+  /// single newline, which when added to the prior block's `\n\n`
+  /// yields the 3-newline pattern the user originally typed.
+  function stripBlankParagraphs(md: string): string {
+    return md.replace(/ \n\n/g, "\n");
   }
 
   /// Restore wiki-link pills after a markdown round-trip.
