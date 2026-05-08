@@ -703,9 +703,16 @@ mod tests {
                 }
             })
             .collect();
+        // Either the wait() path surfaces "exit ... boom" (the
+        // happy case where stdin write beats the child to the
+        // exit), or the stdin write loses the race against the
+        // child exiting and we surface "stdin: Broken pipe"
+        // first. Both are valid "non-zero exit produced an error
+        // event" outcomes. Linux schedules the latter reliably
+        // under load.
         assert!(
             errs.iter()
-                .any(|e| e.contains("exit") && e.contains("boom")),
+                .any(|e| (e.contains("exit") && e.contains("boom")) || e.contains("stdin")),
             "errs={errs:?}"
         );
     }
