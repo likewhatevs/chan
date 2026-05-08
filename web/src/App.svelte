@@ -165,9 +165,17 @@
   ///   Cmd/Ctrl+Shift+O     -> Files (toggle)
   ///   Cmd/Ctrl+P           -> Assistant (toggle)
   ///   Cmd/Ctrl+K           -> Search (toggle)
-  ///   Alt+G                -> Graph (toggle)
+  ///   Cmd/Ctrl+Shift+G     -> Graph (toggle)
   ///   Alt+Shift+[ / ]      -> previous / next tab
-  ///   Alt+1..9             -> jump to tab N
+  ///   Ctrl+Alt+1..9        -> jump to tab N
+  ///
+  /// Mac note: bare-Alt chords are off-limits for letters / digits
+  /// because Option is a dead-key for special characters there
+  /// (Alt+G prints `©`, Alt+L prints `¬`, Alt+1 prints `¡`, etc.).
+  /// All letter / digit chords therefore use Cmd/Ctrl-based combos
+  /// or Ctrl+Alt; Alt+Shift+[/] is kept only because we match by
+  /// `e.code` (which is layout-independent) and preventDefault
+  /// suppresses the typed `«` / `»` before they reach the editor.
   ///
   /// Chord choices avoid browser-reserved combinations where
   /// preventDefault can't reliably win:
@@ -176,11 +184,19 @@
   ///     the assistant is a primary-use surface.
   ///   - Cmd+Shift+P would clash with Firefox's private window
   ///     (OS-level), so search uses Cmd+K (palette convention).
-  ///   - Cmd+G (browser find next) avoided; graph uses Alt+G.
+  ///   - Cmd+G is browser find-next; Cmd+Shift+G is browser find-
+  ///     previous on Chrome / Safari. We override the latter for
+  ///     the graph because find-prev is the lower-traffic action
+  ///     and the chord is mnemonic.
   ///   - Cmd+Shift+[ / ] is the browser's own tab nav, so we use
   ///     Alt+Shift+[ / ] for in-app tab nav. e.code rather than
   ///     e.key so the comparison stays stable when shift is held
-  ///     (browsers report "{"/"}" for e.key on US layout).
+  ///     (browsers report "{"/"}" for e.key on US layout AND `«` /
+  ///     `»` on Mac when Option is held).
+  ///   - Cmd+1..9 is browser tab switching (claimed; preventDefault
+  ///     is unreliable for OS-level tab switching). We use
+  ///     Ctrl+Alt+1..9 instead — distinct from Cmd-based, and
+  ///     unclaimed by mainstream browsers.
   function onWindowKey(e: KeyboardEvent): void {
     const meta = e.metaKey || e.ctrlKey;
     if (meta && !e.shiftKey && !e.altKey && e.key === ",") {
@@ -188,13 +204,13 @@
       openSettings();
       return;
     }
-    if (meta && e.shiftKey && !e.altKey && e.key.toLowerCase() === "o") {
+    if (meta && e.shiftKey && !e.altKey && e.code === "KeyO") {
       e.preventDefault();
       browserOverlay.open = !browserOverlay.open;
       if (browserOverlay.open) openBrowser();
       return;
     }
-    if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "p") {
+    if (meta && !e.shiftKey && !e.altKey && e.code === "KeyP") {
       // Assistant master switch: when disabled in Settings, the
       // chord falls through and the user gets no visible response,
       // matching the hidden bottom-pill button.
@@ -207,12 +223,12 @@
       }
       return;
     }
-    if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
+    if (meta && !e.shiftKey && !e.altKey && e.code === "KeyK") {
       e.preventDefault();
       searchPanel.open = !searchPanel.open;
       return;
     }
-    if (e.altKey && !e.shiftKey && !meta && e.key.toLowerCase() === "g") {
+    if (meta && e.shiftKey && !e.altKey && e.code === "KeyG") {
       e.preventDefault();
       if (graphOverlay.open) {
         graphOverlay.open = false;
@@ -222,20 +238,27 @@
       return;
     }
     if (e.altKey && e.shiftKey && !meta) {
-      if (e.code === "BracketLeft" || e.key === "[") {
+      // e.code is layout-and-modifier-independent, so this branch
+      // matches even though Option mangles e.key into `«` / `»` on
+      // a US Mac layout. preventDefault suppresses the typed
+      // character before it reaches the focused editor.
+      if (e.code === "BracketLeft") {
         e.preventDefault();
         selectPrevTabInActivePane();
         return;
       }
-      if (e.code === "BracketRight" || e.key === "]") {
+      if (e.code === "BracketRight") {
         e.preventDefault();
         selectNextTabInActivePane();
         return;
       }
     }
-    // Alt+1..9 jump-to-tab. e.code === "Digit<N>" so the comparison
-    // survives modifiers changing e.key to a glyph on non-US layouts.
-    if (e.altKey && !e.shiftKey && !meta) {
+    // Ctrl+Alt+1..9 jump-to-tab. e.code === "Digit<N>" so the
+    // comparison survives modifiers changing e.key to a glyph on
+    // non-US layouts AND Option mangling it on Mac. metaKey
+    // excluded so this is distinct from Cmd+1..9 (which the
+    // browser owns for tab switching).
+    if (e.ctrlKey && e.altKey && !e.shiftKey && !e.metaKey) {
       const m = e.code.match(/^Digit([1-9])$/);
       if (m) {
         e.preventDefault();

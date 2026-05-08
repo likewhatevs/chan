@@ -70,7 +70,7 @@
 {/if}
 <button
   class="fbtn"
-  title="Graph (⌥G)"
+  title="Graph (⌘⇧G)"
   aria-label="Graph"
   onclick={openGraph}
 >
