@@ -182,6 +182,10 @@ struct AppArtifacts {
     app: Router,
     token: Option<String>,
     last_activity: Arc<AtomicU64>,
+    /// Live indexer handle so `serve()` can cancel an in-flight
+    /// rebuild on shutdown. The Arc also lives inside the router's
+    /// DriveCell; this is just a second pointer to the same thing.
+    indexer: Arc<indexer::Indexer>,
 }
 
 /// Build the full axum app: state assembly, channels, watcher,
@@ -236,6 +240,7 @@ async fn build_app(
         index_events_tx.subscribe(),
         true,
     ));
+    let indexer_handle = indexer.clone();
 
     // LLM config: load once at boot. Falling back to defaults on
     // a malformed file keeps the server bootable; user fixes the
@@ -297,6 +302,7 @@ async fn build_app(
         app,
         token,
         last_activity,
+        indexer: indexer_handle,
     })
 }
 
@@ -319,6 +325,7 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
 
     let app = artifacts.app;
     let last_activity = artifacts.last_activity;
+    let indexer = artifacts.indexer;
 
     // Single shutdown channel fed by both the idle-timeout watcher
     // (when --timeout is set) and SIGINT/SIGTERM. axum's
@@ -331,6 +338,17 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
         spawn_idle_watcher(timeout, last_activity.clone(), signal_tx.clone());
     }
     spawn_signal_watcher(signal_tx.clone());
+
+    // Side task: when the shutdown signal fires, cancel any in-flight
+    // reindex. The flag is checked at per-file boundaries inside
+    // `Drive::reindex`, so the blocking task lands within at most one
+    // file's worth of work and the runtime drop can return cleanly.
+    let cancel_indexer = indexer.clone();
+    let mut cancel_rx = signal_rx.clone();
+    tokio::spawn(async move {
+        let _ = cancel_rx.changed().await;
+        cancel_indexer.cancel();
+    });
 
     let mut graceful_rx = signal_rx.clone();
     let server_future = axum::serve(listener, app).with_graceful_shutdown(async move {

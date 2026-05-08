@@ -190,7 +190,7 @@ fn main() -> Result<()> {
                 .enable_all()
                 .build()
                 .context("building tokio runtime")?;
-            rt.block_on(cmd_serve(
+            let res = rt.block_on(cmd_serve(
                 addr,
                 prefix,
                 timeout,
@@ -199,7 +199,15 @@ fn main() -> Result<()> {
                 tunnel_url,
                 tunnel_token,
                 tunnel_drive,
-            ))
+            ));
+            // Don't block on blocking-pool tasks (e.g. an in-flight
+            // initial reindex on a large drive): chan-drive's reindex
+            // is uncancellable today, so a normal Runtime drop would
+            // wait for it after Ctrl-C. shutdown_background detaches
+            // the pool so the process can exit; the index may be left
+            // partially populated until the next rebuild.
+            rt.shutdown_background();
+            res
         }
         Command::Index { path } => cmd_index(path),
         Command::Search { path, query, limit } => cmd_search(path, query, limit),
@@ -565,7 +573,7 @@ fn cmd_index(path: PathBuf) -> Result<()> {
     // file browser doesn't show "(unnamed)" later.
     ensure_drive_named(&lib, &path, None)?;
     let drive = lib.open_drive(&path)?;
-    let summary = drive.reindex().context("reindex")?;
+    let summary = drive.reindex(None).context("reindex")?;
     println!(
         "indexed {}/{} files, {} chunks ({} errors)",
         summary.indexed,

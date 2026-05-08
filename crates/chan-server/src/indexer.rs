@@ -17,6 +17,7 @@
 // the payload is tiny.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -55,6 +56,14 @@ pub enum IndexStatus {
 pub struct Indexer {
     status: Arc<Mutex<IndexStatus>>,
     rebuild_tx: mpsc::UnboundedSender<()>,
+    /// Set to true on shutdown so the in-flight `Drive::reindex`
+    /// blocking task bails at its next per-file check. Without this
+    /// the runtime drop after `serve()` returns would have to wait
+    /// for the rebuild to finish naturally; on a large drive that's
+    /// minutes. Cancelled rebuilds leave the index in a clean
+    /// "empty" state (no commit, graph cleared but not refilled),
+    /// so the on-boot `indexed_docs == 0` trigger re-fires next run.
+    cancel: Arc<AtomicBool>,
     /// Held to keep the spawned tasks alive for as long as the
     /// indexer is. Aborted on drop.
     _watcher_task: JoinHandle<()>,
@@ -97,8 +106,14 @@ impl Indexer {
         // unbounded mpsc since the bursts are tiny (one or two
         // requests per session) and dropping a request would just
         // leave the index stale.
+        let cancel = Arc::new(AtomicBool::new(false));
         let (rebuild_tx, rebuild_rx) = mpsc::unbounded_channel::<()>();
-        let coordinator_task = spawn_coordinator(drive.clone(), status.clone(), rebuild_rx);
+        let coordinator_task = spawn_coordinator(
+            drive.clone(),
+            status.clone(),
+            rebuild_rx,
+            cancel.clone(),
+        );
         if initial_build && stats.indexed_docs == 0 {
             // Best-effort: if the channel is full we already
             // queued a rebuild and the redundant request is fine
@@ -106,15 +121,28 @@ impl Indexer {
             let _ = rebuild_tx.send(());
         }
 
-        let watcher_task =
-            spawn_watcher_loop(drive, status.clone(), watch_events, rebuild_tx.clone());
+        let watcher_task = spawn_watcher_loop(
+            drive,
+            status.clone(),
+            watch_events,
+            rebuild_tx.clone(),
+            cancel.clone(),
+        );
 
         Self {
             status,
             rebuild_tx,
+            cancel,
             _watcher_task: watcher_task,
             _coordinator_task: coordinator_task,
         }
+    }
+
+    /// Signal an in-flight rebuild to bail. Idempotent. Safe to call
+    /// from any task; takes effect on the rebuild's next per-file
+    /// check.
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
     }
 
     /// Snapshot the current status. Cheap.
@@ -141,22 +169,34 @@ fn spawn_coordinator(
     drive: Arc<Drive>,
     status: Arc<Mutex<IndexStatus>>,
     mut rx: mpsc::UnboundedReceiver<()>,
+    cancel: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         while rx.recv().await.is_some() {
             // Drain any extra requests that piled up so we run one
             // rebuild for the whole burst.
             while rx.try_recv().is_ok() {}
+            if cancel.load(Ordering::Relaxed) {
+                continue;
+            }
             let drive_w = drive.clone();
             let status_w = status.clone();
+            let cancel_w = cancel.clone();
             *status_w.lock().unwrap() = IndexStatus::Building {
                 current: 0,
                 total: 0,
                 file: String::new(),
             };
-            let result = tokio::task::spawn_blocking(move || drive_w.reindex()).await;
+            let result =
+                tokio::task::spawn_blocking(move || drive_w.reindex(Some(&cancel_w))).await;
             match result {
                 Ok(Ok(_summary)) => set_idle(&drive, &status),
+                Ok(Err(chan_drive::ChanError::Cancelled)) => {
+                    // Shutdown path: don't surface a user-visible
+                    // error; the next boot will pick up the empty
+                    // index and rebuild.
+                    tracing::info!("indexer: rebuild cancelled");
+                }
                 Ok(Err(e)) => {
                     *status.lock().unwrap() = IndexStatus::Error {
                         message: e.to_string(),
@@ -180,6 +220,7 @@ fn spawn_watcher_loop(
     status: Arc<Mutex<IndexStatus>>,
     mut rx: broadcast::Receiver<WatchEvent>,
     rebuild_tx: mpsc::UnboundedSender<()>,
+    cancel: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let pending: Arc<Mutex<HashMap<String, PendingChange>>> =
@@ -187,6 +228,7 @@ fn spawn_watcher_loop(
         let pending_w = pending.clone();
         let drive_w = drive.clone();
         let status_w = status.clone();
+        let cancel_w = cancel.clone();
 
         // Worker: every 200 ms, drain paths whose last event is at
         // least 1 s in the past and apply them. We don't bound the
@@ -196,6 +238,9 @@ fn spawn_watcher_loop(
             let debounce = Duration::from_secs(1);
             loop {
                 tokio::time::sleep(Duration::from_millis(200)).await;
+                if cancel_w.load(Ordering::Relaxed) {
+                    return;
+                }
                 let due = collect_due(&pending_w, debounce);
                 for change in due {
                     *status_w.lock().unwrap() = IndexStatus::Reindexing {
