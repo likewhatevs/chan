@@ -31,12 +31,13 @@
     uploadImageFile,
   } from "./extensions/image";
   import {
-    WikiLinkNode,
+    createWikiLinkNode,
     handleWikiClick,
     openWikiBubble,
     type WikiBubble,
   } from "./extensions/wikiLink";
   import { api } from "../api/client";
+  import { resolveRelativePath } from "../api/wasm";
   import { drive } from "../state/store.svelte";
 
   let {
@@ -45,6 +46,7 @@
     onSubmit,
     onSelectionChange,
     wikiPickerPrefix = null,
+    currentPath = null,
   }: {
     value: string;
     readonly?: boolean;
@@ -68,6 +70,13 @@
     /// `[[note]]` autocomplete stays project-bound rather than
     /// spanning the whole drive.
     wikiPickerPrefix?: string | null;
+    /// Drive-rooted POSIX path of the file this editor is bound
+    /// to (e.g. `Recipes/Pasta.md`). Used by the wiki-link
+    /// serializer to emit file-relative URLs (`./foo.md`) and by
+    /// the parser to resolve them back to canonical drive-rooted
+    /// targets. Null for editors with no source file (assistant
+    /// prompt), in which case wiki-link URLs stay drive-rooted.
+    currentPath?: string | null;
   } = $props();
 
   let host: HTMLDivElement | undefined;
@@ -218,7 +227,11 @@
         }),
         Markdown.configure({ html: false, linkify: false, breaks: true }),
         DateNode,
-        WikiLinkNode,
+        // Per-instance wikiLink extension. The factory closes over
+        // `currentPath` (the prop, captured by reference each call)
+        // so the markdown serializer always sees the latest path
+        // even when the user swaps tabs into a new file.
+        createWikiLinkNode(() => currentPath),
         ImageNode,
       ],
       content: value,
@@ -493,12 +506,18 @@
       // Decode the href once: chan-shared encodes spaces / parens
       // when serializing, so the on-disk form looks like
       // `my%20note.md`; the wikiLink attr expects the human-
-      // readable path.
+      // readable path. After decoding, hrefs that look relative
+      // (`./foo.md` / `../docs/foo.md`) get resolved against the
+      // current file's directory so the atom's `target` is always
+      // the canonical drive-rooted path the click handler expects.
       let target: string;
       try {
         target = decodeURIComponent(href);
       } catch {
         target = href;
+      }
+      if (currentPath) {
+        target = resolveRelativePath(target, currentPath);
       }
       ranges.push({
         from: pos,
@@ -1008,13 +1027,20 @@
     // Standard markdown links saved as <a href>. If the href looks
     // internal (no scheme, ends with .md or has no extension), treat it
     // like a wiki click. Hold Cmd/Ctrl to fall through to default
-    // browser behavior (open externally).
+    // browser behavior (open externally). Relative hrefs (`./foo.md`,
+    // `../docs/foo.md`) are resolved against the current file's
+    // directory before opening, so the click works regardless of
+    // whether the link round-tripped through `decorateWikiLinks`.
     const a = t.closest("a") as HTMLAnchorElement | null;
     if (a && !e.metaKey && !e.ctrlKey) {
       const href = a.getAttribute("href") ?? "";
       if (href && isInternalHref(href)) {
         e.preventDefault();
-        handleWikiClick(decodeURIComponent(href));
+        let resolved = decodeURIComponent(href);
+        if (currentPath) {
+          resolved = resolveRelativePath(resolved, currentPath);
+        }
+        handleWikiClick(resolved);
       }
     }
   }

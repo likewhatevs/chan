@@ -30,66 +30,80 @@ import { wikiLinkToMarkdown } from "../../api/wasm";
 import { openInActivePane } from "../../state/tabs.svelte";
 import { positionPopover, watchViewport } from "./popover";
 
-export const WikiLinkNode = Node.create({
-  name: "wikiLink",
-  group: "inline",
-  inline: true,
-  atom: true,
-  selectable: true,
+/// Build a wikiLink extension that closes over `getFromPath`.
+/// When the getter returns a non-empty string, serialize emits a
+/// file-relative URL (`./foo.md` / `../foo.md`); when it returns
+/// null / empty, the URL stays drive-rooted. Each editor instance
+/// (file editor, assistant prompt, …) gets its own extension so
+/// the closure can read the latest path without a module-level
+/// mutable.
+export function createWikiLinkNode(getFromPath: () => string | null) {
+  return Node.create({
+    name: "wikiLink",
+    group: "inline",
+    inline: true,
+    atom: true,
+    selectable: true,
 
-  addAttributes() {
-    return {
-      target: { default: "", parseHTML: (el) => el.getAttribute("data-target") ?? "" },
-      label: { default: "", parseHTML: (el) => el.getAttribute("data-label") ?? "" },
-      // Anchor inside the target file. Heading anchors are slugs
-      // (`section-name`); block anchors carry the leading `^`
-      // (`^abc123`). Empty when the link points at a whole file.
-      anchor: { default: "", parseHTML: (el) => el.getAttribute("data-anchor") ?? "" },
-    };
-  },
+    addAttributes() {
+      return {
+        target: { default: "", parseHTML: (el) => el.getAttribute("data-target") ?? "" },
+        label: { default: "", parseHTML: (el) => el.getAttribute("data-label") ?? "" },
+        // Anchor inside the target file. Heading anchors are slugs
+        // (`section-name`); block anchors carry the leading `^`
+        // (`^abc123`). Empty when the link points at a whole file.
+        anchor: { default: "", parseHTML: (el) => el.getAttribute("data-anchor") ?? "" },
+      };
+    },
 
-  parseHTML() {
-    return [{ tag: "span[data-md-wiki]" }];
-  },
+    parseHTML() {
+      return [{ tag: "span[data-md-wiki]" }];
+    },
 
-  renderHTML({ HTMLAttributes, node }) {
-    const anchor = (node.attrs.anchor as string) ?? "";
-    const titleSuffix = anchor ? `#${anchor}` : "";
-    return [
-      "span",
-      mergeAttributes(HTMLAttributes, {
-        "data-md-wiki": "true",
-        "data-target": node.attrs.target,
-        "data-label": node.attrs.label,
-        "data-anchor": anchor,
-        class: "md-smart md-smart-wiki",
-        title: `→ ${node.attrs.target}${titleSuffix}`,
-      }),
-      (node.attrs.label as string) || (node.attrs.target as string),
-    ];
-  },
+    renderHTML({ HTMLAttributes, node }) {
+      const anchor = (node.attrs.anchor as string) ?? "";
+      const titleSuffix = anchor ? `#${anchor}` : "";
+      return [
+        "span",
+        mergeAttributes(HTMLAttributes, {
+          "data-md-wiki": "true",
+          "data-target": node.attrs.target,
+          "data-label": node.attrs.label,
+          "data-anchor": anchor,
+          class: "md-smart md-smart-wiki",
+          title: `→ ${node.attrs.target}${titleSuffix}`,
+        }),
+        (node.attrs.label as string) || (node.attrs.target as string),
+      ];
+    },
 
-  addStorage() {
-    return {
-      markdown: {
-        serialize(
-          state: unknown,
-          node: { attrs: { target: string; label: string; anchor: string } },
-        ) {
-          const md = wikiLinkToMarkdown(
-            node.attrs.target,
-            node.attrs.label || undefined,
-            node.attrs.anchor || undefined,
-          );
-          (state as { write(s: string): void }).write(md);
+    addStorage() {
+      return {
+        markdown: {
+          serialize(
+            state: unknown,
+            node: { attrs: { target: string; label: string; anchor: string } },
+          ) {
+            const md = wikiLinkToMarkdown(
+              node.attrs.target,
+              node.attrs.label || undefined,
+              node.attrs.anchor || undefined,
+              getFromPath() ?? undefined,
+            );
+            (state as { write(s: string): void }).write(md);
+          },
+          parse: { setup() {} },
         },
-        parse: { setup() {} },
-      },
-    };
-  },
-});
+      };
+    },
+  });
+}
 
-/// Click handler for existing wiki nodes. Open the target in a new tab.
+/// Click handler for existing wiki nodes. The wikiLink atom node
+/// always carries a canonical drive-rooted `target` (relative URLs
+/// are resolved at parse time by the editor's `decorateWikiLinks`),
+/// so we hand it straight to `openInActivePane` without further
+/// translation.
 export function handleWikiClick(target: string): void {
   void openInActivePane(target);
 }

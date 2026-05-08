@@ -296,6 +296,7 @@
           readonly={readMode}
           onSelectionChange={() => (selVer = selVer + 1)}
           wikiPickerPrefix={tab.repoRoot}
+          currentPath={tab.path}
         />
       {:else}
         <Source bind:this={sourceRef} bind:value={tab.content} />
