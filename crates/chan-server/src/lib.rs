@@ -1941,10 +1941,15 @@ async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
         .iter()
         .map(|e| GraphEdgeView {
             source: e.src.clone(),
-            target: match e.kind {
-                EdgeKind::Tag => format!("#{}", e.dst),
-                _ => e.dst.clone(),
-            },
+            // chan-core stores the leading `#` / `@@` sigil on the
+            // tag/mention edge's dst already (Drive::build_edges
+            // does the formatting), and the matching tag node ids
+            // we emit above use the same `#name` shape. So the
+            // wire-shape target is the plain dst with no extra
+            // prefix; the previous format!("#{}", e.dst) for tag
+            // edges was double-prefixing into "##name" and orphaning
+            // every tag edge.
+            target: e.dst.clone(),
             kind: edge_kind_tag(e.kind),
             broken: match e.kind {
                 EdgeKind::Link => Some(!file_set.contains(e.dst.as_str())),

@@ -394,12 +394,29 @@
       height = Math.max(200, r.height);
       resizeObs = new ResizeObserver((entries) => {
         for (const ent of entries) {
-          width = Math.max(200, ent.contentRect.width);
-          height = Math.max(200, ent.contentRect.height);
+          const nextW = Math.max(200, ent.contentRect.width);
+          const nextH = Math.max(200, ent.contentRect.height);
+          // Translate every node by the centre delta so the
+          // existing layout slides with the viewport instead of
+          // sticking to its old (now-off-centre) coordinates and
+          // waiting for the centre force to drag it back. The
+          // delta also moves the focal pin since pinFocalNodes
+          // re-runs below.
+          const dx = (nextW - width) / 2;
+          const dy = (nextH - height) / 2;
+          if (sim && (dx !== 0 || dy !== 0)) {
+            for (const n of nodes) {
+              if (n.x != null) n.x += dx;
+              if (n.y != null) n.y += dy;
+              if (n.fx != null) n.fx += dx;
+              if (n.fy != null) n.fy += dy;
+            }
+            tick = (tick + 1) | 0;
+          }
+          width = nextW;
+          height = nextH;
           if (sim) {
             sim.force("center", forceCenter(width / 2, height / 2));
-            // Re-pin so the focal node stays centered when the
-            // viewport changes.
             pinFocalNodes();
             sim.alpha(0.4).restart();
           }
@@ -407,6 +424,14 @@
       });
       resizeObs.observe(svgEl);
     }
+    // Defer one frame so the OverlayShell's growth-to-fullscreen
+    // transition has settled before we measure the SVG and seed
+    // the simulation. Without this the first measurement can land
+    // mid-animation and the layout settles around an off-centre
+    // point.
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
     await load();
   });
 
@@ -436,6 +461,17 @@
   /// then settle them into place over a couple of seconds.
   function buildSimulation(g: GraphView): void {
     sim?.stop();
+    // Re-measure the SVG before laying anything out: when the
+    // overlay is opened mid-transition the cached `width`/`height`
+    // can still be the $state defaults (800x600), and seeding
+    // around that wrong centre leaves the graph stuck near the
+    // top of the canvas after the OverlayShell finishes growing
+    // to fill the viewport.
+    if (svgEl) {
+      const r = svgEl.getBoundingClientRect();
+      if (r.width >= 200) width = r.width;
+      if (r.height >= 200) height = r.height;
+    }
     const cx = width / 2;
     const cy = height / 2;
     const layoutNodes: LayoutNode[] = g.nodes.map((n) => ({
@@ -635,6 +671,13 @@
     if (!nodeDown) return;
     if (!nodeDown.moved) {
       selectedId = nodeDown.node.id;
+      // Auto-open the details panel on any click. Without this
+      // the user has to hit the ≡ toggle separately to see what
+      // they just clicked, which makes the click feel inert. If
+      // the user explicitly closed the panel and clicks again
+      // they expect it to surface; the panel toggle button is
+      // still there to dismiss.
+      panelOpen = true;
     } else {
       sim?.alphaTarget(0);
       // Release the drag pin UNLESS this node is the focal pin
