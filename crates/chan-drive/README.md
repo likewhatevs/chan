@@ -1,14 +1,13 @@
-# chan-drive - design
+# chan-drive
 
-This document describes the design of `chan-drive`, the low-level
-Rust library extracted from the chan markdown editor. It owns the
-per-machine registry of known drives, exposes a path-based
+Low-level Rust library extracted from the chan markdown editor. It
+owns the per-machine registry of known drives, exposes a path-based
 sandboxed filesystem API rooted at each drive, and wraps the per-
 drive search index and graph database.
 
-This is the canonical design reference for the crate. Update it in
-the same commit as any change that affects the on-disk layout, the
-public API shape, or the locking model.
+This file is the canonical design reference for the crate. Update
+it in the same commit as any change that affects the on-disk layout,
+the public API shape, or the locking model.
 
 ## Scope and non-scope
 
@@ -276,7 +275,7 @@ pub struct TrashEntry {
 
   - **Location**: `state_dir/trash/<key>/<id>/{payload[/], meta.json}`.
     Trash lives outside the user's drive directory because chan-
-    core stores zero state inside the drive. Trade-off: the trash
+    drive stores zero state inside the drive. Trade-off: the trash
     does not sync via iCloud / Dropbox / git. Acceptable; trash is
     per-machine recovery, not collaboration. A user who relocates
     a drive to a new path also leaves their old trash behind

@@ -183,7 +183,7 @@ where
 /// user-supplied axum router as the service.
 ///
 /// `with_upgrades()` is enabled so the substream stays alive after
-/// a WebSocket 101 response — the bytes ride the existing yamux
+/// a WebSocket 101 response; the bytes ride the existing yamux
 /// substream until either end closes.
 pub async fn serve_substreams<S>(
     mut conn: YamuxConnection<S>,

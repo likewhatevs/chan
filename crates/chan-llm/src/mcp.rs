@@ -72,7 +72,7 @@ impl Server {
 //
 // Descriptions on the params types are surfaced to the MCP client
 // as JSON-schema field descriptions; the tool-level descriptions
-// below explain the action itself. We keep both terse — claude
+// below explain the action itself. We keep both terse; claude
 // already gets richer guidance from `prompts::SYSTEM_PROMPT`.
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

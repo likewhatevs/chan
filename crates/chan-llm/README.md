@@ -1,14 +1,13 @@
-# chan-llm: design
+# chan-llm
 
-`chan-llm` is the cross-platform LLM layer for chan. It owns the
-backends, the prompts, the tool sandbox, and the API-key
-resolution policy. This document is the canonical design
-reference; update it in the same commit as any change that
-affects the public API or the FFI shape.
+Cross-platform LLM layer for chan. Owns the backends, the prompts,
+the tool sandbox, and the API-key resolution policy. This file is
+the canonical design reference; update it in the same commit as any
+change that affects the public API or the FFI shape.
 
-## Why a separate crate (and a separate repo)
+## Why a separate crate
 
-Two consumers, neither contains the other:
+Two consumers, one set of prompts and tool gates:
 
 - `chan-server` (in `chan-writer/chan`) wraps `LlmSession` in axum
   routes and forwards events over WebSocket to the web frontend.
@@ -16,10 +15,11 @@ Two consumers, neither contains the other:
   alongside `chan-drive` and receive events through callback
   objects implemented in Swift / Kotlin.
 
-If chan-llm lived inside `chan-writer/chan`, native shells would
-either drag in axum / tower / tokio's HTTP stack to consume the
-LLM logic, or reimplement it in their native language. Both are
-worse than a small extra repo.
+A single crate keeps the system prompt, tool schemas, edit-control
+rules, and auto-apply policy in one place; both consumers move in
+lockstep when any of those bump. Native shells avoid pulling axum /
+tower / tokio's HTTP stack and never have to reimplement the
+assistant logic in Swift or Kotlin.
 
 `chan-llm` depends on `chan-drive` (for `Drive` and `SearchOpts`).
 It does NOT depend on `chan-server` or `chan`. That's the
@@ -37,11 +37,15 @@ src/
   prompts.rs       SYSTEM_PROMPT + tool descriptions
   tools.rs         StandardTool + ToolContext + execute
   session.rs       LlmSession + SessionListener + types
+  mcp.rs           stdio MCP server (feature = "mcp")
   backends/
     mod.rs         BackendKind + default models
-    anthropic.rs   stub
-    gemini.rs      stub
-    ollama.rs      stub
+    anthropic.rs   SSE streaming + tool round-trips
+    gemini.rs      function-calling + server-side tool exec
+    ollama.rs      local server, custom function-calling
+    claude_cli.rs  drives a local `claude` CLI subprocess
+  bin/
+    chan-llm-mcp.rs  MCP server binary (feature = "mcp")
 ```
 
 ## Public API
@@ -130,35 +134,40 @@ identically in Swift, Kotlin, and Rust. Same pattern as
 
 ## Prompt sourcing
 
-Initial commit uses placeholder prompt constants. The real prompts
-port from `fiorix/chan/crates/chan-core/src/llm/` once the public
-API contract here stabilizes (so prompt iteration doesn't churn
-the surface other repos depend on). Prompts are the highest-
-leverage shared thing in this crate; bumping any of them changes
-the assistant's behavior across web, CLI, and future native shells
-in a single commit.
+The system prompt and the per-tool descriptions live in
+`src/prompts.rs`. They are the highest-leverage shared thing in
+this crate: bumping any of them changes the assistant's behavior
+across web, CLI, and future native shells in a single commit. Host
+apps that need a different prompt pass their own; the constants
+here are the default a host gets when it doesn't.
 
-## Backends (planned port)
+## Backends
 
-Three backend modules ship as stubs in this commit. The real ports
-follow:
+Four backend modules ship today, all wired through the same
+`SessionListener` callback shape:
 
-| Backend | Source | Notes |
-|---------|--------|-------|
-| Anthropic | `claude.rs` (321 LOC) | SSE streaming, tool use round-trips |
-| Gemini | `gemini.rs` (568 LOC) | server-side tool exec, function-calling format |
-| Ollama | `ollama.rs` (373 LOC) | local server, no key, custom function-calling |
+```
+Backend       Notes
+------------  ----------------------------------------------------
+Anthropic     SSE streaming, tool use round-trips.
+Gemini        Function-calling format, server-side tool exec.
+Ollama        Local server, no key, custom function-calling shape
+              (no native tool-use; uses SYSTEM_PROMPT_NO_TOOLS).
+Claude CLI    Drives a local `claude` CLI subprocess; tool
+              dispatch routes through chan-llm's MCP server so
+              writes still stage through `auto_apply_writes`.
+```
 
-Each backend will:
+Each backend:
 
-- Build wire-format requests (system prompt + history + tools +
+- Builds wire-format requests (system prompt + history + tools +
   user message).
-- Drive the streaming response, translating chunks into chan-llm's
+- Drives the streaming response, translating chunks into chan-llm's
   `Delta` / `ToolCall` events.
-- Map vendor stop reasons into `StopReason::{EndOfTurn, MaxTokens,
+- Maps vendor stop reasons into `StopReason::{EndOfTurn, MaxTokens,
   StopSequence, ToolUse, Error}`.
-- NOT touch the filesystem. Tool execution is the host's job (via
-  `tools::execute`), and tool results come back as
+- Does NOT touch the filesystem. Tool execution is the host's job
+  (via `tools::execute`), and tool results come back as
   `on_tool_result` callbacks.
 
 ## FFI plan
@@ -176,17 +185,8 @@ make that mechanical:
 
 ## What's NOT here yet
 
-- Real backend implementations (stubs only).
-- The internal tokio runtime that drives backend HTTP. The `tokio`
-  dep is in Cargo.toml so callers don't get surprised by a feature
-  flag flip later, but no runtime is constructed today.
-- uniffi bindings. Crate is shaped for them; bindings produce when
-  the first native shell lands.
-- CI workflow file. Cross-repo auth between two private repos
-  (chan-llm depending on chan-drive via path) was the open issue;
-  resolved when chan-llm was folded into the chan-core workspace.
-  The workspace-level CI now covers this crate; the pre-push hook
-  mirrors it locally.
+- uniffi bindings. The crate is shaped for them; bindings land when
+  the first native shell does.
 - An assistant chat history schema. The session is stateless on
   this crate's side; consumers persist whatever conversation
   state they want however they want.

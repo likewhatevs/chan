@@ -308,7 +308,7 @@ fn manual_prefix_snippet(body: &str, prefixes: &[String]) -> String {
     }
     let lc = body.to_lowercase();
     // First-match position (byte offset in `lc`/`body`; ASCII
-    // prefixes only — non-ASCII case folding is approximate but
+    // prefixes only; non-ASCII case folding is approximate but
     // good enough for English typeahead).
     let first_idx = prefixes.iter().filter_map(|p| lc.find(p.as_str())).min();
     let first_idx = match first_idx {
