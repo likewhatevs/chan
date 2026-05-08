@@ -39,8 +39,8 @@ pub use drive::{DirEntry, Drive, FileStat, ResolvedLink, SearchOpts, TreeEntry};
 pub use error::{ChanError, Result};
 pub use graph::{Edge, EdgeKind, GraphView, HeadingRow, LinkTarget, LinkTargetKind, Tag};
 pub use index::{
-    BuildOptions, BuildSummary, Chunking, Hit, IndexConfig, IndexStats, Mode as SearchMode,
-    SearchResult, DEFAULT_MODEL,
+    BuildOptions, BuildProgress, BuildStage, BuildSummary, Chunking, Hit, IndexConfig, IndexStats,
+    Mode as SearchMode, SearchResult, DEFAULT_MODEL,
 };
 pub use library::{Library, ResetMode, ResetReport};
 pub use registry::{KnownDrive, Registry};

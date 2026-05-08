@@ -32,6 +32,27 @@ toml = "0.8"
 tracing = "0.1"
 walkdir = "2"
 
+# GPU / accelerator execution providers for the ONNX runtime fastembed
+# already bundles. Lets bge-small run off-CPU; on a typical drive the
+# difference is tens of minutes vs minutes. Pinned to the exact ort
+# version fastembed resolves to so we don't pull a second copy.
+#
+# macOS: WebGPU EP. ort-sys's pyke prebuilt for aarch64-apple-darwin
+# does not ship CoreML symbols (only `none` and `+wgpu` variants
+# exist); the `+wgpu` build is Dawn with the Metal backend, which is
+# the only off-CPU path available without building onnxruntime from
+# source. Always pulled on macOS so embeddings work as the sane
+# default; `CHAN_DISABLE_GPU=1` falls back to CPU at runtime.
+#
+# Linux: CUDA is opt-in via `--features cuda` because the EP needs
+# libcudart + libcublas + the CUDA EP shared lib on the host at
+# runtime; default Linux builds stay hermetic.
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["webgpu"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["cuda"], optional = true }
+
 [dev-dependencies]
 tempfile = "3"
 
@@ -42,6 +63,12 @@ default = ["embeddings"]
 # without a prebuilt onnxruntime binary (currently iOS); the
 # resulting binary still has BM25-only search via tantivy.
 embeddings = ["dep:fastembed"]
+# Linux-only: build with `--features cuda` to wire the CUDA EP for
+# embeddings. Set `CHAN_DISABLE_CUDA=1` at runtime to fall back to CPU
+# without rebuilding. Enabling this on macOS errors at resolve time
+# (ort isn't optional there because CoreML always works); macOS users
+# get GPU acceleration automatically.
+cuda = ["dep:ort"]
 
 [lib]
 name = "chan_drive"

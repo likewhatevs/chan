@@ -25,6 +25,6 @@ pub mod vectors;
 
 pub use config::{Chunking, IndexConfig, DEFAULT_MODEL};
 pub use facade::{
-    BuildOptions, BuildProgress, BuildSummary, Hit, Index, IndexError, IndexStats, Mode,
-    SearchResult,
+    BuildOptions, BuildProgress, BuildStage, BuildSummary, Hit, Index, IndexError, IndexStats,
+    Mode, SearchResult,
 };

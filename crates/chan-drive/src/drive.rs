@@ -498,6 +498,23 @@ impl Drive {
     /// index is unaffected by cancellation: we never reach the
     /// commit, so tantivy discards every pending write.
     pub fn reindex(&self, cancel: Option<&AtomicBool>) -> Result<BuildSummary> {
+        self.reindex_with(cancel, |_| {})
+    }
+
+    /// Same as `reindex`, but `on_progress` is called once per file
+    /// during the search-side pass. The graph-side pass runs first
+    /// without progress reporting (it's seconds even on big drives;
+    /// the embedding pass is the long part). The CLI uses this to
+    /// print live progress; the server's indexer uses the no-arg
+    /// `reindex` because it tracks status separately.
+    pub fn reindex_with<F>(
+        &self,
+        cancel: Option<&AtomicBool>,
+        on_progress: F,
+    ) -> Result<BuildSummary>
+    where
+        F: FnMut(crate::index::BuildProgress<'_>),
+    {
         // Graph rebuild walks the tree once for headings + edges.
         // The search facade walks again for chunking + embeddings.
         // Two passes is the trade for a clean separation; per-file
@@ -505,7 +522,7 @@ impl Drive {
         self.rebuild_graph(cancel)?;
         let summary = self
             .index()?
-            .build_all(BuildOptions::default(), |_| {}, cancel)
+            .build_all(BuildOptions::default(), on_progress, cancel)
             .map_err(|e| match e {
                 crate::index::IndexError::Cancelled => ChanError::Cancelled,
                 other => other.into(),

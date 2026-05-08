@@ -56,12 +56,19 @@ impl Embedder {
     /// Open `model_id` (e.g. `BAAI/bge-small-en-v1.5`). Downloads
     /// the model into `cache_dir` on first use; subsequent opens
     /// are fast.
+    ///
+    /// On macOS the embedder is configured with the WebGPU execution
+    /// provider (Dawn / Metal) so bge-small runs on the GPU.
+    /// `CHAN_DISABLE_GPU=1` in the environment forces CPU instead;
+    /// useful for benchmarking or when the GPU path misbehaves on a
+    /// particular machine.
     pub fn open(model_id: &str, cache_dir: &Path) -> Result<Self, EmbedError> {
         let kind = model_for(model_id)?;
         std::fs::create_dir_all(cache_dir)?;
-        let opts = InitOptions::new(kind.clone())
+        let mut opts = InitOptions::new(kind.clone())
             .with_cache_dir(cache_dir.to_path_buf())
             .with_show_download_progress(true);
+        opts = with_accelerator(opts);
         let inner = TextEmbedding::try_new(opts).map_err(stringify)?;
         let dim = embedding_dim(&kind);
         Ok(Self {
@@ -101,6 +108,47 @@ impl Embedder {
         let mut v = self.embed_documents(&[q.to_owned()])?;
         Ok(v.pop().unwrap_or_default())
     }
+}
+
+/// Wire the platform's GPU / accelerator execution provider into
+/// fastembed's `InitOptions`.
+///
+/// macOS: WebGPU EP routed through Dawn -> Metal. `CHAN_DISABLE_GPU=1`
+/// falls back to CPU without rebuilding. Note: pyke's prebuilt
+/// onnxruntime for aarch64-apple-darwin does not include the CoreML
+/// provider (only the WebGPU variant), so WebGPU is the only off-CPU
+/// option short of building onnxruntime from source.
+///
+/// Linux + `--features cuda`: CUDA EP. `CHAN_DISABLE_GPU=1` falls
+/// back to CPU. Default Linux builds stay on CPU so the binary is
+/// hermetic (the EP needs libcudart + libcublas at runtime).
+///
+/// Other platforms (Windows, default Linux): CPU.
+#[cfg(target_os = "macos")]
+fn with_accelerator(opts: InitOptions) -> InitOptions {
+    if std::env::var_os("CHAN_DISABLE_GPU").is_some() {
+        tracing::info!("embedder: GPU disabled via CHAN_DISABLE_GPU, using CPU");
+        return opts;
+    }
+    let ep = ort::ep::WebGPU::default().build();
+    tracing::info!("embedder: WebGPU EP enabled (Dawn/Metal)");
+    opts.with_execution_providers(vec![ep])
+}
+
+#[cfg(all(target_os = "linux", feature = "cuda"))]
+fn with_accelerator(opts: InitOptions) -> InitOptions {
+    if std::env::var_os("CHAN_DISABLE_GPU").is_some() {
+        tracing::info!("embedder: GPU disabled via CHAN_DISABLE_GPU, using CPU");
+        return opts;
+    }
+    let ep = ort::ep::CUDA::default().build();
+    tracing::info!("embedder: CUDA EP enabled");
+    opts.with_execution_providers(vec![ep])
+}
+
+#[cfg(not(any(target_os = "macos", all(target_os = "linux", feature = "cuda"))))]
+fn with_accelerator(opts: InitOptions) -> InitOptions {
+    opts
 }
 
 /// Map a HuggingFace-style model id to fastembed's enum. Add

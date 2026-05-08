@@ -244,6 +244,23 @@ impl Index {
         let mut chunks_total = 0usize;
         let mut errors: Vec<(String, IndexError)> = Vec::new();
 
+        // Embedding throughput is dominated by ONNX session +
+        // intra-batch parallelism overhead. Per-file embed calls on
+        // a drive of small markdown files (typical: ~30 chunks per
+        // file) leave that overhead unamortized and run an order of
+        // magnitude slower than the hardware can do. Accumulate
+        // chunks across files and flush in `EMBED_BATCH_CHUNKS`-sized
+        // groups so each embed call gets enough work for fastembed's
+        // internal batcher.
+        #[cfg(feature = "embeddings")]
+        let do_vectors = opts.include_vectors;
+        #[cfg(not(feature = "embeddings"))]
+        let _ = opts.include_vectors;
+        #[cfg(feature = "embeddings")]
+        let mut pending: Vec<(String, Vec<chunking::Chunk>)> = Vec::new();
+        #[cfg(feature = "embeddings")]
+        let mut pending_chunks: usize = 0;
+
         for (i, rel) in files.iter().enumerate() {
             if let Some(c) = cancel {
                 if c.load(Ordering::Relaxed) {
@@ -254,19 +271,77 @@ impl Index {
                 index: i,
                 total,
                 path: rel,
+                stage: BuildStage::File,
             });
             let abs = self.drive_root.join(rel);
-            match std::fs::read_to_string(&abs) {
-                Ok(text) => match self.write_file(rel, &text, opts.include_vectors) {
-                    Ok(n) => {
-                        indexed += 1;
-                        chunks_total += n;
+            let text = match std::fs::read_to_string(&abs) {
+                Ok(s) => s,
+                Err(e) => {
+                    errors.push((rel.clone(), e.into()));
+                    continue;
+                }
+            };
+            let chunks = chunking::chunk(&text, &self.config.chunking);
+            if let Err(e) = self.bm25.index_file(rel, &text, &self.config.chunking) {
+                errors.push((rel.clone(), e.into()));
+                continue;
+            }
+            indexed += 1;
+            chunks_total += chunks.len();
+
+            #[cfg(feature = "embeddings")]
+            if do_vectors {
+                if chunks.is_empty() {
+                    // Stale-vector cleanup for files that became
+                    // empty since the last build. `replace_file`
+                    // with an empty vec deletes the on-disk shard.
+                    if let Err(e) = self
+                        .vectors
+                        .replace_file(rel, &self.config.model, 0, vec![])
+                    {
+                        errors.push((rel.clone(), e.into()));
                     }
-                    Err(e) => errors.push((rel.clone(), e)),
-                },
-                Err(e) => errors.push((rel.clone(), e.into())),
+                    continue;
+                }
+                pending_chunks += chunks.len();
+                pending.push((rel.clone(), chunks));
+                if pending_chunks >= EMBED_BATCH_CHUNKS {
+                    on_progress(BuildProgress {
+                        index: i,
+                        total,
+                        path: rel,
+                        stage: BuildStage::EmbedBatch {
+                            chunks: pending_chunks,
+                            files: pending.len(),
+                        },
+                    });
+                    errors.extend(self.flush_embed_batch(&mut pending));
+                    pending_chunks = 0;
+                }
             }
         }
+
+        // Tail flush for the leftover < EMBED_BATCH_CHUNKS group.
+        #[cfg(feature = "embeddings")]
+        if do_vectors && !pending.is_empty() {
+            if let Some(c) = cancel {
+                if c.load(Ordering::Relaxed) {
+                    return Err(IndexError::Cancelled);
+                }
+            }
+            let last = pending.last().map(|(r, _)| r.clone()).unwrap_or_default();
+            on_progress(BuildProgress {
+                index: total.saturating_sub(1),
+                total,
+                path: &last,
+                stage: BuildStage::EmbedBatch {
+                    chunks: pending_chunks,
+                    files: pending.len(),
+                },
+            });
+            errors.extend(self.flush_embed_batch(&mut pending));
+        }
+
         if let Some(c) = cancel {
             if c.load(Ordering::Relaxed) {
                 return Err(IndexError::Cancelled);
@@ -279,6 +354,80 @@ impl Index {
             chunks: chunks_total,
             errors,
         })
+    }
+
+    /// Embed every pending chunk in one call, then split the result
+    /// back per file and write each file's vectors. Drains `pending`.
+    /// On batch failure, falls back to per-file embedding so errors
+    /// can be attributed to the offending file rather than poisoning
+    /// the whole batch.
+    #[cfg(feature = "embeddings")]
+    fn flush_embed_batch(
+        &self,
+        pending: &mut Vec<(String, Vec<chunking::Chunk>)>,
+    ) -> Vec<(String, IndexError)> {
+        let mut errors = Vec::new();
+        if pending.is_empty() {
+            return errors;
+        }
+        let embedder = match self.embedder() {
+            Ok(e) => e,
+            Err(e) => {
+                let msg = e.to_string();
+                for (rel, _) in pending.drain(..) {
+                    errors.push((rel, IndexError::Embed(EmbedError::Fastembed(msg.clone()))));
+                }
+                return errors;
+            }
+        };
+        let dim = embedder.dim();
+        let bodies: Vec<&str> = pending
+            .iter()
+            .flat_map(|(_, chunks)| chunks.iter().map(|c| c.body.as_str()))
+            .collect();
+        let raw = match embedder.embed_documents(&bodies) {
+            Ok(v) => v,
+            Err(_) => {
+                // Per-file fallback so a single bad file doesn't
+                // discard the rest of the batch's vectors.
+                for (rel, chunks) in pending.drain(..) {
+                    if let Err(e) = self.embed_one_file(&rel, &chunks, dim) {
+                        errors.push((rel, e));
+                    }
+                }
+                return errors;
+            }
+        };
+        let mut cursor = 0usize;
+        for (rel, chunks) in pending.drain(..) {
+            let n = chunks.len();
+            let slice = raw[cursor..cursor + n].to_vec();
+            cursor += n;
+            let embedded = vectors::pair(&chunks, slice);
+            if let Err(e) = self
+                .vectors
+                .replace_file(&rel, &self.config.model, dim, embedded)
+            {
+                errors.push((rel, e.into()));
+            }
+        }
+        errors
+    }
+
+    #[cfg(feature = "embeddings")]
+    fn embed_one_file(
+        &self,
+        rel: &str,
+        chunks: &[chunking::Chunk],
+        dim: usize,
+    ) -> Result<(), IndexError> {
+        let bodies: Vec<&str> = chunks.iter().map(|c| c.body.as_str()).collect();
+        let embedder = self.embedder()?;
+        let raw = embedder.embed_documents(&bodies)?;
+        let embedded = vectors::pair(chunks, raw);
+        self.vectors
+            .replace_file(rel, &self.config.model, dim, embedded)?;
+        Ok(())
     }
 
     /// One-file write path used by both `build_all` and `index_one`.
@@ -428,6 +577,14 @@ impl Index {
     }
 }
 
+// Cross-file embedding batch size, in chunks. Tuned for fastembed
+// + bge-small on CPU: large enough that ONNX session overhead is
+// amortized over a useful work unit, small enough that working
+// memory stays modest (~12 MB at 384-dim) on big drives. Only used
+// when the `embeddings` feature is on; harmless otherwise.
+#[cfg(feature = "embeddings")]
+const EMBED_BATCH_CHUNKS: usize = 4096;
+
 /// Knobs for `Index::build_all`.
 #[derive(Debug, Clone, Copy)]
 pub struct BuildOptions {
@@ -449,6 +606,19 @@ pub struct BuildProgress<'a> {
     pub index: usize,
     pub total: usize,
     pub path: &'a str,
+    pub stage: BuildStage,
+}
+
+/// Which step of `build_all` the progress callback is reporting.
+/// `File` fires per file before the read+chunk+BM25 step. `EmbedBatch`
+/// fires once per cross-file embedding flush, which can be the
+/// long-running pause on a CPU-only embedder; without surfacing it
+/// the CLI's progress line would look stuck on whatever file
+/// happened to push the buffer past the batch threshold.
+#[derive(Debug, Clone, Copy)]
+pub enum BuildStage {
+    File,
+    EmbedBatch { chunks: usize, files: usize },
 }
 
 #[derive(Debug)]
