@@ -95,10 +95,9 @@ static MODEL_BUNDLE: &[u8] = include_bytes!("../resources/models.tar.zst");
 #[derive(Debug, Clone)]
 pub struct ServeConfig {
     pub addr: SocketAddr,
-    /// When false, the server skips the per-launch token gate. Used
-    /// by tests and by the desktop shell embedding the server in the
-    /// same process. Loopback bind is the only check left; do not
-    /// flip this in production.
+    /// When true, the server skips the per-launch token gate. For
+    /// tests and local dev only. Loopback bind is the only check
+    /// left; do not flip this in production.
     pub no_token: bool,
     /// URL path prefix all routes are served under. Canonical form:
     /// empty (no prefix) or `/seg[/seg...]` (leading slash, no
@@ -112,6 +111,10 @@ pub struct ServeConfig {
     /// stack on one host. `None` keeps the server resident
     /// indefinitely (today's default).
     pub idle_timeout: Option<Duration>,
+    /// Open the launch URL in the user's default browser after the
+    /// listener binds. Set by the CLI for the default `chan serve`
+    /// flow; suppressed for tunnel mode (no local URL to open).
+    pub open_browser: bool,
 }
 
 /// Resolved at boot for the launch banner / browser handoff.
@@ -328,7 +331,15 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
         prefix: config.prefix.clone(),
         token: artifacts.token.clone(),
     };
-    eprintln!("chan listening on {}", handle.launch_url());
+    let url = handle.launch_url();
+    eprintln!("chan is ready:\n{url}");
+    if config.open_browser {
+        // Best-effort: on a headless host (no `xdg-open`/no display)
+        // this returns an error; log a NOTE and keep serving.
+        if let Err(e) = open::that_detached(&url) {
+            eprintln!("NOTE: could not open browser ({e}); visit the URL above.");
+        }
+    }
 
     let app = artifacts.app;
     let last_activity = artifacts.last_activity;
@@ -415,6 +426,7 @@ pub async fn serve_via_tunnel(
         no_token: true,
         prefix: String::new(),
         idle_timeout: None,
+        open_browser: false,
     };
     let artifacts = build_app(library, drive, &server_config).await?;
 

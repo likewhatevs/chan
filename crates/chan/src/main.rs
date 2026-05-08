@@ -110,9 +110,8 @@ enum Command {
         /// resident indefinitely.
         #[arg(long, value_parser = parse_idle_timeout)]
         timeout: Option<Duration>,
-        /// Skip the per-launch bearer-token gate. For tests and the
-        /// desktop shell only; never expose a no-token server on a
-        /// shared machine.
+        /// Skip the per-launch bearer-token gate. Local dev only;
+        /// never expose a no-token server on a shared machine.
         #[arg(long)]
         no_token: bool,
         /// Tunnel endpoint URL. With --tunnel-token, chan serve
@@ -637,6 +636,10 @@ async fn cmd_serve(
         no_token,
         prefix,
         idle_timeout,
+        // Tunnel mode is the only path with no local URL to open;
+        // every other invocation (default, --no-token desktop shell,
+        // off-loopback bind) gets the browser handoff.
+        open_browser: true,
     };
     chan_server::serve(lib, drive, config)
         .await
