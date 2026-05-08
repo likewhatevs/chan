@@ -32,13 +32,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
-  # candle-kernels' build.rs calls nvidia-smi at compile time to
-  # detect the host GPU's compute capability and pass it as
-  # --gpu-architecture to nvcc. CI runners have no GPU; setting
-  # the env var skips the probe. 75 = Turing; PTX forward-compat
-  # makes the resulting kernels run on Turing, Ampere, Ada,
-  # Hopper. Older GPUs (Pascal etc.) drop to CPU at runtime.
-  CUDA_COMPUTE_CAP: '75'
 
 jobs:
   fmt:
@@ -88,19 +81,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: chan
-      # Linux x86_64 release builds bundle candle's CUDA backend by
-      # default (chan/Cargo.toml target-conditional dep). Building
-      # candle-kernels needs nvcc; the cudarc 0.19 binary it produces
-      # dlopens libcuda at runtime so the host doesn't need a GPU.
-      # Jimver/cuda-toolkit installs only nvcc + cudart-dev (~500 MB)
-      # which is enough for candle-kernels' build.rs to compile and
-      # embed PTX kernels. Windows is CPU-only so no nvcc step.
-      - if: matrix.os == 'ubuntu-latest'
-        uses: Jimver/cuda-toolkit@v0.2.21
-        with:
-          cuda: '12.6.0'
-          method: 'network'
-          sub-packages: '["nvcc", "cudart-dev"]'
       - run: cargo clippy --all-targets -- -D warnings
         working-directory: chan
       - run: cargo test --all-targets

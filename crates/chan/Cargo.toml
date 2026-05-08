@@ -18,6 +18,15 @@ default = ["embeddings"]
 # all the way down. Default-on; opt out (`--no-default-features`)
 # only for platforms where candle-core won't build (currently iOS).
 embeddings = ["chan-server/embeddings", "chan-drive/embeddings"]
+# Opt-in CUDA backend for candle. Linux only; build with
+# `cargo build --release --features cuda`. Requires CUDA Toolkit
+# installed on both the build host (nvcc + dev headers) and the
+# runtime host (libnvrtc, libcublas, libcurand, libcudart): candle's
+# cudarc dep uses dynamic-linking, not dlopen-style fallback, so
+# DT_NEEDED entries land in the ELF and the binary won't launch
+# without those .so files in the loader path. CHAN_DISABLE_GPU=1
+# still forces CPU at runtime once the binary is loaded.
+cuda = ["chan-drive/cuda", "chan-server/cuda"]
 
 [dependencies]
 chan-drive = { workspace = true, default-features = false }
@@ -42,25 +51,6 @@ tracing-subscriber = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 chan-drive = { workspace = true, default-features = false, features = ["metal"] }
 chan-server = { path = "../chan-server", default-features = false, features = ["metal"] }
-
-# Linux x86_64 auto-wires candle's CUDA backend so the shipped
-# release binary uses the GPU for embeddings without a feature flag.
-# cudarc 0.19's `fallback-dynamic-loading` is on by default: the
-# binary dlopens libcuda at runtime and falls back to CPU when no
-# NVIDIA driver is present, so the same artifact runs on hosts
-# without a GPU. CHAN_DISABLE_GPU=1 forces CPU at runtime.
-#
-# Excluded on linux/aarch64 since NVIDIA's Linux ARM CUDA targets
-# datacenter (Grace, Jetson) rather than the desktops/servers chan
-# runs on; bundling kernels on ARM would be all cost no value.
-# Build host needs nvcc to compile candle-kernels; the runtime
-# binary doesn't need any CUDA libs installed.
-#
-# Opt-out: `--no-default-features --features embeddings` for a
-# Linux build without the ~30 MB of CUDA PTX blobs.
-[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
-chan-drive = { workspace = true, default-features = false, features = ["cuda"] }
-chan-server = { path = "../chan-server", default-features = false, features = ["cuda"] }
 
 # ----- packaging metadata --------------------------------------
 #
