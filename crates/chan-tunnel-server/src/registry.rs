@@ -118,6 +118,20 @@ impl Registry {
             .map(|e| e.handle.clone())
     }
 
+    /// Drives currently registered for `user`, sorted by name.
+    /// Used by the public dashboard to enumerate "drives I have
+    /// online" without needing a separate metadata service.
+    pub fn list_drives_for(&self, user: &str) -> Vec<Arc<str>> {
+        let g = self.inner.lock();
+        let mut drives: Vec<Arc<str>> = g
+            .keys()
+            .filter(|(u, _)| u.as_ref() == user)
+            .map(|(_, d)| d.clone())
+            .collect();
+        drives.sort();
+        drives
+    }
+
     /// Remove a registered tunnel only if `handle` is the one
     /// currently stored. Used by the driver task on its own
     /// teardown so it doesn't accidentally evict a successor that
@@ -164,5 +178,29 @@ mod tests {
         assert!(reg.get("alice", "notes").is_some());
         assert!(reg.get("alice", "other").is_none());
         assert!(reg.get("bob", "notes").is_none());
+    }
+
+    #[tokio::test]
+    async fn list_drives_for_returns_sorted_names_per_user() {
+        let reg = Registry::new();
+        let (_h1, _rx1, _sd1) = reg.register(Arc::from("alice"), Arc::from("notes"));
+        let (_h2, _rx2, _sd2) = reg.register(Arc::from("alice"), Arc::from("ideas"));
+        let (_h3, _rx3, _sd3) = reg.register(Arc::from("bob"), Arc::from("notes"));
+
+        let alice: Vec<String> = reg
+            .list_drives_for("alice")
+            .into_iter()
+            .map(|d| d.as_ref().to_string())
+            .collect();
+        assert_eq!(alice, vec!["ideas".to_string(), "notes".to_string()]);
+
+        let bob: Vec<String> = reg
+            .list_drives_for("bob")
+            .into_iter()
+            .map(|d| d.as_ref().to_string())
+            .collect();
+        assert_eq!(bob, vec!["notes".to_string()]);
+
+        assert!(reg.list_drives_for("nobody").is_empty());
     }
 }
