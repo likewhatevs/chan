@@ -2,7 +2,7 @@
 // One module-level singleton per concern; components import them directly.
 
 import type { IndexStatus, LlmMessage, TreeEntry, DriveInfo } from "../api/types";
-import { api, openWatchSocket, type WsStatus } from "../api/client";
+import { api, assistantHash16, openWatchSocket, type WsStatus } from "../api/client";
 import {
   closeTab,
   layout,
@@ -546,21 +546,24 @@ export type AssistantConversation = {
  * Three storage buckets for assistant conversations, scoped by
  * context kind:
  *
- *   - `byFile`: keyed by the file's drive-relative path. The
- *     only persisted bucket: each entry round-trips through
- *     `.chan/assistant/<sha256(path)>.json` so a conversation
- *     scoped to a single file survives across runs.
+ *   - `byFile`: keyed by the file's drive-relative path. Each
+ *     entry round-trips through
+ *     `.chan/assistant/<sha256(path)[..16]>.json` so a single-file
+ *     conversation survives across runs. Hashing happens inside
+ *     api.getConversation/putConversation/deleteConversation; the
+ *     in-memory map keys stay as raw paths.
  *   - `byGroup`: keyed by a stable group ID derived from the
- *     sorted paths joined with `|`. In-memory only. The lifecycle
- *     is tied to the layout: when the set of visible files
- *     changes (a pane is closed, a tab is switched), groups whose
- *     keys are no longer in `availableContexts()` get pruned. We
- *     don't litter disk with chat blobs that lose their context
- *     the moment the layout shifts.
- *   - `drive`: a single conversation for the drive Q&A
- *     context. In-memory across overlay open/close so a user can
- *     dismiss the overlay and come back to the same thread; lost
- *     on full app reload.
+ *     sorted paths joined with `|`. Persisted as an LRU of the
+ *     last `GROUP_LRU_MAX` group threads via a manifest blob
+ *     (`g_index.json`) plus per-group blobs
+ *     (`g_<sha256(key)[..16]>.json`). The manifest is re-ordered
+ *     (MRU first) on every save; entries past the cap are evicted
+ *     both on disk and in memory so the map can't grow unbounded
+ *     across long sessions.
+ *   - `drive`: a single conversation for the drive Q&A context.
+ *     In-memory across overlay open/close so a user can dismiss
+ *     the overlay and come back to the same thread; lost on full
+ *     app reload.
  */
 export const assistantConversations = $state<{
   byFile: Record<string, AssistantConversation>;
@@ -595,14 +598,163 @@ export function rekeyConversationsForRename(from: string, to: string): void {
   }
 }
 
-/** Drop the in-memory entry for a group context. */
+/** Drop the in-memory entry for a group context AND its persisted
+ *  blob + manifest entry. Used by /clear and the Clear button. */
 export function clearGroupConversation(key: string): void {
   delete assistantConversations.byGroup[key];
+  void clearGroupConversationOnDisk(key);
 }
 
 /** Drop the drive conversation entirely. */
 export function clearDriveConversation(): void {
   assistantConversations.drive = null;
+}
+
+// ---- group LRU persistence ----------------------------------------------
+//
+// Group conversations live in `byGroup` (keyed by the sorted-paths
+// `|`-joined string from scope.svelte's `scopeKey`). Each bucket
+// entry is mirrored to its own assistant blob; the most recent
+// `GROUP_LRU_MAX` of those are tracked in a manifest blob so the
+// next launch knows which threads to restore.
+//
+// Why LRU, not unbounded: a long session can touch many distinct
+// pane configurations (split, swap, close a tab, open another),
+// each producing a different group key. Persisting every one
+// would leak orphan blobs into `.chan/assistant/`; the cap puts
+// a hard ceiling on disk + memory growth.
+
+const GROUP_LRU_MAX = 10;
+/// Manifest blob key. Matches the `<name>.json` shape every other
+/// assistant blob uses; the `g_` prefix makes it easy to spot in a
+/// `list_assistant` listing.
+const GROUP_INDEX_KEY = "g_index.json";
+
+type GroupIndexEntry = {
+  /// 16-hex SHA-256 prefix of `key`. Doubles as the per-group blob
+  /// key (combined with the `g_` prefix and `.json` suffix), so the
+  /// manifest is enough to find every persisted thread on disk.
+  hash: string;
+  /// Raw sortedKey from scope.svelte's `scopeKey(paths)`. Stored
+  /// so the manifest is self-describing for diagnostics and so a
+  /// future pane configuration that produces the same set of
+  /// visible files can rehydrate the right thread by string match.
+  key: string;
+  paths: string[];
+  last_touched: number;
+};
+
+type GroupIndex = {
+  schema_version: number;
+  /// MRU first.
+  entries: GroupIndexEntry[];
+};
+
+function blobKeyForGroupHash(hash: string): string {
+  return `g_${hash}.json`;
+}
+
+async function loadGroupIndex(): Promise<GroupIndex> {
+  try {
+    const raw = await api.getAssistantBlob(GROUP_INDEX_KEY);
+    if (!raw) return { schema_version: 1, entries: [] };
+    const parsed = raw as Partial<GroupIndex>;
+    return {
+      schema_version: parsed.schema_version ?? 1,
+      entries: Array.isArray(parsed.entries) ? parsed.entries : [],
+    };
+  } catch {
+    return { schema_version: 1, entries: [] };
+  }
+}
+
+async function saveGroupIndex(idx: GroupIndex): Promise<void> {
+  try {
+    await api.putAssistantBlob(GROUP_INDEX_KEY, idx);
+  } catch {
+    // Manifest write failure is non-fatal: the per-group blob is
+    // already on disk, and the next save rebuilds the manifest.
+  }
+}
+
+/// Lazy load the persisted group conversation for `key` into
+/// `byGroup[key]`. No-op if the bucket already has an entry or no
+/// blob exists. Race-safe: if a concurrent submit creates the
+/// in-memory entry while the disk read is in flight, the on-disk
+/// version is discarded so the user's just-pushed turn isn't
+/// clobbered.
+export async function loadGroupConversation(key: string): Promise<void> {
+  if (assistantConversations.byGroup[key]) return;
+  try {
+    const hash = await assistantHash16(key);
+    const raw = await api.getAssistantBlob(blobKeyForGroupHash(hash));
+    if (!raw) return;
+    if (assistantConversations.byGroup[key]) return; // race
+    const parsed = raw as {
+      messages?: LlmMessage[];
+      turns?: AssistantTurn[];
+    };
+    assistantConversations.byGroup[key] = {
+      messages: parsed.messages ?? [],
+      turns: parsed.turns ?? [],
+    };
+  } catch {
+    // Server unreachable / decode error: leave the bucket empty so
+    // the next submit creates a fresh thread.
+  }
+}
+
+/// Persist a group conversation and bump its position in the LRU
+/// manifest. Evicts entries beyond the cap from both disk and the
+/// in-memory map.
+export async function saveGroupConversation(
+  key: string,
+  paths: string[],
+  conv: AssistantConversation,
+): Promise<void> {
+  const hash = await assistantHash16(key);
+  const blobKey = blobKeyForGroupHash(hash);
+  const now = Date.now();
+  try {
+    await api.putAssistantBlob(blobKey, {
+      schema_version: 1,
+      kind: "group",
+      key,
+      paths,
+      messages: conv.messages,
+      turns: conv.turns,
+      last_touched: now,
+    });
+  } catch {
+    // Skip manifest update so we don't promote an entry whose
+    // blob isn't actually on disk.
+    return;
+  }
+  const idx = await loadGroupIndex();
+  const remaining = idx.entries.filter((e) => e.hash !== hash);
+  remaining.unshift({ hash, key, paths, last_touched: now });
+  const kept = remaining.slice(0, GROUP_LRU_MAX);
+  for (const e of remaining.slice(GROUP_LRU_MAX)) {
+    void api.deleteAssistantBlob(blobKeyForGroupHash(e.hash));
+    delete assistantConversations.byGroup[e.key];
+  }
+  await saveGroupIndex({ schema_version: 1, entries: kept });
+}
+
+async function clearGroupConversationOnDisk(key: string): Promise<void> {
+  try {
+    const hash = await assistantHash16(key);
+    await api.deleteAssistantBlob(blobKeyForGroupHash(hash));
+    const idx = await loadGroupIndex();
+    const next = idx.entries.filter((e) => e.hash !== hash);
+    if (next.length !== idx.entries.length) {
+      await saveGroupIndex({ schema_version: 1, entries: next });
+    }
+  } catch {
+    // Best-effort: if we can't reach the server, the in-memory
+    // drop is already done; the disk leftover gets cleaned up the
+    // next time eviction runs.
+  }
 }
 
 // ---- assistant overlay --------------------------------------------------
@@ -656,19 +808,6 @@ export function openAssistant(): void {
   assistantOverlay.contextId = defaultScopeId();
   assistantOverlay.open = true;
   scheduleSessionSave();
-}
-
-/** Drop in-memory group conversations whose key no longer matches
- *  any current option. Call after every layout-affecting mutation
- *  so disk + memory stay clean. */
-export function pruneStaleAssistantGroups(): void {
-  const valid = new Set<string>();
-  for (const opt of availableAssistantContexts()) {
-    if (opt.kind === "group") valid.add(opt.key);
-  }
-  for (const key of Object.keys(assistantConversations.byGroup)) {
-    if (!valid.has(key)) delete assistantConversations.byGroup[key];
-  }
 }
 
 // ---- graph overlay -----------------------------------------------------

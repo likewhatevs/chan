@@ -43,9 +43,10 @@
     clearFileConversation,
     clearGroupConversation,
     clearDriveConversation,
+    loadGroupConversation,
     openAssistant,
-    pruneStaleAssistantGroups,
     refreshTree,
+    saveGroupConversation,
     drive,
     type AssistantConversation,
     type AssistantPendingEdit,
@@ -75,7 +76,6 @@
   /// hidden panel.
   $effect(() => {
     if (!visible) return;
-    pruneStaleAssistantGroups();
     if (!currentContext) {
       assistantOverlay.contextId = defaultScopeId();
     }
@@ -394,6 +394,10 @@
     if (currentContext.kind === "file") {
       // Pull the persisted thread off disk; in-memory hits skip.
       void loadFileConversation(currentContext.path);
+    } else if (currentContext.kind === "group") {
+      // Group threads round-trip through the LRU manifest so the
+      // last 10 are restored across reloads.
+      void loadGroupConversation(currentContext.key);
     }
     queueMicrotask(scrollToBottom);
   });
@@ -426,26 +430,40 @@
     }
   }
 
-  /// Debounced persistence for file contexts. Group and drive
-  /// are intentionally not persisted: their lifecycle is bound to
-  /// the current layout / app session, so writing to disk would
-  /// just leak orphan blobs into `.chan/assistant/`.
+  /// Debounced persistence. File contexts write a per-path blob
+  /// (one file = one thread, lives until the file is renamed or
+  /// the user clears it). Group contexts write through the LRU
+  /// manifest so only the last `GROUP_LRU_MAX` group threads stick
+  /// around; older ones drop off both disk and memory. Drive Q&A
+  /// stays in-memory only (its retrieval-driven excerpts make
+  /// long-term replay less useful).
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   function scheduleSave(ctx: ScopeOption): void {
-    if (ctx.kind !== "file") return;
-    const path = ctx.path;
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      saveTimer = null;
-      const conv = assistantConversations.byFile[path];
-      if (!conv) return;
-      void api.putConversation(path, {
-        schema_version: 1,
-        path,
-        messages: conv.messages,
-        turns: conv.turns,
-      });
-    }, 400);
+    if (ctx.kind === "file") {
+      const path = ctx.path;
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        saveTimer = null;
+        const conv = assistantConversations.byFile[path];
+        if (!conv) return;
+        void api.putConversation(path, {
+          schema_version: 1,
+          path,
+          messages: conv.messages,
+          turns: conv.turns,
+        });
+      }, 400);
+    } else if (ctx.kind === "group") {
+      const key = ctx.key;
+      const paths = ctx.paths;
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        saveTimer = null;
+        const conv = assistantConversations.byGroup[key];
+        if (!conv) return;
+        void saveGroupConversation(key, paths, conv);
+      }, 400);
+    }
   }
 
   function scrollToBottom(): void {

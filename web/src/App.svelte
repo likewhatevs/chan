@@ -22,7 +22,6 @@
     openGraph,
     openSettings,
     persistLayoutToHash,
-    pruneStaleAssistantGroups,
     reconnectWatcher,
     refreshDrive,
     refreshTree,
@@ -84,12 +83,6 @@
       // the layout restores on next launch. Heavier debounce than
       // the URL hash since it touches disk.
       scheduleSessionSave();
-      // Drop in-memory assistant group conversations whose set of
-      // visible files no longer matches a current option. Runs on
-      // every layout-affecting mutation so closing a pane that
-      // contributed to a group conversation drops that thread
-      // immediately rather than letting it linger as orphan state.
-      pruneStaleAssistantGroups();
     }
   });
 

@@ -63,6 +63,30 @@ function req<T>(
   return request<T>(method, path, body, signal, timeoutMs);
 }
 
+/// First 16 hex chars of SHA-256(input). Reused for assistant blob
+/// keys (file paths and group sortedKeys both go through this) so
+/// arbitrary user strings land inside chan-drive's strict blob-key
+/// validator (alnum + `-_.`, max 100 chars). Truncating to 64 bits
+/// is fine at our scale: a single drive maxes out around hundreds
+/// of conversations, where the birthday-bound collision risk is on
+/// the order of 1e-15.
+export async function assistantHash16(input: string): Promise<string> {
+  const buf = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(input),
+  );
+  const bytes = new Uint8Array(buf);
+  let hex = "";
+  for (let i = 0; i < 8; i++) {
+    hex += bytes[i]!.toString(16).padStart(2, "0");
+  }
+  return hex;
+}
+
+async function blobKeyForPath(path: string): Promise<string> {
+  return `${await assistantHash16(path)}.json`;
+}
+
 export const api = {
   drive: () => req<DriveInfo>("GET", "/api/drive"),
   /// Update the drive's display name in the global registry.
@@ -123,26 +147,57 @@ export const api = {
     return req<LlmModelEntry[]>("GET", path);
   },
   /// Per-file assistant conversation persistence. Each file's
-  /// conversation is its own JSON under `.chan/assistant/`.
+  /// conversation is its own JSON under `.chan/assistant/`, keyed
+  /// by `<sha256(path)[..16]>.json`. The hash hides the raw path
+  /// from chan-drive's blob-key validator (which forbids `/` and
+  /// other separators) and matches the on-disk shape the codebase
+  /// shipped with before the chan-core -> chan-drive rename.
   /// `null` from get means no conversation yet (server returns
   /// 204).
   getConversation: async (path: string): Promise<unknown | null> => {
+    const key = await blobKeyForPath(path);
     const v = await req<unknown | undefined>(
       "GET",
-      `/api/assistant/conversation?path=${encodeURIComponent(path)}`,
+      `/api/assistant/conversation?path=${encodeURIComponent(key)}`,
     );
     return v ?? null;
   },
-  putConversation: (path: string, body: unknown) =>
+  putConversation: async (path: string, body: unknown): Promise<void> => {
+    const key = await blobKeyForPath(path);
+    await req<void>(
+      "PUT",
+      `/api/assistant/conversation?path=${encodeURIComponent(key)}`,
+      body,
+    );
+  },
+  deleteConversation: async (path: string): Promise<void> => {
+    const key = await blobKeyForPath(path);
+    await req<void>(
+      "DELETE",
+      `/api/assistant/conversation?path=${encodeURIComponent(key)}`,
+    );
+  },
+  /// Generic assistant blob get/put/delete. Same endpoint as
+  /// getConversation but typed for non-file keys: the group-LRU
+  /// manifest (`g_index`) and hashed group conversations
+  /// (`g_<sha256(sortedKey)>`).
+  getAssistantBlob: async (key: string): Promise<unknown | null> => {
+    const v = await req<unknown | undefined>(
+      "GET",
+      `/api/assistant/conversation?path=${encodeURIComponent(key)}`,
+    );
+    return v ?? null;
+  },
+  putAssistantBlob: (key: string, body: unknown) =>
     req<void>(
       "PUT",
-      `/api/assistant/conversation?path=${encodeURIComponent(path)}`,
+      `/api/assistant/conversation?path=${encodeURIComponent(key)}`,
       body,
     ),
-  deleteConversation: (path: string) =>
+  deleteAssistantBlob: (key: string) =>
     req<void>(
       "DELETE",
-      `/api/assistant/conversation?path=${encodeURIComponent(path)}`,
+      `/api/assistant/conversation?path=${encodeURIComponent(key)}`,
     ),
   /// Save a Q&A exchange under the configured answers_dir.
   /// Returns the relative path that was written.
