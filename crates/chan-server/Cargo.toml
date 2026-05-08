@@ -28,6 +28,7 @@ tar = { workspace = true, optional = true }
 zstd = { workspace = true, optional = true }
 chan-llm = { workspace = true }
 chan-tunnel-client = { workspace = true }
+chan-tunnel-proto = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
 rand = "0.8"

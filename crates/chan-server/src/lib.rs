@@ -23,6 +23,13 @@ mod self_writes;
 pub use config::ServerConfig;
 pub use preferences::{EditorPrefs, FontPrefs, FontSpec, LineSpacing, PaneWidths, ThemeChoice};
 
+/// Tunnel drive-name helpers re-exported from chan-tunnel-proto so
+/// the `chan` binary can pre-validate / pre-sanitize without taking
+/// a direct dep on the tunnel proto crate.
+pub mod tunnel {
+    pub use chan_tunnel_proto::{is_valid_drive_name, sanitize_drive_name, MAX_DRIVE_NAME_LEN};
+}
+
 use self_writes::SelfWrites;
 
 use std::net::SocketAddr;

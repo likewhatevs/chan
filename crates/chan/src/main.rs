@@ -127,9 +127,11 @@ enum Command {
         /// in `ps`.
         #[arg(long, env = "CHAN_TUNNEL_TOKEN")]
         tunnel_token: Option<String>,
-        /// Drive name to publish at /{user}/<name>. Defaults to the
-        /// drive's stored canonical name. Must be lowercase
-        /// [a-z0-9-], 1-32 chars, no leading/trailing hyphen.
+        /// Drive name to publish at /{user}/<name>. Must be
+        /// lowercase [a-z0-9-], 1-32 chars, no leading/trailing
+        /// hyphen. Defaults to a sanitized form of the drive's
+        /// stored display name (e.g. "My Notes" -> "my-notes");
+        /// chan emits a NOTE when it had to sanitize.
         #[arg(long)]
         tunnel_drive: Option<String>,
         /// Expose the tunneled drive without an OAuth gate. By
@@ -351,6 +353,65 @@ fn same_path(a: &Path, b: &Path) -> bool {
 /// who already had a drive registered before the auto-name change
 /// still see a real name in the file browser without typing
 /// `chan rename` first.
+/// Pick the URL-safe drive name to publish under
+/// `drive.chan.app/{user}/<name>`. The registry display name
+/// (used in the file browser, logs, etc.) and the wire name
+/// are decoupled: the display name can be "My Notes", but the
+/// tunnel name has to satisfy `is_valid_drive_name`.
+///
+/// - With `--tunnel-drive`: validate it; bail with a clear
+///   message + a suggested sanitized form if rejected.
+/// - Without: take the registry name (or basename), sanitize.
+///   Warn when sanitize altered it. Bail when sanitize yields
+///   `None` (the path collapses to all punctuation).
+fn resolve_tunnel_drive_name(
+    flag: Option<String>,
+    registry_name: Option<&str>,
+    root: &Path,
+) -> Result<String> {
+    if let Some(name) = flag {
+        if chan_server::tunnel::is_valid_drive_name(&name) {
+            return Ok(name);
+        }
+        let suggestion = chan_server::tunnel::sanitize_drive_name(&name);
+        let max = chan_server::tunnel::MAX_DRIVE_NAME_LEN;
+        let hint = match suggestion {
+            Some(s) => format!(" Try --tunnel-drive={s}."),
+            None => String::new(),
+        };
+        anyhow::bail!(
+            "--tunnel-drive {name:?} is not URL-safe (need [a-z0-9-], 1-{max} chars, no leading/trailing hyphen).{hint}"
+        );
+    }
+    let source = registry_name
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            root.file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
+    if chan_server::tunnel::is_valid_drive_name(&source) {
+        return Ok(source);
+    }
+    match chan_server::tunnel::sanitize_drive_name(&source) {
+        Some(sanitized) => {
+            eprintln!(
+                "NOTE: drive name {source:?} sanitized to {sanitized:?} for the tunnel URL. \
+                 Pass --tunnel-drive to override."
+            );
+            Ok(sanitized)
+        }
+        None => {
+            let max = chan_server::tunnel::MAX_DRIVE_NAME_LEN;
+            anyhow::bail!(
+                "cannot derive a URL-safe tunnel drive name from {source:?}. \
+                 Pass --tunnel-drive=<name> ([a-z0-9-], 1-{max} chars, no leading/trailing hyphen)."
+            );
+        }
+    }
+}
+
 fn ensure_drive_named(
     lib: &Library,
     root: &Path,
@@ -532,7 +593,7 @@ async fn cmd_serve(
                  Prefer CHAN_TUNNEL_TOKEN env var instead."
             );
         }
-        let drive_name = tunnel_drive.unwrap_or_else(|| known.name.clone().unwrap_or_default());
+        let drive_name = resolve_tunnel_drive_name(tunnel_drive, known.name.as_deref(), &root)?;
         if tunnel_public {
             eprintln!(
                 "WARNING: --public exposes this drive at \
@@ -764,5 +825,57 @@ mod tests {
         assert!(parse_idle_timeout("-5s").is_err()); // negative
         assert!(parse_idle_timeout("five s").is_err());
         assert!(parse_idle_timeout("1.5m").is_err()); // no fractional
+    }
+
+    #[test]
+    fn tunnel_drive_flag_passes_through_when_valid() {
+        let root = PathBuf::from("/tmp/whatever");
+        let out = resolve_tunnel_drive_name(Some("notes".into()), Some("My Notes"), &root).unwrap();
+        assert_eq!(out, "notes");
+    }
+
+    #[test]
+    fn tunnel_drive_flag_rejected_with_suggestion() {
+        let root = PathBuf::from("/tmp/whatever");
+        let err = resolve_tunnel_drive_name(Some("My Drive!".into()), Some("My Notes"), &root)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("not URL-safe"), "{msg}");
+        assert!(msg.contains("--tunnel-drive=my-drive"), "{msg}");
+    }
+
+    #[test]
+    fn tunnel_drive_flag_rejected_when_unsanitizable() {
+        let root = PathBuf::from("/tmp/whatever");
+        let err = resolve_tunnel_drive_name(Some("---".into()), Some("notes"), &root).unwrap_err();
+        assert!(err.to_string().contains("not URL-safe"));
+    }
+
+    #[test]
+    fn tunnel_drive_default_uses_registry_name_as_is_when_valid() {
+        let root = PathBuf::from("/tmp/whatever");
+        let out = resolve_tunnel_drive_name(None, Some("notes"), &root).unwrap();
+        assert_eq!(out, "notes");
+    }
+
+    #[test]
+    fn tunnel_drive_default_sanitizes_registry_name() {
+        let root = PathBuf::from("/tmp/whatever");
+        let out = resolve_tunnel_drive_name(None, Some("My Notes"), &root).unwrap();
+        assert_eq!(out, "my-notes");
+    }
+
+    #[test]
+    fn tunnel_drive_default_falls_back_to_basename_when_no_registry_name() {
+        let root = PathBuf::from("/tmp/Daily Journal");
+        let out = resolve_tunnel_drive_name(None, None, &root).unwrap();
+        assert_eq!(out, "daily-journal");
+    }
+
+    #[test]
+    fn tunnel_drive_default_bails_when_basename_collapses() {
+        let root = PathBuf::from("/tmp/---");
+        let err = resolve_tunnel_drive_name(None, None, &root).unwrap_err();
+        assert!(err.to_string().contains("cannot derive"));
     }
 }

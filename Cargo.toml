@@ -42,6 +42,7 @@ repository = "https://github.com/chan-writer/chan"
 chan-drive = { path = "../chan-core/crates/chan-drive", default-features = false }
 chan-llm = { path = "../chan-core/crates/chan-llm" }
 chan-tunnel-client = { path = "../chan-core/crates/chan-tunnel-client" }
+chan-tunnel-proto = { path = "../chan-core/crates/chan-tunnel-proto" }
 
 anyhow = "1"
 axum = { version = "0.7", features = ["ws", "macros", "multipart"] }
