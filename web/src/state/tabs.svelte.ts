@@ -55,6 +55,17 @@ export type FileTab = {
   /// overlay picker. `null` for files outside any repo (or files
   /// whose repo coincides with the drive itself).
   repoRoot: string | null;
+  /// User-toggled "read mode" for this tab (the lamp in
+  /// WikiStatusBar). Per-tab so multi-pane layouts can mix
+  /// read/write without panes fighting over a global flag.
+  /// Ephemeral; not serialized into the URL hash or session.json.
+  readMode: boolean;
+  /// Filesystem-level writability, sourced from the file response's
+  /// `writable` field on each read. `false` forces the tab into
+  /// read-only mode regardless of `readMode` and disables the lamp
+  /// toggle so the user can't try to write a file the OS won't
+  /// accept. The watcher refreshes this when permissions change.
+  fsWritable: boolean;
 };
 
 export type Tab = FileTab;
@@ -140,6 +151,9 @@ async function loadTabContent(
       t.saved = r.content;
       t.savedMtime = r.mtime ?? null;
       t.repoRoot = r.repo_root ?? null;
+      // Older servers omit `writable`; treat absent as writable so
+      // the lamp behaves the way it did before this field existed.
+      t.fsWritable = r.writable ?? true;
     }
   } catch (e) {
     const t = live();
@@ -175,6 +189,8 @@ export async function openInPane(paneId: string, path: string): Promise<void> {
     error: null,
     inspectorOpen: false,
     repoRoot: null,
+    readMode: false,
+    fsWritable: true,
   };
   p.tabs.push(newTab);
   p.activeTabId = newTab.id;
@@ -292,6 +308,8 @@ function cloneTab(src: Tab): Tab {
     error: src.error,
     inspectorOpen: src.inspectorOpen,
     repoRoot: src.repoRoot,
+    readMode: src.readMode,
+    fsWritable: src.fsWritable,
   };
 }
 
@@ -665,6 +683,11 @@ export async function restoreLayout(s: SerNode): Promise<void> {
           // restored sessions start with null and get the real value
           // once the file fetches.
           repoRoot: null,
+          // Read mode is intentionally ephemeral: a session restored
+          // after restart starts every tab in write mode. fsWritable
+          // gets refreshed by the first loadTabContent.
+          readMode: false,
+          fsWritable: true,
         };
         p.tabs.push(tab);
         if (sertab.a) p.activeTabId = tab.id;
@@ -720,6 +743,26 @@ export async function refreshTabFromDisk(tabId: string): Promise<void> {
   if (!found) return;
   if (found.tab.content !== found.tab.saved) return;
   await loadTabContent(found.paneId, found.tab.id, found.tab.path);
+}
+
+/// Aggregate read-only state across the whole window: true iff
+/// every leaf pane has at least one file tab AND every active
+/// file tab is in read mode (either user-toggled `readMode` or
+/// filesystem-locked via `!fsWritable`). Walks layout.nodes so
+/// callers reading this from a $derived re-run when any of those
+/// fields flip. Returns false when there are no open file tabs
+/// at all (an empty workspace isn't conceptually "in read mode").
+export function isWindowFullyReadOnly(): boolean {
+  let sawFile = false;
+  for (const node of Object.values(layout.nodes)) {
+    if (node.kind !== "leaf") continue;
+    if (node.tabs.length === 0) continue;
+    const active = node.tabs.find((t) => t.id === node.activeTabId);
+    if (!active || active.kind !== "file") continue;
+    sawFile = true;
+    if (!active.readMode && active.fsWritable) return false;
+  }
+  return sawFile;
 }
 
 /// Look up every open tab for `path`, regardless of pane. The

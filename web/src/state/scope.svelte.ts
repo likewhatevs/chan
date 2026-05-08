@@ -41,7 +41,19 @@ import { browserOverlay, browserSelection, tree } from "./store.svelte";
 /// true; consumers render it as disabled in the dropdown when
 /// false (e.g. global before cross-drive indexing ships).
 export type ScopeOption =
-  | { id: string; kind: "file"; label: string; path: string; enabled?: boolean }
+  | {
+      id: string;
+      kind: "file";
+      label: string;
+      path: string;
+      enabled?: boolean;
+      /// True when the underlying tab is read-only (filesystem-
+      /// locked or user-toggled). Read-only files stay searchable
+      /// and answerable but the assistant can't write to them; the
+      /// dropdown appends a "(read-only)" tag and the apply-edit
+      /// path refuses to save.
+      readOnly?: boolean;
+    }
   | {
       id: string;
       kind: "dir";
@@ -90,6 +102,21 @@ export function visibleFilePaths(): string[] {
     if (active && active.path) out.add(active.path);
   }
   return [...out].sort();
+}
+
+/// Lookup the read-only state of a path among the active tabs.
+/// True when at least one open tab on this path is in read mode
+/// (user-toggled or filesystem-locked); false when no open tab
+/// claims the path or every open tab is writable. Drives the
+/// `(read-only)` tag on file scope options.
+function pathIsReadOnly(path: string): boolean {
+  for (const node of Object.values(layout.nodes)) {
+    if (node.kind !== "leaf") continue;
+    const active = node.tabs.find((t) => t.id === node.activeTabId);
+    if (!active || active.kind !== "file" || active.path !== path) continue;
+    if (active.readMode || !active.fsWritable) return true;
+  }
+  return false;
 }
 
 /// Path of the directory the file browser overlay has selected,
@@ -145,12 +172,16 @@ export function availableScopeOptions(opts: {
   global?: { label: string; enabled?: boolean };
 }): ScopeOption[] {
   const files = visibleFilePaths();
-  const out: ScopeOption[] = files.map((path) => ({
-    id: `file:${path}`,
-    kind: "file",
-    label: path,
-    path,
-  }));
+  const out: ScopeOption[] = files.map((path) => {
+    const readOnly = pathIsReadOnly(path);
+    return {
+      id: `file:${path}`,
+      kind: "file",
+      label: readOnly ? `${path} (read-only)` : path,
+      path,
+      readOnly,
+    };
+  });
   if (files.length >= 2) {
     const key = scopeKey(files);
     out.push({

@@ -16,7 +16,7 @@
   import OutlineBody, { type Heading } from "./OutlineBody.svelte";
   import FileInfoBody from "./FileInfoBody.svelte";
   import { setMode, type FileTab } from "../state/tabs.svelte";
-  import { idle, pinAccessory, setReadMode } from "../state/idle.svelte";
+  import { idle, pinAccessory } from "../state/idle.svelte";
   import WikiStatusBar from "./WikiStatusBar.svelte";
 
   // Hover pin: while the cursor is over the floating fmt-bar, the
@@ -74,15 +74,12 @@
   let showInfo = $state(false);
 
   /// Read-only mode for this tab. The status bar's lamp toggle
-  /// drives this; Wysiwyg becomes non-editable + caret-hidden, and
-  /// the floating fmt-bar is removed from the DOM. Mirrors the
-  /// global readMode flag while this tab is the focused one so
-  /// the bottom-pill auto-hide accelerates accordingly.
-  let readMode = $state(false);
-  $effect(() => {
-    setReadMode(readMode);
-    return () => setReadMode(false);
-  });
+  /// drives `tab.readMode` directly; an OS-level read-only file
+  /// (no user-write bit) is reflected through `tab.fsWritable`
+  /// and overrides the lamp so the user can't try to write.
+  /// Per-tab so multi-pane layouts can mix read/write without
+  /// a global signal fighting between panes.
+  const readOnly = $derived(tab.readMode || !tab.fsWritable);
 
   // Bumped on every selection / doc change in the WYSIWYG editor
   // so the active-mark / current-block derivations re-run. The
@@ -195,7 +192,7 @@
     </span>
   </div>
 
-  {#if !tab.loading && !overlayOpen && tab.mode === "wysiwyg" && !readMode}
+  {#if !tab.loading && !overlayOpen && tab.mode === "wysiwyg" && !readOnly}
     <!-- svelte-ignore a11y_interactive_supports_focus -->
     <!-- Wrapper isn't tabbable; the formatting buttons inside are. -->
     <div
@@ -293,7 +290,7 @@
         <Wysiwyg
           bind:this={wysiwygRef}
           bind:value={tab.content}
-          readonly={readMode}
+          readonly={readOnly}
           onSelectionChange={() => (selVer = selVer + 1)}
           wikiPickerPrefix={tab.repoRoot}
           currentPath={tab.path}
@@ -328,7 +325,8 @@
       <WikiStatusBar
         path={tab.path}
         content={tab.content}
-        bind:readMode
+        fsWritable={tab.fsWritable}
+        bind:readMode={tab.readMode}
       />
     {/if}
   {/if}

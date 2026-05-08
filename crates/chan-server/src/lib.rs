@@ -1359,6 +1359,29 @@ struct FileResponse {
     path: String,
     content: String,
     mtime: Option<i64>,
+    /// Filesystem-level writability. False when the path lacks the
+    /// user-write bit (e.g. `chmod -w`); the editor uses this to
+    /// lock the per-tab read mode regardless of user choice. Sourced
+    /// from `metadata().permissions().readonly()` on the resolved
+    /// drive-internal path so symlink escapes are still refused
+    /// upstream by chan-drive.
+    writable: bool,
+}
+
+/// Check the user-write bit on a drive-relative path. Returns true
+/// when the path can't be safely resolved (matches read_text's own
+/// behavior of failing later) so we don't surface a misleading
+/// "locked" lamp on a path that's actually broken; callers get the
+/// real error from `read_text` instead.
+fn fs_writable(state: &AppState, rel: &str) -> bool {
+    let abs = match chan_drive::fs_ops::resolve_safe_strict(state.drive().root(), rel) {
+        Ok(p) => p,
+        Err(_) => return true,
+    };
+    match std::fs::symlink_metadata(&abs) {
+        Ok(m) => !m.permissions().readonly(),
+        Err(_) => true,
+    }
 }
 
 async fn api_read_file(
@@ -1376,10 +1399,12 @@ async fn api_read_file(
             Err(e) => return err_from(&e),
         };
         let mtime = state.drive().stat(&path).ok().and_then(|s| s.mtime);
+        let writable = fs_writable(&state, &path);
         return Json(FileResponse {
             path,
             content,
             mtime,
+            writable,
         })
         .into_response();
     }

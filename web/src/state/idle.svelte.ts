@@ -25,10 +25,12 @@ const IDLE_MS_READMODE = 2500;
 
 export const idle = $state<{ active: boolean }>({ active: false });
 
-/// Global read-mode flag. Mirrored by whichever editor tab is
-/// currently focused and in read-only. Toggled via setReadMode().
-/// Consumers (BottomPill, fmt-bar) read this to apply a faded
-/// look on top of the regular idle fade.
+/// Window-level read-mode flag. True only when *every* visible
+/// file tab is read-only (user-toggled or filesystem-locked); a
+/// mixed write/read layout keeps this false so the bottom pill
+/// stays full-color. Driven by a single $effect in App.svelte
+/// that derives the value from layout state, so there's exactly
+/// one writer to this signal regardless of pane count.
 export const readMode = $state<{ active: boolean }>({ active: false });
 
 let currentIdleMs = IDLE_MS_DEFAULT;

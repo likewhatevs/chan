@@ -20,6 +20,7 @@
   let {
     path,
     content,
+    fsWritable = true,
     readMode = $bindable(false),
   }: {
     /// Drive-relative file path. Used as the backlinks query key.
@@ -27,6 +28,11 @@
     /// Live editor markdown buffer. Word / character counts derive
     /// from this; recompute is debounced so typing stays cheap.
     content: string;
+    /// Filesystem-level writability. When false, the lamp is locked
+    /// to read mode and clicking it does nothing: an unwritable
+    /// file can't be flipped to write mode no matter what the user
+    /// asks for.
+    fsWritable?: boolean;
     /// Two-way: clicking the lamp flips this and the parent passes
     /// it on to Wysiwyg + uses it to hide the format toolbar.
     readMode?: boolean;
@@ -86,14 +92,23 @@
     collapsed = !collapsed;
   }
   function toggleReadMode(): void {
+    // OS-locked files can never be flipped to write mode; the lamp
+    // stays in read state regardless of clicks. The button is also
+    // disabled in the template, so this guard is belt-and-braces.
+    if (!fsWritable) return;
     readMode = !readMode;
   }
+  /// Effective lamp state: a tab whose file lost the user-write bit
+  /// always reads as read-only even if the user hadn't toggled the
+  /// lamp manually. Mirrors the FileEditorTab `readOnly` derivation
+  /// so the status bar agrees with the editor surface above it.
+  const effectiveRead = $derived(readMode || !fsWritable);
 </script>
 
 <div
   class="wiki-statusbar"
   class:collapsed
-  class:read-mode={readMode}
+  class:read-mode={effectiveRead}
   class:idle={idle.active}
 >
   <button
@@ -120,13 +135,21 @@
     <span class="sep">·</span>
     <button
       class="lamp"
-      class:on={!readMode}
-      title={readMode ? "switch to write mode" : "switch to read-only"}
+      class:on={!effectiveRead}
+      class:fs-locked={!fsWritable}
+      disabled={!fsWritable}
+      title={fsWritable
+        ? effectiveRead
+          ? "switch to write mode"
+          : "switch to read-only"
+        : "file is read-only on disk"}
       onclick={toggleReadMode}
       onmousedown={(e) => e.preventDefault()}
     >
       <span class="dot"></span>
-      <span class="lamp-lbl">{readMode ? "read" : "write"}</span>
+      <span class="lamp-lbl"
+        >{!fsWritable ? "locked" : effectiveRead ? "read" : "write"}</span
+      >
     </button>
   {/if}
 </div>
@@ -216,6 +239,18 @@
        read as active without being aggressive. */
     background: #2ea043;
     box-shadow: 0 0 4px rgba(46, 160, 67, .55);
+  }
+  /* Filesystem-locked: the lamp is fixed in read state, the cursor
+     becomes default-not-allowed, and the dot picks up the warn tint
+     so the user can see at a glance that this isn't a user choice. */
+  .lamp:disabled,
+  .lamp.fs-locked {
+    cursor: not-allowed;
+    color: var(--warn-text);
+  }
+  .lamp.fs-locked .dot {
+    background: var(--warn-text);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--warn-text) 35%, transparent);
   }
   .lamp-lbl { letter-spacing: 0.02em; }
 </style>

@@ -243,6 +243,12 @@ export type FileResponse = {
   /// repo coincides with the drive root). Drives the per-file
   /// scope indicator in the overlay picker.
   repo_root?: string | null;
+  /// Filesystem-level writability: true when the underlying file
+  /// has user-write bits set on disk, false otherwise. Drives the
+  /// per-tab read-only lock that overrides the user's lamp toggle.
+  /// Optional for forward-compat with older servers; absent =
+  /// treat as writable to match prior behavior.
+  writable?: boolean;
 };
 
 export type SearchHit = { path: string; score: number };

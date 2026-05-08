@@ -33,6 +33,7 @@
     watchSystemTheme,
   } from "./state/store.svelte";
   import {
+    isWindowFullyReadOnly,
     layout,
     openInActivePane,
     scheduleAutosave,
@@ -45,7 +46,7 @@
     applyInitialPageWidth,
     watchPageWidth,
   } from "./state/pageWidth.svelte";
-  import { installIdleTracker } from "./state/idle.svelte";
+  import { installIdleTracker, setReadMode } from "./state/idle.svelte";
   import { loadShared } from "./api/wasm";
 
   // Keep the URL hash in sync with the current layout so reload (and
@@ -115,6 +116,18 @@
   $effect(() => {
     const fonts = drive.info?.preferences?.fonts;
     applyFontPrefs(fonts ?? DEFAULT_FONT_PREFS);
+  });
+
+  // Single-writer bridge from per-tab read mode to the window-level
+  // readMode flag (which drives the bottom pill's grey state and
+  // the idle tracker's read-mode timing window). Computing this in
+  // App.svelte means there's exactly one effect mutating the
+  // signal regardless of how many panes are open, which avoids the
+  // multi-pane fight that the previous per-FileEditorTab effect
+  // produced (cleanup-then-set on every toggle, with sibling panes
+  // racing to overwrite each other's value).
+  $effect(() => {
+    setReadMode(isWindowFullyReadOnly());
   });
 
   onMount(async () => {

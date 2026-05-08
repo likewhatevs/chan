@@ -448,8 +448,13 @@
       lastSyncedValue = value;
       tagHeadings();
       // External content change = tab switch or fresh load. Refocus
-      // so the user can keep typing without clicking.
-      editor.commands.focus("start");
+      // so the user can keep typing without clicking. Skip when
+      // the editor is non-editable: refocusing a contenteditable=
+      // false editor can leave ProseMirror's selection in a state
+      // that suppresses the post-setContent paint, which is why
+      // filesystem updates appeared to stop landing once the lamp
+      // was flipped to read.
+      if (editor.isEditable) editor.commands.focus("start");
     } finally {
       applyingExternal = false;
     }

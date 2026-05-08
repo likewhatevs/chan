@@ -743,17 +743,27 @@
   /// "applied" in green but the file never reached disk).
   async function applyEdit(edit: AssistantPendingEdit): Promise<void> {
     if (edit.status !== "pending") return;
+    // Refuse if any open tab on this path is filesystem-locked. The
+    // user can keep the readonly file in scope (the assistant can
+    // still see it and answer questions) but accepting an edit
+    // requires a writable target. We only check open tabs because
+    // that's where fsWritable is known client-side; for paths with
+    // no open tab the server's write will reject with a permission
+    // error, which still surfaces in the catch below.
     let openTabUpdated = false;
     for (const node of Object.values(layout.nodes)) {
       if (node.kind !== "leaf") continue;
       for (const t of node.tabs) {
-        if (t.kind === "file" && t.path === edit.path) {
-          t.content = edit.content;
-          // Mark clean so the autosave loop doesn't re-write what
-          // we're about to flush explicitly below.
-          t.saved = edit.content;
-          openTabUpdated = true;
+        if (t.kind !== "file" || t.path !== edit.path) continue;
+        if (!t.fsWritable) {
+          error = `'${edit.path}' is read-only on disk; cannot apply edit`;
+          return;
         }
+        t.content = edit.content;
+        // Mark clean so the autosave loop doesn't re-write what
+        // we're about to flush explicitly below.
+        t.saved = edit.content;
+        openTabUpdated = true;
       }
     }
     try {
