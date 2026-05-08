@@ -141,6 +141,6 @@
   }
   .fbtn.enso.on {
     border-color: var(--assistant-accent);
-    background: rgba(255, 214, 10, 0.12);
+    background: rgba(229, 140, 77, 0.12);
   }
 </style>

@@ -307,7 +307,7 @@
      The neutrals mirror Apple's Notes / system grays so chan reads
      as "the markdown notes app" rather than "GitHub Dark with our
      stuff in it"; functional colors (link blue, accent green, warn
-     amber, pane focus) are kept distinct from the brand yellow so
+     amber, pane focus) are kept distinct from the brand orange so
      they don't fight the assistant accent. */
   :global(:root) {
     --bg: #1c1c1e;
@@ -355,10 +355,10 @@
        into white. */
     --assistant-bubble-bg: #2a2a2c;
     --assistant-user-bubble-bg: rgba(88, 166, 255, 0.28);
-    /* Brand accent for the assistant button (Notes-style yellow).
-       Single source for the ensō tint. Same value in light/dark;
-       the icon is a stroke and reads on both. */
-    --assistant-accent: #ffd60a;
+    /* Brand accent for the assistant button (brand orange, matching
+       chan.app). Single source for the ensō tint; light/dark each
+       get their own shade so the silhouette reads on both. */
+    --assistant-accent: #e58c4d;
   }
   :global([data-theme="light"]) {
     --bg: #ffffff;
@@ -395,7 +395,7 @@
        sides are distinguishable at a glance. */
     --assistant-bubble-bg: #ececef;
     --assistant-user-bubble-bg: #cfe1fb;
-    --assistant-accent: #d2a700;
+    --assistant-accent: #c46a2a;
   }
 
   :global(html), :global(body), :global(#app) {
