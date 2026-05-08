@@ -7,6 +7,7 @@
 // build" hint instead of erroring out.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "embeddings")]
 use std::sync::OnceLock;
 
@@ -41,6 +42,8 @@ pub enum IndexError {
     Vector(#[from] VectorError),
     #[error(transparent)]
     Chan(#[from] ChanError),
+    #[error("operation cancelled")]
+    Cancelled,
 }
 
 /// Which retrieval mode to run.
@@ -221,11 +224,16 @@ impl Index {
         Ok(self.embedder.get().unwrap())
     }
 
-    /// Walk the drive and re-index everything from scratch.
+    /// Walk the drive and re-index everything from scratch. If
+    /// `cancel` is set to true mid-build, returns `Cancelled` without
+    /// calling `commit()` so tantivy discards every pending write
+    /// queued in this run; the on-disk index is left as it was at
+    /// the start.
     pub fn build_all<F>(
         &self,
         opts: BuildOptions,
         mut on_progress: F,
+        cancel: Option<&AtomicBool>,
     ) -> Result<BuildSummary, IndexError>
     where
         F: FnMut(BuildProgress<'_>),
@@ -237,6 +245,11 @@ impl Index {
         let mut errors: Vec<(String, IndexError)> = Vec::new();
 
         for (i, rel) in files.iter().enumerate() {
+            if let Some(c) = cancel {
+                if c.load(Ordering::Relaxed) {
+                    return Err(IndexError::Cancelled);
+                }
+            }
             on_progress(BuildProgress {
                 index: i,
                 total,
@@ -252,6 +265,11 @@ impl Index {
                     Err(e) => errors.push((rel.clone(), e)),
                 },
                 Err(e) => errors.push((rel.clone(), e.into())),
+            }
+        }
+        if let Some(c) = cancel {
+            if c.load(Ordering::Relaxed) {
+                return Err(IndexError::Cancelled);
             }
         }
         self.bm25.commit()?;
@@ -514,7 +532,7 @@ mod tests {
         std::fs::write(tmp.path().join("a.md"), "# alpha\nfoo apples\n").unwrap();
         std::fs::write(tmp.path().join("b.md"), "# beta\nbar bananas\n").unwrap();
         let idx = Index::open(tmp.path(), &idx_dir(&tmp)).unwrap();
-        let summary = idx.build_all(no_vectors(), |_| {}).unwrap();
+        let summary = idx.build_all(no_vectors(), |_| {}, None).unwrap();
         assert_eq!(summary.files, 2);
         assert_eq!(summary.indexed, 2);
         assert!(summary.errors.is_empty());
@@ -528,7 +546,7 @@ mod tests {
         let tmp = make_drive();
         std::fs::write(tmp.path().join("a.md"), "unique-token here\n").unwrap();
         let idx = Index::open(tmp.path(), &idx_dir(&tmp)).unwrap();
-        idx.build_all(no_vectors(), |_| {}).unwrap();
+        idx.build_all(no_vectors(), |_| {}, None).unwrap();
         assert!(!idx
             .search("unique-token", Mode::Bm25, 10)
             .unwrap()
@@ -548,10 +566,28 @@ mod tests {
         std::fs::write(tmp.path().join("a.md"), "first content\n").unwrap();
         let dir = idx_dir(&tmp);
         let idx = Index::open(tmp.path(), &dir).unwrap();
-        idx.build_all(no_vectors(), |_| {}).unwrap();
+        idx.build_all(no_vectors(), |_| {}, None).unwrap();
         assert!(!idx.search("first", Mode::Bm25, 10).unwrap().hits.is_empty());
         drop(idx);
         let idx = Index::rebuild(tmp.path(), &dir).unwrap();
         assert!(idx.search("first", Mode::Bm25, 10).unwrap().hits.is_empty());
+    }
+
+    #[test]
+    fn build_all_honors_cancel_and_skips_commit() {
+        // Pre-flagged cancel should bail before any file is written
+        // and before commit. The on-disk index must still be empty.
+        let tmp = make_drive();
+        std::fs::write(tmp.path().join("a.md"), "alpha unique-token\n").unwrap();
+        std::fs::write(tmp.path().join("b.md"), "beta\n").unwrap();
+        let idx = Index::open(tmp.path(), &idx_dir(&tmp)).unwrap();
+        let cancel = AtomicBool::new(true);
+        let err = idx
+            .build_all(no_vectors(), |_| {}, Some(&cancel))
+            .unwrap_err();
+        assert!(matches!(err, IndexError::Cancelled));
+        // No commit happened; the index stays empty so an auto-rebuild
+        // trigger (`indexed_docs == 0`) would re-fire on next boot.
+        assert_eq!(idx.stats().indexed_docs, 0);
     }
 }

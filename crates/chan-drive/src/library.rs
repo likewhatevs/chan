@@ -298,7 +298,7 @@ mod tests {
         drive
             .write_text("notes/keep.md", "kept across reset")
             .unwrap();
-        drive.reindex().unwrap();
+        drive.reindex(None).unwrap();
         drive.put_session("win-1", b"layout").unwrap();
         drive.put_assistant("conv-a", b"chat").unwrap();
         let p = drive.paths();

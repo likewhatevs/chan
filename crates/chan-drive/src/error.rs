@@ -48,6 +48,8 @@ pub enum ChanError {
     TrashOccupied(String),
     #[error("io error: {0}")]
     Io(String),
+    #[error("operation cancelled")]
+    Cancelled,
 }
 
 impl From<std::io::Error> for ChanError {

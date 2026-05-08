@@ -4,6 +4,7 @@
 // assistant history) lives outside the user's notes tree, keyed by
 // the canonical drive path.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -488,21 +489,40 @@ impl Drive {
     /// the caller decides whether to spawn a worker. Returns the
     /// search-side build summary; graph-side errors short-circuit
     /// the rebuild.
-    pub fn reindex(&self) -> Result<BuildSummary> {
+    ///
+    /// `cancel`: if set to true mid-build, the rebuild bails out
+    /// with `ChanError::Cancelled`. The graph DB is cleared at the
+    /// start so a cancelled rebuild leaves an empty graph (the next
+    /// `index_stats()` reports `indexed_docs == 0`, which lets the
+    /// server's auto-rebuild trigger re-fire on next boot). The BM25
+    /// index is unaffected by cancellation: we never reach the
+    /// commit, so tantivy discards every pending write.
+    pub fn reindex(&self, cancel: Option<&AtomicBool>) -> Result<BuildSummary> {
         // Graph rebuild walks the tree once for headings + edges.
         // The search facade walks again for chunking + embeddings.
         // Two passes is the trade for a clean separation; per-file
         // I/O cost is trivial against the embedding work.
-        self.rebuild_graph()?;
-        let summary = self.index()?.build_all(BuildOptions::default(), |_| {})?;
+        self.rebuild_graph(cancel)?;
+        let summary = self
+            .index()?
+            .build_all(BuildOptions::default(), |_| {}, cancel)
+            .map_err(|e| match e {
+                crate::index::IndexError::Cancelled => ChanError::Cancelled,
+                other => other.into(),
+            })?;
         Ok(summary)
     }
 
-    fn rebuild_graph(&self) -> Result<()> {
+    fn rebuild_graph(&self, cancel: Option<&AtomicBool>) -> Result<()> {
         let entries = self.list_tree()?;
         let graph = self.graph()?;
         graph.clear()?;
         for e in &entries {
+            if let Some(c) = cancel {
+                if c.load(Ordering::Relaxed) {
+                    return Err(ChanError::Cancelled);
+                }
+            }
             if e.is_dir || !fs_ops::is_editable_text(&e.path) {
                 continue;
             }
