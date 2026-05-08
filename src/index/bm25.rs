@@ -16,7 +16,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 use tantivy::collector::TopDocs;
-use tantivy::query::QueryParser;
+use tantivy::query::{BooleanQuery, Occur, Query, QueryParser, RegexQuery};
 use tantivy::schema::{Field, Schema, SchemaBuilder, Value, FAST, INDEXED, STORED, STRING, TEXT};
 use tantivy::snippet::SnippetGenerator;
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
@@ -158,13 +158,50 @@ impl Bm25Index {
 
     /// Search `body` + `heading` with BM25 ranking. Returns up to
     /// `limit` hits.
+    ///
+    /// Plain alphanumeric typeahead queries get prefix-matched so
+    /// typed `beet` finds stored `beetroot`. Tantivy 0.24's
+    /// `QueryParser` does NOT expand `term*` itself, so for a query
+    /// where every whitespace-separated token is bare alphanumerics
+    /// we build a `BooleanQuery` of `RegexQuery::from_pattern("tok.*")`
+    /// over `body` and `heading` directly, ANDed across tokens.
+    /// Queries that contain any tantivy operator (`+ - " * ? ~ :`)
+    /// fall through to `QueryParser::parse_query` so power-user
+    /// searches (phrases, fielded queries, fuzzy) keep their
+    /// semantics. Empty queries return no hits.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<Hit>, Bm25Error> {
+        let q = query.trim();
+        if q.is_empty() {
+            return Ok(Vec::new());
+        }
         let searcher = self.reader.searcher();
         let parser =
             QueryParser::for_index(&self.index, vec![self.fields.body, self.fields.heading]);
-        let parsed = parser.parse_query(query)?;
-        let top = searcher.search(&parsed, &TopDocs::with_limit(limit))?;
-        let snippet_gen = SnippetGenerator::create(&searcher, &parsed, self.fields.body)?;
+        let prefix_query = self.try_build_prefix_query(q)?;
+        // Two parses: the search query (uses the prefix path when
+        // applicable so "beet" finds "beetroot"), and a snippet
+        // query (always the QueryParser parse) so the snippet
+        // generator's term-based highlighting still produces
+        // `<b>...</b>` markers for whole-token matches. Prefix-only
+        // matches won't get highlighted because there's no exact
+        // term to highlight; that's the trade-off for the better
+        // typeahead recall.
+        let search_query: Box<dyn Query> = match &prefix_query {
+            Some(pq) => pq.box_clone(),
+            None => parser.parse_query(q)?,
+        };
+        let snippet_query: Box<dyn Query> = parser.parse_query(q).unwrap_or_else(|_| {
+            // QueryParser can fail (rare; e.g. unbalanced quotes
+            // mid-typing). Fall back to the search query so the
+            // snippet generator still gets something Query-shaped;
+            // worst case it produces no highlight.
+            match &prefix_query {
+                Some(pq) => pq.box_clone(),
+                None => unreachable!("query trimmed empty handled above"),
+            }
+        });
+        let top = searcher.search(&*search_query, &TopDocs::with_limit(limit))?;
+        let snippet_gen = SnippetGenerator::create(&searcher, &*snippet_query, self.fields.body)?;
         let mut hits = Vec::with_capacity(top.len());
         for (score, doc_addr) in top {
             let doc: TantivyDocument = searcher.doc(doc_addr)?;
@@ -185,6 +222,76 @@ impl Bm25Index {
     pub fn doc_count(&self) -> u64 {
         self.reader.searcher().num_docs()
     }
+
+    /// If `q` is one or more bare whitespace-separated tokens (no
+    /// tantivy operators), construct a prefix-match query that
+    /// finds documents where every token appears as a prefix of
+    /// some indexed term in either `body` or `heading`. Returns
+    /// `None` for queries that should pass through to the default
+    /// QueryParser (quoted phrases, fielded queries, etc).
+    ///
+    /// Implementation: per-token `BooleanQuery::Should` over
+    /// `RegexQuery::from_pattern("<tok>.*", body|heading)`, then
+    /// `BooleanQuery::Must` across tokens for AND semantics. The
+    /// BM25 scorer underneath ranks the matched docs as usual.
+    fn try_build_prefix_query(&self, q: &str) -> Result<Option<Box<dyn Query>>, Bm25Error> {
+        let tokens: Vec<&str> = q.split_whitespace().collect();
+        if tokens.is_empty() {
+            return Ok(None);
+        }
+        if tokens.iter().any(|t| has_operator(t)) {
+            return Ok(None);
+        }
+        let mut top: Vec<(Occur, Box<dyn Query>)> = Vec::with_capacity(tokens.len());
+        for tok in tokens {
+            // Lowercase to match the index's default tokenizer
+            // output. Escape regex metachars so a token like "c++"
+            // (which has_operator would let through if we relaxed
+            // the operator set later) doesn't blow up.
+            let lc = tok.to_lowercase();
+            let pattern = format!("{}.*", regex_escape(&lc));
+            let mut field_clauses: Vec<(Occur, Box<dyn Query>)> = Vec::with_capacity(2);
+            for &field in &[self.fields.body, self.fields.heading] {
+                let rq = RegexQuery::from_pattern(&pattern, field)?;
+                field_clauses.push((Occur::Should, Box::new(rq)));
+            }
+            top.push((Occur::Must, Box::new(BooleanQuery::new(field_clauses))));
+        }
+        Ok(Some(Box::new(BooleanQuery::new(top))))
+    }
+}
+
+/// Whether `tok` should bypass the prefix-match path and route
+/// through tantivy's default QueryParser. Tokens with any operator
+/// (`+ - " * ? ~ : ( )`) keep their power-user semantics; tokens
+/// with a hyphen anywhere are also routed through the parser
+/// because tantivy's default tokenizer splits on `-` and our
+/// RegexQuery would not match "unique-token" against the indexed
+/// terms `unique` and `token` separately.
+fn has_operator(tok: &str) -> bool {
+    tok.bytes().any(|b| {
+        matches!(
+            b,
+            b':' | b'*' | b'?' | b'~' | b'+' | b'"' | b'(' | b')' | b'-'
+        )
+    })
+}
+
+/// Escape regex metacharacters so a literal token can be embedded
+/// in a regex pattern. Tantivy's RegexQuery uses Rust's `regex`
+/// syntax; only a handful of metas need escaping for our use.
+fn regex_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$' | '\\' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 fn bm25_dir(index_dir: &Path) -> PathBuf {
@@ -299,5 +406,68 @@ mod tests {
         let hits = idx.search("fox", 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert!(hits[0].snippet.contains("<b>fox</b>"));
+    }
+
+    #[test]
+    fn prefix_matches_partial_word() {
+        // Typing "beet" should surface a doc containing only
+        // "beetroot". This is the common typeahead case for the
+        // Cmd+K palette.
+        let (_tmp, idx) = fresh();
+        idx.index_file(
+            "recipes/beetroot.md",
+            "# Beetroot\nRoasted beetroot recipe.\n",
+            &Chunking::Headings,
+        )
+        .unwrap();
+        idx.commit().unwrap();
+        // Full token still works.
+        assert_eq!(idx.search("beetroot", 10).unwrap().len(), 1);
+        // Bare prefix typed in the palette: matches via the
+        // RegexQuery path that try_build_prefix_query constructs.
+        let hits = idx.search("beet", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, "recipes/beetroot.md");
+    }
+
+    #[test]
+    fn quoted_phrase_falls_back_to_query_parser() {
+        // A quoted phrase contains the `"` operator, so we route
+        // it through tantivy's QueryParser as an exact phrase
+        // query rather than the prefix path. "beet root" doesn't
+        // match "beetroot soup" (no whitespace between beet and
+        // root in the indexed body).
+        let (_tmp, idx) = fresh();
+        idx.index_file("a.md", "# h\nbeetroot soup\n", &Chunking::Headings)
+            .unwrap();
+        idx.commit().unwrap();
+        let phrase_hits = idx.search(r#""beet root""#, 10).unwrap();
+        assert!(phrase_hits.is_empty(), "phrase should not match");
+    }
+
+    #[test]
+    fn empty_query_returns_no_hits() {
+        let (_tmp, idx) = fresh();
+        idx.index_file("a.md", "# h\nfoo\n", &Chunking::Headings)
+            .unwrap();
+        idx.commit().unwrap();
+        assert!(idx.search("", 10).unwrap().is_empty());
+        assert!(idx.search("   ", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn multi_token_prefix_match_anded() {
+        // "be ro" should match "beetroot recipe" since both
+        // tokens have prefix matches in the doc.
+        let (_tmp, idx) = fresh();
+        idx.index_file("a.md", "# h\nbeetroot recipe\n", &Chunking::Headings)
+            .unwrap();
+        idx.index_file("b.md", "# h\nbananas\n", &Chunking::Headings)
+            .unwrap();
+        idx.commit().unwrap();
+        let hits = idx.search("be re", 10).unwrap();
+        let paths: Vec<_> = hits.iter().map(|h| h.path.as_str()).collect();
+        assert!(paths.contains(&"a.md"));
+        assert!(!paths.contains(&"b.md"));
     }
 }
