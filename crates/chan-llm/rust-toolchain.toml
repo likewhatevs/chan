@@ -1,0 +1,18 @@
+# Pinned Rust toolchain. Single source of truth for both local
+# development and CI; the GitHub Actions workflow reads this file
+# via actions-rust-lang/setup-rust-toolchain.
+#
+# Bumping policy: when a new stable release introduces lints we
+# want to absorb, bump `channel` here and fix any new clippy
+# findings in the same commit. Avoid drifting between local and
+# CI by waiting for CI green before merging.
+#
+# Why pin instead of "stable": clippy's lint set differs between
+# minor versions. Without a pin, contributors on an older rustup
+# stable can ship code that fails on CI's newer rustup stable
+# (we hit `unnecessary_sort_by` this way: clean on 1.93, error
+# on 1.95). One pin, one truth.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

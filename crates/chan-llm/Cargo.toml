@@ -1,0 +1,55 @@
+[package]
+name = "chan-llm"
+version = "0.5.0"
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0"
+description = "LLM backends, prompts, and tool sandbox for chan-writer drives"
+repository = "https://github.com/chan-writer/chan-llm"
+
+[features]
+default = []
+# Enables the MCP server module and the `chan-llm-mcp` binary. Off
+# by default so library consumers (chan-server, native shells) don't
+# pull rmcp + its transitive deps unless they want the binary.
+mcp = ["dep:rmcp", "dep:schemars"]
+
+[dependencies]
+chan-core = { path = "../chan-core/crates/chan-core" }
+async-trait = "0.1"
+dirs = "5"
+futures-util = { version = "0.3", default-features = false }
+keyring = "3"
+once_cell = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+thiserror = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "process", "io-util"] }
+toml = "0.8"
+tracing = "0.1"
+
+# `mcp` feature deps. rmcp's defaults already pull macros + server +
+# transport-async-rw + schemars, which is everything we need for a
+# stdio tool server. We also depend on schemars directly because the
+# `JsonSchema` derive lives in user code (the params structs).
+rmcp = { version = "1.6", optional = true, features = ["transport-io"] }
+schemars = { version = "1.2", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lib]
+name = "chan_llm"
+crate-type = ["lib"]
+
+# Standalone MCP server binary. Any MCP client (Claude Desktop,
+# Claude Code, Cursor, ...) can spawn this process to get
+# chan-core-sandboxed read/write/list/search access to a chan
+# drive. `auto_apply_writes` is forced to true here: confirmation
+# UI is the MCP client's responsibility, not ours.
+[[bin]]
+name = "chan-llm-mcp"
+path = "src/bin/chan-llm-mcp.rs"
+required-features = ["mcp"]
