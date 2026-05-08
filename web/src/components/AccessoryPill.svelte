@@ -65,9 +65,7 @@
     aria-label="Assistant"
     onclick={openAssistant}
   >
-    <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
-      <path d="M 10.75 3.24 A 5.5 5.5 0 1 1 5.25 3.24" />
-    </svg>
+    <span class="enso-mark" aria-hidden="true"></span>
   </button>
 {/if}
 <button
@@ -118,28 +116,29 @@
     display: block;
     margin: auto;
   }
-  /* The ensō icon is a stroke path, not a filled glyph; mute the
-     fill so currentColor maps to stroke instead. The yellow tint
-     marks the assistant as the primary attractor on this bar
-     (Notes-style accent). The button is also visibly larger than
-     its neighbours: it's the brand action and the most actionable
-     surface in the pill. Only the stroke is colored, so hover bg
-     still uses the neutral hover-bg. */
+  /* The ensō uses the same chan-mark.png artwork as the empty-pane
+     watermark, painted via CSS mask so the silhouette can take the
+     theme accent. The button is visibly larger than its neighbours:
+     it's the brand action and the most actionable surface in the
+     pill. Yellow tint = Notes-style accent. */
   .fbtn.enso {
-    color: var(--assistant-accent);
-    min-width: 44px;
-    height: 36px;
-    border-radius: 18px;
-    margin: 0 2px;
+    min-width: 72px;
+    height: 57px;
+    border-radius: 28px;
+    margin: 0 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
   }
-  .fbtn.enso svg {
-    fill: none;
-    width: 22px;
-    height: 22px;
+  .fbtn.enso .enso-mark {
+    width: 40px;
+    height: 40px;
+    background-color: var(--assistant-accent);
+    -webkit-mask: url('/chan-mark.png') center / contain no-repeat;
+            mask: url('/chan-mark.png') center / contain no-repeat;
   }
-  .fbtn.enso:hover { color: var(--assistant-accent); }
   .fbtn.enso.on {
-    color: var(--assistant-accent);
     border-color: var(--assistant-accent);
     background: rgba(255, 214, 10, 0.12);
   }
