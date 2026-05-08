@@ -245,9 +245,9 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
   const hint = document.createElement("div");
   hint.className = "md-wiki-bubble-hint";
   hint.innerHTML =
-    '<span><b>type #</b> to link heading</span>' +
-    '<span><b>type ^</b> to link blocks</span>' +
-    '<span><b>type |</b> to change display text</span>';
+    '<span><b>#</b> heading</span>' +
+    '<span><b>^</b> block</span>' +
+    '<span><b>|</b> alias</span>';
   wrap.appendChild(hint);
 
   const list = document.createElement("ul");
