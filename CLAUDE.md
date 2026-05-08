@@ -72,11 +72,20 @@ performs atomic writes. Nothing in this repo should ever call
 No Node.js, no Python, no native daemons at runtime. The frontend
 embeds at build time. New dependencies must hold this line.
 
-### Local-first / loopback-only
+### Local-first by default, opt-in tunnel
 
 The HTTP server binds `127.0.0.1` by default. Auth is a per-launch
 bearer token printed once on stderr and appended to the launch URL.
-No TLS. The single-user, single-machine assumption is architectural.
+No TLS at the local hop.
+
+Tunnel mode (`chan serve --tunnel-token ...`, or `CHAN_TUNNEL_TOKEN`
+env var) replaces the local listener with a `chan-tunnel-client`
+dial to `drive.chan.app/{user}/{drive}/*`. The single-user,
+single-machine assumption still holds: one chan serve process owns
+the drive's writes; the tunnel just relocates the inbound transport.
+The bearer-token gate is auto-disabled in tunnel mode (the gateway
+in front of drive.chan.app is the trust boundary). Wire protocol
+lives in `../chan-tunnel`.
 
 ### App-level vs core
 

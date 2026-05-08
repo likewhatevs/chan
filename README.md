@@ -32,13 +32,11 @@ The workspace assumes the sibling-checkout layout
 
 ## Status
 
-Pre-alpha. Initial commit is a workspace skeleton: `chan add`,
-`chan list`, `chan remove`, `chan rename`, `chan index`, and
-`chan search` work end-to-end against the new chan-core. `chan
-serve` errors with "not implemented yet" until routes finish
-porting from `fiorix/chan` into `chan-server`. Same for LLM,
-attachments, sessions, and the assistant chat history; all live
-in app-level config files once `chan-server` and `chan-llm` land.
+Pre-alpha. `chan add`, `chan list`, `chan remove`, `chan rename`,
+`chan index`, `chan search`, and `chan serve` work end-to-end.
+LLM, attachments, sessions, and assistant chat history land via
+chan-llm and chan-server config files. Tunnel publishing
+(`--tunnel-token`) works against a running chan-tunnel daemon.
 
 ## Build
 
@@ -61,6 +59,29 @@ updates the served bundle without a `cargo build`. In release
 builds, the bundle is baked into the binary at compile time;
 `build.rs` re-links chan-server whenever any file under
 `web/dist/` changes.
+
+## Publish via tunnel
+
+Instead of binding a local port, `chan serve` can publish a drive
+at `https://drive.chan.app/{user}/{drive}/*` over an outbound
+tunnel. No inbound ports, no router config.
+
+```
+export CHAN_TUNNEL_TOKEN=chan_pat_...    # from id.chan.app/tokens
+chan serve ~/Notes
+```
+
+`chan` dials `tunnel.chan.app`, runs a Hello/HelloAck handshake
+that names the drive, and serves every inbound request through
+the same axum router the local-mode listener uses. The flag form
+`--tunnel-token <TOKEN>` works too but exposes the token in `ps`;
+prefer the env var. Override the endpoint with `--tunnel-url`,
+publish under a different name with `--tunnel-drive <name>`. The
+drive name must be lowercase `[a-z0-9-]`, 1-32 chars.
+
+The public URL is currently world-readable. OAuth gating at the
+gateway is tracked separately; for now treat the tunneled URL as
+public.
 
 ## Contributing
 

@@ -99,8 +99,9 @@ enum Command {
         /// (e.g. `drive.example.com/{user}/`). Canonicalized to
         /// `/seg[/seg...]` with `[A-Za-z0-9-]+` segments; trailing
         /// slashes and `//` runs are tolerated. Anything else is
-        /// rejected.
-        #[arg(long)]
+        /// rejected. Mutually exclusive with --tunnel-token (the
+        /// public gateway already strips /{user}/{drive}).
+        #[arg(long, conflicts_with = "tunnel_token")]
         prefix: Option<String>,
         /// Idle timeout before the server triggers a graceful
         /// shutdown. Accepts `30s`, `5m`, `1h`. Useful for systemd
@@ -114,6 +115,23 @@ enum Command {
         /// shared machine.
         #[arg(long)]
         no_token: bool,
+        /// Tunnel endpoint URL. With --tunnel-token, chan serve
+        /// dials this instead of binding a local listener.
+        #[arg(long, default_value = "https://tunnel.chan.app/v1/tunnel")]
+        tunnel_url: String,
+        /// Personal access token (chan_pat_*) from id.chan.app.
+        /// Setting this enables tunnel mode: chan serve does not
+        /// bind a local TCP listener and instead publishes the
+        /// drive at drive.chan.app/{user}/{drive}/*. Prefer the
+        /// CHAN_TUNNEL_TOKEN env var so the secret does not appear
+        /// in `ps`.
+        #[arg(long, env = "CHAN_TUNNEL_TOKEN")]
+        tunnel_token: Option<String>,
+        /// Drive name to publish at /{user}/<name>. Defaults to the
+        /// drive's stored canonical name. Must be lowercase
+        /// [a-z0-9-], 1-32 chars, no leading/trailing hyphen.
+        #[arg(long)]
+        tunnel_drive: Option<String>,
     },
     /// Rebuild the search index + graph for a drive.
     Index { path: PathBuf },
@@ -159,6 +177,9 @@ fn main() -> Result<()> {
             prefix,
             timeout,
             no_token,
+            tunnel_url,
+            tunnel_token,
+            tunnel_drive,
         } => {
             let addr = resolve_listen_addr(host, ipv4, ipv6, port)?;
             let prefix = chan_server::sanitize_prefix(prefix.as_deref().unwrap_or(""))
@@ -169,7 +190,16 @@ fn main() -> Result<()> {
                 .enable_all()
                 .build()
                 .context("building tokio runtime")?;
-            rt.block_on(cmd_serve(addr, prefix, timeout, path, no_token))
+            rt.block_on(cmd_serve(
+                addr,
+                prefix,
+                timeout,
+                path,
+                no_token,
+                tunnel_url,
+                tunnel_token,
+                tunnel_drive,
+            ))
         }
         Command::Index { path } => cmd_index(path),
         Command::Search { path, query, limit } => cmd_search(path, query, limit),
@@ -448,12 +478,16 @@ fn resolve_listen_addr(
     Ok(SocketAddr::new(ip, port))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_serve(
     addr: SocketAddr,
     prefix: String,
     idle_timeout: Option<Duration>,
     path: Option<PathBuf>,
     no_token: bool,
+    tunnel_url: String,
+    tunnel_token: Option<String>,
+    tunnel_drive: Option<String>,
 ) -> Result<()> {
     let lib = library()?;
     // Resolve the drive root: explicit arg first, then the registry
@@ -466,8 +500,31 @@ async fn cmd_serve(
         std::fs::create_dir_all(&root)
             .with_context(|| format!("creating drive root {}", root.display()))?;
     }
-    ensure_drive_named(&lib, &root, None)?;
+    let known = ensure_drive_named(&lib, &root, None)?;
     let drive = lib.open_drive(&root)?;
+
+    if let Some(token) = tunnel_token {
+        // Warn when the token came in via the flag rather than the
+        // env var (clap doesn't expose the source, so compare to env
+        // directly). The flag value is in `ps` output until the
+        // process exits; the env var is not.
+        if std::env::var("CHAN_TUNNEL_TOKEN").ok().as_deref() != Some(token.as_str()) {
+            eprintln!(
+                "WARNING: --tunnel-token is visible in `ps` output. \
+                 Prefer CHAN_TUNNEL_TOKEN env var instead."
+            );
+        }
+        let drive_name = tunnel_drive.unwrap_or_else(|| known.name.clone().unwrap_or_default());
+        eprintln!(
+            "WARNING: tunnel mode publishes this drive at \
+             drive.chan.app/<user>/{drive_name} with no auth gate today. \
+             Anyone with the URL has read/write access. Tracking \
+             gateway-side OAuth gating in follow-up issues."
+        );
+        return chan_server::serve_via_tunnel(lib, drive, &tunnel_url, token, drive_name)
+            .await
+            .context("running tunnel client");
+    }
 
     // Loud warning: the auth model assumes loopback. No TLS, only a
     // bearer token. Binding off-loopback exposes the drive in the
