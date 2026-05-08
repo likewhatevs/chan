@@ -110,7 +110,21 @@ impl Indexer {
         let (rebuild_tx, rebuild_rx) = mpsc::unbounded_channel::<()>();
         let coordinator_task =
             spawn_coordinator(drive.clone(), status.clone(), rebuild_rx, cancel.clone());
-        if initial_build && stats.indexed_docs == 0 {
+        // Trigger a full rebuild when either side of the index is
+        // empty. Checking BM25 alone misses the case where a prior
+        // rebuild was killed mid-graph-pass: the graph DB stays
+        // empty (cancellation leaves it cleared, see Drive::reindex
+        // doc) while BM25 still carries data from a much earlier
+        // run, so without the graph check the server would never
+        // notice and `/api/graph` would keep returning 0 nodes.
+        let graph_empty = drive
+            .graph()
+            .and_then(|g| g.files().map(|fs| fs.is_empty()))
+            .unwrap_or_else(|e| {
+                tracing::warn!("indexer: initial graph check failed: {e}");
+                false
+            });
+        if initial_build && (stats.indexed_docs == 0 || graph_empty) {
             // Best-effort: if the channel is full we already
             // queued a rebuild and the redundant request is fine
             // to drop.
