@@ -4,6 +4,13 @@
 //! through it (ALPN: h2), runs `h2::client` on top, posts the
 //! handshake request, wraps `(SendStream, RecvStream)` in an
 //! `H2Duplex`, and finally runs the chan-tunnel handshake.
+//!
+//! When the URL scheme is `http://` we skip TLS and run h2 in
+//! cleartext (h2c) directly over the TCP socket. The server side
+//! (chan-tunnel-server) is already h2c-only in production: nginx
+//! terminates TLS at tunnel.chan.app and `grpc_pass`-es h2c into
+//! drive-proxy. The h2c branch exists so a local stack can dial the
+//! drive-proxy h2c port without standing up a TLS terminator.
 
 use std::sync::Arc;
 
@@ -35,36 +42,48 @@ pub async fn dial(
     let port = cfg.tunnel_url.port_or_known_default().ok_or_else(|| {
         ClientError::InvalidUrl(format!("cannot infer port from {}", cfg.tunnel_url))
     })?;
-    if cfg.tunnel_url.scheme() != "https" {
+    let scheme = cfg.tunnel_url.scheme();
+    if scheme != "https" && scheme != "http" {
         return Err(ClientError::InvalidUrl(
-            "tunnel URL must be https://".into(),
+            "tunnel URL scheme must be https:// or http://".into(),
         ));
     }
 
-    let tls_config = build_tls_config()?;
-    let connector = TlsConnector::from(Arc::new(tls_config));
-    let server_name = ServerName::try_from(host.clone())
-        .map_err(|e| ClientError::Tls(format!("invalid SNI {host:?}: {e}")))?;
-
     let tcp = TcpStream::connect((host.as_str(), port)).await?;
     tcp.set_nodelay(true).ok();
-    let tls = connector
-        .connect(server_name, tcp)
-        .await
-        .map_err(|e| ClientError::Tls(format!("rustls handshake: {e}")))?;
 
-    let (mut send_req, conn) = h2::client::handshake(tls)
-        .await
-        .map_err(|e| ClientError::Handshake(format!("h2 handshake: {e}")))?;
-    // Drive h2 frames in the background. Returns when the
-    // connection ends; we ignore the result here because the
-    // duplex's reads/writes will surface the error through
-    // `H2Duplex` as an io error.
-    tokio::spawn(async move {
-        if let Err(e) = conn.await {
-            tracing::debug!(error = %e, "h2 client conn ended");
-        }
-    });
+    // Drive h2 frames in the background; the connection future has
+    // a different type per branch (rustls TlsStream vs raw TcpStream),
+    // so spawn inside each arm and only return the SendRequest.
+    let mut send_req = if scheme == "https" {
+        let tls_config = build_tls_config()?;
+        let connector = TlsConnector::from(Arc::new(tls_config));
+        let server_name = ServerName::try_from(host.clone())
+            .map_err(|e| ClientError::Tls(format!("invalid SNI {host:?}: {e}")))?;
+        let tls = connector
+            .connect(server_name, tcp)
+            .await
+            .map_err(|e| ClientError::Tls(format!("rustls handshake: {e}")))?;
+        let (s, conn) = h2::client::handshake(tls)
+            .await
+            .map_err(|e| ClientError::Handshake(format!("h2 handshake: {e}")))?;
+        tokio::spawn(async move {
+            if let Err(e) = conn.await {
+                tracing::debug!(error = %e, "h2 client conn ended");
+            }
+        });
+        s
+    } else {
+        let (s, conn) = h2::client::handshake(tcp)
+            .await
+            .map_err(|e| ClientError::Handshake(format!("h2c handshake: {e}")))?;
+        tokio::spawn(async move {
+            if let Err(e) = conn.await {
+                tracing::debug!(error = %e, "h2 client conn ended");
+            }
+        });
+        s
+    };
 
     let req = http::Request::builder()
         .method(Method::POST)

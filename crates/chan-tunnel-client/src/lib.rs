@@ -225,10 +225,13 @@ pub async fn run(cfg: ClientConfig, router: axum::Router) -> Result<(), ClientEr
             cfg.drive
         )));
     }
-    if cfg.tunnel_url.scheme() != "https" {
-        return Err(ClientError::InvalidUrl(
-            "tunnel URL must be https://".into(),
-        ));
+    match cfg.tunnel_url.scheme() {
+        "https" | "http" => {}
+        other => {
+            return Err(ClientError::InvalidUrl(format!(
+                "tunnel URL scheme must be https:// or http://, got {other}://"
+            )));
+        }
     }
 
     let mut backoff = cfg.initial_backoff;
