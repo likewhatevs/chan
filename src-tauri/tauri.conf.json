@@ -26,11 +26,22 @@
       {
         "label": "settings",
         "title": "Chan Desktop — Settings",
-        "width": 560,
-        "height": 320,
+        "width": 480,
+        "height": 220,
         "resizable": false,
         "visible": false,
         "url": "settings.html"
+      },
+      {
+        "label": "console",
+        "title": "Chan Desktop — Logs",
+        "width": 820,
+        "height": 480,
+        "minWidth": 480,
+        "minHeight": 240,
+        "resizable": true,
+        "visible": false,
+        "url": "console.html"
       }
     ],
     "security": {

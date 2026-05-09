@@ -149,7 +149,8 @@ settingsBtn.addEventListener('click', () => invoke('show_settings'));
 
 // Re-render whenever the chan registry changes from anywhere
 // (the desktop itself, the chan CLI, or another tool editing the
-// TOML directly).
+// TOML directly), or when a serve starts / discovers its URL / exits.
 listen('registry-changed', () => { refresh().catch(showError); });
+listen('serves-changed', () => { refresh().catch(showError); });
 
 boot().catch(showError);

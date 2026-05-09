@@ -2,15 +2,12 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capability for main and settings windows.",
-  "windows": ["main", "settings"],
+  "windows": ["main", "settings", "console"],
   "permissions": [
     "core:default",
     "dialog:default",
     "dialog:allow-open",
-    "dialog:allow-ask",
-    "dialog:allow-message",
     "opener:default",
-    "opener:allow-reveal-item-in-dir",
     "opener:allow-open-url"
   ]
 }

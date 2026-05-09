@@ -2,50 +2,71 @@
 
 mod config;
 mod registry;
+mod serve;
 mod watcher;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::{Manager, State};
+use tauri::{Manager, RunEvent, State};
 
 use config::{Config, ConfigStore};
+use serve::ServeHandle;
 
-/// Process-wide state. The mutex is held only for synchronous map
-/// updates, never across `.await` (this binary is sync-only at the
-/// command layer); shelling out to `chan` happens on Tauri's worker
-/// threads via `tauri::command`.
-struct AppState {
+/// Process-wide state. Shared via `Arc` because the serve supervisor
+/// hands clones to per-drive reader threads.
+pub struct AppState {
     store: Mutex<ConfigStore>,
-    /// Live serve URLs keyed by canonical drive path. Not persisted:
-    /// chan rotates the bearer token on every `chan serve`.
-    urls: Mutex<HashMap<String, String>>,
+    /// Live `chan serve` children keyed by canonical drive path.
+    /// Holds the captured URL once chan prints it.
+    serves: Mutex<HashMap<String, ServeHandle>>,
+}
+
+impl AppState {
+    /// Set the URL on a running serve handle. Returns `true` on a
+    /// real change so the caller can decide whether to emit an
+    /// event. Caller must NOT hold `serves` lock.
+    pub fn set_serve_url(&self, key: &str, url: &str) -> bool {
+        let mut serves = self.serves.lock().unwrap();
+        let Some(h) = serves.get_mut(key) else {
+            return false;
+        };
+        if h.url.as_deref() == Some(url) {
+            return false;
+        }
+        h.url = Some(url.to_string());
+        true
+    }
+
+    /// Mark a drive's sidecar `on` flag false. Used by the reader
+    /// thread when chan exits unexpectedly.
+    pub fn set_drive_off(&self, key: &str) -> std::io::Result<()> {
+        let mut store = self.store.lock().unwrap();
+        let mut cfg = store.get()?;
+        if let Some(s) = cfg.sidecar.get_mut(key) {
+            s.on = false;
+        }
+        store.save(&cfg)
+    }
 }
 
 /// Merged drive view returned to the frontend. Combines a chan
-/// registry entry with desktop sidecar state.
+/// registry entry with desktop sidecar state and the live serve URL.
 #[derive(Debug, Clone, Serialize)]
 struct Drive {
-    /// Display path (the canonical form when canonicalisation
-    /// succeeded, otherwise the registry's literal path).
     path: String,
-    /// Display name. Sourced from chan's registry; the desktop UI
-    /// is read-only on names. Falls back to the basename when chan
-    /// has not assigned one.
     name: String,
-    /// On-toggle state from the desktop sidecar.
     on: bool,
-    /// Live serve URL. Empty when no serve is running.
     url: String,
 }
 
 #[tauri::command]
-fn list_drives(state: State<AppState>) -> Result<Vec<Drive>, String> {
+fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
     let cfg = state.store.lock().unwrap().get().map_err(err)?;
-    let urls = state.urls.lock().unwrap();
+    let serves = state.serves.lock().unwrap();
     let entries = registry::read().map_err(err)?;
 
     let merged = entries
@@ -58,7 +79,10 @@ fn list_drives(state: State<AppState>) -> Result<Vec<Drive>, String> {
                 .or_else(|| basename(&e.path))
                 .unwrap_or_else(|| display_path.clone());
             let on = cfg.sidecar.get(&key).map(|s| s.on).unwrap_or(false);
-            let url = urls.get(&key).cloned().unwrap_or_default();
+            let url = serves
+                .get(&key)
+                .and_then(|h| h.url.clone())
+                .unwrap_or_default();
             Drive {
                 path: display_path,
                 name,
@@ -72,8 +96,6 @@ fn list_drives(state: State<AppState>) -> Result<Vec<Drive>, String> {
 
 #[tauri::command]
 fn add_drive(path: String) -> Result<(), String> {
-    // Defer to the chan binary as the registry's only writer. The
-    // watcher will pick up the registry change and refresh the UI.
     let path = canonical_key(Path::new(&path));
     let out = Command::new(chan_bin())
         .args(["add", &path])
@@ -89,8 +111,10 @@ fn add_drive(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn remove_drive(state: State<AppState>, path: String) -> Result<(), String> {
+fn remove_drive(state: State<Arc<AppState>>, path: String) -> Result<(), String> {
     let key = canonical_key(Path::new(&path));
+    serve::stop(&state, &key);
+
     let out = Command::new(chan_bin())
         .args(["remove", &key])
         .output()
@@ -106,103 +130,89 @@ fn remove_drive(state: State<AppState>, path: String) -> Result<(), String> {
     let mut cfg = store.get().map_err(err)?;
     cfg.sidecar.remove(&key);
     store.save(&cfg).map_err(err)?;
-    state.urls.lock().unwrap().remove(&key);
     Ok(())
 }
 
 #[tauri::command]
-fn set_drive_on(state: State<AppState>, path: String, on: bool) -> Result<(), String> {
-    // Sidecar-only for now. Wiring this to spawn / stop `chan serve`
-    // (and capture the URL into AppState.urls) is a separate task.
+fn set_drive_on(
+    app: tauri::AppHandle,
+    state: State<Arc<AppState>>,
+    path: String,
+    on: bool,
+) -> Result<(), String> {
     let key = canonical_key(Path::new(&path));
-    let mut store = state.store.lock().unwrap();
-    let mut cfg = store.get().map_err(err)?;
-    cfg.sidecar.entry(key).or_default().on = on;
-    store.save(&cfg).map_err(err)?;
+
+    // Persist sidecar bit first so the toggle survives a restart
+    // even if the spawn fails. The reader thread flips it back to
+    // false on unexpected exit.
+    {
+        let mut store = state.store.lock().unwrap();
+        let mut cfg = store.get().map_err(err)?;
+        cfg.sidecar.entry(key.clone()).or_default().on = on;
+        store.save(&cfg).map_err(err)?;
+    }
+
+    if on {
+        let verbose = state.store.lock().unwrap().get().map_err(err)?.dev_mode;
+        let inner: Arc<AppState> = Arc::clone(&state);
+        serve::start(app, inner, key, chan_bin(), verbose)?;
+    } else {
+        serve::stop(&state, &key);
+    }
     Ok(())
 }
 
 #[tauri::command]
-fn forget_all(state: State<AppState>) -> Result<(), String> {
-    // Best-effort: ask chan to forget every registered drive, then
-    // wipe our sidecar. Per-drive failures are surfaced together at
-    // the end so a single bad entry doesn't block the rest.
-    let entries = registry::read().map_err(err)?;
-    let mut errors = Vec::new();
-    for e in &entries {
-        let key = canonical_key(&e.path);
-        let out = Command::new(chan_bin()).args(["remove", &key]).output();
-        match out {
-            Ok(o) if o.status.success() => {}
-            Ok(o) => errors.push(format!(
-                "{key}: {}",
-                String::from_utf8_lossy(&o.stderr).trim()
-            )),
-            Err(err) => errors.push(format!("{key}: {err}")),
-        }
-    }
-    let mut store = state.store.lock().unwrap();
-    store.delete().map_err(err)?;
-    state.urls.lock().unwrap().clear();
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(format!("partial: {}", errors.join("; ")))
-    }
-}
-
-#[tauri::command]
-fn get_config(state: State<AppState>) -> Result<Config, String> {
+fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
     state.store.lock().unwrap().get().map_err(err)
 }
 
 #[tauri::command]
-fn get_config_path(state: State<AppState>) -> String {
-    state.store.lock().unwrap().path().display().to_string()
-}
-
-#[tauri::command]
-fn get_registry_path() -> String {
-    registry::path().display().to_string()
-}
-
-#[tauri::command]
 fn show_settings(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(w) = app.get_webview_window("settings") {
-        w.show().map_err(err)?;
-        w.set_focus().map_err(err)?;
-    }
-    Ok(())
+    show_window(&app, "settings")
 }
 
 #[tauri::command]
 fn set_dev_mode(
     app: tauri::AppHandle,
-    state: State<AppState>,
+    state: State<Arc<AppState>>,
     enabled: bool,
 ) -> Result<Config, String> {
     let mut store = state.store.lock().unwrap();
     let mut cfg = store.get().map_err(err)?;
     cfg.dev_mode = enabled;
     store.save(&cfg).map_err(err)?;
+    drop(store);
     apply_dev_mode(&app, enabled);
     Ok(cfg)
 }
 
+/// Show or hide the console window. Called whenever dev mode flips
+/// and on startup if the persisted dev mode is on.
 fn apply_dev_mode(app: &tauri::AppHandle, enabled: bool) {
-    for (_, win) in app.webview_windows() {
-        if enabled {
-            win.open_devtools();
-        } else {
-            win.close_devtools();
-        }
+    let Some(w) = app.get_webview_window("console") else {
+        return;
+    };
+    if enabled {
+        let _ = w.show();
+        let _ = w.set_focus();
+    } else {
+        let _ = w.hide();
     }
 }
 
-/// Canonical-path key used for sidecar lookups and as the displayed
-/// path. `canonicalize` falls back to the input on error so we still
-/// produce a stable key for not-yet-existing or asleep paths.
+fn show_window(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window(label) {
+        w.show().map_err(err)?;
+        w.set_focus().map_err(err)?;
+    }
+    Ok(())
+}
+
+/// Canonical-path key used for sidecar lookups, serve identity, and
+/// the displayed path. `canonicalize` falls back to the input on
+/// error so we still produce a stable key for not-yet-existing or
+/// asleep paths.
 fn canonical_key(p: &Path) -> String {
     p.canonicalize()
         .unwrap_or_else(|_| PathBuf::from(p))
@@ -215,7 +225,7 @@ fn basename(p: &Path) -> Option<String> {
 }
 
 /// Resolve the chan binary. Prototype: trust `$PATH`. The bundled
-/// binary path (production) is documented in design.md.
+/// binary path (production) is documented in design.md section 5.2.
 fn chan_bin() -> &'static str {
     "chan"
 }
@@ -226,26 +236,26 @@ fn err<E: std::fmt::Display>(e: E) -> String {
 
 fn main() {
     let store = ConfigStore::new().expect("failed to init config store");
+    let state = Arc::new(AppState {
+        store: Mutex::new(store),
+        serves: Mutex::new(HashMap::new()),
+    });
+    let state_for_exit = Arc::clone(&state);
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .manage(AppState {
-            store: Mutex::new(store),
-            urls: Mutex::new(HashMap::new()),
-        })
+        .manage(state)
         .setup(|app| {
-            let state: State<AppState> = app.state();
+            let state: State<Arc<AppState>> = app.state();
             let cfg = state.store.lock().unwrap().get().unwrap_or_default();
             if cfg.dev_mode {
                 apply_dev_mode(app.handle(), true);
             }
 
-            // Spawn the registry watcher. The debouncer owns a
-            // background thread we want alive for the rest of the
-            // process; we leak it rather than thread the unnameable
-            // generic type through Tauri state. Failure is non-fatal:
-            // the UI just won't auto-refresh on external changes.
+            // Registry watcher. Leaked: we want it alive for the
+            // process lifetime and the inner Watcher type is
+            // unnameable through `manage`.
             match watcher::spawn(app.handle().clone(), &registry::path()) {
                 Ok(d) => {
                     Box::leak(Box::new(d));
@@ -259,13 +269,19 @@ fn main() {
             add_drive,
             remove_drive,
             set_drive_on,
-            forget_all,
             get_config,
-            get_config_path,
-            get_registry_path,
             show_settings,
             set_dev_mode,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error building tauri application");
+
+    app.run(move |_app, event| {
+        if matches!(event, RunEvent::Exit) {
+            // Best-effort: SIGKILL every running chan child so
+            // they don't outlive the desktop. The OS reclaims the
+            // ports within seconds.
+            serve::stop_all(&state_for_exit);
+        }
+    });
 }

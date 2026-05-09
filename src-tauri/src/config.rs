@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -47,10 +47,6 @@ impl ConfigStore {
         })
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
     pub fn get(&self) -> io::Result<Config> {
         match fs::read(&self.path) {
             Ok(bytes) => serde_json::from_slice(&bytes)
@@ -70,14 +66,6 @@ impl ConfigStore {
         fs::write(&tmp, bytes)?;
         fs::rename(&tmp, &self.path)?;
         Ok(())
-    }
-
-    pub fn delete(&mut self) -> io::Result<()> {
-        match fs::remove_file(&self.path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e),
-        }
     }
 }
 

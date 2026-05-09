@@ -117,31 +117,57 @@ a valid state, and matches what the CLI does.
 
 ### 3.3 Toggle On (serve)
 
-Toggling On spawns `chan serve <path> --port 0 --no-token=false` (or
-equivalent flags determined later) as a child process owned by
-chan-desktop. The supervisor:
+Toggling On spawns `chan serve <path> --host 127.0.0.1 --port N` as
+a child process owned by chan-desktop. Port `N` is allocated by
+binding `127.0.0.1:0` ourselves and reading back the OS-assigned
+port; we close the probe socket before chan binds. There is a
+TOCTOU window between close and bind which we accept: a foreign
+process grabbing that port between the two calls would surface as
+chan exiting non-zero, which the reader thread already handles.
+We did consider asking chan to print the bound URL so we could let
+it pick the port, but that requires either `chan serve --port 0`
+(not supported today) or a chan-side change.
 
-- streams stderr line-by-line until it sees the "chan is ready:"
-  banner and the URL on the following line,
-- captures `http://127.0.0.1:PORT/?t=TOKEN` and stores it in the
-  in-memory drive state (not persisted; tokens rotate per serve),
-- exposes that URL on the row so the Launch button can open it,
-- reaps the child on toggle-off, on Close, and on app exit.
+The supervisor:
 
-Failure modes the supervisor must handle explicitly:
+- pipes stderr and tails it line by line on a dedicated thread
+  per running drive,
+- watches for chan's `chan is ready:` banner and captures the URL
+  printed on the following line,
+- stores the URL in `AppState.serves` (in-memory only; the bearer
+  token rotates on every `chan serve` so a saved URL would decay
+  to garbage between launches),
+- emits a `serves-changed` Tauri event so the row re-renders with
+  the URL field populated and the Launch button enabled,
+- when the reader hits EOF (chan exited, intentionally or not),
+  reaps the child, flips the sidecar `on` flag back to false, and
+  emits another `serves-changed`.
 
-- non-zero exit before the banner: surface stderr to the user and
-  flip the toggle back to Off,
-- port already in use / permission denied: same,
-- supervisor crash: child must not outlive the desktop process. On
-  Unix, set up a process group and SIGTERM on drop. On Windows, use
-  a job object.
+When dev mode is on, the supervisor also forwards every captured
+line to the frontend as a `chan-log` event with the drive's
+canonical path and the line. The console window subscribes to that
+stream. See section 9 (Settings).
 
 ### 3.4 Toggle Off (stop)
 
-Sends SIGTERM (Unix) or the equivalent on Windows. `chan serve`
-handles graceful shutdown with a 10s grace period. After that, SIGKILL.
-The URL is cleared.
+Calls `Child::kill`, which is SIGKILL on Unix and `TerminateProcess`
+on Windows. chan does not get a chance to flush logs or unbind its
+listening socket cleanly; the OS reclaims the port within seconds.
+
+This is deliberately the prototype version. The intended endgame is
+SIGTERM with a 10s grace period (what chan's own signal handler
+already implements), then SIGKILL on timeout. That needs either
+`libc::kill` on Unix and the win32 equivalent on Windows, or the
+`nix` / `windows-sys` crates. We will pull one in when graceful
+shutdown actually matters; until then, the cost is "chan's last
+log line is missing" and "the listening socket sits in TIME_WAIT
+for ~10s after stop".
+
+App exit triggers a SIGKILL of every running serve via the Tauri
+`RunEvent::Exit` hook, so children do not outlive the desktop
+process under normal exit. Hard crashes can still orphan children;
+a chan-side parent-death watchdog or a per-child PID file would
+close that gap.
 
 ### 3.5 Close drive (remove)
 
@@ -307,19 +333,44 @@ The plan:
 
 This whole section becomes urgent once the first end-user DMG ships.
 
-## 9. Open questions
+## 9. Settings and developer mode
 
-- `chan serve` flags: do we always pass `--no-token` and rely on
-  loopback, or do we keep the token and inject it into the launched
-  URL? Tokens make accidental cross-app exposure harder; cost is
-  the URL changes every serve. Lean: keep the token.
-- Port assignment: pass `--port 0` and parse the printed URL, or
-  allocate a random port ourselves and pass it in? The CLI does not
-  currently support `--port 0`; if/when it does, switch.
+The Settings window is intentionally empty apart from one toggle:
+**Developer mode**. When on:
+
+- every `chan serve` chan-desktop spawns gets `-vv` (debug-level
+  tracing) appended to its argv,
+- the **console window** is shown. The console window is a third
+  Tauri window (label `console`, hidden by default) that subscribes
+  to the `chan-log` event stream and appends every captured line,
+  prefixed with the drive's basename. Auto-scroll pins to the bottom
+  unless the user has scrolled up. There is a Clear button.
+- when dev mode is toggled off, the console window is hidden but
+  not destroyed, and the supervisor stops emitting `chan-log`
+  events. Already-running serves continue with whatever verbosity
+  they were started with; the user has to toggle Off / On to pick
+  up a verbosity change.
+
+This is deliberately not browser DevTools. Browser-level debugging
+the desktop UI itself is a maintainer concern, not an end-user one,
+and is reachable through the standard Tauri / WebKit Inspector when
+needed for development.
+
+Future settings additions are deferred until they have concrete
+demand: tunnel publishing (`--tunnel-token`, `--public`) probably
+belongs in a per-drive "Share" panel rather than a global setting.
+
+## 10. Open questions
+
+- `chan serve` token: today we pass no `--no-token` flag, so chan
+  decides; we just capture the URL it prints. If we later want
+  shareable URLs we will need to rethink, but for the desktop's
+  loopback-only case the default is fine.
 - Multiple desktop windows vs one window: current design is one
   window with a drives table. Adding per-drive child windows is a
   later concern.
-- Settings: which subset of `chan serve` flags do we expose to the
-  user, and which do we hardcode? Tunnel publishing
-  (`--tunnel-token`, `--public`) probably belongs in a per-drive
-  "Share" panel rather than the global settings.
+- Graceful stop: see section 3.4. Worth doing once we hit the first
+  user-visible cost.
+- Cross-platform child reaping on hard crash: see section 3.4.
+  Probably solved by chan growing a parent-death watchdog rather
+  than chan-desktop tracking PIDs in a sidecar file.
