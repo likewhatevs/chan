@@ -352,8 +352,19 @@ struct PendingChange {
 /// Translate a `WatchEvent` into a markdown-only "rebuild this
 /// file" task. Non-md paths and rename events (handled separately
 /// by the caller because rename has both `path` and `to`) are
-/// returned as None.
+/// returned as None. Provider-level errors are logged and
+/// dropped: the watcher channel itself stays subscribed; chan-core
+/// recommends a full reindex in this case but we don't trigger one
+/// today (TODO: wire a reindex on watcher loss).
 fn relevant(event: &WatchEvent) -> Option<PendingChange> {
+    if matches!(event.kind, WatchKind::ProviderError) {
+        tracing::warn!(
+            backend_message = ?event.path,
+            "indexer: filesystem watcher reported a provider error; \
+             search index may drift until the next manual reindex"
+        );
+        return None;
+    }
     let path = event.path.as_deref()?;
     if !path.ends_with(".md") {
         return None;
@@ -371,6 +382,9 @@ fn relevant(event: &WatchEvent) -> Option<PendingChange> {
         }),
         // Renamed: the caller fans out to forget(from) + index(to).
         WatchKind::Renamed => None,
+        // Already handled at the top of the function; listed to
+        // keep the match exhaustive on future variant additions.
+        WatchKind::ProviderError => None,
     }
 }
 

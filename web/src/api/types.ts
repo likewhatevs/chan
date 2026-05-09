@@ -62,6 +62,9 @@ export type AssistantBackendKind =
 export type ClaudePrefs = {
   /// Optional model override; backend default applies when null.
   model?: string | null;
+  /// Optional max output tokens. Null falls back to chan-llm's
+  /// per-backend default (Anthropic: 4096).
+  max_tokens?: number | null;
 };
 
 export type OllamaPrefs = {
@@ -69,12 +72,17 @@ export type OllamaPrefs = {
   url?: string | null;
   /// Model name (must be installed on the Ollama server).
   model?: string | null;
+  /// Maps to Ollama's `options.num_predict`. Null = uncapped.
+  max_tokens?: number | null;
 };
 
 export type GeminiPrefs = {
   /// Optional model override; backend default (gemini-2.5-flash)
   /// applies when null.
   model?: string | null;
+  /// Optional max output tokens. Null falls back to chan-llm's
+  /// per-backend default (Gemini: 4096).
+  max_tokens?: number | null;
 };
 
 export type AssistantPrefs = {
@@ -183,6 +191,7 @@ export type LlmStopReason =
   | "max_tokens"
   | "tool_use"
   | "stop_sequence"
+  | "cancelled"
   | "other";
 
 export type LlmCompletionResponse = {

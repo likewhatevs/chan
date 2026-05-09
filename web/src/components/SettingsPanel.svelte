@@ -338,6 +338,20 @@
     return JSON.parse(JSON.stringify(p));
   }
 
+  /// Parse a max-output-tokens text input into Option<u32>. Empty
+  /// string or non-positive numbers clear the override (chan-llm
+  /// then falls back to its per-backend default). Caps the value at
+  /// u32::MAX so the autosave can't ship a number the server can't
+  /// deserialize.
+  function parseMaxTokens(raw: string): number | null {
+    const t = raw.trim();
+    if (t === "") return null;
+    const n = Number(t);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const i = Math.floor(n);
+    return i > 0xffff_ffff ? 0xffff_ffff : i;
+  }
+
   function snapshot(): string {
     return JSON.stringify({ editing, editedName, editedDefaultRoot });
   }
@@ -614,8 +628,8 @@
           onchange={() => void onBackendChange()}
           disabled={!editing.assistant.enabled}
         >
-          <option value="claude">claude (Anthropic API)</option>
           <option value="claude_cli">claude CLI (shell-executor)</option>
+          <option value="claude">claude (Anthropic API)</option>
           <option value="gemini">gemini (Google API)</option>
           <option value="embedded" disabled>local: coming soon (embedded model)</option>
           <option value="ollama">ollama (local)</option>
@@ -678,6 +692,23 @@
                 : "re-query Anthropic for the model list"}
             >{anthropicLoading ? "…" : "↻"}</button>
           </span>
+        </label>
+        <label class:dim={!editing.assistant.enabled}>
+          <span>Max output tokens</span>
+          <input
+            type="number"
+            min="1"
+            step="1"
+            placeholder="4096 (default)"
+            value={editing.assistant.claude.max_tokens ?? ""}
+            oninput={(e) => {
+              if (!editing) return;
+              editing.assistant.claude.max_tokens = parseMaxTokens(
+                (e.currentTarget as HTMLInputElement).value,
+              );
+            }}
+            disabled={!editing.assistant.enabled}
+          />
         </label>
         {#if anthropicSource === "fallback" && anthropicError}
           <div class="muted err-line">Anthropic: {anthropicError} (showing curated list)</div>
@@ -776,6 +807,23 @@
             >{geminiLoading ? "…" : "↻"}</button>
           </span>
         </label>
+        <label class:dim={!editing.assistant.enabled}>
+          <span>Max output tokens</span>
+          <input
+            type="number"
+            min="1"
+            step="1"
+            placeholder="4096 (default)"
+            value={editing.assistant.gemini.max_tokens ?? ""}
+            oninput={(e) => {
+              if (!editing) return;
+              editing.assistant.gemini.max_tokens = parseMaxTokens(
+                (e.currentTarget as HTMLInputElement).value,
+              );
+            }}
+            disabled={!editing.assistant.enabled}
+          />
+        </label>
         {#if geminiSource === "fallback" && geminiError}
           <div class="muted err-line">Gemini: {geminiError} (showing curated list)</div>
         {/if}
@@ -864,6 +912,23 @@
               title="re-query Ollama for installed models"
             >{ollamaLoading ? "…" : "↻"}</button>
           </span>
+        </label>
+        <label class:dim={!editing.assistant.enabled}>
+          <span>Max output tokens</span>
+          <input
+            type="number"
+            min="1"
+            step="1"
+            placeholder="uncapped (default)"
+            value={editing.assistant.ollama.max_tokens ?? ""}
+            oninput={(e) => {
+              if (!editing) return;
+              editing.assistant.ollama.max_tokens = parseMaxTokens(
+                (e.currentTarget as HTMLInputElement).value,
+              );
+            }}
+            disabled={!editing.assistant.enabled}
+          />
         </label>
         {#if ollamaError}
           <div class="muted err-line">Ollama: {ollamaError}</div>

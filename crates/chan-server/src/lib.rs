@@ -497,6 +497,11 @@ pub async fn serve_via_tunnel(
         public,
         initial_backoff: Duration::from_millis(500),
         max_backoff: Duration::from_secs(30),
+        // chan-tunnel-client 0.5.1 added a per-dial wall-clock cap.
+        // 30s matches the upstream default and covers the trans-
+        // pacific case; black-holed routes fail fast instead of
+        // hanging on the OS TCP timeout.
+        dial_timeout: Duration::from_secs(30),
         events: Some(events_tx),
     };
     chan_tunnel_client::run(cfg, artifacts.app)
@@ -1303,6 +1308,11 @@ struct AssistantPrefsView {
 struct ProviderPrefsView {
     #[serde(default)]
     model: Option<String>,
+    /// Per-backend max output tokens. None falls back to chan-llm's
+    /// per-backend default (Anthropic 4096, Gemini 4096). claude_cli
+    /// has no counterpart in chan-llm and ignores this field.
+    #[serde(default)]
+    max_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1311,6 +1321,9 @@ struct OllamaPrefsView {
     url: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    /// Maps to Ollama's `options.num_predict`. None = uncapped.
+    #[serde(default)]
+    max_tokens: Option<u32>,
 }
 
 /// Frontend uses "claude" (display label) for what chan-llm types
@@ -1367,13 +1380,16 @@ fn preferences_view(state: &AppState) -> PreferencesView {
             auto_apply_writes: llm.auto_apply_writes,
             claude: ProviderPrefsView {
                 model: llm.models.anthropic.clone(),
+                max_tokens: llm.max_tokens.anthropic,
             },
             ollama: OllamaPrefsView {
                 url: llm.urls.ollama.clone(),
                 model: llm.models.ollama.clone(),
+                max_tokens: llm.max_tokens.ollama,
             },
             gemini: ProviderPrefsView {
                 model: llm.models.gemini.clone(),
+                max_tokens: llm.max_tokens.gemini,
             },
         },
         attachments_dir: server.attachments_dir.clone(),
@@ -1549,17 +1565,43 @@ async fn api_write_file(
     AxumPath(path): AxumPath<String>,
     Json(body): Json<WriteBody>,
 ) -> Response {
-    let result = match body.expected_mtime {
-        Some(_) => state
-            .drive()
-            .write_text_if_unchanged(&path, body.expected_mtime, &body.content),
-        None => state.drive().write_text(&path, &body.content),
-    };
-    if let Err(e) = result {
-        if let chan_drive::ChanError::WriteConflict { current_mtime } = e {
+    // chan-drive moved the CAS check to nanosecond precision
+    // (`expected_mtime_ns`) to catch sub-second races between two
+    // writers. Our wire format still surfaces seconds-precision
+    // mtimes to the editor (an i64-as-JSON-number representation
+    // for nanoseconds would lose precision past 2^53). We do the
+    // seconds-precision compare ourselves here, then defer to
+    // `write_text_if_unchanged` with the freshly-stat'd ns so the
+    // actual rename is still gated atomically inside chan-drive.
+    // Sub-second race protection is therefore a TODO until the
+    // wire moves to ns-as-string; document the regression here so
+    // the next reader knows it's a known gap, not a bug.
+    let result = if body.expected_mtime.is_some() {
+        let pre = state.drive().stat(&path).ok();
+        let cur_secs = pre.as_ref().and_then(|s| s.mtime);
+        let cur_ns = pre.as_ref().and_then(|s| s.mtime_ns);
+        if body.expected_mtime != cur_secs {
             return (
                 StatusCode::CONFLICT,
-                Json(WriteConflictBody { current_mtime }),
+                Json(WriteConflictBody {
+                    current_mtime: cur_secs,
+                }),
+            )
+                .into_response();
+        }
+        state
+            .drive()
+            .write_text_if_unchanged(&path, cur_ns, &body.content)
+    } else {
+        state.drive().write_text(&path, &body.content)
+    };
+    if let Err(e) = result {
+        if let chan_drive::ChanError::WriteConflict { current_mtime_ns } = e {
+            return (
+                StatusCode::CONFLICT,
+                Json(WriteConflictBody {
+                    current_mtime: current_mtime_ns.map(|ns| ns / 1_000_000_000),
+                }),
             )
                 .into_response();
         }
@@ -2207,38 +2249,61 @@ async fn api_llm_status(State(state): State<Arc<AppState>>) -> Response {
     let (active_key, status) = chan_llm::keys::resolve(active, &cfg);
     let key_set = active_key.is_some();
     let enabled = cfg.backend.is_some();
-    // Ollama and ClaudeCli are keyless from chan-llm's view (Ollama
-    // is local; ClaudeCli inherits auth from the user's installed
-    // `claude` install), so a missing-key status doesn't block
-    // ready. Anthropic and Gemini need a key to issue a request.
+    // Resolve cmd[0] for the ClaudeCli backend so we can probe PATH.
+    // Mirrors backends::build's resolution: explicit cfg overrides
+    // win, otherwise chan-llm's `default_cmd()` (currently `claude`).
+    let claude_cli_cmd0 = cfg
+        .claude_cli
+        .cmd
+        .as_ref()
+        .and_then(|v| v.first().cloned())
+        .unwrap_or_else(|| {
+            chan_llm::backends::claude_cli::default_cmd()
+                .into_iter()
+                .next()
+                .unwrap_or_default()
+        });
+    let claude_cli_resolved = if active == BackendKind::ClaudeCli {
+        resolve_claude_cli(&claude_cli_cmd0)
+    } else {
+        None
+    };
+    // Ollama is keyless (local); Anthropic and Gemini need a key.
+    // ClaudeCli inherits auth from the installed `claude`, but we
+    // still need to find the binary on PATH to consider it ready.
     let ready = enabled
         && match active {
-            BackendKind::Ollama | BackendKind::ClaudeCli => true,
+            BackendKind::Ollama => true,
+            BackendKind::ClaudeCli => claude_cli_resolved.is_some(),
             BackendKind::Anthropic | BackendKind::Gemini => key_set,
         };
     let reason = if !enabled {
         Some("no backend selected; pick one in Settings".to_string())
     } else if !ready {
-        // Per-backend env var so the message matches the active
-        // selection (the previous "ANTHROPIC_API_KEY / GEMINI_API_KEY"
-        // dual-string was confusing when only one of them was the
-        // active backend).
-        let env = match active {
-            BackendKind::Anthropic => "ANTHROPIC_API_KEY",
-            BackendKind::Gemini => "GEMINI_API_KEY",
-            // Ollama and ClaudeCli are keyless from chan-llm's
-            // perspective (Ollama is local; ClaudeCli inherits auth
-            // from the user's installed `claude` install). The
-            // !ready branch shouldn't fire for them; keep a
-            // sensible env var so the exhaustive match compiles.
-            BackendKind::Ollama => "OLLAMA_HOST",
-            BackendKind::ClaudeCli => "CLAUDE_CLI",
-        };
-        Some(format!(
-            "{} key not configured. Set {env} in your shell, or save the \
-             key from this Settings panel.",
-            backend_tag(active),
-        ))
+        match active {
+            BackendKind::ClaudeCli => Some(format!(
+                "`{claude_cli_cmd0}` not found on PATH. Install the claude \
+                 CLI, or set claude_cli.cmd in llm.toml to an absolute path."
+            )),
+            BackendKind::Ollama => {
+                // Reachable only if a future change adds an Ollama
+                // readiness gate; today the match arm above keeps
+                // Ollama always-ready when enabled.
+                Some("Ollama backend not ready.".to_string())
+            }
+            BackendKind::Anthropic | BackendKind::Gemini => {
+                let env = match active {
+                    BackendKind::Anthropic => "ANTHROPIC_API_KEY",
+                    BackendKind::Gemini => "GEMINI_API_KEY",
+                    _ => unreachable!(),
+                };
+                Some(format!(
+                    "{} key not configured. Set {env} in your shell, or save \
+                     the key from this Settings panel.",
+                    backend_tag(active),
+                ))
+            }
+        }
     } else {
         None
     };
@@ -2257,6 +2322,102 @@ async fn api_llm_status(State(state): State<Arc<AppState>>) -> Response {
         supports_tools: true,
     })
     .into_response()
+}
+
+/// Probe whether the resolved claude_cli `cmd[0]` is reachable from
+/// this process. Mirrors `execvp` semantics first: when the name
+/// carries a path separator, treat it as an explicit path and only
+/// check that location; otherwise walk `$PATH` left-to-right and
+/// return the first executable hit. When the PATH walk misses (or
+/// PATH is unset), fall back to well-known install dirs so a chan
+/// launched without the user's interactive-shell PATH (launchd,
+/// desktop .app double-click, fresh systemd unit) can still locate
+/// a claude installed by Anthropic's official installer or by
+/// Homebrew. Returns None when not found anywhere.
+fn resolve_claude_cli(cmd0: &str) -> Option<PathBuf> {
+    if cmd0.is_empty() {
+        return None;
+    }
+    let p = Path::new(cmd0);
+    if p.components().count() > 1 {
+        return is_executable(p).then(|| p.to_path_buf());
+    }
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            if let Some(hit) = probe_in_dir(&dir, cmd0) {
+                return Some(hit);
+            }
+        }
+    }
+    for dir in claude_cli_fallback_dirs() {
+        if let Some(hit) = probe_in_dir(&dir, cmd0) {
+            return Some(hit);
+        }
+    }
+    None
+}
+
+fn probe_in_dir(dir: &Path, cmd0: &str) -> Option<PathBuf> {
+    let candidate = dir.join(cmd0);
+    if is_executable(&candidate) {
+        return Some(candidate);
+    }
+    // PATHEXT walk on Windows: the shell appends .exe / .cmd /
+    // .bat when the bare name doesn't resolve. Skipped on Unix
+    // where the executable bit is the only signal.
+    #[cfg(windows)]
+    {
+        for ext in ["exe", "cmd", "bat", "com"] {
+            let with_ext = candidate.with_extension(ext);
+            if is_executable(&with_ext) {
+                return Some(with_ext);
+            }
+        }
+    }
+    None
+}
+
+/// Well-known install locations checked after a PATH miss. Order
+/// matters: Anthropic's official installer (`~/.claude/local/bin`)
+/// wins over Homebrew, which wins over distro packages, so that an
+/// explicit user install is preferred when more than one is
+/// present. Windows entries cover the npm-global default
+/// (`%APPDATA%\npm`) since the official installer ships claude as
+/// an npm package on Windows.
+fn claude_cli_fallback_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    #[cfg(unix)]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            dirs.push(PathBuf::from(&home).join(".claude").join("local").join("bin"));
+        }
+        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        dirs.push(PathBuf::from("/usr/local/bin"));
+        dirs.push(PathBuf::from("/usr/bin"));
+    }
+    #[cfg(windows)]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            dirs.push(PathBuf::from(&appdata).join("npm"));
+        }
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            dirs.push(PathBuf::from(&local).join("Programs").join("claude"));
+        }
+    }
+    dirs
+}
+
+#[cfg(unix)]
+fn is_executable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    p.metadata()
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn is_executable(p: &Path) -> bool {
+    p.is_file()
 }
 
 /// `~/.chan/api-keys.toml`-style path the on-disk fallback uses.
@@ -2407,6 +2568,10 @@ fn stop_reason_tag(r: chan_llm::StopReason) -> &'static str {
         chan_llm::StopReason::StopSequence => "stop_sequence",
         chan_llm::StopReason::ToolUse => "tool_use",
         chan_llm::StopReason::Error => "other",
+        // chan-llm 0.5.1 added Cancelled for `CancelHandle::cancel`.
+        // Surface it on the wire so the frontend can distinguish a
+        // user-aborted turn from an upstream error.
+        chan_llm::StopReason::Cancelled => "cancelled",
     }
 }
 
@@ -3071,6 +3236,11 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
         llm.models.anthropic = view.assistant.claude.model;
         llm.models.gemini = view.assistant.gemini.model;
         llm.models.ollama = view.assistant.ollama.model;
+        // None clears the override so backends fall back to their
+        // built-in defaults; see chan-llm `MaxTokens` resolution.
+        llm.max_tokens.anthropic = view.assistant.claude.max_tokens;
+        llm.max_tokens.gemini = view.assistant.gemini.max_tokens;
+        llm.max_tokens.ollama = view.assistant.ollama.max_tokens;
         // Empty string from the form clears the override (back to
         // env or the hardcoded default). Trim before storing so a
         // copy-pasted URL with whitespace doesn't break the http
@@ -3780,5 +3950,128 @@ mod tests {
         let html = b"<html></html>";
         let out = inject_chan_prefix(html, "/foo");
         assert_eq!(out, html);
+    }
+
+    /// Process-env is global; cargo runs tests in parallel by
+    /// default. Any test that mutates PATH / HOME holds this guard
+    /// for its critical section so two probes can't observe each
+    /// other's overrides.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_claude_cli_finds_via_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("claude");
+        std::fs::write(&bin, b"#!/bin/sh\nexit 0\n").unwrap();
+        let mut perms = std::fs::metadata(&bin).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&bin, perms).unwrap();
+
+        let _g = env_lock();
+        let prev = std::env::var_os("PATH");
+        // Empty HOME so the fallback can't accidentally satisfy a
+        // missing-PATH-entry test against the real ~/.claude tree.
+        let prev_home = std::env::var_os("HOME");
+        std::env::set_var("PATH", dir.path());
+        std::env::remove_var("HOME");
+        let resolved = resolve_claude_cli("claude");
+        match prev {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+        match prev_home {
+            Some(p) => std::env::set_var("HOME", p),
+            None => std::env::remove_var("HOME"),
+        }
+        assert_eq!(resolved.as_deref(), Some(bin.as_path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_claude_cli_missing_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let _g = env_lock();
+        let prev = std::env::var_os("PATH");
+        let prev_home = std::env::var_os("HOME");
+        std::env::set_var("PATH", dir.path());
+        // Drop HOME and point the fallback dirs at a tempdir-derived
+        // path that doesn't exist, so the well-known-paths walk
+        // can't find a real claude installed on the test host.
+        std::env::set_var("HOME", dir.path().join("nonexistent-home"));
+        let resolved = resolve_claude_cli("definitely-not-a-real-binary-xyz");
+        match prev {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+        match prev_home {
+            Some(p) => std::env::set_var("HOME", p),
+            None => std::env::remove_var("HOME"),
+        }
+        assert!(resolved.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_claude_cli_explicit_path_must_exist() {
+        // Names with a path separator skip the PATH walk: only the
+        // exact location is checked. Both branches verified here.
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("claude");
+        assert!(resolve_claude_cli(missing.to_str().unwrap()).is_none());
+
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(&missing, b"#!/bin/sh\nexit 0\n").unwrap();
+        let mut perms = std::fs::metadata(&missing).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&missing, perms).unwrap();
+        assert_eq!(
+            resolve_claude_cli(missing.to_str().unwrap()).as_deref(),
+            Some(missing.as_path())
+        );
+    }
+
+    #[test]
+    fn resolve_claude_cli_empty_returns_none() {
+        assert!(resolve_claude_cli("").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_claude_cli_fallback_when_path_misses() {
+        // PATH points only at an empty dir (claude not there); the
+        // ~/.claude/local/bin fallback should still find the binary.
+        // We override $HOME to point at a tempdir so the fallback's
+        // `~/.claude/local/bin` resolves into a location we control.
+        use std::os::unix::fs::PermissionsExt;
+        let path_dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let claude_dir = home.path().join(".claude").join("local").join("bin");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let bin = claude_dir.join("claude");
+        std::fs::write(&bin, b"#!/bin/sh\nexit 0\n").unwrap();
+        let mut perms = std::fs::metadata(&bin).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&bin, perms).unwrap();
+
+        let _g = env_lock();
+        let prev_path = std::env::var_os("PATH");
+        let prev_home = std::env::var_os("HOME");
+        std::env::set_var("PATH", path_dir.path());
+        std::env::set_var("HOME", home.path());
+        let resolved = resolve_claude_cli("claude");
+        match prev_path {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+        match prev_home {
+            Some(p) => std::env::set_var("HOME", p),
+            None => std::env::remove_var("HOME"),
+        }
+        assert_eq!(resolved.as_deref(), Some(bin.as_path()));
     }
 }

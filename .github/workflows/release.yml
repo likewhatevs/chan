@@ -310,8 +310,38 @@ jobs:
           path: artifacts
       - name: List artifacts
         run: find artifacts -type f
+
+      # The self-upgrade flow in `chan serve` / `chan upgrade` reads
+      # `chan.app/dl/latest/VERSION` (text) to discover the current
+      # release and `chan.app/dl/v<version>/SHA256SUMS` to verify the
+      # downloaded archive. Both files have to be in the GitHub
+      # release so chan-prod-setup's bin/fetch-chan-dl.sh can mirror
+      # them onto chan.app/dl/. The text file holds the tag stripped
+      # of its leading `v`; the SHA256SUMS lines name each artifact
+      # as `<hash>  <basename>`.
+      - name: Stage VERSION + SHA256SUMS
+        run: |
+          set -e
+          mkdir -p release-extras
+          tag=${GITHUB_REF#refs/tags/}
+          version=${tag#v}
+          printf '%s\n' "$version" > release-extras/VERSION
+
+          # Flatten artifact subdirs so the checksum file lists
+          # just basenames; that's what `chan upgrade` looks up.
+          mkdir -p flat
+          find artifacts -type f -exec cp -n {} flat/ \;
+          ( cd flat && sha256sum * | LC_ALL=C sort -k 2 ) \
+            > release-extras/SHA256SUMS
+
+          ls -la release-extras
+          cat release-extras/SHA256SUMS
+
       - uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: |
+            artifacts/**/*
+            release-extras/VERSION
+            release-extras/SHA256SUMS
           generate_release_notes: true
           fail_on_unmatched_files: false

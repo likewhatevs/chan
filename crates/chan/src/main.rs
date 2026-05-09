@@ -35,6 +35,8 @@ use chan_drive::{Library, SearchOpts};
 use chan_server::ServeConfig;
 use clap::{Parser, Subcommand};
 
+mod update;
+
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -73,9 +75,6 @@ enum Command {
         name: String,
     },
     /// Run the HTTP server. Defaults to 127.0.0.1 (loopback only).
-    ///
-    /// NOT IMPLEMENTED YET. Routes are being ported from the old
-    /// chan-drive in follow-up commits.
     Serve {
         path: Option<PathBuf>,
         /// Host address to bind. Default 127.0.0.1 (or ::1 with -6).
@@ -150,6 +149,25 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         limit: u32,
     },
+    /// Self-upgrade: download the latest release from chan.app/dl,
+    /// verify SHA256, and atomically replace the running binary.
+    /// URLs are hardcoded; the only knobs are `-y` (skip prompt),
+    /// `--check` (report only), and `--version` (pin a release).
+    /// Set `CHAN_UPDATE_CHECK=0` to silence the banner that fires
+    /// on `chan serve` startup.
+    Upgrade {
+        /// Skip the confirmation prompt.
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Only check + report; do not download or replace the
+        /// binary. Returns success in both directions.
+        #[arg(long)]
+        check: bool,
+        /// Pin a specific version instead of querying chan.app/dl.
+        /// Useful for downgrading or pinning to a tested release.
+        #[arg(long)]
+        version: Option<String>,
+    },
     /// Internal: run the chan-llm MCP server on stdio against a
     /// drive. Spawned as a subprocess by the ClaudeCli backend
     /// (chan-llm v2 path, chan-llm issue #1) so claude routes its
@@ -221,6 +239,25 @@ fn main() -> Result<()> {
         }
         Command::Index { path } => cmd_index(path),
         Command::Search { path, query, limit } => cmd_search(path, query, limit),
+        Command::Upgrade {
+            yes,
+            check,
+            version,
+        } => {
+            // The upgrader uses reqwest + tokio internally; reuse the
+            // same runtime shape as cmd_serve so we stay async without
+            // forcing a sync HTTP dep.
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .context("building tokio runtime")?;
+            rt.block_on(update::run_upgrade(update::UpgradeOptions {
+                assume_yes: yes,
+                check_only: check,
+                version_override: version,
+                verbose: cli.verbose > 0,
+            }))
+        }
         Command::Mcp { path, auto_apply } => {
             // Same shape as serve: stdio MCP needs a tokio runtime
             // for the async server, but everything outside it stays
@@ -423,12 +460,13 @@ fn ensure_drive_named(
     if entry.name.as_deref().unwrap_or("").is_empty() {
         lib.rename_drive(root, Some(resolved.clone()))
             .with_context(|| format!("renaming {}", root.display()))?;
-        // rename_drive returned ok; reflect the new name in the
-        // returned struct without a re-fetch round-trip.
-        return Ok(chan_drive::KnownDrive {
-            name: Some(resolved),
-            ..entry
-        });
+        // KnownDrive carries private fields (canonical_path) so we
+        // can't struct-update the prior entry. register_drive is
+        // idempotent: re-call it to pick up the new name plus
+        // whatever else the registry recomputed.
+        return lib
+            .register_drive(root, Some(resolved))
+            .with_context(|| format!("re-registering {}", root.display()));
     }
     Ok(entry)
 }
@@ -580,6 +618,15 @@ async fn cmd_serve(
     }
     let known = ensure_drive_named(&lib, &root, None)?;
     let drive = lib.open_drive(&root)?;
+
+    // Best-effort update notice. The banner reads cached state
+    // (no network) so an air-gapped host pays zero startup cost.
+    // The probe runs as a detached tokio task with short timeouts;
+    // its failures are swallowed at `debug` level. Honors
+    // CHAN_UPDATE_CHECK=0 and the standard *_PROXY env vars
+    // (reqwest reads them automatically).
+    update::maybe_print_banner();
+    tokio::spawn(update::run_probe());
 
     if let Some(token) = tunnel_token {
         // Warn when the token came in via the flag rather than the
