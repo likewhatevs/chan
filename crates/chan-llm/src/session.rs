@@ -124,6 +124,112 @@ pub struct ToolResult {
     pub output: Json,
 }
 
+/// Status string the orchestrator writes into the placeholder Tool
+/// message when a `write_file` call pauses for user approval. Hosts
+/// match against this (or use `is_pending_placeholder`) to drive
+/// the confirmation UI without coupling to the full JSON shape.
+pub const PENDING_STATUS: &str = "awaiting_user_approval";
+
+/// Status string `apply_resume` writes into the Tool message when
+/// the host reports that the user rejected a paused write.
+pub const REJECTED_STATUS: &str = "rejected_by_user";
+
+/// Status string `apply_resume` writes when the user approved but
+/// applying the call failed for an external reason (disk full,
+/// write conflict).
+pub const FAILED_STATUS: &str = "applied_but_failed";
+
+/// Outcome of a paused tool call after the host's confirmation UI
+/// resolves it. Pass to `apply_resume` to swap the orchestrator's
+/// placeholder for the typed result before re-sending the
+/// transcript via `LlmSession::send`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResumeOutcome {
+    /// User approved and the host (or `LlmSession::approve_pending`)
+    /// applied the call. `output` is the JSON the tool would have
+    /// returned; for `write_file` via the standard sandbox this is
+    /// the `{"path":..., "bytes_written":..., "mtime_ns":...}` shape.
+    Applied(Json),
+    /// User rejected at the confirmation UI. Optional `reason` is
+    /// surfaced to the assistant so it can adapt its plan.
+    Rejected { reason: Option<String> },
+    /// User approved but applying the call failed (e.g. disk full,
+    /// write conflict). The assistant sees this as a structured
+    /// error and can retry or hand back to the user.
+    Failed { error: String },
+}
+
+/// True if `msg` is the orchestrator's placeholder Tool message
+/// for a paused write. Hosts use this to find which call needs
+/// confirmation without parsing JSON internals themselves.
+pub fn is_pending_placeholder(msg: &Message) -> bool {
+    if msg.role != Role::Tool {
+        return false;
+    }
+    let parsed: serde_json::Value = match serde_json::from_str(&msg.content) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    parsed.get("status").and_then(|s| s.as_str()) == Some(PENDING_STATUS)
+}
+
+/// Replace the orchestrator's placeholder Tool message for
+/// `call_id` with `outcome`'s typed serialization, then return the
+/// transcript ready to pass back to `LlmSession::send`.
+///
+/// Errors when the matching message isn't actually a placeholder,
+/// so a host that double-resumes the same call (or targets the
+/// wrong id) catches the mistake instead of silently corrupting
+/// the transcript fed back to the model.
+pub fn apply_resume(
+    mut history: Vec<Message>,
+    call_id: &str,
+    outcome: ResumeOutcome,
+) -> Result<Vec<Message>, LlmError> {
+    let idx = history
+        .iter()
+        .rposition(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some(call_id))
+        .ok_or_else(|| LlmError::Resume(format!("no Tool message with id {call_id}")))?;
+    if !is_pending_placeholder(&history[idx]) {
+        return Err(LlmError::Resume(format!(
+            "Tool message {call_id} is not a pending placeholder; refusing to overwrite",
+        )));
+    }
+    let body = match outcome {
+        ResumeOutcome::Applied(json) => serde_json::to_string(&json),
+        ResumeOutcome::Rejected { reason } => serde_json::to_string(&serde_json::json!({
+            "status": REJECTED_STATUS,
+            "reason": reason,
+        })),
+        ResumeOutcome::Failed { error } => serde_json::to_string(&serde_json::json!({
+            "status": FAILED_STATUS,
+            "error": error,
+        })),
+    }
+    .map_err(|e| LlmError::Resume(format!("encode resume body: {e}")))?;
+    history[idx].content = body;
+    Ok(history)
+}
+
+/// Walk `history` newest-first for an Assistant turn carrying a
+/// tool call with the given id. Used by `LlmSession::approve_pending`
+/// to recover the original args after the host's confirmation UI
+/// resolves a paused write.
+fn find_tool_call_in_history(history: &[Message], call_id: &str) -> Result<ToolCall, LlmError> {
+    for msg in history.iter().rev() {
+        if msg.role != Role::Assistant {
+            continue;
+        }
+        if let Some(call) = msg.tool_calls.iter().find(|c| c.id == call_id) {
+            return Ok(call.clone());
+        }
+    }
+    Err(LlmError::Resume(format!(
+        "no Assistant turn carries tool call {call_id}",
+    )))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {
@@ -198,6 +304,39 @@ impl LlmSession {
         ToolContext::new(self.drive.clone(), self.config.auto_apply_writes)
     }
 
+    /// Convenience for the "user clicked Apply unchanged" path:
+    /// recover the deferred call from `history`, run it through
+    /// the standard tool sandbox with auto_apply forced on for
+    /// this single execution, and return the transcript with the
+    /// placeholder replaced by the tool's real output.
+    ///
+    /// The host's `auto_apply_writes` config is unchanged. The
+    /// override applies only to this one call.
+    ///
+    /// When the host needs to mutate args before applying (e.g.
+    /// the user edited the diff in the confirmation UI), it
+    /// should run the write itself via
+    /// `chan_drive::Drive::write_text` and call `apply_resume`
+    /// directly with the resulting JSON.
+    pub fn approve_pending(
+        &self,
+        history: Vec<Message>,
+        call_id: &str,
+    ) -> Result<Vec<Message>, LlmError> {
+        let call = find_tool_call_in_history(&history, call_id)?;
+        let ctx = ToolContext::new(self.drive.clone(), true);
+        let outcome = crate::tools::execute(&call.name, &call.args, &ctx)?;
+        let json = match outcome {
+            crate::tools::ToolOutcome::Ok(v) => v,
+            crate::tools::ToolOutcome::Pending { tool, .. } => {
+                return Err(LlmError::Resume(format!(
+                    "tool {tool} returned Pending despite auto_apply override; this is a bug",
+                )));
+            }
+        };
+        apply_resume(history, call_id, ResumeOutcome::Applied(json))
+    }
+
     /// Kick off a turn. The host passes the full conversation
     /// transcript; chan-llm prepends the system prompt + tool
     /// descriptions automatically. Returns immediately after
@@ -216,21 +355,28 @@ impl LlmSession {
     /// is off and the assistant proposes `write_file`, the loop
     /// pauses with `on_done(ToolUse)` AFTER pushing both the
     /// assistant's tool_use turn and a placeholder Tool message
-    /// of `{"status":"awaiting_user_approval","tool":"write_file"}`
-    /// for every dangling call. The host should resume by calling
-    /// `send` again with a transcript that *replaces* the
-    /// placeholder Tool message (matched by `tool_call_id`) with
-    /// the real outcome:
+    /// for every dangling call. The placeholder shape is
+    /// `{"status":"awaiting_user_approval","tool":"<name>"}`
+    /// (use the `PENDING_STATUS` constant or
+    /// `is_pending_placeholder` helper to detect it without coupling
+    /// to the JSON shape).
     ///
-    ///   - approved + applied: result of the actual write, e.g.
-    ///     `{"path":"...","bytes_written":N}`.
-    ///   - rejected by user: `{"status":"rejected_by_user"}`.
+    /// To resume, the host typically:
+    ///   1. Detects the placeholder via `is_pending_placeholder`.
+    ///   2. Shows its confirmation UI.
+    ///   3. Builds a `ResumeOutcome` (`Applied` / `Rejected` /
+    ///      `Failed`) and calls `apply_resume(history, call_id,
+    ///      outcome)` to swap the placeholder. Convenience
+    ///      `LlmSession::approve_pending(history, call_id)` does
+    ///      step 3 for the unmodified-Apply case.
+    ///   4. Calls `send` again with the updated transcript.
     ///
     /// Without those placeholders, Anthropic and Gemini reject the
     /// next turn because the tool_use block has no matching
-    /// tool_result. The placeholder keeps the transcript shape valid
-    /// in any case; the host just has to make the result honest
-    /// before sending the next user turn.
+    /// tool_result. `apply_resume` validates that the target
+    /// message is actually a placeholder, so a host that double-
+    /// resumes catches the mistake instead of silently corrupting
+    /// the transcript.
     pub fn send(&self, messages: Vec<Message>, listener: Arc<dyn SessionListener>) -> CancelHandle {
         let cancel = CancelHandle::new();
         let Some(kind) = self.config.backend else {
@@ -445,7 +591,7 @@ async fn run_loop(
                     // real result on resume (matching by id), or
                     // leave it as-is if the user denies the write.
                     let placeholder = serde_json::json!({
-                        "status": "awaiting_user_approval",
+                        "status": PENDING_STATUS,
                         "tool": call.name,
                     });
                     listener.on_tool_result(ToolResult {
@@ -789,5 +935,168 @@ mod tests {
         let t = Message::tool("call-1", "result");
         assert_eq!(t.role, Role::Tool);
         assert_eq!(t.tool_call_id.as_deref(), Some("call-1"));
+    }
+
+    /// Build a transcript that mirrors what the orchestrator
+    /// leaves in `history` after a paused write_file: a user turn,
+    /// the assistant's tool_use turn carrying `call_id`, and a
+    /// placeholder Tool message for the same call.
+    fn paused_transcript(call_id: &str, args: serde_json::Value) -> Vec<Message> {
+        let placeholder = serde_json::json!({
+            "status": PENDING_STATUS,
+            "tool": "write_file",
+        });
+        vec![
+            Message::user("write a file"),
+            Message {
+                role: Role::Assistant,
+                content: String::new(),
+                tool_call_id: None,
+                tool_calls: vec![ToolCall {
+                    id: call_id.into(),
+                    name: "write_file".into(),
+                    args,
+                }],
+            },
+            Message::tool(call_id, serde_json::to_string(&placeholder).unwrap()),
+        ]
+    }
+
+    #[test]
+    fn is_pending_placeholder_detects_orchestrator_emit() {
+        let history = paused_transcript("c1", serde_json::json!({}));
+        assert!(is_pending_placeholder(history.last().unwrap()));
+        // A non-Tool message is never a placeholder.
+        assert!(!is_pending_placeholder(&history[0]));
+        // A Tool message with a different status is not a placeholder.
+        let other = Message::tool("c2", r#"{"status":"applied_but_failed"}"#);
+        assert!(!is_pending_placeholder(&other));
+        // A Tool message with non-JSON content is not a placeholder.
+        let plain = Message::tool("c3", "raw text");
+        assert!(!is_pending_placeholder(&plain));
+    }
+
+    #[test]
+    fn apply_resume_swaps_placeholder_for_applied() {
+        let history = paused_transcript("c1", serde_json::json!({}));
+        let result = serde_json::json!({"path": "a.md", "bytes_written": 2});
+        let updated = apply_resume(history, "c1", ResumeOutcome::Applied(result.clone())).unwrap();
+        // Last message is the swapped Tool result; content is the
+        // raw applied JSON (no wrapper) so back-compat with hosts
+        // that already wrote the value is preserved.
+        let last = updated.last().unwrap();
+        assert_eq!(last.role, Role::Tool);
+        assert_eq!(last.tool_call_id.as_deref(), Some("c1"));
+        let parsed: serde_json::Value = serde_json::from_str(&last.content).unwrap();
+        assert_eq!(parsed, result);
+    }
+
+    #[test]
+    fn apply_resume_swaps_placeholder_for_rejected() {
+        let history = paused_transcript("c1", serde_json::json!({}));
+        let updated = apply_resume(
+            history,
+            "c1",
+            ResumeOutcome::Rejected {
+                reason: Some("user said no".into()),
+            },
+        )
+        .unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&updated.last().unwrap().content).unwrap();
+        assert_eq!(parsed["status"], REJECTED_STATUS);
+        assert_eq!(parsed["reason"], "user said no");
+    }
+
+    #[test]
+    fn apply_resume_swaps_placeholder_for_failed() {
+        let history = paused_transcript("c1", serde_json::json!({}));
+        let updated = apply_resume(
+            history,
+            "c1",
+            ResumeOutcome::Failed {
+                error: "disk full".into(),
+            },
+        )
+        .unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&updated.last().unwrap().content).unwrap();
+        assert_eq!(parsed["status"], FAILED_STATUS);
+        assert_eq!(parsed["error"], "disk full");
+    }
+
+    #[test]
+    fn apply_resume_errors_when_id_unknown() {
+        let history = paused_transcript("c1", serde_json::json!({}));
+        let err = apply_resume(
+            history,
+            "wrong-id",
+            ResumeOutcome::Applied(serde_json::json!({})),
+        )
+        .unwrap_err();
+        match err {
+            LlmError::Resume(msg) => assert!(msg.contains("wrong-id"), "msg: {msg}"),
+            other => panic!("expected Resume, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_resume_refuses_to_overwrite_real_result() {
+        // After a successful apply, the message is no longer a
+        // placeholder. A second apply_resume against the same id
+        // must error rather than silently clobber the real result.
+        let history = paused_transcript("c1", serde_json::json!({}));
+        let once = apply_resume(
+            history,
+            "c1",
+            ResumeOutcome::Applied(serde_json::json!({"ok":true})),
+        )
+        .unwrap();
+        let err = apply_resume(
+            once,
+            "c1",
+            ResumeOutcome::Applied(serde_json::json!({"ok":false})),
+        )
+        .unwrap_err();
+        match err {
+            LlmError::Resume(msg) => {
+                assert!(msg.contains("not a pending placeholder"), "msg: {msg}")
+            }
+            other => panic!("expected Resume, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn approve_pending_executes_call_and_swaps_placeholder() {
+        let (_cfg, _root, drive) = fixture();
+        let session = LlmSession::new(drive.clone(), LlmConfig::default());
+        // Simulate the orchestrator's paused state: the assistant
+        // wanted to write `note.md`, auto_apply was off, and the
+        // placeholder is sitting in the transcript.
+        let history = paused_transcript(
+            "c1",
+            serde_json::json!({"path": "note.md", "content": "hello\n"}),
+        );
+        let updated = session.approve_pending(history, "c1").unwrap();
+        // Placeholder is gone; the Tool message now carries the
+        // real write result and the file landed on disk.
+        let last = updated.last().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&last.content).unwrap();
+        assert_eq!(parsed["path"], "note.md");
+        assert!(parsed.get("bytes_written").is_some(), "got: {parsed}");
+        assert!(drive.exists("note.md"));
+    }
+
+    #[test]
+    fn approve_pending_errors_when_call_not_in_history() {
+        let (_cfg, _root, drive) = fixture();
+        let session = LlmSession::new(drive, LlmConfig::default());
+        // Transcript without the assistant turn carrying the call.
+        let history = vec![Message::user("hi")];
+        let err = session.approve_pending(history, "c1").unwrap_err();
+        match err {
+            LlmError::Resume(msg) => assert!(msg.contains("c1"), "msg: {msg}"),
+            other => panic!("expected Resume, got {other:?}"),
+        }
     }
 }
