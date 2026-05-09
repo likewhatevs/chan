@@ -57,6 +57,7 @@ export type AssistantBackendKind =
   | "ollama"
   | "gemini"
   | "claude_cli"
+  | "gemini_cli"
   | "embedded";
 
 export type ClaudePrefs = {

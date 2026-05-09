@@ -1327,12 +1327,12 @@ struct OllamaPrefsView {
 }
 
 /// Frontend uses "claude" (display label) for what chan-llm types
-/// internally as `BackendKind::Anthropic`. The "claude_cli" variant
-/// covers the new shell-executor backend that wraps the local
-/// `claude` CLI. The "embedded" variant is reserved for a future
-/// on-device backend (qwen2.5 via candle); it has no chan-llm
-/// counterpart yet, so PATCHing it is treated as a no-op when read
-/// back the value falls through to the default.
+/// internally as `BackendKind::Anthropic`. The "claude_cli" /
+/// "gemini_cli" variants cover the shell-executor backends that
+/// wrap the local `claude` and `gemini` CLIs. The "embedded" variant
+/// is reserved for a future on-device backend (qwen2.5 via candle);
+/// it has no chan-llm counterpart yet, so PATCHing it is treated as
+/// a no-op when read back the value falls through to the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum AssistantBackendKind {
@@ -1340,6 +1340,7 @@ enum AssistantBackendKind {
     Ollama,
     Gemini,
     ClaudeCli,
+    GeminiCli,
     Embedded,
 }
 
@@ -1350,6 +1351,7 @@ impl AssistantBackendKind {
             BackendKind::Ollama => AssistantBackendKind::Ollama,
             BackendKind::Gemini => AssistantBackendKind::Gemini,
             BackendKind::ClaudeCli => AssistantBackendKind::ClaudeCli,
+            BackendKind::GeminiCli => AssistantBackendKind::GeminiCli,
         }
     }
 
@@ -1359,6 +1361,7 @@ impl AssistantBackendKind {
             AssistantBackendKind::Ollama => Some(BackendKind::Ollama),
             AssistantBackendKind::Gemini => Some(BackendKind::Gemini),
             AssistantBackendKind::ClaudeCli => Some(BackendKind::ClaudeCli),
+            AssistantBackendKind::GeminiCli => Some(BackendKind::GeminiCli),
             AssistantBackendKind::Embedded => None,
         }
     }
@@ -2214,6 +2217,7 @@ fn backend_tag(kind: BackendKind) -> &'static str {
         BackendKind::Ollama => "ollama",
         BackendKind::Gemini => "gemini",
         BackendKind::ClaudeCli => "claude_cli",
+        BackendKind::GeminiCli => "gemini_cli",
     }
 }
 
@@ -2268,13 +2272,35 @@ async fn api_llm_status(State(state): State<Arc<AppState>>) -> Response {
     } else {
         None
     };
+    // Same shape for the GeminiCli backend.
+    let gemini_cli_cmd0 = cfg
+        .gemini_cli
+        .cmd
+        .as_ref()
+        .and_then(|v| v.first().cloned())
+        .unwrap_or_else(|| {
+            chan_llm::backends::gemini_cli::default_cmd()
+                .into_iter()
+                .next()
+                .unwrap_or_default()
+        });
+    let gemini_cli_resolved = if active == BackendKind::GeminiCli {
+        resolve_gemini_cli(&gemini_cli_cmd0)
+    } else {
+        None
+    };
     // Ollama is keyless (local); Anthropic and Gemini need a key.
-    // ClaudeCli inherits auth from the installed `claude`, but we
-    // still need to find the binary on PATH to consider it ready.
+    // ClaudeCli/GeminiCli inherit auth from the installed CLI, but we
+    // still need to find the binary on PATH to consider them ready.
+    // GeminiCli additionally fails if v2 launches without a stored
+    // GEMINI_API_KEY (the redirected GEMINI_CLI_HOME blocks the
+    // user's `gemini login` auth); we don't gate `ready` on that
+    // here since v1 mode still works without a key.
     let ready = enabled
         && match active {
             BackendKind::Ollama => true,
             BackendKind::ClaudeCli => claude_cli_resolved.is_some(),
+            BackendKind::GeminiCli => gemini_cli_resolved.is_some(),
             BackendKind::Anthropic | BackendKind::Gemini => key_set,
         };
     let reason = if !enabled {
@@ -2284,6 +2310,11 @@ async fn api_llm_status(State(state): State<Arc<AppState>>) -> Response {
             BackendKind::ClaudeCli => Some(format!(
                 "`{claude_cli_cmd0}` not found on PATH. Install the claude \
                  CLI, or set claude_cli.cmd in llm.toml to an absolute path."
+            )),
+            BackendKind::GeminiCli => Some(format!(
+                "`{gemini_cli_cmd0}` not found on PATH. Install the gemini \
+                 CLI (`npm i -g @google/gemini-cli`), or set gemini_cli.cmd \
+                 in llm.toml to an absolute path."
             )),
             BackendKind::Ollama => {
                 // Reachable only if a future change adds an Ollama
@@ -2335,6 +2366,16 @@ async fn api_llm_status(State(state): State<Arc<AppState>>) -> Response {
 /// a claude installed by Anthropic's official installer or by
 /// Homebrew. Returns None when not found anywhere.
 fn resolve_claude_cli(cmd0: &str) -> Option<PathBuf> {
+    resolve_cli_binary(cmd0, claude_cli_fallback_dirs)
+}
+
+/// Same shape as `resolve_claude_cli` but with a gemini-cli-shaped
+/// fallback dir set (npm-global locations rather than `~/.claude`).
+fn resolve_gemini_cli(cmd0: &str) -> Option<PathBuf> {
+    resolve_cli_binary(cmd0, gemini_cli_fallback_dirs)
+}
+
+fn resolve_cli_binary(cmd0: &str, fallback_dirs: fn() -> Vec<PathBuf>) -> Option<PathBuf> {
     if cmd0.is_empty() {
         return None;
     }
@@ -2349,7 +2390,7 @@ fn resolve_claude_cli(cmd0: &str) -> Option<PathBuf> {
             }
         }
     }
-    for dir in claude_cli_fallback_dirs() {
+    for dir in fallback_dirs() {
         if let Some(hit) = probe_in_dir(&dir, cmd0) {
             return Some(hit);
         }
@@ -2407,6 +2448,36 @@ fn claude_cli_fallback_dirs() -> Vec<PathBuf> {
         }
         if let Some(local) = std::env::var_os("LOCALAPPDATA") {
             dirs.push(PathBuf::from(&local).join("Programs").join("claude"));
+        }
+    }
+    dirs
+}
+
+/// Well-known install locations for the gemini CLI. gemini-cli ships
+/// as an npm package (`@google/gemini-cli`), so the fallbacks target
+/// npm-global bin dirs in addition to the standard system bins. Order
+/// puts a user-prefix npm install first, then Homebrew, then system.
+fn gemini_cli_fallback_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    #[cfg(unix)]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            // Common `npm config set prefix=~/.npm-global` layout.
+            dirs.push(PathBuf::from(&home).join(".npm-global").join("bin"));
+            // nvm's per-version bin dir; not enumerated per-version
+            // (we'd need to read .nvmrc). The bare default-version
+            // symlink lives in the user's PATH on most setups, so a
+            // PATH miss here is rare.
+            dirs.push(PathBuf::from(&home).join(".nvm").join("versions"));
+        }
+        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        dirs.push(PathBuf::from("/usr/local/bin"));
+        dirs.push(PathBuf::from("/usr/bin"));
+    }
+    #[cfg(windows)]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            dirs.push(PathBuf::from(&appdata).join("npm"));
         }
     }
     dirs
@@ -2692,17 +2763,28 @@ async fn api_llm_complete(
     // requiring the simple sync caller to track one.
     let session_id = body.session_id.clone().unwrap_or_else(random_session_id);
 
-    // For ClaudeCli only, point the backend at our own binary as
-    // the chan-llm MCP server. chan-llm's claude_cli code launches
-    // claude with `--mcp-config` pointing here so writes flow back
-    // through chan-drive's gates (chan-llm issue #1, v0.5.0). On any
-    // failure to resolve the current exe path we leave mcp_command
-    // empty: chan-llm falls back to v1 black-box mode (auto-apply
-    // forced on) and the user still gets a working assistant.
-    if active == BackendKind::ClaudeCli {
-        if let Some(cmd) = mcp_subcommand_for(state.drive().root()) {
-            config.claude_cli.mcp_command = Some(cmd);
+    // For the agentic CLI backends, point the backend at our own
+    // binary as the chan-llm MCP server. chan-llm launches
+    // claude / gemini with the appropriate v2 wiring (claude:
+    // `--mcp-config` file; gemini: redirected GEMINI_CLI_HOME with
+    // an mcpServers entry) so writes flow back through chan-drive's
+    // gates (chan-llm issue #1, v0.5.0; gemini_cli v2 added in 0.7.0).
+    // On any failure to resolve the current exe path we leave
+    // mcp_command empty: chan-llm falls back to v1 black-box mode
+    // (auto-apply forced on) and the user still gets a working
+    // assistant.
+    match active {
+        BackendKind::ClaudeCli => {
+            if let Some(cmd) = mcp_subcommand_for(state.drive().root()) {
+                config.claude_cli.mcp_command = Some(cmd);
+            }
         }
+        BackendKind::GeminiCli => {
+            if let Some(cmd) = mcp_subcommand_for(state.drive().root()) {
+                config.gemini_cli.mcp_command = Some(cmd);
+            }
+        }
+        _ => {}
     }
 
     let session = LlmSession::new(state.drive().clone(), config);
@@ -2814,7 +2896,7 @@ async fn set_backend_key(state: &Arc<AppState>, kind: BackendKind, key: String) 
             // Ollama and ClaudeCli are keyless; the routes shouldn't
             // call this path for them, but if they do we drop the
             // value silently rather than poison the file.
-            BackendKind::Ollama | BackendKind::ClaudeCli => {}
+            BackendKind::Ollama | BackendKind::ClaudeCli | BackendKind::GeminiCli => {}
         }
         if let Err(e) = cfg.save() {
             return err(
@@ -2837,7 +2919,7 @@ async fn clear_backend_key(state: &Arc<AppState>, kind: BackendKind) -> Response
     match kind {
         BackendKind::Anthropic => cfg.keys.anthropic = None,
         BackendKind::Gemini => cfg.keys.gemini = None,
-        BackendKind::Ollama | BackendKind::ClaudeCli => {}
+        BackendKind::Ollama | BackendKind::ClaudeCli | BackendKind::GeminiCli => {}
     }
     if let Err(e) = cfg.save() {
         return err(
@@ -4043,6 +4125,40 @@ mod tests {
     #[test]
     fn resolve_claude_cli_empty_returns_none() {
         assert!(resolve_claude_cli("").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_gemini_cli_fallback_npm_global() {
+        // gemini-cli ships through npm; the resolver's fallback walk
+        // hits ~/.npm-global/bin when the user's $PATH doesn't carry
+        // their npm prefix (typical for launchd-spawned chan).
+        use std::os::unix::fs::PermissionsExt;
+        let path_dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let npm_bin = home.path().join(".npm-global").join("bin");
+        std::fs::create_dir_all(&npm_bin).unwrap();
+        let bin = npm_bin.join("gemini");
+        std::fs::write(&bin, b"#!/bin/sh\nexit 0\n").unwrap();
+        let mut perms = std::fs::metadata(&bin).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&bin, perms).unwrap();
+
+        let _g = env_lock();
+        let prev_path = std::env::var_os("PATH");
+        let prev_home = std::env::var_os("HOME");
+        std::env::set_var("PATH", path_dir.path());
+        std::env::set_var("HOME", home.path());
+        let resolved = resolve_gemini_cli("gemini");
+        match prev_path {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+        match prev_home {
+            Some(p) => std::env::set_var("HOME", p),
+            None => std::env::remove_var("HOME"),
+        }
+        assert_eq!(resolved.as_deref(), Some(bin.as_path()));
     }
 
     #[cfg(unix)]
