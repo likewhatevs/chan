@@ -183,6 +183,20 @@ enum Command {
         #[arg(long)]
         auto_apply: bool,
     },
+    /// Internal: stdio bridge to the MCP server hosted in-process
+    /// by a running `chan serve`. Connects to the per-server Unix-
+    /// domain socket and pipes stdin/stdout through it. Used by the
+    /// ClaudeCli / GeminiCli backends so the agent's MCP child can
+    /// reach the live drive without trying to reopen it (which would
+    /// deadlock against chan-drive's per-drive flock). Not for
+    /// end-user invocation.
+    #[command(name = "__mcp-proxy", hide = true)]
+    McpProxy {
+        /// Unix-domain socket path the running chan-server listens
+        /// on. Resolved at request time by chan-server, embedded in
+        /// the gemini settings.json / claude --mcp-config payload.
+        socket: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -267,6 +281,13 @@ fn main() -> Result<()> {
                 .build()
                 .context("building tokio runtime")?;
             rt.block_on(cmd_mcp(path, auto_apply))
+        }
+        Command::McpProxy { socket } => {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .context("building tokio runtime")?;
+            rt.block_on(cmd_mcp_proxy(socket))
         }
     }
 }
@@ -765,6 +786,31 @@ async fn cmd_mcp(path: PathBuf, auto_apply: bool) -> Result<()> {
         .serve_stdio()
         .await
         .context("running MCP server")
+}
+
+/// Bridge between the agent subprocess and the MCP server hosted in
+/// chan-server. Connects to the Unix-domain socket and pipes
+/// stdin -> socket and socket -> stdout concurrently. Returns when
+/// either direction closes, which is the normal end of a session.
+async fn cmd_mcp_proxy(socket: PathBuf) -> Result<()> {
+    use tokio::io::{stdin, stdout};
+    use tokio::net::UnixStream;
+    let stream = UnixStream::connect(&socket)
+        .await
+        .with_context(|| format!("connecting to mcp socket {}", socket.display()))?;
+    let (mut read_sock, mut write_sock) = stream.into_split();
+    let mut stdin = stdin();
+    let mut stdout = stdout();
+    // Two simultaneous copies; the first to finish ends the session.
+    // tokio::io::copy_bidirectional doesn't fit here because stdin /
+    // stdout aren't a single duplex stream.
+    let to_socket = tokio::io::copy(&mut stdin, &mut write_sock);
+    let from_socket = tokio::io::copy(&mut read_sock, &mut stdout);
+    tokio::select! {
+        r = to_socket => { r.context("piping stdin to mcp socket")?; }
+        r = from_socket => { r.context("piping mcp socket to stdout")?; }
+    }
+    Ok(())
 }
 
 fn cmd_search(path: PathBuf, query: String, limit: u32) -> Result<()> {

@@ -17,6 +17,7 @@
 
 mod config;
 mod indexer;
+mod mcp_bridge;
 mod preferences;
 mod qr;
 mod self_writes;
@@ -204,6 +205,12 @@ struct AppArtifacts {
     /// the SPA's API calls pick up the public path. Shared with
     /// `AppState::prefix` (same Arc).
     prefix: Arc<RwLock<String>>,
+    /// MCP socket bridge handle. Held here (not on AppState) so the
+    /// accept-loop closures don't have to keep the AppState alive
+    /// past serve() unwind. Drop = abort accept loop + unlink socket.
+    /// `None` when the bridge failed to bind (best-effort: agents
+    /// fall back to v1 black-box mode).
+    mcp_bridge: Option<mcp_bridge::BridgeHandle>,
 }
 
 /// Build the full axum app: state assembly, channels, watcher,
@@ -288,23 +295,57 @@ async fn build_app(
 
     let last_activity = Arc::new(AtomicU64::new(now_unix_secs()));
     let prefix = Arc::new(RwLock::new(config.prefix.clone()));
+
+    // Try to bring up the MCP socket bridge before building
+    // AppState, so the resolved socket path (or `None` on failure)
+    // is part of the immutable state every handler observes.
+    let socket_path = mcp_bridge::pick_socket_path();
+    let state_for_bridge: Arc<RwLock<Option<DriveCell>>> = Arc::new(RwLock::new(Some(DriveCell {
+        drive,
+        watch_handle: Some(watch_handle),
+        indexer,
+    })));
+    let llm_config_arc = Arc::new(Mutex::new(llm_config));
+    let bridge_drive_cell = state_for_bridge.clone();
+    let bridge_llm_config = llm_config_arc.clone();
+    let bridge = mcp_bridge::start(
+        socket_path.clone(),
+        move || {
+            let cell = bridge_drive_cell.read().expect("drive_cell poisoned");
+            cell.as_ref()
+                .expect("drive_cell present for the lifetime of the server")
+                .drive
+                .clone()
+        },
+        move || {
+            bridge_llm_config
+                .lock()
+                .expect("llm_config poisoned")
+                .auto_apply_writes
+        },
+    );
+    let (mcp_socket_path, mcp_bridge) = match bridge {
+        Ok(handle) => (Some(handle.socket_path().to_path_buf()), Some(handle)),
+        Err(e) => {
+            tracing::warn!("mcp bridge bind failed at {}: {e}", socket_path.display());
+            (None, None)
+        }
+    };
+
     let state = Arc::new(AppState {
         library,
         drive_root,
-        drive_cell: RwLock::new(Some(DriveCell {
-            drive,
-            watch_handle: Some(watch_handle),
-            indexer,
-        })),
+        drive_cell: state_for_bridge,
         token: token.clone(),
         prefix: prefix.clone(),
         events_tx,
         index_events_tx,
-        llm_config: Mutex::new(llm_config),
+        llm_config: llm_config_arc,
         server_config: Mutex::new(server_config),
         editor_prefs: Mutex::new(editor_prefs),
         self_writes,
         last_activity: last_activity.clone(),
+        mcp_socket_path,
     });
     // Nest under the prefix so `--prefix=/foo` makes every existing
     // route reachable at `/foo<route>` without changing any handler.
@@ -323,6 +364,7 @@ async fn build_app(
         last_activity,
         indexer: indexer_handle,
         prefix,
+        mcp_bridge,
     })
 }
 
@@ -354,6 +396,11 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
     let app = artifacts.app;
     let last_activity = artifacts.last_activity;
     let indexer = artifacts.indexer;
+    // Keep the MCP bridge alive for the duration of `serve()`. Dropping
+    // it at the end of this function unlinks the socket and aborts the
+    // accept loop. Bound to a `let _` so clippy doesn't warn on
+    // `let _ = artifacts.mcp_bridge` discarding the guard prematurely.
+    let _mcp_bridge = artifacts.mcp_bridge;
 
     // Single shutdown channel fed by both the idle-timeout watcher
     // (when --timeout is set) and SIGINT/SIGTERM. axum's
@@ -440,6 +487,9 @@ pub async fn serve_via_tunnel(
     };
     let artifacts = build_app(library, drive, &server_config).await?;
     let prefix_handle = artifacts.prefix.clone();
+    // Keep the MCP bridge alive for the tunnel session; bound here
+    // so the socket file is unlinked when serve_via_tunnel returns.
+    let _mcp_bridge = artifacts.mcp_bridge;
 
     // Lifecycle events from chan-tunnel-client: drained on a side
     // task so we can print a human-readable "your drive is at ..."
@@ -707,7 +757,7 @@ struct AppState {
     /// process. Always `Some` outside the brief swap window inside
     /// reset itself; handlers reach the inner Arc<Drive> via
     /// `state.drive()` which clones it under a read lock.
-    drive_cell: RwLock<Option<DriveCell>>,
+    drive_cell: Arc<RwLock<Option<DriveCell>>>,
     token: Option<String>,
     /// Canonical URL prefix the SPA prepends to fetch and WebSocket
     /// URLs, injected into the shell as `<meta name="chan-prefix">`.
@@ -742,7 +792,7 @@ struct AppState {
     /// Loaded at boot; mutable for future PATCH /api/llm/config
     /// (backend selection, auto_apply_writes toggle). Currently
     /// only read by the status route and the complete handler.
-    llm_config: Mutex<LlmConfig>,
+    llm_config: Arc<Mutex<LlmConfig>>,
     /// chan-server's own preferences (attachments_dir,
     /// answers_dir, etc). Mutable via PATCH /api/server/config;
     /// reads route through the get handler.
@@ -757,6 +807,14 @@ struct AppState {
     /// queue before forwarding so an editor save doesn't bounce
     /// back as an "external edit" event.
     self_writes: Arc<SelfWrites>,
+    /// Path to the Unix-domain socket where the in-process MCP
+    /// server is exposed for agent subprocesses (claude / gemini).
+    /// `None` when the bridge couldn't bind (read-only tmpdir,
+    /// exotic platforms); the agent backends fall back to v1
+    /// black-box mode in that case. The bridge handle that owns
+    /// the socket file lives on `AppArtifacts` so it gets dropped
+    /// (and the file unlinked) when serve() unwinds.
+    mcp_socket_path: Option<PathBuf>,
 }
 
 /// Drive + its notify watcher. Replaced wholesale by /api/storage/
@@ -2797,21 +2855,27 @@ impl SessionListener for CollectListener {
     }
 }
 
-/// Build the argv chan-llm hands to claude as `--mcp-config`.
-/// Resolves to the running chan binary plus the hidden `__mcp`
-/// subcommand and the drive root, so claude's writes round-trip
-/// through chan-drive's gates instead of touching the drive
-/// directly.
+/// Build the argv chan-llm hands to claude / gemini as the chan
+/// MCP server command. Resolves to `chan __mcp-proxy <socket>`,
+/// where `<socket>` is the per-server Unix-domain socket the
+/// in-process MCP bridge listens on. The proxy just relays stdio
+/// to/from the socket: it doesn't reopen the drive, so the agent's
+/// MCP child sidesteps chan-drive's per-drive flock that
+/// chan-server already holds.
 ///
 /// Returns `None` when `current_exe()` fails (we don't know how to
-/// re-invoke ourselves) or when the drive root is non-UTF-8 (the
-/// MCP config JSON is text). Callers fall back to v1 black-box
-/// mode in that case; chan-llm's claude_cli backend handles the
-/// `None` path explicitly.
-fn mcp_subcommand_for(drive_root: &Path) -> Option<Vec<String>> {
+/// re-invoke ourselves), the path is non-UTF-8 (the gemini settings
+/// JSON / claude --mcp-config JSON is text), or the bridge failed
+/// to bind a socket at boot (read-only tmpdir, exotic platform).
+/// Callers fall back to v1 black-box mode in that case.
+fn mcp_subcommand_for(socket_path: Option<&Path>) -> Option<Vec<String>> {
+    let socket = socket_path?.to_str()?.to_string();
     let exe = std::env::current_exe().ok()?;
-    let drive = drive_root.to_str()?.to_string();
-    Some(vec![exe.to_str()?.to_string(), "__mcp".to_string(), drive])
+    Some(vec![
+        exe.to_str()?.to_string(),
+        "__mcp-proxy".to_string(),
+        socket,
+    ])
 }
 
 async fn api_llm_complete(
@@ -2844,14 +2908,15 @@ async fn api_llm_complete(
     // mcp_command empty: chan-llm falls back to v1 black-box mode
     // (auto-apply forced on) and the user still gets a working
     // assistant.
+    let socket = state.mcp_socket_path.as_deref();
     match active {
         BackendKind::ClaudeCli => {
-            if let Some(cmd) = mcp_subcommand_for(state.drive().root()) {
+            if let Some(cmd) = mcp_subcommand_for(socket) {
                 config.claude_cli.mcp_command = Some(cmd);
             }
         }
         BackendKind::GeminiCli => {
-            if let Some(cmd) = mcp_subcommand_for(state.drive().root()) {
+            if let Some(cmd) = mcp_subcommand_for(socket) {
                 config.gemini_cli.mcp_command = Some(cmd);
             }
         }

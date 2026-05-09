@@ -26,7 +26,7 @@ cuda = ["chan-drive/cuda"]
 chan-drive = { workspace = true, default-features = false }
 tar = { workspace = true, optional = true }
 zstd = { workspace = true, optional = true }
-chan-llm = { workspace = true }
+chan-llm = { workspace = true, features = ["mcp"] }
 chan-tunnel-client = { workspace = true }
 chan-tunnel-proto = { workspace = true }
 anyhow = { workspace = true }
