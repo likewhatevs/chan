@@ -248,7 +248,21 @@ impl Backend for GeminiCliBackend {
             if line.trim().is_empty() {
                 continue;
             }
-            let event: StreamEvent = match serde_json::from_str(&line) {
+            // gemini-cli sometimes prepends a status banner without a
+            // trailing newline before the first JSON event (observed:
+            // "MCP issues detected. Run /mcp list for status." glued
+            // straight onto the init event). Skip any prefix before
+            // the first '{' so the parser sees clean JSON.
+            let payload = match line.find('{') {
+                Some(i) => &line[i..],
+                None => {
+                    // Line has no JSON at all (pure banner). Drop it
+                    // silently rather than failing the turn; the
+                    // banner is informational.
+                    continue;
+                }
+            };
+            let event: StreamEvent = match serde_json::from_str(payload) {
                 Ok(e) => e,
                 Err(e) => {
                     // Don't fail the whole turn on a single
@@ -822,6 +836,54 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Event::Error(s) if s.contains("too many turns"))),
             "events={events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn skips_banner_glued_to_first_json_line() {
+        // gemini-cli emits a status banner without a trailing newline
+        // when MCP server registration fails ("MCP issues detected.
+        // Run /mcp list for status."), gluing it directly onto the
+        // init event. Without the prefix-strip, the parse error
+        // bubbles up as an on_error and chan-server turns the whole
+        // turn into a 502 even though the assistant text streamed
+        // fine afterwards.
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("banner.sh");
+        let script = "#!/bin/sh\nprintf 'MCP issues detected. Run /mcp list for status.'\n\
+            cat <<'EOF'\n\
+            {\"type\":\"init\",\"timestamp\":\"t\",\"session_id\":\"s\",\"model\":\"m\"}\n\
+            {\"type\":\"message\",\"timestamp\":\"t\",\"role\":\"assistant\",\"content\":\"hi\",\"delta\":true}\n\
+            {\"type\":\"result\",\"timestamp\":\"t\",\"status\":\"success\"}\n\
+            EOF\n";
+        std::fs::write(&path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let backend = GeminiCliBackend::new(
+            vec![path.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            tmp.path().to_path_buf(),
+            None,
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                vec![Message::user("hi")],
+                Vec::new(),
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.assistant_text, "hi");
+        assert_eq!(outcome.stop_reason, StopReason::EndOfTurn);
+        let events = listener.0.lock().unwrap();
+        assert!(
+            !events.iter().any(|e| matches!(e, Event::Error(_))),
+            "banner must not surface as on_error: {events:?}"
         );
     }
 
