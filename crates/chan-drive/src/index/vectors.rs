@@ -171,6 +171,13 @@ impl VectorStore {
         Ok(())
     }
 
+    /// Snapshot of every rel_path currently held in memory. Used by
+    /// reconciliation passes (e.g. build_all) that need to compute
+    /// the set of orphan shards without round-tripping disk.
+    pub fn known_paths(&self) -> Vec<String> {
+        self.entries.read().unwrap().keys().cloned().collect()
+    }
+
     /// Brute-force cosine top-k. `query_vec` is assumed normalized
     /// (which BGE outputs are). For non-normalized future models
     /// we'd need to L2-normalize on either side.

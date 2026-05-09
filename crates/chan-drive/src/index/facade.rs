@@ -356,6 +356,26 @@ impl Index {
                 return Err(IndexError::Cancelled);
             }
         }
+        // Drop vector shards for paths that survived a previous
+        // build but are no longer on disk (file deleted while the
+        // process was down, or a forget that crashed between vector
+        // delete and BM25 commit). After this pass the two backends
+        // converge on `files` as the source of truth. Errors here
+        // are non-fatal: an orphan shard wastes disk and may surface
+        // in semantic search as a hit pointing at a missing file,
+        // but the next reindex will retry the cleanup.
+        #[cfg(feature = "embeddings")]
+        if do_vectors {
+            let visited: std::collections::HashSet<&str> =
+                files.iter().map(String::as_str).collect();
+            for rel in self.vectors.known_paths() {
+                if !visited.contains(rel.as_str()) {
+                    if let Err(e) = self.vectors.delete_file(&rel) {
+                        tracing::warn!(rel = %rel, ?e, "vector shard cleanup failed");
+                    }
+                }
+            }
+        }
         self.bm25.commit()?;
         Ok(BuildSummary {
             files: total,
