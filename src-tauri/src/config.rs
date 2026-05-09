@@ -1,3 +1,20 @@
+//! Desktop-only sidecar config.
+//!
+//! The chan registry (`~/.chan/config.toml`) is the source of truth
+//! for which drives exist. This file holds only desktop-specific
+//! state that has no place in chan proper:
+//!
+//! - `dev_mode`: open DevTools on every window.
+//! - `sidecar`: per-drive UI state (currently just the on-toggle),
+//!   keyed by canonical drive path so a `mv` on disk doesn't
+//!   silently revive stale state for a different drive.
+//!
+//! Per-drive serve URLs are intentionally NOT persisted: chan rotates
+//! the bearer token on every `chan serve`, so a saved URL would
+//! decay to garbage between launches. The URL lives in `AppState` in
+//! memory while a serve is running.
+
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -5,19 +22,18 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Drive {
-    pub path: String,
-    pub name: String,
+pub struct DriveSidecar {
+    #[serde(default)]
     pub on: bool,
-    pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
-    pub drives: Vec<Drive>,
-    #[serde(default)]
     pub dev_mode: bool,
+    /// Per-drive UI state, keyed by canonical drive path.
+    #[serde(default)]
+    pub sidecar: HashMap<String, DriveSidecar>,
 }
 
 pub struct ConfigStore {
@@ -26,8 +42,9 @@ pub struct ConfigStore {
 
 impl ConfigStore {
     pub fn new() -> io::Result<Self> {
-        let path = config_path()?;
-        Ok(Self { path })
+        Ok(Self {
+            path: config_path()?,
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -65,18 +82,14 @@ impl ConfigStore {
 }
 
 fn config_path() -> io::Result<PathBuf> {
-    let base = if cfg!(target_os = "macos") {
-        dirs::config_dir()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no config dir"))?
-            .join("Chan Desktop")
-    } else if cfg!(target_os = "windows") {
-        dirs::config_dir()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no config dir"))?
-            .join("Chan Desktop")
-    } else {
+    let base = if cfg!(target_os = "linux") {
         dirs::config_dir()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no config dir"))?
             .join("chan-desktop")
+    } else {
+        dirs::config_dir()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no config dir"))?
+            .join("Chan Desktop")
     };
     Ok(base.join("config.json"))
 }

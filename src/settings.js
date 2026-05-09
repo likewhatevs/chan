@@ -1,37 +1,52 @@
 const { invoke } = window.__TAURI__.core;
 const { revealItemInDir } = window.__TAURI__.opener;
-const { ask } = window.__TAURI__.dialog;
+const { ask, message } = window.__TAURI__.dialog;
 
-const pathEl = document.getElementById('cfg-path');
-const revealBtn = document.getElementById('reveal');
+const regPathEl = document.getElementById('reg-path');
+const cfgPathEl = document.getElementById('cfg-path');
+const revealRegBtn = document.getElementById('reveal-reg');
+const revealCfgBtn = document.getElementById('reveal-cfg');
 const forgetBtn = document.getElementById('forget');
 const devModeEl = document.getElementById('dev-mode');
 
+let regPath = '';
 let cfgPath = '';
 
 async function load() {
-  cfgPath = await invoke('get_config_path');
-  pathEl.textContent = cfgPath;
+  [regPath, cfgPath] = await Promise.all([
+    invoke('get_registry_path'),
+    invoke('get_config_path'),
+  ]);
+  regPathEl.textContent = regPath;
+  cfgPathEl.textContent = cfgPath;
   const cfg = await invoke('get_config');
   devModeEl.checked = !!cfg.dev_mode;
 }
 
-revealBtn.addEventListener('click', async () => {
-  if (cfgPath) {
-    try { await revealItemInDir(cfgPath); } catch (e) {}
-  }
-});
+async function reveal(path) {
+  if (!path) return;
+  try { await revealItemInDir(path); } catch (e) {}
+}
+
+revealRegBtn.addEventListener('click', () => reveal(regPath));
+revealCfgBtn.addEventListener('click', () => reveal(cfgPath));
 
 forgetBtn.addEventListener('click', async () => {
-  const ok = await ask('Forget all drives and delete the config file?', {
-    title: 'Forget all drives',
-    kind: 'warning',
-    okLabel: 'Forget',
-    cancelLabel: 'Cancel',
-  });
+  const ok = await ask(
+    'Run `chan remove` on every registered drive and clear the desktop sidecar config?',
+    {
+      title: 'Forget all drives',
+      kind: 'warning',
+      okLabel: 'Forget',
+      cancelLabel: 'Cancel',
+    },
+  );
   if (!ok) return;
-  const cfg = await invoke('forget_all');
-  devModeEl.checked = !!cfg.dev_mode;
+  try {
+    await invoke('forget_all');
+  } catch (e) {
+    await message(String(e), { title: 'Forget all drives', kind: 'error' });
+  }
 });
 
 devModeEl.addEventListener('change', async () => {

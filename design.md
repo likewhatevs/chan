@@ -55,36 +55,67 @@ the Tauri opener plugin.
 
 ## 3. Drive lifecycle
 
+### 3.0 Source of truth
+
+The `chan` registry at `~/.chan/config.toml` is the single source of
+truth for the set of known drives and their display names.
+chan-desktop is a read-only consumer of the drive set; mutation
+happens exclusively through `chan add` / `chan remove` (and, later,
+`chan rename`).
+
+The desktop owns a small sidecar config of its own at the
+platform-appropriate path, holding only state that has no place in
+chan: today that is just the `dev_mode` flag and a per-drive
+on-toggle, both keyed by canonical drive path. Per-drive serve URLs
+are kept in process memory only because chan rotates the bearer
+token on every `chan serve`.
+
+A filesystem watcher (`notify` + 150ms debounce) runs over
+`~/.chan/` for the lifetime of the process and emits a
+`registry-changed` Tauri event whenever the registry file moves.
+The frontend reacts by re-fetching `list_drives` and re-rendering.
+Concrete consequence: if the user runs `chan add ~/notes` from a
+terminal, the row appears in the desktop window without any
+explicit refresh.
+
+### 3.1 Drive row state
+
 A "drive" in chan-desktop maps 1:1 to a known drive in the `chan`
-registry (`~/.chan/config.toml`). Visible state per drive in the
-inventory:
+registry. Visible state per drive in the inventory:
 
-| column | meaning                                          |
-|--------|--------------------------------------------------|
-| On     | toggle: is `chan serve` running for this drive?  |
-| Path   | absolute path the user picked                    |
-| Name   | display name (subject to chan-core constraints)  |
-| URL    | the URL printed by `chan serve` once it is up    |
-| Close  | unregister: stop + `chan remove`                 |
+| column | meaning                                                  |
+|--------|----------------------------------------------------------|
+| On     | toggle: is `chan serve` running for this drive?          |
+| Path   | canonical absolute path from the chan registry           |
+| Name   | display name from the chan registry; read-only in the UI |
+| URL    | the URL printed by `chan serve` once it is up            |
+| Close  | unregister: stop + `chan remove`                         |
 
-### 3.1 Open drive
+Names are deliberately read-only in the desktop. Renaming a drive is
+done by running `chan rename` from a terminal; the watcher reflects
+the new name on the next debounce tick. The alternative was a
+write-through to `chan rename` from the desktop UI, which we
+rejected for now to keep the registry-as-SoT contract one-way and
+the data flow obvious.
 
-Triggered by the "Open drive" button (and automatically on first
-launch when the config has no drives).
+### 3.2 Open drive
+
+Triggered by the "Open drive" button, and automatically on first
+launch when the chan registry is empty.
 
 1. Tauri opens a native folder picker.
 2. The selected path is canonicalised and validated (see
    section 4).
-3. chan-desktop runs `chan add <path>` to register the drive in the
-   `chan` registry. Stdout is parsed for the assigned name; on
-   success the drive is appended to the desktop config.
-4. The new row appears with **On = off**. The user toggles On to
-   start serving.
+3. chan-desktop runs `chan add <path>`. On non-zero exit, the stderr
+   is surfaced as an inline error banner.
+4. On success there is nothing more to do here: the registry file
+   changed, the watcher fires, the UI re-fetches, the new row
+   appears with **On = off**. The user toggles On to start serving.
 
 `add` is a separate step from `serve`: registering without serving is
 a valid state, and matches what the CLI does.
 
-### 3.2 Toggle On (serve)
+### 3.3 Toggle On (serve)
 
 Toggling On spawns `chan serve <path> --port 0 --no-token=false` (or
 equivalent flags determined later) as a child process owned by
@@ -106,19 +137,37 @@ Failure modes the supervisor must handle explicitly:
   Unix, set up a process group and SIGTERM on drop. On Windows, use
   a job object.
 
-### 3.3 Toggle Off (stop)
+### 3.4 Toggle Off (stop)
 
 Sends SIGTERM (Unix) or the equivalent on Windows. `chan serve`
 handles graceful shutdown with a 10s grace period. After that, SIGKILL.
 The URL is cleared.
 
-### 3.4 Close drive (remove)
+### 3.5 Close drive (remove)
 
 Stops the serve (if running), then runs `chan remove <path>`. The
-filesystem is untouched. The row is removed from the desktop config.
+filesystem is untouched. The watcher fires and the row disappears
+from the UI.
 
 "Close" deliberately leaves the user's markdown folder alone. There
 is no "delete drive" action in the desktop UI.
+
+### 3.6 External changes
+
+Anything that mutates `~/.chan/config.toml` shows up in the UI:
+
+- `chan add` / `chan remove` / `chan rename` from a terminal,
+- a second chan-desktop process opened against the same home
+  directory (rare, but defined),
+- the user editing the TOML by hand.
+
+For external `chan serve` (somebody runs `chan serve ~/notes` from a
+terminal, bypassing the desktop), the registry only records that
+the drive *exists*; it does not record that a serve is running. So
+the desktop's On toggle will not flip to on, and no URL will appear.
+Detecting external serves would need either a process scan
+(cross-platform PITA) or a chan-side change to write a per-drive
+status file. We accept this gap rather than pay for it now.
 
 ## 4. Validation
 
@@ -127,24 +176,25 @@ chan-core / chan helpers, both to avoid drift and so that anything
 the desktop app accepts is also accepted by every other chan
 surface.
 
-- **Drive name**: must satisfy `chan_tunnel_proto::is_valid_drive_name`
-  (lowercase `[a-z0-9-]`, 1-32 chars, no leading/trailing hyphen).
-  Rename input is sanitised through `sanitize_drive_name` before the
-  user can hit Save.
+- **Drive name**: not validated by the desktop at all. Names are
+  read-only in the UI, so the only writer is `chan rename`, which
+  enforces `chan_tunnel_proto::is_valid_drive_name` itself. If a
+  pre-existing registry entry has a name that no longer validates,
+  the desktop displays it as-is rather than rewriting it.
 - **Path**: canonicalised via `std::fs::canonicalize` before being
-  passed to `chan add` / `chan serve`. Reject paths that fail to
-  canonicalise (broken symlink, permission), are not directories, or
-  contain components that the host shell would interpret (we always
-  pass argv as a slice, never as a single shell-quoted string, so
-  the main concern is canonicalisation, not quoting).
+  passed to `chan add` / `chan remove` / `chan serve`. We always
+  invoke chan with argv as a slice (`Command::new("chan").args([...])`),
+  never as a single shell-quoted string, so quoting is a non-issue;
+  the remaining concern is just that we hand chan the same path the
+  user sees in the UI. When canonicalisation fails (broken symlink,
+  asleep network mount), we fall back to the literal path.
 - **Relative path arguments inside a drive** (used later, not by the
   current UI) reuse `chan_drive::fs_ops::validate_rel`.
 
-These dependencies will be pulled in as path deps once the desktop
-crate starts linking chan-core directly. While we are still
-shelling out exclusively, sharing happens by re-implementing the
-same character set tests in the frontend for early feedback and
-re-checking on the Rust side before any subprocess call.
+We will pull chan-core in as a path dep when the desktop starts
+linking it directly (e.g. for the bundled-chan model in section 5.2).
+Until then, validation responsibility lives entirely on the chan
+side and the desktop just forwards user input.
 
 ## 5. The chan binary
 

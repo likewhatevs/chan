@@ -16,12 +16,18 @@
     <p class="dim">Per-user configuration for Chan Desktop.</p>
 
     <div class="kv">
-      <div class="k">Configuration file</div>
+      <div class="k">Chan registry (source of truth for drives)</div>
+      <div class="v" id="reg-path">…</div>
+    </div>
+
+    <div class="kv">
+      <div class="k">Desktop sidecar config (UI state only)</div>
       <div class="v" id="cfg-path">…</div>
     </div>
 
     <div class="row-buttons">
-      <button class="btn" id="reveal">Reveal in folder</button>
+      <button class="btn" id="reveal-reg">Reveal registry</button>
+      <button class="btn" id="reveal-cfg">Reveal sidecar</button>
       <button class="btn danger" id="forget">Forget all drives</button>
     </div>
 

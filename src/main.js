@@ -1,6 +1,7 @@
 const { invoke } = window.__TAURI__.core;
 const { open } = window.__TAURI__.dialog;
 const { openUrl } = window.__TAURI__.opener;
+const { listen } = window.__TAURI__.event;
 
 const main = document.getElementById('main');
 const openBtn = document.getElementById('open-drive');
@@ -8,10 +9,15 @@ const settingsBtn = document.getElementById('open-settings');
 
 let booted = false;
 
+async function refresh() {
+  const drives = await invoke('list_drives');
+  render(drives);
+  return drives;
+}
+
 async function boot() {
-  const cfg = await invoke('get_config');
-  render(cfg);
-  if (!booted && cfg.drives.length === 0) {
+  const drives = await refresh();
+  if (!booted && drives.length === 0) {
     booted = true;
     await pickAndAdd();
   } else {
@@ -25,14 +31,18 @@ async function pickAndAdd() {
     multiple: false,
     title: 'Select a folder containing markdown files',
   });
-  if (typeof selected === 'string' && selected.length) {
-    const cfg = await invoke('add_drive', { path: selected });
-    render(cfg);
+  if (typeof selected !== 'string' || !selected.length) return;
+  try {
+    await invoke('add_drive', { path: selected });
+  } catch (e) {
+    showError(e);
+    return;
   }
+  await refresh();
 }
 
-function render(cfg) {
-  if (!cfg.drives.length) {
+function render(drives) {
+  if (!drives.length) {
     main.innerHTML = `
       <div class="empty">
         <h2>No drives yet</h2>
@@ -44,7 +54,7 @@ function render(cfg) {
     return;
   }
 
-  const rows = cfg.drives.map((d) => {
+  const rows = drives.map((d) => {
     const hasUrl = !!d.url;
     return `
     <tr data-path="${escapeAttr(d.path)}">
@@ -55,9 +65,7 @@ function render(cfg) {
         </label>
       </td>
       <td class="path-cell" title="${escapeAttr(d.path)}">${escapeHtml(d.path)}</td>
-      <td>
-        <input class="name-input" data-act="rename" value="${escapeAttr(d.name)}" />
-      </td>
+      <td class="name-cell" title="set via &#96;chan rename&#96;">${escapeHtml(d.name)}</td>
       <td>
         <div class="url-cell">
           <input class="url-input" value="${escapeAttr(d.url)}" placeholder="—" readonly />
@@ -94,30 +102,38 @@ function bindRowEvents() {
     const path = tr.dataset.path;
 
     tr.querySelector('[data-act="toggle-on"]').addEventListener('change', async (e) => {
-      const cfg = await invoke('update_drive', { update: { path, on: e.target.checked } });
-      render(cfg);
+      try {
+        await invoke('set_drive_on', { path, on: e.target.checked });
+      } catch (err) {
+        showError(err);
+      }
+      await refresh();
     });
 
-    const nameInput = tr.querySelector('[data-act="rename"]');
-    nameInput.addEventListener('change', async () => {
-      const cfg = await invoke('update_drive', { update: { path, name: nameInput.value } });
-      render(cfg);
-    });
-    nameInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') nameInput.blur();
-    });
-
-    const launchBtn = tr.querySelector('[data-act="launch"]');
-    launchBtn.addEventListener('click', async () => {
+    tr.querySelector('[data-act="launch"]').addEventListener('click', async () => {
       const url = tr.querySelector('.url-input').value.trim();
       if (url) await openUrl(url);
     });
 
     tr.querySelector('[data-act="remove"]').addEventListener('click', async () => {
-      const cfg = await invoke('remove_drive', { path });
-      render(cfg);
+      try {
+        await invoke('remove_drive', { path });
+      } catch (err) {
+        showError(err);
+      }
+      await refresh();
     });
   });
+}
+
+function showError(e) {
+  const msg = typeof e === 'string' ? e : (e && e.message) || String(e);
+  // Simple inline banner above the table; replaced on next render.
+  const banner = document.createElement('div');
+  banner.className = 'error-banner';
+  banner.textContent = msg;
+  main.prepend(banner);
+  setTimeout(() => banner.remove(), 5000);
 }
 
 function escapeHtml(s) {
@@ -131,6 +147,9 @@ function escapeAttr(s) {
 openBtn.addEventListener('click', pickAndAdd);
 settingsBtn.addEventListener('click', () => invoke('show_settings'));
 
-boot().catch((e) => {
-  main.innerHTML = `<div class="empty"><h2>Error</h2><p>${escapeHtml(String(e))}</p></div>`;
-});
+// Re-render whenever the chan registry changes from anywhere
+// (the desktop itself, the chan CLI, or another tool editing the
+// TOML directly).
+listen('registry-changed', () => { refresh().catch(showError); });
+
+boot().catch(showError);
