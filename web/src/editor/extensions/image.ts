@@ -21,6 +21,7 @@ import { mergeAttributes } from "@tiptap/core";
 
 import { api, withTokenQuery } from "../../api/client";
 import type { TreeEntry } from "../../api/types";
+import { relativizePath, resolveRelativePath } from "../links";
 import { positionPopover, watchViewport } from "./popover";
 
 /// Extensions we treat as inline images. Lower-case match against
@@ -93,7 +94,14 @@ export function buildSrcWithWidth(src: string, width: number | null): string {
 /// - `addNodeView` renders the image with a small drag handle at
 ///   the bottom-right; dragging mutates the stored fragment so
 ///   the resize survives a save and reload.
-export const ImageNode = Image.extend({
+///
+/// `getFromPath` returns the path of the file being edited (drive-
+/// rooted POSIX) so the node view can resolve relative srcs like
+/// `../logo.png` against the file's directory before fetching from
+/// `/api/files/`. Returning null/empty falls back to drive-root
+/// resolution (legacy / no-source-file callers).
+export function createImageNode(getFromPath: () => string | null) {
+  return Image.extend({
   addNodeView() {
     return ({ node, getPos, editor }) => {
       const wrap = document.createElement("span");
@@ -104,7 +112,7 @@ export const ImageNode = Image.extend({
       const apply = (n: { attrs: { src?: unknown; alt?: unknown } }) => {
         const raw = (n.attrs.src as string | null) ?? "";
         const { src, width } = parseSrcFragment(raw);
-        img.src = resolveImageSrc(src);
+        img.src = resolveImageSrc(src, getFromPath());
         img.alt = (n.attrs.alt as string | null) ?? "";
         if (width != null) {
           img.style.width = `${width}px`;
@@ -175,7 +183,7 @@ export const ImageNode = Image.extend({
     // style so a serialized HTML copy still renders right.
     const raw = (HTMLAttributes.src as string | null) ?? "";
     const { src, width } = parseSrcFragment(raw);
-    const extra: Record<string, string> = { src: resolveImageSrc(src) };
+    const extra: Record<string, string> = { src: resolveImageSrc(src, getFromPath()) };
     if (width != null) extra.style = `width: ${width}px`;
     return ["img", mergeAttributes(HTMLAttributes, extra)];
   },
@@ -183,6 +191,21 @@ export const ImageNode = Image.extend({
   inline: true,
   allowBase64: true,
 });
+}
+
+/// Relativize a drive-rooted path to the directory of `fromPath`,
+/// emitting a `./` or `../` prefixed src. Pass-through when the
+/// input is an absolute URL (http/data/blob) or when `fromPath` is
+/// null/empty (no source file known).
+export function relativizeImageSrc(src: string, fromPath: string | null): string {
+  if (!fromPath) return src;
+  if (/^(https?:|data:|blob:)/i.test(src)) return src;
+  // Strip any width fragment before relativizing so we don't carry
+  // `#w=N` through the path math, then re-attach it after.
+  const { src: clean, width } = parseSrcFragment(src);
+  const rel = relativizePath(clean, fromPath);
+  return width != null ? `${rel}#w=${width}` : rel;
+}
 
 /// Open the inline image picker anchored at `host`. Resolves with
 /// the markdown `src` to insert, or `null` if the user dismisses.
@@ -190,9 +213,15 @@ export const ImageNode = Image.extend({
 /// `attachments/2026-...png`) or an absolute URL. The caller is
 /// responsible for inserting the node and removing the trigger
 /// text from the editor.
+///
+/// `uploadDir` is the drive-relative directory the upload action
+/// targets; when null, the server falls back to its configured
+/// attachments_dir. Pass `dirname(currentPath)` so an upload from
+/// `Recipes/Pasta.md` lands next to that file.
 export function showImagePicker(
   host: HTMLElement,
   pick: (src: string | null) => void,
+  uploadDir: string | null = null,
 ): void {
   const wrap = document.createElement("div");
   wrap.className = "md-pick md-pick-image";
@@ -346,7 +375,7 @@ export function showImagePicker(
     uploadBtn.disabled = true;
     uploadBtn.textContent = "uploading…";
     try {
-      const { path } = await api.uploadAttachment(file);
+      const { path } = await api.uploadAttachment(file, uploadDir);
       cleanup();
       pick(path);
     } catch (e) {
@@ -422,8 +451,15 @@ export function showImagePicker(
 
 /// Upload helper for drag-drop / paste / picker flows. Resolves
 /// with the drive-relative path written by the server.
-export async function uploadImageFile(file: File): Promise<string> {
-  const { path } = await api.uploadAttachment(file);
+///
+/// `dir` is the drive-relative directory to save into. Pass the
+/// editing file's directory so the upload lands next to it; pass
+/// null to use the server's configured attachments_dir.
+export async function uploadImageFile(
+  file: File,
+  dir: string | null = null,
+): Promise<string> {
+  const { path } = await api.uploadAttachment(file, dir);
   return path;
 }
 
@@ -433,12 +469,23 @@ export async function uploadImageFile(file: File): Promise<string> {
  * token in a `?t=` query (the only way to authenticate `<img src>`,
  * which can't carry an `Authorization` header). Absolute URLs
  * (http/data/blob) pass through.
+ *
+ * When `fromPath` is set and `src` starts with `./` or `../`, the
+ * path is resolved against `fromPath`'s directory before being sent
+ * to `/api/files/`. This matches the standard markdown convention
+ * where image paths are relative to the file containing them, so
+ * `![](../logo.png)` from `Recipes/Pasta.md` fetches `logo.png` at
+ * the drive root.
  */
-export function resolveImageSrc(src: string): string {
+export function resolveImageSrc(src: string, fromPath?: string | null): string {
   if (/^(https?:|data:|blob:)/i.test(src)) return src;
+  const driveRooted =
+    fromPath && (src.startsWith("./") || src.startsWith("../"))
+      ? resolveRelativePath(src, fromPath)
+      : src;
   // Encode each path segment but keep the slashes; `/api/files/*`
   // accepts the same encoding the file editor uses elsewhere.
-  const encoded = src
+  const encoded = driveRooted
     .split("/")
     .map((s) => encodeURIComponent(s))
     .join("/");

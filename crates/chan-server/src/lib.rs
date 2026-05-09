@@ -3241,37 +3241,55 @@ struct AnswerSaved {
 /// `![...]` picker / drag-and-drop / clipboard paste. The
 /// frontend sends one part named `file`; we slugify the original
 /// filename, prefix with the unix timestamp (collision
-/// resistance), and write under `attachments_dir` via
-/// Drive::write_bytes (so the path sandbox + special-file
-/// refusal apply). Returns the drive-relative path the file
-/// landed at, matching the frontend's `uploadAttachment`
-/// contract.
+/// resistance), and write via Drive::write_bytes (so the path
+/// sandbox + special-file refusal apply). Returns the drive-
+/// relative path the file landed at, matching the frontend's
+/// `uploadAttachment` contract.
+///
+/// Optional `dir` form field overrides the configured
+/// `attachments_dir` so the editor can land an upload in the same
+/// directory as the file being edited (markdown can then reference
+/// it with a `./name` src). An empty `dir` saves at drive root; an
+/// absent `dir` falls back to `attachments_dir`. Drive sandboxing
+/// rejects `..` escape attempts so we don't validate manually here.
 async fn api_post_attachment(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> Response {
-    let dir = state.server_config.lock().unwrap().attachments_dir.clone();
-
-    // First part named "file" wins; later parts (extra form
-    // fields the frontend may add for captions etc.) are ignored
-    // for now. Errors from the multipart stream become 400 since
-    // they typically mean the client framed the request wrong.
+    // Walk every multipart field once: we want both the file and
+    // the optional `dir` override, and a streaming multipart parser
+    // doesn't let us re-read parts. Order on the wire is up to the
+    // client; pick the first `file` field we see and take the last
+    // `dir` field (so a duplicate doesn't silently win the wrong
+    // way).
     let mut chosen: Option<(String, Vec<u8>)> = None;
+    let mut dir_override: Option<String> = None;
     loop {
         match multipart.next_field().await {
             Ok(Some(field)) => {
-                if field.name() != Some("file") {
-                    continue;
-                }
-                let filename = field.file_name().unwrap_or("").to_owned();
-                let bytes = match field.bytes().await {
-                    Ok(b) => b.to_vec(),
-                    Err(e) => {
-                        return err(StatusCode::BAD_REQUEST, format!("multipart read: {e}"));
+                let name = field.name().unwrap_or("").to_owned();
+                match name.as_str() {
+                    "file" if chosen.is_none() => {
+                        let filename = field.file_name().unwrap_or("").to_owned();
+                        let bytes = match field.bytes().await {
+                            Ok(b) => b.to_vec(),
+                            Err(e) => {
+                                return err(
+                                    StatusCode::BAD_REQUEST,
+                                    format!("multipart read: {e}"),
+                                );
+                            }
+                        };
+                        chosen = Some((filename, bytes));
                     }
-                };
-                chosen = Some((filename, bytes));
-                break;
+                    "dir" => match field.text().await {
+                        Ok(s) => dir_override = Some(s),
+                        Err(e) => {
+                            return err(StatusCode::BAD_REQUEST, format!("multipart read: {e}"));
+                        }
+                    },
+                    _ => {}
+                }
             }
             Ok(None) => break,
             Err(e) => {
@@ -3290,6 +3308,14 @@ async fn api_post_attachment(
     if bytes.is_empty() {
         return err(StatusCode::BAD_REQUEST, "empty file".into());
     }
+
+    // Resolve the target dir: caller-supplied `dir` (incl. empty
+    // string for drive root) wins; missing falls back to the
+    // configured attachments_dir.
+    let dir = match dir_override {
+        Some(d) => d,
+        None => state.server_config.lock().unwrap().attachments_dir.clone(),
+    };
 
     // Filename: <unix_ts>-<slugified-stem>.<ext>. Keeping the
     // unix timestamp at the front gives natural sort + collision
@@ -3314,7 +3340,11 @@ async fn api_post_attachment(
     } else {
         format!("{ts}-{stem_or_default}.{ext}")
     };
-    let rel = format!("{dir}/{saved}");
+    let rel = if dir.is_empty() {
+        saved
+    } else {
+        format!("{dir}/{saved}")
+    };
 
     if let Err(e) = state.drive().write_bytes(&rel, &bytes) {
         return err_from(&e);

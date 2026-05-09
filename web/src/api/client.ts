@@ -208,14 +208,22 @@ export const api = {
   }) => req<{ path: string }>("POST", "/api/answers", body),
   /** Upload an image attachment. Multipart POST that the editor's `![`
    *  picker, drag-and-drop, and clipboard paste all funnel through.
-   *  Returns the drive-relative path of the saved file (e.g.
-   *  `attachments/2026-05-02-...png`). */
-  uploadAttachment: async (file: File): Promise<{ path: string }> => {
+   *  Returns the drive-relative path of the saved file.
+   *
+   *  `dir` is the drive-relative directory to save into. The editor
+   *  passes the directory of the file being edited so uploads land
+   *  next to it (markdown can then reference the file with `./name`).
+   *  Null falls back to the server's configured `attachments_dir`. */
+  uploadAttachment: async (
+    file: File,
+    dir: string | null = null,
+  ): Promise<{ path: string }> => {
     // Multipart upload skips the JSON-shaped request() helper because
     // FormData cannot be JSON-encoded; we hit fetch directly and
     // reuse the same auth token.
     const form = new FormData();
     form.append("file", file);
+    if (dir !== null) form.append("dir", dir);
     const headers: Record<string, string> = {};
     const tk = transportAuthToken();
     if (tk) headers.authorization = `Bearer ${tk}`;

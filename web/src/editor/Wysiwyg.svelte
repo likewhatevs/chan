@@ -25,8 +25,9 @@
     type DateFormatId,
   } from "./dateFormats";
   import {
-    ImageNode,
+    createImageNode,
     isImagePath,
+    relativizeImageSrc,
     showImagePicker,
     uploadImageFile,
   } from "./extensions/image";
@@ -232,7 +233,11 @@
         // so the markdown serializer always sees the latest path
         // even when the user swaps tabs into a new file.
         createWikiLinkNode(() => currentPath),
-        ImageNode,
+        // Same per-instance factory shape as wikiLink: the closure
+        // gives the node view + renderHTML a live read on
+        // `currentPath`, so a relative src like `../logo.png`
+        // resolves against the editing file's directory.
+        createImageNode(() => currentPath),
       ],
       content: value,
       // Cmd/Ctrl+Enter -> parent's onSubmit (assistant prompt
@@ -758,17 +763,27 @@
       // markdown round-trip carries something readable.
       replaceTrailingTrigger("![", () => {
         const anchor = caretAnchorHost();
-        showImagePicker(anchor, (src) => {
-          if (!src || !editor) return;
-          const last = src.split("/").pop() ?? src;
-          const alt = last.replace(/\.[^./]+$/, "");
-          editor
-            .chain()
-            .focus()
-            .insertContent({ type: "image", attrs: { src, alt } })
-            .insertContent(" ")
-            .run();
-        });
+        showImagePicker(
+          anchor,
+          (src) => {
+            if (!src || !editor) return;
+            const last = src.split("/").pop() ?? src;
+            const alt = last.replace(/\.[^./]+$/, "");
+            // Picker hands back drive-rooted paths (existing-image
+            // pick or just-uploaded file) or absolute URLs
+            // (paste-URL flow); relativize to currentPath so the
+            // markdown source stays portable when the file moves
+            // directories.
+            const rel = relativizeImageSrc(src, currentPath ?? null);
+            editor
+              .chain()
+              .focus()
+              .insertContent({ type: "image", attrs: { src: rel, alt } })
+              .insertContent(" ")
+              .run();
+          },
+          dirOfPath(currentPath ?? null),
+        );
       });
       return;
     }
@@ -792,16 +807,22 @@
   async function insertImageFilesAt(pos: number, files: File[]): Promise<void> {
     if (!editor) return;
     let cursor = pos;
+    // Drop the upload next to the editing file so the markdown can
+    // reference it with a `./<name>` src. With no `currentPath`
+    // (assistant prompt editor, etc.) we pass `null` so the server
+    // falls back to its configured attachments_dir.
+    const dir = dirOfPath(currentPath ?? null);
     for (const file of files) {
       try {
-        const path = await uploadImageFile(file);
+        const path = await uploadImageFile(file, dir);
         const last = path.split("/").pop() ?? path;
         const alt = last.replace(/\.[^./]+$/, "");
+        const rel = relativizeImageSrc(path, currentPath ?? null);
         editor
           .chain()
           .focus()
           .insertContentAt(cursor, [
-            { type: "image", attrs: { src: path, alt } },
+            { type: "image", attrs: { src: rel, alt } },
             { type: "text", text: " " },
           ])
           .run();
@@ -815,6 +836,17 @@
         console.error("image upload failed:", e);
       }
     }
+  }
+
+  /// Drive-relative directory portion of `path`, or null when the
+  /// path is null/empty (so the upload can fall back to the
+  /// server's configured attachments_dir). A path with no slash
+  /// (file at drive root) yields the empty string, which the server
+  /// treats as "save at drive root".
+  function dirOfPath(path: string | null): string | null {
+    if (!path) return null;
+    const i = path.lastIndexOf("/");
+    return i < 0 ? "" : path.slice(0, i);
   }
 
   /// Locate the `[[ ... ]]` text range that surrounds the current
