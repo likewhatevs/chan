@@ -2389,7 +2389,12 @@ fn claude_cli_fallback_dirs() -> Vec<PathBuf> {
     #[cfg(unix)]
     {
         if let Some(home) = std::env::var_os("HOME") {
-            dirs.push(PathBuf::from(&home).join(".claude").join("local").join("bin"));
+            dirs.push(
+                PathBuf::from(&home)
+                    .join(".claude")
+                    .join("local")
+                    .join("bin"),
+            );
         }
         dirs.push(PathBuf::from("/opt/homebrew/bin"));
         dirs.push(PathBuf::from("/usr/local/bin"));
