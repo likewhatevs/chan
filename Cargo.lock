@@ -662,6 +662,7 @@ dependencies = [
  "chan-tunnel-client",
  "chan-tunnel-proto",
  "open",
+ "percent-encoding",
  "qrcode",
  "rand 0.8.6",
  "rust-embed",

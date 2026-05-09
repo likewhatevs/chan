@@ -2032,6 +2032,67 @@ fn file_label(rel: &str) -> String {
     stem
 }
 
+/// Resolve a markdown link-edge target to an indexed drive file when
+/// possible. chan-drive stores link targets verbatim from the source
+/// (e.g. `[link](my%20note.md)` -> dst = `"my%20note.md"`); without
+/// this rewrite, every URL-encoded or source-relative target ends up
+/// as a non-clickable "ghost" node in the inspector.
+///
+/// Resolution order, first hit wins:
+///   1. Decoded target as drive-relative (with `.md` / `.txt` /
+///      exact tries), matching wiki-style link semantics.
+///   2. Decoded target joined to the source file's parent directory
+///      (handles `./peer.md`, `../sibling/note.md`, and bare leaves
+///      authored relative to the source).
+///
+/// On miss, returns the percent-decoded target so the ghost node
+/// gets a clean label ("my note") instead of "my%20note".
+fn resolve_link_dst(src: &str, target: &str, files: &std::collections::BTreeSet<&str>) -> String {
+    use percent_encoding::percent_decode_str;
+    use std::path::Path;
+
+    let decoded = percent_decode_str(target).decode_utf8_lossy().into_owned();
+    let stripped = decoded.trim_start_matches('/');
+
+    let mut candidates: Vec<String> = vec![stripped.to_string()];
+    if let Some(parent) = Path::new(src).parent() {
+        if !parent.as_os_str().is_empty() {
+            let joined = parent.join(stripped);
+            if let Some(norm) = normalize_drive_rel(&joined) {
+                candidates.push(norm);
+            }
+        }
+    }
+    for cand in &candidates {
+        for try_path in [cand.clone(), format!("{cand}.md"), format!("{cand}.txt")] {
+            if files.contains(try_path.as_str()) {
+                return try_path;
+            }
+        }
+    }
+    decoded
+}
+
+/// Collapse `.` / `..` components against a drive-relative path.
+/// Returns None if the result would escape the drive root or if the
+/// path includes an absolute prefix.
+fn normalize_drive_rel(p: &std::path::Path) -> Option<String> {
+    use std::path::{Component, PathBuf};
+    let mut parts: Vec<std::ffi::OsString> = Vec::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                parts.pop()?;
+            }
+            Component::Normal(s) => parts.push(s.to_owned()),
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    let joined: PathBuf = parts.iter().collect();
+    Some(joined.to_string_lossy().into_owned())
+}
+
 async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
     let drive = state.drive();
     let graph = match drive.graph() {
@@ -2055,6 +2116,16 @@ async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
     }
 
     let file_set: std::collections::BTreeSet<&str> = files.iter().map(String::as_str).collect();
+
+    // Rewrite link-edge targets so URL-encoded / source-relative
+    // markdown links land on the real file node (clickable in the
+    // inspector). Genuine ghosts get the decoded form so the label
+    // reads "my note" instead of "my%20note".
+    for e in all_edges.iter_mut() {
+        if matches!(e.kind, EdgeKind::Link) {
+            e.dst = resolve_link_dst(&e.src, &e.dst, &file_set);
+        }
+    }
 
     // Build the node list. File nodes for every indexed path; tag
     // nodes per #tag; mention nodes per distinct @@name. Ghost
@@ -4194,5 +4265,83 @@ mod tests {
             None => std::env::remove_var("HOME"),
         }
         assert_eq!(resolved.as_deref(), Some(bin.as_path()));
+    }
+
+    #[test]
+    fn resolve_link_dst_decodes_percent_encoded_to_real_file() {
+        let files: std::collections::BTreeSet<&str> = ["recipes/my note.md", "recipes/intro.md"]
+            .into_iter()
+            .collect();
+        // [link](my%20note.md) inside recipes/intro.md.
+        assert_eq!(
+            resolve_link_dst("recipes/intro.md", "my%20note.md", &files),
+            "recipes/my note.md"
+        );
+    }
+
+    #[test]
+    fn resolve_link_dst_drive_relative_match_wins() {
+        // Wiki-style targets store no extension; resolver tries .md
+        // and lands on the indexed file at drive root.
+        let files: std::collections::BTreeSet<&str> =
+            ["pasta.md", "recipes/pasta.md"].into_iter().collect();
+        assert_eq!(
+            resolve_link_dst("recipes/intro.md", "pasta", &files),
+            "pasta.md",
+        );
+    }
+
+    #[test]
+    fn resolve_link_dst_dot_relative_to_source() {
+        let files: std::collections::BTreeSet<&str> = ["recipes/peer.md", "recipes/intro.md"]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            resolve_link_dst("recipes/intro.md", "./peer.md", &files),
+            "recipes/peer.md",
+        );
+    }
+
+    #[test]
+    fn resolve_link_dst_parent_relative_to_source() {
+        let files: std::collections::BTreeSet<&str> =
+            ["sibling.md", "recipes/intro.md"].into_iter().collect();
+        assert_eq!(
+            resolve_link_dst("recipes/intro.md", "../sibling.md", &files),
+            "sibling.md",
+        );
+    }
+
+    #[test]
+    fn resolve_link_dst_unresolved_returns_decoded() {
+        let files: std::collections::BTreeSet<&str> = ["intro.md"].into_iter().collect();
+        // Genuine broken link: decoded form surfaces a clean ghost
+        // label without %20 noise.
+        assert_eq!(
+            resolve_link_dst("intro.md", "my%20missing.md", &files),
+            "my missing.md",
+        );
+    }
+
+    #[test]
+    fn resolve_link_dst_strips_leading_slash() {
+        let files: std::collections::BTreeSet<&str> = ["recipes/pasta.md"].into_iter().collect();
+        assert_eq!(
+            resolve_link_dst("intro.md", "/recipes/pasta.md", &files),
+            "recipes/pasta.md",
+        );
+    }
+
+    #[test]
+    fn resolve_link_dst_parent_escape_falls_back() {
+        // `../../escape` from a one-level source escapes the drive
+        // root: normalize_drive_rel returns None, so only the
+        // verbatim drive-relative candidate is tried; both miss and
+        // we surface the decoded original.
+        let files: std::collections::BTreeSet<&str> = ["intro.md"].into_iter().collect();
+        assert_eq!(
+            resolve_link_dst("intro.md", "../../escape.md", &files),
+            "../../escape.md",
+        );
     }
 }

@@ -32,6 +32,7 @@ chan-tunnel-proto = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
 open = "5"
+percent-encoding = "2"
 qrcode = { version = "0.14", default-features = false }
 rand = "0.8"
 rust-embed = "8"
