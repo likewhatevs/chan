@@ -66,7 +66,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 20000;
+    z-index: 26000;
   }
   .modal {
     background: var(--bg-elev);
