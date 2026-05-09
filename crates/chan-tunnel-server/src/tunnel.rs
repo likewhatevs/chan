@@ -13,6 +13,7 @@
 //! Authorization) gets a final-frame error response and the rest
 //! of the connection is treated as a keepalive driver until the
 //! peer closes.
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use chan_tunnel_proto::{H2Duplex, TUNNEL_PATH};
@@ -43,7 +44,8 @@ pub async fn serve_tunnel_listener(
         let validator = validator.clone();
         let registry = registry.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_tunnel_conn(tcp, validator, registry, max_drives_per_user).await
+            if let Err(e) =
+                handle_tunnel_conn(tcp, peer, validator, registry, max_drives_per_user).await
             {
                 tracing::warn!(%peer, error = %e, "tunnel connection ended with error");
             } else {
@@ -57,6 +59,7 @@ pub async fn serve_tunnel_listener(
 /// validate, handshake, register, and tunnel-driver lifecycle.
 async fn handle_tunnel_conn(
     tcp: TcpStream,
+    peer: SocketAddr,
     validator: Arc<dyn Validator>,
     registry: Arc<Registry>,
     max_drives_per_user: usize,
@@ -147,7 +150,8 @@ async fn handle_tunnel_conn(
     let user: Arc<str> = Arc::from(validated.username.as_str());
     let drive: Arc<str> = Arc::from(hello.drive.as_str());
     let public = hello.public;
-    let (handle, open_rx, shutdown_rx) = registry.register(user.clone(), drive.clone(), public);
+    let (handle, open_rx, shutdown_rx) =
+        registry.register(user.clone(), drive.clone(), public, Some(peer));
     tracing::info!(%user, %drive, public, "tunnel registered");
 
     drive_tunnel(yconn, open_rx, shutdown_rx, registry.clone(), handle).await;

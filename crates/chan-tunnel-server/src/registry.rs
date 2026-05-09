@@ -14,10 +14,12 @@
 //! currently registered. This matches a chan-serve restart
 //! reclaiming its drive without waiting for a TCP timeout.
 
+use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
-use std::collections::HashMap;
 use tokio::sync::{mpsc, oneshot};
 
 #[derive(Debug, thiserror::Error)]
@@ -27,11 +29,27 @@ pub enum OpenError {
 }
 
 /// One row of `Registry::list_drives_for`. Pairs the drive name
-/// with the `public` bit captured at handshake time.
+/// with the `public` bit captured at handshake time, plus the
+/// peer address and connection time so admin tools can render a
+/// `ps`-like view without piggybacking on the handshake.
 #[derive(Debug, Clone)]
 pub struct DriveInfo {
     pub drive: Arc<str>,
     pub public: bool,
+    pub peer_addr: Option<SocketAddr>,
+    pub connected_at: DateTime<Utc>,
+}
+
+/// One row of `Registry::list_all`. Same as `DriveInfo` but also
+/// carries the username so a single call covers the admin
+/// `tunnel ps` view.
+#[derive(Debug, Clone)]
+pub struct TunnelInfo {
+    pub user: Arc<str>,
+    pub drive: Arc<str>,
+    pub public: bool,
+    pub peer_addr: Option<SocketAddr>,
+    pub connected_at: DateTime<Utc>,
 }
 
 pub(crate) type OpenReply = oneshot::Sender<Result<yamux::Stream, OpenError>>;
@@ -54,6 +72,13 @@ pub struct TunnelHandle {
     /// the tunneled `chan serve` is exposed to anonymous public
     /// traffic. Set from the client's Hello frame at handshake.
     pub public: bool,
+    /// Peer's TCP address as seen by the listener accept loop.
+    /// `None` when the registration didn't go through the listener
+    /// path (mainly tests).
+    pub peer_addr: Option<SocketAddr>,
+    /// Wall-clock time at which the tunnel was registered. Used by
+    /// admin tools to render uptime; not load-bearing for routing.
+    pub connected_at: DateTime<Utc>,
 }
 
 impl TunnelHandle {
@@ -90,12 +115,12 @@ impl Registry {
     /// Register a new tunnel; evict any existing entry for the
     /// same `(user, drive)`. Returns the `OpenRequest` receiver
     /// the driver task must consume, plus the eviction signal.
-    #[allow(dead_code)] // wired into the tunnel listener in a follow-up commit
     pub(crate) fn register(
         self: &Arc<Self>,
         user: Arc<str>,
         drive: Arc<str>,
         public: bool,
+        peer_addr: Option<SocketAddr>,
     ) -> (
         TunnelHandle,
         mpsc::Receiver<OpenRequest>,
@@ -108,6 +133,8 @@ impl Registry {
             user: user.clone(),
             drive: drive.clone(),
             public,
+            peer_addr,
+            connected_at: Utc::now(),
         };
         let entry = Entry {
             handle: handle.clone(),
@@ -145,17 +172,46 @@ impl Registry {
             .map(|((_, d), e)| DriveInfo {
                 drive: d.clone(),
                 public: e.handle.public,
+                peer_addr: e.handle.peer_addr,
+                connected_at: e.handle.connected_at,
             })
             .collect();
         drives.sort_by(|a, b| a.drive.cmp(&b.drive));
         drives
     }
 
+    /// Snapshot every registered tunnel. Sorted by `(user, drive)`
+    /// so the admin `tunnel ps` view is stable across calls.
+    pub fn list_all(&self) -> Vec<TunnelInfo> {
+        let g = self.inner.lock();
+        let mut out: Vec<TunnelInfo> = g
+            .iter()
+            .map(|((u, d), e)| TunnelInfo {
+                user: u.clone(),
+                drive: d.clone(),
+                public: e.handle.public,
+                peer_addr: e.handle.peer_addr,
+                connected_at: e.handle.connected_at,
+            })
+            .collect();
+        out.sort_by(|a, b| a.user.cmp(&b.user).then_with(|| a.drive.cmp(&b.drive)));
+        out
+    }
+
+    /// Force a tunnel offline. Drops the registry entry, which
+    /// fires the per-tunnel driver's shutdown signal and tears
+    /// down the yamux connection. Returns `true` if a row was
+    /// removed, `false` if nothing was registered for the pair.
+    pub fn evict(&self, user: &str, drive: &str) -> bool {
+        let key = (Arc::from(user), Arc::from(drive));
+        let mut g = self.inner.lock();
+        g.remove(&key).is_some()
+    }
+
     /// Remove a registered tunnel only if `handle` is the one
     /// currently stored. Used by the driver task on its own
     /// teardown so it doesn't accidentally evict a successor that
     /// took its slot.
-    #[allow(dead_code)] // wired into the tunnel listener in a follow-up commit
     pub(crate) fn deregister_if_owner(&self, handle: &TunnelHandle) {
         let key = (handle.user.clone(), handle.drive.clone());
         let mut g = self.inner.lock();
@@ -179,10 +235,10 @@ mod tests {
         let user: Arc<str> = Arc::from("alice");
         let drive: Arc<str> = Arc::from("notes");
 
-        let (h1, _rx1, mut shutdown1) = reg.register(user.clone(), drive.clone(), false);
+        let (h1, _rx1, mut shutdown1) = reg.register(user.clone(), drive.clone(), false, None);
         // Re-register the same pair: old entry is dropped, its
         // shutdown receiver fires.
-        let (_h2, _rx2, _shutdown2) = reg.register(user.clone(), drive.clone(), false);
+        let (_h2, _rx2, _shutdown2) = reg.register(user.clone(), drive.clone(), false, None);
         assert!(shutdown1.try_recv().is_ok() || shutdown1.try_recv().is_err());
         // Either Ok(()) (sender closed cleanly via Drop) or Err
         // (channel dropped). The signal-via-drop semantics give us
@@ -193,7 +249,7 @@ mod tests {
     #[tokio::test]
     async fn lookup_returns_current_handle() {
         let reg = Registry::new();
-        let (_h, _rx, _sd) = reg.register(Arc::from("alice"), Arc::from("notes"), false);
+        let (_h, _rx, _sd) = reg.register(Arc::from("alice"), Arc::from("notes"), false, None);
         assert!(reg.get("alice", "notes").is_some());
         assert!(reg.get("alice", "other").is_none());
         assert!(reg.get("bob", "notes").is_none());
@@ -202,9 +258,9 @@ mod tests {
     #[tokio::test]
     async fn list_drives_for_returns_sorted_names_per_user() {
         let reg = Registry::new();
-        let (_h1, _rx1, _sd1) = reg.register(Arc::from("alice"), Arc::from("notes"), false);
-        let (_h2, _rx2, _sd2) = reg.register(Arc::from("alice"), Arc::from("ideas"), true);
-        let (_h3, _rx3, _sd3) = reg.register(Arc::from("bob"), Arc::from("notes"), false);
+        let (_h1, _rx1, _sd1) = reg.register(Arc::from("alice"), Arc::from("notes"), false, None);
+        let (_h2, _rx2, _sd2) = reg.register(Arc::from("alice"), Arc::from("ideas"), true, None);
+        let (_h3, _rx3, _sd3) = reg.register(Arc::from("bob"), Arc::from("notes"), false, None);
 
         let alice: Vec<(String, bool)> = reg
             .list_drives_for("alice")

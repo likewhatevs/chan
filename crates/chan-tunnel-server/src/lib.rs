@@ -142,5 +142,5 @@ mod registry;
 mod tunnel;
 
 pub use public::public_router;
-pub use registry::{DriveInfo, OpenError, Registry, TunnelHandle};
+pub use registry::{DriveInfo, OpenError, Registry, TunnelHandle, TunnelInfo};
 pub use tunnel::serve_tunnel_listener;
