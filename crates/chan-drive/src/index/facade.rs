@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "embeddings")]
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use thiserror::Error;
@@ -129,9 +129,12 @@ pub struct Index {
     vectors: VectorStore,
     /// Lazily loaded: opening the embedder mmaps the safetensors
     /// weights and warms the device, and we don't want
-    /// `chan search --mode bm25` to pay that cost.
+    /// `chan search --mode bm25` to pay that cost. The Mutex
+    /// serializes first-init so two threads racing here can't both
+    /// download the model from HuggingFace; once the Arc is
+    /// populated, every subsequent call clones it cheaply.
     #[cfg(feature = "embeddings")]
-    embedder: OnceLock<Embedder>,
+    embedder: Mutex<Option<Arc<Embedder>>>,
 }
 
 impl std::fmt::Debug for Index {
@@ -141,7 +144,10 @@ impl std::fmt::Debug for Index {
             .field("index_dir", &self.index_dir)
             .field("model", &self.config.model);
         #[cfg(feature = "embeddings")]
-        d.field("embedder_loaded", &self.embedder.get().is_some());
+        d.field(
+            "embedder_loaded",
+            &self.embedder.lock().map(|g| g.is_some()).unwrap_or(false),
+        );
         d.finish()
     }
 }
@@ -176,7 +182,7 @@ impl Index {
             bm25,
             vectors,
             #[cfg(feature = "embeddings")]
-            embedder: OnceLock::new(),
+            embedder: Mutex::new(None),
         })
     }
 
@@ -202,7 +208,7 @@ impl Index {
         config::save(&self.index_dir, &self.config)?;
         #[cfg(feature = "embeddings")]
         {
-            self.embedder = OnceLock::new();
+            *self.embedder.lock().unwrap() = None;
         }
         let vec_dir = self.index_dir.join("embeddings");
         if vec_dir.exists() {
@@ -213,16 +219,22 @@ impl Index {
     }
 
     /// Get-or-init the embedder. Errors propagate (e.g. unknown
-    /// model id, model download failure, candle device init).
+    /// model id, model download failure, candle device init). The
+    /// init step holds the Mutex across `Embedder::open`, which can
+    /// take seconds on a cold cache (model download from
+    /// HuggingFace), so concurrent first-callers serialize and only
+    /// one download happens. Once populated, every call returns a
+    /// cheap Arc clone and never enters the slow path again.
     #[cfg(feature = "embeddings")]
-    fn embedder(&self) -> Result<&Embedder, IndexError> {
-        if let Some(e) = self.embedder.get() {
-            return Ok(e);
+    fn embedder(&self) -> Result<Arc<Embedder>, IndexError> {
+        let mut guard = self.embedder.lock().unwrap();
+        if let Some(e) = guard.as_ref() {
+            return Ok(Arc::clone(e));
         }
         let cache_dir = embeddings::global_models_dir();
-        let e = Embedder::open(&self.config.model, &cache_dir)?;
-        let _ = self.embedder.set(e);
-        Ok(self.embedder.get().unwrap())
+        let e = Arc::new(Embedder::open(&self.config.model, &cache_dir)?);
+        *guard = Some(Arc::clone(&e));
+        Ok(e)
     }
 
     /// Walk the drive and re-index everything from scratch. If

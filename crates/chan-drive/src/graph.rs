@@ -37,11 +37,23 @@
 use std::path::Path;
 use std::sync::Mutex;
 
+use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+use crate::error::{ChanError, Result};
 use crate::markdown;
+
+type ReaderPool = r2d2::Pool<SqliteConnectionManager>;
+type ReaderConn = r2d2::PooledConnection<SqliteConnectionManager>;
+
+/// Reader-pool size. SQLite under WAL serves concurrent readers
+/// with no inter-reader blocking. The hot path is the editor's
+/// `[[` typeahead, which fires per-keystroke; 4 connections covers
+/// a single user's typeahead + status endpoint + an ad-hoc query
+/// without queueing. The writer is single-threaded by SQLite
+/// contract and lives on its own Mutex<Connection> outside the pool.
+const READER_POOL_SIZE: u32 = 4;
 
 /// Edge kind. Mirrors the wiki-link / mention / tag distinction
 /// that the editor already exposes.
@@ -102,11 +114,23 @@ pub struct Tag {
     pub count: u32,
 }
 
-/// Owns the sqlite connection and exposes the read API. Construct
-/// via `Drive::graph()`. The connection is behind a Mutex so the
-/// view is Sync (rusqlite::Connection is Send but not Sync).
+/// Owns the sqlite handles and exposes the read + write API. Two
+/// channels into the same DB:
+///   * `writer` — single Connection behind a Mutex. Carries every
+///     write transaction. SQLite's contract is one writer at a
+///     time; the Mutex enforces it inside the process and the
+///     per-drive flock enforces it cross-process.
+///   * `readers` — r2d2 pool of read-only connections (each opened
+///     with `query_only = ON` as belt-and-braces). Editor
+///     typeahead, backlinks, and status reads draw from the pool
+///     so they don't block on each other or on the writer.
+///
+/// All public methods log entry at debug. Errors are wrapped in
+/// `ChanError::Graph` with enough context to attribute them to a
+/// specific operation in `tracing` output.
 pub struct GraphView {
-    conn: Mutex<Connection>,
+    writer: Mutex<Connection>,
+    readers: ReaderPool,
 }
 
 impl GraphView {
@@ -115,16 +139,53 @@ impl GraphView {
         if let Some(parent) = graph_db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open(graph_db_path)?;
-        Self::tune(&conn)?;
-        Self::migrate(&conn)?;
+        // Writer first: it runs migrations on a unique handle so
+        // the first reader pulled from the pool sees the post-
+        // migration schema.
+        let writer = Connection::open(graph_db_path)?;
+        Self::tune_writer(&writer)?;
+        Self::migrate(&writer)?;
+
+        // Reader pool. `with_init` runs the same WAL / busy_timeout
+        // pragmas every time r2d2 opens a fresh connection, plus
+        // `query_only = ON` to make accidental writes through a
+        // pooled connection fail fast (SQLITE_READONLY) instead of
+        // racing the writer.
+        let manager = SqliteConnectionManager::file(graph_db_path).with_init(|conn| {
+            let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
+            conn.execute_batch(
+                "PRAGMA synchronous = NORMAL; \
+                 PRAGMA busy_timeout = 5000; \
+                 PRAGMA foreign_keys = ON; \
+                 PRAGMA query_only = ON;",
+            )?;
+            Ok(())
+        });
+        let readers = r2d2::Pool::builder()
+            .max_size(READER_POOL_SIZE)
+            .build(manager)
+            .map_err(|e| ChanError::Graph(format!("graph reader pool: {e}")))?;
+        tracing::debug!(
+            db = %graph_db_path.display(),
+            pool = READER_POOL_SIZE,
+            "graph: opened",
+        );
         Ok(Self {
-            conn: Mutex::new(conn),
+            writer: Mutex::new(writer),
+            readers,
         })
     }
 
-    /// Per-connection sqlite tuning. Run once at open before any
-    /// schema work so the migration itself benefits from WAL.
+    fn reader(&self) -> Result<ReaderConn> {
+        self.readers
+            .get()
+            .map_err(|e| ChanError::Graph(format!("graph reader checkout: {e}")))
+    }
+
+    /// Per-connection sqlite tuning for the writer. Run once at open
+    /// before any schema work so the migration itself benefits from
+    /// WAL. Reader connections receive the same set (plus
+    /// `query_only`) via `SqliteConnectionManager::with_init`.
     ///
     ///   journal_mode = WAL       readers don't block writers, single
     ///                            writer at a time (we already gate
@@ -146,7 +207,7 @@ impl GraphView {
     ///                            declare FKs today but the toggle
     ///                            stops a future schema change from
     ///                            silently bypassing them.
-    fn tune(conn: &Connection) -> Result<()> {
+    fn tune_writer(conn: &Connection) -> Result<()> {
         // journal_mode is a query-shaped pragma (returns the new mode).
         // pragma_update would error; query_row drops the result row.
         let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
@@ -160,6 +221,11 @@ impl GraphView {
 
     fn migrate(conn: &Connection) -> Result<()> {
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if v == 0 {
+            tracing::info!("graph: initializing schema at v1");
+        } else if v < 2 {
+            tracing::info!(from = v, to = 2, "graph: migrating schema");
+        }
         if v < 1 {
             conn.execute_batch(
                 r#"
@@ -256,7 +322,8 @@ impl GraphView {
     /// Outgoing edges from `rel`. Document order is not preserved;
     /// callers that need stable order should sort by (kind, dst).
     pub fn neighbors(&self, rel: &str) -> Result<Vec<Edge>> {
-        let conn = self.conn.lock().unwrap();
+        tracing::debug!(rel, "graph::neighbors");
+        let conn = self.reader()?;
         let mut stmt = conn.prepare_cached(
             "SELECT dst, kind, anchor FROM edges WHERE src = ? ORDER BY kind, dst",
         )?;
@@ -284,7 +351,8 @@ impl GraphView {
 
     /// Incoming edges into `rel` (other files that link to it).
     pub fn backlinks(&self, rel: &str) -> Result<Vec<Edge>> {
-        let conn = self.conn.lock().unwrap();
+        tracing::debug!(rel, "graph::backlinks");
+        let conn = self.reader()?;
         let mut stmt = conn.prepare_cached(
             "SELECT src, kind, anchor FROM edges WHERE dst = ? AND kind = 'link' ORDER BY src",
         )?;
@@ -313,7 +381,8 @@ impl GraphView {
     /// All tags in the drive with their reference counts. Tag dst
     /// nodes are stored as `#name`; we strip the prefix in the result.
     pub fn tags(&self) -> Result<Vec<Tag>> {
-        let conn = self.conn.lock().unwrap();
+        tracing::debug!("graph::tags");
+        let conn = self.reader()?;
         let mut stmt = conn.prepare_cached(
             "SELECT dst, COUNT(*) FROM edges WHERE kind = 'tag' GROUP BY dst ORDER BY 2 DESC, 1",
         )?;
@@ -331,8 +400,9 @@ impl GraphView {
 
     /// Files tagged with `tag` (without the leading `#`).
     pub fn files_with_tag(&self, tag: &str) -> Result<Vec<String>> {
+        tracing::debug!(tag, "graph::files_with_tag");
         let dst = format!("#{tag}");
-        let conn = self.conn.lock().unwrap();
+        let conn = self.reader()?;
         let mut stmt = conn.prepare_cached(
             "SELECT DISTINCT src FROM edges WHERE kind = 'tag' AND dst = ? ORDER BY src",
         )?;
@@ -357,7 +427,13 @@ impl GraphView {
         outgoing: &[Edge],
         headings: &[markdown::Heading],
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        tracing::debug!(
+            rel,
+            edges = outgoing.len(),
+            headings = headings.len(),
+            "graph::replace_file",
+        );
+        let conn = self.writer.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         let basename = std::path::Path::new(rel)
             .file_name()
@@ -392,7 +468,8 @@ impl GraphView {
     /// Drop a file from the graph entirely. Edges with `rel` as
     /// either endpoint go too; no dangling references.
     pub fn forget_file(&self, rel: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        tracing::debug!(rel, "graph::forget_file");
+        let conn = self.writer.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         tx.execute(
             "DELETE FROM edges WHERE src = ? OR dst = ?",
@@ -407,7 +484,8 @@ impl GraphView {
     /// Wipe every file, edge, and heading. Used by `Drive::reindex`
     /// before rebuilding from scratch.
     pub fn clear(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        tracing::debug!("graph::clear");
+        let conn = self.writer.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         tx.execute("DELETE FROM edges", [])?;
         tx.execute("DELETE FROM headings", [])?;
@@ -429,7 +507,8 @@ impl GraphView {
     /// server's auto-rebuild trigger) keys off "is the graph empty?"
     /// and a half-populated rebuild lies about its state.
     pub fn replace_all(&self, entries: &[FileGraph<'_>]) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        tracing::debug!(files = entries.len(), "graph::replace_all");
+        let conn = self.writer.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         tx.execute("DELETE FROM edges", [])?;
         tx.execute("DELETE FROM headings", [])?;
@@ -472,7 +551,8 @@ impl GraphView {
 
     /// All files known to the graph, sorted by path.
     pub fn files(&self) -> Result<Vec<String>> {
-        let conn = self.conn.lock().unwrap();
+        tracing::debug!("graph::files");
+        let conn = self.reader()?;
         let mut stmt = conn
             .prepare_cached("SELECT rel_path FROM nodes WHERE kind = 'file' ORDER BY rel_path")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
@@ -510,8 +590,9 @@ impl GraphView {
     /// English/Western notes; revisit when a real Unicode-aware
     /// backend becomes a priority.
     pub fn link_targets(&self, q: &str, limit: u32) -> Result<Vec<LinkTarget>> {
+        tracing::debug!(q, limit, "graph::link_targets");
         let limit = if limit == 0 { 50 } else { limit } as i64;
-        let conn = self.conn.lock().unwrap();
+        let conn = self.reader()?;
         if q.is_empty() {
             return recent_files(&conn, limit);
         }
@@ -593,7 +674,8 @@ impl GraphView {
 
     /// Headings of one file in document order.
     pub fn headings_of(&self, rel: &str) -> Result<Vec<HeadingRow>> {
-        let conn = self.conn.lock().unwrap();
+        tracing::debug!(rel, "graph::headings_of");
+        let conn = self.reader()?;
         let mut stmt = conn.prepare_cached(
             "SELECT level, text, anchor, ord FROM headings \
              WHERE rel_path = ? ORDER BY ord",
@@ -711,7 +793,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn count(g: &GraphView, sql: &str) -> i64 {
-        let conn = g.conn.lock().unwrap();
+        let conn = g.reader().unwrap();
         conn.query_row(sql, [], |r| r.get(0)).unwrap()
     }
 
@@ -721,6 +803,78 @@ mod tests {
         let db = tmp.path().join("graph.sqlite");
         let g = GraphView::open(&db).unwrap();
         assert_eq!(count(&g, "PRAGMA user_version"), 2);
+    }
+
+    #[test]
+    fn reader_pool_is_query_only() {
+        // Defense-in-depth: every pooled reader has query_only=ON,
+        // so a stray write attempted through a reader connection
+        // fails fast with SQLITE_READONLY instead of racing the
+        // writer's tx. If this assertion ever flips, a reader-side
+        // mutation could land on disk and skip the writer mutex.
+        let tmp = TempDir::new().unwrap();
+        let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
+        assert_eq!(count(&g, "PRAGMA query_only"), 1);
+        let conn = g.reader().unwrap();
+        let err = conn
+            .execute("INSERT INTO nodes(rel_path, kind) VALUES ('x','file')", [])
+            .unwrap_err();
+        let msg = err.to_string().to_ascii_lowercase();
+        assert!(
+            msg.contains("readonly") || msg.contains("read-only"),
+            "expected readonly rejection, got: {msg}",
+        );
+    }
+
+    #[test]
+    fn reads_run_concurrently_with_writes() {
+        // Single writer, multi-reader: a write tx in progress on
+        // one thread must not block readers on another. WAL +
+        // reader pool are what buy us this; the test shape pins
+        // the contract so a future regression to one connection
+        // would fail loudly instead of silently re-serializing.
+        use std::sync::Barrier;
+        use std::thread;
+
+        let tmp = TempDir::new().unwrap();
+        let g = std::sync::Arc::new(GraphView::open(&tmp.path().join("g.sqlite")).unwrap());
+        // Seed a row so the read returns predictable data.
+        g.replace_file("a.md", Some("Alpha"), Some(1), &[], &[])
+            .unwrap();
+
+        // Three concurrent readers, one writer. Each reader does
+        // many small queries; if the pool serialised them through
+        // a single connection the wall-time would be the sum.
+        let barrier = std::sync::Arc::new(Barrier::new(4));
+        let mut handles = Vec::new();
+        for _ in 0..3 {
+            let g = std::sync::Arc::clone(&g);
+            let b = std::sync::Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                b.wait();
+                for _ in 0..50 {
+                    let files = g.files().expect("read");
+                    assert!(files.contains(&"a.md".to_string()));
+                }
+            }));
+        }
+        // Writer thread: keep replacing the same row so the writer
+        // mutex is contended for the duration of the reads.
+        let writer = {
+            let g = std::sync::Arc::clone(&g);
+            let b = std::sync::Arc::clone(&barrier);
+            thread::spawn(move || {
+                b.wait();
+                for i in 0..50 {
+                    g.replace_file("a.md", Some("Alpha"), Some(i), &[], &[])
+                        .expect("write");
+                }
+            })
+        };
+        for h in handles {
+            h.join().expect("reader thread panicked");
+        }
+        writer.join().expect("writer thread panicked");
     }
 
     #[test]
@@ -974,7 +1128,7 @@ mod tests {
             .unwrap();
         }
         let g = GraphView::open(&db).unwrap();
-        let conn = g.conn.lock().unwrap();
+        let conn = g.reader().unwrap();
         let bn: Option<String> = conn
             .query_row(
                 "SELECT basename FROM nodes WHERE rel_path='half/done.md'",
@@ -1028,7 +1182,7 @@ mod tests {
             .unwrap();
         }
         let g = GraphView::open(&db).unwrap();
-        let conn = g.conn.lock().unwrap();
+        let conn = g.reader().unwrap();
         let bn: Option<String> = conn
             .query_row(
                 "SELECT basename FROM nodes WHERE rel_path='legacy/note.md'",

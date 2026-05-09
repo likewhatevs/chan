@@ -36,6 +36,16 @@ walkdir = "2"
 cap-std = "3"
 cap-tempfile = "3"
 
+# Connection pool for the graph DB's read path. SQLite in WAL mode
+# allows multiple readers to run concurrently against one writer; we
+# keep the writer behind a Mutex (single-writer is the SQLite
+# contract) and use the pool for reads so editor link-autocomplete
+# queries don't queue behind a reindex write or another typeahead.
+# The pool's per-connection init runs the same PRAGMA tuning as the
+# writer so all handles agree on WAL / busy_timeout / synchronous.
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+
 # Pure-Rust extended-attribute access. Used by atomic_write to
 # preserve user xattrs (Finder tags on macOS, SELinux labels and
 # capabilities on Linux) across the tmpfile + rename dance.
