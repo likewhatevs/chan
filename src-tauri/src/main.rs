@@ -51,6 +51,28 @@ impl AppState {
         }
         store.save(&cfg)
     }
+
+    /// Last port this drive's `chan serve` bound to, if any. Used
+    /// by the supervisor to prefer the same port across restarts so
+    /// open browser tabs don't permanently dead-end on reconnect.
+    pub fn drive_port(&self, key: &str) -> Option<u16> {
+        self.store
+            .lock()
+            .unwrap()
+            .get()
+            .ok()?
+            .sidecar
+            .get(key)
+            .and_then(|s| s.last_port)
+    }
+
+    /// Persist the port chosen for this drive's serve.
+    pub fn set_drive_port(&self, key: &str, port: u16) -> std::io::Result<()> {
+        let mut store = self.store.lock().unwrap();
+        let mut cfg = store.get()?;
+        cfg.sidecar.entry(key.to_string()).or_default().last_port = Some(port);
+        store.save(&cfg)
+    }
 }
 
 /// Merged drive view returned to the frontend. Combines a chan

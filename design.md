@@ -118,15 +118,29 @@ a valid state, and matches what the CLI does.
 ### 3.3 Toggle On (serve)
 
 Toggling On spawns `chan serve <path> --host 127.0.0.1 --port N` as
-a child process owned by chan-desktop. Port `N` is allocated by
-binding `127.0.0.1:0` ourselves and reading back the OS-assigned
-port; we close the probe socket before chan binds. There is a
-TOCTOU window between close and bind which we accept: a foreign
-process grabbing that port between the two calls would surface as
-chan exiting non-zero, which the reader thread already handles.
-We did consider asking chan to print the bound URL so we could let
-it pick the port, but that requires either `chan serve --port 0`
-(not supported today) or a chan-side change.
+a child process owned by chan-desktop. Port `N` is allocated as
+follows:
+
+1. If the drive's sidecar has a `last_port` from an earlier serve,
+   we try to bind `127.0.0.1:last_port` first. On success we drop
+   the probe socket and reuse that port. The point is to keep any
+   browser tabs the user already has open on a URL that is still
+   routable across a stop-then-start cycle.
+2. Otherwise (or if the preferred port is taken), we bind
+   `127.0.0.1:0` and let the OS assign one, then close the probe.
+
+Either way, we persist the chosen port back into the sidecar
+before spawning chan. There is a TOCTOU window between close and
+chan's bind which we accept: a foreign process grabbing the port
+in that window surfaces as chan exiting non-zero, which the
+reader thread already handles by flipping the toggle back to off.
+
+Note: the URL chan prints includes a per-serve bearer token
+(`?t=...`), so even with a stable port the full URL changes on
+restart and a stale browser tab will hit a token-mismatch on
+reconnect. Closing the token gap is a separate decision (e.g.
+`--no-token` for the desktop's loopback case, or chan persisting
+the token across serves) tracked in section 10.
 
 The supervisor:
 
@@ -363,9 +377,13 @@ belongs in a per-drive "Share" panel rather than a global setting.
 ## 10. Open questions
 
 - `chan serve` token: today we pass no `--no-token` flag, so chan
-  decides; we just capture the URL it prints. If we later want
-  shareable URLs we will need to rethink, but for the desktop's
-  loopback-only case the default is fine.
+  rotates the bearer token on every serve. Combined with port
+  reuse (section 3.3) the path stays stable but the query string
+  changes, so a browser tab kept open across a stop-then-start
+  fails its reconnect. Options: pass `--no-token` for the desktop
+  loopback case (cheap, slight loss of in-machine isolation), or
+  ask chan to persist the token (chan-side change, no security
+  cost). Pick one once it actually bites.
 - Multiple desktop windows vs one window: current design is one
   window with a drives table. Adding per-drive child windows is a
   later concern.

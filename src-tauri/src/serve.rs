@@ -70,7 +70,11 @@ pub fn start(
     if state.serves.lock().unwrap().contains_key(&key) {
         return Ok(());
     }
-    let port = pick_port().map_err(|e| format!("allocating port: {e}"))?;
+    let preferred = state.drive_port(&key);
+    let port = pick_port_preferring(preferred).map_err(|e| format!("allocating port: {e}"))?;
+    if let Err(e) = state.set_drive_port(&key, port) {
+        eprintln!("chan-desktop: persisting port for {key}: {e}");
+    }
 
     let mut cmd = Command::new(chan_bin);
     if verbose {
@@ -176,4 +180,17 @@ pub fn stop_all(state: &AppState) {
 fn pick_port() -> std::io::Result<u16> {
     let l = TcpListener::bind("127.0.0.1:0")?;
     Ok(l.local_addr()?.port())
+}
+
+/// Try to bind a previously-used port for this drive so a
+/// stop-then-start cycle leaves any open browser tabs on a URL that
+/// is still routable. Falls back to a fresh OS-assigned port when
+/// the preferred port is taken or when there is no preference yet.
+fn pick_port_preferring(preferred: Option<u16>) -> std::io::Result<u16> {
+    if let Some(p) = preferred {
+        if TcpListener::bind(("127.0.0.1", p)).is_ok() {
+            return Ok(p);
+        }
+    }
+    pick_port()
 }

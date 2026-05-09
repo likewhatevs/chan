@@ -25,6 +25,11 @@ use serde::{Deserialize, Serialize};
 pub struct DriveSidecar {
     #[serde(default)]
     pub on: bool,
+    /// Port the drive's `chan serve` last bound to, persisted so a
+    /// stop-then-start cycle reuses the same port and any browser
+    /// tabs the user has open keep their URL valid.
+    #[serde(default)]
+    pub last_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
