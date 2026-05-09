@@ -41,17 +41,6 @@ impl AppState {
         true
     }
 
-    /// Mark a drive's sidecar `on` flag false. Used by the reader
-    /// thread when chan exits unexpectedly.
-    pub fn set_drive_off(&self, key: &str) -> std::io::Result<()> {
-        let mut store = self.store.lock().unwrap();
-        let mut cfg = store.get()?;
-        if let Some(s) = cfg.sidecar.get_mut(key) {
-            s.on = false;
-        }
-        store.save(&cfg)
-    }
-
     /// Last port this drive's `chan serve` bound to, if any. Used
     /// by the supervisor to prefer the same port across restarts so
     /// open browser tabs don't permanently dead-end on reconnect.
@@ -87,10 +76,14 @@ struct Drive {
 
 #[tauri::command]
 fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
-    let cfg = state.store.lock().unwrap().get().map_err(err)?;
     let serves = state.serves.lock().unwrap();
     let entries = registry::read().map_err(err)?;
 
+    // `on` is derived from a live serve handle, never persisted.
+    // That way a desktop restart comes up with everything off
+    // (matching reality: nothing is actually running yet) and
+    // there is no chance of a stale on=true sticking around after
+    // chan died unexpectedly.
     let merged = entries
         .into_iter()
         .map(|e| {
@@ -100,11 +93,9 @@ fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
                 .name
                 .or_else(|| basename(&e.path))
                 .unwrap_or_else(|| display_path.clone());
-            let on = cfg.sidecar.get(&key).map(|s| s.on).unwrap_or(false);
-            let url = serves
-                .get(&key)
-                .and_then(|h| h.url.clone())
-                .unwrap_or_default();
+            let handle = serves.get(&key);
+            let on = handle.is_some();
+            let url = handle.and_then(|h| h.url.clone()).unwrap_or_default();
             Drive {
                 path: display_path,
                 name,
@@ -117,7 +108,11 @@ fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
 }
 
 #[tauri::command]
-fn add_drive(path: String) -> Result<(), String> {
+fn add_drive(
+    app: tauri::AppHandle,
+    state: State<Arc<AppState>>,
+    path: String,
+) -> Result<(), String> {
     let path = canonical_key(Path::new(&path));
     let out = Command::new(chan_bin())
         .args(["add", &path])
@@ -129,6 +124,14 @@ fn add_drive(path: String) -> Result<(), String> {
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
+
+    // Auto-start: opening a drive from the desktop is the user's
+    // way of saying "make this drive usable now". Spinning up the
+    // serve immediately is what they expect; otherwise the freshly
+    // added row sits there with On=off and Launch disabled, which
+    // looks broken.
+    let verbose = state.store.lock().unwrap().get().map_err(err)?.dev_mode;
+    serve::start(app, Arc::clone(&state), path, chan_bin(), verbose)?;
     Ok(())
 }
 
@@ -163,21 +166,9 @@ fn set_drive_on(
     on: bool,
 ) -> Result<(), String> {
     let key = canonical_key(Path::new(&path));
-
-    // Persist sidecar bit first so the toggle survives a restart
-    // even if the spawn fails. The reader thread flips it back to
-    // false on unexpected exit.
-    {
-        let mut store = state.store.lock().unwrap();
-        let mut cfg = store.get().map_err(err)?;
-        cfg.sidecar.entry(key.clone()).or_default().on = on;
-        store.save(&cfg).map_err(err)?;
-    }
-
     if on {
         let verbose = state.store.lock().unwrap().get().map_err(err)?.dev_mode;
-        let inner: Arc<AppState> = Arc::clone(&state);
-        serve::start(app, inner, key, chan_bin(), verbose)?;
+        serve::start(app, Arc::clone(&state), key, chan_bin(), verbose)?;
     } else {
         serve::stop(&state, &key);
     }

@@ -147,13 +147,16 @@ pub fn start(
             }
         }
 
-        // Reader hit EOF: chan exited. Reap and drop.
-        let mut serves = state2.serves.lock().unwrap();
-        if let Some(mut h) = serves.remove(&key2) {
-            let _ = h.child.wait();
+        // Reader hit EOF: chan exited (intentional kill or crash).
+        // Reap and remove from the live map. `list_drives` derives
+        // the row's On state from this map, so removal alone is
+        // enough to bring the toggle back to off on the next render.
+        {
+            let mut serves = state2.serves.lock().unwrap();
+            if let Some(mut h) = serves.remove(&key2) {
+                let _ = h.child.wait();
+            }
         }
-        drop(serves);
-        let _ = state2.set_drive_off(&key2);
         let _ = app2.emit(SERVES_CHANGED, ());
     });
 

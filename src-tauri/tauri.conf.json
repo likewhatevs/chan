@@ -26,8 +26,8 @@
       {
         "label": "settings",
         "title": "Chan Desktop — Settings",
-        "width": 480,
-        "height": 220,
+        "width": 600,
+        "height": 240,
         "resizable": false,
         "visible": false,
         "url": "settings.html"

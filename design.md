@@ -64,11 +64,13 @@ happens exclusively through `chan add` / `chan remove` (and, later,
 `chan rename`).
 
 The desktop owns a small sidecar config of its own at the
-platform-appropriate path, holding only state that has no place in
-chan: today that is just the `dev_mode` flag and a per-drive
-on-toggle, both keyed by canonical drive path. Per-drive serve URLs
-are kept in process memory only because chan rotates the bearer
-token on every `chan serve`.
+platform-appropriate path. It holds the global `dev_mode` flag and,
+per drive (keyed by canonical path), the last port that drive's
+`chan serve` bound to. Nothing about whether a drive is currently
+*running* is persisted: the On column in the UI is derived live
+from the in-memory map of supervised serves, so a desktop restart
+comes up with everything off and there is no chance of a stale
+on=true sticking after chan died unexpectedly.
 
 A filesystem watcher (`notify` + 150ms debounce) runs over
 `~/.chan/` for the lifetime of the process and emits a
@@ -108,12 +110,17 @@ launch when the chan registry is empty.
    section 4).
 3. chan-desktop runs `chan add <path>`. On non-zero exit, the stderr
    is surfaced as an inline error banner.
-4. On success there is nothing more to do here: the registry file
-   changed, the watcher fires, the UI re-fetches, the new row
-   appears with **On = off**. The user toggles On to start serving.
+4. On success the desktop immediately spawns `chan serve` for the
+   new drive (see section 3.3). The registry watcher fires, the UI
+   re-fetches, the new row appears with **On = on**, and the URL
+   column populates as soon as chan prints its ready banner.
 
-`add` is a separate step from `serve`: registering without serving is
-a valid state, and matches what the CLI does.
+The auto-start is specific to "Open drive" from the desktop UI:
+the user's intent there is "make this drive usable now". Adding a
+drive from a terminal (`chan add`) only registers it; the desktop
+shows the new row with On = off, the same as for any pre-existing
+registry entry. Registering without serving is still a valid state
+in the model; we just don't make the desktop pick it.
 
 ### 3.3 Toggle On (serve)
 
