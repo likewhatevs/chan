@@ -440,8 +440,13 @@ pub async fn serve_via_tunnel(
         while let Some(ev) = events_rx.recv().await {
             match ev {
                 chan_tunnel_client::TunnelEvent::Connected(reg) => {
+                    // Trailing slash matches the gateway's canonical form:
+                    // drive.chan.app/{user}/{drive}/ serves the embedded
+                    // chan SPA whose vite `base: "./"` resolves asset URLs
+                    // relative to that prefix. Without the slash the gateway
+                    // 308s, which works but adds a hop the user can see.
                     eprintln!(
-                        "chan tunnel connected: https://drive.chan.app{}",
+                        "chan tunnel connected: https://drive.chan.app{}/",
                         reg.prefix
                     );
                 }
