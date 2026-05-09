@@ -27,13 +27,7 @@ fn get_config(state: State<AppState>) -> Result<Config, String> {
 
 #[tauri::command]
 fn get_config_path(state: State<AppState>) -> String {
-    state
-        .store
-        .lock()
-        .unwrap()
-        .path()
-        .display()
-        .to_string()
+    state.store.lock().unwrap().path().display().to_string()
 }
 
 #[tauri::command]
@@ -139,7 +133,7 @@ fn main() {
             let state: State<AppState> = app.state();
             let cfg = state.store.lock().unwrap().get().unwrap_or_default();
             if cfg.dev_mode {
-                apply_dev_mode(&app.handle(), true);
+                apply_dev_mode(app.handle(), true);
             }
             Ok(())
         })

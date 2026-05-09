@@ -2,7 +2,15 @@
 name = "chan-desktop"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.95"
+description = "Desktop edition of the chan markdown editor."
+license = "Apache-2.0"
+repository = "https://github.com/chan-writer/chan-desktop"
+homepage = "https://chan.app"
+readme = "../README.md"
+keywords = ["markdown", "editor", "tauri", "notes", "chan"]
+categories = ["text-editors", "gui"]
+publish = false
 
 [[bin]]
 name = "chan-desktop"
