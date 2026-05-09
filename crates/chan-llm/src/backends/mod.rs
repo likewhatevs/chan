@@ -165,6 +165,10 @@ pub fn build(kind: BackendKind, config: &LlmConfig, drive_root: &Path) -> Result
         .for_backend(kind)
         .map(str::to_owned)
         .unwrap_or_else(|| kind.default_model().to_string());
+    // User override > backend default. claude_cli ignores this
+    // (claude has its own ceiling), so the resolver returns None
+    // for it and the constructor doesn't take the param at all.
+    let max_tokens_override = config.max_tokens.for_backend(kind);
     match kind {
         BackendKind::Ollama => {
             // Precedence: OLLAMA_HOST env (per-shell override) wins
@@ -175,21 +179,29 @@ pub fn build(kind: BackendKind, config: &LlmConfig, drive_root: &Path) -> Result
                 .or_else(|| config.urls.ollama.clone())
                 .unwrap_or_else(|| ollama::DEFAULT_URL.to_string());
             let _ = drive_root;
-            Ok(Arc::new(ollama::OllamaBackend::new(base, model)))
+            Ok(Arc::new(ollama::OllamaBackend::new(
+                base,
+                model,
+                max_tokens_override,
+            )))
         }
         BackendKind::Anthropic => {
             let key = keys::resolve(kind, config)
                 .0
                 .ok_or_else(|| LlmError::MissingApiKey("anthropic".into()))?;
             let _ = drive_root;
-            Ok(Arc::new(anthropic::AnthropicBackend::new(key, model)))
+            let max_tokens = max_tokens_override.unwrap_or(anthropic::DEFAULT_MAX_TOKENS);
+            Ok(Arc::new(anthropic::AnthropicBackend::new(
+                key, model, max_tokens,
+            )))
         }
         BackendKind::Gemini => {
             let key = keys::resolve(kind, config)
                 .0
                 .ok_or_else(|| LlmError::MissingApiKey("gemini".into()))?;
             let _ = drive_root;
-            Ok(Arc::new(gemini::GeminiBackend::new(key, model)))
+            let max_tokens = max_tokens_override.unwrap_or(gemini::DEFAULT_MAX_OUTPUT_TOKENS);
+            Ok(Arc::new(gemini::GeminiBackend::new(key, model, max_tokens)))
         }
         BackendKind::ClaudeCli => {
             let cli = config.claude_cli.clone();

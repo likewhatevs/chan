@@ -96,11 +96,15 @@ pub async fn list_models(base_url: &str) -> Result<Vec<String>, crate::error::Ll
 pub struct OllamaBackend {
     base_url: String,
     model: String,
+    /// Maps to Ollama's `options.num_predict`. None = no cap (the
+    /// upstream default; Ollama generates until the model emits a
+    /// stop token or context fills up).
+    max_tokens: Option<u32>,
     client: reqwest::Client,
 }
 
 impl OllamaBackend {
-    pub fn new(base_url: String, model: String) -> Self {
+    pub fn new(base_url: String, model: String, max_tokens: Option<u32>) -> Self {
         // Reject unexpected schemes early. reqwest would fail at
         // request time anyway, but the error message ("relative URL
         // without a base") is opaque; this keeps the user-visible
@@ -127,6 +131,7 @@ impl OllamaBackend {
         Self {
             base_url: base,
             model,
+            max_tokens,
             client,
         }
     }
@@ -172,6 +177,9 @@ impl Backend for OllamaBackend {
                 })
                 .collect(),
             stream: true,
+            options: self.max_tokens.map(|n| ChatOptions {
+                num_predict: Some(n),
+            }),
         };
 
         let url = format!("{}/api/chat", self.base_url);
@@ -346,6 +354,21 @@ struct ChatRequest<'a> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<ToolWire<'a>>,
     stream: bool,
+    /// Ollama's per-request `options` table; only populated when
+    /// the user pinned a max-tokens value, otherwise we omit the
+    /// field so Ollama uses its default. Other generation params
+    /// (temperature, top_p, etc.) live here too and can be added
+    /// the same way when chan-llm starts surfacing them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    options: Option<ChatOptions>,
+}
+
+#[derive(Serialize)]
+struct ChatOptions {
+    /// Ollama wire name. -1 means "no cap"; we never emit that
+    /// because `None` already encodes the same intent.
+    #[serde(rename = "num_predict", skip_serializing_if = "Option::is_none")]
+    num_predict: Option<u32>,
 }
 
 #[derive(Serialize)]

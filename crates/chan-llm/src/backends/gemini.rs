@@ -40,7 +40,13 @@ use super::{Backend, Outcome};
 
 const ENDPOINT_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 
-const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 4096;
+/// Default per-turn output cap when the user hasn't pinned one in
+/// `LlmConfig::max_tokens.gemini`.
+pub const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 4096;
+
+pub fn default_max_output_tokens() -> u32 {
+    DEFAULT_MAX_OUTPUT_TOKENS
+}
 
 /// Hard cap on the SSE re-assembly buffer. See `anthropic.rs` for
 /// rationale; Gemini frames are similarly small in practice.
@@ -49,6 +55,7 @@ const SSE_BUF_CAP_BYTES: usize = 1024 * 1024;
 pub struct GeminiBackend {
     api_key: String,
     model: String,
+    max_output_tokens: u32,
     client: reqwest::Client,
 }
 
@@ -59,12 +66,13 @@ impl std::fmt::Debug for GeminiBackend {
         f.debug_struct("GeminiBackend")
             .field("api_key", &"<redacted>")
             .field("model", &self.model)
+            .field("max_output_tokens", &self.max_output_tokens)
             .finish_non_exhaustive()
     }
 }
 
 impl GeminiBackend {
-    pub fn new(api_key: String, model: String) -> Self {
+    pub fn new(api_key: String, model: String, max_output_tokens: u32) -> Self {
         // 5 minute timeout: same headroom as the other backends for
         // tool-use loops with iterated reads / searches.
         let client = reqwest::Client::builder()
@@ -75,6 +83,7 @@ impl GeminiBackend {
         Self {
             api_key,
             model,
+            max_output_tokens,
             client,
         }
     }
@@ -109,7 +118,7 @@ impl Backend for GeminiBackend {
             system_instruction,
             tools: tools_wire,
             generation_config: GeminiGenerationConfig {
-                max_output_tokens: Some(DEFAULT_MAX_OUTPUT_TOKENS),
+                max_output_tokens: Some(self.max_output_tokens),
             },
         };
 
@@ -377,8 +386,17 @@ fn build_contents(msgs: &[Message]) -> (Option<GeminiSystemInstruction>, Vec<Gem
                 // Gemini's functionResponse needs the tool name (not
                 // the synthesized id); recover it by walking back
                 // through `out` for the matching prior `model` turn.
-                let name = lookup_tool_name(&out, m.tool_call_id.as_deref())
-                    .unwrap_or_else(|| "tool".to_owned());
+                // If we can't recover the name (broken transcript,
+                // host stitched together turns we never saw), skip
+                // the message rather than send `name: "tool"` which
+                // Gemini rejects as an unknown function.
+                let Some(name) = lookup_tool_name(&out, m.tool_call_id.as_deref()) else {
+                    tracing::warn!(
+                        id = ?m.tool_call_id,
+                        "gemini: dropping tool result with no matching prior functionCall",
+                    );
+                    continue;
+                };
                 out.push(GeminiContent {
                     role: "user",
                     parts: vec![GeminiPart::FunctionResponse {
@@ -590,6 +608,28 @@ mod tests {
         assert_eq!(contents.len(), 2);
         assert_eq!(contents[0].role, "user");
         assert_eq!(contents[1].role, "model");
+    }
+
+    #[test]
+    fn build_contents_drops_orphan_tool_result() {
+        // Tool result with an id that doesn't match any prior
+        // functionCall in the transcript. The previous behavior
+        // synthesized name="tool" which Gemini rejects; the new
+        // behavior drops the message and logs.
+        let msgs = vec![
+            Message::user("hi"),
+            Message {
+                role: Role::Tool,
+                content: "ghost result".into(),
+                tool_call_id: Some("never-existed".into()),
+                tool_calls: Vec::new(),
+            },
+        ];
+        let (_, contents) = build_contents(&msgs);
+        // Only the user turn survives; the orphan Tool message is
+        // dropped rather than sent with name="tool".
+        assert_eq!(contents.len(), 1);
+        assert_eq!(contents[0].role, "user");
     }
 
     #[test]

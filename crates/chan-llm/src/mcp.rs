@@ -188,6 +188,13 @@ impl ServerHandler for Server {}
 /// The standalone binary forces auto-apply on, so this branch fires
 /// only in the embedded claude_cli path (issue #1) where a future
 /// side channel will let the host approve writes.
+///
+/// Error messages are run through `mcp_safe_message` so chan-drive's
+/// Display strings (which may carry host absolute paths via
+/// `SpecialFile.path` / `SymlinkEscape`) don't leak across the
+/// MCP boundary. The MCP client may be a third-party process; we
+/// surface the variant kind and the model-actionable bits, no host
+/// filesystem layout.
 fn run_tool(
     name: &str,
     args: &serde_json::Value,
@@ -196,11 +203,54 @@ fn run_tool(
     match tools::execute(name, args, ctx) {
         Ok(ToolOutcome::Ok(v)) => serde_json::to_string(&v)
             .map_err(|e| ErrorData::internal_error(format!("serialize result: {e}"), None)),
-        Ok(ToolOutcome::Pending { tool, args }) => Err(ErrorData::invalid_params(
-            format!("write deferred: {tool} {args}; auto_apply_writes is off"),
+        Ok(ToolOutcome::Pending { tool, .. }) => Err(ErrorData::invalid_params(
+            format!("{tool} deferred: auto_apply_writes is off; user must approve"),
             None,
         )),
-        Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        Err(e) => Err(ErrorData::internal_error(mcp_safe_message(&e), None)),
+    }
+}
+
+/// Build an MCP-safe error message for `err`. Strips host paths and
+/// chan-drive Display details that aren't relevant to the model
+/// while preserving the kind and any model-actionable numbers
+/// (sizes, mtimes, limits).
+fn mcp_safe_message(err: &LlmError) -> String {
+    match err {
+        LlmError::WriteConflict { current_mtime_ns } => {
+            format!("write conflict: file changed on disk (current mtime ns: {current_mtime_ns:?})")
+        }
+        LlmError::WriteTooLarge { kind, size, limit } => {
+            format!("write too large: {size} bytes exceeds {limit} byte cap for {kind}")
+        }
+        LlmError::ListingTooLarge { observed, limit } => {
+            format!("listing too large: {observed} entries (cap {limit})")
+        }
+        LlmError::PathRefused(_) => {
+            // The chan-drive Display may carry an absolute path
+            // (SpecialFile.path, SymlinkEscape); flatten to the
+            // category. The model knows which call it issued; the
+            // category is enough to recover.
+            "path refused: not editable, not a regular file, or escapes drive root".to_string()
+        }
+        LlmError::Core(_) => {
+            // chan-drive errors that didn't get a typed passthrough
+            // (DriveLocked, DriveAlreadyOpen, Trash*, Search, Graph,
+            // Watch, ConfigDecode, Io). Several include paths or
+            // host-specific detail; surface the category only.
+            "drive operation failed".to_string()
+        }
+        LlmError::Io(_) => "i/o error".to_string(),
+        LlmError::Tool(msg) => format!("tool error: {msg}"),
+        LlmError::Http(_) => "http error".to_string(),
+        LlmError::BackendError { status, .. } => format!("backend error: {status}"),
+        LlmError::Keychain(_) => "keychain error".to_string(),
+        LlmError::ConfigDecode(_) => "config decode error".to_string(),
+        LlmError::ConfigEncode(_) => "config encode error".to_string(),
+        LlmError::Mcp(_) => "mcp error".to_string(),
+        LlmError::MissingApiKey(_) => "api key missing".to_string(),
+        LlmError::BackendNotConfigured => "no backend configured".to_string(),
+        LlmError::NotImplemented(_) => "not implemented".to_string(),
     }
 }
 
@@ -289,14 +339,53 @@ mod tests {
                 expected_mtime_ns: None,
             }))
             .unwrap_err();
-        // chan-drive's editable-text gate fires; the assistant cannot
-        // bypass it through the MCP surface.
+        // chan-drive's editable-text gate fires; the MCP surface
+        // returns the scrubbed kind ("path refused"), not the
+        // chan-drive Display string (which would echo "img.png" /
+        // host paths). The model gets the category and recovers.
         assert!(
-            err.message.to_lowercase().contains("png")
-                || err.message.to_lowercase().contains("text")
-                || err.message.to_lowercase().contains(".md"),
+            err.message.to_lowercase().contains("path refused"),
             "msg={}",
             err.message
         );
+    }
+
+    #[test]
+    fn mcp_error_message_does_not_leak_host_paths() {
+        // Trigger a path refusal that, prior to the scrub, would
+        // echo "img.png" and any chan-drive Display detail. After
+        // the scrub the message is category-only.
+        let (_cfg, _root, server) = fixture(true);
+        let err = server
+            .write_file(Parameters(WriteFileParams {
+                path: "img.png".into(),
+                content: "x".into(),
+                expected_mtime_ns: None,
+            }))
+            .unwrap_err();
+        assert!(
+            !err.message.contains("img.png"),
+            "leaked path: {}",
+            err.message
+        );
+        assert!(
+            !err.message.contains('/'),
+            "looks like an absolute path: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn mcp_error_message_keeps_actionable_numbers() {
+        // WriteConflict carries a numeric mtime; that's
+        // model-actionable and stays in the scrubbed output.
+        let err = mcp_safe_message(&LlmError::WriteConflict {
+            current_mtime_ns: Some(123_456_789),
+        });
+        assert!(
+            err.contains("123456789") || err.contains("123_456_789") || err.contains("123456_789"),
+            "should keep mtime numeric in: {err}",
+        );
+        assert!(err.to_lowercase().contains("conflict"));
     }
 }

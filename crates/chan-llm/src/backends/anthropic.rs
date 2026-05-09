@@ -45,11 +45,19 @@ const ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const MODELS_ENDPOINT: &str = "https://api.anthropic.com/v1/models";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-/// Per-turn output cap. 4096 tokens is plenty for the chat replies
-/// and multi-tool exchanges chan does today, and well below the
-/// per-model upper limits, so we don't surprise users with a 429
-/// from a runaway model.
-const DEFAULT_MAX_TOKENS: u32 = 4096;
+/// Per-turn output cap when the user hasn't pinned one in
+/// `LlmConfig::max_tokens.anthropic`. 4096 tokens is plenty for
+/// the chat replies and multi-tool exchanges chan does today, and
+/// well below the per-model upper limits, so we don't surprise
+/// users with a 429 from a runaway model. Reachable via
+/// `default_max_tokens()` for callers who want the resolver value.
+pub const DEFAULT_MAX_TOKENS: u32 = 4096;
+
+/// Public so `backends::build` can read the same default the
+/// constructor does.
+pub fn default_max_tokens() -> u32 {
+    DEFAULT_MAX_TOKENS
+}
 
 /// Hard cap on the SSE re-assembly buffer. Real Anthropic frames
 /// are kilobytes; if a frame ever grows past this we treat the
@@ -119,6 +127,7 @@ struct ModelInfo {
 pub struct AnthropicBackend {
     api_key: String,
     model: String,
+    max_tokens: u32,
     client: reqwest::Client,
 }
 
@@ -130,12 +139,13 @@ impl std::fmt::Debug for AnthropicBackend {
         f.debug_struct("AnthropicBackend")
             .field("api_key", &"<redacted>")
             .field("model", &self.model)
+            .field("max_tokens", &self.max_tokens)
             .finish_non_exhaustive()
     }
 }
 
 impl AnthropicBackend {
-    pub fn new(api_key: String, model: String) -> Self {
+    pub fn new(api_key: String, model: String, max_tokens: u32) -> Self {
         // 5 minute timeout: tool-use loops can take a while when the
         // assistant is iterating through reads / searches before
         // composing a reply. Per-event latency is what matters for
@@ -152,6 +162,7 @@ impl AnthropicBackend {
         Self {
             api_key,
             model,
+            max_tokens,
             client,
         }
     }
@@ -169,7 +180,7 @@ impl Backend for AnthropicBackend {
         let (system, wire_messages) = split_system(&messages);
         let body = AnthropicRequest {
             model: &self.model,
-            max_tokens: DEFAULT_MAX_TOKENS,
+            max_tokens: self.max_tokens,
             stream: true,
             system: system.as_deref(),
             messages: &wire_messages,

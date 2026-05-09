@@ -43,6 +43,14 @@ pub struct LlmConfig {
     /// compatible gateways later is just a new field.
     #[serde(default, skip_serializing_if = "Urls::is_empty")]
     pub urls: Urls,
+    /// Per-backend maximum output tokens. Falls back to the
+    /// backend's default when unset (Anthropic 4096, Gemini 4096,
+    /// Ollama uncapped). Use this when a model supports a higher
+    /// ceiling (Claude Opus's long-form modes, Gemini 1M-context
+    /// models) or to deliberately cap costs on a slow local model.
+    /// claude_cli is omitted: claude picks its own ceiling.
+    #[serde(default, skip_serializing_if = "MaxTokens::is_empty")]
+    pub max_tokens: MaxTokens,
     /// When true, the assistant's `write_file` tool calls go to disk
     /// without a per-call confirmation. When false, the consumer
     /// (web frontend, native shell) must surface a confirmation UI
@@ -75,6 +83,41 @@ pub struct Urls {
 impl Urls {
     fn is_empty(&self) -> bool {
         self.ollama.is_none()
+    }
+}
+
+/// Per-backend output-token caps. Mirrors `Models`'s shape so the
+/// "unset = backend default" rule reads consistently across
+/// settings UIs. `for_backend` returns `None` when the user hasn't
+/// pinned a value, and the resolver in `backends::build` falls
+/// back to the per-backend default.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MaxTokens {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anthropic: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gemini: Option<u32>,
+    /// Maps to Ollama's `options.num_predict`. -1 means "no cap"
+    /// in Ollama wire-format; we don't surface that here, so set
+    /// a positive number to opt into a cap on long local-model
+    /// generations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ollama: Option<u32>,
+}
+
+impl MaxTokens {
+    fn is_empty(&self) -> bool {
+        self.anthropic.is_none() && self.gemini.is_none() && self.ollama.is_none()
+    }
+
+    pub fn for_backend(&self, kind: BackendKind) -> Option<u32> {
+        match kind {
+            BackendKind::Anthropic => self.anthropic,
+            BackendKind::Gemini => self.gemini,
+            BackendKind::Ollama => self.ollama,
+            // claude_cli's max-output is claude's own concern.
+            BackendKind::ClaudeCli => None,
+        }
     }
 }
 
@@ -280,6 +323,7 @@ mod tests {
                 ..Default::default()
             },
             claude_cli: ClaudeCli::default(),
+            max_tokens: MaxTokens::default(),
         };
         cfg.save_to(&p).unwrap();
         let loaded = LlmConfig::load_from(&p).unwrap();
@@ -348,6 +392,41 @@ mod tests {
         LlmConfig::default().save_to(&p).unwrap();
         let raw = std::fs::read_to_string(&p).unwrap();
         assert!(!raw.contains("[claude_cli]"), "got: {raw}");
+    }
+
+    #[test]
+    fn max_tokens_round_trips() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("llm.toml");
+        let cfg = LlmConfig {
+            backend: Some(BackendKind::Anthropic),
+            max_tokens: MaxTokens {
+                anthropic: Some(8192),
+                gemini: Some(2048),
+                ollama: None,
+            },
+            ..Default::default()
+        };
+        cfg.save_to(&p).unwrap();
+        let loaded = LlmConfig::load_from(&p).unwrap();
+        assert_eq!(
+            loaded.max_tokens.for_backend(BackendKind::Anthropic),
+            Some(8192)
+        );
+        assert_eq!(
+            loaded.max_tokens.for_backend(BackendKind::Gemini),
+            Some(2048)
+        );
+        assert_eq!(loaded.max_tokens.for_backend(BackendKind::Ollama), None);
+    }
+
+    #[test]
+    fn empty_max_tokens_skipped_in_serialized_output() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("llm.toml");
+        LlmConfig::default().save_to(&p).unwrap();
+        let raw = std::fs::read_to_string(&p).unwrap();
+        assert!(!raw.contains("[max_tokens]"), "got: {raw}");
     }
 
     #[test]

@@ -59,7 +59,7 @@ pub mod session;
 pub mod tools;
 
 pub use backends::BackendKind;
-pub use config::LlmConfig;
+pub use config::{LlmConfig, MaxTokens};
 pub use error::LlmError;
 pub use keys::KeyStatus;
 pub use session::{
