@@ -443,8 +443,15 @@ impl Index {
     }
 
     /// One-file write path used by both `build_all` and `index_one`.
-    /// Chunks once, hands the same chunks to BM25 and (optionally)
-    /// to the vector store. Caller commits BM25.
+    /// Chunks once, persists vectors first, then hands the same
+    /// chunks to BM25. Caller commits BM25; that commit is the
+    /// durable boundary for the pair. A crash between vector
+    /// persist and BM25 commit drops the BM25 write entirely
+    /// (tantivy never persisted it) and leaves the vector shard on
+    /// disk, which the next reindex overwrites. The opposite
+    /// ordering would let a committed BM25 row reference a chunk
+    /// whose vector never reached disk: silent semantic-search
+    /// drift that the user only notices when results disappear.
     fn write_file(
         &self,
         rel_path: &str,
@@ -452,8 +459,6 @@ impl Index {
         include_vectors: bool,
     ) -> Result<usize, IndexError> {
         let chunks = chunking::chunk(text, &self.config.chunking);
-        self.bm25
-            .index_file(rel_path, text, &self.config.chunking)?;
         // include_vectors is the caller's intent. When the binary
         // is built without `embeddings`, we never produce vectors
         // regardless. BM25-only is a working subset.
@@ -461,45 +466,50 @@ impl Index {
         let _ = include_vectors;
         #[cfg(feature = "embeddings")]
         {
-            if !include_vectors {
-                return Ok(chunks.len());
+            if include_vectors {
+                if chunks.is_empty() {
+                    self.vectors
+                        .replace_file(rel_path, &self.config.model, 0, vec![])?;
+                } else {
+                    let embedder = self.embedder()?;
+                    let dim = embedder.dim();
+                    let bodies: Vec<&str> = chunks.iter().map(|c| c.body.as_str()).collect();
+                    let vectors_raw = embedder.embed_documents(&bodies)?;
+                    let embedded = vectors::pair(&chunks, vectors_raw);
+                    self.vectors
+                        .replace_file(rel_path, &self.config.model, dim, embedded)?;
+                }
             }
-            if chunks.is_empty() {
-                self.vectors
-                    .replace_file(rel_path, &self.config.model, 0, vec![])?;
-                return Ok(0);
-            }
-            let embedder = self.embedder()?;
-            let dim = embedder.dim();
-            let bodies: Vec<&str> = chunks.iter().map(|c| c.body.as_str()).collect();
-            let vectors_raw = embedder.embed_documents(&bodies)?;
-            let embedded = vectors::pair(&chunks, vectors_raw);
-            self.vectors
-                .replace_file(rel_path, &self.config.model, dim, embedded)?;
         }
+        self.bm25
+            .index_file(rel_path, text, &self.config.chunking)?;
         Ok(chunks.len())
     }
 
     /// Re-index a single file (incremental). Used by the watcher
-    /// hook. Always writes both indexes; if you need bm25-only at
-    /// watcher time, gate at the caller.
-    pub fn index_one(&self, rel_path: &str) -> Result<usize, IndexError> {
-        let abs = self.drive_root.join(rel_path);
-        if !abs.is_file() {
-            return self.forget(rel_path).map(|_| 0);
-        }
-        let text = std::fs::read_to_string(&abs)?;
-        let n = self.write_file(rel_path, &text, true)?;
+    /// hook. Caller supplies both `rel_path` and `text` so the read
+    /// goes through the Drive sandbox (path safety, special-file
+    /// refusal, editable-text gate). The index never opens user
+    /// files directly outside `build_all`'s controlled walk.
+    pub fn index_one(&self, rel_path: &str, text: &str) -> Result<usize, IndexError> {
+        let n = self.write_file(rel_path, text, true)?;
         self.bm25.commit()?;
         Ok(n)
     }
 
     /// Drop a file from both indexes (e.g. after the file is
-    /// removed on disk).
+    /// removed on disk). Vectors first, then BM25 + commit. A
+    /// crash between the two leaves the vector shard removed but
+    /// BM25 still claiming the row; the next BM25 search keeps
+    /// working and the next reindex repopulates vectors. The
+    /// opposite ordering would commit a BM25 deletion while the
+    /// vector shard outlived it, so semantic search would surface
+    /// a hit pointing at a path BM25 (and the editor) considers
+    /// gone.
     pub fn forget(&self, rel_path: &str) -> Result<(), IndexError> {
+        self.vectors.delete_file(rel_path)?;
         self.bm25.delete_file(rel_path)?;
         self.bm25.commit()?;
-        self.vectors.delete_file(rel_path)?;
         Ok(())
     }
 

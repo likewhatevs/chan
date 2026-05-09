@@ -13,6 +13,7 @@
 // normalized vectors, so cosine == dot product and we skip the
 // re-normalize at write time.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -45,13 +46,6 @@ struct FileEmbeddings {
     model: String,
     dim: usize,
     chunks: Vec<EmbeddedChunk>,
-}
-
-/// One in-memory entry in the search-time snapshot.
-#[derive(Debug, Clone)]
-struct Entry {
-    rel_path: String,
-    chunk: EmbeddedChunk,
 }
 
 /// One semantic-search result. Field set matches `bm25::Hit` so the
@@ -89,10 +83,11 @@ pub enum VectorError {
 /// In-memory + on-disk vector store, keyed by source path.
 pub struct VectorStore {
     embeddings_dir: PathBuf,
-    /// All chunks across all files, flat. Refreshed on every
-    /// add/replace/delete so brute-force search has nothing to
-    /// reconstruct.
-    entries: std::sync::RwLock<Vec<Entry>>,
+    /// rel_path -> chunks for that file. Mutated incrementally on
+    /// every replace_file / delete_file so search has the same view
+    /// as disk without re-reading every shard. BTreeMap (over Hash)
+    /// keeps search-result ordering deterministic when scores tie.
+    entries: std::sync::RwLock<BTreeMap<String, Vec<EmbeddedChunk>>>,
 }
 
 impl std::fmt::Debug for VectorStore {
@@ -115,8 +110,8 @@ impl VectorStore {
     }
 
     /// Replace the stored chunks for `rel_path` with `embedded`.
-    /// Persists, then refreshes the in-memory snapshot. Pass an empty
-    /// slice to delete the file from the store entirely.
+    /// Persists, then mutates the in-memory snapshot in place. Pass
+    /// an empty slice to delete the file from the store entirely.
     pub fn replace_file(
         &self,
         rel_path: &str,
@@ -128,10 +123,12 @@ impl VectorStore {
         if embedded.is_empty() {
             // No chunks => no file. (Files made up entirely of
             // whitespace / fenced code only would land here.)
-            if path.exists() {
-                std::fs::remove_file(&path)?;
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
             }
-            self.refresh()?;
+            self.entries.write().unwrap().remove(rel_path);
             return Ok(());
         }
         // Sanity: every vector matches `dim`.
@@ -155,16 +152,22 @@ impl VectorStore {
             .map_err(|e| VectorError::Encode(e.to_string()))?;
         crate::fs_ops::atomic_write(&path, &bytes)
             .map_err(|e| VectorError::Io(std::io::Error::other(e.to_string())))?;
-        self.refresh()?;
+        // On-disk write succeeded; mirror it in memory.
+        self.entries
+            .write()
+            .unwrap()
+            .insert(rel_path.to_owned(), payload.chunks);
         Ok(())
     }
 
     pub fn delete_file(&self, rel_path: &str) -> Result<(), VectorError> {
         let path = file_for(&self.embeddings_dir, rel_path);
-        if path.exists() {
-            std::fs::remove_file(&path)?;
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
         }
-        self.refresh()?;
+        self.entries.write().unwrap().remove(rel_path);
         Ok(())
     }
 
@@ -176,21 +179,25 @@ impl VectorStore {
             return Vec::new();
         }
         let entries = self.entries.read().unwrap();
-        let mut scored: Vec<(f32, &Entry)> = entries
+        let mut scored: Vec<(f32, &str, &EmbeddedChunk)> = entries
             .iter()
-            .filter(|e| e.chunk.vector.len() == query_vec.len())
-            .map(|e| (dot(query_vec, &e.chunk.vector), e))
+            .flat_map(|(rel, chunks)| {
+                chunks
+                    .iter()
+                    .filter(|c| c.vector.len() == query_vec.len())
+                    .map(move |c| (dot(query_vec, &c.vector), rel.as_str(), c))
+            })
             .collect();
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(limit);
         scored
             .into_iter()
-            .map(|(score, e)| Hit {
-                path: e.rel_path.clone(),
-                chunk_id: e.chunk.chunk_id.clone(),
-                heading: e.chunk.heading.clone(),
-                start_line: e.chunk.start_line,
-                snippet: snippet_of(&e.chunk.body),
+            .map(|(score, rel, c)| Hit {
+                path: rel.to_owned(),
+                chunk_id: c.chunk_id.clone(),
+                heading: c.heading.clone(),
+                start_line: c.start_line,
+                snippet: snippet_of(&c.body),
                 score,
             })
             .collect()
@@ -198,13 +205,7 @@ impl VectorStore {
 
     /// Total stored chunks. For the API status endpoint.
     pub fn chunk_count(&self) -> usize {
-        self.entries.read().unwrap().len()
-    }
-
-    fn refresh(&self) -> Result<(), VectorError> {
-        let fresh = load_all(&self.embeddings_dir)?;
-        *self.entries.write().unwrap() = fresh;
-        Ok(())
+        self.entries.read().unwrap().values().map(Vec::len).sum()
     }
 }
 
@@ -239,8 +240,8 @@ fn file_for(dir: &Path, rel_path: &str) -> PathBuf {
     dir.join(format!("{hex}.bin"))
 }
 
-fn load_all(dir: &Path) -> Result<Vec<Entry>, VectorError> {
-    let mut out = Vec::new();
+fn load_all(dir: &Path) -> Result<BTreeMap<String, Vec<EmbeddedChunk>>, VectorError> {
+    let mut out: BTreeMap<String, Vec<EmbeddedChunk>> = BTreeMap::new();
     let read_dir = match std::fs::read_dir(dir) {
         Ok(d) => d,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
@@ -276,12 +277,11 @@ fn load_all(dir: &Path) -> Result<Vec<Entry>, VectorError> {
             );
             continue;
         }
-        for c in decoded.chunks {
-            out.push(Entry {
-                rel_path: decoded.rel_path.clone(),
-                chunk: c,
-            });
-        }
+        // Two shards mapping to the same rel_path would be a hash
+        // collision in `file_for` (sha256[..16]). Keep the last
+        // wins; on-disk, replace_file overwrites by hash so this
+        // is purely defensive.
+        out.insert(decoded.rel_path, decoded.chunks);
     }
     Ok(out)
 }

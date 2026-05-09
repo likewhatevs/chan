@@ -804,7 +804,9 @@ impl Drive {
         // (search-then-graph) made backlinks the silent victim.
         self.graph()?
             .replace_file(rel, title.as_deref(), mtime, &edges, &headings)?;
-        self.index()?.index_one(rel)?;
+        // Hand the already-read content to the index so the read
+        // goes through the Drive sandbox exactly once.
+        self.index()?.index_one(rel, &content)?;
         Ok(())
     }
 

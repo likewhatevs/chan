@@ -9,6 +9,44 @@
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 
+/// Byte ranges in the source where wiki-link syntax should be
+/// ignored: code blocks (fenced + indented), inline code, raw HTML.
+/// Wiki links inside these would render as literal text in any
+/// markdown viewer, so storing them as graph edges is a phantom.
+fn skip_ranges(markdown: &str) -> Vec<std::ops::Range<usize>> {
+    let parser = Parser::new_ext(markdown, Options::all()).into_offset_iter();
+    let mut out = Vec::new();
+    let mut code_depth = 0usize;
+    let mut code_start: Option<usize> = None;
+    for (event, range) in parser {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => {
+                if code_depth == 0 {
+                    code_start = Some(range.start);
+                }
+                code_depth += 1;
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                code_depth = code_depth.saturating_sub(1);
+                if code_depth == 0 {
+                    if let Some(s) = code_start.take() {
+                        out.push(s..range.end);
+                    }
+                }
+            }
+            Event::Code(_) | Event::Html(_) | Event::InlineHtml(_) => {
+                out.push(range);
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn in_skip(ranges: &[std::ops::Range<usize>], pos: usize) -> bool {
+    ranges.iter().any(|r| r.start <= pos && pos < r.end)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Link {
     /// Target as written. Not resolved against any base path.
@@ -79,13 +117,21 @@ fn standard_links(markdown: &str) -> Vec<Link> {
 
 /// Hand-rolled scanner for `[[...]]` because pulldown-cmark doesn't
 /// know about wiki links. We don't nest, and a newline inside the
-/// brackets aborts the match.
+/// brackets aborts the match. Skips matches that fall inside ranges
+/// pulldown-cmark identified as code or raw HTML, where the syntax
+/// would render literally and storing it as a graph edge is a
+/// phantom.
 fn wiki_links(markdown: &str) -> Vec<Link> {
     let mut out = Vec::new();
+    let skips = skip_ranges(markdown);
     let bytes = markdown.as_bytes();
     let mut i = 0;
     while i + 1 < bytes.len() {
         if bytes[i] == b'[' && bytes[i + 1] == b'[' {
+            if in_skip(&skips, i) {
+                i += 1;
+                continue;
+            }
             let start = i + 2;
             let mut j = start;
             while j + 1 < bytes.len() {
@@ -190,5 +236,37 @@ mod tests {
         let md = "Hello [a](./a.md) and [[b]] and <https://x.com>";
         let links = extract_links(md);
         assert_eq!(links.len(), 3);
+    }
+
+    #[test]
+    fn wiki_link_in_fenced_code_is_skipped() {
+        let md = "before\n\n```\n[[ignored]]\n```\n\nafter [[real]] tail";
+        let links = extract_links(md);
+        let wiki: Vec<&Link> = links.iter().filter(|l| l.wiki).collect();
+        assert_eq!(wiki.len(), 1, "got: {wiki:?}");
+        assert_eq!(wiki[0].target, "real");
+    }
+
+    #[test]
+    fn wiki_link_in_indented_code_is_skipped() {
+        let md = "para\n\n    [[ignored]]\n\nafter";
+        let wiki: Vec<Link> = extract_links(md).into_iter().filter(|l| l.wiki).collect();
+        assert!(wiki.is_empty(), "got: {wiki:?}");
+    }
+
+    #[test]
+    fn wiki_link_in_inline_code_is_skipped() {
+        let md = "use `[[example]]` and write [[real]]";
+        let wiki: Vec<Link> = extract_links(md).into_iter().filter(|l| l.wiki).collect();
+        assert_eq!(wiki.len(), 1);
+        assert_eq!(wiki[0].target, "real");
+    }
+
+    #[test]
+    fn wiki_link_in_raw_html_block_is_skipped() {
+        let md = "<div>\n[[ignored]]\n</div>\n\nafter [[real]]";
+        let wiki: Vec<Link> = extract_links(md).into_iter().filter(|l| l.wiki).collect();
+        assert_eq!(wiki.len(), 1);
+        assert_eq!(wiki[0].target, "real");
     }
 }
