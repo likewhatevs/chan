@@ -660,11 +660,29 @@ fn write_xattrs_via_fd(
 }
 
 /// Fsync a cap-std `Dir` so a fresh dirent inside it becomes
-/// durable. On unix we dup the fd into a `std::fs::File`, sync, and
-/// drop (which closes the dup); the cap-std `Dir` keeps its own fd
-/// alive. On Windows this is a no-op for the same reason as
-/// `sync_dir`.
-#[cfg(unix)]
+/// durable. On Windows this is a no-op (NTFS commits dirent changes
+/// through the journal as part of the rename itself).
+///
+/// Linux quirk: `Dir::open_ambient_dir` opens directories with
+/// `O_PATH` via cap-primitives, and an `O_PATH` fd does not support
+/// `fsync` (returns `EBADF`). Dup'ing the fd preserves `O_PATH`, so a
+/// straight `try_clone_to_owned` + `sync_all` fails on Linux. We
+/// re-open the same dir via `/proc/self/fd/<n>` to get a fresh
+/// non-`O_PATH` fd that supports `fsync`. Other unixes (macOS, BSDs)
+/// don't carry `O_PATH`, so the dup path is fine there.
+#[cfg(target_os = "linux")]
+pub(crate) fn sync_dir_handle(dir: &cap_std::fs::Dir) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    let raw = dir.as_raw_fd();
+    let proc_path = format!("/proc/self/fd/{raw}");
+    let f = std::fs::File::open(&proc_path)
+        .map_err(|e| ChanError::Io(format!("reopen dir via procfs for fsync: {e}")))?;
+    f.sync_all()
+        .map_err(|e| ChanError::Io(format!("fsync dir: {e}")))?;
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
 pub(crate) fn sync_dir_handle(dir: &cap_std::fs::Dir) -> Result<()> {
     use std::os::fd::AsFd;
     let owned = dir
