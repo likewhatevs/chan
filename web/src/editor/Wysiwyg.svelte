@@ -88,10 +88,27 @@
   // a parent prop flip. Mirror it through setEditable on every
   // prop change. Also dismiss the wiki bubble: it cannot commit
   // edits in a non-editable doc.
+  //
+  // Two subtle points:
+  //
+  // 1. Read `readonly` BEFORE the early-return so Svelte 5 always
+  //    subscribes the effect to it. The first run can happen before
+  //    onMount instantiates the editor; bailing on `!editor` first
+  //    would leave `readonly` untracked and Tiptap stuck in its
+  //    initial `editable` state.
+  //
+  // 2. Pass `emitUpdate=false` (and short-circuit when nothing
+  //    needs to change) so setEditable doesn't dispatch a Tiptap
+  //    update transaction. The default `emitUpdate=true` fires
+  //    onUpdate, which writes `value` back through the bindable;
+  //    that round-trip ripples into App.svelte's autosave effect
+  //    and trips Svelte's effect-update-depth guard.
   $effect(() => {
+    const ro = readonly;
     if (!editor) return;
-    editor.setEditable(!readonly);
-    if (readonly) dismissWikiBubble();
+    if (editor.isEditable === !ro) return;
+    editor.setEditable(!ro, false);
+    if (ro) dismissWikiBubble();
   });
 
   /// Wiki-link bubble. Open while the caret sits between an
