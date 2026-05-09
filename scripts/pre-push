@@ -17,5 +17,14 @@ cargo clippy --all-targets -- -D warnings
 echo "==> cargo test --all-targets"
 cargo test --all-targets
 
+# The mcp feature pulls rmcp + schemars; the default cargo invocation
+# above doesn't enable it, which is how the v0.7.0 mcp.rs regression
+# reached main. Exercise the feature-on path here too.
+echo "==> cargo clippy -p chan-llm --all-targets --features mcp -- -D warnings"
+cargo clippy -p chan-llm --all-targets --features mcp -- -D warnings
+
+echo "==> cargo test -p chan-llm --all-targets --features mcp"
+cargo test -p chan-llm --all-targets --features mcp
+
 echo "==> cargo build -p chan-drive --no-default-features"
 cargo build -p chan-drive --no-default-features

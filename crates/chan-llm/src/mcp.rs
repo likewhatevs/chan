@@ -119,14 +119,21 @@ pub struct EmptyParams {}
 
 // ---- tool dispatch ----------------------------------------------------
 
-// Tool descriptions are sourced from `crate::prompts::*_DESC` so MCP
-// clients (Claude Code, Cursor, gemini-cli, ...) and chan-llm's
-// in-process backends (anthropic, gemini, ollama) see the same
-// guidance. Keeping the strings in one place avoids drift where MCP
-// clients were missing the mtime_ns / truncation / cap notes.
+// Tool descriptions duplicate `crate::prompts::*_DESC` as string
+// literals here because rmcp-macros 1.6's `#[tool(description =
+// ...)]` only parses string literals (darling's FromMeta<String>
+// rejects const paths). The `mcp_descriptions_match_prompts` test
+// below pins the two copies together so a drift breaks the build.
 #[tool_router]
 impl Server {
-    #[tool(description = crate::prompts::READ_FILE_DESC)]
+    #[tool(description = "\
+Read the UTF-8 content of a file in the active drive. The path is \
+POSIX-style relative to the drive root. Returns { path, content, \
+size, mtime_ns }. Files larger than 256 KiB are truncated and the \
+response includes `truncated: true` plus a `note` describing the \
+cap; in that case re-issue with a smaller scope (or open the file \
+in the editor if you need the full thing). Pass `mtime_ns` back \
+on `write_file` as `expected_mtime_ns` to detect concurrent edits.")]
     fn read_file(
         &self,
         Parameters(p): Parameters<ReadFileParams>,
@@ -134,7 +141,17 @@ impl Server {
         run_tool("read_file", &serde_json::json!({"path": p.path}), &self.ctx)
     }
 
-    #[tool(description = crate::prompts::WRITE_FILE_DESC)]
+    #[tool(description = "\
+Replace the content of a file in the active drive (creates the \
+parent directory if needed). The path is POSIX-style relative to \
+the drive root and must end in .md or .txt. New files are capped \
+at 2 MiB; existing files can be edited up to their current size. \
+Pass `expected_mtime_ns` (from your earlier read_file response) \
+to make the write a compare-and-swap; on conflict the call \
+errors and you can re-read before retrying. The host may surface \
+a confirmation UI before the write hits disk; if it does, you \
+will receive a tool result indicating whether the user accepted \
+or rejected the proposed write.")]
     fn write_file(
         &self,
         Parameters(p): Parameters<WriteFileParams>,
@@ -146,7 +163,12 @@ impl Server {
         run_tool("write_file", &args, &self.ctx)
     }
 
-    #[tool(description = crate::prompts::LIST_FILES_DESC)]
+    #[tool(description = "\
+List files in the active drive as { entries, count, total }. \
+Pass an optional `prefix` (POSIX rel-path) to scope the listing to \
+a subdirectory; omit it to list the whole drive. Listings are \
+capped at 2,000 entries; if `truncated` is true, narrow with a \
+prefix or call search_content instead.")]
     fn list_files(
         &self,
         Parameters(p): Parameters<ListFilesParams>,
@@ -158,7 +180,12 @@ impl Server {
         run_tool("list_files", &args, &self.ctx)
     }
 
-    #[tool(description = crate::prompts::SEARCH_CONTENT_DESC)]
+    #[tool(description = "\
+Search the drive's BM25 index for the given query. Returns hits \
+with relative paths, relevance scores, and short snippets around \
+the match. Useful for finding which file mentions a topic before \
+issuing read_file on it. `limit` defaults to 20 and is hard-capped \
+at 100.")]
     fn search_content(
         &self,
         Parameters(p): Parameters<SearchContentParams>,
@@ -248,6 +275,7 @@ fn mcp_safe_message(err: &LlmError) -> String {
         LlmError::MissingApiKey(_) => "api key missing".to_string(),
         LlmError::BackendNotConfigured => "no backend configured".to_string(),
         LlmError::NotImplemented(_) => "not implemented".to_string(),
+        LlmError::Resume(_) => "resume failed".to_string(),
     }
 }
 
@@ -256,6 +284,35 @@ mod tests {
     use super::*;
     use chan_drive::Library;
     use tempfile::TempDir;
+
+    /// Pin the inlined `#[tool(description = ...)]` literals to the
+    /// canonical `prompts::*_DESC` constants. rmcp-macros 1.6 won't
+    /// accept const paths in the attribute (darling parses
+    /// description as Lit::Str), so the strings are duplicated; this
+    /// test breaks the build if the two copies drift.
+    #[test]
+    fn mcp_descriptions_match_prompts() {
+        let read = Server::read_file_tool_attr();
+        assert_eq!(
+            read.description.as_deref(),
+            Some(crate::prompts::READ_FILE_DESC)
+        );
+        let write = Server::write_file_tool_attr();
+        assert_eq!(
+            write.description.as_deref(),
+            Some(crate::prompts::WRITE_FILE_DESC)
+        );
+        let list = Server::list_files_tool_attr();
+        assert_eq!(
+            list.description.as_deref(),
+            Some(crate::prompts::LIST_FILES_DESC)
+        );
+        let search = Server::search_content_tool_attr();
+        assert_eq!(
+            search.description.as_deref(),
+            Some(crate::prompts::SEARCH_CONTENT_DESC)
+        );
+    }
 
     fn fixture(auto_apply: bool) -> (TempDir, TempDir, Server) {
         let cfg = TempDir::new().unwrap();

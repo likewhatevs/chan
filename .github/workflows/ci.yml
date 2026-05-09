@@ -40,6 +40,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all-targets
+      # The `mcp` feature pulls rmcp + schemars and gates the
+      # chan-llm-mcp binary plus the in-process MCP server module.
+      # `cargo {clippy,test} --all-targets` without features skips
+      # both, which is how the v0.7.0 const-path description
+      # regression in mcp.rs reached main. Run the feature-on path
+      # explicitly so future regressions fail CI.
+      - run: cargo clippy -p chan-llm --all-targets --features mcp -- -D warnings
+      - run: cargo test -p chan-llm --all-targets --features mcp
 
   no-default-features:
     name: build (no default features)
