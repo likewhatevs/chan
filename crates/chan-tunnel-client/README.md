@@ -1,43 +1,63 @@
 # chan-tunnel-client
 
-Client library for chan-tunnel. Embedded into `chan serve` (and
-into future native clients) so a user-running `chan` can register
-its drive at the public tunnel host and receive forwarded HTTP
-requests over a single h2/TLS connection.
+Client library for chan-tunnel. Dials a public tunnel terminator
+over h2/TLS at `/v1/tunnel`, runs the Hello / HelloAck round-trip,
+hands the post-handshake byte stream to yamux, and serves every
+inbound substream with a user-supplied `axum::Router` via hyper h1
+(`with_upgrades()` so WebSockets stay attached). Embedded into
+`chan serve` so a user-running `chan` registers its drive at the
+public host and receives forwarded HTTP requests over a single
+long-lived h2 connection.
 
-## What it does
-
-1. Dials the public tunnel host over h2/TLS at `TUNNEL_PATH`.
-2. Sends a `Hello` control frame with the user token and
-   drive name; reads `HelloAck` on success.
-3. Hands the resulting bidirectional stream to yamux.
-4. For every incoming yamux substream, runs hyper's HTTP/1
-   server with a user-supplied `tower::Service` (typically an
-   `axum::Router`).
-
-Everything past the handshake is conventional HTTP between yamux
-substreams: the public side opens a substream per request, the
-local side serves it.
+```toml
+[dependencies]
+chan-tunnel-client = "0.7"
+```
 
 ## Public surface
 
 ```
-dial(...)                       open the h2 stream + run handshake
-ClientConfig                    URL, token, drive name, timeouts
-Registration                    drive name accepted by the server
-TunnelEvent                     substream open / accept / error
-ClientError                     uniffi-friendly error variants
+ClientConfig                  url, token, drive, public flag,
+                              backoff, dial timeout, events tx
+Registration                  HelloAck contents (prefix/user/drive)
+TunnelEvent                   Connected / Disconnected / DialFailed
+ClientError                   uniffi-friendly error variants
 
-handshake<S>(...)               free function over any tokio duplex
-                                (used by wire tests)
-serve_substreams<S>(...)        run an axum::Router on yamux subs
-run(cfg, router)                end-to-end: dial + handshake + serve
+dial(cfg)                     one TLS+h2 attempt; returns yamux conn
+dial_with_tls(cfg, tls)       same, with caller-cached TLS config
+build_tls_config()            rustls + native roots, ALPN h2
+
+handshake(cfg, socket)        free function: Hello/HelloAck over any
+                              tokio duplex; used by wire tests
+serve_substreams(yconn,
+                 router)      run the axum router on every inbound
+                              yamux substream (h1 + upgrades)
+
+run(cfg, router)              long-lived: dial, register, serve,
+                              reconnect with exponential backoff
 ```
 
-## Notes
+## Build & test
 
-- The eventual consumer is `chan serve --tunnel-url ...
-  --tunnel-token ...`; this crate is the library form.
-- `handshake` and `serve_substreams` are exposed as free functions
-  so unit tests can exercise the protocol over an in-memory tokio
-  duplex without spinning up TLS.
+From the workspace root:
+
+```bash
+cargo build -p chan-tunnel-client
+cargo test  -p chan-tunnel-client
+```
+
+The full workspace gate (used by CI and the pre-push hook) is
+`cargo fmt --check && cargo clippy --all-targets -- -D warnings &&
+cargo test`.
+
+## Design
+
+See [`design.md`](design.md) for the dial / handshake / yamux
+flow, the reconnect loop, why `handshake` and `serve_substreams`
+are free functions, the h2c branch, and the cross-crate context.
+The wire format itself is in
+[`chan-tunnel-proto/design.md`](../chan-tunnel-proto/design.md).
+
+## License
+
+Apache-2.0. See [`LICENSE`](../../LICENSE).

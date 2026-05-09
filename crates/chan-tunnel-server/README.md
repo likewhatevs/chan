@@ -1,44 +1,71 @@
 # chan-tunnel-server
 
-Server-side of the chan-tunnel implementation. A library that
-terminates tunnels dialed by `chan serve` and exposes the
-drive-side substreams to a public-facing router.
+Server-side library for chan-tunnel: terminates the long-lived h2c
+POSTs from `chan serve` clients, runs Hello / HelloAck, registers
+each `(user, drive)` in a shared `Registry`, and exposes a
+public-facing axum `Router` that opens fresh yamux substreams to
+forward requests (including WebSocket upgrades) into the registered
+peer. Designed to be embedded into a host process (e.g. the gateway's
+`drive-proxy`) which provides the `Validator` impl, mounts the
+public router at `/{user}/{drive}/...`, and lets nginx terminate
+TLS in front.
 
-## What it does
-
-1. Exposes an `axum::Router` mounted at `TUNNEL_PATH`. nginx
-   (`grpc_pass`) forwards h2c traffic from the public tunnel host
-   (e.g. `tunnel.chan.app`) into this router.
-2. On a new tunnel connection: reads `Hello`, calls the consumer's
-   `Validator` to check the token / scope / drive identity, writes
-   `HelloAck`.
-3. Hands the duplex to yamux and inserts the new tunnel into the
-   shared `Registry`, keyed by `(user, drive)`.
-4. On a public-facing request, the gateway looks up the live
-   tunnel in `Registry` and opens a yamux substream to forward the
-   request.
+```toml
+[dependencies]
+chan-tunnel-server = "0.7"
+```
 
 ## Public surface
 
 ```
-Validator                       trait the consumer implements to
-                                authenticate Hello frames
-Validated                       opaque token returned by Validator
-ServerError                     uniffi-friendly error variants
+Validator (trait)             implemented by host: token -> Validated
+Validated                     user_id, username, scopes
+ServerError                   uniffi-friendly error variants
 
-handshake(...)                  free function: read Hello, validate,
-                                write HelloAck (used by wire tests)
-serve_tunnel_listener(...)      accept loop bound to a tokio listener
-public_router(...)              axum router for the public-facing
-                                side, wired against Registry
-Registry                        live (user, drive) -> tunnel map
-TunnelHandle                    handle to a registered tunnel
-OpenError                       failure mode for opening a substream
+handshake(socket, token,
+          validator, pre_ack) free function: validate + Hello/HelloAck
+                              over any tokio duplex
+handshake_validated(...)      same, with already-validated identity
+
+serve_tunnel_listener(
+    listener, validator,
+    registry, max_drives_per_user)
+                              accept loop on a TCP listener; runs h2
+                              server, validates, registers, drives
+
+public_router(registry)       axum router for the public side
+public_router_with(registry,  same, with PublicConfig knobs
+                   cfg)
+PublicConfig                  body cap, ...
+DEFAULT_REQUEST_BODY_CAP      10 MiB
+
+Registry                      live (user, drive) -> TunnelHandle
+TunnelHandle                  open() -> yamux::Stream
+DriveInfo / TunnelInfo        admin snapshots
+OpenError                     Disconnected
 ```
 
-## Notes
+## Build & test
 
-- The library is async-first; the proto-shaped `handshake` is
-  available for tests against an in-memory duplex.
-- Errors flatten to primitives (no `h2::Error` or `yamux::Error`
-  in public types) so consumers can map them through uniffi later.
+From the workspace root:
+
+```bash
+cargo build -p chan-tunnel-server
+cargo test  -p chan-tunnel-server
+```
+
+The full workspace gate (used by CI and the pre-push hook) is
+`cargo fmt --check && cargo clippy --all-targets -- -D warnings &&
+cargo test`.
+
+## Design
+
+See [`design.md`](design.md) for the listener / driver / registry
+shape, the eviction policy, the public router's substream lifecycle
+including upgrades, and the cross-crate context. The wire format
+itself is in
+[`chan-tunnel-proto/design.md`](../chan-tunnel-proto/design.md).
+
+## License
+
+Apache-2.0. See [`LICENSE`](../../LICENSE).

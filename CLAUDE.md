@@ -13,9 +13,13 @@ and `chan-llm` (LLM backends, prompts, tool sandbox). Same crates
 back the `chan` CLI today and Swift / Kotlin shells via uniffi
 once those land.
 
-Each crate's `README.md` is the canonical design reference for that
-crate. This file is the only set of contributor guidelines and
-applies to every crate.
+Each crate ships two docs: `README.md` is the consumer-facing entry
+(pitch, install, public surface at a glance, build), and `design.md`
+is the canonical design reference (problem, architecture, on-disk
+layout, invariants, error model, consumers, what's wired). Update
+`design.md` in the same commit as any change that affects the
+on-disk layout, public API shape, or locking model. This file is
+the only set of contributor guidelines and applies to every crate.
 
 ## Build & Test
 
@@ -56,7 +60,8 @@ in the same commit. Don't drift between local and CI.
 ## Workspace Principles
 
 These rules cut across every crate. Per-crate design (on-disk
-layout, locking, public API shape) lives in each crate's README.
+layout, locking, public API shape) lives in each crate's
+`design.md`.
 
 ### FFI-shaped public APIs
 
@@ -104,7 +109,7 @@ use the `Collector` listener pattern (`Vec<Event>`) over a
 ## Contributor Patterns
 
 Per-crate rules that come up often when editing this code. For
-the full design rationale, read the crate README.
+the full design rationale, read the crate's `design.md`.
 
 ### chan-drive
 
@@ -157,16 +162,18 @@ the full design rationale, read the crate README.
 ## Documentation
 
 - **Workspace overview**: [`README.md`](README.md)
-- **Crate design references**:
-  - [`crates/chan-drive/README.md`](crates/chan-drive/README.md):
+- **Crate design references** (canonical; `README.md` next to each
+  is the consumer-facing entry):
+  - [`crates/chan-drive/design.md`](crates/chan-drive/design.md):
     on-disk layout, locking model, public API surface, schema
-    versioning.
-  - [`crates/chan-llm/README.md`](crates/chan-llm/README.md):
-    backend list, prompts, tool sandbox, FFI plan.
-  - [`crates/chan-tunnel-proto/README.md`](crates/chan-tunnel-proto/README.md):
-    wire types, framing, control frames.
-  - [`crates/chan-tunnel-client/README.md`](crates/chan-tunnel-client/README.md):
-    dial + handshake, embedding into `chan serve`.
-  - [`crates/chan-tunnel-server/README.md`](crates/chan-tunnel-server/README.md):
-    terminator library, Validator, Registry.
+    versioning, search and graph internals, trash semantics.
+  - [`crates/chan-llm/design.md`](crates/chan-llm/design.md):
+    backend matrix, prompts, tool sandbox, key resolution, FFI
+    plan.
+  - [`crates/chan-tunnel-proto/design.md`](crates/chan-tunnel-proto/design.md):
+    wire format, framing, drive-name rules.
+  - [`crates/chan-tunnel-client/design.md`](crates/chan-tunnel-client/design.md):
+    dial, handshake, yamux substream serving.
+  - [`crates/chan-tunnel-server/design.md`](crates/chan-tunnel-server/design.md):
+    terminator, Validator, Registry, public router.
 - **Issue tracker**: GitHub repo `chan-writer/chan-core`.

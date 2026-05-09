@@ -18,57 +18,94 @@ porting it per platform was not an option, so the primitives live
 in cross-platform Rust here. Each consumer (CLI, iOS, Android)
 links the same crates and gets the same behavior in lockstep.
 
+## Two design constraints shape every public API
+
+1. **FFI-shape from day one.** Every public type has to survive a
+   uniffi boundary later. No lifetimes on public types; owned
+   `String` / `PathBuf` only; `Arc`-able handles; one umbrella
+   error enum per crate with primitive payloads; streaming through
+   callback trait objects, never `impl Stream` or
+   `tokio::sync::mpsc::Receiver`. uniffi bindings produce when the
+   first native shell lands; today the CLI links the crates
+   directly.
+2. **Abstract chan's business logic.** Filesystem sandboxing,
+   atomic writes, the editable-text gate, the symlink/special-file
+   policy, the trash, the search and graph indexes, the LLM tool
+   contract, the tunnel handshake: all of these are chan's product
+   decisions, not implementation details of any one consumer.
+   Holding them here keeps the CLI, the desktop app, and future
+   mobile shells consistent. A backend or a frontend cannot drift
+   away from the gates because the gates are the only API on offer.
+
 ## Crates
 
 ```
 Crate                 Role
 --------------------  -----------------------------------------------
 chan-drive            Library / Drive handles. Sandboxed FS,
-                      tantivy search, sqlite graph DB, watcher,
-                      per-drive trash and blob storage.
+                      tantivy search (BM25 + dense hybrid), sqlite
+                      graph DB, watcher, per-drive trash and blob
+                      storage.
 chan-tunnel-proto     Wire types and control frames. Pure data,
-                      no I/O.
+                      no I/O, no async.
 chan-tunnel-client    Dial + Hello handshake; embedded into
                       `chan serve` to expose a drive on a public
                       URL via the tunnel terminator.
-chan-tunnel-server    Server-side of the tunnel implementation.
-                      Library that terminates tunnels dialed by
-                      `chan serve` and exposes the drive-side
-                      substreams to a public-facing router.
+chan-tunnel-server    Server-side of the tunnel. Library that
+                      terminates tunnels dialed by `chan serve`
+                      and exposes the drive-side substreams to a
+                      public-facing router.
 chan-llm              LLM backends (Anthropic, Gemini, Ollama,
-                      Claude CLI), embedded prompts, and the tool
-                      sandbox routed through chan-drive. Optional
-                      `mcp` feature ships a stdio MCP server and
-                      the `chan-llm-mcp` binary.
+                      Claude CLI, Gemini CLI), embedded prompts,
+                      and the tool sandbox routed through
+                      chan-drive. Optional `mcp` feature ships a
+                      stdio MCP server and the `chan-llm-mcp`
+                      binary.
 ```
 
-Each crate has its own `README.md` with the canonical design
-reference; the workspace-wide `CLAUDE.md` collects contributor
-guidelines for all of them.
+Each crate ships a `README.md` (pitch, install, public surface at
+a glance, build) and a `design.md` (canonical design reference:
+problem, architecture, on-disk layout, invariants, error model,
+consumers, what's wired). The workspace-wide `CLAUDE.md` collects
+contributor guidelines that apply to every crate.
 
 ## Who consumes this
 
-- `chan-writer/chan`: the CLI and embedded web editor. Today's
-  primary consumer. Links chan-drive directly; speaks to chan-llm
-  for the assistant; embeds chan-tunnel-client in `chan serve`.
-- `chan-writer/chan-ios` (later): SwiftUI shell linking
-  chan-drive + chan-llm via uniffi.
-- `chan-writer/chan-android` (later): Compose shell linking the
-  same crates via uniffi.
+```
+Consumer                              Direct deps
+------------------------------------  ----------------------------
+chan-writer/chan (chan binary)        chan-drive, chan-llm
+chan-writer/chan (chan-server)        chan-drive, chan-llm,
+                                      chan-tunnel-client,
+                                      chan-tunnel-proto
+chan-writer/chan (fetch-models)       chan-drive (embeddings)
+chan-writer/chan-gateway              chan-tunnel-server (proto
+  (drive-proxy)                       pulled transitively)
+chan-writer/chan-ios (later)          chan-drive, chan-llm
+                                      via uniffi
+chan-writer/chan-android (later)      chan-drive, chan-llm
+                                      via uniffi
+```
 
-The crates are FFI-shaped from day one: no lifetimes on public
-types, owned strings only, callback-based watcher and assistant
-streaming, no public `async fn`. uniffi bindings produce when the
-first native shell lands.
+The `chan` binary pulls the tunnel crates transitively through
+`chan-server`; only `chan-server` and `drive-proxy` use the tunnel
+public API.
+
+`chan-server` is the HTTP + WebSocket layer wrapping `chan-drive`'s
+`Library` in axum routes and forwarding `LlmSession` events to the
+web frontend. `drive-proxy` terminates user-dialed tunnels at the
+public gateway and routes incoming HTTP requests to the right live
+tunnel. See each crate's `design.md` for the per-consumer wiring.
 
 ## Status
 
 Pre-alpha. The public API is shaped and the chan-drive primitives
 (registry, sandboxed FS, atomic writes, cross-process writer lock,
-tantivy BM25, sqlite graph reads / writes, watcher) are real.
-Hybrid (BM25 + dense) search and a built-in watcher consumer are
-still ahead. The chan-llm backends are wired and stream; uniffi
-bindings have not landed yet.
+tantivy hybrid search, sqlite graph reads / writes, watcher) are
+real. A built-in watcher consumer that drives reindex from
+`WatchEvent`s is still ahead. The chan-llm backends are wired and
+stream end-to-end. uniffi bindings have not landed yet; they ship
+with the first native shell.
 
 ## Build
 

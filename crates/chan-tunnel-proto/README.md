@@ -1,52 +1,51 @@
 # chan-tunnel-proto
 
-Wire types and control frames for chan-tunnel. Pure data: no I/O,
-no async. Both `chan-tunnel-client` and `chan-tunnel-server` depend
-on this crate.
+Wire types and control frames for chan-tunnel: the length-prefixed
+JSON `Hello` / `HelloAck` pair, the drive-name validator, and an
+`H2Duplex` adapter that turns an h2 `(SendStream, RecvStream)` pair
+into one `tokio::io` duplex. Pure data plus a minimal codec; no I/O,
+no async, no tokio runtime. Both `chan-tunnel-client` and
+`chan-tunnel-server` depend on it; bumping the on-the-wire shape is
+done here, not in the I/O crates.
 
-## What chan-tunnel is
-
-A single HTTP/2 bidirectional stream between `chan serve` (running
-on the user's machine) and the public tunnel terminator (e.g.
-`tunnel.chan.app`, fronted by nginx). The first message in each
-direction is a length-prefixed JSON control frame; after that, both
-sides hand the byte stream to yamux and multiplex regular HTTP
-substreams over it.
-
-This crate owns the framing, the control frames, and the drive-name
-rules that both sides apply identically.
+```toml
+[dependencies]
+chan-tunnel-proto = "0.7"
+```
 
 ## Public surface
 
 ```
 control::    Hello, HelloAck, ProtocolVersion
-drive_name:: is_valid_drive_name, sanitize_drive_name,
-             MAX_DRIVE_NAME_LEN
+drive_name:: is_valid_drive_name, is_valid_username,
+             sanitize_drive_name,
+             MAX_DRIVE_NAME_LEN, MAX_USERNAME_LEN
 frame::      encode_frame, decode_frame, FrameError
 io::         read_frame, write_frame, IoFrameError
-h2_duplex::  H2Duplex (h2 SendStream + RecvStream as one duplex)
+h2_duplex::  H2Duplex
+const TUNNEL_PATH: &str            = "/v1/tunnel"
+const MAX_CONTROL_FRAME_BYTES: usize = 64 * 1024
 ```
 
-Constants:
+## Build & test
 
-```
-TUNNEL_PATH               = "/v1/tunnel"
-                            Stable across protocol versions; the
-                            version is negotiated inside Hello,
-                            not via a path bump.
+From the workspace root:
 
-MAX_CONTROL_FRAME_BYTES   = 64 KiB
-                            Upper bound on a single control frame.
-                            Guards against a malicious or buggy
-                            peer trying to allocate gigabytes
-                            before yamux even starts.
+```bash
+cargo build -p chan-tunnel-proto
+cargo test  -p chan-tunnel-proto
 ```
 
-## Out of scope
+The full workspace gate (used by CI and the pre-push hook) is
+`cargo fmt --check && cargo clippy --all-targets -- -D warnings &&
+cargo test`.
 
-- HTTP, TLS, h2 client / server setup.
-- yamux multiplexing.
-- Token validation, registry of live tunnels.
+## Design
 
-Those concerns live in `chan-tunnel-client` and
-`chan-tunnel-server`.
+See [`design.md`](design.md) for the wire format, framing, drive-
+name rules, the `MAX_CONTROL_FRAME_BYTES` rationale, the proto-stays-
+pure invariant, and the cross-crate context.
+
+## License
+
+Apache-2.0. See [`LICENSE`](../../LICENSE).
