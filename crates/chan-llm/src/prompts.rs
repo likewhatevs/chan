@@ -60,9 +60,13 @@ has pasted into the messages. Be concise.";
 /// Description of the read_file tool, surfaced in the tool schema
 /// the backend sees.
 pub const READ_FILE_DESC: &str = "\
-Read the full UTF-8 content of a file in the active drive. The \
-path is POSIX-style relative to the drive root. Returns the file's \
-content as a string.";
+Read the UTF-8 content of a file in the active drive. The path is \
+POSIX-style relative to the drive root. Returns { path, content, \
+size, mtime_ns }. Files larger than 256 KiB are truncated and the \
+response includes `truncated: true` plus a `note` describing the \
+cap; in that case re-issue with a smaller scope (or open the file \
+in the editor if you need the full thing). Pass `mtime_ns` back \
+on `write_file` as `expected_mtime_ns` to detect concurrent edits.";
 
 /// Description of the write_file tool. Mentions the auto_apply
 /// gate so the model knows writes may be deferred to user
@@ -70,20 +74,27 @@ content as a string.";
 pub const WRITE_FILE_DESC: &str = "\
 Replace the content of a file in the active drive (creates the \
 parent directory if needed). The path is POSIX-style relative to \
-the drive root and must end in .md or .txt. The host may surface \
+the drive root and must end in .md or .txt. New files are capped \
+at 2 MiB; existing files can be edited up to their current size. \
+Pass `expected_mtime_ns` (from your earlier read_file response) \
+to make the write a compare-and-swap; on conflict the call \
+errors and you can re-read before retrying. The host may surface \
 a confirmation UI before the write hits disk; if it does, you \
 will receive a tool result indicating whether the user accepted \
 or rejected the proposed write.";
 
 /// Description of the list_files tool.
 pub const LIST_FILES_DESC: &str = "\
-Return the full file tree of the active drive as a list of \
-relative paths plus directory markers and file sizes. Use this \
-to discover what's in the drive before searching or reading.";
+List files in the active drive as { entries, count, total }. \
+Pass an optional `prefix` (POSIX rel-path) to scope the listing to \
+a subdirectory; omit it to list the whole drive. Listings are \
+capped at 2,000 entries; if `truncated` is true, narrow with a \
+prefix or call search_content instead.";
 
 /// Description of the search_content tool.
 pub const SEARCH_CONTENT_DESC: &str = "\
 Search the drive's BM25 index for the given query. Returns hits \
 with relative paths, relevance scores, and short snippets around \
 the match. Useful for finding which file mentions a topic before \
-issuing read_file on it.";
+issuing read_file on it. `limit` defaults to 20 and is hard-capped \
+at 100.";

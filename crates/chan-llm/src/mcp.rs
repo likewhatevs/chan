@@ -89,6 +89,13 @@ pub struct WriteFileParams {
     pub path: String,
     /// Full new file content. Partial diffs are not supported.
     pub content: String,
+    /// Optional optimistic-concurrency token. When set, the write
+    /// only succeeds if the file's current mtime (in nanoseconds)
+    /// equals this value. Use the `mtime_ns` from your prior
+    /// `read_file` response. On mismatch the call returns an
+    /// error and the caller should re-read.
+    #[serde(default)]
+    pub expected_mtime_ns: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -97,6 +104,14 @@ pub struct SearchContentParams {
     /// Hard cap on hits returned. Default 20.
     #[serde(default)]
     pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListFilesParams {
+    /// Optional POSIX rel-path prefix to scope the listing to a
+    /// subdirectory. Empty / omitted lists the whole drive (capped).
+    #[serde(default)]
+    pub prefix: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -123,18 +138,25 @@ impl Server {
         &self,
         Parameters(p): Parameters<WriteFileParams>,
     ) -> std::result::Result<String, ErrorData> {
-        run_tool(
-            "write_file",
-            &serde_json::json!({"path": p.path, "content": p.content}),
-            &self.ctx,
-        )
+        let mut args = serde_json::json!({"path": p.path, "content": p.content});
+        if let Some(mtime_ns) = p.expected_mtime_ns {
+            args["expected_mtime_ns"] = serde_json::json!(mtime_ns);
+        }
+        run_tool("write_file", &args, &self.ctx)
     }
 
     #[tool(
-        description = "Return the full file tree of the active drive as a list of relative paths plus directory markers and file sizes."
+        description = "List files in the active drive as { entries, count, total }. Pass an optional `prefix` (POSIX rel-path) to scope the listing; capped at 2000 entries."
     )]
-    fn list_files(&self, _: Parameters<EmptyParams>) -> std::result::Result<String, ErrorData> {
-        run_tool("list_files", &serde_json::json!({}), &self.ctx)
+    fn list_files(
+        &self,
+        Parameters(p): Parameters<ListFilesParams>,
+    ) -> std::result::Result<String, ErrorData> {
+        let mut args = serde_json::json!({});
+        if let Some(prefix) = p.prefix {
+            args["prefix"] = serde_json::Value::String(prefix);
+        }
+        run_tool("list_files", &args, &self.ctx)
     }
 
     #[tool(
@@ -220,6 +242,7 @@ mod tests {
             .write_file(Parameters(WriteFileParams {
                 path: "a.md".into(),
                 content: "x".into(),
+                expected_mtime_ns: None,
             }))
             .unwrap_err();
         assert!(
@@ -236,6 +259,7 @@ mod tests {
             .write_file(Parameters(WriteFileParams {
                 path: "a.md".into(),
                 content: "hi".into(),
+                expected_mtime_ns: None,
             }))
             .unwrap();
         assert!(out.contains("a.md"), "got: {out}");
@@ -249,7 +273,9 @@ mod tests {
     fn list_files_returns_tree() {
         let (_cfg, root, server) = fixture(true);
         std::fs::write(root.path().join("a.md"), "x").unwrap();
-        let out = server.list_files(Parameters(EmptyParams {})).unwrap();
+        let out = server
+            .list_files(Parameters(ListFilesParams { prefix: None }))
+            .unwrap();
         assert!(out.contains("a.md"), "got: {out}");
     }
 
@@ -260,6 +286,7 @@ mod tests {
             .write_file(Parameters(WriteFileParams {
                 path: "img.png".into(),
                 content: "x".into(),
+                expected_mtime_ns: None,
             }))
             .unwrap_err();
         // chan-drive's editable-text gate fires; the assistant cannot

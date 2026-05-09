@@ -26,6 +26,7 @@
 //!   - `message_delta`: carries the final stop_reason.
 //!   - `message_stop`: end of stream.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,6 +38,7 @@ use crate::error::LlmError;
 use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall};
 use crate::tools::ToolSchema;
 
+use super::retry::{send_with_retry, RetryError, RetryPolicy};
 use super::{Backend, Outcome};
 
 const ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
@@ -48,6 +50,12 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// per-model upper limits, so we don't surprise users with a 429
 /// from a runaway model.
 const DEFAULT_MAX_TOKENS: u32 = 4096;
+
+/// Hard cap on the SSE re-assembly buffer. Real Anthropic frames
+/// are kilobytes; if a frame ever grows past this we treat the
+/// stream as broken (a buggy proxy or a hostile MITM) rather than
+/// keep accumulating until we OOM.
+const SSE_BUF_CAP_BYTES: usize = 1024 * 1024;
 
 /// Hit `/v1/models` and return live model IDs. Used by the Settings
 /// UI to populate the model dropdown when an API key is configured;
@@ -108,11 +116,22 @@ struct ModelInfo {
     id: String,
 }
 
-#[derive(Debug)]
 pub struct AnthropicBackend {
     api_key: String,
     model: String,
     client: reqwest::Client,
+}
+
+// Hand-rolled Debug so tracing / dbg! / panic-with-state never echoes
+// the api_key. The field stays private; this redaction is the safety
+// net for accidental `?backend` formatting.
+impl std::fmt::Debug for AnthropicBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnthropicBackend")
+            .field("api_key", &"<redacted>")
+            .field("model", &self.model)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AnthropicBackend {
@@ -124,6 +143,10 @@ impl AnthropicBackend {
         // a safety net for a wedged upstream.
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(300))
+            // Identifies chan-llm in upstream usage logs; helps
+            // operators tell chan traffic apart from generic SDK
+            // traffic when debugging quotas or 429s.
+            .user_agent(concat!("chan-llm/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("reqwest client builds with default rustls config");
         Self {
@@ -141,6 +164,7 @@ impl Backend for AnthropicBackend {
         messages: Vec<Message>,
         tools: Vec<ToolSchema>,
         listener: Arc<dyn SessionListener>,
+        cancel: Arc<AtomicBool>,
     ) -> Outcome {
         let (system, wire_messages) = split_system(&messages);
         let body = AnthropicRequest {
@@ -159,19 +183,35 @@ impl Backend for AnthropicBackend {
                 .collect::<Vec<_>>(),
         };
 
-        let resp = match self
-            .client
-            .post(ENDPOINT)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
+        // Serialize once; the closure passed to send_with_retry
+        // builds a fresh RequestBuilder each attempt because reqwest
+        // consumes RequestBuilder on send. Body bytes are reused.
+        let body_bytes = match serde_json::to_vec(&body) {
+            Ok(b) => b,
+            Err(e) => {
+                listener.on_error(format!("anthropic body: {e}"));
+                return Outcome::error();
+            }
+        };
+        let resp = match send_with_retry(
+            || {
+                self.client
+                    .post(ENDPOINT)
+                    .header("x-api-key", &self.api_key)
+                    .header("anthropic-version", ANTHROPIC_VERSION)
+                    .header("content-type", "application/json")
+                    .body(body_bytes.clone())
+            },
+            RetryPolicy::default(),
+            &cancel,
+            "anthropic",
+        )
+        .await
         {
             Ok(r) => r,
-            Err(e) => {
-                listener.on_error(format!("anthropic request: {e}"));
+            Err(RetryError::Cancelled) => return Outcome::cancelled(String::new()),
+            Err(RetryError::Network(msg)) => {
+                listener.on_error(format!("anthropic request: {msg}"));
                 return Outcome::error();
             }
         };
@@ -199,6 +239,14 @@ impl Backend for AnthropicBackend {
         let mut stop = StopReason::EndOfTurn;
 
         while let Some(chunk) = stream.next().await {
+            if cancel.load(Ordering::Relaxed) {
+                // Drop the stream by returning early; reqwest cancels
+                // the underlying connection when the response is
+                // dropped at the end of this scope. Carry whatever
+                // assistant text we'd already streamed so the host
+                // can keep partial UX state if it wants.
+                return Outcome::cancelled(assistant_text);
+            }
             let chunk = match chunk {
                 Ok(b) => b,
                 Err(e) => {
@@ -207,6 +255,12 @@ impl Backend for AnthropicBackend {
                 }
             };
             buf.extend_from_slice(&chunk);
+            if buf.len() > SSE_BUF_CAP_BYTES {
+                listener.on_error(format!(
+                    "anthropic stream: re-assembly buffer exceeded {SSE_BUF_CAP_BYTES} bytes; dropping connection",
+                ));
+                return Outcome::error();
+            }
 
             // SSE frames are separated by a blank line ("\n\n"). We
             // split on that boundary so partial frames stay in `buf`
@@ -222,8 +276,12 @@ impl Backend for AnthropicBackend {
                 let parsed: SseEvent = match serde_json::from_str(&payload) {
                     Ok(p) => p,
                     Err(e) => {
-                        listener.on_error(format!("anthropic parse: {e}; raw: {payload}"));
-                        return Outcome::error();
+                        // Single bad frame: log and continue. Some
+                        // proxies inject keepalive lines that aren't
+                        // valid JSON; bailing on the whole turn for
+                        // a transient parse blip is the wrong trade.
+                        tracing::warn!(?e, raw = %truncate_payload(&payload, 400), "anthropic parse: skipping bad frame");
+                        continue;
                     }
                 };
                 match parsed {
@@ -296,6 +354,28 @@ impl Backend for AnthropicBackend {
                     }
                 }
             }
+        }
+
+        // Final-tail flush: if the connection closed without a
+        // trailing blank line, the last frame is still in `buf` and
+        // never went through the inner parser. Try one decode pass
+        // before bailing so we don't silently drop a tail event.
+        if !buf.is_empty() {
+            if let Some(payload) = extract_data(&buf) {
+                if let Ok(parsed) = serde_json::from_str::<SseEvent>(&payload) {
+                    if let SseEvent::MessageDelta { delta } = parsed {
+                        if let Some(reason) = delta.stop_reason {
+                            stop = parse_stop_reason(&reason);
+                        }
+                    }
+                } else {
+                    tracing::warn!(
+                        raw = %truncate_payload(&payload, 400),
+                        "anthropic parse: discarded tail frame on stream close",
+                    );
+                }
+            }
+            buf.clear();
         }
 
         // tool_use stop_reason wins over text-only end_turn when the
@@ -393,16 +473,35 @@ fn find_event_end(buf: &[u8]) -> Option<usize> {
 /// Pull the JSON payload out of an SSE frame. Anthropic frames look
 /// like `event: <type>\ndata: <json>` (with the optional `event:`
 /// line we ignore; the JSON's own `type` field is the source of
-/// truth). Multi-line `data:` continuations aren't used by
-/// Anthropic, so a single-line lookup suffices.
+/// truth). Per SSE spec, multiple `data:` lines within one frame
+/// concatenate with `\n` to form the final payload. Anthropic
+/// doesn't currently use multi-line data, but a future release or
+/// an intermediary proxy might; the spec-compliant join keeps us
+/// safe either way.
 fn extract_data(frame: &[u8]) -> Option<String> {
     let s = std::str::from_utf8(frame).ok()?;
+    let mut out: Option<String> = None;
     for line in s.lines() {
-        if let Some(rest) = line.strip_prefix("data:") {
-            return Some(rest.trim_start().to_string());
+        let Some(rest) = line.strip_prefix("data:") else {
+            continue;
+        };
+        // SSE's "data: <value>" optional-leading-space rule.
+        let rest = rest.strip_prefix(' ').unwrap_or(rest);
+        match &mut out {
+            Some(acc) => {
+                acc.push('\n');
+                acc.push_str(rest);
+            }
+            None => out = Some(rest.to_string()),
         }
     }
-    None
+    out
+}
+
+/// Truncate a string at `max` chars for log lines. Cheap O(n) walk
+/// that respects char boundaries, matches the helper in claude_cli.
+fn truncate_payload(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
 }
 
 // ---- request wire types -------------------------------------------------
@@ -526,4 +625,38 @@ struct AnthropicError {
     #[serde(rename = "type")]
     kind: String,
     message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_data;
+
+    #[test]
+    fn extract_data_single_line() {
+        let frame = b"data: {\"hello\":1}";
+        assert_eq!(extract_data(frame).as_deref(), Some("{\"hello\":1}"));
+    }
+
+    #[test]
+    fn extract_data_concatenates_multiple_data_lines() {
+        // Per SSE spec, multiple data: lines join with '\n'.
+        let frame = b"data: {\"a\":1\ndata: ,\"b\":2}";
+        // Resulting payload should be "{\"a\":1\n,\"b\":2}".
+        let got = extract_data(frame).expect("data");
+        assert_eq!(got, "{\"a\":1\n,\"b\":2}");
+    }
+
+    #[test]
+    fn extract_data_strips_optional_leading_space() {
+        let with_space = b"data: hello";
+        let without = b"data:hello";
+        assert_eq!(extract_data(with_space).as_deref(), Some("hello"));
+        assert_eq!(extract_data(without).as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn extract_data_returns_none_when_no_data_line() {
+        let frame = b"event: ping\n: comment";
+        assert!(extract_data(frame).is_none());
+    }
 }

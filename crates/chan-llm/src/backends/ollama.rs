@@ -24,6 +24,7 @@
 //! send tools and let the model decide; if your model doesn't
 //! support them, you just get text-only completions.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,9 +35,15 @@ use serde::{Deserialize, Serialize};
 use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall};
 use crate::tools::ToolSchema;
 
+use super::retry::{send_with_retry, RetryError, RetryPolicy};
 use super::{Backend, Outcome};
 
 pub const DEFAULT_URL: &str = "http://localhost:11434";
+
+/// Hard cap on the NDJSON re-assembly buffer. Ollama lines are
+/// small in practice; past this we treat the stream as broken
+/// rather than accumulate without bound.
+const NDJSON_BUF_CAP_BYTES: usize = 1024 * 1024;
 
 /// Hit the Ollama daemon's `/api/tags` endpoint and return every
 /// installed model's name. Used by the Settings UI to populate the
@@ -94,6 +101,20 @@ pub struct OllamaBackend {
 
 impl OllamaBackend {
     pub fn new(base_url: String, model: String) -> Self {
+        // Reject unexpected schemes early. reqwest would fail at
+        // request time anyway, but the error message ("relative URL
+        // without a base") is opaque; this keeps the user-visible
+        // failure on misconfigured `OLLAMA_HOST` clear. http and
+        // https only; anything else (file://, ssh://, ws://) is
+        // either a typo or an attempt to do something we don't
+        // support.
+        let base_for_check = base_url.trim();
+        if !(base_for_check.starts_with("http://") || base_for_check.starts_with("https://")) {
+            tracing::warn!(
+                base = %base_url,
+                "ollama: base URL has unsupported scheme; expected http:// or https://",
+            );
+        }
         let base = base_url.trim_end_matches('/').to_owned();
         let client = reqwest::Client::builder()
             // Generous timeout: a 14B-class model on CPU can take
@@ -118,6 +139,7 @@ impl Backend for OllamaBackend {
         messages: Vec<Message>,
         tools: Vec<ToolSchema>,
         listener: Arc<dyn SessionListener>,
+        cancel: Arc<AtomicBool>,
     ) -> Outcome {
         let body = ChatRequest {
             model: &self.model,
@@ -153,10 +175,30 @@ impl Backend for OllamaBackend {
         };
 
         let url = format!("{}/api/chat", self.base_url);
-        let resp = match self.client.post(&url).json(&body).send().await {
-            Ok(r) => r,
+        let body_bytes = match serde_json::to_vec(&body) {
+            Ok(b) => b,
             Err(e) => {
-                listener.on_error(format!("ollama request: {e}"));
+                listener.on_error(format!("ollama body: {e}"));
+                return Outcome::error();
+            }
+        };
+        let resp = match send_with_retry(
+            || {
+                self.client
+                    .post(&url)
+                    .header("content-type", "application/json")
+                    .body(body_bytes.clone())
+            },
+            RetryPolicy::default(),
+            &cancel,
+            "ollama",
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(RetryError::Cancelled) => return Outcome::cancelled(String::new()),
+            Err(RetryError::Network(msg)) => {
+                listener.on_error(format!("ollama request: {msg}"));
                 return Outcome::error();
             }
         };
@@ -175,6 +217,9 @@ impl Backend for OllamaBackend {
         let mut stop = StopReason::EndOfTurn;
 
         while let Some(chunk) = stream.next().await {
+            if cancel.load(Ordering::Relaxed) {
+                return Outcome::cancelled(assistant_text);
+            }
             let chunk = match chunk {
                 Ok(b) => b,
                 Err(e) => {
@@ -183,6 +228,12 @@ impl Backend for OllamaBackend {
                 }
             };
             buf.extend_from_slice(&chunk);
+            if buf.len() > NDJSON_BUF_CAP_BYTES {
+                listener.on_error(format!(
+                    "ollama stream: re-assembly buffer exceeded {NDJSON_BUF_CAP_BYTES} bytes; dropping connection",
+                ));
+                return Outcome::error();
+            }
             while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
                 let line: Vec<u8> = buf.drain(..=pos).collect();
                 let line = &line[..line.len().saturating_sub(1)];
@@ -192,8 +243,11 @@ impl Backend for OllamaBackend {
                 let parsed: ChatChunk = match serde_json::from_slice(line) {
                     Ok(p) => p,
                     Err(e) => {
-                        listener.on_error(format!("ollama parse: {e}"));
-                        return Outcome::error();
+                        // Single bad line: log and keep reading.
+                        // Future Ollama versions sometimes interleave
+                        // status lines that don't match ChatChunk.
+                        tracing::warn!(?e, "ollama parse: skipping bad line");
+                        continue;
                     }
                 };
                 if let Some(msg) = parsed.message.as_ref() {
@@ -230,6 +284,40 @@ impl Backend for OllamaBackend {
                     break;
                 }
             }
+        }
+
+        // Final-tail flush: NDJSON streams that end without a
+        // trailing newline leave the last record in `buf`. Try one
+        // decode pass before returning so we don't drop the final
+        // chunk.
+        if !buf.is_empty() {
+            match serde_json::from_slice::<ChatChunk>(&buf) {
+                Ok(parsed) => {
+                    if let Some(msg) = parsed.message.as_ref() {
+                        if !msg.content.is_empty() {
+                            listener.on_delta(Delta {
+                                text: msg.content.clone(),
+                            });
+                            assistant_text.push_str(&msg.content);
+                        }
+                        for (idx, tc) in msg.tool_calls.iter().enumerate() {
+                            let id = format!("call-{}", tool_calls.len() + idx);
+                            tool_calls.push(ToolCall {
+                                id,
+                                name: tc.function.name.clone(),
+                                args: tc.function.arguments.clone(),
+                            });
+                        }
+                    }
+                    if parsed.done && !tool_calls.is_empty() {
+                        stop = StopReason::ToolUse;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(?e, "ollama parse: discarded tail line on stream close");
+                }
+            }
+            buf.clear();
         }
 
         Outcome {

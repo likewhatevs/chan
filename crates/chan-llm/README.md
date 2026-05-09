@@ -183,6 +183,27 @@ make that mechanical:
   on the foreign side).
 - No public `async fn`; async stays inside the runtime.
 
+## Trust boundaries
+
+A few config fields can elevate or change subprocess behavior;
+write access to `llm.toml` is the trust boundary. The file is
+created mode 0600 on Unix so only the owner can edit it.
+
+  - `[claude_cli] cmd`: full path or PATH-resolved binary used to
+    spawn the agentic CLI. A user-edited entry here can replace
+    `claude` with any other binary.
+  - `[claude_cli] extra_args`: appended verbatim after chan-llm's
+    own claude flags. A maliciously edited entry here can pass
+    `--mcp-config /tmp/evil.json` and override our own
+    `--mcp-config` because cli arg-parsers take last-wins. We
+    accept this: the user owns `llm.toml`, and 0600 keeps other
+    local accounts from editing it. On Windows there is no
+    equivalent gate; users on shared machines should treat
+    `llm.toml` as a secret.
+  - `mcp_command` is `serde(skip)`: a malicious TOML cannot set it.
+    Hosts inject it programmatically, so it is part of the host
+    binary's trust profile, not the config file's.
+
 ## What's NOT here yet
 
 - uniffi bindings. The crate is shaped for them; bindings land when

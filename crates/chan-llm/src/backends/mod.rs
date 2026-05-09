@@ -34,8 +34,11 @@ pub mod anthropic;
 pub mod claude_cli;
 pub mod gemini;
 pub mod ollama;
+mod retry;
+pub use retry::{send_with_retry, RetryPolicy};
 
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -91,11 +94,19 @@ impl BackendKind {
 /// turn translated to chan-llm's event vocabulary.
 #[async_trait]
 pub trait Backend: Send + Sync {
+    /// Drive one HTTP / subprocess exchange. `cancel` is checked at
+    /// chunk boundaries; backends should also drop their underlying
+    /// stream when it flips so an in-flight request stops promptly
+    /// rather than running to completion. The session-level loop
+    /// also checks `cancel` between iterations, so a backend that
+    /// only checks it once per chunk is acceptable - just less
+    /// responsive to the user hitting "stop".
     async fn run(
         &self,
         messages: Vec<Message>,
         tools: Vec<crate::tools::ToolSchema>,
         listener: Arc<dyn SessionListener>,
+        cancel: Arc<AtomicBool>,
     ) -> Outcome;
 }
 
@@ -124,6 +135,14 @@ impl Outcome {
             assistant_text: String::new(),
             tool_calls: Vec::new(),
             stop_reason: crate::session::StopReason::Error,
+        }
+    }
+
+    pub fn cancelled(assistant_text: String) -> Self {
+        Self {
+            assistant_text,
+            tool_calls: Vec::new(),
+            stop_reason: crate::session::StopReason::Cancelled,
         }
     }
 }

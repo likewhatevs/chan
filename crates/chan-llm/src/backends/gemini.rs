@@ -23,6 +23,7 @@
 //!     "tool_call_id <-> tool_result" pairing still works because
 //!     the next turn's `Role::Tool` message carries the same id.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,17 +35,32 @@ use crate::error::LlmError;
 use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall};
 use crate::tools::ToolSchema;
 
+use super::retry::{send_with_retry, RetryError, RetryPolicy};
 use super::{Backend, Outcome};
 
 const ENDPOINT_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 
 const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 4096;
 
-#[derive(Debug)]
+/// Hard cap on the SSE re-assembly buffer. See `anthropic.rs` for
+/// rationale; Gemini frames are similarly small in practice.
+const SSE_BUF_CAP_BYTES: usize = 1024 * 1024;
+
 pub struct GeminiBackend {
     api_key: String,
     model: String,
     client: reqwest::Client,
+}
+
+// Hand-rolled Debug so tracing / dbg! / panic-with-state never echoes
+// the api_key. Same rationale as `AnthropicBackend`.
+impl std::fmt::Debug for GeminiBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GeminiBackend")
+            .field("api_key", &"<redacted>")
+            .field("model", &self.model)
+            .finish_non_exhaustive()
+    }
 }
 
 impl GeminiBackend {
@@ -53,6 +69,7 @@ impl GeminiBackend {
         // tool-use loops with iterated reads / searches.
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(300))
+            .user_agent(concat!("chan-llm/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("reqwest client builds with default rustls config");
         Self {
@@ -70,6 +87,7 @@ impl Backend for GeminiBackend {
         messages: Vec<Message>,
         tools: Vec<ToolSchema>,
         listener: Arc<dyn SessionListener>,
+        cancel: Arc<AtomicBool>,
     ) -> Outcome {
         let (system_instruction, contents) = build_contents(&messages);
         let tools_wire = if tools.is_empty() {
@@ -99,20 +117,33 @@ impl Backend for GeminiBackend {
             "{ENDPOINT_BASE}/models/{}:streamGenerateContent?alt=sse",
             self.model
         );
-        let resp = match self
-            .client
-            .post(&url)
-            // x-goog-api-key keeps the secret out of the URL (and
-            // out of access logs) compared to ?key=.
-            .header("x-goog-api-key", &self.api_key)
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
+        let body_bytes = match serde_json::to_vec(&body) {
+            Ok(b) => b,
+            Err(e) => {
+                listener.on_error(format!("gemini body: {e}"));
+                return Outcome::error();
+            }
+        };
+        let resp = match send_with_retry(
+            || {
+                // x-goog-api-key keeps the secret out of the URL (and
+                // out of access logs) compared to ?key=.
+                self.client
+                    .post(&url)
+                    .header("x-goog-api-key", &self.api_key)
+                    .header("content-type", "application/json")
+                    .body(body_bytes.clone())
+            },
+            RetryPolicy::default(),
+            &cancel,
+            "gemini",
+        )
+        .await
         {
             Ok(r) => r,
-            Err(e) => {
-                listener.on_error(format!("gemini request: {e}"));
+            Err(RetryError::Cancelled) => return Outcome::cancelled(String::new()),
+            Err(RetryError::Network(msg)) => {
+                listener.on_error(format!("gemini request: {msg}"));
                 return Outcome::error();
             }
         };
@@ -132,6 +163,9 @@ impl Backend for GeminiBackend {
         let mut finish_reason: Option<String> = None;
 
         while let Some(chunk) = stream.next().await {
+            if cancel.load(Ordering::Relaxed) {
+                return Outcome::cancelled(assistant_text);
+            }
             let chunk = match chunk {
                 Ok(b) => b,
                 Err(e) => {
@@ -140,6 +174,12 @@ impl Backend for GeminiBackend {
                 }
             };
             buf.extend_from_slice(&chunk);
+            if buf.len() > SSE_BUF_CAP_BYTES {
+                listener.on_error(format!(
+                    "gemini stream: re-assembly buffer exceeded {SSE_BUF_CAP_BYTES} bytes; dropping connection",
+                ));
+                return Outcome::error();
+            }
             while let Some(end) = buf.windows(2).position(|w| w == b"\n\n") {
                 let raw_event: Vec<u8> = buf.drain(..end).collect();
                 let _: Vec<u8> = buf.drain(..2.min(buf.len())).collect();
@@ -150,8 +190,10 @@ impl Backend for GeminiBackend {
                 let parsed: GeminiResponseChunk = match serde_json::from_str(&payload) {
                     Ok(p) => p,
                     Err(e) => {
-                        listener.on_error(format!("gemini parse: {e}; raw: {payload}"));
-                        return Outcome::error();
+                        // Single bad frame: log and continue. Same
+                        // rationale as the anthropic backend.
+                        tracing::warn!(?e, raw = %truncate_payload(&payload, 400), "gemini parse: skipping bad frame");
+                        continue;
                     }
                 };
                 if let Some(candidate) = parsed.candidates.into_iter().next() {
@@ -183,6 +225,27 @@ impl Backend for GeminiBackend {
                     }
                 }
             }
+        }
+
+        // Final-tail flush: pick up the last frame if the connection
+        // closed without a trailing blank line. We only care about
+        // finish_reason here; deltas already streamed via on_delta.
+        if !buf.is_empty() {
+            if let Some(payload) = extract_data(&buf) {
+                if let Ok(parsed) = serde_json::from_str::<GeminiResponseChunk>(&payload) {
+                    if let Some(candidate) = parsed.candidates.into_iter().next() {
+                        if let Some(reason) = candidate.finish_reason {
+                            finish_reason = Some(reason);
+                        }
+                    }
+                } else {
+                    tracing::warn!(
+                        raw = %truncate_payload(&payload, 400),
+                        "gemini parse: discarded tail frame on stream close",
+                    );
+                }
+            }
+            buf.clear();
         }
 
         let stop_reason = if !tool_calls.is_empty() {
@@ -371,14 +434,29 @@ fn lookup_tool_name(out: &[GeminiContent<'_>], id: Option<&str>) -> Option<Strin
 
 /// Pull the JSON payload out of an SSE frame. Mirrors the
 /// Anthropic helper: Gemini also emits `data: <json>\n\n` per event.
+/// Multiple `data:` lines per frame concatenate with `\n` per the
+/// SSE spec; Gemini occasionally splits longer payloads that way.
 fn extract_data(frame: &[u8]) -> Option<String> {
     let s = std::str::from_utf8(frame).ok()?;
+    let mut out: Option<String> = None;
     for line in s.lines() {
-        if let Some(rest) = line.strip_prefix("data:") {
-            return Some(rest.trim_start().to_string());
+        let Some(rest) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let rest = rest.strip_prefix(' ').unwrap_or(rest);
+        match &mut out {
+            Some(acc) => {
+                acc.push('\n');
+                acc.push_str(rest);
+            }
+            None => out = Some(rest.to_string()),
         }
     }
-    None
+    out
+}
+
+fn truncate_payload(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
 }
 
 // ---- request wire types -------------------------------------------------

@@ -63,6 +63,7 @@ pub use config::LlmConfig;
 pub use error::LlmError;
 pub use keys::KeyStatus;
 pub use session::{
-    Delta, LlmSession, Message, Role, SessionListener, StopReason, ToolCall, ToolResult,
+    CancelHandle, Delta, LlmSession, Message, Role, SessionListener, StopReason, ToolCall,
+    ToolResult,
 };
-pub use tools::{StandardTool, Tool, ToolContext};
+pub use tools::{StandardTool, ToolContext};

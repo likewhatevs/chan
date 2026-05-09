@@ -71,6 +71,7 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -165,6 +166,7 @@ impl Backend for ClaudeCliBackend {
         messages: Vec<Message>,
         _tools: Vec<ToolSchema>,
         listener: Arc<dyn SessionListener>,
+        cancel: Arc<AtomicBool>,
     ) -> Outcome {
         let (system, prompt) = split_system_and_prompt(&messages);
 
@@ -263,6 +265,14 @@ impl Backend for ClaudeCliBackend {
         let mut saw_result = false;
 
         loop {
+            if cancel.load(Ordering::Relaxed) {
+                // Kill the subprocess and return what we have. The
+                // assistant_text we collected so far stays on the
+                // outcome so the host can keep partial UI state.
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                return Outcome::cancelled(assistant_text);
+            }
             let line = match reader.next_line().await {
                 Ok(Some(l)) => l,
                 Ok(None) => break,
@@ -624,6 +634,7 @@ mod tests {
                 vec![Message::user("hi")],
                 Vec::new(),
                 listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
             )
             .await;
         assert_eq!(outcome.assistant_text, "hello world");
@@ -689,6 +700,7 @@ mod tests {
                 vec![Message::user("hi")],
                 Vec::new(),
                 listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
             )
             .await;
         assert_eq!(outcome.stop_reason, StopReason::Error);

@@ -209,7 +209,10 @@ fn default_path() -> PathBuf {
 
 /// Atomic write + 0600 perms on Unix. The file may hold API keys,
 /// so set perms before the rename so there's no readable-by-others
-/// window.
+/// window. Also fsyncs the parent dir after rename so the new
+/// dirent survives a power loss; without that step ext4 / xfs /
+/// APFS / btrfs can drop the rename even though the data was
+/// sync'd. Mirrors `chan_drive::fs_ops::atomic_write`.
 fn atomic_write_strict(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     let parent = path
@@ -226,6 +229,22 @@ fn atomic_write_strict(path: &Path, bytes: &[u8]) -> Result<()> {
     }
     tmp.persist(path)
         .map_err(|e| LlmError::Io(e.error.to_string()))?;
+    sync_dir(parent)?;
+    Ok(())
+}
+
+/// fsync a directory so a fresh dirent inside it becomes durable.
+/// Unix-only; Windows commits dirent changes through NTFS's journal
+/// as part of the rename itself, so this is a no-op there.
+#[cfg(unix)]
+fn sync_dir(dir: &Path) -> Result<()> {
+    let f = std::fs::File::open(dir)?;
+    f.sync_all()?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) -> Result<()> {
     Ok(())
 }
 

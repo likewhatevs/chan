@@ -20,6 +20,7 @@
 // stop reason. The loop lives in this module; backends just
 // translate one HTTP exchange.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use chan_drive::Drive;
@@ -131,6 +132,42 @@ pub enum StopReason {
     StopSequence,
     ToolUse,
     Error,
+    /// The host called `CancelHandle::cancel`. The orchestrator and
+    /// the in-flight backend stop at the next checkpoint and emit
+    /// `on_done(Cancelled)`. The transcript may carry a partial
+    /// assistant turn; the host decides whether to keep it.
+    Cancelled,
+}
+
+/// Handle returned by `LlmSession::send`. Call `cancel()` to stop
+/// the in-flight session at the next checkpoint (between SSE/NDJSON
+/// chunks, between tool iterations, between subprocess reads).
+/// Cheap to clone: a single `Arc<AtomicBool>` under the hood.
+#[derive(Clone, Debug)]
+pub struct CancelHandle(Arc<AtomicBool>);
+
+impl CancelHandle {
+    fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn flag(&self) -> Arc<AtomicBool> {
+        self.0.clone()
+    }
+}
+
+impl Default for CancelHandle {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// What the consumer implements. `Send + Sync` because events
@@ -174,11 +211,36 @@ impl LlmSession {
     /// transcript, and runs the backend again. Loops until the
     /// assistant returns text only or hits MAX_TOOL_ITERATIONS
     /// (defense against runaway loops).
-    pub fn send(&self, messages: Vec<Message>, listener: Arc<dyn SessionListener>) {
+    ///
+    /// Resume contract for paused writes: when `auto_apply_writes`
+    /// is off and the assistant proposes `write_file`, the loop
+    /// pauses with `on_done(ToolUse)` AFTER pushing both the
+    /// assistant's tool_use turn and a placeholder Tool message
+    /// of `{"status":"awaiting_user_approval","tool":"write_file"}`
+    /// for every dangling call. The host should resume by calling
+    /// `send` again with a transcript that *replaces* the
+    /// placeholder Tool message (matched by `tool_call_id`) with
+    /// the real outcome:
+    ///
+    ///   - approved + applied: result of the actual write, e.g.
+    ///     `{"path":"...","bytes_written":N}`.
+    ///   - rejected by user: `{"status":"rejected_by_user"}`.
+    ///
+    /// Without those placeholders, Anthropic and Gemini reject the
+    /// next turn because the tool_use block has no matching
+    /// tool_result. The placeholder keeps the transcript shape valid
+    /// in any case; the host just has to make the result honest
+    /// before sending the next user turn.
+    pub fn send(&self, messages: Vec<Message>, listener: Arc<dyn SessionListener>) -> CancelHandle {
+        let cancel = CancelHandle::new();
         let Some(kind) = self.config.backend else {
-            listener.on_error(LlmError::MissingApiKey("no backend configured".into()).to_string());
+            // BackendNotConfigured rather than MissingApiKey: this is
+            // a "the user hasn't picked a backend" state, not a key
+            // problem, and hosts that branch on the error kind want
+            // to nudge the user into Settings, not into Keychain.
+            listener.on_error(LlmError::BackendNotConfigured.to_string());
             listener.on_done(StopReason::Error);
-            return;
+            return cancel;
         };
 
         let backend = match backends::build(kind, &self.config, self.drive.root()) {
@@ -186,7 +248,7 @@ impl LlmSession {
             Err(e) => {
                 listener.on_error(e.to_string());
                 listener.on_done(StopReason::Error);
-                return;
+                return cancel;
             }
         };
 
@@ -226,9 +288,19 @@ impl LlmSession {
             crate::tools::standard_tool_schemas()
         };
 
+        let cancel_inner = cancel.flag();
         spawn(async move {
-            run_loop(backend, history, tool_schemas, tool_ctx, listener).await;
+            run_loop(
+                backend,
+                history,
+                tool_schemas,
+                tool_ctx,
+                listener,
+                cancel_inner,
+            )
+            .await;
         });
+        cancel
     }
 }
 
@@ -252,15 +324,29 @@ async fn run_loop(
     tool_schemas: Vec<crate::tools::ToolSchema>,
     tool_ctx: crate::tools::ToolContext,
     listener: Arc<dyn SessionListener>,
+    cancel: Arc<AtomicBool>,
 ) {
     for _ in 0..MAX_TOOL_ITERATIONS {
+        if cancel.load(Ordering::Relaxed) {
+            listener.on_done(StopReason::Cancelled);
+            return;
+        }
         let outcome = backend
-            .run(history.clone(), tool_schemas.clone(), listener.clone())
+            .run(
+                history.clone(),
+                tool_schemas.clone(),
+                listener.clone(),
+                cancel.clone(),
+            )
             .await;
 
         if outcome.stop_reason == StopReason::Error {
             // Backend already emitted on_error; we just close out.
             listener.on_done(StopReason::Error);
+            return;
+        }
+        if outcome.stop_reason == StopReason::Cancelled {
+            listener.on_done(StopReason::Cancelled);
             return;
         }
 
@@ -281,10 +367,46 @@ async fn run_loop(
             tool_calls: outcome.tool_calls.clone(),
         });
 
-        let mut paused = false;
-        for call in outcome.tool_calls {
+        // Track every tool call from this turn that we still owe a
+        // result for. Anthropic and Gemini reject the next user turn
+        // if any tool_use block from the assistant turn is missing
+        // its matching tool_result. We push a placeholder result for
+        // any tool call we couldn't immediately resolve (the host
+        // overrides the placeholder when it resumes). Without this,
+        // a `Pending` write would leave a dangling tool_use forever.
+        let total_calls = outcome.tool_calls.len();
+        let mut paused_call: Option<ToolCall> = None;
+        for (idx, call) in outcome.tool_calls.into_iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                listener.on_done(StopReason::Cancelled);
+                return;
+            }
             listener.on_tool_call(call.clone());
-            match crate::tools::execute(&call.name, &call.args, &tool_ctx) {
+            // Tool execution is sync: chan-drive's read/write/list/
+            // search are blocking I/O. Without spawn_blocking, a
+            // slow read or an indexer-busy search ties up the tokio
+            // worker that's running this loop, starving every other
+            // session sharing the runtime. Move the call to the
+            // blocking pool so the worker stays free to drive
+            // streams and other sessions.
+            let exec_ctx = tool_ctx.clone();
+            let exec_name = call.name.clone();
+            let exec_args = call.args.clone();
+            let exec_result = tokio::task::spawn_blocking(move || {
+                crate::tools::execute(&exec_name, &exec_args, &exec_ctx)
+            })
+            .await;
+            let exec_result = match exec_result {
+                Ok(r) => r,
+                Err(join_err) => {
+                    // The blocking task panicked. Surface as a tool
+                    // error so the assistant sees the failure and
+                    // can recover; the join error itself contains
+                    // the panic payload as a Display string.
+                    Err(LlmError::Tool(format!("tool panic: {join_err}")))
+                }
+            };
+            match exec_result {
                 Ok(crate::tools::ToolOutcome::Ok(result)) => {
                     listener.on_tool_result(ToolResult {
                         id: call.id.clone(),
@@ -300,8 +422,38 @@ async fn run_loop(
                     // write_file. Pause; the host's UI confirms
                     // and resumes by re-sending with the tool
                     // result appended.
-                    paused = true;
-                    break;
+                    paused_call = Some(call.clone());
+                    // Push a placeholder so the transcript stays
+                    // well-formed for Anthropic / Gemini. The host
+                    // is expected to *replace* this entry with the
+                    // real result on resume (matching by id), or
+                    // leave it as-is if the user denies the write.
+                    let placeholder = serde_json::json!({
+                        "status": "awaiting_user_approval",
+                        "tool": call.name,
+                    });
+                    listener.on_tool_result(ToolResult {
+                        id: call.id.clone(),
+                        output: placeholder.clone(),
+                    });
+                    history.push(Message::tool(
+                        call.id.clone(),
+                        serde_json::to_string(&placeholder).unwrap_or_default(),
+                    ));
+                    // Any later calls in this same assistant turn
+                    // also need placeholders so the assistant turn
+                    // is fully matched. Anthropic in particular
+                    // rejects a partial pairing.
+                    if idx + 1 < total_calls {
+                        // Filled in below by the same placeholder
+                        // path; the loop simply continues with the
+                        // remaining calls and pushes placeholders
+                        // for each via this branch (since they all
+                        // route through the same `Pending` handler
+                        // for write_file). For non-write tools we
+                        // never see Pending here, so this branch is
+                        // only entered once per turn in practice.
+                    }
                 }
                 Err(e) => {
                     let err_text = e.to_string();
@@ -318,7 +470,7 @@ async fn run_loop(
             }
         }
 
-        if paused {
+        if paused_call.is_some() {
             listener.on_done(StopReason::ToolUse);
             return;
         }
@@ -351,8 +503,19 @@ where
 fn shared_runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
     RT.get_or_init(|| {
+        // Default to 4 worker threads (was 2). Hosts that fan out
+        // many concurrent sessions on the same chan-llm instance
+        // (chan-server with multiple clients) benefit from more
+        // headroom; a single-session CLI doesn't notice. Override
+        // with `CHAN_LLM_RUNTIME_THREADS` for tuning without a
+        // rebuild.
+        let worker_threads = std::env::var("CHAN_LLM_RUNTIME_THREADS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(4);
         tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
+            .worker_threads(worker_threads)
             .enable_all()
             .build()
             .expect("build chan-llm shared tokio runtime")
@@ -415,6 +578,188 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert!(matches!(events[0], Event::Error(_)));
         assert!(matches!(events[1], Event::Done(StopReason::Error)));
+    }
+
+    /// Stub backend: returns a single tool_use Outcome on the first
+    /// run, then an empty Outcome on subsequent runs (so the loop
+    /// continues if the orchestrator decides to). Lets us exercise
+    /// run_loop end-to-end without an HTTP backend.
+    struct ToolUseBackend {
+        calls: Mutex<usize>,
+        proposed: Vec<ToolCall>,
+    }
+
+    #[async_trait::async_trait]
+    impl backends::Backend for ToolUseBackend {
+        async fn run(
+            &self,
+            _messages: Vec<Message>,
+            _tools: Vec<crate::tools::ToolSchema>,
+            _listener: Arc<dyn SessionListener>,
+            _cancel: Arc<AtomicBool>,
+        ) -> backends::Outcome {
+            let mut n = self.calls.lock().unwrap();
+            *n += 1;
+            if *n == 1 {
+                backends::Outcome {
+                    assistant_text: String::new(),
+                    tool_calls: self.proposed.clone(),
+                    stop_reason: StopReason::ToolUse,
+                }
+            } else {
+                backends::Outcome {
+                    assistant_text: "done".into(),
+                    tool_calls: Vec::new(),
+                    stop_reason: StopReason::EndOfTurn,
+                }
+            }
+        }
+    }
+
+    /// When auto_apply_writes is off and the assistant proposes
+    /// write_file, the orchestrator must push a placeholder Tool
+    /// message with the same call id so the transcript is
+    /// well-formed. Otherwise Anthropic / Gemini reject the next
+    /// turn for an unmatched tool_use block.
+    #[test]
+    fn pending_write_pushes_placeholder_tool_result() {
+        let (_cfg, _root, drive) = fixture();
+        let backend = Arc::new(ToolUseBackend {
+            calls: Mutex::new(0),
+            proposed: vec![ToolCall {
+                id: "call-1".into(),
+                name: "write_file".into(),
+                args: serde_json::json!({"path": "a.md", "content": "hi"}),
+            }],
+        });
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let tool_ctx = crate::tools::ToolContext::new(drive.clone(), false);
+        // Drive the loop on a one-shot tokio runtime.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(super::run_loop(
+            backend,
+            vec![Message::user("write a file")],
+            Vec::new(),
+            tool_ctx,
+            listener.clone(),
+            Arc::new(AtomicBool::new(false)),
+        ));
+        // Expect: on_tool_call(write_file), on_tool_result(call-1)
+        // with the placeholder, on_done(ToolUse).
+        let events = listener.0.lock().unwrap();
+        let call_count = events
+            .iter()
+            .filter(|e| matches!(e, Event::ToolCall(_)))
+            .count();
+        let result_count = events
+            .iter()
+            .filter(|e| matches!(e, Event::ToolResult(_)))
+            .count();
+        assert_eq!(call_count, 1, "one tool_call event");
+        assert_eq!(
+            result_count,
+            1,
+            "one tool_result placeholder before pause; got: {events:?}",
+            events = events
+                .iter()
+                .map(|e| match e {
+                    Event::ToolCall(s) => format!("call({s})"),
+                    Event::ToolResult(s) => format!("result({s})"),
+                    Event::Done(r) => format!("done({r:?})"),
+                    Event::Delta(_) => "delta".into(),
+                    Event::Error(s) => format!("err({s})"),
+                })
+                .collect::<Vec<_>>()
+        );
+        let last = events.last().expect("events");
+        assert!(matches!(last, Event::Done(StopReason::ToolUse)));
+        // The drive must NOT have been written; auto_apply was off.
+        assert!(!drive.exists("a.md"));
+    }
+
+    /// Backend that simulates a long-running stream by sleeping
+    /// before returning. Used to test cancellation: if the cancel
+    /// flag flips while the backend is "running", run_loop should
+    /// emit on_done(Cancelled) and stop iterating.
+    struct SlowBackend;
+
+    #[async_trait::async_trait]
+    impl backends::Backend for SlowBackend {
+        async fn run(
+            &self,
+            _messages: Vec<Message>,
+            _tools: Vec<crate::tools::ToolSchema>,
+            _listener: Arc<dyn SessionListener>,
+            cancel: Arc<AtomicBool>,
+        ) -> backends::Outcome {
+            // Pretend to stream; check cancel periodically.
+            for _ in 0..50 {
+                if cancel.load(Ordering::Relaxed) {
+                    return backends::Outcome::cancelled(String::new());
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            backends::Outcome {
+                assistant_text: "done".into(),
+                tool_calls: Vec::new(),
+                stop_reason: StopReason::EndOfTurn,
+            }
+        }
+    }
+
+    #[test]
+    fn cancel_during_backend_emits_cancelled() {
+        let (_cfg, _root, drive) = fixture();
+        let backend = Arc::new(SlowBackend);
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let tool_ctx = crate::tools::ToolContext::new(drive, false);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_clone = cancel.clone();
+        // Flip cancel after a short delay so the backend's loop
+        // sees it mid-stream.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let listener_inner = listener.clone();
+            let join = tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                cancel_clone.store(true, Ordering::Relaxed);
+            });
+            super::run_loop(
+                backend,
+                vec![Message::user("hi")],
+                Vec::new(),
+                tool_ctx,
+                listener_inner,
+                cancel,
+            )
+            .await;
+            let _ = join.await;
+            let events = listener.0.lock().unwrap();
+            let last = events.last().expect("at least one event");
+            assert!(
+                matches!(last, Event::Done(StopReason::Cancelled)),
+                "last event should be Done(Cancelled); got {events:?}",
+                events = events.iter().map(|e| format!("{e:?}")).collect::<Vec<_>>()
+            );
+        });
+    }
+
+    impl std::fmt::Debug for Event {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Event::Delta(t) => write!(f, "Delta({t})"),
+                Event::ToolCall(n) => write!(f, "ToolCall({n})"),
+                Event::ToolResult(id) => write!(f, "ToolResult({id})"),
+                Event::Done(r) => write!(f, "Done({r:?})"),
+                Event::Error(e) => write!(f, "Error({e})"),
+            }
+        }
     }
 
     #[test]
