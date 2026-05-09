@@ -40,7 +40,6 @@ use crate::registry::{OpenRequest, Registry, TunnelHandle};
 /// also remove the entry, but only after the request channel
 /// receiver this task owns goes away, which already implies
 /// "tunnel is gone" to the public side.
-#[allow(dead_code)] // wired into the tunnel listener in a follow-up commit
 pub(crate) async fn drive_tunnel<S>(
     mut conn: YamuxConnection<S>,
     mut open_rx: mpsc::Receiver<OpenRequest>,

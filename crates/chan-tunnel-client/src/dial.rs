@@ -30,9 +30,28 @@ use crate::{handshake, ClientConfig, ClientError, Registration};
 /// the yamux connection ready to be passed to `serve_substreams`.
 ///
 /// Reconnect logic lives in `run`; this function is the single
-/// attempt and the testable unit.
+/// attempt and the testable unit. Builds a fresh TLS config every
+/// call, which on macOS walks the keychain. For long-running hosts
+/// that reconnect repeatedly, prefer `dial_with_tls` and reuse the
+/// `Arc<RustlsClientConfig>`.
 pub async fn dial(
     cfg: &ClientConfig,
+) -> Result<(Registration, YamuxConnection<Compat<H2Duplex>>), ClientError> {
+    let tls = if cfg.tunnel_url.scheme() == "https" {
+        Some(Arc::new(build_tls_config()?))
+    } else {
+        None
+    };
+    dial_with_tls(cfg, tls.as_ref()).await
+}
+
+/// Same as `dial` but reuses a pre-built TLS config. The reconnect
+/// loop in `run()` calls this so every retry doesn't re-walk the
+/// system trust store; the macOS keychain in particular costs tens
+/// of milliseconds per load.
+pub async fn dial_with_tls(
+    cfg: &ClientConfig,
+    tls: Option<&Arc<RustlsClientConfig>>,
 ) -> Result<(Registration, YamuxConnection<Compat<H2Duplex>>), ClientError> {
     let host = cfg
         .tunnel_url
@@ -56,8 +75,10 @@ pub async fn dial(
     // a different type per branch (rustls TlsStream vs raw TcpStream),
     // so spawn inside each arm and only return the SendRequest.
     let mut send_req = if scheme == "https" {
-        let tls_config = build_tls_config()?;
-        let connector = TlsConnector::from(Arc::new(tls_config));
+        let tls_config = tls
+            .ok_or_else(|| ClientError::Tls("https:// dial called without a TLS config".into()))?
+            .clone();
+        let connector = TlsConnector::from(tls_config);
         let server_name = ServerName::try_from(host.clone())
             .map_err(|e| ClientError::Tls(format!("invalid SNI {host:?}: {e}")))?;
         let tls = connector
@@ -103,6 +124,11 @@ pub async fn dial(
         StatusCode::UNAUTHORIZED => {
             return Err(ClientError::Handshake("unauthorized (bad token)".into()))
         }
+        StatusCode::FORBIDDEN => {
+            return Err(ClientError::Handshake(
+                "forbidden (token missing tunnel scope)".into(),
+            ));
+        }
         other => return Err(ClientError::Handshake(format!("unexpected status {other}"))),
     }
 
@@ -112,7 +138,7 @@ pub async fn dial(
     handshake(cfg, duplex).await
 }
 
-fn build_tls_config() -> Result<RustlsClientConfig, ClientError> {
+pub fn build_tls_config() -> Result<RustlsClientConfig, ClientError> {
     // rustls 0.23 expects the default crypto provider to be
     // installed once per process. Re-install attempts are no-ops
     // and we ignore the result so multiple `dial` calls in a

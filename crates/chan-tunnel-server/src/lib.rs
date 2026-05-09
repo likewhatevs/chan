@@ -12,12 +12,21 @@
 
 #![forbid(unsafe_code)]
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use chan_tunnel_proto::{read_frame, write_frame, Hello, HelloAck, ProtocolVersion};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt};
 use yamux::{Config as YamuxConfig, Connection as YamuxConnection, Mode};
+
+/// Hard cap on how long the server waits for a client's Hello after
+/// sending 200. A peer that connects, gets the OK, then never sends
+/// the framed Hello (slow loris) is bounded by this. 15s is plenty
+/// for the trans-pacific case; tighter would risk false positives
+/// on slow mobile uplinks.
+const HELLO_READ_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Error)]
 pub enum ServerError {
@@ -92,8 +101,14 @@ fn make_prefix(username: &str, drive: &str) -> String {
 /// HelloAck is written. Returning an error from it aborts the
 /// handshake without registering anything; the caller uses it for
 /// post-validate policy checks (per-user drive limits, etc.).
+///
+/// Order of operations: validator runs first, *then* the Hello is
+/// read and the drive name validated. The tunnel listener
+/// (`handle_tunnel_conn`) needs that order to send 401 on bad
+/// tokens before committing to the body, and consistency keeps the
+/// two paths from diverging.
 pub async fn handshake<S, V, F>(
-    mut socket: S,
+    socket: S,
     token: &str,
     validator: &V,
     pre_ack: F,
@@ -103,7 +118,49 @@ where
     V: Validator + ?Sized,
     F: FnOnce(&Hello, &Validated) -> Result<(), ServerError>,
 {
-    let hello: Hello = read_frame(&mut socket).await?;
+    let validated = validator.validate(token).await?;
+    if !validated.scopes.iter().any(|s| s == "tunnel") {
+        return Err(ServerError::MissingScope);
+    }
+    handshake_validated(socket, validated, pre_ack).await
+}
+
+/// Like `handshake` but takes an already-validated identity. Used
+/// by the tunnel listener to validate the token *before* sending
+/// the 200 response so a 401 can come back when validation fails;
+/// once we've replied 200, this finishes the wire dance (Hello in,
+/// drive-name check, pre_ack, HelloAck out, yamux wrap).
+pub async fn handshake_validated<S, F>(
+    mut socket: S,
+    validated: Validated,
+    pre_ack: F,
+) -> Result<(Hello, Validated, YamuxConnection<Compat<S>>), ServerError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    F: FnOnce(&Hello, &Validated) -> Result<(), ServerError>,
+{
+    // Defense-in-depth: the validator has already authenticated the
+    // token, but the username it returns flows into the public URL
+    // path /{user}/{drive}. If the upstream identity service ever
+    // emits a username with `/`, `..`, whitespace, or other
+    // path-affecting bytes, the public router would mis-route or
+    // leak the prefix. Refuse here so the rest of the pipeline can
+    // assume the username is URL-safe.
+    if !chan_tunnel_proto::is_valid_username(&validated.username) {
+        return Err(ServerError::Handshake(format!(
+            "validator returned an unsafe username for the public path: {:?}",
+            validated.username
+        )));
+    }
+    let hello: Hello = match tokio::time::timeout(HELLO_READ_TIMEOUT, read_frame(&mut socket)).await
+    {
+        Ok(r) => r?,
+        Err(_) => {
+            return Err(ServerError::Handshake(format!(
+                "timed out waiting for Hello after {HELLO_READ_TIMEOUT:?}"
+            )));
+        }
+    };
     if hello.protocol != ProtocolVersion::V1 {
         return Err(ServerError::Handshake(format!(
             "client requested unsupported protocol {:?}",
@@ -117,11 +174,6 @@ where
         )));
     }
 
-    let validated = validator.validate(token).await?;
-    if !validated.scopes.iter().any(|s| s == "tunnel") {
-        return Err(ServerError::MissingScope);
-    }
-
     pre_ack(&hello, &validated)?;
 
     let ack = HelloAck {
@@ -132,8 +184,21 @@ where
     };
     write_frame(&mut socket, &ack).await?;
 
-    let yamux = YamuxConnection::new(socket.compat(), YamuxConfig::default(), Mode::Server);
+    let yamux = YamuxConnection::new(socket.compat(), tunnel_yamux_config(), Mode::Server);
     Ok((hello, validated, yamux))
+}
+
+/// Yamux config with tighter caps than the upstream default. The
+/// upstream `Config::default` allows 8192 concurrent substreams per
+/// connection; that's a single tunnel's per-process budget, and a
+/// public visitor that opens many slow requests can fill it. 256
+/// is plenty for normal browser-shaped concurrency (a handful of
+/// pipelined requests + a WebSocket or two) and bounds the worst
+/// case to a manageable memory footprint.
+fn tunnel_yamux_config() -> YamuxConfig {
+    let mut cfg = YamuxConfig::default();
+    cfg.set_max_num_streams(256);
+    cfg
 }
 
 mod driver;
@@ -141,6 +206,6 @@ mod public;
 mod registry;
 mod tunnel;
 
-pub use public::public_router;
+pub use public::{public_router, public_router_with, PublicConfig, DEFAULT_REQUEST_BODY_CAP};
 pub use registry::{DriveInfo, OpenError, Registry, TunnelHandle, TunnelInfo};
 pub use tunnel::serve_tunnel_listener;

@@ -13,7 +13,7 @@
 
 mod dial;
 
-pub use dial::dial;
+pub use dial::{build_tls_config, dial, dial_with_tls};
 
 use std::pin::Pin;
 use std::time::Duration;
@@ -85,6 +85,13 @@ pub struct ClientConfig {
     /// Initial reconnect backoff. Doubled up to `max_backoff`.
     pub initial_backoff: Duration,
     pub max_backoff: Duration,
+    /// Wall-clock cap on a single dial attempt: TCP connect, TLS,
+    /// h2 handshake, response, Hello/HelloAck. Without this, an
+    /// unreachable host or a black-holed network can hang each
+    /// attempt for the OS-level TCP timeout (minutes), defeating
+    /// the retry backoff. 30s covers the trans-pacific case with
+    /// margin; bump for satellite links.
+    pub dial_timeout: Duration,
     /// Optional channel for `run` to publish lifecycle events on.
     /// Useful when the caller wants to surface "connected", "lost
     /// connection", "retrying in Xs" to its own UI. Backpressure:
@@ -104,6 +111,7 @@ impl Default for ClientConfig {
             public: false,
             initial_backoff: Duration::from_millis(500),
             max_backoff: Duration::from_secs(30),
+            dial_timeout: Duration::from_secs(30),
             events: None,
         }
     }
@@ -240,10 +248,53 @@ pub async fn run(cfg: ClientConfig, router: axum::Router) -> Result<(), ClientEr
             )));
         }
     }
+    // h2c (http://) is fine for a local dev stack but ships the
+    // bearer token in cleartext; warn loudly when someone points it
+    // at a non-loopback host. Loopback detection is best-effort:
+    // hostname "localhost" and the standard 127.x / ::1 literals
+    // count; everything else gets the warning. We don't refuse
+    // outright because there are legitimate cases (private VPN,
+    // Tailscale, in-cluster service).
+    if cfg.tunnel_url.scheme() == "http" {
+        let host = cfg.tunnel_url.host_str().unwrap_or("");
+        let is_loopback =
+            host == "localhost" || host.starts_with("127.") || host == "::1" || host == "[::1]";
+        if !is_loopback {
+            tracing::warn!(
+                host = %host,
+                "tunnel URL is http://; bearer token will be sent in cleartext. \
+                 Use https:// for non-loopback hosts.",
+            );
+        }
+    }
+
+    // Build the TLS config once; rustls-native-certs walks the
+    // OS trust store on every call (slow on macOS keychain) and
+    // the reconnect loop would otherwise re-pay that on every
+    // attempt. Lazy: only build for https:// URLs.
+    let tls = if cfg.tunnel_url.scheme() == "https" {
+        Some(std::sync::Arc::new(build_tls_config()?))
+    } else {
+        None
+    };
 
     let mut backoff = cfg.initial_backoff;
     loop {
-        match dial(&cfg).await {
+        // Cap a single dial attempt so an unreachable host doesn't
+        // hang for minutes (OS TCP timeout) and starve the retry
+        // backoff. Per-leg timeouts inside `dial` would be more
+        // precise but a single global timeout is the simpler knob
+        // and surfaces as one config field.
+        let attempt =
+            tokio::time::timeout(cfg.dial_timeout, dial_with_tls(&cfg, tls.as_ref())).await;
+        let attempt = match attempt {
+            Ok(r) => r,
+            Err(_) => Err(ClientError::Handshake(format!(
+                "dial timed out after {:?}",
+                cfg.dial_timeout
+            ))),
+        };
+        match attempt {
             Ok((registration, yconn)) => {
                 tracing::info!(
                     user = %registration.user,

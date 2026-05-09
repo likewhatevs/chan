@@ -140,13 +140,28 @@ impl Registry {
             handle: handle.clone(),
             _shutdown_tx: shutdown_tx,
         };
-        let key = (user, drive);
+        let key = (user.clone(), drive.clone());
         let evicted = {
             let mut g = self.inner.lock();
             g.insert(key, entry)
         };
         if let Some(old) = evicted {
-            drop(old); // sends shutdown signal via _shutdown_tx Drop
+            // Log the eviction with the prior registration's age so
+            // an operator can spot flap (two chan-serve instances
+            // fighting over the same drive name) without having to
+            // diff connection counts. The Drop on `old` fires the
+            // shutdown signal that tells the previous driver to
+            // close its yamux connection.
+            let prior_age = Utc::now()
+                .signed_duration_since(old.handle.connected_at)
+                .num_milliseconds();
+            tracing::info!(
+                %user,
+                %drive,
+                prior_age_ms = prior_age,
+                "tunnel registration evicted predecessor",
+            );
+            drop(old);
         }
         (handle, open_rx, shutdown_rx)
     }
@@ -231,19 +246,27 @@ mod tests {
 
     #[tokio::test]
     async fn evict_on_collision() {
+        use tokio::sync::oneshot::error::TryRecvError;
         let reg = Registry::new();
         let user: Arc<str> = Arc::from("alice");
         let drive: Arc<str> = Arc::from("notes");
 
-        let (h1, _rx1, mut shutdown1) = reg.register(user.clone(), drive.clone(), false, None);
+        let (_h1, _rx1, mut shutdown1) = reg.register(user.clone(), drive.clone(), false, None);
+        // Before the collision, the receiver has no value and the
+        // sender is still alive: try_recv must report Empty.
+        assert!(matches!(shutdown1.try_recv(), Err(TryRecvError::Empty)));
+
         // Re-register the same pair: old entry is dropped, its
-        // shutdown receiver fires.
+        // shutdown sender is dropped with it, so the receiver wakes
+        // with Closed.
         let (_h2, _rx2, _shutdown2) = reg.register(user.clone(), drive.clone(), false, None);
-        assert!(shutdown1.try_recv().is_ok() || shutdown1.try_recv().is_err());
-        // Either Ok(()) (sender closed cleanly via Drop) or Err
-        // (channel dropped). The signal-via-drop semantics give us
-        // the latter; either way the receiver is no longer usable.
-        let _ = h1;
+        match shutdown1.try_recv() {
+            Err(TryRecvError::Closed) => {}
+            other => panic!("expected Closed after eviction, got {other:?}"),
+        }
+
+        // The new handle is what the registry returns from now on.
+        assert!(reg.get("alice", "notes").is_some());
     }
 
     #[tokio::test]
