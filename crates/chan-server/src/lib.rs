@@ -18,6 +18,7 @@
 mod config;
 mod indexer;
 mod preferences;
+mod qr;
 mod self_writes;
 
 pub use config::ServerConfig;
@@ -342,6 +343,7 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
     };
     let url = handle.launch_url();
     eprintln!("chan is ready:\n{url}");
+    print_qr_if_tty(&url);
     if config.open_browser {
         // Best-effort: on a headless host (no `xdg-open`/no display)
         // this returns an error; log a NOTE and keep serving.
@@ -447,6 +449,10 @@ pub async fn serve_via_tunnel(
     // slow drainer drops events instead of stalling the run loop.
     let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(8);
     tokio::spawn(async move {
+        // First-connect-only flag: print the QR + open the browser
+        // once. Reconnect storms must not re-trigger either side
+        // effect (would spam the screen and re-open tabs).
+        let mut greeted = false;
         while let Some(ev) = events_rx.recv().await {
             match ev {
                 chan_tunnel_client::TunnelEvent::Connected(reg) => {
@@ -462,10 +468,15 @@ pub async fn serve_via_tunnel(
                     // chan SPA whose vite `base: "./"` resolves asset URLs
                     // relative to that prefix. Without the slash the gateway
                     // 308s, which works but adds a hop the user can see.
-                    eprintln!(
-                        "chan tunnel connected: https://drive.chan.app{}/",
-                        reg.prefix
-                    );
+                    let public_url = format!("https://drive.chan.app{}/", reg.prefix);
+                    eprintln!("chan tunnel connected: {public_url}");
+                    if !greeted {
+                        greeted = true;
+                        print_qr_if_tty(&public_url);
+                        if let Err(e) = open::that_detached(&public_url) {
+                            eprintln!("NOTE: could not open browser ({e}); visit the URL above.");
+                        }
+                    }
                 }
                 chan_tunnel_client::TunnelEvent::Disconnected { retry_in } => {
                     eprintln!("chan tunnel disconnected; reconnecting in {retry_in:?}");
@@ -592,6 +603,20 @@ fn bundle_already_seeded(target: &Path) -> bool {
         false
     }
     target.exists() && any_file(target)
+}
+
+/// Print a Dense1x2 QR for `url` to stderr when stderr is a TTY.
+/// Suppressed under redirection so the banner stays grep-friendly
+/// in logs. Encoder failure (URL too long for ECC H) is silent: the
+/// preceding plain-text URL line is still authoritative.
+fn print_qr_if_tty(url: &str) {
+    use std::io::IsTerminal;
+    if !std::io::stderr().is_terminal() {
+        return;
+    }
+    if let Some(s) = qr::render(url) {
+        eprintln!("\n{s}");
+    }
 }
 
 /// Current wall-clock unix timestamp in seconds. Saturates at 0 on
