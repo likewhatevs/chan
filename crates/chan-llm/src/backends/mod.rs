@@ -37,6 +37,16 @@ pub mod ollama;
 mod retry;
 pub use retry::{send_with_retry, RetryPolicy};
 
+/// Hard cap on a single turn's accumulated assistant text. The
+/// listener (`on_delta`) is fire-and-forget; if it blocks or if the
+/// model goes into a runaway emit loop, the per-turn String would
+/// grow unbounded. 10 MB is well above any plausible legitimate
+/// turn (typical: <100 KB) and well below where a single allocation
+/// becomes painful. Backends abort the stream when they cross this
+/// threshold; the alternative (silently truncating) corrupts the
+/// transcript fed back into the model on the next turn.
+pub const ASSISTANT_TEXT_CAP_BYTES: usize = 10 * 1024 * 1024;
+
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;

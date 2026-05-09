@@ -307,6 +307,14 @@ impl Backend for ClaudeCliBackend {
                                 if !text.is_empty() {
                                     listener.on_delta(Delta { text: text.clone() });
                                     assistant_text.push_str(&text);
+                                    if assistant_text.len() > super::ASSISTANT_TEXT_CAP_BYTES {
+                                        listener.on_error(format!(
+                                            "claude_cli stream: assistant text exceeded {} bytes; aborting",
+                                            super::ASSISTANT_TEXT_CAP_BYTES,
+                                        ));
+                                        let _ = child.kill().await;
+                                        return Outcome::error();
+                                    }
                                 }
                             }
                             ContentBlock::ToolUse { id, name, input } => {
@@ -360,7 +368,15 @@ impl Backend for ClaudeCliBackend {
                         if let Some(text) = result {
                             if !text.is_empty() {
                                 listener.on_delta(Delta { text: text.clone() });
-                                assistant_text.push_str(&text);
+                                if text.len() > super::ASSISTANT_TEXT_CAP_BYTES {
+                                    listener.on_error(format!(
+                                        "claude_cli result: assistant text exceeded {} bytes",
+                                        super::ASSISTANT_TEXT_CAP_BYTES,
+                                    ));
+                                    stop = StopReason::Error;
+                                } else {
+                                    assistant_text.push_str(&text);
+                                }
                             }
                         }
                     }

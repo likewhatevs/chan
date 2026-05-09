@@ -19,9 +19,15 @@
 //!     turn and `functionResponse` parts on a `user` turn (the API
 //!     doesn't accept a `tool` role on this endpoint).
 //!   - Per-call ids aren't returned, so we synthesize stable
-//!     `gemini-<idx>` ids per response position. The orchestrator's
-//!     "tool_call_id <-> tool_result" pairing still works because
-//!     the next turn's `Role::Tool` message carries the same id.
+//!     `gemini-<turn>-<idx>` ids per turn position. `<turn>` is the
+//!     0-based index of the model turn this call belongs to, counted
+//!     against the assistant messages already in the transcript at
+//!     request time; `<idx>` is the call's position inside that
+//!     turn. Including the turn index keeps ids unique across the
+//!     whole session, so a tool result from an earlier turn cannot
+//!     collide with a later turn that happened to emit the same
+//!     positional `<idx>`. `lookup_tool_name` mirrors this layout
+//!     when re-serializing tool results back to Gemini.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -98,6 +104,14 @@ impl Backend for GeminiBackend {
         listener: Arc<dyn SessionListener>,
         cancel: Arc<AtomicBool>,
     ) -> Outcome {
+        // 0-based index of the model turn we're about to produce.
+        // Used as the `<turn>` field in synthesized tool-call ids so
+        // they stay unique across the whole session, not just the
+        // current turn.
+        let turn_index = messages
+            .iter()
+            .filter(|m| matches!(m.role, Role::Assistant))
+            .count();
         let (system_instruction, contents) = build_contents(&messages);
         let tools_wire = if tools.is_empty() {
             Vec::new()
@@ -215,15 +229,24 @@ impl Backend for GeminiBackend {
                                 if !text.is_empty() {
                                     listener.on_delta(Delta { text: text.clone() });
                                     assistant_text.push_str(&text);
+                                    if assistant_text.len() > super::ASSISTANT_TEXT_CAP_BYTES {
+                                        listener.on_error(format!(
+                                            "gemini stream: assistant text exceeded {} bytes; aborting",
+                                            super::ASSISTANT_TEXT_CAP_BYTES,
+                                        ));
+                                        return Outcome::error();
+                                    }
                                 }
                             }
                             if let Some(call) = part.function_call {
-                                // Synthesize a stable id by position
-                                // in this turn. The orchestrator pairs
-                                // the next Role::Tool message via this
-                                // id; build_contents recovers the tool
-                                // name from the prior `model` turn.
-                                let id = format!("gemini-{}", tool_calls.len());
+                                // Synthesize a stable id from
+                                // (turn_index, position in this
+                                // turn). The orchestrator pairs the
+                                // next Role::Tool message via this
+                                // id; build_contents recovers the
+                                // tool name by walking to the matching
+                                // `model` turn.
+                                let id = format!("gemini-{}-{}", turn_index, tool_calls.len());
                                 tool_calls.push(ToolCall {
                                     id,
                                     name: call.name,
@@ -428,18 +451,36 @@ fn build_contents(msgs: &[Message]) -> (Option<GeminiSystemInstruction>, Vec<Gem
     (system, out)
 }
 
-/// Walk the most recent `model` turn for a functionCall whose
-/// synthesized id matches `id`, and recover the tool name. Without
-/// this, every Tool message would have to thread the name through
-/// from the orchestrator.
+/// Resolve a synthesized `gemini-<turn>-<idx>` id back to the tool
+/// name by walking `out` to the `<turn>`th `model` turn (0-based)
+/// and indexing into its functionCall parts at `<idx>`. Without this
+/// every Tool message would have to thread the name through from the
+/// orchestrator.
+///
+/// Falls back to the legacy `gemini-<idx>` shape (no turn segment)
+/// for back-compat with transcripts produced by older builds: those
+/// can only be resolved against the most recent model turn, which
+/// matches the prior behaviour.
 fn lookup_tool_name(out: &[GeminiContent<'_>], id: Option<&str>) -> Option<String> {
-    let id = id?;
-    let position = id
-        .strip_prefix("gemini-")
-        .and_then(|s| s.parse::<usize>().ok())?;
-    let last_model = out.iter().rev().find(|c| c.role == "model")?;
+    let rest = id?.strip_prefix("gemini-")?;
+    let target_turn: Option<usize>;
+    let position: usize;
+    match rest.split_once('-') {
+        Some((turn_s, pos_s)) => {
+            target_turn = Some(turn_s.parse().ok()?);
+            position = pos_s.parse().ok()?;
+        }
+        None => {
+            target_turn = None;
+            position = rest.parse().ok()?;
+        }
+    }
+    let model_turn = match target_turn {
+        Some(t) => out.iter().filter(|c| c.role == "model").nth(t)?,
+        None => out.iter().rev().find(|c| c.role == "model")?,
+    };
     let mut seen = 0usize;
-    for part in &last_model.parts {
+    for part in &model_turn.parts {
         if let GeminiPart::FunctionCall { function_call } = part {
             if seen == position {
                 return Some(function_call.name.to_string());
@@ -660,5 +701,95 @@ mod tests {
         let part = &serialized["parts"][0]["functionResponse"];
         assert_eq!(part["name"], "list_files");
         assert_eq!(part["response"]["output"], "[\"notes/a.md\"]");
+    }
+
+    #[test]
+    fn lookup_resolves_cross_turn_ids_without_collision() {
+        // Two model turns each emit a call at position 0. Old ids
+        // ("gemini-0") would collide and route turn-0's tool result
+        // to turn-1's tool name. New ids embed the turn index so the
+        // lookup walks to the correct model turn.
+        let msgs = vec![
+            Message::user("first"),
+            Message {
+                role: Role::Assistant,
+                content: String::new(),
+                tool_call_id: None,
+                tool_calls: vec![ToolCall {
+                    id: "gemini-0-0".into(),
+                    name: "read_file".into(),
+                    args: serde_json::json!({"path": "a.md"}),
+                }],
+            },
+            Message {
+                role: Role::Tool,
+                content: "alpha".into(),
+                tool_call_id: Some("gemini-0-0".into()),
+                tool_calls: Vec::new(),
+            },
+            Message::user("now do another"),
+            Message {
+                role: Role::Assistant,
+                content: String::new(),
+                tool_call_id: None,
+                tool_calls: vec![ToolCall {
+                    id: "gemini-1-0".into(),
+                    name: "list_files".into(),
+                    args: serde_json::json!({"prefix": "notes"}),
+                }],
+            },
+            Message {
+                role: Role::Tool,
+                content: "[]".into(),
+                tool_call_id: Some("gemini-1-0".into()),
+                tool_calls: Vec::new(),
+            },
+        ];
+        let (_, contents) = build_contents(&msgs);
+        // user, model, user(=tool result), user, model, user(=tool result)
+        assert_eq!(contents.len(), 6);
+        let first_response = serde_json::to_value(&contents[2]).unwrap();
+        assert_eq!(
+            first_response["parts"][0]["functionResponse"]["name"],
+            "read_file"
+        );
+        let second_response = serde_json::to_value(&contents[5]).unwrap();
+        assert_eq!(
+            second_response["parts"][0]["functionResponse"]["name"],
+            "list_files"
+        );
+    }
+
+    #[test]
+    fn lookup_back_compat_legacy_id_uses_last_model_turn() {
+        // Legacy "gemini-0" id (pre cross-turn fix). For transcripts
+        // produced by older builds, the lookup falls back to the
+        // most recent model turn.
+        let msgs = vec![
+            Message::user("hello"),
+            Message {
+                role: Role::Assistant,
+                content: String::new(),
+                tool_call_id: None,
+                tool_calls: vec![ToolCall {
+                    id: "gemini-0".into(),
+                    name: "search_content".into(),
+                    args: serde_json::json!({"q": "foo"}),
+                }],
+            },
+            Message {
+                role: Role::Tool,
+                content: "no hits".into(),
+                tool_call_id: Some("gemini-0".into()),
+                tool_calls: Vec::new(),
+            },
+        ];
+        let (_, contents) = build_contents(&msgs);
+        assert_eq!(contents.len(), 3);
+        let resp = serde_json::to_value(&contents[2]).unwrap();
+        assert_eq!(
+            resp["parts"][0]["functionResponse"]["name"],
+            "search_content"
+        );
     }
 }

@@ -392,18 +392,34 @@ async fn run_loop(
             let exec_ctx = tool_ctx.clone();
             let exec_name = call.name.clone();
             let exec_args = call.args.clone();
+            let panic_tool_name = call.name.clone();
             let exec_result = tokio::task::spawn_blocking(move || {
-                crate::tools::execute(&exec_name, &exec_args, &exec_ctx)
+                // catch_unwind keeps the panic payload (which can
+                // contain user paths or other PII) out of the
+                // model-visible tool result. The full payload and
+                // backtrace land in logs via the panic hook; the
+                // assistant sees a generic, scrubbed message.
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::tools::execute(&exec_name, &exec_args, &exec_ctx)
+                }))
             })
             .await;
             let exec_result = match exec_result {
-                Ok(r) => r,
+                Ok(Ok(r)) => r,
+                Ok(Err(_panic_payload)) => {
+                    tracing::error!(
+                        tool = %panic_tool_name,
+                        "tool panic captured; returning generic error to model",
+                    );
+                    Err(LlmError::Tool(format!(
+                        "tool {panic_tool_name} panicked; see host logs"
+                    )))
+                }
                 Err(join_err) => {
-                    // The blocking task panicked. Surface as a tool
-                    // error so the assistant sees the failure and
-                    // can recover; the join error itself contains
-                    // the panic payload as a Display string.
-                    Err(LlmError::Tool(format!("tool panic: {join_err}")))
+                    // JoinError without a payload: cancellation or
+                    // runtime shutdown. Distinct from a panic; no
+                    // need to scrub.
+                    Err(LlmError::Tool(format!("tool join error: {join_err}")))
                 }
             };
             match exec_result {

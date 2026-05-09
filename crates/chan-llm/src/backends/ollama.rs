@@ -264,6 +264,13 @@ impl Backend for OllamaBackend {
                             text: msg.content.clone(),
                         });
                         assistant_text.push_str(&msg.content);
+                        if assistant_text.len() > super::ASSISTANT_TEXT_CAP_BYTES {
+                            listener.on_error(format!(
+                                "ollama stream: assistant text exceeded {} bytes; aborting",
+                                super::ASSISTANT_TEXT_CAP_BYTES,
+                            ));
+                            return Outcome::error();
+                        }
                     }
                     // Tool calls only appear in the final chunk
                     // for streaming responses, but we accumulate

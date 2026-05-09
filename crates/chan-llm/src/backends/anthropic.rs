@@ -316,6 +316,13 @@ impl Backend for AnthropicBackend {
                             if !text.is_empty() {
                                 listener.on_delta(Delta { text: text.clone() });
                                 assistant_text.push_str(&text);
+                                if assistant_text.len() > super::ASSISTANT_TEXT_CAP_BYTES {
+                                    listener.on_error(format!(
+                                        "anthropic stream: assistant text exceeded {} bytes; aborting",
+                                        super::ASSISTANT_TEXT_CAP_BYTES,
+                                    ));
+                                    return Outcome::error();
+                                }
                             }
                         }
                         BlockDelta::InputJsonDelta { partial_json } => {
