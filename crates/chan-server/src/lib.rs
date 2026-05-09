@@ -343,7 +343,6 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
     };
     let url = handle.launch_url();
     eprintln!("chan is ready:\n{url}");
-    print_qr_if_tty(&url);
     if config.open_browser {
         // Best-effort: on a headless host (no `xdg-open`/no display)
         // this returns an error; log a NOTE and keep serving.
