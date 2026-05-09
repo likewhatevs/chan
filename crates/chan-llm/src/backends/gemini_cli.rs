@@ -372,10 +372,31 @@ impl Backend for GeminiCliBackend {
 /// inside it lays out:
 ///
 /// ```text
-/// <home>/.gemini/settings.json     # mcpServers.chan = {command,args}
+/// <home>/.gemini/settings.json     # merged user + chan mcpServer
 /// <home>/.gemini/policies/chan.toml  # deny native edit/shell tools
+/// <home>/.gemini/oauth_creds.json    # symlink -> user's ~/.gemini
+/// <home>/.gemini/google_accounts.json
+/// <home>/.gemini/state.json
+/// <home>/.gemini/installation_id
 /// ```
+///
+/// settings.json merges the user's real `~/.gemini/settings.json`
+/// (so `security.auth.selectedType`, telemetry, sandbox flags, ...
+/// carry over) and force-overwrites `mcpServers.chan` with the
+/// chan-llm wiring. Auth credential files are symlinked (Unix) or
+/// copied (other) into the synthetic home so non-interactive runs
+/// authenticate against the user's existing OAuth state. Without
+/// this, redirecting `GEMINI_CLI_HOME` to a fresh tempdir leaves
+/// gemini-cli with no credentials and it fails with
+/// `FATAL_AUTHENTICATION_ERROR`.
 fn write_gemini_home(wiring: &McpWiring) -> std::io::Result<TempDir> {
+    write_gemini_home_with_user(wiring, dirs::home_dir().map(|h| h.join(".gemini")))
+}
+
+fn write_gemini_home_with_user(
+    wiring: &McpWiring,
+    user_home: Option<std::path::PathBuf>,
+) -> std::io::Result<TempDir> {
     use std::io::Write;
 
     let (bin, base_args) = wiring.command.split_first().ok_or_else(|| {
@@ -391,18 +412,56 @@ fn write_gemini_home(wiring: &McpWiring) -> std::io::Result<TempDir> {
     let policies_dir = dot_gemini.join("policies");
     std::fs::create_dir_all(&policies_dir)?;
 
-    let settings = serde_json::json!({
-        "mcpServers": {
-            MCP_SERVER_KEY: {
-                "command": bin,
-                "args": args,
-                "trust": true,
-            }
+    // Start from the user's real settings.json (when present) so
+    // auth selection and other preferences carry into the sandbox,
+    // then force `mcpServers.chan` to chan-llm's wiring.
+    let mut settings: serde_json::Value = user_home
+        .as_ref()
+        .and_then(|h| std::fs::read_to_string(h.join("settings.json")).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !settings.is_object() {
+        settings = serde_json::json!({});
+    }
+    if let serde_json::Value::Object(map) = &mut settings {
+        let mcp = map
+            .entry("mcpServers".to_string())
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        if !mcp.is_object() {
+            *mcp = serde_json::Value::Object(serde_json::Map::new());
         }
-    });
+        if let serde_json::Value::Object(mcp_map) = mcp {
+            mcp_map.insert(
+                MCP_SERVER_KEY.to_string(),
+                serde_json::json!({
+                    "command": bin,
+                    "args": args,
+                    "trust": true,
+                }),
+            );
+        }
+    }
     let mut sf = std::fs::File::create(dot_gemini.join("settings.json"))?;
     sf.write_all(serde_json::to_string_pretty(&settings)?.as_bytes())?;
     sf.flush()?;
+
+    // Bridge auth state. Best-effort: a missing or unreadable user
+    // file just means gemini-cli will surface its own auth error.
+    if let Some(real) = user_home.as_ref() {
+        for name in [
+            "oauth_creds.json",
+            "google_accounts.json",
+            "state.json",
+            "installation_id",
+        ] {
+            let src = real.join(name);
+            if !src.exists() {
+                continue;
+            }
+            let dst = dot_gemini.join(name);
+            let _ = link_or_copy(&src, &dst);
+        }
+    }
 
     // Deny gemini's native write/edit/shell tools so any mutation
     // has to flow through the chan MCP server (whose dispatch runs
@@ -438,6 +497,22 @@ priority = 900
     pf.flush()?;
 
     Ok(home)
+}
+
+/// Bring a credential file from the user's real `~/.gemini` into
+/// the synthetic home. Symlinking on Unix lets OAuth token refresh
+/// flow back to the user's real file; on other platforms we fall
+/// back to a one-shot copy (refreshed tokens won't persist across
+/// restarts there, but the immediate auth still works).
+fn link_or_copy(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(src, dst)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::copy(src, dst).map(|_| ())
+    }
 }
 
 /// Render the chan-llm transcript into a single labelled prompt
@@ -767,11 +842,14 @@ mod tests {
 
     #[test]
     fn mcp_home_omits_auto_apply_when_off() {
-        let home = write_gemini_home(&McpWiring {
-            command: vec!["chan".into(), "__mcp".into(), "/d".into()],
-            auto_apply_writes: false,
-            api_key: None,
-        })
+        let home = write_gemini_home_with_user(
+            &McpWiring {
+                command: vec!["chan".into(), "__mcp".into(), "/d".into()],
+                auto_apply_writes: false,
+                api_key: None,
+            },
+            None,
+        )
         .unwrap();
         let body =
             std::fs::read_to_string(home.path().join(".gemini").join("settings.json")).unwrap();
@@ -790,11 +868,14 @@ mod tests {
 
     #[test]
     fn mcp_home_appends_auto_apply_when_on() {
-        let home = write_gemini_home(&McpWiring {
-            command: vec!["chan".into(), "__mcp".into(), "/d".into()],
-            auto_apply_writes: true,
-            api_key: None,
-        })
+        let home = write_gemini_home_with_user(
+            &McpWiring {
+                command: vec!["chan".into(), "__mcp".into(), "/d".into()],
+                auto_apply_writes: true,
+                api_key: None,
+            },
+            None,
+        )
         .unwrap();
         let body =
             std::fs::read_to_string(home.path().join(".gemini").join("settings.json")).unwrap();
@@ -810,11 +891,14 @@ mod tests {
 
     #[test]
     fn mcp_home_writes_deny_policy_for_native_writes() {
-        let home = write_gemini_home(&McpWiring {
-            command: vec!["chan".into()],
-            auto_apply_writes: false,
-            api_key: None,
-        })
+        let home = write_gemini_home_with_user(
+            &McpWiring {
+                command: vec!["chan".into()],
+                auto_apply_writes: false,
+                api_key: None,
+            },
+            None,
+        )
         .unwrap();
         let policy = std::fs::read_to_string(
             home.path()
@@ -833,5 +917,98 @@ mod tests {
             );
         }
         assert!(policy.contains("decision = \"deny\""), "{policy}");
+    }
+
+    #[test]
+    fn mcp_home_merges_user_settings_and_overrides_chan_server() {
+        let user = TempDir::new().unwrap();
+        let user_dot = user.path().join(".gemini");
+        std::fs::create_dir_all(&user_dot).unwrap();
+        // User has oauth-personal selected, plus a stale `chan`
+        // mcp entry from a previous chan-llm version that we must
+        // overwrite (not merge with).
+        std::fs::write(
+            user_dot.join("settings.json"),
+            r#"{
+              "security": {"auth": {"selectedType": "oauth-personal"}},
+              "telemetry": {"enabled": false},
+              "mcpServers": {"chan": {"command": "/old/chan"}, "other": {"command": "/keep"}}
+            }"#,
+        )
+        .unwrap();
+
+        let home = write_gemini_home_with_user(
+            &McpWiring {
+                command: vec!["chan".into(), "__mcp".into(), "/d".into()],
+                auto_apply_writes: false,
+                api_key: None,
+            },
+            Some(user_dot.clone()),
+        )
+        .unwrap();
+
+        let body =
+            std::fs::read_to_string(home.path().join(".gemini").join("settings.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["security"]["auth"]["selectedType"], "oauth-personal");
+        assert_eq!(v["telemetry"]["enabled"], false);
+        // chan entry rewritten to the current wiring; sibling entries kept.
+        assert_eq!(v["mcpServers"]["chan"]["command"], "chan");
+        assert_eq!(v["mcpServers"]["chan"]["trust"], true);
+        assert_eq!(v["mcpServers"]["other"]["command"], "/keep");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_home_symlinks_user_auth_files() {
+        let user = TempDir::new().unwrap();
+        let user_dot = user.path().join(".gemini");
+        std::fs::create_dir_all(&user_dot).unwrap();
+        std::fs::write(user_dot.join("oauth_creds.json"), b"{\"token\":\"x\"}").unwrap();
+        std::fs::write(user_dot.join("google_accounts.json"), b"{}").unwrap();
+        std::fs::write(user_dot.join("installation_id"), b"id-1").unwrap();
+        // state.json deliberately absent: bridge must skip cleanly.
+
+        let home = write_gemini_home_with_user(
+            &McpWiring {
+                command: vec!["chan".into()],
+                auto_apply_writes: false,
+                api_key: None,
+            },
+            Some(user_dot.clone()),
+        )
+        .unwrap();
+
+        let dst = home.path().join(".gemini");
+        // Symlink-not-copy: link target must point at the user's
+        // real file so OAuth refresh writes flow back upstream.
+        let creds_link = std::fs::read_link(dst.join("oauth_creds.json")).unwrap();
+        assert_eq!(creds_link, user_dot.join("oauth_creds.json"));
+        assert!(dst.join("google_accounts.json").exists());
+        assert!(dst.join("installation_id").exists());
+        assert!(!dst.join("state.json").exists());
+    }
+
+    #[test]
+    fn mcp_home_tolerates_missing_user_home() {
+        // Common first-run case: user has never invoked gemini-cli
+        // before, so the home directory doesn't exist. Spawn must
+        // succeed and emit a minimal settings.json with just our
+        // chan mcp server.
+        let user = TempDir::new().unwrap();
+        let absent = user.path().join("does-not-exist").join(".gemini");
+        let home = write_gemini_home_with_user(
+            &McpWiring {
+                command: vec!["chan".into()],
+                auto_apply_writes: false,
+                api_key: None,
+            },
+            Some(absent),
+        )
+        .unwrap();
+        let body =
+            std::fs::read_to_string(home.path().join(".gemini").join("settings.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["mcpServers"][MCP_SERVER_KEY]["command"], "chan");
     }
 }

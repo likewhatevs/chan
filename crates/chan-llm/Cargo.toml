@@ -18,6 +18,7 @@ mcp = ["dep:rmcp", "dep:schemars"]
 chan-drive = { path = "../chan-drive" }
 
 async-trait = { workspace = true }
+dirs = { workspace = true }
 futures-util = { workspace = true }
 keyring = { workspace = true }
 once_cell = { workspace = true }
