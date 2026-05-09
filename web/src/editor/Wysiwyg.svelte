@@ -373,30 +373,51 @@
     // content, and the block separator is only flushed before the
     // *next* block), so a doc like [A, empty, B] collapses to
     // "A\n\nB" on serialize and the blank line is gone after a tab
-    // swap. Emitting a single space turns empty paragraphs into
-    // " \n\n" markers, which `stripBlankParagraphs` and
-    // `preserveBlankParagraphs` already understand.
+    // swap. Emitting an NBSP turns empty paragraphs into the
+    // " \n\n" markers `stripBlankParagraphs` and
+    // `preserveBlankParagraphs` already understand. NBSP, not a
+    // regular space, because markdown-it treats a line containing
+    // only ASCII whitespace as a blank line and drops the
+    // paragraph on the next reparse.
+    //
+    // The override has to land on the resolved extension's storage
+    // *and* shadow the inherited `storage` getter via
+    // `Object.defineProperty`. tiptap 2.x's Extendable base class
+    // exposes `extension.storage` as a getter that returns a fresh
+    // empty object on every access for any extension that didn't
+    // declare `addStorage()` (StarterKit's paragraph hasn't), so a
+    // plain `extension.storage.markdown = ...` writes to a
+    // throwaway and tiptap-markdown's `getMarkdownSpec` keeps
+    // reading the default prosemirror serializer. Defining an own
+    // data property shadows the getter so the spec sticks.
     type PMState = {
       write: (content?: string) => void;
       renderInline: (node: { content: { size: number } }) => void;
       closeBlock: (node: unknown) => void;
     };
     type PMNode = { content: { size: number } };
-    const pStorage = (editor.extensionStorage as Record<string, unknown>).paragraph as
-      | { markdown?: { serialize: (s: PMState, n: PMNode) => void; parse: object } }
-      | undefined;
-    if (pStorage) {
-      pStorage.markdown = {
-        serialize(state, node) {
-          if (node.content.size === 0) {
-            state.write(" ");
-          } else {
-            state.renderInline(node);
-          }
-          state.closeBlock(node);
+    const paraExt = editor.extensionManager.extensions.find(
+      (e: { name: string }) => e.name === "paragraph",
+    );
+    if (paraExt) {
+      Object.defineProperty(paraExt, "storage", {
+        value: {
+          markdown: {
+            serialize(state: PMState, node: PMNode) {
+              if (node.content.size === 0) {
+                state.write("\u00A0");
+              } else {
+                state.renderInline(node);
+              }
+              state.closeBlock(node);
+            },
+            parse: {},
+          },
         },
-        parse: {},
-      };
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
     }
     // Set initial markdown explicitly (StarterKit treats `content` as HTML
     // by default). Markdown extension exposes setContent via commands.
