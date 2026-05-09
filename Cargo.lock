@@ -567,7 +567,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chan"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "anyhow",
  "chan-drive",
@@ -640,7 +640,7 @@ dependencies = [
 
 [[package]]
 name = "chan-server"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "anyhow",
  "axum",
@@ -1287,7 +1287,7 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "fetch-models"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "anyhow",
  "chan-drive",
