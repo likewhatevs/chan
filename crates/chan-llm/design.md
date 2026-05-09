@@ -87,11 +87,56 @@ visible consumer today) is the point.
                                  on_error
 ```
 
-The optional MCP server in `mcp.rs` is a different shape on the
-same `tools::execute` foundation: rmcp's stdio transport accepts
-JSON-RPC frames and dispatches to the same handlers, with
-`auto_apply_writes` forced true (confirmation UI is the MCP
-client's job).
+The optional MCP server in `mcp.rs` is a second entry into the
+same `tools::execute` foundation, this time over rmcp's stdio
+transport. It exists for one reason: external agentic CLIs
+(`claude`, `gemini`) bring their own tool loop, and if we let
+that loop call the CLI's native filesystem tools it would touch
+the user's notes directly, bypassing the path sandbox, the
+editable-text gate, atomic writes, and the `auto_apply_writes`
+confirmation contract. The MCP server re-projects chan-llm's
+tools (`read_file`, `write_file`, `list_files`,
+`search_content`) over JSON-RPC on stdio so the CLI's tool loop
+can be allowlisted onto chan-llm's tools and only chan-llm's
+tools, while still routing every operation through
+`tools::execute` and `chan_drive::Drive`. The flow:
+
+```
+   user message
+        |
+        v
+   +----------------+      stdin/stdout JSON-RPC      +---------+
+   | claude / gemini| <----------------------------> |  MCP    |
+   |  CLI subproc   |                                |  server |
+   +----------------+                                +----+----+
+                                                          |
+                                                          v
+                                                  +---------------+
+                                                  | tools::execute|
+                                                  +-------+-------+
+                                                          |
+                                                          v
+                                                  +---------------+
+                                                  |   Drive       |
+                                                  | (sandbox,     |
+                                                  |  atomic, gate)|
+                                                  +---------------+
+```
+
+`auto_apply_writes` is honoured on the MCP path the same way it
+is on the in-process path: the MCP server takes the flag at
+construction (`Server::new(drive, auto_apply_writes)`). The v2
+ClaudeCli / GeminiCli wiring spawns the MCP subprocess with the
+host-binary `__mcp` subcommand and passes `--auto-apply` only
+when the user has opted in. When it's off, `write_file` returns
+a deferred error back to the CLI's tool loop (the host-approval
+side-channel for resuming the CLI mid-call after the user
+confirms is tracked as chan-llm issue #1). Either way, the
+chan-drive gates apply: the CLI subprocess can only see what
+chan-llm's tools expose, never the underlying filesystem
+directly. The `chan-llm-mcp` standalone binary and chan's
+hidden `__mcp` subcommand both run the same server with the
+same dispatch.
 
 ## 3. Components
 
