@@ -18,7 +18,6 @@ struct DriveUpdate {
     path: String,
     name: Option<String>,
     on: Option<bool>,
-    private: Option<bool>,
 }
 
 #[tauri::command]
@@ -52,7 +51,6 @@ fn add_drive(state: State<AppState>, path: String) -> Result<Config, String> {
         path,
         name,
         on: false,
-        private: true,
         url: String::new(),
     });
     store.save(&cfg).map_err(err)?;
@@ -79,9 +77,6 @@ fn update_drive(state: State<AppState>, update: DriveUpdate) -> Result<Config, S
         if let Some(o) = update.on {
             d.on = o;
         }
-        if let Some(p) = update.private {
-            d.private = p;
-        }
     }
     store.save(&cfg).map_err(err)?;
     Ok(cfg)
@@ -103,6 +98,30 @@ fn show_settings(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn set_dev_mode(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    enabled: bool,
+) -> Result<Config, String> {
+    let mut store = state.store.lock().unwrap();
+    let mut cfg = store.get().map_err(err)?;
+    cfg.dev_mode = enabled;
+    store.save(&cfg).map_err(err)?;
+    apply_dev_mode(&app, enabled);
+    Ok(cfg)
+}
+
+fn apply_dev_mode(app: &tauri::AppHandle, enabled: bool) {
+    for (_, win) in app.webview_windows() {
+        if enabled {
+            win.open_devtools();
+        } else {
+            win.close_devtools();
+        }
+    }
+}
+
 fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
@@ -116,6 +135,14 @@ fn main() {
         .manage(AppState {
             store: Mutex::new(store),
         })
+        .setup(|app| {
+            let state: State<AppState> = app.state();
+            let cfg = state.store.lock().unwrap().get().unwrap_or_default();
+            if cfg.dev_mode {
+                apply_dev_mode(&app.handle(), true);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_config,
             get_config_path,
@@ -124,6 +151,7 @@ fn main() {
             update_drive,
             forget_all,
             show_settings,
+            set_dev_mode,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

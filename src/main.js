@@ -1,5 +1,6 @@
 const { invoke } = window.__TAURI__.core;
 const { open } = window.__TAURI__.dialog;
+const { openUrl } = window.__TAURI__.opener;
 
 const main = document.getElementById('main');
 const openBtn = document.getElementById('open-drive');
@@ -43,7 +44,9 @@ function render(cfg) {
     return;
   }
 
-  const rows = cfg.drives.map((d) => `
+  const rows = cfg.drives.map((d) => {
+    const hasUrl = !!d.url;
+    return `
     <tr data-path="${escapeAttr(d.path)}">
       <td>
         <label class="switch">
@@ -56,20 +59,18 @@ function render(cfg) {
         <input class="name-input" data-act="rename" value="${escapeAttr(d.name)}" />
       </td>
       <td>
-        <span class="vis" role="group" aria-label="Visibility">
-          <button data-act="vis" data-private="true"  aria-pressed="${d.private ? 'true' : 'false'}">private</button>
-          <button data-act="vis" data-private="false" aria-pressed="${d.private ? 'false' : 'true'}">public</button>
-        </span>
-      </td>
-      <td>
-        <input class="url-input" value="${escapeAttr(d.url || '—')}" readonly />
+        <div class="url-cell">
+          <input class="url-input" value="${escapeAttr(d.url)}" placeholder="—" readonly />
+          <button class="btn" data-act="launch" ${hasUrl ? '' : 'disabled'}>Launch</button>
+        </div>
       </td>
       <td>
         <div class="row-actions">
           <button class="btn danger" data-act="remove">Close</button>
         </div>
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 
   main.innerHTML = `
     <table class="drives">
@@ -78,8 +79,7 @@ function render(cfg) {
           <th style="width:60px">On</th>
           <th>Path</th>
           <th style="width:200px">Name</th>
-          <th style="width:160px">Visibility</th>
-          <th style="width:200px">URL</th>
+          <th style="width:280px">URL</th>
           <th style="width:90px"></th>
         </tr>
       </thead>
@@ -107,12 +107,10 @@ function bindRowEvents() {
       if (e.key === 'Enter') nameInput.blur();
     });
 
-    tr.querySelectorAll('[data-act="vis"]').forEach((b) => {
-      b.addEventListener('click', async () => {
-        const isPrivate = b.dataset.private === 'true';
-        const cfg = await invoke('update_drive', { update: { path, private: isPrivate } });
-        render(cfg);
-      });
+    const launchBtn = tr.querySelector('[data-act="launch"]');
+    launchBtn.addEventListener('click', async () => {
+      const url = tr.querySelector('.url-input').value.trim();
+      if (url) await openUrl(url);
     });
 
     tr.querySelector('[data-act="remove"]').addEventListener('click', async () => {

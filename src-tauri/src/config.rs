@@ -9,7 +9,6 @@ pub struct Drive {
     pub path: String,
     pub name: String,
     pub on: bool,
-    pub private: bool,
     pub url: String,
 }
 
@@ -17,6 +16,8 @@ pub struct Drive {
 pub struct Config {
     #[serde(default)]
     pub drives: Vec<Drive>,
+    #[serde(default)]
+    pub dev_mode: bool,
 }
 
 pub struct ConfigStore {

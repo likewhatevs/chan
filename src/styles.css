@@ -102,6 +102,12 @@ table.drives tbody tr:hover{ background:var(--code-bg); }
 }
 .url-input{ color:var(--dim); }
 
+.url-cell{ display:flex; gap:6px; align-items:center; }
+.url-cell .url-input{ flex:1; }
+.url-cell .btn[disabled]{
+  opacity:.4; cursor:not-allowed; pointer-events:none;
+}
+
 /* toggle switch */
 .switch{
   position:relative; display:inline-block; width:34px; height:18px;
@@ -118,21 +124,6 @@ table.drives tbody tr:hover{ background:var(--code-bg); }
 }
 .switch input:checked + .slider{ background:var(--accent); }
 .switch input:checked + .slider::before{ transform:translateX(16px); }
-
-/* visibility pill */
-.vis{
-  display:inline-flex; align-items:center; gap:6px;
-  border:1px solid var(--rule); border-radius:3px; overflow:hidden;
-  font-size:11px; letter-spacing:.06em; text-transform:uppercase;
-}
-.vis button{
-  appearance:none; background:transparent; border:0;
-  color:var(--dim); padding:4px 9px; cursor:pointer;
-  font-family:inherit; font-size:11px;
-}
-.vis button[aria-pressed="true"]{
-  background:var(--accent); color:var(--bg);
-}
 
 .row-actions{ display:flex; gap:4px; justify-content:flex-end; }
 
@@ -151,3 +142,9 @@ table.drives tbody tr:hover{ background:var(--code-bg); }
   word-break:break-all;
 }
 .row-buttons{ display:flex; gap:8px; margin-top:18px; }
+
+label.check{
+  display:inline-flex; align-items:center; gap:8px;
+  font-size:12.5px; cursor:pointer; color:var(--fg);
+}
+label.check input{ accent-color:var(--accent); }
