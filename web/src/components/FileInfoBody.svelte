@@ -28,7 +28,7 @@
     graphData,
     selectionEdgesFor,
   } from "../state/graphData.svelte";
-  import { tree } from "../state/store.svelte";
+  import { openGraphAtNode, tree } from "../state/store.svelte";
 
   let {
     path,
@@ -210,7 +210,13 @@
             <h4>Tags</h4>
             <ul>
               {#each refs.tags as t (t.id)}
-                <li><span class="ref tag">{t.label}</span></li>
+                <li>
+                  <button
+                    class="ref tag"
+                    onclick={() => openGraphAtNode(t.id)}
+                    title="open in graph"
+                  >{t.label}</button>
+                </li>
               {/each}
             </ul>
           </section>
@@ -220,7 +226,13 @@
             <h4>Mentions</h4>
             <ul>
               {#each refs.mentions as m (m.id)}
-                <li><span class="ref mention">{m.label}</span></li>
+                <li>
+                  <button
+                    class="ref mention"
+                    onclick={() => openGraphAtNode(m.id)}
+                    title="open in graph"
+                  >{m.label}</button>
+                </li>
               {/each}
             </ul>
           </section>
@@ -230,7 +242,13 @@
             <h4>Dates</h4>
             <ul>
               {#each refs.dates as d (d.id)}
-                <li><span class="ref date">{d.label}</span></li>
+                <li>
+                  <button
+                    class="ref date"
+                    onclick={() => openGraphAtNode(d.id)}
+                    title="open in graph"
+                  >{d.label}</button>
+                </li>
               {/each}
             </ul>
           </section>
@@ -385,21 +403,24 @@
     padding: 0;
     margin: 0;
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 4px;
   }
   .refs li { margin: 0; }
   .ref {
-    display: inline-block;
+    display: block;
+    width: 100%;
+    text-align: left;
     background: var(--bg-elev);
     border: 1px solid var(--border);
     border-radius: 3px;
-    padding: 1px 6px;
+    padding: 2px 6px;
     font-size: 13px;
     color: var(--text);
     cursor: default;
     font: inherit;
     line-height: 1.5;
+    word-break: break-word;
   }
   button.ref {
     cursor: pointer;

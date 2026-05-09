@@ -730,6 +730,16 @@
       nodes = g.nodes;
       edges = g.edges;
       await buildCytoscapeWhenSized(g);
+      // Apply any pending selection handed in by openGraphAtNode.
+      // Done after the cytoscape build so :selected can attach to
+      // an actual element. Opening the side panel makes the
+      // selection visible without a second click.
+      const pending = graphOverlay.pendingSelectId;
+      if (pending && nodes.some((n) => n.id === pending)) {
+        selectedId = pending;
+        panelOpen = true;
+      }
+      graphOverlay.pendingSelectId = null;
     } catch (e) {
       error = (e as Error).message;
     } finally {
@@ -1261,35 +1271,43 @@
     list-style: none;
     margin: 0;
     padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
   }
-  .details button.ref {
+  .details ul li { margin: 0; }
+  /* Chip-styled refs, stacked one per line. Mirrors FileInfoBody's
+     reference list so the file-browser inspector and the graph
+     inspector share the same look. */
+  .details .ref {
+    display: block;
     width: 100%;
-    background: none;
-    border: 0;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 2px 6px;
     text-align: left;
     cursor: pointer;
-    padding: 2px 4px;
-    border-radius: 3px;
     color: var(--text);
     font: inherit;
+    font-size: 13px;
+    line-height: 1.5;
+    word-break: break-word;
   }
-  .details button.ref:hover { background: var(--hover-bg); }
-  .details button.ref.tag { color: var(--accent); }
-  .details button.ref.mention { color: var(--warn-text); }
-  .details button.ref.date { color: var(--accent); }
+  .details .ref:hover {
+    border-color: var(--btn-hover);
+    background: var(--hover-bg);
+  }
+  .details .ref.tag { color: var(--accent); }
+  .details .ref.mention { color: var(--warn-text); }
+  .details .ref.date { color: var(--info-text); }
+  .details .ref.file { color: var(--link); }
   .details li.doc-row {
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 1px 0;
   }
-  .details li.doc-row .ref {
-    flex: 1;
-    padding: 2px 4px;
-    border-radius: 3px;
-    cursor: pointer;
-  }
-  .details li.doc-row .ref:hover { background: var(--hover-bg); }
+  .details li.doc-row .ref { flex: 1; }
   .details .row-open {
     background: transparent;
     border: 1px solid var(--btn-border);

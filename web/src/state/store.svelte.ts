@@ -854,17 +854,42 @@ export const graphOverlay = $state<{
    *  immediate neighbors; 2 = neighbors-of-neighbors; etc. Drive
    *  scope ignores depth (it's the whole graph). */
   depth: number;
+  /** One-shot pre-selected node id, consumed by GraphPanel on the
+   *  next open. Set by openGraphAtNode when launching the overlay
+   *  from a tag/mention/date chip elsewhere in the UI. Cleared once
+   *  the panel applies it. Not persisted in session. */
+  pendingSelectId: string | null;
 }>({
   open: false,
   scopeId: "drive",
   depth: 1,
+  pendingSelectId: null,
 });
 
 /** Open the graph overlay, snapping the scope to the active file
  *  when applicable. Idempotent, mirrors openAssistant. */
 export function openGraph(): void {
   graphOverlay.scopeId = defaultScopeId();
+  graphOverlay.pendingSelectId = null;
   graphOverlay.open = true;
+  scheduleSessionSave();
+}
+
+/** Open the graph overlay at drive scope and pre-select the given
+ *  node so its connections render in the inspector immediately.
+ *  Used by tag/mention/date chips outside the graph (file browser
+ *  inspector today; conceivably the editor margin later). Drive
+ *  scope guarantees the node is in the rendered set regardless of
+ *  the previously-saved scope. */
+export function openGraphAtNode(nodeId: string): void {
+  graphOverlay.scopeId = "drive";
+  graphOverlay.pendingSelectId = nodeId;
+  graphOverlay.open = true;
+  // The file browser overlay paints above the graph (same overlay
+  // tier; whichever opens last is on top), so leaving it up would
+  // hide the graph the user just asked for. Close it here so this
+  // call is "switch surfaces", not "stack a new one behind".
+  browserOverlay.open = false;
   scheduleSessionSave();
 }
 
