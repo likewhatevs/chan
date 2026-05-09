@@ -123,6 +123,14 @@
   /* Keep the CodeMirror chrome wrapper themed. The CM6 editor itself
      uses its default light highlight style for now (see v1.1 polish). */
   .md-source {
+    /* `flex: 1` so the wrapper always spans the full pane width
+       (matches `.md-wysiwyg`). Without it, the wrapper shrinks to
+       its content's intrinsic width — and once we cap `.cm-editor`
+       via `--chan-page-max-width`, that intrinsic width becomes
+       the cap, leaving the source view left-aligned in the pane
+       instead of centered within the page-width column. */
+    flex: 1;
+    min-height: 0;
     height: 100%;
     overflow: auto;
     background: var(--bg);
@@ -133,14 +141,19 @@
   :global(.md-source .cm-editor) {
     height: 100%;
     font-size: var(--chan-font-code-size, 14px);
+    /* Center the whole CM editor (gutter + content together) within
+       the cap when --chan-page-max-width is set (per-device pref
+       written by state/pageWidth). Putting the cap on .cm-content
+       instead would only narrow where lines wrap, leaving the
+       gutter glued to the left edge and an empty band on the
+       right. The scroll container .md-source stays full-width so
+       the scrollbar sits at the viewport edge, matching the
+       Wysiwyg side. */
+    max-width: var(--chan-page-max-width, none);
+    margin-inline: auto;
   }
   :global(.md-source .cm-content) {
     font-family: var(--chan-font-code-family);
-    /* Center content within the cap when --chan-page-max-width is
-       set (per-device pref written by state/pageWidth). When unset,
-       max-width: none restores the original full-width behavior. */
-    max-width: var(--chan-page-max-width, none);
-    margin-inline: auto;
   }
   /* Force every CM internal that could paint a background to
      transparent so `.md-source`'s `var(--bg)` shows uniformly,
