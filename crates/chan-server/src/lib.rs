@@ -196,6 +196,13 @@ struct AppArtifacts {
     /// rebuild on shutdown. The Arc also lives inside the router's
     /// DriveCell; this is just a second pointer to the same thing.
     indexer: Arc<indexer::Indexer>,
+    /// Mutable handle to the URL prefix injected into the SPA shell
+    /// as `<meta name="chan-prefix">`. Local serve sets it once at
+    /// build time from `ServeConfig::prefix`; tunnel mode swaps in
+    /// the registration prefix (`/{user}/{drive}`) on Connected so
+    /// the SPA's API calls pick up the public path. Shared with
+    /// `AppState::prefix` (same Arc).
+    prefix: Arc<RwLock<String>>,
 }
 
 /// Build the full axum app: state assembly, channels, watcher,
@@ -279,6 +286,7 @@ async fn build_app(
     });
 
     let last_activity = Arc::new(AtomicU64::new(now_unix_secs()));
+    let prefix = Arc::new(RwLock::new(config.prefix.clone()));
     let state = Arc::new(AppState {
         library,
         drive_root,
@@ -288,7 +296,7 @@ async fn build_app(
             indexer,
         })),
         token: token.clone(),
-        prefix: config.prefix.clone(),
+        prefix: prefix.clone(),
         events_tx,
         index_events_tx,
         llm_config: Mutex::new(llm_config),
@@ -313,6 +321,7 @@ async fn build_app(
         token,
         last_activity,
         indexer: indexer_handle,
+        prefix,
     })
 }
 
@@ -429,6 +438,7 @@ pub async fn serve_via_tunnel(
         open_browser: false,
     };
     let artifacts = build_app(library, drive, &server_config).await?;
+    let prefix_handle = artifacts.prefix.clone();
 
     // Lifecycle events from chan-tunnel-client: drained on a side
     // task so we can print a human-readable "your drive is at ..."
@@ -440,6 +450,13 @@ pub async fn serve_via_tunnel(
         while let Some(ev) = events_rx.recv().await {
             match ev {
                 chan_tunnel_client::TunnelEvent::Connected(reg) => {
+                    // Update the SPA-facing prefix so /index.html gets a
+                    // <meta name="chan-prefix" content="/{user}/{drive}">
+                    // tag and the frontend prepends the public path to
+                    // its API and WebSocket URLs. The router itself is
+                    // mounted at root: the public gateway strips the
+                    // prefix before forwarding into the tunnel.
+                    *prefix_handle.write().unwrap() = reg.prefix.clone();
                     // Trailing slash matches the gateway's canonical form:
                     // drive.chan.app/{user}/{drive}/ serves the embedded
                     // chan SPA whose vite `base: "./"` resolves asset URLs
@@ -663,12 +680,19 @@ struct AppState {
     /// `state.drive()` which clones it under a read lock.
     drive_cell: RwLock<Option<DriveCell>>,
     token: Option<String>,
-    /// Canonical URL prefix all routes are served under (matches
-    /// `ServeConfig::prefix`). Empty when no `--prefix`. Read by
-    /// `serve_static` to inject a `<meta name="chan-prefix">` tag
-    /// into the SPA shell so the frontend can prepend it to fetch
-    /// and WebSocket URLs.
-    prefix: String,
+    /// Canonical URL prefix the SPA prepends to fetch and WebSocket
+    /// URLs, injected into the shell as `<meta name="chan-prefix">`.
+    /// Mutable so tunnel mode can swap in the registration prefix
+    /// (`/{user}/{drive}`) on Connected; the local-serve path sets
+    /// it once at build time from `ServeConfig::prefix` and never
+    /// touches it again. Empty when no prefix.
+    ///
+    /// Note: this is the SPA-facing prefix only; the axum router is
+    /// already nested under `ServeConfig::prefix` at build time, so
+    /// changing this value does not re-route handlers. In tunnel
+    /// mode the public gateway strips the prefix before forwarding,
+    /// which is why the router stays mounted at root.
+    prefix: Arc<RwLock<String>>,
     /// Last activity timestamp (unix seconds). Bumped by HTTP
     /// middleware on every request, by `ws_upgrade` on connect,
     /// and by `ws_pump` on every successful frame send. The idle
@@ -981,9 +1005,10 @@ async fn serve_static(State(state): State<Arc<AppState>>, uri: axum::http::Uri) 
     } else {
         candidate
     };
+    let prefix = state.prefix.read().unwrap().clone();
     if let Some(file) = WebAssets::get(candidate) {
         let body = if is_index {
-            inject_chan_prefix(&file.data, &state.prefix)
+            inject_chan_prefix(&file.data, &prefix)
         } else {
             file.data.into_owned()
         };
@@ -991,7 +1016,7 @@ async fn serve_static(State(state): State<Arc<AppState>>, uri: axum::http::Uri) 
     }
     // SPA fallback: route paths the frontend handles client-side.
     if let Some(file) = WebAssets::get("index.html") {
-        let body = inject_chan_prefix(&file.data, &state.prefix);
+        let body = inject_chan_prefix(&file.data, &prefix);
         return ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response();
     }
     // No bundle baked / on disk yet (fresh clone, npm not run).
