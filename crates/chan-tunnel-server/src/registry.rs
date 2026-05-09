@@ -213,10 +213,7 @@ mod tests {
             .collect();
         assert_eq!(
             alice,
-            vec![
-                ("ideas".to_string(), true),
-                ("notes".to_string(), false),
-            ]
+            vec![("ideas".to_string(), true), ("notes".to_string(), false),]
         );
 
         let bob: Vec<String> = reg

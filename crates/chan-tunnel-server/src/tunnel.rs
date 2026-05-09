@@ -43,8 +43,7 @@ pub async fn serve_tunnel_listener(
         let validator = validator.clone();
         let registry = registry.clone();
         tokio::spawn(async move {
-            if let Err(e) =
-                handle_tunnel_conn(tcp, validator, registry, max_drives_per_user).await
+            if let Err(e) = handle_tunnel_conn(tcp, validator, registry, max_drives_per_user).await
             {
                 tracing::warn!(%peer, error = %e, "tunnel connection ended with error");
             } else {
@@ -126,11 +125,8 @@ async fn handle_tunnel_conn(
 
     let duplex = H2Duplex::new(send, recv_body);
     let registry_for_check = registry.clone();
-    let (hello, validated, yconn) = handshake(
-        duplex,
-        &token,
-        validator.as_ref(),
-        |hello, validated| {
+    let (hello, validated, yconn) =
+        handshake(duplex, &token, validator.as_ref(), |hello, validated| {
             if max_drives_per_user == 0 {
                 return Ok(());
             }
@@ -145,15 +141,13 @@ async fn handle_tunnel_conn(
                 });
             }
             Ok(())
-        },
-    )
-    .await?;
+        })
+        .await?;
 
     let user: Arc<str> = Arc::from(validated.username.as_str());
     let drive: Arc<str> = Arc::from(hello.drive.as_str());
     let public = hello.public;
-    let (handle, open_rx, shutdown_rx) =
-        registry.register(user.clone(), drive.clone(), public);
+    let (handle, open_rx, shutdown_rx) = registry.register(user.clone(), drive.clone(), public);
     tracing::info!(%user, %drive, public, "tunnel registered");
 
     drive_tunnel(yconn, open_rx, shutdown_rx, registry.clone(), handle).await;
