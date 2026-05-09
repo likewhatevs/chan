@@ -135,12 +135,17 @@ chan's bind which we accept: a foreign process grabbing the port
 in that window surfaces as chan exiting non-zero, which the
 reader thread already handles by flipping the toggle back to off.
 
-Note: the URL chan prints includes a per-serve bearer token
-(`?t=...`), so even with a stable port the full URL changes on
-restart and a stale browser tab will hit a token-mismatch on
-reconnect. Closing the token gap is a separate decision (e.g.
-`--no-token` for the desktop's loopback case, or chan persisting
-the token across serves) tracked in section 10.
+We pass `--no-token` to every `chan serve` the desktop spawns. The
+serve binds to 127.0.0.1, the desktop user already trusts every
+process on their own machine, and the rotating bearer token only
+bought us URL churn that broke browser tabs on every restart.
+Combined with port reuse this means a tab kept open across a
+toggle-Off / toggle-On lands on a still-routable URL and chan's
+WebSocket reconnect succeeds.
+
+This applies only to desktop-spawned serves. A terminal-initiated
+`chan serve` is outside our control and keeps chan's default
+token-issuing behaviour.
 
 The supervisor:
 
@@ -376,14 +381,8 @@ belongs in a per-drive "Share" panel rather than a global setting.
 
 ## 10. Open questions
 
-- `chan serve` token: today we pass no `--no-token` flag, so chan
-  rotates the bearer token on every serve. Combined with port
-  reuse (section 3.3) the path stays stable but the query string
-  changes, so a browser tab kept open across a stop-then-start
-  fails its reconnect. Options: pass `--no-token` for the desktop
-  loopback case (cheap, slight loss of in-machine isolation), or
-  ask chan to persist the token (chan-side change, no security
-  cost). Pick one once it actually bites.
+- (resolved) `chan serve` token: desktop-spawned serves pass
+  `--no-token`. See section 3.3.
 - Multiple desktop windows vs one window: current design is one
   window with a drives table. Adding per-drive child windows is a
   later concern.

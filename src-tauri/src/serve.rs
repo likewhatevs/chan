@@ -87,6 +87,12 @@ pub fn start(
         "127.0.0.1",
         "--port",
         &port.to_string(),
+        // Loopback only and we already trust everything on the
+        // local machine, so the rotating bearer token only buys us
+        // surviving-tab breakage on every restart. Drop it for any
+        // serve the desktop spawns. Terminal-initiated serves are
+        // not under our control and keep their default behaviour.
+        "--no-token",
     ])
     .stdout(Stdio::null())
     .stderr(Stdio::piped());
