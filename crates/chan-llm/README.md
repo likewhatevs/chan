@@ -44,6 +44,7 @@ src/
     gemini.rs      function-calling + server-side tool exec
     ollama.rs      local server, custom function-calling
     claude_cli.rs  drives a local `claude` CLI subprocess
+    gemini_cli.rs  drives a local `gemini` CLI subprocess
   bin/
     chan-llm-mcp.rs  MCP server binary (feature = "mcp")
 ```
@@ -200,8 +201,22 @@ created mode 0600 on Unix so only the owner can edit it.
     local accounts from editing it. On Windows there is no
     equivalent gate; users on shared machines should treat
     `llm.toml` as a secret.
-  - `mcp_command` is `serde(skip)`: a malicious TOML cannot set it.
-    Hosts inject it programmatically, so it is part of the host
+  - `[gemini_cli] cmd` / `extra_args`: same shape as `[claude_cli]`,
+    same trust story. Gemini's headless contract differs in two
+    places. First, gemini-cli has no per-invocation
+    `--mcp-config` flag, so v2 mode rewrites `GEMINI_CLI_HOME` at
+    a tmpdir we own and lays out a synthetic `~/.gemini/`
+    (`settings.json` + `policies/chan.toml`); a user-edited
+    `extra_args` cannot override settings the way it can override
+    a CLI flag, but it can still pass other gemini flags that
+    alter behavior. Second, redirecting `GEMINI_CLI_HOME` blocks
+    gemini from reading the user's real `~/.gemini` auth, so we
+    forward the chan-llm-resolved Gemini API key via the
+    `GEMINI_API_KEY` env var on the subprocess. v2 launches with
+    no chan-llm-stored key surface an auth error from gemini.
+  - `mcp_command` is `serde(skip)` on both `[claude_cli]` and
+    `[gemini_cli]`: a malicious TOML cannot set them. Hosts
+    inject programmatically, so they are part of the host
     binary's trust profile, not the config file's.
 
 ## What's NOT here yet

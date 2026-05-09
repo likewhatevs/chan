@@ -40,10 +40,13 @@ pub fn resolve(kind: BackendKind, config: &LlmConfig) -> (Option<String>, KeySta
     let env_var = match kind {
         BackendKind::Anthropic => "ANTHROPIC_API_KEY",
         BackendKind::Gemini => "GEMINI_API_KEY",
-        // Keyless: ollama is local; claude_cli inherits auth from
-        // the user's installed `claude` (via ~/.claude or its
-        // own env vars), so chan-llm's resolver has nothing to do.
-        BackendKind::Ollama | BackendKind::ClaudeCli => return (None, KeyStatus::Missing),
+        // Keyless: ollama is local; the agentic CLIs inherit auth
+        // from their own installs (claude via ~/.claude, gemini via
+        // ~/.gemini or GEMINI_API_KEY in the user's shell), so
+        // chan-llm's resolver has nothing to do.
+        BackendKind::Ollama | BackendKind::ClaudeCli | BackendKind::GeminiCli => {
+            return (None, KeyStatus::Missing)
+        }
     };
     if let Ok(v) = std::env::var(env_var) {
         if !v.is_empty() {
@@ -117,6 +120,7 @@ fn account(kind: BackendKind) -> &'static str {
         BackendKind::Gemini => "gemini",
         BackendKind::Ollama => "ollama",
         BackendKind::ClaudeCli => "claude_cli",
+        BackendKind::GeminiCli => "gemini_cli",
     }
 }
 

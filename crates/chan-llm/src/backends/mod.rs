@@ -5,13 +5,20 @@
 //   - Gemini (Google)           - HTTP, streaming SSE
 //   - Ollama (local server)     - HTTP, streaming JSON
 //   - ClaudeCli                 - shell-executor wrapper around the
-//                                 `claude` CLI; v1 runs claude as a
-//                                 black-box agent (its own tools, its
-//                                 own permission decisions). The
-//                                 chan-llm tool sandbox does NOT
-//                                 mediate writes from this backend;
-//                                 see claude_cli.rs for the
-//                                 contract gap and the v2 path.
+//                                 `claude` CLI. v1 runs claude as a
+//                                 black-box agent against the drive
+//                                 root; v2 routes claude's writes
+//                                 through chan-llm's MCP server via
+//                                 a temp `--mcp-config`. See
+//                                 claude_cli.rs.
+//   - GeminiCli                 - shell-executor wrapper around the
+//                                 `gemini` CLI. Same v1/v2 split as
+//                                 ClaudeCli; v2 redirects
+//                                 GEMINI_CLI_HOME at a tmpdir we
+//                                 own (gemini-cli has no per-
+//                                 invocation --mcp-config flag) and
+//                                 deny-policies the native edit/
+//                                 shell tools. See gemini_cli.rs.
 //
 // Each provides a `Backend` impl that owns its transport config
 // (auth header style, base URL, model defaults, or subprocess args)
@@ -26,13 +33,18 @@
 // chan-drive::Drive, and the next turn's transcript carries the
 // tool result. Backends only translate one HTTP exchange per turn.
 //
-// The ClaudeCli backend is the deliberate exception: it shells out
-// to a full agent, so claude's own tool loop runs against the
-// drive root directly. This is logged as a v1 limitation.
+// The agentic CLI backends (ClaudeCli, GeminiCli) are the
+// deliberate exception: they shell out to a full agent, so the
+// CLI's own tool loop runs. In v1 mode that loop hits the drive
+// root directly and bypasses chan-llm's gates; in v2 mode writes
+// flow through a chan-llm MCP subprocess, which re-applies the
+// gates. The session-level loop returns empty `tool_calls` for
+// both modes since the CLI has already executed them.
 
 pub mod anthropic;
 pub mod claude_cli;
 pub mod gemini;
+pub mod gemini_cli;
 pub mod ollama;
 mod retry;
 pub use retry::{send_with_retry, RetryPolicy};
@@ -66,6 +78,7 @@ pub enum BackendKind {
     Gemini,
     Ollama,
     ClaudeCli,
+    GeminiCli,
 }
 
 impl BackendKind {
@@ -75,6 +88,7 @@ impl BackendKind {
             BackendKind::Gemini => "gemini",
             BackendKind::Ollama => "ollama",
             BackendKind::ClaudeCli => "claude_cli",
+            BackendKind::GeminiCli => "gemini_cli",
         }
     }
 
@@ -83,10 +97,10 @@ impl BackendKind {
             BackendKind::Anthropic => "claude-opus-4-7",
             BackendKind::Gemini => "gemini-2.5-pro",
             BackendKind::Ollama => "llama3.1",
-            // Empty default: claude CLI picks its own configured
-            // model when --model is omitted. We only override when
-            // the user explicitly sets Models::claude_cli.
-            BackendKind::ClaudeCli => "",
+            // Empty default: the CLI picks its own configured model
+            // when --model is omitted. We only override when the
+            // user explicitly sets Models::claude_cli / gemini_cli.
+            BackendKind::ClaudeCli | BackendKind::GeminiCli => "",
         }
     }
 }
@@ -229,6 +243,31 @@ pub fn build(kind: BackendKind, config: &LlmConfig, drive_root: &Path) -> Result
             });
             Ok(Arc::new(claude_cli::ClaudeCliBackend::new(
                 cli.cmd.unwrap_or_else(claude_cli::default_cmd),
+                cli.extra_args,
+                model,
+                drive_root.to_path_buf(),
+                mcp,
+            )))
+        }
+        BackendKind::GeminiCli => {
+            let cli = config.gemini_cli.clone();
+            let model = if model.is_empty() { None } else { Some(model) };
+            // gemini-cli has no per-invocation `--mcp-config <file>`
+            // flag, so v2 mode rewrites GEMINI_CLI_HOME to a tmpdir
+            // we own. That blocks gemini from reading the user's
+            // real ~/.gemini auth, so we forward the chan-llm-stored
+            // GEMINI_API_KEY through the env when present (None when
+            // the user authenticated gemini-cli via `gemini login`
+            // and no chan-llm key is stored; the v2 launch surfaces
+            // an auth error in that case).
+            let api_key = keys::resolve(BackendKind::Gemini, config).0;
+            let mcp = cli.mcp_command.map(|command| gemini_cli::McpWiring {
+                command,
+                auto_apply_writes: config.auto_apply_writes,
+                api_key,
+            });
+            Ok(Arc::new(gemini_cli::GeminiCliBackend::new(
+                cli.cmd.unwrap_or_else(gemini_cli::default_cmd),
                 cli.extra_args,
                 model,
                 drive_root.to_path_buf(),

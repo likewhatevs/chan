@@ -67,6 +67,10 @@ pub struct LlmConfig {
     /// extra args). Empty for any other backend.
     #[serde(default, skip_serializing_if = "ClaudeCli::is_empty")]
     pub claude_cli: ClaudeCli,
+    /// Settings for the GeminiCli backend (subprocess command,
+    /// extra args). Empty for any other backend.
+    #[serde(default, skip_serializing_if = "GeminiCli::is_empty")]
+    pub gemini_cli: GeminiCli,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,8 +119,8 @@ impl MaxTokens {
             BackendKind::Anthropic => self.anthropic,
             BackendKind::Gemini => self.gemini,
             BackendKind::Ollama => self.ollama,
-            // claude_cli's max-output is claude's own concern.
-            BackendKind::ClaudeCli => None,
+            // The agentic CLIs pick their own ceiling.
+            BackendKind::ClaudeCli | BackendKind::GeminiCli => None,
         }
     }
 }
@@ -134,6 +138,10 @@ pub struct Models {
     /// selects (we don't impose chan-llm defaults on it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_cli: Option<String>,
+    /// Override for the `--model` flag passed to the `gemini` CLI.
+    /// Same "let the CLI pick" semantics as claude_cli.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gemini_cli: Option<String>,
 }
 
 impl Models {
@@ -142,6 +150,7 @@ impl Models {
             && self.gemini.is_none()
             && self.ollama.is_none()
             && self.claude_cli.is_none()
+            && self.gemini_cli.is_none()
     }
 
     pub fn for_backend(&self, kind: BackendKind) -> Option<&str> {
@@ -150,6 +159,7 @@ impl Models {
             BackendKind::Gemini => self.gemini.as_deref(),
             BackendKind::Ollama => self.ollama.as_deref(),
             BackendKind::ClaudeCli => self.claude_cli.as_deref(),
+            BackendKind::GeminiCli => self.gemini_cli.as_deref(),
         }
     }
 }
@@ -190,6 +200,37 @@ impl ClaudeCli {
     }
 }
 
+/// Subprocess settings for the GeminiCli backend. Mirrors `ClaudeCli`
+/// (gemini-cli's headless contract is similar enough that the same
+/// shape applies). The default `cmd` is `["gemini"]` resolved on PATH.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeminiCli {
+    /// Command + leading args used to launch gemini. None falls back
+    /// to `["gemini"]`. Same wrap-with-`nix shell` story as ClaudeCli.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cmd: Option<Vec<String>>,
+    /// Extra args appended after chan-llm's own flags.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_args: Vec<String>,
+    /// Host-injected MCP server command. When `Some`, the backend
+    /// runs gemini in v2 MCP-mediated mode: writes a temp
+    /// `<home>/.gemini/settings.json` (with GEMINI_CLI_HOME pointed
+    /// at that home) advertising chan-llm's MCP server, drops a
+    /// `<home>/.gemini/policies/chan.toml` deny-policy for gemini's
+    /// native edit/shell tools, and passes
+    /// `--allowed-mcp-server-names chan`. Same skip-from-TOML reason
+    /// as `ClaudeCli::mcp_command`: the host re-injects on every
+    /// launch, never persisted.
+    #[serde(skip)]
+    pub mcp_command: Option<Vec<String>>,
+}
+
+impl GeminiCli {
+    fn is_empty(&self) -> bool {
+        self.cmd.is_none() && self.extra_args.is_empty() && self.mcp_command.is_none()
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Keys {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -207,9 +248,10 @@ impl Keys {
         match kind {
             BackendKind::Anthropic => self.anthropic.as_deref(),
             BackendKind::Gemini => self.gemini.as_deref(),
-            // Ollama is keyless (local server). ClaudeCli pulls
-            // its own auth from the user's ~/.claude/ install.
-            BackendKind::Ollama | BackendKind::ClaudeCli => None,
+            // Ollama is keyless (local server). The agentic CLIs
+            // pull their own auth from the user's installed CLI
+            // (claude via ~/.claude, gemini via ~/.gemini or env).
+            BackendKind::Ollama | BackendKind::ClaudeCli | BackendKind::GeminiCli => None,
         }
     }
 }
@@ -323,6 +365,7 @@ mod tests {
                 ..Default::default()
             },
             claude_cli: ClaudeCli::default(),
+            gemini_cli: GeminiCli::default(),
             max_tokens: MaxTokens::default(),
         };
         cfg.save_to(&p).unwrap();

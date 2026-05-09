@@ -119,11 +119,14 @@ pub struct EmptyParams {}
 
 // ---- tool dispatch ----------------------------------------------------
 
+// Tool descriptions are sourced from `crate::prompts::*_DESC` so MCP
+// clients (Claude Code, Cursor, gemini-cli, ...) and chan-llm's
+// in-process backends (anthropic, gemini, ollama) see the same
+// guidance. Keeping the strings in one place avoids drift where MCP
+// clients were missing the mtime_ns / truncation / cap notes.
 #[tool_router]
 impl Server {
-    #[tool(
-        description = "Read the full UTF-8 content of a file in the active drive. The path is POSIX-style relative to the drive root."
-    )]
+    #[tool(description = crate::prompts::READ_FILE_DESC)]
     fn read_file(
         &self,
         Parameters(p): Parameters<ReadFileParams>,
@@ -131,9 +134,7 @@ impl Server {
         run_tool("read_file", &serde_json::json!({"path": p.path}), &self.ctx)
     }
 
-    #[tool(
-        description = "Replace the content of a file in the active drive (creates the parent directory if needed). Path is POSIX-style relative to the drive root and must end in .md or .txt."
-    )]
+    #[tool(description = crate::prompts::WRITE_FILE_DESC)]
     fn write_file(
         &self,
         Parameters(p): Parameters<WriteFileParams>,
@@ -145,9 +146,7 @@ impl Server {
         run_tool("write_file", &args, &self.ctx)
     }
 
-    #[tool(
-        description = "List files in the active drive as { entries, count, total }. Pass an optional `prefix` (POSIX rel-path) to scope the listing; capped at 2000 entries."
-    )]
+    #[tool(description = crate::prompts::LIST_FILES_DESC)]
     fn list_files(
         &self,
         Parameters(p): Parameters<ListFilesParams>,
@@ -159,9 +158,7 @@ impl Server {
         run_tool("list_files", &args, &self.ctx)
     }
 
-    #[tool(
-        description = "Search the drive's BM25 index for the given query. Returns hits with relative paths, relevance scores, and short snippets."
-    )]
+    #[tool(description = crate::prompts::SEARCH_CONTENT_DESC)]
     fn search_content(
         &self,
         Parameters(p): Parameters<SearchContentParams>,
