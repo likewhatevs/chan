@@ -3,7 +3,6 @@
 # build from inside crates/chan/ creates a per-package target
 # dir that the workspace-root /target rule doesn't catch.
 **/target/
-Cargo.lock
 
 # Editor swap / backup files
 *.swp
