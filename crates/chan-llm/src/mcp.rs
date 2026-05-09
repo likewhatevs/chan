@@ -66,6 +66,27 @@ impl Server {
             .map_err(|e| LlmError::Mcp(format!("waiting: {e}")))?;
         Ok(())
     }
+
+    /// Run the server over an arbitrary async read/write pair. Used
+    /// by chan-server to host the MCP service over a Unix-domain
+    /// socket so each agent session can connect without trying to
+    /// reopen the drive (which would deadlock against the parent
+    /// process's per-drive flock). Blocks until the client closes
+    /// its end of the transport.
+    pub async fn serve_io<R, W>(self, reader: R, writer: W) -> crate::error::Result<()>
+    where
+        R: tokio::io::AsyncRead + Send + Unpin + 'static,
+        W: tokio::io::AsyncWrite + Send + Unpin + 'static,
+    {
+        let svc = self
+            .serve((reader, writer))
+            .await
+            .map_err(|e| LlmError::Mcp(format!("serve: {e}")))?;
+        svc.waiting()
+            .await
+            .map_err(|e| LlmError::Mcp(format!("waiting: {e}")))?;
+        Ok(())
+    }
 }
 
 // ---- tool param schemas -----------------------------------------------
