@@ -28,8 +28,18 @@ pub enum ChanError {
     DriveRootMissing(PathBuf),
     #[error("drive is locked by another process")]
     DriveLocked,
-    #[error("write conflict: file changed on disk (current mtime: {current_mtime:?})")]
-    WriteConflict { current_mtime: Option<i64> },
+    #[error("drive is already open in this process; drop the existing handle first")]
+    DriveAlreadyOpen,
+    #[error("write conflict: file changed on disk (current mtime ns: {current_mtime_ns:?})")]
+    WriteConflict { current_mtime_ns: Option<i64> },
+    #[error("write too large: {size} bytes exceeds {limit} byte cap for {kind}")]
+    WriteTooLarge {
+        kind: &'static str,
+        size: u64,
+        limit: u64,
+    },
+    #[error("listing exceeds {limit} entries (encountered at least {observed}); narrow the path or clean up the directory")]
+    ListingTooLarge { observed: usize, limit: usize },
     #[error("config decode error in {path}: {message}")]
     ConfigDecode { path: PathBuf, message: String },
     #[error("config encode error: {0}")]

@@ -26,6 +26,23 @@ toml = "0.8"
 tracing = "0.1"
 walkdir = "2"
 
+# Capability-based filesystem sandbox. We use it on every Drive
+# operation that touches user-controllable paths so a mid-path
+# symlink swap between resolve and op cannot escape the drive
+# root: cap-std opens each component with O_NOFOLLOW and refuses
+# paths that walk outside the Dir handle. cap-tempfile gives us a
+# Dir-relative atomic-write primitive (TempFile + replace) so we
+# don't have to reimplement the create-tmp/fsync/rename dance.
+cap-std = "3"
+cap-tempfile = "3"
+
+# Pure-Rust extended-attribute access. Used by atomic_write to
+# preserve user xattrs (Finder tags on macOS, SELinux labels and
+# capabilities on Linux) across the tmpfile + rename dance.
+# Linux + macOS only; no-op shim on other platforms.
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd", target_os = "netbsd"))'.dependencies]
+xattr = "1"
+
 # Pure-Rust embedding stack. candle handles tensor math + transformer
 # kernels, tokenizers does HF WordPiece/BPE, hf-hub fetches the
 # config.json + tokenizer.json + model.safetensors trio on first use.

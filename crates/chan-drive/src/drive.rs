@@ -20,6 +20,21 @@ use crate::registry::KnownDrive;
 use crate::trash::{self, TrashEntry, TRASH_RETENTION_SECS};
 use crate::watch::{WatchCallback, WatchHandle};
 
+/// Hard cap on `write_text` content size. Markdown / txt notes are
+/// human-authored; 2 MiB is roughly 2M characters of dense English,
+/// far past any realistic note. Anything larger is almost certainly
+/// either a bug, a binary file mislabelled with `.md`, or an LLM tool
+/// running away. We stop it at the boundary so a misbehaving caller
+/// cannot fill the user's drive without an explicit code change.
+pub const TEXT_WRITE_LIMIT: u64 = 2 * 1024 * 1024;
+
+/// Hard cap on `write_bytes` (binary attachments / media). 50 MiB
+/// covers typical PDF / image / short audio attachments with margin.
+/// Same rationale as `TEXT_WRITE_LIMIT`: defense against runaway
+/// callers, not a UX feature; raise via a code change if a real use
+/// case appears.
+pub const BYTES_WRITE_LIMIT: u64 = 50 * 1024 * 1024;
+
 /// User-facing search knobs. The mode defaults to Hybrid (BM25 +
 /// dense, RRF-fused) when the binary is built with `embeddings`,
 /// otherwise the facade falls back to BM25 with `ready: false`.
@@ -46,7 +61,18 @@ pub struct DirEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileStat {
     pub size: u64,
+    /// Last modification time as Unix seconds. Coarse, useful for
+    /// display and for the graph DB which stores i64 seconds.
     pub mtime: Option<i64>,
+    /// Last modification time as Unix nanoseconds. Fits an i64
+    /// until year 2262. Used by `write_text_if_unchanged` so two
+    /// edits within the same wall-clock second are still detected
+    /// as a conflict on filesystems with sub-second mtime (ext4 /
+    /// xfs / APFS / btrfs). May be None on filesystems that only
+    /// expose seconds (FAT, some network mounts), in which case
+    /// the optimistic-concurrency check degrades to seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtime_ns: Option<i64>,
     pub is_dir: bool,
 }
 
@@ -66,6 +92,19 @@ pub struct ResolvedLink {
 /// Cheap reads are unlocked; writes go through the locked handle.
 pub struct Drive {
     entry: KnownDrive,
+    /// Canonical form of `entry.path`, computed once at open. Used
+    /// where we need an absolute path (display, paths::drive_paths
+    /// keying) and as the slow-path baseline for trash::restore.
+    root_canon: std::path::PathBuf,
+    /// Capability-based handle to the drive root. All filesystem
+    /// ops on user-controllable paths go through this so a mid-path
+    /// symlink swap between path-resolution and the actual op
+    /// cannot escape the sandbox: cap-std opens each path component
+    /// with O_NOFOLLOW and refuses paths that walk outside the
+    /// dir handle. The previous resolve_safe_strict + std::fs::op
+    /// pair had a small TOCTOU window between the lexical sandbox
+    /// check and the kernel-side path walk; cap-std closes it.
+    dir: cap_std::fs::Dir,
     paths: DrivePaths,
     /// Held for the lifetime of the Drive. Released on drop.
     _lock: DriveLock,
@@ -87,9 +126,34 @@ impl std::fmt::Debug for Drive {
 
 impl Drive {
     pub(crate) fn open(entry: KnownDrive) -> Result<Arc<Self>> {
-        if !entry.path.exists() {
-            return Err(ChanError::DriveRootMissing(entry.path.clone()));
+        // Defensive check: the registered path must still resolve to
+        // a directory. A user (or another tool) could have replaced
+        // the drive directory with a symlink, file, or socket since
+        // the registry entry was written, in which case our path
+        // sandbox and per-op gates would still apply but the drive
+        // shape itself is no longer what the user signed up for.
+        // `exists()` follows symlinks, so we use lstat here to catch
+        // a "directory turned into a symlink" replacement.
+        let meta = match std::fs::symlink_metadata(&entry.path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(ChanError::DriveRootMissing(entry.path.clone()));
+            }
+            Err(e) => return Err(ChanError::Io(e.to_string())),
+        };
+        let ft = meta.file_type();
+        if !ft.is_dir() || ft.is_symlink() {
+            return Err(ChanError::SpecialFile {
+                kind: fs_ops::describe_file_kind(&ft).to_string(),
+                path: entry.path.clone(),
+            });
         }
+        let root_canon = entry
+            .path
+            .canonicalize()
+            .map_err(|e| ChanError::Io(format!("canonicalize drive root: {e}")))?;
+        let dir = cap_std::fs::Dir::open_ambient_dir(&entry.path, cap_std::ambient_authority())
+            .map_err(|e| ChanError::Io(format!("open drive root: {e}")))?;
         let paths = drive_paths(&entry.path);
         let lock = DriveLock::acquire(&paths.lock)?;
         // Lazy GC: reclaim expired trash entries on every open. No
@@ -99,11 +163,21 @@ impl Drive {
         let _ = trash::sweep_expired(&paths.trash, TRASH_RETENTION_SECS);
         Ok(Arc::new(Self {
             entry,
+            root_canon,
+            dir,
             paths,
             _lock: lock,
             index: std::sync::OnceLock::new(),
             graph: std::sync::OnceLock::new(),
         }))
+    }
+
+    /// Validate `rel` for use with the cap-std `Dir`. Returns a
+    /// pure-Component::Normal PathBuf or a `PathEmpty` / `PathEscape`
+    /// error. cap-std would refuse a bad path anyway; this gate
+    /// gives crisp error variants.
+    fn rel(&self, rel: &str) -> Result<std::path::PathBuf> {
+        fs_ops::validate_rel(rel)
     }
 
     pub fn root(&self) -> &std::path::Path {
@@ -123,15 +197,17 @@ impl Drive {
 
     // ---- filesystem primitives (path-based, rel-only) ----
     //
-    // Every entry point here goes through `resolve_safe_strict`
-    // (lexical sandbox + canonical-form check that the deepest
-    // existing ancestor stays under the drive root). Reads
-    // additionally call `ensure_regular_file` (lstat-based) so we
-    // never block on a FIFO, drain a device, or follow a symlink
-    // off the drive. Writes that target an existing path do the
-    // same check; writes to a fresh path skip it because there's
-    // nothing to inspect yet (the strict resolve already guarded
-    // the parent).
+    // Every entry point here routes through the cap-std `Dir`
+    // opened at `Drive::open`. cap-std uses openat-per-component
+    // with O_NOFOLLOW (or RESOLVE_BENEATH on Linux openat2), so a
+    // mid-path symlink swap between path validation and the actual
+    // op cannot escape the drive root. Reads additionally call
+    // `ensure_regular_file_in` (lstat) so we never block on a FIFO,
+    // drain a device, or follow a symlink off the drive. Writes
+    // that target an existing path do the same check via
+    // `ensure_writable_in`; writes to a fresh path skip it because
+    // there's nothing to inspect yet (cap-std guarded the parent
+    // walk on the way in).
 
     /// Read raw bytes from a file relative to the drive root. No
     /// editable-text gate: callers like image previews need binary
@@ -139,9 +215,16 @@ impl Drive {
     /// drive root; symlinks, FIFOs, sockets, and devices are
     /// rejected.
     pub fn read(&self, rel: &str) -> Result<Vec<u8>> {
-        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
-        fs_ops::ensure_regular_file(&abs)?;
-        Ok(std::fs::read(&abs)?)
+        let rel_path = self.rel(rel)?;
+        ensure_regular_file_in(&self.dir, &rel_path)?;
+        let mut f = self
+            .dir
+            .open(&rel_path)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
+        use std::io::Read;
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf)?;
+        Ok(buf)
     }
 
     /// Read UTF-8 text. Errors if the file isn't on the editable-
@@ -150,9 +233,16 @@ impl Drive {
         if !fs_ops::is_editable_text(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
-        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
-        fs_ops::ensure_regular_file(&abs)?;
-        Ok(std::fs::read_to_string(&abs)?)
+        let rel_path = self.rel(rel)?;
+        ensure_regular_file_in(&self.dir, &rel_path)?;
+        let mut f = self
+            .dir
+            .open(&rel_path)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
+        use std::io::Read;
+        let mut buf = String::new();
+        f.read_to_string(&mut buf)?;
+        Ok(buf)
     }
 
     /// Read UTF-8 text and return the file's stat alongside the
@@ -165,17 +255,19 @@ impl Drive {
         if !fs_ops::is_editable_text(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
-        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
-        // lstat-gate before opening: File::open follows symlinks, so
-        // refuse if the path is a symlink / FIFO / device.
-        fs_ops::ensure_regular_file(&abs)?;
-        let mut f = std::fs::File::open(&abs)?;
+        let rel_path = self.rel(rel)?;
+        ensure_regular_file_in(&self.dir, &rel_path)?;
+        let mut f = self
+            .dir
+            .open(&rel_path)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
         let meta = f.metadata()?;
         let mut content = String::new();
         f.read_to_string(&mut content)?;
         let stat = FileStat {
             size: meta.len(),
-            mtime: mtime_secs(&meta),
+            mtime: mtime_secs_cap(&meta),
+            mtime_ns: mtime_ns_cap(&meta),
             is_dir: false,
         };
         Ok((content, stat))
@@ -190,26 +282,42 @@ impl Drive {
         if !fs_ops::is_editable_text(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
-        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
-        ensure_writable(&abs)?;
-        fs_ops::atomic_write(&abs, content.as_bytes())
+        let rel_path = self.rel(rel)?;
+        let prev = ensure_writable_in(&self.dir, &rel_path)?;
+        check_size(
+            "text",
+            content.len(),
+            TEXT_WRITE_LIMIT,
+            prev.as_ref().map(|m| m.len()),
+        )?;
+        fs_ops::atomic_write_in(&self.dir, &rel_path, content.as_bytes())
     }
 
     /// Optimistic-concurrency write: succeeds only when the file's
-    /// current mtime matches `expected_mtime`. The editor pairs this
-    /// with `read_text_with_stat`: it reads (content, stat), the user
-    /// edits, then it writes back with `expected_mtime = stat.mtime`.
-    /// If the file changed under the editor (another process, another
-    /// pane), the write fails with `ChanError::WriteConflict` and the
-    /// editor can prompt to reload, merge, or overwrite.
+    /// current mtime (nanoseconds) matches `expected_mtime_ns`. The
+    /// editor pairs this with `read_text_with_stat`: it reads
+    /// (content, stat), the user edits, then it writes back with
+    /// `expected_mtime_ns = stat.mtime_ns`. If the file changed under
+    /// the editor (another process, another pane), the write fails
+    /// with `ChanError::WriteConflict` and the editor can prompt to
+    /// reload, merge, or overwrite.
     ///
-    /// Conventions for `expected_mtime`:
+    /// Why nanoseconds: most filesystems chan runs on (ext4, xfs,
+    /// APFS, btrfs) expose nanosecond mtime. Two saves landing within
+    /// the same wall-clock second produce identical second-resolution
+    /// mtimes; an editor saving on top of an autosave from a tool a
+    /// few hundred ms earlier would silently win. Ns resolution
+    /// catches that. On filesystems that only carry seconds (FAT,
+    /// some SMB mounts), `mtime_ns` is the seconds value times 1e9
+    /// and the check degrades gracefully.
+    ///
+    /// Conventions for `expected_mtime_ns`:
     ///   - `None` + missing file: create.
     ///   - `None` + existing file: `WriteConflict`. The caller did
     ///     not know a file was there; treating that as a silent
     ///     overwrite would be the bug we're trying to prevent.
-    ///   - `Some(m)` + current mtime == m: write.
-    ///   - any other case: `WriteConflict { current_mtime }`.
+    ///   - `Some(m)` + current mtime_ns == m: write.
+    ///   - any other case: `WriteConflict { current_mtime_ns }`.
     ///
     /// Residual race: between the mtime check and the atomic rename,
     /// another writer can land. The window is small (no syscalls
@@ -219,30 +327,30 @@ impl Drive {
     pub fn write_text_if_unchanged(
         &self,
         rel: &str,
-        expected_mtime: Option<i64>,
+        expected_mtime_ns: Option<i64>,
         content: &str,
     ) -> Result<()> {
         if !fs_ops::is_editable_text(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
-        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
-        ensure_writable(&abs)?;
-        let (current, exists) = match std::fs::symlink_metadata(&abs) {
-            Ok(meta) => (mtime_secs(&meta), true),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (None, false),
-            Err(e) => return Err(ChanError::Io(e.to_string())),
+        let rel_path = self.rel(rel)?;
+        let prev = ensure_writable_in(&self.dir, &rel_path)?;
+        let (current, exists, prev_size) = match prev.as_ref() {
+            Some(meta) => (mtime_ns_cap(meta), true, Some(meta.len())),
+            None => (None, false, None),
         };
-        let conflict = match (expected_mtime, exists) {
+        let conflict = match (expected_mtime_ns, exists) {
             (None, false) => false,
             (Some(m), true) => current != Some(m),
             _ => true,
         };
         if conflict {
             return Err(ChanError::WriteConflict {
-                current_mtime: current,
+                current_mtime_ns: current,
             });
         }
-        fs_ops::atomic_write(&abs, content.as_bytes())
+        check_size("text", content.len(), TEXT_WRITE_LIMIT, prev_size)?;
+        fs_ops::atomic_write_in(&self.dir, &rel_path, content.as_bytes())
     }
 
     /// Atomically write raw bytes. NOT gated by editable-text;
@@ -250,9 +358,15 @@ impl Drive {
     /// that surface this to the editor must apply their own gate.
     /// Same special-file refusal as `write_text`.
     pub fn write_bytes(&self, rel: &str, content: &[u8]) -> Result<()> {
-        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
-        ensure_writable(&abs)?;
-        fs_ops::atomic_write(&abs, content)
+        let rel_path = self.rel(rel)?;
+        let prev = ensure_writable_in(&self.dir, &rel_path)?;
+        check_size(
+            "bytes",
+            content.len(),
+            BYTES_WRITE_LIMIT,
+            prev.as_ref().map(|m| m.len()),
+        )?;
+        fs_ops::atomic_write_in(&self.dir, &rel_path, content)
     }
 
     /// True iff the path resolves under the drive and refers to a
@@ -260,23 +374,28 @@ impl Drive {
     /// so a `true` return is a strong signal that a read will
     /// succeed.
     pub fn exists(&self, rel: &str) -> bool {
-        let Ok(abs) = fs_ops::resolve_safe_strict(self.root(), rel) else {
+        let Ok(rel_path) = self.rel(rel) else {
             return false;
         };
-        std::fs::symlink_metadata(&abs)
-            .map(|m| m.is_file() && !m.file_type().is_symlink())
-            .unwrap_or(false)
+        match self.dir.symlink_metadata(&rel_path) {
+            Ok(m) => m.is_file() && !m.file_type().is_symlink(),
+            Err(_) => false,
+        }
     }
 
     /// Stat the path using `lstat` semantics (so a symlink reports
     /// as such, not as its target). Refuses paths that escape the
     /// drive root through a mid-path symlink.
     pub fn stat(&self, rel: &str) -> Result<FileStat> {
-        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
-        let meta = std::fs::symlink_metadata(&abs)?;
+        let rel_path = self.rel(rel)?;
+        let meta = self
+            .dir
+            .symlink_metadata(&rel_path)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
         Ok(FileStat {
             size: if meta.is_dir() { 0 } else { meta.len() },
-            mtime: mtime_secs(&meta),
+            mtime: mtime_secs_cap(&meta),
+            mtime_ns: mtime_ns_cap(&meta),
             is_dir: meta.is_dir(),
         })
     }
@@ -285,25 +404,56 @@ impl Drive {
     /// recursive variant. Skips drive-internal noise (`.chan/`,
     /// `.git/`) at the top level and drops non-regular non-dir
     /// entries (symlinks, FIFOs, sockets, devices) at every level.
+    /// Errors with `ListingTooLarge` past `LIST_DIR_LIMIT`.
+    ///
+    /// Per-entry errors (a vanished entry mid-iteration, a
+    /// permission denied on stat) are logged at warn and the entry
+    /// is skipped rather than aborting the listing. Without the log
+    /// the editor's tree view would silently miss entries and the
+    /// user has no signal anything went wrong; with it, the issue
+    /// shows up in `tracing` output and the indexer / status surface
+    /// can act on the count later if needed.
     pub fn list(&self, rel: &str) -> Result<Vec<DirEntry>> {
-        let abs = if rel.is_empty() || rel == "." || rel == "/" {
-            self.root().to_path_buf()
+        let at_root = rel.is_empty() || rel == "." || rel == "/";
+        let read = if at_root {
+            self.dir
+                .read_dir(".")
+                .map_err(|e| ChanError::Io(e.to_string()))?
         } else {
-            fs_ops::resolve_safe_strict(self.root(), rel)?
+            let rel_path = self.rel(rel)?;
+            self.dir
+                .read_dir(&rel_path)
+                .map_err(|e| ChanError::Io(e.to_string()))?
         };
         let mut out = Vec::new();
-        for entry in std::fs::read_dir(&abs)? {
-            let entry = entry?;
+        let mut skipped = 0usize;
+        for entry in read {
+            if out.len() >= fs_ops::LIST_DIR_LIMIT {
+                return Err(ChanError::ListingTooLarge {
+                    observed: out.len(),
+                    limit: fs_ops::LIST_DIR_LIMIT,
+                });
+            }
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!(?rel, ?e, "list: read_dir entry error; skipping");
+                    skipped += 1;
+                    continue;
+                }
+            };
             let name = entry.file_name().to_string_lossy().into_owned();
-            if abs == self.root() && (name == ".chan" || name == ".git") {
+            if at_root && (name == ".chan" || name == ".git") {
                 continue;
             }
-            let Ok(ft) = entry.file_type() else {
-                continue;
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(e) => {
+                    tracing::warn!(?rel, ?name, ?e, "list: file_type failed; skipping");
+                    skipped += 1;
+                    continue;
+                }
             };
-            // Drop non-regular non-dir entries from the listing.
-            // We could instead surface them with a marker, but
-            // every consumer today treats them as junk.
             if !(ft.is_dir() || (ft.is_file() && !ft.is_symlink())) {
                 continue;
             }
@@ -311,6 +461,14 @@ impl Drive {
                 name,
                 is_dir: ft.is_dir(),
             });
+        }
+        if skipped > 0 {
+            tracing::warn!(
+                ?rel,
+                skipped,
+                returned = out.len(),
+                "list: directory listing partial",
+            );
         }
         Ok(out)
     }
@@ -320,8 +478,10 @@ impl Drive {
     }
 
     pub fn create_dir(&self, rel: &str) -> Result<()> {
-        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
-        std::fs::create_dir_all(&abs)?;
+        let rel_path = self.rel(rel)?;
+        self.dir
+            .create_dir_all(&rel_path)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
         Ok(())
     }
 
@@ -337,14 +497,24 @@ impl Drive {
     /// symlinks, FIFOs, sockets, char/block devices. Users who
     /// really want those gone can `rm` them out-of-band.
     pub fn remove(&self, rel: &str) -> Result<()> {
-        let abs = fs_ops::resolve_safe_strict(self.root(), rel)?;
-        let meta = std::fs::symlink_metadata(&abs)?;
+        let rel_path = self.rel(rel)?;
+        // cap-std lstat: TOCTOU-free type check. The subsequent
+        // trash::move_into still operates path-based (it has to
+        // bridge into the trash dir which lives outside the cap-std
+        // Drive sandbox), so the rename itself has a small residual
+        // TOCTOU window. The damage if exploited is "wrong file
+        // goes to trash" - recoverable via `trash_restore`.
+        let meta = self
+            .dir
+            .symlink_metadata(&rel_path)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
         let ft = meta.file_type();
         let is_dir = ft.is_dir();
         let is_regular_file = ft.is_file() && !ft.is_symlink();
+        let abs = self.entry.path.join(&rel_path);
         if !(is_dir || is_regular_file) {
             return Err(ChanError::SpecialFile {
-                kind: fs_ops::describe_file_kind(&ft).to_string(),
+                kind: describe_cap_file_kind(&ft).to_string(),
                 path: abs,
             });
         }
@@ -364,7 +534,7 @@ impl Drive {
     /// entry to give up.
     pub fn trash_restore(&self, id: &str) -> Result<()> {
         let _ = trash::sweep_expired(&self.paths.trash, TRASH_RETENTION_SECS);
-        trash::restore(&self.paths.trash, self.root(), id)
+        trash::restore(&self.paths.trash, self.root(), &self.root_canon, id)
     }
 
     /// Permanently delete a single trash entry.
@@ -439,25 +609,37 @@ impl Drive {
     }
 
     pub fn rename(&self, from: &str, to: &str) -> Result<()> {
-        let from_abs = fs_ops::resolve_safe_strict(self.root(), from)?;
-        let to_abs = fs_ops::resolve_safe_strict(self.root(), to)?;
+        let from_rel = self.rel(from)?;
+        let to_rel = self.rel(to)?;
         // Source must exist as a regular file or directory; refuse
         // to move a symlink or special file. (renaming a symlink
         // is well-defined at the syscall level but not something
         // the editor should ever do silently.)
-        let src_meta = std::fs::symlink_metadata(&from_abs)?;
+        let src_meta = self
+            .dir
+            .symlink_metadata(&from_rel)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
         let src_ft = src_meta.file_type();
         if !(src_ft.is_dir() || (src_ft.is_file() && !src_ft.is_symlink())) {
             return Err(ChanError::SpecialFile {
-                kind: fs_ops::describe_file_kind(&src_ft).to_string(),
-                path: from_abs,
+                kind: describe_cap_file_kind(&src_ft).to_string(),
+                path: self.entry.path.join(&from_rel),
             });
         }
-        ensure_writable(&to_abs)?;
-        if let Some(parent) = to_abs.parent() {
-            std::fs::create_dir_all(parent)?;
+        ensure_writable_in(&self.dir, &to_rel)?;
+        if let Some(parent) = to_rel.parent() {
+            if !parent.as_os_str().is_empty() {
+                self.dir
+                    .create_dir_all(parent)
+                    .map_err(|e| ChanError::Io(e.to_string()))?;
+            }
         }
-        std::fs::rename(&from_abs, &to_abs)?;
+        // cap-std rename within the same Dir is TOCTOU-free: source
+        // and destination resolve through the dir handle, no
+        // path-walk through swappable ancestors.
+        self.dir
+            .rename(&from_rel, &self.dir, &to_rel)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
         Ok(())
     }
 
@@ -531,9 +713,22 @@ impl Drive {
     }
 
     fn rebuild_graph(&self, cancel: Option<&AtomicBool>) -> Result<()> {
+        // Two-phase: collect everything in memory, then commit in a
+        // single sqlite transaction via `GraphView::replace_all`. The
+        // alternative (clear + per-file replace_file) left the graph
+        // half-populated on mid-rebuild error, lying to the server's
+        // auto-rebuild trigger about freshness. Memory cost is bounded
+        // by drive size and is small (a 10k-file drive holds tens of
+        // MB of headings + edges, well within the editor's footprint).
         let entries = self.list_tree()?;
-        let graph = self.graph()?;
-        graph.clear()?;
+        struct Owned {
+            rel: String,
+            title: Option<String>,
+            mtime: Option<i64>,
+            edges: Vec<crate::graph::Edge>,
+            headings: Vec<markdown::Heading>,
+        }
+        let mut owned: Vec<Owned> = Vec::new();
         for e in &entries {
             if let Some(c) = cancel {
                 if c.load(Ordering::Relaxed) {
@@ -548,8 +743,30 @@ impl Drive {
                 Err(_) => continue,
             };
             let (title, headings, edges) = parse_for_graph(&e.path, &content);
-            graph.replace_file(&e.path, title.as_deref(), e.mtime, &edges, &headings)?;
+            owned.push(Owned {
+                rel: e.path.clone(),
+                title,
+                mtime: e.mtime,
+                edges,
+                headings,
+            });
         }
+        if let Some(c) = cancel {
+            if c.load(Ordering::Relaxed) {
+                return Err(ChanError::Cancelled);
+            }
+        }
+        let borrowed: Vec<crate::graph::FileGraph<'_>> = owned
+            .iter()
+            .map(|o| crate::graph::FileGraph {
+                rel: &o.rel,
+                title: o.title.as_deref(),
+                mtime: o.mtime,
+                edges: &o.edges,
+                headings: &o.headings,
+            })
+            .collect();
+        self.graph()?.replace_all(&borrowed)?;
         Ok(())
     }
 
@@ -575,9 +792,19 @@ impl Drive {
         let content = self.read_text(rel)?;
         let mtime = self.stat(rel).ok().and_then(|s| s.mtime);
         let (title, headings, edges) = parse_for_graph(rel, &content);
-        self.index()?.index_one(rel)?;
+        // Graph first, then search index. The graph is what the
+        // editor consults for backlinks and link-autocomplete on
+        // every keystroke; a stale graph is the more user-visible
+        // failure mode. The search index is queried explicitly and
+        // a stale BM25 row gets corrected on the next save or
+        // rebuild. If graph succeeds and index_one fails, the
+        // resulting drift is "search slightly stale", which the
+        // user is less likely to notice and can recover via the
+        // server's auto-rebuild trigger. The opposite ordering
+        // (search-then-graph) made backlinks the silent victim.
         self.graph()?
             .replace_file(rel, title.as_deref(), mtime, &edges, &headings)?;
+        self.index()?.index_one(rel)?;
         Ok(())
     }
 
@@ -640,9 +867,17 @@ impl Drive {
 
     /// Drop a single file from the search index and graph. Used
     /// when the watcher reports a deletion.
+    ///
+    /// Graph first, search second, mirroring `index_file`. If the
+    /// graph delete succeeds and the search delete fails, queries
+    /// surface a "ghost" search hit pointing at a missing file; the
+    /// caller then asks `Drive::read` and gets `NotFound`, which is
+    /// recoverable. The reverse ordering (search-then-graph) would
+    /// leave backlinks pointing at a missing file, a silently broken
+    /// state the editor cannot self-heal.
     pub fn forget_file(&self, rel: &str) -> Result<()> {
-        self.index()?.forget(rel)?;
         self.graph()?.forget_file(rel)?;
+        self.index()?.forget(rel)?;
         Ok(())
     }
 
@@ -677,33 +912,136 @@ impl Drive {
     }
 }
 
-fn mtime_secs(meta: &std::fs::Metadata) -> Option<i64> {
+/// Hard size guard for write_* paths. `kind` is the static label
+/// surfaced in the error so the caller can distinguish text vs
+/// bytes vs (future) blob caps.
+///
+/// The configured `limit` is a fresh-file cap. When the target
+/// already exists and is itself larger than the cap (legacy file,
+/// pre-cap content, a binary attached as `.txt`), the caller is
+/// already past the policy boundary and we let edits up to the
+/// existing size through. The intent is "stop runaway growth", not
+/// "make all your files read-only the moment we ship a cap".
+///
+/// Effective limit = max(prev_size, limit). Refusal carries the
+/// effective limit so the editor can show the user the exact
+/// number it has to stay under.
+fn check_size(kind: &'static str, size: usize, limit: u64, prev_size: Option<u64>) -> Result<()> {
+    let size = size as u64;
+    let effective = std::cmp::max(prev_size.unwrap_or(0), limit);
+    if size > effective {
+        return Err(ChanError::WriteTooLarge {
+            kind,
+            size,
+            limit: effective,
+        });
+    }
+    Ok(())
+}
+
+/// Map a `std::io::Error` returned by a cap-std op into our error
+/// enum. cap-std rejects sandbox escapes (mid-path symlink pointing
+/// outside the dir handle, absolute path passed as rel, `..` that
+/// would walk above the root) with a generic io::Error; the message
+/// it produces ("a path led outside of the filesystem") is the only
+/// portable signal we have to distinguish "you tried to escape"
+/// from "regular I/O error". Fragile if cap-std changes the string;
+/// a regression test in this module pins it.
+fn map_cap_err(err: std::io::Error, rel: &std::path::Path) -> ChanError {
+    let msg = err.to_string();
+    if msg.contains("outside of the filesystem") || msg.contains("path escape") {
+        return ChanError::SymlinkEscape(rel.to_path_buf());
+    }
+    ChanError::Io(msg)
+}
+
+/// cap-std variant of `mtime_secs` for `cap_std::fs::Metadata`.
+fn mtime_secs_cap(meta: &cap_std::fs::Metadata) -> Option<i64> {
     meta.modified()
         .ok()
+        .map(|t| t.into_std())
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64)
 }
 
-/// Refuse to write at `abs` if its final component already exists
-/// as something other than a regular file (symlink, FIFO, socket,
-/// device, directory). Returning Ok when the path is missing is
-/// intentional: a fresh write is always safe; the strict resolve
-/// already vetted the parent.
-fn ensure_writable(abs: &std::path::Path) -> Result<()> {
-    match std::fs::symlink_metadata(abs) {
+/// cap-std variant of `mtime_ns` for `cap_std::fs::Metadata`.
+fn mtime_ns_cap(meta: &cap_std::fs::Metadata) -> Option<i64> {
+    meta.modified()
+        .ok()
+        .map(|t| t.into_std())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|d| i64::try_from(d.as_nanos()).ok())
+}
+
+/// Human-readable name for a cap-std `FileType`. Mirrors
+/// `fs_ops::describe_file_kind`. cap-std exposes the same is_*
+/// predicates plus the unix-only fifo/socket/char/block via
+/// `FileTypeExt`.
+fn describe_cap_file_kind(ft: &cap_std::fs::FileType) -> &'static str {
+    if ft.is_dir() {
+        return "directory";
+    }
+    if ft.is_symlink() {
+        return "symlink";
+    }
+    if ft.is_file() {
+        return "regular";
+    }
+    #[cfg(unix)]
+    {
+        use cap_std::fs::FileTypeExt;
+        if ft.is_fifo() {
+            return "fifo";
+        }
+        if ft.is_socket() {
+            return "socket";
+        }
+        if ft.is_char_device() {
+            return "char_device";
+        }
+        if ft.is_block_device() {
+            return "block_device";
+        }
+    }
+    "unknown"
+}
+
+/// cap-std equivalent of `fs_ops::ensure_regular_file`. Lstat
+/// through the sandboxed `Dir`; refuse anything that isn't a real
+/// regular file (symlink / FIFO / socket / device / directory).
+fn ensure_regular_file_in(dir: &cap_std::fs::Dir, rel: &std::path::Path) -> Result<()> {
+    let meta = dir.symlink_metadata(rel).map_err(|e| map_cap_err(e, rel))?;
+    let ft = meta.file_type();
+    if ft.is_file() && !ft.is_symlink() {
+        return Ok(());
+    }
+    Err(ChanError::SpecialFile {
+        kind: describe_cap_file_kind(&ft).to_string(),
+        path: rel.to_path_buf(),
+    })
+}
+
+/// cap-std equivalent of `ensure_writable`. Returns the existing
+/// file's metadata when the leaf is a regular file, `None` when
+/// missing, error when it's something we refuse to overwrite.
+fn ensure_writable_in(
+    dir: &cap_std::fs::Dir,
+    rel: &std::path::Path,
+) -> Result<Option<cap_std::fs::Metadata>> {
+    match dir.symlink_metadata(rel) {
         Ok(meta) => {
             let ft = meta.file_type();
             if ft.is_file() && !ft.is_symlink() {
-                Ok(())
+                Ok(Some(meta))
             } else {
                 Err(ChanError::SpecialFile {
-                    kind: fs_ops::describe_file_kind(&ft).to_string(),
-                    path: abs.to_path_buf(),
+                    kind: describe_cap_file_kind(&ft).to_string(),
+                    path: rel.to_path_buf(),
                 })
             }
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(ChanError::Io(e.to_string())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(map_cap_err(e, rel)),
     }
 }
 
@@ -740,18 +1078,109 @@ fn parse_for_graph(
 }
 
 /// Whether `path` lies under the `prefix` directory. POSIX
-/// separators on both sides; case-sensitive. Used by the post-
-/// filter for `SearchOpts::scope`.
+/// separators on both sides; ASCII case-insensitive comparison.
+///
+/// Why case-insensitive: scope filters live in the search/UI layer
+/// and reflect the user's mental model of folders, not the
+/// filesystem's strict casing. APFS (default) and NTFS are
+/// case-insensitive, so a scope of `"Notes"` matching a stored path
+/// of `"notes/foo.md"` is what the user wants. ext4 is technically
+/// case-sensitive, so the over-match here is theoretical: a user
+/// would have to maintain `Notes/` and `notes/` as distinct folders
+/// AND ask the search to scope into one without bleeding the other.
+/// We accept that minor risk in exchange for predictable UX across
+/// platforms. ASCII-only fold (no Unicode) matches the rest of the
+/// crate's case-folding policy.
 fn path_under(path: &str, prefix: &str) -> bool {
     let prefix = prefix.trim_end_matches('/');
     if prefix.is_empty() {
         return true;
     }
-    if path == prefix {
+    if path.eq_ignore_ascii_case(prefix) {
         return true;
     }
-    let with_slash = format!("{prefix}/");
-    path.starts_with(&with_slash)
+    // Byte-level check sidesteps any UTF-8 boundary risk if a path
+    // contains multibyte chars. We're comparing ASCII, so this is
+    // safe and equivalent to the str form.
+    let pb = prefix.as_bytes();
+    let path_b = path.as_bytes();
+    if path_b.len() < pb.len() + 1 {
+        return false;
+    }
+    path_b[..pb.len()].eq_ignore_ascii_case(pb) && path_b[pb.len()] == b'/'
+}
+
+#[cfg(test)]
+mod cap_err_tests {
+    use super::map_cap_err;
+    use crate::error::ChanError;
+    use std::io;
+    use std::path::Path;
+
+    /// Pin the cap-std error-string match. If cap-std ever rewords
+    /// the message we use to detect a sandbox escape, this test
+    /// fails and we fix the matcher in `map_cap_err`. Without this
+    /// pin a silent regression would let "you tried to escape" land
+    /// as a generic `Io` and break `ChanError::SymlinkEscape`
+    /// callers.
+    #[test]
+    fn maps_cap_std_escape_message_to_symlink_escape() {
+        let e = io::Error::other("a path led outside of the filesystem");
+        let mapped = map_cap_err(e, Path::new("notes/x.md"));
+        assert!(matches!(mapped, ChanError::SymlinkEscape(_)));
+    }
+
+    #[test]
+    fn maps_other_io_errors_passthrough_to_io() {
+        let e = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
+        let mapped = map_cap_err(e, Path::new("notes/x.md"));
+        assert!(matches!(mapped, ChanError::Io(_)));
+    }
+}
+
+#[cfg(test)]
+mod path_under_tests {
+    use super::path_under;
+
+    #[test]
+    fn matches_exact_and_descendant() {
+        assert!(path_under("notes", "notes"));
+        assert!(path_under("notes/a.md", "notes"));
+        assert!(path_under("notes/sub/a.md", "notes"));
+    }
+
+    #[test]
+    fn empty_prefix_matches_anything() {
+        assert!(path_under("any/thing.md", ""));
+        assert!(path_under("any/thing.md", "/"));
+    }
+
+    #[test]
+    fn rejects_sibling_prefix_share() {
+        // "notes-archive" must not match scope "notes".
+        assert!(!path_under("notes-archive/a.md", "notes"));
+    }
+
+    #[test]
+    fn case_insensitive_ascii() {
+        assert!(path_under("Notes/a.md", "notes"));
+        assert!(path_under("notes/a.md", "NOTES"));
+        assert!(path_under("Notes/Sub/a.md", "notes/sub"));
+    }
+
+    #[test]
+    fn trailing_slash_on_prefix_is_normalized() {
+        assert!(path_under("notes/a.md", "notes/"));
+        assert!(path_under("notes", "notes/"));
+    }
+
+    #[test]
+    fn does_not_panic_on_multibyte_paths() {
+        // Real-world: a folder named with non-ASCII. The byte-level
+        // boundary check shouldn't trip.
+        assert!(path_under("Café/a.md", "Café"));
+        assert!(!path_under("Other/a.md", "Café"));
+    }
 }
 
 /// Convert links + tokens into graph edges. Wiki links and
@@ -849,6 +1278,7 @@ mod tests {
         assert_eq!(content, "hello");
         assert_eq!(stat.size, 5);
         assert!(stat.mtime.is_some());
+        assert!(stat.mtime_ns.is_some());
         assert!(!stat.is_dir);
     }
 
@@ -869,7 +1299,7 @@ mod tests {
         assert!(matches!(
             err,
             ChanError::WriteConflict {
-                current_mtime: Some(_)
+                current_mtime_ns: Some(_)
             }
         ));
         assert_eq!(drive.read_text("a.md").unwrap(), "v1");
@@ -884,7 +1314,7 @@ mod tests {
         assert!(matches!(
             err,
             ChanError::WriteConflict {
-                current_mtime: None
+                current_mtime_ns: None
             }
         ));
         assert!(!drive.exists("a.md"));
@@ -896,7 +1326,7 @@ mod tests {
         drive.write_text("a.md", "v1").unwrap();
         let (_, stat) = drive.read_text_with_stat("a.md").unwrap();
         drive
-            .write_text_if_unchanged("a.md", stat.mtime, "v2")
+            .write_text_if_unchanged("a.md", stat.mtime_ns, "v2")
             .unwrap();
         assert_eq!(drive.read_text("a.md").unwrap(), "v2");
     }
@@ -910,13 +1340,51 @@ mod tests {
             .write_text_if_unchanged("a.md", stale, "v2")
             .unwrap_err();
         match err {
-            ChanError::WriteConflict { current_mtime } => {
-                assert!(current_mtime.is_some());
-                assert_ne!(current_mtime, stale);
+            ChanError::WriteConflict { current_mtime_ns } => {
+                assert!(current_mtime_ns.is_some());
+                assert_ne!(current_mtime_ns, stale);
             }
             other => panic!("expected WriteConflict, got {other:?}"),
         }
         assert_eq!(drive.read_text("a.md").unwrap(), "v1");
+    }
+
+    /// Two saves landing within the same wall-clock second on a
+    /// nanosecond-resolution filesystem must still produce a conflict
+    /// when the second writer presents the first writer's stat token.
+    /// Filesystems without ns mtime degrade to seconds; on those the
+    /// assertion may not exercise the new precision, so we only run
+    /// it when we can observe distinct ns values from back-to-back
+    /// writes.
+    #[test]
+    fn write_text_if_unchanged_detects_subsecond_conflict() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "v1").unwrap();
+        let stale_ns = drive.stat("a.md").unwrap().mtime_ns;
+        // Tight loop until mtime_ns advances. On filesystems with
+        // only seconds resolution this would spin until the next
+        // second boundary; cap at 200ms.
+        let start = std::time::Instant::now();
+        loop {
+            drive.write_text("a.md", "v2").unwrap();
+            let now_ns = drive.stat("a.md").unwrap().mtime_ns;
+            if now_ns != stale_ns {
+                break;
+            }
+            if start.elapsed() > std::time::Duration::from_millis(200) {
+                // FS likely lacks sub-second resolution; skip rather
+                // than spin into the next wall-clock second.
+                return;
+            }
+        }
+        // Now an attempt to write back with the original (pre-v2)
+        // stat must conflict. Without ns precision, two same-second
+        // writes would collide and let this through.
+        let err = drive
+            .write_text_if_unchanged("a.md", stale_ns, "v3")
+            .unwrap_err();
+        assert!(matches!(err, ChanError::WriteConflict { .. }));
+        assert_eq!(drive.read_text("a.md").unwrap(), "v2");
     }
 
     #[test]
@@ -924,6 +1392,81 @@ mod tests {
         let (_cfg, _root, drive) = fixture();
         drive.write_bytes("img.png", &[0xff, 0xd8, 0xff]).unwrap();
         assert_eq!(drive.read("img.png").unwrap(), vec![0xff, 0xd8, 0xff]);
+    }
+
+    #[test]
+    fn write_text_rejects_oversize_content_for_new_file() {
+        let (_cfg, _root, drive) = fixture();
+        // One byte over the cap. Allocating 2 MiB+1 is fine; the
+        // guard rejects before any I/O.
+        let big = "x".repeat(TEXT_WRITE_LIMIT as usize + 1);
+        let err = drive.write_text("a.md", &big).unwrap_err();
+        match err {
+            ChanError::WriteTooLarge { kind, size, limit } => {
+                assert_eq!(kind, "text");
+                assert_eq!(limit, TEXT_WRITE_LIMIT);
+                assert_eq!(size, TEXT_WRITE_LIMIT + 1);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(!drive.exists("a.md"));
+    }
+
+    #[test]
+    fn write_bytes_rejects_oversize_content_for_new_file() {
+        let (_cfg, _root, drive) = fixture();
+        // 50 MiB+1 byte. Heap-alloc once; cheap.
+        let big = vec![0u8; BYTES_WRITE_LIMIT as usize + 1];
+        let err = drive.write_bytes("blob.bin", &big).unwrap_err();
+        assert!(matches!(
+            err,
+            ChanError::WriteTooLarge { kind: "bytes", .. }
+        ));
+        assert!(!drive.exists("blob.bin"));
+    }
+
+    /// A pre-cap file (or a binary mistakenly named `.md`) larger
+    /// than the configured limit must remain editable: writes up to
+    /// its current size go through, only growth beyond it is
+    /// rejected. Without this rule, shipping the cap would silently
+    /// turn every legacy big file read-only on next save.
+    #[test]
+    fn write_text_allows_edits_to_legacy_oversize_file() {
+        let (_cfg, root, drive) = fixture();
+        // Plant a 3 MiB file directly via std (bypasses the cap).
+        let path = root.path().join("legacy.md");
+        let big = "y".repeat(TEXT_WRITE_LIMIT as usize + 1024 * 1024);
+        std::fs::write(&path, &big).unwrap();
+        // Editing the file at the same size succeeds.
+        let same_size = "z".repeat(big.len());
+        drive.write_text("legacy.md", &same_size).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len() as usize, big.len());
+        // Shrinking succeeds (well within max(prev, limit)).
+        drive.write_text("legacy.md", "shrunk").unwrap();
+        assert_eq!(drive.read_text("legacy.md").unwrap(), "shrunk");
+    }
+
+    /// Growing a legacy oversize file past its current size IS
+    /// rejected: the effective limit is max(prev_size, configured
+    /// limit), so a 3 MiB file caps at 3 MiB on the next write.
+    #[test]
+    fn write_text_rejects_growth_past_legacy_size() {
+        let (_cfg, root, drive) = fixture();
+        let path = root.path().join("legacy.md");
+        let prev = "y".repeat(TEXT_WRITE_LIMIT as usize + 1024);
+        std::fs::write(&path, &prev).unwrap();
+        // One byte over the existing size, well above the configured cap.
+        let grown = "z".repeat(prev.len() + 1);
+        let err = drive.write_text("legacy.md", &grown).unwrap_err();
+        match err {
+            ChanError::WriteTooLarge { limit, size, .. } => {
+                assert_eq!(limit, prev.len() as u64, "effective limit = prev size");
+                assert_eq!(size, grown.len() as u64);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        // File on disk unchanged.
+        assert_eq!(std::fs::metadata(&path).unwrap().len() as usize, prev.len());
     }
 
     #[test]
@@ -954,6 +1497,44 @@ mod tests {
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         let err = lib.open_drive(root.path()).unwrap_err();
         assert!(matches!(err, ChanError::DriveLocked));
+    }
+
+    /// Defensive: if the registered drive path has been replaced by
+    /// a symlink (or a regular file) between registration and the
+    /// next open, refuse rather than carry on as if it were still a
+    /// real directory.
+    #[cfg(unix)]
+    #[test]
+    fn open_refuses_when_root_is_symlink() {
+        use std::os::unix::fs::symlink;
+        let cfg = TempDir::new().unwrap();
+        let real = TempDir::new().unwrap();
+        let staging = TempDir::new().unwrap();
+        // Register a real directory ...
+        let registered_path = staging.path().join("drive");
+        std::fs::create_dir(&registered_path).unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(&registered_path, None).unwrap();
+        // ... then swap it for a symlink to a different directory.
+        std::fs::remove_dir(&registered_path).unwrap();
+        symlink(real.path(), &registered_path).unwrap();
+        let err = lib.open_drive(&registered_path).unwrap_err();
+        assert!(matches!(err, ChanError::SpecialFile { .. }));
+    }
+
+    #[test]
+    fn open_refuses_when_root_is_regular_file() {
+        let cfg = TempDir::new().unwrap();
+        let staging = TempDir::new().unwrap();
+        let registered_path = staging.path().join("drive");
+        std::fs::create_dir(&registered_path).unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(&registered_path, None).unwrap();
+        // Replace the directory with a regular file.
+        std::fs::remove_dir(&registered_path).unwrap();
+        std::fs::write(&registered_path, b"not a drive").unwrap();
+        let err = lib.open_drive(&registered_path).unwrap_err();
+        assert!(matches!(err, ChanError::SpecialFile { .. }));
     }
 
     #[cfg(unix)]

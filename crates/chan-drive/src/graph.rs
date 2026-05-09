@@ -84,6 +84,18 @@ pub struct Edge {
     pub anchor: Option<String>,
 }
 
+/// Borrow-only payload describing one file's graph state, used by
+/// `GraphView::replace_all` for the atomic rebuild path. Internal
+/// (the borrow lifetime would not survive uniffi) and not re-exported
+/// from the crate root.
+pub struct FileGraph<'a> {
+    pub rel: &'a str,
+    pub title: Option<&'a str>,
+    pub mtime: Option<i64>,
+    pub edges: &'a [Edge],
+    pub headings: &'a [markdown::Heading],
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tag {
     pub name: String,
@@ -104,10 +116,46 @@ impl GraphView {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(graph_db_path)?;
+        Self::tune(&conn)?;
         Self::migrate(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
+    }
+
+    /// Per-connection sqlite tuning. Run once at open before any
+    /// schema work so the migration itself benefits from WAL.
+    ///
+    ///   journal_mode = WAL       readers don't block writers, single
+    ///                            writer at a time (we already gate
+    ///                            that with the per-drive flock); WAL
+    ///                            also crash-recovers cleanly because
+    ///                            the WAL file is the durable record
+    ///                            of in-flight commits.
+    ///   synchronous  = NORMAL    under WAL this is the standard
+    ///                            durability/perf trade. Survives a
+    ///                            process crash; can lose the last
+    ///                            committed tx on a kernel/power
+    ///                            crash within the WAL flush window.
+    ///                            Acceptable for a regenerable graph.
+    ///   busy_timeout = 5000      readers (e.g. the status endpoint
+    ///                            during a reindex) wait briefly
+    ///                            instead of failing immediately on
+    ///                            SQLITE_BUSY.
+    ///   foreign_keys = ON        cheap insurance; the schema doesn't
+    ///                            declare FKs today but the toggle
+    ///                            stops a future schema change from
+    ///                            silently bypassing them.
+    fn tune(conn: &Connection) -> Result<()> {
+        // journal_mode is a query-shaped pragma (returns the new mode).
+        // pragma_update would error; query_row drops the result row.
+        let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
+        conn.execute_batch(
+            "PRAGMA synchronous = NORMAL; \
+             PRAGMA busy_timeout = 5000; \
+             PRAGMA foreign_keys = ON;",
+        )?;
+        Ok(())
     }
 
     fn migrate(conn: &Connection) -> Result<()> {
@@ -145,14 +193,36 @@ impl GraphView {
             // basename is derived from rel_path (no file IO needed)
             // and backfilled here. title stays NULL until the next
             // index_file / reindex pass repopulates it from content.
+            //
+            // ALTER TABLE in sqlite is not transactional with the DDL
+            // sense most users expect, but it is atomic per statement.
+            // We run schema mutations first (they cannot be rolled
+            // back into the v1 shape), then do the basename backfill
+            // and the user_version bump in a single transaction. If a
+            // crash lands before the commit, user_version stays at 1
+            // and the next open re-runs the backfill against a schema
+            // that already has the columns (the IF NOT EXISTS / no-op
+            // ALTER TABLE pattern). That's why we tolerate "column
+            // already exists" by inspecting PRAGMA before re-ALTERing.
+            let cols: Vec<String> = {
+                let mut stmt = conn.prepare("PRAGMA table_info(nodes)")?;
+                let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row?);
+                }
+                out
+            };
+            if !cols.iter().any(|c| c == "title") {
+                conn.execute_batch("ALTER TABLE nodes ADD COLUMN title TEXT;")?;
+            }
+            if !cols.iter().any(|c| c == "basename") {
+                conn.execute_batch("ALTER TABLE nodes ADD COLUMN basename TEXT;")?;
+            }
             conn.execute_batch(
-                r#"
-                ALTER TABLE nodes ADD COLUMN title TEXT;
-                ALTER TABLE nodes ADD COLUMN basename TEXT;
-                CREATE INDEX IF NOT EXISTS nodes_basename_idx ON nodes(basename);
-                PRAGMA user_version = 2;
-                "#,
+                "CREATE INDEX IF NOT EXISTS nodes_basename_idx ON nodes(basename);",
             )?;
+
             let paths: Vec<String> = {
                 let mut stmt = conn.prepare("SELECT rel_path FROM nodes WHERE kind = 'file'")?;
                 let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
@@ -174,6 +244,10 @@ impl GraphView {
                     stmt.execute(params![p, bn])?;
                 }
             }
+            // Bump user_version inside the same tx as the backfill so
+            // a crash mid-migration leaves user_version at 1 with a
+            // schema that's idempotently safe to re-migrate.
+            tx.execute_batch("PRAGMA user_version = 2;")?;
             tx.commit()?;
         }
         Ok(())
@@ -338,6 +412,60 @@ impl GraphView {
         tx.execute("DELETE FROM edges", [])?;
         tx.execute("DELETE FROM headings", [])?;
         tx.execute("DELETE FROM nodes", [])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Atomic rebuild: clear the graph and re-insert `entries` in a
+    /// single transaction. If any insert fails, the transaction
+    /// rolls back and the graph stays in its previous state.
+    ///
+    /// This replaces the prior `clear()` + per-file `replace_file()`
+    /// loop in `Drive::reindex`, which left the graph half-populated
+    /// when a per-file write errored mid-rebuild. Callers that want
+    /// progress reporting per-file should still use that loop for
+    /// non-transactional incremental updates; reindex specifically
+    /// trades streaming for atomicity because the next caller (the
+    /// server's auto-rebuild trigger) keys off "is the graph empty?"
+    /// and a half-populated rebuild lies about its state.
+    pub fn replace_all(&self, entries: &[FileGraph<'_>]) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM edges", [])?;
+        tx.execute("DELETE FROM headings", [])?;
+        tx.execute("DELETE FROM nodes", [])?;
+        {
+            let mut ins_node = tx.prepare_cached(
+                "INSERT OR REPLACE INTO nodes(rel_path, kind, mtime, title, basename) \
+                 VALUES (?, 'file', ?, ?, ?)",
+            )?;
+            let mut ins_edge = tx.prepare_cached(
+                "INSERT OR IGNORE INTO edges(src, dst, kind, anchor) VALUES (?, ?, ?, ?)",
+            )?;
+            let mut ins_heading = tx.prepare_cached(
+                "INSERT INTO headings(rel_path, level, text, anchor, ord) VALUES (?, ?, ?, ?, ?)",
+            )?;
+            for fg in entries {
+                let basename = std::path::Path::new(fg.rel)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(fg.rel);
+                ins_node.execute(params![fg.rel, fg.mtime, fg.title, basename])?;
+                for e in fg.edges {
+                    ins_edge.execute(params![fg.rel, e.dst, e.kind.as_str(), e.anchor])?;
+                }
+                for h in fg.headings {
+                    let anchor = markdown::heading_anchor(&h.text);
+                    ins_heading.execute(params![
+                        fg.rel,
+                        h.level as i64,
+                        h.text,
+                        anchor,
+                        h.ord as i64
+                    ])?;
+                }
+            }
+        }
         tx.commit()?;
         Ok(())
     }
@@ -596,6 +724,56 @@ mod tests {
     }
 
     #[test]
+    fn replace_all_clears_then_inserts_in_one_tx() {
+        let tmp = TempDir::new().unwrap();
+        let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
+        // Pre-populate so we can verify clear-and-replace semantics.
+        g.replace_file("old.md", Some("Old"), Some(1), &[], &[])
+            .unwrap();
+        assert_eq!(
+            count(&g, "SELECT COUNT(*) FROM nodes WHERE rel_path='old.md'"),
+            1
+        );
+        let edges = vec![Edge {
+            src: "a.md".into(),
+            dst: "b.md".into(),
+            kind: EdgeKind::Link,
+            anchor: None,
+        }];
+        let headings = vec![markdown::Heading {
+            ord: 0,
+            line: 0,
+            level: 1,
+            text: "Hello".into(),
+        }];
+        let entries = vec![
+            FileGraph {
+                rel: "a.md",
+                title: Some("Alpha"),
+                mtime: Some(10),
+                edges: &edges,
+                headings: &headings,
+            },
+            FileGraph {
+                rel: "b.md",
+                title: None,
+                mtime: Some(20),
+                edges: &[],
+                headings: &[],
+            },
+        ];
+        g.replace_all(&entries).unwrap();
+        // Old entry is gone, new ones present.
+        assert_eq!(count(&g, "SELECT COUNT(*) FROM nodes"), 2);
+        assert_eq!(
+            count(&g, "SELECT COUNT(*) FROM nodes WHERE rel_path='old.md'"),
+            0
+        );
+        assert_eq!(count(&g, "SELECT COUNT(*) FROM edges"), 1);
+        assert_eq!(count(&g, "SELECT COUNT(*) FROM headings"), 1);
+    }
+
+    #[test]
     fn replace_then_forget_round_trips() {
         let tmp = TempDir::new().unwrap();
         let db = tmp.path().join("graph.sqlite");
@@ -752,6 +930,63 @@ mod tests {
             .filter(|h| h.kind == LinkTargetKind::Heading)
             .count();
         assert_eq!(heading_hits, 5);
+    }
+
+    #[test]
+    fn migration_v2_idempotent_when_columns_already_present() {
+        // Simulates a crash that landed the ALTER TABLE statements
+        // but not the basename backfill. user_version is still 1, the
+        // columns are present and basename is NULL. The next open must
+        // not error on re-ALTER and must complete the backfill.
+        let tmp = TempDir::new().unwrap();
+        let db = tmp.path().join("g.sqlite");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE nodes (
+                    rel_path TEXT PRIMARY KEY,
+                    kind     TEXT NOT NULL,
+                    mtime    INTEGER,
+                    title    TEXT,
+                    basename TEXT
+                );
+                CREATE TABLE edges (
+                    src    TEXT NOT NULL,
+                    dst    TEXT NOT NULL,
+                    kind   TEXT NOT NULL,
+                    anchor TEXT,
+                    PRIMARY KEY (src, dst, kind)
+                );
+                CREATE TABLE headings (
+                    rel_path TEXT NOT NULL,
+                    level    INTEGER NOT NULL,
+                    text     TEXT NOT NULL,
+                    anchor   TEXT NOT NULL,
+                    ord      INTEGER NOT NULL,
+                    PRIMARY KEY (rel_path, ord)
+                );
+                INSERT INTO nodes(rel_path, kind, mtime, title, basename)
+                VALUES ('half/done.md', 'file', 5, NULL, NULL);
+                PRAGMA user_version = 1;
+                "#,
+            )
+            .unwrap();
+        }
+        let g = GraphView::open(&db).unwrap();
+        let conn = g.conn.lock().unwrap();
+        let bn: Option<String> = conn
+            .query_row(
+                "SELECT basename FROM nodes WHERE rel_path='half/done.md'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(bn.as_deref(), Some("done.md"));
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 2);
     }
 
     #[test]

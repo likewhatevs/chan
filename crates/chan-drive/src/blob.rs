@@ -27,28 +27,44 @@ use std::path::Path;
 use crate::error::{ChanError, Result};
 use crate::fs_ops;
 
+/// Maximum length of a blob key. 255 matches the most common
+/// filesystem filename ceiling (ext4, APFS, NTFS, btrfs, xfs);
+/// callers can compose `<prefix>-<sha256>` (74 chars) or longer
+/// natural identifiers without bumping the cap. The previous 100
+/// fit a sha256 hex but rejected reasonable composite keys.
+const MAX_KEY_LEN: usize = 255;
+
 /// Validate a flat blob key. The key becomes a single path
 /// component under the bucket dir, so it must not contain
-/// separators, must not be empty, and must not start with `.`
+/// separators, must not be empty, must not start with `.`
 /// (defense against accidentally writing a hidden file when a
-/// caller hands us an unsanitized name).
+/// caller hands us an unsanitized name), and must not start with
+/// `-` (defense against future shell-out paths that would treat
+/// the key as a CLI flag; chan-drive doesn't shell out today, but
+/// the cost of forbidding it is zero and the cost of revisiting
+/// after a CVE is real).
 ///
-/// Allowed: ASCII alphanumeric, `-`, `_`, `.`. Length 1..=100.
-/// 64-char sha256 hex (the typical assistant-key shape) fits;
-/// UUIDs with dashes fit; window-id strings fit.
+/// Allowed: ASCII alphanumeric, `-`, `_`, `.`. Length 1..=255.
+/// 64-char sha256 hex fits; UUIDs with dashes fit; longer composite
+/// identifiers fit.
 pub(crate) fn validate_key(key: &str) -> Result<()> {
     if key.is_empty() {
         return Err(ChanError::InvalidKey("empty".into()));
     }
-    if key.len() > 100 {
+    if key.len() > MAX_KEY_LEN {
         return Err(ChanError::InvalidKey(format!(
-            "{} exceeds 100 chars",
+            "{} exceeds {MAX_KEY_LEN} chars",
             key.len()
         )));
     }
     if key.starts_with('.') {
         return Err(ChanError::InvalidKey(
             "leading '.' (would write a hidden file)".into(),
+        ));
+    }
+    if key.starts_with('-') {
+        return Err(ChanError::InvalidKey(
+            "leading '-' (would look like a CLI flag if shelled out)".into(),
         ));
     }
     for c in key.chars() {
@@ -206,10 +222,11 @@ mod tests {
     fn validate_key_rejects() {
         assert!(validate_key("").is_err());
         assert!(validate_key(".hidden").is_err());
+        assert!(validate_key("-flagshape").is_err());
         assert!(validate_key("a/b").is_err());
         assert!(validate_key("a\\b").is_err());
         assert!(validate_key("a b").is_err()); // no spaces
-        assert!(validate_key(&"x".repeat(101)).is_err());
+        assert!(validate_key(&"x".repeat(MAX_KEY_LEN + 1)).is_err());
     }
 
     #[test]
@@ -218,6 +235,10 @@ mod tests {
         validate_key("abc_def").unwrap();
         validate_key("conv.json").unwrap();
         validate_key(&"a".repeat(64)).unwrap(); // sha256 hex shape
+                                                // Composite "<prefix>-<sha256>" shape (74 chars) fits comfortably.
+        validate_key(&format!("session-{}", "0".repeat(64))).unwrap();
+        // Right at the cap.
+        validate_key(&"x".repeat(MAX_KEY_LEN)).unwrap();
     }
 
     #[test]

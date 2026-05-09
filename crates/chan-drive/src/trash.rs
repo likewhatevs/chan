@@ -87,11 +87,17 @@ pub fn move_into(trash_dir: &Path, src_abs: &Path, original_rel: &str, is_dir: b
         return Ok(());
     }
 
-    // Cross-fs fallback. Copy first, write meta, then drop source.
+    // Cross-fs fallback. Copy first, fsync the copied bytes so a
+    // crash after `write_meta` cannot leave a "complete" trash entry
+    // pointing at non-durable payload bytes, then write meta, then
+    // drop source. `fs::copy` does not fsync; without the explicit
+    // sync, the meta atomic_write only guarantees the meta itself.
     if is_dir {
         copy_dir(src_abs, &payload)?;
+        fs_ops::sync_tree(&payload)?;
     } else {
         fs::copy(src_abs, &payload)?;
+        fs_ops::sync_file(&payload)?;
     }
     write_meta(&entry_dir, original_rel, size, is_dir)?;
     if is_dir {
@@ -134,7 +140,12 @@ pub fn list(trash_dir: &Path) -> Result<Vec<TrashEntry>> {
     Ok(out)
 }
 
-pub fn restore(trash_dir: &Path, drive_root: &Path, id: &str) -> Result<()> {
+pub fn restore(
+    trash_dir: &Path,
+    drive_root: &Path,
+    drive_root_canon: &Path,
+    id: &str,
+) -> Result<()> {
     let entry_dir = trash_dir.join(id);
     let meta_path = entry_dir.join("meta.json");
     let raw = match fs::read(&meta_path) {
@@ -157,10 +168,13 @@ pub fn restore(trash_dir: &Path, drive_root: &Path, id: &str) -> Result<()> {
         });
     }
 
-    // The leaf doesn't exist yet (we're restoring), so resolve_safe_strict
-    // canonicalizes the deepest existing ancestor. That's enough to catch
-    // mid-path symlinks pointing outside the drive.
-    let dest = fs_ops::resolve_safe_strict(drive_root, &meta.original_path)?;
+    // The leaf doesn't exist yet (we're restoring), so the strict
+    // resolve canonicalizes the deepest existing ancestor. That's
+    // enough to catch mid-path symlinks pointing outside the drive.
+    // The Drive caller passes its cached canonical root so we don't
+    // re-canonicalize on every restore.
+    let dest =
+        fs_ops::resolve_safe_strict_canon(drive_root, drive_root_canon, &meta.original_path)?;
     if fs::symlink_metadata(&dest).is_ok() {
         return Err(ChanError::TrashOccupied(meta.original_path.clone()));
     }
@@ -169,14 +183,20 @@ pub fn restore(trash_dir: &Path, drive_root: &Path, id: &str) -> Result<()> {
     }
 
     if fs::rename(&payload, &dest).is_err() {
-        // Cross-fs again: copy + drop. Same ordering rationale as
-        // move_into but mirrored: payload's removal is best-effort
-        // since the trash entry is already considered consumed.
+        // Cross-fs again: copy, fsync, then drop the trash payload.
+        // Without the fsync, a crash between copy and remove can
+        // leave a non-durable destination plus a still-present trash
+        // entry. With it, the destination is durable; if the remove
+        // races a crash the trash entry survives but the destination
+        // is intact (next list will show TrashOccupied if the user
+        // tries to re-restore, prompting a manual purge).
         if meta.is_dir {
             copy_dir(&payload, &dest)?;
+            fs_ops::sync_tree(&dest)?;
             fs::remove_dir_all(&payload)?;
         } else {
             fs::copy(&payload, &dest)?;
+            fs_ops::sync_file(&dest)?;
             fs::remove_file(&payload)?;
         }
     }
@@ -201,16 +221,41 @@ pub fn purge_one(trash_dir: &Path, id: &str) -> Result<()> {
     }
 }
 
+/// Permanently delete every trash entry. Reports per-entry totals so
+/// the caller can distinguish "wiped clean" from "filesystem refused
+/// some entries". Previous behavior was to log-and-continue and
+/// return `Ok(())`, which made a fully-failed empty look identical
+/// to a successful one. We now bubble up an error when at least one
+/// entry remained AND nothing was successfully removed; partial
+/// success returns Ok with the failed entries logged.
 pub fn purge_all(trash_dir: &Path) -> Result<()> {
     let rd = match fs::read_dir(trash_dir) {
         Ok(rd) => rd,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e.into()),
     };
+    let mut removed = 0usize;
+    let mut failed = 0usize;
+    let mut last_err: Option<std::io::Error> = None;
     for entry in rd.flatten() {
-        if let Err(e) = fs::remove_dir_all(entry.path()) {
-            tracing::warn!(?e, "purge_all: failed to remove entry");
+        match fs::remove_dir_all(entry.path()) {
+            Ok(()) => removed += 1,
+            Err(e) => {
+                failed += 1;
+                tracing::warn!(?e, path = ?entry.path(), "purge_all: failed to remove entry");
+                last_err = Some(e);
+            }
         }
+    }
+    if removed == 0 && failed > 0 {
+        // Total failure: the trash is unchanged and the caller's UX
+        // ("trash emptied") would be a lie. Surface the last error.
+        return Err(ChanError::Io(format!(
+            "purge_all: 0 of {failed} entries removed; last error: {}",
+            last_err
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "unknown".into()),
+        )));
     }
     Ok(())
 }
@@ -260,12 +305,14 @@ fn allocate_id(trash_dir: &Path) -> Result<String> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    // nanos alone is unique on most clocks; the suffix retry covers
-    // the rare same-nanosecond burst (and tests that mock time).
-    let mut id = format!("{nanos:032}");
+    // 19 digits fits any date the i64-ns mtime convention can
+    // produce (max ~2262), so lexicographic id sort tracks
+    // chronological order for diagnostics. Suffix-retry covers the
+    // rare same-nanosecond burst (and tests that mock time).
+    let mut id = format!("{nanos:019}");
     let mut n = 1u32;
     while trash_dir.join(&id).exists() {
-        id = format!("{nanos:032}-{n}");
+        id = format!("{nanos:019}-{n}");
         n += 1;
     }
     Ok(id)
@@ -302,7 +349,19 @@ fn dir_size(path: &Path) -> Result<u64> {
     let mut total = 0u64;
     for entry in fs::read_dir(path)? {
         let entry = entry?;
-        let meta = entry.metadata()?;
+        // lstat (symlink_metadata), not metadata: the latter follows
+        // symlinks. A user dir containing `link -> /` would otherwise
+        // recurse outside the drive and double-count the host fs.
+        // chan-drive never creates symlinks itself, but a third-party
+        // tool inside the user's notes tree might.
+        let meta = match entry.path().symlink_metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let ft = meta.file_type();
+        if ft.is_symlink() {
+            continue;
+        }
         if meta.is_dir() {
             total = total.saturating_add(dir_size(&entry.path()).unwrap_or(0));
         } else if meta.is_file() {
@@ -347,7 +406,13 @@ mod tests {
         let (_t, trash) = ts();
         move_into(&trash, &src, "notes/a.md", false).unwrap();
         let id = list(&trash).unwrap()[0].id.clone();
-        restore(&trash, drive.path(), &id).unwrap();
+        restore(
+            &trash,
+            drive.path(),
+            &drive.path().canonicalize().unwrap(),
+            &id,
+        )
+        .unwrap();
         assert_eq!(std::fs::read(&src).unwrap(), b"hello");
         assert!(list(&trash).unwrap().is_empty());
     }
@@ -361,7 +426,13 @@ mod tests {
         move_into(&trash, &src, "a.md", false).unwrap();
         std::fs::write(&src, b"v2").unwrap();
         let id = list(&trash).unwrap()[0].id.clone();
-        let err = restore(&trash, drive.path(), &id).unwrap_err();
+        let err = restore(
+            &trash,
+            drive.path(),
+            &drive.path().canonicalize().unwrap(),
+            &id,
+        )
+        .unwrap_err();
         assert!(matches!(err, ChanError::TrashOccupied(_)));
         // Trash entry still present; user can purge or pick a new path.
         assert_eq!(list(&trash).unwrap().len(), 1);
@@ -383,7 +454,13 @@ mod tests {
         assert!(entries[0].is_dir);
         assert_eq!(entries[0].size, 3); // 1 + 2 bytes
         let id = entries[0].id.clone();
-        restore(&trash, drive.path(), &id).unwrap();
+        restore(
+            &trash,
+            drive.path(),
+            &drive.path().canonicalize().unwrap(),
+            &id,
+        )
+        .unwrap();
         assert_eq!(std::fs::read(dir.join("a.md")).unwrap(), b"a");
         assert_eq!(std::fs::read(dir.join("sub/b.md")).unwrap(), b"bb");
     }
@@ -449,7 +526,13 @@ mod tests {
         let drive = TempDir::new().unwrap();
         let (_t, trash) = ts();
         std::fs::create_dir_all(&trash).unwrap();
-        let err = restore(&trash, drive.path(), "missing").unwrap_err();
+        let err = restore(
+            &trash,
+            drive.path(),
+            &drive.path().canonicalize().unwrap(),
+            "missing",
+        )
+        .unwrap_err();
         assert!(matches!(err, ChanError::TrashEntryNotFound(_)));
     }
 }

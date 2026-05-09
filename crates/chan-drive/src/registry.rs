@@ -30,12 +30,37 @@ pub struct Registry {
 
 /// One entry in the registry. `name` is user-editable and shown in
 /// recents lists / window titles.
+///
+/// `canonical_path` is the canonicalized form of `path`, computed
+/// once at insert / load time and reused for comparisons. The field
+/// is intentionally `#[serde(skip)]`: the canonical form is a
+/// per-machine artifact, recomputable on load, and including it in
+/// the on-disk TOML would invite the registry to disagree with the
+/// filesystem after a `mv`. Falls back to a clone of `path` when
+/// the path doesn't currently canonicalize (drive root deleted /
+/// network mount asleep), keeping the entry comparable lexically.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KnownDrive {
     pub path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub last_opened: DateTime<Utc>,
+    #[serde(skip)]
+    pub(crate) canonical_path: Option<PathBuf>,
+}
+
+impl KnownDrive {
+    /// Cached canonical path; falls back to a stat if the cache
+    /// hasn't been primed (e.g. an entry constructed by tests
+    /// outside the Registry).
+    fn canonical(&self) -> PathBuf {
+        if let Some(p) = &self.canonical_path {
+            return p.clone();
+        }
+        self.path
+            .canonicalize()
+            .unwrap_or_else(|_| self.path.clone())
+    }
 }
 
 impl Registry {
@@ -51,10 +76,19 @@ impl Registry {
             return Ok(Self::default());
         }
         let raw = std::fs::read_to_string(path)?;
-        toml::from_str(&raw).map_err(|e| ChanError::ConfigDecode {
+        let mut reg: Self = toml::from_str(&raw).map_err(|e| ChanError::ConfigDecode {
             path: path.to_path_buf(),
             message: e.to_string(),
-        })
+        })?;
+        // Prime the canonical-path cache once at load. Comparisons
+        // (find / touch / remove / set_name) are then pure and don't
+        // re-canonicalize per call. Failure here is non-fatal: an
+        // entry whose drive root is missing or asleep stays
+        // comparable lexically.
+        for d in &mut reg.drives {
+            d.canonical_path = Some(d.path.canonicalize().unwrap_or_else(|_| d.path.clone()));
+        }
+        Ok(reg)
     }
 
     pub fn save(&self) -> Result<()> {
@@ -70,11 +104,11 @@ impl Registry {
     /// possible). Matches by canonical path so symlink wiggles
     /// don't create duplicate registry entries.
     pub fn find(&self, root: &Path) -> Option<&KnownDrive> {
-        let target = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        self.drives.iter().find(|d| {
-            let dp = d.path.canonicalize().unwrap_or_else(|_| d.path.clone());
-            dp == target
-        })
+        let target = canonicalize_or_keep(root);
+        match self.drives.iter().position(|d| d.canonical() == target) {
+            Some(i) => Some(&self.drives[i]),
+            None => self.drives.iter().find(|d| fresh_canonical(d) == target),
+        }
     }
 
     /// Touch-or-append the drive entry, then sort most-recent first.
@@ -84,58 +118,73 @@ impl Registry {
     /// drive never clobbers a user-set name. Pass `set_name` from
     /// the explicit rename path instead.
     pub fn touch(&mut self, root: &Path, name: Option<String>) -> usize {
-        let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let canonical = canonicalize_or_keep(root);
         let now = Utc::now();
-        if let Some(d) = self.drives.iter_mut().find(|d| {
-            let dp = d.path.canonicalize().unwrap_or_else(|_| d.path.clone());
-            dp == canonical
-        }) {
-            d.last_opened = now;
+        let idx = position_match(&self.drives, &canonical);
+        if let Some(i) = idx {
+            self.drives[i].last_opened = now;
+            // Refresh the cache: a relinked drive (registered dir
+            // replaced by a symlink to elsewhere) would otherwise
+            // keep the stale canonical, then the next touch wouldn't
+            // find it on the fast path. Belt and braces.
+            self.drives[i].canonical_path = Some(canonical.clone());
         } else {
             self.drives.push(KnownDrive {
                 path: canonical.clone(),
                 name,
                 last_opened: now,
+                canonical_path: Some(canonical.clone()),
             });
         }
         self.drives
             .sort_by_key(|d| std::cmp::Reverse(d.last_opened));
-        self.drives
-            .iter()
-            .position(|d| {
-                let dp = d.path.canonicalize().unwrap_or_else(|_| d.path.clone());
-                dp == canonical
-            })
-            .unwrap_or(0)
+        position_match(&self.drives, &canonical).unwrap_or(0)
     }
 
     /// Remove a registry entry. Does not delete the directory or
     /// the per-drive state on disk; the caller decides whether to
     /// purge that separately.
     pub fn remove(&mut self, root: &Path) -> bool {
-        let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let canonical = canonicalize_or_keep(root);
         let before = self.drives.len();
-        self.drives.retain(|d| {
-            let dp = d.path.canonicalize().unwrap_or_else(|_| d.path.clone());
-            dp != canonical
-        });
+        self.drives
+            .retain(|d| d.canonical() != canonical && fresh_canonical(d) != canonical);
         self.drives.len() != before
     }
 
     /// Set the display name on an existing drive. No-op if the
     /// drive isn't registered.
     pub fn set_name(&mut self, root: &Path, name: Option<String>) -> bool {
-        let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        if let Some(d) = self.drives.iter_mut().find(|d| {
-            let dp = d.path.canonicalize().unwrap_or_else(|_| d.path.clone());
-            dp == canonical
-        }) {
-            d.name = name;
-            true
-        } else {
-            false
-        }
+        let canonical = canonicalize_or_keep(root);
+        let Some(i) = position_match(&self.drives, &canonical) else {
+            return false;
+        };
+        self.drives[i].name = name;
+        true
     }
+}
+
+/// Canonicalize-or-fall-back-to-input. Used for the per-call target
+/// path; entries cache their own canonical form on insert / load.
+fn canonicalize_or_keep(root: &Path) -> PathBuf {
+    root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
+}
+
+/// Re-canonicalize an entry's `path` ignoring its cache. Used as the
+/// slow-path fallback when the cached canonical doesn't match the
+/// target (drive moved or relinked since last load).
+fn fresh_canonical(d: &KnownDrive) -> PathBuf {
+    d.path.canonicalize().unwrap_or_else(|_| d.path.clone())
+}
+
+/// Index of the drive whose canonical (cached, then fresh) matches
+/// `canonical`. Centralises the fast-path / slow-path lookup so
+/// touch / find / set_name all behave consistently.
+fn position_match(drives: &[KnownDrive], canonical: &Path) -> Option<usize> {
+    if let Some(i) = drives.iter().position(|d| d.canonical() == *canonical) {
+        return Some(i);
+    }
+    drives.iter().position(|d| fresh_canonical(d) == *canonical)
 }
 
 /// Effective default drive root: registry override wins, otherwise

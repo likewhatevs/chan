@@ -35,7 +35,10 @@ pub mod registry;
 pub mod trash;
 pub mod watch;
 
-pub use drive::{DirEntry, Drive, FileStat, ResolvedLink, SearchOpts, TreeEntry};
+pub use drive::{
+    DirEntry, Drive, FileStat, ResolvedLink, SearchOpts, TreeEntry, BYTES_WRITE_LIMIT,
+    TEXT_WRITE_LIMIT,
+};
 pub use error::{ChanError, Result};
 pub use graph::{Edge, EdgeKind, GraphView, HeadingRow, LinkTarget, LinkTargetKind, Tag};
 pub use index::{

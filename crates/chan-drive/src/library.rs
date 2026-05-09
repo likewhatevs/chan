@@ -4,8 +4,9 @@
 // In practice apps create one Library at startup and keep it
 // alive. Drives are opened against it. Cheap to clone (Arc inside).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use serde::{Deserialize, Serialize};
 
@@ -47,6 +48,26 @@ struct LibraryInner {
     /// mutation. The Mutex serializes registry writes so
     /// `register_drive` calls from concurrent threads don't race.
     registry: Mutex<Registry>,
+    /// In-process map of currently-open Drives, keyed by canonical
+    /// path. Each entry is a `Weak<Drive>` so the map doesn't
+    /// keep drives alive past the caller's last `Arc`. The
+    /// per-drive flock already prevents two processes (or two
+    /// concurrent opens in this process) from racing on disk; the
+    /// map adds two things on top:
+    ///
+    ///   1. A clearer in-process error: `DriveAlreadyOpen` instead
+    ///      of `DriveLocked`. The latter implies cross-process
+    ///      contention, which would mislead a developer who is
+    ///      really fighting their own forgotten `Arc`.
+    ///   2. Defense-in-depth on filesystems where flock is
+    ///      unreliable (NFS-mounted state_dir, certain SMB
+    ///      configurations). Even if the kernel-side lock is a
+    ///      no-op, the in-process map still serializes within a
+    ///      single Library handle.
+    ///
+    /// Dead entries (Weak that no longer upgrades) are GC'd lazily
+    /// on every map access; no background thread.
+    live_drives: Mutex<HashMap<PathBuf, Weak<Drive>>>,
 }
 
 impl Library {
@@ -64,6 +85,7 @@ impl Library {
             inner: Arc::new(LibraryInner {
                 config_path,
                 registry: Mutex::new(registry),
+                live_drives: Mutex::new(HashMap::new()),
             }),
         })
     }
@@ -143,7 +165,30 @@ impl Library {
             .ok_or_else(|| ChanError::DriveNotRegistered(root.to_path_buf()))?
             .clone();
         drop(reg);
-        Drive::open(entry)
+        let key = canonical_key(&entry.path);
+        // In-process pre-check: if we still hold an open handle to
+        // this drive, return DriveAlreadyOpen rather than letting
+        // the cross-process flock surface as DriveLocked. The lock
+        // on `live_drives` is held only across the upgrade probe;
+        // we drop it before calling Drive::open so a slow open
+        // (canonicalize on a cloud root, lazy index init) never
+        // blocks unrelated drives from registering / listing.
+        {
+            let mut map = self.inner.live_drives.lock().unwrap();
+            gc_dead_entries(&mut map);
+            if let Some(weak) = map.get(&key) {
+                if weak.upgrade().is_some() {
+                    return Err(ChanError::DriveAlreadyOpen);
+                }
+            }
+        }
+        let drive = Drive::open(entry)?;
+        self.inner
+            .live_drives
+            .lock()
+            .unwrap()
+            .insert(key, Arc::downgrade(&drive));
+        Ok(drive)
     }
 
     /// Wipe per-drive chan-managed state for `root`. The user's
@@ -176,6 +221,23 @@ impl Library {
     /// Re-creation of the skeleton happens lazily on the next
     /// `open_drive` + first `index()` / `graph()` access.
     pub fn reset_drive(&self, root: &Path, mode: ResetMode) -> Result<ResetReport> {
+        // In-process pre-check: a buggy caller might hold a Drive
+        // and call reset_drive from another thread, expecting the
+        // flock to serialize. It does (DriveLock::acquire below
+        // would fail with DriveLocked), but the clearer error tells
+        // the developer they're racing themselves rather than a
+        // mystery second process. Cross-process safety still rides
+        // on the flock.
+        let key = canonical_key(root);
+        {
+            let mut map = self.inner.live_drives.lock().unwrap();
+            gc_dead_entries(&mut map);
+            if let Some(weak) = map.get(&key) {
+                if weak.upgrade().is_some() {
+                    return Err(ChanError::DriveAlreadyOpen);
+                }
+            }
+        }
         let drive_paths = paths::drive_paths(root);
         let _lock = DriveLock::acquire(&drive_paths.lock)?;
         let mut removed = 0;
@@ -193,10 +255,14 @@ impl Library {
         ] {
             removed += wipe_dir(dir)?;
         }
-        // Release the lock before mutating the registry: the
-        // registry mutex is independent and shouldn't compose
-        // with the per-drive flock.
-        drop(_lock);
+        // Hold the writer lock across the registry update so a
+        // concurrent open_drive cannot lazily recreate the state we
+        // just wiped, lazily commit a half-formed index/graph dir,
+        // and then notice its registry entry has been dropped. The
+        // registry mutex composes cleanly here: it's a lock we own,
+        // the flock is process-wide, and no path acquires them in
+        // the opposite order. _lock is dropped at the end of the
+        // function after the registry write completes.
         if matches!(mode, ResetMode::Everything) {
             let mut reg = self.inner.registry.lock().unwrap();
             if reg.remove(root) {
@@ -207,6 +273,22 @@ impl Library {
             removed_entries: removed,
         })
     }
+}
+
+/// Canonical-form key for the live-drives map. Falls back to the
+/// input path when the filesystem can't canonicalize (drive root
+/// missing or asleep), so the map still tracks "this exact request
+/// path" through the rest of the operation.
+fn canonical_key(root: &Path) -> PathBuf {
+    root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
+}
+
+/// Drop dead entries from the live-drives map. A `Weak<Drive>`
+/// whose Arc has been dropped will fail to upgrade; we remove it
+/// so the map's footprint stays bounded by the actually-open
+/// drives, not by every drive ever opened in the process.
+fn gc_dead_entries(map: &mut HashMap<PathBuf, Weak<Drive>>) {
+    map.retain(|_, w| w.strong_count() > 0);
 }
 
 /// Recursively delete `dir` and return the number of entries
@@ -357,12 +439,43 @@ mod tests {
     }
 
     #[test]
-    fn reset_drive_returns_locked_when_drive_is_open() {
+    fn reset_drive_rejects_when_drive_is_open_in_process() {
         let (lib, _cfg, drive) = lib();
         lib.register_drive(drive.path(), None).unwrap();
         let _open = lib.open_drive(drive.path()).unwrap();
+        // In-process pre-check fires first: clearer error than the
+        // cross-process flock would surface, since we know we're
+        // racing ourselves rather than another process.
         let err = lib.reset_drive(drive.path(), ResetMode::State).unwrap_err();
+        assert!(matches!(err, ChanError::DriveAlreadyOpen));
+    }
+
+    #[test]
+    fn reset_drive_returns_locked_when_other_process_holds_lock() {
+        // Hand-crafted second Library handle on the same config to
+        // simulate another process: each Library has its own
+        // live_drives map, so the in-process check on `lib2`
+        // doesn't fire, and we hit the flock instead.
+        let (lib, cfg, drive) = lib();
+        lib.register_drive(drive.path(), None).unwrap();
+        let _open = lib.open_drive(drive.path()).unwrap();
+        let lib2 = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        let err = lib2
+            .reset_drive(drive.path(), ResetMode::State)
+            .unwrap_err();
         assert!(matches!(err, ChanError::DriveLocked));
+    }
+
+    #[test]
+    fn second_open_in_same_process_returns_already_open() {
+        let (lib, _cfg, drive) = lib();
+        lib.register_drive(drive.path(), None).unwrap();
+        let first = lib.open_drive(drive.path()).unwrap();
+        let err = lib.open_drive(drive.path()).unwrap_err();
+        assert!(matches!(err, ChanError::DriveAlreadyOpen));
+        // Once the first handle is dropped, the second open succeeds.
+        drop(first);
+        let _second = lib.open_drive(drive.path()).unwrap();
     }
 
     #[test]
