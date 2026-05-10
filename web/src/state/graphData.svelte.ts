@@ -99,5 +99,29 @@ export function selectionEdgesFor(path: string): {
   return out;
 }
 
+/// Documents that reference the given non-file node (a tag /
+/// mention / date). Mirrors the inline lookup that GraphPanel does
+/// for its tag-node inspector branch but reads the global graph
+/// store, so the search overlay can use the same data without
+/// having to render the whole canvas first.
+///
+/// Returns an empty array when the graph isn't loaded yet or the
+/// node id doesn't exist (the typical "tag was deleted between
+/// search hit and click" case).
+export function documentsReferencing(nodeId: string): GraphViewNode[] {
+  const view = graphData.view;
+  if (!view) return [];
+  const target = view.nodes.find((n) => n.id === nodeId);
+  if (!target) return [];
+  const nodeById = new Map(view.nodes.map((n) => [n.id, n]));
+  const out: GraphViewNode[] = [];
+  for (const e of view.edges) {
+    if (e.target !== nodeId) continue;
+    const src = nodeById.get(e.source);
+    if (src && src.kind === "file") out.push(src);
+  }
+  return out;
+}
+
 /// Re-export so consumers don't need a second import.
 export type { GraphViewEdge, GraphViewNode };

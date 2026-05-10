@@ -1,0 +1,80 @@
+<script lang="ts">
+  // Dispatcher that renders the correct inspector body for whatever
+  // the user picked. Replaces ad-hoc per-overlay dispatching so the
+  // file browser, search overlay, and graph all share one component.
+  //
+  // Caller hands in a discriminated `selection` describing what was
+  // clicked. Files (text + image) route to FileInfoBody — it already
+  // branches internally on extension, so the search "image" hit and
+  // the graph "image-ish file" node both get the same preview. Tag
+  // / mention / date nodes route to TagInfoBody.
+
+  import FileInfoBody from "./FileInfoBody.svelte";
+  import TagInfoBody from "./TagInfoBody.svelte";
+
+  export type InspectorSelection =
+    | { kind: "file"; path: string }
+    | {
+        kind: "tag" | "mention" | "date";
+        nodeId: string;
+        label: string;
+      }
+    | null;
+
+  let {
+    selection,
+    onOpen,
+    onClose,
+    onNavigate,
+    showRefs = true,
+  }: {
+    selection: InspectorSelection;
+    /// Forwarded to FileInfoBody as the "Open in this pane" handler.
+    /// Tag bodies don't take an open action.
+    onOpen?: () => void;
+    onClose?: () => void;
+    onNavigate?: (path: string) => void;
+    showRefs?: boolean;
+  } = $props();
+</script>
+
+{#if !selection}
+  <div class="empty">
+    <div class="empty-title">Details</div>
+    <div class="empty-hint">click a result to inspect</div>
+  </div>
+{:else if selection.kind === "file"}
+  <FileInfoBody
+    path={selection.path}
+    {onOpen}
+    {onClose}
+    {onNavigate}
+    {showRefs}
+  />
+{:else}
+  <TagInfoBody
+    nodeId={selection.nodeId}
+    label={selection.label}
+    kind={selection.kind}
+    {onClose}
+    {onNavigate}
+  />
+{/if}
+
+<style>
+  .empty {
+    text-align: center;
+    color: var(--text-secondary);
+    padding: 1.2rem 0.7rem 0.8rem 0.7rem;
+  }
+  .empty-title {
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 0.25rem;
+  }
+  .empty-hint {
+    font-style: italic;
+    font-size: 14px;
+    opacity: 0.85;
+  }
+</style>

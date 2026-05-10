@@ -505,7 +505,10 @@ export const indexStatus = $state<{ value: IndexStatus | null }>({
 /// Open/closed state of the content-search command palette
 /// (`SearchPanel.svelte`). Toggled by Cmd/Ctrl+K and by the
 /// search button in the toolbar.
-export const searchPanel = $state<{ open: boolean }>({ open: false });
+export const searchPanel = $state<{ open: boolean; inspectorOpen: boolean }>({
+  open: false,
+  inspectorOpen: false,
+});
 
 /// Per-file assistant conversation state. Keyed by the file's
 /// drive-relative path. The conversation persists across
