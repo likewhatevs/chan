@@ -152,23 +152,28 @@ chan:
   provider: google
   imported_at: 2026-05-10T12:34:56Z
   frontmatter_version: 1
-contact:
-  display_name: Jane Q. Doe
-  given_name: Jane
-  family_name: Doe
-  emails:
-    - { value: jane@example.com, label: work }
-  phones:
-    - { value: "+1-555-0100", label: mobile }
-  organizations:
-    - { name: Acme Corp, title: Engineer }
-  labels: [Friends, Work]
 ---
 
 # Jane Q. Doe
 
-Notes from the CSV "Notes" column go here verbatim.
+- **Email**: jane@example.com (work)
+- **Phone**: +1-555-0100 (mobile)
+- **Org**: Acme Corp - Engineer
+- **Labels**: Friends, Work
+
+Notes from the CSV "Notes" column go here, with markdown specials
+(brackets, asterisks, leading `#`) escaped so they don't inject
+graph edges or extra headings.
 ```
+
+Frontmatter holds only the chan-internal classifier so a chan
+editor with no frontmatter renderer shows a friendly note rather
+than ten lines of YAML. Contact data lives as bullet items in the
+body. The `chan.kind: contact` key is the sole signal downstream
+consumers (graph builder, editor `@` picker, `Drive::contacts`)
+use to classify a file as a contact; it is path-independent, so a
+hand-rolled `.md` with the same frontmatter dropped into any
+folder is discovered the same way.
 
 Round-trip rule: chan never rewrites a contact file after import.
 The file is fully user-owned the moment it lands. Re-import with

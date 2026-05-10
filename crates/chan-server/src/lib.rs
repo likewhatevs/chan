@@ -70,6 +70,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
+use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
@@ -645,7 +646,15 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/answers", post(api_post_answer))
         .route("/api/attachments", post(api_post_attachment))
         .route("/api/contacts", get(api_get_contacts))
-        .route("/api/contacts/import", post(api_post_contacts_import))
+        // Google Contacts CSV exports run a few hundred KB for normal
+        // address books and into the low MB for power users. axum's
+        // 2 MB default would silently 413 the larger ones; cap at
+        // 32 MiB so we cover the realistic ceiling without inviting
+        // accidental DoS via huge uploads.
+        .route(
+            "/api/contacts/import",
+            post(api_post_contacts_import).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
+        )
         .route("/api/storage/reset", post(api_storage_reset))
         .route("/api/health", get(api_health))
         .route("/ws", get(ws_upgrade));

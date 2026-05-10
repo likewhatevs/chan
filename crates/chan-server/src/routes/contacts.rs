@@ -1,7 +1,7 @@
 //! Contact routes:
 //!
-//!   POST /api/contacts/import — multipart import of a contact CSV.
-//!   GET  /api/contacts        — list (and filter) contact notes.
+//!   POST /api/contacts/import : multipart import of a contact CSV.
+//!   GET  /api/contacts        : list (and filter) contact notes.
 //!
 //! The list route powers the editor `@` picker: caller passes an
 //! optional `?q=` substring; we case-insensitive-match against
@@ -195,15 +195,31 @@ pub async fn api_post_contacts_import(
         Err(e) => return err_from(&e),
     };
 
-    // Tell the watcher these paths were our own writes so the
-    // editor doesn't see a flood of "external edit" events.
+    // Tell the watcher these paths were our own writes so the editor
+    // doesn't see a flood of "external edit" events, and collect them
+    // for an immediate index pass. Without the inline index call, the
+    // watcher's 1 s debounce leaves a visible lag between import and
+    // the contact showing up in the @ picker.
+    let mut to_index: Vec<String> = Vec::new();
     for o in &summary.outcomes {
         match o {
             ImportOutcome::Wrote { path } | ImportOutcome::Overwrote { path } => {
                 state.self_writes.note(path);
+                to_index.push(path.clone());
             }
             _ => {}
         }
+    }
+    if !to_index.is_empty() {
+        let drive = state.drive();
+        let _ = tokio::task::spawn_blocking(move || {
+            for p in &to_index {
+                if let Err(e) = drive.index_file(p) {
+                    tracing::warn!(path = %p, error = %e, "contacts: post-import index_file failed");
+                }
+            }
+        })
+        .await;
     }
 
     let mut wrote = Vec::new();

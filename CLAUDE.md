@@ -26,12 +26,12 @@ crates/
                 routes; uses chan-llm for assistant routes. Per-area
                 handlers live in src/routes/{drive, files, search,
                 graph, llm, sessions, attachments, storage,
-                preferences, build_info, ws, health}.rs; lib.rs holds
-                ServeConfig + build_app + serve + serve_via_tunnel +
-                router(). Top-level modules: auth, bus, cli_resolve,
-                config, embed_seed, error, indexer, mcp_bridge,
-                preferences, qr, self_writes, signal, state,
-                static_assets, store, util.
+                preferences, contacts, build_info, ws, health}.rs;
+                lib.rs holds ServeConfig + build_app + serve +
+                serve_via_tunnel + router(). Top-level modules:
+                auth, bus, cli_resolve, config, embed_seed, error,
+                indexer, mcp_bridge, preferences, qr, self_writes,
+                signal, state, static_assets, store, util.
   fetch-models  build helper. Pre-fetches the BGE-small embedding
                 model into chan-server/resources/ so release builds
                 bundle it. Run via `make models`; not invoked by

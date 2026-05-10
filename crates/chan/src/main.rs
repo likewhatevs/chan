@@ -967,8 +967,9 @@ fn cmd_contacts_import_csv(
         let mut wrote = 0usize;
         let mut overwrote = 0usize;
         let mut skipped = 0usize;
+        let on_disk = |p: &str| drive.exists(p);
         for c in &contacts {
-            let path = slug_for(c, &dir_norm, &mut taken, &mut unnamed);
+            let path = slug_for(c, &dir_norm, &mut taken, &mut unnamed, &on_disk);
             let exists = drive.exists(&path);
             if exists && !overwrite {
                 println!("WOULD SKIP      {path}  (exists)");
