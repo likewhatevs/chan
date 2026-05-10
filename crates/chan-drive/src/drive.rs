@@ -608,6 +608,26 @@ impl Drive {
         crate::blob::clear(&self.paths.assistant)
     }
 
+    /// Write one markdown note per `Contact` into `dir` (drive-
+    /// relative; created if missing). Each note carries a
+    /// `chan.kind: contact` frontmatter so downstream consumers
+    /// (graph builder, editor `@` picker) can classify it without a
+    /// separate index. Path collisions are handled per `opts`:
+    /// either skipped or overwritten.
+    ///
+    /// All writes go through `write_text`, so the path sandbox,
+    /// editable-text gate, and atomic-rename rules apply per file.
+    /// One bad contact does not abort the batch; per-file errors
+    /// land in the returned `ImportSummary` as `Failed`.
+    pub fn import_contacts(
+        &self,
+        dir: &str,
+        contacts: Vec<crate::contacts::Contact>,
+        opts: crate::contacts::ImportOpts,
+    ) -> Result<crate::contacts::ImportSummary> {
+        crate::contacts::import::run(self, dir, contacts, opts)
+    }
+
     pub fn rename(&self, from: &str, to: &str) -> Result<()> {
         let from_rel = self.rel(from)?;
         let to_rel = self.rel(to)?;

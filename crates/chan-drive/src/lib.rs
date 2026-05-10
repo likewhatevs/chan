@@ -22,6 +22,7 @@
 //   - Editor preferences (fonts, theme). App-level concern.
 
 mod blob;
+pub mod contacts;
 pub mod drive;
 pub mod error;
 pub mod fs_ops;
@@ -35,6 +36,10 @@ pub mod registry;
 pub mod trash;
 pub mod watch;
 
+pub use contacts::{
+    Contact, EmailAddress, ImportCounts, ImportOpts, ImportOutcome, ImportSummary, Organization,
+    PhoneNumber, ProviderKind,
+};
 pub use drive::{
     DirEntry, Drive, FileStat, ResolvedLink, SearchOpts, TreeEntry, BYTES_WRITE_LIMIT,
     TEXT_WRITE_LIMIT,

@@ -50,6 +50,8 @@ pub enum ChanError {
     Graph(String),
     #[error("watch error: {0}")]
     Watch(String),
+    #[error("contacts error: {0}")]
+    Contacts(String),
     #[error("trash entry not found: {0}")]
     TrashEntryNotFound(String),
     #[error("trash entry corrupt ({id}): {message}")]

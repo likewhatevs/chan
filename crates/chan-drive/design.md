@@ -312,6 +312,43 @@ Filter chain in `watch::dispatch` short-circuits both `.chan/`
 and `.git/` subtrees. chan-drive never writes inside the user's
 drive directory, so any `.chan/` activity is foreign noise.
 
+### Contacts
+
+Imports a third-party contact dump (Google Contacts CSV today,
+vCard / Outlook later) as one markdown note per contact. The
+notes carry a `chan.kind: contact` frontmatter so downstream
+consumers (graph builder, editor `@` picker) classify them
+without a separate index.
+
+Pure-function split:
+
+| File              | Responsibility                                |
+| ----------------- | --------------------------------------------- |
+| `provider.rs`     | `ProviderKind` enum (parser dispatch tag)     |
+| `google.rs`       | Google CSV parser; ` ::: ` multi-value form   |
+| `emit.rs`         | `Contact -> markdown`; hand-formatted YAML    |
+| `slug.rs`         | filename derivation, sanitization, collisions |
+| `import.rs`       | orchestrator: writes via `Drive::write_text`  |
+
+The orchestrator is exposed as `Drive::import_contacts` so the
+import flow inherits the path sandbox, editable-text gate, and
+atomic-rename rules. One bad contact does not abort a batch: per-
+file errors land in `ImportSummary` as `Failed` outcomes.
+
+Imported notes are user-owned the moment they land. chan does
+not re-edit them. Re-importing either skips existing files or
+overwrites them (per `ImportOpts.overwrite`); there is no merge.
+
+Filename strategy: derive from `display_name`, fall back to
+first email local-part, then `phone-<digits>`, then `unnamed-N`.
+Sanitize path separators / control chars / Windows-reserved
+chars to `_`. Trim to 120 bytes UTF-8-safely. On collision
+within a batch, append ` (2)`, ` (3)`, etc. before the `.md`.
+
+Non-goals: OAuth, API integration, two-way sync, on-disk cache.
+Contact notes ARE the source of truth; the existing markdown
+indexer covers read.
+
 ## 4. Public API surface
 
 ### Library
@@ -376,6 +413,11 @@ Drive::get_assistant(key: &str) -> Result<Option<Vec<u8>>>
 Drive::list_assistant() -> Result<Vec<String>>
 Drive::delete_assistant(key: &str) -> Result<()>
 Drive::clear_assistant() -> Result<()>
+
+Drive::import_contacts(dir: &str,
+    contacts: Vec<Contact>,
+    opts: ImportOpts,
+) -> Result<ImportSummary>
 ```
 
 `BYTES_WRITE_LIMIT` and `TEXT_WRITE_LIMIT` cap a single write
@@ -415,6 +457,26 @@ Drive::watch(cb: Arc<dyn WatchCallback>) -> Result<WatchHandle>
 trait WatchCallback: Send + Sync {
     fn on_event(&self, event: WatchEvent);
 }
+```
+
+### Contacts
+
+```rust
+contacts::google::parse_google_csv(rdr: impl Read) -> Result<Vec<Contact>>
+contacts::emit::render_markdown(c: &Contact, ctx: &EmitContext) -> String
+contacts::slug::slug_for(c: &Contact, dir: &str,
+    taken: &mut HashSet<String>,
+    unnamed_counter: &mut usize,
+) -> String
+
+ProviderKind::{Google}
+ProviderKind::as_str(self) -> &'static str
+ProviderKind::parse(s: &str) -> Option<Self>
+
+ImportOpts { overwrite: bool }
+ImportOutcome::{Wrote, Overwrote, Skipped, Failed}
+ImportSummary { outcomes: Vec<ImportOutcome> }
+ImportSummary::counts(&self) -> ImportCounts
 ```
 
 ### Public types (selected)
