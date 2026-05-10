@@ -36,6 +36,7 @@
   import { formatMtime } from "../state/format";
   import ResizeHandle from "./ResizeHandle.svelte";
   import OverlayShell from "./OverlayShell.svelte";
+  import FileInfoBody from "./FileInfoBody.svelte";
 
   // cytoscape.use is idempotent across module reloads.
   cytoscape.use(fcose);
@@ -69,7 +70,14 @@
 
   // ---- types -------------------------------------------------------------
 
-  type EdgeKind = GraphViewEdge["kind"];
+  // The graph view only renders documents (files), images (also
+  // file nodes, split by extension at element-build time), and
+  // tags. Mention and date nodes/edges are filtered out at load.
+  // The link-index backend still produces them; see GH issue
+  // (chan-writer/chan) for the eventual indexing-side cleanup.
+  type RenderedEdgeKind = "link" | "tag";
+  type RenderedEdge = GraphViewEdge & { kind: RenderedEdgeKind };
+  type RenderedNode = Extract<GraphViewNode, { kind: "file" | "tag" }>;
 
   // ---- state -------------------------------------------------------------
 
@@ -86,16 +94,14 @@
   /// identity, so the effect only acts on real transitions.
   let lastScopeId: string | null = null;
 
-  let nodes: GraphViewNode[] = $state([]);
-  let edges: GraphViewEdge[] = $state([]);
+  let nodes: RenderedNode[] = $state([]);
+  let edges: RenderedEdge[] = $state([]);
   let loading = $state(true);
   let error: string | null = $state(null);
 
-  let show = $state<Record<EdgeKind, boolean>>({
+  let show = $state<Record<RenderedEdgeKind, boolean>>({
     link: true,
     tag: true,
-    mention: true,
-    date: true,
   });
 
   // Currently inspected node, surfaced in the side details panel.
@@ -111,9 +117,9 @@
   //   (1) the SCOPE picker in the header (file / group / drive).
   //       For file and group, BFS out from the seed paths up to
   //       graphOverlay.depth hops. Drive = no filter.
-  //   (2) the per-edge-kind chips (link / tag / mention / date).
-  //       Edges whose kind is filtered out are dropped, and any
-  //       non-file node attached only via filtered edges drops too.
+  //   (2) the per-edge-kind chips (link / tag). Edges whose kind
+  //       is filtered out are dropped, and any non-file node
+  //       attached only via filtered edges drops too.
   //
   // (1) runs first so the BFS sees the full graph (depth = "graph
   // hops away"). (2) is a render-time filter that can change without
@@ -195,7 +201,7 @@
   });
 
   const counts = $derived.by(() => {
-    const c: Record<EdgeKind, number> = { link: 0, tag: 0, mention: 0, date: 0 };
+    const c: Record<RenderedEdgeKind, number> = { link: 0, tag: 0 };
     for (const e of edges) c[e.kind]++;
     return c;
   });
@@ -212,21 +218,19 @@
     return m;
   });
 
-  const selectedNode = $derived<GraphViewNode | null>(
+  const selectedNode = $derived<RenderedNode | null>(
     selectedId ? (nodeById.get(selectedId) ?? null) : null,
   );
 
   /// Edges where `selectedId` is an endpoint, grouped for the side
-  /// panel. For a file node this gives us its outgoing references
-  /// per kind; for a tag/mention/date node, `documents` lists every
-  /// file that references it.
+  /// panel. For a file node this gives us its outgoing tag/link
+  /// references; for a tag node, `documents` lists every file that
+  /// references it.
   const selectionEdges = $derived.by(() => {
     const out = {
-      tags: [] as GraphViewNode[],
-      mentions: [] as GraphViewNode[],
-      dates: [] as GraphViewNode[],
-      links: [] as GraphViewNode[],
-      documents: [] as Extract<GraphViewNode, { kind: "file" }>[],
+      tags: [] as RenderedNode[],
+      links: [] as RenderedNode[],
+      documents: [] as Extract<RenderedNode, { kind: "file" }>[],
     };
     if (!selectedId) return out;
     const sel = nodeById.get(selectedId);
@@ -236,10 +240,8 @@
         const target = nodeById.get(e.target);
         if (!target) continue;
         if (e.kind === "tag") out.tags.push(target);
-        else if (e.kind === "mention") out.mentions.push(target);
-        else if (e.kind === "date") out.dates.push(target);
         else if (e.kind === "link") out.links.push(target);
-      } else if (sel.kind !== "file" && e.target === selectedId) {
+      } else if (sel.kind === "tag" && e.target === selectedId) {
         const source = nodeById.get(e.source);
         if (source && source.kind === "file") out.documents.push(source);
       }
@@ -262,7 +264,7 @@
     }
   }
 
-  function selectFromList(n: GraphViewNode): void {
+  function selectFromList(n: RenderedNode): void {
     selectedId = n.id;
     if (cy) {
       cy.$(":selected").unselect();
@@ -276,18 +278,15 @@
   /// Used by the inspector's kind chip background. Cytoscape itself
   /// resolves these via getComputedStyle at buildCytoscape time, so
   /// theme changes propagate next reload.
-  const NODE_COLORS: Record<GraphViewNode["kind"], string> = {
-    file: "var(--link)",
-    tag: "var(--accent)",
-    mention: "var(--warn-text)",
-    date: "var(--info-text)",
+  const NODE_COLORS: Record<"doc" | "img" | "tag", string> = {
+    doc: "var(--g-doc)",
+    img: "var(--g-img)",
+    tag: "var(--g-tag)",
   };
 
-  const EDGE_COLORS: Record<EdgeKind, string> = {
+  const EDGE_COLORS: Record<RenderedEdgeKind, string> = {
     link: "var(--text-secondary)",
-    tag: "var(--accent)",
-    mention: "var(--warn-text)",
-    date: "var(--info-text)",
+    tag: "var(--g-tag)",
   };
 
   // ---- cytoscape glue ----------------------------------------------------
@@ -311,10 +310,13 @@
     const cs = getComputedStyle(host);
     const v = (n: string, fb: string) => cs.getPropertyValue(n).trim() || fb;
     return {
-      link: v("--link", "#4a90e2"),
-      accent: v("--accent", "#9b6dff"),
-      warn: v("--warn-text", "#e0a93b"),
-      info: v("--info-text", "#7eaecc"),
+      // Three node kinds in the graph: documents (orange file
+      // rectangles), images (purple circles), tags (green
+      // hashtag labels). Mention/date are filtered upstream.
+      doc: v("--g-doc", "#ff8a3d"),
+      img: v("--g-img", "#b07dff"),
+      tag: v("--g-tag", "#6cd07a"),
+      accent: v("--accent", "#ff7a3b"),
       text: v("--text", "#e8e8e8"),
       textSec: v("--text-secondary", "#9a9a9a"),
       bg: v("--bg", "#1e1e1e"),
@@ -347,39 +349,44 @@
           "min-zoomed-font-size": 8,
         },
       },
+      // Documents: small orange rounded rectangle, label below.
       {
-        selector: 'node[kind = "file"]',
+        selector: 'node[kind = "doc"]',
         style: {
-          "background-color": c.link,
+          shape: "round-rectangle",
+          "background-color": c.doc,
           width: 14,
-          height: 14,
+          height: 18,
         },
       },
+      // Images: small purple circle, label below.
+      {
+        selector: 'node[kind = "img"]',
+        style: {
+          shape: "ellipse",
+          "background-color": c.img,
+          width: 10,
+          height: 10,
+        },
+      },
+      // Tags: green hashtag text only — no fill, label centered
+      // on the node so the "#name" string IS the visual.
       {
         selector: 'node[kind = "tag"]',
         style: {
-          "background-color": c.accent,
-          width: 8,
-          height: 8,
-          "font-size": 10,
-        },
-      },
-      {
-        selector: 'node[kind = "mention"]',
-        style: {
-          "background-color": c.warn,
-          width: 8,
-          height: 8,
-          "font-size": 10,
-        },
-      },
-      {
-        selector: 'node[kind = "date"]',
-        style: {
-          "background-color": c.info,
-          width: 8,
-          height: 8,
-          "font-size": 10,
+          shape: "rectangle",
+          "background-opacity": 0,
+          "border-width": 0,
+          width: 22,
+          height: 14,
+          color: c.tag,
+          "font-size": 12,
+          "font-weight": 600,
+          "text-valign": "center",
+          "text-halign": "center",
+          "text-margin-y": 0,
+          "text-outline-color": c.bg,
+          "text-outline-width": 2,
         },
       },
       {
@@ -408,10 +415,10 @@
       {
         selector: "node:selected",
         style: {
-          "border-color": c.accent,
+          "border-color": c.doc,
           "border-width": 3,
-          "overlay-color": c.accent,
-          "overlay-opacity": 0.12,
+          "overlay-color": c.doc,
+          "overlay-opacity": 0.15,
           "overlay-padding": 2,
         },
       },
@@ -420,28 +427,20 @@
         style: {
           "curve-style": "bezier",
           "line-cap": "round",
-          opacity: 0.7,
+          opacity: 0.15,
         },
       },
       {
         selector: 'edge[kind = "link"]',
-        style: { "line-color": c.textSec, width: 1.6 },
+        style: { "line-color": c.text, width: 0.7 },
       },
       {
         selector: 'edge[kind = "tag"]',
-        style: { "line-color": c.accent, width: 1.1 },
-      },
-      {
-        selector: 'edge[kind = "mention"]',
-        style: { "line-color": c.warn, width: 1.1 },
-      },
-      {
-        selector: 'edge[kind = "date"]',
-        style: { "line-color": c.info, width: 1.1 },
+        style: { "line-color": c.tag, width: 1.0 },
       },
       {
         selector: "edge[?broken]",
-        style: { "line-style": "dashed", opacity: 0.45 },
+        style: { "line-style": "dashed", opacity: 0.11 },
       },
       {
         selector: ".hidden",
@@ -515,7 +514,13 @@
       animate: true,
       fit: false,
       randomize: false,
-      infinite: false,
+      // infinite=true keeps the simulation + cytoscape grab/free
+      // handlers alive after the initial settle. Without it the
+      // layout calls end() once progress hits 1 and tears its
+      // event handlers down — drags after that point do nothing.
+      // Pair this with the free/unlock listener below that drops
+      // alphaTarget back to 0 so the graph still cools.
+      infinite: true,
       ungrabifyWhileSimulating: false,
       fixedAfterDragging: true,
       alpha: 1,
@@ -523,16 +528,23 @@
       alphaDecay: 1 - Math.pow(0.05, 1 / 150),
       alphaTarget: 0,
       velocityDecay: 0.55,
-      collideRadius: (n: cytoscape.NodeSingular) =>
-        n.data("kind") === "file" ? 18 : 10,
-      collideStrength: 0.9,
+      // cytoscape-d3-force merges each cy element's data() into
+      // the d3-force node/edge object, so accessors receive the
+      // raw fields (no .data() method on these args).
+      collideRadius: (n: { kind?: string }) => {
+        if (n.kind === "doc") return 26;
+        if (n.kind === "tag") return 18;
+        return 14;
+      },
+      collideStrength: 0.95,
       collideIterations: 2,
-      manyBodyStrength: -22,
-      linkDistance: (e: cytoscape.EdgeSingular) =>
-        e.data("kind") === "link" ? 70 : 40,
-      linkStrength: 0.6,
-      xStrength: 0.04,
-      yStrength: 0.04,
+      manyBodyStrength: -90,
+      linkDistance: (e: { kind?: string }) =>
+        e.kind === "link" ? 120 : 70,
+      linkStrength: 0.55,
+      linkId: (n: { id: string }) => n.id,
+      xStrength: 0.05,
+      yStrength: 0.05,
     } as cytoscape.LayoutOptions;
   }
 
@@ -555,6 +567,13 @@
     return ids;
   }
 
+  /// Files split into "doc" vs "img" by extension at element-build
+  /// time; the GraphView type only knows "file". Anything not a
+  /// recognised image extension counts as a document.
+  function classifyFile(path: string): "doc" | "img" {
+    return /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(path) ? "img" : "doc";
+  }
+
   function buildElements(g: GraphView): {
     elements: ElementDefinition[];
     dropped: number;
@@ -565,7 +584,7 @@
     for (const n of g.nodes) {
       const data: Record<string, unknown> = {
         id: n.id,
-        kind: n.kind,
+        kind: n.kind === "file" ? classifyFile(n.path) : n.kind,
         label: n.label,
       };
       if (n.kind === "file") {
@@ -664,6 +683,19 @@
         }
         forceLayout = cy.layout(d3ForceOptions());
         forceLayout.run();
+
+        // cytoscape-d3-force's built-in grab/free handlers bump
+        // alphaTarget to ~0.33 and never restore it to 0 — so
+        // after a single drag the simulation runs forever. Add
+        // our own free/unlock handler (registered after the
+        // built-in's, so it executes second) that drops the
+        // target back, letting alpha decay to alphaMin and the
+        // graph actually settle.
+        cy.nodes().on("free unlock", () => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const sim = (forceLayout as any)?.simulation;
+          if (sim) sim.alphaTarget(0);
+        });
       });
     });
     layout.run();
@@ -770,9 +802,22 @@
     error = null;
     try {
       const g: GraphView = await api.graph();
-      nodes = g.nodes;
-      edges = g.edges;
-      await buildCytoscapeWhenSized(g);
+      // Drop mention/date nodes and their edges. The link-index
+      // backend still produces them; the eventual cleanup is
+      // tracked as a separate issue. Filtering here keeps the
+      // rest of the component working over a clean dataset.
+      const renderedNodes: RenderedNode[] = g.nodes.filter(
+        (n): n is RenderedNode => n.kind === "file" || n.kind === "tag",
+      );
+      const renderedEdges: RenderedEdge[] = g.edges.filter(
+        (e): e is RenderedEdge => e.kind === "link" || e.kind === "tag",
+      );
+      nodes = renderedNodes;
+      edges = renderedEdges;
+      await buildCytoscapeWhenSized({
+        nodes: renderedNodes,
+        edges: renderedEdges,
+      });
       // Apply any pending selection handed in by openGraphAtNode.
       // Done after the cytoscape build so :selected can attach to
       // an actual element. Opening the side panel makes the
@@ -887,7 +932,7 @@
       </label>
     {/if}
     <div class="filters">
-      {#each ["link", "tag", "mention", "date"] as const as kind (kind)}
+      {#each ["link", "tag"] as const as kind (kind)}
         <label class="chip" class:on={show[kind]}>
           <input type="checkbox" bind:checked={show[kind]} />
           <span class="dot" style="background:{EDGE_COLORS[kind]}"></span>
@@ -934,9 +979,24 @@
         <div class="empty-title">Details</div>
         <div class="empty-hint">click a node to inspect it</div>
       </div>
+    {:else if selectedNode.kind === "file" && classifyFile(selectedNode.path) === "img"}
+      <!-- Image inspector: shared with the file browser. Shows a
+           preview thumbnail and the docs that link to the image
+           (backlinks). No "Open in this pane" button — images
+           don't open in the editor. -->
+      <FileInfoBody
+        path={selectedNode.path}
+        showRefs
+        onClose={() => (selectedId = null)}
+        onNavigate={(p) => {
+          void openInActivePane(p);
+          close();
+        }}
+      />
     {:else if selectedNode.kind === "file"}
+      {@const fileKind = classifyFile(selectedNode.path)}
       <header class="head">
-        <span class="kind-chip" style="background: {NODE_COLORS.file}">file</span>
+        <span class="kind-chip" style="background: {NODE_COLORS[fileKind]}">{fileKind === "img" ? "image" : "doc"}</span>
         <button class="close" onclick={() => (selectedId = null)}>×</button>
       </header>
       <h3 class="title" title={selectedNode.path}>{selectedNode.label}</h3>
@@ -953,10 +1013,6 @@
           <span class="v">{meta ? formatMtime(meta.mtime) : "?"}</span>
           <span class="k">tags</span>
           <span class="v">{selectionEdges.tags.length}</span>
-          <span class="k">mentions</span>
-          <span class="v">{selectionEdges.mentions.length}</span>
-          <span class="k">dates</span>
-          <span class="v">{selectionEdges.dates.length}</span>
           <span class="k">links out</span>
           <span class="v">{selectionEdges.links.length}</span>
         </div>
@@ -969,26 +1025,6 @@
           <ul>
             {#each selectionEdges.tags as t (t.id)}
               <li><button class="ref tag" onclick={() => selectFromList(t)}>{t.label}</button></li>
-            {/each}
-          </ul>
-        </section>
-      {/if}
-      {#if selectionEdges.mentions.length > 0}
-        <section>
-          <h4>Mentions</h4>
-          <ul>
-            {#each selectionEdges.mentions as m (m.id)}
-              <li><button class="ref mention" onclick={() => selectFromList(m)}>{m.label}</button></li>
-            {/each}
-          </ul>
-        </section>
-      {/if}
-      {#if selectionEdges.dates.length > 0}
-        <section>
-          <h4>Dates</h4>
-          <ul>
-            {#each selectionEdges.dates as d (d.id)}
-              <li><button class="ref date" onclick={() => selectFromList(d)}>{d.label}</button></li>
             {/each}
           </ul>
         </section>
@@ -1341,10 +1377,8 @@
     border-color: var(--btn-hover);
     background: var(--hover-bg);
   }
-  .details .ref.tag { color: var(--accent); }
-  .details .ref.mention { color: var(--warn-text); }
-  .details .ref.date { color: var(--info-text); }
-  .details .ref.file { color: var(--link); }
+  .details .ref.tag { color: var(--g-tag); }
+  .details .ref.file { color: var(--g-doc); }
   .details li.doc-row {
     display: flex;
     align-items: center;

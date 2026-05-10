@@ -19,9 +19,9 @@
   // re-runs when the selected path changes ($derived dependency
   // tracking does the gating).
 
-  import { api } from "../api/client";
+  import { api, withTokenQuery } from "../api/client";
   import type { GraphEdge } from "../api/types";
-  import { isEditableText } from "../state/fileTypes";
+  import { isEditableText, isImage } from "../state/fileTypes";
   import { basename, formatMtime, formatSize } from "../state/format";
   import {
     ensureGraphLoaded,
@@ -161,10 +161,11 @@
   </div>
 {:else}
   {@const editable = isEditableText(entry.path)}
+  {@const image = isImage(entry.path)}
   <div class="info">
     <header class="head">
-      <span class="kind-chip file" class:view-only={!editable}>
-        {editable ? "file" : "view-only"}
+      <span class="kind-chip file" class:image class:view-only={!editable && !image}>
+        {image ? "image" : editable ? "file" : "view-only"}
       </span>
       {#if onClose}
         <button class="close" onclick={onClose} aria-label="clear selection">×</button>
@@ -172,12 +173,26 @@
     </header>
     <h3 class="title">{basename(entry.path)}</h3>
     <div class="path mono">{entry.path}</div>
+    {#if image}
+      <!-- Inline preview. Bytes come from /api/files with the
+           per-launch bearer token appended as a query param so the
+           browser's <img> can fetch without a custom Authorization
+           header. Object-fit contains so portrait + landscape both
+           sit cleanly in the fixed-height frame. -->
+      <div class="image-preview">
+        <img
+          src={withTokenQuery(`/api/files/${encodeURIComponent(entry.path).replace(/%2F/g, "/")}`)}
+          alt={basename(entry.path)}
+          loading="lazy"
+        />
+      </div>
+    {/if}
     <div class="meta-grid">
       <span class="k">size</span>
       <span class="v">{formatSize(entry.size)}</span>
       <span class="k">modified</span>
       <span class="v">{formatMtime(entry.mtime)}</span>
-      {#if showRefs}
+      {#if showRefs && !image}
         <span class="k">tags</span>
         <span class="v">{refs ? refs.tags.length : "…"}</span>
         <span class="k">mentions</span>
@@ -188,9 +203,12 @@
         <span class="v">{refs ? refs.links.length : "…"}</span>
         <span class="k">backlinks</span>
         <span class="v">{backlinksLoading ? "…" : backlinks.length}</span>
+      {:else if showRefs && image}
+        <span class="k">linked from</span>
+        <span class="v">{backlinksLoading ? "…" : backlinks.length}</span>
       {/if}
     </div>
-    {#if onOpen}
+    {#if onOpen && !image}
       {#if editable}
         <button class="open" onclick={onOpen}>Open in this pane</button>
       {:else}
@@ -331,7 +349,30 @@
   }
   .kind-chip.file { background: var(--link); }
   .kind-chip.file.view-only { background: var(--text-secondary); }
+  .kind-chip.file.image { background: var(--g-img); }
   .kind-chip.dir { background: var(--accent); }
+  /* Image preview frame: fixed max height, checkered fallback bg
+     (visible while bytes are loading or for images with alpha so
+     the panel doesn't show empty space). object-fit contain keeps
+     the natural aspect ratio so portraits and landscapes both fit. */
+  .image-preview {
+    margin: 0 0 0.6rem 0;
+    padding: 4px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    max-height: 220px;
+    overflow: hidden;
+  }
+  .image-preview img {
+    max-width: 100%;
+    max-height: 210px;
+    object-fit: contain;
+    display: block;
+  }
   .view-only-hint {
     color: var(--text-secondary);
     font-size: 14px;
@@ -432,7 +473,11 @@
   .ref.tag { color: var(--accent); }
   .ref.mention { color: var(--warn-text); }
   .ref.date { color: var(--info-text); }
-  .ref.file { color: var(--link); word-break: break-all; }
+  /* Backlinks / link targets: use the standard text color rather
+     than --link. The chip already reads as a clickable button
+     thanks to the surface + hover treatment, and the doc/file
+     name is the actual content — not a call-to-action. */
+  .ref.file { color: var(--text); word-break: break-all; }
   .ref.file.missing {
     color: var(--text-secondary);
     font-style: italic;

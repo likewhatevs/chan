@@ -359,6 +359,13 @@
        chan.app). Single source for the ensō tint; light/dark each
        get their own shade so the silhouette reads on both. */
     --assistant-accent: #e58c4d;
+    /* Graph palette: only doc / image / tag are rendered now,
+       matching the chan brand's warm orange primary plus a
+       hue-separated supporting pair (purple for images, green
+       for tag hashtag labels). */
+    --g-doc: #ff8a3d;
+    --g-img: #b07dff;
+    --g-tag: #6cd07a;
   }
   :global([data-theme="light"]) {
     --bg: #ffffff;
@@ -396,6 +403,12 @@
     --assistant-bubble-bg: #ececef;
     --assistant-user-bubble-bg: #cfe1fb;
     --assistant-accent: #c46a2a;
+    /* Light-mode graph palette: deeper, less saturated than dark
+       mode so the same node hues stay legible against light bg
+       without glaring. */
+    --g-doc: #c25a1f;
+    --g-img: #7a4cd8;
+    --g-tag: #2f9444;
   }
 
   :global(html), :global(body), :global(#app) {

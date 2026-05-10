@@ -9,8 +9,20 @@
 
 const EDITABLE_EXTENSIONS = new Set(["md", "txt"]);
 
+const IMAGE_EXTENSIONS = new Set([
+  "png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp",
+]);
+
 export function isEditableText(path: string): boolean {
   const dot = path.lastIndexOf(".");
   if (dot < 0 || dot === path.length - 1) return false;
   return EDITABLE_EXTENSIONS.has(path.slice(dot + 1).toLowerCase());
+}
+
+/// True for raster + svg images. Matches the set the editor's image
+/// picker accepts (image.ts) and the graph's file-vs-image classifier.
+export function isImage(path: string): boolean {
+  const dot = path.lastIndexOf(".");
+  if (dot < 0 || dot === path.length - 1) return false;
+  return IMAGE_EXTENSIONS.has(path.slice(dot + 1).toLowerCase());
 }
