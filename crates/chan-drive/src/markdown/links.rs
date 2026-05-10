@@ -89,14 +89,33 @@ fn standard_links(markdown: &str) -> Vec<Link> {
 
     for event in parser {
         match event {
-            Event::Start(Tag::Link { dest_url, .. }) => {
+            // `[label](dest)` and `![alt](src)` both contribute an
+            // edge from the source file to the target. Image embeds
+            // were previously skipped, so an inspector view of an
+            // image showed a misleading "0 backlinks" even when the
+            // image was embedded in N markdown files. Treating both
+            // events as the same link kind matches the wiki-side
+            // behavior (`![[img]]` already produced an edge because
+            // the wiki scanner ignores the leading `!`).
+            Event::Start(Tag::Link { dest_url, .. })
+            | Event::Start(Tag::Image { dest_url, .. }) => {
                 in_link = Some(dest_url.into_string());
                 current_label.clear();
             }
             Event::Text(t) if in_link.is_some() => current_label.push_str(&t),
             Event::Code(t) if in_link.is_some() => current_label.push_str(&t),
-            Event::End(TagEnd::Link) => {
+            Event::End(TagEnd::Link) | Event::End(TagEnd::Image) => {
                 if let Some(target) = in_link.take() {
+                    // Empty-target links/images (`[label]()`,
+                    // `![alt]()`) carry no graph signal; downstream
+                    // we'd build a ghost node with an empty id and
+                    // Cytoscape rejects those at render time.
+                    // Matches the wiki_links scanner which already
+                    // requires `!target.is_empty()`.
+                    if target.is_empty() {
+                        current_label.clear();
+                        continue;
+                    }
                     let label = if current_label.is_empty() {
                         None
                     } else {
@@ -177,6 +196,27 @@ mod tests {
         assert_eq!(links[0].target, "./index.md");
         assert_eq!(links[0].label.as_deref(), Some("home"));
         assert!(!links[0].wiki);
+    }
+
+    #[test]
+    fn standard_image_embed_extracted() {
+        // `![alt](src)` is a Tag::Image in pulldown-cmark and used to
+        // be silently dropped, leaving images with empty backlinks
+        // in the inspector. Treat it as a link so the graph picks up
+        // the image as an edge target.
+        let links = extract_links("see ![cat](images/cat.jpg) please");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "images/cat.jpg");
+        assert_eq!(links[0].label.as_deref(), Some("cat"));
+        assert!(!links[0].wiki);
+    }
+
+    #[test]
+    fn standard_link_and_image_both_collected() {
+        let links = extract_links("[home](./i.md) and ![pic](./p.jpg)");
+        assert_eq!(links.len(), 2);
+        let targets: Vec<&str> = links.iter().map(|l| l.target.as_str()).collect();
+        assert_eq!(targets, vec!["./i.md", "./p.jpg"]);
     }
 
     #[test]
