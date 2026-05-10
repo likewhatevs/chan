@@ -47,18 +47,15 @@ cap-tempfile = "3"
 r2d2 = "0.8"
 r2d2_sqlite = "0.25"
 
-# Pure-Rust extended-attribute access. Used by atomic_write to
-# preserve user xattrs (Finder tags on macOS, SELinux labels and
-# capabilities on Linux) across the tmpfile + rename dance.
-# Linux + macOS only; no-op shim on other platforms.
-[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd", target_os = "netbsd"))'.dependencies]
-xattr = "1"
-
 # Pure-Rust embedding stack. candle handles tensor math + transformer
 # kernels, tokenizers does HF WordPiece/BPE, hf-hub fetches the
 # config.json + tokenizer.json + model.safetensors trio on first use.
 # All optional + gated by the `embeddings` feature so iOS / minimal
 # builds can opt out via `--no-default-features` and still get BM25.
+# Keep these inside the unconditional [dependencies] block above any
+# `[target.cfg(...)]` section: the target-cfg table stays open until
+# the next header, so misplacing them would silently drop the deps
+# on excluded platforms and break `embeddings.rs`.
 candle-core = { version = "0.10", default-features = false, optional = true }
 candle-nn = { version = "0.10", default-features = false, optional = true }
 candle-transformers = { version = "0.10", default-features = false, optional = true }
@@ -70,6 +67,13 @@ tokenizers = { version = "0.21", default-features = false, optional = true, feat
 # rustls-tls keeps the TLS stack pure Rust; default-tls would pull
 # native-tls + reqwest.
 hf-hub = { version = "0.4", default-features = false, optional = true, features = ["ureq", "rustls-tls"] }
+
+# Pure-Rust extended-attribute access. Used by atomic_write to
+# preserve user xattrs (Finder tags on macOS, SELinux labels and
+# capabilities on Linux) across the tmpfile + rename dance.
+# Linux + macOS only; no-op shim on other platforms.
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd", target_os = "netbsd"))'.dependencies]
+xattr = "1"
 
 [dev-dependencies]
 tempfile = "3"
