@@ -19,7 +19,7 @@
 
   import { onDestroy, onMount } from "svelte";
   import { Editor } from "@tiptap/core";
-  import { TextSelection } from "@tiptap/pm/state";
+  import { NodeSelection, TextSelection } from "@tiptap/pm/state";
   import StarterKit from "@tiptap/starter-kit";
   import TaskList from "@tiptap/extension-task-list";
   import TaskItem from "@tiptap/extension-task-item";
@@ -429,6 +429,7 @@
         syncTagBubble();
         syncContactBubble();
         updateCursorDecorations();
+        maybeOpenAtomEditAtSelection();
         onSelectionChange?.();
       },
       onSelectionUpdate: () => {
@@ -436,6 +437,7 @@
         syncTagBubble();
         syncContactBubble();
         updateCursorDecorations();
+        maybeOpenAtomEditAtSelection();
         onSelectionChange?.();
       },
     });
@@ -1334,6 +1336,41 @@
   }
 
   // ---- date edit-existing flow ----------------------------------------
+
+  /// When the caret arrives on an editable atom (date pill, wiki
+  /// link) via arrow-key NodeSelection, open the corresponding
+  /// edit popover. Mirrors the click path; the one-shot guard
+  /// `lastAtomEditPos` prevents the dismiss-refocus loop from
+  /// re-opening for the same atom. Clears the guard as soon as the
+  /// selection moves off any atom so a later re-entry reopens.
+  function maybeOpenAtomEditAtSelection(): void {
+    if (!editor) return;
+    const sel = editor.state.selection;
+    if (!(sel instanceof NodeSelection)) {
+      lastAtomEditPos = null;
+      return;
+    }
+    const node = sel.node;
+    const name = node.type.name;
+    if (name !== "date" && name !== "wikiLink") {
+      lastAtomEditPos = null;
+      return;
+    }
+    if (lastAtomEditPos === sel.from) return;
+    lastAtomEditPos = sel.from;
+    const dom = editor.view.nodeDOM(sel.from);
+    if (!(dom instanceof HTMLElement)) return;
+    if (name === "date") {
+      openDateEditAt(sel.from, dom);
+      return;
+    }
+    // Wiki: record entry direction so the dismiss path lands the
+    // caret on the correct side of the restored atom (continuing
+    // the user's arrow motion). Left-arrow entry means the user
+    // came from the right side; restore caret BEFORE the atom.
+    wikiEditEntryDir = lastHorizontalArrow === "left" ? "before" : "after";
+    enterWikiEditAt(dom);
+  }
 
   /// Open the calendar pre-filled with the date atom at `pos`.
   /// Shared by both the click handler and the NodeSelection
