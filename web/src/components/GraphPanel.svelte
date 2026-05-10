@@ -16,9 +16,11 @@
 
   import { onDestroy, onMount } from "svelte";
   import cytoscape from "cytoscape";
-  import type { Core, ElementDefinition, EventObject } from "cytoscape";
+  import type { Core, ElementDefinition, EventObject, Layouts } from "cytoscape";
   // @ts-expect-error fcose ships no .d.ts; the layout name is enough
   import fcose from "cytoscape-fcose";
+  // @ts-expect-error cytoscape-d3-force ships no .d.ts
+  import d3Force from "cytoscape-d3-force";
 
   import { api } from "../api/client";
   import type { GraphView, GraphViewEdge, GraphViewNode } from "../api/types";
@@ -37,6 +39,7 @@
 
   // cytoscape.use is idempotent across module reloads.
   cytoscape.use(fcose);
+  cytoscape.use(d3Force);
 
   // Visibility of the details aside lives on the overlay; per-window
   // session, not persisted to disk. Defaults closed.
@@ -73,6 +76,7 @@
   let containerEl: HTMLDivElement | undefined = $state();
   let cy: Core | null = null;
   let resizeObs: ResizeObserver | null = null;
+  let forceLayout: Layouts | null = null;
 
   /// Gates the currentScope $effect: scopeOptions re-derives any
   /// time the file tree updates, producing a fresh array (and thus
@@ -501,6 +505,37 @@
     } as cytoscape.LayoutOptions;
   }
 
+  /// d3-force options. Runs AFTER fcose seeds positions, so
+  /// `randomize: false` keeps the cluster layout fcose produced and
+  /// just relaxes overlaps + adds the live "jostle" feel: drag a
+  /// node, neighbours nudge out of the way, everything settles.
+  function d3ForceOptions() {
+    return {
+      name: "d3-force",
+      animate: true,
+      fit: false,
+      randomize: false,
+      infinite: false,
+      ungrabifyWhileSimulating: false,
+      fixedAfterDragging: true,
+      alpha: 1,
+      alphaMin: 0.05,
+      alphaDecay: 1 - Math.pow(0.05, 1 / 150),
+      alphaTarget: 0,
+      velocityDecay: 0.55,
+      collideRadius: (n: cytoscape.NodeSingular) =>
+        n.data("kind") === "file" ? 18 : 10,
+      collideStrength: 0.9,
+      collideIterations: 2,
+      manyBodyStrength: -22,
+      linkDistance: (e: cytoscape.EdgeSingular) =>
+        e.data("kind") === "link" ? 70 : 40,
+      linkStrength: 0.6,
+      xStrength: 0.04,
+      yStrength: 0.04,
+    } as cytoscape.LayoutOptions;
+  }
+
   /// File-node ids matching the current scope's seed path(s). Used
   /// to pin the focal-anchor inside the fcose run. Returns an empty
   /// array for drive / global scope (no anchor wanted).
@@ -562,6 +597,8 @@
 
   function buildCytoscape(g: GraphView): void {
     if (!containerEl) return;
+    forceLayout?.stop();
+    forceLayout = null;
     cy?.destroy();
     const { elements, dropped } = buildElements(g);
     if (dropped > 0) {
@@ -625,6 +662,8 @@
             ele.lock();
           }
         }
+        forceLayout = cy.layout(d3ForceOptions());
+        forceLayout.run();
       });
     });
     layout.run();
@@ -702,6 +741,8 @@
       // the next open can build against the freshly-mounted DOM.
       resizeObs?.disconnect();
       resizeObs = null;
+      forceLayout?.stop();
+      forceLayout = null;
       cy?.destroy();
       cy = null;
       lastScopeId = null;
@@ -718,6 +759,8 @@
 
   onDestroy(() => {
     resizeObs?.disconnect();
+    forceLayout?.stop();
+    forceLayout = null;
     cy?.destroy();
     cy = null;
   });
