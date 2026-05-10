@@ -86,6 +86,13 @@
   let resizeObs: ResizeObserver | null = null;
   let forceLayout: Layouts | null = null;
 
+  /// Half-width of the box that the d3-force `randomize` scatters
+  /// visible nodes into at the start of every rebuild. 300 = a
+  /// 600x600 model-space area centered on the focal at (0, 0).
+  /// The pre-fit camera frames this box, so the first visible
+  /// frame shows the explosion before d3-force pulls things in.
+  const INITIAL_BBOX_HALF = 300;
+
   /// Gates the currentScope $effect: scopeOptions re-derives any
   /// time the file tree updates, producing a fresh array (and thus
   /// a fresh currentScope object reference) even when the user
@@ -332,6 +339,11 @@
         style: {
           label: "data(label)",
           color: c.text,
+          // Match the rest of the chrome (App.svelte body
+          // font-family) so graph labels read as part of the same
+          // UI rather than a separate widget.
+          "font-family":
+            '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
           "font-size": 11,
           // Labels above the node, ellipsised at a fixed width.
           // Right-of-node placement (the prior layout) bled long
@@ -343,7 +355,10 @@
           "text-wrap": "ellipsis",
           "text-max-width": "110px",
           "text-outline-color": c.bg,
-          "text-outline-width": 2,
+          // Outline at 1px reads as a subtle halo for legibility
+          // over edges/nodes; 2px made labels look bolder than the
+          // surrounding UI text.
+          "text-outline-width": 1,
           "border-width": 1.5,
           "border-color": c.bg,
           "min-zoomed-font-size": 8,
@@ -386,7 +401,7 @@
           "text-halign": "center",
           "text-margin-y": 0,
           "text-outline-color": c.bg,
-          "text-outline-width": 2,
+          "text-outline-width": 1,
         },
       },
       {
@@ -508,43 +523,54 @@
   /// `randomize: false` keeps the cluster layout fcose produced and
   /// just relaxes overlaps + adds the live "jostle" feel: drag a
   /// node, neighbours nudge out of the way, everything settles.
-  function d3ForceOptions() {
+  /// d3-force tuning depends on graph size: the playground values
+  /// (manyBody -90, weak centering 0.05) were dialed in against a
+  /// ~45-node graph. Applied to a 7-node file-scope view, the
+  /// repulsion overwhelms the spring constraints and pushes the
+  /// satellites off the canvas. Scale repulsion down and centering
+  /// up as the visible count drops.
+  function d3ForceOptions(visibleCount: number) {
+    // Smooth interpolation between sparse (≤8 nodes) and dense
+    // (≥40 nodes) regimes.
+    const t = Math.max(0, Math.min(1, (visibleCount - 8) / 32));
+    const manyBody = -20 + (-90 - -20) * t;
+    const xy = 0.25 - (0.25 - 0.05) * t;
     return {
       name: "d3-force",
       animate: true,
       fit: false,
       randomize: false,
-      // infinite=true keeps the simulation + cytoscape grab/free
-      // handlers alive after the initial settle. Without it the
-      // layout calls end() once progress hits 1 and tears its
-      // event handlers down — drags after that point do nothing.
-      // Pair this with the free/unlock listener below that drops
-      // alphaTarget back to 0 so the graph still cools.
       infinite: true,
       ungrabifyWhileSimulating: false,
       fixedAfterDragging: true,
       alpha: 1,
       alphaMin: 0.05,
-      alphaDecay: 1 - Math.pow(0.05, 1 / 150),
+      // ~300 ticks (~5s at 60fps) for the simulation to cool from
+      // alpha=1 to alphaMin. Doubled from the previous 150-tick
+      // setting so the initial "shake" — and the same shake on
+      // depth/scope/reload rebuilds — is visible long enough to
+      // read as motion rather than a single snap.
+      alphaDecay: 1 - Math.pow(0.05, 1 / 300),
       alphaTarget: 0,
       velocityDecay: 0.55,
-      // cytoscape-d3-force merges each cy element's data() into
-      // the d3-force node/edge object, so accessors receive the
-      // raw fields (no .data() method on these args).
+      // Collide radius approximates the label's visual footprint,
+      // not just the node circle: doc labels can be ~110px wide
+      // (text-max-width) so we use ~55 as a half-width bubble that
+      // keeps neighbouring file names from overlapping.
       collideRadius: (n: { kind?: string }) => {
-        if (n.kind === "doc") return 26;
-        if (n.kind === "tag") return 18;
-        return 14;
+        if (n.kind === "doc") return 55;
+        if (n.kind === "tag") return 30;
+        return 22;
       },
       collideStrength: 0.95,
       collideIterations: 2,
-      manyBodyStrength: -90,
+      manyBodyStrength: manyBody,
       linkDistance: (e: { kind?: string }) =>
         e.kind === "link" ? 120 : 70,
       linkStrength: 0.55,
       linkId: (n: { id: string }) => n.id,
-      xStrength: 0.05,
-      yStrength: 0.05,
+      xStrength: xy,
+      yStrength: xy,
     } as cytoscape.LayoutOptions;
   }
 
@@ -619,6 +645,11 @@
     forceLayout?.stop();
     forceLayout = null;
     cy?.destroy();
+    // Direct DOM mutation, not a Svelte class binding — needs to
+    // be effective synchronously, before fcose's first render.
+    // Cleared just before forceLayout.run() so the d3-force
+    // animation IS the user-visible "drawing" of the graph.
+    containerEl.style.opacity = "0";
     const { elements, dropped } = buildElements(g);
     if (dropped > 0) {
       console.warn(`graph: dropped ${dropped} edges with unknown endpoints`);
@@ -635,7 +666,11 @@
       elements,
       style: buildStylesheet(containerEl),
       minZoom: 0.15,
-      maxZoom: 4,
+      // Capped at 2 so the post-fit zoom on small scopes (5-15
+      // visible nodes packed tight) doesn't blow up the labels.
+      // cytoscape's font-size is model-space pixels, scaled by
+      // zoom — zoom=5 turned an 11px font into 55px screen text.
+      maxZoom: 2,
       boxSelectionEnabled: false,
       selectionType: "single",
     });
@@ -666,31 +701,88 @@
       fcoseOptions({ randomize: true, animate: false, focalIds }),
     );
     layout.one("layoutstop", () => {
-      // Apply the visibility filter now that every node has a real
-      // position; hidden ones won't pull the bounding box around.
       syncVisibility();
       requestAnimationFrame(() => {
-        if (!cy) return;
+        if (!cy || !containerEl) return;
         cy.resize();
-        const vis = cy.elements(":visible");
-        if (vis.nonempty()) cy.fit(vis, 30);
+        const liveEles = cy.elements(":visible");
+
+        // Lock the focal at origin so it visually anchors the
+        // cluster. We also strip cytoscape-d3-force's built-in
+        // forceCenter below — that auto-centers on the canvas
+        // midpoint in world coords, fighting our locked-at-(0,0)
+        // focal and stranding it on the canvas edge.
+        const focalSet = new Set(focalIds);
         for (const id of focalIds) {
           const ele = cy.getElementById(id);
           if (ele.nonempty()) {
+            ele.position({ x: 0, y: 0 });
             ele.addClass("focal");
             ele.lock();
           }
         }
-        forceLayout = cy.layout(d3ForceOptions());
+
+        // Scatter visible non-focal nodes uniformly within a
+        // 600x600 box around origin. d3-force will then pull
+        // them inward under spring + center forces over the
+        // alpha decay (~5s); that convergence IS the user-visible
+        // "shake" on first draw / scope / depth / reload.
+        liveEles.nodes().forEach((n) => {
+          if (focalSet.has(n.id())) return;
+          n.position({
+            x: (Math.random() - 0.5) * INITIAL_BBOX_HALF * 2,
+            y: (Math.random() - 0.5) * INITIAL_BBOX_HALF * 2,
+          });
+        });
+
+        // Fit camera to the scattered positions BEFORE reveal
+        // so the first visible frame shows the full explosion.
+        cy.fit(liveEles, 30);
+
+        const liveNodeCount = liveEles.nodes().length;
+        forceLayout = liveEles.layout(d3ForceOptions(liveNodeCount));
+
+        forceLayout.one("layoutstop", () => {
+          if (!cy) return;
+          requestAnimationFrame(() => {
+            if (!cy) return;
+            const v = cy.elements(":visible");
+            if (v.nonempty()) {
+              // Smooth animated zoom-in to the settled cluster.
+              cy.animate(
+                { fit: { eles: v, padding: 30 } },
+                { duration: 600, easing: "ease-out" },
+              );
+            }
+          });
+        });
+
+        // Start d3-force ticking BEFORE revealing the canvas so
+        // the first visible frame already has nodes in motion,
+        // not a static scatter that briefly flashes before the
+        // animation begins. ~180 ms (≈ 11 ticks at 60 fps) is
+        // enough for visible drift; CSS opacity transition then
+        // fades the canvas in over the still-running animation.
         forceLayout.run();
 
-        // cytoscape-d3-force's built-in grab/free handlers bump
-        // alphaTarget to ~0.33 and never restore it to 0 — so
-        // after a single drag the simulation runs forever. Add
-        // our own free/unlock handler (registered after the
-        // built-in's, so it executes second) that drops the
-        // target back, letting alpha decay to alphaMin and the
-        // graph actually settle.
+        // Strip cytoscape-d3-force's built-in forceCenter, which
+        // shifts the centroid each tick toward (cy.width/2,
+        // cy.height/2) in world coords (a fixed point unrelated
+        // to our (0, 0) focal). With the focal locked at origin,
+        // that constant pull dragged the rest of the cluster
+        // away from the focal; with it removed, only our
+        // xStrength/yStrength forces pull each node toward
+        // (0, 0) — same target the focal is locked at, so they
+        // align.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const sim = (forceLayout as any).simulation;
+        if (sim) sim.force("center", null);
+
+        setTimeout(() => {
+          if (!containerEl) return;
+          containerEl.style.opacity = "";
+        }, 180);
+
         cy.nodes().on("free unlock", () => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const sim = (forceLayout as any)?.simulation;
@@ -702,7 +794,7 @@
 
     // Suppress the first re-firing of the currentScope effect: the
     // current scope IS the one we just built for.
-    lastScopeId = currentScope?.id ?? null;
+    lastScopeId = `${currentScope?.id ?? null}|${graphOverlay.depth}`;
   }
 
   /// Apply current scope + edge-kind filters by toggling the
@@ -857,19 +949,20 @@
     buildCytoscape(g);
   }
 
-  // Scope change → full rebuild. fcose's `fixedNodeConstraint`
-  // only takes effect at layout time; soft repositioning after the
-  // fact would leave neighbours where the previous layout placed
-  // them, around the *old* anchor. A rebuild is cheap at our scale
-  // (low hundreds of nodes) and keeps the focal node visually
-  // centred. Gated on the scope id so the tree-derived scopeOptions
-  // array re-deriving doesn't trigger a rebuild when the user
-  // hasn't actually changed scope.
+  // Scope or depth change → full rebuild. The visible-only fcose
+  // pass that runs after the global layout sizes itself to whatever
+  // node set is currently in scope; toggling depth grows that set,
+  // so the new nodes need fresh positions or they show up at their
+  // (now stale) global-fcose coordinates. Cheap at our scale (low
+  // hundreds of nodes). Gated on the (id, depth) pair so the
+  // tree-derived scopeOptions re-deriving doesn't kick a rebuild.
   $effect(() => {
     const id = currentScope?.id ?? null;
+    const depth = graphOverlay.depth;
     if (!cy) return;
-    if (id === lastScopeId) return;
-    lastScopeId = id;
+    const sig = `${id}|${depth}`;
+    if (sig === lastScopeId) return;
+    lastScopeId = sig;
     if (nodes.length > 0) void buildCytoscapeWhenSized({ nodes, edges });
   });
 
@@ -1240,6 +1333,10 @@
   .cy {
     position: absolute;
     inset: 0;
+    /* Smooth fade when buildCytoscape clears the inline opacity:0
+       it sets at the start of a rebuild; gives a gentler reveal
+       than a hard pop into the d3-force animation. */
+    transition: opacity 200ms ease-out;
   }
   .cy.dim {
     opacity: 0.4;
