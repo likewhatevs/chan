@@ -1338,6 +1338,42 @@
     tagBubble.setQuery(range.query);
   }
 
+  // ---- date edit-existing flow ----------------------------------------
+
+  /// Open the calendar pre-filled with the date atom at `pos`.
+  /// Shared by both the click handler and the NodeSelection
+  /// (arrow-key) trigger so the two paths behave identically.
+  function openDateEditAt(pos: number, host: HTMLElement): void {
+    if (!editor) return;
+    const node = editor.state.doc.nodeAt(pos);
+    if (!node || node.type.name !== "date") return;
+    const existingFormat = (node.attrs.format as DateFormatId) ?? "iso";
+    showCalendar(
+      host,
+      (picked: DatePick | null) => {
+        if (!editor) return;
+        if (!picked) {
+          // Dismiss: refocus the editor so the caret lands back
+          // on the pill (the calendar stole DOM focus). Mirrors
+          // the image / wiki dismiss path.
+          editor.commands.focus();
+          return;
+        }
+        const dateType = editor.schema.nodes.date;
+        if (!dateType) return;
+        editor.view.dispatch(
+          editor.state.tr.replaceWith(
+            pos,
+            pos + 1,
+            dateType.create({ date: picked.iso, format: picked.format }),
+          ),
+        );
+        editor.commands.focus();
+      },
+      existingFormat,
+    );
+  }
+
   // ---- image edit-existing flow ---------------------------------------
 
   /// Re-open the `![` picker pre-filled with the current image's
@@ -1378,6 +1414,13 @@
       // change from breaking arrow nav.
       const dom = editor.view.nodeDOM(pos);
       if (dom instanceof HTMLElement) enterWikiEditAt(dom);
+      return;
+    }
+    if (node.type.name === "date") {
+      if (lastAtomEditPos === pos) return;
+      lastAtomEditPos = pos;
+      const dom = editor.view.nodeDOM(pos);
+      if (dom instanceof HTMLElement) openDateEditAt(pos, dom);
       return;
     }
     if (node.type.name !== "image") {
@@ -1700,42 +1743,28 @@
     }
     if (t.matches("[data-md-date]")) {
       e.preventDefault();
-      // Preserve the originating format so click-to-edit doesn't
-      // jump the pill to the user's default; if the user wants a
-      // different format they pick it explicitly in the dropdown.
-      const existingFormat = (t.getAttribute("data-date-format") ?? "iso") as DateFormatId;
-      const existingIso = t.getAttribute("data-date") ?? "";
-      showCalendar(
-        t,
-        (picked) => {
-          if (!picked || !editor) return;
-          // Find the date node by attribute scan. We use the DOM's
-          // data-date as the key; ambiguity (two pills with the
-          // same date AND same format) resolves to the first match,
-          // which is good enough for a click-anchored edit.
-          const dateType = editor.schema.nodes.date;
-          let from = -1;
-          editor.state.doc.descendants((n, p) => {
-            if (from >= 0) return false;
-            if (
-              n.type === dateType &&
-              n.attrs.date === existingIso &&
-              n.attrs.format === existingFormat
-            ) {
-              from = p;
-              return false;
-            }
-          });
-          if (from < 0) return;
-          const tr = editor.state.tr.replaceWith(
-            from,
-            from + 1,
-            dateType.create({ date: picked.iso, format: picked.format }),
-          );
-          editor.view.dispatch(tr);
-        },
-        existingFormat,
-      );
+      if (!editor) return;
+      const ed = editor;
+      // Resolve the atom's doc position via PM rather than scanning
+      // by data-attrs (the old path); `openDateEditAt` is the same
+      // entrypoint the NodeSelection trigger uses, so click and
+      // arrow-key onto the pill behave identically.
+      let pos: number;
+      try {
+        pos = ed.view.posAtDOM(t, 0);
+      } catch {
+        return;
+      }
+      const node = ed.state.doc.nodeAt(pos);
+      if (!node || node.type.name !== "date") {
+        // Some browsers report posAtDOM at the position before the
+        // wrap; step back one and re-check.
+        const alt = pos - 1;
+        const altNode = alt >= 0 ? ed.state.doc.nodeAt(alt) : null;
+        if (altNode && altNode.type.name === "date") pos = alt;
+        else return;
+      }
+      openDateEditAt(pos, t);
       return;
     }
     // Standard markdown links saved as <a href>. If the href looks
