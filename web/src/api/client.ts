@@ -234,6 +234,45 @@ export const api = {
     }
     return (await res.json()) as { path: string };
   },
+  /** Import contacts from a CSV. Multipart POST mirroring
+   *  uploadAttachment: server runs the parser, drops one
+   *  `chan.kind: contact` markdown note per contact under
+   *  `destDir`, and returns a per-row outcome breakdown. The
+   *  wizard surfaces these counts to the user. */
+  importContacts: async (
+    file: File,
+    destDir: string,
+    opts: { provider?: string; overwrite?: boolean } = {},
+  ): Promise<{
+    wrote: string[];
+    overwrote: string[];
+    skipped: Array<{ path: string; reason: string }>;
+    failed: Array<{ name: string; reason: string }>;
+  }> => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("dest_dir", destDir);
+    form.append("provider", opts.provider ?? "google");
+    form.append("overwrite", opts.overwrite ? "true" : "false");
+    const headers: Record<string, string> = {};
+    const tk = transportAuthToken();
+    if (tk) headers.authorization = `Bearer ${tk}`;
+    const res = await fetch(apiPath("/api/contacts/import"), {
+      method: "POST",
+      headers,
+      body: form,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText);
+      throw new ApiError(res.status, text || res.statusText);
+    }
+    return (await res.json()) as {
+      wrote: string[];
+      overwrote: string[];
+      skipped: Array<{ path: string; reason: string }>;
+      failed: Array<{ name: string; reason: string }>;
+    };
+  },
   list: () => req<TreeEntry[]>("GET", "/api/files"),
   read: (path: string) => req<FileResponse>("GET", `/api/files/${encPath(path)}`),
   /// Persist `content` at `path`. When `expectedMtime` is provided,

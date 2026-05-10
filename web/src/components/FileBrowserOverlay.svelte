@@ -10,6 +10,7 @@
   import FileTree from "./FileTree.svelte";
   import Inspector from "./Inspector.svelte";
   import FileInfoBody from "./FileInfoBody.svelte";
+  import ImportContactsModal from "./ImportContactsModal.svelte";
   import OverlayShell from "./OverlayShell.svelte";
   import { isEditableText } from "../state/fileTypes";
   import {
@@ -83,10 +84,10 @@
   /// Roughly the rendered size of the popover. We pre-compute layout
   /// before the popover mounts so it never flashes in the wrong
   /// place; these constants approximate the real footprint of the
-  /// menu (4 action rows + separator + folder readout). The folder
-  /// readout can be long but is clipped by overflow: hidden so the
-  /// height stays predictable.
-  const POPOVER_HEIGHT = 184;
+  /// menu (4 create/action rows + separator + folder readout).
+  /// The folder readout can be long but is clipped by overflow:
+  /// hidden so the height stays predictable.
+  const POPOVER_HEIGHT = 208;
   const POPOVER_WIDTH = 240;
 
   /// "Copied" flash state for the folder-path row. Reset after
@@ -94,6 +95,32 @@
   let copiedFlash = $state(false);
   let copiedTimer: ReturnType<typeof setTimeout> | null = null;
   const COPIED_FLASH_MS = 1200;
+
+  /// Import-contacts wizard. Opens from the popover; closes back
+  /// to the file browser. The wizard refreshes the tree on
+  /// success so the new notes show up immediately.
+  let importContactsOpen = $state(false);
+
+  function openImportContacts(): void {
+    menuOpen = false;
+    importContactsOpen = true;
+  }
+
+  /// Sensible default destination for the import wizard. If the
+  /// user has a folder selected in the tree, suggest that.
+  /// Otherwise default to "Contacts" so the typical first-run lands
+  /// in a single, named folder rather than scattering at the drive
+  /// root.
+  function pickInitialFolder(sel: string | null): string {
+    if (!sel) return "Contacts";
+    const entry = tree.entries.find((e) => e.path === sel);
+    if (entry?.is_dir) return entry.path;
+    if (entry && !entry.is_dir) {
+      const slash = entry.path.lastIndexOf("/");
+      return slash > 0 ? entry.path.slice(0, slash) : "";
+    }
+    return "Contacts";
+  }
 
   /// Toggle the popover. When opening, measure the trigger button
   /// against the viewport and pick "below" or "above" depending on
@@ -266,6 +293,14 @@
         <span>New folder</span>
       </button>
     </li>
+    <li>
+      <button role="menuitem" onclick={openImportContacts}>
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm-1.5 1.5A4.5 4.5 0 0 0 2 14h12a4.5 4.5 0 0 0-4.5-4.5h-3z"/>
+        </svg>
+        <span>Import contacts…</span>
+      </button>
+    </li>
     <li class="sep" role="separator"></li>
     <li>
       <button role="menuitem" onclick={renameDrive}>
@@ -298,6 +333,12 @@
     </li>
   </ul>
 {/if}
+
+<ImportContactsModal
+  open={importContactsOpen}
+  defaultDir={pickInitialFolder(browserSelection.path)}
+  onClose={() => (importContactsOpen = false)}
+/>
 
 <style>
   .browser {
