@@ -21,7 +21,7 @@ import { mergeAttributes } from "@tiptap/core";
 
 import { api, withTokenQuery } from "../../api/client";
 import type { TreeEntry } from "../../api/types";
-import { relativizePath, resolveRelativePath } from "../links";
+import { normalizeHref, relativizePath, resolveRelativePath } from "../links";
 import { positionPopover, watchViewport } from "./popover";
 
 /// Extensions we treat as inline images. Lower-case match against
@@ -567,19 +567,20 @@ export async function uploadImageFile(
  * which can't carry an `Authorization` header). Absolute URLs
  * (http/data/blob) pass through.
  *
- * When `fromPath` is set and `src` starts with `./` or `../`, the
- * path is resolved against `fromPath`'s directory before being sent
- * to `/api/files/`. This matches the standard markdown convention
- * where image paths are relative to the file containing them, so
- * `![](../logo.png)` from `Recipes/Pasta.md` fetches `logo.png` at
- * the drive root.
+ * Drive-rooted (`/images/x.png`) and parent-relative (`../x.png`)
+ * sources go through `normalizeHref` against `fromPath`'s directory,
+ * the same resolver chan-drive uses for graph edges, so a single
+ * canonical drive-relative path is what reaches `/api/files/`.
+ * Falls back to the literal src if resolution fails (shouldn't
+ * happen for a well-formed local image, but keeps the old image
+ * loading path if a malformed src slips through).
  */
 export function resolveImageSrc(src: string, fromPath?: string | null): string {
   if (/^(https?:|data:|blob:)/i.test(src)) return src;
-  const driveRooted =
-    fromPath && (src.startsWith("./") || src.startsWith("../"))
-      ? resolveRelativePath(src, fromPath)
-      : src;
+  const sourceDir = fromPath
+    ? fromPath.split("/").slice(0, -1).join("/")
+    : "";
+  const driveRooted = normalizeHref(src, sourceDir) ?? src;
   // Encode each path segment but keep the slashes; `/api/files/*`
   // accepts the same encoding the file editor uses elsewhere.
   const encoded = driveRooted

@@ -58,7 +58,7 @@
   import { createTagDecorationExtension } from "./extensions/tagDecoration";
   import { openGraphAtNode } from "../state/store.svelte";
   import { api } from "../api/client";
-  import { resolveRelativePath } from "./links";
+  import { normalizeHref, resolveRelativePath } from "./links";
   import { drive } from "../state/store.svelte";
 
   let {
@@ -814,12 +814,13 @@
   /// re-parses the buffer and runs the round-trip.
   ///
   /// We rebuild the pills here. For every text node carrying a
-  /// `link` mark whose href is internal-looking (no scheme; passes
-  /// `isInternalHref`), we replace the marked range with a fresh
-  /// `wikiLink` atom node carrying the decoded target + the
-  /// rendered text as the label. External http(s)/mailto links are
-  /// left as Link marks. Idempotent: a doc with only existing
-  /// wikiLink nodes (no Link marks) walks to no replacements.
+  /// `link` mark, the href is run through `normalizeHref`; a
+  /// non-null result replaces the marked range with a fresh
+  /// `wikiLink` atom node carrying the canonical drive-rooted
+  /// target. External http(s)/mailto links (normalizeHref returns
+  /// null) are left as Link marks. Idempotent: a doc with only
+  /// existing wikiLink nodes (no Link marks) walks to no
+  /// replacements.
   function decorateWikiLinks(): void {
     if (!editor) return;
     const wikiType = editor.schema.nodes.wikiLink;
@@ -834,27 +835,32 @@
       const linkMark = node.marks.find((m) => m.type === linkMarkType);
       if (!linkMark) return;
       const href = (linkMark.attrs.href as string | null) ?? "";
-      if (!href || !isInternalHref(href)) return;
-      // Decode the href once: chan-shared encodes spaces / parens
-      // when serializing, so the on-disk form looks like
-      // `my%20note.md`; the wikiLink attr expects the human-
-      // readable path. After decoding, hrefs that look relative
-      // (`./foo.md` / `../docs/foo.md`) get resolved against the
-      // current file's directory so the atom's `target` is always
-      // the canonical drive-rooted path the click handler expects.
-      let target: string;
+      if (!href) return;
+      // Decode once (chan-shared encodes spaces / parens when
+      // serializing), then split off any `#anchor` so normalizeHref
+      // operates on the path portion alone. The atom's target is
+      // the canonical drive-rooted path with the anchor reattached;
+      // normalizeHref returns null for externals / fragment-only
+      // refs, in which case the Link mark is left untouched and the
+      // browser's default click behavior applies.
+      let decoded: string;
       try {
-        target = decodeURIComponent(href);
+        decoded = decodeURIComponent(href);
       } catch {
-        target = href;
+        decoded = href;
       }
-      if (currentPath) {
-        target = resolveRelativePath(target, currentPath);
-      }
+      const hashIdx = decoded.indexOf("#");
+      const pathPart = hashIdx === -1 ? decoded : decoded.slice(0, hashIdx);
+      const fragment = hashIdx === -1 ? "" : decoded.slice(hashIdx);
+      const sourceDir = currentPath
+        ? currentPath.split("/").slice(0, -1).join("/")
+        : "";
+      const normalized = normalizeHref(pathPart, sourceDir);
+      if (normalized === null) return;
       ranges.push({
         from: pos,
         to: pos + node.text.length,
-        target,
+        target: normalized + fragment,
         label: node.text,
       });
     });
@@ -2277,30 +2283,34 @@
       openDateEditAt(pos, t);
       return;
     }
-    // Standard markdown links saved as <a href>. If the href looks
-    // internal (no scheme, ends with .md or has no extension), treat it
-    // like a wiki click. Hold Cmd/Ctrl to fall through to default
-    // browser behavior (open externally). Relative hrefs (`./foo.md`,
-    // `../docs/foo.md`) are resolved against the current file's
-    // directory before opening, so the click works regardless of
-    // whether the link round-tripped through `decorateWikiLinks`.
+    // Standard markdown links saved as <a href>. Hold Cmd/Ctrl to
+    // fall through to default browser behavior. Otherwise the href
+    // goes through `normalizeHref`, the same resolver chan-drive
+    // uses when writing graph edges, so `/abs`, `../rel`, `./rel`,
+    // and bare `rel` all converge on the canonical drive-rooted
+    // path. A null result means external / fragment-only / escapes
+    // the drive, in which case the browser default applies.
     const a = t.closest("a") as HTMLAnchorElement | null;
     if (a && !e.metaKey && !e.ctrlKey) {
       const href = a.getAttribute("href") ?? "";
-      if (href && isInternalHref(href)) {
-        e.preventDefault();
-        let resolved = decodeURIComponent(href);
-        if (currentPath) {
-          resolved = resolveRelativePath(resolved, currentPath);
-        }
-        handleWikiClick(resolved);
+      if (!href) return;
+      let decoded: string;
+      try {
+        decoded = decodeURIComponent(href);
+      } catch {
+        decoded = href;
       }
+      const hashIdx = decoded.indexOf("#");
+      const pathPart = hashIdx === -1 ? decoded : decoded.slice(0, hashIdx);
+      const fragment = hashIdx === -1 ? "" : decoded.slice(hashIdx);
+      const sourceDir = currentPath
+        ? currentPath.split("/").slice(0, -1).join("/")
+        : "";
+      const normalized = normalizeHref(pathPart, sourceDir);
+      if (normalized === null) return;
+      e.preventDefault();
+      handleWikiClick(normalized + fragment);
     }
-  }
-
-  function isInternalHref(href: string): boolean {
-    // External if it has a scheme (`https:`, `mailto:`, etc.).
-    return !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href);
   }
 
   // Editor density follows the user's line_spacing pref. Default
