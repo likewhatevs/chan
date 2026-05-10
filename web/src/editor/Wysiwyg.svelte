@@ -33,6 +33,7 @@
     type DateFormatId,
   } from "./dateFormats";
   import { createImageNode } from "./extensions/image";
+  import { openImageBubble, type ImageBubble } from "./extensions/imageBubble";
   import {
     createWikiLinkNode,
     handleWikiClick,
@@ -123,6 +124,7 @@
     editor.setEditable(!ro, false);
     if (ro) {
       dismissWikiBubble();
+      dismissImageBubble();
       dismissTagBubble();
       dismissContactBubble();
       clearCursorDecorations();
@@ -195,6 +197,27 @@
   /// Mapped through every transaction in `onUpdate` so typing
   /// inside the brackets doesn't desync the saved position.
   let editingWikiBracketStart: number | null = null;
+
+  /// Image bubble. Same non-focus-stealing pattern as the wiki
+  /// bubble: open while the caret sits inside `![alt](src)` source
+  /// text, dismiss when the caret leaves the range. Two sub-modes
+  /// (path / alt) track which half of the markdown the caret is in.
+  let imageBubble: ImageBubble | undefined;
+
+  /// Snapshot of the image atom we replaced when entering edit
+  /// mode. Mirrors `editingWikiOriginal`: a dismiss without accept
+  /// restores the original atom rather than leaving stray
+  /// `![alt](src)` text in the doc.
+  let editingImageOriginal: { src: string; alt: string } | null = null;
+  /// Doc position of the leading `!` of the `![alt](src)` text
+  /// inserted on entry. Mapped through every transaction so typing
+  /// inside the range doesn't desync the saved offset.
+  let editingImageBracketStart: number | null = null;
+  /// Alt text we pre-populated on edit entry. The accept path uses
+  /// it to decide whether to auto-fill from the filename: an
+  /// unchanged default counts as "no user input" and gets replaced
+  /// by the picked file's basename.
+  let editingImageDefaultAlt: string = "";
 
   /// Scroll the editor to the i-th heading (0-based, document order).
   /// Called by the inspector (outline view) via `bind:this` from
@@ -369,7 +392,7 @@
           // wins is enough; the host stays out of per-bubble accept
           // / dismiss logic.
           const activeBubble: BubbleHandle | undefined =
-            wikiBubble ?? tagBubble ?? contactBubble;
+            wikiBubble ?? imageBubble ?? tagBubble ?? contactBubble;
           if (activeBubble?.handleKey(event)) {
             event.preventDefault();
             return true;
@@ -409,6 +432,14 @@
             editingWikiBracketStart,
           );
         }
+        // Same mapping for the image bubble's saved bracket start.
+        // Without it, `restoreImageEditOriginal` would walk the doc
+        // from a stale offset and miss the `![alt](src)` text.
+        if (editingImageBracketStart !== null) {
+          editingImageBracketStart = transaction.mapping.map(
+            editingImageBracketStart,
+          );
+        }
         if (applyingExternal) return;
         const raw = (editor.storage.markdown as { getMarkdown(): string }).getMarkdown();
         // Strip the NBSP-paragraph markers we injected on parse so
@@ -426,6 +457,7 @@
         value = md;
         tagHeadings();
         syncWikiBubble();
+        syncImageBubble();
         syncTagBubble();
         syncContactBubble();
         updateCursorDecorations();
@@ -434,6 +466,7 @@
       },
       onSelectionUpdate: () => {
         syncWikiBubble();
+        syncImageBubble();
         syncTagBubble();
         syncContactBubble();
         updateCursorDecorations();
@@ -528,6 +561,7 @@
 
   onDestroy(() => {
     dismissWikiBubble();
+    dismissImageBubble();
     dismissTagBubble();
     dismissContactBubble();
     editor?.destroy();
@@ -879,6 +913,24 @@
           defaultDateFormat(),
         );
       });
+      return;
+    }
+    if (before.endsWith("![") && !imageBubble) {
+      // Auto-pair: complete the markdown image shape to `![](|)`
+      // with the caret parked between the parens. The user's typing
+      // becomes the `(src)` query; the bubble opens in path mode
+      // and the host's sync hook keeps it pinned while the caret
+      // stays inside.
+      const pos = editor.state.selection.from;
+      editor
+        .chain()
+        .insertContentAt(pos, "]()", { updateSelection: false })
+        .setTextSelection(pos + 2)
+        .run();
+      editingImageBracketStart = pos - 2;
+      editingImageOriginal = null;
+      editingImageDefaultAlt = "";
+      openImageBubbleForCurrentCaret();
       return;
     }
     if (before.endsWith("[[") && !wikiBubble) {
@@ -1352,12 +1404,19 @@
     }
     const node = sel.node;
     const name = node.type.name;
-    if (name !== "date" && name !== "wikiLink") {
+    if (name !== "date" && name !== "wikiLink" && name !== "image") {
       lastAtomEditPos = null;
       return;
     }
     if (lastAtomEditPos === sel.from) return;
     lastAtomEditPos = sel.from;
+    if (name === "image") {
+      // Image atoms route into the source-text edit flow rather than
+      // a separate popover; `enterImageEditAt` reads attrs off the
+      // node directly so it doesn't need the DOM element.
+      enterImageEditAt(sel.from, node);
+      return;
+    }
     const dom = editor.view.nodeDOM(sel.from);
     if (!(dom instanceof HTMLElement)) return;
     if (name === "date") {
@@ -1532,6 +1591,336 @@
     editor.view.dispatch(tr);
   }
 
+  // ---- image edit-existing flow ----------------------------------------
+
+  /// Drive-relative dirname for `path`. Used to scope uploads next
+  /// to the editing file. Null path -> null (let the server fall
+  /// back to its configured attachments_dir); root-level file ->
+  /// empty string (drive root); nested file -> dirname segment.
+  function dirOfPath(p: string | null): string | null {
+    if (p === null) return null;
+    const slash = p.lastIndexOf("/");
+    if (slash < 0) return "";
+    return p.slice(0, slash);
+  }
+
+  /// Locate the `![alt](src)` text range surrounding the caret and
+  /// report which slot (alt / path / outside) the caret sits in.
+  /// Mirrors `findBracketRange`'s contract for the wiki bubble; the
+  /// host's sync hook uses the `mode` to drive the bubble between
+  /// path-search and alt-echo modes.
+  ///
+  /// Mode boundaries (offsets relative to the leading `!`):
+  ///   - 0..1                    -> outside (between `!` and `[`)
+  ///   - 2..2 + altLen + 1       -> alt (covers `[`, alt text, `]`,
+  ///                                and one boundary char so a
+  ///                                keystroke crossing the divider
+  ///                                doesn't immediately dismiss)
+  ///   - 2 + altLen + 2..end - 1 -> path (inside `(...)`)
+  ///   - >= fullLen              -> outside
+  function findImageRange(
+    ed: Editor,
+  ): {
+    start: number;
+    end: number;
+    alt: string;
+    src: string;
+    mode: "alt" | "path" | "outside";
+  } | null {
+    const sel = ed.state.selection;
+    if (!sel.empty) return null;
+    const resolved = ed.state.doc.resolve(sel.from);
+    const block = resolved.parent;
+    if (!block.isTextblock) return null;
+    const blockStart = resolved.start();
+    const offset = sel.from - blockStart;
+    const text = block.textContent;
+    const bangIdx = text.lastIndexOf("![", Math.max(0, offset));
+    if (bangIdx === -1) return null;
+    const rest = text.slice(bangIdx);
+    const m = /^!\[([^\]]*)\]\(([^)]*)\)/.exec(rest);
+    if (!m) return null;
+    const alt = m[1] ?? "";
+    const src = m[2] ?? "";
+    const fullLen = m[0].length;
+    const rel = offset - bangIdx;
+    if (rel < 0 || rel >= fullLen) return null;
+    let mode: "alt" | "path" | "outside";
+    if (rel <= 1) {
+      mode = "outside";
+    } else if (rel <= 2 + alt.length + 1) {
+      mode = "alt";
+    } else if (rel >= 2 + alt.length + 2 && rel <= fullLen - 1) {
+      mode = "path";
+    } else {
+      mode = "outside";
+    }
+    return {
+      start: blockStart + bangIdx,
+      end: blockStart + bangIdx + fullLen,
+      alt,
+      src,
+      mode,
+    };
+  }
+
+  /// Fallback range lookup for commit / restore paths. When the OS
+  /// file picker dropped focus, the live selection check inside
+  /// `findImageRange` fails (sel.empty is false because PM lost the
+  /// cursor entirely); we scan the textblock starting from the saved
+  /// bracket-start and parse the `![alt](src)` shape from there.
+  /// Returns positions plus parsed alt / src; no mode field — the
+  /// callers don't need to disambiguate.
+  function findImageRangeAt(
+    ed: Editor,
+    start: number,
+  ): { start: number; end: number; alt: string; src: string } | null {
+    const doc = ed.state.doc;
+    if (start < 0 || start >= doc.content.size) return null;
+    let resolved;
+    try {
+      resolved = doc.resolve(start);
+    } catch {
+      return null;
+    }
+    const blockStart = resolved.start();
+    const blockEnd = resolved.end();
+    if (start < blockStart || start >= blockEnd) return null;
+    const text = doc.textBetween(blockStart, blockEnd, "\n", " ");
+    const offset = start - blockStart;
+    const rest = text.slice(offset);
+    const m = /^!\[([^\]]*)\]\(([^)]*)\)/.exec(rest);
+    if (!m) return null;
+    return {
+      start,
+      end: start + m[0].length,
+      alt: m[1] ?? "",
+      src: m[2] ?? "",
+    };
+  }
+
+  /// Mount the image bubble anchored at the caret's screen position.
+  /// Caller must ensure `![alt](src)` text is already present with
+  /// the caret inside it (either freshly autopaired by `onInput` or
+  /// inserted by `enterImageEditAt`). Same caret-anchor shim as the
+  /// wiki bubble; sync hook keeps it in step with the caret.
+  function openImageBubbleForCurrentCaret(): void {
+    if (!editor || imageBubble) return;
+    imageBubble = openImageBubble({
+      host: caretAnchorHost(),
+      uploadDir: dirOfPath(currentPath ?? null),
+      onClickPick: (src) => {
+        replaceImagePathInSource(src);
+      },
+      onUpload: (src) => {
+        replaceImagePathInSource(src);
+        acceptImageBubble();
+      },
+      onCommit: () => acceptImageBubble(),
+      onDismiss: () => dismissImageBubble(),
+    });
+    // Seed the bubble's mode + query / alt from the current range so
+    // the first paint reflects what the user has already typed.
+    const range = findImageRange(editor);
+    if (range) {
+      imageBubble.setMode(range.mode === "alt" ? "alt" : "path");
+      if (range.mode === "alt") {
+        imageBubble.setAlt(range.alt);
+      } else {
+        imageBubble.setPathQuery(cleanSrc(range.src));
+      }
+    }
+  }
+
+  /// Strip a `#w=N` (or any `#...`) fragment from a markdown image
+  /// src. The width is rendered by the image node, not searched on,
+  /// so the path-mode filter sees the path portion only.
+  function cleanSrc(src: string): string {
+    const hash = src.indexOf("#");
+    return hash < 0 ? src : src.slice(0, hash);
+  }
+
+  /// Replace the `(src)` portion of the surrounding `![alt](src)`
+  /// markdown range with `newSrc`, leaving `[alt]` intact. No-op
+  /// when no range surrounds the caret AND the saved bracket-start
+  /// can't be located.
+  function replaceImagePathInSource(newSrc: string): void {
+    if (!editor) return;
+    const ed = editor;
+    let range = findImageRange(ed);
+    if (!range && editingImageBracketStart !== null) {
+      const fallback = findImageRangeAt(ed, editingImageBracketStart);
+      if (fallback) {
+        range = { ...fallback, mode: "path" };
+      }
+    }
+    if (!range) return;
+    const replacement = `![${range.alt}](${newSrc})`;
+    ed.view.dispatch(
+      ed.state.tr.insertText(replacement, range.start, range.end),
+    );
+  }
+
+  /// Commit the bubble: replace the `![alt](src)` text with an image
+  /// atom carrying the chosen src + alt. The alt auto-fills from the
+  /// picked file's basename when the user hasn't typed (or has left
+  /// the default we pre-populated on edit-entry). When the picked
+  /// src matches the saved original after fragment-stripping, we
+  /// keep the original verbatim so things like `#w=120` survive a
+  /// round-trip through the bubble.
+  function acceptImageBubble(): void {
+    if (!editor || !imageBubble) return;
+    const ed = editor;
+    let range = findImageRange(ed);
+    if (!range && editingImageBracketStart !== null) {
+      const fb = findImageRangeAt(ed, editingImageBracketStart);
+      if (fb) range = { ...fb, mode: "path" };
+    }
+    if (!range) {
+      dismissImageBubble();
+      return;
+    }
+    const picked = imageBubble.accept() ?? range.src;
+    if (!picked) {
+      dismissImageBubble();
+      return;
+    }
+    // Auto-fill alt from the picked file's basename (without ext)
+    // when the user hasn't supplied one (or has left the default
+    // we pre-populated on edit-entry, which counts as untouched).
+    let alt = range.alt;
+    if (alt === "" || alt === editingImageDefaultAlt) {
+      const base = picked.split("/").pop() ?? picked;
+      const dot = base.lastIndexOf(".");
+      alt = dot > 0 ? base.slice(0, dot) : base;
+    }
+    // Preserve the original src verbatim when the user's pick
+    // resolves to the same drive-rooted path; this keeps `#w=N`
+    // fragments and `./` style prefixes intact across the edit.
+    let finalSrc = picked;
+    if (editingImageOriginal) {
+      const origClean = cleanSrc(editingImageOriginal.src);
+      const origNormalized = origClean.startsWith("./") || origClean.startsWith("../")
+        ? currentPath
+          ? resolveRelativePath(origClean, currentPath)
+          : origClean
+        : origClean;
+      if (origNormalized === picked) {
+        finalSrc = editingImageOriginal.src;
+      }
+    }
+    const imgType = ed.schema.nodes.image;
+    if (!imgType) {
+      dismissImageBubble();
+      return;
+    }
+    const orig = editingImageOriginal;
+    editingImageOriginal = null;
+    editingImageBracketStart = null;
+    editingImageDefaultAlt = "";
+    dismissImageBubble();
+    const insertNode = imgType.create({ src: finalSrc, alt });
+    ed.chain()
+      .focus()
+      .deleteRange({ from: range.start, to: range.end })
+      .insertContent({
+        type: "image",
+        attrs: { src: finalSrc, alt },
+      })
+      .run();
+    // Silence the unused-var warning when no original snapshot was
+    // captured (the typed-`![` flow). The node was inserted above;
+    // we only kept `orig`/`insertNode` for branch symmetry.
+    void orig;
+    void insertNode;
+  }
+
+  function dismissImageBubble(): void {
+    imageBubble?.dismiss();
+    imageBubble = undefined;
+    // Same contract as the wiki dismiss: if the bubble was opened
+    // in edit-existing mode, restore the original atom. The typed-
+    // `![` flow has no original snapshot; in that case we walk the
+    // doc and delete the leftover `![]()` markup.
+    if (editingImageOriginal || editingImageBracketStart !== null) {
+      restoreImageEditOriginal();
+    }
+  }
+
+  function restoreImageEditOriginal(): void {
+    if (!editor) return;
+    const ed = editor;
+    const orig = editingImageOriginal;
+    const start = editingImageBracketStart;
+    editingImageOriginal = null;
+    editingImageBracketStart = null;
+    editingImageDefaultAlt = "";
+    if (start === null) return;
+    const range = findImageRangeAt(ed, start);
+    if (!range) return;
+    const imgType = ed.schema.nodes.image;
+    if (orig && imgType) {
+      const atom = imgType.create({ src: orig.src, alt: orig.alt });
+      ed.view.dispatch(ed.state.tr.replaceWith(range.start, range.end, atom));
+    } else {
+      // Typed-`![` flow: nothing to restore. Delete the literal
+      // `![](|)` markup so the user doesn't end up with stray
+      // brackets on dismiss.
+      ed.view.dispatch(ed.state.tr.delete(range.start, range.end));
+    }
+  }
+
+  /// Re-evaluate the open bubble on every selection / doc update.
+  /// Track caret movement across the `[alt]` / `(src)` divide by
+  /// flipping modes, and dismiss when the caret leaves the range.
+  function syncImageBubble(): void {
+    if (!editor || !imageBubble) return;
+    const range = findImageRange(editor);
+    if (!range || range.mode === "outside") {
+      dismissImageBubble();
+      return;
+    }
+    imageBubble.setMode(range.mode);
+    if (range.mode === "alt") {
+      imageBubble.setAlt(range.alt);
+    } else {
+      // Normalize relative srcs against the editing file so the
+      // catalog filter (drive-rooted entries) can match `./foo.png`
+      // typed from a nested doc.
+      let q = cleanSrc(range.src);
+      if ((q.startsWith("./") || q.startsWith("../")) && currentPath) {
+        q = resolveRelativePath(q, currentPath);
+      }
+      imageBubble.setPathQuery(q);
+    }
+  }
+
+  /// Enter image edit mode by replacing the atom at `pos` with
+  /// `![alt](src)` source text, then opening the bubble in path
+  /// mode. Mirrors `enterWikiEditAt`. The original src + alt are
+  /// snapshotted so a dismiss-without-accept can restore the atom.
+  function enterImageEditAt(pos: number, atomNode: { attrs: Record<string, unknown>; nodeSize: number }): void {
+    if (!editor) return;
+    const ed = editor;
+    const src = (atomNode.attrs.src as string) ?? "";
+    const alt = (atomNode.attrs.alt as string) ?? "";
+    editingImageOriginal = { src, alt };
+    editingImageBracketStart = pos;
+    editingImageDefaultAlt = alt;
+    const insertText = `![${alt}](${src})`;
+    // Caret position inside the `(src)` parens: `![alt](` is
+    // 2 + alt.length + 2 chars; we want the caret just after the
+    // opening paren so the bubble opens in path mode pre-populated
+    // with the current src.
+    const caretInsideSrc = pos + 2 + alt.length + 2 + src.length;
+    ed.chain()
+      .focus()
+      .insertContentAt({ from: pos, to: pos + atomNode.nodeSize }, insertText)
+      .setTextSelection(caretInsideSrc)
+      .run();
+    openImageBubbleForCurrentCaret();
+  }
+
   // ---- caret-driven decorations ----------------------------------------
 
   /// Strip the `data-cursor-*` attributes from any element decorated
@@ -1661,6 +2050,34 @@
     if (wikiEl) {
       e.preventDefault();
       enterWikiEditAt(wikiEl);
+      return;
+    }
+    // Click on an inline image atom: enter image edit mode. We
+    // resolve the atom's doc position via PM, validate the node
+    // type, and hand control to `enterImageEditAt`. The image
+    // node uses the minimal renderer (no wrap div), so the target
+    // is the `<img>` itself.
+    if (editor && t.tagName === "IMG" && host && host.contains(t)) {
+      const ed = editor;
+      let pos: number;
+      try {
+        pos = ed.view.posAtDOM(t, 0);
+      } catch {
+        return;
+      }
+      let node = ed.state.doc.nodeAt(pos);
+      if (!node || node.type.name !== "image") {
+        const alt = pos - 1;
+        const altNode = alt >= 0 ? ed.state.doc.nodeAt(alt) : null;
+        if (altNode && altNode.type.name === "image") {
+          pos = alt;
+          node = altNode;
+        } else {
+          return;
+        }
+      }
+      e.preventDefault();
+      enterImageEditAt(pos, node);
       return;
     }
     if (t.matches("[data-md-date]")) {
@@ -2540,7 +2957,15 @@
     max-width: 100%;
     height: auto;
     border-radius: 3px;
-    vertical-align: middle;
+    /* Bottom-align inline images so they sit on the same baseline
+       as surrounding text instead of pulling line height. Mirrors
+       the way most prose engines render inline figures. */
+    vertical-align: bottom;
+  }
+  /* ProseMirror-rendered images: same baseline-align so an image
+     sharing a line with text doesn't push the cap height up. */
+  :global(.md-wysiwyg .ProseMirror img) {
+    vertical-align: bottom;
   }
   :global(.md-image-wrap) {
     position: relative;
@@ -2570,4 +2995,125 @@
     pointer-events: none;
     user-select: none;
   }
+
+  /* Image bubble. Mirrors the wiki bubble (anchored under the
+     caret, no focus stealing) but lays out three optional rows:
+     preview, results, alt-echo. Width matches the wiki bubble so
+     the visual rhythm stays consistent across triggers. */
+  :global(.md-image-bubble) {
+    background: var(--bg-elev);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.4);
+    width: 360px;
+    font-size: 13px;
+    user-select: none;
+  }
+  /* Thumbnail preview of the active result. Fixed max height so a
+     tall image doesn't push the result list off-screen. */
+  :global(.md-image-bubble-preview) {
+    padding: .4rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+  }
+  :global(.md-image-bubble-preview.is-hidden) { display: none; }
+  :global(.md-image-bubble-preview img) {
+    max-width: 100%;
+    max-height: 120px;
+    object-fit: contain;
+    border-radius: 2px;
+  }
+  /* Result list. Same shape as the wiki / tag lists. */
+  :global(.md-image-bubble-list) {
+    list-style: none; margin: 0; padding: 0;
+    max-height: 180px; overflow-y: auto;
+  }
+  :global(.md-image-bubble-list.is-hidden) { display: none; }
+  :global(.md-image-bubble-list.is-empty) { display: none; }
+  :global(.md-image-bubble-list li) {
+    padding: .3rem .55rem; cursor: pointer;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+  :global(.md-image-bubble-list li.active),
+  :global(.md-image-bubble-list li:hover) { background: var(--hover-bg); }
+
+  /* Alt-mode echo row. Replaces the result list when the caret
+     sits inside `[alt]`. Same horizontal padding as the list rows
+     so the visual column stays stable across mode flips. */
+  :global(.md-image-bubble-alt) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: .4rem .55rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+  :global(.md-image-bubble-alt.is-hidden) { display: none; }
+  :global(.md-image-bubble-alt-label) {
+    color: var(--muted);
+    font-style: italic;
+  }
+  :global(.md-image-bubble-alt-value) {
+    color: var(--text);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  :global(.md-image-bubble-alt-value.is-empty) {
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  /* Footer: upload button (left) + accept hint (right). Flex with
+     `accept` taking the rest of the row so the two siblings stay
+     spaced. Same dashed-top border the wiki bubble uses. */
+  :global(.md-image-bubble-footer) {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: .35rem .55rem;
+    border-top: 1px dashed var(--border);
+  }
+  :global(.md-image-bubble-upload) {
+    background: var(--accent);
+    color: #fff;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.2;
+  }
+  :global(.md-image-bubble-upload:hover) { filter: brightness(1.15); }
+  :global(.md-image-bubble-upload:disabled) {
+    opacity: 0.55;
+    cursor: progress;
+  }
+  :global(.md-image-bubble-accept) {
+    color: var(--muted);
+    font-size: 11px;
+    margin-left: auto;
+  }
+  :global(.md-image-bubble-accept.is-hidden) { display: none; }
+
+  /* Error row. Surfaced when an upload fails or exceeds the size
+     cap. Sits between the alt/list region and the footer so the
+     accept hint stays in place. */
+  :global(.md-image-bubble-error) {
+    padding: .35rem .55rem;
+    border-top: 1px solid var(--border);
+    color: var(--danger, #e57373);
+    background: color-mix(in srgb, var(--danger, #e57373) 12%, transparent);
+    font-size: 12px;
+  }
+  :global(.md-image-bubble-error.is-hidden) { display: none; }
 </style>

@@ -1,0 +1,391 @@
+// `![alt](src)` image bubble.
+//
+// Mirrors the wiki bubble's non-focus-stealing popover pattern. Two
+// modes track the caret position inside the `![alt](src)` source:
+//
+//   - "path": caret inside `(src)`. Shows a filterable list of the
+//     drive's images plus a thumbnail preview of the highlighted
+//     entry. Enter / click commits the chosen path.
+//
+//   - "alt": caret inside `[alt]`. Shows a single "alt: <typed text>"
+//     echo row in place of the list so the user has visible feedback
+//     while typing the alt attribute.
+//
+// Both modes share a footer carrying an upload button (left) and a
+// keyboard hint (right). An error row above the footer surfaces
+// upload failures (size cap, server error) without dismissing the
+// bubble.
+//
+// The bubble doesn't take focus: the host (Wysiwyg.svelte) drives
+// the keyboard through `BubbleHandle.handleKey`. The user's caret
+// stays inside `![alt](src)` and their typing IS the search query.
+// Enter on the path mode commits the highlighted result; Enter on
+// the alt mode is forwarded to `opts.onCommit` so the host can fall
+// through to the path's current src.
+
+import { api, withTokenQuery } from "../../api/client";
+import { openBubbleShell, type BubbleHandle } from "../bubble";
+import { isImagePath } from "./image";
+
+/// Server-side size cap. Mirrors the upload limit chan-server applies
+/// to `/api/attachments` so the pre-flight check fails fast instead
+/// of waiting for a 413 round-trip. Keep in sync with the server.
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+export interface ImageBubbleOpts {
+  /// Anchor element. Pass the caret-anchor shim so the wrap sits
+  /// under the cursor.
+  host: HTMLElement;
+  /// Drive-relative directory to upload new images into. Null falls
+  /// back to the server's configured `attachments_dir`. The host
+  /// typically passes the editing file's directory so uploads land
+  /// next to the note.
+  uploadDir?: string | null;
+  /// Fires when the user clicks a result row in the list. The host
+  /// rewrites the `(src)` portion of the markdown to the picked
+  /// path; the alt and the rest of the range stay intact.
+  onClickPick: (src: string) => void;
+  /// Fires after a successful upload, with the drive-relative path
+  /// the server saved. Same insertion contract as `onClickPick`.
+  onUpload: (src: string) => void;
+  /// Fires on Enter. The host runs its accept path (replace the
+  /// `![alt](src)` text with an image atom).
+  onCommit?: () => void;
+  /// Fires on Escape. The host runs its dismiss path (which may
+  /// restore the original atom if the bubble was opened in
+  /// edit-existing mode).
+  onDismiss?: () => void;
+}
+
+export type ImageBubbleMode = "path" | "alt";
+
+export interface ImageBubble extends BubbleHandle {
+  /// Toggle between path-search and alt-text-echo modes. Called by
+  /// the host's sync hook as the caret crosses the `[alt]` / `(src)`
+  /// boundary.
+  setMode(mode: ImageBubbleMode): void;
+  /// Update the substring filter against the cached image catalog.
+  /// Empty query shows the first 8 entries.
+  setPathQuery(q: string): void;
+  /// Update the alt-mode echo row. Empty value renders a muted hint
+  /// telling the user Enter will fall back to the filename.
+  setAlt(text: string): void;
+  /// Move the active result selection by `delta` (+1 / -1) within
+  /// the rendered results.
+  moveActive(delta: number): void;
+  /// Resolve the currently-highlighted path, or null if no results.
+  /// The caller commits by replacing the `(src)` range with the
+  /// returned string.
+  accept(): string | null;
+  /// Tear down DOM + listeners. Idempotent.
+  dismiss(): void;
+}
+
+interface CatalogEntry {
+  path: string;
+}
+
+/// URI-encode a drive-relative path one segment at a time, keeping
+/// the `/` separators intact. Same shape `resolveImageSrc` uses so
+/// the preview hits the same `/api/files/...` URL the editor would
+/// load if the atom were already inserted.
+function encodePath(path: string): string {
+  return path
+    .split("/")
+    .map((seg) => encodeURIComponent(seg))
+    .join("/");
+}
+
+export function openImageBubble(opts: ImageBubbleOpts): ImageBubble {
+  const shell = openBubbleShell({
+    host: opts.host,
+    className: "md-image-bubble",
+  });
+  const { wrap } = shell;
+
+  // Preview slot: img inside a wrap so we can hide the whole block
+  // with one toggle. Shown in path mode when there's an active
+  // result; hidden in alt mode and when results are empty.
+  const preview = document.createElement("div");
+  preview.className = "md-image-bubble-preview is-hidden";
+  const previewImg = document.createElement("img");
+  preview.appendChild(previewImg);
+  wrap.appendChild(preview);
+
+  // Result list. Each row is the drive-relative path; mousedown
+  // commits via `onClickPick` (preventDefault keeps editor focus).
+  const list = document.createElement("ul");
+  list.className = "md-image-bubble-list";
+  wrap.appendChild(list);
+
+  // Alt-mode echo row. Hidden in path mode. Two children: a small
+  // "alt:" label and a live value span.
+  const altRow = document.createElement("div");
+  altRow.className = "md-image-bubble-alt is-hidden";
+  const altLabel = document.createElement("span");
+  altLabel.className = "md-image-bubble-alt-label";
+  altLabel.textContent = "alt:";
+  const altValue = document.createElement("span");
+  altValue.className = "md-image-bubble-alt-value";
+  altRow.appendChild(altLabel);
+  altRow.appendChild(altValue);
+  wrap.appendChild(altRow);
+
+  // Error row. Hidden by default; surfaced when an upload fails.
+  // Sits above the footer so it doesn't move the keyboard hint.
+  const error = document.createElement("div");
+  error.className = "md-image-bubble-error is-hidden";
+  wrap.appendChild(error);
+
+  // Footer: upload button (left) + accept hint (right). The hidden
+  // <input type="file"> lives on document.body so closing the
+  // bubble doesn't tear it down mid-dialog.
+  const footer = document.createElement("div");
+  footer.className = "md-image-bubble-footer";
+  const uploadBtn = document.createElement("button");
+  uploadBtn.type = "button";
+  uploadBtn.className = "md-image-bubble-upload";
+  uploadBtn.textContent = "Upload…";
+  // mousedown preventDefault keeps the editor's selection alive
+  // through the click; the OS file picker would otherwise steal
+  // focus and ProseMirror would collapse the selection.
+  uploadBtn.addEventListener("mousedown", (ev) => {
+    ev.preventDefault();
+  });
+  const accept = document.createElement("span");
+  accept.className = "md-image-bubble-accept";
+  accept.textContent = "⏎  to accept";
+  footer.appendChild(uploadBtn);
+  footer.appendChild(accept);
+  wrap.appendChild(footer);
+
+  // Hidden file input. Re-used across uploads; reset before each
+  // open so a re-pick of the same file still fires `change`.
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = "image/*";
+  fileInput.style.display = "none";
+  document.body.appendChild(fileInput);
+
+  let mode: ImageBubbleMode = "path";
+  let catalog: CatalogEntry[] = [];
+  let catalogLoaded = false;
+  let entries: CatalogEntry[] = [];
+  let active = 0;
+  let lastQuery = "";
+  let alive = true;
+
+  const setError = (msg: string | null): void => {
+    if (!msg) {
+      error.classList.add("is-hidden");
+      error.textContent = "";
+    } else {
+      error.classList.remove("is-hidden");
+      error.textContent = msg;
+    }
+    shell.reposition();
+  };
+
+  const renderPreview = (): void => {
+    if (mode !== "path" || entries.length === 0) {
+      preview.classList.add("is-hidden");
+      previewImg.removeAttribute("src");
+      return;
+    }
+    const entry = entries[active] ?? entries[0];
+    if (!entry) {
+      preview.classList.add("is-hidden");
+      return;
+    }
+    const url = withTokenQuery(`/api/files/${encodePath(entry.path)}`);
+    previewImg.src = url;
+    preview.classList.remove("is-hidden");
+  };
+
+  const renderList = (): void => {
+    list.innerHTML = "";
+    if (mode !== "path") {
+      list.classList.add("is-hidden");
+      return;
+    }
+    list.classList.remove("is-hidden");
+    if (entries.length === 0) {
+      list.classList.add("is-empty");
+      accept.classList.add("is-hidden");
+      shell.reposition();
+      return;
+    }
+    list.classList.remove("is-empty");
+    accept.classList.remove("is-hidden");
+    entries.forEach((entry, i) => {
+      const li = document.createElement("li");
+      li.textContent = entry.path;
+      if (i === active) li.classList.add("active");
+      li.addEventListener("mousedown", (ev) => {
+        ev.preventDefault();
+        active = i;
+        opts.onClickPick(entry.path);
+      });
+      list.appendChild(li);
+    });
+    shell.reposition();
+  };
+
+  const renderAlt = (value: string): void => {
+    if (mode !== "alt") {
+      altRow.classList.add("is-hidden");
+      return;
+    }
+    altRow.classList.remove("is-hidden");
+    if (value.trim().length === 0) {
+      altValue.classList.add("is-empty");
+      altValue.textContent = "(empty — Enter to use filename)";
+    } else {
+      altValue.classList.remove("is-empty");
+      altValue.textContent = value;
+    }
+    shell.reposition();
+  };
+
+  const renderAll = (): void => {
+    renderList();
+    renderPreview();
+    if (mode === "path") {
+      altRow.classList.add("is-hidden");
+    }
+    shell.reposition();
+  };
+
+  const filterCatalog = (q: string): CatalogEntry[] => {
+    if (!catalogLoaded) return [];
+    const trimmed = q.trim();
+    if (!trimmed) return catalog.slice(0, 8);
+    const lc = trimmed.toLowerCase();
+    return catalog.filter((e) => e.path.toLowerCase().includes(lc)).slice(0, 8);
+  };
+
+  const refreshPathResults = (): void => {
+    entries = filterCatalog(lastQuery);
+    active = 0;
+    renderAll();
+  };
+
+  // Load the catalog once on open. The list is small enough (a
+  // drive's image set) that filtering in memory beats per-keystroke
+  // round-trips, and it sidesteps the catalog endpoint's lack of
+  // a media-type filter.
+  void (async () => {
+    try {
+      const tree = await api.list();
+      if (!alive) return;
+      catalog = tree
+        .filter((e) => !e.is_dir && isImagePath(e.path))
+        .map((e) => ({ path: e.path }))
+        .sort((a, b) => a.path.localeCompare(b.path));
+      catalogLoaded = true;
+      if (mode === "path") refreshPathResults();
+    } catch {
+      if (!alive) return;
+      catalog = [];
+      catalogLoaded = true;
+      if (mode === "path") refreshPathResults();
+    }
+  })();
+
+  // Wire upload. The click is dispatched programmatically from the
+  // button's click event so the mousedown preventDefault above keeps
+  // the editor selection alive while the OS dialog opens.
+  uploadBtn.addEventListener("click", () => {
+    setError(null);
+    fileInput.value = "";
+    fileInput.click();
+  });
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    if (file.size > MAX_UPLOAD_BYTES) {
+      const mb = (file.size / (1024 * 1024)).toFixed(1);
+      setError(`file too large: ${mb} MB (max 50 MB)`);
+      fileInput.value = "";
+      return;
+    }
+    uploadBtn.disabled = true;
+    void api
+      .uploadAttachment(file, opts.uploadDir ?? null)
+      .then((res) => {
+        if (!alive) return;
+        uploadBtn.disabled = false;
+        fileInput.value = "";
+        opts.onUpload(res.path);
+      })
+      .catch((e: unknown) => {
+        if (!alive) return;
+        uploadBtn.disabled = false;
+        fileInput.value = "";
+        const msg = e instanceof Error ? e.message : String(e);
+        setError(msg);
+      });
+  });
+
+  // Initial paint
+  renderAll();
+
+  return {
+    setMode(next: ImageBubbleMode): void {
+      if (!alive) return;
+      if (mode === next) return;
+      mode = next;
+      renderAll();
+    },
+    setPathQuery(q: string): void {
+      if (!alive) return;
+      lastQuery = q;
+      if (mode !== "path") return;
+      refreshPathResults();
+    },
+    setAlt(text: string): void {
+      if (!alive) return;
+      if (mode !== "alt") return;
+      renderAlt(text);
+    },
+    moveActive(delta: number): void {
+      if (!alive) return;
+      if (mode !== "path") return;
+      if (entries.length === 0) return;
+      active = Math.max(0, Math.min(entries.length - 1, active + delta));
+      renderList();
+      renderPreview();
+    },
+    accept(): string | null {
+      if (!alive) return null;
+      if (mode !== "path") return null;
+      if (entries.length === 0) return null;
+      const entry = entries[active] ?? entries[0];
+      return entry ? entry.path : null;
+    },
+    dismiss(): void {
+      if (!alive) return;
+      alive = false;
+      fileInput.remove();
+      shell.dismiss();
+    },
+    handleKey(event: KeyboardEvent): boolean {
+      if (!alive) return false;
+      switch (event.key) {
+        case "Enter":
+          opts.onCommit?.();
+          return true;
+        case "Escape":
+          opts.onDismiss?.();
+          return true;
+        case "ArrowDown":
+          this.moveActive(1);
+          return true;
+        case "ArrowUp":
+          this.moveActive(-1);
+          return true;
+      }
+      return false;
+    },
+  };
+}
