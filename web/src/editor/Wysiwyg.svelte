@@ -3114,6 +3114,41 @@
   :global(.md-tag-bubble-results li.active),
   :global(.md-tag-bubble-results li:hover) { background: var(--hover-bg); }
 
+  /* Contact picker bubble (@). Same anchored-under-caret pattern;
+     two-line rows (display name + first email) so the user can tell
+     similarly-named contacts apart without expanding the popover. */
+  :global(.md-contact-bubble) {
+    background: var(--bg-elev);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.4);
+    width: 280px;
+    font-size: 13px;
+    user-select: none;
+  }
+  :global(.md-contact-bubble-results) {
+    list-style: none; margin: 0; padding: 0;
+    max-height: 220px; overflow-y: auto;
+  }
+  :global(.md-contact-bubble-results li) {
+    padding: .3rem .55rem; cursor: pointer;
+    display: flex; flex-direction: column; gap: 1px;
+    overflow: hidden;
+  }
+  :global(.md-contact-bubble-results li.active),
+  :global(.md-contact-bubble-results li:hover) { background: var(--hover-bg); }
+  :global(.md-contact-bubble-primary) {
+    color: var(--link);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  :global(.md-contact-bubble-secondary) {
+    color: var(--text-secondary, var(--text));
+    opacity: .7;
+    font-size: 12px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
   /* Inline images: keep them from blowing the editor column out
      by capping max-width. The native size renders if it fits.
      The wrapper (`.md-image-wrap`) carries the resize handle in

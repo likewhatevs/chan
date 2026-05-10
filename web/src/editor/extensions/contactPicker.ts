@@ -15,7 +15,7 @@
 import { positionPopover, watchViewport } from "./popover";
 import { api } from "../../api/client";
 
-export type ContactRow = { path: string; label: string };
+export type ContactRow = { path: string; label: string; emails?: string[] };
 
 export interface ContactBubble {
   /// Update the typed query (without the leading `@`) and re-fetch.
@@ -85,8 +85,24 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubble {
     wrap.style.display = "";
     entries.forEach((row, i) => {
       const li = document.createElement("li");
-      li.textContent = row.label;
       li.className = i === active ? "active" : "";
+      // Primary line: contact's display name (or the basename
+      // fallback when the import lost it). Secondary line: first
+      // email so the user can disambiguate Alice (work) from Alice
+      // (home) without committing the wrong wiki-link. The picker
+      // stays keyboard-only so we wrap both in spans the host can
+      // style independently.
+      const primary = document.createElement("span");
+      primary.className = "md-contact-bubble-primary";
+      primary.textContent = row.label;
+      li.appendChild(primary);
+      const firstEmail = row.emails?.[0];
+      if (firstEmail) {
+        const secondary = document.createElement("span");
+        secondary.className = "md-contact-bubble-secondary";
+        secondary.textContent = firstEmail;
+        li.appendChild(secondary);
+      }
       li.addEventListener("mousedown", (ev) => {
         ev.preventDefault();
         active = i;

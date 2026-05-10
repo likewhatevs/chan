@@ -282,13 +282,18 @@ export const api = {
     return { ...body, warnings: body.warnings ?? [] };
   },
   /** List contact-kind notes for the editor `@` picker. Optional
-   *  `q` is a case-insensitive substring filter on title + basename;
-   *  empty string returns the alphabetical head of the catalog. */
+   *  `q` is a case-insensitive substring filter against the
+   *  contact's title, basename, AND any of its email addresses
+   *  (so typing `alice` matches both "Alice Anderson" and a
+   *  contact whose only `alice` is in `alice@example.com`); empty
+   *  string returns the alphabetical head of the catalog. The
+   *  returned `emails` is the contact's full address list, used
+   *  by the picker to render a secondary line under the name. */
   contacts: (q = "", limit = 10) => {
     const qs = new URLSearchParams();
     if (q) qs.set("q", q);
     qs.set("limit", String(limit));
-    return req<Array<{ path: string; label: string }>>(
+    return req<Array<{ path: string; label: string; emails?: string[] }>>(
       "GET",
       `/api/contacts?${qs.toString()}`,
     );

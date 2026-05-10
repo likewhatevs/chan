@@ -5,10 +5,13 @@
 //!
 //! The list route powers the editor `@` picker: caller passes an
 //! optional `?q=` substring; we case-insensitive-match against
-//! display title and basename, cap at `?limit=` (default 10), and
-//! return drive-relative paths plus display labels. The wiki-link
-//! the picker inserts is what re-resolves to the same Contact node
-//! on the next graph pass, so the round-trip stays consistent.
+//! display title, basename, and the joined email column inside
+//! SQLite (so a typed `alice` finds `alice@example.com` even when
+//! the contact's display name has nothing to do with the address),
+//! cap at `?limit=` (default 10), and return drive-relative paths,
+//! display labels, and the contact's email list. The wiki-link the
+//! picker inserts is what re-resolves to the same Contact node on
+//! the next graph pass, so the round-trip stays consistent.
 //!
 //! Wraps `Drive::import_contacts`. The frontend wizard (and the
 //! `chan contacts import csv` CLI for parity) sends:
@@ -81,11 +84,15 @@ pub async fn api_get_contacts(
         .map(|c| {
             // Picker rows show the title primarily; basename is the
             // fallback when the imported file has no `# H1` (rare,
-            // but possible if the user edited the markdown).
+            // but possible if the user edited the markdown). Emails
+            // ride along so the picker can render the first one as a
+            // secondary line and so the caller can confirm an
+            // email-substring match.
             let label = c.title.unwrap_or(c.basename);
             serde_json::json!({
                 "path": c.rel_path,
                 "label": label,
+                "emails": c.emails,
             })
         })
         .collect();

@@ -124,7 +124,22 @@ impl Indexer {
                 tracing::warn!("indexer: initial graph check failed: {e}");
                 false
             });
-        if initial_build && (stats.indexed_docs == 0 || graph_empty) {
+        // Pre-v3 contacts have NULL `emails` in the graph and won't
+        // match an email-substring `@` picker query until they're
+        // re-indexed. The graph migration cannot walk the disk on
+        // its own (no Drive handle), so we drive a one-shot full
+        // rebuild here on the first boot after upgrade. The flag
+        // clears as soon as every contact row has been re-parsed.
+        let emails_need_backfill = drive.contacts_need_email_backfill().unwrap_or_else(|e| {
+            tracing::warn!("indexer: contacts email-backfill check failed: {e}");
+            false
+        });
+        if initial_build && (stats.indexed_docs == 0 || graph_empty || emails_need_backfill) {
+            if emails_need_backfill {
+                tracing::info!(
+                    "indexer: pre-v3 contact rows detected; queueing one-shot rebuild to populate searchable emails"
+                );
+            }
             // Best-effort: if the channel is full we already
             // queued a rebuild and the redundant request is fine
             // to drop.
