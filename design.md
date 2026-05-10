@@ -113,6 +113,7 @@ lib.rs           ServeConfig, sanitize_prefix, build_app, serve,
 
 routes/
   attachments.rs   POST /api/attachments (multipart upload)
+  contacts.rs      POST /api/contacts/import (multipart CSV)
   build_info.rs    GET /api/build-info
   drive.rs         GET/PATCH /api/drive, GET /api/cloud-drives
   files.rs         /api/files, /api/files/*path, /api/move
