@@ -288,20 +288,18 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
     // entries, and merge them into the resolution set so an existing
     // image lands on a real file node (the frontend then styles
     // file-kind nodes by extension via classifyFile).
-    let image_files: std::collections::BTreeSet<String> =
-        match drive.list_tree() {
-            Ok(entries) => entries
-                .into_iter()
-                .filter(|e| !e.is_dir && is_image_path(&e.path))
-                .map(|e| e.path)
-                .collect(),
-            // list_tree failure shouldn't kill the graph; fall back to
-            // an empty image set and the old ghost-rendering path.
-            Err(_) => std::collections::BTreeSet::new(),
-        };
+    let image_files: std::collections::BTreeSet<String> = match drive.list_tree() {
+        Ok(entries) => entries
+            .into_iter()
+            .filter(|e| !e.is_dir && is_image_path(&e.path))
+            .map(|e| e.path)
+            .collect(),
+        // list_tree failure shouldn't kill the graph; fall back to
+        // an empty image set and the old ghost-rendering path.
+        Err(_) => std::collections::BTreeSet::new(),
+    };
 
-    let mut file_set: std::collections::BTreeSet<&str> =
-        files.iter().map(String::as_str).collect();
+    let mut file_set: std::collections::BTreeSet<&str> = files.iter().map(String::as_str).collect();
     for img in &image_files {
         file_set.insert(img.as_str());
     }
