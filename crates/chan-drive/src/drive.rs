@@ -928,10 +928,27 @@ impl Drive {
     }
 
     /// All contact-kind notes in the drive, sorted by display name.
-    /// Pass-through to `GraphView::contacts`. Drives the editor `@`
-    /// picker and `GET /api/contacts`.
+    /// Pass-through to `GraphView::contacts`. Convenience for callers
+    /// (CLI, tests) that want the full list; the editor `@` picker
+    /// and `GET /api/contacts` should call `contacts_filtered`
+    /// instead so the case-insensitive contains filter and result cap
+    /// run inside SQLite.
     pub fn contacts(&self) -> Result<Vec<crate::graph::ContactNode>> {
         self.graph()?.contacts()
+    }
+
+    /// Filtered contact-kind notes. `query` is matched case-
+    /// insensitively against title and basename inside SQLite, and
+    /// `limit` caps the row count so picker keystrokes stay O(limit)
+    /// regardless of how many contacts the drive holds. `query` of
+    /// `None` or empty returns up to `limit` contacts in display-name
+    /// order.
+    pub fn contacts_filtered(
+        &self,
+        query: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::graph::ContactNode>> {
+        self.graph()?.contacts_filtered(query, limit)
     }
 
     // ---- watch ----

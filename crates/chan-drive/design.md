@@ -398,6 +398,43 @@ Non-goals: OAuth, API integration, two-way sync, on-disk cache.
 Contact notes ARE the source of truth; the existing markdown
 indexer covers read.
 
+Contact-aware filtering for the editor `@` picker and
+`GET /api/contacts` lives at the SQL layer:
+`GraphView::contacts_filtered(query, limit)` runs a case-
+insensitive `LIKE` against `title` and `basename` with the limit
+applied inside SQLite, so per-keystroke calls stay O(limit)
+instead of O(N). `GraphView::contacts()` is a convenience wrapper
+for callers that want the full list.
+
+Discovery is content-driven, not directory-driven. Any `.md` file
+whose frontmatter has `chan.kind: contact` (under the `chan:`
+namespace) is classified as `NodeKind::Contact` regardless of
+where it sits in the drive. A user who hand-rolls a contact note
+in their own folder and drops it in is picked up by the next
+indexer pass; the `Contacts/` directory is just the importer's
+default destination, not a discovery requirement.
+
+Limitations of the v1 contacts surface, recorded so a future
+iteration can pick them up:
+
+  - Email-aware `@` picker matching is not pushed down. Emails
+    live in body bullets, not on the `nodes` row, so a query of
+    `alice` matches a contact whose title or basename contains
+    `alice` but does not match a contact whose only `alice` is
+    in `alice@example.com`. Adding email-aware match requires
+    either a `nodes.emails` text column populated by
+    `parse_for_graph` or a side `contact_emails` table joined
+    in `contacts_filtered`.
+  - The chan-llm tool sandbox (and the MCP server it backs) does
+    not yet expose a contacts-aware tool. Agents reach contacts
+    through the existing `read_file` / `list_files` /
+    `search_content` tools (e.g., `list_files prefix=Contacts/`
+    or `search_content "kind: contact"`); a dedicated
+    `list_contacts` / `find_contact` tool would parallel
+    `Drive::contacts_filtered` and would be the right shape if
+    the agent surface needs richer contact discovery. Tracked
+    alongside `chan-llm` issue #2 (MCP resources).
+
 ## 4. Public API surface
 
 ### Library
@@ -468,6 +505,8 @@ Drive::import_contacts(dir: &str,
     opts: ImportOpts,
 ) -> Result<ImportSummary>
 Drive::contacts() -> Result<Vec<ContactNode>>
+Drive::contacts_filtered(query: Option<&str>, limit: usize)
+    -> Result<Vec<ContactNode>>
 ```
 
 `BYTES_WRITE_LIMIT` and `TEXT_WRITE_LIMIT` cap a single write

@@ -612,42 +612,75 @@ impl GraphView {
         Ok(out)
     }
 
-    /// Contact-kind nodes only, sorted by path. Drives the editor's
-    /// `@` picker and the `GET /api/contacts` route. Title is the
-    /// contact's display name (`# H1` of the imported note); basename
-    /// is the file name without directory.
+    /// All contact-kind nodes, sorted by display name. Convenience
+    /// wrapper on `contacts_filtered(None, usize::MAX)` for callers
+    /// (CLI, tests) that want the whole list.
     pub fn contacts(&self) -> Result<Vec<ContactNode>> {
-        tracing::debug!("graph::contacts");
+        self.contacts_filtered(None, usize::MAX)
+    }
+
+    /// Contact-kind nodes filtered + capped at the SQL layer. Drives
+    /// the editor's `@` picker and `GET /api/contacts`.
+    ///
+    /// `query`: case-insensitive substring matched against `title`
+    /// (the `# H1` of the imported note) and `basename` (the file
+    /// name minus directory). `None` or empty matches everything.
+    /// `limit`: hard cap on rows returned. Callers that want
+    /// "everything" pass `usize::MAX`.
+    ///
+    /// Push-down rationale: the picker fires per-keystroke, and
+    /// loading the full list + lowercasing every row in Rust is O(N)
+    /// per request. SQLite's `LIKE` with `COLLATE NOCASE` does the
+    /// same case-insensitive contains check at the storage layer and
+    /// stops walking once `limit` rows match. Email-aware matching
+    /// is not yet pushed down: emails live in the body bullets, not
+    /// the `nodes` row, so a future schema bump (or a side
+    /// `contact_emails` table) would be required before the picker
+    /// can match `alice` to `alice@example.com`.
+    pub fn contacts_filtered(&self, query: Option<&str>, limit: usize) -> Result<Vec<ContactNode>> {
+        let needle = query.map(|s| s.trim()).filter(|s| !s.is_empty());
+        tracing::debug!(?needle, limit, "graph::contacts_filtered");
         let conn = self.reader()?;
-        let mut stmt = conn.prepare_cached(
-            "SELECT rel_path, basename, title FROM nodes \
-             WHERE kind = 'contact' ORDER BY \
-             COALESCE(title, basename, rel_path) COLLATE NOCASE",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, Option<String>>(2)?,
-            ))
-        })?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (rel_path, basename, title) = row?;
-            let basename = basename.unwrap_or_else(|| {
-                std::path::Path::new(&rel_path)
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(&rel_path)
-                    .to_string()
-            });
-            out.push(ContactNode {
-                rel_path,
-                basename,
-                title,
-            });
+        let limit_sql: i64 = limit.min(i64::MAX as usize) as i64;
+
+        // Two SQL shapes so the unfiltered path stays a clean
+        // `WHERE kind = 'contact'` (planner picks the kind index, no
+        // wasted LIKE work), and the filtered path adds two
+        // case-insensitive contains predicates against title and
+        // basename.
+        if let Some(q) = needle {
+            // Use the same LIKE-wildcard escape pair (`like_escape` +
+            // `ESCAPE '\\'`) the link-targets path uses so a query of
+            // "100%off" matches literally instead of as a wildcard.
+            let pattern = format!("%{}%", like_escape(q));
+            let mut stmt = conn.prepare_cached(
+                "SELECT rel_path, basename, title FROM nodes \
+                 WHERE kind = 'contact' \
+                   AND (title LIKE ?1 ESCAPE '\\' COLLATE NOCASE \
+                        OR basename LIKE ?1 ESCAPE '\\' COLLATE NOCASE) \
+                 ORDER BY COALESCE(title, basename, rel_path) COLLATE NOCASE \
+                 LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(params![pattern, limit_sql], row_to_contact)?;
+            let mut out = Vec::with_capacity(limit.min(64));
+            for row in rows {
+                out.push(row?);
+            }
+            Ok(out)
+        } else {
+            let mut stmt = conn.prepare_cached(
+                "SELECT rel_path, basename, title FROM nodes \
+                 WHERE kind = 'contact' \
+                 ORDER BY COALESCE(title, basename, rel_path) COLLATE NOCASE \
+                 LIMIT ?1",
+            )?;
+            let rows = stmt.query_map(params![limit_sql], row_to_contact)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            Ok(out)
         }
-        Ok(out)
     }
 
     /// Link-autocomplete lookup. Drives the `[[` typeahead in the
@@ -860,6 +893,28 @@ fn recent_files(conn: &Connection, limit: i64) -> Result<Vec<LinkTarget>> {
     Ok(out)
 }
 
+/// rusqlite row -> ContactNode. Shared between `contacts` and
+/// `contacts_filtered` so the basename fallback (derive from
+/// `rel_path` when the column is NULL, e.g., for v2 rows the
+/// indexer hasn't refreshed yet) lives in one place.
+fn row_to_contact(row: &rusqlite::Row<'_>) -> rusqlite::Result<ContactNode> {
+    let rel_path: String = row.get(0)?;
+    let basename: Option<String> = row.get(1)?;
+    let title: Option<String> = row.get(2)?;
+    let basename = basename.unwrap_or_else(|| {
+        std::path::Path::new(&rel_path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&rel_path)
+            .to_string()
+    });
+    Ok(ContactNode {
+        rel_path,
+        basename,
+        title,
+    })
+}
+
 /// Escape SQL LIKE wildcards (`%`, `_`) and the escape character
 /// (`\`) so user-typed queries are matched literally. Pair with
 /// `ESCAPE '\\'` in the SQL.
@@ -1052,6 +1107,99 @@ mod tests {
             g.replace_file(rel, *title, *mtime, NodeKind::File, &[], &[])
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn contacts_filtered_pushes_query_and_limit_into_sql() {
+        let tmp = TempDir::new().unwrap();
+        let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
+        // Mix of contact and file nodes; filter must skip files even
+        // when their title/basename matches.
+        g.replace_file(
+            "Contacts/Alice.md",
+            Some("Alice Anderson"),
+            Some(1),
+            NodeKind::Contact,
+            &[],
+            &[],
+        )
+        .unwrap();
+        g.replace_file(
+            "Contacts/Bob.md",
+            Some("Bob Brown"),
+            Some(2),
+            NodeKind::Contact,
+            &[],
+            &[],
+        )
+        .unwrap();
+        g.replace_file(
+            "Contacts/Charlie.md",
+            Some("Charlie Cohen"),
+            Some(3),
+            NodeKind::Contact,
+            &[],
+            &[],
+        )
+        .unwrap();
+        g.replace_file(
+            "notes/alice-mentioned.md",
+            Some("Alice Mentioned"),
+            Some(4),
+            NodeKind::File,
+            &[],
+            &[],
+        )
+        .unwrap();
+
+        // Case-insensitive contains on title.
+        let hits = g.contacts_filtered(Some("ali"), 10).unwrap();
+        let paths: Vec<_> = hits.iter().map(|c| c.rel_path.as_str()).collect();
+        assert_eq!(paths, vec!["Contacts/Alice.md"]);
+
+        // Case-insensitive contains on basename.
+        let hits = g.contacts_filtered(Some("BOB"), 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].rel_path, "Contacts/Bob.md");
+
+        // Empty / None matches all contacts in display-name order,
+        // capped by limit.
+        let hits = g.contacts_filtered(None, 2).unwrap();
+        let paths: Vec<_> = hits.iter().map(|c| c.rel_path.as_str()).collect();
+        assert_eq!(paths, vec!["Contacts/Alice.md", "Contacts/Bob.md"]);
+
+        // Empty-string query is treated as None.
+        let hits = g.contacts_filtered(Some("   "), 10).unwrap();
+        assert_eq!(hits.len(), 3);
+    }
+
+    #[test]
+    fn contacts_filtered_escapes_like_wildcards() {
+        let tmp = TempDir::new().unwrap();
+        let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
+        g.replace_file(
+            "Contacts/100off.md",
+            Some("100% Off"),
+            Some(1),
+            NodeKind::Contact,
+            &[],
+            &[],
+        )
+        .unwrap();
+        g.replace_file(
+            "Contacts/Bob.md",
+            Some("Bob"),
+            Some(2),
+            NodeKind::Contact,
+            &[],
+            &[],
+        )
+        .unwrap();
+        // A bare `%` would be a SQL LIKE wildcard matching everything.
+        // After escaping it must match only the literal "%".
+        let hits = g.contacts_filtered(Some("%"), 10).unwrap();
+        let paths: Vec<_> = hits.iter().map(|c| c.rel_path.as_str()).collect();
+        assert_eq!(paths, vec!["Contacts/100off.md"]);
     }
 
     #[test]
