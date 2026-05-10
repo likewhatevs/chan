@@ -248,6 +248,10 @@ export const api = {
     overwrote: string[];
     skipped: Array<{ path: string; reason: string }>;
     failed: Array<{ name: string; reason: string }>;
+    /** Non-fatal issues the server detected while parsing the
+     *  request (e.g., unknown multipart parts that were ignored).
+     *  Always present; empty when nothing unexpected showed up. */
+    warnings: string[];
   }> => {
     const form = new FormData();
     form.append("file", file);
@@ -266,12 +270,16 @@ export const api = {
       const text = await res.text().catch(() => res.statusText);
       throw new ApiError(res.status, text || res.statusText);
     }
-    return (await res.json()) as {
+    const body = (await res.json()) as {
       wrote: string[];
       overwrote: string[];
       skipped: Array<{ path: string; reason: string }>;
       failed: Array<{ name: string; reason: string }>;
+      warnings?: string[];
     };
+    // `warnings` was added after the initial route shipped; tolerate
+    // older servers that don't send it by defaulting to empty.
+    return { ...body, warnings: body.warnings ?? [] };
   },
   /** List contact-kind notes for the editor `@` picker. Optional
    *  `q` is a case-insensitive substring filter on title + basename;

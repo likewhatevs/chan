@@ -290,6 +290,20 @@
               </ul>
             </details>
           {/if}
+          {#if result.warnings.length > 0}
+            <!-- Non-fatal: parts of the request the server
+                 ignored (typically an unknown multipart field).
+                 Surface so a typo on the wire doesn't get swallowed
+                 silently; the import itself still succeeded. -->
+            <details class="fails warn" open>
+              <summary>Warnings</summary>
+              <ul>
+                {#each result.warnings as w}
+                  <li>{w}</li>
+                {/each}
+              </ul>
+            </details>
+          {/if}
         </div>
       {/if}
 
@@ -434,6 +448,7 @@
   .counts .bad { color: var(--err, #d33); }
   .fails summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; }
   .fails ul { margin: 0.4rem 0 0 1rem; padding: 0; font-size: 13px; }
+  .fails.warn summary { color: var(--warn, #c80); }
   .error { color: var(--err, #d33); font-size: 13px; }
   input[type="file"] {
     background: var(--bg);

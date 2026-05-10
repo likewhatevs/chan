@@ -19,18 +19,23 @@
 //!   provider   text        "google" today; flag is forward-compat
 //!   overwrite  text        "true" / "false" (default false)
 //!
-//! Response shape per plan §7:
+//! Response shape:
 //!   {
 //!     "wrote":     ["Contacts/Jane Doe.md", ...],
 //!     "overwrote": [...],
 //!     "skipped":   [{"path": "...", "reason": "exists"}, ...],
-//!     "failed":    [{"name": "...", "reason": "..."}, ...]
+//!     "failed":    [{"name": "...", "reason": "..."}, ...],
+//!     "warnings":  ["ignoring unknown multipart field `foo`", ...]
 //!   }
 //!
 //! Per-file errors do not fail the request: a single bad slug
 //! lands as `failed` and the rest of the batch goes through.
 //! Setup-level failures (parse error, dest_dir creation refused
-//! by the path sandbox) return 400.
+//! by the path sandbox) return 400. `warnings` carries non-fatal
+//! issues the route detected while parsing the request, e.g.,
+//! unknown multipart parts the route doesn't consume; clients
+//! (the wizard, the CLI) surface them so a typo in a field name
+//! doesn't fail silently.
 
 use std::sync::Arc;
 
@@ -66,36 +71,24 @@ pub async fn api_get_contacts(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ContactsListQuery>,
 ) -> Response {
-    let needle = q.q.unwrap_or_default().trim().to_lowercase();
-    let all = match state.drive().contacts() {
+    let needle = q.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let rows = match state.drive().contacts_filtered(needle, q.limit) {
         Ok(v) => v,
         Err(e) => return err_from(&e),
     };
-    let mut out = Vec::with_capacity(q.limit.min(all.len()));
-    for c in all {
-        if !needle.is_empty() {
-            let title_ok = c
-                .title
-                .as_deref()
-                .map(|t| t.to_lowercase().contains(&needle))
-                .unwrap_or(false);
-            let basename_ok = c.basename.to_lowercase().contains(&needle);
-            if !title_ok && !basename_ok {
-                continue;
-            }
-        }
-        // Picker rows show the title primarily; basename is the
-        // fallback when the imported file has no `# H1` (rare, but
-        // possible if the user edited the markdown).
-        let label = c.title.clone().unwrap_or_else(|| c.basename.clone());
-        out.push(serde_json::json!({
-            "path": c.rel_path,
-            "label": label,
-        }));
-        if out.len() >= q.limit {
-            break;
-        }
-    }
+    let out: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|c| {
+            // Picker rows show the title primarily; basename is the
+            // fallback when the imported file has no `# H1` (rare,
+            // but possible if the user edited the markdown).
+            let label = c.title.unwrap_or(c.basename);
+            serde_json::json!({
+                "path": c.rel_path,
+                "label": label,
+            })
+        })
+        .collect();
     Json(out).into_response()
 }
 
@@ -107,18 +100,37 @@ pub async fn api_post_contacts_import(
     let mut dest_dir: Option<String> = None;
     let mut provider: Option<String> = None;
     let mut overwrite = false;
+    // Track parts the route doesn't consume so the caller (CLI, UI)
+    // can flag them. Silently dropping unknown fields hides client
+    // bugs (typos like `dest-dir` for `dest_dir`, future schema drift
+    // a stale chan binary doesn't recognize). We don't fail the
+    // request: the import still succeeds with what we did parse.
+    let mut warnings: Vec<String> = Vec::new();
 
     loop {
         match multipart.next_field().await {
             Ok(Some(field)) => {
                 let name = field.name().unwrap_or("").to_owned();
                 match name.as_str() {
-                    "file" if csv_bytes.is_none() => match field.bytes().await {
-                        Ok(b) => csv_bytes = Some(b.to_vec()),
-                        Err(e) => {
-                            return err(StatusCode::BAD_REQUEST, format!("multipart read: {e}"));
+                    "file" => {
+                        if csv_bytes.is_some() {
+                            warnings
+                                .push("multiple `file` parts in request; using the first".into());
+                            // Drain the duplicate so the next loop
+                            // iteration sees the next field.
+                            let _ = field.bytes().await;
+                            continue;
                         }
-                    },
+                        match field.bytes().await {
+                            Ok(b) => csv_bytes = Some(b.to_vec()),
+                            Err(e) => {
+                                return err(
+                                    StatusCode::BAD_REQUEST,
+                                    format!("multipart read: {e}"),
+                                );
+                            }
+                        }
+                    }
                     "dest_dir" => match field.text().await {
                         Ok(s) => dest_dir = Some(s),
                         Err(e) => {
@@ -144,7 +156,18 @@ pub async fn api_post_contacts_import(
                             return err(StatusCode::BAD_REQUEST, format!("multipart read: {e}"));
                         }
                     },
-                    _ => {}
+                    other => {
+                        // Unknown / unexpected part. Drain its body
+                        // to keep the multipart parser advancing,
+                        // record it, and move on.
+                        let label = if other.is_empty() {
+                            "<unnamed part>".to_string()
+                        } else {
+                            other.to_string()
+                        };
+                        let _ = field.bytes().await;
+                        warnings.push(format!("ignoring unknown multipart field `{label}`"));
+                    }
                 }
             }
             Ok(None) => break,
@@ -244,6 +267,11 @@ pub async fn api_post_contacts_import(
         "overwrote": overwrote,
         "skipped": skipped,
         "failed": failed,
+        // `warnings` is always present (never omitted) so the
+        // frontend / CLI can render it without a presence check. It
+        // stays empty when nothing unexpected showed up in the
+        // request.
+        "warnings": warnings,
     }))
     .into_response()
 }
