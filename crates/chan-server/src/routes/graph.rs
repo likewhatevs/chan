@@ -183,6 +183,22 @@ fn file_label(rel: &str) -> String {
     stem
 }
 
+/// Image-extension predicate. Mirrors the frontend's classifyFile
+/// regex (`png|jpe?g|gif|webp|svg|avif|bmp`). The graph route uses
+/// this to enrich the file set with image files referenced by
+/// markdown so a `![](pic.png)` lands on a real file node instead
+/// of a ghost. Keep both predicates in sync.
+fn is_image_path(rel: &str) -> bool {
+    let ext = std::path::Path::new(rel)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    matches!(
+        ext.as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "avif" | "bmp")
+    )
+}
+
 /// Resolve a markdown link-edge target to an indexed drive file when
 /// possible. chan-drive stores link targets verbatim from the source
 /// (e.g. `[link](my%20note.md)` -> dst = `"my%20note.md"`); without
@@ -266,7 +282,29 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
         }
     }
 
-    let file_set: std::collections::BTreeSet<&str> = files.iter().map(String::as_str).collect();
+    // Image files aren't graph nodes (the indexer skips non-text
+    // files), so a markdown `![alt](pic.png)` would otherwise resolve
+    // to a ghost. Walk the disk tree, collect image-extensioned
+    // entries, and merge them into the resolution set so an existing
+    // image lands on a real file node (the frontend then styles
+    // file-kind nodes by extension via classifyFile).
+    let image_files: std::collections::BTreeSet<String> =
+        match drive.list_tree() {
+            Ok(entries) => entries
+                .into_iter()
+                .filter(|e| !e.is_dir && is_image_path(&e.path))
+                .map(|e| e.path)
+                .collect(),
+            // list_tree failure shouldn't kill the graph; fall back to
+            // an empty image set and the old ghost-rendering path.
+            Err(_) => std::collections::BTreeSet::new(),
+        };
+
+    let mut file_set: std::collections::BTreeSet<&str> =
+        files.iter().map(String::as_str).collect();
+    for img in &image_files {
+        file_set.insert(img.as_str());
+    }
 
     // Rewrite link-edge targets so URL-encoded / source-relative
     // markdown links land on the real file node (clickable in the
@@ -278,16 +316,39 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
         }
     }
 
+    // Track which image files are actually referenced by an edge so
+    // we only emit nodes for images that participate in the graph.
+    // Unreferenced images would inflate the node count without
+    // adding any edges — purely visual noise.
+    let mut referenced_images: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    for e in &all_edges {
+        if matches!(e.kind, EdgeKind::Link) && image_files.contains(&e.dst) {
+            referenced_images.insert(e.dst.clone());
+        }
+    }
+
     // Build the node list. File nodes for every indexed path; tag
-    // nodes per #tag; mention nodes per distinct @@name. Ghost
-    // file nodes for unresolved link targets so the graph shows
-    // broken links as dangling muted nodes.
+    // nodes per #tag; mention nodes per distinct @@name. Image
+    // file nodes for any image actually referenced by an edge (the
+    // indexer skips images, so they aren't in `files` even when
+    // they exist on disk). Ghost file nodes for unresolved link
+    // targets so the graph shows broken links as dangling muted
+    // nodes.
     let mut nodes: Vec<GraphNodeView> = Vec::new();
     for path in &files {
         nodes.push(GraphNodeView::File {
             id: path.clone(),
             label: file_label(path),
             path: path.clone(),
+            missing: false,
+        });
+    }
+    for img in &referenced_images {
+        nodes.push(GraphNodeView::File {
+            id: img.clone(),
+            label: file_label(img),
+            path: img.clone(),
             missing: false,
         });
     }
@@ -300,6 +361,15 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
     let mut mention_set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut ghost_set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for e in &all_edges {
+        // Defensive: skip edges that resolved to an empty dst.
+        // Cytoscape rejects nodes with an empty string id; without
+        // this filter a legacy database with an empty-target edge
+        // (pre-empty-target-skip extractor) blocks the whole graph
+        // render with "Can not create element with invalid string
+        // ID ``".
+        if e.dst.is_empty() {
+            continue;
+        }
         match e.kind {
             EdgeKind::Mention => {
                 mention_set.insert(e.dst.clone());
@@ -329,6 +399,12 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
 
     let edges: Vec<GraphEdgeView> = all_edges
         .iter()
+        // Same defensive guard as the node-set above: an edge with
+        // an empty endpoint would point at a node we never created
+        // (ghosts / mentions / tags filter empty dsts), and
+        // Cytoscape errors on empty source/target ids the same as
+        // empty node ids.
+        .filter(|e| !e.src.is_empty() && !e.dst.is_empty())
         .map(|e| GraphEdgeView {
             source: e.src.clone(),
             // chan-drive stores the leading `#` / `@@` sigil on the
