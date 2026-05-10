@@ -10,10 +10,10 @@
 // the host (Wysiwyg.svelte) routes Enter / Escape / Arrow keys
 // while the trigger range is active.
 
-import { positionPopover, watchViewport } from "./popover";
+import { openBubbleShell, type BubbleHandle } from "../bubble";
 import { ensureGraphLoaded, graphData } from "../../state/graphData.svelte";
 
-export interface TagBubble {
+export interface TagBubble extends BubbleHandle {
   /// Update the typed query and re-render. Empty query shows the
   /// catalog's first 5 tags.
   setQuery(query: string): void;
@@ -33,23 +33,20 @@ export interface TagBubbleOpts {
   /// Click-to-commit; the host commits the same way it would on
   /// Enter (calls accept() and replaces the trigger range).
   onClickAccept?: () => void;
+  /// Fires on Enter inside the bubble. Wired to the same host
+  /// accept path as `onClickAccept`.
+  onCommit?: () => void;
+  /// Fires on Escape. Host runs its full dismiss path.
+  onDismiss?: () => void;
 }
 
 export function openTagBubble(opts: TagBubbleOpts): TagBubble {
-  const wrap = document.createElement("div");
-  wrap.className = "md-tag-bubble";
-  wrap.style.position = "absolute";
-  // Match the wiki / image picker so the bubble floats above any
-  // overlay that sits at 25000.
-  wrap.style.zIndex = "30000";
+  const shell = openBubbleShell({ host: opts.host, className: "md-tag-bubble" });
+  const { wrap } = shell;
 
   const list = document.createElement("ul");
   list.className = "md-tag-bubble-results";
   wrap.appendChild(list);
-
-  document.body.appendChild(wrap);
-  positionPopover(opts.host, wrap);
-  const stopWatch = watchViewport(opts.host, wrap);
 
   let entries: string[] = [];
   let active = 0;
@@ -77,7 +74,7 @@ export function openTagBubble(opts: TagBubbleOpts): TagBubble {
       });
       list.appendChild(li);
     });
-    if (wrap.isConnected) positionPopover(opts.host, wrap);
+    shell.reposition();
   };
 
   const filter = (q: string): void => {
@@ -130,8 +127,25 @@ export function openTagBubble(opts: TagBubbleOpts): TagBubble {
     dismiss(): void {
       if (!alive) return;
       alive = false;
-      stopWatch();
-      wrap.remove();
+      shell.dismiss();
+    },
+    handleKey(event: KeyboardEvent): boolean {
+      if (!alive) return false;
+      switch (event.key) {
+        case "Enter":
+          opts.onCommit?.();
+          return true;
+        case "Escape":
+          opts.onDismiss?.();
+          return true;
+        case "ArrowDown":
+          this.moveActive(1);
+          return true;
+        case "ArrowUp":
+          this.moveActive(-1);
+          return true;
+      }
+      return false;
     },
   };
 }

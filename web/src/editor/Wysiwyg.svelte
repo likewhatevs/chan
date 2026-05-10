@@ -44,6 +44,7 @@
     openContactBubble,
     type ContactBubble,
   } from "./extensions/contactPicker";
+  import { type BubbleHandle } from "./bubble";
   import { FoldHeadingExtension } from "./extensions/foldHeading";
   import { createTagDecorationExtension } from "./extensions/tagDecoration";
   import { openGraphAtNode } from "../state/store.svelte";
@@ -350,81 +351,17 @@
       // insert path.
       editorProps: {
         handleKeyDown: (_view, event) => {
-          // Wiki bubble owns Enter / Escape / Arrow keys while the
-          // caret is inside `[[ ]]`. We check bubble state instead
-          // of just findBracketRange() so that an empty `[[ ]]`
-          // typed by the user without going through the trigger
-          // path doesn't accidentally swallow Enter.
-          if (wikiBubble) {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              acceptWikiBubble();
-              return true;
-            }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              dismissWikiBubble();
-              return true;
-            }
-            // ArrowUp / ArrowDown always browse the bubble's
-            // result list, both in the typed `[[` flow and the
-            // edit-existing flow (where the bubble shows the
-            // current link's matches; arrow-keys are how the user
-            // picks a different one).
-            if (event.key === "ArrowDown") {
-              event.preventDefault();
-              wikiBubble.moveActive(1);
-              return true;
-            }
-            if (event.key === "ArrowUp") {
-              event.preventDefault();
-              wikiBubble.moveActive(-1);
-              return true;
-            }
-          }
-          if (tagBubble) {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              acceptTagBubble();
-              return true;
-            }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              dismissTagBubble();
-              return true;
-            }
-            if (event.key === "ArrowDown") {
-              event.preventDefault();
-              tagBubble.moveActive(1);
-              return true;
-            }
-            if (event.key === "ArrowUp") {
-              event.preventDefault();
-              tagBubble.moveActive(-1);
-              return true;
-            }
-          }
-          if (contactBubble) {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              acceptContactBubble();
-              return true;
-            }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              dismissContactBubble();
-              return true;
-            }
-            if (event.key === "ArrowDown") {
-              event.preventDefault();
-              contactBubble.moveActive(1);
-              return true;
-            }
-            if (event.key === "ArrowUp") {
-              event.preventDefault();
-              contactBubble.moveActive(-1);
-              return true;
-            }
+          // Bubble keyboard routing: each adapter owns its Enter /
+          // Escape / Arrow semantics behind `BubbleHandle.handleKey`.
+          // Only one bubble is ever open at a time (the open paths
+          // guard with `if (otherBubble) return`), so first-match
+          // wins is enough; the host stays out of per-bubble accept
+          // / dismiss logic.
+          const activeBubble: BubbleHandle | undefined =
+            wikiBubble ?? tagBubble ?? contactBubble;
+          if (activeBubble?.handleKey(event)) {
+            event.preventDefault();
+            return true;
           }
           if (
             onSubmit &&
@@ -1019,6 +956,8 @@
       host: caretAnchorHost(),
       prefix: wikiPickerPrefix,
       onClickAccept: () => acceptWikiBubble(),
+      onCommit: () => acceptWikiBubble(),
+      onDismiss: () => dismissWikiBubble(),
       followExisting,
       onFollowExisting: (target, anchor) => {
         // Treat this as "navigate AND keep the link": restore the
@@ -1236,6 +1175,8 @@
     tagBubble = openTagBubble({
       host: caretAnchorHost(),
       onClickAccept: () => acceptTagBubble(),
+      onCommit: () => acceptTagBubble(),
+      onDismiss: () => dismissTagBubble(),
     });
     tagBubble.setQuery(query);
   }
@@ -1327,6 +1268,8 @@
     contactBubble = openContactBubble({
       host: caretAnchorHost(),
       onClickAccept: () => acceptContactBubble(),
+      onCommit: () => acceptContactBubble(),
+      onDismiss: () => dismissContactBubble(),
     });
     contactBubble.setQuery(query);
   }

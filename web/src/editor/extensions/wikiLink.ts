@@ -28,7 +28,7 @@ import { Node, mergeAttributes } from "@tiptap/core";
 import { api } from "../../api/client";
 import { wikiLinkToMarkdown } from "../links";
 import { openInActivePane } from "../../state/tabs.svelte";
-import { positionPopover, watchViewport } from "./popover";
+import { openBubbleShell, type BubbleHandle } from "../bubble";
 
 /// Build a wikiLink extension that closes over `getFromPath`.
 /// When the getter returns a non-empty string, serialize emits a
@@ -205,9 +205,18 @@ export interface WikiBubbleOpts {
   /// Fires when the user clicks the `>` follow button. Receives
   /// the same `followExisting` value the bubble was opened with.
   onFollowExisting?: (target: string, anchor: string) => void;
+  /// Fires on Enter inside the bubble. The host runs the same
+  /// accept path as `onClickAccept` (call `accept()` + replace the
+  /// bracket range). Kept separate so the keyboard and mouse paths
+  /// can diverge later without touching the bubble shell.
+  onCommit?: () => void;
+  /// Fires on Escape. The host should run its full dismiss path
+  /// (clearing edit-existing snapshots, etc.), not just the
+  /// bubble's `dismiss()`.
+  onDismiss?: () => void;
 }
 
-export interface WikiBubble {
+export interface WikiBubble extends BubbleHandle {
   /// Update the query string (the text between the brackets) and
   /// re-render. The bubble debounces network calls; safe to call
   /// on every keystroke.
@@ -296,13 +305,8 @@ function fileLabel(target: string): string {
 }
 
 export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
-  const wrap = document.createElement("div");
-  wrap.className = "md-wiki-bubble";
-  wrap.style.position = "absolute";
-  // Above any overlay (InlineAssist + SearchPanel sit at 25000),
-  // so [[ inside the assistant prompt's Wysiwyg shows the bubble
-  // ABOVE the chat backdrop instead of behind it.
-  wrap.style.zIndex = "30000";
+  const shell = openBubbleShell({ host: opts.host, className: "md-wiki-bubble" });
+  const { wrap } = shell;
 
   const head = document.createElement("div");
   head.className = "md-wiki-bubble-head";
@@ -377,8 +381,6 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
     footer.appendChild(followBtn);
   }
   wrap.appendChild(footer);
-
-  document.body.appendChild(wrap);
 
   let mode: Mode = "file";
   /// File picked when transitioning into heading or block mode.
@@ -470,7 +472,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
       accept.classList.add("is-hidden");
       preview.classList.add("is-hidden");
       preview.innerHTML = "";
-      if (wrap.isConnected) positionPopover(opts.host, wrap);
+      shell.reposition();
       return;
     }
     list.classList.remove("is-empty");
@@ -538,7 +540,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
       preview.classList.add("is-hidden");
       preview.innerHTML = "";
     }
-    if (wrap.isConnected) positionPopover(opts.host, wrap);
+    shell.reposition();
   };
 
   const runFileSearch = async (filePart: string): Promise<void> => {
@@ -653,9 +655,6 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
     lockedMtime = null;
     blockToken++;
   };
-
-  positionPopover(opts.host, wrap);
-  const stopWatch = watchViewport(opts.host, wrap);
 
   // Initial paint
   renderHead("");
@@ -821,8 +820,28 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
     dismiss(): void {
       if (!alive) return;
       alive = false;
-      stopWatch();
-      wrap.remove();
+      shell.dismiss();
+    },
+    handleKey(event: KeyboardEvent): boolean {
+      if (!alive) return false;
+      switch (event.key) {
+        case "Enter":
+          opts.onCommit?.();
+          return true;
+        case "Escape":
+          opts.onDismiss?.();
+          return true;
+        case "ArrowDown":
+          // moveActive already accounts for the follow-button slot
+          // (active === entries.length) when followBtn is present,
+          // so the host doesn't need any special-case branching.
+          this.moveActive(1);
+          return true;
+        case "ArrowUp":
+          this.moveActive(-1);
+          return true;
+      }
+      return false;
     },
   };
 }

@@ -8,16 +8,17 @@
 // host replaces the `@<query>` range with `[[<rel_path>]]`.
 //
 // Same UX shape as TagBubble: the bubble does NOT take focus; the
-// host routes Enter / Escape / Arrow keys while it's open. Layout
-// reuses `positionPopover` + `watchViewport` so the popover
-// floats correctly under the caret across scrolls and reflows.
+// host routes Enter / Escape / Arrow keys while it's open via the
+// shared `BubbleHandle.handleKey`. Layout / lifecycle live behind
+// `openBubbleShell` so the popover floats correctly under the
+// caret across scrolls and reflows.
 
-import { positionPopover, watchViewport } from "./popover";
+import { openBubbleShell, type BubbleHandle } from "../bubble";
 import { api } from "../../api/client";
 
 export type ContactRow = { path: string; label: string; emails?: string[] };
 
-export interface ContactBubble {
+export interface ContactBubble extends BubbleHandle {
   /// Update the typed query (without the leading `@`) and re-fetch.
   setQuery(query: string): void;
   /// Move the active row by +1 / -1, clamped to bounds.
@@ -36,6 +37,11 @@ export interface ContactBubbleOpts {
   /// Click-to-commit path; the host commits the same way as on
   /// Enter (calls accept() and replaces the trigger range).
   onClickAccept?: () => void;
+  /// Fires on Enter inside the bubble. Wired to the same host
+  /// accept path as `onClickAccept`.
+  onCommit?: () => void;
+  /// Fires on Escape. Host runs its full dismiss path.
+  onDismiss?: () => void;
 }
 
 /// Result cap. Picker is keyboard-driven; 8 rows fits a typical
@@ -48,20 +54,15 @@ const PAGE_LIMIT = 8;
 const DEBOUNCE_MS = 60;
 
 export function openContactBubble(opts: ContactBubbleOpts): ContactBubble {
-  const wrap = document.createElement("div");
-  wrap.className = "md-contact-bubble";
-  wrap.style.position = "absolute";
-  // Match the wiki / tag picker so the bubble floats above any
-  // overlay that sits at 25000.
-  wrap.style.zIndex = "30000";
+  const shell = openBubbleShell({
+    host: opts.host,
+    className: "md-contact-bubble",
+  });
+  const { wrap } = shell;
 
   const list = document.createElement("ul");
   list.className = "md-contact-bubble-results";
   wrap.appendChild(list);
-
-  document.body.appendChild(wrap);
-  positionPopover(opts.host, wrap);
-  const stopWatch = watchViewport(opts.host, wrap);
 
   let entries: ContactRow[] = [];
   let active = 0;
@@ -110,7 +111,7 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubble {
       });
       list.appendChild(li);
     });
-    if (wrap.isConnected) positionPopover(opts.host, wrap);
+    shell.reposition();
   };
 
   const fetchNow = async (q: string): Promise<void> => {
@@ -164,8 +165,25 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubble {
       if (!alive) return;
       alive = false;
       if (pendingTimer) clearTimeout(pendingTimer);
-      stopWatch();
-      wrap.remove();
+      shell.dismiss();
+    },
+    handleKey(event: KeyboardEvent): boolean {
+      if (!alive) return false;
+      switch (event.key) {
+        case "Enter":
+          opts.onCommit?.();
+          return true;
+        case "Escape":
+          opts.onDismiss?.();
+          return true;
+        case "ArrowDown":
+          this.moveActive(1);
+          return true;
+        case "ArrowUp":
+          this.moveActive(-1);
+          return true;
+      }
+      return false;
     },
   };
 }
