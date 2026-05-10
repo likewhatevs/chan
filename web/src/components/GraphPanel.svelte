@@ -16,9 +16,11 @@
 
   import { onDestroy, onMount } from "svelte";
   import cytoscape from "cytoscape";
-  import type { Core, ElementDefinition, EventObject } from "cytoscape";
+  import type { Core, ElementDefinition, EventObject, Layouts } from "cytoscape";
   // @ts-expect-error fcose ships no .d.ts; the layout name is enough
   import fcose from "cytoscape-fcose";
+  // @ts-expect-error cytoscape-d3-force ships no .d.ts
+  import d3Force from "cytoscape-d3-force";
 
   import { api } from "../api/client";
   import type { GraphView, GraphViewEdge, GraphViewNode } from "../api/types";
@@ -34,9 +36,11 @@
   import { formatMtime } from "../state/format";
   import ResizeHandle from "./ResizeHandle.svelte";
   import OverlayShell from "./OverlayShell.svelte";
+  import FileInfoBody from "./FileInfoBody.svelte";
 
   // cytoscape.use is idempotent across module reloads.
   cytoscape.use(fcose);
+  cytoscape.use(d3Force);
 
   // Visibility of the details aside lives on the overlay; per-window
   // session, not persisted to disk. Defaults closed.
@@ -66,13 +70,28 @@
 
   // ---- types -------------------------------------------------------------
 
-  type EdgeKind = GraphViewEdge["kind"];
+  // The graph view only renders documents (files), images (also
+  // file nodes, split by extension at element-build time), and
+  // tags. Mention and date nodes/edges are filtered out at load.
+  // The link-index backend still produces them; see GH issue
+  // (chan-writer/chan) for the eventual indexing-side cleanup.
+  type RenderedEdgeKind = "link" | "tag";
+  type RenderedEdge = GraphViewEdge & { kind: RenderedEdgeKind };
+  type RenderedNode = Extract<GraphViewNode, { kind: "file" | "tag" }>;
 
   // ---- state -------------------------------------------------------------
 
   let containerEl: HTMLDivElement | undefined = $state();
   let cy: Core | null = null;
   let resizeObs: ResizeObserver | null = null;
+  let forceLayout: Layouts | null = null;
+
+  /// Half-width of the box that the d3-force `randomize` scatters
+  /// visible nodes into at the start of every rebuild. 300 = a
+  /// 600x600 model-space area centered on the focal at (0, 0).
+  /// The pre-fit camera frames this box, so the first visible
+  /// frame shows the explosion before d3-force pulls things in.
+  const INITIAL_BBOX_HALF = 300;
 
   /// Gates the currentScope $effect: scopeOptions re-derives any
   /// time the file tree updates, producing a fresh array (and thus
@@ -82,16 +101,14 @@
   /// identity, so the effect only acts on real transitions.
   let lastScopeId: string | null = null;
 
-  let nodes: GraphViewNode[] = $state([]);
-  let edges: GraphViewEdge[] = $state([]);
+  let nodes: RenderedNode[] = $state([]);
+  let edges: RenderedEdge[] = $state([]);
   let loading = $state(true);
   let error: string | null = $state(null);
 
-  let show = $state<Record<EdgeKind, boolean>>({
+  let show = $state<Record<RenderedEdgeKind, boolean>>({
     link: true,
     tag: true,
-    mention: true,
-    date: true,
   });
 
   // Currently inspected node, surfaced in the side details panel.
@@ -107,9 +124,9 @@
   //   (1) the SCOPE picker in the header (file / group / drive).
   //       For file and group, BFS out from the seed paths up to
   //       graphOverlay.depth hops. Drive = no filter.
-  //   (2) the per-edge-kind chips (link / tag / mention / date).
-  //       Edges whose kind is filtered out are dropped, and any
-  //       non-file node attached only via filtered edges drops too.
+  //   (2) the per-edge-kind chips (link / tag). Edges whose kind
+  //       is filtered out are dropped, and any non-file node
+  //       attached only via filtered edges drops too.
   //
   // (1) runs first so the BFS sees the full graph (depth = "graph
   // hops away"). (2) is a render-time filter that can change without
@@ -191,7 +208,7 @@
   });
 
   const counts = $derived.by(() => {
-    const c: Record<EdgeKind, number> = { link: 0, tag: 0, mention: 0, date: 0 };
+    const c: Record<RenderedEdgeKind, number> = { link: 0, tag: 0 };
     for (const e of edges) c[e.kind]++;
     return c;
   });
@@ -208,21 +225,19 @@
     return m;
   });
 
-  const selectedNode = $derived<GraphViewNode | null>(
+  const selectedNode = $derived<RenderedNode | null>(
     selectedId ? (nodeById.get(selectedId) ?? null) : null,
   );
 
   /// Edges where `selectedId` is an endpoint, grouped for the side
-  /// panel. For a file node this gives us its outgoing references
-  /// per kind; for a tag/mention/date node, `documents` lists every
-  /// file that references it.
+  /// panel. For a file node this gives us its outgoing tag/link
+  /// references; for a tag node, `documents` lists every file that
+  /// references it.
   const selectionEdges = $derived.by(() => {
     const out = {
-      tags: [] as GraphViewNode[],
-      mentions: [] as GraphViewNode[],
-      dates: [] as GraphViewNode[],
-      links: [] as GraphViewNode[],
-      documents: [] as Extract<GraphViewNode, { kind: "file" }>[],
+      tags: [] as RenderedNode[],
+      links: [] as RenderedNode[],
+      documents: [] as Extract<RenderedNode, { kind: "file" }>[],
     };
     if (!selectedId) return out;
     const sel = nodeById.get(selectedId);
@@ -232,10 +247,8 @@
         const target = nodeById.get(e.target);
         if (!target) continue;
         if (e.kind === "tag") out.tags.push(target);
-        else if (e.kind === "mention") out.mentions.push(target);
-        else if (e.kind === "date") out.dates.push(target);
         else if (e.kind === "link") out.links.push(target);
-      } else if (sel.kind !== "file" && e.target === selectedId) {
+      } else if (sel.kind === "tag" && e.target === selectedId) {
         const source = nodeById.get(e.source);
         if (source && source.kind === "file") out.documents.push(source);
       }
@@ -258,7 +271,7 @@
     }
   }
 
-  function selectFromList(n: GraphViewNode): void {
+  function selectFromList(n: RenderedNode): void {
     selectedId = n.id;
     if (cy) {
       cy.$(":selected").unselect();
@@ -272,18 +285,15 @@
   /// Used by the inspector's kind chip background. Cytoscape itself
   /// resolves these via getComputedStyle at buildCytoscape time, so
   /// theme changes propagate next reload.
-  const NODE_COLORS: Record<GraphViewNode["kind"], string> = {
-    file: "var(--link)",
-    tag: "var(--accent)",
-    mention: "var(--warn-text)",
-    date: "var(--info-text)",
+  const NODE_COLORS: Record<"doc" | "img" | "tag", string> = {
+    doc: "var(--g-doc)",
+    img: "var(--g-img)",
+    tag: "var(--g-tag)",
   };
 
-  const EDGE_COLORS: Record<EdgeKind, string> = {
+  const EDGE_COLORS: Record<RenderedEdgeKind, string> = {
     link: "var(--text-secondary)",
-    tag: "var(--accent)",
-    mention: "var(--warn-text)",
-    date: "var(--info-text)",
+    tag: "var(--g-tag)",
   };
 
   // ---- cytoscape glue ----------------------------------------------------
@@ -307,10 +317,13 @@
     const cs = getComputedStyle(host);
     const v = (n: string, fb: string) => cs.getPropertyValue(n).trim() || fb;
     return {
-      link: v("--link", "#4a90e2"),
-      accent: v("--accent", "#9b6dff"),
-      warn: v("--warn-text", "#e0a93b"),
-      info: v("--info-text", "#7eaecc"),
+      // Three node kinds in the graph: documents (orange file
+      // rectangles), images (purple circles), tags (green
+      // hashtag labels). Mention/date are filtered upstream.
+      doc: v("--g-doc", "#ff8a3d"),
+      img: v("--g-img", "#b07dff"),
+      tag: v("--g-tag", "#6cd07a"),
+      accent: v("--accent", "#ff7a3b"),
       text: v("--text", "#e8e8e8"),
       textSec: v("--text-secondary", "#9a9a9a"),
       bg: v("--bg", "#1e1e1e"),
@@ -326,6 +339,11 @@
         style: {
           label: "data(label)",
           color: c.text,
+          // Match the rest of the chrome (App.svelte body
+          // font-family) so graph labels read as part of the same
+          // UI rather than a separate widget.
+          "font-family":
+            '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
           "font-size": 11,
           // Labels above the node, ellipsised at a fixed width.
           // Right-of-node placement (the prior layout) bled long
@@ -337,45 +355,53 @@
           "text-wrap": "ellipsis",
           "text-max-width": "110px",
           "text-outline-color": c.bg,
-          "text-outline-width": 2,
+          // Outline at 1px reads as a subtle halo for legibility
+          // over edges/nodes; 2px made labels look bolder than the
+          // surrounding UI text.
+          "text-outline-width": 1,
           "border-width": 1.5,
           "border-color": c.bg,
           "min-zoomed-font-size": 8,
         },
       },
+      // Documents: small orange rounded rectangle, label below.
       {
-        selector: 'node[kind = "file"]',
+        selector: 'node[kind = "doc"]',
         style: {
-          "background-color": c.link,
+          shape: "round-rectangle",
+          "background-color": c.doc,
           width: 14,
-          height: 14,
+          height: 18,
         },
       },
+      // Images: small purple circle, label below.
+      {
+        selector: 'node[kind = "img"]',
+        style: {
+          shape: "ellipse",
+          "background-color": c.img,
+          width: 10,
+          height: 10,
+        },
+      },
+      // Tags: green hashtag text only — no fill, label centered
+      // on the node so the "#name" string IS the visual.
       {
         selector: 'node[kind = "tag"]',
         style: {
-          "background-color": c.accent,
-          width: 8,
-          height: 8,
-          "font-size": 10,
-        },
-      },
-      {
-        selector: 'node[kind = "mention"]',
-        style: {
-          "background-color": c.warn,
-          width: 8,
-          height: 8,
-          "font-size": 10,
-        },
-      },
-      {
-        selector: 'node[kind = "date"]',
-        style: {
-          "background-color": c.info,
-          width: 8,
-          height: 8,
-          "font-size": 10,
+          shape: "rectangle",
+          "background-opacity": 0,
+          "border-width": 0,
+          width: 22,
+          height: 14,
+          color: c.tag,
+          "font-size": 12,
+          "font-weight": 600,
+          "text-valign": "center",
+          "text-halign": "center",
+          "text-margin-y": 0,
+          "text-outline-color": c.bg,
+          "text-outline-width": 1,
         },
       },
       {
@@ -404,10 +430,10 @@
       {
         selector: "node:selected",
         style: {
-          "border-color": c.accent,
+          "border-color": c.doc,
           "border-width": 3,
-          "overlay-color": c.accent,
-          "overlay-opacity": 0.12,
+          "overlay-color": c.doc,
+          "overlay-opacity": 0.15,
           "overlay-padding": 2,
         },
       },
@@ -416,28 +442,20 @@
         style: {
           "curve-style": "bezier",
           "line-cap": "round",
-          opacity: 0.7,
+          opacity: 0.15,
         },
       },
       {
         selector: 'edge[kind = "link"]',
-        style: { "line-color": c.textSec, width: 1.6 },
+        style: { "line-color": c.text, width: 0.7 },
       },
       {
         selector: 'edge[kind = "tag"]',
-        style: { "line-color": c.accent, width: 1.1 },
-      },
-      {
-        selector: 'edge[kind = "mention"]',
-        style: { "line-color": c.warn, width: 1.1 },
-      },
-      {
-        selector: 'edge[kind = "date"]',
-        style: { "line-color": c.info, width: 1.1 },
+        style: { "line-color": c.tag, width: 1.0 },
       },
       {
         selector: "edge[?broken]",
-        style: { "line-style": "dashed", opacity: 0.45 },
+        style: { "line-style": "dashed", opacity: 0.11 },
       },
       {
         selector: ".hidden",
@@ -501,6 +519,61 @@
     } as cytoscape.LayoutOptions;
   }
 
+  /// d3-force options. Runs AFTER fcose seeds positions, so
+  /// `randomize: false` keeps the cluster layout fcose produced and
+  /// just relaxes overlaps + adds the live "jostle" feel: drag a
+  /// node, neighbours nudge out of the way, everything settles.
+  /// d3-force tuning depends on graph size: the playground values
+  /// (manyBody -90, weak centering 0.05) were dialed in against a
+  /// ~45-node graph. Applied to a 7-node file-scope view, the
+  /// repulsion overwhelms the spring constraints and pushes the
+  /// satellites off the canvas. Scale repulsion down and centering
+  /// up as the visible count drops.
+  function d3ForceOptions(visibleCount: number) {
+    // Smooth interpolation between sparse (≤8 nodes) and dense
+    // (≥40 nodes) regimes.
+    const t = Math.max(0, Math.min(1, (visibleCount - 8) / 32));
+    const manyBody = -20 + (-90 - -20) * t;
+    const xy = 0.25 - (0.25 - 0.05) * t;
+    return {
+      name: "d3-force",
+      animate: true,
+      fit: false,
+      randomize: false,
+      infinite: true,
+      ungrabifyWhileSimulating: false,
+      fixedAfterDragging: true,
+      alpha: 1,
+      alphaMin: 0.05,
+      // ~300 ticks (~5s at 60fps) for the simulation to cool from
+      // alpha=1 to alphaMin. Doubled from the previous 150-tick
+      // setting so the initial "shake" — and the same shake on
+      // depth/scope/reload rebuilds — is visible long enough to
+      // read as motion rather than a single snap.
+      alphaDecay: 1 - Math.pow(0.05, 1 / 300),
+      alphaTarget: 0,
+      velocityDecay: 0.55,
+      // Collide radius approximates the label's visual footprint,
+      // not just the node circle: doc labels can be ~110px wide
+      // (text-max-width) so we use ~55 as a half-width bubble that
+      // keeps neighbouring file names from overlapping.
+      collideRadius: (n: { kind?: string }) => {
+        if (n.kind === "doc") return 55;
+        if (n.kind === "tag") return 30;
+        return 22;
+      },
+      collideStrength: 0.95,
+      collideIterations: 2,
+      manyBodyStrength: manyBody,
+      linkDistance: (e: { kind?: string }) =>
+        e.kind === "link" ? 120 : 70,
+      linkStrength: 0.55,
+      linkId: (n: { id: string }) => n.id,
+      xStrength: xy,
+      yStrength: xy,
+    } as cytoscape.LayoutOptions;
+  }
+
   /// File-node ids matching the current scope's seed path(s). Used
   /// to pin the focal-anchor inside the fcose run. Returns an empty
   /// array for drive / global scope (no anchor wanted).
@@ -520,6 +593,13 @@
     return ids;
   }
 
+  /// Files split into "doc" vs "img" by extension at element-build
+  /// time; the GraphView type only knows "file". Anything not a
+  /// recognised image extension counts as a document.
+  function classifyFile(path: string): "doc" | "img" {
+    return /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(path) ? "img" : "doc";
+  }
+
   function buildElements(g: GraphView): {
     elements: ElementDefinition[];
     dropped: number;
@@ -530,7 +610,7 @@
     for (const n of g.nodes) {
       const data: Record<string, unknown> = {
         id: n.id,
-        kind: n.kind,
+        kind: n.kind === "file" ? classifyFile(n.path) : n.kind,
         label: n.label,
       };
       if (n.kind === "file") {
@@ -562,7 +642,14 @@
 
   function buildCytoscape(g: GraphView): void {
     if (!containerEl) return;
+    forceLayout?.stop();
+    forceLayout = null;
     cy?.destroy();
+    // Direct DOM mutation, not a Svelte class binding — needs to
+    // be effective synchronously, before fcose's first render.
+    // Cleared just before forceLayout.run() so the d3-force
+    // animation IS the user-visible "drawing" of the graph.
+    containerEl.style.opacity = "0";
     const { elements, dropped } = buildElements(g);
     if (dropped > 0) {
       console.warn(`graph: dropped ${dropped} edges with unknown endpoints`);
@@ -579,7 +666,11 @@
       elements,
       style: buildStylesheet(containerEl),
       minZoom: 0.15,
-      maxZoom: 4,
+      // Capped at 2 so the post-fit zoom on small scopes (5-15
+      // visible nodes packed tight) doesn't blow up the labels.
+      // cytoscape's font-size is model-space pixels, scaled by
+      // zoom — zoom=5 turned an 11px font into 55px screen text.
+      maxZoom: 2,
       boxSelectionEnabled: false,
       selectionType: "single",
     });
@@ -610,28 +701,100 @@
       fcoseOptions({ randomize: true, animate: false, focalIds }),
     );
     layout.one("layoutstop", () => {
-      // Apply the visibility filter now that every node has a real
-      // position; hidden ones won't pull the bounding box around.
       syncVisibility();
       requestAnimationFrame(() => {
-        if (!cy) return;
+        if (!cy || !containerEl) return;
         cy.resize();
-        const vis = cy.elements(":visible");
-        if (vis.nonempty()) cy.fit(vis, 30);
+        const liveEles = cy.elements(":visible");
+
+        // Lock the focal at origin so it visually anchors the
+        // cluster. We also strip cytoscape-d3-force's built-in
+        // forceCenter below — that auto-centers on the canvas
+        // midpoint in world coords, fighting our locked-at-(0,0)
+        // focal and stranding it on the canvas edge.
+        const focalSet = new Set(focalIds);
         for (const id of focalIds) {
           const ele = cy.getElementById(id);
           if (ele.nonempty()) {
+            ele.position({ x: 0, y: 0 });
             ele.addClass("focal");
             ele.lock();
           }
         }
+
+        // Scatter visible non-focal nodes uniformly within a
+        // 600x600 box around origin. d3-force will then pull
+        // them inward under spring + center forces over the
+        // alpha decay (~5s); that convergence IS the user-visible
+        // "shake" on first draw / scope / depth / reload.
+        liveEles.nodes().forEach((n) => {
+          if (focalSet.has(n.id())) return;
+          n.position({
+            x: (Math.random() - 0.5) * INITIAL_BBOX_HALF * 2,
+            y: (Math.random() - 0.5) * INITIAL_BBOX_HALF * 2,
+          });
+        });
+
+        // Fit camera to the scattered positions BEFORE reveal
+        // so the first visible frame shows the full explosion.
+        cy.fit(liveEles, 30);
+
+        const liveNodeCount = liveEles.nodes().length;
+        forceLayout = liveEles.layout(d3ForceOptions(liveNodeCount));
+
+        forceLayout.one("layoutstop", () => {
+          if (!cy) return;
+          requestAnimationFrame(() => {
+            if (!cy) return;
+            const v = cy.elements(":visible");
+            if (v.nonempty()) {
+              // Smooth animated zoom-in to the settled cluster.
+              cy.animate(
+                { fit: { eles: v, padding: 30 } },
+                { duration: 600, easing: "ease-out" },
+              );
+            }
+          });
+        });
+
+        // Start d3-force ticking BEFORE revealing the canvas so
+        // the first visible frame already has nodes in motion,
+        // not a static scatter that briefly flashes before the
+        // animation begins. ~180 ms (≈ 11 ticks at 60 fps) is
+        // enough for visible drift; CSS opacity transition then
+        // fades the canvas in over the still-running animation.
+        forceLayout.run();
+
+        // Strip cytoscape-d3-force's built-in forceCenter, which
+        // shifts the centroid each tick toward (cy.width/2,
+        // cy.height/2) in world coords (a fixed point unrelated
+        // to our (0, 0) focal). With the focal locked at origin,
+        // that constant pull dragged the rest of the cluster
+        // away from the focal; with it removed, only our
+        // xStrength/yStrength forces pull each node toward
+        // (0, 0) — same target the focal is locked at, so they
+        // align.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const sim = (forceLayout as any).simulation;
+        if (sim) sim.force("center", null);
+
+        setTimeout(() => {
+          if (!containerEl) return;
+          containerEl.style.opacity = "";
+        }, 180);
+
+        cy.nodes().on("free unlock", () => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const sim = (forceLayout as any)?.simulation;
+          if (sim) sim.alphaTarget(0);
+        });
       });
     });
     layout.run();
 
     // Suppress the first re-firing of the currentScope effect: the
     // current scope IS the one we just built for.
-    lastScopeId = currentScope?.id ?? null;
+    lastScopeId = `${currentScope?.id ?? null}|${graphOverlay.depth}`;
   }
 
   /// Apply current scope + edge-kind filters by toggling the
@@ -702,6 +865,8 @@
       // the next open can build against the freshly-mounted DOM.
       resizeObs?.disconnect();
       resizeObs = null;
+      forceLayout?.stop();
+      forceLayout = null;
       cy?.destroy();
       cy = null;
       lastScopeId = null;
@@ -718,6 +883,8 @@
 
   onDestroy(() => {
     resizeObs?.disconnect();
+    forceLayout?.stop();
+    forceLayout = null;
     cy?.destroy();
     cy = null;
   });
@@ -727,9 +894,22 @@
     error = null;
     try {
       const g: GraphView = await api.graph();
-      nodes = g.nodes;
-      edges = g.edges;
-      await buildCytoscapeWhenSized(g);
+      // Drop mention/date nodes and their edges. The link-index
+      // backend still produces them; the eventual cleanup is
+      // tracked as a separate issue. Filtering here keeps the
+      // rest of the component working over a clean dataset.
+      const renderedNodes: RenderedNode[] = g.nodes.filter(
+        (n): n is RenderedNode => n.kind === "file" || n.kind === "tag",
+      );
+      const renderedEdges: RenderedEdge[] = g.edges.filter(
+        (e): e is RenderedEdge => e.kind === "link" || e.kind === "tag",
+      );
+      nodes = renderedNodes;
+      edges = renderedEdges;
+      await buildCytoscapeWhenSized({
+        nodes: renderedNodes,
+        edges: renderedEdges,
+      });
       // Apply any pending selection handed in by openGraphAtNode.
       // Done after the cytoscape build so :selected can attach to
       // an actual element. Opening the side panel makes the
@@ -769,19 +949,20 @@
     buildCytoscape(g);
   }
 
-  // Scope change → full rebuild. fcose's `fixedNodeConstraint`
-  // only takes effect at layout time; soft repositioning after the
-  // fact would leave neighbours where the previous layout placed
-  // them, around the *old* anchor. A rebuild is cheap at our scale
-  // (low hundreds of nodes) and keeps the focal node visually
-  // centred. Gated on the scope id so the tree-derived scopeOptions
-  // array re-deriving doesn't trigger a rebuild when the user
-  // hasn't actually changed scope.
+  // Scope or depth change → full rebuild. The visible-only fcose
+  // pass that runs after the global layout sizes itself to whatever
+  // node set is currently in scope; toggling depth grows that set,
+  // so the new nodes need fresh positions or they show up at their
+  // (now stale) global-fcose coordinates. Cheap at our scale (low
+  // hundreds of nodes). Gated on the (id, depth) pair so the
+  // tree-derived scopeOptions re-deriving doesn't kick a rebuild.
   $effect(() => {
     const id = currentScope?.id ?? null;
+    const depth = graphOverlay.depth;
     if (!cy) return;
-    if (id === lastScopeId) return;
-    lastScopeId = id;
+    const sig = `${id}|${depth}`;
+    if (sig === lastScopeId) return;
+    lastScopeId = sig;
     if (nodes.length > 0) void buildCytoscapeWhenSized({ nodes, edges });
   });
 
@@ -844,7 +1025,7 @@
       </label>
     {/if}
     <div class="filters">
-      {#each ["link", "tag", "mention", "date"] as const as kind (kind)}
+      {#each ["link", "tag"] as const as kind (kind)}
         <label class="chip" class:on={show[kind]}>
           <input type="checkbox" bind:checked={show[kind]} />
           <span class="dot" style="background:{EDGE_COLORS[kind]}"></span>
@@ -891,9 +1072,24 @@
         <div class="empty-title">Details</div>
         <div class="empty-hint">click a node to inspect it</div>
       </div>
+    {:else if selectedNode.kind === "file" && classifyFile(selectedNode.path) === "img"}
+      <!-- Image inspector: shared with the file browser. Shows a
+           preview thumbnail and the docs that link to the image
+           (backlinks). No "Open in this pane" button — images
+           don't open in the editor. -->
+      <FileInfoBody
+        path={selectedNode.path}
+        showRefs
+        onClose={() => (selectedId = null)}
+        onNavigate={(p) => {
+          void openInActivePane(p);
+          close();
+        }}
+      />
     {:else if selectedNode.kind === "file"}
+      {@const fileKind = classifyFile(selectedNode.path)}
       <header class="head">
-        <span class="kind-chip" style="background: {NODE_COLORS.file}">file</span>
+        <span class="kind-chip" style="background: {NODE_COLORS[fileKind]}">{fileKind === "img" ? "image" : "doc"}</span>
         <button class="close" onclick={() => (selectedId = null)}>×</button>
       </header>
       <h3 class="title" title={selectedNode.path}>{selectedNode.label}</h3>
@@ -910,10 +1106,6 @@
           <span class="v">{meta ? formatMtime(meta.mtime) : "?"}</span>
           <span class="k">tags</span>
           <span class="v">{selectionEdges.tags.length}</span>
-          <span class="k">mentions</span>
-          <span class="v">{selectionEdges.mentions.length}</span>
-          <span class="k">dates</span>
-          <span class="v">{selectionEdges.dates.length}</span>
           <span class="k">links out</span>
           <span class="v">{selectionEdges.links.length}</span>
         </div>
@@ -926,26 +1118,6 @@
           <ul>
             {#each selectionEdges.tags as t (t.id)}
               <li><button class="ref tag" onclick={() => selectFromList(t)}>{t.label}</button></li>
-            {/each}
-          </ul>
-        </section>
-      {/if}
-      {#if selectionEdges.mentions.length > 0}
-        <section>
-          <h4>Mentions</h4>
-          <ul>
-            {#each selectionEdges.mentions as m (m.id)}
-              <li><button class="ref mention" onclick={() => selectFromList(m)}>{m.label}</button></li>
-            {/each}
-          </ul>
-        </section>
-      {/if}
-      {#if selectionEdges.dates.length > 0}
-        <section>
-          <h4>Dates</h4>
-          <ul>
-            {#each selectionEdges.dates as d (d.id)}
-              <li><button class="ref date" onclick={() => selectFromList(d)}>{d.label}</button></li>
             {/each}
           </ul>
         </section>
@@ -1161,6 +1333,10 @@
   .cy {
     position: absolute;
     inset: 0;
+    /* Smooth fade when buildCytoscape clears the inline opacity:0
+       it sets at the start of a rebuild; gives a gentler reveal
+       than a hard pop into the d3-force animation. */
+    transition: opacity 200ms ease-out;
   }
   .cy.dim {
     opacity: 0.4;
@@ -1298,10 +1474,8 @@
     border-color: var(--btn-hover);
     background: var(--hover-bg);
   }
-  .details .ref.tag { color: var(--accent); }
-  .details .ref.mention { color: var(--warn-text); }
-  .details .ref.date { color: var(--info-text); }
-  .details .ref.file { color: var(--link); }
+  .details .ref.tag { color: var(--g-tag); }
+  .details .ref.file { color: var(--g-doc); }
   .details li.doc-row {
     display: flex;
     align-items: center;
