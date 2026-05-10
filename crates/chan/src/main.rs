@@ -19,6 +19,14 @@
 //   chan index <path>               rebuild the search index +
 //                                   graph for the drive
 //   chan search <path> <query>      query the BM25 index
+//   chan contacts import csv FILE --into DIR
+//                                   import a Google Contacts CSV
+//                                   as one markdown note per
+//                                   contact under DIR (drive-
+//                                   relative). Notes carry
+//                                   `chan.kind: contact`
+//                                   frontmatter for graph + @
+//                                   picker classification.
 //
 // Anything that touches the registry / drive contents goes through
 // `chan_drive::Library` and `chan_drive::Drive` so the library's
@@ -197,6 +205,59 @@ enum Command {
         /// the gemini settings.json / claude --mcp-config payload.
         socket: PathBuf,
     },
+    /// Manage contacts inside a drive. Today: import contacts from
+    /// an external source as one markdown note per contact, with
+    /// `chan.kind: contact` frontmatter so the editor and graph
+    /// classify them automatically.
+    Contacts {
+        #[command(subcommand)]
+        action: ContactsAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ContactsAction {
+    /// Import contacts from an external source as markdown notes.
+    /// Pick the source format with a sub-subcommand.
+    Import {
+        #[command(subcommand)]
+        source: ImportSource,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ImportSource {
+    /// Import from a CSV file. Currently only Google Contacts
+    /// CSV is supported (export at contacts.google.com -> Export
+    /// -> "Google CSV"). Other CSV dialects can be added later
+    /// behind --provider.
+    Csv {
+        /// Path to the CSV file.
+        file: PathBuf,
+        /// Drive-relative folder where notes will land. Created
+        /// if it does not exist. Use `""` to write at the drive
+        /// root.
+        #[arg(long)]
+        into: String,
+        /// Source provider's CSV format. Currently only "google".
+        #[arg(long, default_value = "google")]
+        provider: String,
+        /// Parse and report what would be written; do not touch
+        /// the drive.
+        #[arg(long)]
+        dry_run: bool,
+        /// Replace existing files instead of skipping them. The
+        /// per-contact line in the report changes from SKIPPED to
+        /// OVERWROTE so it's clear which files moved.
+        #[arg(long)]
+        overwrite: bool,
+        /// Drive root. Defaults to the registered default drive.
+        /// Auto-registers the path if not already known, so
+        /// `chan contacts import csv ... --drive /some/dir`
+        /// works without a prior `chan add`.
+        #[arg(long)]
+        drive: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -289,6 +350,18 @@ fn main() -> Result<()> {
                 .context("building tokio runtime")?;
             rt.block_on(cmd_mcp_proxy(socket))
         }
+        Command::Contacts { action } => match action {
+            ContactsAction::Import { source } => match source {
+                ImportSource::Csv {
+                    file,
+                    into,
+                    provider,
+                    dry_run,
+                    overwrite,
+                    drive,
+                } => cmd_contacts_import_csv(file, into, provider, dry_run, overwrite, drive),
+            },
+        },
     }
 }
 
@@ -839,6 +912,110 @@ fn cmd_search(path: PathBuf, query: String, limit: u32) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn cmd_contacts_import_csv(
+    file: PathBuf,
+    into: String,
+    provider: String,
+    dry_run: bool,
+    overwrite: bool,
+    drive: Option<PathBuf>,
+) -> Result<()> {
+    use chan_drive::contacts::{
+        google::parse_google_csv, slug::slug_for, ImportOpts, ProviderKind,
+    };
+    use std::collections::HashSet;
+
+    // Provider gate. Only Google CSV today; the flag exists so the
+    // help text and the wire shape are stable when more land.
+    let prov =
+        ProviderKind::parse(&provider).with_context(|| format!("unknown provider: {provider}"))?;
+    if prov != ProviderKind::Google {
+        anyhow::bail!("only --provider google is supported today");
+    }
+
+    // Parse the CSV up front. A bad file should fail before we
+    // touch the drive, so the user doesn't end up with a half-
+    // created Contacts/ dir on a typo.
+    let csv_bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+    let contacts = parse_google_csv(csv_bytes.as_slice())
+        .with_context(|| format!("parsing {}", file.display()))?;
+    if contacts.is_empty() {
+        println!("(no contacts in {})", file.display());
+        return Ok(());
+    }
+
+    let lib = library()?;
+    let root = drive
+        .or_else(|| lib.default_drive_root())
+        .unwrap_or_else(|| lib.effective_default_drive_root());
+    if !root.exists() {
+        std::fs::create_dir_all(&root)
+            .with_context(|| format!("creating drive root {}", root.display()))?;
+    }
+    ensure_drive_named(&lib, &root, None)?;
+    let drive = lib.open_drive(&root)?;
+
+    if dry_run {
+        // Mirror the orchestrator's slug + existence check loop
+        // without writing. Existence checks against the live drive
+        // so SKIPPED / OVERWROTE labels are accurate.
+        let mut taken: HashSet<String> = HashSet::new();
+        let mut unnamed = 0usize;
+        let dir_norm = into.trim_matches('/').to_string();
+        let mut wrote = 0usize;
+        let mut overwrote = 0usize;
+        let mut skipped = 0usize;
+        for c in &contacts {
+            let path = slug_for(c, &dir_norm, &mut taken, &mut unnamed);
+            let exists = drive.exists(&path);
+            if exists && !overwrite {
+                println!("WOULD SKIP      {path}  (exists)");
+                skipped += 1;
+            } else if exists {
+                println!("WOULD OVERWRITE {path}");
+                overwrote += 1;
+            } else {
+                println!("WOULD WRITE     {path}");
+                wrote += 1;
+            }
+        }
+        println!();
+        println!(
+            "{wrote} would write, {overwrote} would overwrite, \
+             {skipped} would skip (dry-run; no files changed)"
+        );
+        return Ok(());
+    }
+
+    let summary = drive
+        .import_contacts(&into, contacts, ImportOpts { overwrite })
+        .context("importing contacts")?;
+    print_import_summary(&summary);
+    Ok(())
+}
+
+fn print_import_summary(summary: &chan_drive::ImportSummary) {
+    use chan_drive::ImportOutcome;
+    for o in &summary.outcomes {
+        match o {
+            ImportOutcome::Wrote { path } => println!("WROTE     {path}"),
+            ImportOutcome::Overwrote { path } => println!("OVERWROTE {path}"),
+            ImportOutcome::Skipped { path, reason } => {
+                println!("SKIPPED   {path}  ({reason})")
+            }
+            ImportOutcome::Failed { name, reason } => {
+                println!("FAILED    {name}  ({reason})")
+            }
+        }
+    }
+    let c = summary.counts();
+    println!();
+    println!(
+        "{} wrote, {} overwrote, {} skipped, {} failed",
+        c.wrote, c.overwrote, c.skipped, c.failed
+    );
 }
 
 #[cfg(test)]

@@ -54,6 +54,31 @@ backends spawn: `chan __mcp <drive-root>` runs chan-llm's MCP
 server on stdio; `chan __mcp-proxy <socket>` is a stdio bridge
 into the in-process MCP server hosted by a running `chan serve`.
 
+Subcommand surface today:
+
+```
+chan add PATH [--name NAME]
+chan list
+chan remove PATH
+chan rename PATH NAME
+chan serve [PATH] [--host ...] [--port ...] [--prefix ...] ...
+chan index PATH
+chan search PATH QUERY [--limit N]
+chan upgrade [-y] [--check] [--version V]
+chan contacts import csv FILE --into DIR
+                              [--provider google] [--dry-run]
+                              [--overwrite] [--drive PATH]
+```
+
+`chan contacts import csv` parses a Google Contacts CSV and
+writes one markdown note per contact under `--into` (drive-
+relative). Notes carry `chan.kind: contact` frontmatter so the
+graph builder and editor `@` picker can classify them without a
+separate index. The orchestrator lives on `chan-drive`
+(`Drive::import_contacts`); this binary just plumbs flags and
+prints a per-row summary table. Re-running either skips
+existing files (default) or overwrites (`--overwrite`).
+
 ### chan-server
 
 Owns: HTTP + WebSocket routes, per-launch token auth middleware,

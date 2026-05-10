@@ -48,10 +48,15 @@ repository = "https://github.com/chan-writer/chan"
 # declare their own `embeddings` feature that enables this one).
 # Without `default-features = false` here, per-crate overrides are
 # silently ignored by Cargo.
-chan-drive = { path = "../chan-core/crates/chan-drive", version = "0.7.5", default-features = false }
-chan-llm = { path = "../chan-core/crates/chan-llm", version = "0.7.5" }
-chan-tunnel-client = { path = "../chan-core/crates/chan-tunnel-client", version = "0.7.5" }
-chan-tunnel-proto = { path = "../chan-core/crates/chan-tunnel-proto", version = "0.7.5" }
+# DEV-ONLY on contacts-api branch: paths swapped to the contacts-api
+# worktree of chan-core so we can iterate on Drive::import_contacts
+# without bumping chan-drive. Revert to ../chan-core/... before merging
+# to chan main, or bump chan-drive to a release that includes the
+# contacts module.
+chan-drive = { path = "../chan-core-contacts-api/crates/chan-drive", version = "0.7.5", default-features = false }
+chan-llm = { path = "../chan-core-contacts-api/crates/chan-llm", version = "0.7.5" }
+chan-tunnel-client = { path = "../chan-core-contacts-api/crates/chan-tunnel-client", version = "0.7.5" }
+chan-tunnel-proto = { path = "../chan-core-contacts-api/crates/chan-tunnel-proto", version = "0.7.5" }
 
 anyhow = "1"
 axum = { version = "0.7", features = ["ws", "macros", "multipart"] }
