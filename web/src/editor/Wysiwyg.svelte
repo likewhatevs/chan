@@ -217,7 +217,7 @@
   /// user gets when they type `[[`). Original atom attrs are saved
   /// here so a dismiss without accept can restore the link.
   let editingWikiOriginal:
-    | { target: string; label: string; anchor: string }
+    | { target: string; label: string; anchor: string; wasAbs: boolean }
     | null = null;
   /// Doc position of the opening `[` of the bracket pair we
   /// inserted on entry. Tracked so `restoreWikiEditOriginal` can
@@ -827,7 +827,14 @@
     const linkMarkType = editor.schema.marks.link;
     if (!wikiType || !linkMarkType) return;
 
-    type Range = { from: number; to: number; target: string; label: string };
+    type Range = {
+      from: number;
+      to: number;
+      target: string;
+      label: string;
+      anchor: string;
+      wasAbs: boolean;
+    };
     const ranges: Range[] = [];
 
     editor.state.doc.descendants((node, pos) => {
@@ -837,12 +844,14 @@
       const href = (linkMark.attrs.href as string | null) ?? "";
       if (!href) return;
       // Decode once (chan-shared encodes spaces / parens when
-      // serializing), then split off any `#anchor` so normalizeHref
-      // operates on the path portion alone. The atom's target is
-      // the canonical drive-rooted path with the anchor reattached;
-      // normalizeHref returns null for externals / fragment-only
-      // refs, in which case the Link mark is left untouched and the
-      // browser's default click behavior applies.
+      // serializing), then split off `#anchor` so normalizeHref
+      // operates on the path portion alone. The atom carries the
+      // canonical drive-rooted path on `target`, the section on
+      // its own `anchor` attr, and `wasAbs` if the source markdown
+      // used a leading slash (so the serializer can round-trip
+      // `/path` instead of relativizing it). normalizeHref returns
+      // null for externals / fragment-only refs, in which case the
+      // Link mark is left untouched and the browser default fires.
       let decoded: string;
       try {
         decoded = decodeURIComponent(href);
@@ -851,7 +860,7 @@
       }
       const hashIdx = decoded.indexOf("#");
       const pathPart = hashIdx === -1 ? decoded : decoded.slice(0, hashIdx);
-      const fragment = hashIdx === -1 ? "" : decoded.slice(hashIdx);
+      const anchor = hashIdx === -1 ? "" : decoded.slice(hashIdx + 1);
       const sourceDir = currentPath
         ? currentPath.split("/").slice(0, -1).join("/")
         : "";
@@ -860,8 +869,10 @@
       ranges.push({
         from: pos,
         to: pos + node.text.length,
-        target: normalized + fragment,
+        target: normalized,
         label: node.text,
+        anchor,
+        wasAbs: pathPart.startsWith("/"),
       });
     });
 
@@ -875,7 +886,12 @@
       tr.replaceWith(
         r.from,
         r.to,
-        wikiType.create({ target: r.target, label: r.label }),
+        wikiType.create({
+          target: r.target,
+          label: r.label,
+          anchor: r.anchor,
+          wasAbs: r.wasAbs,
+        }),
       );
     }
     // Same flags as decorateSmartNodes: out of undo, out of the
@@ -1245,6 +1261,7 @@
                   target: orig.target,
                   label: orig.label,
                   anchor: orig.anchor,
+                  wasAbs: orig.wasAbs,
                 }),
               ),
             );
@@ -2011,7 +2028,8 @@
     const target = (atom.attrs.target as string) || "";
     const label = (atom.attrs.label as string) || target;
     const anchor = (atom.attrs.anchor as string) || "";
-    editingWikiOriginal = { target, label, anchor };
+    const wasAbs = (atom.attrs.wasAbs as boolean) || false;
+    editingWikiOriginal = { target, label, anchor, wasAbs };
     editingWikiBracketStart = pos;
     // Replace the atom with `[[label]]` text. Caret lands at the
     // end of the label (between `label` and `]]`), matching the
@@ -2075,6 +2093,7 @@
       target: orig.target,
       label: orig.label,
       anchor: orig.anchor,
+      wasAbs: orig.wasAbs,
     });
     let tr = editor.state.tr.replaceWith(start, end, atomNode);
     // After the replace, `start` points to the atom and

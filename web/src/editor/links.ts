@@ -13,21 +13,30 @@
 /// time can tell relative URLs from legacy drive-rooted ones.
 /// When omitted (e.g. assistant prompt context, no source file),
 /// the URL stays drive-rooted.
+///
+/// `wasAbs` overrides the relativization: if true, the URL is
+/// emitted in drive-rooted form with a leading slash, preserving
+/// the shape `decorateWikiLinks` saw in the source markdown.
 export function wikiLinkToMarkdown(
   target: string,
   label?: string,
   anchor?: string,
   fromPath?: string,
+  wasAbs?: boolean,
 ): string {
   const stem = (label ?? target.split("/").pop() ?? target).replace(/\.md$/, "");
-  // Build the URL portion. With `fromPath` set, the URL is
-  // rewritten to a file-relative path so notes stay portable
-  // across project layouts (an editor opening a single file
-  // outside the drive can still resolve the link). Without
-  // `fromPath`, fall back to the legacy drive-rooted form so
-  // the assistant prompt and other no-source-file callers keep
-  // their existing semantics.
-  const path = fromPath ? relativizePath(target, fromPath) : target;
+  // Build the URL portion. With `wasAbs`, emit drive-rooted form
+  // (`/path`) regardless of `fromPath`. Otherwise, with `fromPath`
+  // set, the URL is rewritten to a file-relative path so notes
+  // stay portable across project layouts. Without `fromPath`, fall
+  // back to the legacy drive-rooted form (no slash) so the
+  // assistant prompt and other no-source-file callers keep their
+  // existing semantics.
+  const path = wasAbs
+    ? `/${target}`
+    : fromPath
+      ? relativizePath(target, fromPath)
+      : target;
   const enc = path
     .split("/")
     .map((s) => encodeURIComponent(s).replace(/%2F/g, "/"))

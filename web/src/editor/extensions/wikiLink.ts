@@ -53,6 +53,17 @@ export function createWikiLinkNode(getFromPath: () => string | null) {
         // (`section-name`); block anchors carry the leading `^`
         // (`^abc123`). Empty when the link points at a whole file.
         anchor: { default: "", parseHTML: (el) => el.getAttribute("data-anchor") ?? "" },
+        // True when the source markdown wrote the href in drive-
+        // rooted form (`[](/path)`). The serializer reads this to
+        // round-trip the leading slash instead of collapsing every
+        // URL to source-relative form via `relativizePath`. Default
+        // false so atoms inserted via the picker (which writes
+        // bare drive-rooted, then relativized on save) keep their
+        // existing serialization.
+        wasAbs: {
+          default: false,
+          parseHTML: (el) => el.getAttribute("data-was-abs") === "true",
+        },
       };
     },
 
@@ -119,13 +130,21 @@ export function createWikiLinkNode(getFromPath: () => string | null) {
         markdown: {
           serialize(
             state: unknown,
-            node: { attrs: { target: string; label: string; anchor: string } },
+            node: {
+              attrs: {
+                target: string;
+                label: string;
+                anchor: string;
+                wasAbs: boolean;
+              };
+            },
           ) {
             const md = wikiLinkToMarkdown(
               node.attrs.target,
               node.attrs.label || undefined,
               node.attrs.anchor || undefined,
               getFromPath() ?? undefined,
+              node.attrs.wasAbs,
             );
             (state as { write(s: string): void }).write(md);
           },
