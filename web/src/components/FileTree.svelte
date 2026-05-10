@@ -247,6 +247,22 @@
     });
   }
 
+  /// Auto-scroll when the selection changes from outside (e.g.
+  /// store.revealAndSelect after a successful folder create).
+  /// Keyboard nav already calls queueScrollIntoView directly, so
+  /// re-scrolling here is benign — the second rAF resolves on the
+  /// same frame without flicker. Wait one more rAF than usual to
+  /// give Svelte a chance to expand any newly-uncollapsed ancestor
+  /// folders so the row's DOM element exists.
+  $effect(() => {
+    const path = browserSelection.path;
+    if (!path) return;
+    requestAnimationFrame(() => {
+      const el = rowEls.get(path);
+      if (el) el.scrollIntoView({ block: "nearest" });
+    });
+  });
+
   /// Walk to the parent folder of `path`. Returns "" for top-level
   /// rows; the caller decides whether to act on root selection.
   function parentOf(path: string): string {

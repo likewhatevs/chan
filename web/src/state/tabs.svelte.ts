@@ -780,3 +780,31 @@ export function tabsForPath(path: string): { paneId: string; tabId: string }[] {
   }
   return out;
 }
+
+/// Rewrite tab paths in place after a rename/move. Handles both
+/// the single-file rename (exact path match) and the directory
+/// rename (every tab whose path starts with `from/`). Editor state
+/// — buffer, cursor, dirty flag, savedMtime — is preserved so the
+/// rename feels like a relabel rather than a close+reopen. The
+/// server already moved the bytes atomically; mtime stays valid
+/// for the moved file, so the next save's CAS check still works.
+///
+/// Tabs that were dirty stay dirty after the rename: the user's
+/// unsaved buffer follows the file. If the new path doesn't accept
+/// it (kind change, etc.) the next save surfaces the failure via
+/// the existing error channel; we don't need to special-case here.
+export function rekeyTabsForRename(from: string, to: string): void {
+  const dirPrefix = `${from}/`;
+  const newDirPrefix = `${to}/`;
+  for (const node of Object.values(layout.nodes)) {
+    if (node.kind !== "leaf") continue;
+    for (const t of node.tabs) {
+      if (t.kind !== "file") continue;
+      if (t.path === from) {
+        t.path = to;
+      } else if (t.path.startsWith(dirPrefix)) {
+        t.path = newDirPrefix + t.path.slice(dirPrefix.length);
+      }
+    }
+  }
+}

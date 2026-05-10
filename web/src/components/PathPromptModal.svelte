@@ -1,0 +1,493 @@
+<script lang="ts">
+  // Path-input modal for create / move / rename. Adds folder
+  // autocomplete (from the loaded tree), live status row showing
+  // what the typed path will do (move to existing folder, create a
+  // new folder, overwrite, etc.), and pre-flight validation that
+  // mirrors what chan-drive will accept. Driven by pathPromptState
+  // in the store; resolves the same Promise<string|null> shape as
+  // uiPrompt.
+
+  import { tick } from "svelte";
+  import {
+    pathPromptState,
+    resolvePathPrompt,
+    tree,
+  } from "../state/store.svelte";
+  import {
+    appendDefaultMd,
+    preserveExtension,
+    validatePath,
+  } from "../state/pathValidate";
+  import type { PathPromptMode } from "../state/store.svelte";
+
+  let value = $state("");
+  let inputEl: HTMLInputElement | undefined = $state();
+  /// Highlighted suggestion index. -1 means "no suggestion focused";
+  /// Tab / ↓ moves into the list, ↑ moves back up to -1 so the
+  /// raw input is what Enter submits. We don't auto-select the
+  /// first match because that would disagree with the user's
+  /// in-progress input on the very first keystroke.
+  let highlightIdx = $state(-1);
+
+  // Sync local state on every (re)open.
+  $effect(() => {
+    if (pathPromptState.open) {
+      value = pathPromptState.defaultValue;
+      highlightIdx = -1;
+      void tick().then(() => {
+        inputEl?.focus();
+        inputEl?.select();
+      });
+    }
+  });
+
+  /// Effective path + the suffix we tacked on for the user (if
+  /// any). We resolve the extension here so the status row can
+  /// preview both the create-time `.md` auto-append and the
+  /// rename-time extension preservation in italic — same visual
+  /// language for both, which keeps the user from being surprised
+  /// by store-side rewrites.
+  const resolved = $derived.by<{ path: string; autoSuffix: string }>(() => {
+    const trimmed = value.trim();
+    if (trimmed === "") return { path: "", autoSuffix: "" };
+    if (pathPromptState.kind !== "file") {
+      return { path: trimmed, autoSuffix: "" };
+    }
+    let out = trimmed;
+    if (pathPromptState.mode === "create") {
+      out = appendDefaultMd(trimmed);
+    } else if (pathPromptState.mode === "move" && pathPromptState.sourcePath) {
+      out = preserveExtension(pathPromptState.sourcePath, trimmed);
+    }
+    const autoSuffix =
+      out.length > trimmed.length && out.startsWith(trimmed)
+        ? out.slice(trimmed.length)
+        : "";
+    return { path: out, autoSuffix };
+  });
+  const effectiveValue = $derived(resolved.path);
+  const autoSuffix = $derived(resolved.autoSuffix);
+
+  /// Validation result for the current input. Empty input still
+  /// validates so the placeholder modal isn't immediately red.
+  ///
+  /// Validate against the RAW input rather than the effective
+  /// value: otherwise a trailing-slash input like `a/b/` would
+  /// become `a/b/.md` via appendDefaultMd and quietly pass the
+  /// "ends with /" check, letting the user submit a bare `.md`
+  /// file. Validating raw catches the ill-formed input upstream
+  /// of any auto-resolution. We also re-validate the resolved
+  /// path as a defensive backstop in case auto-resolution ever
+  /// produces something the raw input wouldn't have.
+  const validation = $derived.by(() => {
+    const trimmed = value.trim();
+    if (trimmed === "") return { ok: true as const };
+    const rawCheck = validatePath(trimmed);
+    if (!rawCheck.ok) return rawCheck;
+    if (effectiveValue && effectiveValue !== trimmed) {
+      return validatePath(effectiveValue);
+    }
+    return { ok: true as const };
+  });
+
+  /// Folder index from the loaded tree. Built once per tree change
+  /// and reused for both autocomplete and the parent-exists check.
+  const folderSet = $derived.by(() => {
+    const s = new Set<string>();
+    for (const e of tree.entries) {
+      if (e.is_dir) s.add(e.path);
+    }
+    return s;
+  });
+
+  /// Map of every entry by exact path. Drives the overwrite check
+  /// (existing file at the target) and the kind-mismatch check
+  /// (typed `foo/` but `foo` is a file, not a directory).
+  const entryByPath = $derived(new Map(tree.entries.map((e) => [e.path, e])));
+
+  /// Suggestions: directories whose path starts with whatever the
+  /// user has typed, minus the source path of an in-flight rename
+  /// (no point suggesting "move into yourself"). Capped so we
+  /// never paint a thousand-row dropdown on a fresh drive that
+  /// has only directories yet.
+  const SUGGESTION_LIMIT = 8;
+  const suggestions = $derived.by(() => {
+    const q = value.trim();
+    if (q === "") return [] as string[];
+    const src = pathPromptState.sourcePath;
+    const out: string[] = [];
+    for (const dir of folderSet) {
+      if (!dir.startsWith(q)) continue;
+      if (dir === q) continue; // exact match already typed; skip
+      if (src && (dir === src || dir.startsWith(`${src}/`))) continue;
+      out.push(dir);
+      if (out.length >= SUGGESTION_LIMIT) break;
+    }
+    out.sort();
+    return out;
+  });
+
+  /// Walk every ancestor of `path` and return the ones that don't
+  /// exist as folders yet. Used so the status row can announce both
+  /// the implicit ancestors AND the target instead of mentioning
+  /// only the immediate parent (which used to hide multi-segment
+  /// chains like `a/b/c/d` from the user).
+  function missingAncestors(path: string): string[] {
+    const segs = path.split("/");
+    segs.pop(); // drop basename; we want the ancestor chain
+    if (segs.length === 0) return [];
+    const out: string[] = [];
+    let acc = "";
+    for (const seg of segs) {
+      acc = acc ? `${acc}/${seg}` : seg;
+      if (!folderSet.has(acc)) out.push(acc);
+    }
+    return out;
+  }
+
+  /// Status hint for the action row underneath the input. The
+  /// "creates" branch carries both the missing ancestors AND the
+  /// target so the row can surface, e.g., "creates folders foo/,
+  /// foo/bar/" for a `foo/bar` folder when neither exists yet,
+  /// rather than only mentioning the implicit parent.
+  type Status =
+    | { kind: "empty" }
+    | { kind: "invalid"; reason: string }
+    | { kind: "kind-mismatch"; reason: string }
+    | { kind: "no-op" }
+    | { kind: "overwrites"; path: string; isFolder: boolean }
+    | {
+        kind: "creates";
+        /// Ancestor folders that need to be created. Empty when
+        /// the parent already exists.
+        newAncestors: string[];
+        /// The new file or folder at the typed path.
+        target: { path: string; isFolder: boolean };
+        mode: PathPromptMode;
+      };
+
+  const status = $derived.by<Status>(() => {
+    const path = effectiveValue;
+    if (path === "") return { kind: "empty" };
+    if (!validation.ok) return { kind: "invalid", reason: validation.reason };
+
+    // Existing entry at the exact typed path: overwrite (move) or
+    // kind-mismatch (target is a file but we're creating a folder,
+    // or vice versa).
+    const targetEntry = entryByPath.get(path);
+    const wantDir = pathPromptState.kind === "folder";
+    if (targetEntry) {
+      if (targetEntry.is_dir !== wantDir) {
+        const have = targetEntry.is_dir ? "folder" : "file";
+        const want = wantDir ? "folder" : "file";
+        return {
+          kind: "kind-mismatch",
+          reason: `'${path}' is an existing ${have}, can't ${
+            pathPromptState.mode === "move" ? "rename onto" : "create"
+          } a ${want}`,
+        };
+      }
+      if (pathPromptState.mode === "move") {
+        if (pathPromptState.sourcePath === path) {
+          return { kind: "no-op" };
+        }
+        return { kind: "overwrites", path, isFolder: wantDir };
+      }
+      // Create mode + existing target = error.
+      return {
+        kind: "kind-mismatch",
+        reason: `'${path}' already exists`,
+      };
+    }
+
+    return {
+      kind: "creates",
+      newAncestors: missingAncestors(path),
+      target: { path, isFolder: wantDir },
+      mode: pathPromptState.mode,
+    };
+  });
+
+  const submitDisabled = $derived(
+    status.kind === "empty" ||
+      status.kind === "invalid" ||
+      status.kind === "kind-mismatch" ||
+      status.kind === "no-op",
+  );
+
+  /// Per-segment breakdown for the colored path render. Existing
+  /// folders render in muted grey, segments that need to be created
+  /// render in mint-green. When we auto-resolved an extension (the
+  /// `.md` for a new file or the preserved extension on rename),
+  /// that suffix is split into its own `auto` chunk so the template
+  /// can italicize it and signal that the user didn't type it.
+  function pathSegments(
+    s: Extract<Status, { kind: "creates" }>,
+  ): Array<{ text: string; isNew: boolean; auto?: boolean }> {
+    const parts = s.target.path.split("/");
+    const out: Array<{ text: string; isNew: boolean; auto?: boolean }> = [];
+    let acc = "";
+    for (let i = 0; i < parts.length - 1; i++) {
+      acc = acc ? `${acc}/${parts[i]}` : parts[i];
+      out.push({ text: `${parts[i]}/`, isNew: !folderSet.has(acc) });
+    }
+    // Final segment is the target itself; always "new" in this
+    // branch (the existing-target case routes through `overwrites`
+    // / `kind-mismatch` instead). Add the trailing `/` for folders.
+    const tail = parts[parts.length - 1];
+    if (autoSuffix && tail.endsWith(autoSuffix)) {
+      // Show the user-typed stem as the "new" piece, then the
+      // auto-resolved suffix as its own italicized chunk.
+      const stem = tail.slice(0, -autoSuffix.length);
+      if (stem) out.push({ text: stem, isNew: true });
+      out.push({ text: autoSuffix, isNew: true, auto: true });
+    } else {
+      out.push({
+        text: s.target.isFolder ? `${tail}/` : tail,
+        isNew: true,
+      });
+    }
+    return out;
+  }
+
+  function ok(): void {
+    if (submitDisabled) return;
+    // Submit the effective value so the receiver sees the resolved
+    // path (e.g. with the auto-appended `.md`) rather than having
+    // to apply the same rule again. The store-side appendDefaultMd
+    // remains as a defensive layer (idempotent).
+    resolvePathPrompt(effectiveValue);
+  }
+  function cancel(): void {
+    resolvePathPrompt(null);
+  }
+
+  function applySuggestion(s: string): void {
+    // Append `/` so the user's next keystroke extends the path
+    // *into* the chosen folder rather than rewriting its name.
+    // Validation rejects a path that ends in `/` (so Enter on the
+    // bare "Recipes/" doesn't submit and create a stray .md), which
+    // makes the trailing slash a free affordance: visible cue + a
+    // submit guard.
+    value = `${s}/`;
+    highlightIdx = -1;
+    queueMicrotask(() => inputEl?.focus());
+  }
+
+  function onKey(e: KeyboardEvent): void {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (highlightIdx >= 0 && highlightIdx < suggestions.length) {
+        applySuggestion(suggestions[highlightIdx]);
+        return;
+      }
+      ok();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancel();
+    } else if (e.key === "Tab" && suggestions.length > 0) {
+      // Tab cycles into / through the suggestion list, completing the
+      // first one when nothing is highlighted yet. Shift+Tab goes
+      // backwards (and out, when at -1).
+      e.preventDefault();
+      if (e.shiftKey) {
+        highlightIdx = highlightIdx <= -1 ? suggestions.length - 1 : highlightIdx - 1;
+      } else {
+        highlightIdx = highlightIdx >= suggestions.length - 1 ? -1 : highlightIdx + 1;
+      }
+    } else if (e.key === "ArrowDown" && suggestions.length > 0) {
+      e.preventDefault();
+      highlightIdx = Math.min(highlightIdx + 1, suggestions.length - 1);
+    } else if (e.key === "ArrowUp" && suggestions.length > 0) {
+      e.preventDefault();
+      highlightIdx = Math.max(highlightIdx - 1, -1);
+    }
+  }
+</script>
+
+{#if pathPromptState.open}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="overlay" onclick={cancel}>
+    <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" tabindex="-1">
+      <div class="title">{pathPromptState.title}</div>
+      <input
+        bind:this={inputEl}
+        bind:value
+        onkeydown={onKey}
+        spellcheck="false"
+        autocomplete="off"
+        placeholder={pathPromptState.kind === "folder"
+          ? "folder/path"
+          : "file/path"}
+      />
+
+      {#if suggestions.length > 0}
+        <ul class="suggestions" role="listbox">
+          {#each suggestions as s, i (s)}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <li
+              role="option"
+              aria-selected={i === highlightIdx}
+              class:active={i === highlightIdx}
+              onmousedown={(e) => {
+                e.preventDefault();
+                applySuggestion(s);
+              }}
+              onmouseenter={() => (highlightIdx = i)}
+            >{s}/</li>
+          {/each}
+        </ul>
+      {/if}
+
+      <div
+        class="status"
+        class:err={status.kind === "invalid" || status.kind === "kind-mismatch"}
+        class:warn={status.kind === "overwrites" ||
+          (status.kind === "creates" && status.newAncestors.length > 0)}
+      >
+        {#if status.kind === "empty"}
+          <span class="muted">type a path</span>
+        {:else if status.kind === "invalid"}
+          ✗ {status.reason}
+        {:else if status.kind === "kind-mismatch"}
+          ✗ {status.reason}
+        {:else if status.kind === "overwrites"}
+          ⚠ overwrites existing {status.isFolder ? "folder" : "file"}
+          <span class="mono">{status.path}{status.isFolder ? "/" : ""}</span>
+        {:else if status.kind === "no-op"}
+          <span class="muted">unchanged</span>
+        {:else}
+          {@const segs = pathSegments(status)}
+          {@const arrow = status.newAncestors.length > 0 ? "⚠" : "→"}
+          {arrow}
+          {#if status.mode === "move"}
+            moves to
+          {:else}
+            new {status.target.isFolder ? "folder" : "file"}
+          {/if}
+          <span class="mono path-render">
+            {#each segs as seg, i (i)}
+              <span
+                class="seg"
+                class:isnew={seg.isNew}
+                class:auto={seg.auto}
+                title={seg.auto ? "added automatically (no extension typed)" : undefined}
+              >{seg.text}</span>
+            {/each}
+          </span>
+        {/if}
+      </div>
+
+      <div class="actions">
+        <button class="cancel" onclick={cancel}>Cancel</button>
+        <button class="ok" onclick={ok} disabled={submitDisabled}>OK</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<style>
+  .overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 26000;
+  }
+  .modal {
+    background: var(--bg-elev);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    padding: 1rem;
+    min-width: 420px;
+    max-width: 80vw;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+  .title {
+    font-size: 15px;
+    color: var(--text-secondary);
+  }
+  input {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.4rem 0.5rem;
+    font: inherit;
+    outline: none;
+  }
+  input:focus { border-color: var(--link); }
+  .suggestions {
+    margin: 0;
+    padding: 2px 0;
+    list-style: none;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .suggestions li {
+    padding: 4px 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .suggestions li.active,
+  .suggestions li:hover {
+    background: var(--hover-bg);
+    color: var(--text);
+  }
+  .status {
+    font-size: 13px;
+    color: var(--text-secondary);
+    min-height: 1.4em;
+  }
+  .status.err { color: var(--danger, #d33); }
+  .status.warn { color: var(--warn-text); }
+  .status .muted { opacity: 0.7; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  /* Per-segment path render: existing path bits stay muted so they
+     read as "context", and the to-be-created bits get the lighter
+     mint-green (--info-text) so the new portion catches the eye
+     without shouting. Keeping the new segments at normal weight —
+     the color does the work. */
+  .path-render .seg { color: var(--text-secondary); }
+  .path-render .seg.isnew { color: var(--info-text); }
+  /* Auto-appended chunks (currently just the `.md` we add to a
+     new file with no extension) render italic + faded so the user
+     can tell that bit wasn't typed by them. Same green hue so it
+     still reads as "this segment is new". */
+  .path-render .seg.auto { font-style: italic; opacity: 0.75; }
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.4rem;
+  }
+  .actions button {
+    padding: 0.3rem 0.75rem;
+    border-radius: 4px;
+    border: 1px solid var(--btn-border);
+    background: var(--btn-bg);
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+  }
+  .actions button:hover:not(:disabled) { border-color: var(--btn-hover); }
+  .actions button:disabled { opacity: 0.6; cursor: default; }
+  .actions .ok {
+    background: var(--link);
+    border-color: var(--link);
+    color: #fff;
+  }
+  .actions .ok:disabled { background: var(--btn-bg); color: var(--text-secondary); }
+</style>

@@ -1,11 +1,13 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import BottomPill from "./components/BottomPill.svelte";
+  import ConfirmModal from "./components/ConfirmModal.svelte";
   import ConflictModal from "./components/ConflictModal.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
   import FileBrowserOverlay from "./components/FileBrowserOverlay.svelte";
   import GraphPanel from "./components/GraphPanel.svelte";
   import InlineAssist from "./components/InlineAssist.svelte";
+  import PathPromptModal from "./components/PathPromptModal.svelte";
   import PromptModal from "./components/PromptModal.svelte";
   import SearchPanel from "./components/SearchPanel.svelte";
   import SettingsPanel from "./components/SettingsPanel.svelte";
@@ -289,6 +291,8 @@
 <BottomPill />
 <!-- Window-level overlays. Mounted once. -->
 <PromptModal />
+<PathPromptModal />
+<ConfirmModal />
 <SearchPanel />
 <InlineAssist />
 <GraphPanel />

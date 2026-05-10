@@ -11,13 +11,18 @@ import {
   serializeLayout,
 } from "./tabs.svelte";
 import { isEditableText } from "./fileTypes";
+import { appendDefaultMd, preserveExtension } from "./pathValidate";
 import { setNotifyHandler } from "./notify.svelte";
 import {
   availableScopeOptions,
   defaultScopeId,
   type ScopeOption,
 } from "./scope.svelte";
-import { refreshTabFromDisk, tabsForPath } from "./tabs.svelte";
+import {
+  refreshTabFromDisk,
+  rekeyTabsForRename,
+  tabsForPath,
+} from "./tabs.svelte";
 import { invalidateGraph, ensureGraphLoaded } from "./graphData.svelte";
 export const drive = $state<{ info: DriveInfo | null }>({ info: null });
 
@@ -1076,6 +1081,28 @@ export function collapseAllFolders(): void {
   persistTreeExpanded();
 }
 
+/// Reveal a path in the file browser tree: expand every ancestor
+/// folder so the row is visible, then set the browser selection to
+/// it. FileTree's selection-change effect scrolls the row into
+/// view. Called after a successful create / move so the user lands
+/// next to whatever they just produced instead of having to hunt
+/// for it. Walks the path segment-by-segment rather than the
+/// entries list because the new entry may not be in the snapshot
+/// yet (the tree refresh may still be in flight).
+export function revealAndSelect(path: string): void {
+  const parts = path.split("/");
+  let acc = "";
+  for (let i = 0; i < parts.length - 1; i++) {
+    acc = acc ? `${acc}/${parts[i]}` : parts[i];
+    treeExpanded.map[acc] = true;
+  }
+  treeExpanded.map[""] = true;
+  browserSelection.path = path;
+  // The expansion change counts as a user action — persist it so
+  // the next launch keeps the new entry in view.
+  persistTreeExpanded();
+}
+
 /// True when every directory in the current tree is expanded.
 /// Drives the header toggle's glyph + title.
 export function isFullyExpanded(): boolean {
@@ -1170,6 +1197,136 @@ export function resolvePrompt(value: string | null): void {
   r?.(value);
 }
 
+// ---- in-page confirm ----------------------------------------------------
+//
+// `window.confirm()` shares the same WKWebView gap as `window.prompt()`,
+// and we want destructive-action confirmation on overwrite. Same shape
+// as PromptState minus the input.
+
+type ConfirmState = {
+  open: boolean;
+  title: string;
+  message: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  destructive: boolean;
+  resolve: ((value: boolean) => void) | null;
+};
+
+export const confirmState = $state<ConfirmState>({
+  open: false,
+  title: "",
+  message: "",
+  confirmLabel: "OK",
+  cancelLabel: "Cancel",
+  destructive: false,
+  resolve: null,
+});
+
+/// Show a confirm dialog. Resolves true on OK, false on Cancel / Esc /
+/// outside-click. Pass `destructive: true` to style the OK button as a
+/// warning so overwrite / delete reads correctly. Replaces `window.confirm`.
+export function uiConfirm(opts: {
+  title: string;
+  message?: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  destructive?: boolean;
+}): Promise<boolean> {
+  return new Promise((resolve) => {
+    // If a confirm is already open, drop the previous one as cancelled.
+    confirmState.resolve?.(false);
+    confirmState.title = opts.title;
+    confirmState.message = opts.message ?? "";
+    confirmState.confirmLabel = opts.confirmLabel ?? "OK";
+    confirmState.cancelLabel = opts.cancelLabel ?? "Cancel";
+    confirmState.destructive = opts.destructive ?? false;
+    confirmState.resolve = resolve;
+    confirmState.open = true;
+  });
+}
+
+/// Called by the modal component on OK / Cancel.
+export function resolveConfirm(value: boolean): void {
+  const r = confirmState.resolve;
+  confirmState.resolve = null;
+  confirmState.open = false;
+  r?.(value);
+}
+
+// ---- in-page path prompt ------------------------------------------------
+//
+// Richer cousin of uiPrompt for typing relative paths: live folder
+// autocomplete from the loaded tree, parent-creation hints, overwrite
+// warnings, and client-side validation. Used by file create / move /
+// rename. The plain uiPrompt stays around for label-only inputs (drive
+// rename, etc.).
+//
+// `kind` distinguishes the two entity classes the user can be naming:
+// a file (default `.md` will be appended on submit if no extension) or
+// a folder. The modal uses it to label the status row and to decide
+// what the autocomplete should suggest.
+//
+// `mode` controls how an existing target at the typed path is treated:
+//   - "create": existing target is a hard error (cannot overwrite via
+//     create; the user should rename or pick a different name).
+//   - "move":   existing target is a soft warning; the caller will
+//     fire a separate uiConfirm before performing the destructive
+//     action.
+
+export type PathPromptKind = "file" | "folder";
+export type PathPromptMode = "create" | "move";
+
+type PathPromptState = {
+  open: boolean;
+  title: string;
+  defaultValue: string;
+  kind: PathPromptKind;
+  mode: PathPromptMode;
+  /// Set on "move": the path being renamed. The modal hides this from
+  /// the autocomplete (no point suggesting "move to itself") and the
+  /// "overwrites" check ignores it (renaming `a` → `a` is a no-op,
+  /// not an overwrite).
+  sourcePath: string | null;
+  resolve: ((value: string | null) => void) | null;
+};
+
+export const pathPromptState = $state<PathPromptState>({
+  open: false,
+  title: "",
+  defaultValue: "",
+  kind: "file",
+  mode: "create",
+  sourcePath: null,
+  resolve: null,
+});
+
+export function uiPathPrompt(opts: {
+  title: string;
+  defaultValue?: string;
+  kind: PathPromptKind;
+  mode: PathPromptMode;
+  sourcePath?: string | null;
+}): Promise<string | null> {
+  return new Promise((resolve) => {
+    pathPromptState.resolve?.(null);
+    pathPromptState.title = opts.title;
+    pathPromptState.defaultValue = opts.defaultValue ?? "";
+    pathPromptState.kind = opts.kind;
+    pathPromptState.mode = opts.mode;
+    pathPromptState.sourcePath = opts.sourcePath ?? null;
+    pathPromptState.resolve = resolve;
+    pathPromptState.open = true;
+  });
+}
+
+export function resolvePathPrompt(value: string | null): void {
+  const r = pathPromptState.resolve;
+  pathPromptState.resolve = null;
+  pathPromptState.open = false;
+  r?.(value);
+}
+
 /// File CRUD helpers shared by the sidebar header and the tree's
 /// context menu / hover actions. They wrap the raw API with prompts,
 /// confirmations, and a tree refresh, plus opening the new file in the
@@ -1177,61 +1334,34 @@ export function resolvePrompt(value: string | null): void {
 /// affordances keeps the actions consistent regardless of which entry
 /// point the user reaches for.
 
-/// Append `.md` to a relative path when the basename has no real
-/// extension. "Real extension" = a `.` past position 0 with content
-/// after it. So `note` → `note.md`, `sub/note` → `sub/note.md`,
-/// `note.txt` stays, `note.` (trailing dot) → `note..md` is avoided
-/// by stripping the trailing dot first. Hidden-style names like
-/// `.gitignore` get `.md` tacked on intentionally: this is a notes
-/// app, the user typed a name, not a Unix dotfile.
-function appendDefaultMd(path: string): string {
-  const stripped = path.endsWith(".") ? path.slice(0, -1) : path;
-  const slash = stripped.lastIndexOf("/");
-  const basename = slash >= 0 ? stripped.slice(slash + 1) : stripped;
-  const dot = basename.lastIndexOf(".");
-  if (dot <= 0) return `${stripped}.md`;
-  return stripped;
-}
+// `appendDefaultMd` moved to ../state/pathValidate so PathPromptModal
+// can preview the auto-extension live; we re-import below.
 
-/// Re-attach the original file's extension to a rename target when
-/// the user dropped it during the prompt. A renamed `note.md` ->
-/// `humus` rounds back up to `humus.md`. If the user explicitly
-/// chose a different extension (`humus.txt`) we leave it alone, and
-/// if the original had no extension we don't invent one. Hidden-
-/// style basenames (where the only `.` is at position 0) are
-/// treated as extension-less so a leading-dot file doesn't claim
-/// the rest of its name as the "extension". Mirrors
-/// `appendDefaultMd`'s "real extension" predicate.
-function preserveExtension(oldPath: string, newPath: string): string {
-  const oldBase = basenameOf(oldPath);
-  const oldDot = oldBase.lastIndexOf(".");
-  if (oldDot <= 0) return newPath;
-  const oldExt = oldBase.slice(oldDot);
-  const newBase = basenameOf(newPath);
-  const newDot = newBase.lastIndexOf(".");
-  if (newDot > 0) return newPath;
-  return newPath + oldExt;
-}
-
-function basenameOf(path: string): string {
-  const slash = path.lastIndexOf("/");
-  return slash >= 0 ? path.slice(slash + 1) : path;
-}
+// `preserveExtension` moved to ../state/pathValidate so the
+// PathPromptModal can preview the rename-with-preserved-extension
+// inline. We re-import above; the call below is now a defensive
+// idempotent layer (the modal already resolved the extension).
 
 export const fileOps = {
   async createFile(parentPath: string): Promise<void> {
-    const name = await uiPrompt(
-      "new file (relative path), e.g. note or sub/note (.md added if no extension)",
-    );
+    // Pre-populate the input with the parent prefix so the user
+    // only types the basename. Folder autocomplete still kicks in
+    // once they touch any other folder under the same prefix.
+    const defaultValue = parentPath ? `${parentPath}/` : "";
+    const name = await uiPathPrompt({
+      title: "new file (relative path; .md added if no extension)",
+      defaultValue,
+      kind: "file",
+      mode: "create",
+    });
     if (!name) return;
-    const raw = parentPath ? `${parentPath}/${name}` : name;
     // Default to .md when the user didn't type one. "No extension"
     // means the basename has no `.` past position 0 (hidden files
     // like `.gitignore` still get .md tacked on, which is the
     // friendly outcome for a notes app: the user typed a name, not
     // a hidden file). Existing extensions are preserved; non-text
     // ones still hit the editable-text gate below and get rejected.
-    const path = appendDefaultMd(raw);
+    const path = appendDefaultMd(name);
     if (!isEditableText(path)) {
       ui.status = `'${path}' is not an editable text file (only .md and .txt)`;
       return;
@@ -1240,17 +1370,33 @@ export const fileOps = {
       await api.create(path, false, "");
       await refreshTree();
       await openInActivePane(path);
+      // Editor took over; close the file browser so the user lands
+      // on the new tab instead of seeing the tree above the editor.
+      // Mirrors the close-on-open behavior the inspector's Open
+      // button uses.
+      browserOverlay.open = false;
     } catch (e) {
       ui.status = `create failed: ${(e as Error).message}`;
     }
   },
   async createDir(parentPath: string): Promise<void> {
-    const name = await uiPrompt("new folder name");
-    if (!name) return;
-    const path = parentPath ? `${parentPath}/${name}` : name;
+    const defaultValue = parentPath ? `${parentPath}/` : "";
+    const path = await uiPathPrompt({
+      title: "new folder",
+      defaultValue,
+      kind: "folder",
+      mode: "create",
+    });
+    if (!path) return;
     try {
       await api.create(path, true);
       await refreshTree();
+      // Folder creation leaves the user inside the file browser
+      // (unlike file creation, which jumps straight into an editor
+      // tab), so reveal the new folder and select it. Expands every
+      // ancestor along the way so a `a/b/new-folder` create lands
+      // visible even if `a` and `b` were collapsed.
+      revealAndSelect(path);
     } catch (e) {
       ui.status = `create failed: ${(e as Error).message}`;
     }
@@ -1281,11 +1427,34 @@ export const fileOps = {
   /// `note.md`), put it back so the resulting path still routes
   /// through the editor's text gate. Directories don't have
   /// extensions so the input is taken verbatim.
+  ///
+  /// If the resolved target collides with an existing entry, we
+  /// stop for a uiConfirm before issuing the move. The PathPrompt
+  /// modal already shows a warning row, but the user might commit
+  /// past it on Enter, so the confirm dialog is the second gate
+  /// before any destructive overwrite.
   async rename(path: string, isDir = false): Promise<void> {
-    const next = await uiPrompt("new path", path);
+    const next = await uiPathPrompt({
+      title: "new path",
+      defaultValue: path,
+      kind: isDir ? "folder" : "file",
+      mode: "move",
+      sourcePath: path,
+    });
     if (!next || next === path) return;
     const target = isDir ? next : preserveExtension(path, next);
     if (target === path) return;
+    const existing = tree.entries.find((e) => e.path === target);
+    if (existing) {
+      const what = existing.is_dir ? "folder" : "file";
+      const confirmed = await uiConfirm({
+        title: `Overwrite existing ${what}?`,
+        message: `'${target}' already exists. The current ${what} will be replaced.`,
+        confirmLabel: "Overwrite",
+        destructive: true,
+      });
+      if (!confirmed) return;
+    }
     try {
       await api.move(path, target);
       await refreshTree();
@@ -1296,6 +1465,17 @@ export const fileOps = {
       // Handles both single-file renames (exact key match) and
       // directory renames (every key under `path/`).
       rekeyConversationsForRename(path, target);
+      // Same idea for any open editor tab(s) pointing at the
+      // renamed file: rewrite the path in place so the buffer,
+      // cursor, and dirty state survive the rename. Without this
+      // the user would see a stale tab labelled with the old name
+      // that 404s on the next save.
+      rekeyTabsForRename(path, target);
+      // Land the user on the renamed entry in the browser tree so
+      // they don't lose track of it (especially for moves that hop
+      // into a different folder). Same helper the create paths use;
+      // expands every ancestor along the way.
+      revealAndSelect(target);
     } catch (e) {
       ui.status = `rename failed: ${(e as Error).message}`;
     }
