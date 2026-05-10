@@ -27,6 +27,7 @@
   import {
     createImageNode,
     isImagePath,
+    parseSrcFragment,
     relativizeImageSrc,
     showImagePicker,
     uploadImageFile,
@@ -37,6 +38,10 @@
     openWikiBubble,
     type WikiBubble,
   } from "./extensions/wikiLink";
+  import { openTagBubble, type TagBubble } from "./extensions/tagPicker";
+  import { FoldHeadingExtension } from "./extensions/foldHeading";
+  import { createTagDecorationExtension } from "./extensions/tagDecoration";
+  import { openGraphAtNode } from "../state/store.svelte";
   import { api } from "../api/client";
   import { resolveRelativePath } from "./links";
   import { drive } from "../state/store.svelte";
@@ -108,7 +113,11 @@
     if (!editor) return;
     if (editor.isEditable === !ro) return;
     editor.setEditable(!ro, false);
-    if (ro) dismissWikiBubble();
+    if (ro) {
+      dismissWikiBubble();
+      dismissTagBubble();
+      clearCursorDecorations();
+    }
   });
 
   /// Wiki-link bubble. Open while the caret sits between an
@@ -119,6 +128,34 @@
   /// list. Cleared when the caret leaves the bracket range, on
   /// Escape, on accept, or on editor destroy.
   let wikiBubble: WikiBubble | undefined;
+
+  /// `#tag` autocomplete bubble. Opens while the caret sits at the
+  /// end of a `#word` token in a non-heading, non-codeblock textblock.
+  /// Same non-focus-stealing pattern as the wiki bubble: keyboard is
+  /// owned by Wysiwyg; the bubble owns its own DOM and result list.
+  let tagBubble: TagBubble | undefined;
+
+  /// Elements currently carrying caret-driven `data-cursor-*` attrs.
+  /// Tracked so `updateCursorDecorations` can wipe the previous set
+  /// in O(N) without scanning the whole editor DOM.
+  let cursorDecorated: HTMLElement[] = [];
+
+  /// Last image atom whose picker was opened from a click /
+  /// selection on it. Used as a one-shot guard so a single
+  /// `NodeSelection` on the atom doesn't keep re-opening the
+  /// picker every time `onSelectionUpdate` fires (the dismiss
+  /// path leaves PM's selection where it was). Cleared as soon
+  /// as the selection moves off the atom.
+  let lastImageEditAtomPos: number | null = null;
+
+  /// Wiki link atom currently in edit mode. Click on the pill (or
+  /// ArrowLeft/Right adjacency) replaces the atom with `[[label]]`
+  /// text and lets the wiki bubble take over (the same flow the
+  /// user gets when they type `[[`). Original atom attrs are saved
+  /// here so a dismiss without accept can restore the link.
+  let editingWikiOriginal:
+    | { target: string; label: string; anchor: string }
+    | null = null;
 
   /// Scroll the editor to the i-th heading (0-based, document order).
   /// Called by the inspector (outline view) via `bind:this` from
@@ -255,6 +292,19 @@
         // `currentPath`, so a relative src like `../logo.png`
         // resolves against the editing file's directory.
         createImageNode(() => currentPath),
+        // Heading fold/unfold via a chevron widget + a node-class
+        // decoration that hides following blocks until the next
+        // heading of equal-or-higher level. Pure UI state; the
+        // markdown source is never touched.
+        FoldHeadingExtension,
+        // `#tag` rendering as clickable pills. Click opens the
+        // graph inspector pre-selected at the tag node so users
+        // can see which documents share the tag. The id on a tag
+        // graph node is `#<name>` (chan-server emits it that way),
+        // so we rebuild it from the bare name passed back here.
+        createTagDecorationExtension({
+          onTagClick: (name) => openGraphAtNode(`#${name}`),
+        }),
       ],
       content: value,
       // Cmd/Ctrl+Enter -> parent's onSubmit (assistant prompt
@@ -280,14 +330,43 @@
               dismissWikiBubble();
               return true;
             }
+            // In edit-existing mode (the user clicked an existing
+            // wiki atom), ArrowUp / ArrowDown commit-and-exit per
+            // the spec: dismissWikiBubble's restore branch puts
+            // the original atom back. In normal `[[` typing flow
+            // the same keys still navigate the result list.
             if (event.key === "ArrowDown") {
               event.preventDefault();
-              wikiBubble.moveActive(1);
+              if (editingWikiOriginal) dismissWikiBubble();
+              else wikiBubble.moveActive(1);
               return true;
             }
             if (event.key === "ArrowUp") {
               event.preventDefault();
-              wikiBubble.moveActive(-1);
+              if (editingWikiOriginal) dismissWikiBubble();
+              else wikiBubble.moveActive(-1);
+              return true;
+            }
+          }
+          if (tagBubble) {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              acceptTagBubble();
+              return true;
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              dismissTagBubble();
+              return true;
+            }
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              tagBubble.moveActive(1);
+              return true;
+            }
+            if (event.key === "ArrowUp") {
+              event.preventDefault();
+              tagBubble.moveActive(-1);
               return true;
             }
           }
@@ -382,10 +461,16 @@
         value = md;
         tagHeadings();
         syncWikiBubble();
+        syncTagBubble();
+        updateCursorDecorations();
+        maybeOpenImageEditPicker();
         onSelectionChange?.();
       },
       onSelectionUpdate: () => {
         syncWikiBubble();
+        syncTagBubble();
+        updateCursorDecorations();
+        maybeOpenImageEditPicker();
         onSelectionChange?.();
       },
     });
@@ -454,6 +539,7 @@
       lastSyncedValue = value;
       editor.commands.focus("start");
       tagHeadings();
+      updateCursorDecorations();
     } finally {
       applyingExternal = false;
     }
@@ -475,6 +561,7 @@
 
   onDestroy(() => {
     dismissWikiBubble();
+    dismissTagBubble();
     editor?.destroy();
   });
 
@@ -490,6 +577,7 @@
       setMarkdownContent(value);
       lastSyncedValue = value;
       tagHeadings();
+      updateCursorDecorations();
       // External content change = tab switch or fresh load. Refocus
       // so the user can keep typing without clicking. Skip when
       // the editor is non-editable: refocusing a contenteditable=
@@ -711,8 +799,19 @@
     return "iso";
   }
 
-  function onInput(_e: Event): void {
+  function onInput(e: Event): void {
     if (!editor) return;
+    // Tag bubble opens only on a literal `#` keystroke. Doing this in
+    // onInput (which fires after tiptap's transaction lands) lets us
+    // distinguish a fresh `#` from caret merely passing over an
+    // existing `#tag` token. `InputEvent.data` is the typed character
+    // for plain insertions and null for everything else (backspace,
+    // composition state changes, paste, etc.), so the check is safe.
+    const inputData = (e as InputEvent).data ?? "";
+    if (!tagBubble && inputData === "#") {
+      const range = findTagRange(editor);
+      if (range) openTagBubbleForCurrentCaret(range.query);
+    }
     // Look at text immediately before the cursor (up to 16 chars). This is
     // more reliable than matching the serialized markdown, which may have
     // trailing newlines or surrounding content that defeat end-anchors.
@@ -782,20 +881,23 @@
         const anchor = caretAnchorHost();
         showImagePicker(
           anchor,
-          (src) => {
-            if (!src || !editor) return;
-            const last = src.split("/").pop() ?? src;
-            const alt = last.replace(/\.[^./]+$/, "");
+          (result) => {
+            if (!result || !editor) return;
             // Picker hands back drive-rooted paths (existing-image
             // pick or just-uploaded file) or absolute URLs
             // (paste-URL flow); relativize to currentPath so the
             // markdown source stays portable when the file moves
-            // directories.
-            const rel = relativizeImageSrc(src, currentPath ?? null);
+            // directories. The alt text comes from the picker's
+            // alt field (auto-populated from the filename, user-
+            // editable).
+            const rel = relativizeImageSrc(result.src, currentPath ?? null);
             editor
               .chain()
               .focus()
-              .insertContent({ type: "image", attrs: { src: rel, alt } })
+              .insertContent({
+                type: "image",
+                attrs: { src: rel, alt: result.alt },
+              })
               .insertContent(" ")
               .run();
           },
@@ -909,10 +1011,50 @@
   /// inside them).
   function openWikiBubbleForCurrentCaret(): void {
     if (!editor || wikiBubble) return;
+    // When this open is part of an "edit existing link" flow,
+    // surface the original target as a `>` follow button on the
+    // bubble so the user can navigate without dismissing first.
+    const followExisting = editingWikiOriginal
+      ? {
+          target: editingWikiOriginal.target,
+          anchor: editingWikiOriginal.anchor,
+        }
+      : undefined;
     wikiBubble = openWikiBubble({
       host: caretAnchorHost(),
       prefix: wikiPickerPrefix,
       onClickAccept: () => acceptWikiBubble(),
+      followExisting,
+      onFollowExisting: (target, anchor) => {
+        // Treat this as "navigate AND keep the link": restore the
+        // original atom in place of the temporary `[[label]]`
+        // brackets first, so the surrounding markdown round-trips
+        // unchanged once the new file is opened. Use the saved
+        // snapshot rather than `target`/`anchor` alone so the
+        // original label is preserved.
+        const orig = editingWikiOriginal;
+        editingWikiOriginal = null;
+        if (editor && orig) {
+          const range = findBracketRange(editor);
+          const wikiType = editor.schema.nodes.wikiLink;
+          if (range && wikiType) {
+            editor.view.dispatch(
+              editor.state.tr.replaceWith(
+                range.start,
+                range.end,
+                wikiType.create({
+                  target: orig.target,
+                  label: orig.label,
+                  anchor: orig.anchor,
+                }),
+              ),
+            );
+          }
+        }
+        dismissWikiBubble();
+        const fullTarget = anchor ? `${target}#${anchor}` : target;
+        handleWikiClick(fullTarget);
+      },
     });
     wikiBubble.setQuery("");
   }
@@ -987,6 +1129,10 @@
     }
     const picked = wikiBubble.accept();
     if (!picked) return;
+    // Accept supersedes the edit-existing snapshot: the user
+    // explicitly chose a new target, so dismiss must NOT restore
+    // the prior atom. Clear before dismissWikiBubble runs.
+    editingWikiOriginal = null;
     dismissWikiBubble();
     // anchor is "" for file picks; only heading / block picks
     // populate it. The wikiLink node carries it onto the markdown
@@ -1026,6 +1172,13 @@
   function dismissWikiBubble(): void {
     wikiBubble?.dismiss();
     wikiBubble = undefined;
+    // If the bubble was opened in edit-existing mode and the user
+    // walked away without accepting, restore the original atom so
+    // the document doesn't end up with stray bracket text.
+    // `acceptWikiBubble` clears the snapshot before calling
+    // `dismissWikiBubble` so this branch only fires on true
+    // dismissals (Escape, click out, caret leaving the brackets).
+    if (editingWikiOriginal) restoreWikiEditOriginal();
   }
 
   /// Re-evaluate bubble lifecycle on every selection / doc update.
@@ -1041,6 +1194,348 @@
         return;
       }
       wikiBubble.setQuery(range.query);
+    }
+  }
+
+  // ---- tag bubble ------------------------------------------------------
+
+  /// Detect the `#word` token immediately to the left of the caret, if
+  /// any. Mirrors `findBracketRange`'s contract: returns positions in
+  /// the prosemirror document plus the typed query (without the `#`).
+  /// Constraints:
+  ///   - Selection must be collapsed (no range select).
+  ///   - Caret must sit in a textblock that is not a heading or
+  ///     codeBlock (those treat `#` literally).
+  ///   - Caret must NOT be inside a `[[ ]]` range; the wiki bubble
+  ///     owns `#` inside its bracket flow.
+  ///   - The `#` must be at block-start or preceded by whitespace,
+  ///     and only `[A-Za-z0-9_-]` may follow it up to the caret.
+  function findTagRange(
+    ed: Editor,
+  ): { start: number; end: number; query: string } | null {
+    const sel = ed.state.selection;
+    if (!sel.empty) return null;
+    if (findBracketRange(ed)) return null;
+    const fromPos = ed.state.doc.resolve(sel.from);
+    const parent = fromPos.parent;
+    if (!parent.isTextblock) return null;
+    if (parent.type.name === "heading") return null;
+    if (parent.type.name === "codeBlock") return null;
+    const blockStart = fromPos.start();
+    // textBetween with NBSP for atom leaves keeps offsets aligned to
+    // doc positions even when the block contains wikiLink / image
+    // atoms ahead of the caret.
+    const before = ed.state.doc.textBetween(blockStart, sel.from, "\n", " ");
+    const m = before.match(/(?:^|\s)#([A-Za-z0-9_-]*)$/);
+    if (!m) return null;
+    const query = m[1] ?? "";
+    const hashPos = sel.from - query.length - 1;
+    return { start: hashPos, end: sel.from, query };
+  }
+
+  function openTagBubbleForCurrentCaret(query: string): void {
+    if (!editor || tagBubble) return;
+    tagBubble = openTagBubble({
+      host: caretAnchorHost(),
+      onClickAccept: () => acceptTagBubble(),
+    });
+    tagBubble.setQuery(query);
+  }
+
+  function acceptTagBubble(): void {
+    if (!editor || !tagBubble) return;
+    const range = findTagRange(editor);
+    if (!range) {
+      dismissTagBubble();
+      return;
+    }
+    const picked = tagBubble.accept();
+    if (!picked) return;
+    dismissTagBubble();
+    // Replace `#typed` (the entire trigger range) with the chosen
+    // tag plus a trailing space so the cursor lands at a clean break.
+    editor
+      .chain()
+      .focus()
+      .deleteRange({ from: range.start, to: range.end })
+      .insertContent(`#${picked}`)
+      .insertContent(" ")
+      .run();
+  }
+
+  function dismissTagBubble(): void {
+    tagBubble?.dismiss();
+    tagBubble = undefined;
+  }
+
+  /// Re-evaluate an OPEN tag bubble's lifecycle on every selection /
+  /// doc update. Open: keep alive while the caret stays in the
+  /// trigger range; push the latest query in. Dismiss when the
+  /// caret leaves the range. We deliberately do NOT auto-open here:
+  /// opening is triggered only by a fresh `#` keystroke (`onInput`)
+  /// so the bubble doesn't pop when the caret merely passes over an
+  /// existing `#tag` in the document.
+  function syncTagBubble(): void {
+    if (!editor) return;
+    if (!editor.isEditable) {
+      dismissTagBubble();
+      return;
+    }
+    if (!tagBubble) return;
+    const range = findTagRange(editor);
+    if (!range) {
+      dismissTagBubble();
+      return;
+    }
+    tagBubble.setQuery(range.query);
+  }
+
+  // ---- image edit-existing flow ---------------------------------------
+
+  /// Re-open the `![` picker pre-filled with the current image's
+  /// src + alt whenever a click or arrow-key navigation drops PM's
+  /// selection onto an image atom (PM emits a `NodeSelection` for
+  /// `selectable: true` atoms in those cases). Commit on the
+  /// picker overwrites `src` and `alt` in place via setNodeAttribute;
+  /// dismiss is a no-op. The `lastImageEditAtomPos` guard prevents
+  /// re-opening for the same selection — selection only fires on
+  /// changes, but onUpdate also calls this and we don't want a
+  /// re-trigger while the picker steals focus and dispatches its
+  /// own transactions.
+  function maybeOpenImageEditPicker(): void {
+    if (!editor || !editor.isEditable) return;
+    const sel = editor.state.selection;
+    const node =
+      "node" in sel
+        ? ((sel as unknown as { node: { type: { name: string }; attrs: Record<string, unknown> } }).node)
+        : null;
+    if (!node || node.type.name !== "image") {
+      lastImageEditAtomPos = null;
+      return;
+    }
+    const pos = sel.from;
+    if (lastImageEditAtomPos === pos) return;
+    lastImageEditAtomPos = pos;
+    const rawSrc = (node.attrs.src as string) ?? "";
+    const alt = (node.attrs.alt as string) ?? "";
+    // Seed the picker with a drive-rooted path stripped of any
+    // `#w=N` fragment so the list highlights / filters correctly.
+    // We hold on to `rawSrc` so an alt-only edit can put it back
+    // verbatim (preserving the fragment + the original `./` /
+    // `../` prefix style).
+    const { src: cleanSrc } = parseSrcFragment(rawSrc);
+    let resolvedSrc = cleanSrc;
+    if (
+      currentPath &&
+      (cleanSrc.startsWith("./") || cleanSrc.startsWith("../"))
+    ) {
+      resolvedSrc = resolveRelativePath(cleanSrc, currentPath);
+    }
+    const anchor = caretAnchorHost();
+    showImagePicker(
+      anchor,
+      (result) => {
+        if (!editor) return;
+        if (!result) {
+          // Dismiss: refocus the editor so the caret lands back on
+          // the image's line (PM's NodeSelection on the atom is
+          // still valid; only DOM focus moved to the picker's
+          // search input). Without this, Escape leaves the editor
+          // unfocused and the user has to click to resume typing.
+          editor.commands.focus();
+          return;
+        }
+        // Path unchanged: keep `rawSrc` verbatim so width fragments
+        // and the user's chosen `./` style round-trip cleanly. Path
+        // changed: relativize against the editing file as usual.
+        const finalSrc =
+          result.src === resolvedSrc
+            ? rawSrc
+            : relativizeImageSrc(result.src, currentPath ?? null);
+        editor.view.dispatch(
+          editor.state.tr
+            .setNodeAttribute(pos, "src", finalSrc)
+            .setNodeAttribute(pos, "alt", result.alt),
+        );
+        editor.commands.focus();
+      },
+      dirOfPath(currentPath ?? null),
+      { src: resolvedSrc, alt },
+    );
+  }
+
+  // ---- wiki edit-existing flow ----------------------------------------
+
+  /// Enter wiki edit mode by replacing the clicked atom with
+  /// `[[label]]` text and dropping the caret inside the brackets;
+  /// the existing `[[ ]]` bubble flow takes over from there. The
+  /// original atom attrs are saved so a dismiss-without-accept can
+  /// restore the link rather than leaving stray brackets.
+  function enterWikiEditAt(wrap: HTMLElement): void {
+    if (!editor) return;
+    const stash = (wrap as unknown as { __wikiGetPos?: () => number | undefined })
+      .__wikiGetPos;
+    const pos = typeof stash === "function" ? stash() : undefined;
+    if (typeof pos !== "number") return;
+    const atom = editor.state.doc.nodeAt(pos);
+    if (!atom || atom.type.name !== "wikiLink") return;
+    const target = (atom.attrs.target as string) || "";
+    const label = (atom.attrs.label as string) || target;
+    const anchor = (atom.attrs.anchor as string) || "";
+    editingWikiOriginal = { target, label, anchor };
+    // Replace the atom with `[[label]]` text. Caret lands at the
+    // end of the label (between `label` and `]]`), matching the
+    // typing-`[[ ]]` flow's caret position so syncWikiBubble's
+    // findBracketRange resolves the bubble at this caret.
+    const insertText = `[[${label}]]`;
+    editor
+      .chain()
+      .focus()
+      .insertContentAt({ from: pos, to: pos + atom.nodeSize }, insertText)
+      .setTextSelection(pos + 2 + label.length)
+      .run();
+    // syncWikiBubble fires from onUpdate; openWikiBubbleForCurrent
+    // -Caret won't because the caret was already inside brackets,
+    // but our onInput trigger only catches `[[` keystrokes. Open
+    // explicitly here so the bubble is alive on first paint with
+    // the follow button populated.
+    openWikiBubbleForCurrentCaret();
+  }
+
+  /// Restore the wiki atom we replaced when entering edit mode.
+  /// Called by the bubble's dismiss path. Looks up the current
+  /// `[[ ]]` range surrounding the caret (it might have been
+  /// edited but not accepted) and replaces it with the original
+  /// atom; if no bracket range survives, nothing to do.
+  function restoreWikiEditOriginal(): void {
+    if (!editor || !editingWikiOriginal) return;
+    const orig = editingWikiOriginal;
+    editingWikiOriginal = null;
+    const range = findBracketRange(editor);
+    if (!range) return;
+    const wikiType = editor.schema.nodes.wikiLink;
+    if (!wikiType) return;
+    const tr = editor.state.tr.replaceWith(
+      range.start,
+      range.end,
+      wikiType.create({
+        target: orig.target,
+        label: orig.label,
+        anchor: orig.anchor,
+      }),
+    );
+    editor.view.dispatch(tr);
+  }
+
+  // ---- caret-driven decorations ----------------------------------------
+
+  /// Strip the `data-cursor-*` attributes from any element decorated
+  /// on the previous pass. Cheap to call on every selection change
+  /// because the tracked list is small (at most a few elements).
+  ///
+  /// Elements whose subtree contains the active focus (the user is
+  /// editing the atom's source span) are kept decorated so the CSS
+  /// reveal doesn't flicker mid-edit; a follow-up pass clears them
+  /// once focus returns to the editor.
+  function clearCursorDecorations(): void {
+    const active = document.activeElement;
+    const kept: HTMLElement[] = [];
+    for (const el of cursorDecorated) {
+      if (active && el.contains(active)) {
+        kept.push(el);
+        continue;
+      }
+      el.removeAttribute("data-cursor-in");
+      el.removeAttribute("data-cursor-prefix");
+      el.removeAttribute("data-cursor-href");
+      el.removeAttribute("data-cursor-md");
+    }
+    cursorDecorated = kept;
+  }
+
+  /// Tag the DOM elements at / around the caret with `data-cursor-*`
+  /// attrs so the CSS rules below can reveal source-mode decorations:
+  ///   - heading hash prefix when caret is in a heading
+  ///   - markdown link form `[label](url)` for wikiLink atoms and
+  ///     plain `<a>` Link marks
+  ///   - markdown image form `![alt](src)` shown above the rendered
+  ///     image when the caret is adjacent to an image atom
+  ///
+  /// All three trigger off the same selection-update hook so a single
+  /// pass per caret move drives every visual.
+  function updateCursorDecorations(): void {
+    if (!editor || !host) return;
+    clearCursorDecorations();
+    if (!editor.isEditable) return;
+    const sel = editor.state.selection;
+    if (!sel.empty) return;
+    const cursor = sel.from;
+    let fromPos;
+    try {
+      fromPos = editor.state.doc.resolve(cursor);
+    } catch {
+      return;
+    }
+    const parent = fromPos.parent;
+    const view = editor.view;
+
+    // 1. Heading hash prefix when the caret sits in a heading block.
+    //    `view.nodeDOM(blockStart)` returns null in some StarterKit
+    //    setups (Heading has no custom node view), so walk up from
+    //    the caret's DOM ancestor to the H1..H6 element instead.
+    if (parent.type.name === "heading") {
+      const level = Math.min(
+        6,
+        Math.max(1, (parent.attrs.level as number) || 1),
+      );
+      try {
+        const result = view.domAtPos(cursor);
+        let el: HTMLElement | null =
+          result.node instanceof HTMLElement
+            ? result.node
+            : (result.node.parentElement ?? null);
+        while (el && !/^H[1-6]$/.test(el.tagName) && el !== host) {
+          el = el.parentElement;
+        }
+        if (el && /^H[1-6]$/.test(el.tagName)) {
+          el.setAttribute("data-cursor-in", "");
+          el.setAttribute("data-cursor-prefix", "#".repeat(level));
+          cursorDecorated.push(el);
+        }
+      } catch {
+        // domAtPos can throw mid-update; the next selection event
+        // will re-run the decoration pass.
+      }
+    }
+
+    // 2. Plain `<a>` Link mark covering the caret. Marks have no
+    //    node DOM, so we walk up from the caret's DOM ancestor to
+    //    the anchor element; CSS uses the native `href` attribute
+    //    for the suffix so no extra attr-setting is needed.
+    const linkType = editor.schema.marks.link;
+    if (linkType) {
+      const inLink =
+        fromPos.nodeBefore?.marks.some((m) => m.type === linkType) ||
+        fromPos.nodeAfter?.marks.some((m) => m.type === linkType);
+      if (inLink) {
+        try {
+          const result = view.domAtPos(cursor);
+          let el: HTMLElement | null =
+            result.node instanceof HTMLElement
+              ? result.node
+              : (result.node.parentElement ?? null);
+          while (el && el.tagName !== "A" && el !== host) {
+            el = el.parentElement;
+          }
+          if (el && el.tagName === "A") {
+            el.setAttribute("data-cursor-in", "");
+            cursorDecorated.push(el);
+          }
+        } catch {
+          // domAtPos can throw on invalid positions during rapid
+          // updates; the next selection event will retry.
+        }
+      }
     }
   }
 
@@ -1084,10 +1579,16 @@
       chain.run();
       return;
     }
-    if (t.matches("[data-md-wiki]")) {
+    // Click on a wiki pill: enter "edit existing link" mode. We do
+    // NOT navigate on click (the user requested the bubble-style
+    // editor instead, with a `>` follow button). The atom is
+    // replaced with `[[label]]` text and the bubble auto-opens via
+    // the existing `[[ ]]` flow; the bubble's `>` button covers
+    // the previous click-to-navigate behaviour.
+    const wikiEl = t.closest("[data-md-wiki]") as HTMLElement | null;
+    if (wikiEl) {
       e.preventDefault();
-      const target = t.getAttribute("data-target") ?? "";
-      if (target) handleWikiClick(target);
+      enterWikiEditAt(wikiEl);
       return;
     }
     if (t.matches("[data-md-date]")) {
@@ -1522,7 +2023,8 @@
   }
   :global(.md-pick-action:hover:not(:disabled)) { border-color: var(--btn-hover); }
   :global(.md-pick-action:disabled) { opacity: 0.6; cursor: default; }
-  :global(.md-pick-url) {
+  :global(.md-pick-url),
+  :global(.md-pick-alt) {
     background: var(--bg);
     color: var(--text);
     border: 1px solid var(--border);
@@ -1532,7 +2034,8 @@
     font-size: 14px;
     outline: none;
   }
-  :global(.md-pick-url:focus) { border-color: var(--link); }
+  :global(.md-pick-url:focus),
+  :global(.md-pick-alt:focus) { border-color: var(--link); }
 
   /* Wiki-link bubble. Anchored under the caret while the user
      types between `[[ ]]`. Non-focus-stealing: no inputs, no
@@ -1656,6 +2159,153 @@
     text-align: right;
   }
   :global(.md-wiki-bubble-accept.is-hidden) { display: none; }
+
+  /* `>` follow button rendered by the wiki bubble in
+     edit-existing mode. Sits in the bottom-right corner so the
+     accept hint and the follow chevron read as paired actions. */
+  :global(.md-wiki-bubble-follow) {
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    background: var(--btn-bg);
+    color: var(--text);
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    padding: 1px 7px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 14px;
+    line-height: 1;
+  }
+  :global(.md-wiki-bubble-follow:hover) {
+    border-color: var(--btn-hover);
+    color: var(--link);
+  }
+  :global(.md-wiki-bubble) { position: relative; }
+
+  /* Caret-driven source-mode decorations. Set by
+     `updateCursorDecorations` on every selection change. */
+
+  /* Heading hash prefix shown only when the caret is on the
+     heading line. The space after `attr()` keeps the gap between
+     the hashes and the heading text. */
+  :global(.md-wysiwyg :is(h1, h2, h3, h4, h5, h6)[data-cursor-in])::before {
+    content: attr(data-cursor-prefix) "\00a0";
+    color: var(--text-secondary);
+    opacity: 0.45;
+    font-weight: normal;
+  }
+
+  /* Wiki link click flow lives in the bubble (see
+     `.md-wiki-bubble-follow`); no per-pill source span. */
+
+  /* Plain markdown links (Link mark) wrap their text in `<a href>`.
+     Marks have no node view, so the URL is shown read-only via a
+     `::after` pseudo when the caret enters the mark range. The
+     mark's text itself is editable in place; URL editing is not
+     supported for plain links (use a wiki link for that). */
+  :global(.md-wysiwyg a[data-cursor-in])::before {
+    content: "[";
+    color: var(--text-secondary);
+    opacity: 0.55;
+  }
+  :global(.md-wysiwyg a[data-cursor-in])::after {
+    content: "](" attr(href) ")";
+    color: var(--text-secondary);
+    opacity: 0.55;
+  }
+
+  /* Heading fold chevron rendered by the foldHeading plugin. The
+     chevron sits inside the heading element (widget side: -1) and
+     rotates between `▾` (open) and `▸` (folded). Click toggles
+     the fold via the plugin's `handleClick` prop. The negative
+     left margin pulls the chevron into the gutter so the heading
+     text aligns with non-folded headings; with `flex` on the
+     heading itself the chevron stays vertically centered.
+     Inline-block + reserved width keeps long-press hit area
+     reachable on touch. */
+  /* Chevron sits in the left gutter (negative margin) so heading
+     text alignment matches non-folded headings. The negative
+     margin pulls it into the editor's left padding without
+     affecting layout: net offset = -1.5em + 1em width + 0.5em
+     right gap = 0, so the heading text starts where it would
+     have without a chevron. Obsidian / gdocs lay out their
+     chevrons the same way. */
+  :global(.md-wysiwyg .md-fold-chevron) {
+    display: inline-block;
+    width: 1em;
+    margin-left: -1.5em;
+    margin-right: 0.5em;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+    font-size: 0.7em;
+    line-height: inherit;
+    vertical-align: middle;
+    opacity: 0.5;
+    transition: opacity 0.15s ease;
+    font-weight: normal;
+    text-align: center;
+  }
+  :global(.md-wysiwyg .md-fold-chevron:hover),
+  :global(.md-wysiwyg .md-fold-chevron[data-folded="true"]) {
+    opacity: 1;
+  }
+  /* Ellipsis cue at the end of a folded heading, signalling that
+     there's hidden content below. */
+  :global(.md-wysiwyg .md-fold-ellipsis) {
+    color: var(--text-secondary);
+    user-select: none;
+    margin-left: 0.25em;
+    opacity: 0.6;
+  }
+  /* Blocks under a folded heading get this class via a node
+     decoration; CSS hides them entirely. The chevron + heading
+     stay visible. */
+  :global(.md-wysiwyg .md-fold-hidden) {
+    display: none;
+  }
+
+  /* `#tag` inline pill. The decoration plugin scans the doc for
+     `#word` runs; CSS turns each into a rounded chip that visually
+     matches the file-info tag chips. Click handling lives in the
+     plugin's `handleClick` prop. */
+  :global(.md-wysiwyg .md-tag-pill) {
+    background: var(--smart-bg);
+    color: var(--accent);
+    border-radius: 999px;
+    padding: 0.05em 0.5em;
+    font-size: 0.92em;
+    cursor: pointer;
+    text-decoration: none;
+  }
+  :global(.md-wysiwyg .md-tag-pill:hover) {
+    filter: brightness(1.1);
+  }
+
+  /* Tag autocomplete bubble. Same anchored-under-caret pattern as
+     the wiki bubble; narrower because tag names are short. */
+  :global(.md-tag-bubble) {
+    background: var(--bg-elev);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.4);
+    width: 220px;
+    font-size: 13px;
+    user-select: none;
+  }
+  :global(.md-tag-bubble-results) {
+    list-style: none; margin: 0; padding: 0;
+    max-height: 180px; overflow-y: auto;
+  }
+  :global(.md-tag-bubble-results li) {
+    padding: .3rem .55rem; cursor: pointer;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--link);
+  }
+  :global(.md-tag-bubble-results li.active),
+  :global(.md-tag-bubble-results li:hover) { background: var(--hover-bg); }
 
   /* Inline images: keep them from blowing the editor column out
      by capping max-width. The native size renders if it fits.

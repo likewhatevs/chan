@@ -60,6 +60,42 @@ export function createWikiLinkNode(getFromPath: () => string | null) {
       return [{ tag: "span[data-md-wiki]" }];
     },
 
+    addNodeView() {
+      // Minimal node view: builds the same DOM as renderHTML below
+      // but stashes the live `getPos` callback on the wrap so
+      // Wysiwyg's click handler can find the atom's position
+      // without a fragile DOM-to-position dance.
+      return ({ node, getPos }) => {
+        const wrap = document.createElement("span");
+        const apply = (n: typeof node) => {
+          const target = (n.attrs.target as string) ?? "";
+          const lbl = (n.attrs.label as string) ?? "";
+          const anchor = (n.attrs.anchor as string) ?? "";
+          wrap.className = "md-smart md-smart-wiki";
+          wrap.setAttribute("data-md-wiki", "true");
+          wrap.setAttribute("data-target", target);
+          wrap.setAttribute("data-label", lbl);
+          wrap.setAttribute("data-anchor", anchor);
+          wrap.title = `→ ${target}${anchor ? `#${anchor}` : ""}`;
+          wrap.textContent = lbl || target;
+        };
+        apply(node);
+        // Stash the position getter; consumers test `typeof` before
+        // calling. PM updates `getPos` across transactions, so the
+        // closure stays in sync without us tracking it manually.
+        (wrap as unknown as { __wikiGetPos: () => number | undefined }).__wikiGetPos =
+          getPos as () => number | undefined;
+        return {
+          dom: wrap,
+          update(updated) {
+            if (updated.type !== node.type) return false;
+            apply(updated);
+            return true;
+          },
+        };
+      };
+    },
+
     renderHTML({ HTMLAttributes, node }) {
       const anchor = (node.attrs.anchor as string) ?? "";
       const titleSuffix = anchor ? `#${anchor}` : "";
@@ -76,6 +112,7 @@ export function createWikiLinkNode(getFromPath: () => string | null) {
         (node.attrs.label as string) || (node.attrs.target as string),
       ];
     },
+
 
     addStorage() {
       return {
@@ -139,6 +176,16 @@ export interface WikiBubbleOpts {
   /// selection the same way it would on Enter (call `accept()` and
   /// replace the bracket range).
   onClickAccept?: () => void;
+  /// When set, the bubble is in "edit existing link" mode: a `>`
+  /// follow button is rendered that navigates to the supplied
+  /// target (decoded drive-rooted path + optional anchor). Click
+  /// dismisses the bubble before navigating, so the host's
+  /// dismiss path runs and can choose whether to restore the
+  /// original atom or leave the brackets in place.
+  followExisting?: { target: string; anchor: string };
+  /// Fires when the user clicks the `>` follow button. Receives
+  /// the same `followExisting` value the bubble was opened with.
+  onFollowExisting?: (target: string, anchor: string) => void;
 }
 
 export interface WikiBubble {
@@ -289,6 +336,27 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
   accept.className = "md-wiki-bubble-accept";
   accept.textContent = "⏎  to accept"; // U+23CE return symbol
   wrap.appendChild(accept);
+
+  // `>` follow button. Only rendered when the bubble is opened in
+  // edit-existing mode; clicking dismisses the bubble and asks the
+  // host to navigate to the original target. A `mousedown`
+  // preventDefault keeps the editor's selection intact during the
+  // click so the dismiss path can choose what to do with the
+  // surrounding brackets.
+  let followBtn: HTMLButtonElement | null = null;
+  if (opts.followExisting) {
+    followBtn = document.createElement("button");
+    followBtn.type = "button";
+    followBtn.className = "md-wiki-bubble-follow";
+    followBtn.title = "follow link";
+    followBtn.textContent = "›";
+    followBtn.addEventListener("mousedown", (ev) => {
+      ev.preventDefault();
+      const { target, anchor } = opts.followExisting!;
+      opts.onFollowExisting?.(target, anchor);
+    });
+    wrap.appendChild(followBtn);
+  }
 
   document.body.appendChild(wrap);
 

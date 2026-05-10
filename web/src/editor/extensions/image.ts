@@ -220,8 +220,9 @@ export function relativizeImageSrc(src: string, fromPath: string | null): string
 /// `Recipes/Pasta.md` lands next to that file.
 export function showImagePicker(
   host: HTMLElement,
-  pick: (src: string | null) => void,
+  pick: (result: { src: string; alt: string } | null) => void,
   uploadDir: string | null = null,
+  initial?: { src: string; alt: string },
 ): void {
   const wrap = document.createElement("div");
   wrap.className = "md-pick md-pick-image";
@@ -260,6 +261,61 @@ export function showImagePicker(
   urlInput.className = "md-pick-url";
   footer.appendChild(urlInput);
 
+  // Alt-text field: auto-populated from the picked filename, but
+  // editable. Commit happens here (Enter), so picking from the
+  // list / upload / URL doesn't immediately insert; it stages the
+  // src and focuses this field for an optional override.
+  const altInput = document.createElement("input");
+  altInput.type = "text";
+  altInput.placeholder = "alt text";
+  altInput.className = "md-pick-alt";
+  footer.appendChild(altInput);
+
+  /// Default alt = filename stem of the chosen src. Strip any
+  /// query / fragment so URLs like `https://x.test/foo.png?w=1`
+  /// give "foo" not "foo?w=1".
+  const altFromSrc = (src: string): string => {
+    const last = src.split("/").pop() ?? src;
+    const clean = last.split("?")[0].split("#")[0] ?? last;
+    return clean.replace(/\.[^./]+$/, "");
+  };
+
+  /// Path the user has chosen but not yet committed. Committing
+  /// is gated on the alt field's Enter so the user always gets a
+  /// chance to override the auto-populated alt text.
+  let stagedSrc: string | null = null;
+  const stageAndFocusAlt = (src: string): void => {
+    // Only refresh the alt field when the src actually changes.
+    // Picking the same src twice (e.g. opening the picker on an
+    // existing image and pressing Enter on the auto-highlighted
+    // list match) must not clobber a user-edited alt.
+    if (stagedSrc !== src) {
+      altInput.value = altFromSrc(src);
+    }
+    stagedSrc = src;
+    altInput.focus();
+    altInput.select();
+  };
+
+  // "Edit existing" pre-fill. Stages the current src so Enter on
+  // alt commits unchanged, fills the alt input, and seeds the
+  // search box with the current src so the list highlights /
+  // narrows to it. Focus goes to the search input (selected) so
+  // the user can immediately type to change the image; if they
+  // only want to edit alt, they Tab into it.
+  if (initial) {
+    stagedSrc = initial.src;
+    altInput.value = initial.alt;
+    search.value = initial.src;
+  }
+  const commitStaged = (): void => {
+    if (!stagedSrc) return;
+    const alt = altInput.value;
+    const src = stagedSrc;
+    cleanup();
+    pick({ src, alt });
+  };
+
   // Hidden file input the upload button forwards to. Lives on
   // document.body, NOT inside `wrap`: on iOS the photo-picker
   // sheet's dismissal can fire a mousedown on the underlying
@@ -290,8 +346,7 @@ export function showImagePicker(
       li.className = i === active ? "active" : "";
       li.onmousedown = (ev) => {
         ev.preventDefault();
-        cleanup();
-        pick(path);
+        stageAndFocusAlt(path);
       };
       list.appendChild(li);
     });
@@ -349,8 +404,7 @@ export function showImagePicker(
     } else if (e.key === "Enter") {
       const sel = entries[active];
       if (sel) {
-        cleanup();
-        pick(sel);
+        stageAndFocusAlt(sel);
       }
       e.preventDefault();
     } else if (e.key === "Escape") {
@@ -376,8 +430,9 @@ export function showImagePicker(
     uploadBtn.textContent = "uploading…";
     try {
       const { path } = await api.uploadAttachment(file, uploadDir);
-      cleanup();
-      pick(path);
+      stageAndFocusAlt(path);
+      uploadBtn.disabled = false;
+      uploadBtn.textContent = "Upload image…";
     } catch (e) {
       uploadBtn.disabled = false;
       uploadBtn.textContent = "Upload image…";
@@ -407,9 +462,20 @@ export function showImagePicker(
       const v = urlInput.value.trim();
       if (v) {
         e.preventDefault();
-        cleanup();
-        pick(v);
+        stageAndFocusAlt(v);
       }
+    } else if (e.key === "Escape") {
+      cleanup();
+      pick(null);
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  });
+
+  altInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitStaged();
     } else if (e.key === "Escape") {
       cleanup();
       pick(null);
@@ -443,10 +509,19 @@ export function showImagePicker(
   document.addEventListener("mousedown", onAway);
 
   void loadImages().then(() => {
-    filter("");
+    // `search.value` is the seeded query when `initial` was passed;
+    // otherwise it's the empty string, matching the old "show all"
+    // behaviour on first open.
+    filter(search.value);
     if (wrap.isConnected) positionPopover(host, wrap);
   });
-  setTimeout(() => search.focus(), 0);
+  setTimeout(() => {
+    search.focus();
+    // Pre-select so a keystroke replaces the seeded path; Enter
+    // (no changes) is still a valid commit because stagedSrc is
+    // already populated when `initial` was passed.
+    if (initial) search.select();
+  }, 0);
 }
 
 /// Upload helper for drag-drop / paste / picker flows. Resolves
