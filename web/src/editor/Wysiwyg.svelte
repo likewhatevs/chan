@@ -2244,12 +2244,41 @@
     user-select: none;
   }
   /* While editing a strike, drop the strikethrough line so the
-     text stays readable. The marker widgets keep the `~~` shape
-     visible at both ends. The class is applied via Decoration.inline
-     so it lands on whatever element renders the strike mark
-     (typically `<s>` or a span PM wraps around it). */
-  :global(.md-wysiwyg .md-mark-editing-strike) {
+     text stays readable. PM's Decoration.inline may land the class
+     either on the `<s>` element directly or on a wrapping `<span>`,
+     depending on how it merges with the mark; cover both. The
+     descendant selector also handles nested marks (e.g. bold inside
+     strike). */
+  :global(.md-wysiwyg .md-mark-editing-strike),
+  :global(.md-wysiwyg .md-mark-editing-strike s),
+  :global(.md-wysiwyg s.md-mark-editing-strike) {
     text-decoration: none;
+  }
+
+  /* Fenced code block: when the caret is inside, reveal the
+     opening / closing ``` fences (and the language label, if any)
+     as muted pseudo-element lines wrapping the rendered code.
+     Block-level pseudos so they each sit on their own line above
+     and below the existing <pre>. */
+  :global(.md-wysiwyg pre[data-cursor-in])::before {
+    content: "```" attr(data-lang);
+    display: block;
+    color: var(--text-secondary);
+    opacity: 0.45;
+    font-family: var(--chan-font-mono-family, monospace);
+    font-size: 0.9em;
+    line-height: 1.2;
+    margin-bottom: 0.25em;
+  }
+  :global(.md-wysiwyg pre[data-cursor-in])::after {
+    content: "```";
+    display: block;
+    color: var(--text-secondary);
+    opacity: 0.45;
+    font-family: var(--chan-font-mono-family, monospace);
+    font-size: 0.9em;
+    line-height: 1.2;
+    margin-top: 0.25em;
   }
 
   /* Wiki link click flow lives in the bubble (see

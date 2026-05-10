@@ -32,11 +32,12 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
 
 /// Marker text per mark type. The plugin only adds widgets for
 /// marks whose name is a key here; the schema may carry other marks
-/// (link, code) we deliberately don't decorate this way.
+/// (link) we deliberately don't decorate this way.
 const MARK_MARKER: Record<string, string> = {
   bold: "**",
   italic: "*",
   strike: "~~",
+  code: "`",
 };
 
 function buildMarker(text: string): HTMLElement {
@@ -78,6 +79,22 @@ export const LiveSourceExtension = Extension.create({
                 Decoration.node(blockStart, blockEnd, {
                   "data-cursor-in": "",
                   "data-cursor-prefix": "#".repeat(level),
+                }),
+              );
+            }
+
+            // 1b. Fenced code block. Tag the codeBlock node so CSS
+            //     can reveal the opening / closing ``` fences (and
+            //     the optional language label) when the caret is
+            //     inside.
+            if (parent.type.name === "codeBlock") {
+              const lang = (parent.attrs.language as string | null) ?? "";
+              const blockStart = $from.before($from.depth);
+              const blockEnd = blockStart + parent.nodeSize;
+              decos.push(
+                Decoration.node(blockStart, blockEnd, {
+                  "data-cursor-in": "",
+                  "data-lang": lang,
                 }),
               );
             }
