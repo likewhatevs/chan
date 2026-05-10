@@ -102,6 +102,17 @@ export function buildSrcWithWidth(src: string, width: number | null): string {
 /// resolution (legacy / no-source-file callers).
 export function createImageNode(getFromPath: () => string | null) {
   return Image.extend({
+  // The stock `@tiptap/extension-image` input rule converts
+  // `![alt](src)` typed text into an image atom as soon as the
+  // closing `)` lands. That fights our bubble flow, which
+  // intentionally keeps the markdown text in the editor while
+  // the user picks an image (so they can search, see a preview,
+  // and edit alt). The host commits via setNodeAttribute /
+  // replaceWith when the user accepts; until then there's no
+  // atom. Drop the rule entirely.
+  addInputRules() {
+    return [];
+  },
   addNodeView() {
     return ({ node, getPos, editor }) => {
       const wrap = document.createElement("span");
@@ -111,6 +122,17 @@ export function createImageNode(getFromPath: () => string | null) {
       img.draggable = false;
       const apply = (n: { attrs: { src?: unknown; alt?: unknown } }) => {
         const raw = (n.attrs.src as string | null) ?? "";
+        if (!raw) {
+          // Empty src: leave the `<img>` source-less so the browser
+          // doesn't fire a request to `/api/files/` (which 404s
+          // and clutters the console). The atom still renders the
+          // alt text via the nodeview wrapper, so the user sees a
+          // placeholder and can edit it.
+          img.removeAttribute("src");
+          img.alt = (n.attrs.alt as string | null) ?? "";
+          img.style.removeProperty("width");
+          return;
+        }
         const { src, width } = parseSrcFragment(raw);
         img.src = resolveImageSrc(src, getFromPath());
         img.alt = (n.attrs.alt as string | null) ?? "";

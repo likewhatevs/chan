@@ -30,9 +30,12 @@
     isImagePath,
     parseSrcFragment,
     relativizeImageSrc,
-    showImagePicker,
     uploadImageFile,
   } from "./extensions/image";
+  import {
+    openImageBubble,
+    type ImageBubbleHandle,
+  } from "./extensions/imageBubble";
   import {
     createWikiLinkNode,
     handleWikiClick,
@@ -117,6 +120,7 @@
     if (ro) {
       dismissWikiBubble();
       dismissTagBubble();
+      dismissImageBubble();
       clearCursorDecorations();
     }
   });
@@ -148,6 +152,30 @@
   /// path leaves PM's selection where it was). Cleared as soon
   /// as the selection moves off the atom.
   let lastAtomEditPos: number | null = null;
+
+  /// Image bubble open while the caret sits inside `![alt](src)`
+  /// text in the editor. Same non-focus-stealing pattern as the
+  /// wiki bubble; the host owns the keyboard and selection-
+  /// tracking, the bubble owns its own DOM and result list.
+  let imageBubble: ImageBubbleHandle | undefined;
+  /// Original attrs of the image atom we replaced with text on
+  /// entry to edit-existing mode. Null for the typed-`![` flow
+  /// (no atom existed). On dismiss-without-accept we restore the
+  /// atom from this snapshot so the document doesn't end up with
+  /// stray markdown text.
+  let editingImageOriginal: { src: string; alt: string } | null = null;
+  /// Doc position of the opening `!` in `![alt](src)`. Used by
+  /// the dismiss path to find and replace / remove the inserted
+  /// text even when the caret has moved. Mapped through every
+  /// transaction in `onUpdate`.
+  let editingImageBracketStart: number | null = null;
+  /// Default alt the user has not yet diverged from. While the
+  /// editor still shows this string in the `[alt]` slot, the
+  /// accept path overrides it from the picked filename; once the
+  /// user types anything different it sticks. Lets the typed-
+  /// `![` flow start with `![]( )` and still get an auto-alt
+  /// when the user picks an image.
+  let editingImageDefaultAlt = "";
 
   /// Direction the user came from when entering wiki edit mode
   /// via NodeSelection. ArrowLeft → entered from the right side
@@ -371,6 +399,28 @@
               return true;
             }
           }
+          if (imageBubble) {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              acceptImageBubble();
+              return true;
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              dismissImageBubble();
+              return true;
+            }
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              imageBubble.moveActive(1);
+              return true;
+            }
+            if (event.key === "ArrowUp") {
+              event.preventDefault();
+              imageBubble.moveActive(-1);
+              return true;
+            }
+          }
           if (tagBubble) {
             if (event.key === "Enter") {
               event.preventDefault();
@@ -441,6 +491,23 @@
             .filter((f): f is File => !!f && f.type.startsWith("image/"));
           if (files.length > 0) {
             event.preventDefault();
+            // While the image bubble is open the user is editing
+            // an `![alt](src)` markup; route uploads into that
+            // markup's path slot rather than inserting a fresh
+            // atom (which would leave the open brackets behind).
+            if (imageBubble) {
+              void uploadImageFile(files[0]!, dirOfPath(currentPath ?? null))
+                .then((path) => {
+                  if (!editor) return;
+                  replaceImagePathInSource(path);
+                  acceptImageBubble();
+                })
+                .catch((err) => {
+                  // eslint-disable-next-line no-console
+                  console.error("paste-upload failed:", err);
+                });
+              return true;
+            }
             const at = view.state.selection.from;
             void insertImageFilesAt(at, files);
             return true;
@@ -455,6 +522,13 @@
               const u = new URL(text);
               if (isImagePath(u.pathname)) {
                 event.preventDefault();
+                if (imageBubble) {
+                  // Same routing as the file path: drop the URL
+                  // into the source's `(path)` slot and commit.
+                  replaceImagePathInSource(text);
+                  acceptImageBubble();
+                  return true;
+                }
                 const last = u.pathname.split("/").pop() ?? "";
                 const alt = last.replace(/\.[^./]+$/, "");
                 editor!
@@ -483,6 +557,11 @@
             editingWikiBracketStart,
           );
         }
+        if (editingImageBracketStart !== null) {
+          editingImageBracketStart = transaction.mapping.map(
+            editingImageBracketStart,
+          );
+        }
         if (applyingExternal) return;
         const raw = (editor.storage.markdown as { getMarkdown(): string }).getMarkdown();
         // Strip the NBSP-paragraph markers we injected on parse so
@@ -501,6 +580,7 @@
         tagHeadings();
         syncWikiBubble();
         syncTagBubble();
+        syncImageBubble();
         updateCursorDecorations();
         maybeOpenImageEditPicker();
         onSelectionChange?.();
@@ -508,6 +588,7 @@
       onSelectionUpdate: () => {
         syncWikiBubble();
         syncTagBubble();
+        syncImageBubble();
         updateCursorDecorations();
         maybeOpenImageEditPicker();
         onSelectionChange?.();
@@ -601,6 +682,7 @@
   onDestroy(() => {
     dismissWikiBubble();
     dismissTagBubble();
+    dismissImageBubble();
     editor?.destroy();
   });
 
@@ -840,20 +922,28 @@
 
   function onInput(e: Event): void {
     if (!editor) return;
-    // Tag bubble opens only on a literal `#` keystroke. Doing this in
-    // onInput (which fires after tiptap's transaction lands) lets us
-    // distinguish a fresh `#` from caret merely passing over an
-    // existing `#tag` token. `InputEvent.data` is the typed character
-    // for plain insertions and null for everything else (backspace,
-    // composition state changes, paste, etc.), so the check is safe.
     const inputData = (e as InputEvent).data ?? "";
+    // Defer the rest of the work to the next tick. The browser's
+    // `input` event can fire BEFORE ProseMirror's mutation observer
+    // has applied the transaction for the just-typed character, so
+    // reading `editor.state` here would miss it. By the next macro-
+    // task PM has caught up and `endsWith("![")` etc. see the right
+    // doc.
+    setTimeout(() => onInputDeferred(inputData), 0);
+  }
+
+  function onInputDeferred(inputData: string): void {
+    if (!editor) return;
+    // Tag bubble opens only on a literal `#` keystroke. Distinguishes
+    // a fresh `#` from caret merely passing over an existing `#tag`.
+    // `InputEvent.data` is the typed character for plain insertions
+    // and null for everything else (backspace, composition state
+    // changes, paste, etc.), so the check is safe.
     if (!tagBubble && inputData === "#") {
       const range = findTagRange(editor);
       if (range) openTagBubbleForCurrentCaret(range.query);
     }
-    // Look at text immediately before the cursor (up to 16 chars). This is
-    // more reliable than matching the serialized markdown, which may have
-    // trailing newlines or surrounding content that defeat end-anchors.
+    // Look at text immediately before the cursor (up to 16 chars).
     const { from } = editor.state.selection;
     const before = editor.state.doc.textBetween(Math.max(0, from - 16), from, "\n", "\n");
 
@@ -911,38 +1001,24 @@
       openWikiBubbleForCurrentCaret();
       return;
     }
-    if (before.endsWith("![")) {
-      // The trigger eats both characters; the picker resolves
-      // with either a drive-relative path, a remote URL, or
-      // null (cancel). Alt text comes from the filename so the
-      // markdown round-trip carries something readable.
-      replaceTrailingTrigger("![", () => {
-        const anchor = caretAnchorHost();
-        showImagePicker(
-          anchor,
-          (result) => {
-            if (!result || !editor) return;
-            // Picker hands back drive-rooted paths (existing-image
-            // pick or just-uploaded file) or absolute URLs
-            // (paste-URL flow); relativize to currentPath so the
-            // markdown source stays portable when the file moves
-            // directories. The alt text comes from the picker's
-            // alt field (auto-populated from the filename, user-
-            // editable).
-            const rel = relativizeImageSrc(result.src, currentPath ?? null);
-            editor
-              .chain()
-              .focus()
-              .insertContent({
-                type: "image",
-                attrs: { src: rel, alt: result.alt },
-              })
-              .insertContent(" ")
-              .run();
-          },
-          dirOfPath(currentPath ?? null),
-        );
-      });
+    if (before.endsWith("![") && !imageBubble) {
+      // Mirror the `[[` autopair: leave the typed `![` in place,
+      // insert `]()` AFTER the caret, drop the cursor inside the
+      // `()`. The bubble below the caret picks up the path query
+      // from the text between the parens (same way the wiki
+      // bubble picks up the bracket query). `![` is at
+      // [from-2, from); we insert `]()` at `from`, then set the
+      // caret 2 chars later — that lands between `(` and `)`.
+      const pos = from;
+      editor
+        .chain()
+        .insertContentAt(pos, "]()", { updateSelection: false })
+        .setTextSelection(pos + 2)
+        .run();
+      editingImageOriginal = null;
+      editingImageBracketStart = pos - "![".length;
+      editingImageDefaultAlt = "";
+      openImageBubbleForCurrentCaret();
       return;
     }
     // Live date detection: scan the cursor's parent block for any
@@ -1389,15 +1465,39 @@
   function maybeOpenImageEditPicker(): void {
     if (!editor || !editor.isEditable) return;
     const sel = editor.state.selection;
-    const node =
+    // First check: NodeSelection on an atom (click on the image
+    // / wiki / date pill). PM typically creates this for `select-
+    // able: true` atoms when clicked.
+    let node: { type: { name: string }; attrs: Record<string, unknown>; nodeSize: number } | null =
       "node" in sel
-        ? ((sel as unknown as { node: { type: { name: string }; attrs: Record<string, unknown> } }).node)
+        ? ((sel as unknown as { node: { type: { name: string }; attrs: Record<string, unknown>; nodeSize: number } }).node)
         : null;
+    let pos = sel.from;
+    // Fallback: arrow-key navigation often lands the caret as a
+    // TextSelection ADJACENT to an inline atom rather than a
+    // NodeSelection on it. Detect that case so arrow into an
+    // image / wiki / date pill still surfaces the edit popover.
+    // We only consider this when the bubble isn't already open
+    // and the selection just moved (the lastAtomEditPos guard
+    // below dedupes per-atom).
+    if (!node && sel.empty && !imageBubble && !wikiBubble) {
+      const fromPos = editor.state.doc.resolve(sel.from);
+      const before = fromPos.nodeBefore;
+      const after = fromPos.nodeAfter;
+      const isEditableAtom = (n: { type: { name: string } } | null | undefined): boolean =>
+        !!n && (n.type.name === "image" || n.type.name === "wikiLink" || n.type.name === "date");
+      if (isEditableAtom(after)) {
+        node = after as typeof node;
+        pos = sel.from;
+      } else if (isEditableAtom(before)) {
+        node = before as typeof node;
+        pos = sel.from - (before as { nodeSize: number }).nodeSize;
+      }
+    }
     if (!node) {
       lastAtomEditPos = null;
       return;
     }
-    const pos = sel.from;
     if (node.type.name === "wikiLink") {
       if (lastAtomEditPos === pos) return;
       lastAtomEditPos = pos;
@@ -1429,52 +1529,301 @@
     }
     if (lastAtomEditPos === pos) return;
     lastAtomEditPos = pos;
+    enterImageEditAt(pos, node);
+  }
+
+  /// Replace an image atom at `pos` with its `![alt](src)` source
+  /// text, drop the caret inside the parens, and open the image
+  /// bubble. The original src + alt are snapshot so dismiss-
+  /// without-accept can put the atom back; on accept we update
+  /// the atom in place (which surfaces as a setNodeAttribute-
+  /// equivalent transaction with `#w=N` fragments preserved if
+  /// the path didn't actually change).
+  function enterImageEditAt(
+    pos: number,
+    node: { attrs: Record<string, unknown> },
+  ): void {
+    if (!editor) return;
     const rawSrc = (node.attrs.src as string) ?? "";
     const alt = (node.attrs.alt as string) ?? "";
-    // Seed the picker with a drive-rooted path stripped of any
-    // `#w=N` fragment so the list highlights / filters correctly.
-    // We hold on to `rawSrc` so an alt-only edit can put it back
-    // verbatim (preserving the fragment + the original `./` /
-    // `../` prefix style).
-    const { src: cleanSrc } = parseSrcFragment(rawSrc);
-    let resolvedSrc = cleanSrc;
-    if (
-      currentPath &&
-      (cleanSrc.startsWith("./") || cleanSrc.startsWith("../"))
-    ) {
-      resolvedSrc = resolveRelativePath(cleanSrc, currentPath);
+    editingImageOriginal = { src: rawSrc, alt };
+    editingImageBracketStart = pos;
+    editingImageDefaultAlt = alt;
+    const insertText = `![${alt}](${rawSrc})`;
+    // Caret lands inside the parens (right after the opening `(`)
+    // so the bubble starts in path mode and the user can search
+    // immediately. Position math: `pos` is the atom's position;
+    // after replace, brackets occupy [pos, pos + insertText.len].
+    // The opening paren sits at `pos + 3 + alt.len`; caret one
+    // past that lands inside the parens.
+    const caretPos = pos + 4 + alt.length;
+    // Use `tr.insertText` (NOT `chain.insertContent`) because
+    // tiptap-markdown's content schema would re-parse the
+    // `![alt](src)` string as an image atom and immediately
+    // recreate the node we're trying to replace with text.
+    // `tr.insertText` writes plain text characters into the doc,
+    // bypassing the markdown parse.
+    let tr = editor.state.tr.insertText(insertText, pos, pos + 1);
+    try {
+      tr = tr.setSelection(TextSelection.create(tr.doc, caretPos));
+    } catch {
+      // Position out of range (degenerate doc); leave selection
+      // where the replace mapped it.
     }
-    const anchor = caretAnchorHost();
-    showImagePicker(
-      anchor,
-      (result) => {
-        if (!editor) return;
-        if (!result) {
-          // Dismiss: refocus the editor so the caret lands back on
-          // the image's line (PM's NodeSelection on the atom is
-          // still valid; only DOM focus moved to the picker's
-          // search input). Without this, Escape leaves the editor
-          // unfocused and the user has to click to resume typing.
-          editor.commands.focus();
-          return;
-        }
-        // Path unchanged: keep `rawSrc` verbatim so width fragments
-        // and the user's chosen `./` style round-trip cleanly. Path
-        // changed: relativize against the editing file as usual.
-        const finalSrc =
-          result.src === resolvedSrc
-            ? rawSrc
-            : relativizeImageSrc(result.src, currentPath ?? null);
-        editor.view.dispatch(
-          editor.state.tr
-            .setNodeAttribute(pos, "src", finalSrc)
-            .setNodeAttribute(pos, "alt", result.alt),
-        );
-        editor.commands.focus();
-      },
-      dirOfPath(currentPath ?? null),
-      { src: resolvedSrc, alt },
+    editor.view.dispatch(tr);
+    editor.commands.focus();
+    openImageBubbleForCurrentCaret();
+  }
+
+  /// Locate the `![alt](src)` text range surrounding the caret,
+  /// if any. Returns positions in the prosemirror document plus
+  /// the parsed alt / src and the mode the caret currently sits
+  /// in (between `[` and `]` → "alt"; between `(` and `)` →
+  /// "path"). Mirrors `findBracketRange`'s contract for wiki.
+  function findImageRange(ed: Editor): {
+    start: number;
+    end: number;
+    alt: string;
+    src: string;
+    mode: "alt" | "path" | "outside";
+  } | null {
+    const sel = ed.state.selection;
+    if (!sel.empty) return null;
+    const fromPos = ed.state.doc.resolve(sel.from);
+    const block = fromPos.parent;
+    if (!block.isTextblock) return null;
+    const blockStart = fromPos.start();
+    const text = ed.state.doc.textBetween(
+      blockStart,
+      fromPos.end(),
+      "\n",
+      " ",
     );
+    const offset = sel.from - blockStart;
+    // Walk backward to find the `![` that opens our range.
+    const exclam = text.lastIndexOf("![", Math.max(0, offset - 1));
+    if (exclam < 0) return null;
+    // Match `![alt](src)` from `exclam`. Lazy `[^\]]*` /
+    // `[^)]*` so trailing markup further on the line doesn't
+    // greedy-match into the wrong close.
+    const tail = text.slice(exclam);
+    const m = tail.match(/^!\[([^\]]*)\]\(([^)]*)\)/);
+    if (!m) return null;
+    const fullLen = m[0].length;
+    const altLen = (m[1] ?? "").length;
+    // Caret offsets relative to `!`:
+    //   1 = between `!` and `[`               (outside)
+    //   2 = between `[` and (alt or `]`)      (alt)
+    //   2 + altLen = between alt and `]`      (alt)
+    //   3 + altLen = between `]` and `(`      (alt — let the caret
+    //                                          slip across the
+    //                                          boundary without
+    //                                          dismissing)
+    //   4 + altLen = between `(` and src      (path)
+    //   4 + altLen + srcLen = between src/`)` (path)
+    //   fullLen = after `)`                   (outside)
+    const inTail = offset - exclam;
+    const start = blockStart + exclam;
+    const end = blockStart + exclam + fullLen;
+    let mode: "alt" | "path" | "outside";
+    if (inTail < 2 || inTail >= fullLen) mode = "outside";
+    else if (inTail <= 3 + altLen) mode = "alt";
+    else mode = "path";
+    return {
+      start,
+      end,
+      alt: m[1] ?? "",
+      src: m[2] ?? "",
+      mode,
+    };
+  }
+
+  function openImageBubbleForCurrentCaret(): void {
+    if (!editor || imageBubble) return;
+    imageBubble = openImageBubble({
+      host: caretAnchorHost(),
+      uploadDir: dirOfPath(currentPath ?? null),
+      onClickPick: (src) => {
+        replaceImagePathInSource(src);
+        // Click also commits, matching the wiki bubble's "click
+        // a result accepts it" behaviour.
+        acceptImageBubble();
+      },
+      onUpload: (src) => {
+        replaceImagePathInSource(src);
+        acceptImageBubble();
+      },
+    });
+    syncImageBubble();
+  }
+
+  /// Replace the `(path)` text in the editor's image source with
+  /// `newSrc`. Used by the bubble's pick / upload callbacks so
+  /// the editor reflects the chosen image before commit fires.
+  function replaceImagePathInSource(newSrc: string): void {
+    if (!editor) return;
+    const range = findImageRange(editor);
+    if (!range) return;
+    const insert = `![${range.alt}](${newSrc})`;
+    editor.view.dispatch(
+      editor.state.tr.insertText(insert, range.start, range.end),
+    );
+  }
+
+  function acceptImageBubble(): void {
+    if (!editor || !imageBubble) return;
+    const range = findImageRange(editor);
+    if (!range) {
+      dismissImageBubble();
+      return;
+    }
+    // Pick winner: bubble's highlighted result over typed text.
+    // The user types in the editor to FILTER the list; the active
+    // list item is what they intend to commit. When the list is
+    // empty (no matches / external URL typed), fall through to the
+    // typed text — that supports paste-URL flow and lets the user
+    // hand-type a path the catalog doesn't know about.
+    const pickedFromList = imageBubble.pickActive();
+    const chosenSrc = pickedFromList ?? range.src;
+    // Auto-fill alt from the chosen src's filename when the user
+    // didn't override it. `editingImageDefaultAlt` is what we
+    // pre-populated on entry, so equality means the user hasn't
+    // typed anything in the alt slot.
+    let finalAlt = range.alt;
+    if (
+      finalAlt.length === 0 ||
+      finalAlt === editingImageDefaultAlt
+    ) {
+      const last = chosenSrc.split("/").pop() ?? chosenSrc;
+      const clean = (last.split("?")[0] ?? last).split("#")[0] ?? last;
+      finalAlt = clean.replace(/\.[^./]+$/, "");
+    }
+    // Edit-existing && path unchanged: keep `editingImageOriginal.src`
+    // verbatim (preserves `#w=N` fragments and the `./` style).
+    const orig = editingImageOriginal;
+    let finalSrc: string;
+    if (orig) {
+      const { src: cleanOrig } = parseSrcFragment(orig.src);
+      let resolvedOrig = cleanOrig;
+      if (
+        currentPath &&
+        (cleanOrig.startsWith("./") || cleanOrig.startsWith("../"))
+      ) {
+        resolvedOrig = resolveRelativePath(cleanOrig, currentPath);
+      }
+      finalSrc =
+        chosenSrc === resolvedOrig || chosenSrc === cleanOrig
+          ? orig.src
+          : relativizeImageSrc(chosenSrc, currentPath ?? null);
+    } else {
+      finalSrc = relativizeImageSrc(chosenSrc, currentPath ?? null);
+    }
+    const imageType = editor.schema.nodes.image;
+    if (!imageType) return;
+    // Suppress the dismiss-restore path: we're committing.
+    editingImageOriginal = null;
+    editingImageBracketStart = null;
+    editingImageDefaultAlt = "";
+    dismissImageBubble();
+    editor.view.dispatch(
+      editor.state.tr.replaceWith(
+        range.start,
+        range.end,
+        imageType.create({ src: finalSrc, alt: finalAlt }),
+      ),
+    );
+    editor.commands.focus();
+  }
+
+  function dismissImageBubble(): void {
+    if (imageBubble) {
+      imageBubble.dismiss();
+      imageBubble = undefined;
+    }
+    if (editingImageOriginal || editingImageBracketStart != null) {
+      restoreImageEditOriginal();
+    }
+  }
+
+  /// Either put the original atom back (edit-existing path) or
+  /// remove the inserted `![](`+`)` text (typed-`![` path) so the
+  /// document doesn't end up with stray markdown.
+  function restoreImageEditOriginal(): void {
+    if (!editor) return;
+    const orig = editingImageOriginal;
+    const start = editingImageBracketStart;
+    editingImageOriginal = null;
+    editingImageBracketStart = null;
+    editingImageDefaultAlt = "";
+    if (start === null) return;
+    // Rescan for the `![..](..)` markup at the saved start. Matches
+    // findImageRange but without the selection requirement (caret
+    // may have moved out by the time we get here).
+    const doc = editor.state.doc;
+    if (start < 0 || start >= doc.content.size) return;
+    let resolved;
+    try {
+      resolved = doc.resolve(start);
+    } catch {
+      return;
+    }
+    const blockStart = resolved.start();
+    const blockEnd = resolved.end();
+    if (start < blockStart || start >= blockEnd) return;
+    const text = doc.textBetween(blockStart, blockEnd, "\n", " ");
+    const offset = start - blockStart;
+    const tail = text.slice(offset);
+    const m = tail.match(/^!\[([^\]]*)\]\(([^)]*)\)/);
+    if (!m) return;
+    const end = start + m[0].length;
+    const imageType = editor.schema.nodes.image;
+    if (!imageType) return;
+    if (orig) {
+      // Edit-existing: replace markup with the original atom.
+      editor.view.dispatch(
+        editor.state.tr.replaceWith(
+          start,
+          end,
+          imageType.create({ src: orig.src, alt: orig.alt }),
+        ),
+      );
+    } else {
+      // Typed-`![` flow: just delete the empty markup.
+      editor.view.dispatch(editor.state.tr.delete(start, end));
+    }
+  }
+
+  /// Re-evaluate the image bubble's mode + query as the caret
+  /// moves and the user types. Open: keep alive; sync mode to
+  /// caret position; sync query / alt-echo. No bubble: do
+  /// nothing (entry happens through explicit triggers, not from
+  /// selection alone).
+  function syncImageBubble(): void {
+    if (!editor || !imageBubble) return;
+    const range = findImageRange(editor);
+    if (!range || range.mode === "outside") {
+      dismissImageBubble();
+      return;
+    }
+    if (range.mode === "alt") {
+      imageBubble.setMode("alt");
+      imageBubble.setAlt(range.alt);
+    } else {
+      imageBubble.setMode("path");
+      // Normalize the search query: relative paths (`./` / `../`)
+      // get resolved against the editing file so they match the
+      // drive-rooted entries in the catalog. Strip any `#w=N`
+      // fragment so it doesn't break substring matching.
+      const { src: cleanSrc } = parseSrcFragment(range.src);
+      let query = cleanSrc;
+      if (
+        currentPath &&
+        (cleanSrc.startsWith("./") || cleanSrc.startsWith("../"))
+      ) {
+        query = resolveRelativePath(cleanSrc, currentPath);
+      }
+      imageBubble.setPathQuery(query);
+    }
   }
 
   // ---- wiki edit-existing flow ----------------------------------------
@@ -2451,6 +2800,104 @@
   }
   :global(.md-wysiwyg .md-tag-pill:hover) {
     filter: brightness(1.1);
+  }
+
+  /* Image bubble. Anchored under the caret while the user edits
+     `![alt](src)` text in the editor. Path mode shows a result
+     list; alt mode swaps the list for an alt-text echo so the
+     user gets feedback while typing in the `[alt]` slot. The
+     footer carries the upload action and the accept hint. */
+  :global(.md-image-bubble) {
+    background: var(--bg-elev);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.4);
+    width: 360px;
+    font-size: 13px;
+    user-select: none;
+  }
+  :global(.md-image-bubble-preview) {
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    max-height: 180px;
+    overflow: hidden;
+  }
+  :global(.md-image-bubble-preview.is-empty) { display: none; }
+  :global(.md-image-bubble-preview img) {
+    max-width: 100%;
+    max-height: 180px;
+    object-fit: contain;
+    background: #fff;
+  }
+  :global(.md-image-bubble-list) {
+    list-style: none; margin: 0; padding: 0;
+    max-height: 200px; overflow-y: auto;
+  }
+  :global(.md-image-bubble-list.is-hidden) { display: none; }
+  :global(.md-image-bubble-list li) {
+    padding: .3rem .55rem; cursor: pointer;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  :global(.md-image-bubble-list li.active),
+  :global(.md-image-bubble-list li:hover) { background: var(--hover-bg); }
+  :global(.md-image-bubble-alt) {
+    display: flex;
+    align-items: baseline;
+    gap: .4rem;
+    padding: .55rem;
+    color: var(--text);
+    font-size: 13px;
+  }
+  :global(.md-image-bubble-alt.is-hidden) { display: none; }
+  :global(.md-image-bubble-alt-label) {
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+  :global(.md-image-bubble-alt-value) {
+    color: var(--text);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  :global(.md-image-bubble-alt-value.is-empty) {
+    color: var(--muted);
+    font-style: italic;
+  }
+  :global(.md-image-bubble-footer) {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .35rem .55rem;
+    border-top: 1px dashed var(--border);
+  }
+  :global(.md-image-bubble-upload) {
+    background: var(--btn-bg);
+    color: var(--text);
+    border: 1px solid var(--btn-border);
+    border-radius: 3px;
+    padding: 4px 8px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+  }
+  :global(.md-image-bubble-upload:hover:not(:disabled)) {
+    border-color: var(--btn-hover);
+  }
+  :global(.md-image-bubble-upload:disabled) {
+    opacity: 0.6;
+    cursor: default;
+  }
+  :global(.md-image-bubble-accept) {
+    color: var(--muted);
+    font-size: 11px;
+    margin-left: auto;
   }
 
   /* Tag autocomplete bubble. Same anchored-under-caret pattern as
