@@ -232,6 +232,45 @@ E-mail 1 - Type,E-mail 1 - Value
 }
 
 #[test]
+fn imported_contacts_are_reachable_by_email_substring_via_picker_filter() {
+    // End-to-end: import a CSV with emails, reindex, then prove a
+    // typed email fragment surfaces the matching contact through
+    // the same code path the @ picker uses.
+    let cfg = TempDir::new().unwrap();
+    let drive_root = TempDir::new().unwrap();
+    let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+    lib.register_drive(drive_root.path(), Some("EmailSearch".into()))
+        .unwrap();
+    let drive = lib.open_drive(drive_root.path()).unwrap();
+
+    let contacts = parse_google_csv(CSV.as_bytes()).unwrap();
+    drive
+        .import_contacts("Contacts", contacts, ImportOpts::default())
+        .unwrap();
+    drive.reindex(None).unwrap();
+
+    // Local-part match.
+    let hits = drive.contacts_filtered(Some("jane@x"), 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].rel_path, "Contacts/Jane Doe.md");
+    assert!(hits[0].emails.iter().any(|e| e == "jane@x.com"));
+
+    // Domain match.
+    let hits = drive.contacts_filtered(Some("y.com"), 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].rel_path, "Contacts/Bob Smith.md");
+
+    // Case insensitivity.
+    let hits = drive.contacts_filtered(Some("JANE@X.COM"), 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].rel_path, "Contacts/Jane Doe.md");
+
+    // The picker also surfaces emails on the row itself for the
+    // secondary-line render.
+    assert!(hits[0].emails.contains(&"jane@x.com".to_string()));
+}
+
+#[test]
 fn removing_contact_frontmatter_demotes_node_back_to_file() {
     // If a user edits a contact note and strips the chan.kind
     // frontmatter, the next index pass should drop it from

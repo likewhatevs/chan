@@ -20,11 +20,13 @@
 // as every other drive op.
 
 pub mod emit;
+pub mod extract;
 pub mod google;
 pub mod import;
 pub mod provider;
 pub mod slug;
 
+pub use extract::extract_emails;
 pub use provider::ProviderKind;
 
 use serde::{Deserialize, Serialize};

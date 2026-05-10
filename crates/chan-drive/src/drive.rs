@@ -748,6 +748,7 @@ impl Drive {
             mtime: Option<i64>,
             edges: Vec<crate::graph::Edge>,
             headings: Vec<markdown::Heading>,
+            emails: Option<String>,
         }
         let mut owned: Vec<Owned> = Vec::new();
         for e in &entries {
@@ -763,7 +764,7 @@ impl Drive {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            let (title, node_kind, headings, edges) = parse_for_graph(&e.path, &content);
+            let (title, node_kind, headings, edges, emails) = parse_for_graph(&e.path, &content);
             owned.push(Owned {
                 rel: e.path.clone(),
                 title,
@@ -771,6 +772,7 @@ impl Drive {
                 mtime: e.mtime,
                 edges,
                 headings,
+                emails,
             });
         }
         if let Some(c) = cancel {
@@ -787,6 +789,7 @@ impl Drive {
                 node_kind: o.node_kind,
                 edges: &o.edges,
                 headings: &o.headings,
+                emails: o.emails.as_deref(),
             })
             .collect();
         self.graph()?.replace_all(&borrowed)?;
@@ -814,7 +817,7 @@ impl Drive {
         }
         let content = self.read_text(rel)?;
         let mtime = self.stat(rel).ok().and_then(|s| s.mtime);
-        let (title, node_kind, headings, edges) = parse_for_graph(rel, &content);
+        let (title, node_kind, headings, edges, emails) = parse_for_graph(rel, &content);
         // Graph first, then search index. The graph is what the
         // editor consults for backlinks and link-autocomplete on
         // every keystroke; a stale graph is the more user-visible
@@ -825,8 +828,15 @@ impl Drive {
         // user is less likely to notice and can recover via the
         // server's auto-rebuild trigger. The opposite ordering
         // (search-then-graph) made backlinks the silent victim.
-        self.graph()?
-            .replace_file(rel, title.as_deref(), mtime, node_kind, &edges, &headings)?;
+        self.graph()?.replace_file(
+            rel,
+            title.as_deref(),
+            mtime,
+            node_kind,
+            &edges,
+            &headings,
+            emails.as_deref(),
+        )?;
         // Hand the already-read content to the index so the read
         // goes through the Drive sandbox exactly once.
         self.index()?.index_one(rel, &content)?;
@@ -938,17 +948,29 @@ impl Drive {
     }
 
     /// Filtered contact-kind notes. `query` is matched case-
-    /// insensitively against title and basename inside SQLite, and
-    /// `limit` caps the row count so picker keystrokes stay O(limit)
-    /// regardless of how many contacts the drive holds. `query` of
-    /// `None` or empty returns up to `limit` contacts in display-name
-    /// order.
+    /// insensitively against title, basename, and the joined email
+    /// column inside SQLite, and `limit` caps the row count so
+    /// picker keystrokes stay O(limit) regardless of how many
+    /// contacts the drive holds. `query` of `None` or empty returns
+    /// up to `limit` contacts in display-name order.
     pub fn contacts_filtered(
         &self,
         query: Option<&str>,
         limit: usize,
     ) -> Result<Vec<crate::graph::ContactNode>> {
         self.graph()?.contacts_filtered(query, limit)
+    }
+
+    /// True when at least one contact-kind row in the graph DB has
+    /// `emails IS NULL`. Set after a v3 schema migration finds
+    /// pre-v3 contact rows that haven't been re-indexed yet (the
+    /// migration cannot walk the filesystem itself, so the column
+    /// stays NULL until something re-parses the file). The chan-
+    /// server indexer reads this on boot and fires a one-shot full
+    /// rebuild so email-aware @ matching works without the user
+    /// having to think about it.
+    pub fn contacts_need_email_backfill(&self) -> Result<bool> {
+        self.graph()?.contacts_need_email_backfill()
     }
 
     // ---- watch ----
@@ -1096,8 +1118,10 @@ fn ensure_writable_in(
 
 /// Parse a file's content into the graph-side structures: the
 /// title (for the graph node), the heading list (for graph
-/// headings), and the outgoing edges (links + tokens). The
-/// search-side chunking is done separately by the index facade.
+/// headings), the outgoing edges (links + tokens), and, for
+/// contact-kind files, the joined email list (space-separated,
+/// lowercased). The search-side chunking is done separately by the
+/// index facade.
 fn parse_for_graph(
     rel: &str,
     raw: &str,
@@ -1106,6 +1130,7 @@ fn parse_for_graph(
     crate::graph::NodeKind,
     Vec<markdown::Heading>,
     Vec<crate::graph::Edge>,
+    Option<String>,
 ) {
     let fm = markdown::parse_frontmatter(raw);
     let body_src = &raw[fm.body_offset..];
@@ -1136,7 +1161,22 @@ fn parse_for_graph(
     let links = markdown::extract_links(body_src);
     let tokens = markdown::extract_tokens(body_src);
     let edges = build_edges(rel, &links, &tokens);
-    (title, node_kind, headings, edges)
+    // Email extraction runs only for contact-kind files: a regular
+    // note that mentions an email in passing should not get its
+    // address mirrored into a `nodes.emails` column the picker can
+    // surface, and skipping the scan for File-kind keeps the
+    // hot-path cost zero on normal indexes.
+    let emails = if matches!(node_kind, crate::graph::NodeKind::Contact) {
+        let list = crate::contacts::extract_emails(body_src);
+        if list.is_empty() {
+            None
+        } else {
+            Some(list.join(" "))
+        }
+    } else {
+        None
+    };
+    (title, node_kind, headings, edges, emails)
 }
 
 /// Whether `path` lies under the `prefix` directory. POSIX

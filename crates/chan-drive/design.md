@@ -414,26 +414,35 @@ in their own folder and drops it in is picked up by the next
 indexer pass; the `Contacts/` directory is just the importer's
 default destination, not a discovery requirement.
 
-Limitations of the v1 contacts surface, recorded so a future
-iteration can pick them up:
+Email-aware `@` picker matching is pushed down at v3. The graph
+schema gains a `nodes.emails TEXT` column populated at index time:
+`parse_for_graph` runs `contacts::extract_emails` over the body of
+every contact-kind file, joins the lowercased addresses with
+spaces, and stores them on the row. `contacts_filtered` adds a
+third `LIKE ... COLLATE NOCASE` predicate against that column, so
+a typed `alice` finds both "Alice Anderson" and a contact whose
+only `alice` is in `alice@example.com`. The picker also receives
+the deduplicated email list back so it can render a secondary line
+under the contact's name.
 
-  - Email-aware `@` picker matching is not pushed down. Emails
-    live in body bullets, not on the `nodes` row, so a query of
-    `alice` matches a contact whose title or basename contains
-    `alice` but does not match a contact whose only `alice` is
-    in `alice@example.com`. Adding email-aware match requires
-    either a `nodes.emails` text column populated by
-    `parse_for_graph` or a side `contact_emails` table joined
-    in `contacts_filtered`.
-  - The chan-llm tool sandbox (and the MCP server it backs) does
-    not yet expose a contacts-aware tool. Agents reach contacts
-    through the existing `read_file` / `list_files` /
-    `search_content` tools (e.g., `list_files prefix=Contacts/`
-    or `search_content "kind: contact"`); a dedicated
-    `list_contacts` / `find_contact` tool would parallel
-    `Drive::contacts_filtered` and would be the right shape if
-    the agent surface needs richer contact discovery. Tracked
-    alongside `chan-llm` issue #2 (MCP resources).
+The v3 migration cannot walk the filesystem (it runs inside
+`graph.rs`, with no Drive handle), so contacts indexed before v3
+keep `emails IS NULL`. `Drive::contacts_need_email_backfill`
+returns `true` while any such row exists; the chan-server indexer
+reads the flag on boot and queues a one-shot full rebuild so
+email-aware matching works without operator intervention. The
+flag clears as soon as every contact row has been re-parsed.
+
+The chan-llm tool sandbox (and the MCP server it backs) does not
+expose a contacts-aware tool, by design. Agents reach contacts
+through the existing `read_file` / `list_files` / `search_content`
+tools: contact files carry `chan.kind: contact` in frontmatter
+plus the contact's data as readable bullets in the body, and any
+note that wiki-links to a contact creates a graph edge the agent
+can follow via `read_file` on the linked path. Adding a dedicated
+`list_contacts` / `find_contact` tool would just duplicate
+`Drive::contacts_filtered` over a wire the model already has the
+primitives to traverse.
 
 ## 4. Public API surface
 
@@ -507,6 +516,7 @@ Drive::import_contacts(dir: &str,
 Drive::contacts() -> Result<Vec<ContactNode>>
 Drive::contacts_filtered(query: Option<&str>, limit: usize)
     -> Result<Vec<ContactNode>>
+Drive::contacts_need_email_backfill() -> Result<bool>
 ```
 
 `BYTES_WRITE_LIMIT` and `TEXT_WRITE_LIMIT` cap a single write

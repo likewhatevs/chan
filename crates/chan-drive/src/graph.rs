@@ -10,10 +10,23 @@
 //                                       frontmatter `title`); NULL
 //                                       for non-file rows or until
 //                                       the next index_file pass
-//         basename TEXT)             -- file_name() of rel_path,
+//         basename TEXT,             -- file_name() of rel_path,
 //                                       used by link_targets prefix
 //                                       lookup. NULL for non-file
 //                                       rows.
+//         emails   TEXT)             -- space-separated lowercased
+//                                       email addresses pulled from
+//                                       a contact-kind file's body
+//                                       so the @ picker can match
+//                                       `alice` against
+//                                       `alice@example.com`.
+//                                       NULL for non-contact rows
+//                                       and for legacy contact rows
+//                                       indexed before v3 (the
+//                                       indexer triggers a full
+//                                       rebuild when a backfill is
+//                                       needed; see
+//                                       contacts_need_email_backfill).
 //
 //   edges(src      TEXT NOT NULL,    -- node rel_path
 //         dst      TEXT NOT NULL,    -- node rel_path
@@ -86,6 +99,15 @@ pub struct ContactNode {
     pub rel_path: String,
     pub basename: String,
     pub title: Option<String>,
+    /// Email addresses pulled from the contact note's body at index
+    /// time. Empty for contacts with no extractable address (e.g.,
+    /// phone-only entries) and for contacts indexed before the v3
+    /// schema bump until the next index pass repopulates them.
+    /// Surfaced so the picker can render a secondary line under the
+    /// contact's name and so callers can confirm an email-substring
+    /// match on the result.
+    #[serde(default)]
+    pub emails: Vec<String>,
 }
 
 /// Edge kind. Mirrors the wiki-link / mention / tag distinction
@@ -140,6 +162,14 @@ pub struct FileGraph<'a> {
     pub node_kind: NodeKind,
     pub edges: &'a [Edge],
     pub headings: &'a [markdown::Heading],
+    /// Pre-joined, space-separated lowercased email addresses for
+    /// contact-kind files. `None` for File-kind nodes and for
+    /// contact-kind files with no extractable address. The space
+    /// separator is intentional: it lets the picker run a single
+    /// `LIKE '%alice%' COLLATE NOCASE` against the column instead
+    /// of joining a side table on every keystroke. Email shape is
+    /// narrow enough (no spaces) that the join is unambiguous.
+    pub emails: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -257,8 +287,8 @@ impl GraphView {
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if v == 0 {
             tracing::info!("graph: initializing schema at v1");
-        } else if v < 2 {
-            tracing::info!(from = v, to = 2, "graph: migrating schema");
+        } else if v < 3 {
+            tracing::info!(from = v, to = 3, "graph: migrating schema");
         }
         if v < 1 {
             conn.execute_batch(
@@ -349,6 +379,30 @@ impl GraphView {
             // schema that's idempotently safe to re-migrate.
             tx.execute_batch("PRAGMA user_version = 2;")?;
             tx.commit()?;
+        }
+        if v < 3 {
+            // v3: add `emails` to nodes for the @ picker's email-
+            // substring match. Same idempotency pattern as v2: check
+            // PRAGMA before ALTER so a crash mid-migration replays
+            // safely. No file-level backfill here (the migration runs
+            // inside graph.rs, with no Drive handle to walk the
+            // filesystem); contacts indexed before v3 keep emails =
+            // NULL, and `Drive::contacts_need_email_backfill` plus
+            // the chan-server indexer's initial-build trigger drive
+            // a one-shot full reindex on the next boot.
+            let cols: Vec<String> = {
+                let mut stmt = conn.prepare("PRAGMA table_info(nodes)")?;
+                let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row?);
+                }
+                out
+            };
+            if !cols.iter().any(|c| c == "emails") {
+                conn.execute_batch("ALTER TABLE nodes ADD COLUMN emails TEXT;")?;
+            }
+            conn.execute_batch("PRAGMA user_version = 3;")?;
         }
         Ok(())
     }
@@ -455,7 +509,13 @@ impl GraphView {
     /// the link-autocomplete query (`link_targets`). `node_kind`
     /// tags the file as a regular note or as an imported contact;
     /// the contact tag drives the editor `@` picker and lets graph
-    /// consumers filter without re-parsing frontmatter.
+    /// consumers filter without re-parsing frontmatter. `emails` is
+    /// the pre-joined, space-separated lowercased address list for
+    /// contact-kind files (`None` for File-kind, and `None` for
+    /// contacts with no extractable address); see `FileGraph.emails`.
+    // Folding these into a struct would churn 14 call sites (incl.
+    // tests) for a style win; the function stays at 7 params.
+    #[allow(clippy::too_many_arguments)]
     pub fn replace_file(
         &self,
         rel: &str,
@@ -464,6 +524,7 @@ impl GraphView {
         node_kind: NodeKind,
         outgoing: &[Edge],
         headings: &[markdown::Heading],
+        emails: Option<&str>,
     ) -> Result<()> {
         tracing::debug!(
             rel,
@@ -479,9 +540,9 @@ impl GraphView {
             .and_then(|s| s.to_str())
             .unwrap_or(rel);
         tx.execute(
-            "INSERT OR REPLACE INTO nodes(rel_path, kind, mtime, title, basename) \
-             VALUES (?, ?, ?, ?, ?)",
-            params![rel, node_kind.as_str(), mtime, title, basename],
+            "INSERT OR REPLACE INTO nodes(rel_path, kind, mtime, title, basename, emails) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+            params![rel, node_kind.as_str(), mtime, title, basename, emails],
         )?;
         tx.execute("DELETE FROM edges WHERE src = ?", params![rel])?;
         tx.execute("DELETE FROM headings WHERE rel_path = ?", params![rel])?;
@@ -554,8 +615,8 @@ impl GraphView {
         tx.execute("DELETE FROM nodes", [])?;
         {
             let mut ins_node = tx.prepare_cached(
-                "INSERT OR REPLACE INTO nodes(rel_path, kind, mtime, title, basename) \
-                 VALUES (?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO nodes(rel_path, kind, mtime, title, basename, emails) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
             )?;
             let mut ins_edge = tx.prepare_cached(
                 "INSERT OR IGNORE INTO edges(src, dst, kind, anchor) VALUES (?, ?, ?, ?)",
@@ -573,7 +634,8 @@ impl GraphView {
                     fg.node_kind.as_str(),
                     fg.mtime,
                     fg.title,
-                    basename
+                    basename,
+                    fg.emails,
                 ])?;
                 for e in fg.edges {
                     ins_edge.execute(params![fg.rel, e.dst, e.kind.as_str(), e.anchor])?;
@@ -652,12 +714,17 @@ impl GraphView {
             // Use the same LIKE-wildcard escape pair (`like_escape` +
             // `ESCAPE '\\'`) the link-targets path uses so a query of
             // "100%off" matches literally instead of as a wildcard.
+            // The emails column carries every address joined by spaces,
+            // so a substring match on it is enough to surface
+            // `alice@example.com` for a typed `alice` (or even
+            // `example.com`) without a side-table join.
             let pattern = format!("%{}%", like_escape(q));
             let mut stmt = conn.prepare_cached(
-                "SELECT rel_path, basename, title FROM nodes \
+                "SELECT rel_path, basename, title, emails FROM nodes \
                  WHERE kind = 'contact' \
                    AND (title LIKE ?1 ESCAPE '\\' COLLATE NOCASE \
-                        OR basename LIKE ?1 ESCAPE '\\' COLLATE NOCASE) \
+                        OR basename LIKE ?1 ESCAPE '\\' COLLATE NOCASE \
+                        OR emails LIKE ?1 ESCAPE '\\' COLLATE NOCASE) \
                  ORDER BY COALESCE(title, basename, rel_path) COLLATE NOCASE \
                  LIMIT ?2",
             )?;
@@ -669,7 +736,7 @@ impl GraphView {
             Ok(out)
         } else {
             let mut stmt = conn.prepare_cached(
-                "SELECT rel_path, basename, title FROM nodes \
+                "SELECT rel_path, basename, title, emails FROM nodes \
                  WHERE kind = 'contact' \
                  ORDER BY COALESCE(title, basename, rel_path) COLLATE NOCASE \
                  LIMIT ?1",
@@ -681,6 +748,23 @@ impl GraphView {
             }
             Ok(out)
         }
+    }
+
+    /// True when at least one contact-kind row has `emails` IS NULL.
+    /// Drives the chan-server indexer's one-shot full-rebuild trigger
+    /// after a v3 migration: contacts written before the column
+    /// existed have NULL there, so the picker can't email-match them
+    /// until they're re-indexed. A clean v3-from-scratch DB and a
+    /// drive whose contacts have all been re-indexed both report
+    /// `false` so the trigger doesn't fire on every boot.
+    pub fn contacts_need_email_backfill(&self) -> Result<bool> {
+        let conn = self.reader()?;
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM nodes WHERE kind = 'contact' AND emails IS NULL",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
     }
 
     /// Link-autocomplete lookup. Drives the `[[` typeahead in the
@@ -896,11 +980,13 @@ fn recent_files(conn: &Connection, limit: i64) -> Result<Vec<LinkTarget>> {
 /// rusqlite row -> ContactNode. Shared between `contacts` and
 /// `contacts_filtered` so the basename fallback (derive from
 /// `rel_path` when the column is NULL, e.g., for v2 rows the
-/// indexer hasn't refreshed yet) lives in one place.
+/// indexer hasn't refreshed yet) lives in one place. `emails`
+/// is the joined column: empty / NULL maps to an empty vec.
 fn row_to_contact(row: &rusqlite::Row<'_>) -> rusqlite::Result<ContactNode> {
     let rel_path: String = row.get(0)?;
     let basename: Option<String> = row.get(1)?;
     let title: Option<String> = row.get(2)?;
+    let emails_raw: Option<String> = row.get(3)?;
     let basename = basename.unwrap_or_else(|| {
         std::path::Path::new(&rel_path)
             .file_name()
@@ -908,10 +994,19 @@ fn row_to_contact(row: &rusqlite::Row<'_>) -> rusqlite::Result<ContactNode> {
             .unwrap_or(&rel_path)
             .to_string()
     });
+    let emails = emails_raw
+        .map(|s| {
+            s.split_whitespace()
+                .filter(|t| !t.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
     Ok(ContactNode {
         rel_path,
         basename,
         title,
+        emails,
     })
 }
 
@@ -944,7 +1039,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let db = tmp.path().join("graph.sqlite");
         let g = GraphView::open(&db).unwrap();
-        assert_eq!(count(&g, "PRAGMA user_version"), 2);
+        assert_eq!(count(&g, "PRAGMA user_version"), 3);
     }
 
     #[test]
@@ -981,8 +1076,16 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let g = std::sync::Arc::new(GraphView::open(&tmp.path().join("g.sqlite")).unwrap());
         // Seed a row so the read returns predictable data.
-        g.replace_file("a.md", Some("Alpha"), Some(1), NodeKind::File, &[], &[])
-            .unwrap();
+        g.replace_file(
+            "a.md",
+            Some("Alpha"),
+            Some(1),
+            NodeKind::File,
+            &[],
+            &[],
+            None,
+        )
+        .unwrap();
 
         // Three concurrent readers, one writer. Each reader does
         // many small queries; if the pool serialised them through
@@ -1008,8 +1111,16 @@ mod tests {
             thread::spawn(move || {
                 b.wait();
                 for i in 0..50 {
-                    g.replace_file("a.md", Some("Alpha"), Some(i), NodeKind::File, &[], &[])
-                        .expect("write");
+                    g.replace_file(
+                        "a.md",
+                        Some("Alpha"),
+                        Some(i),
+                        NodeKind::File,
+                        &[],
+                        &[],
+                        None,
+                    )
+                    .expect("write");
                 }
             })
         };
@@ -1024,8 +1135,16 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
         // Pre-populate so we can verify clear-and-replace semantics.
-        g.replace_file("old.md", Some("Old"), Some(1), NodeKind::File, &[], &[])
-            .unwrap();
+        g.replace_file(
+            "old.md",
+            Some("Old"),
+            Some(1),
+            NodeKind::File,
+            &[],
+            &[],
+            None,
+        )
+        .unwrap();
         assert_eq!(
             count(&g, "SELECT COUNT(*) FROM nodes WHERE rel_path='old.md'"),
             1
@@ -1050,6 +1169,7 @@ mod tests {
                 node_kind: NodeKind::File,
                 edges: &edges,
                 headings: &headings,
+                emails: None,
             },
             FileGraph {
                 rel: "b.md",
@@ -1058,6 +1178,7 @@ mod tests {
                 node_kind: NodeKind::File,
                 edges: &[],
                 headings: &[],
+                emails: None,
             },
         ];
         g.replace_all(&entries).unwrap();
@@ -1083,6 +1204,7 @@ mod tests {
             NodeKind::File,
             &[],
             &[],
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1104,7 +1226,7 @@ mod tests {
 
     fn populate(g: &GraphView, files: &[(&str, Option<&str>, Option<i64>)]) {
         for (rel, title, mtime) in files {
-            g.replace_file(rel, *title, *mtime, NodeKind::File, &[], &[])
+            g.replace_file(rel, *title, *mtime, NodeKind::File, &[], &[], None)
                 .unwrap();
         }
     }
@@ -1122,6 +1244,7 @@ mod tests {
             NodeKind::Contact,
             &[],
             &[],
+            Some("alice@example.com alice.work@example.com"),
         )
         .unwrap();
         g.replace_file(
@@ -1131,6 +1254,7 @@ mod tests {
             NodeKind::Contact,
             &[],
             &[],
+            Some("bob@example.org"),
         )
         .unwrap();
         g.replace_file(
@@ -1140,6 +1264,7 @@ mod tests {
             NodeKind::Contact,
             &[],
             &[],
+            None,
         )
         .unwrap();
         g.replace_file(
@@ -1149,6 +1274,7 @@ mod tests {
             NodeKind::File,
             &[],
             &[],
+            None,
         )
         .unwrap();
 
@@ -1171,6 +1297,27 @@ mod tests {
         // Empty-string query is treated as None.
         let hits = g.contacts_filtered(Some("   "), 10).unwrap();
         assert_eq!(hits.len(), 3);
+
+        // Email-substring match: typed local part finds the contact
+        // whose stored emails column contains it.
+        let hits = g.contacts_filtered(Some("bob@example"), 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].rel_path, "Contacts/Bob.md");
+        assert_eq!(hits[0].emails, vec!["bob@example.org"]);
+
+        // Email-domain match: typed domain fragment finds every
+        // contact with that domain.
+        let hits = g.contacts_filtered(Some("example.com"), 10).unwrap();
+        let paths: Vec<_> = hits.iter().map(|c| c.rel_path.as_str()).collect();
+        assert_eq!(paths, vec!["Contacts/Alice.md"]);
+
+        // Surfaced emails are split back into a vec for picker
+        // rendering.
+        let alice = hits.into_iter().next().unwrap();
+        assert_eq!(
+            alice.emails,
+            vec!["alice@example.com", "alice.work@example.com"]
+        );
     }
 
     #[test]
@@ -1184,6 +1331,7 @@ mod tests {
             NodeKind::Contact,
             &[],
             &[],
+            None,
         )
         .unwrap();
         g.replace_file(
@@ -1193,6 +1341,7 @@ mod tests {
             NodeKind::Contact,
             &[],
             &[],
+            None,
         )
         .unwrap();
         // A bare `%` would be a SQL LIKE wildcard matching everything.
@@ -1271,6 +1420,7 @@ mod tests {
             NodeKind::File,
             &[],
             &headings,
+            None,
         )
         .unwrap();
         let hits = g.link_targets("variant", 10).unwrap();
@@ -1320,8 +1470,16 @@ mod tests {
                 text: format!("note-{i}"),
             });
         }
-        g.replace_file("toc-heavy.md", None, Some(1), NodeKind::File, &[], &hs)
-            .unwrap();
+        g.replace_file(
+            "toc-heavy.md",
+            None,
+            Some(1),
+            NodeKind::File,
+            &[],
+            &hs,
+            None,
+        )
+        .unwrap();
         let hits = g.link_targets("note", 10).unwrap();
         // Cap at limit/2 = 5 heading hits, regardless of how many
         // headings actually match.
@@ -1386,7 +1544,7 @@ mod tests {
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 2);
+        assert_eq!(v, 3);
     }
 
     #[test]
@@ -1451,6 +1609,79 @@ mod tests {
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 2);
+        assert_eq!(v, 3);
+    }
+
+    #[test]
+    fn migration_v3_adds_emails_column_and_marks_existing_contacts_for_backfill() {
+        // Open at v2, insert a contact-kind row by hand (simulating
+        // an upgrade from a chan that didn't track emails). Re-open:
+        // the migration adds the column without touching existing
+        // values, and `contacts_need_email_backfill` reports `true`
+        // so the chan-server indexer can drive a one-shot rebuild.
+        let tmp = TempDir::new().unwrap();
+        let db = tmp.path().join("g.sqlite");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE nodes (
+                    rel_path TEXT PRIMARY KEY,
+                    kind     TEXT NOT NULL,
+                    mtime    INTEGER,
+                    title    TEXT,
+                    basename TEXT
+                );
+                CREATE TABLE edges (
+                    src    TEXT NOT NULL,
+                    dst    TEXT NOT NULL,
+                    kind   TEXT NOT NULL,
+                    anchor TEXT,
+                    PRIMARY KEY (src, dst, kind)
+                );
+                CREATE TABLE headings (
+                    rel_path TEXT NOT NULL,
+                    level    INTEGER NOT NULL,
+                    text     TEXT NOT NULL,
+                    anchor   TEXT NOT NULL,
+                    ord      INTEGER NOT NULL,
+                    PRIMARY KEY (rel_path, ord)
+                );
+                INSERT INTO nodes(rel_path, kind, mtime, title, basename)
+                VALUES ('Contacts/Legacy.md', 'contact', 1, 'Legacy', 'Legacy.md');
+                PRAGMA user_version = 2;
+                "#,
+            )
+            .unwrap();
+        }
+        let g = GraphView::open(&db).unwrap();
+        let conn = g.reader().unwrap();
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 3);
+        let cols: Vec<String> = {
+            let mut stmt = conn.prepare("PRAGMA table_info(nodes)").unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(1))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect()
+        };
+        assert!(cols.iter().any(|c| c == "emails"));
+        // Pre-v3 contact row has emails = NULL: backfill needed.
+        assert!(g.contacts_need_email_backfill().unwrap());
+        // After re-indexing the row with an email, the backfill flag
+        // clears.
+        g.replace_file(
+            "Contacts/Legacy.md",
+            Some("Legacy"),
+            Some(2),
+            NodeKind::Contact,
+            &[],
+            &[],
+            Some("legacy@example.com"),
+        )
+        .unwrap();
+        assert!(!g.contacts_need_email_backfill().unwrap());
     }
 }
