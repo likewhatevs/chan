@@ -83,21 +83,6 @@ export const LiveSourceExtension = Extension.create({
               );
             }
 
-            // 1b. Fenced code block. Tag the codeBlock node so CSS
-            //     can reveal the opening / closing ``` fences (and
-            //     the optional language label) when the caret is
-            //     inside.
-            if (parent.type.name === "codeBlock") {
-              const lang = (parent.attrs.language as string | null) ?? "";
-              const blockStart = $from.before($from.depth);
-              const blockEnd = blockStart + parent.nodeSize;
-              decos.push(
-                Decoration.node(blockStart, blockEnd, {
-                  "data-cursor-in": "",
-                  "data-lang": lang,
-                }),
-              );
-            }
 
             // 2. Inline-mark markers. For each tracked mark, find
             //    the contiguous range covering the caret position

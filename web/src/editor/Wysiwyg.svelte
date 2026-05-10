@@ -45,6 +45,7 @@
     type ContactBubble,
   } from "./extensions/contactPicker";
   import { type BubbleHandle } from "./bubble";
+  import { CodeBlockFenced } from "./extensions/codeBlockFenced";
   import { FoldHeadingExtension } from "./extensions/foldHeading";
   import { LiveSourceExtension } from "./extensions/liveSource";
   import { createTagDecorationExtension } from "./extensions/tagDecoration";
@@ -293,7 +294,11 @@
       element: host,
       editable: !readonly,
       extensions: [
-        StarterKit,
+        // Disable StarterKit's built-in CodeBlock so our
+        // `CodeBlockFenced` (always-visible fences + editable
+        // language) is the only code-block node in the schema.
+        StarterKit.configure({ codeBlock: false }),
+        CodeBlockFenced,
         // `nested: true` lets a task list contain another task list
         // when the user indents (Tab inside a task item). Mirrors
         // GitHub-flavored markdown task list semantics.
@@ -2257,30 +2262,33 @@
     text-decoration: none !important;
   }
 
-  /* Fenced code block: when the caret is inside, reveal the
-     opening / closing ``` fences (and the language label, if any)
-     as muted pseudo-element lines wrapping the rendered code.
-     Block-level pseudos so they each sit on their own line above
-     and below the existing <pre>. */
-  :global(.md-wysiwyg pre[data-cursor-in])::before {
-    content: "```" attr(data-lang);
-    display: block;
+  /* Fenced code block (`CodeBlockFenced` NodeView). Always-visible
+     opening / closing ``` rows with an editable language slot next
+     to the opener. The fence rows render in the same monospace
+     family as the code content so the source-mode look is
+     consistent; muted color signals they're metadata, not part of
+     the code. */
+  :global(.md-wysiwyg .md-codeblock-fence) {
     color: var(--text-secondary);
-    opacity: 0.45;
+    opacity: 0.6;
     font-family: var(--chan-font-mono-family, monospace);
     font-size: 0.9em;
     line-height: 1.2;
-    margin-bottom: 0.25em;
+    user-select: none;
   }
-  :global(.md-wysiwyg pre[data-cursor-in])::after {
-    content: "```";
-    display: block;
-    color: var(--text-secondary);
-    opacity: 0.45;
-    font-family: var(--chan-font-mono-family, monospace);
-    font-size: 0.9em;
-    line-height: 1.2;
-    margin-top: 0.25em;
+  :global(.md-wysiwyg .md-codeblock-lang) {
+    color: var(--text);
+    opacity: 0.85;
+    /* The contenteditable span needs `outline: none` so focusing
+       it for typing doesn't draw a UA focus ring inside the styled
+       code box. Caret visibility is preserved via the input itself. */
+    outline: none;
+    user-select: text;
+  }
+  :global(.md-wysiwyg .md-codeblock-lang:empty)::before {
+    content: "language";
+    opacity: 0.4;
+    user-select: none;
   }
 
   /* Wiki link click flow lives in the bubble (see
