@@ -1,6 +1,6 @@
-// @date smart node + picker UI.
+// Date smart node + picker UI.
 //
-// Typing `@date` opens an inline calendar popover with a format
+// Typing `!/date` opens an inline calendar popover with a format
 // dropdown. Picking a date inserts a `date` node that displays the
 // chosen date in the chosen format and serializes to plain text in
 // the same format. Click an existing pill to re-open the picker.
@@ -106,7 +106,7 @@ export const DateNode = Node.create({
 /// Build a small flyout calendar attached to `host`. Calls `pick` with
 /// the chosen date plus the format id, or `null` to dismiss.
 ///
-/// `initialFormat` seeds the format dropdown so @date picks up the
+/// `initialFormat` seeds the format dropdown so !/date picks up the
 /// user's default and click-to-edit preserves the existing pill's
 /// format.
 ///

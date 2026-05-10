@@ -231,7 +231,7 @@ export type Preferences = {
   pane_widths: PaneWidths;
   /// Editor density for paragraphs and lists.
   line_spacing: LineSpacing;
-  /// Default format used by @date / @today and as the initial
+  /// Default format used by !/date / !/today and as the initial
   /// selection in the calendar picker's format dropdown.
   /// Format ids are defined in `web/src/editor/dateFormats.ts`.
   date_format: string;

@@ -1076,8 +1076,8 @@
     <section>
       <h3>Date pills</h3>
       <p class="hint">
-        Format used by <code>@today</code> and pre-selected in the
-        <code>@date</code> picker. The editor still detects every
+        Format used by <code>!/today</code> and pre-selected in the
+        <code>!/date</code> picker. The editor still detects every
         format on this list when reading a file or watching you
         type, so old documents keep auto-pilling regardless of
         which one is the default here.

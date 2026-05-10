@@ -1,14 +1,21 @@
 <script lang="ts">
   // TipTap-based WYSIWYG editor with smart-node extensions for
-  // @date, [[wiki]], and ![image]. Two-way bound to the parent's
+  // dates, wiki-links, and images. Two-way bound to the parent's
   // `value` (markdown text). Round-trips through tiptap-markdown.
   //
   // Trigger handling: we listen for input events. When the buffer
-  // gains `@today`, `@date`, `[[`, or `![`, we insert the
-  // corresponding node and clean up the trigger text. (`@today`
-  // is just a shortcut: it inserts a `date` node prefilled with
-  // today's date so the styling and round-trip semantics match
-  // `@date`.)
+  // gains a known trigger, we insert the corresponding node and
+  // clean up the trigger text:
+  //
+  //   `!/today`  -> date pill prefilled with today's date
+  //   `!/date`   -> calendar picker; commits to a date pill
+  //   `[[`       -> wiki-link picker (file autocomplete)
+  //   `![`       -> image picker
+  //
+  // The `!/` two-char prefix for command-style insertions is the
+  // chan convention (see project memory): collision-free with
+  // prose, leaves single chars (`@`, `:`, `;`) free for other
+  // surfaces. `@` is reserved for the contacts picker.
 
   import { onDestroy, onMount } from "svelte";
   import { Editor } from "@tiptap/core";
@@ -947,9 +954,15 @@
     const { from } = editor.state.selection;
     const before = editor.state.doc.textBetween(Math.max(0, from - 16), from, "\n", "\n");
 
-    if (before.endsWith("@today")) {
-      replaceTrailingTrigger("@today", () => {
-        // @today and @date both produce dates; we use the same
+    // `!/today` and `!/date`: command-style trigger for inline
+    // insertions. The two-char `!/` prefix is collision-free with
+    // prose (`Done!`, `:smile:`, `/usr/local/bin`), so the picker
+    // never flickers mid-typing. Reserved as the convention for any
+    // future inline command (`!/table`, `!/hr`, etc.); see the
+    // chan_command_trigger memory.
+    if (before.endsWith("!/today")) {
+      replaceTrailingTrigger("!/today", () => {
+        // !/today and !/date both produce dates; we use the same
         // node type for both so the styling is consistent and a
         // markdown round-trip doesn't change the appearance.
         // Format follows the user's default date-format pref.
@@ -964,8 +977,8 @@
       });
       return;
     }
-    if (before.endsWith("@date")) {
-      replaceTrailingTrigger("@date", () => {
+    if (before.endsWith("!/date")) {
+      replaceTrailingTrigger("!/date", () => {
         const anchor = caretAnchorHost();
         showCalendar(
           anchor,

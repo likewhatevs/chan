@@ -290,22 +290,26 @@ starts returning `Contact` nodes; clients can render or ignore.
 
 Phase 5 work. Two coupled changes:
 
-### 10a. Migrate `@today` / `@date` to `!today` / `!date`
+### 10a. Migrate `@today` / `@date` to `!/today` / `!/date`
 
 Free `@` for live contact search. In
 `web/src/editor/Wysiwyg.svelte` the trigger arms change from
-`endsWith("@today")` / `endsWith("@date")` to the `!`-prefixed
+`endsWith("@today")` / `endsWith("@date")` to the `!/`-prefixed
 forms. On-disk format unchanged: dates serialize as the formatted
 string (e.g., `02 Jan 2029`); `decorateSmartNodes` re-pills via
 regex against that text on load.
 
-Word-boundary tightening: the existing `endsWith` logic doesn't
-require start-of-word, so `Done!today` would fire. Add a
-preceded-by-{whitespace,line-start,punctuation} guard at the same
-time.
+The two-char `!/` prefix is the chan convention for command-style
+inline insertions (vs single chars `/`, `;`, `!`, `:` which all
+flicker the picker on common prose patterns -- paths, sentence-end
+`!`, emoji `:smile:`). Collision-free with prose, so no
+word-boundary guard is required. See the chan_command_trigger
+project memory for the rationale and the full options-table that
+led here.
 
 Doc sweep: `README.md`, `chan --help`, any onboarding text mentioning
-`@today` / `@date`.
+`@today` / `@date` (incl. `web/src/components/SettingsPanel.svelte`
+date-format hint and `web/src/api/types.ts` doc comment).
 
 ### 10b. `@` picker
 
@@ -341,7 +345,7 @@ explicit user opt-in, not a chan-internal convenience.
 | 2     | HTTP `POST /api/contacts/import` (§7). Integration test via existing server harness. |
 | 3     | Frontend wizard (§8). Manual browser verification per CLAUDE.md UI rule. |
 | 4     | Graph: `GraphNode::Contact` (§9), link extractor classifies by frontmatter. |
-| 5     | Editor `@` picker + `!today` / `!date` migration (§10). `GET /api/contacts` read route. |
+| 5     | Editor `@` picker + `!/today` / `!/date` migration (§10). `GET /api/contacts` read route. |
 
 Phases 0-3 deliver "import contacts as markdown" (the user's
 original ask). Phases 4-5 deliver "make them first-class" (graph
@@ -359,8 +363,9 @@ Resolved (from the original plan + this session):
 - **Contact reference syntax: regular wiki-link.** No
   `contact://` URL scheme. Frontmatter on the target classifies
   the link as a contact.
-- **`!today` / `!date` for date pills.** Frees `@` for the
-  contact picker.
+- **`!/today` / `!/date` for date pills.** Two-char prefix
+  collision-free with prose / paths / emoji shortcodes; frees `@`
+  for the contact picker. See chan_command_trigger memory.
 - **Provider abstraction is parser dispatch.** Not an API client.
   `enum ProviderKind { Google }` today; add Outlook / vCard variants
   later by adding parser modules.
