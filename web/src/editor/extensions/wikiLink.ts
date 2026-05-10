@@ -332,31 +332,32 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
   display.appendChild(displayValue);
   wrap.appendChild(display);
 
-  const accept = document.createElement("div");
+  // Footer row: accept hint on the left, follow-link button (when
+  // in edit-existing mode) on the right. Flex layout so the two
+  // share the row instead of overlapping. mousedown on the button
+  // preventDefaults to keep editor selection / focus intact while
+  // the dismiss path runs.
+  const footer = document.createElement("div");
+  footer.className = "md-wiki-bubble-footer";
+  const accept = document.createElement("span");
   accept.className = "md-wiki-bubble-accept";
   accept.textContent = "⏎  to accept"; // U+23CE return symbol
-  wrap.appendChild(accept);
-
-  // `>` follow button. Only rendered when the bubble is opened in
-  // edit-existing mode; clicking dismisses the bubble and asks the
-  // host to navigate to the original target. A `mousedown`
-  // preventDefault keeps the editor's selection intact during the
-  // click so the dismiss path can choose what to do with the
-  // surrounding brackets.
+  footer.appendChild(accept);
   let followBtn: HTMLButtonElement | null = null;
   if (opts.followExisting) {
     followBtn = document.createElement("button");
     followBtn.type = "button";
     followBtn.className = "md-wiki-bubble-follow";
     followBtn.title = "follow link";
-    followBtn.textContent = "›";
+    followBtn.textContent = "Open link  ›";
     followBtn.addEventListener("mousedown", (ev) => {
       ev.preventDefault();
       const { target, anchor } = opts.followExisting!;
       opts.onFollowExisting?.(target, anchor);
     });
-    wrap.appendChild(followBtn);
+    footer.appendChild(followBtn);
   }
+  wrap.appendChild(footer);
 
   document.body.appendChild(wrap);
 
@@ -438,6 +439,13 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
 
   const renderResults = (): void => {
     list.innerHTML = "";
+    // Highlight the follow button when arrow nav has parked the
+    // active index past the last result. Cleared on every render
+    // so it tracks `active` exactly.
+    if (followBtn) {
+      if (active === entries.length) followBtn.classList.add("is-active");
+      else followBtn.classList.remove("is-active");
+    }
     if (entries.length === 0) {
       list.classList.add("is-empty");
       accept.classList.add("is-hidden");
@@ -711,13 +719,33 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
       void runFileSearch(fileQuery);
     },
     moveActive(delta: number): void {
-      if (!alive || entries.length === 0) return;
-      active = Math.max(0, Math.min(entries.length - 1, active + delta));
+      if (!alive) return;
+      // The follow button (when present) is a virtual extra slot
+      // past the last result: arrow-down off the bottom of the
+      // list lands on it, so the user can open the link without
+      // touching the mouse. Skipped when there's no follow.
+      const lastIdx = entries.length - 1 + (followBtn ? 1 : 0);
+      if (lastIdx < 0) return;
+      active = Math.max(0, Math.min(lastIdx, active + delta));
       // Re-render so the block-mode preview tracks arrow navigation.
       renderResults();
     },
     accept(): WikiBubbleAccept | null {
-      if (!alive || entries.length === 0) return null;
+      if (!alive) return null;
+      // Active is on the follow slot: trigger the follow callback
+      // and return null. The host treats null as "no link to
+      // insert" and skips the brackets-replace transaction; the
+      // follow handler restores the original atom + navigates.
+      if (followBtn && active === entries.length) {
+        if (opts.followExisting && opts.onFollowExisting) {
+          opts.onFollowExisting(
+            opts.followExisting.target,
+            opts.followExisting.anchor,
+          );
+        }
+        return null;
+      }
+      if (entries.length === 0) return null;
       const entry = entries[active];
       if (!entry) return null;
       // Display-text override: when the user typed `|...` the

@@ -1849,7 +1849,19 @@
     cursor: pointer !important;
     user-select: none;
   }
-  :global(.md-wysiwyg .md-smart-date)  { color: var(--warn-text); }
+  /* Date pill: same chip shape as the wiki pill, in `--warn-text`
+     so the user can tell dates and links apart at a glance. The
+     base `.md-smart` rules supply background / cursor / user-
+     select; this rule overrides shape + size only. */
+  :global(.md-wysiwyg .md-smart-date) {
+    color: var(--warn-text);
+    border-radius: 999px;
+    padding: 0.05em 0.55em;
+    font-size: 0.95em;
+  }
+  :global(.md-wysiwyg .md-smart-date:hover) {
+    filter: brightness(1.1);
+  }
   /* Wiki link rendered as a rounded chip pill (Google Docs-style
      mention chip): accent text on a soft background, no underline,
      pill border-radius, slight horizontal padding. The base
@@ -2269,40 +2281,48 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  /* Faded separator + accept hint. Hidden when there are no
-     results to commit so an empty bubble doesn't claim Enter
-     does something it cannot. */
-  :global(.md-wiki-bubble-accept) {
-    padding: .3rem .55rem;
+  /* Footer row: accept hint on the left, follow button on the
+     right when in edit-existing mode. Flex layout so both share
+     the row instead of overlapping. The dashed separator hugs
+     the row's top edge to match the prior accept-only design. */
+  :global(.md-wiki-bubble-footer) {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: .35rem .55rem;
     border-top: 1px dashed var(--border);
+  }
+  :global(.md-wiki-bubble-accept) {
     color: var(--muted);
     font-size: 11px;
-    text-align: right;
+    flex: 1;
   }
   :global(.md-wiki-bubble-accept.is-hidden) { display: none; }
 
-  /* `>` follow button rendered by the wiki bubble in
-     edit-existing mode. Sits in the bottom-right corner so the
-     accept hint and the follow chevron read as paired actions. */
+  /* Follow button rendered by the wiki bubble in edit-existing
+     mode. Reads as a clear primary action — accent fill, label
+     plus chevron — so a user opening the bubble to navigate (the
+     common case) doesn't have to hunt for it. */
   :global(.md-wiki-bubble-follow) {
-    position: absolute;
-    right: 4px;
-    bottom: 4px;
-    background: var(--btn-bg);
-    color: var(--text);
-    border: 1px solid var(--btn-border);
+    background: var(--accent);
+    color: #fff;
+    border: 1px solid var(--accent);
     border-radius: 4px;
-    padding: 1px 7px;
+    padding: 5px 12px;
     cursor: pointer;
     font: inherit;
-    font-size: 14px;
-    line-height: 1;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.2;
+    margin-left: auto;
+    box-shadow: 0 1px 2px rgba(0,0,0,.25);
   }
-  :global(.md-wiki-bubble-follow:hover) {
-    border-color: var(--btn-hover);
-    color: var(--link);
+  :global(.md-wiki-bubble-follow:hover),
+  :global(.md-wiki-bubble-follow.is-active) {
+    filter: brightness(1.15);
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
-  :global(.md-wiki-bubble) { position: relative; }
 
   /* Caret-driven source-mode decorations. Set by
      `updateCursorDecorations` on every selection change. */
