@@ -12,6 +12,7 @@
 
   import { onDestroy, onMount } from "svelte";
   import { Editor } from "@tiptap/core";
+  import { TextSelection } from "@tiptap/pm/state";
   import StarterKit from "@tiptap/starter-kit";
   import TaskList from "@tiptap/extension-task-list";
   import TaskItem from "@tiptap/extension-task-item";
@@ -140,13 +141,28 @@
   /// in O(N) without scanning the whole editor DOM.
   let cursorDecorated: HTMLElement[] = [];
 
-  /// Last image atom whose picker was opened from a click /
-  /// selection on it. Used as a one-shot guard so a single
+  /// Last atom (image or wikiLink) whose edit popover was opened
+  /// from a click / selection on it. One-shot guard so a single
   /// `NodeSelection` on the atom doesn't keep re-opening the
-  /// picker every time `onSelectionUpdate` fires (the dismiss
+  /// popover every time `onSelectionUpdate` fires (the dismiss
   /// path leaves PM's selection where it was). Cleared as soon
   /// as the selection moves off the atom.
-  let lastImageEditAtomPos: number | null = null;
+  let lastAtomEditPos: number | null = null;
+
+  /// Direction the user came from when entering wiki edit mode
+  /// via NodeSelection. ArrowLeft → entered from the right side
+  /// of the pill, so on dismiss the caret should land BEFORE the
+  /// restored atom (continuing leftward). ArrowRight → entered
+  /// from the left, caret AFTER. Click and other paths default to
+  /// "after". Cleared after each restore so a stale value can't
+  /// influence the next edit.
+  let wikiEditEntryDir: "before" | "after" = "after";
+  /// Last horizontal arrow keypress, captured in `handleKeyDown`
+  /// and consumed by `maybeOpenImageEditPicker`'s wikiLink branch
+  /// to decide `wikiEditEntryDir`. Reset to null on any non-arrow
+  /// keystroke so a click-driven entry doesn't inherit a stale
+  /// direction.
+  let lastHorizontalArrow: "left" | "right" | null = null;
 
   /// Wiki link atom currently in edit mode. Click on the pill (or
   /// ArrowLeft/Right adjacency) replaces the atom with `[[label]]`
@@ -156,6 +172,15 @@
   let editingWikiOriginal:
     | { target: string; label: string; anchor: string }
     | null = null;
+  /// Doc position of the opening `[` of the bracket pair we
+  /// inserted on entry. Tracked so `restoreWikiEditOriginal` can
+  /// find the brackets even after the user navigates the caret
+  /// out of them (which used to defeat the selection-based
+  /// `findBracketRange` lookup and leave the brackets unrestored
+  /// in the doc, where they would round-trip as `\[\[…\]\]`).
+  /// Mapped through every transaction in `onUpdate` so typing
+  /// inside the brackets doesn't desync the saved position.
+  let editingWikiBracketStart: number | null = null;
 
   /// Scroll the editor to the i-th heading (0-based, document order).
   /// Called by the inspector (outline view) via `bind:this` from
@@ -330,21 +355,19 @@
               dismissWikiBubble();
               return true;
             }
-            // In edit-existing mode (the user clicked an existing
-            // wiki atom), ArrowUp / ArrowDown commit-and-exit per
-            // the spec: dismissWikiBubble's restore branch puts
-            // the original atom back. In normal `[[` typing flow
-            // the same keys still navigate the result list.
+            // ArrowUp / ArrowDown always browse the bubble's
+            // result list, both in the typed `[[` flow and the
+            // edit-existing flow (where the bubble shows the
+            // current link's matches; arrow-keys are how the user
+            // picks a different one).
             if (event.key === "ArrowDown") {
               event.preventDefault();
-              if (editingWikiOriginal) dismissWikiBubble();
-              else wikiBubble.moveActive(1);
+              wikiBubble.moveActive(1);
               return true;
             }
             if (event.key === "ArrowUp") {
               event.preventDefault();
-              if (editingWikiOriginal) dismissWikiBubble();
-              else wikiBubble.moveActive(-1);
+              wikiBubble.moveActive(-1);
               return true;
             }
           }
@@ -379,6 +402,12 @@
             onSubmit();
             return true;
           }
+          // Capture horizontal arrow direction so the wiki edit-
+          // existing entry path can place the caret on the correct
+          // side of the pill on dismiss.
+          if (event.key === "ArrowLeft") lastHorizontalArrow = "left";
+          else if (event.key === "ArrowRight") lastHorizontalArrow = "right";
+          else lastHorizontalArrow = null;
           return false;
         },
         handleDrop: (view, event, _slice, moved) => {
@@ -443,7 +472,17 @@
           return false;
         },
       },
-      onUpdate: ({ editor }) => {
+      onUpdate: ({ editor, transaction }) => {
+        // Keep the wiki edit-existing bracket-start position in
+        // sync with the doc as the user types inside (or near)
+        // the brackets. Without this, `restoreWikiEditOriginal`
+        // would walk the doc from a stale offset and miss the
+        // brackets, leaving them to round-trip as escaped text.
+        if (editingWikiBracketStart !== null) {
+          editingWikiBracketStart = transaction.mapping.map(
+            editingWikiBracketStart,
+          );
+        }
         if (applyingExternal) return;
         const raw = (editor.storage.markdown as { getMarkdown(): string }).getMarkdown();
         // Strip the NBSP-paragraph markers we injected on parse so
@@ -1020,6 +1059,13 @@
           anchor: editingWikiOriginal.anchor,
         }
       : undefined;
+    // Initial query reflects whatever sits between the brackets
+    // RIGHT NOW. For typed `[[` the brackets are empty; for the
+    // edit-existing path enterWikiEditAt has just inserted
+    // `[[label]]`, so `range.query === label` and the search runs
+    // pre-populated with the existing link's text.
+    const range = findBracketRange(editor);
+    const initialQuery = range?.query ?? "";
     wikiBubble = openWikiBubble({
       host: caretAnchorHost(),
       prefix: wikiPickerPrefix,
@@ -1034,6 +1080,7 @@
         // original label is preserved.
         const orig = editingWikiOriginal;
         editingWikiOriginal = null;
+        editingWikiBracketStart = null;
         if (editor && orig) {
           const range = findBracketRange(editor);
           const wikiType = editor.schema.nodes.wikiLink;
@@ -1056,7 +1103,7 @@
         handleWikiClick(fullTarget);
       },
     });
-    wikiBubble.setQuery("");
+    wikiBubble.setQuery(initialQuery);
   }
 
   /// Build a synthetic "host" element that reports the caret's
@@ -1133,6 +1180,7 @@
     // explicitly chose a new target, so dismiss must NOT restore
     // the prior atom. Clear before dismissWikiBubble runs.
     editingWikiOriginal = null;
+    editingWikiBracketStart = null;
     dismissWikiBubble();
     // anchor is "" for file picks; only heading / block picks
     // populate it. The wikiLink node carries it onto the markdown
@@ -1309,13 +1357,35 @@
       "node" in sel
         ? ((sel as unknown as { node: { type: { name: string }; attrs: Record<string, unknown> } }).node)
         : null;
-    if (!node || node.type.name !== "image") {
-      lastImageEditAtomPos = null;
+    if (!node) {
+      lastAtomEditPos = null;
       return;
     }
     const pos = sel.from;
-    if (lastImageEditAtomPos === pos) return;
-    lastImageEditAtomPos = pos;
+    if (node.type.name === "wikiLink") {
+      if (lastAtomEditPos === pos) return;
+      lastAtomEditPos = pos;
+      // Direction-aware caret placement on dismiss: ArrowLeft into
+      // the pill came from the right side, so restoring should
+      // leave the caret BEFORE the pill (continuing leftward);
+      // ArrowRight into the pill came from the left, caret AFTER.
+      // Click and other entries default to "after" (no direction).
+      wikiEditEntryDir = lastHorizontalArrow === "left" ? "before" : "after";
+      lastHorizontalArrow = null;
+      // PM resolves nodeDOM for atom positions to the nodeView's
+      // wrap span (set up in extensions/wikiLink.ts). Falling back
+      // to no-op when the lookup fails keeps a transient selection
+      // change from breaking arrow nav.
+      const dom = editor.view.nodeDOM(pos);
+      if (dom instanceof HTMLElement) enterWikiEditAt(dom);
+      return;
+    }
+    if (node.type.name !== "image") {
+      lastAtomEditPos = null;
+      return;
+    }
+    if (lastAtomEditPos === pos) return;
+    lastAtomEditPos = pos;
     const rawSrc = (node.attrs.src as string) ?? "";
     const alt = (node.attrs.alt as string) ?? "";
     // Seed the picker with a drive-rooted path stripped of any
@@ -1383,6 +1453,7 @@
     const label = (atom.attrs.label as string) || target;
     const anchor = (atom.attrs.anchor as string) || "";
     editingWikiOriginal = { target, label, anchor };
+    editingWikiBracketStart = pos;
     // Replace the atom with `[[label]]` text. Caret lands at the
     // end of the label (between `label` and `]]`), matching the
     // typing-`[[ ]]` flow's caret position so syncWikiBubble's
@@ -1410,20 +1481,56 @@
   function restoreWikiEditOriginal(): void {
     if (!editor || !editingWikiOriginal) return;
     const orig = editingWikiOriginal;
+    const start = editingWikiBracketStart;
     editingWikiOriginal = null;
-    const range = findBracketRange(editor);
-    if (!range) return;
+    editingWikiBracketStart = null;
+    if (start === null) return;
+    // Locate the closing `]]` by scanning the parent textblock
+    // from the saved bracket-start. Selection is unreliable here
+    // because the user may have arrowed out of the brackets
+    // (which is what triggered this dismiss); we walk the doc
+    // explicitly so the brackets get replaced even when the caret
+    // has moved away.
+    const doc = editor.state.doc;
+    if (start < 0 || start >= doc.content.size) return;
+    let resolvedStart;
+    try {
+      resolvedStart = doc.resolve(start);
+    } catch {
+      return;
+    }
+    const blockStart = resolvedStart.start();
+    const blockEnd = resolvedStart.end();
+    if (start < blockStart || start >= blockEnd) return;
+    const text = doc.textBetween(blockStart, blockEnd, "\n", " ");
+    const offset = start - blockStart;
+    if (text.slice(offset, offset + 2) !== "[[") return;
+    const closeIdx = text.indexOf("]]", offset + 2);
+    if (closeIdx === -1) return;
+    const end = blockStart + closeIdx + 2;
     const wikiType = editor.schema.nodes.wikiLink;
     if (!wikiType) return;
-    const tr = editor.state.tr.replaceWith(
-      range.start,
-      range.end,
-      wikiType.create({
-        target: orig.target,
-        label: orig.label,
-        anchor: orig.anchor,
-      }),
-    );
+    const dir = wikiEditEntryDir;
+    wikiEditEntryDir = "after";
+    const atomNode = wikiType.create({
+      target: orig.target,
+      label: orig.label,
+      anchor: orig.anchor,
+    });
+    let tr = editor.state.tr.replaceWith(start, end, atomNode);
+    // After the replace, `start` points to the atom and
+    // `start + 1` points right after it. Place the caret on the
+    // side the user came from so arrow nav continues smoothly.
+    const caretPos = dir === "before" ? start : start + 1;
+    try {
+      const r = tr.doc.resolve(caretPos);
+      tr = tr.setSelection(
+        TextSelection.near(r, dir === "before" ? -1 : 1),
+      );
+    } catch {
+      // Position out of range: leave the selection where the
+      // replace mapped it.
+    }
     editor.view.dispatch(tr);
   }
 
@@ -1743,7 +1850,21 @@
     user-select: none;
   }
   :global(.md-wysiwyg .md-smart-date)  { color: var(--warn-text); }
-  :global(.md-wysiwyg .md-smart-wiki)  { color: var(--link); text-decoration: underline; }
+  /* Wiki link rendered as a rounded chip pill (Google Docs-style
+     mention chip): accent text on a soft background, no underline,
+     pill border-radius, slight horizontal padding. The base
+     `.md-smart` rules take care of background/cursor/user-select;
+     we only override the radius / padding / decoration here. */
+  :global(.md-wysiwyg .md-smart-wiki) {
+    color: var(--link);
+    text-decoration: none;
+    border-radius: 999px;
+    padding: 0.05em 0.55em;
+    font-size: 0.95em;
+  }
+  :global(.md-wysiwyg .md-smart-wiki:hover) {
+    filter: brightness(1.1);
+  }
   /* Plain markdown links: pointer too (we hijack internal ones in onClick). */
   :global(.md-wysiwyg a) {
     cursor: pointer !important;
