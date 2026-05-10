@@ -46,6 +46,7 @@
   } from "./extensions/contactPicker";
   import { type BubbleHandle } from "./bubble";
   import { FoldHeadingExtension } from "./extensions/foldHeading";
+  import { LiveSourceExtension } from "./extensions/liveSource";
   import { createTagDecorationExtension } from "./extensions/tagDecoration";
   import { openGraphAtNode } from "../state/store.svelte";
   import { api } from "../api/client";
@@ -334,6 +335,11 @@
         // heading of equal-or-higher level. Pure UI state; the
         // markdown source is never touched.
         FoldHeadingExtension,
+        // Live-preview decorations: heading prefix + bold / italic /
+        // strike markers shown only when the caret is on / in the
+        // element. PM-managed so re-renders by other plugins don't
+        // wipe them.
+        LiveSourceExtension,
         // `#tag` rendering as clickable pills. Click opens the
         // graph inspector pre-selected at the tag node so users
         // can see which documents share the tag. The id on a tag
@@ -1486,16 +1492,13 @@
     cursorDecorated = kept;
   }
 
-  /// Tag the DOM elements at / around the caret with `data-cursor-*`
-  /// attrs so the CSS rules below can reveal source-mode decorations:
-  ///   - heading hash prefix when caret is in a heading
-  ///   - markdown link form `[label](url)` for wikiLink atoms and
-  ///     plain `<a>` Link marks
-  ///   - markdown image form `![alt](src)` shown above the rendered
-  ///     image when the caret is adjacent to an image atom
-  ///
-  /// All three trigger off the same selection-update hook so a single
-  /// pass per caret move drives every visual.
+  /// Tag the `<a>` element under the caret with `data-cursor-in` so
+  /// the link-URL suffix renders via `attr(href)`. Headings and
+  /// inline marks are handled by the `liveSource` PM-decoration
+  /// extension; this function only covers the plain Link mark
+  /// because its CSS uses `attr(href)` on the live `<a>` element and
+  /// a PM-managed decoration would wrap that in a span and break
+  /// the selector.
   function updateCursorDecorations(): void {
     if (!editor || !host) return;
     clearCursorDecorations();
@@ -1509,39 +1512,9 @@
     } catch {
       return;
     }
-    const parent = fromPos.parent;
     const view = editor.view;
 
-    // 1. Heading hash prefix when the caret sits in a heading block.
-    //    `view.nodeDOM(blockStart)` returns null in some StarterKit
-    //    setups (Heading has no custom node view), so walk up from
-    //    the caret's DOM ancestor to the H1..H6 element instead.
-    if (parent.type.name === "heading") {
-      const level = Math.min(
-        6,
-        Math.max(1, (parent.attrs.level as number) || 1),
-      );
-      try {
-        const result = view.domAtPos(cursor);
-        let el: HTMLElement | null =
-          result.node instanceof HTMLElement
-            ? result.node
-            : (result.node.parentElement ?? null);
-        while (el && !/^H[1-6]$/.test(el.tagName) && el !== host) {
-          el = el.parentElement;
-        }
-        if (el && /^H[1-6]$/.test(el.tagName)) {
-          el.setAttribute("data-cursor-in", "");
-          el.setAttribute("data-cursor-prefix", "#".repeat(level));
-          cursorDecorated.push(el);
-        }
-      } catch {
-        // domAtPos can throw mid-update; the next selection event
-        // will re-run the decoration pass.
-      }
-    }
-
-    // 2. Plain `<a>` Link mark covering the caret. Marks have no
+    // Plain `<a>` Link mark covering the caret. Marks have no
     //    node DOM, so we walk up from the caret's DOM ancestor to
     //    the anchor element; CSS uses the native `href` attribute
     //    for the suffix so no extra attr-setting is needed.
@@ -2251,6 +2224,18 @@
     color: var(--text-secondary);
     opacity: 0.45;
     font-weight: normal;
+  }
+
+  /* Inline-mark source markers (bold / italic / strike). The
+     `liveSource` plugin inserts these as non-editable widget
+     decorations at the mark range boundaries when the caret is
+     in the mark. Visual: muted same-color text that inherits the
+     surrounding font-weight / style so `**` looks bold next to
+     bold text, and `*` looks italic next to italic text. */
+  :global(.md-wysiwyg .md-source-marker) {
+    color: var(--text-secondary);
+    opacity: 0.45;
+    user-select: none;
   }
 
   /* Wiki link click flow lives in the bubble (see
