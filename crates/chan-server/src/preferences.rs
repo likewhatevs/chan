@@ -160,11 +160,7 @@ impl EditorPrefs {
     }
 
     pub fn load_from(path: &Path) -> Result<Self, Error> {
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let raw = std::fs::read_to_string(path)?;
-        toml::from_str(&raw).map_err(|e| Error::Config(e.to_string()))
+        crate::store::load_toml(path)
     }
 
     pub fn save(&self) -> Result<(), Error> {
@@ -172,13 +168,7 @@ impl EditorPrefs {
     }
 
     pub fn save_to(&self, path: &Path) -> Result<(), Error> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let body = toml::to_string_pretty(self).map_err(|e| Error::Config(e.to_string()))?;
-        chan_drive::fs_ops::atomic_write(path, body.as_bytes())
-            .map_err(|e| Error::Config(e.to_string()))?;
-        Ok(())
+        crate::store::save_toml(path, self)
     }
 }
 

@@ -19,12 +19,26 @@ bundle embedded via rust-embed.
 
 ```
 crates/
-  chan         the binary. Parses CLI args, dispatches subcommands,
-               mounts the embedded frontend.
-  chan-server  HTTP + WebSocket surface. Wraps chan-drive in axum
-               routes; uses chan-llm for assistant routes.
+  chan          the binary. Parses CLI args, dispatches subcommands,
+                mounts the embedded frontend. Self-upgrade lives in
+                src/update.rs.
+  chan-server   HTTP + WebSocket surface. Wraps chan-drive in axum
+                routes; uses chan-llm for assistant routes. Per-area
+                handlers live in src/routes/{drive, files, search,
+                graph, llm, sessions, attachments, storage,
+                preferences, build_info, ws, health}.rs; lib.rs holds
+                ServeConfig + build_app + serve + serve_via_tunnel +
+                router(). Top-level modules: auth, bus, cli_resolve,
+                config, embed_seed, error, indexer, mcp_bridge,
+                preferences, qr, self_writes, signal, state,
+                static_assets, store, util.
+  fetch-models  build helper. Pre-fetches the BGE-small embedding
+                model into chan-server/resources/ so release builds
+                bundle it. Run via `make models`; not invoked by
+                `cargo build` directly.
 
-web/           Svelte frontend (wires in a follow-up commit).
+web/            Svelte frontend, embedded into the binary at build
+                time via rust-embed.
 ```
 
 One sibling repo, pulled in as a path dep:
@@ -87,8 +101,10 @@ dial to `drive.chan.app/{user}/{drive}/*`. The single-user,
 single-machine assumption still holds: one chan serve process owns
 the drive's writes; the tunnel just relocates the inbound transport.
 The bearer-token gate is auto-disabled in tunnel mode (the gateway
-in front of drive.chan.app is the trust boundary). Wire protocol
-lives in `../chan-tunnel`.
+in front of drive.chan.app is the trust boundary; default behavior
+bounces anonymous visitors to id.chan.app, opt out with
+`--tunnel-public`). Wire protocol lives in
+`../chan-core/crates/chan-tunnel-proto`.
 
 ### App-level vs core
 
@@ -118,7 +134,14 @@ don't reimplement library primitives here. When in doubt, read
   or flags that don't exist.
 - **Server routes go in chan-server**: never inline an axum
   handler inside the binary crate. The `chan` crate parses args
-  and calls `chan_server::serve`.
+  and calls `chan_server::serve`. New routes belong in the
+  matching `crates/chan-server/src/routes/<area>.rs`; cross-area
+  shared types live in the module that owns them. `lib.rs::router()`
+  is the only place the route table is assembled.
+- **App-level config files**: anything new under `<config>/chan/`
+  goes through `crate::store::{load_toml, save_toml}` so atomic
+  writes + parent-dir fsync match the rest of the app. Don't roll
+  a fresh `tempfile + rename` by hand.
 - **LLM lives in chan-llm**: backends, tools, prompts, and key
   resolution all live in the chan-llm crate (chan-core
   workspace). chan-server's /api/llm/* routes wrap

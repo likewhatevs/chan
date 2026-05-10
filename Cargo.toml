@@ -1,15 +1,21 @@
 # Workspace manifest for chan: notes app with embedded web editor.
 #
-# Two crates:
+# Three crates:
 #
-#   - chan         the binary. Parses CLI args; dispatches subcommands
-#                  (add, list, remove, rename, serve, index, search).
-#                  Embeds the web frontend at build time via rust-embed
-#                  (wired in a later iteration).
+#   - chan          the binary. Parses CLI args; dispatches subcommands
+#                   (add, list, remove, rename, serve, index, search,
+#                   upgrade). Embeds the web frontend at build time
+#                   via chan-server's rust-embed.
 #
-#   - chan-server  HTTP + WebSocket surface. Wraps chan-drive's Library
-#                  / Drive handles in axum routes and serves the
-#                  embedded frontend.
+#   - chan-server   HTTP + WebSocket surface. Wraps chan-drive's
+#                   Library / Drive handles in axum routes and serves
+#                   the embedded frontend.
+#
+#   - fetch-models  build-only helper. Pre-fetches the default
+#                   embedding model into chan-server/resources/ so
+#                   release builds can bundle it via include_bytes!.
+#                   Run via `make models`; not invoked by `cargo
+#                   build` directly.
 #
 # chan-drive (filesystem, search, graph), chan-llm (LLM backends,
 # prompts, tool sandbox, key resolution), and chan-tunnel-client
@@ -29,7 +35,10 @@ members = [
 [workspace.package]
 version = "0.6.15"
 edition = "2021"
-rust-version = "1.80"
+# Mirrors `rust-toolchain.toml`; pre-push and CI compile under the
+# same compiler. Bumping requires updating both files in the same
+# commit.
+rust-version = "1.95"
 license = "Apache-2.0"
 repository = "https://github.com/chan-writer/chan"
 
