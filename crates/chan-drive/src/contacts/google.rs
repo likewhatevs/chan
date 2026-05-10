@@ -39,6 +39,11 @@ use super::{Contact, EmailAddress, Organization, PhoneNumber, ProviderKind};
 
 const MULTI_SEP: &str = " ::: ";
 
+/// Cap on `<prefix> N - <field>` slot scanning per row. Google's CSV
+/// export typically tops out at 9; 16 is generous and bounded so a
+/// row with weird headers can't make us iterate forever.
+const MAX_INDEXED_FIELDS: usize = 16;
+
 /// Parse a Google Contacts CSV from any `Read`. Returns one
 /// `Contact` per non-empty data row. Rows with no usable identity
 /// (no display name, no email, no phone) are skipped silently
@@ -58,7 +63,7 @@ pub fn parse_google_csv<R: Read>(rdr: R) -> Result<Vec<Contact>> {
         .collect();
 
     let mut out = Vec::new();
-    for (line_no, rec) in reader.records().enumerate() {
+    for rec in reader.records() {
         let rec = rec.map_err(csv_err)?;
         let get = |name: &str| -> Option<String> {
             header_index
@@ -103,7 +108,6 @@ pub fn parse_google_csv<R: Read>(rdr: R) -> Result<Vec<Contact>> {
 
         let has_identity = !display_name.is_empty() || !emails.is_empty() || !phones.is_empty();
         if !has_identity {
-            let _ = line_no; // reserved for future error-context use
             continue;
         }
 
@@ -146,9 +150,7 @@ where
     F: Fn(&str) -> Option<String>,
 {
     let mut out = Vec::new();
-    // Google CSV exports cap at 9 typically; 16 is generous and
-    // bounded so a malformed header can't make us iterate forever.
-    for n in 1..=16 {
+    for n in 1..=MAX_INDEXED_FIELDS {
         let key_a = format!("{prefix} {n} - {field_a}");
         let key_b = format!("{prefix} {n} - {field_b}");
         let raw_a = get(&key_a);

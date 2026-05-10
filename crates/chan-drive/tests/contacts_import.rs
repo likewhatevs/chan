@@ -187,6 +187,51 @@ fn imported_contacts_classified_as_contact_nodes_after_index() {
 }
 
 #[test]
+fn intra_batch_duplicate_name_skips_unrelated_existing_suffixed_file() {
+    // Two contacts named "Jane Smith" land in one batch. An unrelated
+    // user file already exists at "Contacts/Jane Smith (2).md". The
+    // second contact must NOT clobber that file under overwrite, nor
+    // get a misleading "skipped" outcome attached to it under skip.
+    let cfg = TempDir::new().unwrap();
+    let drive_root = TempDir::new().unwrap();
+    let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+    lib.register_drive(drive_root.path(), Some("DupBatch".into()))
+        .unwrap();
+    let drive = lib.open_drive(drive_root.path()).unwrap();
+
+    drive.create_dir("Contacts").unwrap();
+    drive
+        .write_text(
+            "Contacts/Jane Smith (2).md",
+            "user-owned, unrelated to the import\n",
+        )
+        .unwrap();
+
+    let dup = "\
+Name,Given Name,Family Name,Notes,Group Membership,\
+E-mail 1 - Type,E-mail 1 - Value
+\"Jane Smith\",Jane,Smith,first,,Home,jane.a@x.com
+\"Jane Smith\",Jane,Smith,second,,Home,jane.b@x.com
+";
+    let contacts = parse_google_csv(dup.as_bytes()).unwrap();
+    assert_eq!(contacts.len(), 2);
+    let summary = drive
+        .import_contacts("Contacts", contacts, ImportOpts { overwrite: true })
+        .unwrap();
+    let counts = summary.counts();
+    assert_eq!(counts.wrote, 2, "both contacts should land as new files");
+    assert_eq!(counts.overwrote, 0);
+
+    // The pre-existing user file is untouched.
+    let preserved = drive.read_text("Contacts/Jane Smith (2).md").unwrap();
+    assert_eq!(preserved, "user-owned, unrelated to the import\n");
+
+    // The two import targets are "Jane Smith.md" and "Jane Smith (3).md".
+    assert!(drive.exists("Contacts/Jane Smith.md"));
+    assert!(drive.exists("Contacts/Jane Smith (3).md"));
+}
+
+#[test]
 fn removing_contact_frontmatter_demotes_node_back_to_file() {
     // If a user edits a contact note and strips the chan.kind
     // frontmatter, the next index pass should drop it from

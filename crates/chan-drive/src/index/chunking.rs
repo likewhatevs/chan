@@ -9,6 +9,7 @@
 // embeddings code is strategy-agnostic.
 
 use crate::markdown::headings::{self, Heading};
+use crate::markdown::parse_frontmatter;
 
 use super::config::Chunking;
 
@@ -37,12 +38,30 @@ pub struct Chunk {
 }
 
 /// Split a markdown document into chunks per the active strategy.
+///
+/// YAML frontmatter is stripped before chunking so the indexer never
+/// tokenizes classifier metadata (`chan.kind: contact`, `provider:
+/// google`, `imported_at: ...`). Without this, a search for `google`
+/// would surface every imported contact note via the prelude chunk.
+/// Chunk line numbers stay relative to the original source: we add
+/// the frontmatter's line count back after running the strategy on
+/// the body.
 pub fn chunk(source: &str, strategy: &Chunking) -> Vec<Chunk> {
-    match strategy {
-        Chunking::Headings => chunk_by_headings(source),
-        Chunking::WholeDoc => chunk_whole(source),
-        Chunking::Fixed { chars } => chunk_fixed(source, *chars),
+    let fm = parse_frontmatter(source);
+    let body = &source[fm.body_offset..];
+    let line_offset = source[..fm.body_offset].matches('\n').count();
+    let mut chunks = match strategy {
+        Chunking::Headings => chunk_by_headings(body),
+        Chunking::WholeDoc => chunk_whole(body),
+        Chunking::Fixed { chars } => chunk_fixed(body, *chars),
+    };
+    if line_offset > 0 {
+        for c in &mut chunks {
+            c.start_line += line_offset;
+            c.end_line += line_offset;
+        }
     }
+    chunks
 }
 
 fn chunk_whole(source: &str) -> Vec<Chunk> {
@@ -226,5 +245,28 @@ mod tests {
         let src = "αβγδαβγδαβγδ";
         let c = chunk(src, &Chunking::Fixed { chars: 4 });
         assert_eq!(c.len(), 3);
+    }
+
+    #[test]
+    fn frontmatter_is_stripped_before_chunking() {
+        // Without the strip, the YAML lines would land in a `prelude`
+        // chunk and a search for "google" would match every contact.
+        let src = "---\nchan:\n  kind: contact\n  provider: google\n---\n# Jane Doe\n\nbody\n";
+        let c = chunk(src, &Chunking::Headings);
+        assert_eq!(c.len(), 1, "no prelude chunk for the YAML: {c:?}");
+        assert_eq!(c[0].id, "h-0");
+        assert!(!c[0].body.contains("google"));
+        assert!(!c[0].body.contains("kind: contact"));
+    }
+
+    #[test]
+    fn frontmatter_strip_preserves_original_line_numbers() {
+        // start_line must remain relative to the on-disk file so the
+        // editor can scroll search hits back to the right line.
+        let src = "---\na: 1\nb: 2\n---\n# title\nbody\n";
+        let c = chunk(src, &Chunking::Headings);
+        assert_eq!(c.len(), 1);
+        // `# title` is on line 4 (0-indexed) in the original source.
+        assert_eq!(c[0].start_line, 4);
     }
 }

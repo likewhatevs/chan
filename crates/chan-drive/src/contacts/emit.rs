@@ -56,13 +56,37 @@ pub fn render_markdown(c: &Contact, ctx: &EmitContext) -> String {
         let notes = notes.trim();
         if !notes.is_empty() {
             s.push('\n');
-            s.push_str(notes);
-            if !notes.ends_with('\n') {
-                s.push('\n');
-            }
+            write_notes(&mut s, notes);
         }
     }
     s
+}
+
+/// CSV "Notes" cells are arbitrary user text. Two failure modes if
+/// emitted verbatim: `[[Other Note]]` becomes a live wiki-link edge
+/// (importer-driven, not user-driven), and `# X` injects an extra H1
+/// that breaks heading-based chunking and could shift the title the
+/// indexer resolves for the file. `md_inline` escapes the link and
+/// emphasis specials per line; this wrapper additionally backslash-
+/// escapes any leading `#` so a note line never lands as an ATX
+/// heading. Paragraph structure (blank lines) is preserved.
+fn write_notes(s: &mut String, notes: &str) {
+    for line in notes.split('\n') {
+        let line = line.trim_end_matches('\r');
+        let escaped = md_inline(line);
+        let leading_ws_end = escaped
+            .char_indices()
+            .find(|(_, c)| !c.is_whitespace())
+            .map(|(i, _)| i)
+            .unwrap_or(escaped.len());
+        let (lead, body) = escaped.split_at(leading_ws_end);
+        s.push_str(lead);
+        if body.starts_with('#') {
+            s.push('\\');
+        }
+        s.push_str(body);
+        s.push('\n');
+    }
 }
 
 fn write_chan_block(s: &mut String, c: &Contact, ctx: &EmitContext) {
@@ -332,6 +356,48 @@ mod tests {
         let md = render_markdown(&c, &ctx());
         let body_start = md.split("---\n").nth(2).unwrap().trim_start();
         assert!(body_start.starts_with("# Some Body"));
+    }
+
+    #[test]
+    fn notes_escape_wiki_links_and_inline_specials() {
+        // A wiki-link in the CSV must not become a real graph edge
+        // after import; brackets get backslashed by `md_inline`.
+        let c = Contact {
+            display_name: "Test".into(),
+            notes: Some("see [[Important Doc]] and *bold*".into()),
+            ..Default::default()
+        };
+        let md = render_markdown(&c, &ctx());
+        assert!(!md.contains("[[Important Doc]]"));
+        assert!(md.contains(r"\[\[Important Doc\]\]"));
+        assert!(md.contains(r"\*bold\*"));
+    }
+
+    #[test]
+    fn notes_escape_leading_hash_so_no_extra_heading_appears() {
+        // `# Section` in a note must not parse as an ATX heading
+        // (would break heading-based chunking + title resolution).
+        let c = Contact {
+            display_name: "Test".into(),
+            notes: Some("# Pwned\n\nbody line".into()),
+            ..Default::default()
+        };
+        let md = render_markdown(&c, &ctx());
+        assert!(md.contains(r"\# Pwned"));
+        // The only real H1 is still the display-name line.
+        let h1_count = md.lines().filter(|l| l.starts_with("# ")).count();
+        assert_eq!(h1_count, 1);
+    }
+
+    #[test]
+    fn notes_preserve_paragraph_structure() {
+        let c = Contact {
+            display_name: "Test".into(),
+            notes: Some("first line\n\nsecond paragraph".into()),
+            ..Default::default()
+        };
+        let md = render_markdown(&c, &ctx());
+        assert!(md.contains("first line\n\nsecond paragraph"));
     }
 
     #[test]

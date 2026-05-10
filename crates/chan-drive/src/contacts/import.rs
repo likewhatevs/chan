@@ -44,16 +44,20 @@ pub fn run(
     };
 
     // Pre-seed: if a file already exists at the slugged path, the
-    // slugger should NOT pick a different name - we want to either
-    // overwrite (per opts) or report skipped, not silently rename
-    // around it. So we leave `taken` empty here and check existence
-    // separately after slugging.
+    // slugger should NOT pick a different name for the *natural*
+    // pick - we want to either overwrite (per opts) or report
+    // skipped, not silently rename around it. So `taken` starts
+    // empty and we let `slug_for` consult the disk only when it
+    // falls into its " (N)" suffix loop (so two contacts with the
+    // same display name in one batch don't accidentally clobber an
+    // unrelated existing file at the suffixed path).
     let mut taken: HashSet<String> = HashSet::new();
     let mut unnamed = 0usize;
     let mut summary = ImportSummary::default();
+    let on_disk = |p: &str| drive.exists(p);
 
     for c in contacts {
-        let path = slug_for(&c, &dir, &mut taken, &mut unnamed);
+        let path = slug_for(&c, &dir, &mut taken, &mut unnamed, &on_disk);
         let exists = drive.exists(&path);
 
         if exists && !opts.overwrite {
