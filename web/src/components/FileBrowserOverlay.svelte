@@ -72,31 +72,41 @@
     browserSelection.path = null;
   }
 
-  /// "+" popover state. Closes on outside click via the
-  /// click-capture handler on the popover root.
-  let newMenuOpen = $state(false);
+  /// Hamburger popover state. Holds: New file, New folder, Rename
+  /// drive, and a click-to-copy row exposing the on-disk drive
+  /// folder path. Closes on outside click via the click-capture
+  /// handler on the popover root.
+  let menuOpen = $state(false);
   let triggerEl: HTMLButtonElement | undefined = $state();
   let popoverPos = $state<{ top: number; left: number }>({ top: 0, left: 0 });
 
   /// Roughly the rendered size of the popover. We pre-compute layout
   /// before the popover mounts so it never flashes in the wrong
-  /// place; these constants approximate the real footprint of two
-  /// list rows with the icon + label inside.
-  const POPOVER_HEIGHT = 76;
-  const POPOVER_WIDTH = 156;
+  /// place; these constants approximate the real footprint of the
+  /// menu (4 action rows + separator + folder readout). The folder
+  /// readout can be long but is clipped by overflow: hidden so the
+  /// height stays predictable.
+  const POPOVER_HEIGHT = 184;
+  const POPOVER_WIDTH = 240;
+
+  /// "Copied" flash state for the folder-path row. Reset after
+  /// COPIED_FLASH_MS so the indicator doesn't stick.
+  let copiedFlash = $state(false);
+  let copiedTimer: ReturnType<typeof setTimeout> | null = null;
+  const COPIED_FLASH_MS = 1200;
 
   /// Toggle the popover. When opening, measure the trigger button
   /// against the viewport and pick "below" or "above" depending on
   /// which side has more room. Without this the menu was clipped
   /// outside the OverlayShell panel whenever the file browser sat
   /// near the bottom of the screen.
-  function toggleNewMenu(): void {
-    if (newMenuOpen) {
-      newMenuOpen = false;
+  function toggleMenu(): void {
+    if (menuOpen) {
+      menuOpen = false;
       return;
     }
     if (!triggerEl) {
-      newMenuOpen = true;
+      menuOpen = true;
       return;
     }
     const r = triggerEl.getBoundingClientRect();
@@ -122,24 +132,49 @@
       left = viewportW - margin - POPOVER_WIDTH;
     }
     popoverPos = { top, left };
-    newMenuOpen = true;
+    menuOpen = true;
   }
 
   async function newFileHere(): Promise<void> {
-    newMenuOpen = false;
+    menuOpen = false;
     await fileOps.createFile("");
   }
 
   async function newDirHere(): Promise<void> {
-    newMenuOpen = false;
+    menuOpen = false;
     await fileOps.createDir("");
   }
 
+  async function renameDrive(): Promise<void> {
+    menuOpen = false;
+    await fileOps.renameDrive();
+  }
+
+  /// Copy the drive folder path to the system clipboard. Leaves
+  /// the menu open so the user sees the "copied" flash without
+  /// having to reopen it. Silently no-ops if the clipboard write
+  /// rejects (rare on localhost; we don't need to surface it).
+  async function copyFolder(): Promise<void> {
+    const root = drive.info?.root;
+    if (!root) return;
+    try {
+      await navigator.clipboard.writeText(root);
+      copiedFlash = true;
+      if (copiedTimer) clearTimeout(copiedTimer);
+      copiedTimer = setTimeout(() => {
+        copiedFlash = false;
+        copiedTimer = null;
+      }, COPIED_FLASH_MS);
+    } catch {
+      // ignore: localhost clipboard writes essentially never fail
+    }
+  }
+
   function onWindowMousedown(e: MouseEvent): void {
-    if (!newMenuOpen) return;
+    if (!menuOpen) return;
     const target = e.target as HTMLElement | null;
-    if (target?.closest(".new-popover, .new-trigger")) return;
-    newMenuOpen = false;
+    if (target?.closest(".browser-menu, .menu-trigger")) return;
+    menuOpen = false;
   }
 </script>
 
@@ -152,15 +187,17 @@
         {drive.info?.name ?? "(unnamed)"}
       </span>
       <span class="actions">
-        <span class="new-wrap">
+        <span class="menu-wrap">
           <button
             bind:this={triggerEl}
-            class="hbtn new-trigger"
-            class:on={newMenuOpen}
-            title="New file or folder"
-            aria-label="New"
-            onclick={toggleNewMenu}
-          >+</button>
+            class="hbtn menu-trigger"
+            class:on={menuOpen}
+            title="Drive actions"
+            aria-label="Drive actions"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onclick={toggleMenu}
+          >☰</button>
         </span>
         <button
           class="hbtn"
@@ -206,15 +243,15 @@
 <!-- Popover lives outside the OverlayShell panel so it can render
      above OR below the trigger without getting clipped by the
      panel's overflow:hidden. Position is computed in
-     `toggleNewMenu` against the viewport. -->
-{#if visible && newMenuOpen}
+     `toggleMenu` against the viewport. -->
+{#if visible && menuOpen}
   <ul
-    class="new-popover"
+    class="browser-menu"
     role="menu"
     style="top: {popoverPos.top}px; left: {popoverPos.left}px;"
   >
     <li>
-      <button onclick={newFileHere}>
+      <button role="menuitem" onclick={newFileHere}>
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <path d="M2 1.75C2 .784 2.784 0 3.75 0h5.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 12.25 16h-8.5A1.75 1.75 0 0 1 2 14.25V1.75zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 8 4.25V1.5H3.75zM9.5 1.5v2.75c0 .138.112.25.25.25h2.5l-2.75-3z" />
         </svg>
@@ -222,11 +259,41 @@
       </button>
     </li>
     <li>
-      <button onclick={newDirHere}>
+      <button role="menuitem" onclick={newDirHere}>
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5l-1.4-1.55A1.75 1.75 0 0 0 4.81 1H1.75z" />
         </svg>
         <span>New folder</span>
+      </button>
+    </li>
+    <li class="sep" role="separator"></li>
+    <li>
+      <button role="menuitem" onclick={renameDrive}>
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.756l8.61-8.61zm.176 4.823L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064l6.286-6.286zM10.811 3.75 12.25 5.189l1.227-1.227a.25.25 0 0 0 0-.354l-1.085-1.085a.25.25 0 0 0-.354 0L10.811 3.75z" />
+        </svg>
+        <span>Rename drive…</span>
+      </button>
+    </li>
+    <li>
+      <!-- Folder readout doubles as the disclosure ("where on disk
+           is this drive?") and the copy-to-clipboard action. We
+           keep the menu open after copy so the flash is visible. -->
+      <button
+        role="menuitem"
+        class="folder-row"
+        onclick={copyFolder}
+        title={drive.info?.root}
+        disabled={!drive.info?.root}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25V13.25c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V6.75a.25.25 0 0 0-.25-.25h-1.5a.75.75 0 0 1 0-1.5h1.5c.966 0 1.75.784 1.75 1.75v6.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25V6.75z M7.25 0a.75.75 0 0 1 .75.75v6.5l1.97-1.97a.749.749 0 1 1 1.06 1.06l-3.25 3.25a.749.749 0 0 1-1.06 0L3.47 6.34a.749.749 0 1 1 1.06-1.06l1.97 1.97V.75A.75.75 0 0 1 7.25 0z" />
+        </svg>
+        <span class="folder-text">
+          <span class="folder-label">Folder</span>
+          <span class="folder-path mono">{drive.info?.root ?? ""}</span>
+        </span>
+        <span class="copied-hint" class:on={copiedFlash}>copied</span>
       </button>
     </li>
   </ul>
@@ -273,11 +340,11 @@
     border-color: var(--btn-hover);
     background: var(--hover-bg);
   }
-  .new-wrap { position: relative; display: inline-flex; }
+  .menu-wrap { position: relative; display: inline-flex; }
   /* position: fixed against viewport coords computed in script;
      z-index above the overlay scrim (25000) so the menu paints in
      front. */
-  .new-popover {
+  .browser-menu {
     position: fixed;
     z-index: 25500;
     margin: 0;
@@ -287,11 +354,17 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
-    min-width: 140px;
+    min-width: 220px;
+    max-width: 320px;
     font-size: 15px;
   }
-  .new-popover li { margin: 0; }
-  .new-popover button {
+  .browser-menu li { margin: 0; }
+  .browser-menu li.sep {
+    height: 1px;
+    background: var(--separator, var(--border));
+    margin: 4px 0;
+  }
+  .browser-menu button {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -304,17 +377,57 @@
     cursor: pointer;
     font: inherit;
   }
-  .new-popover button:hover {
+  .browser-menu button:hover:not(:disabled) {
     background: var(--hover-bg);
     color: var(--text);
   }
-  .new-popover svg {
+  .browser-menu button:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+  .browser-menu svg {
     width: 14px;
     height: 14px;
     flex-shrink: 0;
     fill: currentColor;
     color: var(--text-secondary);
   }
+  /* Folder readout: two-line inside one row. Top line is the
+     "Folder" label, bottom line is the on-disk path in monospace
+     and ellipsised so a long path doesn't blow up the popover. */
+  .browser-menu .folder-row { align-items: flex-start; }
+  .folder-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+    flex: 1;
+  }
+  .folder-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .folder-path {
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    direction: rtl; /* keep the basename visible when truncated */
+    text-align: left;
+  }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .copied-hint {
+    font-size: 12px;
+    color: var(--text-secondary);
+    opacity: 0;
+    transition: opacity 120ms ease-out;
+    flex-shrink: 0;
+    align-self: center;
+  }
+  .copied-hint.on { opacity: 1; color: var(--ok, var(--text)); }
   .body {
     flex: 1;
     display: flex;

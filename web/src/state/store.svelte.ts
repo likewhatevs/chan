@@ -1255,6 +1255,26 @@ export const fileOps = {
       ui.status = `create failed: ${(e as Error).message}`;
     }
   },
+  /// Rename the drive (display name only, the on-disk directory
+  /// stays put). The name is registry metadata returned in
+  /// DriveInfo.name and shown in the file-browser header. No-op
+  /// when the user cancels or the input is unchanged; on success
+  /// the fresh DriveInfo from the PATCH response is written back
+  /// into the drive store so the header updates without an extra
+  /// refresh round-trip.
+  async renameDrive(): Promise<void> {
+    const current = drive.info?.name ?? "";
+    const next = await uiPrompt("drive name", current);
+    if (next === null) return;
+    const trimmed = next.trim();
+    if (trimmed === current) return;
+    try {
+      const info = await api.updatePreferences({ name: trimmed });
+      drive.info = info;
+    } catch (e) {
+      ui.status = `rename failed: ${(e as Error).message}`;
+    }
+  },
   /// Rename or move a file / directory. `isDir` toggles the
   /// extension-preservation step: for files, if the user drops the
   /// existing extension during the prompt (typed `note` instead of

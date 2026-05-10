@@ -1,8 +1,11 @@
 <script lang="ts">
   // Settings overlay. Per-device-global preferences form (fonts,
   // assistant, attachments_dir, default-drive path) plus the
-  // drive display name and the keychain controls for the
-  // assistant API key.
+  // keychain controls for the assistant API key.
+  //
+  // The drive display name is edited from the file-browser
+  // hamburger, not here, so the settings overlay is purely
+  // about device-wide preferences.
   //
   // Auto-saves on change (500 ms debounce). Font changes preview
   // live by writing CSS variables on document.documentElement; the
@@ -41,7 +44,6 @@
   }
 
   let editing = $state<Preferences | null>(null);
-  let editedName = $state<string>("");
   /// Cached global config. Populated on mount and after every
   /// global save. Settings are always per-device-global now (no
   /// per-drive override); we keep the cached payload here so
@@ -330,7 +332,6 @@
     if (!info) return;
     if (!editing) {
       editing = clone(info.preferences);
-      editedName = info.name ?? "";
     }
   });
 
@@ -353,17 +354,15 @@
   }
 
   function snapshot(): string {
-    return JSON.stringify({ editing, editedName, editedDefaultRoot });
+    return JSON.stringify({ editing, editedDefaultRoot });
   }
 
   /// True when the form differs from the last server payload. Drives
   /// the auto-save effect: identical-to-server means nothing to do.
   /// Compares against the global config (settings are always
-  /// per-device-global now). Name and default-drive-path diffs
-  /// also count.
+  /// per-device-global now). Default-drive-path diffs also count.
   function dirty(): boolean {
     if (!editing || !drive.info) return false;
-    if ((drive.info.name ?? "") !== editedName) return true;
     if ((globalConfig?.default_drive_root ?? "") !== editedDefaultRoot) {
       return true;
     }
@@ -396,16 +395,9 @@
     }
     const sent = snapshot();
     try {
-      // Two writes, both conditional:
-      //   1. Drive name (registry entry) -> PATCH /api/drive.
-      //      Skipped when the name is unchanged.
-      //   2. Prefs + default-root (global config) -> PATCH /api/config.
-      //      Always sent because the cost of a no-op PATCH is
-      //      small and avoids tracking per-section dirty state.
-      const namePromise =
-        (drive.info?.name ?? "") !== editedName
-          ? api.updatePreferences({ name: editedName })
-          : Promise.resolve(null);
+      // Prefs + default-root (global config) -> PATCH /api/config.
+      // Drive name lives in the file-browser hamburger now, so this
+      // is the only write the settings overlay performs.
       const trimmedDefault = editedDefaultRoot.trim();
       const defaultRootBody: string | null =
         trimmedDefault === "" ? null : trimmedDefault;
@@ -414,16 +406,15 @@
         default_drive_root: defaultRootBody,
         drives: globalConfig?.drives,
       };
-      const prefsPromise = api.updateConfig(cfgBody);
-      await Promise.all([namePromise, prefsPromise]);
+      await api.updateConfig(cfgBody);
       // Re-fetch authoritative state. Two reads (drive + global)
-      // because either could have been touched.
+      // because the prefs save can echo back into drive.info via
+      // the indexer / config bridge.
       const [info, cfg] = await Promise.all([api.drive(), api.config()]);
       drive.info = info;
       globalConfig = cfg;
       if (snapshot() === sent) {
         editing = clone(info.preferences);
-        editedName = info.name ?? "";
         editedDefaultRoot = cfg.default_drive_root ?? "";
       }
       // Push fonts globally so the editor picks them up via the
@@ -491,8 +482,8 @@
   $effect(() => {
     // Read-track every editable field.
     if (!editing) return;
-    void editedName;
     JSON.stringify(editing);
+    void editedDefaultRoot;
     if (!dirty()) return;
     scheduleSave();
   });
@@ -584,22 +575,6 @@
   <div class="placeholder">loading settings…</div>
 {:else}
   <div class="settings">
-    <section>
-      <h3>Notes</h3>
-      <label>
-        <span>Name</span>
-        <input bind:value={editedName} placeholder="(unnamed)" />
-      </label>
-      <label>
-        <span>Folder</span>
-        <input
-          value={drive.info.root}
-          readonly
-          title="folder where these notes live on disk"
-        />
-      </label>
-    </section>
-
     <section>
       <h3>Assistant</h3>
 
@@ -1309,7 +1284,6 @@
     width: 100%;
   }
   input:focus, select:focus { border-color: var(--link); }
-  input[readonly] { color: var(--text-secondary); background: var(--bg); }
   .grid {
     display: grid;
     grid-template-columns: 7em 1fr;
