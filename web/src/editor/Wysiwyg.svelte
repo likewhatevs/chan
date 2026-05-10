@@ -2246,13 +2246,15 @@
   /* While editing a strike, drop the strikethrough line so the
      text stays readable. PM's Decoration.inline may land the class
      either on the `<s>` element directly or on a wrapping `<span>`,
-     depending on how it merges with the mark; cover both. The
-     descendant selector also handles nested marks (e.g. bold inside
-     strike). */
+     depending on how it merges with the mark; cover both, and use
+     !important to beat the UA style on `<s>` regardless of which
+     case we hit. Nested marks (e.g. bold inside strike) are
+     covered by the descendant selector. */
   :global(.md-wysiwyg .md-mark-editing-strike),
   :global(.md-wysiwyg .md-mark-editing-strike s),
+  :global(.md-wysiwyg .md-mark-editing-strike *),
   :global(.md-wysiwyg s.md-mark-editing-strike) {
-    text-decoration: none;
+    text-decoration: none !important;
   }
 
   /* Fenced code block: when the caret is inside, reveal the
