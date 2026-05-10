@@ -1,4 +1,14 @@
-//! POST /api/contacts/import — multipart import of a contact CSV.
+//! Contact routes:
+//!
+//!   POST /api/contacts/import — multipart import of a contact CSV.
+//!   GET  /api/contacts        — list (and filter) contact notes.
+//!
+//! The list route powers the editor `@` picker: caller passes an
+//! optional `?q=` substring; we case-insensitive-match against
+//! display title and basename, cap at `?limit=` (default 10), and
+//! return drive-relative paths plus display labels. The wiki-link
+//! the picker inserts is what re-resolves to the same Contact node
+//! on the next graph pass, so the round-trip stays consistent.
 //!
 //! Wraps `Drive::import_contacts`. The frontend wizard (and the
 //! `chan contacts import csv` CLI for parity) sends:
@@ -24,15 +34,70 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Multipart, State};
+use axum::extract::{Multipart, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use serde::Deserialize;
 
 use chan_drive::contacts::{google::parse_google_csv, ImportOpts, ImportOutcome, ProviderKind};
 
 use crate::error::{err, err_from};
 use crate::state::AppState;
+
+#[derive(Debug, Deserialize)]
+pub struct ContactsListQuery {
+    /// Case-insensitive substring filter on display title + basename.
+    /// Empty / absent returns the full alphabetical list, capped by
+    /// `limit`.
+    #[serde(default)]
+    pub q: Option<String>,
+    /// Result cap. The picker is fine with 10 by default; bump for
+    /// power-user / debug callers.
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+fn default_limit() -> usize {
+    10
+}
+
+pub async fn api_get_contacts(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ContactsListQuery>,
+) -> Response {
+    let needle = q.q.unwrap_or_default().trim().to_lowercase();
+    let all = match state.drive().contacts() {
+        Ok(v) => v,
+        Err(e) => return err_from(&e),
+    };
+    let mut out = Vec::with_capacity(q.limit.min(all.len()));
+    for c in all {
+        if !needle.is_empty() {
+            let title_ok = c
+                .title
+                .as_deref()
+                .map(|t| t.to_lowercase().contains(&needle))
+                .unwrap_or(false);
+            let basename_ok = c.basename.to_lowercase().contains(&needle);
+            if !title_ok && !basename_ok {
+                continue;
+            }
+        }
+        // Picker rows show the title primarily; basename is the
+        // fallback when the imported file has no `# H1` (rare, but
+        // possible if the user edited the markdown).
+        let label = c.title.clone().unwrap_or_else(|| c.basename.clone());
+        out.push(serde_json::json!({
+            "path": c.rel_path,
+            "label": label,
+        }));
+        if out.len() >= q.limit {
+            break;
+        }
+    }
+    Json(out).into_response()
+}
 
 pub async fn api_post_contacts_import(
     State(state): State<Arc<AppState>>,

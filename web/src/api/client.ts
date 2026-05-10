@@ -273,6 +273,18 @@ export const api = {
       failed: Array<{ name: string; reason: string }>;
     };
   },
+  /** List contact-kind notes for the editor `@` picker. Optional
+   *  `q` is a case-insensitive substring filter on title + basename;
+   *  empty string returns the alphabetical head of the catalog. */
+  contacts: (q = "", limit = 10) => {
+    const qs = new URLSearchParams();
+    if (q) qs.set("q", q);
+    qs.set("limit", String(limit));
+    return req<Array<{ path: string; label: string }>>(
+      "GET",
+      `/api/contacts?${qs.toString()}`,
+    );
+  },
   list: () => req<TreeEntry[]>("GET", "/api/files"),
   read: (path: string) => req<FileResponse>("GET", `/api/files/${encPath(path)}`),
   /// Persist `content` at `path`. When `expectedMtime` is provided,

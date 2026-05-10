@@ -48,9 +48,9 @@ use routes::{
     api_llm_clear_gemini_key, api_llm_complete, api_llm_gemini_models, api_llm_ollama_models,
     api_llm_set_anthropic_key, api_llm_set_gemini_key, api_llm_status, api_llm_tools, api_move,
     api_patch_config, api_patch_drive, api_patch_server_config, api_post_answer,
-    api_post_attachment, api_post_contacts_import, api_put_assistant, api_put_session,
-    api_read_file, api_resolve_link, api_search_content, api_search_files, api_storage_reset,
-    api_write_file, ws_upgrade,
+    api_get_contacts, api_post_attachment, api_post_contacts_import, api_put_assistant,
+    api_put_session, api_read_file, api_resolve_link, api_search_content, api_search_files,
+    api_storage_reset, api_write_file, ws_upgrade,
 };
 use signal::{now_unix_secs, print_qr_if_tty, spawn_idle_watcher, spawn_signal_watcher};
 use state::{AppState, DriveCell};
@@ -644,6 +644,7 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/answers", post(api_post_answer))
         .route("/api/attachments", post(api_post_attachment))
+        .route("/api/contacts", get(api_get_contacts))
         .route("/api/contacts/import", post(api_post_contacts_import))
         .route("/api/storage/reset", post(api_storage_reset))
         .route("/api/health", get(api_health))

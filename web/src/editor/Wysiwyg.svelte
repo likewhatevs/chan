@@ -50,6 +50,10 @@
     type WikiBubble,
   } from "./extensions/wikiLink";
   import { openTagBubble, type TagBubble } from "./extensions/tagPicker";
+  import {
+    openContactBubble,
+    type ContactBubble,
+  } from "./extensions/contactPicker";
   import { FoldHeadingExtension } from "./extensions/foldHeading";
   import { createTagDecorationExtension } from "./extensions/tagDecoration";
   import { openGraphAtNode } from "../state/store.svelte";
@@ -128,6 +132,7 @@
       dismissWikiBubble();
       dismissTagBubble();
       dismissImageBubble();
+      dismissContactBubble();
       clearCursorDecorations();
     }
   });
@@ -146,6 +151,13 @@
   /// Same non-focus-stealing pattern as the wiki bubble: keyboard is
   /// owned by Wysiwyg; the bubble owns its own DOM and result list.
   let tagBubble: TagBubble | undefined;
+
+  /// `@contact` picker bubble. Opens on a fresh `@` keystroke at
+  /// start-of-word; replaces the `@<query>` range with a wiki-link
+  /// to the chosen contact's note. Dismisses on Esc, on `@` then
+  /// space (empty query), on the caret leaving the trigger range
+  /// (different line / different block), or on accept.
+  let contactBubble: ContactBubble | undefined;
 
   /// Elements currently carrying caret-driven `data-cursor-*` attrs.
   /// Tracked so `updateCursorDecorations` can wipe the previous set
@@ -450,6 +462,28 @@
               return true;
             }
           }
+          if (contactBubble) {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              acceptContactBubble();
+              return true;
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              dismissContactBubble();
+              return true;
+            }
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              contactBubble.moveActive(1);
+              return true;
+            }
+            if (event.key === "ArrowUp") {
+              event.preventDefault();
+              contactBubble.moveActive(-1);
+              return true;
+            }
+          }
           if (
             onSubmit &&
             (event.metaKey || event.ctrlKey) &&
@@ -588,6 +622,7 @@
         syncWikiBubble();
         syncTagBubble();
         syncImageBubble();
+        syncContactBubble();
         updateCursorDecorations();
         maybeOpenImageEditPicker();
         onSelectionChange?.();
@@ -596,6 +631,7 @@
         syncWikiBubble();
         syncTagBubble();
         syncImageBubble();
+        syncContactBubble();
         updateCursorDecorations();
         maybeOpenImageEditPicker();
         onSelectionChange?.();
@@ -690,6 +726,7 @@
     dismissWikiBubble();
     dismissTagBubble();
     dismissImageBubble();
+    dismissContactBubble();
     editor?.destroy();
   });
 
@@ -949,6 +986,26 @@
     if (!tagBubble && inputData === "#") {
       const range = findTagRange(editor);
       if (range) openTagBubbleForCurrentCaret(range.query);
+    }
+    // Contact bubble opens on a fresh `@` keystroke at start-of-
+    // word. Same input-event rationale as the tag bubble: caret
+    // moving across an existing `@foo` should NOT pop the picker;
+    // only a freshly-typed `@` should. `@@` (the existing mention
+    // syntax) auto-dismisses via syncContactBubble because the
+    // range regex won't match a doubled `@`.
+    if (!contactBubble && inputData === "@") {
+      const range = findContactRange(editor);
+      if (range) openContactBubbleForCurrentCaret(range.query);
+    }
+    // `@<space>` (bare `@` then space) dismisses the picker. The
+    // user signaled "not a contact lookup, just an `@` in prose."
+    // Spaces inside a non-empty query are allowed (contact display
+    // names like "Jane Doe" must be typeable).
+    if (contactBubble && inputData === " ") {
+      const range = findContactRange(editor);
+      if (!range || range.query.trim() === "") {
+        dismissContactBubble();
+      }
     }
     // Look at text immediately before the cursor (up to 16 chars).
     const { from } = editor.state.selection;
@@ -1425,6 +1482,97 @@
       return;
     }
     tagBubble.setQuery(range.query);
+  }
+
+  /// Locate the trigger range for the contact `@` picker: an `@`
+  /// at start-of-word (preceded by whitespace or block start),
+  /// followed by zero-or-more name-friendly chars. Returns the
+  /// range to replace on accept and the current query (without the
+  /// leading `@`). Skipped in headings + code blocks for the same
+  /// reasons as the tag bubble: pills don't belong in either.
+  /// Spaces ARE allowed in the query so display names like
+  /// "Jane Doe" are typeable; the `@<space>` early-dismiss lives
+  /// in `onInput` (it's an input-event signal, not a range check).
+  function findContactRange(
+    ed: Editor,
+  ): { start: number; end: number; query: string } | null {
+    const sel = ed.state.selection;
+    if (!sel.empty) return null;
+    if (findBracketRange(ed)) return null;
+    const fromPos = ed.state.doc.resolve(sel.from);
+    const parent = fromPos.parent;
+    if (!parent.isTextblock) return null;
+    if (parent.type.name === "heading") return null;
+    if (parent.type.name === "codeBlock") return null;
+    const blockStart = fromPos.start();
+    const before = ed.state.doc.textBetween(blockStart, sel.from, "\n", " ");
+    // Allow letters, digits, underscore, hyphen, period, and SINGLE
+    // spaces inside the query (no consecutive spaces - that's a
+    // strong signal the user is no longer composing a name). The
+    // leading `(?:^|\s)` ensures the `@` is at start-of-word so
+    // `email@host` doesn't trigger.
+    const m = before.match(/(?:^|\s)@([A-Za-z0-9_.-]*(?:\s[A-Za-z0-9_.-]+)*)$/);
+    if (!m) return null;
+    const query = m[1] ?? "";
+    const atPos = sel.from - query.length - 1;
+    return { start: atPos, end: sel.from, query };
+  }
+
+  function openContactBubbleForCurrentCaret(query: string): void {
+    if (!editor || contactBubble) return;
+    contactBubble = openContactBubble({
+      host: caretAnchorHost(),
+      onClickAccept: () => acceptContactBubble(),
+    });
+    contactBubble.setQuery(query);
+  }
+
+  function acceptContactBubble(): void {
+    if (!editor || !contactBubble) return;
+    const range = findContactRange(editor);
+    if (!range) {
+      dismissContactBubble();
+      return;
+    }
+    const picked = contactBubble.accept();
+    if (!picked) return;
+    dismissContactBubble();
+    // Insert the picked contact as a wiki-link to its note. The
+    // `[[` parser strips the `.md` suffix; we strip here too so
+    // the on-disk markdown stays clean. The decorator pass on the
+    // next render will pill it like any other wiki-link.
+    const target = picked.path.replace(/\.md$/i, "");
+    editor
+      .chain()
+      .focus()
+      .deleteRange({ from: range.start, to: range.end })
+      .insertContent(`[[${target}]]`)
+      .insertContent(" ")
+      .run();
+  }
+
+  function dismissContactBubble(): void {
+    contactBubble?.dismiss();
+    contactBubble = undefined;
+  }
+
+  /// Same lifecycle pattern as syncTagBubble: keep an open contact
+  /// bubble alive while the caret stays in the trigger range;
+  /// dismiss when the range is gone (caret moved to a different
+  /// line / different block / out of the `@<query>` slice).
+  function syncContactBubble(): void {
+    if (!editor) return;
+    if (!editor.isEditable) {
+      dismissContactBubble();
+      return;
+    }
+    if (!contactBubble) return;
+    const range = findContactRange(editor);
+    if (!range) {
+      dismissContactBubble();
+      return;
+    }
+    contactBubble.setQuery(range.query);
   }
 
   // ---- date edit-existing flow ----------------------------------------
