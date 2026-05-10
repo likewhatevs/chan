@@ -60,9 +60,51 @@ export const LiveSourceExtension = Extension.create({
         props: {
           decorations(state) {
             const { selection, doc, schema } = state;
-            if (!selection.empty) return null;
-            const $from = doc.resolve(selection.from);
             const decos: Decoration[] = [];
+
+            // Bracket shading runs regardless of selection because
+            // `[[...]]` only appears in the doc while a wiki link
+            // is being created or edited; muting the brackets makes
+            // the user's actual label / query stand out. Scans each
+            // textblock once; atoms count as one position via the
+            // `\0` leaf-text placeholder so regex offsets stay in
+            // sync with PM positions.
+            doc.descendants((node, pos) => {
+              if (!node.isTextblock) return true;
+              const startContent = pos + 1;
+              const endContent = pos + node.nodeSize - 1;
+              if (endContent <= startContent) return false;
+              const text = doc.textBetween(
+                startContent,
+                endContent,
+                "\n",
+                "\0",
+              );
+              const re = /\[\[([^\]]*)\]\]/g;
+              let m: RegExpExecArray | null;
+              while ((m = re.exec(text)) !== null) {
+                const openStart = startContent + m.index;
+                const openEnd = openStart + 2;
+                const closeStart = openStart + 2 + (m[1] ?? "").length;
+                const closeEnd = closeStart + 2;
+                decos.push(
+                  Decoration.inline(openStart, openEnd, {
+                    class: "md-wiki-bracket",
+                  }),
+                );
+                decos.push(
+                  Decoration.inline(closeStart, closeEnd, {
+                    class: "md-wiki-bracket",
+                  }),
+                );
+              }
+              return false;
+            });
+
+            if (!selection.empty) {
+              return decos.length ? DecorationSet.create(doc, decos) : null;
+            }
+            const $from = doc.resolve(selection.from);
 
             // 1. Heading prefix. Wraps the entire heading block so
             //    the CSS `::before` selector lands on the H1..H6

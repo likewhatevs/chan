@@ -1413,6 +1413,28 @@
   /// the existing `[[ ]]` bubble flow takes over from there. The
   /// original atom attrs are saved so a dismiss-without-accept can
   /// restore the link rather than leaving stray brackets.
+  /// Build the inner `[[ ]]` query text for an existing wikiLink
+  /// atom on edit-entry. Mirrors the bubble's input grammar:
+  ///   - heading anchor (bare slug) → `target#slug`
+  ///   - block anchor (leading `^`) → `target^id`
+  ///   - alias differs from default file label → append `|alias`
+  /// The default label is the file basename without `.md` (same
+  /// derivation `fileLabel` uses inside the bubble), so a link
+  /// whose alias matches the natural label doesn't pick up a
+  /// redundant `|name` on every edit.
+  function wikiEditQuery(target: string, label: string, anchor: string): string {
+    let query = target;
+    if (anchor) {
+      query += anchor.startsWith("^") ? anchor : `#${anchor}`;
+    }
+    const defaultLabel =
+      (target.split("/").pop() ?? target).replace(/\.md$/, "");
+    if (label && label !== defaultLabel) {
+      query += `|${label}`;
+    }
+    return query;
+  }
+
   function enterWikiEditAt(wrap: HTMLElement): void {
     if (!editor) return;
     const stash = (wrap as unknown as { __wikiGetPos?: () => number | undefined })
@@ -1427,16 +1449,18 @@
     const wasAbs = (atom.attrs.wasAbs as boolean) || false;
     editingWikiOriginal = { target, label, anchor, wasAbs };
     editingWikiBracketStart = pos;
-    // Replace the atom with `[[label]]` text. Caret lands at the
-    // end of the label (between `label` and `]]`), matching the
-    // typing-`[[ ]]` flow's caret position so syncWikiBubble's
-    // findBracketRange resolves the bubble at this caret.
-    const insertText = `[[${label}]]`;
+    // Rebuild the inner query so the visible source matches what
+    // the user originally typed: anchor (`#heading` or `^block`)
+    // and `|alias` are restored when present. The bubble parses
+    // the same shape when reopened, so the user can edit any
+    // component in place.
+    const inner = wikiEditQuery(target, label, anchor);
+    const insertText = `[[${inner}]]`;
     editor
       .chain()
       .focus()
       .insertContentAt({ from: pos, to: pos + atom.nodeSize }, insertText)
-      .setTextSelection(pos + 2 + label.length)
+      .setTextSelection(pos + 2 + inner.length)
       .run();
     // syncWikiBubble fires from onUpdate; openWikiBubbleForCurrent
     // -Caret won't because the caret was already inside brackets,
@@ -2272,6 +2296,16 @@
     color: var(--text-secondary);
     opacity: 0.45;
     font-weight: normal;
+  }
+
+  /* `[[` / `]]` brackets surfaced by the wiki create / edit flows
+     render muted so the user's query text reads as the primary
+     content. The class is applied via Decoration.inline; only the
+     two-char bracket ranges are decorated, not the label between
+     them. */
+  :global(.md-wysiwyg .md-wiki-bracket) {
+    color: var(--text-secondary);
+    opacity: 0.5;
   }
 
   /* Inline-mark source markers (bold / italic / strike). The
