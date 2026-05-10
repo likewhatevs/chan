@@ -1713,6 +1713,12 @@
     font-family: var(--chan-font-heading3-family);
     font-size: var(--chan-font-heading3-size, 18px);
   }
+  /* Headings anchor the fold chevron (absolute-positioned into the
+     left gutter). Without `position: relative` the chevron would
+     anchor to the editor root, missing the per-line gutter. */
+  :global(.md-wysiwyg :is(h1, h2, h3, h4, h5, h6)) {
+    position: relative;
+  }
   :global(.md-wysiwyg ::selection) { background: var(--selection-bg); }
   /* Read-only mode: hide the caret entirely (the user toggled into
      "maximize for reading"). ProseMirror still lets you click to
@@ -2237,6 +2243,14 @@
     opacity: 0.45;
     user-select: none;
   }
+  /* While editing a strike, drop the strikethrough line so the
+     text stays readable. The marker widgets keep the `~~` shape
+     visible at both ends. The class is applied via Decoration.inline
+     so it lands on whatever element renders the strike mark
+     (typically `<s>` or a span PM wraps around it). */
+  :global(.md-wysiwyg .md-mark-editing-strike) {
+    text-decoration: none;
+  }
 
   /* Wiki link click flow lives in the bubble (see
      `.md-wiki-bubble-follow`); no per-pill source span. */
@@ -2266,24 +2280,24 @@
      heading itself the chevron stays vertically centered.
      Inline-block + reserved width keeps long-press hit area
      reachable on touch. */
-  /* Chevron sits in the left gutter (negative margin) so heading
-     text alignment matches non-folded headings. The negative
-     margin pulls it into the editor's left padding without
-     affecting layout: net offset = -1.5em + 1em width + 0.5em
-     right gap = 0, so the heading text starts where it would
-     have without a chevron. Obsidian / gdocs lay out their
-     chevrons the same way. */
+  /* Chevron sits in the left gutter, absolutely positioned so it
+     never overlaps inline content (notably the `## ` source-mode
+     prefix the liveSource extension reveals when the caret is on
+     the heading line). Heading text starts at offset 0 — the
+     chevron lives entirely in the parent's left padding. Obsidian
+     and gdocs lay out their chevrons the same way. */
   :global(.md-wysiwyg .md-fold-chevron) {
+    position: absolute;
+    left: -1.5em;
+    top: 50%;
+    transform: translateY(-50%);
     display: inline-block;
     width: 1em;
-    margin-left: -1.5em;
-    margin-right: 0.5em;
     color: var(--text-secondary);
     cursor: pointer;
     user-select: none;
     font-size: 0.7em;
-    line-height: inherit;
-    vertical-align: middle;
+    line-height: 1;
     opacity: 0.5;
     transition: opacity 0.15s ease;
     font-weight: normal;

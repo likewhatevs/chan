@@ -88,6 +88,12 @@ export const LiveSourceExtension = Extension.create({
             //    widgets sit outside the marked text so the user
             //    can see the markers without us touching the
             //    marked content itself.
+            //
+            //    Strike additionally gets an inline decoration
+            //    class so the CSS can drop the strikethrough line
+            //    while the caret is inside — otherwise the text
+            //    being edited stays crossed out and is hard to
+            //    read.
             for (const markName of Object.keys(MARK_MARKER)) {
               const markType: MarkType | undefined = schema.marks[markName];
               if (!markType) continue;
@@ -108,6 +114,13 @@ export const LiveSourceExtension = Extension.create({
                   key: `live-mark-${markName}-close`,
                 }),
               );
+              if (markName === "strike") {
+                decos.push(
+                  Decoration.inline(range.from, range.to, {
+                    class: "md-mark-editing-strike",
+                  }),
+                );
+              }
             }
 
             return decos.length ? DecorationSet.create(doc, decos) : null;
