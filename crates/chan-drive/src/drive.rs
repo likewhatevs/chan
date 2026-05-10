@@ -1233,21 +1233,41 @@ mod path_under_tests {
 /// `Tag` / `Mention` edges. External links (http://, mailto:) are
 /// dropped because they don't connect to anything else in the
 /// drive's graph.
+///
+/// Markdown link hrefs (`[label](href)`) and image embeds
+/// (`![alt](src)`) are run through `markdown::normalize_href` so
+/// `/abs` and `../rel` write the same drive-relative dst as the
+/// equivalent bare path. Wiki-link targets (`[[name]]`) keep the
+/// existing drive-rooted-by-default convention; an explicit `./`
+/// or `..` prefix opts into source-relative resolution.
 fn build_edges(
     src: &str,
     links: &[markdown::Link],
     tokens: &[markdown::Token],
 ) -> Vec<crate::graph::Edge> {
     use crate::graph::{Edge, EdgeKind};
+    let source_dir = match src.rfind('/') {
+        Some(i) => &src[..i],
+        None => "",
+    };
     let mut out = Vec::new();
     for l in links {
-        if !l.is_internal() {
+        // Wiki-link convention: bare `[[name]]` and `[[a/b]]` are
+        // drive-rooted (the picker has always inserted them this
+        // way). An explicit `./` / `..` prefix flips to source-
+        // relative. Markdown links use standard relative semantics.
+        let normalize_target = if l.wiki && !is_relative_marker(&l.target) {
+            format!("/{}", l.target.trim_start_matches('/'))
+        } else {
+            l.target.clone()
+        };
+        let Some(dst) = markdown::normalize_href(&normalize_target, source_dir) else {
             continue;
-        }
-        let (target, anchor) = split_anchor(&l.target);
+        };
+        let (_, anchor) = split_anchor(&l.target);
         out.push(Edge {
             src: src.to_string(),
-            dst: target,
+            dst,
             kind: EdgeKind::Link,
             anchor,
         });
@@ -1273,6 +1293,13 @@ fn build_edges(
         }
     }
     out
+}
+
+/// True when a wiki-link target opts into source-relative resolution
+/// via a leading `./` or `..` segment. Plain `[[name]]` and `[[a/b]]`
+/// stay drive-rooted (the picker's existing convention).
+fn is_relative_marker(target: &str) -> bool {
+    target == "." || target == ".." || target.starts_with("./") || target.starts_with("../")
 }
 
 /// Split a link target into (path, anchor). `path#section` becomes
@@ -1910,5 +1937,98 @@ mod tests {
         // does. Resolves to the original verbatim.
         let r = drive.resolve_link("recipes/pasta.md").unwrap();
         assert_eq!(r.path, "recipes/pasta.md");
+    }
+
+    // ---- build_edges (link normalization) ----
+
+    fn md_link(target: &str) -> markdown::Link {
+        markdown::Link {
+            target: target.to_string(),
+            label: None,
+            wiki: false,
+        }
+    }
+
+    fn wiki_link(target: &str) -> markdown::Link {
+        markdown::Link {
+            target: target.to_string(),
+            label: None,
+            wiki: true,
+        }
+    }
+
+    fn dsts(edges: &[crate::graph::Edge]) -> Vec<&str> {
+        edges.iter().map(|e| e.dst.as_str()).collect()
+    }
+
+    #[test]
+    fn build_edges_normalizes_drive_rooted_markdown_link() {
+        // `[link](/images/foo.png)` from notes/post.md should land
+        // at dst=images/foo.png, not /images/foo.png.
+        let edges = build_edges("notes/post.md", &[md_link("/images/foo.png")], &[]);
+        assert_eq!(dsts(&edges), vec!["images/foo.png"]);
+    }
+
+    #[test]
+    fn build_edges_normalizes_parent_relative_markdown_link() {
+        // `[link](../images/foo.png)` from notes/post.md collapses
+        // lexically to images/foo.png.
+        let edges = build_edges("notes/post.md", &[md_link("../images/foo.png")], &[]);
+        assert_eq!(dsts(&edges), vec!["images/foo.png"]);
+    }
+
+    #[test]
+    fn build_edges_skips_external_markdown_link() {
+        let edges = build_edges("notes/post.md", &[md_link("https://example.com/x")], &[]);
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn build_edges_skips_fragment_only_link() {
+        let edges = build_edges("notes/post.md", &[md_link("#section")], &[]);
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn build_edges_skips_drive_escape() {
+        // `../../x.md` from a depth-1 file pops past the drive root.
+        let edges = build_edges("notes/post.md", &[md_link("../../x.md")], &[]);
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn build_edges_preserves_anchor_column() {
+        let edges = build_edges("notes/post.md", &[md_link("/a.md#sec")], &[]);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].dst, "a.md");
+        assert_eq!(edges[0].anchor.as_deref(), Some("sec"));
+    }
+
+    #[test]
+    fn build_edges_wiki_default_drive_rooted() {
+        // Plain `[[Contacts/Jane Doe]]` from any source dir resolves
+        // to the drive root. Matches the picker's existing insertion
+        // form and keeps the smoke-test invariant.
+        let edges = build_edges("notes/post.md", &[wiki_link("Contacts/Jane Doe")], &[]);
+        assert_eq!(dsts(&edges), vec!["Contacts/Jane Doe"]);
+    }
+
+    #[test]
+    fn build_edges_wiki_explicit_absolute() {
+        let edges = build_edges("notes/post.md", &[wiki_link("/Contacts/Jane Doe")], &[]);
+        assert_eq!(dsts(&edges), vec!["Contacts/Jane Doe"]);
+    }
+
+    #[test]
+    fn build_edges_wiki_relative_walks_up() {
+        // `[[../foo]]` from notes/post.md walks up to drive root.
+        let edges = build_edges("notes/post.md", &[wiki_link("../foo")], &[]);
+        assert_eq!(dsts(&edges), vec!["foo"]);
+    }
+
+    #[test]
+    fn build_edges_wiki_dot_relative_resolves_to_source_dir() {
+        let edges = build_edges("notes/post.md", &[wiki_link("./sibling")], &[]);
+        assert_eq!(dsts(&edges), vec!["notes/sibling"]);
     }
 }

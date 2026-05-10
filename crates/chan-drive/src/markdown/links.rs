@@ -81,6 +81,77 @@ pub fn extract_links(markdown: &str) -> Vec<Link> {
     out
 }
 
+/// Resolve a link href to a clean drive-relative POSIX path.
+///
+/// `href` is the literal target as written in the markdown (or the
+/// inner text of a wiki link). `source_dir` is the directory of the
+/// file the href appears in, expressed as a drive-relative POSIX
+/// path with no leading slash (use `""` for files at the drive
+/// root).
+///
+/// Returns `None` for hrefs that don't address a graph-targetable
+/// file: external schemes, intra-document fragments, empty hrefs,
+/// and relative paths that escape the drive root.
+///
+/// The graph builder and the editor's click handler both call this
+/// (the editor side via a hand-port in TS) so the on-disk edges and
+/// the in-editor navigation agree on the same target string.
+pub fn normalize_href(href: &str, source_dir: &str) -> Option<String> {
+    if href.is_empty() || href.as_bytes().contains(&0) {
+        return None;
+    }
+    // Fragment-only refs (`#anchor`) stay intra-document and don't
+    // produce a graph edge.
+    if href.starts_with('#') {
+        return None;
+    }
+    // URL scheme detection: a `:` that appears before any `/`, `#`,
+    // or `?` marks the href as external (`https:`, `mailto:`, etc.).
+    // Mirrors `Link::is_internal` so the two stay in sync.
+    for (i, b) in href.bytes().enumerate() {
+        match b {
+            b':' if i > 0 => return None,
+            b'/' | b'#' | b'?' => break,
+            _ => continue,
+        }
+    }
+    // Strip the trailing `?query` and `#anchor` portions; the graph
+    // already records anchor on its own column, so the path-only
+    // view is what's resolved against the drive.
+    let path_only = {
+        let q = href.find('?').unwrap_or(href.len());
+        let h = href.find('#').unwrap_or(href.len());
+        &href[..q.min(h)]
+    };
+    if path_only.is_empty() {
+        return None;
+    }
+    let combined = if let Some(rest) = path_only.strip_prefix('/') {
+        rest.to_string()
+    } else if source_dir.is_empty() {
+        path_only.to_string()
+    } else {
+        format!("{}/{}", source_dir.trim_end_matches('/'), path_only)
+    };
+    // Lexical `.` / `..` collapse. A `..` that pops past the drive
+    // root is rejected; lexical-only matches chan-drive's no-symlink
+    // sandbox philosophy.
+    let mut stack: Vec<&str> = Vec::new();
+    for part in combined.split('/') {
+        match part {
+            "" | "." => continue,
+            ".." => {
+                stack.pop()?;
+            }
+            _ => stack.push(part),
+        }
+    }
+    if stack.is_empty() {
+        return None;
+    }
+    Some(stack.join("/"))
+}
+
 fn standard_links(markdown: &str) -> Vec<Link> {
     let parser = Parser::new_ext(markdown, Options::all());
     let mut links = Vec::new();
@@ -308,5 +379,132 @@ mod tests {
         let wiki: Vec<Link> = extract_links(md).into_iter().filter(|l| l.wiki).collect();
         assert_eq!(wiki.len(), 1);
         assert_eq!(wiki[0].target, "real");
+    }
+
+    #[test]
+    fn normalize_drive_rooted_strips_leading_slash() {
+        assert_eq!(normalize_href("/x.md", "notes").as_deref(), Some("x.md"));
+        assert_eq!(
+            normalize_href("/images/x.png", "deep/nested").as_deref(),
+            Some("images/x.png"),
+        );
+    }
+
+    #[test]
+    fn normalize_parent_relative_walks_up() {
+        assert_eq!(normalize_href("../x.md", "notes").as_deref(), Some("x.md"));
+        assert_eq!(normalize_href("../../x.md", "a/b").as_deref(), Some("x.md"),);
+    }
+
+    #[test]
+    fn normalize_parent_relative_escapes_drive() {
+        assert!(normalize_href("../../../x.md", "a/b").is_none());
+        assert!(normalize_href("../x.md", "").is_none());
+    }
+
+    #[test]
+    fn normalize_dot_relative_resolves_to_source_dir() {
+        assert_eq!(
+            normalize_href("./x.md", "notes").as_deref(),
+            Some("notes/x.md"),
+        );
+    }
+
+    #[test]
+    fn normalize_bare_relative_resolves_to_source_dir() {
+        assert_eq!(
+            normalize_href("x.md", "notes").as_deref(),
+            Some("notes/x.md"),
+        );
+        assert_eq!(normalize_href("x.md", "").as_deref(), Some("x.md"));
+    }
+
+    #[test]
+    fn normalize_external_schemes_rejected() {
+        assert!(normalize_href("https://x.com/", "notes").is_none());
+        assert!(normalize_href("mailto:a@b", "notes").is_none());
+        assert!(normalize_href("tel:+15551234", "notes").is_none());
+    }
+
+    #[test]
+    fn normalize_fragment_only_rejected() {
+        assert!(normalize_href("#section", "notes").is_none());
+    }
+
+    #[test]
+    fn normalize_strips_anchor_from_relative() {
+        assert_eq!(
+            normalize_href("a.md#sec", "notes").as_deref(),
+            Some("notes/a.md"),
+        );
+    }
+
+    #[test]
+    fn normalize_strips_anchor_from_absolute() {
+        assert_eq!(
+            normalize_href("/a.md#sec", "notes").as_deref(),
+            Some("a.md"),
+        );
+    }
+
+    #[test]
+    fn normalize_strips_query() {
+        assert_eq!(
+            normalize_href("a.md?q=1", "notes").as_deref(),
+            Some("notes/a.md"),
+        );
+    }
+
+    #[test]
+    fn normalize_strips_query_and_anchor_together() {
+        assert_eq!(
+            normalize_href("a.md?q=1#sec", "notes").as_deref(),
+            Some("notes/a.md"),
+        );
+        assert_eq!(
+            normalize_href("a.md#sec?q=1", "notes").as_deref(),
+            Some("notes/a.md"),
+        );
+    }
+
+    #[test]
+    fn normalize_empty_rejected() {
+        assert!(normalize_href("", "notes").is_none());
+    }
+
+    #[test]
+    fn normalize_root_only_rejected() {
+        assert!(normalize_href("/", "notes").is_none());
+        assert!(normalize_href("/#frag", "notes").is_none());
+        assert!(normalize_href("/?q=1", "notes").is_none());
+    }
+
+    #[test]
+    fn normalize_preserves_spaces() {
+        assert_eq!(
+            normalize_href("/contacts/Jane Doe.md", "notes").as_deref(),
+            Some("contacts/Jane Doe.md"),
+        );
+    }
+
+    #[test]
+    fn normalize_collapses_interior_dot() {
+        assert_eq!(
+            normalize_href("a/./b.md", "notes").as_deref(),
+            Some("notes/a/b.md"),
+        );
+    }
+
+    #[test]
+    fn normalize_collapses_interior_double_dot() {
+        assert_eq!(
+            normalize_href("a/b/../c.md", "notes").as_deref(),
+            Some("notes/a/c.md"),
+        );
+    }
+
+    #[test]
+    fn normalize_rejects_null_byte() {
+        assert!(normalize_href("a\0b.md", "notes").is_none());
     }
 }

@@ -247,6 +247,42 @@ init keep the writer and the pool agreeing on `journal_mode`,
 and headings with computed anchors. `forget_file` removes a file
 and all its edges. `clear` wipes everything for a full rebuild.
 
+#### Link resolution
+
+Markdown link hrefs and image embeds (`[label](href)`,
+`![alt](src)`) are run through `markdown::normalize_href` before
+the graph builder writes the edge `dst`. The normalizer is a
+pure function: input is `(href, source_dir)`, output is
+`Option<String>` (clean drive-relative POSIX path; `None` for
+external schemes, fragment-only refs, empty hrefs, and lexical
+escapes past the drive root).
+
+Resolution rules, in order:
+
+1. Fragment-only `#anchor` refs return `None` (intra-document).
+2. URL schemes (`https:`, `mailto:`, `tel:`, ...) detected by a
+   `:` ahead of any `/` `#` `?` return `None`.
+3. Trailing `?query` and `#anchor` are stripped; the anchor is
+   preserved separately on the edge's `anchor` column.
+4. Hrefs starting with `/` are drive-rooted (the leading slash
+   is stripped); otherwise the href is joined to `source_dir`.
+5. `.` / `..` segments collapse lexically. A `..` past the drive
+   root returns `None`; chan-drive's no-symlink sandbox rules
+   out symlink chasing here as well.
+
+Wiki-link targets (`[[name]]`) keep the picker's existing
+drive-rooted-by-default convention: bare `[[Contacts/Jane]]`
+resolves to `Contacts/Jane`, an explicit `[[/Contacts/Jane]]`
+likewise. Targets prefixed with `./` or `..` opt into source-
+relative resolution (`[[../foo]]` from `notes/x.md` walks up to
+`foo`).
+
+The same normalizer ships as a hand-port to TS for the editor's
+click handler so on-disk edges and in-editor navigation agree on
+the resolved path. Edges written before the normalizer landed
+keep their literal (unnormalized) `dst` until the next reindex
+rewrites the table.
+
 #### Link autocomplete (`[[`)
 
 `link_targets` drives the editor's `[[` typeahead: the user types
