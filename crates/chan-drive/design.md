@@ -315,15 +315,23 @@ drive directory, so any `.chan/` activity is foreign noise.
 ### Contacts
 
 Imports a third-party contact dump (Google Contacts CSV today,
-vCard / Outlook later) as one markdown note per contact. The
-notes carry a `chan.kind: contact` frontmatter that the indexer
-reads in `parse_for_graph` to tag the corresponding `nodes` row
-as `kind = 'contact'`. Same row, different kind: backlinks,
-link-autocomplete, and forget_file all keep working unchanged
-because they key on `rel_path`, not `kind`. Downstream consumers
-(`Drive::contacts`, future editor `@` picker, future
-`GET /api/contacts`) filter on `kind = 'contact'` to surface
-contacts as a distinct UI surface.
+vCard / Outlook later) as one markdown note per contact.
+
+On-disk shape: slim YAML frontmatter holding only the chan-
+internal classifier (`kind: contact`, `provider`, `imported_at`,
+`frontmatter_version`, optional `remote_id`); contact data
+(emails, phones, organizations, labels) lives in the body as
+bullet items so a chan editor that doesn't strip frontmatter
+shows a friendly note rather than a YAML dump. Notes from the
+import follow.
+
+Indexer reads the frontmatter in `parse_for_graph` to tag the
+corresponding `nodes` row as `kind = 'contact'`. Same row,
+different kind: backlinks, link-autocomplete, and forget_file
+all keep working unchanged because they key on `rel_path`, not
+`kind`. Downstream consumers (`Drive::contacts`, editor `@`
+picker, `GET /api/contacts`) filter on `kind = 'contact'` to
+surface contacts as a distinct UI surface.
 
 Pure-function split:
 

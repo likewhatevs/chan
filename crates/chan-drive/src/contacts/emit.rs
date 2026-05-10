@@ -1,27 +1,33 @@
 // Render a Contact as a markdown note.
 //
-// Frontmatter shape (YAML):
+// On-disk shape (slim version, post 2026-05-10):
 //
+//   ---
 //   chan:
 //     kind: contact
 //     provider: google
 //     imported_at: 2026-05-10T12:34:56Z
 //     frontmatter_version: 1
-//   contact:
-//     display_name: Jane Q. Doe
-//     given_name: Jane
-//     family_name: Doe
-//     emails:
-//       - { value: jane@example.com, label: work }
-//     ...
+//   ---
+//
+//   # Jane Q. Doe
+//
+//   - **Email**: jane@example.com (work)
+//   - **Phone**: +1-555-0100 (mobile)
+//   - **Org**: Acme Corp - Engineer
+//   - **Labels**: Friends, Work
+//
+//   Notes from the CSV go here.
+//
+// Frontmatter holds only the chan-internal classifier (so the graph
+// builder + editor `@` picker can spot a contact note without
+// re-parsing the body); the contact's actual data lives as bullet
+// items in the body so a chan editor with no frontmatter renderer
+// shows a friendly note rather than 12 lines of YAML.
 //
 // We hand-format the YAML rather than pulling a serializer dep.
-// The shape is small and fixed, escaping rules are mechanical, and
-// adding `serde_yaml` would import an unmaintained crate.
-//
-// String quoting: double-quoted always, with `\\`, `\"`, `\n`,
-// `\r`, `\t` escaped. Robust at the cost of slightly noisier
-// output for plain ASCII names. Worth the simplicity.
+// The chan block is small and fixed; adding `serde_yaml` would
+// import an unmaintained crate for two lines of output.
 
 use chrono::{DateTime, Utc};
 
@@ -41,11 +47,11 @@ pub fn render_markdown(c: &Contact, ctx: &EmitContext) -> String {
     let mut s = String::with_capacity(512);
     s.push_str("---\n");
     write_chan_block(&mut s, c, ctx);
-    write_contact_block(&mut s, c);
     s.push_str("---\n\n");
     s.push_str("# ");
     s.push_str(c.display_name.trim());
     s.push('\n');
+    write_body_bullets(&mut s, c);
     if let Some(notes) = c.notes.as_ref() {
         let notes = notes.trim();
         if !notes.is_empty() {
@@ -66,9 +72,9 @@ fn write_chan_block(s: &mut String, c: &Contact, ctx: &EmitContext) {
     s.push_str(c.provider.as_str());
     s.push('\n');
     s.push_str("  imported_at: ");
-    // RFC3339 with second precision; chrono's `to_rfc3339_opts`
-    // would let us pin the format, but the default is good enough
-    // and round-trips through gray_matter / serde_yaml parsers.
+    // RFC3339; chrono's `to_rfc3339_opts` would let us pin the
+    // format, but the default is good enough and round-trips
+    // through gray_matter / serde_yaml parsers.
     s.push_str(&ctx.imported_at.to_rfc3339());
     s.push('\n');
     s.push_str("  frontmatter_version: ");
@@ -81,92 +87,104 @@ fn write_chan_block(s: &mut String, c: &Contact, ctx: &EmitContext) {
     }
 }
 
-fn write_contact_block(s: &mut String, c: &Contact) {
-    s.push_str("contact:\n");
-    s.push_str("  display_name: ");
-    s.push_str(&yaml_string(&c.display_name));
+fn write_body_bullets(s: &mut String, c: &Contact) {
+    let any = !c.emails.is_empty()
+        || !c.phones.is_empty()
+        || !c.organizations.is_empty()
+        || !c.labels.is_empty();
+    if !any {
+        return;
+    }
     s.push('\n');
-    if let Some(g) = c.given_name.as_ref() {
-        s.push_str("  given_name: ");
-        s.push_str(&yaml_string(g));
+    for e in &c.emails {
+        write_bullet_email(s, e);
+    }
+    for p in &c.phones {
+        write_bullet_phone(s, p);
+    }
+    for o in &c.organizations {
+        write_bullet_org(s, o);
+    }
+    if !c.labels.is_empty() {
+        s.push_str("- **Labels**: ");
+        for (i, l) in c.labels.iter().enumerate() {
+            if i > 0 {
+                s.push_str(", ");
+            }
+            s.push_str(&md_inline(l));
+        }
         s.push('\n');
     }
-    if let Some(f) = c.family_name.as_ref() {
-        s.push_str("  family_name: ");
-        s.push_str(&yaml_string(f));
-        s.push('\n');
-    }
-    write_emails(s, &c.emails);
-    write_phones(s, &c.phones);
-    write_orgs(s, &c.organizations);
-    write_labels(s, &c.labels);
 }
 
-fn write_emails(s: &mut String, emails: &[EmailAddress]) {
-    if emails.is_empty() {
-        return;
-    }
-    s.push_str("  emails:\n");
-    for e in emails {
-        s.push_str("    - { value: ");
-        s.push_str(&yaml_string(&e.value));
-        if let Some(l) = e.label.as_ref() {
-            s.push_str(", label: ");
-            s.push_str(&yaml_string(l));
+fn write_bullet_email(s: &mut String, e: &EmailAddress) {
+    s.push_str("- **Email**: ");
+    s.push_str(&md_inline(&e.value));
+    if let Some(l) = e.label.as_ref() {
+        let l = l.trim();
+        if !l.is_empty() {
+            s.push_str(" (");
+            s.push_str(&md_inline(l));
+            s.push(')');
         }
-        s.push_str(" }\n");
     }
+    s.push('\n');
 }
 
-fn write_phones(s: &mut String, phones: &[PhoneNumber]) {
-    if phones.is_empty() {
-        return;
-    }
-    s.push_str("  phones:\n");
-    for p in phones {
-        s.push_str("    - { value: ");
-        s.push_str(&yaml_string(&p.value));
-        if let Some(l) = p.label.as_ref() {
-            s.push_str(", label: ");
-            s.push_str(&yaml_string(l));
+fn write_bullet_phone(s: &mut String, p: &PhoneNumber) {
+    s.push_str("- **Phone**: ");
+    s.push_str(&md_inline(&p.value));
+    if let Some(l) = p.label.as_ref() {
+        let l = l.trim();
+        if !l.is_empty() {
+            s.push_str(" (");
+            s.push_str(&md_inline(l));
+            s.push(')');
         }
-        s.push_str(" }\n");
     }
+    s.push('\n');
 }
 
-fn write_orgs(s: &mut String, orgs: &[Organization]) {
-    if orgs.is_empty() {
-        return;
-    }
-    s.push_str("  organizations:\n");
-    for o in orgs {
-        s.push_str("    - { name: ");
-        s.push_str(&yaml_string(&o.name));
-        if let Some(t) = o.title.as_ref() {
-            s.push_str(", title: ");
-            s.push_str(&yaml_string(t));
+fn write_bullet_org(s: &mut String, o: &Organization) {
+    s.push_str("- **Org**: ");
+    s.push_str(&md_inline(&o.name));
+    if let Some(t) = o.title.as_ref() {
+        let t = t.trim();
+        if !t.is_empty() {
+            // Hyphen, not em dash: workspace style rule + survives
+            // ASCII-only round-trips.
+            s.push_str(" - ");
+            s.push_str(&md_inline(t));
         }
-        s.push_str(" }\n");
     }
+    s.push('\n');
 }
 
-fn write_labels(s: &mut String, labels: &[String]) {
-    if labels.is_empty() {
-        return;
-    }
-    s.push_str("  labels: [");
-    for (i, l) in labels.iter().enumerate() {
-        if i > 0 {
-            s.push_str(", ");
+/// Escape inline markdown specials in a contact field. We only
+/// escape the four chars that change rendering inside a list item:
+/// asterisks, underscores, backticks, and brackets. Newlines are
+/// stripped (replaced by space) so a multi-line value doesn't
+/// break the bullet structure.
+fn md_inline(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\n' | '\r' => out.push(' '),
+            '*' | '_' | '`' | '[' | ']' | '\\' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            c if c.is_control() => {} // drop other controls
+            c => out.push(c),
         }
-        s.push_str(&yaml_string(l));
     }
-    s.push_str("]\n");
+    out
 }
 
 /// Double-quoted YAML string with the four escapes that matter for
-/// arbitrary contact data. Newlines / carriage returns / tabs land
-/// as escapes; everything else passes through.
+/// arbitrary contact data (used only by the chan-block fields like
+/// `remote_id`). Newlines / carriage returns / tabs land as
+/// escapes; everything else passes through.
 fn yaml_string(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
@@ -201,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn full_contact_round_trip_through_gray_matter() {
+    fn full_contact_emits_slim_frontmatter_and_bulleted_body() {
         let c = Contact {
             provider: ProviderKind::Google,
             remote_id: Some("people/c1".into()),
@@ -225,12 +243,21 @@ mod tests {
         };
         let md = render_markdown(&c, &ctx());
 
-        // Body present.
+        // H1 + body present.
         assert!(md.contains("# Jane Q. Doe"));
+        assert!(md.contains("- **Email**: jane@example.com (work)"));
+        assert!(md.contains("- **Phone**: +1-555-0100 (mobile)"));
+        assert!(md.contains("- **Org**: Acme Corp - Engineer"));
+        assert!(md.contains("- **Labels**: Friends, Work"));
         assert!(md.contains("Met at FOSDEM 2026."));
 
+        // Frontmatter is the slim chan-block only; no contact: block.
+        assert!(!md.contains("contact:"));
+        assert!(!md.contains("display_name:"));
+
         // Frontmatter parses cleanly via the same parser the
-        // markdown indexer uses; confirms shape isn't broken.
+        // markdown indexer uses; confirms the chan classifier shape
+        // survives so Phase 4 graph + @ picker keep working.
         let fm = crate::markdown::parse_frontmatter(&md);
         assert!(fm.body_offset > 0, "frontmatter not detected");
         let chan = fm.data.get("chan").expect("chan block");
@@ -243,37 +270,57 @@ mod tests {
             chan.get("frontmatter_version").and_then(|v| v.as_u64()),
             Some(1)
         );
-        let contact = fm.data.get("contact").expect("contact block");
         assert_eq!(
-            contact.get("display_name").and_then(|v| v.as_str()),
-            Some("Jane Q. Doe")
+            chan.get("remote_id").and_then(|v| v.as_str()),
+            Some("people/c1")
         );
     }
 
     #[test]
-    fn minimal_contact_omits_optional_blocks() {
+    fn minimal_contact_emits_only_h1_and_chan_block() {
         let c = Contact {
             display_name: "X".into(),
             ..Default::default()
         };
         let md = render_markdown(&c, &ctx());
-        assert!(md.contains("display_name: \"X\""));
-        assert!(!md.contains("emails:"));
-        assert!(!md.contains("phones:"));
-        assert!(!md.contains("organizations:"));
-        assert!(!md.contains("labels:"));
+        assert!(md.contains("kind: contact"));
+        assert!(md.contains("# X"));
+        // No bullet section when every contact-data field is empty.
+        assert!(!md.contains("- **Email**"));
+        assert!(!md.contains("- **Phone**"));
+        assert!(!md.contains("- **Org**"));
+        assert!(!md.contains("- **Labels**"));
         assert!(!md.contains("remote_id"));
     }
 
     #[test]
-    fn quoted_strings_escape_specials() {
+    fn body_strings_escape_inline_markdown_specials() {
         let c = Contact {
-            display_name: "Quote \" Backslash \\ Newline\nTab\tEnd".into(),
+            display_name: "Test".into(),
+            emails: vec![EmailAddress {
+                // Asterisk + underscore would otherwise emphasize.
+                value: "weird*user_name@x.com".into(),
+                label: Some("home".into()),
+            }],
             ..Default::default()
         };
         let md = render_markdown(&c, &ctx());
-        // The display_name frontmatter value must escape these.
-        assert!(md.contains(r#"display_name: "Quote \" Backslash \\ Newline\nTab\tEnd""#));
+        assert!(md.contains(r"weird\*user\_name@x.com"));
+    }
+
+    #[test]
+    fn body_strips_newlines_inside_field_values() {
+        let c = Contact {
+            display_name: "Test".into(),
+            organizations: vec![Organization {
+                name: "Foo\nCorp".into(),
+                title: None,
+            }],
+            ..Default::default()
+        };
+        let md = render_markdown(&c, &ctx());
+        assert!(md.contains("Foo Corp"));
+        assert!(!md.contains("Foo\nCorp"));
     }
 
     #[test]
@@ -285,5 +332,26 @@ mod tests {
         let md = render_markdown(&c, &ctx());
         let body_start = md.split("---\n").nth(2).unwrap().trim_start();
         assert!(body_start.starts_with("# Some Body"));
+    }
+
+    #[test]
+    fn multiple_emails_each_get_their_own_bullet() {
+        let c = Contact {
+            display_name: "Alice".into(),
+            emails: vec![
+                EmailAddress {
+                    value: "alice@home.com".into(),
+                    label: Some("Home".into()),
+                },
+                EmailAddress {
+                    value: "alice@work.com".into(),
+                    label: Some("Work".into()),
+                },
+            ],
+            ..Default::default()
+        };
+        let md = render_markdown(&c, &ctx());
+        assert!(md.contains("- **Email**: alice@home.com (Home)"));
+        assert!(md.contains("- **Email**: alice@work.com (Work)"));
     }
 }

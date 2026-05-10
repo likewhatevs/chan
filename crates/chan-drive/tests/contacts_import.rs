@@ -43,17 +43,24 @@ fn end_to_end_import_into_drive() {
     assert!(drive.exists("Contacts/Jane Doe.md"));
     assert!(drive.exists("Contacts/Bob Smith.md"));
 
-    // Frontmatter is what we promised.
+    // Slim chan-block frontmatter + readable body bullets.
     let jane = drive.read_text("Contacts/Jane Doe.md").unwrap();
     assert!(jane.starts_with("---\n"));
     assert!(jane.contains("kind: contact"));
     assert!(jane.contains("provider: google"));
-    assert!(jane.contains("display_name: \"Jane Doe\""));
-    assert!(jane.contains("jane@x.com"));
+    // Body holds the contact data, NOT the frontmatter (Phase 0a:
+    // the editor doesn't strip frontmatter, so we keep the chan
+    // classifier slim and put the contact info where the user can
+    // read it).
+    assert!(!jane.contains("contact:"));
+    assert!(!jane.contains("display_name:"));
     assert!(jane.contains("# Jane Doe"));
+    assert!(jane.contains("- **Email**: jane@x.com (Home)"));
+    assert!(jane.contains("- **Phone**: +1-555-0100 (Mobile)"));
+    assert!(jane.contains("- **Org**: Acme - Engineer"));
     assert!(jane.contains("Met at FOSDEM"));
     // System "* myContacts" label dropped; user-set "Friends" kept.
-    assert!(jane.contains("Friends"));
+    assert!(jane.contains("- **Labels**: Friends"));
     assert!(!jane.contains("myContacts"));
 }
 
