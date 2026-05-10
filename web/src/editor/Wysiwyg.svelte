@@ -2262,33 +2262,56 @@
     text-decoration: none !important;
   }
 
-  /* Fenced code block (`CodeBlockFenced` NodeView). Always-visible
-     opening / closing ``` rows with an editable language slot next
-     to the opener. The fence rows render in the same monospace
-     family as the code content so the source-mode look is
-     consistent; muted color signals they're metadata, not part of
-     the code. */
+  /* Fenced code block (`CodeBlockFenced` NodeView). The wrap is
+     the styled box; fences sit inside it as monospace rows. The
+     language is a real `<input>` so PM treats it as opaque and we
+     get native focus/blur/caret behavior. */
+  :global(.md-wysiwyg .md-codeblock) {
+    background: var(--bg-elev);
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-family: var(--chan-font-mono-family, monospace);
+    font-size: 0.9em;
+    line-height: 1.4;
+    margin: 0.5em 0;
+  }
   :global(.md-wysiwyg .md-codeblock-fence) {
     color: var(--text-secondary);
     opacity: 0.6;
-    font-family: var(--chan-font-mono-family, monospace);
-    font-size: 0.9em;
-    line-height: 1.2;
     user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 2px;
   }
-  :global(.md-wysiwyg .md-codeblock-lang) {
+  :global(.md-wysiwyg .md-codeblock-content) {
+    background: transparent;
+    margin: 0;
+    padding: 0;
+    border: none;
+    font: inherit;
     color: var(--text);
-    opacity: 0.85;
-    /* The contenteditable span needs `outline: none` so focusing
-       it for typing doesn't draw a UA focus ring inside the styled
-       code box. Caret visibility is preserved via the input itself. */
-    outline: none;
-    user-select: text;
   }
-  :global(.md-wysiwyg .md-codeblock-lang:empty)::before {
-    content: "language";
+  :global(.md-wysiwyg .md-codeblock-content code) {
+    background: transparent;
+    padding: 0;
+    font: inherit;
+  }
+  /* The language `<input>` styled to look like inline text inside
+     the fence row: no border, transparent background, inherits the
+     monospace font so it doesn't visually break the fence line. */
+  :global(.md-wysiwyg .md-codeblock-lang) {
+    background: transparent;
+    border: none;
+    outline: none;
+    padding: 0;
+    margin: 0;
+    color: var(--text);
+    font: inherit;
+    width: 8ch;
+  }
+  :global(.md-wysiwyg .md-codeblock-lang::placeholder) {
+    color: var(--text-secondary);
     opacity: 0.4;
-    user-select: none;
   }
 
   /* Wiki link click flow lives in the bubble (see

@@ -1,22 +1,29 @@
 // Fenced code block with always-visible fences and an editable
-// language label.
+// language label, all inside a single styled box.
 //
-// Extends StarterKit's CodeBlock with a NodeView that renders:
+// NodeView layout:
 //
-//   ```<lang>
-//   <code content (PM contentDOM)>
-//   ```
+//   <div class="md-codeblock">           (the styled box)
+//     <div class="md-codeblock-fence">
+//       ```<input class="md-codeblock-lang" />
+//     </div>
+//     <pre class="md-codeblock-content">
+//       <code>                            (PM contentDOM)
+//     </pre>
+//     <div class="md-codeblock-fence">```</div>
+//   </div>
 //
-// `<lang>` is a small `contenteditable=true` span living next to
-// the opening fence. Typing into it dispatches a transaction that
-// updates the node's `language` attribute. The closing fence is a
-// `contenteditable=false` footer.
+// The language is a real `<input type="text">`. Native inputs are
+// black boxes from PM's perspective: it doesn't try to reconcile
+// their internal state, and `stopEvent` keeps PM from intercepting
+// keystrokes that should go to the input. The fence wrapper rows
+// are non-editable; only the input slot and the code content
+// accept the caret.
 //
-// This replaces the `::before` / `::after` pseudo-element fence
-// reveal the `liveSource` plugin used to drive: the fences are
-// always present (matching how a markdown source view looks) and
-// the language is directly editable instead of needing a separate
-// picker UI.
+// On `input` events we dispatch `setNodeAttribute("language", ...)`
+// so the change round-trips through markdown serialization. The
+// `update()` callback resyncs the input value when the model
+// changes from elsewhere (paste, undo).
 
 import CodeBlock from "@tiptap/extension-code-block";
 
@@ -24,29 +31,27 @@ export const CodeBlockFenced = CodeBlock.extend({
   addNodeView() {
     return ({ node, getPos, editor }) => {
       const wrap = document.createElement("div");
-      wrap.className = "md-codeblock-wrap";
+      wrap.className = "md-codeblock";
 
-      // Opening fence row. The "```" prefix is plain text; the
-      // language span is a tiny editable region that mirrors the
-      // node's `language` attribute. `contentEditable=false` on
-      // the row prevents PM from putting the caret in the literal
-      // "```" text; `contentEditable=true` on the span carves out
-      // the editable language slot.
+      // Opening fence: literal "```" plus the language `<input>`.
       const header = document.createElement("div");
       header.className = "md-codeblock-fence is-open";
       header.contentEditable = "false";
       header.appendChild(document.createTextNode("```"));
-      const langInput = document.createElement("span");
+      const langInput = document.createElement("input");
+      langInput.type = "text";
       langInput.className = "md-codeblock-lang";
-      langInput.contentEditable = "true";
       langInput.spellcheck = false;
-      langInput.textContent = (node.attrs.language as string | null) ?? "";
+      langInput.autocapitalize = "off";
+      langInput.autocomplete = "off";
+      langInput.placeholder = "lang";
+      langInput.value = (node.attrs.language as string | null) ?? "";
       langInput.addEventListener("input", () => {
         const pos = getPos();
         if (typeof pos !== "number") return;
-        const raw = langInput.textContent ?? "";
-        // Empty string round-trips as null (no language) so the
-        // markdown serializer emits a bare ```.
+        const raw = langInput.value;
+        // Empty string round-trips as null so the markdown
+        // serializer emits a bare ```.
         const next = raw.length === 0 ? null : raw;
         const current = (editor.state.doc.nodeAt(pos)?.attrs.language ??
           null) as string | null;
@@ -56,53 +61,69 @@ export const CodeBlockFenced = CodeBlock.extend({
         );
       });
       langInput.addEventListener("keydown", (e) => {
-        // Enter on the language slot jumps the caret to the first
-        // line of the code content rather than inserting a newline
-        // into the language attribute.
+        // Enter on the language slot moves the caret to the first
+        // line of the code content rather than submitting / firing
+        // PM Enter handlers.
         if (e.key === "Enter") {
           e.preventDefault();
+          e.stopPropagation();
           const pos = getPos();
           if (typeof pos !== "number") return;
           editor.commands.focus(pos + 1);
-        }
-        // Stop Backspace from bubbling out and deleting the
-        // codeBlock node when the language slot is empty.
-        if (e.key === "Backspace" && langInput.textContent === "") {
-          e.preventDefault();
         }
       });
       header.appendChild(langInput);
       wrap.appendChild(header);
 
-      // PM content lives in the `<code>` inside `<pre>`. Same
-      // structure StarterKit's default renderHTML produces, so
-      // syntax-highlight extensions stay compatible.
+      // PM content lives inside `<pre><code>`. Same shape
+      // StarterKit emits so syntax-highlighting extensions stay
+      // compatible if we add one later.
       const pre = document.createElement("pre");
+      pre.className = "md-codeblock-content";
       const code = document.createElement("code");
       pre.appendChild(code);
       wrap.appendChild(pre);
 
-      // Closing fence row. Non-editable; the user types `` ``` ``
-      // on a fresh line inside the code content to close, or
-      // simply navigates out of the block (PM's existing exits
-      // still apply).
+      // Closing fence row. Non-editable; the user closes the block
+      // by exiting the code content (Tiptap's default exits still
+      // apply: Enter on an empty trailing line, Mod-Enter, etc.).
       const footer = document.createElement("div");
       footer.className = "md-codeblock-fence is-close";
       footer.contentEditable = "false";
       footer.textContent = "```";
       wrap.appendChild(footer);
 
+      const isOurUI = (target: EventTarget | null): boolean => {
+        if (!(target instanceof Node)) return false;
+        return (
+          header.contains(target) ||
+          footer.contains(target) ||
+          target === langInput
+        );
+      };
+
       return {
         dom: wrap,
         contentDOM: code,
+        // PM owns events on the code content; events sourced from
+        // the fence rows / language input belong to us and must not
+        // reach PM (otherwise PM either swallows keystrokes that
+        // should land in the input, or blurs the input on click).
+        stopEvent(event) {
+          return isOurUI(event.target);
+        },
+        // Same logic for DOM mutations: changes inside our UI
+        // shouldn't trigger PM's reconciliation pass.
+        ignoreMutation(mutation) {
+          return isOurUI(mutation.target);
+        },
         update(updated) {
           if (updated.type !== node.type) return false;
           const next = (updated.attrs.language as string | null) ?? "";
-          // Only resync from the model when it diverges. Skipping
-          // the assignment otherwise keeps the user's caret in the
-          // language input stable while they type.
-          if (langInput.textContent !== next) {
-            langInput.textContent = next;
+          // Skip the assignment when unchanged so the user's caret
+          // position inside the input stays stable as they type.
+          if (langInput.value !== next) {
+            langInput.value = next;
           }
           return true;
         },
