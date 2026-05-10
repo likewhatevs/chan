@@ -55,6 +55,39 @@ type ReaderConn = r2d2::PooledConnection<SqliteConnectionManager>;
 /// contract and lives on its own Mutex<Connection> outside the pool.
 const READER_POOL_SIZE: u32 = 4;
 
+/// Node kind. Distinguishes a regular markdown file from one that
+/// the contacts importer dropped (frontmatter `chan.kind: contact`).
+/// The graph stores both as `nodes` rows; the kind drives downstream
+/// filtering (the editor's `@` picker reads only contacts; backlinks
+/// and link-autocomplete read both). Aliasing a contact onto its
+/// file row keeps the graph free of double-counted edges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NodeKind {
+    File,
+    Contact,
+}
+
+impl NodeKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            NodeKind::File => "file",
+            NodeKind::Contact => "contact",
+        }
+    }
+}
+
+/// Lightweight projection of a contact-kind node, surfaced through
+/// `GraphView::contacts` for the editor `@` picker and
+/// `GET /api/contacts` (the wiki-link target the picker inserts is
+/// what the link extractor then resolves back to a Contact node, so
+/// the round-trip is consistent).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContactNode {
+    pub rel_path: String,
+    pub basename: String,
+    pub title: Option<String>,
+}
+
 /// Edge kind. Mirrors the wiki-link / mention / tag distinction
 /// that the editor already exposes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +137,7 @@ pub struct FileGraph<'a> {
     pub rel: &'a str,
     pub title: Option<&'a str>,
     pub mtime: Option<i64>,
+    pub node_kind: NodeKind,
     pub edges: &'a [Edge],
     pub headings: &'a [markdown::Heading],
 }
@@ -418,17 +452,22 @@ impl GraphView {
     /// edges/headings owned by `rel` and inserts the supplied ones
     /// in a single transaction. `title` is the file's display title
     /// (h1 or frontmatter `title`) and is stored on the node for
-    /// the link-autocomplete query (`link_targets`).
+    /// the link-autocomplete query (`link_targets`). `node_kind`
+    /// tags the file as a regular note or as an imported contact;
+    /// the contact tag drives the editor `@` picker and lets graph
+    /// consumers filter without re-parsing frontmatter.
     pub fn replace_file(
         &self,
         rel: &str,
         title: Option<&str>,
         mtime: Option<i64>,
+        node_kind: NodeKind,
         outgoing: &[Edge],
         headings: &[markdown::Heading],
     ) -> Result<()> {
         tracing::debug!(
             rel,
+            kind = node_kind.as_str(),
             edges = outgoing.len(),
             headings = headings.len(),
             "graph::replace_file",
@@ -441,8 +480,8 @@ impl GraphView {
             .unwrap_or(rel);
         tx.execute(
             "INSERT OR REPLACE INTO nodes(rel_path, kind, mtime, title, basename) \
-             VALUES (?, 'file', ?, ?, ?)",
-            params![rel, mtime, title, basename],
+             VALUES (?, ?, ?, ?, ?)",
+            params![rel, node_kind.as_str(), mtime, title, basename],
         )?;
         tx.execute("DELETE FROM edges WHERE src = ?", params![rel])?;
         tx.execute("DELETE FROM headings WHERE rel_path = ?", params![rel])?;
@@ -516,7 +555,7 @@ impl GraphView {
         {
             let mut ins_node = tx.prepare_cached(
                 "INSERT OR REPLACE INTO nodes(rel_path, kind, mtime, title, basename) \
-                 VALUES (?, 'file', ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?)",
             )?;
             let mut ins_edge = tx.prepare_cached(
                 "INSERT OR IGNORE INTO edges(src, dst, kind, anchor) VALUES (?, ?, ?, ?)",
@@ -529,7 +568,13 @@ impl GraphView {
                     .file_name()
                     .and_then(|s| s.to_str())
                     .unwrap_or(fg.rel);
-                ins_node.execute(params![fg.rel, fg.mtime, fg.title, basename])?;
+                ins_node.execute(params![
+                    fg.rel,
+                    fg.node_kind.as_str(),
+                    fg.mtime,
+                    fg.title,
+                    basename
+                ])?;
                 for e in fg.edges {
                     ins_edge.execute(params![fg.rel, e.dst, e.kind.as_str(), e.anchor])?;
                 }
@@ -553,12 +598,54 @@ impl GraphView {
     pub fn files(&self) -> Result<Vec<String>> {
         tracing::debug!("graph::files");
         let conn = self.reader()?;
-        let mut stmt = conn
-            .prepare_cached("SELECT rel_path FROM nodes WHERE kind = 'file' ORDER BY rel_path")?;
+        // Contacts are markdown files with a more specific kind tag;
+        // include them so callers iterating the drive's notes see
+        // them too.
+        let mut stmt = conn.prepare_cached(
+            "SELECT rel_path FROM nodes WHERE kind IN ('file', 'contact') ORDER BY rel_path",
+        )?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         let mut out = Vec::new();
         for row in rows {
             out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Contact-kind nodes only, sorted by path. Drives the editor's
+    /// `@` picker and the `GET /api/contacts` route. Title is the
+    /// contact's display name (`# H1` of the imported note); basename
+    /// is the file name without directory.
+    pub fn contacts(&self) -> Result<Vec<ContactNode>> {
+        tracing::debug!("graph::contacts");
+        let conn = self.reader()?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT rel_path, basename, title FROM nodes \
+             WHERE kind = 'contact' ORDER BY \
+             COALESCE(title, basename, rel_path) COLLATE NOCASE",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (rel_path, basename, title) = row?;
+            let basename = basename.unwrap_or_else(|| {
+                std::path::Path::new(&rel_path)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&rel_path)
+                    .to_string()
+            });
+            out.push(ContactNode {
+                rel_path,
+                basename,
+                title,
+            });
         }
         Ok(out)
     }
@@ -611,7 +698,7 @@ impl GraphView {
                         WHEN title IS NOT NULL AND LOWER(title) LIKE LOWER(?2) ESCAPE '\\' THEN 3 \
                         ELSE 99 \
                     END AS rank \
-                FROM nodes WHERE kind = 'file' \
+                FROM nodes WHERE kind IN ('file', 'contact') \
              ) WHERE rank < 99 \
              ORDER BY rank ASC, mtime DESC, rel_path ASC \
              LIMIT ?3",
@@ -746,7 +833,7 @@ pub struct LinkTarget {
 fn recent_files(conn: &Connection, limit: i64) -> Result<Vec<LinkTarget>> {
     let mut stmt = conn.prepare_cached(
         "SELECT rel_path, title, mtime FROM nodes \
-         WHERE kind = 'file' \
+         WHERE kind IN ('file', 'contact') \
          ORDER BY mtime DESC, rel_path ASC \
          LIMIT ?1",
     )?;
@@ -839,7 +926,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let g = std::sync::Arc::new(GraphView::open(&tmp.path().join("g.sqlite")).unwrap());
         // Seed a row so the read returns predictable data.
-        g.replace_file("a.md", Some("Alpha"), Some(1), &[], &[])
+        g.replace_file("a.md", Some("Alpha"), Some(1), NodeKind::File, &[], &[])
             .unwrap();
 
         // Three concurrent readers, one writer. Each reader does
@@ -866,7 +953,7 @@ mod tests {
             thread::spawn(move || {
                 b.wait();
                 for i in 0..50 {
-                    g.replace_file("a.md", Some("Alpha"), Some(i), &[], &[])
+                    g.replace_file("a.md", Some("Alpha"), Some(i), NodeKind::File, &[], &[])
                         .expect("write");
                 }
             })
@@ -882,7 +969,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
         // Pre-populate so we can verify clear-and-replace semantics.
-        g.replace_file("old.md", Some("Old"), Some(1), &[], &[])
+        g.replace_file("old.md", Some("Old"), Some(1), NodeKind::File, &[], &[])
             .unwrap();
         assert_eq!(
             count(&g, "SELECT COUNT(*) FROM nodes WHERE rel_path='old.md'"),
@@ -905,6 +992,7 @@ mod tests {
                 rel: "a.md",
                 title: Some("Alpha"),
                 mtime: Some(10),
+                node_kind: NodeKind::File,
                 edges: &edges,
                 headings: &headings,
             },
@@ -912,6 +1000,7 @@ mod tests {
                 rel: "b.md",
                 title: None,
                 mtime: Some(20),
+                node_kind: NodeKind::File,
                 edges: &[],
                 headings: &[],
             },
@@ -932,8 +1021,15 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let db = tmp.path().join("graph.sqlite");
         let g = GraphView::open(&db).unwrap();
-        g.replace_file("notes/a.md", Some("Hello"), Some(1000), &[], &[])
-            .unwrap();
+        g.replace_file(
+            "notes/a.md",
+            Some("Hello"),
+            Some(1000),
+            NodeKind::File,
+            &[],
+            &[],
+        )
+        .unwrap();
         assert_eq!(
             count(
                 &g,
@@ -953,7 +1049,8 @@ mod tests {
 
     fn populate(g: &GraphView, files: &[(&str, Option<&str>, Option<i64>)]) {
         for (rel, title, mtime) in files {
-            g.replace_file(rel, *title, *mtime, &[], &[]).unwrap();
+            g.replace_file(rel, *title, *mtime, NodeKind::File, &[], &[])
+                .unwrap();
         }
     }
 
@@ -1023,6 +1120,7 @@ mod tests {
             "notes/2026-05-06.md",
             Some("Pasta night"),
             Some(1),
+            NodeKind::File,
             &[],
             &headings,
         )
@@ -1074,7 +1172,7 @@ mod tests {
                 text: format!("note-{i}"),
             });
         }
-        g.replace_file("toc-heavy.md", None, Some(1), &[], &hs)
+        g.replace_file("toc-heavy.md", None, Some(1), NodeKind::File, &[], &hs)
             .unwrap();
         let hits = g.link_targets("note", 10).unwrap();
         // Cap at limit/2 = 5 heading hits, regardless of how many

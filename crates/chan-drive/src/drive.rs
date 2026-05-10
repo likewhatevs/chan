@@ -744,6 +744,7 @@ impl Drive {
         struct Owned {
             rel: String,
             title: Option<String>,
+            node_kind: crate::graph::NodeKind,
             mtime: Option<i64>,
             edges: Vec<crate::graph::Edge>,
             headings: Vec<markdown::Heading>,
@@ -762,10 +763,11 @@ impl Drive {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            let (title, headings, edges) = parse_for_graph(&e.path, &content);
+            let (title, node_kind, headings, edges) = parse_for_graph(&e.path, &content);
             owned.push(Owned {
                 rel: e.path.clone(),
                 title,
+                node_kind,
                 mtime: e.mtime,
                 edges,
                 headings,
@@ -782,6 +784,7 @@ impl Drive {
                 rel: &o.rel,
                 title: o.title.as_deref(),
                 mtime: o.mtime,
+                node_kind: o.node_kind,
                 edges: &o.edges,
                 headings: &o.headings,
             })
@@ -811,7 +814,7 @@ impl Drive {
         }
         let content = self.read_text(rel)?;
         let mtime = self.stat(rel).ok().and_then(|s| s.mtime);
-        let (title, headings, edges) = parse_for_graph(rel, &content);
+        let (title, node_kind, headings, edges) = parse_for_graph(rel, &content);
         // Graph first, then search index. The graph is what the
         // editor consults for backlinks and link-autocomplete on
         // every keystroke; a stale graph is the more user-visible
@@ -823,7 +826,7 @@ impl Drive {
         // server's auto-rebuild trigger. The opposite ordering
         // (search-then-graph) made backlinks the silent victim.
         self.graph()?
-            .replace_file(rel, title.as_deref(), mtime, &edges, &headings)?;
+            .replace_file(rel, title.as_deref(), mtime, node_kind, &edges, &headings)?;
         // Hand the already-read content to the index so the read
         // goes through the Drive sandbox exactly once.
         self.index()?.index_one(rel, &content)?;
@@ -922,6 +925,13 @@ impl Drive {
         let g = GraphView::open(&self.paths.graph_db)?;
         let _ = self.graph.set(g);
         Ok(self.graph.get().unwrap())
+    }
+
+    /// All contact-kind notes in the drive, sorted by display name.
+    /// Pass-through to `GraphView::contacts`. Drives the editor `@`
+    /// picker and `GET /api/contacts`.
+    pub fn contacts(&self) -> Result<Vec<crate::graph::ContactNode>> {
+        self.graph()?.contacts()
     }
 
     // ---- watch ----
@@ -1076,6 +1086,7 @@ fn parse_for_graph(
     raw: &str,
 ) -> (
     Option<String>,
+    crate::graph::NodeKind,
     Vec<markdown::Heading>,
     Vec<crate::graph::Edge>,
 ) {
@@ -1093,10 +1104,22 @@ fn parse_for_graph(
                 .find(|h| h.level == 1)
                 .map(|h| h.text.clone())
         });
+    // Contact-kind tag lives under the chan namespace so user
+    // frontmatter (which may already carry a `kind:` of its own
+    // for app-specific reasons) can't accidentally tip a regular
+    // note into the contacts surface.
+    let node_kind = fm
+        .data
+        .get("chan")
+        .and_then(|v| v.get("kind"))
+        .and_then(|v| v.as_str())
+        .filter(|s| s.eq_ignore_ascii_case("contact"))
+        .map(|_| crate::graph::NodeKind::Contact)
+        .unwrap_or(crate::graph::NodeKind::File);
     let links = markdown::extract_links(body_src);
     let tokens = markdown::extract_tokens(body_src);
     let edges = build_edges(rel, &links, &tokens);
-    (title, headings, edges)
+    (title, node_kind, headings, edges)
 }
 
 /// Whether `path` lies under the `prefix` directory. POSIX

@@ -139,3 +139,69 @@ fn import_into_drive_root() {
     assert!(drive.exists("Jane Doe.md"));
     assert!(drive.exists("Bob Smith.md"));
 }
+
+#[test]
+fn imported_contacts_classified_as_contact_nodes_after_index() {
+    // Phase 4 wiring: imported notes carry chan.kind: contact in
+    // their frontmatter, and the indexer should pick that up so
+    // Drive::contacts returns them and a regular .md does not.
+    let cfg = TempDir::new().unwrap();
+    let drive_root = TempDir::new().unwrap();
+    let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+    lib.register_drive(drive_root.path(), Some("ContactsGraph".into()))
+        .unwrap();
+    let drive = lib.open_drive(drive_root.path()).unwrap();
+
+    // One contact import + one plain note. Indexing both should
+    // surface the contact only via Drive::contacts while both
+    // appear in Drive::list_tree.
+    let contacts = parse_google_csv(CSV.as_bytes()).unwrap();
+    drive
+        .import_contacts("Contacts", contacts, ImportOpts::default())
+        .unwrap();
+    drive
+        .write_text("notes/journal.md", "# Journal\n\nUnrelated.\n")
+        .unwrap();
+
+    drive.reindex(None).unwrap();
+
+    let contacts = drive.contacts().unwrap();
+    let paths: Vec<_> = contacts.iter().map(|c| c.rel_path.clone()).collect();
+    assert!(paths.contains(&"Contacts/Jane Doe.md".to_string()));
+    assert!(paths.contains(&"Contacts/Bob Smith.md".to_string()));
+    assert!(!paths.contains(&"notes/journal.md".to_string()));
+    // Title comes from the # H1 the emitter puts in.
+    let jane = contacts
+        .iter()
+        .find(|c| c.rel_path == "Contacts/Jane Doe.md")
+        .unwrap();
+    assert_eq!(jane.title.as_deref(), Some("Jane Doe"));
+    assert_eq!(jane.basename, "Jane Doe.md");
+}
+
+#[test]
+fn removing_contact_frontmatter_demotes_node_back_to_file() {
+    // If a user edits a contact note and strips the chan.kind
+    // frontmatter, the next index pass should drop it from
+    // Drive::contacts. We can't change the importer's output to
+    // simulate this cleanly, so synthesize a file directly.
+    let cfg = TempDir::new().unwrap();
+    let drive_root = TempDir::new().unwrap();
+    let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+    lib.register_drive(drive_root.path(), Some("Demote".into()))
+        .unwrap();
+    let drive = lib.open_drive(drive_root.path()).unwrap();
+
+    drive
+        .write_text("people/x.md", "---\nchan:\n  kind: contact\n---\n# X\n")
+        .unwrap();
+    drive.reindex(None).unwrap();
+    assert_eq!(drive.contacts().unwrap().len(), 1);
+
+    // Strip the contact tag.
+    drive
+        .write_text("people/x.md", "# X\n\nJust a note now.\n")
+        .unwrap();
+    drive.index_file("people/x.md").unwrap();
+    assert_eq!(drive.contacts().unwrap().len(), 0);
+}

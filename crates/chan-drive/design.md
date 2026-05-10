@@ -316,9 +316,14 @@ drive directory, so any `.chan/` activity is foreign noise.
 
 Imports a third-party contact dump (Google Contacts CSV today,
 vCard / Outlook later) as one markdown note per contact. The
-notes carry a `chan.kind: contact` frontmatter so downstream
-consumers (graph builder, editor `@` picker) classify them
-without a separate index.
+notes carry a `chan.kind: contact` frontmatter that the indexer
+reads in `parse_for_graph` to tag the corresponding `nodes` row
+as `kind = 'contact'`. Same row, different kind: backlinks,
+link-autocomplete, and forget_file all keep working unchanged
+because they key on `rel_path`, not `kind`. Downstream consumers
+(`Drive::contacts`, future editor `@` picker, future
+`GET /api/contacts`) filter on `kind = 'contact'` to surface
+contacts as a distinct UI surface.
 
 Pure-function split:
 
@@ -418,6 +423,7 @@ Drive::import_contacts(dir: &str,
     contacts: Vec<Contact>,
     opts: ImportOpts,
 ) -> Result<ImportSummary>
+Drive::contacts() -> Result<Vec<ContactNode>>
 ```
 
 `BYTES_WRITE_LIMIT` and `TEXT_WRITE_LIMIT` cap a single write
@@ -477,6 +483,10 @@ ImportOpts { overwrite: bool }
 ImportOutcome::{Wrote, Overwrote, Skipped, Failed}
 ImportSummary { outcomes: Vec<ImportOutcome> }
 ImportSummary::counts(&self) -> ImportCounts
+
+// Graph projection (see Components -> Contacts).
+NodeKind::{File, Contact}
+ContactNode { rel_path, basename, title }
 ```
 
 ### Public types (selected)

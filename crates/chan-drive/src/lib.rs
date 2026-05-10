@@ -45,7 +45,9 @@ pub use drive::{
     TEXT_WRITE_LIMIT,
 };
 pub use error::{ChanError, Result};
-pub use graph::{Edge, EdgeKind, GraphView, HeadingRow, LinkTarget, LinkTargetKind, Tag};
+pub use graph::{
+    ContactNode, Edge, EdgeKind, GraphView, HeadingRow, LinkTarget, LinkTargetKind, NodeKind, Tag,
+};
 pub use index::{
     BuildOptions, BuildProgress, BuildStage, BuildSummary, Chunking, Hit, IndexConfig, IndexStats,
     Mode as SearchMode, SearchResult, DEFAULT_MODEL,
