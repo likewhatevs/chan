@@ -86,12 +86,90 @@
   /// overlay is per-window-session and not worth persisting.
   let promptMode = $state<"wysiwyg" | "source">("wysiwyg");
 
-  /// Whether the inline formatting controls (B / I / S / lists /
-  /// HR / link / block-kind dropdown) are revealed inside the
-  /// prompt-bar. Default off so the assistant overlay opens with
-  /// minimal chrome; toggled by the leading `Aa` button. Local
-  /// component state, not persisted.
-  let formattingBarOpen = $state(false);
+  /// User-controlled prompt height (px). Mirrors the file editor's
+  /// inspector resize affordance: a thin bar at the top of the
+  /// prompt area lets the user grow / shrink the input. Local to
+  /// the component for now; if multiple sessions want this to
+  /// stick we can move it into preferences. Default mirrors the
+  /// previous `30vh` cap on a typical 1080p panel so existing users
+  /// don't see a jump on first load.
+  const PROMPT_HEIGHT_MIN = 80;
+  const PROMPT_HEIGHT_MAX = 600;
+  let promptHeight = $state(220);
+  let promptResizing = $state(false);
+
+  function onPromptResizeDown(e: PointerEvent): void {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = promptHeight;
+    const target = e.currentTarget as HTMLElement;
+    target.setPointerCapture(e.pointerId);
+    promptResizing = true;
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+    const onMove = (ev: PointerEvent) => {
+      // Drag UP (deltaY < 0) grows the prompt; drag DOWN shrinks
+      // it. The handle sits above the prompt input so this matches
+      // the user's intuition.
+      const next = startH - (ev.clientY - startY);
+      promptHeight = Math.max(
+        PROMPT_HEIGHT_MIN,
+        Math.min(PROMPT_HEIGHT_MAX, next),
+      );
+    };
+    const onUp = (ev: PointerEvent) => {
+      target.releasePointerCapture(ev.pointerId);
+      target.removeEventListener("pointermove", onMove);
+      target.removeEventListener("pointerup", onUp);
+      target.removeEventListener("pointercancel", onUp);
+      promptResizing = false;
+      document.body.style.removeProperty("cursor");
+      document.body.style.removeProperty("user-select");
+    };
+    target.addEventListener("pointermove", onMove);
+    target.addEventListener("pointerup", onUp);
+    target.addEventListener("pointercancel", onUp);
+  }
+
+  /// Whether the prompt's overflow menu (formatting controls +
+  /// source toggle) is open. Anchored to the ⋯ button beside Send
+  /// in the status line; the bubble pops upward. Local component
+  /// state, not persisted.
+  let promptMenuOpen = $state(false);
+  let promptMenuAnchor = $state<HTMLButtonElement | undefined>();
+  let promptMenuRect = $state<{
+    left: number;
+    bottom: number;
+  } | null>(null);
+
+  function togglePromptMenu(): void {
+    if (promptMenuOpen) {
+      promptMenuOpen = false;
+      return;
+    }
+    if (promptMenuAnchor) {
+      const r = promptMenuAnchor.getBoundingClientRect();
+      // Anchor at the button's TOP-LEFT so the bubble (positioned
+      // with bottom = viewport.height - r.top) opens upward and
+      // floats above the status line.
+      promptMenuRect = { left: r.left, bottom: window.innerHeight - r.top + 4 };
+    }
+    promptMenuOpen = true;
+  }
+
+  function closePromptMenu(): void {
+    promptMenuOpen = false;
+  }
+
+  function onPromptMenuDocPointer(e: PointerEvent): void {
+    if (!promptMenuOpen) return;
+    const t = e.target as Element | null;
+    if (!t) return;
+    if (t.closest?.(".prompt-menu-bubble")) return;
+    if (t.closest?.(".prompt-menu-trigger")) return;
+    promptMenuOpen = false;
+  }
+
 
   /// Refs into the prompt editor so the formatting toolbar above
   /// it can call into Wysiwyg's mark/block-kind API. Source mode
@@ -877,15 +955,26 @@
       // it instead of closing the panel; the user expects the
       // visible Stop button to also be reachable from the keyboard.
       e.preventDefault();
-      if (loading) {
+      // Prompt menu wins over both stop and close so users can
+      // dismiss the overflow bubble without nuking the whole
+      // assistant overlay.
+      if (promptMenuOpen) {
+        promptMenuOpen = false;
+      } else if (loading) {
         cancel();
       } else {
         close();
       }
     }
   }
-  onMount(() => document.addEventListener("keydown", onWindowKey));
-  onDestroy(() => document.removeEventListener("keydown", onWindowKey));
+  onMount(() => {
+    document.addEventListener("keydown", onWindowKey);
+    document.addEventListener("pointerdown", onPromptMenuDocPointer);
+  });
+  onDestroy(() => {
+    document.removeEventListener("keydown", onWindowKey);
+    document.removeEventListener("pointerdown", onPromptMenuDocPointer);
+  });
 
   // Reactive accessor for the currently-rendered scrollback.
   // Reading through the proxied map / object tracks both the
@@ -1071,128 +1160,25 @@
         {/if}
       </div>
 
-      <!-- Bar above the prompt input + the prompt input itself live
-           inside .prompt-area. The floating formatting pill was
-           replaced by inline controls inside .prompt-bar; the wrap
-           still pins the layout but no longer needs to anchor an
-           absolutely-positioned child. -->
+      <!-- The previous prompt-bar (Aa toggle + source toggle) was
+           replaced by a single ⋯ trigger that lives in the status
+           line next to Send. The bubble carries the formatting
+           controls + the source toggle so the prompt itself sits
+           edge-to-edge with no chrome above it. -->
       <div class="prompt-area">
-        <!-- Bar above the prompt input. Mirrors FileEditorTab's
-             .tab-bar: Aa toggle + (when revealed) inline formatting
-             controls on the left, source-mode toggle on the right.
-             The page-width control from the file editor's bar is
-             intentionally absent: prompt margins aren't adjustable. -->
-        <div class="prompt-bar" role="toolbar" aria-label="Prompt">
-          <span class="left">
-            <button
-              class="hbtn aa-toggle"
-              class:on={formattingBarOpen}
-              title={formattingBarOpen ? "hide formatting" : "show formatting"}
-              aria-label="toggle formatting toolbar"
-              aria-pressed={formattingBarOpen}
-              disabled={promptMode !== "wysiwyg"}
-              onclick={() => (formattingBarOpen = !formattingBarOpen)}
-            >Aa</button>
-            {#if formattingBarOpen && promptMode === "wysiwyg"}
-              <!-- Inline formatting controls. Same set the file editor
-                   exposes; collapsed by default so the assistant
-                   overlay opens with a clean prompt bar. -->
-              <span class="fmt-group" role="toolbar" aria-label="Formatting">
-                <select
-                  class="block-kind"
-                  value={blockKind}
-                  onchange={onBlockKindChange}
-                  onmousedown={(e) => e.stopPropagation()}
-                  title="block style"
-                >
-                  <option value="h1">h1</option>
-                  <option value="h2">h2</option>
-                  <option value="h3">h3</option>
-                  <option value="normal">text</option>
-                  <option value="code">code</option>
-                  <option value="quote">quote</option>
-                </select>
-                <button
-                  class="fbtn"
-                  class:on={isBold}
-                  title="bold (Cmd/Ctrl+B)"
-                  onmousedown={(e) => e.preventDefault()}
-                  onclick={() => wysiwygRef?.toggleBold()}
-                ><b>B</b></button>
-                <button
-                  class="fbtn"
-                  class:on={isItalic}
-                  title="italic (Cmd/Ctrl+I)"
-                  onmousedown={(e) => e.preventDefault()}
-                  onclick={() => wysiwygRef?.toggleItalic()}
-                ><i>I</i></button>
-                <button
-                  class="fbtn"
-                  class:on={isStrike}
-                  title="strikethrough"
-                  onmousedown={(e) => e.preventDefault()}
-                  onclick={() => wysiwygRef?.toggleStrike()}
-                ><s>S</s></button>
-                <button
-                  class="fbtn"
-                  class:on={isInlineCode}
-                  title="inline code (Cmd/Ctrl+E)"
-                  onmousedown={(e) => e.preventDefault()}
-                  onclick={() => wysiwygRef?.toggleInlineCode()}
-                ><code>{`<>`}</code></button>
-                <button
-                  class="fbtn"
-                  class:on={isLink}
-                  title="link"
-                  aria-label="toggle link"
-                  onmousedown={(e) => e.preventDefault()}
-                  onclick={() => wysiwygRef?.toggleLink()}
-                >🔗</button>
-                <button
-                  class="fbtn"
-                  class:on={isBulletList}
-                  title="bullet list"
-                  aria-label="bullet list"
-                  onmousedown={(e) => e.preventDefault()}
-                  onclick={() => wysiwygRef?.toggleBulletList()}
-                >•</button>
-                <button
-                  class="fbtn"
-                  class:on={isOrderedList}
-                  title="ordered list"
-                  aria-label="ordered list"
-                  onmousedown={(e) => e.preventDefault()}
-                  onclick={() => wysiwygRef?.toggleOrderedList()}
-                >1.</button>
-                <button
-                  class="fbtn"
-                  class:on={isTaskList}
-                  title="task list"
-                  aria-label="task list"
-                  onmousedown={(e) => e.preventDefault()}
-                  onclick={() => wysiwygRef?.toggleTaskList()}
-                >☐</button>
-                <button
-                  class="fbtn"
-                  title="horizontal rule (insert ---)"
-                  aria-label="insert horizontal rule"
-                  onmousedown={(e) => e.preventDefault()}
-                  onclick={() => wysiwygRef?.insertHorizontalRule()}
-                >―</button>
-              </span>
-            {/if}
-          </span>
-          <span class="actions">
-            <button
-              class="hbtn"
-              title={promptMode === "wysiwyg" ? "view source" : "view rendered"}
-              aria-label={promptMode === "wysiwyg" ? "view source" : "view rendered"}
-              onclick={() => (promptMode = promptMode === "wysiwyg" ? "source" : "wysiwyg")}
-            >{promptMode === "wysiwyg" ? "</>" : "¶"}</button>
-          </span>
-        </div>
-
-        <div class="prompt-wrap" class:disabled={!currentContext}>
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="prompt-resize-handle"
+          class:active={promptResizing}
+          onpointerdown={onPromptResizeDown}
+          aria-label="resize prompt"
+          title="drag to resize the prompt"
+        ></div>
+        <div
+          class="prompt-wrap"
+          class:disabled={!currentContext}
+          style="height: {promptHeight}px"
+        >
           {#if promptMode === "wysiwyg"}
             <Wysiwyg
               bind:this={wysiwygRef}
@@ -1219,6 +1205,16 @@
             <span class="muted">Cmd+Enter to send  ·  /clear to reset</span>
           {/if}
         </span>
+        <button
+          bind:this={promptMenuAnchor}
+          class="action-btn menu prompt-menu-trigger"
+          class:on={promptMenuOpen}
+          onclick={togglePromptMenu}
+          title="prompt options"
+          aria-haspopup="menu"
+          aria-expanded={promptMenuOpen}
+          aria-label="prompt options"
+        >⋯</button>
         {#if loading}
           <button
             class="action-btn stop"
@@ -1236,6 +1232,133 @@
           >→</button>
         {/if}
       </div>
+      {#if promptMenuOpen && promptMenuRect}
+        <!-- Floats above the status line; positioned with `bottom`
+             so the menu grows upward from the trigger. The
+             onmousedown=stopPropagation on each formatting button
+             keeps the editor focused while clicking. -->
+        <div
+          class="prompt-menu-bubble"
+          role="menu"
+          tabindex="-1"
+          aria-label="prompt menu"
+          style="left: {promptMenuRect.left}px; bottom: {promptMenuRect.bottom}px;"
+          onmousedown={(e) => e.stopPropagation()}
+        >
+          <div
+            class="fmt-row"
+            role="toolbar"
+            aria-label="Formatting"
+            class:disabled={promptMode !== "wysiwyg"}
+          >
+            <select
+              class="block-kind"
+              value={blockKind}
+              onchange={onBlockKindChange}
+              onmousedown={(e) => e.stopPropagation()}
+              disabled={promptMode !== "wysiwyg"}
+              title="block style"
+            >
+              <option value="h1">h1</option>
+              <option value="h2">h2</option>
+              <option value="h3">h3</option>
+              <option value="normal">text</option>
+              <option value="code">code</option>
+              <option value="quote">quote</option>
+            </select>
+            <button
+              class="fbtn"
+              class:on={isBold}
+              title="bold (Cmd/Ctrl+B)"
+              disabled={promptMode !== "wysiwyg"}
+              onmousedown={(e) => e.preventDefault()}
+              onclick={() => wysiwygRef?.toggleBold()}
+            ><b>B</b></button>
+            <button
+              class="fbtn"
+              class:on={isItalic}
+              title="italic (Cmd/Ctrl+I)"
+              disabled={promptMode !== "wysiwyg"}
+              onmousedown={(e) => e.preventDefault()}
+              onclick={() => wysiwygRef?.toggleItalic()}
+            ><i>I</i></button>
+            <button
+              class="fbtn"
+              class:on={isStrike}
+              title="strikethrough"
+              disabled={promptMode !== "wysiwyg"}
+              onmousedown={(e) => e.preventDefault()}
+              onclick={() => wysiwygRef?.toggleStrike()}
+            ><s>S</s></button>
+            <button
+              class="fbtn"
+              class:on={isInlineCode}
+              title="inline code (Cmd/Ctrl+E)"
+              disabled={promptMode !== "wysiwyg"}
+              onmousedown={(e) => e.preventDefault()}
+              onclick={() => wysiwygRef?.toggleInlineCode()}
+            ><code>{`<>`}</code></button>
+            <button
+              class="fbtn"
+              class:on={isLink}
+              title="link"
+              aria-label="toggle link"
+              disabled={promptMode !== "wysiwyg"}
+              onmousedown={(e) => e.preventDefault()}
+              onclick={() => wysiwygRef?.toggleLink()}
+            >🔗</button>
+            <button
+              class="fbtn"
+              class:on={isBulletList}
+              title="bullet list"
+              aria-label="bullet list"
+              disabled={promptMode !== "wysiwyg"}
+              onmousedown={(e) => e.preventDefault()}
+              onclick={() => wysiwygRef?.toggleBulletList()}
+            >•</button>
+            <button
+              class="fbtn"
+              class:on={isOrderedList}
+              title="ordered list"
+              aria-label="ordered list"
+              disabled={promptMode !== "wysiwyg"}
+              onmousedown={(e) => e.preventDefault()}
+              onclick={() => wysiwygRef?.toggleOrderedList()}
+            >1.</button>
+            <button
+              class="fbtn"
+              class:on={isTaskList}
+              title="task list"
+              aria-label="task list"
+              disabled={promptMode !== "wysiwyg"}
+              onmousedown={(e) => e.preventDefault()}
+              onclick={() => wysiwygRef?.toggleTaskList()}
+            >☐</button>
+            <button
+              class="fbtn"
+              title="horizontal rule (insert ---)"
+              aria-label="insert horizontal rule"
+              disabled={promptMode !== "wysiwyg"}
+              onmousedown={(e) => e.preventDefault()}
+              onclick={() => wysiwygRef?.insertHorizontalRule()}
+            >―</button>
+          </div>
+          <div class="action-list">
+            <button
+              class="mbtn"
+              onclick={() => {
+                promptMode = promptMode === "wysiwyg" ? "source" : "wysiwyg";
+                closePromptMenu();
+              }}
+            >
+              <span class="mbtn-icon">{promptMode === "wysiwyg" ? "</>" : "¶"}</span>
+              <span class="mbtn-label">
+                {promptMode === "wysiwyg" ? "Show Source" : "Show Rendered"}
+              </span>
+            </button>
+          </div>
+        </div>
+      {/if}
 </OverlayShell>
 
 <style>
@@ -1614,11 +1737,27 @@
   .prompt-wrap {
     position: relative;
     background: var(--bg-card);
-    max-height: 30vh;
     min-height: 80px;
     display: flex;
     flex-direction: column;
     overflow: auto;
+  }
+  /* Drag-to-resize bar on top of the prompt input. Sits above the
+     .prompt-wrap so a drag upward grows the input height. Same
+     "thin neutral bar that thickens on hover" look as
+     ResizeHandle.svelte, just rotated to the horizontal axis. */
+  .prompt-resize-handle {
+    height: 4px;
+    flex-shrink: 0;
+    background: var(--separator);
+    cursor: row-resize;
+    touch-action: none;
+    transition: height 0.1s, background 0.1s;
+  }
+  .prompt-resize-handle:hover,
+  .prompt-resize-handle.active {
+    height: 6px;
+    background: var(--separator-hover);
   }
   .prompt-wrap.disabled { opacity: 0.55; pointer-events: none; }
   /* Trim the file editor's generous default padding so the
@@ -1629,82 +1768,51 @@
     line-height: 1.5;
   }
 
-  /* Bar above the prompt input. Same shape as FileEditorTab's
-     .tab-bar so the assistant's prompt reads as a first-class
-     editor surface: bg-card fill, top border separating it from
-     the chat scrollback above, source-mode toggle on the right.
-     The page-width control from the file editor's bar is dropped
-     here: prompt margins aren't a thing the user adjusts. */
-  .prompt-bar {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.25rem 0.5rem;
-    background: var(--bg-card);
-    border-top: 1px solid var(--border);
-    font-size: 14px;
-    color: var(--text-secondary);
-    min-height: 28px;
-  }
-  .prompt-bar .left {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-  }
-  .prompt-bar .actions { display: flex; gap: 2px; }
-  /* hbtn parity with FileEditorTab's tab-bar buttons: same minimum
-     hit area, same hover treatment, so </> reads as the same
-     control across the editor and the assistant. */
-  .prompt-bar .hbtn {
-    background: none;
-    border: 1px solid transparent;
-    border-radius: 3px;
-    cursor: pointer;
-    color: var(--text-secondary);
-    font: inherit;
-    min-width: 28px;
-    text-align: center;
-    padding: 0 5px;
-    line-height: 18px;
-    height: 20px;
-  }
-  .prompt-bar .hbtn:hover { color: var(--text); border-color: var(--btn-border); }
-  .prompt-bar .hbtn.on { color: var(--text); border-color: var(--btn-hover); background: var(--hover-bg); }
-  .prompt-bar .aa-toggle {
-    font-style: italic;
-    font-family: ui-serif, Georgia, serif;
-    font-size: 14px;
-  }
-  .prompt-bar .aa-toggle:disabled {
-    cursor: default;
-    opacity: 0.45;
-  }
-  .prompt-bar .aa-toggle:disabled:hover {
-    color: var(--text-secondary);
-    border-color: transparent;
-  }
-  /* Container that holds the prompt-bar and the scrollable
-     prompt-wrap. The floating fmt-bar that used to anchor on this
-     element is gone; the inline controls now live inside the bar. */
+  /* Container that holds the prompt input. The previous prompt-bar
+     (Aa toggle + source toggle) was folded into a popover anchored
+     to a ⋯ button in the status line below. */
   .prompt-area {
     display: flex;
     flex-direction: column;
     min-height: 0;
   }
-  /* Inline formatting controls revealed by the Aa toggle inside the
-     prompt-bar. Same shape as FileEditorTab's `.fmt-group`. */
-  .prompt-bar .fmt-group {
-    display: flex;
-    align-items: center;
-    gap: 1px;
-    margin-left: 6px;
-    padding-left: 8px;
-    border-left: 1px solid var(--border);
+  /* The ⋯ menu trigger reuses .action-btn for hit-area parity with
+     Send/Stop. Default styling already has a neutral border + hover;
+     just dim slightly so Send remains the visually primary action. */
+  .action-btn.menu {
+    color: var(--text-secondary);
+    font-size: 18px;
+    line-height: 1;
   }
-  .prompt-bar .block-kind {
+  .action-btn.menu:hover { color: var(--text); background: var(--hover-bg); }
+  .action-btn.menu.on { color: var(--text); background: var(--hover-bg); }
+
+  /* Prompt overflow menu. Same look as the tab menu bubble in
+     FileEditorTab but positioned with `bottom` instead of `top`
+     so it grows upward from the trigger. */
+  .prompt-menu-bubble {
+    position: fixed;
+    z-index: 50;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+    padding: 6px;
+    min-width: 240px;
+    max-width: calc(100vw - 16px);
+    color: var(--text);
+    font-size: 13px;
+  }
+  .prompt-menu-bubble .fmt-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+    padding: 2px 4px 6px;
+    border-bottom: 1px solid var(--separator);
+  }
+  .prompt-menu-bubble .fmt-row.disabled { opacity: 0.55; }
+  .prompt-menu-bubble .block-kind {
     background: transparent;
     color: var(--text);
     border: 1px solid var(--btn-border);
@@ -1713,11 +1821,11 @@
     margin-right: 2px;
     font: inherit;
     font-size: 12px;
-    height: 20px;
+    height: 22px;
   }
-  .prompt-bar .fbtn {
-    min-width: 22px;
-    height: 20px;
+  .prompt-menu-bubble .fbtn {
+    min-width: 24px;
+    height: 22px;
     text-align: center;
     background: transparent;
     border: 1px solid transparent;
@@ -1727,16 +1835,47 @@
     font: inherit;
     font-size: 13px;
     padding: 0 4px;
-    line-height: 18px;
+    line-height: 20px;
   }
-  .prompt-bar .fbtn:hover { background: var(--hover-bg); border-color: var(--btn-border); }
-  .prompt-bar .fbtn.on {
+  .prompt-menu-bubble .fbtn:hover:not(:disabled) {
+    background: var(--hover-bg);
+    border-color: var(--btn-border);
+  }
+  .prompt-menu-bubble .fbtn.on {
     background: var(--hover-bg);
     border-color: var(--btn-hover);
   }
-  .prompt-bar .fbtn b,
-  .prompt-bar .fbtn i,
-  .prompt-bar .fbtn s,
-  .prompt-bar .fbtn code { font-size: 13px; }
-  .prompt-bar .fbtn code { font-family: ui-monospace, monospace; }
+  .prompt-menu-bubble .fbtn:disabled { cursor: default; opacity: 0.55; }
+  .prompt-menu-bubble .fbtn b,
+  .prompt-menu-bubble .fbtn i,
+  .prompt-menu-bubble .fbtn s,
+  .prompt-menu-bubble .fbtn code { font-size: 13px; }
+  .prompt-menu-bubble .fbtn code { font-family: ui-monospace, monospace; }
+  .prompt-menu-bubble .action-list {
+    display: flex;
+    flex-direction: column;
+    padding-top: 4px;
+  }
+  .prompt-menu-bubble .mbtn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    padding: 6px 8px;
+    text-align: left;
+  }
+  .prompt-menu-bubble .mbtn:hover { background: var(--hover-bg); }
+  .prompt-menu-bubble .mbtn-icon {
+    width: 18px;
+    text-align: center;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+  .prompt-menu-bubble .mbtn-label { flex: 1; }
 </style>

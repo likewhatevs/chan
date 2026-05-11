@@ -66,20 +66,6 @@ export type FileTab = {
   /// toggle so the user can't try to write a file the OS won't
   /// accept. The watcher refreshes this when permissions change.
   fsWritable: boolean;
-  /// Whether the inline formatting controls (B / I / S / lists /
-  /// HR / link / block-kind dropdown) are revealed in the tab-bar
-  /// next to the page-width adjuster. Default off so the editor
-  /// chrome stays minimal; toggled by the leading `Aa` button.
-  /// Per-tab and ephemeral: not serialized into the URL hash so a
-  /// session restore starts every tab with the bar collapsed.
-  formattingBarOpen: boolean;
-  /// Whether the editor's tab-bar (Aa + page-width + format-group +
-  /// reveal-in-browser + mode + inspector) is visible. Master switch
-  /// over the entire tab-bar row, toggled by a `⋯` button that sits
-  /// next to the filename in the pane's tab strip. Per-tab and
-  /// ephemeral: session restore starts every tab with chrome hidden
-  /// so the editor opens visually clean.
-  toolbarOpen: boolean;
 };
 
 export type Tab = FileTab;
@@ -217,8 +203,6 @@ export async function openInPane(paneId: string, path: string): Promise<void> {
     repoRoot: null,
     readMode: false,
     fsWritable: true,
-    formattingBarOpen: false,
-    toolbarOpen: false,
   };
   p.tabs.push(newTab);
   p.activeTabId = newTab.id;
@@ -338,8 +322,6 @@ function cloneTab(src: Tab): Tab {
     repoRoot: src.repoRoot,
     readMode: src.readMode,
     fsWritable: src.fsWritable,
-    formattingBarOpen: src.formattingBarOpen,
-    toolbarOpen: src.toolbarOpen,
   };
 }
 
@@ -718,11 +700,6 @@ export async function restoreLayout(s: SerNode): Promise<void> {
           // gets refreshed by the first loadTabContent.
           readMode: false,
           fsWritable: true,
-          // Formatting bar + the master toolbar both start collapsed
-          // on every restore so the editor chrome is minimal until
-          // the user asks for it.
-          formattingBarOpen: false,
-          toolbarOpen: false,
         };
         p.tabs.push(tab);
         if (sertab.a) p.activeTabId = tab.id;

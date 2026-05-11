@@ -18,6 +18,7 @@
 
   import FileEditorTab from "./FileEditorTab.svelte";
   import { tabLabel, tabTooltip } from "../state/tabs.svelte";
+  import { tabMenu, toggleTabMenu } from "../state/tabMenu.svelte";
 
   let { pane }: { pane: LeafNode } = $props();
 
@@ -383,20 +384,33 @@
         {#if isDirty(t)}
           <span class="dirty unsaved" title="unsaved changes">●</span>
         {/if}
-        <!-- Per-tab toolbar toggle. Reveals or hides the editor's
-             entire tab-bar (Aa, page-width, formatting group, mode
-             toggle, inspector toggle). Per-tab state so each open
-             file can keep its chrome where the user left it. -->
+        <!-- Per-tab menu. Opens a popover anchored to this button
+             with the per-file affordances (formatting toolbar, zoom,
+             duplicate, reveal in browser, source toggle, outline
+             toggle). State is shared via tabMenu.svelte so the
+             FileEditorTab body can render the bubble in its own
+             coordinate space. -->
         <button
           class="tb-toggle"
-          class:on={t.kind === "file" && t.toolbarOpen}
-          aria-label="toggle editor toolbar"
-          aria-pressed={t.kind === "file" && t.toolbarOpen}
-          title={t.kind === "file" && t.toolbarOpen ? "hide toolbar" : "show toolbar"}
+          class:on={t.kind === "file" && tabMenu.openForTabId === t.id}
+          aria-label="open tab menu"
+          aria-haspopup="menu"
+          aria-expanded={t.kind === "file" && tabMenu.openForTabId === t.id}
+          title="tab menu"
           onmousedown={(e) => e.stopPropagation()}
           onclick={(e) => {
             e.stopPropagation();
-            if (t.kind === "file") t.toolbarOpen = !t.toolbarOpen;
+            if (t.kind !== "file") return;
+            // Make sure the click also focuses this tab so the bubble
+            // operates on the file that's about to render.
+            pane.activeTabId = t.id;
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            toggleTabMenu(t.id, {
+              left: r.left,
+              top: r.top,
+              right: r.right,
+              bottom: r.bottom,
+            });
           }}
         >⋯</button>
         <button

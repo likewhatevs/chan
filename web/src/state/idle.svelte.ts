@@ -5,11 +5,18 @@
 // Any of the watched events flips it back to false and restarts the
 // timer.
 //
-// Reset triggers: mousedown, click, wheel, scroll, keydown, touchstart,
-// touchmove. Pointer hover (`mousemove`) is intentionally NOT a reset
-// trigger: a user reading should be able to leave their cursor still
-// and have the pills fade. The user reactivates by scrolling or
-// tapping anywhere; both produce events on this list.
+// Reset triggers: mousemove, mousedown, click, wheel, scroll,
+// touchstart, touchmove. Keyboard input (`keydown`) is intentionally
+// NOT a reset trigger: typing or arrow-key caret motion should leave
+// the floating pills hidden so the writing surface stays uncluttered.
+// Mouse motion IS a reset trigger so the user "reaching for the
+// chrome" (any cursor twitch) brings the pill back into view; once
+// the mouse stops moving for IDLE_MS the pill fades again.
+//
+// Boot behavior: idle.active starts false, so the pill is visible
+// when the app loads / a new tab opens; the very first arm() starts
+// the fade timer, so if the user never moves the mouse the pill
+// fades on its own after IDLE_MS.
 //
 // Pin mechanism: while any consumer holds a pin (typically because the
 // mouse is hovering over an accessory bar), `idle.active` stays false
@@ -90,11 +97,11 @@ export function pinAccessory(): () => void {
 export function installIdleTracker(): () => void {
   if (typeof window === "undefined") return () => {};
   const events = [
+    "mousemove",
     "mousedown",
     "click",
     "wheel",
     "scroll",
-    "keydown",
     "touchstart",
     "touchmove",
   ] as const;

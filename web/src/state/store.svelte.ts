@@ -1534,4 +1534,44 @@ export const fileOps = {
       ui.status = `delete failed: ${(e as Error).message}`;
     }
   },
+  /// Duplicate a file in-place. Reads the source via the API so any
+  /// unsaved buffer in the open tab is intentionally ignored — the
+  /// duplicate mirrors what's on disk, not what's in the editor.
+  /// Resolves the next free `name-copy.ext`, `name-copy-2.ext`, ...
+  /// under the same directory, creates the file, refreshes the tree,
+  /// and opens the new tab next to the source.
+  async duplicateFile(path: string): Promise<void> {
+    try {
+      const src = await api.read(path);
+      const target = nextDuplicateName(path);
+      await api.create(target, false, src.content);
+      await refreshTree();
+      await openInActivePane(target);
+      revealAndSelect(target);
+    } catch (e) {
+      ui.status = `duplicate failed: ${(e as Error).message}`;
+    }
+  },
 };
+
+/// Compute the next available "name-copy{,-N}.ext" sibling for
+/// `path`. Looks at the current tree to avoid collisions; the
+/// server still owns the final word (a concurrent create elsewhere
+/// could race), and the create call will surface that error.
+function nextDuplicateName(path: string): string {
+  const slash = path.lastIndexOf("/");
+  const dir = slash < 0 ? "" : path.slice(0, slash + 1);
+  const base = slash < 0 ? path : path.slice(slash + 1);
+  const dot = base.lastIndexOf(".");
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : "";
+  const has = (p: string): boolean => tree.entries.some((e) => e.path === p);
+  let candidate = `${dir}${stem}-copy${ext}`;
+  if (!has(candidate)) return candidate;
+  for (let n = 2; n < 1000; n++) {
+    candidate = `${dir}${stem}-copy-${n}${ext}`;
+    if (!has(candidate)) return candidate;
+  }
+  // Fall through with a timestamp suffix to break the unlikely tie.
+  return `${dir}${stem}-copy-${Date.now()}${ext}`;
+}
