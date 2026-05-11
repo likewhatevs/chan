@@ -87,18 +87,18 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubble {
     entries.forEach((row, i) => {
       const li = document.createElement("li");
       li.className = i === active ? "active" : "";
-      // Primary line: contact's display name (or the basename
-      // fallback when the import lost it). Secondary line: first
-      // email so the user can disambiguate Alice (work) from Alice
-      // (home) without committing the wrong wiki-link. The picker
-      // stays keyboard-only so we wrap both in spans the host can
-      // style independently.
+      // Primary line: the contact's display name (title / basename).
+      // Secondary line: first email, shown only when distinct from
+      // the primary so an email-only contact (no name in the source
+      // CSV) doesn't render the same string twice. The host inserts
+      // `row.label` as the link text on accept, so for email-only
+      // contacts the link text is the email itself.
+      const firstEmail = row.emails?.[0];
       const primary = document.createElement("span");
       primary.className = "md-contact-bubble-primary";
       primary.textContent = row.label;
       li.appendChild(primary);
-      const firstEmail = row.emails?.[0];
-      if (firstEmail) {
+      if (firstEmail && firstEmail !== row.label) {
         const secondary = document.createElement("span");
         secondary.className = "md-contact-bubble-secondary";
         secondary.textContent = firstEmail;
