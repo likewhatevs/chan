@@ -48,11 +48,22 @@ pub struct AppState {
     /// the server's lifetime: hardcoded to true on every tunnel run,
     /// always false on local serve. `serve_static` reads it to
     /// inject the `<meta name="chan-settings-disabled">` tag, and
-    /// the settings-area write handlers consult it via
-    /// `error::err_settings_locked` so the API can't be poked
-    /// around the greyed-out button. Read-side endpoints are left
-    /// open so the UI can still populate values in view mode.
+    /// the `tunnel_guard::settings_guard` middleware reads it to
+    /// refuse the settings-write routes server-side.
     pub settings_disabled: bool,
+    /// Snapshot of `ServeConfig::tunnel_public`. Stricter than
+    /// `settings_disabled`: only true on `--tunnel-public` runs
+    /// where the gateway is NOT authenticating the viewer. Read by:
+    ///
+    ///   - `tunnel_guard::tunnel_public_guard`: refuses
+    ///     `POST /api/llm/complete` so an anonymous visitor cannot
+    ///     spend the owner's LLM tokens;
+    ///   - the read-only handlers that would otherwise leak host
+    ///     state (`api_get_drive`, `api_get_config`,
+    ///     `api_cloud_drives`, `api_llm_status`): they strip
+    ///     absolute paths, the drive registry, and assistant
+    ///     readiness signals before serializing.
+    pub tunnel_public: bool,
     /// Last activity timestamp (unix seconds). Bumped by HTTP
     /// middleware on every request, by `ws_upgrade` on connect,
     /// and by `ws_pump` on every successful frame send. The idle
@@ -150,5 +161,77 @@ impl AppState {
             .expect("drive cell missing outside reset window")
             .indexer
             .clone()
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    //! Minimal `AppState` builder for tests that exercise the
+    //! middleware / handlers but don't need a real drive on disk.
+    //! The `drive_cell` is intentionally left `None`: callers that
+    //! try to reach into it will hit the `drive_cell missing` panic
+    //! from `AppState::drive()`, which is the right failure mode
+    //! (the test isn't supposed to touch the drive).
+    //!
+    //! The `Library` is opened against a tempfile so that
+    //! `list_drives` returns an empty Vec and registry writes don't
+    //! pollute the developer's `~/.chan/config.toml`.
+
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::{Arc, Mutex, RwLock};
+
+    use chan_drive::Library;
+    use chan_llm::LlmConfig;
+    use tokio::sync::{broadcast, watch};
+
+    use super::AppState;
+    use crate::self_writes::SelfWrites;
+    use crate::{EditorPrefs, ServerConfig};
+
+    /// Build an `AppState` with the two policy bools set to the
+    /// requested values and everything else stubbed to defaults.
+    /// The returned `AppState` is safe to wrap in `Arc` and hand to
+    /// axum extractors; reading any drive-bearing field will panic
+    /// (by design).
+    pub fn make_test_state(settings_disabled: bool, tunnel_public: bool) -> Arc<AppState> {
+        // The TempDir's path is what Library::open_at uses for any
+        // later registry writes (register_drive, set_default_drive_root,
+        // ...). Letting it drop here would delete the directory and
+        // make those writes fail with ENOENT, which is a subtle
+        // footgun for any future test that uses make_test_state and
+        // mutates the registry. Leak the guard so the directory
+        // outlives the test process: cheap (`#[cfg(test)]` only,
+        // the process exits in seconds), avoids the footgun, and is
+        // simpler than threading a lifetime through AppState.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let lib = Library::open_at(tmp.path().join("config.toml")).expect("open library");
+        std::mem::forget(tmp);
+        let (events_tx, _) = broadcast::channel::<String>(1);
+        let (index_events_tx, _) = broadcast::channel::<chan_drive::WatchEvent>(1);
+        // A never-tripped shutdown channel: tests don't run the
+        // signal watcher, so the receiver stays parked on the
+        // initial `false` value for the lifetime of the AppState.
+        // Sender is leaked so the rx isn't seen as closed.
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        std::mem::forget(shutdown_tx);
+        Arc::new(AppState {
+            library: lib,
+            drive_root: PathBuf::from("/dev/null"),
+            drive_cell: Arc::new(RwLock::new(None)),
+            token: None,
+            prefix: Arc::new(RwLock::new(String::new())),
+            settings_disabled,
+            tunnel_public,
+            events_tx,
+            index_events_tx,
+            llm_config: Arc::new(Mutex::new(LlmConfig::default())),
+            server_config: Mutex::new(ServerConfig::default()),
+            editor_prefs: Mutex::new(EditorPrefs::default()),
+            self_writes: Arc::new(SelfWrites::new()),
+            last_activity: Arc::new(AtomicU64::new(0)),
+            mcp_socket_path: None,
+            shutdown_rx,
+        })
     }
 }

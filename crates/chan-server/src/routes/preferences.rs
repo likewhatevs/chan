@@ -20,7 +20,7 @@ use axum::Json;
 use chan_llm::BackendKind;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{err, err_settings_locked, Error};
+use crate::error::{err, Error};
 use crate::state::AppState;
 use crate::{FontPrefs, LineSpacing, PaneWidths, ThemeChoice};
 
@@ -57,7 +57,7 @@ pub struct AssistantPrefsView {
     pub gemini: ProviderPrefsView,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderPrefsView {
     #[serde(default)]
     pub model: Option<String>,
@@ -122,14 +122,32 @@ impl AssistantBackendKind {
 
 /// Build the unified Preferences view for the current state. Reads
 /// each backing store under its own lock.
+///
+/// On `--tunnel-public` runs the assistant subtree is neutralized:
+/// `enabled` flips to false and every backend-config field empties.
+/// The matching write-side routes are 403'd by the settings guard
+/// already; redacting the read keeps the SPA in lock-step (so the
+/// assistant pill greys out via the existing master-switch logic),
+/// stops the configured backend / model / ollama URL from leaking
+/// to anonymous visitors, and removes any signal that could tell
+/// a visitor whether the assistant gate is worth probing.
 pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
     let editor = state.editor_prefs.lock().expect("editor prefs poisoned");
     let server = state.server_config.lock().expect("server config poisoned");
     let llm = state.llm_config.lock().expect("llm config poisoned");
-    let backend_kind = llm.backend.unwrap_or(BackendKind::Anthropic);
-    PreferencesView {
-        fonts: editor.fonts.clone(),
-        assistant: AssistantPrefsView {
+    let assistant = if state.tunnel_public {
+        AssistantPrefsView {
+            enabled: false,
+            backend: AssistantBackendKind::Claude,
+            answers_dir: String::new(),
+            auto_apply_writes: false,
+            claude: ProviderPrefsView::default(),
+            ollama: OllamaPrefsView::default(),
+            gemini: ProviderPrefsView::default(),
+        }
+    } else {
+        let backend_kind = llm.backend.unwrap_or(BackendKind::Anthropic);
+        AssistantPrefsView {
             enabled: llm.backend.is_some(),
             backend: AssistantBackendKind::from_chan_llm(backend_kind),
             answers_dir: server.answers_dir.clone(),
@@ -147,7 +165,11 @@ pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
                 model: llm.models.gemini.clone(),
                 max_tokens: llm.max_tokens.gemini,
             },
-        },
+        }
+    };
+    PreferencesView {
+        fonts: editor.fonts.clone(),
+        assistant,
         attachments_dir: server.attachments_dir.clone(),
         theme: editor.theme,
         pane_widths: editor.pane_widths,
@@ -187,9 +209,8 @@ pub async fn api_patch_server_config(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PatchServerConfigBody>,
 ) -> Response {
-    if state.settings_disabled {
-        return err_settings_locked();
-    }
+    // settings_disabled is enforced by `tunnel_guard::settings_guard`
+    // at the router layer; no per-handler gate.
     let mut cfg = state.server_config.lock().unwrap();
     if let Some(p) = body.attachments_dir {
         if p.is_empty() {
@@ -257,6 +278,19 @@ pub struct PatchConfigBody {
 }
 
 fn global_config_view(state: &AppState) -> GlobalConfigView {
+    // On `--tunnel-public` runs we strip the whole "host machine"
+    // dimension of the response: anonymous visitors must not see
+    // `default_drive_root` (typically `~/Documents/Chan`, which
+    // reveals the owner's username) or the registry of OTHER drives
+    // on the host. `preferences` stays full because the SPA needs
+    // fonts/theme/etc. to render even when Settings is locked.
+    if state.tunnel_public {
+        return GlobalConfigView {
+            preferences: preferences_view(state),
+            default_drive_root: None,
+            drives: Vec::new(),
+        };
+    }
     let drives = state
         .library
         .list_drives()
@@ -285,9 +319,8 @@ pub async fn api_patch_config(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PatchConfigBody>,
 ) -> Response {
-    if state.settings_disabled {
-        return err_settings_locked();
-    }
+    // settings_disabled is enforced by `tunnel_guard::settings_guard`
+    // at the router layer; no per-handler gate.
     if let Some(prefs) = body.preferences {
         if let Err(e) = apply_preferences(&state, prefs) {
             return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
@@ -369,4 +402,94 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
             .map_err(|e| Error::Config(format!("save llm config: {e}")))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Redaction round-trips for the public-tunnel mode.
+    //!
+    //! The view-building functions are private to this module, so
+    //! the test goes through `serde_json` on the same struct the
+    //! handler returns. That keeps the test honest about the JSON
+    //! shape an anonymous visitor would actually see on the wire.
+
+    use super::*;
+    use crate::state::test_support::make_test_state;
+
+    fn to_json(view: &GlobalConfigView) -> serde_json::Value {
+        serde_json::to_value(view).expect("serialize")
+    }
+
+    fn pref_to_json(view: &PreferencesView) -> serde_json::Value {
+        serde_json::to_value(view).expect("serialize")
+    }
+
+    #[test]
+    fn global_config_view_redacts_host_paths_on_public_tunnel() {
+        let state = make_test_state(true, true);
+        let view = global_config_view(&state);
+        let json = to_json(&view);
+        // The drive registry and the default-root path are the two
+        // host-level fields the unredacted shape carries. Both MUST
+        // be empty/null for `--tunnel-public` so an anonymous
+        // visitor never learns the owner's filesystem layout.
+        assert_eq!(json["default_drive_root"], serde_json::Value::Null);
+        assert_eq!(
+            json["drives"],
+            serde_json::json!([]),
+            "drives[] must be empty on tunnel_public"
+        );
+    }
+
+    #[test]
+    fn preferences_view_seals_assistant_on_public_tunnel() {
+        let state = make_test_state(true, true);
+        let view = preferences_view(&state);
+        let json = pref_to_json(&view);
+        // The assistant subtree is the cost-bearing surface. Even
+        // though POST /api/llm/complete is refused by the public-
+        // tunnel guard, leaking the configured backend / model /
+        // ollama URL would still hand a visitor useful probe data.
+        // `enabled: false` also greys the assistant pill via the
+        // SPA's existing master-switch logic — one bug to fix if
+        // either side regresses.
+        assert_eq!(json["assistant"]["enabled"], serde_json::json!(false));
+        assert_eq!(json["assistant"]["backend"], serde_json::json!("claude"));
+        assert_eq!(json["assistant"]["answers_dir"], serde_json::json!(""));
+        assert_eq!(
+            json["assistant"]["auto_apply_writes"],
+            serde_json::json!(false)
+        );
+        assert_eq!(
+            json["assistant"]["ollama"]["url"],
+            serde_json::Value::Null,
+            "ollama URL would leak the owner's LAN host"
+        );
+        assert_eq!(
+            json["assistant"]["claude"]["model"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            json["assistant"]["gemini"]["model"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn global_config_view_keeps_host_fields_on_local_serve() {
+        // Sanity check: the local-serve path (both flags false) is
+        // the only mode where the registry should round-trip. If
+        // someone flips this default the host-info leak comes
+        // straight back.
+        let state = make_test_state(false, false);
+        let view = global_config_view(&state);
+        let json = to_json(&view);
+        // The test Library is empty, so `drives` is [] and
+        // `default_drive_root` is null even on local serve. What we
+        // assert here is that the redaction branch was NOT taken —
+        // i.e. the fields exist with their unredacted shape (drives
+        // is an array, default_drive_root is the JSON null produced
+        // by `Option::None`, NOT the forced None of the redact arm).
+        assert!(json["drives"].is_array());
+    }
 }

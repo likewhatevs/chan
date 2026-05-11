@@ -18,7 +18,7 @@ use chan_drive::ResetMode;
 use serde::{Deserialize, Serialize};
 
 use crate::bus::make_watch_bridge;
-use crate::error::{err, err_from, err_settings_locked};
+use crate::error::{err, err_from};
 use crate::indexer::Indexer;
 use crate::state::{AppState, DriveCell};
 
@@ -64,9 +64,8 @@ pub async fn api_storage_reset(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ResetBody>,
 ) -> Response {
-    if state.settings_disabled {
-        return err_settings_locked();
-    }
+    // settings_disabled is enforced by `tunnel_guard::settings_guard`
+    // at the router layer; no per-handler gate.
     let mode: ResetMode = body.mode.into();
     // Run the reset on a blocking-thread: the drain spin-wait sleeps
     // and the chan-drive wipe walks the filesystem; neither belongs

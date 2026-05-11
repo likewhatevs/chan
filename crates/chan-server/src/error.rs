@@ -26,17 +26,33 @@ pub fn err(status: StatusCode, msg: String) -> Response {
     (status, Json(serde_json::json!({"error": msg}))).into_response()
 }
 
-/// Refusal returned by every settings-area write endpoint when the
-/// server was started with `settings_disabled = true` (today: any
-/// tunnel run). Reads stay open; only mutating routes call this.
-/// Uses 403 because the request is well-formed and authenticated by
-/// the gateway, the host policy just forbids the operation.
+/// Refusal returned by `tunnel_guard::settings_guard` when the
+/// server was started with `settings_disabled = true` (any tunnel
+/// run). 403 because the request is well-formed; the host policy
+/// just forbids the operation. Single source of truth for the
+/// error body so SPA error toasts stay consistent.
 pub fn err_settings_locked() -> Response {
     err(
         StatusCode::FORBIDDEN,
-        "settings are disabled by the host: this server is running \
-         in a mode that forbids configuration changes from the UI \
-         (tunnel mode)"
+        "settings are disabled while this drive is shared via a \
+         tunnel; configuration changes are only allowed on a local \
+         (loopback) serve"
+            .into(),
+    )
+}
+
+/// Refusal returned by `tunnel_guard::tunnel_public_guard` for
+/// cost-bearing routes that must not be reachable from anonymous
+/// visitors when the server is running with `--tunnel-public`. The
+/// drive owner's LLM tokens, the indexer's CPU/IO budget, and the
+/// keychain backends are all attached to the owner's machine; an
+/// unauthenticated visitor cannot be allowed to draw on them.
+pub fn err_tunnel_public_locked() -> Response {
+    err(
+        StatusCode::FORBIDDEN,
+        "this operation requires an authenticated session; the \
+         public tunnel does not authenticate visitors. Use a \
+         loopback serve or a private (non-public) tunnel."
             .into(),
     )
 }
@@ -74,4 +90,45 @@ pub fn err_from(e: &chan_drive::ChanError) -> Response {
         _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
     err(status, msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    async fn body_json(r: Response) -> serde_json::Value {
+        let (parts, body) = r.into_parts();
+        let bytes = to_bytes(body, 8192).await.expect("read body");
+        // Sanity: error bodies are tiny, way under 8 KiB.
+        assert_eq!(parts.status, StatusCode::FORBIDDEN);
+        serde_json::from_slice(&bytes).expect("error body is JSON")
+    }
+
+    #[tokio::test]
+    async fn err_settings_locked_shape() {
+        let v = body_json(err_settings_locked()).await;
+        let msg = v
+            .get("error")
+            .and_then(|x| x.as_str())
+            .expect("error field");
+        assert!(
+            msg.contains("settings"),
+            "wrong message: {msg:?}, must reference 'settings' so the SPA \
+             toast is recognisable"
+        );
+    }
+
+    #[tokio::test]
+    async fn err_tunnel_public_locked_shape() {
+        let v = body_json(err_tunnel_public_locked()).await;
+        let msg = v
+            .get("error")
+            .and_then(|x| x.as_str())
+            .expect("error field");
+        // The exact text is a UX choice and can drift, but the body
+        // MUST carry a `error` string field at 403 — that's the
+        // wire contract every chan-server refusal shares.
+        assert!(!msg.is_empty());
+    }
 }

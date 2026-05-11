@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::bus::LlmBroadcastListener;
 use crate::cli_resolve::{api_keys_path_string, resolve_claude_cli, resolve_gemini_cli};
-use crate::error::{err, err_llm, err_settings_locked};
+use crate::error::{err, err_llm};
 use crate::state::AppState;
 
 /// `/api/llm/status` view shape. Frontend's `LlmStatus` type is a
@@ -110,6 +110,33 @@ fn keychain_available() -> bool {
 }
 
 pub async fn api_llm_status(State(state): State<Arc<AppState>>) -> Response {
+    // Public-tunnel runs return a sealed-off status: no backend, no
+    // model, no key paths, no readiness signal. The companion
+    // `tunnel_guard::tunnel_public_guard` refuses POST
+    // /api/llm/complete anyway; this redaction stops a visitor from
+    // (a) discovering which provider the owner pays for, (b) seeing
+    // the absolute on-disk path of the keychain fallback file, and
+    // (c) probing for a misconfiguration that might let the gate
+    // through. The shape stays compatible: the SPA's existing
+    // master-switch logic greys the assistant pill when `enabled`
+    // is false, which is the same greying we want here.
+    if state.tunnel_public {
+        return Json(LlmStatus {
+            backend: backend_tag(BackendKind::Anthropic),
+            model: None,
+            key: LlmKeyView {
+                set: false,
+                source: None,
+                path: None,
+                keychain_available: false,
+            },
+            ready: false,
+            reason: None,
+            enabled: false,
+            supports_tools: true,
+        })
+        .into_response();
+    }
     let cfg = state.llm_config.lock().unwrap().clone();
     let active = cfg.backend.unwrap_or(BackendKind::Anthropic);
     let model = cfg
@@ -651,20 +678,17 @@ async fn clear_backend_key(state: &Arc<AppState>, kind: BackendKind) -> Response
     StatusCode::NO_CONTENT.into_response()
 }
 
+// All four key handlers are gated by `tunnel_guard::settings_guard`
+// at the router layer; no per-handler check.
+
 pub async fn api_llm_set_anthropic_key(
     State(state): State<Arc<AppState>>,
     Json(body): Json<SetKeyBody>,
 ) -> Response {
-    if state.settings_disabled {
-        return err_settings_locked();
-    }
     set_backend_key(&state, BackendKind::Anthropic, body.key).await
 }
 
 pub async fn api_llm_clear_anthropic_key(State(state): State<Arc<AppState>>) -> Response {
-    if state.settings_disabled {
-        return err_settings_locked();
-    }
     clear_backend_key(&state, BackendKind::Anthropic).await
 }
 
@@ -672,16 +696,10 @@ pub async fn api_llm_set_gemini_key(
     State(state): State<Arc<AppState>>,
     Json(body): Json<SetKeyBody>,
 ) -> Response {
-    if state.settings_disabled {
-        return err_settings_locked();
-    }
     set_backend_key(&state, BackendKind::Gemini, body.key).await
 }
 
 pub async fn api_llm_clear_gemini_key(State(state): State<Arc<AppState>>) -> Response {
-    if state.settings_disabled {
-        return err_settings_locked();
-    }
     clear_backend_key(&state, BackendKind::Gemini).await
 }
 

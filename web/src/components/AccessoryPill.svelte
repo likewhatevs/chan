@@ -95,7 +95,9 @@
 <button
   class="fbtn"
   class:disabled={settingsLocked}
-  title={settingsLocked ? "Settings disabled by host" : "Settings (⌘,)"}
+  title={settingsLocked
+    ? "Settings disabled while this drive is shared via a tunnel"
+    : "Settings (⌘,)"}
   aria-label="Settings"
   aria-disabled={settingsLocked}
   disabled={settingsLocked}

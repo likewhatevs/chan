@@ -31,6 +31,7 @@ mod signal;
 mod state;
 mod static_assets;
 mod store;
+mod tunnel_guard;
 mod util;
 
 pub use config::ServerConfig;
@@ -72,7 +73,7 @@ use std::time::Duration;
 
 use axum::extract::DefaultBodyLimit;
 use axum::middleware;
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post, put};
 use axum::Router;
 use chan_drive::{Drive, Library, WatchEvent};
 use chan_llm::LlmConfig;
@@ -108,13 +109,29 @@ pub struct ServeConfig {
     /// Tell the SPA shell to grey out the Settings entry point so a
     /// non-owner viewer can't open the settings panel. Surfaced to
     /// the frontend as `<meta name="chan-settings-disabled">`, and
-    /// mirrored on `AppState::settings_disabled` so the settings-
-    /// area write handlers (drive rename, prefs PATCH, LLM key set
-    /// / clear, storage reset) can refuse the request server-side
-    /// via `err_settings_locked`. Hardcoded to true on every
+    /// mirrored on `AppState::settings_disabled` so the
+    /// `tunnel_guard::settings_guard` middleware can refuse the
+    /// matching write routes server-side. Hardcoded to true on every
     /// `serve_via_tunnel` run; the local-serve path always leaves
     /// it false.
     pub settings_disabled: bool,
+    /// Treat every inbound request as anonymous: the server is
+    /// publicly tunneled (`--tunnel-public`), the gateway is not
+    /// authenticating visitors, and the drive owner cannot be
+    /// distinguished from a hostile third party. Stricter than
+    /// `settings_disabled`:
+    ///
+    ///   - the `tunnel_guard::tunnel_public_guard` middleware refuses
+    ///     cost-bearing routes (today `POST /api/llm/complete`);
+    ///   - read-only handlers that expose host-level data
+    ///     (`GET /api/drive`, `GET /api/config`, `GET /api/cloud-drives`,
+    ///     `GET /api/llm/status`) redact paths and disable signals
+    ///     before serializing.
+    ///
+    /// Hosted (OAuth-gated) tunnel runs leave this false: the
+    /// gateway has already proven the viewer is the drive owner, so
+    /// the assistant and host-level reads stay available.
+    pub tunnel_public: bool,
 }
 
 /// Resolved at boot for the launch banner / browser handoff.
@@ -337,6 +354,7 @@ async fn build_app(
         token: token.clone(),
         prefix: prefix.clone(),
         settings_disabled: config.settings_disabled,
+        tunnel_public: config.tunnel_public,
         events_tx,
         index_events_tx,
         llm_config: llm_config_arc,
@@ -498,9 +516,13 @@ pub async fn serve_via_tunnel(
         // a browser the owner doesn't fully control (different
         // device, shared workstation), so the conservative default
         // is to keep the panel inert until a dedicated opt-back-in
-        // flag exists. `public` still controls the gateway-level
-        // auth behaviour and is unrelated to this gate.
+        // flag exists.
         settings_disabled: true,
+        // Forward the public-tunnel flag verbatim. The handlers /
+        // middleware consume this for the harsher restrictions that
+        // only apply when the gateway is not authenticating the
+        // viewer (assistant gate, host-path redactions).
+        tunnel_public: public,
     };
     let artifacts = build_app(library, drive, &server_config).await?;
     let prefix_handle = artifacts.prefix.clone();
@@ -611,8 +633,63 @@ pub async fn serve_via_tunnel(
 }
 
 fn router(state: Arc<AppState>) -> Router {
+    // ---- Settings-write gate ----------------------------------------
+    //
+    // Refused with 403 by `tunnel_guard::settings_guard` on any
+    // tunnel run (hosted OR public). Reads of the same areas stay
+    // open via the main router below; the SPA can still populate
+    // values in view mode. The middleware runs as a route_layer on
+    // this sub-router so it fires before the JSON / query extractors
+    // and a malformed body cannot leak the request schema via 422.
+    let settings_writes = Router::new()
+        .route("/api/drive", patch(api_patch_drive))
+        .route("/api/config", patch(api_patch_config))
+        .route("/api/server/config", patch(api_patch_server_config))
+        .route(
+            "/api/llm/keys/anthropic",
+            put(api_llm_set_anthropic_key).delete(api_llm_clear_anthropic_key),
+        )
+        .route(
+            "/api/llm/keys/gemini",
+            put(api_llm_set_gemini_key).delete(api_llm_clear_gemini_key),
+        )
+        .route("/api/storage/reset", post(api_storage_reset))
+        .route("/api/index/rebuild", post(api_index_rebuild))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            tunnel_guard::settings_guard,
+        ));
+
+    // ---- Public-tunnel gate -----------------------------------------
+    //
+    // Refused with 403 by `tunnel_guard::tunnel_public_guard` only
+    // when the server was started with `--tunnel-public`. The hosted
+    // (OAuth-gated) tunnel run leaves this open so the owner viewing
+    // their drive from another device can still use the assistant
+    // their machine paid for.
+    //
+    // /api/llm/complete is the cost-bearing route: a single call can
+    // burn minutes of Claude/Gemini token budget. The settings-write
+    // gate alone does not cover it (no settings are mutated), so this
+    // separate layer carries the assistant-completion lockdown.
+    let tunnel_public_block = Router::new()
+        .route("/api/llm/complete", post(api_llm_complete))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            tunnel_guard::tunnel_public_guard,
+        ));
+
+    // ---- Open routes ------------------------------------------------
+    //
+    // Everything not in the two gated sub-routers above: read-only
+    // endpoints, drive-content writes (allowed in tunnel mode by
+    // design), and per-window session storage. The read-side handlers
+    // that would otherwise expose host-level data
+    // (`api_get_drive`, `api_get_config`, `api_cloud_drives`,
+    // `api_llm_status`) redact the response themselves when
+    // `state.tunnel_public` is set.
     let api = Router::new()
-        .route("/api/drive", get(api_get_drive).patch(api_patch_drive))
+        .route("/api/drive", get(api_get_drive))
         .route("/api/cloud-drives", get(api_cloud_drives))
         .route("/api/files", get(api_list_files).post(api_create_file))
         .route(
@@ -625,7 +702,6 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/search/files", get(api_search_files))
         .route("/api/search/content", get(api_search_content))
         .route("/api/index/status", get(api_index_status))
-        .route("/api/index/rebuild", post(api_index_rebuild))
         .route("/api/link-targets", get(api_link_targets))
         .route("/api/resolve-link", get(api_resolve_link))
         .route("/api/headings/*path", get(api_headings))
@@ -634,27 +710,11 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/backlinks/*path", get(api_backlinks))
         .route("/api/llm/status", get(api_llm_status))
         .route("/api/llm/tools", get(api_llm_tools))
-        .route("/api/llm/complete", post(api_llm_complete))
-        // Per-provider key writes. Path shape matches the frontend's
-        // /api/llm/keys/<provider> (a stable contract across the
-        // chan-writer surfaces); the older /api/llm/<provider>/key
-        // form was a port artifact and is gone.
-        .route(
-            "/api/llm/keys/anthropic",
-            axum::routing::put(api_llm_set_anthropic_key).delete(api_llm_clear_anthropic_key),
-        )
-        .route(
-            "/api/llm/keys/gemini",
-            axum::routing::put(api_llm_set_gemini_key).delete(api_llm_clear_gemini_key),
-        )
         .route("/api/llm/anthropic/models", get(api_llm_anthropic_models))
         .route("/api/llm/gemini/models", get(api_llm_gemini_models))
         .route("/api/llm/ollama/models", get(api_llm_ollama_models))
-        .route(
-            "/api/server/config",
-            get(api_get_server_config).patch(api_patch_server_config),
-        )
-        .route("/api/config", get(api_get_config).patch(api_patch_config))
+        .route("/api/server/config", get(api_get_server_config))
+        .route("/api/config", get(api_get_config))
         .route("/api/build-info", get(api_build_info))
         // Session blob keyed by window id (?w=<id>). The frontend
         // sends the window id as a query string (path-segment encode
@@ -703,9 +763,10 @@ fn router(state: Arc<AppState>) -> Router {
             "/api/contacts/import",
             post(api_post_contacts_import).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
         )
-        .route("/api/storage/reset", post(api_storage_reset))
         .route("/api/health", get(api_health))
-        .route("/ws", get(ws_upgrade));
+        .route("/ws", get(ws_upgrade))
+        .merge(settings_writes)
+        .merge(tunnel_public_block);
     Router::new()
         .merge(api)
         .fallback(serve_static)

@@ -784,8 +784,10 @@ async fn cmd_serve(
         // off-loopback bind) gets the browser handoff.
         open_browser: true,
         // Local serve always trusts the operator; the greyed-
-        // Settings UI is currently only used in tunnel mode.
+        // Settings UI and the public-tunnel redactions are tunnel-
+        // mode only.
         settings_disabled: false,
+        tunnel_public: false,
     };
     chan_server::serve(lib, drive, config)
         .await
