@@ -2018,16 +2018,11 @@
       dismissImageOverlay();
       openImageZoom(src);
     });
-    const resizeBtn = makeBtn("Resize", () => {
-      dismissImageOverlay();
-      promptImageResize(pos);
-    });
     const editBtn = makeBtn("Edit", () => {
       dismissImageOverlay();
       enterImageEditAt(pos, node);
     });
     wrap.appendChild(zoomBtn);
-    wrap.appendChild(resizeBtn);
     wrap.appendChild(editBtn);
     document.body.appendChild(wrap);
     // Position over the image's top-right corner with a small inset
@@ -2063,46 +2058,6 @@
       document.removeEventListener("keydown", onKey, true);
       wrap.remove();
     };
-  }
-
-  /// Ask the user for a target pixel width and write the answer
-  /// into the image's `src` as the `#w=N` fragment. We use
-  /// `window.prompt` for now because the overlay needs to dismiss
-  /// before we can show a richer inline input without fighting the
-  /// editor's focus management. The image extension's renderHTML
-  /// reads the fragment and applies `width: Npx` on render.
-  function promptImageResize(pos: number): void {
-    if (!editor) return;
-    const ed = editor;
-    const node = ed.state.doc.nodeAt(pos);
-    if (!node || node.type.name !== "image") return;
-    const rawSrc = (node.attrs.src as string) ?? "";
-    // Parse any existing `#w=N` so the prompt's default reflects the
-    // current width. Use a non-greedy match so we don't pick up
-    // unrelated fragment content the user may have written by hand.
-    const widthMatch = rawSrc.match(/#w=(\d+)/);
-    const currentWidth = widthMatch ? widthMatch[1] : "";
-    const reply = window.prompt(
-      "Width in pixels (empty for natural size):",
-      currentWidth,
-    );
-    if (reply === null) return; // cancelled
-    const trimmed = reply.trim();
-    let nextSrc: string;
-    // Drop any existing `#w=N` first; we'll re-attach if the user
-    // supplied a value. Preserve anything else in the fragment
-    // (rare for images but possible).
-    const base = rawSrc.replace(/#w=\d+/, "").replace(/#$/, "");
-    if (trimmed === "") {
-      nextSrc = base;
-    } else {
-      const n = parseInt(trimmed, 10);
-      if (!Number.isFinite(n) || n <= 0) return;
-      nextSrc = base.includes("#")
-        ? `${base}&w=${n}`
-        : `${base}#w=${n}`;
-    }
-    ed.view.dispatch(ed.state.tr.setNodeAttribute(pos, "src", nextSrc));
   }
 
   /// Fullscreen image viewer. Renders the image centered on a dark
@@ -2290,11 +2245,20 @@
     // via `maybeOpenAtomEditAtSelection`; click is the slow path
     // because clicks frequently land on an image as part of a
     // resize / select gesture rather than an explicit "edit" intent.
-    if (editor && t.tagName === "IMG" && host && host.contains(t)) {
+    // Image atom click target: the rendered <img>, or the wrap span
+    // the node view inserts to anchor the drag-resize handle. Walk
+    // up if the click landed on the handle so we still resolve the
+    // image atom's position. Clicks on the handle itself preventDefault
+    // up in the handle's mousedown listener so they never reach here.
+    const imgEl =
+      t.tagName === "IMG"
+        ? (t as HTMLImageElement)
+        : (t.closest(".md-image-wrap")?.querySelector("img") as HTMLImageElement | null);
+    if (editor && imgEl && host && host.contains(imgEl)) {
       const ed = editor;
       let pos: number;
       try {
-        pos = ed.view.posAtDOM(t, 0);
+        pos = ed.view.posAtDOM(imgEl, 0);
       } catch {
         return;
       }
@@ -2310,7 +2274,7 @@
         }
       }
       e.preventDefault();
-      openImageActionOverlay(t, pos, node);
+      openImageActionOverlay(imgEl, pos, node);
       return;
     }
     if (t.matches("[data-md-date]")) {
@@ -3219,10 +3183,10 @@
     transition: opacity 0.15s ease;
   }
   :global(.md-image-wrap:hover .md-image-handle),
-  :global(.md-image-wrap.resizing .md-image-handle) {
+  :global(.md-image-wrap.is-resizing .md-image-handle) {
     opacity: 1;
   }
-  :global(.md-image-wrap.resizing img) {
+  :global(.md-image-wrap.is-resizing img) {
     /* Disable image-drag during resize so the user doesn't
        accidentally drag the image instead of grabbing the handle. */
     pointer-events: none;

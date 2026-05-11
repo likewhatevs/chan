@@ -80,9 +80,20 @@ export function resolveImageSrc(src: string, fromPath?: string | null): string {
   return withTokenQuery(`/api/files/${encoded}`);
 }
 
+/// Build the new src string for an image after resizing. `width`
+/// of null strips the `#w=N` fragment; other fragment parts (rare
+/// for images, but possible if a user hand-wrote one) are kept.
+export function setImageWidth(src: string, width: number | null): string {
+  const { base } = parseImageSrc(src);
+  if (width == null) return base;
+  return base.includes("#") ? `${base}&w=${width}` : `${base}#w=${width}`;
+}
+
 /// TipTap node spec. The factory closes over `getFromPath` so the
 /// renderHTML always sees the live editing file when resolving
-/// relative srcs (the prop reference is captured by the caller).
+/// relative srcs. `renderHTML` covers the static path (copy /
+/// initial render); `addNodeView` overrides the in-editor render
+/// so we can attach a bottom-right drag handle for resizing.
 export function createImageNode(getFromPath: () => string | null) {
   return Image.extend({
     renderHTML({ HTMLAttributes }) {
@@ -96,6 +107,91 @@ export function createImageNode(getFromPath: () => string | null) {
       if (resolved) extra.src = resolved;
       if (width != null) extra.style = `width: ${width}px`;
       return ["img", mergeAttributes(HTMLAttributes, extra)];
+    },
+    addNodeView() {
+      // Wrap the `<img>` in a span with a drag-resize handle pinned
+      // to the bottom-right corner. The handle is muted until the
+      // wrap is hovered or the image is PM-selected; dragging it
+      // updates `img.style.width` live, and the final pixel width
+      // is committed into the src as the `#w=N` fragment on mouseup.
+      return ({ node, getPos, editor }) => {
+        const wrap = document.createElement("span");
+        wrap.className = "md-image-wrap";
+        const img = document.createElement("img");
+        img.draggable = false;
+        const apply = (n: typeof node) => {
+          const raw = (n.attrs.src as string | null) ?? "";
+          const resolved = resolveImageSrc(raw, getFromPath());
+          const { width } = parseImageSrc(raw);
+          if (resolved) img.src = resolved;
+          else img.removeAttribute("src");
+          img.alt = (n.attrs.alt as string | null) ?? "";
+          if (width != null) img.style.width = `${width}px`;
+          else img.style.removeProperty("width");
+        };
+        apply(node);
+        wrap.appendChild(img);
+
+        const handle = document.createElement("span");
+        handle.className = "md-image-handle";
+        handle.title = "drag to resize";
+        wrap.appendChild(handle);
+
+        handle.addEventListener("mousedown", (e) => {
+          // PM would otherwise interpret the mousedown as a click
+          // on the image atom and re-route to its own selection /
+          // overlay handler. preventDefault keeps the editor's
+          // selection alive; stopPropagation keeps the overlay
+          // click handler from running.
+          e.preventDefault();
+          e.stopPropagation();
+          const startX = e.clientX;
+          const startW = img.getBoundingClientRect().width;
+          wrap.classList.add("is-resizing");
+          const onMove = (ev: MouseEvent): void => {
+            const delta = ev.clientX - startX;
+            // Floor at 40px so the handle stays reachable; CSS
+            // `max-width: 100%` on the img caps the upper bound to
+            // the column width without us needing an explicit ceiling.
+            const next = Math.max(40, Math.round(startW + delta));
+            img.style.width = `${next}px`;
+          };
+          const onUp = (): void => {
+            wrap.classList.remove("is-resizing");
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+            const finalW = Math.round(img.getBoundingClientRect().width);
+            const pos = getPos?.();
+            if (typeof pos !== "number") return;
+            const current =
+              (editor.state.doc.nodeAt(pos)?.attrs.src as string | null) ?? "";
+            const nextSrc = setImageWidth(current, finalW);
+            if (nextSrc === current) return;
+            editor.view.dispatch(
+              editor.state.tr.setNodeAttribute(pos, "src", nextSrc),
+            );
+          };
+          document.addEventListener("mousemove", onMove);
+          document.addEventListener("mouseup", onUp);
+        });
+
+        return {
+          dom: wrap,
+          update(updated) {
+            if (updated.type !== node.type) return false;
+            apply(updated);
+            return true;
+          },
+          // PM would otherwise try to reconcile the inline-styled
+          // img's mutations into a fresh node view on every drag
+          // tick, fighting the live width state. Ignore mutations
+          // inside the wrap; the explicit `update` call from PM
+          // already covers attribute changes.
+          ignoreMutation() {
+            return true;
+          },
+        };
+      };
     },
   }).configure({
     inline: true,
