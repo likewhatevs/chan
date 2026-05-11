@@ -427,7 +427,12 @@
      button regardless of which pane the user clicked in; the
      translateX clamp keeps it on-screen for tabs that sit near the
      right edge. Width matches the longest action label plus the
-     icon column so the buttons read as a tidy list. */
+     icon column so the buttons read as a tidy list.
+
+     Bouncy reveal: the bubble enters via a `bubble-pop` keyframe
+     using the same easeOutBack curve as the BottomPill (small
+     overshoot on the way in so the menu reads as alive rather than
+     mechanical). Hover gives a tiny scale-up for the same reason. */
   .tab-menu-bubble {
     position: fixed;
     z-index: 50;
@@ -443,8 +448,35 @@
     overflow-y: auto;
     color: var(--text);
     font-size: 13px;
-    /* Anti-overflow on narrow viewports. */
-    transform: translateX(0);
+    /* Anchor the bouncy reveal to the top-left of the bubble so the
+       overshoot grows away from the trigger button rather than from
+       the center of the popover (which would visually drift it
+       sideways during the bounce). */
+    transform-origin: top left;
+    animation: bubble-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .tab-menu-bubble:hover {
+    transform: scale(1.015);
+  }
+  @keyframes bubble-pop {
+    0% {
+      opacity: 0;
+      transform: scale(0.92);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tab-menu-bubble {
+      animation: none;
+      transition: none;
+    }
+    .tab-menu-bubble:hover {
+      transform: none;
+    }
   }
   .fmt-row {
     display: flex;

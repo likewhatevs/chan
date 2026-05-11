@@ -5,18 +5,21 @@
 // Any of the watched events flips it back to false and restarts the
 // timer.
 //
-// Reset triggers: mousemove, mousedown, click, wheel, scroll,
-// touchstart, touchmove. Keyboard input (`keydown`) is intentionally
-// NOT a reset trigger: typing or arrow-key caret motion should leave
-// the floating pills hidden so the writing surface stays uncluttered.
-// Mouse motion IS a reset trigger so the user "reaching for the
-// chrome" (any cursor twitch) brings the pill back into view; once
-// the mouse stops moving for IDLE_MS the pill fades again.
+// Reset triggers: mousedown, click, touchstart, plus a
+// `selectionchange` listener that only fires when a real, non-empty
+// text selection lands (the pill's two useful actions on a selection
+// are Search and Assistant). Keyboard input (`keydown`) is NOT a
+// reset trigger: typing or arrow-key caret motion should leave the
+// floating pills hidden. Mouse motion / wheel / scroll are NOT reset
+// triggers either: cursor-following scroll while the user types
+// would otherwise pop the pill back on every line wrap, and ambient
+// mouse twitches over the writing surface are not real intent. The
+// pill stays hidden until the user clicks or selects text.
 //
 // Boot behavior: idle.active starts false, so the pill is visible
 // when the app loads / a new tab opens; the very first arm() starts
-// the fade timer, so if the user never moves the mouse the pill
-// fades on its own after IDLE_MS.
+// the fade timer, so if the user never interacts the pill fades on
+// its own after IDLE_MS.
 //
 // Pin mechanism: while any consumer holds a pin (typically because the
 // mouse is hovering over an accessory bar), `idle.active` stays false
@@ -92,22 +95,31 @@ export function pinAccessory(): () => void {
   };
 }
 
+/// Selection-change listener: only counts as activity when the user
+/// actually has a non-empty selection. A bare caret move (no
+/// selection) is treated as keyboard activity and intentionally
+/// ignored so the pill stays hidden while the user is typing.
+function onSelectionChange(): void {
+  if (typeof window === "undefined") return;
+  const sel = window.getSelection();
+  if (!sel) return;
+  if (sel.isCollapsed) return;
+  const text = sel.toString();
+  if (text.length === 0) return;
+  onActivity();
+}
+
 /// Install once at app startup. Returns a teardown for symmetry, but
 /// the listener is intended to live for the entire app lifetime.
 export function installIdleTracker(): () => void {
   if (typeof window === "undefined") return () => {};
-  const events = [
-    "mousemove",
-    "mousedown",
-    "click",
-    "wheel",
-    "scroll",
-    "touchstart",
-    "touchmove",
-  ] as const;
+  const events = ["mousedown", "click", "touchstart"] as const;
   for (const ev of events) {
     window.addEventListener(ev, onActivity, { passive: true, capture: true });
   }
+  document.addEventListener("selectionchange", onSelectionChange, {
+    passive: true,
+  });
   arm();
   return () => {
     for (const ev of events) {
@@ -117,6 +129,7 @@ export function installIdleTracker(): () => void {
         { capture: true } as EventListenerOptions,
       );
     }
+    document.removeEventListener("selectionchange", onSelectionChange);
     if (idleTimer) {
       clearTimeout(idleTimer);
       idleTimer = null;

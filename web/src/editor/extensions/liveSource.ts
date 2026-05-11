@@ -211,6 +211,30 @@ export const LiveSourceExtension = Extension.create({
               );
             }
 
+            // 1b. Blockquote cursor-in marker. Mirrors the codeBlock
+            //     branch: when the caret is inside a blockquote, tag
+            //     the wrapping `<blockquote>` so CSS can hide the
+            //     "quote" badge (visible by default, like the
+            //     codeblock language badge) and surface the `> `
+            //     source hint on the active line. The caret can sit
+            //     at any depth inside a blockquote (paragraphs,
+            //     nested lists), so we walk up from $from to find
+            //     the enclosing blockquote node rather than checking
+            //     only the direct parent.
+            for (let d = $from.depth; d > 0; d--) {
+              const node = $from.node(d);
+              if (node.type.name === "blockquote") {
+                const blockStart = $from.before(d);
+                const blockEnd = blockStart + node.nodeSize;
+                decos.push(
+                  Decoration.node(blockStart, blockEnd, {
+                    "data-cursor-in": "",
+                  }),
+                );
+                break;
+              }
+            }
+
             // 1. Heading prefix. Wraps the entire heading block so
             //    the CSS `::before` selector lands on the H1..H6
             //    element. data-cursor-prefix carries the hash run.

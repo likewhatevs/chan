@@ -156,9 +156,10 @@
   let tagBubble: TagBubble | undefined;
 
   /// `@contact` picker bubble. Opens on a fresh `@` keystroke at
-  /// start-of-word; replaces the `@<query>` range with a wiki-link
-  /// to the chosen contact's note. Dismisses on Esc, on `@` then
-  /// space (empty query), on the caret leaving the trigger range
+  /// start-of-word; replaces the `@<query>` range with a standard
+  /// markdown link (`[Label](rel/path/to/contact.md)`) to the
+  /// chosen contact's note. Dismisses on Esc, on `@` then space
+  /// (empty query), on the caret leaving the trigger range
   /// (different line / different block), or on accept.
   let contactBubble: ContactBubble | undefined;
 
@@ -244,6 +245,15 @@
       | null;
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  /// Move the caret to the end of the document and focus the editor.
+  /// Used by callers that prefill `value` with seeded content (e.g.
+  /// the assistant prompt quoting a selection) and want the user to
+  /// keep typing past the seed rather than land at the document
+  /// start where the seed text begins.
+  export function focusEnd(): void {
+    editor?.commands.focus("end");
   }
 
   // ---- formatting API ---------------------------------------------------
@@ -1521,16 +1531,31 @@
     const picked = contactBubble.accept();
     if (!picked) return;
     dismissContactBubble();
-    // Insert the picked contact as a wiki-link to its note. The
-    // `[[` parser strips the `.md` suffix; we strip here too so
-    // the on-disk markdown stays clean. The decorator pass on the
-    // next render will pill it like any other wiki-link.
-    const target = picked.path.replace(/\.md$/i, "");
+    // Insert the picked contact as a standard markdown link with a
+    // file-relative URL to the contact note. We deliberately do NOT
+    // use the `[[wiki-link]]` form here: contact mentions should
+    // round-trip as plain markdown so external readers see a normal
+    // link, and the rendered chip is selected by `data-refkind` on
+    // the resolved target (graph kind, not syntax). When there's no
+    // `currentPath` (assistant prompt and other no-source callers),
+    // fall back to the drive-rooted form.
+    const rel = currentPath
+      ? relativizePath(picked.path, currentPath)
+      : picked.path;
+    const href = rel
+      .split("/")
+      .map((s) => encodeURIComponent(s).replace(/%2F/g, "/"))
+      .join("/");
+    const linkMark = editor.schema.marks.link;
     editor
       .chain()
       .focus()
       .deleteRange({ from: range.start, to: range.end })
-      .insertContent(`[[${target}]]`)
+      .insertContent({
+        type: "text",
+        text: picked.label,
+        marks: linkMark ? [{ type: "link", attrs: { href } }] : [],
+      })
       .insertContent(" ")
       .run();
   }
@@ -2697,13 +2722,52 @@
     color: var(--text-secondary);
     text-decoration: line-through;
   }
+  /* Blockquote chrome: a card-like container with a left rail and a
+     small "Quote" badge in the top-right corner, mirroring the
+     CodeBlockFenced badge so the affordance reads as one of the
+     "block kinds" the editor offers. The badge sits as a `::before`
+     pseudo (no NodeView needed): the liveSource plugin adds
+     `data-cursor-in` when the caret enters the blockquote, and the
+     paired CSS rule hides the badge so it doesn't crowd the active
+     editing surface. Enter on an empty trailing line exits the
+     quote — same as the stock TipTap blockquote. Trigger to enter:
+     `> ` at the start of a line (StarterKit's default input rule). */
   :global(.md-wysiwyg blockquote) {
+    position: relative;
     border-left: 3px solid var(--border);
-    padding-left: 0.75rem;
+    padding: 0.4rem 0.75rem 0.4rem 0.9rem;
     color: var(--text-secondary);
     margin: 0.5em 0;
+    background: var(--bg-card);
+    border-radius: 4px;
     font-family: var(--chan-font-quote-family);
     font-size: var(--chan-font-quote-size, 15px);
+  }
+  :global(.md-wysiwyg blockquote)::before {
+    content: "Quote";
+    position: absolute;
+    top: 4px;
+    right: 8px;
+    font-family: var(--chan-font-mono-family, monospace);
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+    opacity: 0.55;
+    pointer-events: none;
+    user-select: none;
+    transition: opacity 120ms ease;
+  }
+  /* When the caret is inside the blockquote, hide the badge to keep
+     the editing surface uncluttered (same UX rhythm as the codeblock
+     language badge that disappears when the caret enters). */
+  :global(.md-wysiwyg blockquote[data-cursor-in])::before {
+    opacity: 0;
+  }
+  :global(.md-wysiwyg blockquote > :first-child) {
+    margin-top: 0;
+  }
+  :global(.md-wysiwyg blockquote > :last-child) {
+    margin-bottom: 0;
   }
   :global(.md-wysiwyg pre) {
     background: var(--code-bg);
@@ -2951,19 +3015,26 @@
   :global(.md-pick-url:focus),
   :global(.md-pick-alt:focus) { border-color: var(--link); }
 
-  /* Wiki-link bubble. Anchored under the caret while the user
-     types between `[[ ]]`. Non-focus-stealing: no inputs, no
-     tab targets, only mousedown handlers that preserve the
-     editor selection. */
-  :global(.md-wiki-bubble) {
+  /* Shared chrome for every editor popover (wiki / image / tag /
+     contact). Each variant below only overrides width and any
+     content-specific bits so the bubbles read as the same widget
+     across triggers. */
+  :global(.md-bubble) {
     background: var(--bg-elev);
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 4px;
     box-shadow: 0 4px 12px rgba(0,0,0,.4);
-    width: 360px;
     font-size: 13px;
     user-select: none;
+  }
+
+  /* Wiki-link bubble. Anchored under the caret while the user
+     types between `[[ ]]`. Non-focus-stealing: no inputs, no
+     tab targets, only mousedown handlers that preserve the
+     editor selection. */
+  :global(.md-wiki-bubble) {
+    width: 360px;
   }
   :global(.md-wiki-bubble-head) {
     padding: .35rem .55rem;
@@ -3337,14 +3408,7 @@
   /* Tag autocomplete bubble. Same anchored-under-caret pattern as
      the wiki bubble; narrower because tag names are short. */
   :global(.md-tag-bubble) {
-    background: var(--bg-elev);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    box-shadow: 0 4px 12px rgba(0,0,0,.4);
     width: 220px;
-    font-size: 13px;
-    user-select: none;
   }
   :global(.md-tag-bubble-results) {
     list-style: none; margin: 0; padding: 0;
@@ -3360,20 +3424,15 @@
 
   /* Contact picker bubble (@). Same anchored-under-caret pattern;
      two-line rows (display name + first email) so the user can tell
-     similarly-named contacts apart without expanding the popover. */
+     similarly-named contacts apart without expanding the popover.
+     Width + result-list geometry match the wiki / image bubbles so
+     the three pickers read as the same widget. */
   :global(.md-contact-bubble) {
-    background: var(--bg-elev);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    box-shadow: 0 4px 12px rgba(0,0,0,.4);
-    width: 280px;
-    font-size: 13px;
-    user-select: none;
+    width: 360px;
   }
   :global(.md-contact-bubble-results) {
     list-style: none; margin: 0; padding: 0;
-    max-height: 220px; overflow-y: auto;
+    max-height: 180px; overflow-y: auto;
   }
   :global(.md-contact-bubble-results li) {
     padding: .3rem .55rem; cursor: pointer;
@@ -3483,14 +3542,7 @@
      preview, results, alt-echo. Width matches the wiki bubble so
      the visual rhythm stays consistent across triggers. */
   :global(.md-image-bubble) {
-    background: var(--bg-elev);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    box-shadow: 0 4px 12px rgba(0,0,0,.4);
     width: 360px;
-    font-size: 13px;
-    user-select: none;
   }
   /* Thumbnail preview of the active result. Fixed max height so a
      tall image doesn't push the result list off-screen. */

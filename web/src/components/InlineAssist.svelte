@@ -475,9 +475,26 @@
     const id = currentContext.id;
     if (lastOpenedContextId === id) return;
     lastOpenedContextId = id;
-    savedSelection = captureSelection();
+    const sel = captureSelection();
     error = null;
-    prompt = "";
+    // If the user had real text selected when they hit the assistant
+    // shortcut, prefill the prompt with the selection as a markdown
+    // blockquote followed by a blank line so the caret lands on a
+    // fresh paragraph beneath. Making the reference explicit in the
+    // prompt avoids the "what selection?" confusion of the silent
+    // `# Selection` block, and the model still sees the same text
+    // since the quote ships as part of the instruction. We clear
+    // `savedSelection` in this branch so the user message doesn't
+    // duplicate the same text under both `# Instruction` and
+    // `# Selection`.
+    if (sel) {
+      prompt = formatQuotePrefill(sel);
+      savedSelection = null;
+      queueMicrotask(() => wysiwygRef?.focusEnd());
+    } else {
+      prompt = "";
+      savedSelection = null;
+    }
     void ensureToolsLoaded();
     void refreshLlmStatus();
     if (currentContext.kind === "file") {
@@ -490,6 +507,24 @@
     }
     queueMicrotask(scrollToBottom);
   });
+
+  /// Format a selection as a markdown blockquote prefix for the
+  /// prompt: each line gets `> `, blank inner lines become bare `>`,
+  /// and we terminate with `\n\n` so the caret lands on a fresh,
+  /// empty paragraph below the quote. A single trailing newline on
+  /// the selection (common when the user triple-clicked a paragraph)
+  /// is stripped before quoting so it doesn't become a phantom
+  /// empty `>` line at the bottom of the block. CR/LF is normalised
+  /// so a paste from Windows-style sources still renders one quote
+  /// block instead of N short ones.
+  function formatQuotePrefill(text: string): string {
+    const normalised = text.replace(/\r\n?/g, "\n").replace(/\n$/, "");
+    const quoted = normalised
+      .split("\n")
+      .map((l) => (l.length === 0 ? ">" : `> ${l}`))
+      .join("\n");
+    return `${quoted}\n\n`;
+  }
 
   /// Read the persisted file conversation back from
   /// `.chan/assistant/<sha256>.json`. Only called for file
