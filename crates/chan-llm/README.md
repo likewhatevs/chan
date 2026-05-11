@@ -65,6 +65,38 @@ trait SessionListener: Send + Sync {
 }
 ```
 
+## Contacts and the graph
+
+chan-drive maintains a sqlite link graph next to every drive
+(nodes, edges, headings, tags, contacts). The editor uses it for
+the `[[` link picker, the `@` contact picker, chip rendering, and
+the graph view. None of that surface is exposed through chan-llm.
+
+This is intentional. A contact file is just a `.md` with YAML
+frontmatter (`chan.kind: contact`, plus name / email / phone
+fields); the body holds free-form notes. From the agent's
+perspective:
+
+  - **"Find Alice"**: `search_content "Alice"` (BM25 over bodies
+    and frontmatter).
+  - **"What contacts do I have?"**: `list_files` with a prefix
+    that matches the contacts directory, then `read_file` on
+    interesting hits.
+  - **"What links to this contact?"**: `search_content` for the
+    filename, or read candidate notes directly.
+
+The model parses YAML frontmatter from `read_file` output without
+needing a typed surface. Adding `list_contacts`, `backlinks`, or
+`neighbors` MCP tools would buy efficiency (avoid the
+list+read+search loop on large drives) but not new capability;
+that's tracked as
+[chan-writer/chan-core#3](https://github.com/chan-writer/chan-core/issues/3),
+not a v1 omission.
+
+The frontend reading the same files renders chips and the @ picker
+straight from chan-drive's `GraphView::contacts_filtered`, but
+nothing about that path crosses chan-llm.
+
 ## Build and test
 
 ```bash

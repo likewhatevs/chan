@@ -45,6 +45,28 @@ shaped for a future uniffi binding to Swift / Kotlin shells. No
 public `async fn`; async runs internal to the crate where it
 exists at all.
 
+## Path and link conventions
+
+Two path forms coexist on purpose:
+
+  - **API surface** (every `Drive` method, MCP tool `path` args,
+    graph row keys) takes one canonical form: a drive-rooted POSIX
+    rel path with no leading slash and no `..`. The path sandbox
+    rejects anything else.
+  - **Inside markdown bodies**, hrefs stay in whatever form the
+    renderer expects. The GitHub convention is "relative to the
+    file that contains the link" (`./bar`, `../images/x.png`),
+    which keeps notes rendering correctly when viewed outside
+    chan (GitHub web, Obsidian, a pasted preview).
+
+`markdown::normalize_href(href, source_dir)` bridges the two: it
+accepts `./foo`, `../bar`, `/baz`, or bare `foo` and resolves
+each to the same drive-rooted destination for the graph. The
+on-disk text is never rewritten. The same normalizer ships as a
+hand-port to TypeScript so the editor's click handler agrees with
+the indexer on what each link resolves to. See `design.md` for the
+full resolution rules and the wiki-link (`[[name]]`) variant.
+
 ## Build and test
 
 From the workspace root:

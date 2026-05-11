@@ -249,6 +249,17 @@ and all its edges. `clear` wipes everything for a full rebuild.
 
 #### Link resolution
 
+Two path forms coexist in chan-drive on purpose. The Drive API
+(`read`, `write_text`, `list`, MCP tool `path` args, graph row
+keys) speaks one canonical form: a drive-rooted POSIX rel path
+with no leading slash and no `..`. Inside markdown bodies the
+user (or an agent) writes hrefs in whatever form the renderer
+expects, which for GitHub-style markdown is "relative to the file
+that contains the link" so the document keeps rendering when
+viewed outside chan (GitHub web, Obsidian, a pasted preview).
+The normalizer below is the bridge: file bodies stay portable,
+the graph and queries see one canonical destination.
+
 Markdown link hrefs and image embeds (`[label](href)`,
 `![alt](src)`) are run through `markdown::normalize_href` before
 the graph builder writes the edge `dst`. The normalizer is a
