@@ -1760,11 +1760,15 @@
         replaceImagePathInSource(src);
       },
       onUpload: (src) => {
-        replaceImagePathInSource(src);
-        // Pass the uploaded path explicitly so accept doesn't pick
-        // up the list's currently-highlighted catalog entry instead
-        // of the new upload.
-        acceptImageBubble(src);
+        // Relativize against the editing file so the markdown reads
+        // `./name.png` like the paste path does. Server returns a
+        // drive-rooted path; without this, the bubble upload would
+        // emit `[](file.png)` while paste emits `[](./file.png)`.
+        const rel = currentPath ? relativizePath(src, currentPath) : src;
+        replaceImagePathInSource(rel);
+        // Pass the path explicitly so accept doesn't pick up the
+        // list's currently-highlighted catalog entry instead.
+        acceptImageBubble(rel);
       },
       onCommit: () => acceptImageBubble(),
       onDismiss: () => dismissImageBubble(),
