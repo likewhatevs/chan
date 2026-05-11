@@ -2152,16 +2152,22 @@
     editingImageBracketStart = pos;
     editingImageDefaultAlt = alt;
     const insertText = `![${alt}](${src})`;
-    // Caret position inside the `(src)` parens: `![alt](` is
-    // 2 + alt.length + 2 chars; we want the caret just after the
-    // opening paren so the bubble opens in path mode pre-populated
-    // with the current src.
+    // Insert as a plain text node, NOT through the chain's string
+    // content path: tiptap-markdown's parser recognises
+    // `![alt](src)` and re-creates an image atom from the string,
+    // making the replace a no-op. `tr.replaceWith` with an explicit
+    // text node lays down the literal characters so the bubble can
+    // operate on them in path mode.
+    const tr = ed.state.tr;
+    const textNode = ed.state.schema.text(insertText);
+    tr.replaceWith(pos, pos + atomNode.nodeSize, textNode);
+    // Caret right before the closing `)` of the inserted markup
+    // (path mode pre-populated with the current src). `![alt](` is
+    // 2 + alt.length + 2 chars from `pos`.
     const caretInsideSrc = pos + 2 + alt.length + 2 + src.length;
-    ed.chain()
-      .focus()
-      .insertContentAt({ from: pos, to: pos + atomNode.nodeSize }, insertText)
-      .setTextSelection(caretInsideSrc)
-      .run();
+    tr.setSelection(TextSelection.create(tr.doc, caretInsideSrc));
+    ed.view.dispatch(tr);
+    ed.commands.focus();
     openImageBubbleForCurrentCaret();
   }
 
