@@ -1714,7 +1714,10 @@
       },
       onUpload: (src) => {
         replaceImagePathInSource(src);
-        acceptImageBubble();
+        // Pass the uploaded path explicitly so accept doesn't pick
+        // up the list's currently-highlighted catalog entry instead
+        // of the new upload.
+        acceptImageBubble(src);
       },
       onCommit: () => acceptImageBubble(),
       onDismiss: () => dismissImageBubble(),
@@ -1768,7 +1771,13 @@
   /// src matches the saved original after fragment-stripping, we
   /// keep the original verbatim so things like `#w=120` survive a
   /// round-trip through the bubble.
-  function acceptImageBubble(): void {
+  ///
+  /// `overrideSrc` short-circuits `imageBubble.accept()`: callers
+  /// that already know which path to commit (notably the upload
+  /// flow's `onUpload`, where the bubble's list-highlight is stale)
+  /// pass the path explicitly so it doesn't get overridden by the
+  /// currently-highlighted catalog entry.
+  function acceptImageBubble(overrideSrc?: string): void {
     if (!editor || !imageBubble) return;
     const ed = editor;
     let range = findImageRange(ed);
@@ -1780,7 +1789,7 @@
       dismissImageBubble();
       return;
     }
-    const picked = imageBubble.accept() ?? range.src;
+    const picked = overrideSrc ?? imageBubble.accept() ?? range.src;
     if (!picked) {
       dismissImageBubble();
       return;
