@@ -20,9 +20,12 @@
   } from "../state/graphData.svelte";
   import { openInActivePane } from "../state/tabs.svelte";
   import {
+    browserOverlay,
+    openBrowser,
     openGraphAtNode,
     paneWidths,
     persistPaneWidths,
+    revealAndSelect,
     searchPanel,
     tree,
   } from "../state/store.svelte";
@@ -391,6 +394,15 @@
             if (sel?.kind === "file") {
               close();
               void openInActivePane(sel.path);
+            }
+          }}
+          onReveal={() => {
+            const sel = selection;
+            if (sel?.kind === "file") {
+              revealAndSelect(sel.path);
+              openBrowser();
+              browserOverlay.inspectorOpen = true;
+              close();
             }
           }}
         />

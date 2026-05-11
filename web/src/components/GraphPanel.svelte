@@ -27,9 +27,12 @@
   import { openInActivePane } from "../state/tabs.svelte";
   import {
     availableGraphScopes,
+    browserOverlay,
     graphOverlay,
+    openBrowser,
     paneWidths,
     persistPaneWidths,
+    revealAndSelect,
     tree,
   } from "../state/store.svelte";
   import { type ScopeOption, defaultScopeId } from "../state/scope.svelte";
@@ -273,6 +276,18 @@
   function openSelectedFile(): void {
     if (selectedNode && selectedNode.kind === "file" && !selectedNode.missing) {
       void openInActivePane(selectedNode.path);
+      close();
+    }
+  }
+
+  /// "Show in file browser" handler for image nodes in the inspector.
+  /// FileInfoBody only renders the button when this is set + the
+  /// selection is an image, so it's safe to bind for every file.
+  function revealSelectedFile(): void {
+    if (selectedNode && selectedNode.kind === "file" && !selectedNode.missing) {
+      revealAndSelect(selectedNode.path);
+      openBrowser();
+      browserOverlay.inspectorOpen = true;
       close();
     }
   }
@@ -1152,6 +1167,7 @@
         selection={inspectorSelection}
         onClose={() => (selectedId = null)}
         onOpen={openSelectedFile}
+        onReveal={revealSelectedFile}
         onNavigate={selectByPath}
         documentsOverride={selectionDocumentsInScope}
       />

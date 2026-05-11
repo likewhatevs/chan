@@ -46,12 +46,19 @@
   let {
     path,
     onOpen,
+    onReveal,
     onClose,
     showRefs = false,
     onNavigate,
   }: {
     path: string | null;
     onOpen?: () => void;
+    /// Image-inspector counterpart to `onOpen`. Renders a
+    /// "Show in file browser" button on image entries; the host
+    /// reveals the path in its tree and closes itself. Absent = no
+    /// button (e.g. when the inspector already lives inside the
+    /// file browser).
+    onReveal?: () => void;
     onClose?: () => void;
     /// When true, fetch + render tags / mentions / dates / links /
     /// backlinks for files. Off by default so the file editor's
@@ -157,8 +164,7 @@
         <button class="close" onclick={onClose} aria-label="clear selection">×</button>
       {/if}
     </header>
-    <h3 class="title">{basename(entry.path) || "(root)"}</h3>
-    <div class="path mono">{entry.path || "/"}</div>
+    <h3 class="title" title={entry.path || "/"}>{basename(entry.path) || "(root)"}</h3>
     {#if dirStats}
       <div class="meta-grid">
         <span class="k">files</span>
@@ -184,21 +190,28 @@
         <button class="close" onclick={onClose} aria-label="clear selection">×</button>
       {/if}
     </header>
-    <h3 class="title">{basename(entry.path)}</h3>
-    <div class="path mono">{entry.path}</div>
+    <h3 class="title" title={entry.path}>{basename(entry.path)}</h3>
     {#if image}
       <!-- Inline preview. Bytes come from /api/files with the
            per-launch bearer token appended as a query param so the
            browser's <img> can fetch without a custom Authorization
            header. Object-fit contains so portrait + landscape both
-           sit cleanly in the fixed-height frame. -->
-      <div class="image-preview">
+           sit cleanly in the fixed-height frame.
+           Wrapped in a button so a click on the preview opens the
+           shared fullscreen zoom overlay (matches the editor's
+           image action overlay). -->
+      <button
+        type="button"
+        class="image-preview"
+        title="Zoom"
+        onclick={() => openImageZoom(entry.path)}
+      >
         <img
           src={withTokenQuery(`/api/files/${encodeURIComponent(entry.path).replace(/%2F/g, "/")}`)}
           alt={basename(entry.path)}
           loading="lazy"
         />
-      </div>
+      </button>
     {/if}
     <div class="meta-grid">
       <span class="k">size</span>
@@ -221,7 +234,11 @@
         <span class="v">{backlinksLoading ? "…" : backlinks.length}</span>
       {/if}
     </div>
-    {#if onOpen && !image}
+    {#if image}
+      {#if onReveal}
+        <button class="open" onclick={onReveal}>Show in file browser</button>
+      {/if}
+    {:else if onOpen}
       {#if editable}
         <button class="open" onclick={onOpen}>Open in this pane</button>
       {:else}
@@ -394,6 +411,12 @@
      (visible while bytes are loading or for images with alpha so
      the panel doesn't show empty space). object-fit contain keeps
      the natural aspect ratio so portraits and landscapes both fit. */
+  /* Image preview frame: fixed max height, checkered fallback bg
+     (visible while bytes are loading or for images with alpha so
+     the panel doesn't show empty space). object-fit contain keeps
+     the natural aspect ratio so portraits and landscapes both fit.
+     Rendered as a <button> so a click opens the fullscreen zoom
+     overlay; default button chrome is stripped. */
   .image-preview {
     margin: 0 0 0.6rem 0;
     padding: 4px;
@@ -405,12 +428,18 @@
     justify-content: center;
     max-height: 220px;
     overflow: hidden;
+    width: 100%;
+    cursor: zoom-in;
+    font: inherit;
+    color: inherit;
   }
+  .image-preview:hover { border-color: var(--btn-hover); }
   .image-preview img {
     max-width: 100%;
     max-height: 210px;
     object-fit: contain;
     display: block;
+    pointer-events: none;
   }
   .view-only-hint {
     color: var(--text-secondary);
@@ -429,18 +458,11 @@
   }
   .close:hover { color: var(--text); }
   .title {
-    margin: 0 0 0.15rem 0;
+    margin: 0 0 0.5rem 0;
     font-size: 16px;
     font-weight: 600;
     word-break: break-word;
   }
-  .path {
-    color: var(--text-secondary);
-    font-size: 13px;
-    margin-bottom: 0.5rem;
-    word-break: break-all;
-  }
-  .mono { font-family: ui-monospace, monospace; }
   .meta-grid {
     display: grid;
     grid-template-columns: 6.5em 1fr;

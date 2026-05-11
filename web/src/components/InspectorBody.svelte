@@ -25,6 +25,7 @@
   let {
     selection,
     onOpen,
+    onReveal,
     onClose,
     onNavigate,
     showRefs = true,
@@ -34,6 +35,10 @@
     /// Forwarded to FileInfoBody as the "Open in this pane" handler.
     /// Tag bodies don't take an open action.
     onOpen?: () => void;
+    /// Forwarded to FileInfoBody as the "Show in file browser"
+    /// handler for image entries. Hosts that already live inside
+    /// the file browser pass undefined.
+    onReveal?: () => void;
     onClose?: () => void;
     onNavigate?: (path: string) => void;
     showRefs?: boolean;
@@ -52,6 +57,7 @@
   <FileInfoBody
     path={selection.path}
     {onOpen}
+    {onReveal}
     {onClose}
     {onNavigate}
     {showRefs}
