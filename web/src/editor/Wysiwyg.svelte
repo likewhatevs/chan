@@ -220,6 +220,14 @@
   /// by the picked file's basename.
   let editingImageDefaultAlt: string = "";
 
+  /// Position of the image atom being edited. The atom stays in
+  /// the doc during edit (it is no longer replaced by source
+  /// text); the bubble's editing paragraph sits BELOW the atom's
+  /// paragraph. On commit we mutate this atom's attrs and delete
+  /// the editing paragraph; on dismiss we delete the editing
+  /// paragraph and the atom is already untouched.
+  let editingImageAtomPos: number | null = null;
+
   /// Cleanup for the floating image action overlay (zoom + edit
   /// buttons shown when a rendered image is clicked). `undefined`
   /// when no overlay is open. The function tears down the DOM and
@@ -549,6 +557,9 @@
           editingImageBracketStart = transaction.mapping.map(
             editingImageBracketStart,
           );
+        }
+        if (editingImageAtomPos !== null) {
+          editingImageAtomPos = transaction.mapping.map(editingImageAtomPos);
         }
         if (applyingExternal) return;
         const raw = (editor.storage.markdown as { getMarkdown(): string }).getMarkdown();
@@ -1938,12 +1949,34 @@
       dismissImageBubble();
       return;
     }
-    const orig = editingImageOriginal;
+
+    // Branch by flow:
+    //   - Edit-existing (editingImageAtomPos != null): atom stays
+    //     in place; we mutate its attrs and delete the editing
+    //     paragraph that hosted the source text.
+    //   - Typed-`![` (atomPos null): the markup IS the only thing
+    //     in the doc, replace it with a fresh atom.
+    const atomPos = editingImageAtomPos;
     editingImageOriginal = null;
+    editingImageAtomPos = null;
     editingImageBracketStart = null;
     editingImageDefaultAlt = "";
     dismissImageBubble();
-    const insertNode = imgType.create({ src: finalSrc, alt });
+
+    if (atomPos != null) {
+      // Resolve the editing paragraph's boundaries from the saved
+      // bracket-start so we can delete it cleanly.
+      const rangeStart = ed.state.doc.resolve(range.start);
+      const paraStart = rangeStart.before(rangeStart.depth);
+      const paraEnd = paraStart + rangeStart.parent.nodeSize;
+      const tr = ed.state.tr;
+      tr.setNodeMarkup(atomPos, undefined, { src: finalSrc, alt });
+      tr.delete(paraStart, paraEnd);
+      ed.view.dispatch(tr);
+      ed.commands.focus(atomPos + 1);
+      return;
+    }
+
     ed.chain()
       .focus()
       .deleteRange({ from: range.start, to: range.end })
@@ -1952,21 +1985,16 @@
         attrs: { src: finalSrc, alt },
       })
       .run();
-    // Silence the unused-var warning when no original snapshot was
-    // captured (the typed-`![` flow). The node was inserted above;
-    // we only kept `orig`/`insertNode` for branch symmetry.
-    void orig;
-    void insertNode;
   }
 
   function dismissImageBubble(): void {
     imageBubble?.dismiss();
     imageBubble = undefined;
-    // Same contract as the wiki dismiss: if the bubble was opened
-    // in edit-existing mode, restore the original atom. The typed-
-    // `![` flow has no original snapshot; in that case we walk the
-    // doc and delete the leftover `![]()` markup.
-    if (editingImageOriginal || editingImageBracketStart !== null) {
+    if (
+      editingImageOriginal ||
+      editingImageBracketStart !== null ||
+      editingImageAtomPos !== null
+    ) {
       restoreImageEditOriginal();
     }
   }
@@ -1974,24 +2002,35 @@
   function restoreImageEditOriginal(): void {
     if (!editor) return;
     const ed = editor;
-    const orig = editingImageOriginal;
+    const atomPos = editingImageAtomPos;
     const start = editingImageBracketStart;
     editingImageOriginal = null;
+    editingImageAtomPos = null;
     editingImageBracketStart = null;
     editingImageDefaultAlt = "";
     if (start === null) return;
+
+    // Edit-existing flow: delete the entire editing paragraph
+    // (the atom in the paragraph above is untouched, no restore
+    // needed for it).
+    if (atomPos != null) {
+      try {
+        const resolved = ed.state.doc.resolve(start);
+        const paraStart = resolved.before(resolved.depth);
+        const paraEnd = paraStart + resolved.parent.nodeSize;
+        ed.view.dispatch(ed.state.tr.delete(paraStart, paraEnd));
+      } catch {
+        // Position out of range (doc shrunk under us); nothing
+        // to clean up.
+      }
+      return;
+    }
+
+    // Typed-`![` flow: walk to the `![](|)` markup at `start` and
+    // delete it so the user doesn't end up with stray brackets.
     const range = findImageRangeAt(ed, start);
     if (!range) return;
-    const imgType = ed.schema.nodes.image;
-    if (orig && imgType) {
-      const atom = imgType.create({ src: orig.src, alt: orig.alt });
-      ed.view.dispatch(ed.state.tr.replaceWith(range.start, range.end, atom));
-    } else {
-      // Typed-`![` flow: nothing to restore. Delete the literal
-      // `![](|)` markup so the user doesn't end up with stray
-      // brackets on dismiss.
-      ed.view.dispatch(ed.state.tr.delete(range.start, range.end));
-    }
+    ed.view.dispatch(ed.state.tr.delete(range.start, range.end));
   }
 
   /// Re-evaluate the open bubble on every selection / doc update.
@@ -2143,28 +2182,40 @@
     document.addEventListener("keydown", onKey, true);
   }
 
+  /// Edit-existing flow: keep the image atom rendered, insert a
+  /// new paragraph BELOW it containing `![alt](src)` source text,
+  /// and park the caret inside that text. Both the rendered image
+  /// (on top) and the editable source (on bottom) stay visible so
+  /// the user can compare while editing. On commit, the atom's
+  /// attrs update and the editing paragraph goes away; on dismiss,
+  /// only the editing paragraph goes away (the atom never changed).
   function enterImageEditAt(pos: number, atomNode: { attrs: Record<string, unknown>; nodeSize: number }): void {
     if (!editor) return;
     const ed = editor;
     const src = (atomNode.attrs.src as string) ?? "";
     const alt = (atomNode.attrs.alt as string) ?? "";
-    editingImageOriginal = { src, alt };
-    editingImageBracketStart = pos;
-    editingImageDefaultAlt = alt;
+    const paraType = ed.state.schema.nodes.paragraph;
+    if (!paraType) return;
+    // End of the textblock that contains the atom: that's where
+    // the editing paragraph slots in (immediately after).
+    const atomResolved = ed.state.doc.resolve(pos);
+    const paraEnd =
+      atomResolved.before(atomResolved.depth) + atomResolved.parent.nodeSize;
     const insertText = `![${alt}](${src})`;
-    // Insert as a plain text node, NOT through the chain's string
-    // content path: tiptap-markdown's parser recognises
-    // `![alt](src)` and re-creates an image atom from the string,
-    // making the replace a no-op. `tr.replaceWith` with an explicit
-    // text node lays down the literal characters so the bubble can
-    // operate on them in path mode.
-    const tr = ed.state.tr;
     const textNode = ed.state.schema.text(insertText);
-    tr.replaceWith(pos, pos + atomNode.nodeSize, textNode);
-    // Caret right before the closing `)` of the inserted markup
-    // (path mode pre-populated with the current src). `![alt](` is
-    // 2 + alt.length + 2 chars from `pos`.
-    const caretInsideSrc = pos + 2 + alt.length + 2 + src.length;
+    const newPara = paraType.create(null, textNode);
+
+    editingImageOriginal = { src, alt };
+    editingImageAtomPos = pos;
+    editingImageDefaultAlt = alt;
+    // bracketStart points at the `!` of the inserted markup
+    // (paraEnd + 1 = first content position inside the new
+    // paragraph).
+    editingImageBracketStart = paraEnd + 1;
+
+    const tr = ed.state.tr.insert(paraEnd, newPara);
+    // Caret right before the closing `)` of the inserted markup.
+    const caretInsideSrc = paraEnd + 1 + 2 + alt.length + 2 + src.length;
     tr.setSelection(TextSelection.create(tr.doc, caretInsideSrc));
     ed.view.dispatch(tr);
     ed.commands.focus();
