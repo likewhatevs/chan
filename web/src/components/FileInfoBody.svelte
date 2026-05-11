@@ -28,7 +28,20 @@
     graphData,
     selectionEdgesFor,
   } from "../state/graphData.svelte";
+  import { openImageZoom } from "../state/imageZoom";
   import { openGraphAtNode, tree } from "../state/store.svelte";
+
+  /// Visual / behavioural kind for a file reference. Images route to
+  /// the fullscreen zoom overlay (editor's "Zoom" button shares the
+  /// same helper); contacts are markdown notes under `Contacts/` and
+  /// open in the editor like other docs but get their own chip color
+  /// so a glance distinguishes them. Anything else is a doc.
+  type RefKind = "doc" | "image" | "contact";
+  function classifyRef(path: string): RefKind {
+    if (isImage(path)) return "image";
+    if (path === "Contacts" || path.startsWith("Contacts/")) return "contact";
+    return "doc";
+  }
 
   let {
     path,
@@ -277,10 +290,25 @@
             <ul>
               {#each refs.links as l (l.id)}
                 <li>
-                  {#if l.kind === "file" && !l.missing && onNavigate}
-                    <button class="ref file" onclick={() => navigate(l.path)}>{l.label}</button>
+                  {#if l.kind !== "file"}
+                    <span class="ref file">{l.label}</span>
+                  {:else if l.missing}
+                    <span class="ref file missing" data-refkind={classifyRef(l.path)}>{l.label}</span>
+                  {:else if classifyRef(l.path) === "image"}
+                    <button
+                      class="ref file"
+                      data-refkind="image"
+                      title="Zoom"
+                      onclick={() => openImageZoom(l.path)}
+                    >{l.label}</button>
+                  {:else if onNavigate}
+                    <button
+                      class="ref file"
+                      data-refkind={classifyRef(l.path)}
+                      onclick={() => navigate(l.path)}
+                    >{l.label}</button>
                   {:else}
-                    <span class="ref file" class:missing={l.kind === "file" && l.missing}>{l.label}</span>
+                    <span class="ref file" data-refkind={classifyRef(l.path)}>{l.label}</span>
                   {/if}
                 </li>
               {/each}
@@ -293,10 +321,21 @@
             <ul>
               {#each backlinks as b (b.src)}
                 <li>
-                  {#if onNavigate}
-                    <button class="ref file" onclick={() => navigate(b.src)}>{b.src}</button>
+                  {#if classifyRef(b.src) === "image"}
+                    <button
+                      class="ref file"
+                      data-refkind="image"
+                      title="Zoom"
+                      onclick={() => openImageZoom(b.src)}
+                    >{b.src}</button>
+                  {:else if onNavigate}
+                    <button
+                      class="ref file"
+                      data-refkind={classifyRef(b.src)}
+                      onclick={() => navigate(b.src)}
+                    >{b.src}</button>
                   {:else}
-                    <span class="ref file">{b.src}</span>
+                    <span class="ref file" data-refkind={classifyRef(b.src)}>{b.src}</span>
                   {/if}
                 </li>
               {/each}
@@ -476,8 +515,20 @@
   /* Backlinks / link targets: use the standard text color rather
      than --link. The chip already reads as a clickable button
      thanks to the surface + hover treatment, and the doc/file
-     name is the actual content — not a call-to-action. */
-  .ref.file { color: var(--text); word-break: break-all; }
+     name is the actual content, not a call-to-action.
+     Per-kind left accent (doc / image / contact) lets the reader
+     scan the list and pick out images vs contacts vs plain docs
+     without a per-row icon. Padding is fixed so swapping accent
+     widths doesn't shift the label. */
+  .ref.file {
+    color: var(--text);
+    word-break: break-all;
+    border-left-width: 3px;
+    padding-left: 6px;
+  }
+  .ref.file[data-refkind="doc"] { border-left-color: var(--g-doc); }
+  .ref.file[data-refkind="image"] { border-left-color: var(--g-img); }
+  .ref.file[data-refkind="contact"] { border-left-color: var(--info-text); }
   .ref.file.missing {
     color: var(--text-secondary);
     font-style: italic;
