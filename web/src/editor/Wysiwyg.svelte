@@ -439,30 +439,42 @@
           mousedown: (view, event) => {
             const target = event.target as HTMLElement | null;
             if (!target || !host) return false;
-            const imgEl: HTMLImageElement | null =
-              target.tagName === "IMG"
-                ? (target as HTMLImageElement)
-                : (target.closest(".md-image-wrap")?.querySelector(
-                    "img",
-                  ) as HTMLImageElement | null);
+            const wrap = target.closest(
+              ".md-image-wrap",
+            ) as HTMLElement | null;
+            const imgEl =
+              (wrap?.querySelector("img") as HTMLImageElement | null) ??
+              (target.tagName === "IMG" ? (target as HTMLImageElement) : null);
             if (!imgEl || !host.contains(imgEl)) return false;
-            let pos: number;
-            try {
-              pos = view.posAtDOM(imgEl, 0);
-            } catch {
-              return false;
-            }
-            let node = view.state.doc.nodeAt(pos);
-            if (!node || node.type.name !== "image") {
-              const alt = pos - 1;
-              const altNode = alt >= 0 ? view.state.doc.nodeAt(alt) : null;
-              if (altNode && altNode.type.name === "image") {
-                pos = alt;
-                node = altNode;
-              } else {
-                return false;
+            // posAtDOM through a NodeView wrap can land far from
+            // the atom (PM treats the wrap as opaque and resolves
+            // to whatever PM-tracked node is closest in the DOM
+            // tree, which is sometimes a sibling block). posAtCoords
+            // from the actual click position is more deterministic:
+            // the user clicked on the image, so the coord-based pos
+            // is on or adjacent to the atom.
+            const coord = view.posAtCoords({
+              left: event.clientX,
+              top: event.clientY,
+            });
+            if (!coord) return false;
+            // Inline atoms occupy a single position. posAtCoords
+            // can return either the position before the atom or
+            // right at it depending on bias; probe both sides.
+            const doc = view.state.doc;
+            const candidates = [coord.pos, coord.pos - 1, coord.pos + 1];
+            let pos = -1;
+            let node = null as ReturnType<typeof doc.nodeAt>;
+            for (const c of candidates) {
+              if (c < 0 || c >= doc.content.size) continue;
+              const n = doc.nodeAt(c);
+              if (n && n.type.name === "image") {
+                pos = c;
+                node = n;
+                break;
               }
             }
+            if (pos < 0 || !node) return false;
             event.preventDefault();
             openImageActionOverlay(imgEl, pos, node);
             return true;
