@@ -26,6 +26,21 @@ pub fn err(status: StatusCode, msg: String) -> Response {
     (status, Json(serde_json::json!({"error": msg}))).into_response()
 }
 
+/// Refusal returned by every settings-area write endpoint when the
+/// server was started with `settings_disabled = true` (today: any
+/// tunnel run). Reads stay open; only mutating routes call this.
+/// Uses 403 because the request is well-formed and authenticated by
+/// the gateway, the host policy just forbids the operation.
+pub fn err_settings_locked() -> Response {
+    err(
+        StatusCode::FORBIDDEN,
+        "settings are disabled by the host: this server is running \
+         in a mode that forbids configuration changes from the UI \
+         (tunnel mode)"
+            .into(),
+    )
+}
+
 /// Map a chan-llm error to the right HTTP status. Backend HTTP errors
 /// surface their upstream status when it's a valid u16; everything else
 /// collapses to 500 / 400 / 501 by category.

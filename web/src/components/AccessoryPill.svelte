@@ -25,13 +25,23 @@
     openGraph,
     openSettings,
     searchPanel,
+    settingsDisabled,
   } from "../state/store.svelte";
 
-  /// Hide the assistant button when the master switch is off so
-  /// the pill doesn't promise an empty panel.
+  /// Master switch state. When off we keep the button visible but
+  /// inert + greyed so the entry point stays discoverable and the
+  /// tooltip points the user at the toggle in Settings. Hiding the
+  /// button made the missing affordance unexplainable, especially
+  /// for users who hit Cmd/Ctrl+P and saw nothing happen.
   const assistantEnabled = $derived(
     drive.info?.preferences.assistant.enabled ?? true,
   );
+
+  /// Server-controlled lockdown of the Settings panel (tunnel mode
+  /// with --tunnel-public). We grey the button rather than hide it
+  /// so a returning owner sees the entry point and understands why
+  /// it's inert: matches the issue #21 viewer / kiosk story.
+  const settingsLocked = settingsDisabled;
 </script>
 
 <button
@@ -57,17 +67,20 @@
     />
   </svg>
 </button>
-{#if assistantEnabled}
-  <button
-    class="fbtn enso"
-    class:on={assistantOverlay.open}
-    title="Assistant (⌘P)"
-    aria-label="Assistant"
-    onclick={openAssistant}
-  >
-    <span class="enso-mark" aria-hidden="true"></span>
-  </button>
-{/if}
+<button
+  class="fbtn enso"
+  class:on={assistantOverlay.open && assistantEnabled}
+  class:disabled={!assistantEnabled}
+  title={assistantEnabled
+    ? "Assistant (⌘P)"
+    : "Assistant is off — enable it in Settings"}
+  aria-label="Assistant"
+  aria-disabled={!assistantEnabled}
+  disabled={!assistantEnabled}
+  onclick={openAssistant}
+>
+  <span class="enso-mark" aria-hidden="true"></span>
+</button>
 <button
   class="fbtn"
   title="Graph (⌘⇧G)"
@@ -81,8 +94,11 @@
 </button>
 <button
   class="fbtn"
-  title="Settings (⌘,)"
+  class:disabled={settingsLocked}
+  title={settingsLocked ? "Settings disabled by host" : "Settings (⌘,)"}
   aria-label="Settings"
+  aria-disabled={settingsLocked}
+  disabled={settingsLocked}
   onclick={openSettings}
 >
   <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -111,6 +127,16 @@
   .fbtn.on {
     background: var(--hover-bg);
     border-color: var(--btn-hover);
+  }
+  /* Locked Settings entry: keep the affordance visible so the owner
+     can still see where it lives, but kill hover feedback and the
+     pointer hint so it reads as inert. The native `disabled`
+     attribute already blocks onclick; this is purely visual. */
+  .fbtn.disabled,
+  .fbtn.disabled:hover {
+    opacity: 0.35;
+    background: transparent;
+    cursor: not-allowed;
   }
   .fbtn svg {
     width: 19px;

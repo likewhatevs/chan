@@ -143,9 +143,11 @@ enum Command {
         /// Expose the tunneled drive without an OAuth gate. By
         /// default, drive.chan.app/{user}/{drive} bounces anonymous
         /// visitors to id.chan.app. With --public, anyone with the
-        /// URL can reach the drive over the same tunnel. Only takes
-        /// effect together with --tunnel-token.
-        #[arg(long)]
+        /// URL can reach the drive over the same tunnel. Requires
+        /// --tunnel-token (or `CHAN_TUNNEL_TOKEN`); clap rejects the
+        /// flag otherwise so it can't silently no-op on a non-tunnel
+        /// run.
+        #[arg(long, requires = "tunnel_token")]
         tunnel_public: bool,
     },
     /// Rebuild the search index + graph for a drive.
@@ -781,6 +783,9 @@ async fn cmd_serve(
         // every other invocation (default, --no-token desktop shell,
         // off-loopback bind) gets the browser handoff.
         open_browser: true,
+        // Local serve always trusts the operator; the greyed-
+        // Settings UI is currently only used in tunnel mode.
+        settings_disabled: false,
     };
     chan_server::serve(lib, drive, config)
         .await

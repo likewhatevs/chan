@@ -4,9 +4,11 @@
 //! from disk on each request (debug). The fallback handler returns
 //! `index.html` for any path that isn't a baked asset and isn't an
 //! `/api`/`/ws` route, so client-side routes work without server-side
-//! awareness of them. The SPA shell gets a `<meta name="chan-prefix">`
-//! tag injected so the frontend transport layer prepends the prefix
-//! to fetch and WebSocket URLs.
+//! awareness of them. The SPA shell gets `<meta name="chan-prefix">`
+//! and (when set) `<meta name="chan-settings-disabled">` tags
+//! injected so the frontend transport layer prepends the prefix to
+//! fetch and WebSocket URLs and the Settings entry point can grey
+//! itself out.
 
 use std::sync::Arc;
 
@@ -47,9 +49,10 @@ pub async fn serve_static(State(state): State<Arc<AppState>>, uri: axum::http::U
         candidate
     };
     let prefix = state.prefix.read().unwrap().clone();
+    let settings_disabled = state.settings_disabled;
     if let Some(file) = WebAssets::get(candidate) {
         let body = if is_index {
-            inject_chan_prefix(&file.data, &prefix)
+            inject_chan_meta(&file.data, &prefix, settings_disabled)
         } else {
             file.data.into_owned()
         };
@@ -57,7 +60,7 @@ pub async fn serve_static(State(state): State<Arc<AppState>>, uri: axum::http::U
     }
     // SPA fallback: route paths the frontend handles client-side.
     if let Some(file) = WebAssets::get("index.html") {
-        let body = inject_chan_prefix(&file.data, &prefix);
+        let body = inject_chan_meta(&file.data, &prefix, settings_disabled);
         return ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response();
     }
     // No bundle baked / on disk yet (fresh clone, npm not run).
@@ -68,25 +71,36 @@ pub async fn serve_static(State(state): State<Arc<AppState>>, uri: axum::http::U
         .into_response()
 }
 
-/// Inject `<meta name="chan-prefix" content="<prefix>">` after the
-/// opening `<head>` tag of the SPA shell so the frontend transport
-/// layer can read it at boot and prepend the prefix to fetch and
-/// WebSocket URLs.
+/// Inject the SPA's runtime hints as `<meta>` tags right after the
+/// opening `<head>` so the frontend can read them synchronously at
+/// boot:
 ///
-/// No-op when `prefix` is empty (the meta tag isn't needed; the
-/// frontend defaults to "" when absent). When `<head>` isn't found,
-/// returns the original bytes unchanged.
-pub fn inject_chan_prefix(html: &[u8], prefix: &str) -> Vec<u8> {
-    if prefix.is_empty() {
+///   - `<meta name="chan-prefix" content="<prefix>">` when `prefix`
+///     is non-empty. The transport layer prepends it to fetch and
+///     WebSocket URLs.
+///   - `<meta name="chan-settings-disabled" content="1">` when
+///     `settings_disabled` is true. Greys out the Settings entry
+///     point in the SPA.
+///
+/// No-op when neither hint applies, or when `<head>` isn't found in
+/// the document (returns the original bytes unchanged).
+pub fn inject_chan_meta(html: &[u8], prefix: &str, settings_disabled: bool) -> Vec<u8> {
+    if prefix.is_empty() && !settings_disabled {
         return html.to_vec();
     }
     let needle = b"<head>";
     let Some(pos) = html.windows(needle.len()).position(|w| w == needle) else {
         return html.to_vec();
     };
-    // Prefix is canonical (`/seg[/seg...]` with `[A-Za-z0-9-]+`
-    // segments) so it cannot contain HTML-attribute-special bytes.
-    let insert = format!("<meta name=\"chan-prefix\" content=\"{prefix}\">");
+    let mut insert = String::new();
+    if !prefix.is_empty() {
+        // Prefix is canonical (`/seg[/seg...]` with `[A-Za-z0-9-]+`
+        // segments) so it cannot contain HTML-attribute-special bytes.
+        insert.push_str(&format!("<meta name=\"chan-prefix\" content=\"{prefix}\">"));
+    }
+    if settings_disabled {
+        insert.push_str("<meta name=\"chan-settings-disabled\" content=\"1\">");
+    }
     let mut out = Vec::with_capacity(html.len() + insert.len());
     let after_head = pos + needle.len();
     out.extend_from_slice(&html[..after_head]);
@@ -131,24 +145,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn inject_chan_prefix_inserts_meta_after_head() {
+    fn inject_chan_meta_inserts_prefix_after_head() {
         let html = b"<!doctype html><html><head><title>x</title></head></html>";
-        let out = inject_chan_prefix(html, "/foo");
+        let out = inject_chan_meta(html, "/foo", false);
         let s = std::str::from_utf8(&out).unwrap();
         assert!(s.contains("<head><meta name=\"chan-prefix\" content=\"/foo\"><title>"));
+        assert!(!s.contains("chan-settings-disabled"));
     }
 
     #[test]
-    fn inject_chan_prefix_noop_on_empty_prefix() {
+    fn inject_chan_meta_inserts_settings_disabled_after_head() {
+        let html = b"<head><title>x</title></head>";
+        let out = inject_chan_meta(html, "", true);
+        let s = std::str::from_utf8(&out).unwrap();
+        assert!(s.contains("<head><meta name=\"chan-settings-disabled\" content=\"1\"><title>"));
+        assert!(!s.contains("chan-prefix"));
+    }
+
+    #[test]
+    fn inject_chan_meta_combines_both_tags() {
+        let html = b"<head><title>x</title></head>";
+        let out = inject_chan_meta(html, "/foo", true);
+        let s = std::str::from_utf8(&out).unwrap();
+        // Prefix is injected first, settings-disabled second; both
+        // sit immediately after the opening <head>.
+        assert!(s.contains(
+            "<head><meta name=\"chan-prefix\" content=\"/foo\">\
+             <meta name=\"chan-settings-disabled\" content=\"1\"><title>"
+        ));
+    }
+
+    #[test]
+    fn inject_chan_meta_noop_when_nothing_set() {
         let html = b"<head></head>";
-        let out = inject_chan_prefix(html, "");
+        let out = inject_chan_meta(html, "", false);
         assert_eq!(out, html);
     }
 
     #[test]
-    fn inject_chan_prefix_noop_when_head_missing() {
+    fn inject_chan_meta_noop_when_head_missing() {
         let html = b"<html></html>";
-        let out = inject_chan_prefix(html, "/foo");
+        let out = inject_chan_meta(html, "/foo", true);
         assert_eq!(out, html);
     }
 }

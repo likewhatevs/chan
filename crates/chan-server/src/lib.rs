@@ -105,6 +105,16 @@ pub struct ServeConfig {
     /// listener binds. Set by the CLI for the default `chan serve`
     /// flow; suppressed for tunnel mode (no local URL to open).
     pub open_browser: bool,
+    /// Tell the SPA shell to grey out the Settings entry point so a
+    /// non-owner viewer can't open the settings panel. Surfaced to
+    /// the frontend as `<meta name="chan-settings-disabled">`, and
+    /// mirrored on `AppState::settings_disabled` so the settings-
+    /// area write handlers (drive rename, prefs PATCH, LLM key set
+    /// / clear, storage reset) can refuse the request server-side
+    /// via `err_settings_locked`. Hardcoded to true on every
+    /// `serve_via_tunnel` run; the local-serve path always leaves
+    /// it false.
+    pub settings_disabled: bool,
 }
 
 /// Resolved at boot for the launch banner / browser handoff.
@@ -326,6 +336,7 @@ async fn build_app(
         drive_cell: state_for_bridge,
         token: token.clone(),
         prefix: prefix.clone(),
+        settings_disabled: config.settings_disabled,
         events_tx,
         index_events_tx,
         llm_config: llm_config_arc,
@@ -458,6 +469,12 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
 /// id.chan.app; only the drive owner's signed-in session can reach
 /// the tunneled drive. When true, drive-proxy skips the OAuth gate
 /// and anyone with the URL can read/write.
+///
+/// Independently of `public`, tunnel mode always greys out the
+/// Settings panel in the SPA: the drive is reachable from at least
+/// one browser context the owner doesn't fully control, so the safe
+/// default is to keep configuration changes off the table until a
+/// dedicated owner-affordance is wired in.
 pub async fn serve_via_tunnel(
     library: Library,
     drive: Arc<Drive>,
@@ -476,6 +493,14 @@ pub async fn serve_via_tunnel(
         prefix: String::new(),
         idle_timeout: None,
         open_browser: false,
+        // Disable Settings on every tunnel run, not just the public
+        // one: even with the OAuth gate the drive is reachable from
+        // a browser the owner doesn't fully control (different
+        // device, shared workstation), so the conservative default
+        // is to keep the panel inert until a dedicated opt-back-in
+        // flag exists. `public` still controls the gateway-level
+        // auth behaviour and is unrelated to this gate.
+        settings_disabled: true,
     };
     let artifacts = build_app(library, drive, &server_config).await?;
     let prefix_handle = artifacts.prefix.clone();

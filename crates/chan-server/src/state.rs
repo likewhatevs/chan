@@ -44,6 +44,15 @@ pub struct AppState {
     /// mode the public gateway strips the prefix before forwarding,
     /// which is why the router stays mounted at root.
     pub prefix: Arc<RwLock<String>>,
+    /// Snapshot of `ServeConfig::settings_disabled`. Immutable for
+    /// the server's lifetime: hardcoded to true on every tunnel run,
+    /// always false on local serve. `serve_static` reads it to
+    /// inject the `<meta name="chan-settings-disabled">` tag, and
+    /// the settings-area write handlers consult it via
+    /// `error::err_settings_locked` so the API can't be poked
+    /// around the greyed-out button. Read-side endpoints are left
+    /// open so the UI can still populate values in view mode.
+    pub settings_disabled: bool,
     /// Last activity timestamp (unix seconds). Bumped by HTTP
     /// middleware on every request, by `ws_upgrade` on connect,
     /// and by `ws_pump` on every successful frame send. The idle

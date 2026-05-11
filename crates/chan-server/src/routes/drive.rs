@@ -8,7 +8,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use super::preferences::{preferences_view, PreferencesView};
-use crate::error::err_from;
+use crate::error::{err_from, err_settings_locked};
 use crate::state::AppState;
 
 #[derive(Serialize)]
@@ -46,6 +46,9 @@ pub async fn api_patch_drive(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PatchDriveBody>,
 ) -> Response {
+    if state.settings_disabled {
+        return err_settings_locked();
+    }
     if let Some(name) = body.name {
         let new_name = if name.is_empty() { None } else { Some(name) };
         if let Err(e) = state.library.rename_drive(state.drive().root(), new_name) {

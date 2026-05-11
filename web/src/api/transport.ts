@@ -43,6 +43,18 @@ function readPrefix(): string {
   return v.replace(/\/+$/, "");
 }
 
+/// True when the server told the SPA shell to lock down the
+/// Settings entry point (any tunnel mode run). Read once from the
+/// `<meta name="chan-settings-disabled">` tag. The UI greys out the
+/// Settings button; the matching write-side server routes refuse
+/// with 403 so a curl bypass can't sidestep the lock.
+export const SETTINGS_DISABLED = readBoolMeta("chan-settings-disabled");
+
+function readBoolMeta(name: string): boolean {
+  const m = document.querySelector(`meta[name="${name}"]`);
+  return m?.getAttribute("content")?.trim() === "1";
+}
+
 /// Prepend the server URL prefix to an in-app path. Pass paths with
 /// a leading slash (`/api/foo`); the result is the absolute path the
 /// browser should fetch. Used by `request`, `withTokenQuery`, and

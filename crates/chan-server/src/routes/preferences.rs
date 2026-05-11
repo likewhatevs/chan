@@ -20,7 +20,7 @@ use axum::Json;
 use chan_llm::BackendKind;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{err, Error};
+use crate::error::{err, err_settings_locked, Error};
 use crate::state::AppState;
 use crate::{FontPrefs, LineSpacing, PaneWidths, ThemeChoice};
 
@@ -187,6 +187,9 @@ pub async fn api_patch_server_config(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PatchServerConfigBody>,
 ) -> Response {
+    if state.settings_disabled {
+        return err_settings_locked();
+    }
     let mut cfg = state.server_config.lock().unwrap();
     if let Some(p) = body.attachments_dir {
         if p.is_empty() {
@@ -282,6 +285,9 @@ pub async fn api_patch_config(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PatchConfigBody>,
 ) -> Response {
+    if state.settings_disabled {
+        return err_settings_locked();
+    }
     if let Some(prefs) = body.preferences {
         if let Err(e) = apply_preferences(&state, prefs) {
             return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());

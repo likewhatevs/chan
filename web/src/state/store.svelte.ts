@@ -24,6 +24,7 @@ import {
   tabsForPath,
 } from "./tabs.svelte";
 import { invalidateGraph, ensureGraphLoaded } from "./graphData.svelte";
+import { SETTINGS_DISABLED } from "../api/transport";
 export const drive = $state<{ info: DriveInfo | null }>({ info: null });
 
 export const tree = $state<{ entries: TreeEntry[]; loading: boolean }>({
@@ -912,7 +913,15 @@ export function openGraphAtNode(nodeId: string): void {
 
 export const settingsOverlay = $state<{ open: boolean }>({ open: false });
 
+/// True when the server forbids opening Settings (today: tunnel
+/// mode with --tunnel-public). Sourced from the SPA shell meta tag
+/// at module load. The pill and any other entry point check this
+/// to grey themselves out; `openSettings` also gates on it so the
+/// Cmd/Ctrl+, keybinding cannot work around the disabled button.
+export const settingsDisabled = SETTINGS_DISABLED;
+
 export function openSettings(): void {
+  if (SETTINGS_DISABLED) return;
   settingsOverlay.open = true;
   scheduleSessionSave();
 }

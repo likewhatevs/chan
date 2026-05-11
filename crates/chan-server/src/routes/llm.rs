@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::bus::LlmBroadcastListener;
 use crate::cli_resolve::{api_keys_path_string, resolve_claude_cli, resolve_gemini_cli};
-use crate::error::{err, err_llm};
+use crate::error::{err, err_llm, err_settings_locked};
 use crate::state::AppState;
 
 /// `/api/llm/status` view shape. Frontend's `LlmStatus` type is a
@@ -655,10 +655,16 @@ pub async fn api_llm_set_anthropic_key(
     State(state): State<Arc<AppState>>,
     Json(body): Json<SetKeyBody>,
 ) -> Response {
+    if state.settings_disabled {
+        return err_settings_locked();
+    }
     set_backend_key(&state, BackendKind::Anthropic, body.key).await
 }
 
 pub async fn api_llm_clear_anthropic_key(State(state): State<Arc<AppState>>) -> Response {
+    if state.settings_disabled {
+        return err_settings_locked();
+    }
     clear_backend_key(&state, BackendKind::Anthropic).await
 }
 
@@ -666,10 +672,16 @@ pub async fn api_llm_set_gemini_key(
     State(state): State<Arc<AppState>>,
     Json(body): Json<SetKeyBody>,
 ) -> Response {
+    if state.settings_disabled {
+        return err_settings_locked();
+    }
     set_backend_key(&state, BackendKind::Gemini, body.key).await
 }
 
 pub async fn api_llm_clear_gemini_key(State(state): State<Arc<AppState>>) -> Response {
+    if state.settings_disabled {
+        return err_settings_locked();
+    }
     clear_backend_key(&state, BackendKind::Gemini).await
 }
 
