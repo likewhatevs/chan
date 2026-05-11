@@ -261,6 +261,20 @@ fn normalize_drive_rel(p: &std::path::Path) -> Option<String> {
     Some(parts.join("/"))
 }
 
+/// Collect drive image files (non-directory, image extension).
+/// Returns an empty set on `list_tree` failure so callers degrade to
+/// the old ghost-rendering path instead of failing the request.
+fn drive_image_files(drive: &chan_drive::Drive) -> std::collections::BTreeSet<String> {
+    match drive.list_tree() {
+        Ok(entries) => entries
+            .into_iter()
+            .filter(|e| !e.is_dir && is_image_path(&e.path))
+            .map(|e| e.path)
+            .collect(),
+        Err(_) => std::collections::BTreeSet::new(),
+    }
+}
+
 pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
     let drive = state.drive();
     let graph = match drive.graph() {
@@ -285,20 +299,10 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
 
     // Image files aren't graph nodes (the indexer skips non-text
     // files), so a markdown `![alt](pic.png)` would otherwise resolve
-    // to a ghost. Walk the disk tree, collect image-extensioned
-    // entries, and merge them into the resolution set so an existing
-    // image lands on a real file node (the frontend then styles
-    // file-kind nodes by extension via classifyFile).
-    let image_files: std::collections::BTreeSet<String> = match drive.list_tree() {
-        Ok(entries) => entries
-            .into_iter()
-            .filter(|e| !e.is_dir && is_image_path(&e.path))
-            .map(|e| e.path)
-            .collect(),
-        // list_tree failure shouldn't kill the graph; fall back to
-        // an empty image set and the old ghost-rendering path.
-        Err(_) => std::collections::BTreeSet::new(),
-    };
+    // to a ghost. Image files merged into the resolution set so an
+    // existing image lands on a real file node (the frontend then
+    // styles file-kind nodes by extension via classifyFile).
+    let image_files = drive_image_files(&drive);
 
     let mut file_set: std::collections::BTreeSet<&str> = files.iter().map(String::as_str).collect();
     for img in &image_files {
@@ -453,21 +457,49 @@ pub async fn api_backlinks(
         Ok(g) => g,
         Err(e) => return err_from(&e),
     };
-    match graph.backlinks(&path) {
-        Ok(edges) => {
-            let mapped: Vec<ApiBacklinkEdge> = edges
-                .into_iter()
-                .map(|e| ApiBacklinkEdge {
+
+    // chan-drive stores the verbatim authored target on each link
+    // edge ("./img.png", "attachments/pic.png", "../foo/x.md"), so
+    // its SQL backlinks(dst=?) query misses every source-relative
+    // reference. We mirror api_graph's resolution: walk all
+    // outgoing edges, resolve link dsts against the drive's file
+    // set, then keep the ones that land on `path`. Slightly more
+    // expensive than the SQL filter, but on the same order as the
+    // graph load the inspector just ran.
+    let files = match graph.files() {
+        Ok(f) => f,
+        Err(e) => return err_from(&e),
+    };
+    let image_files = drive_image_files(&drive);
+    let mut file_set: std::collections::BTreeSet<&str> =
+        files.iter().map(String::as_str).collect();
+    for img in &image_files {
+        file_set.insert(img.as_str());
+    }
+
+    let mut out: Vec<ApiBacklinkEdge> = Vec::new();
+    for f in &files {
+        let edges = match graph.neighbors(f) {
+            Ok(es) => es,
+            Err(e) => return err_from(&e),
+        };
+        for e in edges {
+            if !matches!(e.kind, EdgeKind::Link) {
+                continue;
+            }
+            let resolved = resolve_link_dst(&e.src, &e.dst, &file_set);
+            if resolved == path {
+                out.push(ApiBacklinkEdge {
                     src: e.src,
-                    dst: e.dst,
+                    dst: resolved,
                     kind: edge_kind_tag(e.kind),
                     anchor: e.anchor,
-                })
-                .collect();
-            Json(mapped).into_response()
+                });
+            }
         }
-        Err(e) => err_from(&e),
     }
+    out.sort_by(|a, b| a.src.cmp(&b.src));
+    Json(out).into_response()
 }
 
 #[cfg(test)]
@@ -536,6 +568,35 @@ mod tests {
         assert_eq!(
             resolve_link_dst("intro.md", "/recipes/pasta.md", &files),
             "recipes/pasta.md",
+        );
+    }
+
+    #[test]
+    fn resolve_link_dst_image_attachments_drive_relative() {
+        // `![](attachments/pic.png)` from any source resolves to the
+        // image at the drive root. Backlinks for the image now find
+        // this edge instead of returning the stale "linked from: 0"
+        // that the SQL `dst = "attachments/pic.png"` query produced
+        // when the source authored it as a drive-relative path.
+        let files: std::collections::BTreeSet<&str> =
+            ["attachments/pic.png", "notes/journal.md"]
+                .into_iter()
+                .collect();
+        assert_eq!(
+            resolve_link_dst("notes/journal.md", "attachments/pic.png", &files),
+            "attachments/pic.png",
+        );
+    }
+
+    #[test]
+    fn resolve_link_dst_image_source_relative_dot() {
+        // `![](./img.png)` inside notes/journal.md should land on the
+        // sibling image, not stay verbatim.
+        let files: std::collections::BTreeSet<&str> =
+            ["notes/img.png", "notes/journal.md"].into_iter().collect();
+        assert_eq!(
+            resolve_link_dst("notes/journal.md", "./img.png", &files),
+            "notes/img.png",
         );
     }
 
