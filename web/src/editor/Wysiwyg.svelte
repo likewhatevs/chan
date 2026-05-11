@@ -386,6 +386,13 @@
   let applyingExternal = false;
   let lastSyncedValue = "";
 
+  /// YAML frontmatter at the top of the loaded markdown file. We
+  /// stash it verbatim on parse (so the editor view doesn't render
+  /// `---` + a block of keys as oversized text) and prepend it back
+  /// on serialize so the on-disk file keeps the metadata intact.
+  /// Empty string when the file has no frontmatter block.
+  let stashedFrontmatter = "";
+
   onMount(() => {
     if (!host) return;
     editor = new Editor({
@@ -627,7 +634,12 @@
         // the file on disk stays clean (plain blank lines, no
         // invisible characters). The next reload re-injects them
         // through `preserveBlankParagraphs`.
-        const md = stripBlankParagraphs(raw);
+        const body = stripBlankParagraphs(raw);
+        // Re-attach the YAML frontmatter we stashed at load time so
+        // the file on disk keeps its `---` block intact. Editor
+        // never sees this block in the doc model, but every write
+        // back to `value` carries it.
+        const md = stashedFrontmatter + body;
         // Pin lastSyncedValue to the same string we're writing to
         // value, so the external-sync $effect (which fires from the
         // bind:value round-trip) sees no work to do and skips
@@ -777,14 +789,32 @@
 
   function setMarkdownContent(md: string): void {
     if (!editor) return;
+    // Split off a leading YAML frontmatter block (`---\n...\n---\n`)
+    // before handing markdown to tiptap. tiptap-markdown has no
+    // frontmatter awareness; without this split the fence + keys
+    // render as oversized paragraphs in the editor. We re-attach the
+    // stashed block on serialize so the file round-trips intact.
+    const { fm, body } = splitFrontmatter(md);
+    stashedFrontmatter = fm;
     // tiptap-markdown registers `setMarkdown` via storage.markdown.parser
     // but the cleanest invocation is editor.commands.setContent(md).
     // Second positional arg is `emitUpdate: boolean` in this tiptap
     // version; the older `{ emitUpdate: false }` object form was
     // dropped.
-    editor.commands.setContent(preserveBlankParagraphs(md), false);
+    editor.commands.setContent(preserveBlankParagraphs(body), false);
     decorateSmartNodes();
     decorateWikiLinks();
+  }
+
+  /// Detect a leading YAML frontmatter block in `md`. Match shape:
+  /// `---` on the first line, then any content, then `---` on its
+  /// own line. The trailing newline (if present) is consumed too so
+  /// the body starts at a clean paragraph boundary. When there's no
+  /// frontmatter, returns `{ fm: "", body: md }` unchanged.
+  function splitFrontmatter(md: string): { fm: string; body: string } {
+    const m = md.match(/^---\n([\s\S]*?)\n---(?:\n|$)/);
+    if (!m) return { fm: "", body: md };
+    return { fm: m[0], body: md.slice(m[0].length) };
   }
 
   /// markdown-it (and CommonMark in general) treats blank lines as
