@@ -428,6 +428,21 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
 /// Incoming link edges for one file. The frontend uses this for
 /// the "linked from" panel. chan-drive's `backlinks` filters to
 /// link-kind edges already; we just pass through.
+/// Backlinks payload shape: matches `ApiEdge` (lowercase `kind`)
+/// so the frontend's `GraphEdge` type doesn't have to special-case
+/// PascalCase versus lowercase across endpoints. `Edge.kind`'s
+/// default `Serialize` would emit `"Link"` / `"Mention"` / `"Tag"`,
+/// which `FileInfoBody`'s `kind === "link"` filter then rejects
+/// — surfacing as "0 linked from" in the inspector.
+#[derive(serde::Serialize)]
+struct ApiBacklinkEdge {
+    src: String,
+    dst: String,
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    anchor: Option<String>,
+}
+
 pub async fn api_backlinks(
     State(state): State<Arc<AppState>>,
     AxumPath(path): AxumPath<String>,
@@ -438,7 +453,18 @@ pub async fn api_backlinks(
         Err(e) => return err_from(&e),
     };
     match graph.backlinks(&path) {
-        Ok(edges) => Json(edges).into_response(),
+        Ok(edges) => {
+            let mapped: Vec<ApiBacklinkEdge> = edges
+                .into_iter()
+                .map(|e| ApiBacklinkEdge {
+                    src: e.src,
+                    dst: e.dst,
+                    kind: edge_kind_tag(e.kind),
+                    anchor: e.anchor,
+                })
+                .collect();
+            Json(mapped).into_response()
+        }
         Err(e) => err_from(&e),
     }
 }
