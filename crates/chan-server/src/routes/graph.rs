@@ -242,22 +242,23 @@ fn resolve_link_dst(src: &str, target: &str, files: &std::collections::BTreeSet<
 
 /// Collapse `.` / `..` components against a drive-relative path.
 /// Returns None if the result would escape the drive root or if the
-/// path includes an absolute prefix.
+/// path includes an absolute prefix. Always emits `/` separators so
+/// the result matches drive-relative file-set keys on Windows too,
+/// where `PathBuf::to_string_lossy` would otherwise yield `\`.
 fn normalize_drive_rel(p: &std::path::Path) -> Option<String> {
-    use std::path::{Component, PathBuf};
-    let mut parts: Vec<std::ffi::OsString> = Vec::new();
+    use std::path::Component;
+    let mut parts: Vec<String> = Vec::new();
     for c in p.components() {
         match c {
             Component::CurDir => {}
             Component::ParentDir => {
                 parts.pop()?;
             }
-            Component::Normal(s) => parts.push(s.to_owned()),
+            Component::Normal(s) => parts.push(s.to_string_lossy().into_owned()),
             Component::RootDir | Component::Prefix(_) => return None,
         }
     }
-    let joined: PathBuf = parts.iter().collect();
-    Some(joined.to_string_lossy().into_owned())
+    Some(parts.join("/"))
 }
 
 pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
