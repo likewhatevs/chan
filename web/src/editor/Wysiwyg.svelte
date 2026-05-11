@@ -1739,7 +1739,12 @@
     mode: "alt" | "path" | "outside";
   } | null {
     const sel = ed.state.selection;
-    if (!sel.empty) return null;
+    // Non-collapsed selection (Shift+Arrow text-select inside the
+    // source markup): probe from `sel.from`, then accept only if
+    // BOTH endpoints land inside the same `![alt](src)` range.
+    // That keeps the bubble alive while the user expands a
+    // selection inside the source text but dismisses cleanly when
+    // the selection bleeds past `)` or before `!`.
     const resolved = ed.state.doc.resolve(sel.from);
     const block = resolved.parent;
     if (!block.isTextblock) return null;
@@ -1756,6 +1761,13 @@
     const fullLen = m[0].length;
     const rel = offset - bangIdx;
     if (rel < 0 || rel >= fullLen) return null;
+    if (!sel.empty) {
+      // sel.to must also be inside the same range, in the same
+      // textblock. If sel spans out, bail (the user is selecting
+      // beyond the markup; we should dismiss).
+      if (sel.to > blockStart + bangIdx + fullLen) return null;
+      if (sel.to < blockStart + bangIdx) return null;
+    }
     let mode: "alt" | "path" | "outside";
     if (rel <= 1) {
       mode = "outside";
