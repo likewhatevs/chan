@@ -137,3 +137,73 @@ fn default_model_present(repo_dir: &Path) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn repo_dir_name_matches_hf_hub_layout() {
+        assert_eq!(
+            repo_dir_name("BAAI/bge-small-en-v1.5"),
+            "models--BAAI--bge-small-en-v1.5"
+        );
+    }
+
+    fn seeded(repo: &Path) {
+        fs::create_dir_all(repo.join("refs")).unwrap();
+        fs::write(repo.join("refs").join("main"), b"deadbeef").unwrap();
+        let snap = repo.join("snapshots").join("deadbeef");
+        fs::create_dir_all(&snap).unwrap();
+        fs::write(snap.join("config.json"), b"{}").unwrap();
+        fs::write(snap.join("tokenizer.json"), b"{}").unwrap();
+        fs::write(snap.join("model.safetensors"), b"weights").unwrap();
+    }
+
+    #[test]
+    fn present_when_full_layout_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        seeded(tmp.path());
+        assert!(default_model_present(tmp.path()));
+    }
+
+    #[test]
+    fn absent_when_dir_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!default_model_present(tmp.path()));
+    }
+
+    #[test]
+    fn absent_when_only_stray_lockfile() {
+        // The old "any file present" heuristic considered this
+        // seeded; the new check rejects it.
+        let tmp = tempfile::tempdir().unwrap();
+        let blobs = tmp.path().join("blobs");
+        fs::create_dir_all(&blobs).unwrap();
+        fs::write(blobs.join("abc.lock"), b"").unwrap();
+        assert!(!default_model_present(tmp.path()));
+    }
+
+    #[test]
+    fn absent_when_refs_main_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        seeded(tmp.path());
+        fs::remove_file(tmp.path().join("refs").join("main")).unwrap();
+        assert!(!default_model_present(tmp.path()));
+    }
+
+    #[test]
+    fn absent_when_snapshot_incomplete() {
+        let tmp = tempfile::tempdir().unwrap();
+        seeded(tmp.path());
+        fs::remove_file(
+            tmp.path()
+                .join("snapshots")
+                .join("deadbeef")
+                .join("tokenizer.json"),
+        )
+        .unwrap();
+        assert!(!default_model_present(tmp.path()));
+    }
+}
