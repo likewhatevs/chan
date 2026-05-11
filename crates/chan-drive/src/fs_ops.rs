@@ -232,22 +232,28 @@ fn enotsup_errno() -> i32 {
     }
 }
 
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "freebsd",
-    target_os = "netbsd"
-)))]
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd"
+    ))
+))]
 fn read_xattrs(_path: &Path) -> Vec<(std::ffi::OsString, Vec<u8>)> {
     Vec::new()
 }
 
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "freebsd",
-    target_os = "netbsd"
-)))]
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd"
+    ))
+))]
 fn write_xattrs(_path: &Path, _xattrs: &[(std::ffi::OsString, Vec<u8>)]) {}
 
 /// fsync a directory so a freshly-created or freshly-renamed entry
@@ -636,22 +642,28 @@ fn open_std_file_through_dir(dir: &cap_std::fs::Dir, rel: &Path) -> Option<std::
     Some(std::fs::File::from(owned))
 }
 
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "freebsd",
-    target_os = "netbsd"
-)))]
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd"
+    ))
+))]
 fn read_xattrs_via_fd(_dir: &cap_std::fs::Dir, _rel: &Path) -> Vec<(std::ffi::OsString, Vec<u8>)> {
     Vec::new()
 }
 
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "freebsd",
-    target_os = "netbsd"
-)))]
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd"
+    ))
+))]
 fn write_xattrs_via_fd(
     _dir: &cap_std::fs::Dir,
     _rel: &Path,
