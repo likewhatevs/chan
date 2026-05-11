@@ -58,6 +58,16 @@ pub struct LlmConfig {
     /// flip to true.
     #[serde(default)]
     pub auto_apply_writes: bool,
+    /// Hard cap on a single MCP `read_image` response, in bytes.
+    /// Mirrors the `MaxTokens` shape: `None` means "use the
+    /// chan-llm default" (`mcp::DEFAULT_MCP_IMAGE_MAX_BYTES`,
+    /// currently 10 MiB). Set this to widen for models that accept
+    /// larger image attachments, or narrow it to keep tool results
+    /// bounded on a metered network. The MCP server reads the file
+    /// before checking the cap, so this also caps the worst-case
+    /// memory the server allocates for a single image read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_image_max_bytes: Option<u64>,
     /// Per-backend API keys when stored in the on-disk fallback.
     /// Env vars and the OS keychain take precedence. Empty strings
     /// are treated as unset.
@@ -367,6 +377,7 @@ mod tests {
             claude_cli: ClaudeCli::default(),
             gemini_cli: GeminiCli::default(),
             max_tokens: MaxTokens::default(),
+            mcp_image_max_bytes: None,
         };
         cfg.save_to(&p).unwrap();
         let loaded = LlmConfig::load_from(&p).unwrap();
@@ -470,6 +481,28 @@ mod tests {
         LlmConfig::default().save_to(&p).unwrap();
         let raw = std::fs::read_to_string(&p).unwrap();
         assert!(!raw.contains("[max_tokens]"), "got: {raw}");
+    }
+
+    #[test]
+    fn mcp_image_max_bytes_round_trips() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("llm.toml");
+        let cfg = LlmConfig {
+            mcp_image_max_bytes: Some(20 * 1024 * 1024),
+            ..Default::default()
+        };
+        cfg.save_to(&p).unwrap();
+        let loaded = LlmConfig::load_from(&p).unwrap();
+        assert_eq!(loaded.mcp_image_max_bytes, Some(20 * 1024 * 1024));
+    }
+
+    #[test]
+    fn unset_mcp_image_max_bytes_skipped_in_serialized_output() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("llm.toml");
+        LlmConfig::default().save_to(&p).unwrap();
+        let raw = std::fs::read_to_string(&p).unwrap();
+        assert!(!raw.contains("mcp_image_max_bytes"), "got: {raw}");
     }
 
     #[test]

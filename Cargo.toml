@@ -57,6 +57,7 @@ chan-llm = { path = "crates/chan-llm" }
 anyhow = "1"
 async-trait = "0.1"
 axum = "0.7"
+base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 dirs = "5"

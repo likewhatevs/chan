@@ -122,7 +122,8 @@ const ALLOWED_TOOLS: &str = concat!(
     "mcp__chan__read_file,",
     "mcp__chan__write_file,",
     "mcp__chan__list_files,",
-    "mcp__chan__search_content",
+    "mcp__chan__search_content,",
+    "mcp__chan__read_image",
 );
 
 /// Tools claude is explicitly NOT allowed to use in v2 mode.
@@ -776,6 +777,28 @@ mod tests {
             args.iter().map(|a| a.as_str().unwrap()).collect::<Vec<_>>(),
             vec!["__mcp", "/d"]
         );
+    }
+
+    #[test]
+    fn allowed_tools_covers_every_mcp_tool() {
+        // Each `mcp__chan__*` entry maps to a real tool on the
+        // chan-llm MCP server. If a new tool lands in mcp.rs without
+        // being added here, claude prompts for permission on first
+        // use and the v2 black-box experience breaks. Pin every
+        // current tool by name so a drift surfaces as a test
+        // failure at the right place.
+        for tool in [
+            "mcp__chan__read_file",
+            "mcp__chan__write_file",
+            "mcp__chan__list_files",
+            "mcp__chan__search_content",
+            "mcp__chan__read_image",
+        ] {
+            assert!(
+                ALLOWED_TOOLS.contains(tool),
+                "ALLOWED_TOOLS missing {tool}: {ALLOWED_TOOLS}"
+            );
+        }
     }
 
     #[test]

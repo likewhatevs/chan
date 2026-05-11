@@ -98,3 +98,18 @@ with relative paths, relevance scores, and short snippets around \
 the match. Useful for finding which file mentions a topic before \
 issuing read_file on it. `limit` defaults to 20 and is hard-capped \
 at 100.";
+
+/// Description of the read_image tool. MCP-only: not surfaced
+/// through `tools::standard_tool_schemas()` because the in-process
+/// backends don't have a multimodal-content slot today (issue #2's
+/// follow-up). Pinned against the inlined `#[tool]` literal in
+/// `mcp.rs` via `mcp_descriptions_match_prompts`.
+pub const READ_IMAGE_DESC: &str = "\
+Read a raster image from the active drive and return it as an MCP \
+image content block. The path is POSIX-style relative to the drive \
+root and must end in .png, .jpg, .jpeg, .webp, or .gif; other \
+extensions are refused (text files use read_file). The response is \
+the raw image bytes base64-encoded with the matching MIME type. \
+Single-call cap defaults to 10 MiB; oversized files error with \
+`image too large` so you can pick a smaller file (the host may \
+have widened or narrowed this cap via config).";

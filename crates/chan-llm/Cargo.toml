@@ -12,7 +12,7 @@ default = []
 # Enables the MCP server module and the `chan-llm-mcp` binary. Off
 # by default so library consumers (chan-server, native shells) don't
 # pull rmcp + its transitive deps unless they want the binary.
-mcp = ["dep:rmcp", "dep:schemars"]
+mcp = ["dep:rmcp", "dep:schemars", "dep:base64"]
 
 [dependencies]
 chan-drive = { path = "../chan-drive" }
@@ -35,6 +35,9 @@ tracing = { workspace = true }
 # transport-async-rw + schemars, which is everything we need for a
 # stdio tool server. We also depend on schemars directly because the
 # `JsonSchema` derive lives in user code (the params structs).
+# base64 is used by `read_image` to encode binary image bytes for the
+# MCP `image` content type.
+base64 = { workspace = true, optional = true }
 rmcp = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 

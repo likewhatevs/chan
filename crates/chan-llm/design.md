@@ -150,9 +150,9 @@ same dispatch.
   that mirrors `chan_drive::fs_ops::atomic_write` (tempfile in
   the same dir, fsync, rename, fsync parent).
 - Fields: `backend`, `models`, `urls`, `max_tokens`,
-  `auto_apply_writes`, `keys`, `claude_cli`, `gemini_cli`. Empty
-  sub-tables are skipped on serialization so a fresh install
-  doesn't grow noise.
+  `auto_apply_writes`, `mcp_image_max_bytes`, `keys`, `claude_cli`,
+  `gemini_cli`. Empty sub-tables and `None` scalars are skipped on
+  serialization so a fresh install doesn't grow noise.
 
 Key resolver (`keys.rs`)
 
@@ -169,8 +169,11 @@ Prompts (`prompts.rs`)
 - `SYSTEM_PROMPT` and `SYSTEM_PROMPT_NO_TOOLS` (the latter for
   Ollama models that don't support tool calling).
 - Per-tool descriptions (`READ_FILE_DESC`, `WRITE_FILE_DESC`,
-  `LIST_FILES_DESC`, `SEARCH_CONTENT_DESC`) referenced from the
-  tool schema and re-exposed verbatim in the MCP server.
+  `LIST_FILES_DESC`, `SEARCH_CONTENT_DESC`, `READ_IMAGE_DESC`)
+  referenced from the tool schema and re-exposed verbatim in the
+  MCP server. `READ_IMAGE_DESC` is MCP-only: the in-process
+  backends don't have a multimodal-content slot today, so it
+  isn't surfaced via `tools::standard_tool_schemas()`.
 
 Tool sandbox (`tools.rs`)
 
@@ -199,9 +202,20 @@ Session (`session.rs`)
 MCP server (`mcp.rs`, `feature = "mcp"`)
 
 - rmcp-based stdio transport. `Server::new(drive,
-  auto_apply_writes).serve_stdio().await`.
-- Same `tools::execute` dispatch, so chan-drive's gates apply
-  identically to MCP-driven and in-process calls.
+  auto_apply_writes).with_max_image_bytes(n).serve_stdio().await`.
+- Five tools: `read_file`, `write_file`, `list_files`,
+  `search_content` (text, via `tools::execute`) and `read_image`
+  (binary, via `Drive::read` + base64 + rmcp `Content::image`).
+  chan-drive's path sandbox and regular-file gate apply to all
+  five; the editable-text gate fires for the text tools, the
+  image-extension allowlist (`is_supported_image`: png/jpg/jpeg/
+  webp/gif) fires for `read_image`.
+- `read_image` is capped per call. The cap defaults to
+  `DEFAULT_MCP_IMAGE_MAX_BYTES` (10 MiB) and is overridable via
+  `Server::with_max_image_bytes`. Embedded callers (chan-server,
+  the `__mcp` subcommand) thread it from
+  `LlmConfig::mcp_image_max_bytes`; the standalone binary takes
+  `--max-image-bytes <N>`.
 - Standalone binary `chan-llm-mcp` builds when the feature is
   on; in chan's CLI the same code path runs in-process via the
   hidden `__mcp` subcommand.
@@ -221,8 +235,8 @@ The crate's headline types, all sync, all FFI-shaped:
 
 ```text
 LlmConfig            { backend, models, urls, max_tokens,
-                       auto_apply_writes, keys,
-                       claude_cli, gemini_cli }
+                       auto_apply_writes, mcp_image_max_bytes,
+                       keys, claude_cli, gemini_cli }
                      load() / save()
                      load_from(&Path) / save_to(&Path)
 
@@ -283,7 +297,10 @@ MCP module (`feature = "mcp"`):
 
 ```text
 mcp::Server::new(drive, auto_apply_writes) -> Server
-mcp::Server::serve_stdio().await -> Result<()>
+mcp::Server::with_max_image_bytes(n: u64)  -> Server
+mcp::Server::serve_stdio().await           -> Result<()>
+mcp::DEFAULT_MCP_IMAGE_MAX_BYTES           -> u64 (10 MiB)
+mcp::is_supported_image(rel: &str)         -> Option<&'static str>
 ```
 
 ## 5. Invariants and trust boundaries
@@ -532,5 +549,8 @@ shaped to make that mechanical:
   when the first native shell does.
 - Conversation history schema. The session is stateless; consumers
   persist whatever transcript shape they want however they want.
-- MCP `resources/` (image content, browse-style discovery).
-  Tracked separately; v1 of the MCP server ships tools-only.
+- MCP `resources/` (browse-style discovery). Tracked separately.
+  Image reads are covered by the `read_image` tool; resources
+  would add a list / read surface scoped to the drive's media
+  directory (the model picks files without first calling
+  `list_files`).

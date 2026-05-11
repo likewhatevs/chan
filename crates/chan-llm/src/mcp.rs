@@ -12,20 +12,69 @@
 //!     Edit / Glob / Grep tools, so the agent's edits flow through
 //!     `tools::execute` and chan-drive's gates fire.
 //!
-//! v1 ships tools-only. Resources (binary content like images,
-//! browse-style discovery) are deferred to issue #2.
+//! Tools exposed: `read_file`, `write_file`, `list_files`,
+//! `search_content`, and `read_image`. The first four route through
+//! `tools::execute` (text-only JSON results); `read_image` is the
+//! binary read path: it pulls bytes through `Drive::read` (path
+//! sandbox, regular-file gate, lstat) and returns base64-encoded
+//! image content as an MCP `image` content block, capped at
+//! `max_image_bytes` (default 10 MiB, configurable via
+//! `LlmConfig::mcp_image_max_bytes` or `--max-image-bytes`).
 
 use std::sync::Arc;
 
+use base64::engine::Engine as _;
 use chan_drive::Drive;
 use rmcp::{
-    handler::server::wrapper::Parameters, model::ErrorData, schemars, tool, tool_handler,
-    tool_router, transport::stdio, ServerHandler, ServiceExt,
+    handler::server::wrapper::Parameters,
+    model::{Content, ErrorData},
+    schemars, tool, tool_handler, tool_router,
+    transport::stdio,
+    ServerHandler, ServiceExt,
 };
 use serde::Deserialize;
 
 use crate::error::LlmError;
 use crate::tools::{self, ToolContext, ToolOutcome};
+
+/// Default hard cap on a single `read_image` response, in bytes.
+/// 10 MiB covers the typical image attachment ceiling of frontier
+/// vision models with margin for base64's ~33% inflation; oversized
+/// images surface as an `invalid_params` error so the model can
+/// recover instead of bloating a single tool turn. Overridable via
+/// `LlmConfig::mcp_image_max_bytes` or `--max-image-bytes` on the
+/// standalone binary.
+pub const DEFAULT_MCP_IMAGE_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Extension -> MIME table for `read_image`. We keep the set narrow
+/// on purpose: anything outside this list is either not renderable by
+/// frontier vision models (BMP, TIFF) or carries enough sharp edges
+/// (SVG's inline script, AVIF's still-patchy decoder support) that
+/// the user is better served opening the file in a real viewer.
+/// Comparison is case-insensitive.
+const IMAGE_EXTENSIONS: &[(&str, &str)] = &[
+    ("png", "image/png"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("webp", "image/webp"),
+    ("gif", "image/gif"),
+];
+
+/// Returns the MIME type for `rel` when its extension is in the
+/// `read_image` allowlist, else `None`. The comparison strips an
+/// optional leading dot and lowercases; `image.PNG` and `image.png`
+/// both match. Does not touch the filesystem.
+pub fn is_supported_image(rel: &str) -> Option<&'static str> {
+    let dot = rel.rfind('.')?;
+    let ext = &rel[dot + 1..];
+    if ext.is_empty() {
+        return None;
+    }
+    let lower = ext.to_ascii_lowercase();
+    IMAGE_EXTENSIONS
+        .iter()
+        .find_map(|(e, m)| if *e == lower { Some(*m) } else { None })
+}
 
 // Note: we deliberately do NOT bring `crate::error::Result` into scope.
 // The `#[tool_handler]` macro expands to code that uses bare `Result`,
@@ -44,13 +93,31 @@ use crate::tools::{self, ToolContext, ToolOutcome};
 #[derive(Clone)]
 pub struct Server {
     ctx: ToolContext,
+    /// Hard cap on a single `read_image` response, in bytes. Set via
+    /// `with_max_image_bytes`; defaults to
+    /// `DEFAULT_MCP_IMAGE_MAX_BYTES`. Lives on the server (not the
+    /// `ToolContext`) because it's an MCP-surface policy, not a
+    /// chan-drive invariant: the same `Drive` can host a server with
+    /// a different cap.
+    max_image_bytes: u64,
 }
 
 impl Server {
     pub fn new(drive: Arc<Drive>, auto_apply_writes: bool) -> Self {
         Self {
             ctx: ToolContext::new(drive, auto_apply_writes),
+            max_image_bytes: DEFAULT_MCP_IMAGE_MAX_BYTES,
         }
+    }
+
+    /// Override the per-response `read_image` byte cap. Mirrors the
+    /// builder shape that backends use elsewhere in chan-llm: a
+    /// caller that doesn't care about the cap keeps the default;
+    /// chan-server / the standalone binary set it from
+    /// `LlmConfig::mcp_image_max_bytes` (or `--max-image-bytes`).
+    pub fn with_max_image_bytes(mut self, n: u64) -> Self {
+        self.max_image_bytes = n;
+        self
     }
 
     /// Run the server on stdio. JSON-RPC frames in on stdin, out on
@@ -138,6 +205,13 @@ pub struct ListFilesParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct EmptyParams {}
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReadImageParams {
+    /// POSIX-style relative path under the drive root. Must end in
+    /// one of: .png, .jpg, .jpeg, .webp, .gif.
+    pub path: String,
+}
+
 // ---- tool dispatch ----------------------------------------------------
 
 // Tool descriptions duplicate `crate::prompts::*_DESC` as string
@@ -216,6 +290,54 @@ at 100.")]
             args["limit"] = serde_json::json!(limit);
         }
         run_tool("search_content", &args, &self.ctx)
+    }
+
+    #[tool(description = "\
+Read a raster image from the active drive and return it as an MCP \
+image content block. The path is POSIX-style relative to the drive \
+root and must end in .png, .jpg, .jpeg, .webp, or .gif; other \
+extensions are refused (text files use read_file). The response is \
+the raw image bytes base64-encoded with the matching MIME type. \
+Single-call cap defaults to 10 MiB; oversized files error with \
+`image too large` so you can pick a smaller file (the host may \
+have widened or narrowed this cap via config).")]
+    fn read_image(
+        &self,
+        Parameters(p): Parameters<ReadImageParams>,
+    ) -> std::result::Result<Content, ErrorData> {
+        let mime = is_supported_image(&p.path).ok_or_else(|| {
+            // Mirror the "path refused" wording the other handlers
+            // use after the chan-drive scrub: the model recovers by
+            // listing the drive and picking a supported extension.
+            ErrorData::invalid_params(
+                "path refused: unsupported image extension (expected png/jpg/jpeg/webp/gif)"
+                    .to_string(),
+                None,
+            )
+        })?;
+        // Drive::read handles the path sandbox, regular-file gate,
+        // and lstat refusal; it does NOT apply is_editable_text
+        // (that's the text-only gate). Image extensions are the
+        // sole policy we add on top.
+        let bytes =
+            self.ctx.drive.read(&p.path).map_err(|e| {
+                ErrorData::internal_error(mcp_safe_message(&LlmError::from(e)), None)
+            })?;
+        // Cap before base64 so we don't pay the allocation on
+        // oversized files. Base64 inflates by ~4/3, so the
+        // post-encode payload is at most `max_image_bytes * 4 / 3`.
+        if (bytes.len() as u64) > self.max_image_bytes {
+            return Err(ErrorData::invalid_params(
+                format!(
+                    "image too large: {} bytes exceeds {} byte cap",
+                    bytes.len(),
+                    self.max_image_bytes
+                ),
+                None,
+            ));
+        }
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        Ok(Content::image(b64, mime))
     }
 }
 
@@ -333,6 +455,11 @@ mod tests {
             search.description.as_deref(),
             Some(crate::prompts::SEARCH_CONTENT_DESC)
         );
+        let image = Server::read_image_tool_attr();
+        assert_eq!(
+            image.description.as_deref(),
+            Some(crate::prompts::READ_IMAGE_DESC)
+        );
     }
 
     fn fixture(auto_apply: bool) -> (TempDir, TempDir, Server) {
@@ -448,6 +575,122 @@ mod tests {
             "looks like an absolute path: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn is_supported_image_extension_table() {
+        assert_eq!(is_supported_image("a.png"), Some("image/png"));
+        assert_eq!(is_supported_image("a.PNG"), Some("image/png"));
+        assert_eq!(is_supported_image("a.jpg"), Some("image/jpeg"));
+        assert_eq!(is_supported_image("a.jpeg"), Some("image/jpeg"));
+        assert_eq!(is_supported_image("a.webp"), Some("image/webp"));
+        assert_eq!(is_supported_image("a.gif"), Some("image/gif"));
+        assert_eq!(is_supported_image("a.md"), None);
+        assert_eq!(is_supported_image("a.bmp"), None);
+        assert_eq!(is_supported_image("a.svg"), None);
+        assert_eq!(is_supported_image("a"), None);
+        assert_eq!(is_supported_image(""), None);
+        assert_eq!(is_supported_image("a."), None);
+    }
+
+    #[test]
+    fn read_image_returns_base64_image_content() {
+        let (_cfg, root, server) = fixture(true);
+        // Minimal valid PNG: the 8-byte signature is enough to
+        // verify round-trip; we don't care that it's a parseable
+        // image, only that read_image reads the bytes verbatim and
+        // hands them to base64 with the right MIME.
+        let bytes = b"\x89PNG\r\n\x1a\n";
+        std::fs::write(root.path().join("a.png"), bytes).unwrap();
+        let content = server
+            .read_image(Parameters(ReadImageParams {
+                path: "a.png".into(),
+            }))
+            .unwrap();
+        let img = content.as_image().expect("expected ImageContent");
+        assert_eq!(img.mime_type, "image/png");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&img.data)
+            .unwrap();
+        assert_eq!(decoded, bytes);
+    }
+
+    #[test]
+    fn read_image_refuses_unsupported_extension() {
+        let (_cfg, root, server) = fixture(true);
+        std::fs::write(root.path().join("a.bmp"), b"BMP").unwrap();
+        let err = server
+            .read_image(Parameters(ReadImageParams {
+                path: "a.bmp".into(),
+            }))
+            .unwrap_err();
+        assert!(
+            err.message
+                .to_lowercase()
+                .contains("unsupported image extension"),
+            "msg={}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn read_image_caps_response_size() {
+        let (_cfg, root, server_default) = fixture(true);
+        // Override the cap to 4 bytes so a 5-byte file overflows;
+        // exercises with_max_image_bytes alongside the cap check.
+        let server = server_default.with_max_image_bytes(4);
+        std::fs::write(root.path().join("a.png"), b"\x89PNG\r").unwrap();
+        let err = server
+            .read_image(Parameters(ReadImageParams {
+                path: "a.png".into(),
+            }))
+            .unwrap_err();
+        assert!(
+            err.message.contains("image too large"),
+            "msg={}",
+            err.message
+        );
+        // The numeric size and cap stay in the message: the model
+        // needs them to pick a smaller file or to surface the cap
+        // to the user.
+        assert!(err.message.contains("5"), "msg={}", err.message);
+        assert!(err.message.contains("4"), "msg={}", err.message);
+    }
+
+    #[test]
+    fn read_image_path_sandbox_error_is_scrubbed() {
+        let (_cfg, _root, server) = fixture(true);
+        // Path escape: chan-drive's path-resolver refuses this; the
+        // error surfaces through mcp_safe_message as the scrubbed
+        // category, no host filesystem detail.
+        let err = server
+            .read_image(Parameters(ReadImageParams {
+                path: "../escape.png".into(),
+            }))
+            .unwrap_err();
+        assert!(
+            err.message.to_lowercase().contains("path refused"),
+            "msg={}",
+            err.message
+        );
+        assert!(
+            !err.message.contains("escape.png"),
+            "leaked path: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn server_with_max_image_bytes_overrides_default() {
+        let (_cfg, _root, server_default) = fixture(true);
+        let server = server_default.with_max_image_bytes(123);
+        assert_eq!(server.max_image_bytes, 123);
+    }
+
+    #[test]
+    fn server_defaults_to_default_image_cap() {
+        let (_cfg, _root, server) = fixture(true);
+        assert_eq!(server.max_image_bytes, DEFAULT_MCP_IMAGE_MAX_BYTES);
     }
 
     #[test]

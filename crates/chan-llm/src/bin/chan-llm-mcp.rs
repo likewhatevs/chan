@@ -7,7 +7,7 @@
 //! Usage:
 //!
 //!     chan-llm-mcp --drive /path/to/drive [--config /path/to/llm.toml]
-//!                  [--auto-apply]
+//!                  [--auto-apply] [--max-image-bytes N]
 //!
 //! `--auto-apply` is the explicit, opt-in knob for letting the
 //! server's `write_file` tool hit disk without producing a
@@ -18,6 +18,12 @@
 //! ClaudeCli path in chan-llm (issue #1) flips it from
 //! `LlmConfig.auto_apply_writes` so the user's preference in the
 //! chan UI carries through to the MCP subprocess.
+//!
+//! `--max-image-bytes N` overrides the per-response cap on
+//! `read_image` (default 10 MiB). chan-server / chan's embedded
+//! `__mcp` subcommand resolve this from
+//! `LlmConfig::mcp_image_max_bytes`; the standalone binary
+//! takes a CLI flag instead to avoid pulling in llm.toml here.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -89,7 +95,10 @@ fn main() -> ExitCode {
         }
     };
 
-    let server = Server::new(drive, args.auto_apply);
+    let mut server = Server::new(drive, args.auto_apply);
+    if let Some(cap) = args.max_image_bytes {
+        server = server.with_max_image_bytes(cap);
+    }
     if let Err(e) = runtime.block_on(server.serve_stdio()) {
         eprintln!("chan-llm-mcp: {e}");
         return ExitCode::FAILURE;
@@ -102,17 +111,24 @@ chan-llm-mcp - MCP server exposing chan drive tools over stdio
 
 USAGE:
     chan-llm-mcp --drive <path> [--config <path>] [--auto-apply]
+                 [--max-image-bytes <N>]
 
 OPTIONS:
-    --drive <path>     Absolute path of the chan drive to expose.
-                       Must already be registered (use `chan drive add`).
-    --config <path>    Override for the chan-drive registry config
-                       (defaults to ~/.chan/config.toml).
-    --auto-apply       Apply write_file tool calls without producing
-                       a 'deferred' error. Off by default: the MCP
-                       client is expected to surface a confirmation
-                       UI before flipping this on.
-    -h, --help         Print this help.
+    --drive <path>           Absolute path of the chan drive to expose.
+                             Must already be registered
+                             (use `chan drive add`).
+    --config <path>          Override for the chan-drive registry config
+                             (defaults to ~/.chan/config.toml).
+    --auto-apply             Apply write_file tool calls without
+                             producing a 'deferred' error. Off by
+                             default: the MCP client is expected to
+                             surface a confirmation UI before flipping
+                             this on.
+    --max-image-bytes <N>    Hard cap on a single read_image response,
+                             in bytes. Default 10 MiB. Oversized files
+                             error with `image too large` instead of
+                             being silently downscaled.
+    -h, --help               Print this help.
 ";
 
 #[derive(Default)]
@@ -120,6 +136,7 @@ struct Args {
     drive: Option<PathBuf>,
     config: Option<PathBuf>,
     auto_apply: bool,
+    max_image_bytes: Option<u64>,
     help: bool,
 }
 
@@ -137,6 +154,13 @@ impl Args {
                     out.config = Some(PathBuf::from(v));
                 }
                 "--auto-apply" => out.auto_apply = true,
+                "--max-image-bytes" => {
+                    let v = it.next().ok_or("--max-image-bytes needs a value")?;
+                    let n: u64 = v
+                        .parse()
+                        .map_err(|_| format!("--max-image-bytes: not a u64: {v}"))?;
+                    out.max_image_bytes = Some(n);
+                }
                 "-h" | "--help" => out.help = true,
                 other => return Err(format!("unknown argument: {other}")),
             }

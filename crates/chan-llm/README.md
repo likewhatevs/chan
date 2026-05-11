@@ -38,7 +38,8 @@ GeminiCli   ready    drives a local `gemini` subprocess; v2 rewrites
 
 ```text
 LlmConfig            backend, models, urls, max_tokens,
-                     auto_apply_writes, keys, claude_cli, gemini_cli.
+                     auto_apply_writes, mcp_image_max_bytes, keys,
+                     claude_cli, gemini_cli.
                      load() / save() at chan-drive's config dir.
 
 KeyStatus            Env | Keychain | File | Missing.
