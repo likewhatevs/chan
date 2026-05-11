@@ -27,6 +27,65 @@
 
 import CodeBlock from "@tiptap/extension-code-block";
 
+/// Shorthand → human-friendly display label for the language
+/// badge shown on collapsed (not-being-edited) code blocks. Only
+/// the most common aliases are mapped; anything else falls back
+/// to a capitalised version of the raw value so the badge still
+/// reads cleanly without us maintaining an exhaustive table.
+const LANG_DISPLAY: Record<string, string> = {
+  sh: "Shell",
+  bash: "Shell",
+  zsh: "Shell",
+  fish: "Shell",
+  shell: "Shell",
+  js: "JavaScript",
+  javascript: "JavaScript",
+  jsx: "JSX",
+  ts: "TypeScript",
+  typescript: "TypeScript",
+  tsx: "TSX",
+  py: "Python",
+  python: "Python",
+  rb: "Ruby",
+  ruby: "Ruby",
+  rs: "Rust",
+  rust: "Rust",
+  go: "Go",
+  c: "C",
+  cpp: "C++",
+  "c++": "C++",
+  cs: "C#",
+  java: "Java",
+  kt: "Kotlin",
+  kotlin: "Kotlin",
+  swift: "Swift",
+  php: "PHP",
+  html: "HTML",
+  css: "CSS",
+  scss: "SCSS",
+  sass: "Sass",
+  json: "JSON",
+  yaml: "YAML",
+  yml: "YAML",
+  toml: "TOML",
+  xml: "XML",
+  sql: "SQL",
+  md: "Markdown",
+  markdown: "Markdown",
+  diff: "Diff",
+  patch: "Diff",
+  text: "Text",
+  txt: "Text",
+};
+
+function langDisplay(raw: string | null | undefined): string {
+  const v = (raw ?? "").trim();
+  if (!v) return "";
+  const k = v.toLowerCase();
+  if (LANG_DISPLAY[k]) return LANG_DISPLAY[k];
+  return v.charAt(0).toUpperCase() + v.slice(1);
+}
+
 export const CodeBlockFenced = CodeBlock.extend({
   addNodeView() {
     return ({ node, getPos, editor }) => {
@@ -93,11 +152,22 @@ export const CodeBlockFenced = CodeBlock.extend({
       footer.textContent = "```";
       wrap.appendChild(footer);
 
+      // Language badge: only visible when the caret is OUTSIDE
+      // the block (the fence rows hide). The `liveSource` plugin
+      // sets `data-cursor-in` on the wrap when the caret enters,
+      // and CSS toggles fences vs. badge from that single signal.
+      const badge = document.createElement("div");
+      badge.className = "md-codeblock-badge";
+      badge.contentEditable = "false";
+      badge.textContent = langDisplay(node.attrs.language as string | null);
+      wrap.appendChild(badge);
+
       const isOurUI = (target: EventTarget | null): boolean => {
         if (!(target instanceof Node)) return false;
         return (
           header.contains(target) ||
           footer.contains(target) ||
+          badge.contains(target) ||
           target === langInput
         );
       };
@@ -124,6 +194,10 @@ export const CodeBlockFenced = CodeBlock.extend({
           // position inside the input stays stable as they type.
           if (langInput.value !== next) {
             langInput.value = next;
+          }
+          const badgeNext = langDisplay(next);
+          if (badge.textContent !== badgeNext) {
+            badge.textContent = badgeNext;
           }
           return true;
         },

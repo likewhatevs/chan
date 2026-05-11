@@ -512,11 +512,14 @@
                 // against the editing file so the markdown reads
                 // `./name.png` like the bubble-driven insert.
                 const src = fromPath ? relativizePath(path, fromPath) : path;
-                const last = path.split("/").pop() ?? path;
-                const alt = last.replace(/\.[^./]+$/, "");
+                // No alt-text auto-fill: paste / upload paths
+                // produce timestamp-prefixed filenames that aren't
+                // meaningful as descriptions, and the indexer
+                // already keys off filenames, not alt text. Users
+                // can add an alt later via the edit-existing flow.
                 const tr = view.state.tr.insert(
                   cursor,
-                  imgType.create({ src, alt }),
+                  imgType.create({ src, alt: "" }),
                 );
                 view.dispatch(tr);
                 // Image atom is one position; advance the cursor so
@@ -1924,8 +1927,14 @@
     // Auto-fill alt from the picked file's basename (without ext)
     // when the user hasn't supplied one (or has left the default
     // we pre-populated on edit-entry, which counts as untouched).
+    // Skip the auto-fill on uploads (`overrideSrc` set): upload
+    // filenames are timestamp-prefixed and not meaningful as
+    // descriptions; the user can add an alt later via edit-existing.
     let alt = range.alt;
-    if (alt === "" || alt === editingImageDefaultAlt) {
+    if (
+      overrideSrc === undefined &&
+      (alt === "" || alt === editingImageDefaultAlt)
+    ) {
       const base = picked.split("/").pop() ?? picked;
       const dot = base.lastIndexOf(".");
       alt = dot > 0 ? base.slice(0, dot) : base;
@@ -3001,10 +3010,13 @@
   }
 
   /* Fenced code block (`CodeBlockFenced` NodeView). The wrap is
-     the styled box; fences sit inside it as monospace rows. The
-     language is a real `<input>` so PM treats it as opaque and we
-     get native focus/blur/caret behavior. */
+     the styled box; the language fence rows live inside, plus a
+     small badge that surfaces the language name when the block
+     isn't being edited. Toggle: `data-cursor-in` (set by the
+     liveSource decoration when the caret enters) flips fences
+     visible / badge hidden. */
   :global(.md-wysiwyg .md-codeblock) {
+    position: relative;
     background: var(--bg-elev);
     border-radius: 4px;
     padding: 8px 12px;
@@ -3013,13 +3025,17 @@
     line-height: 1.4;
     margin: 0.5em 0;
   }
-  :global(.md-wysiwyg .md-codeblock-fence) {
-    color: var(--text-secondary);
-    opacity: 0.6;
-    user-select: none;
+  /* Default (caret outside): hide both fence rows. */
+  :global(.md-wysiwyg .md-codeblock .md-codeblock-fence) {
+    display: none;
+  }
+  :global(.md-wysiwyg .md-codeblock[data-cursor-in] .md-codeblock-fence) {
     display: flex;
     align-items: center;
     gap: 2px;
+    color: var(--text-secondary);
+    opacity: 0.6;
+    user-select: none;
   }
   :global(.md-wysiwyg .md-codeblock-content) {
     background: transparent;
@@ -3050,6 +3066,41 @@
   :global(.md-wysiwyg .md-codeblock-lang::placeholder) {
     color: var(--text-secondary);
     opacity: 0.4;
+  }
+  /* Language badge: anchored to top-right, only visible when the
+     code block isn't being edited (no `data-cursor-in`). Hidden
+     when empty (no language set) so plain code blocks don't carry
+     an empty badge. */
+  :global(.md-wysiwyg .md-codeblock-badge) {
+    position: absolute;
+    top: 6px;
+    right: 10px;
+    color: var(--text-secondary);
+    opacity: 0.55;
+    font-family: var(--chan-font-body-family, inherit);
+    font-size: 0.8em;
+    user-select: none;
+    pointer-events: none;
+  }
+  :global(.md-wysiwyg .md-codeblock-badge:empty),
+  :global(.md-wysiwyg .md-codeblock[data-cursor-in] .md-codeblock-badge) {
+    display: none;
+  }
+
+  /* Image-source markdown syntax coloring. The `![alt](src)` text
+     only appears in the doc while an image is in edit mode (atom
+     swapped for source); these rules tint the punctuation muted
+     and give the alt / src text their own subtle accent so the
+     three components read distinctly. */
+  :global(.md-wysiwyg .md-image-marker) {
+    color: var(--text-secondary);
+    opacity: 0.55;
+  }
+  :global(.md-wysiwyg .md-image-alt) {
+    color: var(--accent, #6c8cf5);
+  }
+  :global(.md-wysiwyg .md-image-src) {
+    color: var(--link, #88c0d0);
   }
 
   /* Wiki link click flow lives in the bubble (see

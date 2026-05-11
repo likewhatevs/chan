@@ -98,6 +98,61 @@ export const LiveSourceExtension = Extension.create({
                   }),
                 );
               }
+
+              // Image-source markdown syntax coloring. Same idea as
+              // wiki brackets: when an image atom is in edit mode
+              // its `![alt](src)` is laid down as plain text in the
+              // textblock; we tint the punctuation so the alt and
+              // src text stand out from the markers.
+              const imgRe = /!\[([^\]]*)\]\(([^)]*)\)/g;
+              let im: RegExpExecArray | null;
+              while ((im = imgRe.exec(text)) !== null) {
+                const matchStart = startContent + im.index;
+                const altLen = (im[1] ?? "").length;
+                const srcLen = (im[2] ?? "").length;
+                // `![`
+                decos.push(
+                  Decoration.inline(matchStart, matchStart + 2, {
+                    class: "md-image-marker",
+                  }),
+                );
+                // alt text
+                if (altLen > 0) {
+                  decos.push(
+                    Decoration.inline(
+                      matchStart + 2,
+                      matchStart + 2 + altLen,
+                      { class: "md-image-alt" },
+                    ),
+                  );
+                }
+                // `](`
+                decos.push(
+                  Decoration.inline(
+                    matchStart + 2 + altLen,
+                    matchStart + 2 + altLen + 2,
+                    { class: "md-image-marker" },
+                  ),
+                );
+                // src text
+                if (srcLen > 0) {
+                  decos.push(
+                    Decoration.inline(
+                      matchStart + 2 + altLen + 2,
+                      matchStart + 2 + altLen + 2 + srcLen,
+                      { class: "md-image-src" },
+                    ),
+                  );
+                }
+                // `)`
+                decos.push(
+                  Decoration.inline(
+                    matchStart + 2 + altLen + 2 + srcLen,
+                    matchStart + 2 + altLen + 2 + srcLen + 1,
+                    { class: "md-image-marker" },
+                  ),
+                );
+              }
               return false;
             });
 
@@ -106,10 +161,25 @@ export const LiveSourceExtension = Extension.create({
             }
             const $from = doc.resolve(selection.from);
 
+            // 1a. Code block cursor-in marker. The `CodeBlockFenced`
+            //     NodeView hides its fence rows and shows a small
+            //     language badge by default; when the caret is
+            //     inside, CSS flips that around so the user can edit
+            //     the language slot and see the literal backticks.
+            const parent = $from.parent;
+            if (parent.type.name === "codeBlock") {
+              const blockStart = $from.before($from.depth);
+              const blockEnd = blockStart + parent.nodeSize;
+              decos.push(
+                Decoration.node(blockStart, blockEnd, {
+                  "data-cursor-in": "",
+                }),
+              );
+            }
+
             // 1. Heading prefix. Wraps the entire heading block so
             //    the CSS `::before` selector lands on the H1..H6
             //    element. data-cursor-prefix carries the hash run.
-            const parent = $from.parent;
             if (parent.type.name === "heading") {
               const level = Math.min(
                 6,
