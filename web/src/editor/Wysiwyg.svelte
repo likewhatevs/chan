@@ -2191,6 +2191,13 @@
   /// only the editing paragraph goes away (the atom never changed).
   function enterImageEditAt(pos: number, atomNode: { attrs: Record<string, unknown>; nodeSize: number }): void {
     if (!editor) return;
+    // Re-entry guard: while an edit is already in flight, a second
+    // call would insert a second editing paragraph below the same
+    // atom. Re-entry can fire when PM emits a follow-up selection
+    // update after `enterImageEditAt`'s own dispatch (focus(),
+    // bubble open, etc.) and `lastAtomEditPos` has been cleared
+    // because the post-dispatch caret is a TextSelection.
+    if (editingImageAtomPos !== null) return;
     const ed = editor;
     const src = (atomNode.attrs.src as string) ?? "";
     const alt = (atomNode.attrs.alt as string) ?? "";
@@ -3253,6 +3260,10 @@
     position: relative;
     display: inline-block;
     line-height: 0;
+    /* 5px gutter on each side so surrounding inline text in a
+       `foo ![](path) bar` line breathes around the image instead
+       of butting against its edge. */
+    margin: 0 5px;
   }
   :global(.md-image-handle) {
     position: absolute;
