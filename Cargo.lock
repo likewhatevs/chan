@@ -503,7 +503,7 @@ dependencies = [
 
 [[package]]
 name = "chan-drive"
-version = "0.8.5"
+version = "0.8.6"
 dependencies = [
  "bincode",
  "candle-core",
@@ -537,7 +537,7 @@ dependencies = [
 
 [[package]]
 name = "chan-llm"
-version = "0.8.5"
+version = "0.8.6"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -560,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "chan-tunnel-client"
-version = "0.8.5"
+version = "0.8.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "chan-tunnel-proto"
-version = "0.8.5"
+version = "0.8.6"
 dependencies = [
  "bytes",
  "h2",
@@ -603,7 +603,7 @@ dependencies = [
 
 [[package]]
 name = "chan-tunnel-server"
-version = "0.8.5"
+version = "0.8.6"
 dependencies = [
  "anyhow",
  "async-trait",
