@@ -567,19 +567,19 @@ pub async fn serve_via_tunnel(
     // tunnel client doesn't observe SIGINT/SIGTERM itself; without
     // this select! a Ctrl-C would only terminate the process via the
     // outer runtime drop. With it, the future cancellation drops the
-    // tunnel client cleanly: yamux substreams close, MCP bridge drop
-    // unlinks its socket, indexer cancel has already fired.
-    const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
+    // tunnel client cleanly: yamux substreams close (which terminates
+    // all client HTTP and WS connections), MCP bridge drop unlinks
+    // its socket, indexer cancel has already fired.
     tokio::select! {
         res = chan_tunnel_client::run(cfg, artifacts.app) => {
             res.map_err(|e| Error::Config(e.to_string()))?;
         }
         _ = signal_rx.changed() => {
-            // Give in-flight tunnel requests up to SHUTDOWN_GRACE to
-            // drain. If the tunnel client doesn't return by then the
-            // outer runtime drop forces exit.
-            tokio::time::sleep(SHUTDOWN_GRACE).await;
-            eprintln!("chan: graceful shutdown exceeded {SHUTDOWN_GRACE:?}; forcing exit");
+            // Dropping the tunnel future via select! cancellation
+            // closes the yamux session immediately. No drain window
+            // needed: there's no axum-level connection pool here, so
+            // unlike serve()'s graceful_shutdown there's nothing
+            // outstanding to wait on.
         }
     }
     Ok(())
