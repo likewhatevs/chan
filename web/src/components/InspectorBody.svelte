@@ -11,6 +11,7 @@
 
   import FileInfoBody from "./FileInfoBody.svelte";
   import TagInfoBody from "./TagInfoBody.svelte";
+  import type { GraphViewNode } from "../state/graphData.svelte";
 
   export type InspectorSelection =
     | { kind: "file"; path: string }
@@ -27,6 +28,7 @@
     onClose,
     onNavigate,
     showRefs = true,
+    documentsOverride,
   }: {
     selection: InspectorSelection;
     /// Forwarded to FileInfoBody as the "Open in this pane" handler.
@@ -35,6 +37,9 @@
     onClose?: () => void;
     onNavigate?: (path: string) => void;
     showRefs?: boolean;
+    /// Forwarded to TagInfoBody. GraphPanel uses this to keep the
+    /// tag inspector scoped to docs visible in the rendered subgraph.
+    documentsOverride?: GraphViewNode[];
   } = $props();
 </script>
 
@@ -58,6 +63,7 @@
     kind={selection.kind}
     {onClose}
     {onNavigate}
+    {documentsOverride}
   />
 {/if}
 

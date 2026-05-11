@@ -21,6 +21,7 @@
     kind,
     onClose,
     onNavigate,
+    documentsOverride,
   }: {
     nodeId: string;
     label: string;
@@ -30,6 +31,12 @@
     /// path. Hosts decide whether to open it in the active pane and
     /// close themselves; absent = entries render as non-clickable.
     onNavigate?: (path: string) => void;
+    /// Optional scope-filtered document list. When provided, this
+    /// replaces the full-graph `documentsReferencing(nodeId)` lookup.
+    /// GraphPanel passes its scope-filtered selectionEdges.documents
+    /// so the tag inspector only lists docs visible in the rendered
+    /// subgraph; search overlay leaves this unset for the full list.
+    documentsOverride?: GraphViewNode[];
   } = $props();
 
   // Make sure the graph is loaded before we try to look up
@@ -40,7 +47,9 @@
     void ensureGraphLoaded();
   });
 
-  const documents = $derived<GraphViewNode[]>(documentsReferencing(nodeId));
+  const documents = $derived<GraphViewNode[]>(
+    documentsOverride ?? documentsReferencing(nodeId),
+  );
 
   /// Background color for the kind chip. Mirrors the graph palette
   /// (--g-tag etc.) so search and graph chips are visually identical.

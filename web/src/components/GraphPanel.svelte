@@ -33,10 +33,9 @@
     tree,
   } from "../state/store.svelte";
   import { type ScopeOption, defaultScopeId } from "../state/scope.svelte";
-  import { formatMtime } from "../state/format";
   import ResizeHandle from "./ResizeHandle.svelte";
   import OverlayShell from "./OverlayShell.svelte";
-  import FileInfoBody from "./FileInfoBody.svelte";
+  import InspectorBody, { type InspectorSelection } from "./InspectorBody.svelte";
 
   // cytoscape.use is idempotent across module reloads.
   cytoscape.use(fcose);
@@ -70,14 +69,20 @@
 
   // ---- types -------------------------------------------------------------
 
-  // The graph view only renders documents (files), images (also
-  // file nodes, split by extension at element-build time), and
-  // tags. Mention and date nodes/edges are filtered out at load.
-  // The link-index backend still produces them; see GH issue
-  // (chan-writer/chan) for the eventual indexing-side cleanup.
-  type RenderedEdgeKind = "link" | "tag";
+  // The graph view renders documents (files), images (also file
+  // nodes, split by extension at element-build time), tags, and
+  // mentions. Dates are still filtered out at load: chan-drive's
+  // graph index has stopped emitting date edges (issue #17), but
+  // older indexes may still contain them.
+  type RenderedEdgeKind = "link" | "tag" | "mention";
   type RenderedEdge = GraphViewEdge & { kind: RenderedEdgeKind };
-  type RenderedNode = Extract<GraphViewNode, { kind: "file" | "tag" }>;
+  type RenderedNode = Extract<GraphViewNode, { kind: "file" | "tag" | "mention" }>;
+  /// Chip toggles. `link`, `tag`, `mention` are edge-kind filters
+  /// (the visual element they govern is the edge plus any node only
+  /// reachable through edges of that kind). `img` is a node filter:
+  /// flipping it off hides every file node whose path classifies as
+  /// an image, along with any edge touching one.
+  type FilterKind = "link" | "tag" | "mention" | "img";
 
   // ---- state -------------------------------------------------------------
 
@@ -106,9 +111,11 @@
   let loading = $state(true);
   let error: string | null = $state(null);
 
-  let show = $state<Record<RenderedEdgeKind, boolean>>({
+  let show = $state<Record<FilterKind, boolean>>({
     link: true,
     tag: true,
+    mention: true,
+    img: true,
   });
 
   // Currently inspected node, surfaced in the side details panel.
@@ -186,10 +193,24 @@
     return visited;
   });
 
+  /// File-node ids the `img` filter currently hides. Pulled out so
+  /// both visibleEdges (drop edges touching a hidden image) and
+  /// visibleNodeIds (skip the node entirely) agree.
+  const hiddenImageIds = $derived.by(() => {
+    const ids = new Set<string>();
+    if (show.img) return ids;
+    for (const n of nodes) {
+      if (n.kind === "file" && classifyFile(n.path) === "img") ids.add(n.id);
+    }
+    return ids;
+  });
+
   const visibleEdges = $derived(
     edges.filter(
       (e) =>
         show[e.kind] &&
+        !hiddenImageIds.has(e.source) &&
+        !hiddenImageIds.has(e.target) &&
         (scopedNodeIds === null ||
           (scopedNodeIds.has(e.source) && scopedNodeIds.has(e.target))),
     ),
@@ -198,7 +219,7 @@
     const ids = new Set<string>();
     for (const n of nodes) {
       if (scopedNodeIds !== null && !scopedNodeIds.has(n.id)) continue;
-      if (n.kind === "file") ids.add(n.id);
+      if (n.kind === "file" && !hiddenImageIds.has(n.id)) ids.add(n.id);
     }
     for (const e of visibleEdges) {
       ids.add(e.source);
@@ -207,9 +228,15 @@
     return ids;
   });
 
+  /// Chip counts. Edge-kind chips report the underlying edge count;
+  /// the `img` chip reports image-file-node count since that's what
+  /// it actually toggles.
   const counts = $derived.by(() => {
-    const c: Record<RenderedEdgeKind, number> = { link: 0, tag: 0 };
+    const c: Record<FilterKind, number> = { link: 0, tag: 0, mention: 0, img: 0 };
     for (const e of edges) c[e.kind]++;
+    for (const n of nodes) {
+      if (n.kind === "file" && classifyFile(n.path) === "img") c.img++;
+    }
     return c;
   });
 
@@ -217,52 +244,31 @@
 
   const nodeById = $derived(new Map(nodes.map((n) => [n.id, n])));
 
-  const fileEntryByPath = $derived.by(() => {
-    const m = new Map<string, { mtime: number | null; size: number }>();
-    for (const e of tree.entries) {
-      if (!e.is_dir) m.set(e.path, { mtime: e.mtime, size: e.size });
-    }
-    return m;
-  });
-
   const selectedNode = $derived<RenderedNode | null>(
     selectedId ? (nodeById.get(selectedId) ?? null) : null,
   );
 
-  /// Edges where `selectedId` is an endpoint, grouped for the side
-  /// panel. For a file node this gives us its outgoing tag/link
-  /// references; for a tag node, `documents` lists every file that
-  /// references it.
-  const selectionEdges = $derived.by(() => {
-    const out = {
-      tags: [] as RenderedNode[],
-      links: [] as RenderedNode[],
-      documents: [] as Extract<RenderedNode, { kind: "file" }>[],
-    };
-    if (!selectedId) return out;
-    const sel = nodeById.get(selectedId);
-    if (!sel) return out;
+  /// Documents that reference the currently-selected tag or mention
+  /// node, restricted to nodes drawn in the current subgraph. Passed
+  /// to InspectorBody as `documentsOverride` so the inspector stays
+  /// consistent with what the user can see on the canvas; without it
+  /// TagInfoBody would fall back to the full-graph
+  /// `documentsReferencing` lookup.
+  const selectionDocumentsInScope = $derived.by(() => {
+    if (
+      !selectedNode ||
+      (selectedNode.kind !== "tag" && selectedNode.kind !== "mention")
+    ) {
+      return undefined;
+    }
+    const out: Extract<RenderedNode, { kind: "file" }>[] = [];
     for (const e of edges) {
-      if (sel.kind === "file" && e.source === selectedId) {
-        const target = nodeById.get(e.target);
-        if (!target) continue;
-        if (e.kind === "tag") out.tags.push(target);
-        else if (e.kind === "link") out.links.push(target);
-      } else if (sel.kind === "tag" && e.target === selectedId) {
-        const source = nodeById.get(e.source);
-        if (source && source.kind === "file") out.documents.push(source);
-      }
+      if (e.target !== selectedNode.id) continue;
+      const source = nodeById.get(e.source);
+      if (source && source.kind === "file") out.push(source);
     }
     return out;
   });
-
-  // Compact byte-count formatting tuned for the dense graph aside.
-  function formatSizeCompact(bytes: number): string {
-    if (bytes < 1024) return `${bytes}`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}K`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}M`;
-    return `${(bytes / 1024 / 1024 / 1024).toFixed(1)}G`;
-  }
 
   function openSelectedFile(): void {
     if (selectedNode && selectedNode.kind === "file" && !selectedNode.missing) {
@@ -280,20 +286,54 @@
     }
   }
 
+  /// Click handler for link / backlink / tag-doc entries surfaced by
+  /// the shared InspectorBody. The other surfaces (file browser,
+  /// search) treat onNavigate as "open in the editor", but here the
+  /// user is exploring the graph: route to a select-in-canvas instead
+  /// so the inspector keeps following the user as they hop along
+  /// references. The "Open in this pane" button (onOpen) is still
+  /// the path to the editor.
+  function selectByPath(path: string): void {
+    const n = nodeById.get(path);
+    if (n) selectFromList(n);
+  }
+
+  /// Build the dispatcher's selection from selectedNode. Returns null
+  /// for ghost / missing file nodes: FileInfoBody looks up the entry
+  /// in the file tree, and a missing path would render as an empty
+  /// "click a file to inspect" placeholder, hiding the ghost. We
+  /// render the ghost branch inline below instead.
+  const inspectorSelection = $derived<InspectorSelection>(
+    selectedNode === null
+      ? null
+      : selectedNode.kind === "file"
+        ? selectedNode.missing
+          ? null
+          : { kind: "file", path: selectedNode.path }
+        : {
+            kind: selectedNode.kind,
+            nodeId: selectedNode.id,
+            label: selectedNode.label,
+          },
+  );
+
   // ---- presentation ------------------------------------------------------
 
-  /// Used by the inspector's kind chip background. Cytoscape itself
-  /// resolves these via getComputedStyle at buildCytoscape time, so
-  /// theme changes propagate next reload.
-  const NODE_COLORS: Record<"doc" | "img" | "tag", string> = {
-    doc: "var(--g-doc)",
-    img: "var(--g-img)",
-    tag: "var(--g-tag)",
-  };
-
+  /// Cytoscape resolves --g-* via getComputedStyle at buildCytoscape
+  /// time, so theme changes propagate next reload.
   const EDGE_COLORS: Record<RenderedEdgeKind, string> = {
     link: "var(--text-secondary)",
     tag: "var(--g-tag)",
+    mention: "var(--warn-text)",
+  };
+
+  /// Per-chip dot color. Edge-kind chips reuse EDGE_COLORS; img is a
+  /// node filter so it points at the image node color directly.
+  const FILTER_COLORS: Record<FilterKind, string> = {
+    link: EDGE_COLORS.link,
+    tag: EDGE_COLORS.tag,
+    mention: EDGE_COLORS.mention,
+    img: "var(--g-img)",
   };
 
   // ---- cytoscape glue ----------------------------------------------------
@@ -317,12 +357,14 @@
     const cs = getComputedStyle(host);
     const v = (n: string, fb: string) => cs.getPropertyValue(n).trim() || fb;
     return {
-      // Three node kinds in the graph: documents (orange file
-      // rectangles), images (purple circles), tags (green
-      // hashtag labels). Mention/date are filtered upstream.
+      // Node kinds in the graph: documents (orange file rectangles),
+      // images (purple circles), tags (green hashtag labels), and
+      // mentions (warn-colored @@name labels). Dates are filtered
+      // upstream.
       doc: v("--g-doc", "#ff8a3d"),
       img: v("--g-img", "#b07dff"),
       tag: v("--g-tag", "#6cd07a"),
+      mention: v("--warn-text", "#e3b341"),
       accent: v("--accent", "#ff7a3b"),
       text: v("--text", "#e8e8e8"),
       textSec: v("--text-secondary", "#9a9a9a"),
@@ -384,8 +426,8 @@
           height: 10,
         },
       },
-      // Tags: green hashtag text only — no fill, label centered
-      // on the node so the "#name" string IS the visual.
+      // Tags: green hashtag text only, no fill, label centered on
+      // the node so the "#name" string IS the visual.
       {
         selector: 'node[kind = "tag"]',
         style: {
@@ -395,6 +437,26 @@
           width: 22,
           height: 14,
           color: c.tag,
+          "font-size": 12,
+          "font-weight": 600,
+          "text-valign": "center",
+          "text-halign": "center",
+          "text-margin-y": 0,
+          "text-outline-color": c.bg,
+          "text-outline-width": 1,
+        },
+      },
+      // Mentions: same text-only treatment as tags but in the warn
+      // color so @@name reads as a different kind at a glance.
+      {
+        selector: 'node[kind = "mention"]',
+        style: {
+          shape: "rectangle",
+          "background-opacity": 0,
+          "border-width": 0,
+          width: 28,
+          height: 14,
+          color: c.mention,
           "font-size": 12,
           "font-weight": 600,
           "text-valign": "center",
@@ -452,6 +514,10 @@
       {
         selector: 'edge[kind = "tag"]',
         style: { "line-color": c.tag, width: 1.0 },
+      },
+      {
+        selector: 'edge[kind = "mention"]',
+        style: { "line-color": c.mention, width: 1.0 },
       },
       {
         selector: "edge[?broken]",
@@ -816,6 +882,8 @@
       const id = n === 1 ? base : `${base}#${n}`;
       const wantVisible =
         show[e.kind] &&
+        !hiddenImageIds.has(e.source) &&
+        !hiddenImageIds.has(e.target) &&
         (scopedNodeIds === null ||
           (scopedNodeIds.has(e.source) && scopedNodeIds.has(e.target)));
       if (wantVisible) visE.add(id);
@@ -894,15 +962,17 @@
     error = null;
     try {
       const g: GraphView = await api.graph();
-      // Drop mention/date nodes and their edges. The link-index
-      // backend still produces them; the eventual cleanup is
-      // tracked as a separate issue. Filtering here keeps the
-      // rest of the component working over a clean dataset.
+      // Drop date nodes / edges only. Dates aren't authored as
+      // graph endpoints in any UX surface today (issue #17), so a
+      // stale row from an older index would render with no visual
+      // affordance.
       const renderedNodes: RenderedNode[] = g.nodes.filter(
-        (n): n is RenderedNode => n.kind === "file" || n.kind === "tag",
+        (n): n is RenderedNode =>
+          n.kind === "file" || n.kind === "tag" || n.kind === "mention",
       );
       const renderedEdges: RenderedEdge[] = g.edges.filter(
-        (e): e is RenderedEdge => e.kind === "link" || e.kind === "tag",
+        (e): e is RenderedEdge =>
+          e.kind === "link" || e.kind === "tag" || e.kind === "mention",
       );
       nodes = renderedNodes;
       edges = renderedEdges;
@@ -1025,10 +1095,10 @@
       </label>
     {/if}
     <div class="filters">
-      {#each ["link", "tag"] as const as kind (kind)}
+      {#each ["link", "tag", "mention", "img"] as const as kind (kind)}
         <label class="chip" class:on={show[kind]}>
           <input type="checkbox" bind:checked={show[kind]} />
-          <span class="dot" style="background:{EDGE_COLORS[kind]}"></span>
+          <span class="dot" style="background:{FILTER_COLORS[kind]}"></span>
           {kind}
           <span class="count">{counts[kind]}</span>
         </label>
@@ -1067,112 +1137,24 @@
     onChange={() => persistPaneWidths()}
   />
   <aside class="details" style="width: {paneWidths.graph}px">
-    {#if !selectedNode}
-      <div class="empty">
-        <div class="empty-title">Details</div>
-        <div class="empty-hint">click a node to inspect it</div>
-      </div>
-    {:else if selectedNode.kind === "file" && classifyFile(selectedNode.path) === "img"}
-      <!-- Image inspector: shared with the file browser. Shows a
-           preview thumbnail and the docs that link to the image
-           (backlinks). No "Open in this pane" button — images
-           don't open in the editor. -->
-      <FileInfoBody
-        path={selectedNode.path}
-        showRefs
-        onClose={() => (selectedId = null)}
-        onNavigate={(p) => {
-          void openInActivePane(p);
-          close();
-        }}
-      />
-    {:else if selectedNode.kind === "file"}
-      {@const fileKind = classifyFile(selectedNode.path)}
+    {#if selectedNode && selectedNode.kind === "file" && selectedNode.missing}
+      <!-- Ghost / broken-link target. Not in the file tree, so
+           FileInfoBody can't render it; surface it inline. -->
       <header class="head">
-        <span class="kind-chip" style="background: {NODE_COLORS[fileKind]}">{fileKind === "img" ? "image" : "doc"}</span>
+        <span class="kind-chip ghost">doc</span>
         <button class="close" onclick={() => (selectedId = null)}>×</button>
       </header>
       <h3 class="title" title={selectedNode.path}>{selectedNode.label}</h3>
       <div class="path mono">{selectedNode.path}</div>
-
-      {#if selectedNode.missing}
-        <div class="missing">file does not exist (broken-link target)</div>
-      {:else}
-        {@const meta = fileEntryByPath.get(selectedNode.path)}
-        <div class="meta-grid">
-          <span class="k">size</span>
-          <span class="v">{meta ? formatSizeCompact(meta.size) : "?"}</span>
-          <span class="k">modified</span>
-          <span class="v">{meta ? formatMtime(meta.mtime) : "?"}</span>
-          <span class="k">tags</span>
-          <span class="v">{selectionEdges.tags.length}</span>
-          <span class="k">links out</span>
-          <span class="v">{selectionEdges.links.length}</span>
-        </div>
-        <button class="open" onclick={openSelectedFile}>Open in this pane</button>
-      {/if}
-
-      {#if selectionEdges.tags.length > 0}
-        <section>
-          <h4>Tags</h4>
-          <ul>
-            {#each selectionEdges.tags as t (t.id)}
-              <li><button class="ref tag" onclick={() => selectFromList(t)}>{t.label}</button></li>
-            {/each}
-          </ul>
-        </section>
-      {/if}
-      {#if selectionEdges.links.length > 0}
-        <section>
-          <h4>Links to</h4>
-          <ul>
-            {#each selectionEdges.links as l (l.id)}
-              <li><button class="ref file" onclick={() => selectFromList(l)}>{l.label}</button></li>
-            {/each}
-          </ul>
-        </section>
-      {/if}
+      <div class="missing">file does not exist (broken-link target)</div>
     {:else}
-      <header class="head">
-        <span class="kind-chip" style="background: {NODE_COLORS[selectedNode.kind]}">{selectedNode.kind}</span>
-        <button class="close" onclick={() => (selectedId = null)}>×</button>
-      </header>
-      <h3 class="title">{selectedNode.label}</h3>
-      <div class="meta-grid">
-        <span class="k">documents</span>
-        <span class="v">{selectionEdges.documents.length}</span>
-      </div>
-      {#if selectionEdges.documents.length === 0}
-        <div class="empty-hint">no documents reference this</div>
-      {:else}
-        <section>
-          <h4>Documents</h4>
-          <ul>
-            {#each selectionEdges.documents as f (f.id)}
-              <li class="doc-row">
-                <!-- svelte-ignore a11y_click_events_have_key_events -->
-                <span
-                  class="ref file"
-                  onclick={() => selectFromList(f)}
-                  role="button"
-                  tabindex="0"
-                  title="select"
-                >{f.label}</span>
-                {#if !f.missing}
-                  <button
-                    class="row-open"
-                    onclick={() => {
-                      void openInActivePane(f.path);
-                      close();
-                    }}
-                    title="open in the active pane"
-                  >open</button>
-                {/if}
-              </li>
-            {/each}
-          </ul>
-        </section>
-      {/if}
+      <InspectorBody
+        selection={inspectorSelection}
+        onClose={() => (selectedId = null)}
+        onOpen={openSelectedFile}
+        onNavigate={selectByPath}
+        documentsOverride={selectionDocumentsInScope}
+      />
     {/if}
   </aside>
   {/if}
@@ -1350,21 +1332,10 @@
     padding: 0.6rem 0.7rem 0.8rem 0.7rem;
     font-size: 12.5px;
   }
-  .details .empty {
-    text-align: center;
-    color: var(--text-secondary);
-    padding-top: 1.2rem;
-  }
-  .details .empty-title {
-    font-weight: 600;
-    color: var(--text);
-    margin-bottom: 0.25rem;
-  }
-  .details .empty-hint {
-    font-style: italic;
-    font-size: 14px;
-    opacity: 0.85;
-  }
+  /* Most of the inspector now renders inside `<InspectorBody>` (file
+     / tag / mention / date kinds share its styles). The rules below
+     only style the inline ghost branch (file does not exist) since
+     FileInfoBody can't render a path that's missing from the tree. */
   .details .head {
     display: flex;
     align-items: center;
@@ -1382,6 +1353,7 @@
     flex: 1;
     text-align: center;
   }
+  .kind-chip.ghost { background: var(--g-doc); opacity: 0.55; }
   .details .close {
     background: transparent;
     border: 0;
@@ -1410,90 +1382,6 @@
     font-style: italic;
     margin: 0.3rem 0 0.6rem 0;
     font-size: 11.5px;
-  }
-  .details .meta-grid {
-    display: grid;
-    grid-template-columns: 6.5em 1fr;
-    gap: 2px 0.5rem;
-    margin: 0.4rem 0 0.6rem 0;
-    font-size: 14px;
-  }
-  .details .meta-grid .k { color: var(--text-secondary); }
-  .details .meta-grid .v {
-    color: var(--text);
-    font-variant-numeric: tabular-nums;
-  }
-  .details .open {
-    width: 100%;
-    background: var(--btn-bg);
-    color: var(--text);
-    border: 1px solid var(--btn-border);
-    border-radius: 4px;
-    padding: 5px 0;
-    cursor: pointer;
-    font: inherit;
-    margin-bottom: 0.5rem;
-  }
-  .details .open:hover { border-color: var(--btn-hover); }
-  .details section { margin-top: 0.55rem; }
-  .details h4 {
-    margin: 0 0 0.2rem 0;
-    font-size: 13px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-secondary);
-  }
-  .details ul {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .details ul li { margin: 0; }
-  /* Chip-styled refs, stacked one per line. Mirrors FileInfoBody's
-     reference list so the file-browser inspector and the graph
-     inspector share the same look. */
-  .details .ref {
-    display: block;
-    width: 100%;
-    background: var(--bg-elev);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 2px 6px;
-    text-align: left;
-    cursor: pointer;
-    color: var(--text);
-    font: inherit;
-    font-size: 13px;
-    line-height: 1.5;
-    word-break: break-word;
-  }
-  .details .ref:hover {
-    border-color: var(--btn-hover);
-    background: var(--hover-bg);
-  }
-  .details .ref.tag { color: var(--g-tag); }
-  .details .ref.file { color: var(--g-doc); }
-  .details li.doc-row {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-  .details li.doc-row .ref { flex: 1; }
-  .details .row-open {
-    background: transparent;
-    border: 1px solid var(--btn-border);
-    color: var(--text-secondary);
-    border-radius: 3px;
-    padding: 1px 6px;
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .details .row-open:hover {
-    color: var(--text);
-    border-color: var(--btn-hover);
   }
   .placeholder {
     position: absolute;
