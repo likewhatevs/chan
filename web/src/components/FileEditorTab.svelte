@@ -333,6 +333,13 @@
             onmousedown={(e) => e.preventDefault()}
             onclick={() => wysiwygRef?.insertHorizontalRule()}
           >―</button>
+          <button
+            class="fbtn"
+            title="insert image"
+            aria-label="insert image"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => wysiwygRef?.insertImage()}
+          >🖼</button>
         </span>
       {/if}
     </span>

@@ -32,7 +32,14 @@
     isoOf,
     type DateFormatId,
   } from "./dateFormats";
-  import { createImageNode, resolveImageSrc } from "./extensions/image";
+  import {
+    createImageNode,
+    parseImageSrc,
+    resolveImageSrc,
+    setImageAlign,
+    setImageWidth,
+    type ImageAlign,
+  } from "./extensions/image";
   import { openImageBubble, type ImageBubble } from "./extensions/imageBubble";
   import {
     createWikiLinkNode,
@@ -267,6 +274,26 @@
   /// the caret in the paragraph that follows.
   export function insertHorizontalRule(): void {
     editor?.chain().setHorizontalRule().run();
+  }
+
+  /// Toolbar entry point for inserting an image. Drops `![](|)` at
+  /// the cursor with the caret parked between the parens, then
+  /// opens the image bubble in path mode. Mirrors the typed-`![`
+  /// auto-pair flow at the `onInput` site so dismiss / commit /
+  /// upload paths all share `editingImageBracketStart` bookkeeping.
+  export function insertImage(): void {
+    if (!editor) return;
+    if (imageBubble) return;
+    const ed = editor;
+    const pos = ed.state.selection.from;
+    ed.chain()
+      .insertContentAt(pos, "![]()", { updateSelection: false })
+      .setTextSelection(pos + 4)
+      .run();
+    editingImageBracketStart = pos;
+    editingImageOriginal = null;
+    editingImageDefaultAlt = "";
+    openImageBubbleForCurrentCaret();
   }
 
   /// Toggle a link mark on the current selection. When the selection
@@ -1882,18 +1909,79 @@
       },
       onCommit: () => acceptImageBubble(),
       onDismiss: () => dismissImageBubble(),
+      onSetAlign: (align) => setImageAlignInSource(align),
     });
     // Seed the bubble's mode + query / alt from the current range so
-    // the first paint reflects what the user has already typed.
+    // the first paint reflects what the user has already typed. The
+    // path query must run through the same `./` / `../` normalization
+    // `syncImageBubble` does — without it, the first paint on an
+    // edit-existing flow shows an empty list / preview (the catalog
+    // is drive-rooted; a relative src misses the substring filter).
     const range = findImageRange(editor);
     if (range) {
       imageBubble.setMode(range.mode === "alt" ? "alt" : "path");
+      const { align } = parseImageSrc(range.src);
+      imageBubble.setActiveAlign(align);
+      imageBubble.setAlignAvailable(imageIsAloneInBlock(editor, range));
       if (range.mode === "alt") {
         imageBubble.setAlt(range.alt);
       } else {
-        imageBubble.setPathQuery(cleanSrc(range.src));
+        let q = cleanSrc(range.src);
+        if ((q.startsWith("./") || q.startsWith("../")) && currentPath) {
+          q = resolveRelativePath(q, currentPath);
+        }
+        imageBubble.setPathQuery(q);
       }
     }
+  }
+
+  /// True when the `![alt](src)` source-text range is the only
+  /// non-whitespace content in its containing textblock. The
+  /// alignment buttons are only meaningful when an image owns its
+  /// own line: on a mixed `foo ![](path) bar` line the wrap is
+  /// laid out inline with the surrounding text and the auto-margin
+  /// trick can't move it. We surface this as a disable on the
+  /// bubble's align group so the user gets a clear signal instead
+  /// of clicks that appear to do nothing.
+  function imageIsAloneInBlock(
+    ed: Editor,
+    range: { start: number; end: number },
+  ): boolean {
+    const resolved = ed.state.doc.resolve(range.start);
+    const blockStart = resolved.start();
+    const text = resolved.parent.textContent;
+    const before = text.slice(0, range.start - blockStart);
+    const after = text.slice(range.end - blockStart);
+    return (before + after).trim() === "";
+  }
+
+  /// Rewrite the `(src)` portion of the surrounding `![alt](src)`
+  /// markdown to set / clear the alignment fragment, then re-park
+  /// the caret inside the parens so the bubble stays open. `null`
+  /// strips the fragment (centered, the default).
+  function setImageAlignInSource(align: ImageAlign | null): void {
+    if (!editor) return;
+    const ed = editor;
+    let range = findImageRange(ed);
+    if (!range && editingImageBracketStart !== null) {
+      const fb = findImageRangeAt(ed, editingImageBracketStart);
+      if (fb) range = { ...fb, mode: "path" };
+    }
+    if (!range) return;
+    const nextSrc = setImageAlign(range.src, align);
+    if (nextSrc === range.src) {
+      imageBubble?.setActiveAlign(align);
+      return;
+    }
+    const replacement = `![${range.alt}](${nextSrc})`;
+    // Re-park the caret inside the (src) so the bubble's sync hook
+    // doesn't dismiss on the trailing-paren landing point that PM
+    // picks by default after `insertText`.
+    const caretInside = range.start + 2 + range.alt.length + 2 + nextSrc.length;
+    const tr = ed.state.tr.insertText(replacement, range.start, range.end);
+    tr.setSelection(TextSelection.create(tr.doc, caretInside));
+    ed.view.dispatch(tr);
+    imageBubble?.setActiveAlign(align);
   }
 
   /// Strip a `#w=N` (or any `#...`) fragment from a markdown image
@@ -1978,7 +2066,16 @@
     // paste paths do — without this the catalog accept would
     // emit a bare drive-rooted path regardless of the current
     // file's location.
-    let finalSrc = currentPath ? relativizePath(picked, currentPath) : picked;
+    // Only relativize drive-rooted `picked` values. The upload flow
+    // pre-relativizes (so `replaceImagePathInSource` writes `./foo`
+    // into the source text and the user doesn't see a brief bare
+    // `foo`) and re-feeds the result through `overrideSrc`. Without
+    // the guard, `relativizePath` treats `./foo` as drive-rooted,
+    // splits it as `[".", "foo"]`, and emits `././foo`.
+    const pickedIsRelative =
+      picked.startsWith("./") || picked.startsWith("../");
+    let finalSrc =
+      currentPath && !pickedIsRelative ? relativizePath(picked, currentPath) : picked;
     if (editingImageOriginal) {
       const origClean = cleanSrc(editingImageOriginal.src);
       const origNormalized = origClean.startsWith("./") || origClean.startsWith("../")
@@ -1990,6 +2087,18 @@
         finalSrc = editingImageOriginal.src;
       }
     }
+    // Re-apply the live text's fragment params onto `finalSrc`. The
+    // catalog accept rebuilt `picked` from a bare drive-rooted path,
+    // and the same-path branch above falls back to the ORIGINAL src
+    // (not the live one), so any align / width changes the user
+    // made via the bubble during this session would otherwise be
+    // stripped on commit. parseImageSrc on `range.src` reads the
+    // latest state straight off the text the bubble just rewrote.
+    const liveFrag = parseImageSrc(range.src);
+    finalSrc = setImageWidth(
+      setImageAlign(finalSrc, liveFrag.align),
+      liveFrag.width,
+    );
     const imgType = ed.schema.nodes.image;
     if (!imgType) {
       dismissImageBubble();
@@ -2063,6 +2172,9 @@
       return;
     }
     imageBubble.setMode(range.mode);
+    const { align } = parseImageSrc(range.src);
+    imageBubble.setActiveAlign(align);
+    imageBubble.setAlignAvailable(imageIsAloneInBlock(editor, range));
     if (range.mode === "alt") {
       imageBubble.setAlt(range.alt);
     } else {
@@ -3277,6 +3389,15 @@
   :global(.md-wysiwyg .ProseMirror img) {
     vertical-align: bottom;
   }
+  /* Inline by default: an image mid-sentence sits on the same line
+     as surrounding text, matching the prior render. The wrap turns
+     into a centered block ONLY when it owns its paragraph (the
+     `:only-child` rule below); the `align-left` / `align-right`
+     classes are no-ops on a mixed line, and the bubble disables
+     the buttons there to make that explicit. `width: fit-content`
+     keeps the wrap sized to the image so the resize handle stays
+     pinned to the image's bottom-right corner even when the wrap
+     is offset by auto margins. */
   :global(.md-image-wrap) {
     position: relative;
     display: inline-block;
@@ -3285,6 +3406,26 @@
        `foo ![](path) bar` line breathes around the image instead
        of butting against its edge. */
     margin: 0 5px;
+    vertical-align: bottom;
+  }
+  /* `is-alone` is set from the image node view in `image.ts` when
+     the parent textblock holds only this image. CSS `:only-child`
+     can't substitute here: text neighbors are text NODES, not
+     element siblings, so a mixed `text ![](img) text` line would
+     still match `:only-child` and falsely activate block mode. */
+  :global(.md-image-wrap.is-alone) {
+    display: block;
+    width: fit-content;
+    max-width: 100%;
+    margin: 8px auto;
+  }
+  :global(.md-image-wrap.is-alone.align-left) {
+    margin-left: 0;
+    margin-right: auto;
+  }
+  :global(.md-image-wrap.is-alone.align-right) {
+    margin-left: auto;
+    margin-right: 0;
   }
   /* Resize grip pinned to the image's bottom-right corner. Subtle
      white triangle with a drop-shadow so it reads against any
@@ -3421,12 +3562,66 @@
     opacity: 0.55;
     cursor: progress;
   }
-  :global(.md-image-bubble-accept) {
-    color: var(--muted);
-    font-size: 11px;
+  /* Commit button. `margin-left: auto` pushes it to the right edge
+     of the footer (the alignment group sits in the middle). Same
+     accent / contrast as the calendar's OK so the affordance reads
+     consistently across bubbles. */
+  :global(.md-image-bubble-ok) {
+    background: var(--link);
+    color: #fff;
+    border: 1px solid var(--link);
+    border-radius: 4px;
+    padding: 4px 12px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.2;
     margin-left: auto;
   }
-  :global(.md-image-bubble-accept.is-hidden) { display: none; }
+  :global(.md-image-bubble-ok:hover) {
+    filter: brightness(1.1);
+  }
+  :global(.md-image-bubble-ok.is-hidden) { display: none; }
+
+  /* Alignment group: three small icon-buttons that flip the
+     `#left` / `#right` fragment on the current `(src)`. The middle
+     button clears the fragment to mark the default (centered). */
+  :global(.md-image-bubble-align) {
+    display: inline-flex;
+    gap: 2px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px;
+  }
+  :global(.md-image-bubble-align-btn) {
+    background: transparent;
+    color: var(--text);
+    border: none;
+    border-radius: 3px;
+    padding: 2px 6px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1;
+    min-width: 22px;
+  }
+  :global(.md-image-bubble-align-btn:hover) {
+    background: var(--hover-bg);
+  }
+  :global(.md-image-bubble-align-btn.is-active) {
+    background: var(--accent);
+    color: #fff;
+  }
+  :global(.md-image-bubble-align-btn:disabled),
+  :global(.md-image-bubble-align.is-disabled .md-image-bubble-align-btn) {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  :global(.md-image-bubble-align.is-disabled .md-image-bubble-align-btn.is-active) {
+    background: transparent;
+    color: var(--text);
+  }
 
   /* Error row. Surfaced when an upload fails or exceeds the size
      cap. Sits between the alt/list region and the footer so the

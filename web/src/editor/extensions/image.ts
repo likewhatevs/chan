@@ -25,22 +25,37 @@ export function isImagePath(path: string): boolean {
   return (IMAGE_EXTS as readonly string[]).includes(ext);
 }
 
+export type ImageAlign = "left" | "right";
+
 /// Split a markdown image src into the URL portion (used to fetch
-/// the file) and an optional pixel width parsed from the `#w=N`
-/// fragment. The width travels in the URL fragment so the markdown
-/// stays portable: other renderers ignore the fragment and show the
-/// image at its natural size. Multiple fragment params separated by
-/// `&` are supported (only `w` is used today; anything else is kept
-/// on the returned base so it round-trips).
-export function parseImageSrc(src: string): { base: string; width: number | null } {
-  if (!src) return { base: "", width: null };
+/// the file) and the optional fragment params. Width travels as
+/// `#w=N`; alignment as bare `#left` / `#right` (absent fragment =
+/// the default, centered). The fragment stays in the markdown so
+/// other renderers see a plain `file.png` (path-only after the
+/// hash is stripped); chan-drive's link parser strips `#...` before
+/// indexing, so fragments never leak into the graph.
+///
+/// Multiple fragment params are joined with `&` (e.g. `#w=200&left`).
+/// Unknown parts are preserved on the returned `base` so they round-
+/// trip through edits that don't touch them.
+export function parseImageSrc(src: string): {
+  base: string;
+  width: number | null;
+  align: ImageAlign | null;
+} {
+  if (!src) return { base: "", width: null, align: null };
   const hash = src.indexOf("#");
-  if (hash < 0) return { base: src, width: null };
+  if (hash < 0) return { base: src, width: null, align: null };
   const baseUrl = src.slice(0, hash);
   const fragment = src.slice(hash + 1);
   let width: number | null = null;
+  let align: ImageAlign | null = null;
   const kept: string[] = [];
   for (const part of fragment.split("&")) {
+    if (part === "left" || part === "right") {
+      align = part;
+      continue;
+    }
     const eq = part.indexOf("=");
     const key = eq < 0 ? part : part.slice(0, eq);
     const val = eq < 0 ? "" : part.slice(eq + 1);
@@ -52,7 +67,23 @@ export function parseImageSrc(src: string): { base: string; width: number | null
     if (part) kept.push(part);
   }
   const base = kept.length === 0 ? baseUrl : `${baseUrl}#${kept.join("&")}`;
-  return { base, width };
+  return { base, width, align };
+}
+
+/// Rebuild an image src from its base + fragment params. Keeps any
+/// unknown fragment parts the parser preserved on `base`; appends
+/// `w=N` and the bare align token in a stable order so a round-trip
+/// through parse/build is idempotent.
+function buildImageSrc(
+  base: string,
+  width: number | null,
+  align: ImageAlign | null,
+): string {
+  const parts: string[] = [];
+  if (width != null) parts.push(`w=${width}`);
+  if (align) parts.push(align);
+  if (parts.length === 0) return base;
+  return base.includes("#") ? `${base}&${parts.join("&")}` : `${base}#${parts.join("&")}`;
 }
 
 /// Resolve a markdown image src to a URL the browser can load.
@@ -81,12 +112,19 @@ export function resolveImageSrc(src: string, fromPath?: string | null): string {
 }
 
 /// Build the new src string for an image after resizing. `width`
-/// of null strips the `#w=N` fragment; other fragment parts (rare
-/// for images, but possible if a user hand-wrote one) are kept.
+/// of null strips the `#w=N` fragment; align and other fragment
+/// parts round-trip untouched.
 export function setImageWidth(src: string, width: number | null): string {
-  const { base } = parseImageSrc(src);
-  if (width == null) return base;
-  return base.includes("#") ? `${base}&w=${width}` : `${base}#w=${width}`;
+  const { base, align } = parseImageSrc(src);
+  return buildImageSrc(base, width, align);
+}
+
+/// Build the new src string after toggling alignment. `null` clears
+/// the align fragment (centered, the default); width and unknown
+/// fragment parts round-trip untouched.
+export function setImageAlign(src: string, align: ImageAlign | null): string {
+  const { base, width } = parseImageSrc(src);
+  return buildImageSrc(base, width, align);
 }
 
 /// TipTap node spec. The factory closes over `getFromPath` so the
@@ -99,13 +137,14 @@ export function createImageNode(getFromPath: () => string | null) {
     renderHTML({ HTMLAttributes }) {
       const raw = (HTMLAttributes.src as string | null) ?? "";
       const resolved = resolveImageSrc(raw, getFromPath());
-      const { width } = parseImageSrc(raw);
+      const { width, align } = parseImageSrc(raw);
       // Empty src: serialize without a `src` attribute so the
       // browser doesn't fire a useless GET to `/api/files/`. The
       // alt text (if any) still renders.
       const extra: Record<string, string> = {};
       if (resolved) extra.src = resolved;
       if (width != null) extra.style = `width: ${width}px`;
+      if (align) extra["data-align"] = align;
       return ["img", mergeAttributes(HTMLAttributes, extra)];
     },
     addNodeView() {
@@ -122,14 +161,36 @@ export function createImageNode(getFromPath: () => string | null) {
         const apply = (n: typeof node) => {
           const raw = (n.attrs.src as string | null) ?? "";
           const resolved = resolveImageSrc(raw, getFromPath());
-          const { width } = parseImageSrc(raw);
+          const { width, align } = parseImageSrc(raw);
           if (resolved) img.src = resolved;
           else img.removeAttribute("src");
           img.alt = (n.attrs.alt as string | null) ?? "";
           if (width != null) img.style.width = `${width}px`;
           else img.style.removeProperty("width");
+          wrap.classList.toggle("align-left", align === "left");
+          wrap.classList.toggle("align-right", align === "right");
+        };
+        // Toggle the `is-alone` class based on whether the parent
+        // textblock holds only this image. CSS keys block-level
+        // layout (centered + align-left / align-right) off this
+        // class. We can't rely on `:only-child` because PM serializes
+        // text neighbors as text NODES, which are not "siblings" for
+        // the `:only-child` selector — a mixed `text ![](img) text`
+        // line still has the wrap as the only ELEMENT child, which
+        // would falsely activate block mode.
+        const updateAlone = () => {
+          const pos = getPos?.();
+          if (typeof pos !== "number") return;
+          const $pos = editor.state.doc.resolve(pos);
+          wrap.classList.toggle("is-alone", $pos.parent.childCount === 1);
         };
         apply(node);
+        updateAlone();
+        // Node view's `update` is called only when the IMAGE node's
+        // attrs / content change; sibling text edits don't trigger
+        // it. Subscribe to the editor's `update` so the aloneness
+        // class stays accurate as the user types around the image.
+        editor.on("update", updateAlone);
         wrap.appendChild(img);
 
         const handle = document.createElement("span");
@@ -180,6 +241,7 @@ export function createImageNode(getFromPath: () => string | null) {
           update(updated) {
             if (updated.type !== node.type) return false;
             apply(updated);
+            updateAlone();
             return true;
           },
           // PM would otherwise try to reconcile the inline-styled
@@ -189,6 +251,9 @@ export function createImageNode(getFromPath: () => string | null) {
           // already covers attribute changes.
           ignoreMutation() {
             return true;
+          },
+          destroy() {
+            editor.off("update", updateAlone);
           },
         };
       };

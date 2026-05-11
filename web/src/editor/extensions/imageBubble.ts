@@ -25,7 +25,7 @@
 
 import { api, withTokenQuery } from "../../api/client";
 import { openBubbleShell, type BubbleHandle } from "../bubble";
-import { isImagePath } from "./image";
+import { isImagePath, type ImageAlign } from "./image";
 
 /// Server-side size cap. Mirrors the upload limit chan-server applies
 /// to `/api/attachments` so the pre-flight check fails fast instead
@@ -55,6 +55,11 @@ export interface ImageBubbleOpts {
   /// restore the original atom if the bubble was opened in
   /// edit-existing mode).
   onDismiss?: () => void;
+  /// Fires when the user clicks an alignment button. `null` clears
+  /// the fragment (default, centered); `"left"` / `"right"` set the
+  /// matching bare-token fragment on the current `(src)` portion.
+  /// The host rewrites the markdown text in place.
+  onSetAlign?: (align: ImageAlign | null) => void;
 }
 
 export type ImageBubbleMode = "path" | "alt";
@@ -83,6 +88,15 @@ export interface ImageBubble extends BubbleHandle {
   /// the upload completes (which would delete the `![]()` markup
   /// the upload was supposed to fill in).
   isUploading(): boolean;
+  /// Sync the visual `is-active` state on the alignment buttons to
+  /// the alignment fragment currently parsed off the markdown src.
+  /// `null` highlights the centered (default) button.
+  setActiveAlign(align: ImageAlign | null): void;
+  /// Enable / disable the alignment buttons. Disabled when the image
+  /// shares its textblock with other content: aligning would either
+  /// be a no-op (the wrap is still inline-block on a mixed line) or
+  /// break paragraph flow, so the affordance is hidden instead.
+  setAlignAvailable(available: boolean): void;
   /// Tear down DOM + listeners. Idempotent.
   dismiss(): void;
 }
@@ -143,9 +157,10 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubble {
   error.className = "md-image-bubble-error is-hidden";
   wrap.appendChild(error);
 
-  // Footer: upload button (left) + accept hint (right). The hidden
-  // <input type="file"> lives on document.body so closing the
-  // bubble doesn't tear it down mid-dialog.
+  // Footer: upload button (left) + alignment group (middle) + accept
+  // hint (right). The hidden <input type="file"> lives on
+  // document.body so closing the bubble doesn't tear it down
+  // mid-dialog.
   const footer = document.createElement("div");
   footer.className = "md-image-bubble-footer";
   const uploadBtn = document.createElement("button");
@@ -158,11 +173,61 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubble {
   uploadBtn.addEventListener("mousedown", (ev) => {
     ev.preventDefault();
   });
-  const accept = document.createElement("span");
-  accept.className = "md-image-bubble-accept";
-  accept.textContent = "⏎  to accept";
+
+  // Alignment group. Three buttons (left / center / right) that
+  // toggle the `#left` / `#right` fragment on `(src)`. Centered =
+  // no fragment, which keeps the markdown clean for the common case.
+  // The fragment never reaches the graph index: chan-drive's link
+  // parser strips `#...` before resolving paths.
+  const alignGroup = document.createElement("div");
+  alignGroup.className = "md-image-bubble-align";
+  const makeAlignBtn = (
+    title: string,
+    label: string,
+    handler: () => void,
+  ): HTMLButtonElement => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "md-image-bubble-align-btn";
+    btn.title = title;
+    btn.textContent = label;
+    btn.addEventListener("mousedown", (ev) => {
+      ev.preventDefault();
+    });
+    btn.addEventListener("click", handler);
+    return btn;
+  };
+  const alignLeftBtn = makeAlignBtn("align left (#left)", "⇤", () => {
+    opts.onSetAlign?.("left");
+  });
+  const alignCenterBtn = makeAlignBtn("center (default)", "↔", () => {
+    opts.onSetAlign?.(null);
+  });
+  const alignRightBtn = makeAlignBtn("align right (#right)", "⇥", () => {
+    opts.onSetAlign?.("right");
+  });
+  alignGroup.appendChild(alignLeftBtn);
+  alignGroup.appendChild(alignCenterBtn);
+  alignGroup.appendChild(alignRightBtn);
+
+  // OK button: explicit commit affordance for mouse users, matching
+  // the calendar bubble pattern. Same effect as pressing Enter; the
+  // keyboard-shortcut hint is folded into the title attribute so
+  // the footer doesn't grow a third row.
+  const okBtn = document.createElement("button");
+  okBtn.type = "button";
+  okBtn.className = "md-image-bubble-ok";
+  okBtn.textContent = "OK";
+  okBtn.title = "insert the highlighted image (Enter)";
+  okBtn.addEventListener("mousedown", (ev) => {
+    ev.preventDefault();
+  });
+  okBtn.addEventListener("click", () => {
+    opts.onCommit?.();
+  });
   footer.appendChild(uploadBtn);
-  footer.appendChild(accept);
+  footer.appendChild(alignGroup);
+  footer.appendChild(okBtn);
   wrap.appendChild(footer);
 
   // Hidden file input. Re-used across uploads; reset before each
@@ -231,12 +296,12 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubble {
     list.classList.remove("is-hidden");
     if (entries.length === 0) {
       list.classList.add("is-empty");
-      accept.classList.add("is-hidden");
+      okBtn.classList.add("is-hidden");
       shell.reposition();
       return;
     }
     list.classList.remove("is-empty");
-    accept.classList.remove("is-hidden");
+    okBtn.classList.remove("is-hidden");
     entries.forEach((entry, i) => {
       const li = document.createElement("li");
       li.textContent = entry.path;
@@ -429,6 +494,26 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubble {
     },
     isUploading(): boolean {
       return uploading;
+    },
+    setActiveAlign(align: ImageAlign | null): void {
+      if (!alive) return;
+      alignLeftBtn.classList.toggle("is-active", align === "left");
+      alignCenterBtn.classList.toggle("is-active", align === null);
+      alignRightBtn.classList.toggle("is-active", align === "right");
+    },
+    setAlignAvailable(available: boolean): void {
+      if (!alive) return;
+      alignGroup.classList.toggle("is-disabled", !available);
+      const title = available
+        ? null
+        : "alignment unavailable: image shares the line with text";
+      for (const btn of [alignLeftBtn, alignCenterBtn, alignRightBtn]) {
+        btn.disabled = !available;
+        if (title) btn.title = title;
+        else if (btn === alignLeftBtn) btn.title = "align left (#left)";
+        else if (btn === alignCenterBtn) btn.title = "center (default)";
+        else btn.title = "align right (#right)";
+      }
     },
     dismiss(): void {
       if (!alive) return;
