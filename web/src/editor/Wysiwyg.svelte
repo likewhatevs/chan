@@ -1875,6 +1875,13 @@
   /// flipping modes, and dismiss when the caret leaves the range.
   function syncImageBubble(): void {
     if (!editor || !imageBubble) return;
+    // Suspend the dismiss path while an upload is in flight. The
+    // OS file picker steals focus and PM's selection updates can
+    // fire as focus returns; without this guard, syncImageBubble
+    // would dismiss the bubble (and `restoreImageEditOriginal`
+    // would delete the typed `![]()` markup) before the upload's
+    // onUpload callback can land the new path.
+    if (imageBubble.isUploading()) return;
     const range = findImageRange(editor);
     if (!range || range.mode === "outside") {
       dismissImageBubble();
@@ -3093,7 +3100,12 @@
     font-weight: 600;
     line-height: 1.2;
   }
-  :global(.md-image-bubble-upload:hover) { filter: brightness(1.15); }
+  :global(.md-image-bubble-upload:hover),
+  :global(.md-image-bubble-upload.is-active) {
+    filter: brightness(1.15);
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
   :global(.md-image-bubble-upload:disabled) {
     opacity: 0.55;
     cursor: progress;

@@ -77,6 +77,12 @@ export interface ImageBubble extends BubbleHandle {
   /// The caller commits by replacing the `(src)` range with the
   /// returned string.
   accept(): string | null;
+  /// True while a file is in flight to /api/attachments. The host's
+  /// sync hook checks this so a selection-update fired by the OS
+  /// file picker returning focus doesn't dismiss the bubble before
+  /// the upload completes (which would delete the `![]()` markup
+  /// the upload was supposed to fill in).
+  isUploading(): boolean;
   /// Tear down DOM + listeners. Idempotent.
   dismiss(): void;
 }
@@ -174,6 +180,20 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubble {
   let active = 0;
   let lastQuery = "";
   let alive = true;
+  /// Upload-in-flight flag. Read by the host's syncImageBubble so a
+  /// selection update fired by the OS file picker returning focus
+  /// can't dismiss the bubble and delete the `![]()` markup before
+  /// the response lands.
+  let uploading = false;
+  /// True when keyboard focus is parked on the upload button
+  /// (ArrowDown past the last result lands here). The button gets
+  /// an `is-active` class for visual feedback; Enter triggers the
+  /// file picker instead of committing the highlighted result.
+  let uploadFocused = false;
+
+  const renderUploadFocus = (): void => {
+    uploadBtn.classList.toggle("is-active", uploadFocused);
+  };
 
   const setError = (msg: string | null): void => {
     if (!msg) {
@@ -309,18 +329,25 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubble {
       fileInput.value = "";
       return;
     }
+    uploading = true;
     uploadBtn.disabled = true;
+    const prevLabel = uploadBtn.textContent;
+    uploadBtn.textContent = "uploading…";
     void api
       .uploadAttachment(file, opts.uploadDir ?? null)
       .then((res) => {
         if (!alive) return;
+        uploading = false;
         uploadBtn.disabled = false;
+        uploadBtn.textContent = prevLabel ?? "Upload…";
         fileInput.value = "";
         opts.onUpload(res.path);
       })
       .catch((e: unknown) => {
         if (!alive) return;
+        uploading = false;
         uploadBtn.disabled = false;
+        uploadBtn.textContent = prevLabel ?? "Upload…";
         fileInput.value = "";
         const msg = e instanceof Error ? e.message : String(e);
         setError(msg);
@@ -335,12 +362,16 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubble {
       if (!alive) return;
       if (mode === next) return;
       mode = next;
+      uploadFocused = false;
+      renderUploadFocus();
       renderAll();
     },
     setPathQuery(q: string): void {
       if (!alive) return;
       lastQuery = q;
       if (mode !== "path") return;
+      uploadFocused = false;
+      renderUploadFocus();
       refreshPathResults();
     },
     setAlt(text: string): void {
@@ -351,7 +382,31 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubble {
     moveActive(delta: number): void {
       if (!alive) return;
       if (mode !== "path") return;
-      if (entries.length === 0) return;
+      // ArrowDown past the last result (or with no results) parks
+      // focus on the upload button so the user can reach it without
+      // the mouse. ArrowUp lifts focus back into the list.
+      if (uploadFocused) {
+        if (delta < 0) {
+          uploadFocused = false;
+          if (entries.length > 0) active = entries.length - 1;
+          renderUploadFocus();
+          renderList();
+          renderPreview();
+        }
+        return;
+      }
+      if (entries.length === 0) {
+        if (delta > 0) {
+          uploadFocused = true;
+          renderUploadFocus();
+        }
+        return;
+      }
+      if (delta > 0 && active === entries.length - 1) {
+        uploadFocused = true;
+        renderUploadFocus();
+        return;
+      }
       active = Math.max(0, Math.min(entries.length - 1, active + delta));
       renderList();
       renderPreview();
@@ -363,6 +418,9 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubble {
       const entry = entries[active] ?? entries[0];
       return entry ? entry.path : null;
     },
+    isUploading(): boolean {
+      return uploading;
+    },
     dismiss(): void {
       if (!alive) return;
       alive = false;
@@ -373,6 +431,13 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubble {
       if (!alive) return false;
       switch (event.key) {
         case "Enter":
+          if (uploadFocused) {
+            // Trigger the file picker rather than commit. The user
+            // navigated to the upload slot; Enter there means "open
+            // the upload dialog".
+            uploadBtn.click();
+            return true;
+          }
           opts.onCommit?.();
           return true;
         case "Escape":
