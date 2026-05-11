@@ -32,7 +32,7 @@
     isoOf,
     type DateFormatId,
   } from "./dateFormats";
-  import { createImageNode } from "./extensions/image";
+  import { createImageNode, resolveImageSrc } from "./extensions/image";
   import { openImageBubble, type ImageBubble } from "./extensions/imageBubble";
   import {
     createWikiLinkNode,
@@ -125,6 +125,7 @@
     if (ro) {
       dismissWikiBubble();
       dismissImageBubble();
+      dismissImageOverlay();
       dismissTagBubble();
       dismissContactBubble();
       clearCursorDecorations();
@@ -218,6 +219,12 @@
   /// unchanged default counts as "no user input" and gets replaced
   /// by the picked file's basename.
   let editingImageDefaultAlt: string = "";
+
+  /// Cleanup for the floating image action overlay (zoom + edit
+  /// buttons shown when a rendered image is clicked). `undefined`
+  /// when no overlay is open. The function tears down the DOM and
+  /// removes the global listeners that drive its lifetime.
+  let imageOverlayDismiss: (() => void) | undefined;
 
   /// Scroll the editor to the i-th heading (0-based, document order).
   /// Called by the inspector (outline view) via `bind:this` from
@@ -609,6 +616,7 @@
   onDestroy(() => {
     dismissWikiBubble();
     dismissImageBubble();
+    dismissImageOverlay();
     dismissTagBubble();
     dismissContactBubble();
     editor?.destroy();
@@ -1966,6 +1974,113 @@
   /// `![alt](src)` source text, then opening the bubble in path
   /// mode. Mirrors `enterWikiEditAt`. The original src + alt are
   /// snapshotted so a dismiss-without-accept can restore the atom.
+  /// Tear down any open image action overlay. Idempotent; safe to
+  /// call from places that don't know whether one is showing.
+  function dismissImageOverlay(): void {
+    if (imageOverlayDismiss) {
+      imageOverlayDismiss();
+      imageOverlayDismiss = undefined;
+    }
+  }
+
+  /// Show a small floating overlay anchored to the clicked image's
+  /// top-right corner with two actions: "Zoom" opens the image in a
+  /// fullscreen viewer; "Edit" reveals the markdown source via
+  /// `enterImageEditAt`. Click outside or Escape dismisses without
+  /// committing. Arrow-key entry into an image bypasses this overlay
+  /// and goes straight to edit, per the EDITOR.md spec.
+  function openImageActionOverlay(
+    imgEl: HTMLElement,
+    pos: number,
+    node: { attrs: Record<string, unknown>; nodeSize: number },
+  ): void {
+    dismissImageOverlay();
+    const wrap = document.createElement("div");
+    wrap.className = "md-image-actions";
+    const zoomBtn = document.createElement("button");
+    zoomBtn.type = "button";
+    zoomBtn.className = "md-image-action";
+    zoomBtn.textContent = "Zoom";
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "md-image-action";
+    editBtn.textContent = "Edit";
+    wrap.appendChild(zoomBtn);
+    wrap.appendChild(editBtn);
+    document.body.appendChild(wrap);
+    // Position over the image's top-right corner with a small inset
+    // so the overlay sits ON the image, not floating in space.
+    const reposition = (): void => {
+      const r = imgEl.getBoundingClientRect();
+      const w = wrap.offsetWidth || 120;
+      wrap.style.top = `${r.top + window.scrollY + 8}px`;
+      wrap.style.left = `${r.right + window.scrollX - w - 8}px`;
+    };
+    reposition();
+    const onScroll = (): void => reposition();
+    const onResize = (): void => reposition();
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onResize);
+    const onDocMouseDown = (ev: MouseEvent): void => {
+      const target = ev.target as Node | null;
+      if (target && wrap.contains(target)) return;
+      dismissImageOverlay();
+    };
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        dismissImageOverlay();
+      }
+    };
+    document.addEventListener("mousedown", onDocMouseDown, true);
+    document.addEventListener("keydown", onKey, true);
+    imageOverlayDismiss = (): void => {
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onResize);
+      document.removeEventListener("mousedown", onDocMouseDown, true);
+      document.removeEventListener("keydown", onKey, true);
+      wrap.remove();
+    };
+    zoomBtn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      const src = (node.attrs.src as string) || "";
+      dismissImageOverlay();
+      openImageZoom(src);
+    });
+    editBtn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      dismissImageOverlay();
+      enterImageEditAt(pos, node);
+    });
+  }
+
+  /// Fullscreen image viewer. Renders the image centered on a dark
+  /// backdrop. Click anywhere or press Escape to dismiss.
+  function openImageZoom(src: string): void {
+    if (!src) return;
+    const resolved = resolveImageSrc(src, currentPath ?? null);
+    const backdrop = document.createElement("div");
+    backdrop.className = "md-image-zoom";
+    const img = document.createElement("img");
+    img.src = resolved;
+    img.alt = "";
+    img.draggable = false;
+    backdrop.appendChild(img);
+    document.body.appendChild(backdrop);
+    const dismiss = (): void => {
+      document.removeEventListener("keydown", onKey, true);
+      backdrop.remove();
+    };
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        dismiss();
+      }
+    };
+    backdrop.addEventListener("click", () => dismiss());
+    document.addEventListener("keydown", onKey, true);
+  }
+
   function enterImageEditAt(pos: number, atomNode: { attrs: Record<string, unknown>; nodeSize: number }): void {
     if (!editor) return;
     const ed = editor;
@@ -2119,11 +2234,11 @@
       enterWikiEditAt(wikiEl);
       return;
     }
-    // Click on an inline image atom: enter image edit mode. We
-    // resolve the atom's doc position via PM, validate the node
-    // type, and hand control to `enterImageEditAt`. The image
-    // node uses the minimal renderer (no wrap div), so the target
-    // is the `<img>` itself.
+    // Click on an inline image atom: open the action overlay
+    // (zoom + edit). Arrow-key entry still jumps straight to edit
+    // via `maybeOpenAtomEditAtSelection`; click is the slow path
+    // because clicks frequently land on an image as part of a
+    // resize / select gesture rather than an explicit "edit" intent.
     if (editor && t.tagName === "IMG" && host && host.contains(t)) {
       const ed = editor;
       let pos: number;
@@ -2144,7 +2259,7 @@
         }
       }
       e.preventDefault();
-      enterImageEditAt(pos, node);
+      openImageActionOverlay(t, pos, node);
       return;
     }
     if (t.matches("[data-md-date]")) {
@@ -3188,4 +3303,58 @@
     font-size: 12px;
   }
   :global(.md-image-bubble-error.is-hidden) { display: none; }
+
+  /* Image action overlay (Zoom / Edit). Floats over the clicked
+     image's top-right corner; click outside or Esc dismisses. The
+     buttons inherit the editor's foreground color so they read
+     against either a bright or a dark image background. */
+  :global(.md-image-actions) {
+    position: absolute;
+    z-index: 30000;
+    display: inline-flex;
+    gap: 2px;
+    background: rgba(20, 20, 20, 0.85);
+    color: #fff;
+    border-radius: 6px;
+    padding: 2px;
+    backdrop-filter: blur(4px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  }
+  :global(.md-image-action) {
+    background: transparent;
+    color: inherit;
+    border: 0;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    line-height: 1.2;
+  }
+  :global(.md-image-action:hover) {
+    background: rgba(255, 255, 255, 0.15);
+  }
+
+  /* Fullscreen image viewer triggered by the action overlay's
+     "Zoom" button. Click anywhere on the backdrop or press Esc to
+     dismiss. The image scales down to fit but never up; we don't
+     want to upscale a small drawing into a pixelated mess. */
+  :global(.md-image-zoom) {
+    position: fixed;
+    inset: 0;
+    z-index: 40000;
+    background: rgba(0, 0, 0, 0.92);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: zoom-out;
+  }
+  :global(.md-image-zoom img) {
+    max-width: 92vw;
+    max-height: 92vh;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  }
 </style>
