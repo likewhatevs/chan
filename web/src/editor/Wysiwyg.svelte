@@ -1997,15 +1997,37 @@
     dismissImageOverlay();
     const wrap = document.createElement("div");
     wrap.className = "md-image-actions";
-    const zoomBtn = document.createElement("button");
-    zoomBtn.type = "button";
-    zoomBtn.className = "md-image-action";
-    zoomBtn.textContent = "Zoom";
-    const editBtn = document.createElement("button");
-    editBtn.type = "button";
-    editBtn.className = "md-image-action";
-    editBtn.textContent = "Edit";
+    const makeBtn = (label: string, run: () => void): HTMLButtonElement => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "md-image-action";
+      btn.textContent = label;
+      // Use mousedown + preventDefault so the editor's selection
+      // survives the click. Click events on a document.body-mounted
+      // overlay would otherwise race with PM's blur/refocus and the
+      // action's editor commands would land in a stale state.
+      btn.addEventListener("mousedown", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        run();
+      });
+      return btn;
+    };
+    const zoomBtn = makeBtn("Zoom", () => {
+      const src = (node.attrs.src as string) || "";
+      dismissImageOverlay();
+      openImageZoom(src);
+    });
+    const resizeBtn = makeBtn("Resize", () => {
+      dismissImageOverlay();
+      promptImageResize(pos);
+    });
+    const editBtn = makeBtn("Edit", () => {
+      dismissImageOverlay();
+      enterImageEditAt(pos, node);
+    });
     wrap.appendChild(zoomBtn);
+    wrap.appendChild(resizeBtn);
     wrap.appendChild(editBtn);
     document.body.appendChild(wrap);
     // Position over the image's top-right corner with a small inset
@@ -2041,17 +2063,46 @@
       document.removeEventListener("keydown", onKey, true);
       wrap.remove();
     };
-    zoomBtn.addEventListener("click", (ev) => {
-      ev.preventDefault();
-      const src = (node.attrs.src as string) || "";
-      dismissImageOverlay();
-      openImageZoom(src);
-    });
-    editBtn.addEventListener("click", (ev) => {
-      ev.preventDefault();
-      dismissImageOverlay();
-      enterImageEditAt(pos, node);
-    });
+  }
+
+  /// Ask the user for a target pixel width and write the answer
+  /// into the image's `src` as the `#w=N` fragment. We use
+  /// `window.prompt` for now because the overlay needs to dismiss
+  /// before we can show a richer inline input without fighting the
+  /// editor's focus management. The image extension's renderHTML
+  /// reads the fragment and applies `width: Npx` on render.
+  function promptImageResize(pos: number): void {
+    if (!editor) return;
+    const ed = editor;
+    const node = ed.state.doc.nodeAt(pos);
+    if (!node || node.type.name !== "image") return;
+    const rawSrc = (node.attrs.src as string) ?? "";
+    // Parse any existing `#w=N` so the prompt's default reflects the
+    // current width. Use a non-greedy match so we don't pick up
+    // unrelated fragment content the user may have written by hand.
+    const widthMatch = rawSrc.match(/#w=(\d+)/);
+    const currentWidth = widthMatch ? widthMatch[1] : "";
+    const reply = window.prompt(
+      "Width in pixels (empty for natural size):",
+      currentWidth,
+    );
+    if (reply === null) return; // cancelled
+    const trimmed = reply.trim();
+    let nextSrc: string;
+    // Drop any existing `#w=N` first; we'll re-attach if the user
+    // supplied a value. Preserve anything else in the fragment
+    // (rare for images but possible).
+    const base = rawSrc.replace(/#w=\d+/, "").replace(/#$/, "");
+    if (trimmed === "") {
+      nextSrc = base;
+    } else {
+      const n = parseInt(trimmed, 10);
+      if (!Number.isFinite(n) || n <= 0) return;
+      nextSrc = base.includes("#")
+        ? `${base}&w=${n}`
+        : `${base}#w=${n}`;
+    }
+    ed.view.dispatch(ed.state.tr.setNodeAttribute(pos, "src", nextSrc));
   }
 
   /// Fullscreen image viewer. Renders the image centered on a dark
