@@ -1,7 +1,9 @@
 const { invoke } = window.__TAURI__.core;
-const { open } = window.__TAURI__.dialog;
+const { open, ask } = window.__TAURI__.dialog;
 const { openUrl } = window.__TAURI__.opener;
 const { listen } = window.__TAURI__.event;
+const { check: checkForUpdate } = window.__TAURI__.updater;
+const { relaunch } = window.__TAURI__.process;
 
 const main = document.getElementById('main');
 const openBtn = document.getElementById('open-drive');
@@ -147,6 +149,35 @@ function escapeAttr(s) {
 openBtn.addEventListener('click', pickAndAdd);
 settingsBtn.addEventListener('click', () => invoke('show_settings'));
 
+// Fire-and-forget update check. Runs once per process launch.
+// Endpoint / pubkey live in tauri.conf.json under `plugins.updater`.
+// Failure modes (offline, endpoint 4xx/5xx, malformed manifest)
+// are swallowed: an air-gapped launch should not pop a dialog
+// about a failed update probe.
+async function maybeOfferUpdate() {
+  let update;
+  try {
+    update = await checkForUpdate();
+  } catch (e) {
+    console.warn('update check failed:', e);
+    return;
+  }
+  if (!update) return;
+  const accepted = await ask(
+    `A new version of Chan Desktop is available: ${update.version}.\n\n` +
+    (update.body ? update.body + '\n\n' : '') +
+    'Install and restart now?',
+    { title: 'Chan Desktop update', okLabel: 'Install', cancelLabel: 'Later', kind: 'info' }
+  );
+  if (!accepted) return;
+  try {
+    await update.downloadAndInstall();
+    await relaunch();
+  } catch (e) {
+    showError(e);
+  }
+}
+
 // Re-render whenever the chan registry changes from anywhere
 // (the desktop itself, the chan CLI, or another tool editing the
 // TOML directly), or when a serve starts / discovers its URL / exits.
@@ -154,3 +185,4 @@ listen('registry-changed', () => { refresh().catch(showError); });
 listen('serves-changed', () => { refresh().catch(showError); });
 
 boot().catch(showError);
+maybeOfferUpdate().catch((e) => console.warn('update flow error:', e));
