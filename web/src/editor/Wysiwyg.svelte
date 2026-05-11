@@ -3214,15 +3214,19 @@
        of butting against its edge. */
     margin: 0 5px;
   }
+  /* Resize grip pinned to the image's bottom-right corner. Subtle
+     white triangle with a drop-shadow so it reads against any
+     image content; visible only on hover or active resize. */
   :global(.md-image-handle) {
     position: absolute;
-    right: -4px;
-    bottom: -4px;
-    width: 12px;
-    height: 12px;
-    background: var(--link);
-    border: 2px solid var(--bg);
-    border-radius: 2px;
+    right: 0;
+    bottom: 0;
+    width: 0;
+    height: 0;
+    border-style: solid;
+    border-width: 0 0 12px 12px;
+    border-color: transparent transparent rgba(255, 255, 255, 0.95) transparent;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
     cursor: nwse-resize;
     opacity: 0;
     transition: opacity 0.15s ease;
