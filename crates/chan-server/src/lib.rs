@@ -190,6 +190,20 @@ pub fn sanitize_prefix(input: &str) -> Result<String, String> {
     Ok(out)
 }
 
+/// Combine the `open_browser` config flag with the `BROWSER` env
+/// var. Returns false if the flag is off or if `BROWSER` is set to
+/// an empty string. The empty-string case is a Unix convention
+/// (python's `webbrowser`, several CLIs) for "I have no browser;
+/// don't try". A non-empty `BROWSER` falls through: the `open`
+/// crate honors it on Linux, and we leave macOS/Windows to their
+/// platform default opener.
+fn should_open_browser(open_browser: bool) -> bool {
+    if !open_browser {
+        return false;
+    }
+    !matches!(std::env::var("BROWSER"), Ok(v) if v.is_empty())
+}
+
 /// Bundle returned by `build_app`: the prefixed axum app plus the
 /// pieces `serve()` needs out-of-band (token for the launch URL,
 /// last_activity for the idle watcher). The watch handle and
@@ -404,7 +418,7 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
     };
     let url = handle.launch_url();
     eprintln!("chan is ready:\n{url}");
-    if config.open_browser {
+    if should_open_browser(config.open_browser) {
         // Best-effort: on a headless host (no `xdg-open`/no display)
         // this returns an error; log a NOTE and keep serving.
         if let Err(e) = open::that_detached(&url) {
@@ -500,6 +514,7 @@ pub async fn serve_via_tunnel(
     token: String,
     drive_name: String,
     public: bool,
+    open_browser: bool,
 ) -> Result<(), Error> {
     // The addr field is unused in tunnel mode (no local listener);
     // any parseable SocketAddr works. Prefix is empty: the public
@@ -510,6 +525,10 @@ pub async fn serve_via_tunnel(
         no_token: true,
         prefix: String::new(),
         idle_timeout: None,
+        // Unused on this path: the tunnel browser-open fires from
+        // the Connected event handler below, gated by the
+        // `open_browser` parameter on serve_via_tunnel. The local
+        // serve() open path is never reached in tunnel mode.
         open_browser: false,
         // Disable Settings on every tunnel run, not just the public
         // one: even with the OAuth gate the drive is reachable from
@@ -578,8 +597,12 @@ pub async fn serve_via_tunnel(
                     if !greeted {
                         greeted = true;
                         print_qr_if_tty(&public_url);
-                        if let Err(e) = open::that_detached(&public_url) {
-                            eprintln!("NOTE: could not open browser ({e}); visit the URL above.");
+                        if should_open_browser(open_browser) {
+                            if let Err(e) = open::that_detached(&public_url) {
+                                eprintln!(
+                                    "NOTE: could not open browser ({e}); visit the URL above."
+                                );
+                            }
                         }
                     }
                 }

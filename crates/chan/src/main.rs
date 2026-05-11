@@ -121,6 +121,12 @@ enum Command {
         /// never expose a no-token server on a shared machine.
         #[arg(long)]
         no_token: bool,
+        /// Do not open the system default browser when the server is
+        /// ready. The URL is still printed; useful for shells that
+        /// host the UI in their own window (chan-desktop) or for
+        /// headless / scripted invocations.
+        #[arg(long)]
+        no_browser: bool,
         /// Lock down the Settings panel: the SPA greys the cog and
         /// the server refuses every settings-write route with 403
         /// (PATCH /api/drive, /api/config, /api/server/config,
@@ -290,6 +296,7 @@ fn main() -> Result<()> {
             prefix,
             timeout,
             no_token,
+            no_browser,
             no_settings,
             tunnel_url,
             tunnel_token,
@@ -311,6 +318,7 @@ fn main() -> Result<()> {
                 timeout,
                 path,
                 no_token,
+                no_browser,
                 no_settings,
                 tunnel_url,
                 tunnel_token,
@@ -708,6 +716,7 @@ async fn cmd_serve(
     idle_timeout: Option<Duration>,
     path: Option<PathBuf>,
     no_token: bool,
+    no_browser: bool,
     no_settings: bool,
     tunnel_url: String,
     tunnel_token: Option<String>,
@@ -763,6 +772,7 @@ async fn cmd_serve(
             token,
             drive_name,
             tunnel_public,
+            !no_browser,
         )
         .await
         .context("running tunnel client");
@@ -795,10 +805,11 @@ async fn cmd_serve(
         no_token,
         prefix,
         idle_timeout,
-        // Tunnel mode is the only path with no local URL to open;
-        // every other invocation (default, --no-token desktop shell,
-        // off-loopback bind) gets the browser handoff.
-        open_browser: true,
+        // Default: open the browser on bind. --no-browser opts out
+        // (desktop shells that host the UI in their own window,
+        // headless / scripted invocations). Honored in both local
+        // and tunnel mode.
+        open_browser: !no_browser,
         // Local serve trusts the operator by default; --no-settings
         // opts into the same UI grey + server 403 that tunnel mode
         // gets, for kiosk / shared-workstation deployments. The
