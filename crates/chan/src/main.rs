@@ -121,6 +121,16 @@ enum Command {
         /// never expose a no-token server on a shared machine.
         #[arg(long)]
         no_token: bool,
+        /// Lock down the Settings panel: the SPA greys the cog and
+        /// the server refuses every settings-write route with 403
+        /// (PATCH /api/drive, /api/config, /api/server/config,
+        /// PUT/DELETE /api/llm/keys/*, POST /api/storage/reset,
+        /// POST /api/index/rebuild). Tunnel mode already implies
+        /// this; the flag lets a local serve opt in for kiosk-style
+        /// deployments (shared workstation, demo box) where the
+        /// drive owner is not the operator at the keyboard.
+        #[arg(long)]
+        no_settings: bool,
         /// Tunnel endpoint URL. With --tunnel-token, chan serve
         /// dials this instead of binding a local listener.
         #[arg(long, default_value = "https://tunnel.chan.app/v1/tunnel")]
@@ -280,6 +290,7 @@ fn main() -> Result<()> {
             prefix,
             timeout,
             no_token,
+            no_settings,
             tunnel_url,
             tunnel_token,
             tunnel_drive,
@@ -300,6 +311,7 @@ fn main() -> Result<()> {
                 timeout,
                 path,
                 no_token,
+                no_settings,
                 tunnel_url,
                 tunnel_token,
                 tunnel_drive,
@@ -696,6 +708,7 @@ async fn cmd_serve(
     idle_timeout: Option<Duration>,
     path: Option<PathBuf>,
     no_token: bool,
+    no_settings: bool,
     tunnel_url: String,
     tunnel_token: Option<String>,
     tunnel_drive: Option<String>,
@@ -774,6 +787,9 @@ async fn cmd_serve(
         }
     }
 
+    if no_settings {
+        eprintln!("chan: --no-settings is set; the SPA will grey the cog and all settings-write routes will refuse with 403.");
+    }
     let config = ServeConfig {
         addr,
         no_token,
@@ -783,10 +799,13 @@ async fn cmd_serve(
         // every other invocation (default, --no-token desktop shell,
         // off-loopback bind) gets the browser handoff.
         open_browser: true,
-        // Local serve always trusts the operator; the greyed-
-        // Settings UI and the public-tunnel redactions are tunnel-
-        // mode only.
-        settings_disabled: false,
+        // Local serve trusts the operator by default; --no-settings
+        // opts into the same UI grey + server 403 that tunnel mode
+        // gets, for kiosk / shared-workstation deployments. The
+        // public-tunnel redactions on GETs are kept tunnel-only:
+        // a local operator on the same machine has nothing to hide
+        // from themselves.
+        settings_disabled: no_settings,
         tunnel_public: false,
     };
     chan_server::serve(lib, drive, config)
