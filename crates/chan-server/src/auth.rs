@@ -41,7 +41,7 @@ pub fn random_token() -> String {
 /// survives a binary rebuild so the browser's cached sessionStorage
 /// token stays valid across `cargo build && chan serve` cycles.
 pub fn load_or_create_token(paths: &DrivePaths) -> std::io::Result<String> {
-    std::fs::create_dir_all(&paths.tokens)?;
+    ensure_tokens_dir(&paths.tokens)?;
     let token_path = paths.tokens.join("token");
     if let Ok(s) = std::fs::read_to_string(&token_path) {
         let s = s.trim();
@@ -52,6 +52,30 @@ pub fn load_or_create_token(paths: &DrivePaths) -> std::io::Result<String> {
     let token = random_token();
     write_token_atomic(&token_path, &token)?;
     Ok(token)
+}
+
+/// Make sure `<state>/tokens/<drive-key>/` is a directory we can write
+/// inside. Self-heals one specific corruption seen in the wild: a
+/// regular file sitting at that path (left behind by some pre-release
+/// build / manual fiddling) used to make `create_dir_all` fail with
+/// `AlreadyExists` and abort the whole serve. We remove the stray
+/// file and retry. Anything else (symlink, dir we cannot create
+/// because of a real permission problem) is propagated unchanged.
+fn ensure_tokens_dir(dir: &Path) -> std::io::Result<()> {
+    match std::fs::create_dir_all(dir) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let meta = std::fs::symlink_metadata(dir)?;
+            let ft = meta.file_type();
+            if ft.is_file() {
+                std::fs::remove_file(dir)?;
+                std::fs::create_dir_all(dir)
+            } else {
+                Err(e)
+            }
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Write the token via chan-drive's atomic_write helper (tmpfile +
@@ -148,5 +172,60 @@ mod tests {
     fn extract_token_missing() {
         let h = HeaderMap::new();
         assert_eq!(extract_token(None, &h), None);
+    }
+
+    /// Regression: some on-disk state has `<state>/tokens/<key>` as a
+    /// regular file (32-byte token blob) instead of a directory.
+    /// `chan serve` used to die with `io: File exists (os error 17)`
+    /// because `create_dir_all` cannot turn a file into a directory.
+    /// `ensure_tokens_dir` must self-heal: drop the stray file, make
+    /// the directory, and let the regular write path produce a fresh
+    /// token underneath.
+    #[test]
+    fn ensure_tokens_dir_self_heals_stale_file_at_tokens_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tokens = tmp.path().join("tokens").join("deadbeef0000cafe");
+        // Pre-populate the schema-violating state: parent dir exists,
+        // and the per-key slot is a regular file.
+        std::fs::create_dir_all(tokens.parent().unwrap()).unwrap();
+        std::fs::write(&tokens, b"WTMYtxvSqLsPsRpVBihjKJaUHWsnL7F9").unwrap();
+        assert!(tokens.is_file());
+
+        ensure_tokens_dir(&tokens).expect("self-heal");
+        assert!(
+            tokens.is_dir(),
+            "stray file should have been replaced by a dir"
+        );
+
+        // Follow-through: the real call site writes a `token` file
+        // inside, which the next boot reads back unchanged.
+        let token_path = tokens.join("token");
+        write_token_atomic(&token_path, "abcdef").unwrap();
+        assert_eq!(std::fs::read_to_string(&token_path).unwrap(), "abcdef");
+    }
+
+    /// Sanity: the happy path stays happy. `ensure_tokens_dir` on a
+    /// pristine layout is a plain `create_dir_all`.
+    #[test]
+    fn ensure_tokens_dir_creates_missing_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tokens = tmp.path().join("tokens").join("aaaaaaaaaaaaaaaa");
+        ensure_tokens_dir(&tokens).unwrap();
+        assert!(tokens.is_dir());
+    }
+
+    /// And idempotence: a second call on an existing directory must
+    /// succeed without touching the contents.
+    #[test]
+    fn ensure_tokens_dir_idempotent_on_existing_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tokens = tmp.path().join("tokens").join("bbbbbbbbbbbbbbbb");
+        std::fs::create_dir_all(&tokens).unwrap();
+        std::fs::write(tokens.join("token"), b"existing").unwrap();
+        ensure_tokens_dir(&tokens).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(tokens.join("token")).unwrap(),
+            "existing"
+        );
     }
 }
