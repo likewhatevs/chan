@@ -17,15 +17,25 @@
 // We handle both. (1) is the documented default; (2) shows up
 // occasionally and is harmless to support.
 //
-// Columns we read:
-//   Name                            -> display_name
-//   Given Name                      -> given_name
-//   Family Name                     -> family_name
+// Columns we read (with fallbacks, in priority order):
+//   Name | Display Name             -> display_name
+//   Given Name | First Name         -> given_name
+//   (none)     | Middle Name        -> middle_name (only used to
+//                                       compose display_name when
+//                                       the Name column is empty)
+//   Family Name | Last Name         -> family_name
 //   Notes                           -> notes
-//   Group Membership                -> labels (split on " ::: ")
+//   Group Membership | Labels       -> labels (split on " ::: ")
 //   E-mail N - Value / Type         -> emails
 //   Phone N - Value / Type          -> phones
 //   Organization N - Name / Title   -> organizations
+//
+// Why the fallbacks: Google's current Google CSV export (as of
+// 2025/2026) uses `First Name` / `Middle Name` / `Last Name`
+// rather than the older `Given Name` / `Family Name` shape this
+// parser was originally written against. Without the fallbacks
+// every row landed as email-as-title because the name columns
+// were never read.
 //
 // Everything else is ignored. We don't error on unknown columns;
 // Google adds them all the time and dropping them is the right call.
@@ -73,12 +83,14 @@ pub fn parse_google_csv<R: Read>(rdr: R) -> Result<Vec<Contact>> {
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
         };
+        let get_any = |names: &[&str]| -> Option<String> { names.iter().find_map(|n| get(n)) };
 
-        let display_name = get("Name").unwrap_or_default();
-        let given_name = get("Given Name");
-        let family_name = get("Family Name");
+        let display_name = get_any(&["Name", "Display Name"]).unwrap_or_default();
+        let given_name = get_any(&["Given Name", "First Name"]);
+        let middle_name = get("Middle Name");
+        let family_name = get_any(&["Family Name", "Last Name"]);
         let notes = get("Notes");
-        let labels = get("Group Membership")
+        let labels = get_any(&["Group Membership", "Labels"])
             .map(|s| {
                 s.split(MULTI_SEP)
                     .map(str::trim)
@@ -114,7 +126,7 @@ pub fn parse_google_csv<R: Read>(rdr: R) -> Result<Vec<Contact>> {
         let display_name = if display_name.is_empty() {
             // Synthesize from what we have so the body H1 isn't empty.
             // Slug logic has its own fallback chain for the filename.
-            best_effort_name(&given_name, &family_name, &emails, &phones)
+            best_effort_name(&given_name, &middle_name, &family_name, &emails, &phones)
         } else {
             display_name
         };
@@ -185,20 +197,25 @@ where
 
 fn best_effort_name(
     given: &Option<String>,
+    middle: &Option<String>,
     family: &Option<String>,
     emails: &[EmailAddress],
     phones: &[PhoneNumber],
 ) -> String {
-    match (given, family) {
-        (Some(g), Some(f)) => format!("{g} {f}"),
-        (Some(g), None) => g.clone(),
-        (None, Some(f)) => f.clone(),
-        (None, None) => emails
-            .first()
-            .map(|e| e.value.clone())
-            .or_else(|| phones.first().map(|p| p.value.clone()))
-            .unwrap_or_default(),
+    let parts: Vec<&str> = [given.as_deref(), middle.as_deref(), family.as_deref()]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if !parts.is_empty() {
+        return parts.join(" ");
     }
+    emails
+        .first()
+        .map(|e| e.value.clone())
+        .or_else(|| phones.first().map(|p| p.value.clone()))
+        .unwrap_or_default()
 }
 
 fn csv_err(e: csv::Error) -> ChanError {
@@ -317,5 +334,44 @@ Mobile,+1-555-0100,\
     fn header_only_returns_empty() {
         let v = parse_google_csv(HEADER.as_bytes()).unwrap();
         assert!(v.is_empty());
+    }
+
+    /// Current Google Contacts export header uses `First Name` /
+    /// `Middle Name` / `Last Name` instead of the older `Given Name`
+    /// / `Family Name` shape. Verify the fallback lookups pick them
+    /// up and compose `display_name` correctly.
+    #[test]
+    fn parses_first_middle_last_header_shape() {
+        let header = "First Name,Middle Name,Last Name,Notes,Labels,\
+E-mail 1 - Label,E-mail 1 - Value,\
+Phone 1 - Label,Phone 1 - Value,\
+Organization 1 - Name,Organization 1 - Title";
+        let csv = format!(
+            "{header}\n\
+Alexandre,Prado,Vilela,,,\
+Home,alepradovilella@yahoo.com.br,\
+,,\
+,\n"
+        );
+        let v = parse_google_csv(csv.as_bytes()).unwrap();
+        assert_eq!(v.len(), 1);
+        let c = &v[0];
+        assert_eq!(c.display_name, "Alexandre Prado Vilela");
+        assert_eq!(c.given_name.as_deref(), Some("Alexandre"));
+        assert_eq!(c.family_name.as_deref(), Some("Vilela"));
+        assert_eq!(c.emails.len(), 1);
+        assert_eq!(c.emails[0].value, "alepradovilella@yahoo.com.br");
+    }
+
+    /// First Name only, no middle / last. Display name should be
+    /// just the given name (no extra spaces, no email fallback).
+    #[test]
+    fn first_name_only_falls_through_cleanly() {
+        let header = "First Name,Middle Name,Last Name,\
+E-mail 1 - Label,E-mail 1 - Value";
+        let csv = format!("{header}\nAldren,,,Home,aldren@gmail.com\n");
+        let v = parse_google_csv(csv.as_bytes()).unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].display_name, "Aldren");
     }
 }
