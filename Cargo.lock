@@ -578,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "chan"
-version = "0.6.19"
+version = "0.6.20"
 dependencies = [
  "anyhow",
  "chan-drive",
@@ -599,7 +599,7 @@ dependencies = [
 
 [[package]]
 name = "chan-drive"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "bincode",
  "candle-core",
@@ -633,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "chan-llm"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "async-trait",
  "chan-drive",
@@ -655,7 +655,7 @@ dependencies = [
 
 [[package]]
 name = "chan-server"
-version = "0.6.19"
+version = "0.6.20"
 dependencies = [
  "anyhow",
  "axum",
@@ -684,7 +684,7 @@ dependencies = [
 
 [[package]]
 name = "chan-tunnel-client"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -714,7 +714,7 @@ dependencies = [
 
 [[package]]
 name = "chan-tunnel-proto"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "bytes",
  "h2",
@@ -1333,7 +1333,7 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "fetch-models"
-version = "0.6.19"
+version = "0.6.20"
 dependencies = [
  "anyhow",
  "chan-drive",
