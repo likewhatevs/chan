@@ -18,13 +18,15 @@
 //! port within seconds. Upgrading to SIGTERM with a grace period
 //! is a follow-up; see design.md section 3.4.
 
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::thread;
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use crate::AppState;
 
@@ -87,12 +89,13 @@ pub fn start(
         "127.0.0.1",
         "--port",
         &port.to_string(),
-        // Loopback only and we already trust everything on the
-        // local machine, so the rotating bearer token only buys us
-        // surviving-tab breakage on every restart. Drop it for any
-        // serve the desktop spawns. Terminal-initiated serves are
-        // not under our control and keep their default behaviour.
-        "--no-token",
+        // chan-desktop owns the window: the webview loads the
+        // token-bearing URL once and the SPA caches the token in
+        // sessionStorage, so the across-restart breakage that
+        // motivated --no-token is moot here. Keeping the token
+        // shuts out localhost-fingerprinting from web pages and
+        // other local processes that can reach 127.0.0.1.
+        "--no-browser",
     ])
     .stdout(Stdio::null())
     .stderr(Stdio::piped());
@@ -105,6 +108,7 @@ pub fn start(
         .take()
         .ok_or_else(|| "no stderr handle".to_string())?;
 
+    let window_label = window_label_for(&key);
     state
         .serves
         .lock()
@@ -117,6 +121,7 @@ pub fn start(
     let app2 = app.clone();
     let state2 = state.clone();
     let key2 = key.clone();
+    let window_label2 = window_label.clone();
     thread::spawn(move || {
         let reader = BufReader::new(stderr);
         let mut saw_ready_banner = false;
@@ -144,6 +149,7 @@ pub fn start(
             } else if !line.trim().is_empty() && state2.set_serve_url(&key2, line.trim()) {
                 let _ = app2.emit(SERVES_CHANGED, ());
                 saw_ready_banner = false; // only capture the first URL
+                open_drive_window(&app2, &key2, &window_label2, line.trim());
             }
         }
 
@@ -157,6 +163,11 @@ pub fn start(
                 let _ = h.child.wait();
             }
         }
+        // Tear down the drive window if it's still around (e.g. the
+        // serve died on its own, or the user toggled Off). Closing
+        // the window in response to the user clicking its X already
+        // happens via the window's own CloseRequested handler.
+        close_drive_window(&app2, &window_label2);
         let _ = app2.emit(SERVES_CHANGED, ());
     });
 
@@ -180,6 +191,92 @@ pub fn stop_all(state: &AppState) {
     for (_, h) in serves.iter_mut() {
         let _ = h.child.kill();
     }
+}
+
+/// Stable Tauri window label for a drive. Tauri labels must match
+/// `[a-zA-Z0-9_-]+`, and drive keys are filesystem paths, so we hash
+/// the key and prefix it. Same key always maps to the same label.
+fn window_label_for(key: &str) -> String {
+    let mut h = DefaultHasher::new();
+    key.hash(&mut h);
+    format!("drive-{:016x}", h.finish())
+}
+
+/// Best-effort window title: drive folder basename, fall back to the
+/// full key. Only used to label the webview window we open for a
+/// running serve.
+fn drive_title(key: &str) -> String {
+    let base = Path::new(key)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| key.to_string());
+    format!("chan: {base}")
+}
+
+/// Open the drive's webview window on the main thread. The window
+/// loads chan's local URL directly. Closing the window stops the
+/// serve, so this is the inverse of `set_drive_on(false)`.
+fn open_drive_window(app: &AppHandle, key: &str, label: &str, url: &str) {
+    let Ok(parsed) = url.parse::<tauri::Url>() else {
+        eprintln!("chan-desktop: bad chan URL for {key}: {url}");
+        return;
+    };
+    let app_owned = app.clone();
+    let key_owned = key.to_string();
+    let label_owned = label.to_string();
+    let title = drive_title(key);
+    let res = app.run_on_main_thread(move || {
+        // Tear down any leftover window with the same label (e.g.
+        // a quick Off-then-On cycle where the previous window's
+        // cleanup hasn't fully landed yet). Labels must be unique
+        // and `build` panics on collision.
+        if let Some(old) = app_owned.get_webview_window(&label_owned) {
+            let _ = old.destroy();
+        }
+        let win = match WebviewWindowBuilder::new(
+            &app_owned,
+            &label_owned,
+            WebviewUrl::External(parsed),
+        )
+        .title(title)
+        .inner_size(1200.0, 800.0)
+        .min_inner_size(640.0, 400.0)
+        .resizable(true)
+        .build()
+        {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("chan-desktop: opening drive window for {key_owned}: {e}");
+                return;
+            }
+        };
+        let app_for_event = app_owned.clone();
+        let key_for_event = key_owned.clone();
+        win.on_window_event(move |event| {
+            if matches!(event, WindowEvent::CloseRequested { .. }) {
+                let state = app_for_event.state::<Arc<AppState>>();
+                stop(&state, &key_for_event);
+            }
+        });
+    });
+    if let Err(e) = res {
+        eprintln!("chan-desktop: scheduling drive window for {key}: {e}");
+    }
+}
+
+/// Destroy the drive's webview window if it still exists. Used by
+/// the reader thread when the serve has gone away on its own (so the
+/// stale window doesn't linger pointing at a dead port). Safe to
+/// call when no such window exists.
+fn close_drive_window(app: &AppHandle, label: &str) {
+    let app_owned = app.clone();
+    let label_owned = label.to_string();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(w) = app_owned.get_webview_window(&label_owned) {
+            let _ = w.destroy();
+        }
+    });
 }
 
 /// Bind 127.0.0.1:0 to let the OS hand us a free port, then close
