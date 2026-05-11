@@ -1321,7 +1321,12 @@ fn build_edges(
         let Some(dst) = markdown::normalize_href(&normalize_target, source_dir) else {
             continue;
         };
+        // Anchors only mean something for markdown targets (heading
+        // refs like `note.md#section`). For images/PDFs/etc. the `#`
+        // suffix is an Obsidian-style param (`img.png#width=300`),
+        // not a heading anchor, so drop it.
         let (_, anchor) = split_anchor(&l.target);
+        let anchor = if dst.ends_with(".md") { anchor } else { None };
         out.push(Edge {
             src: src.to_string(),
             dst,
@@ -2059,6 +2064,19 @@ mod tests {
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].dst, "a.md");
         assert_eq!(edges[0].anchor.as_deref(), Some("sec"));
+    }
+
+    #[test]
+    fn build_edges_drops_anchor_for_non_markdown_target() {
+        // `![alt](img.png#width=300)` is the Obsidian image-sizing
+        // syntax; the `#...` suffix is a render hint, not a heading
+        // anchor. The graph edge must point at `img.png` with an
+        // empty anchor so the inspector's backlinks query and the
+        // anchor column itself stay semantically clean.
+        let edges = build_edges("notes/post.md", &[md_link("img.png#width=300")], &[]);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].dst, "notes/img.png");
+        assert!(edges[0].anchor.is_none(), "got: {:?}", edges[0].anchor);
     }
 
     #[test]
