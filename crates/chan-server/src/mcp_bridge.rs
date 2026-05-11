@@ -25,7 +25,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rand::RngCore;
+#[cfg(unix)]
 use tokio::net::UnixListener;
+#[cfg(unix)]
 use tokio::task::JoinHandle;
 
 /// Pick a unique socket path under the system tmp dir. macOS caps
@@ -41,9 +43,20 @@ pub fn pick_socket_path() -> PathBuf {
 /// Bridge handle returned from `start`. Drop = abort the accept loop
 /// and unlink the socket file. Held by `AppState` for the lifetime
 /// of the chan-server process.
+#[cfg(unix)]
 pub struct BridgeHandle {
     socket_path: PathBuf,
     accept_loop: Option<JoinHandle<()>>,
+}
+
+/// Windows stub: chan-server's MCP bridge relies on Unix-domain
+/// sockets, which are not how the chan stack reaches subprocess
+/// agents on Windows. The handle still exists so `AppArtifacts` has
+/// a stable type across targets; `start` returns `Unsupported` so
+/// the caller falls back to `mcp_socket_path = None`.
+#[cfg(not(unix))]
+pub struct BridgeHandle {
+    socket_path: PathBuf,
 }
 
 impl BridgeHandle {
@@ -52,6 +65,7 @@ impl BridgeHandle {
     }
 }
 
+#[cfg(unix)]
 impl Drop for BridgeHandle {
     fn drop(&mut self) {
         if let Some(h) = self.accept_loop.take() {
@@ -66,6 +80,7 @@ impl Drop for BridgeHandle {
 /// current drive Arc and the live `auto_apply_writes` setting (read
 /// at connect time so the user can toggle it mid-session and the
 /// next agent turn picks up the change).
+#[cfg(unix)]
 pub fn start<DF, AF>(
     socket_path: PathBuf,
     drive_for: DF,
@@ -110,4 +125,20 @@ where
         socket_path,
         accept_loop: Some(accept_loop),
     })
+}
+
+#[cfg(not(unix))]
+pub fn start<DF, AF>(
+    _socket_path: PathBuf,
+    _drive_for: DF,
+    _auto_apply_for: AF,
+) -> std::io::Result<BridgeHandle>
+where
+    DF: Fn() -> Arc<chan_drive::Drive> + Send + Sync + 'static,
+    AF: Fn() -> bool + Send + Sync + 'static,
+{
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "mcp bridge requires unix-domain sockets",
+    ))
 }

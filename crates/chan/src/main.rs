@@ -865,6 +865,7 @@ async fn cmd_mcp(path: PathBuf, auto_apply: bool) -> Result<()> {
 /// chan-server. Connects to the Unix-domain socket and pipes
 /// stdin -> socket and socket -> stdout concurrently. Returns when
 /// either direction closes, which is the normal end of a session.
+#[cfg(unix)]
 async fn cmd_mcp_proxy(socket: PathBuf) -> Result<()> {
     use tokio::io::{stdin, stdout};
     use tokio::net::UnixStream;
@@ -884,6 +885,15 @@ async fn cmd_mcp_proxy(socket: PathBuf) -> Result<()> {
         r = from_socket => { r.context("piping mcp socket to stdout")?; }
     }
     Ok(())
+}
+
+/// Windows stub: chan's MCP bridge runs over Unix-domain sockets; the
+/// proxy subcommand has no counterpart on Windows. The CLI still
+/// accepts `__mcp-proxy` so flag-parsing stays target-agnostic, but
+/// invoking it fails fast instead of half-working.
+#[cfg(not(unix))]
+async fn cmd_mcp_proxy(_socket: PathBuf) -> Result<()> {
+    anyhow::bail!("__mcp-proxy is unix-only");
 }
 
 fn cmd_search(path: PathBuf, query: String, limit: u32) -> Result<()> {
