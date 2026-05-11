@@ -424,6 +424,50 @@
         handleDrop: () => {
           return false;
         },
+        handleDOMEvents: {
+          // Intercept mousedown on image atoms BEFORE PM creates a
+          // NodeSelection on them. PM's default selection would
+          // also wake `maybeOpenAtomEditAtSelection`'s image branch
+          // and open the edit bubble — but for clicks we want the
+          // Zoom / Edit overlay only (arrow-key entry keeps its own
+          // direct-to-edit path). Returning true stops PM from
+          // processing the mousedown further.
+          //
+          // The resize-handle's own mousedown stopPropagation
+          // prevents this branch from firing when the user grabs
+          // the handle.
+          mousedown: (view, event) => {
+            const target = event.target as HTMLElement | null;
+            if (!target || !host) return false;
+            const imgEl: HTMLImageElement | null =
+              target.tagName === "IMG"
+                ? (target as HTMLImageElement)
+                : (target.closest(".md-image-wrap")?.querySelector(
+                    "img",
+                  ) as HTMLImageElement | null);
+            if (!imgEl || !host.contains(imgEl)) return false;
+            let pos: number;
+            try {
+              pos = view.posAtDOM(imgEl, 0);
+            } catch {
+              return false;
+            }
+            let node = view.state.doc.nodeAt(pos);
+            if (!node || node.type.name !== "image") {
+              const alt = pos - 1;
+              const altNode = alt >= 0 ? view.state.doc.nodeAt(alt) : null;
+              if (altNode && altNode.type.name === "image") {
+                pos = alt;
+                node = altNode;
+              } else {
+                return false;
+              }
+            }
+            event.preventDefault();
+            openImageActionOverlay(imgEl, pos, node);
+            return true;
+          },
+        },
         handlePaste: (view, event) => {
           // Route clipboard images through the attachments endpoint
           // instead of letting Tiptap's `allowBase64` inline them as
@@ -2245,38 +2289,10 @@
     // via `maybeOpenAtomEditAtSelection`; click is the slow path
     // because clicks frequently land on an image as part of a
     // resize / select gesture rather than an explicit "edit" intent.
-    // Image atom click target: the rendered <img>, or the wrap span
-    // the node view inserts to anchor the drag-resize handle. Walk
-    // up if the click landed on the handle so we still resolve the
-    // image atom's position. Clicks on the handle itself preventDefault
-    // up in the handle's mousedown listener so they never reach here.
-    const imgEl =
-      t.tagName === "IMG"
-        ? (t as HTMLImageElement)
-        : (t.closest(".md-image-wrap")?.querySelector("img") as HTMLImageElement | null);
-    if (editor && imgEl && host && host.contains(imgEl)) {
-      const ed = editor;
-      let pos: number;
-      try {
-        pos = ed.view.posAtDOM(imgEl, 0);
-      } catch {
-        return;
-      }
-      let node = ed.state.doc.nodeAt(pos);
-      if (!node || node.type.name !== "image") {
-        const alt = pos - 1;
-        const altNode = alt >= 0 ? ed.state.doc.nodeAt(alt) : null;
-        if (altNode && altNode.type.name === "image") {
-          pos = alt;
-          node = altNode;
-        } else {
-          return;
-        }
-      }
-      e.preventDefault();
-      openImageActionOverlay(imgEl, pos, node);
-      return;
-    }
+    // Image atom clicks are routed by the editor's mousedown
+    // handler (see editorProps.handleDOMEvents.mousedown) which
+    // fires before PM sets a NodeSelection, so the click handler
+    // here doesn't need to do anything for them.
     if (t.matches("[data-md-date]")) {
       e.preventDefault();
       if (!editor) return;
