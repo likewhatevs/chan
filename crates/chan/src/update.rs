@@ -427,7 +427,13 @@ pub async fn run_upgrade(opts: UpgradeOptions) -> Result<()> {
         if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
             bail!("use -y to confirm upgrade in non-interactive mode");
         }
-        if !confirm("proceed? [y/N] ")? {
+        let is_downgrade = semver_newer(&current, &target_version);
+        let (prompt, default_yes) = if is_downgrade {
+            ("proceed? [y/N] ", false)
+        } else {
+            ("proceed? [Y/n] ", true)
+        };
+        if !confirm(prompt, default_yes)? {
             bail!("aborted");
         }
     }
@@ -612,7 +618,7 @@ fn set_executable_mode(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn confirm(prompt: &str) -> Result<bool> {
+fn confirm(prompt: &str, default_yes: bool) -> Result<bool> {
     use std::io::Write as _;
     print!("{prompt}");
     std::io::stdout().flush().ok();
@@ -621,6 +627,9 @@ fn confirm(prompt: &str) -> Result<bool> {
         .read_line(&mut buf)
         .context("reading confirmation")?;
     let answer = buf.trim().to_ascii_lowercase();
+    if answer.is_empty() {
+        return Ok(default_yes);
+    }
     Ok(matches!(answer.as_str(), "y" | "yes"))
 }
 
