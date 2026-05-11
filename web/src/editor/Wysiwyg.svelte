@@ -51,6 +51,7 @@
   import { LiveSourceExtension } from "./extensions/liveSource";
   import { createTagDecorationExtension } from "./extensions/tagDecoration";
   import { openGraphAtNode } from "../state/store.svelte";
+  import { openImageZoom } from "../state/imageZoom";
   import { api } from "../api/client";
   import { normalizeHref, relativizePath, resolveRelativePath } from "./links";
   import { drive } from "../state/store.svelte";
@@ -2092,7 +2093,7 @@
     const zoomBtn = makeBtn("Zoom", () => {
       const src = (node.attrs.src as string) || "";
       dismissImageOverlay();
-      openImageZoom(src);
+      openImageZoom(src, currentPath ?? null);
     });
     const editBtn = makeBtn("Edit", () => {
       dismissImageOverlay();
@@ -2134,33 +2135,6 @@
       document.removeEventListener("keydown", onKey, true);
       wrap.remove();
     };
-  }
-
-  /// Fullscreen image viewer. Renders the image centered on a dark
-  /// backdrop. Click anywhere or press Escape to dismiss.
-  function openImageZoom(src: string): void {
-    if (!src) return;
-    const resolved = resolveImageSrc(src, currentPath ?? null);
-    const backdrop = document.createElement("div");
-    backdrop.className = "md-image-zoom";
-    const img = document.createElement("img");
-    img.src = resolved;
-    img.alt = "";
-    img.draggable = false;
-    backdrop.appendChild(img);
-    document.body.appendChild(backdrop);
-    const dismiss = (): void => {
-      document.removeEventListener("keydown", onKey, true);
-      backdrop.remove();
-    };
-    const onKey = (ev: KeyboardEvent): void => {
-      if (ev.key === "Escape") {
-        ev.preventDefault();
-        dismiss();
-      }
-    };
-    backdrop.addEventListener("click", () => dismiss());
-    document.addEventListener("keydown", onKey, true);
   }
 
   /// Edit-existing flow: swap the image atom for its `![alt](src)`
