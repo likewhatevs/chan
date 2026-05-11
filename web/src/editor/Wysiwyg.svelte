@@ -52,7 +52,7 @@
   import { createTagDecorationExtension } from "./extensions/tagDecoration";
   import { openGraphAtNode } from "../state/store.svelte";
   import { api } from "../api/client";
-  import { normalizeHref, resolveRelativePath } from "./links";
+  import { normalizeHref, relativizePath, resolveRelativePath } from "./links";
   import { drive } from "../state/store.svelte";
 
   let {
@@ -417,8 +417,55 @@
         handleDrop: () => {
           return false;
         },
-        handlePaste: () => {
-          return false;
+        handlePaste: (view, event) => {
+          // Route clipboard images through the attachments endpoint
+          // instead of letting Tiptap's `allowBase64` inline them as
+          // a data: URI. The base64 path is fine for previewing in
+          // memory but bloats the markdown source and never reaches
+          // the drive, so the link breaks on the next reload.
+          const cd = event.clipboardData;
+          if (!cd) return false;
+          const imageFiles = Array.from(cd.files).filter((f) =>
+            f.type.startsWith("image/"),
+          );
+          if (imageFiles.length === 0) return false;
+          event.preventDefault();
+          const dir = dirOfPath(currentPath ?? null);
+          const fromPath = currentPath ?? null;
+          // Snapshot the insertion point at paste time. Subsequent
+          // uploads are async; capturing the position now keeps the
+          // images landing where the user pasted instead of wherever
+          // the caret has wandered to by the time the first response
+          // returns.
+          const insertAt = view.state.selection.from;
+          const imgType = view.state.schema.nodes.image;
+          if (!imgType) return false;
+          void (async () => {
+            let cursor = insertAt;
+            for (const file of imageFiles) {
+              try {
+                const { path } = await api.uploadAttachment(file, dir);
+                // Drive-rooted path from the server; relativize
+                // against the editing file so the markdown reads
+                // `./name.png` like the bubble-driven insert.
+                const src = fromPath ? relativizePath(path, fromPath) : path;
+                const last = path.split("/").pop() ?? path;
+                const alt = last.replace(/\.[^./]+$/, "");
+                const tr = view.state.tr.insert(
+                  cursor,
+                  imgType.create({ src, alt }),
+                );
+                view.dispatch(tr);
+                // Image atom is one position; advance the cursor so
+                // a second pasted image lands AFTER the first.
+                cursor += 1;
+              } catch (e) {
+                // eslint-disable-next-line no-console
+                console.error("[paste] upload failed", e);
+              }
+            }
+          })();
+          return true;
         },
       },
       onUpdate: ({ editor, transaction }) => {
