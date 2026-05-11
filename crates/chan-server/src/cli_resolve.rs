@@ -172,7 +172,9 @@ mod tests {
     /// Process-env is global; cargo runs tests in parallel by
     /// default. Any test that mutates PATH / HOME holds this guard
     /// for its critical section so two probes can't observe each
-    /// other's overrides.
+    /// other's overrides. Only the unix tests touch process env;
+    /// gating keeps the windows build's dead_code lint quiet.
+    #[cfg(unix)]
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock().unwrap_or_else(|p| p.into_inner())
