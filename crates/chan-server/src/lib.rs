@@ -644,7 +644,15 @@ fn router(state: Arc<AppState>) -> Router {
             get(api_list_assistant).delete(api_clear_assistant),
         )
         .route("/api/answers", post(api_post_answer))
-        .route("/api/attachments", post(api_post_attachment))
+        .route(
+            "/api/attachments",
+            // Image attachments cap. Axum's default body limit is
+            // 2 MiB, which rejects routine phone photos and
+            // screenshots; 50 MiB matches the editor's client-side
+            // pre-flight in `imageBubble.ts` so an upload that
+            // passes the browser check also passes here.
+            post(api_post_attachment).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
+        )
         .route("/api/contacts", get(api_get_contacts))
         // Google Contacts CSV exports run a few hundred KB for normal
         // address books and into the low MB for power users. axum's
