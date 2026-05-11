@@ -1126,7 +1126,7 @@
         class:on={panelOpen}
         onclick={() => (panelOpen = !panelOpen)}
         title={panelOpen ? "Hide details panel" : "Show details panel"}
-      >≡</button>
+      >◫</button>
     </span>
   </div>
 

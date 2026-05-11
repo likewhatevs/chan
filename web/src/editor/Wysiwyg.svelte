@@ -261,6 +261,36 @@
   export function toggleOrderedList(): void { editor?.chain().toggleOrderedList().run(); }
   export function toggleTaskList(): void { editor?.chain().toggleTaskList().run(); }
 
+  /// Insert a thematic break (`---` in markdown) at the cursor.
+  /// TipTap's HorizontalRule node is part of StarterKit; the command
+  /// splits the current block if needed, drops in the HR, and lands
+  /// the caret in the paragraph that follows.
+  export function insertHorizontalRule(): void {
+    editor?.chain().setHorizontalRule().run();
+  }
+
+  /// Toggle a link mark on the current selection. When the selection
+  /// already carries a Link mark, the mark is removed (URL prompt
+  /// skipped). Otherwise, prompt for a URL and apply the mark; an
+  /// empty / cancelled prompt is a no-op. External-only by design:
+  /// internal links go through the `[[` wiki-link bubble.
+  export function toggleLink(): void {
+    if (!editor) return;
+    if (editor.isActive("link")) {
+      editor.chain().unsetLink().run();
+      return;
+    }
+    const existing = (editor.getAttributes("link").href as string | undefined) ?? "";
+    const href = window.prompt("link URL", existing);
+    if (href === null) return;
+    const trimmed = href.trim();
+    if (trimmed === "") {
+      editor.chain().unsetLink().run();
+      return;
+    }
+    editor.chain().setLink({ href: trimmed }).run();
+  }
+
   /// Set the current block to a heading (1..6), a paragraph
   /// ("normal"), an inline-code-rich code block, or a blockquote.
   /// Idempotent: re-applying the same kind is a no-op in TipTap.

@@ -86,6 +86,13 @@
   /// overlay is per-window-session and not worth persisting.
   let promptMode = $state<"wysiwyg" | "source">("wysiwyg");
 
+  /// Whether the inline formatting controls (B / I / S / lists /
+  /// HR / link / block-kind dropdown) are revealed inside the
+  /// prompt-bar. Default off so the assistant overlay opens with
+  /// minimal chrome; toggled by the leading `Aa` button. Local
+  /// component state, not persisted.
+  let formattingBarOpen = $state(false);
+
   /// Refs into the prompt editor so the formatting toolbar above
   /// it can call into Wysiwyg's mark/block-kind API. Source mode
   /// has no formatting toolbar (a textarea ignores them).
@@ -126,6 +133,10 @@
   const isTaskList = $derived.by(() => {
     void selVer;
     return wysiwygRef?.isActive("taskList") ?? false;
+  });
+  const isLink = $derived.by(() => {
+    void selVer;
+    return wysiwygRef?.isActive("link") ?? false;
   });
   const blockKind = $derived.by<BlockKind>(() => {
     void selVer;
@@ -1061,17 +1072,116 @@
       </div>
 
       <!-- Bar above the prompt input + the prompt input itself live
-           inside .prompt-area so the floating fmt-bar can anchor
-           on a non-clipping parent (prompt-wrap has overflow:auto
-           and would clip a pill that straddles its top edge). -->
+           inside .prompt-area. The floating formatting pill was
+           replaced by inline controls inside .prompt-bar; the wrap
+           still pins the layout but no longer needs to anchor an
+           absolutely-positioned child. -->
       <div class="prompt-area">
         <!-- Bar above the prompt input. Mirrors FileEditorTab's
-             .tab-bar: a flat horizontal strip with the source-mode
-             toggle on the right. The page-width control from the
-             file editor's bar is intentionally absent here: prompt
-             margins aren't a thing the user adjusts. -->
+             .tab-bar: Aa toggle + (when revealed) inline formatting
+             controls on the left, source-mode toggle on the right.
+             The page-width control from the file editor's bar is
+             intentionally absent: prompt margins aren't adjustable. -->
         <div class="prompt-bar" role="toolbar" aria-label="Prompt">
-          <span class="left"></span>
+          <span class="left">
+            <button
+              class="hbtn aa-toggle"
+              class:on={formattingBarOpen}
+              title={formattingBarOpen ? "hide formatting" : "show formatting"}
+              aria-label="toggle formatting toolbar"
+              aria-pressed={formattingBarOpen}
+              disabled={promptMode !== "wysiwyg"}
+              onclick={() => (formattingBarOpen = !formattingBarOpen)}
+            >Aa</button>
+            {#if formattingBarOpen && promptMode === "wysiwyg"}
+              <!-- Inline formatting controls. Same set the file editor
+                   exposes; collapsed by default so the assistant
+                   overlay opens with a clean prompt bar. -->
+              <span class="fmt-group" role="toolbar" aria-label="Formatting">
+                <select
+                  class="block-kind"
+                  value={blockKind}
+                  onchange={onBlockKindChange}
+                  onmousedown={(e) => e.stopPropagation()}
+                  title="block style"
+                >
+                  <option value="h1">h1</option>
+                  <option value="h2">h2</option>
+                  <option value="h3">h3</option>
+                  <option value="normal">text</option>
+                  <option value="code">code</option>
+                  <option value="quote">quote</option>
+                </select>
+                <button
+                  class="fbtn"
+                  class:on={isBold}
+                  title="bold (Cmd/Ctrl+B)"
+                  onmousedown={(e) => e.preventDefault()}
+                  onclick={() => wysiwygRef?.toggleBold()}
+                ><b>B</b></button>
+                <button
+                  class="fbtn"
+                  class:on={isItalic}
+                  title="italic (Cmd/Ctrl+I)"
+                  onmousedown={(e) => e.preventDefault()}
+                  onclick={() => wysiwygRef?.toggleItalic()}
+                ><i>I</i></button>
+                <button
+                  class="fbtn"
+                  class:on={isStrike}
+                  title="strikethrough"
+                  onmousedown={(e) => e.preventDefault()}
+                  onclick={() => wysiwygRef?.toggleStrike()}
+                ><s>S</s></button>
+                <button
+                  class="fbtn"
+                  class:on={isInlineCode}
+                  title="inline code (Cmd/Ctrl+E)"
+                  onmousedown={(e) => e.preventDefault()}
+                  onclick={() => wysiwygRef?.toggleInlineCode()}
+                ><code>{`<>`}</code></button>
+                <button
+                  class="fbtn"
+                  class:on={isLink}
+                  title="link"
+                  aria-label="toggle link"
+                  onmousedown={(e) => e.preventDefault()}
+                  onclick={() => wysiwygRef?.toggleLink()}
+                >🔗</button>
+                <button
+                  class="fbtn"
+                  class:on={isBulletList}
+                  title="bullet list"
+                  aria-label="bullet list"
+                  onmousedown={(e) => e.preventDefault()}
+                  onclick={() => wysiwygRef?.toggleBulletList()}
+                >•</button>
+                <button
+                  class="fbtn"
+                  class:on={isOrderedList}
+                  title="ordered list"
+                  aria-label="ordered list"
+                  onmousedown={(e) => e.preventDefault()}
+                  onclick={() => wysiwygRef?.toggleOrderedList()}
+                >1.</button>
+                <button
+                  class="fbtn"
+                  class:on={isTaskList}
+                  title="task list"
+                  aria-label="task list"
+                  onmousedown={(e) => e.preventDefault()}
+                  onclick={() => wysiwygRef?.toggleTaskList()}
+                >☐</button>
+                <button
+                  class="fbtn"
+                  title="horizontal rule (insert ---)"
+                  aria-label="insert horizontal rule"
+                  onmousedown={(e) => e.preventDefault()}
+                  onclick={() => wysiwygRef?.insertHorizontalRule()}
+                >―</button>
+              </span>
+            {/if}
+          </span>
           <span class="actions">
             <button
               class="hbtn"
@@ -1081,81 +1191,6 @@
             >{promptMode === "wysiwyg" ? "</>" : "¶"}</button>
           </span>
         </div>
-
-        {#if promptMode === "wysiwyg"}
-          <!-- Floating formatting pill, anchored on .prompt-area so
-               it can straddle the prompt-bar/prompt-wrap boundary
-               without being clipped by the wrap's overflow:auto.
-               Same recipe as the editor canvas's .fmt-bar. Drops in
-               source mode (textarea can't act on B/I/S). -->
-          <div class="fmt-bar" role="toolbar" aria-label="Formatting">
-            <select
-              class="block-kind"
-              value={blockKind}
-              onchange={onBlockKindChange}
-              title="block style"
-            >
-              <option value="h1">h1</option>
-              <option value="h2">h2</option>
-              <option value="h3">h3</option>
-              <option value="normal">text</option>
-              <option value="code">code</option>
-              <option value="quote">quote</option>
-            </select>
-            <button
-              class="fbtn"
-              class:on={isBold}
-              title="bold (Cmd/Ctrl+B)"
-              onmousedown={(e) => e.preventDefault()}
-              onclick={() => wysiwygRef?.toggleBold()}
-            ><b>B</b></button>
-            <button
-              class="fbtn"
-              class:on={isItalic}
-              title="italic (Cmd/Ctrl+I)"
-              onmousedown={(e) => e.preventDefault()}
-              onclick={() => wysiwygRef?.toggleItalic()}
-            ><i>I</i></button>
-            <button
-              class="fbtn"
-              class:on={isStrike}
-              title="strikethrough"
-              onmousedown={(e) => e.preventDefault()}
-              onclick={() => wysiwygRef?.toggleStrike()}
-            ><s>S</s></button>
-            <button
-              class="fbtn"
-              class:on={isInlineCode}
-              title="inline code (Cmd/Ctrl+E)"
-              onmousedown={(e) => e.preventDefault()}
-              onclick={() => wysiwygRef?.toggleInlineCode()}
-            ><code>{`<>`}</code></button>
-            <button
-              class="fbtn"
-              class:on={isBulletList}
-              title="bullet list"
-              aria-label="bullet list"
-              onmousedown={(e) => e.preventDefault()}
-              onclick={() => wysiwygRef?.toggleBulletList()}
-            >•</button>
-            <button
-              class="fbtn"
-              class:on={isOrderedList}
-              title="ordered list"
-              aria-label="ordered list"
-              onmousedown={(e) => e.preventDefault()}
-              onclick={() => wysiwygRef?.toggleOrderedList()}
-            >1.</button>
-            <button
-              class="fbtn"
-              class:on={isTaskList}
-              title="task list"
-              aria-label="task list"
-              onmousedown={(e) => e.preventDefault()}
-              onclick={() => wysiwygRef?.toggleTaskList()}
-            >☐</button>
-          </div>
-        {/if}
 
         <div class="prompt-wrap" class:disabled={!currentContext}>
           {#if promptMode === "wysiwyg"}
@@ -1588,11 +1623,9 @@
   .prompt-wrap.disabled { opacity: 0.55; pointer-events: none; }
   /* Trim the file editor's generous default padding so the
      prompt feels compact in the chat dialog. The :global is
-     required because Wysiwyg's CSS lives in its own scope.
-     Top padding leaves room for the floating fmt-bar so the
-     first line of text doesn't sit under the pill. */
+     required because Wysiwyg's CSS lives in its own scope. */
   .prompt-wrap :global(.md-wysiwyg) {
-    padding: 28px 12px 8px;
+    padding: 8px 12px;
     line-height: 1.5;
   }
 
@@ -1614,7 +1647,13 @@
     color: var(--text-secondary);
     min-height: 28px;
   }
-  .prompt-bar .left { flex: 1; display: flex; align-items: center; }
+  .prompt-bar .left {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
   .prompt-bar .actions { display: flex; gap: 2px; }
   /* hbtn parity with FileEditorTab's tab-bar buttons: same minimum
      hit area, same hover treatment, so </> reads as the same
@@ -1633,69 +1672,71 @@
     height: 20px;
   }
   .prompt-bar .hbtn:hover { color: var(--text); border-color: var(--btn-border); }
-  /* Container that holds the prompt-bar, the floating fmt-bar, and
-     the scrollable prompt-wrap. Anchors the absolutely-positioned
-     fmt-bar so it can straddle the bar/wrap boundary without being
-     clipped by .prompt-wrap's overflow:auto. */
+  .prompt-bar .hbtn.on { color: var(--text); border-color: var(--btn-hover); background: var(--hover-bg); }
+  .prompt-bar .aa-toggle {
+    font-style: italic;
+    font-family: ui-serif, Georgia, serif;
+    font-size: 14px;
+  }
+  .prompt-bar .aa-toggle:disabled {
+    cursor: default;
+    opacity: 0.45;
+  }
+  .prompt-bar .aa-toggle:disabled:hover {
+    color: var(--text-secondary);
+    border-color: transparent;
+  }
+  /* Container that holds the prompt-bar and the scrollable
+     prompt-wrap. The floating fmt-bar that used to anchor on this
+     element is gone; the inline controls now live inside the bar. */
   .prompt-area {
-    position: relative;
     display: flex;
     flex-direction: column;
     min-height: 0;
   }
-  /* Floating formatting pill, centered on the boundary between the
-     prompt-bar and the prompt-wrap. Same recipe as the editor
-     canvas's .fmt-bar (--bg-card fill, --border ring, rounded
-     999px, soft shadow). z-index keeps the pill above the bar. */
-  .prompt-area .fmt-bar {
-    position: absolute;
-    top: 12px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 5;
+  /* Inline formatting controls revealed by the Aa toggle inside the
+     prompt-bar. Same shape as FileEditorTab's `.fmt-group`. */
+  .prompt-bar .fmt-group {
     display: flex;
     align-items: center;
-    gap: 4px;
-    padding: 6px 10px;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
-    color: var(--text);
-    width: max-content;
-    max-width: calc(100% - 24px);
+    gap: 1px;
+    margin-left: 6px;
+    padding-left: 8px;
+    border-left: 1px solid var(--border);
   }
-  .prompt-area .fmt-bar .block-kind {
-    background: var(--bg-card);
+  .prompt-bar .block-kind {
+    background: transparent;
     color: var(--text);
     border: 1px solid var(--btn-border);
-    border-radius: 14px;
-    padding: 1px 8px;
+    border-radius: 3px;
+    padding: 0 4px;
+    margin-right: 2px;
     font: inherit;
-    font-size: 15px;
-    height: 26px;
+    font-size: 12px;
+    height: 20px;
   }
-  .prompt-area .fmt-bar .fbtn {
-    min-width: 30px;
-    height: 26px;
+  .prompt-bar .fbtn {
+    min-width: 22px;
+    height: 20px;
     text-align: center;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 13px;
+    border-radius: 3px;
     color: var(--text);
     cursor: pointer;
     font: inherit;
-    padding: 0 6px;
-    line-height: 24px;
+    font-size: 13px;
+    padding: 0 4px;
+    line-height: 18px;
   }
-  .prompt-area .fmt-bar .fbtn:hover { background: var(--hover-bg); }
-  .prompt-area .fmt-bar .fbtn.on {
+  .prompt-bar .fbtn:hover { background: var(--hover-bg); border-color: var(--btn-border); }
+  .prompt-bar .fbtn.on {
     background: var(--hover-bg);
     border-color: var(--btn-hover);
   }
-  .prompt-area .fmt-bar .fbtn b,
-  .prompt-area .fmt-bar .fbtn i,
-  .prompt-area .fmt-bar .fbtn s,
-  .prompt-area .fmt-bar .fbtn code { font-size: 15px; }
-  .prompt-area .fmt-bar .fbtn code { font-family: ui-monospace, monospace; }
+  .prompt-bar .fbtn b,
+  .prompt-bar .fbtn i,
+  .prompt-bar .fbtn s,
+  .prompt-bar .fbtn code { font-size: 13px; }
+  .prompt-bar .fbtn code { font-family: ui-monospace, monospace; }
 </style>

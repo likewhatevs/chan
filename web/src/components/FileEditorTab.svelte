@@ -4,11 +4,11 @@
   // pane-scoped buttons (split + close).
   //
   // Top bar layout:
-  //   left  : formatting toolbar (heading dropdown, B / I / S /
-  //           inline-code). Shown only in WYSIWYG mode; the
-  //           buttons can't act on a textarea source view.
-  //   right : wysiwyg/source toggle, inspector toggle, assistant
-  //           button (same trigger as Cmd+P).
+  //   left  : `Aa` toggle, page-width adjuster, and (when the toggle
+  //           is on AND we're in WYSIWYG mode) inline formatting
+  //           controls — block-kind dropdown, B / I / S / inline-code,
+  //           link, lists, task list, horizontal rule.
+  //   right : wysiwyg/source toggle, inspector toggle.
 
   import Wysiwyg, { type BlockKind } from "../editor/Wysiwyg.svelte";
   import Source from "../editor/Source.svelte";
@@ -16,29 +16,13 @@
   import OutlineBody, { type Heading } from "./OutlineBody.svelte";
   import FileInfoBody from "./FileInfoBody.svelte";
   import { setMode, type FileTab } from "../state/tabs.svelte";
-  import { idle, pinAccessory } from "../state/idle.svelte";
   import WikiStatusBar from "./WikiStatusBar.svelte";
 
-  // Hover pin: while the cursor is over the floating fmt-bar, the
-  // idle tracker won't fade it out. Refcounted so a second hover
-  // doesn't leak a release fn.
-  let fmtBarRelease: (() => void) | null = null;
-  function fmtBarEnter(): void {
-    fmtBarRelease?.();
-    fmtBarRelease = pinAccessory();
-  }
-  function fmtBarLeave(): void {
-    fmtBarRelease?.();
-    fmtBarRelease = null;
-  }
   import {
-    assistantOverlay,
-    browserOverlay,
-    graphOverlay,
+    openBrowser,
     paneWidths,
     persistPaneWidths,
-    searchPanel,
-    settingsOverlay,
+    revealAndSelect,
   } from "../state/store.svelte";
   import {
     PAGE_WIDTH_MAX,
@@ -49,17 +33,6 @@
   } from "../state/pageWidth.svelte";
 
   let { tab }: { tab: FileTab } = $props();
-
-  /// Overlay is up: hide the floating formatting bar so it doesn't
-  /// peek out from behind the modal. Cheaper than a stacking-context
-  /// dance.
-  const overlayOpen = $derived(
-    settingsOverlay.open ||
-      searchPanel.open ||
-      assistantOverlay.open ||
-      browserOverlay.open ||
-      graphOverlay.open,
-  );
 
   // Editor refs so the outline body can call scrollToHeading /
   // scrollToLine on whichever editor variant is showing, and so
@@ -123,6 +96,10 @@
     void selVer;
     return wysiwygRef?.isActive("taskList") ?? false;
   });
+  const isLink = $derived.by(() => {
+    void selVer;
+    return wysiwygRef?.isActive("link") ?? false;
+  });
   const blockKind = $derived.by<BlockKind>(() => {
     void selVer;
     return wysiwygRef?.currentBlockKind() ?? "normal";
@@ -131,6 +108,16 @@
   function onBlockKindChange(e: Event): void {
     const v = (e.currentTarget as HTMLSelectElement).value as BlockKind;
     wysiwygRef?.setBlockKind(v);
+  }
+
+  /// Reveal the open file in the File Browser overlay. Expand every
+  /// ancestor folder so the row is visible, set the browser
+  /// selection to this file, then open the overlay. Mirrors the
+  /// post-create/move "land next to the thing you just produced"
+  /// flow in `revealAndSelect`.
+  function revealInBrowser(): void {
+    revealAndSelect(tab.path);
+    openBrowser();
   }
 
   // In-tab find was removed; the browser's native ⌘F applies. The
@@ -203,8 +190,23 @@
 </script>
 
 <div class="editor-tab">
+  {#if tab.toolbarOpen}
   <div class="tab-bar">
     <span class="left">
+      <!-- `Aa` toggle: reveal the inline formatting controls. Always
+           rendered so the affordance is discoverable, but disabled in
+           source mode and on read-only tabs (where the formatting
+           commands wouldn't apply anyway). The state is per-tab and
+           ephemeral; session restore starts every tab collapsed. -->
+      <button
+        class="hbtn aa-toggle"
+        class:on={tab.formattingBarOpen}
+        title={tab.formattingBarOpen ? "hide formatting" : "show formatting"}
+        aria-label="toggle formatting toolbar"
+        aria-pressed={tab.formattingBarOpen}
+        disabled={tab.mode !== "wysiwyg" || readOnly}
+        onclick={() => (tab.formattingBarOpen = !tab.formattingBarOpen)}
+      >Aa</button>
       <!-- Page-width adjuster. Vertical click-drag (up = wider,
            down = narrower) is the discoverable affordance; hover +
            wheel and focus + Up/Down/Shift+Up/Down still work for
@@ -241,13 +243,109 @@
       >{pageWidth.value == null
           ? "100%"
           : `${Math.round((pageWidth.value / PAGE_WIDTH_MAX) * 100)}%`}</button>
+
+      {#if tab.formattingBarOpen && !tab.loading && tab.mode === "wysiwyg" && !readOnly}
+        <!-- Inline formatting controls. Same buttons that used to
+             live in the floating `.fmt-bar` pill; now collapsed into
+             the tab-bar so the editor canvas is uncluttered. The
+             onmousedown=preventDefault dance keeps the editor focused
+             while clicking, which avoids ProseMirror re-scrolling the
+             selection into view on every click. -->
+        <span class="fmt-group" role="toolbar" aria-label="Formatting">
+          <select
+            class="block-kind"
+            value={blockKind}
+            onchange={onBlockKindChange}
+            onmousedown={(e) => e.stopPropagation()}
+            title="block style"
+          >
+            <option value="h1">h1</option>
+            <option value="h2">h2</option>
+            <option value="h3">h3</option>
+            <option value="normal">text</option>
+            <option value="code">code</option>
+            <option value="quote">quote</option>
+          </select>
+          <button
+            class="fbtn"
+            class:on={isBold}
+            title="bold (Cmd/Ctrl+B)"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => wysiwygRef?.toggleBold()}
+          ><b>B</b></button>
+          <button
+            class="fbtn"
+            class:on={isItalic}
+            title="italic (Cmd/Ctrl+I)"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => wysiwygRef?.toggleItalic()}
+          ><i>I</i></button>
+          <button
+            class="fbtn"
+            class:on={isStrike}
+            title="strikethrough (Cmd/Ctrl+Shift+S)"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => wysiwygRef?.toggleStrike()}
+          ><s>S</s></button>
+          <button
+            class="fbtn"
+            class:on={isInlineCode}
+            title="inline code (Cmd/Ctrl+E)"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => wysiwygRef?.toggleInlineCode()}
+          ><code>{`<>`}</code></button>
+          <button
+            class="fbtn"
+            class:on={isLink}
+            title="link"
+            aria-label="toggle link"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => wysiwygRef?.toggleLink()}
+          >🔗</button>
+          <button
+            class="fbtn"
+            class:on={isBulletList}
+            title="bullet list"
+            aria-label="bullet list"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => wysiwygRef?.toggleBulletList()}
+          >•</button>
+          <button
+            class="fbtn"
+            class:on={isOrderedList}
+            title="ordered list"
+            aria-label="ordered list"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => wysiwygRef?.toggleOrderedList()}
+          >1.</button>
+          <button
+            class="fbtn"
+            class:on={isTaskList}
+            title="task list"
+            aria-label="task list"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => wysiwygRef?.toggleTaskList()}
+          >☐</button>
+          <button
+            class="fbtn"
+            title="horizontal rule (insert ---)"
+            aria-label="insert horizontal rule"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => wysiwygRef?.insertHorizontalRule()}
+          >―</button>
+        </span>
+      {/if}
     </span>
     <span class="actions">
       <!-- Assistant button moved to the global toolbar (top-right,
            ensō glyph). Cmd/Ctrl+H from anywhere on this tab still
-           opens it pre-scoped to this file. Formatting buttons
-           moved to the floating .fmt-bar below; the tab-bar now
-           carries only mode + inspector toggles. -->
+           opens it pre-scoped to this file. -->
+      <button
+        class="hbtn"
+        title="show in file browser"
+        aria-label="show in file browser"
+        onclick={revealInBrowser}
+      >📄</button>
       <button
         class="hbtn"
         title={tab.mode === "wysiwyg" ? "view source" : "view rendered"}
@@ -258,93 +356,9 @@
         class:on={tab.inspectorOpen}
         title={tab.inspectorOpen ? "hide inspector" : "show inspector"}
         onclick={() => (tab.inspectorOpen = !tab.inspectorOpen)}
-      >≡</button>
+      >◫</button>
     </span>
   </div>
-
-  {#if !tab.loading && !overlayOpen && tab.mode === "wysiwyg" && !readOnly}
-    <!-- svelte-ignore a11y_interactive_supports_focus -->
-    <!-- Wrapper isn't tabbable; the formatting buttons inside are. -->
-    <div
-      class="fmt-bar"
-      class:idle={idle.active}
-      role="toolbar"
-      aria-label="Formatting"
-      onmouseenter={fmtBarEnter}
-      onmouseleave={fmtBarLeave}
-    >
-      <select
-        class="block-kind"
-        value={blockKind}
-        onchange={onBlockKindChange}
-        title="block style"
-      >
-        <option value="h1">h1</option>
-        <option value="h2">h2</option>
-        <option value="h3">h3</option>
-        <option value="normal">text</option>
-        <option value="code">code</option>
-        <option value="quote">quote</option>
-      </select>
-      <!-- onmousedown preventDefault keeps the editor focused when
-           the button is clicked, so the chain commands below don't
-           re-focus and scroll the selection into view. Without it,
-           clicking inline-code (or any other toolbar button) on a
-           multi-line selection scrolls the editor to wherever the
-           focus lands. -->
-      <button
-        class="fbtn"
-        class:on={isBold}
-        title="bold (Cmd/Ctrl+B)"
-        onmousedown={(e) => e.preventDefault()}
-        onclick={() => wysiwygRef?.toggleBold()}
-      ><b>B</b></button>
-      <button
-        class="fbtn"
-        class:on={isItalic}
-        title="italic (Cmd/Ctrl+I)"
-        onmousedown={(e) => e.preventDefault()}
-        onclick={() => wysiwygRef?.toggleItalic()}
-      ><i>I</i></button>
-      <button
-        class="fbtn"
-        class:on={isStrike}
-        title="strikethrough (Cmd/Ctrl+Shift+S)"
-        onmousedown={(e) => e.preventDefault()}
-        onclick={() => wysiwygRef?.toggleStrike()}
-      ><s>S</s></button>
-      <button
-        class="fbtn"
-        class:on={isInlineCode}
-        title="inline code (Cmd/Ctrl+E)"
-        onmousedown={(e) => e.preventDefault()}
-        onclick={() => wysiwygRef?.toggleInlineCode()}
-      ><code>{`<>`}</code></button>
-      <button
-        class="fbtn"
-        class:on={isBulletList}
-        title="bullet list"
-        aria-label="bullet list"
-        onmousedown={(e) => e.preventDefault()}
-        onclick={() => wysiwygRef?.toggleBulletList()}
-      >•</button>
-      <button
-        class="fbtn"
-        class:on={isOrderedList}
-        title="ordered list"
-        aria-label="ordered list"
-        onmousedown={(e) => e.preventDefault()}
-        onclick={() => wysiwygRef?.toggleOrderedList()}
-      >1.</button>
-      <button
-        class="fbtn"
-        class:on={isTaskList}
-        title="task list"
-        aria-label="task list"
-        onmousedown={(e) => e.preventDefault()}
-        onclick={() => wysiwygRef?.toggleTaskList()}
-      >☐</button>
-    </div>
   {/if}
 
   {#if tab.error}
@@ -411,8 +425,6 @@
     min-width: 0;
     background: var(--bg);
     color: var(--text);
-    /* Anchor for the absolutely-positioned floating format bar. */
-    position: relative;
   }
   /* Same look + dimensions as the other tab kinds' headers
      (FileBrowserTab). Visual consistency
@@ -429,8 +441,32 @@
     flex-shrink: 0;
     min-height: 28px;
   }
-  .tab-bar .left { flex: 1; display: flex; align-items: center; }
+  .tab-bar .left {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
   .tab-bar .actions { display: flex; gap: 2px; }
+  /* The Aa toggle uses the same .hbtn frame as the page-width and
+     mode buttons; italic + serif feel hint "typography" without
+     fighting the bar's flat aesthetic. Disabled state (source mode
+     or read-only) drops the cursor and dims further. */
+  .aa-toggle {
+    font-style: italic;
+    font-family: ui-serif, Georgia, serif;
+    font-size: 14px;
+    min-width: 28px;
+  }
+  .aa-toggle:disabled {
+    cursor: default;
+    opacity: 0.45;
+  }
+  .aa-toggle:disabled:hover {
+    color: var(--text-secondary);
+    border-color: transparent;
+  }
   /* Page-width button: same visual as .hbtn, just wide enough for
      a 4-digit number ("1200") or "full". Tabular-nums so the width
      doesn't jiggle as digits change. */
@@ -452,63 +488,49 @@
     cursor: ns-resize !important;
     user-select: none;
   }
-  /* Floating formatting pill anchored near the top of the editor
-     area, centered, hovering over the canvas like Apple Notes. */
-  .fmt-bar {
-    position: absolute;
-    top: 12px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 20;
+  /* Inline formatting controls revealed by the Aa toggle. Sits in
+     the tab-bar next to the page-width pill; uses smaller, flatter
+     buttons than the old floating pill so it doesn't dominate the
+     bar at the top of the editor. */
+  .fmt-group {
     display: flex;
-    gap: 4px;
     align-items: center;
-    padding: 8px 12px;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
-    font-size: 16px;
-    color: var(--text);
-    /* Pointer-target spacing only; the editor canvas underneath
-       remains clickable around the pill. */
-    transition: opacity 200ms ease;
-  }
-  /* Idle: fade out + drop pointer events. Same recipe as
-     BottomPill so both pills idle together. */
-  .fmt-bar.idle {
-    opacity: 0;
-    pointer-events: none;
+    gap: 1px;
+    margin-left: 6px;
+    padding-left: 8px;
+    border-left: 1px solid var(--border);
   }
   .block-kind {
-    background: var(--bg-card);
+    background: transparent;
     color: var(--text);
     border: 1px solid var(--btn-border);
-    border-radius: 14px;
-    padding: 1px 8px;
+    border-radius: 3px;
+    padding: 0 4px;
+    margin-right: 2px;
     font: inherit;
-    font-size: 15px;
-    height: 28px;
+    font-size: 12px;
+    height: 20px;
   }
   .fbtn {
-    min-width: 34px;
-    height: 28px;
+    min-width: 22px;
+    height: 20px;
     text-align: center;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 14px;
+    border-radius: 3px;
     color: var(--text);
     cursor: pointer;
     font: inherit;
-    padding: 0 8px;
-    line-height: 26px;
+    font-size: 13px;
+    padding: 0 4px;
+    line-height: 18px;
   }
-  .fbtn:hover { background: var(--hover-bg); }
+  .fbtn:hover { background: var(--hover-bg); border-color: var(--btn-border); }
   .fbtn.on {
     background: var(--hover-bg);
     border-color: var(--btn-hover);
   }
-  .fbtn b, .fbtn i, .fbtn s, .fbtn code { font-size: 16px; }
+  .fbtn b, .fbtn i, .fbtn s, .fbtn code { font-size: 13px; }
   .fbtn code { font-family: ui-monospace, monospace; }
   .hbtn {
     background: none;

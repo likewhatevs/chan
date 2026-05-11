@@ -17,7 +17,7 @@
   } from "../state/tabs.svelte";
 
   import FileEditorTab from "./FileEditorTab.svelte";
-  import { tabLabel } from "../state/tabs.svelte";
+  import { tabLabel, tabTooltip } from "../state/tabs.svelte";
 
   let { pane }: { pane: LeafNode } = $props();
 
@@ -366,16 +366,39 @@
         onmousedown={() => (pane.activeTabId = t.id)}
         role="tab"
         tabindex="0"
+        title={tabTooltip(t)}
         draggable="true"
         ondragstart={(e) => onDragStart(e, t.id)}
         ondragend={(e) => onDragEnd(e, t.id)}
         ondragover={(e) => onTabDragOver(e, i)}
         ondrop={(e) => onTabDrop(e, i)}
       >
+        <!-- Spinner appears while the file is still loading from
+             disk; once loaded the tab leads straight with the
+             filename so the strip reads as plain text. -->
+        {#if t.kind === "file" && t.loading}
+          <span class="marker spinner" aria-hidden="true"></span>
+        {/if}
         <span class="path">{tabLabel(t)}</span>
         {#if isDirty(t)}
           <span class="dirty unsaved" title="unsaved changes">●</span>
         {/if}
+        <!-- Per-tab toolbar toggle. Reveals or hides the editor's
+             entire tab-bar (Aa, page-width, formatting group, mode
+             toggle, inspector toggle). Per-tab state so each open
+             file can keep its chrome where the user left it. -->
+        <button
+          class="tb-toggle"
+          class:on={t.kind === "file" && t.toolbarOpen}
+          aria-label="toggle editor toolbar"
+          aria-pressed={t.kind === "file" && t.toolbarOpen}
+          title={t.kind === "file" && t.toolbarOpen ? "hide toolbar" : "show toolbar"}
+          onmousedown={(e) => e.stopPropagation()}
+          onclick={(e) => {
+            e.stopPropagation();
+            if (t.kind === "file") t.toolbarOpen = !t.toolbarOpen;
+          }}
+        >⋯</button>
         <button
           class="close"
           onclick={(e) => {
@@ -424,11 +447,16 @@
     color: var(--text);
   }
   .pane.focused { border-color: var(--pane-focus); }
+  /* iTerm-style strip: a dark bar with no per-tab dividers. The
+     active tab is a rounded pill sitting on the bar rather than a
+     beveled cap that "merges" with the editor below. */
   .tabs {
     display: flex;
     align-items: center;
-    background: var(--tab-inactive-bg);
+    gap: 2px;
+    background: var(--bg);
     border-bottom: 1px solid var(--border);
+    padding: 4px 6px;
     overflow-x: auto;
     flex-shrink: 0;
     transition: box-shadow 0.1s;
@@ -445,34 +473,97 @@
     flex-shrink: 0;
   }
   .tab {
-    display: flex; gap: 4px; align-items: center;
-    padding: .25rem .5rem;
-    border-right: 1px solid var(--border);
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 999px;
     cursor: pointer;
-    font-size: 14px;
+    font-size: 13px;
     color: var(--text-secondary);
-    background: var(--tab-inactive-bg);
+    background: transparent;
     user-select: none;
+    /* Subtle ease so toggling between tabs doesn't pop. */
+    transition: background 80ms ease, color 80ms ease;
   }
+  .tab:hover { color: var(--text); }
   .tab.active {
-    background: var(--tab-active-bg);
+    background: var(--bg-elev);
     color: var(--text);
     font-weight: 500;
+    box-shadow: 0 0 0 1px var(--border);
   }
+  /* CSS-only spinner shown while a tab's content is loading. Inherits
+     color from the tab's text-secondary so it sits at the same
+     visual weight as the surrounding label. */
+  .tab .marker.spinner {
+    width: 10px;
+    height: 10px;
+    border: 1.5px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: tab-spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes tab-spin {
+    to { transform: rotate(360deg); }
+  }
+  /* Per-tab toolbar toggle. Sits between the dirty dot and the
+     close button. Reveals on hover or when the tab is active so a
+     packed strip doesn't pile glyphs against every label. */
+  .tab .tb-toggle {
+    background: none;
+    border: 0;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    color: var(--text-secondary);
+    padding: 0 4px;
+    opacity: 0;
+    transition: opacity 80ms ease, color 80ms ease;
+    flex-shrink: 0;
+  }
+  .tab:hover .tb-toggle,
+  .tab.active .tb-toggle,
+  .tab .tb-toggle.on { opacity: 1; }
+  .tab .tb-toggle:hover { color: var(--text); }
+  .tab .tb-toggle.on { color: var(--text); }
+  /* Close button stays invisible until the row is hovered or the
+     tab is active; matches iTerm / Chrome's behavior so the strip
+     reads cleanly with many tabs open. */
   .tab .close {
-    background: none; border: 0; cursor: pointer; font-size: 16px;
-    color: var(--text-secondary); padding: 0 2px;
+    background: none;
+    border: 0;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    color: var(--text-secondary);
+    padding: 0 2px;
+    opacity: 0;
+    transition: opacity 80ms ease, color 80ms ease;
+    flex-shrink: 0;
   }
+  .tab:hover .close,
+  .tab.active .close { opacity: 1; }
   .tab .close:hover { color: var(--text); }
-  .dirty { font-size: 16px; }
-  .dirty.unsaved { color: var(--info-text); }
-  .path { white-space: nowrap; }
-  .actions { margin-left: auto; display: flex; }
-  .actions button {
-    background: none; border: 0; cursor: pointer; padding: .25rem .5rem;
-    font-size: 16px; color: var(--text-secondary);
+  .dirty {
+    font-size: 10px;
+    line-height: 1;
+    color: var(--info-text);
   }
-  .actions button:hover { color: var(--text); }
+  .path { white-space: nowrap; }
+  .actions { margin-left: auto; display: flex; gap: 2px; padding-left: 4px; }
+  .actions button {
+    background: none;
+    border: 0;
+    cursor: pointer;
+    padding: 2px 6px;
+    font-size: 14px;
+    line-height: 1;
+    color: var(--text-secondary);
+    border-radius: 3px;
+  }
+  .actions button:hover { color: var(--text); background: var(--hover-bg); }
   .editor-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   /* Empty pane: muted chan logo watermark, centered. CSS mask
      paints the silhouette in the current text-secondary color so

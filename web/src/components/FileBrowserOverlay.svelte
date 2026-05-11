@@ -224,21 +224,21 @@
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             onclick={toggleMenu}
-          >☰</button>
+          >⋮</button>
         </span>
         <button
           class="hbtn"
           title={fullyExpanded ? "collapse all folders" : "expand all folders"}
           onclick={toggleAll}
           aria-label="toggle expand all"
-        >{fullyExpanded ? "⊟" : "⊞"}</button>
+        >⇅</button>
         <button
           class="hbtn"
           class:on={browserOverlay.inspectorOpen}
           title={browserOverlay.inspectorOpen ? "hide inspector" : "show inspector"}
           onclick={() => (browserOverlay.inspectorOpen = !browserOverlay.inspectorOpen)}
           aria-label="toggle inspector"
-        >≡</button>
+        >◫</button>
       </span>
     </header>
     <div class="body">

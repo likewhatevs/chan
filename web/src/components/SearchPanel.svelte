@@ -306,7 +306,7 @@
             title={searchPanel.inspectorOpen ? "hide inspector" : "show inspector"}
             aria-label="toggle inspector"
             onclick={() => (searchPanel.inspectorOpen = !searchPanel.inspectorOpen)}
-          >≡</button>
+          >◫</button>
         </span>
       </header>
       <ul class="hits">
