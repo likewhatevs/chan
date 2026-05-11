@@ -1942,7 +1942,12 @@
     // Preserve the original src verbatim when the user's pick
     // resolves to the same drive-rooted path; this keeps `#w=N`
     // fragments and `./` style prefixes intact across the edit.
-    let finalSrc = picked;
+    // Otherwise, relativize the picked path against the editing
+    // file so the markdown reads `./name.png` like the upload /
+    // paste paths do — without this the catalog accept would
+    // emit a bare drive-rooted path regardless of the current
+    // file's location.
+    let finalSrc = currentPath ? relativizePath(picked, currentPath) : picked;
     if (editingImageOriginal) {
       const origClean = cleanSrc(editingImageOriginal.src);
       const origNormalized = origClean.startsWith("./") || origClean.startsWith("../")
