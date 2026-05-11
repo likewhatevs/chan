@@ -27,7 +27,7 @@
 
 import { Extension, getMarkRange } from "@tiptap/core";
 import type { MarkType } from "@tiptap/pm/model";
-import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { NodeSelection, Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 
 /// Marker text per mark type. The plugin only adds widgets for
@@ -155,6 +155,40 @@ export const LiveSourceExtension = Extension.create({
               }
               return false;
             });
+
+            // Horizontal rule live source. HR is a void leaf, so it
+            // can't carry the cursor or hold text we could edit in
+            // place. Instead, when the rule is NodeSelected (click or
+            // arrow-cursor onto it), tag it with `data-cursor-in` so
+            // the CSS collapses the line, and inject a sibling widget
+            // showing the literal `---` source. NodeSelections have
+            // `from + 1 == to`, so this branch must run before the
+            // `!selection.empty` early return below.
+            if (
+              selection instanceof NodeSelection &&
+              selection.node.type.name === "horizontalRule"
+            ) {
+              const from = selection.from;
+              const to = selection.to;
+              decos.push(
+                Decoration.node(from, to, {
+                  "data-cursor-in": "",
+                }),
+              );
+              decos.push(
+                Decoration.widget(
+                  from,
+                  () => {
+                    const el = document.createElement("div");
+                    el.className = "md-hr-source";
+                    el.textContent = "---";
+                    el.contentEditable = "false";
+                    return el;
+                  },
+                  { side: -1, key: "live-hr-source" },
+                ),
+              );
+            }
 
             if (!selection.empty) {
               return decos.length ? DecorationSet.create(doc, decos) : null;

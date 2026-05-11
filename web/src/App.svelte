@@ -322,7 +322,11 @@
     --text-secondary: #98989d;
     --text-heading: #f5f5f7;
     --link: #58a6ff;
-    --code-bg: #232325;
+    /* Code background needs a clear step away from --bg (#1c1c1e) so
+       fenced blocks and inline `code` read as a slab; #232325 collided
+       with --bg-card. Light-mode value (below) does the same against
+       the white canvas. */
+    --code-bg: #2a2a2c;
     --btn-bg: #2a2a2c;
     --btn-border: #3a3a3c;
     --btn-hover: #98989d;
@@ -380,7 +384,7 @@
     --text-secondary: #6c6c70;
     --text-heading: #1c1c1e;
     --link: #0969da;
-    --code-bg: #f5f5f7;
+    --code-bg: #e8e8ec;
     --btn-bg: #f2f2f4;
     --btn-border: #d1d1d6;
     --btn-hover: #6c6c70;

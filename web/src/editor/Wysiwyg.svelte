@@ -2712,6 +2712,29 @@
     padding: 0.5rem 0.75rem;
     overflow-x: auto;
   }
+  /* Horizontal rule: rendered as a 2px line by default; the liveSource
+     plugin flips the rendering when the HR is NodeSelected (click or
+     arrow-cursor onto it). When `data-cursor-in` is set, the line
+     collapses and a sibling `.md-hr-source` widget shows the literal
+     `---` markdown so the user sees they can edit / delete it. */
+  :global(.md-wysiwyg hr) {
+    border: 0;
+    border-top: 2px solid var(--border);
+    margin: 1em 0;
+    cursor: pointer;
+  }
+  :global(.md-wysiwyg hr[data-cursor-in]) {
+    border-top: 0;
+    margin: 0;
+    height: 0;
+  }
+  :global(.md-wysiwyg .md-hr-source) {
+    font-family: var(--chan-font-mono-family, monospace);
+    color: var(--text-secondary);
+    user-select: none;
+    margin: 1em 0;
+    letter-spacing: 0.1em;
+  }
   :global(.md-wysiwyg code),
   :global(.md-wysiwyg pre) {
     font-family: var(--chan-font-code-family);
@@ -3138,7 +3161,7 @@
      visible / badge hidden. */
   :global(.md-wysiwyg .md-codeblock) {
     position: relative;
-    background: var(--bg-elev);
+    background: var(--code-bg);
     border-radius: 4px;
     padding: 8px 12px;
     font-family: var(--chan-font-mono-family, monospace);
