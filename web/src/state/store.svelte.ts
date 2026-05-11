@@ -140,6 +140,10 @@ export function applyServerPreferences(): void {
     paneWidths.inspector = prefs.pane_widths.inspector;
     paneWidths.graph = prefs.pane_widths.graph;
     paneWidths.browser = prefs.pane_widths.browser;
+    // Server hands back PaneWidths.search via #[serde(default)], so
+    // older preferences.toml without the field still arrives with a
+    // valid number rather than `undefined`.
+    paneWidths.search = prefs.pane_widths.search ?? DEFAULT_PANE_WIDTHS.search;
   }
 }
 
@@ -954,12 +958,14 @@ const DEFAULT_PANE_WIDTHS = {
   inspector: 220,
   graph: 260,
   browser: 240,
+  search: 280,
 };
 
 export const paneWidths = $state<{
   inspector: number;
   graph: number;
   browser: number;
+  search: number;
 }>({ ...DEFAULT_PANE_WIDTHS });
 
 /// Currently inspected entry in the File Browser tab. Module-level
@@ -984,6 +990,7 @@ export function persistPaneWidths(): void {
       inspector: clamp(paneWidths.inspector),
       graph: clamp(paneWidths.graph),
       browser: clamp(paneWidths.browser),
+      search: clamp(paneWidths.search),
     };
     widthsPersistInflight = widthsPersistInflight.catch(() => {}).then(async () => {
       const cfg = await api.config();
@@ -992,7 +999,8 @@ export function persistPaneWidths(): void {
         cur &&
         cur.inspector === snapshot.inspector &&
         cur.graph === snapshot.graph &&
-        cur.browser === snapshot.browser
+        cur.browser === snapshot.browser &&
+        cur.search === snapshot.search
       ) {
         return;
       }

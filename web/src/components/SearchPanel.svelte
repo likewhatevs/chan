@@ -21,6 +21,8 @@
   import { openInActivePane } from "../state/tabs.svelte";
   import {
     openGraphAtNode,
+    paneWidths,
+    persistPaneWidths,
     searchPanel,
     tree,
   } from "../state/store.svelte";
@@ -50,10 +52,6 @@
   let loading = $state(false);
   let active = $state(0);
   let error = $state<string | null>(null);
-  /// Local-only width for the search inspector pane. Persisting
-  /// this would require a new key in the PreferencesScreen schema
-  /// on the server; left as a tidy-up follow-up.
-  let inspectorWidth = $state(280);
 
   /// Debounce token. Bumped on every input change; any in-flight
   /// promise that resolves with a stale token discards its result.
@@ -378,7 +376,8 @@
     {#if searchPanel.inspectorOpen}
       <Inspector
         title="Details"
-        bind:width={inspectorWidth}
+        bind:width={paneWidths.search}
+        onResize={persistPaneWidths}
       >
         <InspectorBody
           selection={selection}

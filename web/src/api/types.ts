@@ -208,6 +208,7 @@ export type PaneWidths = {
   inspector: number;
   graph: number;
   browser: number;
+  search: number;
 };
 
 /// Vertical density for paragraphs and lists in the editor.

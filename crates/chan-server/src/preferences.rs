@@ -128,6 +128,10 @@ pub struct PaneWidths {
     pub inspector: u32,
     pub graph: u32,
     pub browser: u32,
+    // Per-field default so older preferences.toml (written before the
+    // search inspector got its own width slot) load cleanly.
+    #[serde(default = "default_search_width")]
+    pub search: u32,
 }
 
 impl Default for PaneWidths {
@@ -137,8 +141,13 @@ impl Default for PaneWidths {
             inspector: 220,
             graph: 260,
             browser: 240,
+            search: default_search_width(),
         }
     }
+}
+
+fn default_search_width() -> u32 {
+    280
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,6 +218,24 @@ mod tests {
         let prefs = EditorPrefs::load_from(&p).unwrap();
         assert_eq!(prefs.date_format, "long");
         assert_eq!(prefs.theme, ThemeChoice::System);
+    }
+
+    #[test]
+    fn pane_widths_legacy_file_fills_search_default() {
+        // Regression: preferences.toml written before the search
+        // inspector got its own width slot must still load.
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("preferences.toml");
+        std::fs::write(
+            &p,
+            "[pane_widths]\ninspector = 240\ngraph = 300\nbrowser = 250\n",
+        )
+        .unwrap();
+        let prefs = EditorPrefs::load_from(&p).unwrap();
+        assert_eq!(prefs.pane_widths.inspector, 240);
+        assert_eq!(prefs.pane_widths.graph, 300);
+        assert_eq!(prefs.pane_widths.browser, 250);
+        assert_eq!(prefs.pane_widths.search, default_search_width());
     }
 
     #[test]
