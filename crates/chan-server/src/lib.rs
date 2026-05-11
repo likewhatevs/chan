@@ -77,7 +77,7 @@ use axum::Router;
 use chan_drive::{Drive, Library, WatchEvent};
 use chan_llm::LlmConfig;
 use tokio::net::TcpListener;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 use tower_http::trace::TraceLayer;
 
 /// Configuration the binary hands the server at boot. Kept terse on
@@ -189,6 +189,10 @@ struct AppArtifacts {
     /// `None` when the bridge failed to bind (best-effort: agents
     /// fall back to v1 black-box mode).
     mcp_bridge: Option<mcp_bridge::BridgeHandle>,
+    /// Shutdown signal sender. Fed by SIGINT/SIGTERM and (optionally)
+    /// the idle-timeout watcher. Receivers live on `AppState` and in
+    /// `serve()` / `serve_via_tunnel()` for the runloop select.
+    shutdown_tx: Arc<watch::Sender<bool>>,
 }
 
 /// Build the full axum app: state assembly, channels, watcher,
@@ -273,6 +277,12 @@ async fn build_app(
 
     let last_activity = Arc::new(AtomicU64::new(now_unix_secs()));
     let prefix = Arc::new(RwLock::new(config.prefix.clone()));
+    // Shutdown channel: sender lives in artifacts so the serve loop
+    // can fire it from SIGINT and the idle watcher; receivers live on
+    // AppState (for ws_pump et al) and in serve() itself for the
+    // graceful-shutdown select.
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let shutdown_tx = Arc::new(shutdown_tx);
 
     // Try to bring up the MCP socket bridge before building
     // AppState, so the resolved socket path (or `None` on failure)
@@ -324,6 +334,7 @@ async fn build_app(
         self_writes,
         last_activity: last_activity.clone(),
         mcp_socket_path,
+        shutdown_rx,
     });
     // Nest under the prefix so `--prefix=/foo` makes every existing
     // route reachable at `/foo<route>` without changing any handler.
@@ -343,6 +354,7 @@ async fn build_app(
         indexer: indexer_handle,
         prefix,
         mcp_bridge,
+        shutdown_tx,
     })
 }
 
@@ -383,9 +395,11 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
     // Single shutdown channel fed by both the idle-timeout watcher
     // (when --timeout is set) and SIGINT/SIGTERM. axum's
     // with_graceful_shutdown awaits a `changed()` on it, then stops
-    // accepting new connections and drains in-flight ones.
-    let (signal_tx, mut signal_rx) = tokio::sync::watch::channel(false);
-    let signal_tx = Arc::new(signal_tx);
+    // accepting new connections and drains in-flight ones. The
+    // channel itself was created inside build_app so AppState (for
+    // ws_pump and other long-lived handlers) shares the same signal.
+    let signal_tx = artifacts.shutdown_tx;
+    let mut signal_rx = signal_tx.subscribe();
 
     if let Some(timeout) = config.idle_timeout {
         spawn_idle_watcher(timeout, last_activity.clone(), signal_tx.clone());
@@ -473,9 +487,10 @@ pub async fn serve_via_tunnel(
     // Same shutdown wiring as `serve()`: signal_watcher drives a
     // tokio::watch channel, and a side task cancels any in-flight
     // reindex when shutdown fires so the runtime doesn't have to
-    // wait for the rebuild to finish naturally.
-    let (signal_tx, mut signal_rx) = tokio::sync::watch::channel(false);
-    let signal_tx = Arc::new(signal_tx);
+    // wait for the rebuild to finish naturally. Channel was created
+    // inside build_app so AppState shares the receiver.
+    let signal_tx = artifacts.shutdown_tx;
+    let mut signal_rx = signal_tx.subscribe();
     spawn_signal_watcher(signal_tx.clone());
 
     let cancel_indexer = indexer.clone();

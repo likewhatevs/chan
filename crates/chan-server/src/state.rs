@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use chan_drive::{Drive, Library, WatchEvent, WatchHandle};
 use chan_llm::LlmConfig;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
 use crate::indexer;
 use crate::self_writes::SelfWrites;
@@ -87,6 +87,12 @@ pub struct AppState {
     /// the socket file lives on `AppArtifacts` so it gets dropped
     /// (and the file unlinked) when serve() unwinds.
     pub mcp_socket_path: Option<PathBuf>,
+    /// Process-wide shutdown signal. Fires once SIGINT/SIGTERM or
+    /// the idle-timeout watcher trip. Long-lived handlers (e.g.
+    /// `/ws`) observe this to close their sockets promptly so axum's
+    /// graceful drain returns in milliseconds instead of holding
+    /// open until the hard deadline.
+    pub shutdown_rx: watch::Receiver<bool>,
 }
 
 /// Drive + its notify watcher. Replaced wholesale by /api/storage/
