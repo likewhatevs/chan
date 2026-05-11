@@ -95,11 +95,18 @@
   let forceLayout: Layouts | null = null;
 
   /// Half-width of the box that the d3-force `randomize` scatters
-  /// visible nodes into at the start of every rebuild. 300 = a
-  /// 600x600 model-space area centered on the focal at (0, 0).
-  /// The pre-fit camera frames this box, so the first visible
-  /// frame shows the explosion before d3-force pulls things in.
-  const INITIAL_BBOX_HALF = 300;
+  /// visible nodes into at the start of every rebuild. 150 = a
+  /// 300x300 model-space area centered on the focal at (0, 0).
+  /// Kept small so the spring forces have room to wobble within
+  /// the brief shake window without flinging satellites off-frame.
+  const INITIAL_BBOX_HALF = 150;
+
+  /// Camera zoom for the opening frame: the cluster appears as a
+  /// tiny dot at canvas center, then animates out to the fitted
+  /// size. Sits just above `minZoom` (0.15) so the boot frame is
+  /// small but still legible enough to hint at structure during
+  /// the grow-in.
+  const BOOT_ZOOM = 0.25;
 
   /// Gates the currentScope $effect: scopeOptions re-derives any
   /// time the file tree updates, producing a fresh array (and thus
@@ -626,14 +633,15 @@
       fixedAfterDragging: true,
       alpha: 1,
       alphaMin: 0.05,
-      // ~300 ticks (~5s at 60fps) for the simulation to cool from
-      // alpha=1 to alphaMin. Doubled from the previous 150-tick
-      // setting so the initial "shake" — and the same shake on
-      // depth/scope/reload rebuilds — is visible long enough to
-      // read as motion rather than a single snap.
-      alphaDecay: 1 - Math.pow(0.05, 1 / 300),
+      // ~90 ticks (~1.5s at 60fps) for the simulation to cool from
+      // alpha=1 to alphaMin: a brief shake-then-settle rather than
+      // a long simmer.
+      alphaDecay: 1 - Math.pow(0.05, 1 / 90),
       alphaTarget: 0,
-      velocityDecay: 0.55,
+      // Velocity damping. Loose enough that the shake stays visible
+      // across the 90-tick budget; tight enough that nodes stop on
+      // a definite resting point.
+      velocityDecay: 0.45,
       // Collide radius approximates the label's visual footprint,
       // not just the node circle: doc labels can be ~110px wide
       // (text-max-width) so we use ~55 as a half-width bubble that
@@ -653,6 +661,59 @@
       xStrength: xy,
       yStrength: xy,
     } as cytoscape.LayoutOptions;
+  }
+
+  /// Cap the camera zoom after a `cy.fit()` call so a small visible
+  /// cluster (5-15 nodes packed tight) doesn't blow up labels at
+  /// load. cytoscape's font-size is model-space pixels scaled by
+  /// zoom; past ~2x, an 11px label becomes 22+px screen text. The
+  /// global `maxZoom` is set much higher than this so the USER can
+  /// still scroll-wheel in close — only the auto-fit is capped.
+  /// Upper bound for the auto-fit zoom so small scopes don't blow
+  /// up label sizes at load. The user-driven max (cy.maxZoom) is
+  /// well above this; this cap only governs the boot animation.
+  const AUTO_FIT_MAX_ZOOM = 2.2;
+  /// Multiplier applied to the natural fit zoom so the cluster
+  /// lands a touch tighter than a bare cy.fit() would. Capped by
+  /// AUTO_FIT_MAX_ZOOM so tiny scopes don't run away.
+  const AUTO_FIT_ZOOM_BOOST = 1.10;
+  function clampAutoFitZoom(): void {
+    if (!cy) return;
+    if (cy.zoom() > AUTO_FIT_MAX_ZOOM) cy.zoom(AUTO_FIT_MAX_ZOOM);
+  }
+
+  /// Compute the clamped {zoom, pan} that would frame `eles` with
+  /// `padding` px of breathing room. Returns explicit targets so
+  /// the boot animation can feed them straight into a
+  /// `cy.animate({ zoom, pan })` call — animating to explicit
+  /// targets interpolates monotonically, with no overshoot then
+  /// snap that cytoscape's built-in `fit:` target would produce.
+  function computeFitTarget(
+    eles: cytoscape.CollectionReturnValue,
+    padding: number,
+  ): { zoom: number; pan: { x: number; y: number } } {
+    const bb = eles.boundingBox({});
+    const cw = cy!.width();
+    const ch = cy!.height();
+    const zoomFit = Math.min(
+      (cw - 2 * padding) / Math.max(bb.w, 1),
+      (ch - 2 * padding) / Math.max(bb.h, 1),
+    );
+    const z = Math.min(zoomFit * AUTO_FIT_ZOOM_BOOST, AUTO_FIT_MAX_ZOOM);
+    return { zoom: z, pan: panToCenter(bb, z) };
+  }
+
+  /// Pan vector that lands the bounding-box center at the viewport
+  /// center for a given zoom. viewportPx = modelCoord * zoom + pan,
+  /// so pan = viewportCenter - bbCenter * zoom.
+  function panToCenter(
+    bb: { x1: number; y1: number; x2: number; y2: number },
+    zoom: number,
+  ): { x: number; y: number } {
+    if (!cy) return { x: 0, y: 0 };
+    const cx = (bb.x1 + bb.x2) / 2;
+    const cy_ = (bb.y1 + bb.y2) / 2;
+    return { x: cy.width() / 2 - cx * zoom, y: cy.height() / 2 - cy_ * zoom };
   }
 
   /// File-node ids matching the current scope's seed path(s). Used
@@ -747,11 +808,12 @@
       elements,
       style: buildStylesheet(containerEl),
       minZoom: 0.15,
-      // Capped at 2 so the post-fit zoom on small scopes (5-15
-      // visible nodes packed tight) doesn't blow up the labels.
-      // cytoscape's font-size is model-space pixels, scaled by
-      // zoom — zoom=5 turned an 11px font into 55px screen text.
-      maxZoom: 2,
+      // User-driven zoom (scroll wheel) wants headroom — capped too
+      // low and the canvas hits an invisible wall while inspecting.
+      // Auto-fit on load is clamped separately by clampAutoFitZoom()
+      // so small scopes don't blow up labels at startup; this ceiling
+      // only bounds the user's own scroll-wheel pinch.
+      maxZoom: 6,
       boxSelectionEnabled: false,
       selectionType: "single",
     });
@@ -816,9 +878,11 @@
           });
         });
 
-        // Fit camera to the scattered positions BEFORE reveal
-        // so the first visible frame shows the full explosion.
-        cy.fit(liveEles, 30);
+        // Boot frame: cluster sits as a tiny dot at canvas center.
+        // The post-settle animate-fit grows it from here to the
+        // fitted size.
+        cy.zoom(BOOT_ZOOM);
+        cy.center();
 
         const liveNodeCount = liveEles.nodes().length;
         forceLayout = liveEles.layout(d3ForceOptions(liveNodeCount));
@@ -840,10 +904,28 @@
             if (!cy) return;
             const v = cy.elements(":visible");
             if (v.nonempty()) {
-              // Smooth animated zoom-in to the settled cluster.
+              // Two-stage animation: 900ms grow from BOOT_ZOOM to a
+              // 0.5% overshoot of the target, then a 100ms ease back
+              // to the exact target. Total 1s. The micro-overshoot
+              // gives the reveal a tiny bounce so the cluster reads
+              // as a soft landing instead of an abrupt halt.
+              const bb = v.boundingBox({});
+              const target = computeFitTarget(v, 30);
+              const overshootZoom = target.zoom * 1.005;
+              const overshootPan = panToCenter(bb, overshootZoom);
               cy.animate(
-                { fit: { eles: v, padding: 30 } },
-                { duration: 600, easing: "ease-out" },
+                { zoom: overshootZoom, pan: overshootPan },
+                {
+                  duration: 900,
+                  easing: "ease-out",
+                  complete: () => {
+                    if (!cy) return;
+                    cy.animate(
+                      { zoom: target.zoom, pan: target.pan },
+                      { duration: 100, easing: "ease-in-out" },
+                    );
+                  },
+                },
               );
             }
           });
