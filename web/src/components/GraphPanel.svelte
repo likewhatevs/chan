@@ -825,6 +825,17 @@
 
         forceLayout.one("layoutstop", () => {
           if (!cy) return;
+          // Unlock the focal once d3-force has settled so the user
+          // can drag it. The lock was only needed during layout to
+          // keep the focal anchored at origin while the rest of the
+          // cluster relaxed around it; past that, an immovable
+          // central node is just an annoyance (especially in file
+          // scope where the seed IS the file the user opened the
+          // graph for).
+          for (const id of focalIds) {
+            const ele = cy.getElementById(id);
+            if (ele.nonempty()) ele.unlock();
+          }
           requestAnimationFrame(() => {
             if (!cy) return;
             const v = cy.elements(":visible");
