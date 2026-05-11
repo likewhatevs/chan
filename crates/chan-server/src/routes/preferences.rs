@@ -146,7 +146,7 @@ pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
             gemini: ProviderPrefsView::default(),
         }
     } else {
-        let backend_kind = llm.backend.unwrap_or(BackendKind::Anthropic);
+        let backend_kind = llm.backend.unwrap_or(BackendKind::ClaudeCli);
         AssistantPrefsView {
             enabled: llm.backend.is_some(),
             backend: AssistantBackendKind::from_chan_llm(backend_kind),
