@@ -11,7 +11,8 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::{Manager, RunEvent, State};
+use tauri::menu::{Menu, MenuItemBuilder, PredefinedMenuItem, WINDOW_SUBMENU_ID};
+use tauri::{Manager, RunEvent, State, WindowEvent};
 
 use config::{Config, ConfigStore};
 use serve::ServeHandle;
@@ -268,6 +269,27 @@ fn main() {
                 apply_dev_mode(app.handle(), true);
             }
 
+            install_app_menu(app.handle())?;
+
+            // Closing the main window via the red traffic light or
+            // Cmd+W should hide it, not destroy it: hidden serve
+            // children, settings, and console windows can still keep
+            // the process alive, and reopening via Dock click or the
+            // Window > Drive Manager menu item should be instant.
+            // Without this, a closed main window cannot be brought
+            // back without quitting and relaunching.
+            if let Some(main) = app.get_webview_window("main") {
+                let main_for_event = main.clone();
+                main.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = main_for_event.hide();
+                    }
+                });
+                let _ = main.show();
+                let _ = main.set_focus();
+            }
+
             // Registry watcher. Leaked: we want it alive for the
             // process lifetime and the inner Watcher type is
             // unnameable through `manage`.
@@ -291,12 +313,69 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error building tauri application");
 
-    app.run(move |_app, event| {
-        if matches!(event, RunEvent::Exit) {
-            // Best-effort: SIGKILL every running chan child so
-            // they don't outlive the desktop. The OS reclaims the
-            // ports within seconds.
-            serve::stop_all(&state_for_exit);
+    app.run(move |app, event| {
+        match event {
+            RunEvent::Exit => {
+                // Best-effort: SIGKILL every running chan child so
+                // they don't outlive the desktop. The OS reclaims
+                // the ports within seconds.
+                serve::stop_all(&state_for_exit);
+            }
+            // macOS: Dock click or `open -a` while the process is
+            // still alive. If no windows are visible (main has been
+            // hidden / closed and the user has no drive windows
+            // open), bring the main window back.
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } => {
+                if !has_visible_windows {
+                    let _ = show_window(app, "main");
+                }
+            }
+            _ => {}
         }
     });
+}
+
+/// Inject window-navigation items into the default Tauri menu.
+/// Tauri's `Menu::default` produces the standard macOS menubar
+/// (app / File / Edit / View / Window / Help) but its Window
+/// submenu only has Minimize / Zoom / Close — a closed main
+/// window has no menu path back. We prepend Drive Manager,
+/// Settings, and Logs items to that submenu so each app window
+/// is reachable by name.
+fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let menu = Menu::default(app)?;
+
+    let drive_manager = MenuItemBuilder::with_id("win-main", "Drive Manager")
+        .accelerator("CmdOrCtrl+1")
+        .build(app)?;
+    let settings = MenuItemBuilder::with_id("win-settings", "Settings…")
+        .accelerator("CmdOrCtrl+,")
+        .build(app)?;
+    let logs = MenuItemBuilder::with_id("win-console", "Logs")
+        .accelerator("CmdOrCtrl+L")
+        .build(app)?;
+
+    if let Some(window_submenu) = menu.get(WINDOW_SUBMENU_ID).and_then(|k| k.as_submenu().cloned()) {
+        let sep = PredefinedMenuItem::separator(app)?;
+        window_submenu.prepend_items(&[&drive_manager, &settings, &logs, &sep])?;
+    }
+
+    app.set_menu(menu)?;
+    app.on_menu_event(|app, event| match event.id().as_ref() {
+        "win-main" => {
+            let _ = show_window(app, "main");
+        }
+        "win-settings" => {
+            let _ = show_window(app, "settings");
+        }
+        "win-console" => {
+            let _ = show_window(app, "console");
+        }
+        _ => {}
+    });
+    Ok(())
 }
