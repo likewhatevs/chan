@@ -471,8 +471,7 @@ pub async fn api_backlinks(
         Err(e) => return err_from(&e),
     };
     let image_files = drive_image_files(&drive);
-    let mut file_set: std::collections::BTreeSet<&str> =
-        files.iter().map(String::as_str).collect();
+    let mut file_set: std::collections::BTreeSet<&str> = files.iter().map(String::as_str).collect();
     for img in &image_files {
         file_set.insert(img.as_str());
     }
@@ -578,10 +577,9 @@ mod tests {
         // this edge instead of returning the stale "linked from: 0"
         // that the SQL `dst = "attachments/pic.png"` query produced
         // when the source authored it as a drive-relative path.
-        let files: std::collections::BTreeSet<&str> =
-            ["attachments/pic.png", "notes/journal.md"]
-                .into_iter()
-                .collect();
+        let files: std::collections::BTreeSet<&str> = ["attachments/pic.png", "notes/journal.md"]
+            .into_iter()
+            .collect();
         assert_eq!(
             resolve_link_dst("notes/journal.md", "attachments/pic.png", &files),
             "attachments/pic.png",
