@@ -337,11 +337,20 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubble {
       .uploadAttachment(file, opts.uploadDir ?? null)
       .then((res) => {
         if (!alive) return;
-        uploading = false;
         uploadBtn.disabled = false;
         uploadBtn.textContent = prevLabel ?? "Upload…";
         fileInput.value = "";
+        // Hand the path off to the host BEFORE clearing the
+        // upload-in-flight flag. The host's onUpload synchronously
+        // dispatches replaceImagePathInSource + acceptImageBubble;
+        // those trigger onUpdate cycles whose syncImageBubble
+        // reads `isUploading()`. Without the guard, the caret
+        // moving past the `(...)` after the text replace would
+        // see mode=outside and call dismiss → restore → delete
+        // the markup we just rewrote. Clearing the flag after
+        // onUpload returns keeps both transactions guarded.
         opts.onUpload(res.path);
+        uploading = false;
       })
       .catch((e: unknown) => {
         if (!alive) return;
