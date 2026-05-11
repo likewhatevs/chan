@@ -90,12 +90,13 @@ pub async fn api_post_attachment(
         None => state.server_config.lock().unwrap().attachments_dir.clone(),
     };
 
-    // Filename: <unix_ts>-<slugified-stem>.<ext>. Keeping the
-    // unix timestamp at the front gives natural sort + collision
-    // resistance without committing to a date format the frontend
-    // would parse. Extension is preserved (lowercased) so the
-    // browser's content-type sniffer agrees with what the editor
-    // wrote.
+    // Filename: <slugified-stem>.<ext>, kept close to what the user
+    // pasted / uploaded so the markdown source reads naturally. On
+    // collision in the target dir, append `-1`, `-2`, ... until we
+    // find a free slot. The slug step strips path separators and
+    // disallowed characters so a hostile filename can't escape the
+    // chosen dir. Extension is lowercased so the browser's
+    // content-type sniffer agrees with the editor's render.
     let (stem, ext) = split_filename(&original);
     let stem_slug = slugify_for_filename(stem);
     let stem_or_default = if stem_slug.is_empty() {
@@ -104,19 +105,48 @@ pub async fn api_post_attachment(
         &stem_slug
     };
     let ext = ext.map(|e| e.to_ascii_lowercase()).unwrap_or_default();
-    let ts = now_unix_secs();
-    let saved = if ext.is_empty() {
-        format!("{ts}-{stem_or_default}")
-    } else {
-        format!("{ts}-{stem_or_default}.{ext}")
+    let join_filename = |name: &str| -> String {
+        if dir.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{dir}/{name}")
+        }
     };
-    let rel = if dir.is_empty() {
-        saved
-    } else {
-        format!("{dir}/{saved}")
+    let build_name = |suffix: Option<u32>| -> String {
+        let base = match suffix {
+            None => stem_or_default.to_owned(),
+            Some(n) => format!("{stem_or_default}-{n}"),
+        };
+        if ext.is_empty() {
+            base
+        } else {
+            format!("{base}.{ext}")
+        }
     };
 
-    if let Err(e) = state.drive().write_bytes(&rel, &bytes) {
+    let drive = state.drive();
+    let mut rel = join_filename(&build_name(None));
+    let mut attempt: u32 = 1;
+    // Hard cap on retries: if a thousand suffixes are taken the
+    // user has bigger problems than this loop; bail to a unique
+    // timestamp fallback rather than spinning forever.
+    while drive.exists(&rel) {
+        if attempt > 1000 {
+            let ts = now_unix_secs();
+            let base = format!("{stem_or_default}-{ts}");
+            let name = if ext.is_empty() {
+                base
+            } else {
+                format!("{base}.{ext}")
+            };
+            rel = join_filename(&name);
+            break;
+        }
+        rel = join_filename(&build_name(Some(attempt)));
+        attempt += 1;
+    }
+
+    if let Err(e) = drive.write_bytes(&rel, &bytes) {
         return err_from(&e);
     }
     state.self_writes.note(&rel);

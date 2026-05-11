@@ -19,7 +19,7 @@
 
   import { onDestroy, onMount } from "svelte";
   import { Editor } from "@tiptap/core";
-  import { TextSelection } from "@tiptap/pm/state";
+  import { NodeSelection, TextSelection } from "@tiptap/pm/state";
   import StarterKit from "@tiptap/starter-kit";
   import TaskList from "@tiptap/extension-task-list";
   import TaskItem from "@tiptap/extension-task-item";
@@ -32,17 +32,8 @@
     isoOf,
     type DateFormatId,
   } from "./dateFormats";
-  import {
-    createImageNode,
-    isImagePath,
-    parseSrcFragment,
-    relativizeImageSrc,
-    uploadImageFile,
-  } from "./extensions/image";
-  import {
-    openImageBubble,
-    type ImageBubbleHandle,
-  } from "./extensions/imageBubble";
+  import { createImageNode, resolveImageSrc } from "./extensions/image";
+  import { openImageBubble, type ImageBubble } from "./extensions/imageBubble";
   import {
     createWikiLinkNode,
     handleWikiClick,
@@ -54,11 +45,14 @@
     openContactBubble,
     type ContactBubble,
   } from "./extensions/contactPicker";
+  import { type BubbleHandle } from "./bubble";
+  import { CodeBlockFenced } from "./extensions/codeBlockFenced";
   import { FoldHeadingExtension } from "./extensions/foldHeading";
+  import { LiveSourceExtension } from "./extensions/liveSource";
   import { createTagDecorationExtension } from "./extensions/tagDecoration";
   import { openGraphAtNode } from "../state/store.svelte";
   import { api } from "../api/client";
-  import { normalizeHref, resolveRelativePath } from "./links";
+  import { normalizeHref, relativizePath, resolveRelativePath } from "./links";
   import { drive } from "../state/store.svelte";
 
   let {
@@ -130,8 +124,9 @@
     editor.setEditable(!ro, false);
     if (ro) {
       dismissWikiBubble();
-      dismissTagBubble();
       dismissImageBubble();
+      dismissImageOverlay();
+      dismissTagBubble();
       dismissContactBubble();
       clearCursorDecorations();
     }
@@ -172,30 +167,6 @@
   /// as the selection moves off the atom.
   let lastAtomEditPos: number | null = null;
 
-  /// Image bubble open while the caret sits inside `![alt](src)`
-  /// text in the editor. Same non-focus-stealing pattern as the
-  /// wiki bubble; the host owns the keyboard and selection-
-  /// tracking, the bubble owns its own DOM and result list.
-  let imageBubble: ImageBubbleHandle | undefined;
-  /// Original attrs of the image atom we replaced with text on
-  /// entry to edit-existing mode. Null for the typed-`![` flow
-  /// (no atom existed). On dismiss-without-accept we restore the
-  /// atom from this snapshot so the document doesn't end up with
-  /// stray markdown text.
-  let editingImageOriginal: { src: string; alt: string } | null = null;
-  /// Doc position of the opening `!` in `![alt](src)`. Used by
-  /// the dismiss path to find and replace / remove the inserted
-  /// text even when the caret has moved. Mapped through every
-  /// transaction in `onUpdate`.
-  let editingImageBracketStart: number | null = null;
-  /// Default alt the user has not yet diverged from. While the
-  /// editor still shows this string in the `[alt]` slot, the
-  /// accept path overrides it from the picked filename; once the
-  /// user types anything different it sticks. Lets the typed-
-  /// `![` flow start with `![]( )` and still get an auto-alt
-  /// when the user picks an image.
-  let editingImageDefaultAlt = "";
-
   /// Direction the user came from when entering wiki edit mode
   /// via NodeSelection. ArrowLeft → entered from the right side
   /// of the pill, so on dismiss the caret should land BEFORE the
@@ -205,7 +176,6 @@
   /// influence the next edit.
   let wikiEditEntryDir: "before" | "after" = "after";
   /// Last horizontal arrow keypress, captured in `handleKeyDown`
-  /// and consumed by `maybeOpenImageEditPicker`'s wikiLink branch
   /// to decide `wikiEditEntryDir`. Reset to null on any non-arrow
   /// keystroke so a click-driven entry doesn't inherit a stale
   /// direction.
@@ -228,6 +198,33 @@
   /// Mapped through every transaction in `onUpdate` so typing
   /// inside the brackets doesn't desync the saved position.
   let editingWikiBracketStart: number | null = null;
+
+  /// Image bubble. Same non-focus-stealing pattern as the wiki
+  /// bubble: open while the caret sits inside `![alt](src)` source
+  /// text, dismiss when the caret leaves the range. Two sub-modes
+  /// (path / alt) track which half of the markdown the caret is in.
+  let imageBubble: ImageBubble | undefined;
+
+  /// Snapshot of the image atom we replaced when entering edit
+  /// mode. Mirrors `editingWikiOriginal`: a dismiss without accept
+  /// restores the original atom rather than leaving stray
+  /// `![alt](src)` text in the doc.
+  let editingImageOriginal: { src: string; alt: string } | null = null;
+  /// Doc position of the leading `!` of the `![alt](src)` text
+  /// inserted on entry. Mapped through every transaction so typing
+  /// inside the range doesn't desync the saved offset.
+  let editingImageBracketStart: number | null = null;
+  /// Alt text we pre-populated on edit entry. The accept path uses
+  /// it to decide whether to auto-fill from the filename: an
+  /// unchanged default counts as "no user input" and gets replaced
+  /// by the picked file's basename.
+  let editingImageDefaultAlt: string = "";
+
+  /// Cleanup for the floating image action overlay (zoom + edit
+  /// buttons shown when a rendered image is clicked). `undefined`
+  /// when no overlay is open. The function tears down the DOM and
+  /// removes the global listeners that drive its lifetime.
+  let imageOverlayDismiss: (() => void) | undefined;
 
   /// Scroll the editor to the i-th heading (0-based, document order).
   /// Called by the inspector (outline view) via `bind:this` from
@@ -327,7 +324,11 @@
       element: host,
       editable: !readonly,
       extensions: [
-        StarterKit,
+        // Disable StarterKit's built-in CodeBlock so our
+        // `CodeBlockFenced` (always-visible fences + editable
+        // language) is the only code-block node in the schema.
+        StarterKit.configure({ codeBlock: false }),
+        CodeBlockFenced,
         // `nested: true` lets a task list contain another task list
         // when the user indents (Tab inside a task item). Mirrors
         // GitHub-flavored markdown task list semantics.
@@ -369,6 +370,11 @@
         // heading of equal-or-higher level. Pure UI state; the
         // markdown source is never touched.
         FoldHeadingExtension,
+        // Live-preview decorations: heading prefix + bold / italic /
+        // strike markers shown only when the caret is on / in the
+        // element. PM-managed so re-renders by other plugins don't
+        // wipe them.
+        LiveSourceExtension,
         // `#tag` rendering as clickable pills. Click opens the
         // graph inspector pre-selected at the tag node so users
         // can see which documents share the tag. The id on a tag
@@ -386,103 +392,17 @@
       // insert path.
       editorProps: {
         handleKeyDown: (_view, event) => {
-          // Wiki bubble owns Enter / Escape / Arrow keys while the
-          // caret is inside `[[ ]]`. We check bubble state instead
-          // of just findBracketRange() so that an empty `[[ ]]`
-          // typed by the user without going through the trigger
-          // path doesn't accidentally swallow Enter.
-          if (wikiBubble) {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              acceptWikiBubble();
-              return true;
-            }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              dismissWikiBubble();
-              return true;
-            }
-            // ArrowUp / ArrowDown always browse the bubble's
-            // result list, both in the typed `[[` flow and the
-            // edit-existing flow (where the bubble shows the
-            // current link's matches; arrow-keys are how the user
-            // picks a different one).
-            if (event.key === "ArrowDown") {
-              event.preventDefault();
-              wikiBubble.moveActive(1);
-              return true;
-            }
-            if (event.key === "ArrowUp") {
-              event.preventDefault();
-              wikiBubble.moveActive(-1);
-              return true;
-            }
-          }
-          if (imageBubble) {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              acceptImageBubble();
-              return true;
-            }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              dismissImageBubble();
-              return true;
-            }
-            if (event.key === "ArrowDown") {
-              event.preventDefault();
-              imageBubble.moveActive(1);
-              return true;
-            }
-            if (event.key === "ArrowUp") {
-              event.preventDefault();
-              imageBubble.moveActive(-1);
-              return true;
-            }
-          }
-          if (tagBubble) {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              acceptTagBubble();
-              return true;
-            }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              dismissTagBubble();
-              return true;
-            }
-            if (event.key === "ArrowDown") {
-              event.preventDefault();
-              tagBubble.moveActive(1);
-              return true;
-            }
-            if (event.key === "ArrowUp") {
-              event.preventDefault();
-              tagBubble.moveActive(-1);
-              return true;
-            }
-          }
-          if (contactBubble) {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              acceptContactBubble();
-              return true;
-            }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              dismissContactBubble();
-              return true;
-            }
-            if (event.key === "ArrowDown") {
-              event.preventDefault();
-              contactBubble.moveActive(1);
-              return true;
-            }
-            if (event.key === "ArrowUp") {
-              event.preventDefault();
-              contactBubble.moveActive(-1);
-              return true;
-            }
+          // Bubble keyboard routing: each adapter owns its Enter /
+          // Escape / Arrow semantics behind `BubbleHandle.handleKey`.
+          // Only one bubble is ever open at a time (the open paths
+          // guard with `if (otherBubble) return`), so first-match
+          // wins is enough; the host stays out of per-bubble accept
+          // / dismiss logic.
+          const activeBubble: BubbleHandle | undefined =
+            wikiBubble ?? imageBubble ?? tagBubble ?? contactBubble;
+          if (activeBubble?.handleKey(event)) {
+            event.preventDefault();
+            return true;
           }
           if (
             onSubmit &&
@@ -501,90 +421,117 @@
           else lastHorizontalArrow = null;
           return false;
         },
-        handleDrop: (view, event, _slice, moved) => {
-          // `moved` is true for in-editor drag-rearrange; we let
-          // ProseMirror's default handler take that case.
-          if (moved) return false;
-          const dt = (event as DragEvent).dataTransfer;
-          if (!dt) return false;
-          const imageFiles = Array.from(dt.files).filter((f) =>
+        handleDrop: () => {
+          return false;
+        },
+        handleDOMEvents: {
+          // Intercept mousedown on image atoms BEFORE PM creates a
+          // NodeSelection on them. PM's default selection would
+          // also wake `maybeOpenAtomEditAtSelection`'s image branch
+          // and open the edit bubble — but for clicks we want the
+          // Zoom / Edit overlay only (arrow-key entry keeps its own
+          // direct-to-edit path). Returning true stops PM from
+          // processing the mousedown further.
+          //
+          // The resize-handle's own mousedown stopPropagation
+          // prevents this branch from firing when the user grabs
+          // the handle.
+          mousedown: (view, event) => {
+            const target = event.target as HTMLElement | null;
+            if (!target || !host) return false;
+            const wrap = target.closest(
+              ".md-image-wrap",
+            ) as HTMLElement | null;
+            const imgEl =
+              (wrap?.querySelector("img") as HTMLImageElement | null) ??
+              (target.tagName === "IMG" ? (target as HTMLImageElement) : null);
+            if (!imgEl || !host.contains(imgEl)) return false;
+            // posAtDOM through a NodeView wrap can land far from
+            // the atom (PM treats the wrap as opaque and resolves
+            // to whatever PM-tracked node is closest in the DOM
+            // tree, which is sometimes a sibling block). posAtCoords
+            // from the actual click position is more deterministic:
+            // the user clicked on the image, so the coord-based pos
+            // is on or adjacent to the atom.
+            const coord = view.posAtCoords({
+              left: event.clientX,
+              top: event.clientY,
+            });
+            if (!coord) return false;
+            // Inline atoms occupy a single position. posAtCoords
+            // can return either the position before the atom or
+            // right at it depending on bias; probe both sides.
+            const doc = view.state.doc;
+            const candidates = [coord.pos, coord.pos - 1, coord.pos + 1];
+            let pos = -1;
+            let node = null as ReturnType<typeof doc.nodeAt>;
+            for (const c of candidates) {
+              if (c < 0 || c >= doc.content.size) continue;
+              const n = doc.nodeAt(c);
+              if (n && n.type.name === "image") {
+                pos = c;
+                node = n;
+                break;
+              }
+            }
+            if (pos < 0 || !node) return false;
+            event.preventDefault();
+            openImageActionOverlay(imgEl, pos, node);
+            return true;
+          },
+        },
+        handlePaste: (view, event) => {
+          // Route clipboard images through the attachments endpoint
+          // instead of letting Tiptap's `allowBase64` inline them as
+          // a data: URI. The base64 path is fine for previewing in
+          // memory but bloats the markdown source and never reaches
+          // the drive, so the link breaks on the next reload.
+          const cd = event.clipboardData;
+          if (!cd) return false;
+          const imageFiles = Array.from(cd.files).filter((f) =>
             f.type.startsWith("image/"),
           );
           if (imageFiles.length === 0) return false;
           event.preventDefault();
-          const coords = view.posAtCoords({
-            left: (event as DragEvent).clientX,
-            top: (event as DragEvent).clientY,
-          });
-          const at = coords?.pos ?? view.state.selection.from;
-          void insertImageFilesAt(at, imageFiles);
-          return true;
-        },
-        handlePaste: (view, event) => {
-          const cd = (event as ClipboardEvent).clipboardData;
-          if (!cd) return false;
-          // First: any image files in the clipboard items? Both
-          // direct file paste and clipboard images (Cmd+V from a
-          // screenshot tool) land here as `kind: 'file'`.
-          const files = Array.from(cd.items)
-            .filter((it) => it.kind === "file")
-            .map((it) => it.getAsFile())
-            .filter((f): f is File => !!f && f.type.startsWith("image/"));
-          if (files.length > 0) {
-            event.preventDefault();
-            // While the image bubble is open the user is editing
-            // an `![alt](src)` markup; route uploads into that
-            // markup's path slot rather than inserting a fresh
-            // atom (which would leave the open brackets behind).
-            if (imageBubble) {
-              void uploadImageFile(files[0]!, dirOfPath(currentPath ?? null))
-                .then((path) => {
-                  if (!editor) return;
-                  replaceImagePathInSource(path);
-                  acceptImageBubble();
-                })
-                .catch((err) => {
-                  // eslint-disable-next-line no-console
-                  console.error("paste-upload failed:", err);
-                });
-              return true;
-            }
-            const at = view.state.selection.from;
-            void insertImageFilesAt(at, files);
-            return true;
-          }
-          // Second: pasted text that looks like an image URL.
-          // Accept http(s) URLs whose path component ends in a
-          // known image extension. Anything else falls through
-          // to the default text-paste handler.
-          const text = cd.getData("text/plain").trim();
-          if (text && /^https?:\/\//i.test(text)) {
-            try {
-              const u = new URL(text);
-              if (isImagePath(u.pathname)) {
-                event.preventDefault();
-                if (imageBubble) {
-                  // Same routing as the file path: drop the URL
-                  // into the source's `(path)` slot and commit.
-                  replaceImagePathInSource(text);
-                  acceptImageBubble();
-                  return true;
-                }
-                const last = u.pathname.split("/").pop() ?? "";
-                const alt = last.replace(/\.[^./]+$/, "");
-                editor!
-                  .chain()
-                  .focus()
-                  .insertContent({ type: "image", attrs: { src: text, alt } })
-                  .insertContent(" ")
-                  .run();
-                return true;
+          const dir = dirOfPath(currentPath ?? null);
+          const fromPath = currentPath ?? null;
+          // Snapshot the insertion point at paste time. Subsequent
+          // uploads are async; capturing the position now keeps the
+          // images landing where the user pasted instead of wherever
+          // the caret has wandered to by the time the first response
+          // returns.
+          const insertAt = view.state.selection.from;
+          const imgType = view.state.schema.nodes.image;
+          if (!imgType) return false;
+          void (async () => {
+            let cursor = insertAt;
+            for (const file of imageFiles) {
+              try {
+                const { path } = await api.uploadAttachment(file, dir);
+                // Drive-rooted path from the server; relativize
+                // against the editing file so the markdown reads
+                // `./name.png` like the bubble-driven insert.
+                const src = fromPath ? relativizePath(path, fromPath) : path;
+                // No alt-text auto-fill: paste / upload paths
+                // produce timestamp-prefixed filenames that aren't
+                // meaningful as descriptions, and the indexer
+                // already keys off filenames, not alt text. Users
+                // can add an alt later via the edit-existing flow.
+                const tr = view.state.tr.insert(
+                  cursor,
+                  imgType.create({ src, alt: "" }),
+                );
+                view.dispatch(tr);
+                // Image atom is one position; advance the cursor so
+                // a second pasted image lands AFTER the first.
+                cursor += 1;
+              } catch (e) {
+                // eslint-disable-next-line no-console
+                console.error("[paste] upload failed", e);
               }
-            } catch {
-              // malformed URL: fall through to plain paste.
             }
-          }
-          return false;
+          })();
+          return true;
         },
       },
       onUpdate: ({ editor, transaction }) => {
@@ -598,6 +545,9 @@
             editingWikiBracketStart,
           );
         }
+        // Same mapping for the image bubble's saved bracket start.
+        // Without it, `restoreImageEditOriginal` would walk the doc
+        // from a stale offset and miss the `![alt](src)` text.
         if (editingImageBracketStart !== null) {
           editingImageBracketStart = transaction.mapping.map(
             editingImageBracketStart,
@@ -620,20 +570,20 @@
         value = md;
         tagHeadings();
         syncWikiBubble();
-        syncTagBubble();
         syncImageBubble();
+        syncTagBubble();
         syncContactBubble();
         updateCursorDecorations();
-        maybeOpenImageEditPicker();
+        maybeOpenAtomEditAtSelection();
         onSelectionChange?.();
       },
       onSelectionUpdate: () => {
         syncWikiBubble();
-        syncTagBubble();
         syncImageBubble();
+        syncTagBubble();
         syncContactBubble();
         updateCursorDecorations();
-        maybeOpenImageEditPicker();
+        maybeOpenAtomEditAtSelection();
         onSelectionChange?.();
       },
     });
@@ -724,8 +674,9 @@
 
   onDestroy(() => {
     dismissWikiBubble();
-    dismissTagBubble();
     dismissImageBubble();
+    dismissImageOverlay();
+    dismissTagBubble();
     dismissContactBubble();
     editor?.destroy();
   });
@@ -1078,6 +1029,24 @@
       });
       return;
     }
+    if (before.endsWith("![") && !imageBubble) {
+      // Auto-pair: complete the markdown image shape to `![](|)`
+      // with the caret parked between the parens. The user's typing
+      // becomes the `(src)` query; the bubble opens in path mode
+      // and the host's sync hook keeps it pinned while the caret
+      // stays inside.
+      const pos = editor.state.selection.from;
+      editor
+        .chain()
+        .insertContentAt(pos, "]()", { updateSelection: false })
+        .setTextSelection(pos + 2)
+        .run();
+      editingImageBracketStart = pos - 2;
+      editingImageOriginal = null;
+      editingImageDefaultAlt = "";
+      openImageBubbleForCurrentCaret();
+      return;
+    }
     if (before.endsWith("[[") && !wikiBubble) {
       // Auto-pair: insert `]]` after the caret and step the caret
       // back into the middle. The leading `[[` the user typed stays;
@@ -1093,26 +1062,6 @@
       openWikiBubbleForCurrentCaret();
       return;
     }
-    if (before.endsWith("![") && !imageBubble) {
-      // Mirror the `[[` autopair: leave the typed `![` in place,
-      // insert `]()` AFTER the caret, drop the cursor inside the
-      // `()`. The bubble below the caret picks up the path query
-      // from the text between the parens (same way the wiki
-      // bubble picks up the bracket query). `![` is at
-      // [from-2, from); we insert `]()` at `from`, then set the
-      // caret 2 chars later — that lands between `(` and `)`.
-      const pos = from;
-      editor
-        .chain()
-        .insertContentAt(pos, "]()", { updateSelection: false })
-        .setTextSelection(pos + 2)
-        .run();
-      editingImageOriginal = null;
-      editingImageBracketStart = pos - "![".length;
-      editingImageDefaultAlt = "";
-      openImageBubbleForCurrentCaret();
-      return;
-    }
     // Live date detection: scan the cursor's parent block for any
     // catalog match and convert it to a pill. The catalog regex
     // requires a non-word, non-dash sentinel after the date, so
@@ -1121,58 +1070,6 @@
     // block). Scoped to the local block to keep per-keystroke cost
     // bounded.
     decorateSmartNodes("local");
-  }
-
-  /// Upload a sequence of image files and insert each as an
-  /// `image` node at `pos` (in document order). Used by both
-  /// drop and paste paths so the failure modes stay consistent.
-  /// We don't show an inline placeholder while the upload is in
-  /// flight: typical image uploads run in well under a second on
-  /// localhost, and a placeholder that races the cursor is more
-  /// disruptive than a brief delay.
-  async function insertImageFilesAt(pos: number, files: File[]): Promise<void> {
-    if (!editor) return;
-    let cursor = pos;
-    // Drop the upload next to the editing file so the markdown can
-    // reference it with a `./<name>` src. With no `currentPath`
-    // (assistant prompt editor, etc.) we pass `null` so the server
-    // falls back to its configured attachments_dir.
-    const dir = dirOfPath(currentPath ?? null);
-    for (const file of files) {
-      try {
-        const path = await uploadImageFile(file, dir);
-        const last = path.split("/").pop() ?? path;
-        const alt = last.replace(/\.[^./]+$/, "");
-        const rel = relativizeImageSrc(path, currentPath ?? null);
-        editor
-          .chain()
-          .focus()
-          .insertContentAt(cursor, [
-            { type: "image", attrs: { src: rel, alt } },
-            { type: "text", text: " " },
-          ])
-          .run();
-        // Advance the cursor for subsequent inserts in the same
-        // batch so we don't stack everything at the original pos.
-        // +2 accounts for the atomic image node + the trailing
-        // space we appended.
-        cursor += 2;
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.error("image upload failed:", e);
-      }
-    }
-  }
-
-  /// Drive-relative directory portion of `path`, or null when the
-  /// path is null/empty (so the upload can fall back to the
-  /// server's configured attachments_dir). A path with no slash
-  /// (file at drive root) yields the empty string, which the server
-  /// treats as "save at drive root".
-  function dirOfPath(path: string | null): string | null {
-    if (!path) return null;
-    const i = path.lastIndexOf("/");
-    return i < 0 ? "" : path.slice(0, i);
   }
 
   /// Locate the `[[ ... ]]` text range that surrounds the current
@@ -1238,6 +1135,8 @@
       host: caretAnchorHost(),
       prefix: wikiPickerPrefix,
       onClickAccept: () => acceptWikiBubble(),
+      onCommit: () => acceptWikiBubble(),
+      onDismiss: () => dismissWikiBubble(),
       followExisting,
       onFollowExisting: (target, anchor) => {
         // Treat this as "navigate AND keep the link": restore the
@@ -1455,6 +1354,8 @@
     tagBubble = openTagBubble({
       host: caretAnchorHost(),
       onClickAccept: () => acceptTagBubble(),
+      onCommit: () => acceptTagBubble(),
+      onDismiss: () => dismissTagBubble(),
     });
     tagBubble.setQuery(query);
   }
@@ -1546,6 +1447,8 @@
     contactBubble = openContactBubble({
       host: caretAnchorHost(),
       onClickAccept: () => acceptContactBubble(),
+      onCommit: () => acceptContactBubble(),
+      onDismiss: () => dismissContactBubble(),
     });
     contactBubble.setQuery(query);
   }
@@ -1600,6 +1503,48 @@
 
   // ---- date edit-existing flow ----------------------------------------
 
+  /// When the caret arrives on an editable atom (date pill, wiki
+  /// link) via arrow-key NodeSelection, open the corresponding
+  /// edit popover. Mirrors the click path; the one-shot guard
+  /// `lastAtomEditPos` prevents the dismiss-refocus loop from
+  /// re-opening for the same atom. Clears the guard as soon as the
+  /// selection moves off any atom so a later re-entry reopens.
+  function maybeOpenAtomEditAtSelection(): void {
+    if (!editor) return;
+    const sel = editor.state.selection;
+    if (!(sel instanceof NodeSelection)) {
+      lastAtomEditPos = null;
+      return;
+    }
+    const node = sel.node;
+    const name = node.type.name;
+    if (name !== "date" && name !== "wikiLink" && name !== "image") {
+      lastAtomEditPos = null;
+      return;
+    }
+    if (lastAtomEditPos === sel.from) return;
+    lastAtomEditPos = sel.from;
+    if (name === "image") {
+      // Image atoms route into the source-text edit flow rather than
+      // a separate popover; `enterImageEditAt` reads attrs off the
+      // node directly so it doesn't need the DOM element.
+      enterImageEditAt(sel.from, node);
+      return;
+    }
+    const dom = editor.view.nodeDOM(sel.from);
+    if (!(dom instanceof HTMLElement)) return;
+    if (name === "date") {
+      openDateEditAt(sel.from, dom);
+      return;
+    }
+    // Wiki: record entry direction so the dismiss path lands the
+    // caret on the correct side of the restored atom (continuing
+    // the user's arrow motion). Left-arrow entry means the user
+    // came from the right side; restore caret BEFORE the atom.
+    wikiEditEntryDir = lastHorizontalArrow === "left" ? "before" : "after";
+    enterWikiEditAt(dom);
+  }
+
   /// Open the calendar pre-filled with the date atom at `pos`.
   /// Shared by both the click handler and the NodeSelection
   /// (arrow-key) trigger so the two paths behave identically.
@@ -1634,382 +1579,6 @@
     );
   }
 
-  // ---- image edit-existing flow ---------------------------------------
-
-  /// Re-open the `![` picker pre-filled with the current image's
-  /// src + alt whenever a click or arrow-key navigation drops PM's
-  /// selection onto an image atom (PM emits a `NodeSelection` for
-  /// `selectable: true` atoms in those cases). Commit on the
-  /// picker overwrites `src` and `alt` in place via setNodeAttribute;
-  /// dismiss is a no-op. The `lastImageEditAtomPos` guard prevents
-  /// re-opening for the same selection — selection only fires on
-  /// changes, but onUpdate also calls this and we don't want a
-  /// re-trigger while the picker steals focus and dispatches its
-  /// own transactions.
-  function maybeOpenImageEditPicker(): void {
-    if (!editor || !editor.isEditable) return;
-    const sel = editor.state.selection;
-    // First check: NodeSelection on an atom (click on the image
-    // / wiki / date pill). PM typically creates this for `select-
-    // able: true` atoms when clicked.
-    let node: { type: { name: string }; attrs: Record<string, unknown>; nodeSize: number } | null =
-      "node" in sel
-        ? ((sel as unknown as { node: { type: { name: string }; attrs: Record<string, unknown>; nodeSize: number } }).node)
-        : null;
-    let pos = sel.from;
-    // Fallback: arrow-key navigation often lands the caret as a
-    // TextSelection ADJACENT to an inline atom rather than a
-    // NodeSelection on it. Detect that case so arrow into an
-    // image / wiki / date pill still surfaces the edit popover.
-    // We only consider this when the bubble isn't already open
-    // and the selection just moved (the lastAtomEditPos guard
-    // below dedupes per-atom).
-    if (!node && sel.empty && !imageBubble && !wikiBubble) {
-      const fromPos = editor.state.doc.resolve(sel.from);
-      const before = fromPos.nodeBefore;
-      const after = fromPos.nodeAfter;
-      const isEditableAtom = (n: { type: { name: string } } | null | undefined): boolean =>
-        !!n && (n.type.name === "image" || n.type.name === "wikiLink" || n.type.name === "date");
-      if (isEditableAtom(after)) {
-        node = after as typeof node;
-        pos = sel.from;
-      } else if (isEditableAtom(before)) {
-        node = before as typeof node;
-        pos = sel.from - (before as { nodeSize: number }).nodeSize;
-      }
-    }
-    if (!node) {
-      lastAtomEditPos = null;
-      return;
-    }
-    if (node.type.name === "wikiLink") {
-      if (lastAtomEditPos === pos) return;
-      lastAtomEditPos = pos;
-      // Direction-aware caret placement on dismiss: ArrowLeft into
-      // the pill came from the right side, so restoring should
-      // leave the caret BEFORE the pill (continuing leftward);
-      // ArrowRight into the pill came from the left, caret AFTER.
-      // Click and other entries default to "after" (no direction).
-      wikiEditEntryDir = lastHorizontalArrow === "left" ? "before" : "after";
-      lastHorizontalArrow = null;
-      // PM resolves nodeDOM for atom positions to the nodeView's
-      // wrap span (set up in extensions/wikiLink.ts). Falling back
-      // to no-op when the lookup fails keeps a transient selection
-      // change from breaking arrow nav.
-      const dom = editor.view.nodeDOM(pos);
-      if (dom instanceof HTMLElement) enterWikiEditAt(dom);
-      return;
-    }
-    if (node.type.name === "date") {
-      if (lastAtomEditPos === pos) return;
-      lastAtomEditPos = pos;
-      const dom = editor.view.nodeDOM(pos);
-      if (dom instanceof HTMLElement) openDateEditAt(pos, dom);
-      return;
-    }
-    if (node.type.name !== "image") {
-      lastAtomEditPos = null;
-      return;
-    }
-    if (lastAtomEditPos === pos) return;
-    lastAtomEditPos = pos;
-    enterImageEditAt(pos, node);
-  }
-
-  /// Replace an image atom at `pos` with its `![alt](src)` source
-  /// text, drop the caret inside the parens, and open the image
-  /// bubble. The original src + alt are snapshot so dismiss-
-  /// without-accept can put the atom back; on accept we update
-  /// the atom in place (which surfaces as a setNodeAttribute-
-  /// equivalent transaction with `#w=N` fragments preserved if
-  /// the path didn't actually change).
-  function enterImageEditAt(
-    pos: number,
-    node: { attrs: Record<string, unknown> },
-  ): void {
-    if (!editor) return;
-    const rawSrc = (node.attrs.src as string) ?? "";
-    const alt = (node.attrs.alt as string) ?? "";
-    editingImageOriginal = { src: rawSrc, alt };
-    editingImageBracketStart = pos;
-    editingImageDefaultAlt = alt;
-    const insertText = `![${alt}](${rawSrc})`;
-    // Caret lands inside the parens (right after the opening `(`)
-    // so the bubble starts in path mode and the user can search
-    // immediately. Position math: `pos` is the atom's position;
-    // after replace, brackets occupy [pos, pos + insertText.len].
-    // The opening paren sits at `pos + 3 + alt.len`; caret one
-    // past that lands inside the parens.
-    const caretPos = pos + 4 + alt.length;
-    // Use `tr.insertText` (NOT `chain.insertContent`) because
-    // tiptap-markdown's content schema would re-parse the
-    // `![alt](src)` string as an image atom and immediately
-    // recreate the node we're trying to replace with text.
-    // `tr.insertText` writes plain text characters into the doc,
-    // bypassing the markdown parse.
-    let tr = editor.state.tr.insertText(insertText, pos, pos + 1);
-    try {
-      tr = tr.setSelection(TextSelection.create(tr.doc, caretPos));
-    } catch {
-      // Position out of range (degenerate doc); leave selection
-      // where the replace mapped it.
-    }
-    editor.view.dispatch(tr);
-    editor.commands.focus();
-    openImageBubbleForCurrentCaret();
-  }
-
-  /// Locate the `![alt](src)` text range surrounding the caret,
-  /// if any. Returns positions in the prosemirror document plus
-  /// the parsed alt / src and the mode the caret currently sits
-  /// in (between `[` and `]` → "alt"; between `(` and `)` →
-  /// "path"). Mirrors `findBracketRange`'s contract for wiki.
-  function findImageRange(ed: Editor): {
-    start: number;
-    end: number;
-    alt: string;
-    src: string;
-    mode: "alt" | "path" | "outside";
-  } | null {
-    const sel = ed.state.selection;
-    if (!sel.empty) return null;
-    const fromPos = ed.state.doc.resolve(sel.from);
-    const block = fromPos.parent;
-    if (!block.isTextblock) return null;
-    const blockStart = fromPos.start();
-    const text = ed.state.doc.textBetween(
-      blockStart,
-      fromPos.end(),
-      "\n",
-      " ",
-    );
-    const offset = sel.from - blockStart;
-    // Walk backward to find the `![` that opens our range.
-    const exclam = text.lastIndexOf("![", Math.max(0, offset - 1));
-    if (exclam < 0) return null;
-    // Match `![alt](src)` from `exclam`. Lazy `[^\]]*` /
-    // `[^)]*` so trailing markup further on the line doesn't
-    // greedy-match into the wrong close.
-    const tail = text.slice(exclam);
-    const m = tail.match(/^!\[([^\]]*)\]\(([^)]*)\)/);
-    if (!m) return null;
-    const fullLen = m[0].length;
-    const altLen = (m[1] ?? "").length;
-    // Caret offsets relative to `!`:
-    //   1 = between `!` and `[`               (outside)
-    //   2 = between `[` and (alt or `]`)      (alt)
-    //   2 + altLen = between alt and `]`      (alt)
-    //   3 + altLen = between `]` and `(`      (alt — let the caret
-    //                                          slip across the
-    //                                          boundary without
-    //                                          dismissing)
-    //   4 + altLen = between `(` and src      (path)
-    //   4 + altLen + srcLen = between src/`)` (path)
-    //   fullLen = after `)`                   (outside)
-    const inTail = offset - exclam;
-    const start = blockStart + exclam;
-    const end = blockStart + exclam + fullLen;
-    let mode: "alt" | "path" | "outside";
-    if (inTail < 2 || inTail >= fullLen) mode = "outside";
-    else if (inTail <= 3 + altLen) mode = "alt";
-    else mode = "path";
-    return {
-      start,
-      end,
-      alt: m[1] ?? "",
-      src: m[2] ?? "",
-      mode,
-    };
-  }
-
-  function openImageBubbleForCurrentCaret(): void {
-    if (!editor || imageBubble) return;
-    imageBubble = openImageBubble({
-      host: caretAnchorHost(),
-      uploadDir: dirOfPath(currentPath ?? null),
-      onClickPick: (src) => {
-        replaceImagePathInSource(src);
-        // Click also commits, matching the wiki bubble's "click
-        // a result accepts it" behaviour.
-        acceptImageBubble();
-      },
-      onUpload: (src) => {
-        replaceImagePathInSource(src);
-        acceptImageBubble();
-      },
-    });
-    syncImageBubble();
-  }
-
-  /// Replace the `(path)` text in the editor's image source with
-  /// `newSrc`. Used by the bubble's pick / upload callbacks so
-  /// the editor reflects the chosen image before commit fires.
-  function replaceImagePathInSource(newSrc: string): void {
-    if (!editor) return;
-    const range = findImageRange(editor);
-    if (!range) return;
-    const insert = `![${range.alt}](${newSrc})`;
-    editor.view.dispatch(
-      editor.state.tr.insertText(insert, range.start, range.end),
-    );
-  }
-
-  function acceptImageBubble(): void {
-    if (!editor || !imageBubble) return;
-    const range = findImageRange(editor);
-    if (!range) {
-      dismissImageBubble();
-      return;
-    }
-    // Pick winner: bubble's highlighted result over typed text.
-    // The user types in the editor to FILTER the list; the active
-    // list item is what they intend to commit. When the list is
-    // empty (no matches / external URL typed), fall through to the
-    // typed text — that supports paste-URL flow and lets the user
-    // hand-type a path the catalog doesn't know about.
-    const pickedFromList = imageBubble.pickActive();
-    const chosenSrc = pickedFromList ?? range.src;
-    // Auto-fill alt from the chosen src's filename when the user
-    // didn't override it. `editingImageDefaultAlt` is what we
-    // pre-populated on entry, so equality means the user hasn't
-    // typed anything in the alt slot.
-    let finalAlt = range.alt;
-    if (
-      finalAlt.length === 0 ||
-      finalAlt === editingImageDefaultAlt
-    ) {
-      const last = chosenSrc.split("/").pop() ?? chosenSrc;
-      const clean = (last.split("?")[0] ?? last).split("#")[0] ?? last;
-      finalAlt = clean.replace(/\.[^./]+$/, "");
-    }
-    // Edit-existing && path unchanged: keep `editingImageOriginal.src`
-    // verbatim (preserves `#w=N` fragments and the `./` style).
-    const orig = editingImageOriginal;
-    let finalSrc: string;
-    if (orig) {
-      const { src: cleanOrig } = parseSrcFragment(orig.src);
-      let resolvedOrig = cleanOrig;
-      if (
-        currentPath &&
-        (cleanOrig.startsWith("./") || cleanOrig.startsWith("../"))
-      ) {
-        resolvedOrig = resolveRelativePath(cleanOrig, currentPath);
-      }
-      finalSrc =
-        chosenSrc === resolvedOrig || chosenSrc === cleanOrig
-          ? orig.src
-          : relativizeImageSrc(chosenSrc, currentPath ?? null);
-    } else {
-      finalSrc = relativizeImageSrc(chosenSrc, currentPath ?? null);
-    }
-    const imageType = editor.schema.nodes.image;
-    if (!imageType) return;
-    // Suppress the dismiss-restore path: we're committing.
-    editingImageOriginal = null;
-    editingImageBracketStart = null;
-    editingImageDefaultAlt = "";
-    dismissImageBubble();
-    editor.view.dispatch(
-      editor.state.tr.replaceWith(
-        range.start,
-        range.end,
-        imageType.create({ src: finalSrc, alt: finalAlt }),
-      ),
-    );
-    editor.commands.focus();
-  }
-
-  function dismissImageBubble(): void {
-    if (imageBubble) {
-      imageBubble.dismiss();
-      imageBubble = undefined;
-    }
-    if (editingImageOriginal || editingImageBracketStart != null) {
-      restoreImageEditOriginal();
-    }
-  }
-
-  /// Either put the original atom back (edit-existing path) or
-  /// remove the inserted `![](`+`)` text (typed-`![` path) so the
-  /// document doesn't end up with stray markdown.
-  function restoreImageEditOriginal(): void {
-    if (!editor) return;
-    const orig = editingImageOriginal;
-    const start = editingImageBracketStart;
-    editingImageOriginal = null;
-    editingImageBracketStart = null;
-    editingImageDefaultAlt = "";
-    if (start === null) return;
-    // Rescan for the `![..](..)` markup at the saved start. Matches
-    // findImageRange but without the selection requirement (caret
-    // may have moved out by the time we get here).
-    const doc = editor.state.doc;
-    if (start < 0 || start >= doc.content.size) return;
-    let resolved;
-    try {
-      resolved = doc.resolve(start);
-    } catch {
-      return;
-    }
-    const blockStart = resolved.start();
-    const blockEnd = resolved.end();
-    if (start < blockStart || start >= blockEnd) return;
-    const text = doc.textBetween(blockStart, blockEnd, "\n", " ");
-    const offset = start - blockStart;
-    const tail = text.slice(offset);
-    const m = tail.match(/^!\[([^\]]*)\]\(([^)]*)\)/);
-    if (!m) return;
-    const end = start + m[0].length;
-    const imageType = editor.schema.nodes.image;
-    if (!imageType) return;
-    if (orig) {
-      // Edit-existing: replace markup with the original atom.
-      editor.view.dispatch(
-        editor.state.tr.replaceWith(
-          start,
-          end,
-          imageType.create({ src: orig.src, alt: orig.alt }),
-        ),
-      );
-    } else {
-      // Typed-`![` flow: just delete the empty markup.
-      editor.view.dispatch(editor.state.tr.delete(start, end));
-    }
-  }
-
-  /// Re-evaluate the image bubble's mode + query as the caret
-  /// moves and the user types. Open: keep alive; sync mode to
-  /// caret position; sync query / alt-echo. No bubble: do
-  /// nothing (entry happens through explicit triggers, not from
-  /// selection alone).
-  function syncImageBubble(): void {
-    if (!editor || !imageBubble) return;
-    const range = findImageRange(editor);
-    if (!range || range.mode === "outside") {
-      dismissImageBubble();
-      return;
-    }
-    if (range.mode === "alt") {
-      imageBubble.setMode("alt");
-      imageBubble.setAlt(range.alt);
-    } else {
-      imageBubble.setMode("path");
-      // Normalize the search query: relative paths (`./` / `../`)
-      // get resolved against the editing file so they match the
-      // drive-rooted entries in the catalog. Strip any `#w=N`
-      // fragment so it doesn't break substring matching.
-      const { src: cleanSrc } = parseSrcFragment(range.src);
-      let query = cleanSrc;
-      if (
-        currentPath &&
-        (cleanSrc.startsWith("./") || cleanSrc.startsWith("../"))
-      ) {
-        query = resolveRelativePath(cleanSrc, currentPath);
-      }
-      imageBubble.setPathQuery(query);
-    }
-  }
-
   // ---- wiki edit-existing flow ----------------------------------------
 
   /// Enter wiki edit mode by replacing the clicked atom with
@@ -2017,6 +1586,28 @@
   /// the existing `[[ ]]` bubble flow takes over from there. The
   /// original atom attrs are saved so a dismiss-without-accept can
   /// restore the link rather than leaving stray brackets.
+  /// Build the inner `[[ ]]` query text for an existing wikiLink
+  /// atom on edit-entry. Mirrors the bubble's input grammar:
+  ///   - heading anchor (bare slug) → `target#slug`
+  ///   - block anchor (leading `^`) → `target^id`
+  ///   - alias differs from default file label → append `|alias`
+  /// The default label is the file basename without `.md` (same
+  /// derivation `fileLabel` uses inside the bubble), so a link
+  /// whose alias matches the natural label doesn't pick up a
+  /// redundant `|name` on every edit.
+  function wikiEditQuery(target: string, label: string, anchor: string): string {
+    let query = target;
+    if (anchor) {
+      query += anchor.startsWith("^") ? anchor : `#${anchor}`;
+    }
+    const defaultLabel =
+      (target.split("/").pop() ?? target).replace(/\.md$/, "");
+    if (label && label !== defaultLabel) {
+      query += `|${label}`;
+    }
+    return query;
+  }
+
   function enterWikiEditAt(wrap: HTMLElement): void {
     if (!editor) return;
     const stash = (wrap as unknown as { __wikiGetPos?: () => number | undefined })
@@ -2031,16 +1622,18 @@
     const wasAbs = (atom.attrs.wasAbs as boolean) || false;
     editingWikiOriginal = { target, label, anchor, wasAbs };
     editingWikiBracketStart = pos;
-    // Replace the atom with `[[label]]` text. Caret lands at the
-    // end of the label (between `label` and `]]`), matching the
-    // typing-`[[ ]]` flow's caret position so syncWikiBubble's
-    // findBracketRange resolves the bubble at this caret.
-    const insertText = `[[${label}]]`;
+    // Rebuild the inner query so the visible source matches what
+    // the user originally typed: anchor (`#heading` or `^block`)
+    // and `|alias` are restored when present. The bubble parses
+    // the same shape when reopened, so the user can edit any
+    // component in place.
+    const inner = wikiEditQuery(target, label, anchor);
+    const insertText = `[[${inner}]]`;
     editor
       .chain()
       .focus()
       .insertContentAt({ from: pos, to: pos + atom.nodeSize }, insertText)
-      .setTextSelection(pos + 2 + label.length)
+      .setTextSelection(pos + 2 + inner.length)
       .run();
     // syncWikiBubble fires from onUpdate; openWikiBubbleForCurrent
     // -Caret won't because the caret was already inside brackets,
@@ -2112,6 +1705,500 @@
     editor.view.dispatch(tr);
   }
 
+  // ---- image edit-existing flow ----------------------------------------
+
+  /// Drive-relative dirname for `path`. Used to scope uploads next
+  /// to the editing file. Null path -> null (let the server fall
+  /// back to its configured attachments_dir); root-level file ->
+  /// empty string (drive root); nested file -> dirname segment.
+  function dirOfPath(p: string | null): string | null {
+    if (p === null) return null;
+    const slash = p.lastIndexOf("/");
+    if (slash < 0) return "";
+    return p.slice(0, slash);
+  }
+
+  /// Locate the `![alt](src)` text range surrounding the caret and
+  /// report which slot (alt / path / outside) the caret sits in.
+  /// Mirrors `findBracketRange`'s contract for the wiki bubble; the
+  /// host's sync hook uses the `mode` to drive the bubble between
+  /// path-search and alt-echo modes.
+  ///
+  /// Mode boundaries (offsets relative to the leading `!`):
+  ///   - 0..1                    -> outside (between `!` and `[`)
+  ///   - 2..2 + altLen + 1       -> alt (covers `[`, alt text, `]`,
+  ///                                and one boundary char so a
+  ///                                keystroke crossing the divider
+  ///                                doesn't immediately dismiss)
+  ///   - 2 + altLen + 2..end - 1 -> path (inside `(...)`)
+  ///   - >= fullLen              -> outside
+  function findImageRange(
+    ed: Editor,
+  ): {
+    start: number;
+    end: number;
+    alt: string;
+    src: string;
+    mode: "alt" | "path" | "outside";
+  } | null {
+    const sel = ed.state.selection;
+    // Non-collapsed selection (Shift+Arrow text-select inside the
+    // source markup): probe from `sel.from`, then accept only if
+    // BOTH endpoints land inside the same `![alt](src)` range.
+    // That keeps the bubble alive while the user expands a
+    // selection inside the source text but dismisses cleanly when
+    // the selection bleeds past `)` or before `!`.
+    const resolved = ed.state.doc.resolve(sel.from);
+    const block = resolved.parent;
+    if (!block.isTextblock) return null;
+    const blockStart = resolved.start();
+    const offset = sel.from - blockStart;
+    const text = block.textContent;
+    const bangIdx = text.lastIndexOf("![", Math.max(0, offset));
+    if (bangIdx === -1) return null;
+    const rest = text.slice(bangIdx);
+    const m = /^!\[([^\]]*)\]\(([^)]*)\)/.exec(rest);
+    if (!m) return null;
+    const alt = m[1] ?? "";
+    const src = m[2] ?? "";
+    const fullLen = m[0].length;
+    const rel = offset - bangIdx;
+    if (rel < 0 || rel >= fullLen) return null;
+    if (!sel.empty) {
+      // sel.to must also be inside the same range, in the same
+      // textblock. If sel spans out, bail (the user is selecting
+      // beyond the markup; we should dismiss).
+      if (sel.to > blockStart + bangIdx + fullLen) return null;
+      if (sel.to < blockStart + bangIdx) return null;
+    }
+    let mode: "alt" | "path" | "outside";
+    if (rel <= 1) {
+      mode = "outside";
+    } else if (rel <= 2 + alt.length + 1) {
+      mode = "alt";
+    } else if (rel >= 2 + alt.length + 2 && rel <= fullLen - 1) {
+      mode = "path";
+    } else {
+      mode = "outside";
+    }
+    return {
+      start: blockStart + bangIdx,
+      end: blockStart + bangIdx + fullLen,
+      alt,
+      src,
+      mode,
+    };
+  }
+
+  /// Fallback range lookup for commit / restore paths. When the OS
+  /// file picker dropped focus, the live selection check inside
+  /// `findImageRange` fails (sel.empty is false because PM lost the
+  /// cursor entirely); we scan the textblock starting from the saved
+  /// bracket-start and parse the `![alt](src)` shape from there.
+  /// Returns positions plus parsed alt / src; no mode field — the
+  /// callers don't need to disambiguate.
+  function findImageRangeAt(
+    ed: Editor,
+    start: number,
+  ): { start: number; end: number; alt: string; src: string } | null {
+    const doc = ed.state.doc;
+    if (start < 0 || start >= doc.content.size) return null;
+    let resolved;
+    try {
+      resolved = doc.resolve(start);
+    } catch {
+      return null;
+    }
+    const blockStart = resolved.start();
+    const blockEnd = resolved.end();
+    if (start < blockStart || start >= blockEnd) return null;
+    const text = doc.textBetween(blockStart, blockEnd, "\n", " ");
+    const offset = start - blockStart;
+    const rest = text.slice(offset);
+    const m = /^!\[([^\]]*)\]\(([^)]*)\)/.exec(rest);
+    if (!m) return null;
+    return {
+      start,
+      end: start + m[0].length,
+      alt: m[1] ?? "",
+      src: m[2] ?? "",
+    };
+  }
+
+  /// Mount the image bubble anchored at the caret's screen position.
+  /// Caller must ensure `![alt](src)` text is already present with
+  /// the caret inside it (either freshly autopaired by `onInput` or
+  /// inserted by `enterImageEditAt`). Same caret-anchor shim as the
+  /// wiki bubble; sync hook keeps it in step with the caret.
+  function openImageBubbleForCurrentCaret(): void {
+    if (!editor || imageBubble) return;
+    imageBubble = openImageBubble({
+      host: caretAnchorHost(),
+      uploadDir: dirOfPath(currentPath ?? null),
+      onClickPick: (src) => {
+        replaceImagePathInSource(src);
+      },
+      onUpload: (src) => {
+        // Relativize against the editing file so the markdown reads
+        // `./name.png` like the paste path does. Server returns a
+        // drive-rooted path; without this, the bubble upload would
+        // emit `[](file.png)` while paste emits `[](./file.png)`.
+        const rel = currentPath ? relativizePath(src, currentPath) : src;
+        replaceImagePathInSource(rel);
+        // Pass the path explicitly so accept doesn't pick up the
+        // list's currently-highlighted catalog entry instead.
+        acceptImageBubble(rel);
+      },
+      onCommit: () => acceptImageBubble(),
+      onDismiss: () => dismissImageBubble(),
+    });
+    // Seed the bubble's mode + query / alt from the current range so
+    // the first paint reflects what the user has already typed.
+    const range = findImageRange(editor);
+    if (range) {
+      imageBubble.setMode(range.mode === "alt" ? "alt" : "path");
+      if (range.mode === "alt") {
+        imageBubble.setAlt(range.alt);
+      } else {
+        imageBubble.setPathQuery(cleanSrc(range.src));
+      }
+    }
+  }
+
+  /// Strip a `#w=N` (or any `#...`) fragment from a markdown image
+  /// src. The width is rendered by the image node, not searched on,
+  /// so the path-mode filter sees the path portion only.
+  function cleanSrc(src: string): string {
+    const hash = src.indexOf("#");
+    return hash < 0 ? src : src.slice(0, hash);
+  }
+
+  /// Replace the `(src)` portion of the surrounding `![alt](src)`
+  /// markdown range with `newSrc`, leaving `[alt]` intact. No-op
+  /// when no range surrounds the caret AND the saved bracket-start
+  /// can't be located.
+  function replaceImagePathInSource(newSrc: string): void {
+    if (!editor) return;
+    const ed = editor;
+    let range = findImageRange(ed);
+    if (!range && editingImageBracketStart !== null) {
+      const fallback = findImageRangeAt(ed, editingImageBracketStart);
+      if (fallback) {
+        range = { ...fallback, mode: "path" };
+      }
+    }
+    if (!range) return;
+    const replacement = `![${range.alt}](${newSrc})`;
+    ed.view.dispatch(
+      ed.state.tr.insertText(replacement, range.start, range.end),
+    );
+  }
+
+  /// Commit the bubble: replace the `![alt](src)` text with an image
+  /// atom carrying the chosen src + alt. The alt auto-fills from the
+  /// picked file's basename when the user hasn't typed (or has left
+  /// the default we pre-populated on edit-entry). When the picked
+  /// src matches the saved original after fragment-stripping, we
+  /// keep the original verbatim so things like `#w=120` survive a
+  /// round-trip through the bubble.
+  ///
+  /// `overrideSrc` short-circuits `imageBubble.accept()`: callers
+  /// that already know which path to commit (notably the upload
+  /// flow's `onUpload`, where the bubble's list-highlight is stale)
+  /// pass the path explicitly so it doesn't get overridden by the
+  /// currently-highlighted catalog entry.
+  function acceptImageBubble(overrideSrc?: string): void {
+    if (!editor || !imageBubble) return;
+    const ed = editor;
+    let range = findImageRange(ed);
+    if (!range && editingImageBracketStart !== null) {
+      const fb = findImageRangeAt(ed, editingImageBracketStart);
+      if (fb) range = { ...fb, mode: "path" };
+    }
+    if (!range) {
+      dismissImageBubble();
+      return;
+    }
+    const picked = overrideSrc ?? imageBubble.accept() ?? range.src;
+    if (!picked) {
+      dismissImageBubble();
+      return;
+    }
+    // Auto-fill alt from the picked file's basename (without ext)
+    // when the user hasn't supplied one (or has left the default
+    // we pre-populated on edit-entry, which counts as untouched).
+    // Skip the auto-fill on uploads (`overrideSrc` set): upload
+    // filenames are timestamp-prefixed and not meaningful as
+    // descriptions; the user can add an alt later via edit-existing.
+    let alt = range.alt;
+    if (
+      overrideSrc === undefined &&
+      (alt === "" || alt === editingImageDefaultAlt)
+    ) {
+      const base = picked.split("/").pop() ?? picked;
+      const dot = base.lastIndexOf(".");
+      alt = dot > 0 ? base.slice(0, dot) : base;
+    }
+    // Preserve the original src verbatim when the user's pick
+    // resolves to the same drive-rooted path; this keeps `#w=N`
+    // fragments and `./` style prefixes intact across the edit.
+    let finalSrc = picked;
+    if (editingImageOriginal) {
+      const origClean = cleanSrc(editingImageOriginal.src);
+      const origNormalized = origClean.startsWith("./") || origClean.startsWith("../")
+        ? currentPath
+          ? resolveRelativePath(origClean, currentPath)
+          : origClean
+        : origClean;
+      if (origNormalized === picked) {
+        finalSrc = editingImageOriginal.src;
+      }
+    }
+    const imgType = ed.schema.nodes.image;
+    if (!imgType) {
+      dismissImageBubble();
+      return;
+    }
+    editingImageOriginal = null;
+    editingImageBracketStart = null;
+    editingImageDefaultAlt = "";
+    dismissImageBubble();
+    // Replace the source-text range with a fresh image atom in
+    // place, preserving the line's other content. `tr.replaceWith`
+    // takes a real node (vs the chain string path which would
+    // re-parse the inserted text).
+    const tr = ed.state.tr;
+    const atom = imgType.create({ src: finalSrc, alt });
+    tr.replaceWith(range.start, range.end, atom);
+    ed.view.dispatch(tr);
+    ed.commands.focus(range.start + 1);
+  }
+
+  function dismissImageBubble(): void {
+    imageBubble?.dismiss();
+    imageBubble = undefined;
+    // Same contract as the wiki dismiss: if the bubble was opened
+    // in edit-existing mode, restore the original atom. The typed-
+    // `![` flow has no original snapshot; in that case we walk the
+    // doc and delete the leftover `![]()` markup.
+    if (editingImageOriginal || editingImageBracketStart !== null) {
+      restoreImageEditOriginal();
+    }
+  }
+
+  function restoreImageEditOriginal(): void {
+    if (!editor) return;
+    const ed = editor;
+    const orig = editingImageOriginal;
+    const start = editingImageBracketStart;
+    editingImageOriginal = null;
+    editingImageBracketStart = null;
+    editingImageDefaultAlt = "";
+    if (start === null) return;
+    const range = findImageRangeAt(ed, start);
+    if (!range) return;
+    const imgType = ed.schema.nodes.image;
+    if (orig && imgType) {
+      const atom = imgType.create({ src: orig.src, alt: orig.alt });
+      ed.view.dispatch(ed.state.tr.replaceWith(range.start, range.end, atom));
+    } else {
+      // Typed-`![` flow: nothing to restore. Delete the literal
+      // `![](|)` markup so the user doesn't end up with stray
+      // brackets on dismiss.
+      ed.view.dispatch(ed.state.tr.delete(range.start, range.end));
+    }
+  }
+
+  /// Re-evaluate the open bubble on every selection / doc update.
+  /// Track caret movement across the `[alt]` / `(src)` divide by
+  /// flipping modes, and dismiss when the caret leaves the range.
+  function syncImageBubble(): void {
+    if (!editor || !imageBubble) return;
+    // Suspend the dismiss path while an upload is in flight. The
+    // OS file picker steals focus and PM's selection updates can
+    // fire as focus returns; without this guard, syncImageBubble
+    // would dismiss the bubble (and `restoreImageEditOriginal`
+    // would delete the typed `![]()` markup) before the upload's
+    // onUpload callback can land the new path.
+    if (imageBubble.isUploading()) return;
+    const range = findImageRange(editor);
+    if (!range || range.mode === "outside") {
+      dismissImageBubble();
+      return;
+    }
+    imageBubble.setMode(range.mode);
+    if (range.mode === "alt") {
+      imageBubble.setAlt(range.alt);
+    } else {
+      // Normalize relative srcs against the editing file so the
+      // catalog filter (drive-rooted entries) can match `./foo.png`
+      // typed from a nested doc.
+      let q = cleanSrc(range.src);
+      if ((q.startsWith("./") || q.startsWith("../")) && currentPath) {
+        q = resolveRelativePath(q, currentPath);
+      }
+      imageBubble.setPathQuery(q);
+    }
+  }
+
+  /// Enter image edit mode by replacing the atom at `pos` with
+  /// `![alt](src)` source text, then opening the bubble in path
+  /// mode. Mirrors `enterWikiEditAt`. The original src + alt are
+  /// snapshotted so a dismiss-without-accept can restore the atom.
+  /// Tear down any open image action overlay. Idempotent; safe to
+  /// call from places that don't know whether one is showing.
+  function dismissImageOverlay(): void {
+    if (imageOverlayDismiss) {
+      imageOverlayDismiss();
+      imageOverlayDismiss = undefined;
+    }
+  }
+
+  /// Show a small floating overlay anchored to the clicked image's
+  /// top-right corner with two actions: "Zoom" opens the image in a
+  /// fullscreen viewer; "Edit" reveals the markdown source via
+  /// `enterImageEditAt`. Click outside or Escape dismisses without
+  /// committing. Arrow-key entry into an image bypasses this overlay
+  /// and goes straight to edit, per the EDITOR.md spec.
+  function openImageActionOverlay(
+    imgEl: HTMLElement,
+    pos: number,
+    node: { attrs: Record<string, unknown>; nodeSize: number },
+  ): void {
+    dismissImageOverlay();
+    const wrap = document.createElement("div");
+    wrap.className = "md-image-actions";
+    const makeBtn = (label: string, run: () => void): HTMLButtonElement => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "md-image-action";
+      btn.textContent = label;
+      // Use mousedown + preventDefault so the editor's selection
+      // survives the click. Click events on a document.body-mounted
+      // overlay would otherwise race with PM's blur/refocus and the
+      // action's editor commands would land in a stale state.
+      btn.addEventListener("mousedown", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        run();
+      });
+      return btn;
+    };
+    const zoomBtn = makeBtn("Zoom", () => {
+      const src = (node.attrs.src as string) || "";
+      dismissImageOverlay();
+      openImageZoom(src);
+    });
+    const editBtn = makeBtn("Edit", () => {
+      dismissImageOverlay();
+      enterImageEditAt(pos, node);
+    });
+    wrap.appendChild(zoomBtn);
+    wrap.appendChild(editBtn);
+    document.body.appendChild(wrap);
+    // Position over the image's top-right corner with a small inset
+    // so the overlay sits ON the image, not floating in space.
+    const reposition = (): void => {
+      const r = imgEl.getBoundingClientRect();
+      const w = wrap.offsetWidth || 120;
+      wrap.style.top = `${r.top + window.scrollY + 8}px`;
+      wrap.style.left = `${r.right + window.scrollX - w - 8}px`;
+    };
+    reposition();
+    const onScroll = (): void => reposition();
+    const onResize = (): void => reposition();
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onResize);
+    const onDocMouseDown = (ev: MouseEvent): void => {
+      const target = ev.target as Node | null;
+      if (target && wrap.contains(target)) return;
+      dismissImageOverlay();
+    };
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        dismissImageOverlay();
+      }
+    };
+    document.addEventListener("mousedown", onDocMouseDown, true);
+    document.addEventListener("keydown", onKey, true);
+    imageOverlayDismiss = (): void => {
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onResize);
+      document.removeEventListener("mousedown", onDocMouseDown, true);
+      document.removeEventListener("keydown", onKey, true);
+      wrap.remove();
+    };
+  }
+
+  /// Fullscreen image viewer. Renders the image centered on a dark
+  /// backdrop. Click anywhere or press Escape to dismiss.
+  function openImageZoom(src: string): void {
+    if (!src) return;
+    const resolved = resolveImageSrc(src, currentPath ?? null);
+    const backdrop = document.createElement("div");
+    backdrop.className = "md-image-zoom";
+    const img = document.createElement("img");
+    img.src = resolved;
+    img.alt = "";
+    img.draggable = false;
+    backdrop.appendChild(img);
+    document.body.appendChild(backdrop);
+    const dismiss = (): void => {
+      document.removeEventListener("keydown", onKey, true);
+      backdrop.remove();
+    };
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        dismiss();
+      }
+    };
+    backdrop.addEventListener("click", () => dismiss());
+    document.addEventListener("keydown", onKey, true);
+  }
+
+  /// Edit-existing flow: swap the image atom for its `![alt](src)`
+  /// source text IN PLACE so the surrounding text on the line
+  /// keeps its layout (Obsidian-style: image renders when the
+  /// caret is off the line, source text shows when the caret is
+  /// on it). On dismiss we restore the atom from the saved
+  /// snapshot; on commit we replace the source text with a fresh
+  /// atom carrying the new attrs.
+  function enterImageEditAt(pos: number, atomNode: { attrs: Record<string, unknown>; nodeSize: number }): void {
+    if (!editor) return;
+    // Re-entry guard: while an edit is already in flight, a
+    // follow-up selection update (focus, bubble open, etc.)
+    // can land on the inserted text or trigger maybeOpen again
+    // before our state is settled. The original snapshot tells
+    // us we're already mid-edit.
+    if (editingImageOriginal !== null) return;
+    const ed = editor;
+    const src = (atomNode.attrs.src as string) ?? "";
+    const alt = (atomNode.attrs.alt as string) ?? "";
+    const insertText = `![${alt}](${src})`;
+    // Replace the atom (size 1) with a literal text node. Going
+    // through `tr.replaceWith` with a schema-built text node
+    // sidesteps tiptap-markdown's parser, which would otherwise
+    // re-recognise `![alt](src)` and rebuild the atom from the
+    // string — making the swap a no-op.
+    const tr = ed.state.tr;
+    const textNode = ed.state.schema.text(insertText);
+    tr.replaceWith(pos, pos + atomNode.nodeSize, textNode);
+    // Caret immediately before the closing `)` of the source so
+    // the bubble opens in path mode pre-populated with `src`.
+    const caretInsideSrc = pos + 2 + alt.length + 2 + src.length;
+    tr.setSelection(TextSelection.create(tr.doc, caretInsideSrc));
+
+    editingImageOriginal = { src, alt };
+    editingImageBracketStart = pos;
+    editingImageDefaultAlt = alt;
+
+    ed.view.dispatch(tr);
+    ed.commands.focus();
+    openImageBubbleForCurrentCaret();
+  }
+
   // ---- caret-driven decorations ----------------------------------------
 
   /// Strip the `data-cursor-*` attributes from any element decorated
@@ -2138,16 +2225,13 @@
     cursorDecorated = kept;
   }
 
-  /// Tag the DOM elements at / around the caret with `data-cursor-*`
-  /// attrs so the CSS rules below can reveal source-mode decorations:
-  ///   - heading hash prefix when caret is in a heading
-  ///   - markdown link form `[label](url)` for wikiLink atoms and
-  ///     plain `<a>` Link marks
-  ///   - markdown image form `![alt](src)` shown above the rendered
-  ///     image when the caret is adjacent to an image atom
-  ///
-  /// All three trigger off the same selection-update hook so a single
-  /// pass per caret move drives every visual.
+  /// Tag the `<a>` element under the caret with `data-cursor-in` so
+  /// the link-URL suffix renders via `attr(href)`. Headings and
+  /// inline marks are handled by the `liveSource` PM-decoration
+  /// extension; this function only covers the plain Link mark
+  /// because its CSS uses `attr(href)` on the live `<a>` element and
+  /// a PM-managed decoration would wrap that in a span and break
+  /// the selector.
   function updateCursorDecorations(): void {
     if (!editor || !host) return;
     clearCursorDecorations();
@@ -2161,39 +2245,9 @@
     } catch {
       return;
     }
-    const parent = fromPos.parent;
     const view = editor.view;
 
-    // 1. Heading hash prefix when the caret sits in a heading block.
-    //    `view.nodeDOM(blockStart)` returns null in some StarterKit
-    //    setups (Heading has no custom node view), so walk up from
-    //    the caret's DOM ancestor to the H1..H6 element instead.
-    if (parent.type.name === "heading") {
-      const level = Math.min(
-        6,
-        Math.max(1, (parent.attrs.level as number) || 1),
-      );
-      try {
-        const result = view.domAtPos(cursor);
-        let el: HTMLElement | null =
-          result.node instanceof HTMLElement
-            ? result.node
-            : (result.node.parentElement ?? null);
-        while (el && !/^H[1-6]$/.test(el.tagName) && el !== host) {
-          el = el.parentElement;
-        }
-        if (el && /^H[1-6]$/.test(el.tagName)) {
-          el.setAttribute("data-cursor-in", "");
-          el.setAttribute("data-cursor-prefix", "#".repeat(level));
-          cursorDecorated.push(el);
-        }
-      } catch {
-        // domAtPos can throw mid-update; the next selection event
-        // will re-run the decoration pass.
-      }
-    }
-
-    // 2. Plain `<a>` Link mark covering the caret. Marks have no
+    // Plain `<a>` Link mark covering the caret. Marks have no
     //    node DOM, so we walk up from the caret's DOM ancestor to
     //    the anchor element; CSS uses the native `href` attribute
     //    for the suffix so no extra attr-setting is needed.
@@ -2276,6 +2330,15 @@
       enterWikiEditAt(wikiEl);
       return;
     }
+    // Click on an inline image atom: open the action overlay
+    // (zoom + edit). Arrow-key entry still jumps straight to edit
+    // via `maybeOpenAtomEditAtSelection`; click is the slow path
+    // because clicks frequently land on an image as part of a
+    // resize / select gesture rather than an explicit "edit" intent.
+    // Image atom clicks are routed by the editor's mousedown
+    // handler (see editorProps.handleDOMEvents.mousedown) which
+    // fires before PM sets a NodeSelection, so the click handler
+    // here doesn't need to do anything for them.
     if (t.matches("[data-md-date]")) {
       e.preventDefault();
       if (!editor) return;
@@ -2391,6 +2454,12 @@
   :global(.md-wysiwyg h3) {
     font-family: var(--chan-font-heading3-family);
     font-size: var(--chan-font-heading3-size, 18px);
+  }
+  /* Headings anchor the fold chevron (absolute-positioned into the
+     left gutter). Without `position: relative` the chevron would
+     anchor to the editor root, missing the per-line gutter. */
+  :global(.md-wysiwyg :is(h1, h2, h3, h4, h5, h6)) {
+    position: relative;
   }
   :global(.md-wysiwyg ::selection) { background: var(--selection-bg); }
   /* Read-only mode: hide the caret entirely (the user toggled into
@@ -2905,6 +2974,135 @@
     font-weight: normal;
   }
 
+  /* `[[` / `]]` brackets surfaced by the wiki create / edit flows
+     render muted so the user's query text reads as the primary
+     content. The class is applied via Decoration.inline; only the
+     two-char bracket ranges are decorated, not the label between
+     them. */
+  :global(.md-wysiwyg .md-wiki-bracket) {
+    color: var(--text-secondary);
+    opacity: 0.5;
+  }
+
+  /* Inline-mark source markers (bold / italic / strike). The
+     `liveSource` plugin inserts these as non-editable widget
+     decorations at the mark range boundaries when the caret is
+     in the mark. Visual: muted same-color text that inherits the
+     surrounding font-weight / style so `**` looks bold next to
+     bold text, and `*` looks italic next to italic text. */
+  :global(.md-wysiwyg .md-source-marker) {
+    color: var(--text-secondary);
+    opacity: 0.45;
+    user-select: none;
+  }
+  /* While editing a strike, drop the strikethrough line so the
+     text stays readable. PM's Decoration.inline may land the class
+     either on the `<s>` element directly or on a wrapping `<span>`,
+     depending on how it merges with the mark; cover both, and use
+     !important to beat the UA style on `<s>` regardless of which
+     case we hit. Nested marks (e.g. bold inside strike) are
+     covered by the descendant selector. */
+  :global(.md-wysiwyg .md-mark-editing-strike),
+  :global(.md-wysiwyg .md-mark-editing-strike s),
+  :global(.md-wysiwyg .md-mark-editing-strike *),
+  :global(.md-wysiwyg s.md-mark-editing-strike) {
+    text-decoration: none !important;
+  }
+
+  /* Fenced code block (`CodeBlockFenced` NodeView). The wrap is
+     the styled box; the language fence rows live inside, plus a
+     small badge that surfaces the language name when the block
+     isn't being edited. Toggle: `data-cursor-in` (set by the
+     liveSource decoration when the caret enters) flips fences
+     visible / badge hidden. */
+  :global(.md-wysiwyg .md-codeblock) {
+    position: relative;
+    background: var(--bg-elev);
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-family: var(--chan-font-mono-family, monospace);
+    font-size: 0.9em;
+    line-height: 1.4;
+    margin: 0.5em 0;
+  }
+  /* Default (caret outside): hide both fence rows. */
+  :global(.md-wysiwyg .md-codeblock .md-codeblock-fence) {
+    display: none;
+  }
+  :global(.md-wysiwyg .md-codeblock[data-cursor-in] .md-codeblock-fence) {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    color: var(--text-secondary);
+    opacity: 0.6;
+    user-select: none;
+  }
+  :global(.md-wysiwyg .md-codeblock-content) {
+    background: transparent;
+    margin: 0;
+    padding: 0;
+    border: none;
+    font: inherit;
+    color: var(--text);
+  }
+  :global(.md-wysiwyg .md-codeblock-content code) {
+    background: transparent;
+    padding: 0;
+    font: inherit;
+  }
+  /* The language `<input>` styled to look like inline text inside
+     the fence row: no border, transparent background, inherits the
+     monospace font so it doesn't visually break the fence line. */
+  :global(.md-wysiwyg .md-codeblock-lang) {
+    background: transparent;
+    border: none;
+    outline: none;
+    padding: 0;
+    margin: 0;
+    color: var(--text);
+    font: inherit;
+    width: 8ch;
+  }
+  :global(.md-wysiwyg .md-codeblock-lang::placeholder) {
+    color: var(--text-secondary);
+    opacity: 0.4;
+  }
+  /* Language badge: anchored to top-right, only visible when the
+     code block isn't being edited (no `data-cursor-in`). Hidden
+     when empty (no language set) so plain code blocks don't carry
+     an empty badge. */
+  :global(.md-wysiwyg .md-codeblock-badge) {
+    position: absolute;
+    top: 6px;
+    right: 10px;
+    color: var(--text-secondary);
+    opacity: 0.55;
+    font-family: var(--chan-font-body-family, inherit);
+    font-size: 0.8em;
+    user-select: none;
+    pointer-events: none;
+  }
+  :global(.md-wysiwyg .md-codeblock-badge:empty),
+  :global(.md-wysiwyg .md-codeblock[data-cursor-in] .md-codeblock-badge) {
+    display: none;
+  }
+
+  /* Image-source markdown syntax coloring. The `![alt](src)` text
+     only appears in the doc while an image is in edit mode (atom
+     swapped for source); these rules tint the punctuation muted
+     and give the alt / src text their own subtle accent so the
+     three components read distinctly. */
+  :global(.md-wysiwyg .md-image-marker) {
+    color: var(--text-secondary);
+    opacity: 0.55;
+  }
+  :global(.md-wysiwyg .md-image-alt) {
+    color: var(--accent, #6c8cf5);
+  }
+  :global(.md-wysiwyg .md-image-src) {
+    color: var(--link, #88c0d0);
+  }
+
   /* Wiki link click flow lives in the bubble (see
      `.md-wiki-bubble-follow`); no per-pill source span. */
 
@@ -2933,24 +3131,24 @@
      heading itself the chevron stays vertically centered.
      Inline-block + reserved width keeps long-press hit area
      reachable on touch. */
-  /* Chevron sits in the left gutter (negative margin) so heading
-     text alignment matches non-folded headings. The negative
-     margin pulls it into the editor's left padding without
-     affecting layout: net offset = -1.5em + 1em width + 0.5em
-     right gap = 0, so the heading text starts where it would
-     have without a chevron. Obsidian / gdocs lay out their
-     chevrons the same way. */
+  /* Chevron sits in the left gutter, absolutely positioned so it
+     never overlaps inline content (notably the `## ` source-mode
+     prefix the liveSource extension reveals when the caret is on
+     the heading line). Heading text starts at offset 0 — the
+     chevron lives entirely in the parent's left padding. Obsidian
+     and gdocs lay out their chevrons the same way. */
   :global(.md-wysiwyg .md-fold-chevron) {
+    position: absolute;
+    left: -1.5em;
+    top: 50%;
+    transform: translateY(-50%);
     display: inline-block;
     width: 1em;
-    margin-left: -1.5em;
-    margin-right: 0.5em;
     color: var(--text-secondary);
     cursor: pointer;
     user-select: none;
     font-size: 0.7em;
-    line-height: inherit;
-    vertical-align: middle;
+    line-height: 1;
     opacity: 0.5;
     transition: opacity 0.15s ease;
     font-weight: normal;
@@ -2990,104 +3188,6 @@
   }
   :global(.md-wysiwyg .md-tag-pill:hover) {
     filter: brightness(1.1);
-  }
-
-  /* Image bubble. Anchored under the caret while the user edits
-     `![alt](src)` text in the editor. Path mode shows a result
-     list; alt mode swaps the list for an alt-text echo so the
-     user gets feedback while typing in the `[alt]` slot. The
-     footer carries the upload action and the accept hint. */
-  :global(.md-image-bubble) {
-    background: var(--bg-elev);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    box-shadow: 0 4px 12px rgba(0,0,0,.4);
-    width: 360px;
-    font-size: 13px;
-    user-select: none;
-  }
-  :global(.md-image-bubble-preview) {
-    border-bottom: 1px solid var(--border);
-    background: var(--bg);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    max-height: 180px;
-    overflow: hidden;
-  }
-  :global(.md-image-bubble-preview.is-empty) { display: none; }
-  :global(.md-image-bubble-preview img) {
-    max-width: 100%;
-    max-height: 180px;
-    object-fit: contain;
-    background: #fff;
-  }
-  :global(.md-image-bubble-list) {
-    list-style: none; margin: 0; padding: 0;
-    max-height: 200px; overflow-y: auto;
-  }
-  :global(.md-image-bubble-list.is-hidden) { display: none; }
-  :global(.md-image-bubble-list li) {
-    padding: .3rem .55rem; cursor: pointer;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 12px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  :global(.md-image-bubble-list li.active),
-  :global(.md-image-bubble-list li:hover) { background: var(--hover-bg); }
-  :global(.md-image-bubble-alt) {
-    display: flex;
-    align-items: baseline;
-    gap: .4rem;
-    padding: .55rem;
-    color: var(--text);
-    font-size: 13px;
-  }
-  :global(.md-image-bubble-alt.is-hidden) { display: none; }
-  :global(.md-image-bubble-alt-label) {
-    color: var(--text-secondary);
-    font-size: 12px;
-  }
-  :global(.md-image-bubble-alt-value) {
-    color: var(--text);
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  :global(.md-image-bubble-alt-value.is-empty) {
-    color: var(--muted);
-    font-style: italic;
-  }
-  :global(.md-image-bubble-footer) {
-    display: flex;
-    align-items: center;
-    gap: .5rem;
-    padding: .35rem .55rem;
-    border-top: 1px dashed var(--border);
-  }
-  :global(.md-image-bubble-upload) {
-    background: var(--btn-bg);
-    color: var(--text);
-    border: 1px solid var(--btn-border);
-    border-radius: 3px;
-    padding: 4px 8px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 13px;
-  }
-  :global(.md-image-bubble-upload:hover:not(:disabled)) {
-    border-color: var(--btn-hover);
-  }
-  :global(.md-image-bubble-upload:disabled) {
-    opacity: 0.6;
-    cursor: default;
-  }
-  :global(.md-image-bubble-accept) {
-    color: var(--muted);
-    font-size: 11px;
-    margin-left: auto;
   }
 
   /* Tag autocomplete bubble. Same anchored-under-caret pattern as
@@ -3158,34 +3258,230 @@
     max-width: 100%;
     height: auto;
     border-radius: 3px;
-    vertical-align: middle;
+    /* Bottom-align inline images so they sit on the same baseline
+       as surrounding text instead of pulling line height. Mirrors
+       the way most prose engines render inline figures. */
+    vertical-align: bottom;
+  }
+  /* ProseMirror-rendered images: same baseline-align so an image
+     sharing a line with text doesn't push the cap height up. */
+  :global(.md-wysiwyg .ProseMirror img) {
+    vertical-align: bottom;
   }
   :global(.md-image-wrap) {
     position: relative;
     display: inline-block;
     line-height: 0;
+    /* 5px gutter on each side so surrounding inline text in a
+       `foo ![](path) bar` line breathes around the image instead
+       of butting against its edge. */
+    margin: 0 5px;
   }
+  /* Resize grip pinned to the image's bottom-right corner. Subtle
+     white triangle with a drop-shadow so it reads against any
+     image content; visible only on hover or active resize. */
   :global(.md-image-handle) {
     position: absolute;
-    right: -4px;
-    bottom: -4px;
-    width: 12px;
-    height: 12px;
-    background: var(--link);
-    border: 2px solid var(--bg);
-    border-radius: 2px;
+    right: 0;
+    bottom: 0;
+    width: 0;
+    height: 0;
+    border-style: solid;
+    border-width: 0 0 12px 12px;
+    border-color: transparent transparent rgba(255, 255, 255, 0.95) transparent;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
     cursor: nwse-resize;
     opacity: 0;
     transition: opacity 0.15s ease;
   }
   :global(.md-image-wrap:hover .md-image-handle),
-  :global(.md-image-wrap.resizing .md-image-handle) {
+  :global(.md-image-wrap.is-resizing .md-image-handle) {
     opacity: 1;
   }
-  :global(.md-image-wrap.resizing img) {
+  :global(.md-image-wrap.is-resizing img) {
     /* Disable image-drag during resize so the user doesn't
        accidentally drag the image instead of grabbing the handle. */
     pointer-events: none;
     user-select: none;
+  }
+
+  /* Image bubble. Mirrors the wiki bubble (anchored under the
+     caret, no focus stealing) but lays out three optional rows:
+     preview, results, alt-echo. Width matches the wiki bubble so
+     the visual rhythm stays consistent across triggers. */
+  :global(.md-image-bubble) {
+    background: var(--bg-elev);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.4);
+    width: 360px;
+    font-size: 13px;
+    user-select: none;
+  }
+  /* Thumbnail preview of the active result. Fixed max height so a
+     tall image doesn't push the result list off-screen. */
+  :global(.md-image-bubble-preview) {
+    padding: .4rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+  }
+  :global(.md-image-bubble-preview.is-hidden) { display: none; }
+  :global(.md-image-bubble-preview img) {
+    max-width: 100%;
+    max-height: 120px;
+    object-fit: contain;
+    border-radius: 2px;
+  }
+  /* Result list. Same shape as the wiki / tag lists. */
+  :global(.md-image-bubble-list) {
+    list-style: none; margin: 0; padding: 0;
+    max-height: 180px; overflow-y: auto;
+  }
+  :global(.md-image-bubble-list.is-hidden) { display: none; }
+  :global(.md-image-bubble-list.is-empty) { display: none; }
+  :global(.md-image-bubble-list li) {
+    padding: .3rem .55rem; cursor: pointer;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+  :global(.md-image-bubble-list li.active),
+  :global(.md-image-bubble-list li:hover) { background: var(--hover-bg); }
+
+  /* Alt-mode echo row. Replaces the result list when the caret
+     sits inside `[alt]`. Same horizontal padding as the list rows
+     so the visual column stays stable across mode flips. */
+  :global(.md-image-bubble-alt) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: .4rem .55rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+  :global(.md-image-bubble-alt.is-hidden) { display: none; }
+  :global(.md-image-bubble-alt-label) {
+    color: var(--muted);
+    font-style: italic;
+  }
+  :global(.md-image-bubble-alt-value) {
+    color: var(--text);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  :global(.md-image-bubble-alt-value.is-empty) {
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  /* Footer: upload button (left) + accept hint (right). Flex with
+     `accept` taking the rest of the row so the two siblings stay
+     spaced. Same dashed-top border the wiki bubble uses. */
+  :global(.md-image-bubble-footer) {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: .35rem .55rem;
+    border-top: 1px dashed var(--border);
+  }
+  :global(.md-image-bubble-upload) {
+    background: var(--accent);
+    color: #fff;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.2;
+  }
+  :global(.md-image-bubble-upload:hover),
+  :global(.md-image-bubble-upload.is-active) {
+    filter: brightness(1.15);
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  :global(.md-image-bubble-upload:disabled) {
+    opacity: 0.55;
+    cursor: progress;
+  }
+  :global(.md-image-bubble-accept) {
+    color: var(--muted);
+    font-size: 11px;
+    margin-left: auto;
+  }
+  :global(.md-image-bubble-accept.is-hidden) { display: none; }
+
+  /* Error row. Surfaced when an upload fails or exceeds the size
+     cap. Sits between the alt/list region and the footer so the
+     accept hint stays in place. */
+  :global(.md-image-bubble-error) {
+    padding: .35rem .55rem;
+    border-top: 1px solid var(--border);
+    color: var(--danger, #e57373);
+    background: color-mix(in srgb, var(--danger, #e57373) 12%, transparent);
+    font-size: 12px;
+  }
+  :global(.md-image-bubble-error.is-hidden) { display: none; }
+
+  /* Image action overlay (Zoom / Edit). Floats over the clicked
+     image's top-right corner; click outside or Esc dismisses. The
+     buttons inherit the editor's foreground color so they read
+     against either a bright or a dark image background. */
+  :global(.md-image-actions) {
+    position: absolute;
+    z-index: 30000;
+    display: inline-flex;
+    gap: 2px;
+    background: rgba(20, 20, 20, 0.85);
+    color: #fff;
+    border-radius: 6px;
+    padding: 2px;
+    backdrop-filter: blur(4px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  }
+  :global(.md-image-action) {
+    background: transparent;
+    color: inherit;
+    border: 0;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    line-height: 1.2;
+  }
+  :global(.md-image-action:hover) {
+    background: rgba(255, 255, 255, 0.15);
+  }
+
+  /* Fullscreen image viewer triggered by the action overlay's
+     "Zoom" button. Click anywhere on the backdrop or press Esc to
+     dismiss. The image scales down to fit but never up; we don't
+     want to upscale a small drawing into a pixelated mess. */
+  :global(.md-image-zoom) {
+    position: fixed;
+    inset: 0;
+    z-index: 40000;
+    background: rgba(0, 0, 0, 0.92);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: zoom-out;
+  }
+  :global(.md-image-zoom img) {
+    max-width: 92vw;
+    max-height: 92vh;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   }
 </style>

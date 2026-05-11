@@ -1,87 +1,131 @@
-// Image insertion / edit bubble.
+// `![alt](src)` image bubble.
 //
-// Mirrors the wiki bubble's contract: non-focus-stealing popover
-// anchored under the caret, the host owns the keyboard, and the
-// bubble emits picks via callbacks. Two modes:
+// Mirrors the wiki bubble's non-focus-stealing popover pattern. Two
+// modes track the caret position inside the `![alt](src)` source:
 //
-//   - "path": typing inside `(path)` filters drive images live;
-//     ArrowUp/Down browses the result list. The upload button
-//     uploads a local file and resolves with the new drive path.
-//   - "alt": caret sits inside `[alt]`. The bubble surfaces the
-//     current alt text in the place results would otherwise be,
-//     so the user gets feedback while editing.
+//   - "path": caret inside `(src)`. Shows a filterable list of the
+//     drive's images plus a thumbnail preview of the highlighted
+//     entry. Enter / click commits the chosen path.
 //
-// Mode is set by the host (Wysiwyg) based on caret position
-// inside the source markdown the editor injects when entering
-// edit-existing or `![`-typing mode.
+//   - "alt": caret inside `[alt]`. Shows a single "alt: <typed text>"
+//     echo row in place of the list so the user has visible feedback
+//     while typing the alt attribute.
+//
+// Both modes share a footer carrying an upload button (left) and a
+// keyboard hint (right). An error row above the footer surfaces
+// upload failures (size cap, server error) without dismissing the
+// bubble.
+//
+// The bubble doesn't take focus: the host (Wysiwyg.svelte) drives
+// the keyboard through `BubbleHandle.handleKey`. The user's caret
+// stays inside `![alt](src)` and their typing IS the search query.
+// Enter on the path mode commits the highlighted result; Enter on
+// the alt mode is forwarded to `opts.onCommit` so the host can fall
+// through to the path's current src.
 
 import { api, withTokenQuery } from "../../api/client";
-import type { TreeEntry } from "../../api/types";
+import { openBubbleShell, type BubbleHandle } from "../bubble";
 import { isImagePath } from "./image";
-import { positionPopover, watchViewport } from "./popover";
+
+/// Server-side size cap. Mirrors the upload limit chan-server applies
+/// to `/api/attachments` so the pre-flight check fails fast instead
+/// of waiting for a 413 round-trip. Keep in sync with the server.
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+export interface ImageBubbleOpts {
+  /// Anchor element. Pass the caret-anchor shim so the wrap sits
+  /// under the cursor.
+  host: HTMLElement;
+  /// Drive-relative directory to upload new images into. Null falls
+  /// back to the server's configured `attachments_dir`. The host
+  /// typically passes the editing file's directory so uploads land
+  /// next to the note.
+  uploadDir?: string | null;
+  /// Fires when the user clicks a result row in the list. The host
+  /// rewrites the `(src)` portion of the markdown to the picked
+  /// path; the alt and the rest of the range stay intact.
+  onClickPick: (src: string) => void;
+  /// Fires after a successful upload, with the drive-relative path
+  /// the server saved. Same insertion contract as `onClickPick`.
+  onUpload: (src: string) => void;
+  /// Fires on Enter. The host runs its accept path (replace the
+  /// `![alt](src)` text with an image atom).
+  onCommit?: () => void;
+  /// Fires on Escape. The host runs its dismiss path (which may
+  /// restore the original atom if the bubble was opened in
+  /// edit-existing mode).
+  onDismiss?: () => void;
+}
 
 export type ImageBubbleMode = "path" | "alt";
 
-export interface ImageBubbleOpts {
-  host: HTMLElement;
-  /// Drive-relative directory uploads target (passed to
-  /// `api.uploadAttachment`). When null, the server uses its
-  /// configured `attachments_dir`.
-  uploadDir?: string | null;
-  /// Fires when the user clicks a list item. The host commits
-  /// the same way it would for an Enter on the active row.
-  onClickPick: (src: string) => void;
-  /// Fires when an upload completes successfully. The host
-  /// inserts the new drive path the same way as a list pick.
-  onUpload: (src: string) => void;
-}
-
-export interface ImageBubbleHandle {
-  /// Switch between "path" (search results visible) and "alt"
-  /// (alt-text echo visible). No-op when already in that mode.
+export interface ImageBubble extends BubbleHandle {
+  /// Toggle between path-search and alt-text-echo modes. Called by
+  /// the host's sync hook as the caret crosses the `[alt]` / `(src)`
+  /// boundary.
   setMode(mode: ImageBubbleMode): void;
-  /// Update the path-search query and re-render the list. Safe
-  /// to call before the image catalog has loaded; the filter
-  /// re-applies once it lands.
+  /// Update the substring filter against the cached image catalog.
+  /// Empty query shows the first 8 entries.
   setPathQuery(q: string): void;
-  /// Update the alt-text echo. Empty values render as a muted
-  /// placeholder so the user sees the slot exists.
+  /// Update the alt-mode echo row. Empty value renders a muted hint
+  /// telling the user Enter will fall back to the filename.
   setAlt(text: string): void;
-  /// Move the active result in path mode. No-op in alt mode or
-  /// when the result list is empty.
+  /// Move the active result selection by `delta` (+1 / -1) within
+  /// the rendered results.
   moveActive(delta: number): void;
-  /// Resolve the highlighted result, or null when path mode has
-  /// no results. The host treats null as "fall back to whatever
-  /// the user typed in the editor".
-  pickActive(): string | null;
+  /// Resolve the currently-highlighted path, or null if no results.
+  /// The caller commits by replacing the `(src)` range with the
+  /// returned string.
+  accept(): string | null;
+  /// True while a file is in flight to /api/attachments. The host's
+  /// sync hook checks this so a selection-update fired by the OS
+  /// file picker returning focus doesn't dismiss the bubble before
+  /// the upload completes (which would delete the `![]()` markup
+  /// the upload was supposed to fill in).
+  isUploading(): boolean;
   /// Tear down DOM + listeners. Idempotent.
   dismiss(): void;
 }
 
-export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
-  const wrap = document.createElement("div");
-  wrap.className = "md-image-bubble";
-  wrap.style.position = "absolute";
-  wrap.style.zIndex = "30000";
+interface CatalogEntry {
+  path: string;
+}
 
-  // Live preview: thumbnail of the active list entry. Hidden in
-  // alt mode and when there are no results. The image hits
-  // `/api/files/<path>` with the auth token in a query so it
-  // renders inline like the editor's own image atom does.
+/// URI-encode a drive-relative path one segment at a time, keeping
+/// the `/` separators intact. Same shape `resolveImageSrc` uses so
+/// the preview hits the same `/api/files/...` URL the editor would
+/// load if the atom were already inserted.
+function encodePath(path: string): string {
+  return path
+    .split("/")
+    .map((seg) => encodeURIComponent(seg))
+    .join("/");
+}
+
+export function openImageBubble(opts: ImageBubbleOpts): ImageBubble {
+  const shell = openBubbleShell({
+    host: opts.host,
+    className: "md-image-bubble",
+  });
+  const { wrap } = shell;
+
+  // Preview slot: img inside a wrap so we can hide the whole block
+  // with one toggle. Shown in path mode when there's an active
+  // result; hidden in alt mode and when results are empty.
   const preview = document.createElement("div");
-  preview.className = "md-image-bubble-preview is-empty";
+  preview.className = "md-image-bubble-preview is-hidden";
   const previewImg = document.createElement("img");
-  previewImg.draggable = false;
   preview.appendChild(previewImg);
   wrap.appendChild(preview);
 
+  // Result list. Each row is the drive-relative path; mousedown
+  // commits via `onClickPick` (preventDefault keeps editor focus).
   const list = document.createElement("ul");
   list.className = "md-image-bubble-list";
   wrap.appendChild(list);
 
-  // Alt-text echo row, visible only in "alt" mode. Replaces the
-  // result list in the same vertical slot so the bubble doesn't
-  // grow when switching modes.
+  // Alt-mode echo row. Hidden in path mode. Two children: a small
+  // "alt:" label and a live value span.
   const altRow = document.createElement("div");
   altRow.className = "md-image-bubble-alt is-hidden";
   const altLabel = document.createElement("span");
@@ -93,183 +137,329 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
   altRow.appendChild(altValue);
   wrap.appendChild(altRow);
 
+  // Error row. Hidden by default; surfaced when an upload fails.
+  // Sits above the footer so it doesn't move the keyboard hint.
+  const error = document.createElement("div");
+  error.className = "md-image-bubble-error is-hidden";
+  wrap.appendChild(error);
+
+  // Footer: upload button (left) + accept hint (right). The hidden
+  // <input type="file"> lives on document.body so closing the
+  // bubble doesn't tear it down mid-dialog.
   const footer = document.createElement("div");
   footer.className = "md-image-bubble-footer";
   const uploadBtn = document.createElement("button");
   uploadBtn.type = "button";
   uploadBtn.className = "md-image-bubble-upload";
-  uploadBtn.textContent = "Upload image…";
+  uploadBtn.textContent = "Upload…";
+  // mousedown preventDefault keeps the editor's selection alive
+  // through the click; the OS file picker would otherwise steal
+  // focus and ProseMirror would collapse the selection.
+  uploadBtn.addEventListener("mousedown", (ev) => {
+    ev.preventDefault();
+  });
+  const accept = document.createElement("span");
+  accept.className = "md-image-bubble-accept";
+  accept.textContent = "⏎  to accept";
   footer.appendChild(uploadBtn);
-  const acceptHint = document.createElement("span");
-  acceptHint.className = "md-image-bubble-accept";
-  acceptHint.textContent = "⏎ to accept";
-  footer.appendChild(acceptHint);
+  footer.appendChild(accept);
   wrap.appendChild(footer);
 
-  document.body.appendChild(wrap);
-  positionPopover(opts.host, wrap);
-  const stopWatch = watchViewport(opts.host, wrap);
-
-  // Hidden file input. Lives on document.body for the same iOS-
-  // photo-sheet reason `showImagePicker` documents.
+  // Hidden file input. Re-used across uploads; reset before each
+  // open so a re-pick of the same file still fires `change`.
   const fileInput = document.createElement("input");
   fileInput.type = "file";
-  fileInput.accept = ".png,.jpg,.jpeg,.gif,.webp,.svg";
+  fileInput.accept = "image/*";
   fileInput.style.display = "none";
   document.body.appendChild(fileInput);
 
-  let alive = true;
-  let allImages: string[] = [];
-  let imagesLoaded = false;
-  let entries: string[] = [];
-  let active = 0;
   let mode: ImageBubbleMode = "path";
-  let currentQuery = "";
+  let catalog: CatalogEntry[] = [];
+  let catalogLoaded = false;
+  let entries: CatalogEntry[] = [];
+  let active = 0;
+  let lastQuery = "";
+  let alive = true;
+  /// Upload-in-flight flag. Read by the host's syncImageBubble so a
+  /// selection update fired by the OS file picker returning focus
+  /// can't dismiss the bubble and delete the `![]()` markup before
+  /// the response lands.
+  let uploading = false;
+  /// True when keyboard focus is parked on the upload button
+  /// (ArrowDown past the last result lands here). The button gets
+  /// an `is-active` class for visual feedback; Enter triggers the
+  /// file picker instead of committing the highlighted result.
+  let uploadFocused = false;
 
-  // Upload wiring. preventDefault on mousedown keeps the editor
-  // selection intact so the host's commit transaction lands on
-  // the same spot the user was editing.
-  uploadBtn.addEventListener("mousedown", (e) => e.preventDefault());
-  uploadBtn.addEventListener("click", () => {
-    fileInput.click();
-  });
-  fileInput.addEventListener("change", async () => {
-    const f = fileInput.files?.[0];
-    if (!f) return;
-    uploadBtn.disabled = true;
-    const previousLabel = uploadBtn.textContent;
-    uploadBtn.textContent = "uploading…";
-    try {
-      const { path } = await api.uploadAttachment(f, opts.uploadDir ?? null);
-      if (!alive) return;
-      opts.onUpload(path);
-    } catch {
-      // Reset the button so the user can retry. The host stays
-      // open on failure (no commit happens).
-      uploadBtn.disabled = false;
-      uploadBtn.textContent = previousLabel ?? "Upload image…";
+  const renderUploadFocus = (): void => {
+    uploadBtn.classList.toggle("is-active", uploadFocused);
+  };
+
+  const setError = (msg: string | null): void => {
+    if (!msg) {
+      error.classList.add("is-hidden");
+      error.textContent = "";
+    } else {
+      error.classList.remove("is-hidden");
+      error.textContent = msg;
     }
-  });
+    shell.reposition();
+  };
 
   const renderPreview = (): void => {
-    if (mode !== "path") {
-      preview.classList.add("is-empty");
+    if (mode !== "path" || entries.length === 0) {
+      preview.classList.add("is-hidden");
       previewImg.removeAttribute("src");
       return;
     }
-    const activePath = entries[active];
-    if (!activePath) {
-      preview.classList.add("is-empty");
-      previewImg.removeAttribute("src");
+    const entry = entries[active] ?? entries[0];
+    if (!entry) {
+      preview.classList.add("is-hidden");
       return;
     }
-    preview.classList.remove("is-empty");
-    // Drive-rooted paths only here (the catalog filters out non-
-    // drive entries earlier); encode each segment and append the
-    // auth token so `<img>` can authenticate via query string.
-    const encoded = activePath
-      .split("/")
-      .map(encodeURIComponent)
-      .join("/");
-    previewImg.src = withTokenQuery(`/api/files/${encoded}`);
+    const url = withTokenQuery(`/api/files/${encodePath(entry.path)}`);
+    previewImg.src = url;
+    preview.classList.remove("is-hidden");
   };
 
   const renderList = (): void => {
     list.innerHTML = "";
-    entries.forEach((p, i) => {
+    if (mode !== "path") {
+      list.classList.add("is-hidden");
+      return;
+    }
+    list.classList.remove("is-hidden");
+    if (entries.length === 0) {
+      list.classList.add("is-empty");
+      accept.classList.add("is-hidden");
+      shell.reposition();
+      return;
+    }
+    list.classList.remove("is-empty");
+    accept.classList.remove("is-hidden");
+    entries.forEach((entry, i) => {
       const li = document.createElement("li");
-      li.textContent = p;
+      li.textContent = entry.path;
       if (i === active) li.classList.add("active");
       li.addEventListener("mousedown", (ev) => {
         ev.preventDefault();
-        opts.onClickPick(p);
+        active = i;
+        opts.onClickPick(entry.path);
       });
       list.appendChild(li);
     });
-    renderPreview();
-    if (wrap.isConnected) positionPopover(opts.host, wrap);
+    shell.reposition();
   };
 
-  const applyFilter = (q: string): void => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) {
-      entries = allImages.slice(0, 8);
-    } else {
-      entries = allImages
-        .filter((p) => p.toLowerCase().includes(needle))
-        .slice(0, 8);
+  const renderAlt = (value: string): void => {
+    if (mode !== "alt") {
+      altRow.classList.add("is-hidden");
+      return;
     }
-    active = 0;
+    altRow.classList.remove("is-hidden");
+    if (value.trim().length === 0) {
+      altValue.classList.add("is-empty");
+      altValue.textContent = "(empty — Enter to use filename)";
+    } else {
+      altValue.classList.remove("is-empty");
+      altValue.textContent = value;
+    }
+    shell.reposition();
+  };
+
+  const renderAll = (): void => {
     renderList();
+    renderPreview();
+    if (mode === "path") {
+      altRow.classList.add("is-hidden");
+    }
+    shell.reposition();
   };
 
-  const ensureLoaded = (): void => {
-    if (imagesLoaded) return;
+  const filterCatalog = (q: string): CatalogEntry[] => {
+    if (!catalogLoaded) return [];
+    const trimmed = q.trim();
+    if (!trimmed) return catalog.slice(0, 8);
+    const lc = trimmed.toLowerCase();
+    return catalog.filter((e) => e.path.toLowerCase().includes(lc)).slice(0, 8);
+  };
+
+  const refreshPathResults = (): void => {
+    entries = filterCatalog(lastQuery);
+    active = 0;
+    renderAll();
+  };
+
+  // Load the catalog once on open. The list is small enough (a
+  // drive's image set) that filtering in memory beats per-keystroke
+  // round-trips, and it sidesteps the catalog endpoint's lack of
+  // a media-type filter.
+  void (async () => {
+    try {
+      const tree = await api.list();
+      if (!alive) return;
+      catalog = tree
+        .filter((e) => !e.is_dir && isImagePath(e.path))
+        .map((e) => ({ path: e.path }))
+        .sort((a, b) => a.path.localeCompare(b.path));
+      catalogLoaded = true;
+      if (mode === "path") refreshPathResults();
+    } catch {
+      if (!alive) return;
+      catalog = [];
+      catalogLoaded = true;
+      if (mode === "path") refreshPathResults();
+    }
+  })();
+
+  // Wire upload. The click is dispatched programmatically from the
+  // button's click event so the mousedown preventDefault above keeps
+  // the editor selection alive while the OS dialog opens.
+  uploadBtn.addEventListener("click", () => {
+    setError(null);
+    fileInput.value = "";
+    fileInput.click();
+  });
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    if (file.size > MAX_UPLOAD_BYTES) {
+      const mb = (file.size / (1024 * 1024)).toFixed(1);
+      setError(`file too large: ${mb} MB (max 50 MB)`);
+      fileInput.value = "";
+      return;
+    }
+    uploading = true;
+    uploadBtn.disabled = true;
+    const prevLabel = uploadBtn.textContent;
+    uploadBtn.textContent = "uploading…";
     void api
-      .list()
-      .then((tree: TreeEntry[]) => {
+      .uploadAttachment(file, opts.uploadDir ?? null)
+      .then((res) => {
         if (!alive) return;
-        allImages = tree
-          .filter((e) => !e.is_dir && isImagePath(e.path))
-          .map((e) => e.path);
-        imagesLoaded = true;
-        applyFilter(currentQuery);
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = prevLabel ?? "Upload…";
+        fileInput.value = "";
+        // Hand the path off to the host BEFORE clearing the
+        // upload-in-flight flag. The host's onUpload synchronously
+        // dispatches replaceImagePathInSource + acceptImageBubble;
+        // those trigger onUpdate cycles whose syncImageBubble
+        // reads `isUploading()`. Without the guard, the caret
+        // moving past the `(...)` after the text replace would
+        // see mode=outside and call dismiss → restore → delete
+        // the markup we just rewrote. Clearing the flag after
+        // onUpload returns keeps both transactions guarded.
+        opts.onUpload(res.path);
+        uploading = false;
       })
-      .catch(() => {
+      .catch((e: unknown) => {
         if (!alive) return;
-        allImages = [];
-        imagesLoaded = true;
-        applyFilter(currentQuery);
+        uploading = false;
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = prevLabel ?? "Upload…";
+        fileInput.value = "";
+        const msg = e instanceof Error ? e.message : String(e);
+        setError(msg);
       });
-  };
+  });
 
-  ensureLoaded();
-  // First paint with whatever cache we have (likely empty until
-  // the fetch lands).
-  applyFilter("");
+  // Initial paint
+  renderAll();
 
   return {
-    setMode(m): void {
-      if (mode === m) return;
-      mode = m;
-      if (mode === "path") {
-        list.classList.remove("is-hidden");
-        altRow.classList.add("is-hidden");
-      } else {
-        list.classList.add("is-hidden");
-        altRow.classList.remove("is-hidden");
+    setMode(next: ImageBubbleMode): void {
+      if (!alive) return;
+      if (mode === next) return;
+      mode = next;
+      uploadFocused = false;
+      renderUploadFocus();
+      renderAll();
+    },
+    setPathQuery(q: string): void {
+      if (!alive) return;
+      lastQuery = q;
+      if (mode !== "path") return;
+      uploadFocused = false;
+      renderUploadFocus();
+      refreshPathResults();
+    },
+    setAlt(text: string): void {
+      if (!alive) return;
+      if (mode !== "alt") return;
+      renderAlt(text);
+    },
+    moveActive(delta: number): void {
+      if (!alive) return;
+      if (mode !== "path") return;
+      // ArrowDown past the last result (or with no results) parks
+      // focus on the upload button so the user can reach it without
+      // the mouse. ArrowUp lifts focus back into the list.
+      if (uploadFocused) {
+        if (delta < 0) {
+          uploadFocused = false;
+          if (entries.length > 0) active = entries.length - 1;
+          renderUploadFocus();
+          renderList();
+          renderPreview();
+        }
+        return;
       }
-      renderPreview();
-      if (wrap.isConnected) positionPopover(opts.host, wrap);
-    },
-    setPathQuery(q): void {
-      currentQuery = q;
-      if (imagesLoaded) applyFilter(q);
-    },
-    setAlt(text): void {
-      if (text) {
-        altValue.textContent = text;
-        altValue.classList.remove("is-empty");
-      } else {
-        altValue.textContent = "(empty — Enter to use filename)";
-        altValue.classList.add("is-empty");
+      if (entries.length === 0) {
+        if (delta > 0) {
+          uploadFocused = true;
+          renderUploadFocus();
+        }
+        return;
       }
-    },
-    moveActive(delta): void {
-      if (!alive || mode !== "path" || entries.length === 0) return;
+      if (delta > 0 && active === entries.length - 1) {
+        uploadFocused = true;
+        renderUploadFocus();
+        return;
+      }
       active = Math.max(0, Math.min(entries.length - 1, active + delta));
       renderList();
+      renderPreview();
     },
-    pickActive(): string | null {
-      if (mode !== "path" || entries.length === 0) return null;
-      return entries[active] ?? null;
+    accept(): string | null {
+      if (!alive) return null;
+      if (mode !== "path") return null;
+      if (entries.length === 0) return null;
+      const entry = entries[active] ?? entries[0];
+      return entry ? entry.path : null;
+    },
+    isUploading(): boolean {
+      return uploading;
     },
     dismiss(): void {
       if (!alive) return;
       alive = false;
-      stopWatch();
-      wrap.remove();
       fileInput.remove();
+      shell.dismiss();
+    },
+    handleKey(event: KeyboardEvent): boolean {
+      if (!alive) return false;
+      switch (event.key) {
+        case "Enter":
+          if (uploadFocused) {
+            // Trigger the file picker rather than commit. The user
+            // navigated to the upload slot; Enter there means "open
+            // the upload dialog".
+            uploadBtn.click();
+            return true;
+          }
+          opts.onCommit?.();
+          return true;
+        case "Escape":
+          opts.onDismiss?.();
+          return true;
+        case "ArrowDown":
+          this.moveActive(1);
+          return true;
+        case "ArrowUp":
+          this.moveActive(-1);
+          return true;
+      }
+      return false;
     },
   };
 }
