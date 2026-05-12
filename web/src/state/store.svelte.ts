@@ -1623,6 +1623,15 @@ type PathPromptState = {
   /// "overwrites" check ignores it (renaming `a` → `a` is a no-op,
   /// not an overwrite).
   sourcePath: string | null;
+  /// Optional caller-supplied validator run against the effective
+  /// (post-extension-resolution) path. Returns a human-readable
+  /// reason when the path should be rejected, or null when it's
+  /// fine. The modal surfaces the reason in the red status row and
+  /// disables Submit, so the user fixes the input in-place instead
+  /// of bouncing through a status-bar error after the dialog
+  /// closes. Used today by createFile to enforce the .md/.txt
+  /// editable-text gate up front.
+  validate: ((effectivePath: string) => string | null) | null;
   resolve: ((value: string | null) => void) | null;
 };
 
@@ -1633,6 +1642,7 @@ export const pathPromptState = $state<PathPromptState>({
   kind: "file",
   mode: "create",
   sourcePath: null,
+  validate: null,
   resolve: null,
 });
 
@@ -1642,6 +1652,7 @@ export function uiPathPrompt(opts: {
   kind: PathPromptKind;
   mode: PathPromptMode;
   sourcePath?: string | null;
+  validate?: (effectivePath: string) => string | null;
 }): Promise<string | null> {
   return new Promise((resolve) => {
     pathPromptState.resolve?.(null);
@@ -1650,6 +1661,7 @@ export function uiPathPrompt(opts: {
     pathPromptState.kind = opts.kind;
     pathPromptState.mode = opts.mode;
     pathPromptState.sourcePath = opts.sourcePath ?? null;
+    pathPromptState.validate = opts.validate ?? null;
     pathPromptState.resolve = resolve;
     pathPromptState.open = true;
   });
@@ -1658,6 +1670,7 @@ export function uiPathPrompt(opts: {
 export function resolvePathPrompt(value: string | null): void {
   const r = pathPromptState.resolve;
   pathPromptState.resolve = null;
+  pathPromptState.validate = null;
   pathPromptState.open = false;
   r?.(value);
 }
@@ -1768,19 +1781,22 @@ export const fileOps = {
       defaultValue,
       kind: "file",
       mode: "create",
+      // Enforce the editable-text gate inline. The modal calls this
+      // against the effective path (post `.md` auto-append) so a
+      // user who types `foo.foo` sees the rejection in the dialog
+      // and can correct it, instead of submitting and getting a
+      // status-bar error after the prompt closes.
+      validate: (path) =>
+        isEditableText(path)
+          ? null
+          : `'${path}' is not an editable text file (only .md and .txt)`,
     });
     if (!name) return;
-    // Default to .md when the user didn't type one. "No extension"
-    // means the basename has no `.` past position 0 (hidden files
-    // like `.gitignore` still get .md tacked on, which is the
-    // friendly outcome for a notes app: the user typed a name, not
-    // a hidden file). Existing extensions are preserved; non-text
-    // ones still hit the editable-text gate below and get rejected.
+    // The modal already validated against `isEditableText`, but
+    // appendDefaultMd is idempotent and the cost is trivial; keep it
+    // here as a defensive backstop in case any caller bypasses the
+    // modal validator in the future.
     const path = appendDefaultMd(name);
-    if (!isEditableText(path)) {
-      ui.status = `'${path}' is not an editable text file (only .md and .txt)`;
-      return;
-    }
     try {
       await api.create(path, false, "");
       await refreshTree();

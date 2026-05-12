@@ -21,6 +21,7 @@
     browserSelection,
     closeOverlay,
     drive,
+    fileOps,
     graphOverlay,
     openAssistant,
     openBrowser,
@@ -325,6 +326,15 @@
       if (m) {
         e.preventDefault();
         selectTabAtIndexInActivePane(Number(m[1]) - 1);
+        return;
+      }
+      // Ctrl+Alt+N: open the same "new file" prompt the file
+      // browser menu uses. `fileOps.createFile` runs the path
+      // dialog, creates the file, and opens it in the active pane.
+      // e.code so Option mangling on macOS doesn't bury the chord.
+      if (e.code === "KeyN") {
+        e.preventDefault();
+        void fileOps.createFile("");
       }
     }
   }

@@ -85,7 +85,17 @@
     const rawCheck = validatePath(trimmed);
     if (!rawCheck.ok) return rawCheck;
     if (effectiveValue && effectiveValue !== trimmed) {
-      return validatePath(effectiveValue);
+      const effCheck = validatePath(effectiveValue);
+      if (!effCheck.ok) return effCheck;
+    }
+    // Caller-supplied validator (e.g. "must be editable text") runs
+    // last against the effective path so the user sees a precise
+    // reason inline instead of submitting and getting an error
+    // toast after the dialog closes.
+    const v = pathPromptState.validate;
+    if (v && effectiveValue) {
+      const reason = v(effectiveValue);
+      if (reason) return { ok: false as const, reason };
     }
     return { ok: true as const };
   });
