@@ -17,6 +17,7 @@
     assistantOverlay,
     bootstrap,
     browserOverlay,
+    browserSelection,
     drive,
     graphOverlay,
     openAssistant,
@@ -87,20 +88,33 @@
     }
   });
 
-  // Mirror overlay open-state + per-overlay knobs into the session
-  // payload so close-and-quit restores everything on the next
-  // launch. Same debounce mechanism as the layout effect; the
-  // helpers in store.svelte.ts already coalesce.
+  // Mirror overlay open-state + per-overlay knobs into the URL hash
+  // (for copy-paste portability) AND the session payload (for
+  // close-and-quit restore). The hash captures every visible
+  // surface so another browser opening the same URL lands on the
+  // identical screen; the session also stores defaults for next
+  // launch. Both helpers debounce internally.
   $effect(() => {
     if (!bootstrapped) return;
     void settingsOverlay.open;
     void searchPanel.open;
+    void searchPanel.query;
+    void searchPanel.inspectorOpen;
     void assistantOverlay.open;
     void assistantOverlay.contextId;
+    void assistantOverlay.prompt;
     void browserOverlay.open;
+    void browserOverlay.inspectorOpen;
+    void browserSelection.path;
     void graphOverlay.open;
     void graphOverlay.scopeId;
     void graphOverlay.depth;
+    void graphOverlay.filters.link;
+    void graphOverlay.filters.tag;
+    void graphOverlay.filters.mention;
+    void graphOverlay.filters.img;
+    void graphOverlay.inspectorOpen;
+    persistLayoutToHash();
     scheduleSessionSave();
   });
 
@@ -140,12 +154,19 @@
     installIdleTracker();
     await bootstrap();
     // First-launch experience: if the URL hash didn't restore any
-    // tabs, the pane stays empty and the file browser overlay
-    // auto-opens so the user has somewhere to start.
+    // tabs AND no overlay is already up (the hash may have asked
+    // for assistant / graph / search on a tabless drive), pop the
+    // file browser so the user has somewhere to start.
     const hasTabs = Object.values(layout.nodes).some(
       (n) => n.kind === "leaf" && n.tabs.length > 0,
     );
-    if (!hasTabs) openBrowser();
+    const anyOverlayOpen =
+      browserOverlay.open ||
+      searchPanel.open ||
+      assistantOverlay.open ||
+      graphOverlay.open ||
+      settingsOverlay.open;
+    if (!hasTabs && !anyOverlayOpen) openBrowser();
     bootstrapped = true;
     // Visibility-change resume hook. Browsers throttle / suspend
     // backgrounded tabs and the WebSocket reconnect can stretch

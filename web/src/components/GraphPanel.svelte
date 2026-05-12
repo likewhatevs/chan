@@ -44,9 +44,8 @@
   cytoscape.use(fcose);
   cytoscape.use(d3Force);
 
-  // Visibility of the details aside lives on the overlay; per-window
-  // session, not persisted to disk. Defaults closed.
-  let panelOpen = $state(false);
+  // Visibility of the details aside lives on `graphOverlay.inspectorOpen`
+  // (module state) so it round-trips through the URL hash.
 
   const visible = $derived(graphOverlay.open);
 
@@ -121,12 +120,10 @@
   let loading = $state(true);
   let error: string | null = $state(null);
 
-  let show = $state<Record<FilterKind, boolean>>({
-    link: true,
-    tag: true,
-    mention: true,
-    img: true,
-  });
+  /// Chip toggles live on `graphOverlay.filters` (module state) so
+  /// they round-trip through the URL hash. Local proxy aliases keep
+  /// the existing read sites compact.
+  const show = graphOverlay.filters;
 
   // Currently inspected node, surfaced in the side details panel.
   // Tap a node to set this; tap empty space to clear it. Nodes never
@@ -875,7 +872,7 @@
     cy.on("tap", "node", (ev: EventObject) => {
       const id = ev.target.id() as string;
       selectedId = id;
-      panelOpen = true;
+      graphOverlay.inspectorOpen = true;
     });
     cy.on("tap", (ev: EventObject) => {
       if (ev.target === cy) selectedId = null;
@@ -1149,7 +1146,7 @@
       const pending = graphOverlay.pendingSelectId;
       if (pending && nodes.some((n) => n.id === pending)) {
         selectedId = pending;
-        panelOpen = true;
+        graphOverlay.inspectorOpen = true;
       }
       graphOverlay.pendingSelectId = null;
     } catch (e) {
@@ -1270,9 +1267,9 @@
       <button class="reload" onclick={() => void load()} title="Reload graph">↻</button>
       <button
         class="reload"
-        class:on={panelOpen}
-        onclick={() => (panelOpen = !panelOpen)}
-        title={panelOpen ? "Hide details panel" : "Show details panel"}
+        class:on={graphOverlay.inspectorOpen}
+        onclick={() => (graphOverlay.inspectorOpen = !graphOverlay.inspectorOpen)}
+        title={graphOverlay.inspectorOpen ? "Hide details panel" : "Show details panel"}
       >◫</button>
     </span>
   </div>
@@ -1293,7 +1290,7 @@
     ></div>
   </div>
 
-  {#if panelOpen}
+  {#if graphOverlay.inspectorOpen}
   <ResizeHandle
     bind:width={paneWidths.graph}
     onChange={() => persistPaneWidths()}

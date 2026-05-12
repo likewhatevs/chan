@@ -267,6 +267,10 @@ export async function bootstrap(): Promise<void> {
           }
         }
       }
+      // Per-overlay state from the hash lands on top of any
+      // session-restored knobs so a shared URL always wins. Skipped
+      // in fresh windows so the New-Window menu starts truly clean.
+      if (!fresh) applyOverlaysFromHash();
     } catch (e) {
       ui.status = `restore failed: ${(e as Error).message}`;
     }
@@ -313,9 +317,23 @@ export function scheduleDriveRefresh(): void {
 }
 
 // ---- URL hash bridge for layout + UI persistence ------------------------
+//
+// Every visible surface round-trips through the URL hash so a
+// copy-paste of the address bar reproduces the same screen on
+// another browser: pane / tab tree under `s`, plus a per-overlay
+// key (`files`, `search`, `graph`, `assist`, `settings`). Presence
+// of an overlay key = that overlay is open; its value carries the
+// scoped state (selected entry, query, scope+depth+filters,
+// assistant context). Settings has no per-overlay state so its
+// value is just `1`.
 
 const HASH_LAYOUT = "s";
 const HASH_SIDEBAR = "c"; // "1" if collapsed, absent if expanded
+const HASH_BROWSER = "files";
+const HASH_SEARCH = "search";
+const HASH_GRAPH = "graph";
+const HASH_ASSIST = "assist";
+const HASH_SETTINGS = "settings";
 
 function hashParams(): URLSearchParams {
   const h = window.location.hash;
@@ -348,10 +366,100 @@ function readLayoutHash(): ReturnType<typeof serializeLayout> {
   }
 }
 
-/// Write the current layout to `location.hash` via
+/// Encode the graph filter chips as a 4-char string of `0`/`1`,
+/// order: link, tag, mention, img. All-on (the default) returns
+/// the empty string so a fresh graph open doesn't bloat the URL.
+function encodeGraphFilters(f: GraphFilters): string {
+  if (f.link && f.tag && f.mention && f.img) return "";
+  const bit = (v: boolean) => (v ? "1" : "0");
+  return `${bit(f.link)}${bit(f.tag)}${bit(f.mention)}${bit(f.img)}`;
+}
+
+function decodeGraphFilters(s: string): GraphFilters {
+  // Empty / missing string = defaults (all on).
+  if (!s) return { ...DEFAULT_GRAPH_FILTERS };
+  const ch = (i: number) => (s[i] === "0" ? false : true);
+  return { link: ch(0), tag: ch(1), mention: ch(2), img: ch(3) };
+}
+
+/// Split `<flag>:<rest>` where flag is a single `0`/`1` for an
+/// inspector-open bit. Returns `[bit, rest]`; if no leading flag
+/// is present the bit comes back as null and the original string
+/// is returned as the rest (legacy hash format).
+function splitInspectorBit(raw: string): [boolean | null, string] {
+  if (raw.length >= 2 && raw[1] === ":" && (raw[0] === "0" || raw[0] === "1")) {
+    return [raw[0] === "1", raw.slice(2)];
+  }
+  return [null, raw];
+}
+
+/// Apply overlay state encoded in `location.hash`. Called from
+/// bootstrap after the layout (and session payload, where
+/// applicable) has been restored, so the per-overlay knobs land
+/// on top of any session-persisted defaults. Each key is optional;
+/// missing means "overlay stays closed".
+function applyOverlaysFromHash(): void {
+  const params = hashParams();
+  if (params.has(HASH_BROWSER)) {
+    // Encoding: `<inspectorBit>:<path>`. Both fields optional.
+    const [ins, path] = splitInspectorBit(params.get(HASH_BROWSER) ?? "");
+    if (ins !== null) browserOverlay.inspectorOpen = ins;
+    if (path) revealAndSelect(path);
+    else browserSelection.path = null;
+    browserOverlay.open = true;
+  }
+  if (params.has(HASH_SEARCH)) {
+    // Encoding: `<inspectorBit>:<query>`. Both fields optional.
+    const [ins, query] = splitInspectorBit(params.get(HASH_SEARCH) ?? "");
+    if (ins !== null) searchPanel.inspectorOpen = ins;
+    searchPanel.query = query;
+    searchPanel.open = true;
+  }
+  if (params.has(HASH_GRAPH)) {
+    // Encoding: `<scopeId>|<depth>|<chips>|<inspectorBit>`. All
+    // trailing fields optional; an empty value falls back to
+    // defaults.
+    const raw = params.get(HASH_GRAPH) ?? "";
+    const [scope, depthStr, chips, ins] = raw.split("|");
+    if (scope) graphOverlay.scopeId = scope;
+    const depth = Number(depthStr);
+    if (Number.isFinite(depth) && depth >= 1) graphOverlay.depth = depth;
+    // Mutate fields in place; reassigning `graphOverlay.filters`
+    // would orphan any consumer that captured the proxy reference
+    // at mount time (e.g. `const show = graphOverlay.filters` in
+    // GraphPanel.svelte).
+    const f = decodeGraphFilters(chips ?? "");
+    graphOverlay.filters.link = f.link;
+    graphOverlay.filters.tag = f.tag;
+    graphOverlay.filters.mention = f.mention;
+    graphOverlay.filters.img = f.img;
+    if (ins === "0" || ins === "1") graphOverlay.inspectorOpen = ins === "1";
+    graphOverlay.open = true;
+  }
+  if (params.has(HASH_ASSIST)) {
+    // Encoding: `<contextId>|<prompt>`. The prompt is everything
+    // after the first `|` (so it may itself contain `|`).
+    const raw = params.get(HASH_ASSIST) ?? "";
+    const sep = raw.indexOf("|");
+    if (sep === -1) {
+      if (raw) assistantOverlay.contextId = raw;
+      assistantOverlay.prompt = "";
+    } else {
+      const ctx = raw.slice(0, sep);
+      if (ctx) assistantOverlay.contextId = ctx;
+      assistantOverlay.prompt = raw.slice(sep + 1);
+    }
+    assistantOverlay.open = true;
+  }
+  if (params.has(HASH_SETTINGS) && !SETTINGS_DISABLED) {
+    settingsOverlay.open = true;
+  }
+}
+
+/// Write the current layout + overlay state to `location.hash` via
 /// `history.replaceState` (so reloads are silent and the browser
-/// back/forward stack stays clean). Empty layout strips the key
-/// entirely.
+/// back/forward stack stays clean). Empty values strip their key
+/// entirely so a hash never grows orphans.
 export function persistStateToHash(): void {
   const ser = serializeLayout();
   const url = new URL(window.location.href);
@@ -364,6 +472,45 @@ export function persistStateToHash(): void {
   // Drop the legacy sidebar-collapsed key from any pre-existing
   // saved URL hash so it doesn't sit there forever.
   params.delete(HASH_SIDEBAR);
+  // ---- overlay keys: presence = open ------------------------
+  if (browserOverlay.open) {
+    const ins = browserOverlay.inspectorOpen ? "1" : "0";
+    params.set(HASH_BROWSER, `${ins}:${browserSelection.path ?? ""}`);
+  } else {
+    params.delete(HASH_BROWSER);
+  }
+  if (searchPanel.open) {
+    const ins = searchPanel.inspectorOpen ? "1" : "0";
+    params.set(HASH_SEARCH, `${ins}:${searchPanel.query ?? ""}`);
+  } else {
+    params.delete(HASH_SEARCH);
+  }
+  if (graphOverlay.open) {
+    const chips = encodeGraphFilters(graphOverlay.filters);
+    // Trim trailing separators when later fields are empty so
+    // URLs stay readable (`graph=drive` instead of `graph=drive|1|`).
+    const depth = String(graphOverlay.depth);
+    const ins = graphOverlay.inspectorOpen ? "1" : "0";
+    const insTail = graphOverlay.inspectorOpen ? `|${ins}` : "";
+    let val = graphOverlay.scopeId;
+    if (chips || insTail) val = `${val}|${depth}|${chips}${insTail}`;
+    else if (depth !== "1") val = `${val}|${depth}`;
+    params.set(HASH_GRAPH, val);
+  } else {
+    params.delete(HASH_GRAPH);
+  }
+  if (assistantOverlay.open) {
+    let val = assistantOverlay.contextId;
+    if (assistantOverlay.prompt) val = `${val}|${assistantOverlay.prompt}`;
+    params.set(HASH_ASSIST, val);
+  } else {
+    params.delete(HASH_ASSIST);
+  }
+  if (settingsOverlay.open) {
+    params.set(HASH_SETTINGS, "1");
+  } else {
+    params.delete(HASH_SETTINGS);
+  }
   const next = params.toString();
   url.hash = next ? `#${next}` : "";
   history.replaceState(null, "", url.toString());
@@ -510,9 +657,17 @@ export const indexStatus = $state<{ value: IndexStatus | null }>({
 /// Open/closed state of the content-search command palette
 /// (`SearchPanel.svelte`). Toggled by Cmd/Ctrl+K and by the
 /// search button in the toolbar.
-export const searchPanel = $state<{ open: boolean; inspectorOpen: boolean }>({
+export const searchPanel = $state<{
+  open: boolean;
+  inspectorOpen: boolean;
+  /// Live query bound to the SearchPanel input. Lifted out of the
+  /// component so it round-trips through the URL hash: copy-paste of
+  /// a chan URL with `search=foo` lands on the same query.
+  query: string;
+}>({
   open: false,
   inspectorOpen: false,
+  query: "",
 });
 
 /// Per-file assistant conversation state. Keyed by the file's
@@ -806,9 +961,15 @@ export type AssistantContextId = string;
 export const assistantOverlay = $state<{
   open: boolean;
   contextId: AssistantContextId;
+  /// Live prompt buffer. Lifted out of InlineAssist so it
+  /// round-trips through the URL hash: a copy-pasted chan URL
+  /// reopens the assistant with whatever the user had typed but
+  /// not yet submitted.
+  prompt: string;
 }>({
   open: false,
   contextId: "drive",
+  prompt: "",
 });
 
 /** Build the context dropdown options for the assistant overlay.
@@ -858,6 +1019,26 @@ export function availableGraphScopes(): ScopeOption[] {
   });
 }
 
+/** Edge-kind / node-kind chip toggles on the graph. `link`, `tag`,
+ *  `mention` are edge-kind filters (their edges plus any node only
+ *  reachable through filtered-out edges drop). `img` is a node
+ *  filter that hides every file node classified as an image. Lifted
+ *  out of GraphPanel so the URL hash can round-trip the exact
+ *  filter set. */
+export type GraphFilters = {
+  link: boolean;
+  tag: boolean;
+  mention: boolean;
+  img: boolean;
+};
+
+export const DEFAULT_GRAPH_FILTERS: GraphFilters = {
+  link: true,
+  tag: true,
+  mention: true,
+  img: true,
+};
+
 export const graphOverlay = $state<{
   open: boolean;
   /** Same id encoding as assistantOverlay.contextId
@@ -867,6 +1048,11 @@ export const graphOverlay = $state<{
    *  immediate neighbors; 2 = neighbors-of-neighbors; etc. Drive
    *  scope ignores depth (it's the whole graph). */
   depth: number;
+  /** Per-edge-kind / per-node-kind chip toggles. */
+  filters: GraphFilters;
+  /** Right-side details panel toggle. Lifted out of GraphPanel so
+   *  it round-trips through the URL hash. */
+  inspectorOpen: boolean;
   /** One-shot pre-selected node id, consumed by GraphPanel on the
    *  next open. Set by openGraphAtNode when launching the overlay
    *  from a tag/mention/date chip elsewhere in the UI. Cleared once
@@ -876,6 +1062,8 @@ export const graphOverlay = $state<{
   open: false,
   scopeId: "drive",
   depth: 1,
+  filters: { ...DEFAULT_GRAPH_FILTERS },
+  inspectorOpen: false,
   pendingSelectId: null,
 });
 

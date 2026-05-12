@@ -11,6 +11,7 @@
   // share one panel and one context picker. This file is search-
   // only now.
 
+  import { untrack } from "svelte";
   import { api } from "../api/client";
   import type { ContentHit } from "../api/types";
   import { isImage } from "../state/fileTypes";
@@ -50,7 +51,9 @@
       };
 
   let inputEl: HTMLInputElement | undefined = $state();
-  let query = $state("");
+  /// Query is module-level (lives on `searchPanel.query`) so the
+  /// URL hash can round-trip it: a copy-pasted chan URL with
+  /// `search=foo` reopens the panel preloaded with that term.
   let chunkHits = $state<ContentHit[]>([]);
   let loading = $state(false);
   let active = $state(0);
@@ -73,9 +76,23 @@
   // prefill quiet for the common cases where the selection isn't
   // useful (long paragraph, multi-line, focus inside another input).
   $effect(() => {
-    if (searchPanel.open) {
-      const seed = extractSearchSeed();
-      query = seed ?? "";
+    if (!searchPanel.open) return;
+    // Only react to the open transition; tracking the query here
+    // would fire on every keystroke and re-select the input,
+    // making typing impossible. `untrack` reads the value without
+    // subscribing.
+    untrack(() => {
+      // Three open paths converge here:
+      //   (a) URL hash restore — searchPanel.query was set by
+      //       applyOverlaysFromHash before the panel went open.
+      //       Keep it as-is and run a search.
+      //   (b) Text-selection seed — query was empty, the user
+      //       had real text selected when they hit Cmd+K. Adopt
+      //       it and run a search.
+      //   (c) Fresh empty open — wait for the user to type.
+      const restored = searchPanel.query.trim();
+      const seed = restored ? null : extractSearchSeed();
+      if (seed) searchPanel.query = seed;
       chunkHits = [];
       active = 0;
       error = null;
@@ -84,10 +101,10 @@
       void ensureGraphLoaded();
       queueMicrotask(() => {
         inputEl?.focus();
-        if (seed) inputEl?.select();
+        if (seed || restored) inputEl?.select();
       });
-      if (seed) scheduleSearch();
-    }
+      if (restored || seed) scheduleSearch();
+    });
   });
 
   /// Caps for the selection-prefill gate. ≤8 words because BM25
@@ -121,7 +138,7 @@
 
   function scheduleSearch(): void {
     if (debounceTimer) clearTimeout(debounceTimer);
-    const q = query.trim();
+    const q = searchPanel.query.trim();
     if (!q) {
       chunkHits = [];
       loading = false;
@@ -158,7 +175,7 @@
   /// hits anywhere in the path so "kitten" finds
   /// "trips/2024/kitten.jpg" as well as "kitten.jpg" at the root.
   const imageRows = $derived.by<SearchRow[]>(() => {
-    const q = query.trim().toLowerCase();
+    const q = searchPanel.query.trim().toLowerCase();
     if (!q) return [];
     const out: SearchRow[] = [];
     for (const e of tree.entries) {
@@ -175,7 +192,7 @@
   /// We surface the document count so the user can pick the more
   /// active tag when several near-matches share a prefix.
   const tagRows = $derived.by<SearchRow[]>(() => {
-    const q = query.trim().toLowerCase();
+    const q = searchPanel.query.trim().toLowerCase();
     if (!q) return [];
     const view = graphData.view;
     if (!view) return [];
@@ -351,7 +368,7 @@
           <span>searching…</span>
         {:else if error}
           <span class="err">{error}</span>
-        {:else if query.trim() && rows.length === 0}
+        {:else if searchPanel.query.trim() && rows.length === 0}
           <span>no matches</span>
         {:else if rows.length > 0}
           <span>
@@ -367,7 +384,7 @@
       <div class="head">
         <input
           bind:this={inputEl}
-          bind:value={query}
+          bind:value={searchPanel.query}
           oninput={scheduleSearch}
           onkeydown={onKeyDown}
           placeholder="search content, tags, images (Cmd+K)"

@@ -270,8 +270,15 @@
   /// then renders its details. Files no longer auto-open on click;
   /// double-click (or the Open button in the panel) is the path
   /// to actually opening a file.
+  ///
+  /// A click also forces the inspector open: the user expects the
+  /// metadata pane to surface the selection. If they explicitly
+  /// closed the inspector earlier and then click another row, the
+  /// click takes precedence (and reopens it on next reload via the
+  /// URL hash).
   function selectPath(path: string): void {
     browserSelection.path = path;
+    browserOverlay.inspectorOpen = true;
   }
 
   function showMenu(ev: MouseEvent, path: string, isDir: boolean): void {

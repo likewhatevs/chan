@@ -152,5 +152,22 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    /* Match the menu / tab-menu bounce so every overlay shares the
+       same open feel. */
+    transform-origin: center top;
+    animation: overlay-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  @keyframes overlay-pop {
+    0% {
+      opacity: 0;
+      transform: scale(0.92);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .panel { animation: none; }
   }
 </style>

@@ -231,7 +231,9 @@
   // and refocuses when its value is reset to "" after a submit,
   // so we don't keep an explicit ref here.
   let scrollEl: HTMLDivElement | undefined = $state();
-  let prompt = $state("");
+  // Prompt buffer lives on `assistantOverlay.prompt` (module
+  // state) so it round-trips through the URL hash. Local alias
+  // keeps the binding sites compact.
   let loading = $state(false);
   let error = $state<string | null>(null);
   let savedSelection = $state<string | null>(null);
@@ -467,7 +469,7 @@
       // different context doesn't carry the old prompt forward.
       if (lastOpenedContextId !== null) {
         lastOpenedContextId = null;
-        prompt = "";
+        assistantOverlay.prompt = "";
         error = null;
       }
       return;
@@ -488,11 +490,13 @@
     // duplicate the same text under both `# Instruction` and
     // `# Selection`.
     if (sel) {
-      prompt = formatQuotePrefill(sel);
+      assistantOverlay.prompt = formatQuotePrefill(sel);
       savedSelection = null;
       queueMicrotask(() => wysiwygRef?.focusEnd());
     } else {
-      prompt = "";
+      // Don't clobber a URL-restored prompt with "" when the
+      // overlay opens. Only reset when there isn't one to preserve.
+      if (!assistantOverlay.prompt) assistantOverlay.prompt = "";
       savedSelection = null;
     }
     void ensureToolsLoaded();
@@ -628,7 +632,7 @@
       clearDriveConversation();
     }
     error = null;
-    prompt = "";
+    assistantOverlay.prompt = "";
   }
 
   /// Build the per-turn user message. Each context kind gets its
@@ -731,7 +735,7 @@
   async function submit(): Promise<void> {
     const ctx = currentContext;
     if (!ctx || loading) return;
-    const trimmed = prompt.trim();
+    const trimmed = assistantOverlay.prompt.trim();
     if (!trimmed) return;
     // Slash commands: handled locally, no LLM round-trip.
     if (trimmed === "/clear") {
@@ -761,7 +765,7 @@
     const userBody = buildUserMessage(ctx, trimmed, savedSelection, excerpts);
     conv.messages.push({ role: "user", content: userBody });
     conv.turns.push({ kind: "user", content: trimmed, created_at: Date.now() });
-    prompt = "";
+    assistantOverlay.prompt = "";
     scheduleSave(ctx);
     queueMicrotask(scrollToBottom);
     try {
@@ -1217,11 +1221,11 @@
           {#if promptMode === "wysiwyg"}
             <Wysiwyg
               bind:this={wysiwygRef}
-              bind:value={prompt}
+              bind:value={assistantOverlay.prompt}
               onSelectionChange={() => (selVer = selVer + 1)}
             />
           {:else}
-            <Source bind:value={prompt} />
+            <Source bind:value={assistantOverlay.prompt} />
           {/if}
         </div>
       </div>
@@ -1261,7 +1265,7 @@
           <button
             class="action-btn send"
             onclick={() => void submit()}
-            disabled={!currentContext || !prompt.trim()}
+            disabled={!currentContext || !assistantOverlay.prompt.trim()}
             title="send (Cmd/Ctrl+Enter)"
             aria-label="send"
           >→</button>
