@@ -18,8 +18,10 @@ use crate::lock::DriveLock;
 use crate::markdown;
 use crate::paths::{drive_paths, DrivePaths};
 use crate::registry::KnownDrive;
+use crate::report::{ReportFanOut, ReportState};
 use crate::trash::{self, TrashEntry, TRASH_RETENTION_SECS};
 use crate::watch::{WatchCallback, WatchHandle};
+use crate::{Report, ReportScope};
 
 /// Hard cap on `write_text` content size. Markdown / txt notes are
 /// human-authored; 2 MiB is roughly 2M characters of dense English,
@@ -187,6 +189,12 @@ pub struct Drive {
     /// before answering search queries. Cleared by `reindex_with`
     /// after the marker file is removed on disk.
     needs_rebuild: std::sync::atomic::AtomicBool,
+    /// Lazily-initialized SLOC / language / COCOMO report. First
+    /// touch (`report()` or `watch()`) does a full scan; further
+    /// access reads the cached state, and the watcher fanout
+    /// keeps it current incrementally. Kept behind `OnceLock` so
+    /// drives that never query the report skip the scan entirely.
+    report: std::sync::OnceLock<Arc<ReportState>>,
 }
 
 impl std::fmt::Debug for Drive {
@@ -265,6 +273,7 @@ impl Drive {
             graph: std::sync::OnceLock::new(),
             rename_log: std::sync::Mutex::new(rename_log),
             needs_rebuild: std::sync::atomic::AtomicBool::new(needs_rebuild),
+            report: std::sync::OnceLock::new(),
         }))
     }
 
@@ -1627,8 +1636,64 @@ impl Drive {
     /// Start a recursive filesystem watcher on the drive. Drop
     /// the returned `WatchHandle` to stop. Events for `.chan/`
     /// and `.git/` are filtered out.
+    ///
+    /// Also warms the SLOC / language / COCOMO report so the
+    /// watcher can keep it current incrementally. The first
+    /// `watch()` call on a fresh drive pays the initial-scan
+    /// cost; subsequent calls reuse the cached state. Drives
+    /// that never need the report can skip watching, or call
+    /// `report()` on demand instead.
     pub fn watch(self: &Arc<Self>, cb: Arc<dyn WatchCallback>) -> Result<WatchHandle> {
-        WatchHandle::start(self.root(), cb)
+        let report = self.report_state()?;
+        let fan: Arc<dyn WatchCallback> = ReportFanOut::new(cb, report.clone());
+        WatchHandle::start(self.root(), fan)
+    }
+
+    // ---- report ----
+
+    /// Snapshot of the drive's code/SLOC report covering every
+    /// indexed file. Lazy on first call (full scan). Returned
+    /// `Report` is a plain serde value; clone-and-shape is the
+    /// caller's job.
+    pub fn report(&self) -> Result<Report> {
+        Ok(self.report_state()?.snapshot(&ReportScope::All))
+    }
+
+    /// Snapshot of the report restricted to a drive-relative
+    /// POSIX prefix. Empty `prefix` is equivalent to `report()`.
+    /// Missing files in the prefix produce empty roll-ups.
+    pub fn report_for_prefix(&self, prefix: &str) -> Result<Report> {
+        Ok(self
+            .report_state()?
+            .snapshot(&ReportScope::Prefix(prefix.to_string())))
+    }
+
+    /// Snapshot of the report restricted to an explicit list of
+    /// drive-relative paths. Paths absent from the index are
+    /// silently ignored.
+    pub fn report_for_files(&self, paths: &[String]) -> Result<Report> {
+        Ok(self
+            .report_state()?
+            .snapshot(&ReportScope::Files(paths.to_vec())))
+    }
+
+    /// Path to the persisted JSONL form of the report on disk.
+    /// chan-drive's writer thread keeps this file in sync with
+    /// the in-memory index via debounced atomic writes.
+    pub fn report_jsonl_path(&self) -> Result<std::path::PathBuf> {
+        Ok(self.report_state()?.jsonl_path().to_path_buf())
+    }
+
+    fn report_state(&self) -> Result<&Arc<ReportState>> {
+        if let Some(s) = self.report.get() {
+            return Ok(s);
+        }
+        let state = ReportState::open(self.root(), &self.paths.report)?;
+        // OnceLock::set is racy with a concurrent caller; the
+        // loser drops its state cleanly, which terminates its
+        // writer thread via Drop. The winner's state stays.
+        let _ = self.report.set(state);
+        Ok(self.report.get().expect("report state just set"))
     }
 }
 

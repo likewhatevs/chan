@@ -34,8 +34,15 @@ pub mod markdown;
 pub mod paths;
 pub mod progress;
 pub mod registry;
+mod report;
 pub mod trash;
 pub mod watch;
+
+pub use chan_report::{
+    CocomoModel, CocomoParams, CocomoSummary, FileStats as ReportFileStats,
+    LanguageStats as ReportLanguageStats, Report, ReportMeta, Scope as ReportScope,
+    Totals as ReportTotals,
+};
 
 pub use contacts::{
     Contact, EmailAddress, ImportCounts, ImportOpts, ImportOutcome, ImportSummary, Organization,

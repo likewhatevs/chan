@@ -123,6 +123,11 @@ pub struct DrivePaths {
     /// `<id>/{meta.json, payload[/]}`. Lazily GC'd on Drive::open
     /// and on every trash_* call.
     pub trash: PathBuf,
+    /// Per-drive code/SLOC report. JSONL serialized by
+    /// `chan-report`, persisted atomically by chan-drive's
+    /// ReportState writer thread. Lives in state_dir; the report
+    /// is regenerable from a full rescan if missing or corrupt.
+    pub report: PathBuf,
 }
 
 /// Resolve the per-drive global paths for `drive_root`.
@@ -140,6 +145,7 @@ pub fn drive_paths(drive_root: &Path) -> DrivePaths {
         lock: state.join("locks").join(&key),
         tokens: state.join("tokens").join(&key),
         trash: state.join("trash").join(&key),
+        report: state.join("report").join(&key).join("report.jsonl"),
     }
 }
 
