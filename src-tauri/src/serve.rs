@@ -218,6 +218,11 @@ fn open_drive_window(app: &AppHandle, key: &str, label: &str, url: &str) {
         // `core:webview:allow-set-webview-zoom` permission on
         // drive-* windows in capabilities/default.json.
         .zoom_hotkeys_enabled(true)
+        // Hand HTML5 drag-and-drop to the page. Tauri's OS-level
+        // drag handler swallows dragover events otherwise, so
+        // chan's pane-to-pane tab moves never see the highlight /
+        // drop the receiving pane expects.
+        .disable_drag_drop_handler()
         .build()
         {
             Ok(w) => w,

@@ -21,8 +21,12 @@
   --danger: #f85149;
 }
 
+/* Light tokens: applied either when the OS prefers light AND the
+   user hasn't picked an explicit theme, OR when the user picks
+   light via the toolbar toggle. Explicit `[data-theme="dark"]`
+   overrides the media query to keep dark even on a light-mode OS. */
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme="dark"]) {
     --bg: #ffffff;
     --bg-card: #f5f5f7;
     --bg-elev: #ffffff;
@@ -39,6 +43,23 @@
     --brand: #c46a2a;
     --danger: #cf222e;
   }
+}
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --bg-card: #f5f5f7;
+  --bg-elev: #ffffff;
+  --border: #d1d1d6;
+  --text: #1c1c1e;
+  --text-secondary: #6c6c70;
+  --link: #0969da;
+  --btn-bg: #f2f2f4;
+  --btn-border: #d1d1d6;
+  --btn-hover: #6c6c70;
+  --accent: #1a7f37;
+  --hover-bg: rgba(0, 0, 0, 0.05);
+  --zebra-bg: rgba(0, 0, 0, 0.025);
+  --brand: #c46a2a;
+  --danger: #cf222e;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -143,8 +164,20 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
 }
-.path-cell:hover { color: var(--text); }
+.path-cell:hover { color: var(--brand); }
+.path-cell .ic-home {
+  vertical-align: -2px;
+  margin-right: 2px;
+}
+.path-cell .path-sep {
+  color: var(--text-secondary);
+  margin: 0 4px 0 2px;
+  opacity: 0.6;
+}
+.path-cell:hover .path-sep { color: var(--brand); }
 
 .name-cell { color: var(--text); }
 
@@ -209,3 +242,19 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
 .switch input:checked + .slider::before { transform: translateX(16px); }
 
 .row-actions { display: flex; gap: 4px; justify-content: flex-end; }
+
+button.btn.icon {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Theme toggle: show the icon for the OTHER mode, so the icon
+   signals what clicking will switch to. Dark current → sun visible;
+   light current → moon visible. */
+#theme-toggle .ic-sun,
+#theme-toggle .ic-moon { display: none; }
+.is-dark #theme-toggle .ic-sun { display: inline-block; }
+.is-light #theme-toggle .ic-moon { display: inline-block; }

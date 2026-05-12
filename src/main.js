@@ -7,13 +7,71 @@ const { relaunch } = window.__TAURI__.process;
 
 const main = document.getElementById('main');
 const openBtn = document.getElementById('open-drive');
+const themeToggle = document.getElementById('theme-toggle');
+
+/// Theme handling. Stored values:
+///   - null  : follow OS via prefers-color-scheme (no data-theme attr)
+///   - "dark": forced dark regardless of OS
+///   - "light": forced light regardless of OS
+/// Clicking the toggle flips between explicit dark and explicit light;
+/// to return to "follow OS", clear localStorage.chanDesktopTheme by hand.
+const THEME_KEY = 'chanDesktopTheme';
+const osLight = window.matchMedia('(prefers-color-scheme: light)');
+
+function effectiveTheme() {
+  const saved = localStorage.getItem(THEME_KEY);
+  if (saved === 'dark' || saved === 'light') return saved;
+  return osLight.matches ? 'light' : 'dark';
+}
+
+function applyTheme() {
+  const saved = localStorage.getItem(THEME_KEY);
+  const root = document.documentElement;
+  if (saved === 'dark' || saved === 'light') {
+    root.setAttribute('data-theme', saved);
+  } else {
+    root.removeAttribute('data-theme');
+  }
+  // Mirror onto body so the toggle button can choose which icon to
+  // render — CSS variables alone don't expose the active theme.
+  document.body.classList.toggle('is-dark', effectiveTheme() === 'dark');
+  document.body.classList.toggle('is-light', effectiveTheme() === 'light');
+}
+
+applyTheme();
+osLight.addEventListener('change', applyTheme);
+themeToggle.addEventListener('click', () => {
+  const next = effectiveTheme() === 'dark' ? 'light' : 'dark';
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme();
+});
 
 let booted = false;
+let homeDir = '';
 
 async function refresh() {
+  if (!homeDir) {
+    try { homeDir = await invoke('home_dir'); } catch { homeDir = ''; }
+  }
   const drives = await invoke('list_drives');
   render(drives);
   return drives;
+}
+
+/// Render a drive's filesystem path with the user's home folder
+/// collapsed to a house glyph. Paths outside the home dir render
+/// verbatim. Returns an HTML string; caller injects into a clickable
+/// cell that calls `reveal_in_finder` with the full path.
+function renderPath(full) {
+  if (homeDir && (full === homeDir || full.startsWith(homeDir + '/'))) {
+    const rest = full.slice(homeDir.length).replace(/^\//, '');
+    // Inline SVG house glyph keeps the rendering self-contained and
+    // tints with currentColor for theme switches.
+    const house = `<svg class="ic-home" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="home"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>`;
+    if (!rest) return house;
+    return `${house}<span class="path-sep">/</span>${escapeHtml(rest)}`;
+  }
+  return escapeHtml(full);
 }
 
 async function boot() {
@@ -65,7 +123,7 @@ function render(drives) {
           <span class="slider"></span>
         </label>
       </td>
-      <td class="path-cell" title="${escapeAttr(d.path)}">${escapeHtml(d.path)}</td>
+      <td class="path-cell" data-act="reveal" title="${escapeAttr(d.path)} — click to open in Finder">${renderPath(d.path)}</td>
       <td class="name-cell" title="set via &#96;chan rename&#96;">${escapeHtml(d.name)}</td>
       <td>
         <div class="url-cell">
@@ -123,6 +181,14 @@ function bindRowEvents() {
         showError(err);
       }
       await refresh();
+    });
+
+    tr.querySelector('[data-act="reveal"]').addEventListener('click', async () => {
+      try {
+        await invoke('reveal_in_finder', { path });
+      } catch (err) {
+        showError(err);
+      }
     });
   });
 }

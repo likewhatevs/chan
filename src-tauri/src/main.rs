@@ -180,6 +180,39 @@ fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
     state.store.lock().unwrap().get().map_err(err)
 }
 
+/// User's home directory as a plain string, for the Drive Manager
+/// to abbreviate paths to `~/...`. Returns an empty string when the
+/// platform can't resolve it.
+#[tauri::command]
+fn home_dir() -> String {
+    dirs::home_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default()
+}
+
+/// Open the given folder in the OS file manager. macOS: Finder,
+/// Linux: default file manager, Windows: Explorer. Used by the
+/// Drive Manager's path cell so users can jump to the drive folder
+/// from the row. Trusts the caller to pass a path the user just saw
+/// in the list — paths come from `list_drives`, which sources from
+/// the chan registry; no shell interpolation, args are passed as
+/// argv to the OS open command.
+#[tauri::command]
+fn reveal_in_finder(path: String) -> Result<(), String> {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    Command::new(opener)
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("opening {path}: {e}"))?;
+    Ok(())
+}
+
 fn show_window(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
     if let Some(w) = app.get_webview_window(label) {
         w.show().map_err(err)?;
@@ -287,6 +320,8 @@ fn main() {
             remove_drive,
             set_drive_on,
             get_config,
+            home_dir,
+            reveal_in_finder,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application");
