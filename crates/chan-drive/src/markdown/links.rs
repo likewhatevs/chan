@@ -342,7 +342,11 @@ where
     let mut prev_end = 0usize;
     for (start, end, _) in &edits {
         if *start < prev_end {
-            tracing::warn!(start, prev_end, "rewrite_link_targets: overlapping edits; aborting rewrite");
+            tracing::warn!(
+                start,
+                prev_end,
+                "rewrite_link_targets: overlapping edits; aborting rewrite"
+            );
             return None;
         }
         prev_end = *end;
@@ -758,10 +762,7 @@ mod tests {
             "./old name.md",
             "./new name.md",
         );
-        assert_eq!(
-            out.as_deref(),
-            Some("[label](<./new name.md>) tail"),
-        );
+        assert_eq!(out.as_deref(), Some("[label](<./new name.md>) tail"),);
     }
 
     #[test]
@@ -772,11 +773,7 @@ mod tests {
 
     #[test]
     fn rewrite_wiki_target_preserves_label() {
-        let out = rewrite_one(
-            "ref [[notes/x|exhibit X]]",
-            "notes/x",
-            "archive/x",
-        );
+        let out = rewrite_one("ref [[notes/x|exhibit X]]", "notes/x", "archive/x");
         assert_eq!(out.as_deref(), Some("ref [[archive/x|exhibit X]]"));
     }
 
@@ -817,7 +814,10 @@ mod tests {
                 None
             }
         });
-        assert_eq!(out.as_deref(), Some("[home](./new.md) and [home](./old.md)"));
+        assert_eq!(
+            out.as_deref(),
+            Some("[home](./new.md) and [home](./old.md)")
+        );
         assert_eq!(calls, 2);
     }
 

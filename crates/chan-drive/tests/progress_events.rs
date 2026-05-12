@@ -36,15 +36,9 @@ fn reindex_emits_graph_and_index_stages() {
     lib.register_drive(drive_root.path(), Some("Prog".into()))
         .unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
-    drive
-        .write_text("intro.md", "# Intro\n\nHello\n")
-        .unwrap();
-    drive
-        .write_text("notes/x.md", "# X\n\nhi\n")
-        .unwrap();
-    drive
-        .write_text("notes/y.txt", "plain\n")
-        .unwrap();
+    drive.write_text("intro.md", "# Intro\n\nHello\n").unwrap();
+    drive.write_text("notes/x.md", "# X\n\nhi\n").unwrap();
+    drive.write_text("notes/y.txt", "plain\n").unwrap();
 
     let cb = Collector::new();
     drive.reindex_with(None, &cb).unwrap();
@@ -62,7 +56,10 @@ fn reindex_emits_graph_and_index_stages() {
     // (or total == 0 for indeterminate stages, but reindex always
     // knows its total).
     for e in cb.0.lock().unwrap().iter() {
-        if matches!(e.stage, ProgressStage::GraphRebuild | ProgressStage::IndexFile) {
+        if matches!(
+            e.stage,
+            ProgressStage::GraphRebuild | ProgressStage::IndexFile
+        ) {
             assert!(
                 e.total > 0,
                 "stage {:?} should know its total; event = {e:?}",
@@ -72,7 +69,10 @@ fn reindex_emits_graph_and_index_stages() {
                 e.current < e.total,
                 "current >= total in {e:?} (events are 0-indexed)",
             );
-            assert!(e.label.is_some(), "file-level events should carry a path label");
+            assert!(
+                e.label.is_some(),
+                "file-level events should carry a path label"
+            );
         }
     }
 }
@@ -105,16 +105,10 @@ fn rename_with_link_rewrite_with_emits_rewrite_progress() {
     // Two source files reference the target by markdown link so
     // the rewriter has work to do per source.
     drive
-        .write_text(
-            "src1.md",
-            "# S1\n\nlink to [target](old/target.md)\n",
-        )
+        .write_text("src1.md", "# S1\n\nlink to [target](old/target.md)\n")
         .unwrap();
     drive
-        .write_text(
-            "src2.md",
-            "# S2\n\nalso linking [target](old/target.md)\n",
-        )
+        .write_text("src2.md", "# S2\n\nalso linking [target](old/target.md)\n")
         .unwrap();
     drive
         .write_text("old/target.md", "# Target\n\nbody\n")
@@ -158,22 +152,16 @@ fn import_contacts_with_emits_per_contact_progress() {
     ];
     let cb = Collector::new();
     let summary = drive
-        .import_contacts_with(
-            "Contacts",
-            contacts,
-            ImportOpts { overwrite: false },
-            &cb,
-        )
+        .import_contacts_with("Contacts", contacts, ImportOpts { overwrite: false }, &cb)
         .unwrap();
     assert_eq!(summary.outcomes.len(), 2);
-    let import_events: Vec<_> = cb
-        .0
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|e| e.stage == ProgressStage::Import)
-        .cloned()
-        .collect();
+    let import_events: Vec<_> =
+        cb.0.lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e.stage == ProgressStage::Import)
+            .cloned()
+            .collect();
     assert_eq!(
         import_events.len(),
         2,
@@ -204,14 +192,13 @@ fn reset_drive_with_emits_one_event_per_subsystem() {
     let cb = Collector::new();
     lib.reset_drive_with(drive_root.path(), ResetMode::State, &cb)
         .unwrap();
-    let reset_events: Vec<_> = cb
-        .0
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|e| e.stage == ProgressStage::Reset)
-        .cloned()
-        .collect();
+    let reset_events: Vec<_> =
+        cb.0.lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e.stage == ProgressStage::Reset)
+            .cloned()
+            .collect();
     // Five subsystems: index, graph, sessions, assistant, tokens.
     assert_eq!(reset_events.len(), 5, "got events: {reset_events:?}");
     let labels: Vec<_> = reset_events

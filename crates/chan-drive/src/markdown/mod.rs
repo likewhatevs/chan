@@ -17,9 +17,7 @@ pub mod tokens;
 
 pub use frontmatter::{parse as parse_frontmatter, Frontmatter};
 pub use headings::{parse as parse_headings, Heading};
-pub use links::{
-    extract_links, normalize_href, rewrite_link_targets, Link, LinkRef, LinkRefKind,
-};
+pub use links::{extract_links, normalize_href, rewrite_link_targets, Link, LinkRef, LinkRefKind};
 pub use tokens::{extract_tokens, Token};
 
 /// Compute a heading anchor slug from display text. Lowercase,
