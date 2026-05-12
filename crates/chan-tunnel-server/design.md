@@ -122,25 +122,35 @@ Out of scope:
 `serve_tunnel_listener(listener, validator, registry,
 max_drives_per_user)`:
 
-1. `TcpListener::accept`, then spawn `handle_tunnel_conn`.
-2. `h2::server::handshake(tcp)`; accept the first stream.
-3. Reject `(method != POST) || (path != TUNNEL_PATH)` with 404.
-4. Parse `Authorization: Bearer ...` (case-insensitive scheme,
+1. `TcpListener::accept`. Try to acquire one permit from a
+   per-listener `Semaphore::new(MAX_INFLIGHT_HANDSHAKES)` (1024).
+   If the semaphore is empty, the TCP socket is dropped and the
+   loop continues; this bounds memory against floods of half-open
+   peers that have not yet hit a per-stage timeout. Otherwise
+   spawn `handle_tunnel_conn` carrying the owned permit.
+2. `h2::server::handshake(tcp)` under `H2_HANDSHAKE_TIMEOUT` (10s).
+3. First `conn.accept()` under `FIRST_STREAM_TIMEOUT` (10s).
+4. Reject `(method != POST) || (path != TUNNEL_PATH)` with 404.
+5. Parse `Authorization: Bearer ...` (case-insensitive scheme,
    trimmed token); reject missing / empty with 401.
-5. Spawn an h2 frame driver task BEFORE awaiting the validator:
+6. Spawn an h2 frame driver task BEFORE awaiting the validator:
    the validator may be a network round-trip and h2 only progresses
-   while polled. The task also rejects any subsequent stream on
-   the same connection with 409 (clients must only ever open one).
-6. Call `validator.validate(token).await`. On error: send 401
+   while polled. The task rejects any subsequent stream on the
+   same connection with 409 (clients must only ever open one) and
+   `abrupt_shutdown(ENHANCE_YOUR_CALM)` after
+   `MAX_DRAINER_REJECTIONS` (16) rejections.
+7. Call `validator.validate(token).await` under `VALIDATE_TIMEOUT`
+   (10s, independent of any timeout the `Validator` impl enforces
+   internally). On timeout, reply 504. On error: 401
    (`InvalidToken`), 502 (`Identity`), or 500. Bare 401 / 403
    responses arrive at the client as distinct `ClientError`
    variants; collapsing them into a generic 200-then-close hid
    auth failures behind transport failures.
-7. Verify the validated token's `scopes` contains `"tunnel"`; 403
+8. Verify the validated token's `scopes` contains `"tunnel"`; 403
    otherwise.
-8. Send 200 (response headers, body open). Wrap `(SendStream,
+9. Send 200 (response headers, body open). Wrap `(SendStream,
    recv_body)` in `H2Duplex`.
-9. `handshake_validated(duplex, validated, pre_ack)`:
+10. `handshake_validated(duplex, validated, pre_ack)`:
    - Defense-in-depth username check (`is_valid_username`).
    - `read_frame::<Hello>` with `HELLO_READ_TIMEOUT` (15s) bound.
    - Reject non-V1 protocol; reject invalid drive name.
@@ -149,10 +159,12 @@ max_drives_per_user)`:
    - Build and write `HelloAck { prefix: "/{user}/{drive}", ... }`.
    - Wrap the duplex in yamux server mode with
      `tunnel_yamux_config()` (max 256 concurrent substreams).
-10. `registry.register(user, drive, public, peer_addr)` returns
+11. `registry.register(user, drive, public, peer_addr)` returns
     a `TunnelHandle`, the open-request `mpsc::Receiver`, and the
-    eviction `oneshot::Receiver`.
-11. `drive_tunnel(...)` runs until close or eviction. On exit,
+    eviction `oneshot::Receiver`. The in-flight semaphore permit
+    is dropped here: the per-tunnel driver runs without holding
+    one so a long-lived tunnel does not consume an accept slot.
+12. `drive_tunnel(...)` runs until close or eviction. On exit,
     `registry.deregister_if_owner(&handle)`.
 
 ### Driver loop (`driver.rs`)
@@ -292,8 +304,15 @@ pub fn public_router_with(
     registry: Arc<Registry>, cfg: PublicConfig,
 ) -> axum::Router;
 
-pub struct PublicConfig { pub request_body_cap: usize }
+pub struct PublicConfig {
+    pub request_body_cap: usize,
+    pub trust_forwarded_for: bool,
+    pub allowed_host_suffixes: Vec<String>,
+    pub upstream_request_timeout: Duration,
+}
 pub const DEFAULT_REQUEST_BODY_CAP: usize = 10 * 1024 * 1024;
+pub const DEFAULT_UPSTREAM_REQUEST_TIMEOUT: Duration =
+    Duration::from_secs(30);
 
 // Registry
 pub struct Registry { /* ... */ }
@@ -397,6 +416,40 @@ Server-specific notes:
   after `UPGRADE_IDLE_TIMEOUT` (5 min) of no bytes either way.
   Keeps a public client that 101'd and went silent from pinning
   the substream forever.
+- **Listener back-pressure cap**: at most
+  `MAX_INFLIGHT_HANDSHAKES` (1024) connections may sit in the
+  authenticate-and-handshake stages simultaneously. Above that the
+  TCP socket is closed immediately so a flood of half-open peers
+  cannot exhaust memory.
+- **Public-side host allowlist**: when
+  `PublicConfig::allowed_host_suffixes` is non-empty, the public
+  router replies 421 Misdirected Request to any request whose
+  `Host` header does not end with one of the listed suffixes.
+  Empty (default) trusts the fronting proxy's host routing. Used
+  as a defence-in-depth wall if the public listener is ever
+  exposed directly.
+- **Upstream request timeout**: the public router caps the time
+  spent on the h1 handshake plus the wait for response headers
+  against the registered chan-serve via
+  `PublicConfig::upstream_request_timeout` (default 30s); a 504
+  Gateway Timeout is returned on miss. Body streaming after
+  headers is intentionally uncapped so long downloads / uploads
+  are not artificially limited.
+- **Forwarded-header sanitisation**: the public router strips
+  `Forwarded`, `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Real-IP`,
+  `Proxy-Authorization`, and `Proxy-Authenticate` from incoming
+  requests before re-injecting its own `X-Forwarded-*`. The public
+  side does not get to dictate any of these to chan-serve.
+  `X-Forwarded-For` is the one knob: when
+  `PublicConfig::trust_forwarded_for` is `false` (default), the
+  incoming value is discarded and downstream sees only the
+  ConnectInfo IP. Operators behind a proxy that already overwrites
+  XFF with the real client address (e.g. nginx
+  `proxy_set_header X-Forwarded-For $remote_addr`) can set the
+  flag to `true` so chan-serve sees the real source IP appended
+  with the proxy hop. Trusting the value when the upstream uses
+  `$proxy_add_x_forwarded_for` lets a public client spoof its
+  source IP, so the default is the safe one.
 
 ## 7. Error model
 

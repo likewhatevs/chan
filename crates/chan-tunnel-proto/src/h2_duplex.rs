@@ -102,22 +102,32 @@ impl AsyncWrite for H2Duplex {
                 "h2 write half closed",
             )));
         }
+        // h2 can satisfy `poll_capacity` with `Ready(Ok(0))` when the
+        // peer hasn't yet bumped the flow-control window. Returning
+        // Pending in that case without re-arming a waker would hang
+        // the writer: poll_capacity's waker has just been consumed.
+        // Loop until either capacity is non-zero (we can send), the
+        // stream errors, or poll_capacity itself goes Pending (then
+        // its waker is registered and we can safely yield).
         if self.send.capacity() == 0 {
             self.send.reserve_capacity(buf.len());
-            match self.send.poll_capacity(cx) {
-                Poll::Ready(Some(Ok(cap))) => {
-                    if cap == 0 {
-                        return Poll::Pending;
+            loop {
+                match self.send.poll_capacity(cx) {
+                    Poll::Ready(Some(Ok(cap))) if cap > 0 => break,
+                    Poll::Ready(Some(Ok(_))) => {
+                        // Zero grant. Re-poll; poll_capacity will
+                        // register a fresh waker on the next call.
+                        continue;
                     }
+                    Poll::Ready(Some(Err(e))) => return Poll::Ready(Err(h2_to_io(e))),
+                    Poll::Ready(None) => {
+                        return Poll::Ready(Err(io::Error::new(
+                            io::ErrorKind::BrokenPipe,
+                            "h2 stream closed",
+                        )))
+                    }
+                    Poll::Pending => return Poll::Pending,
                 }
-                Poll::Ready(Some(Err(e))) => return Poll::Ready(Err(h2_to_io(e))),
-                Poll::Ready(None) => {
-                    return Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "h2 stream closed",
-                    )))
-                }
-                Poll::Pending => return Poll::Pending,
             }
         }
         let n = std::cmp::min(self.send.capacity(), buf.len());

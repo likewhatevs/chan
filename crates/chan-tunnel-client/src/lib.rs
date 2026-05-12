@@ -98,6 +98,19 @@ pub struct ClientConfig {
     /// `run` uses `try_send`, so a slow consumer drops events
     /// rather than blocking the tunnel.
     pub events: Option<mpsc::Sender<TunnelEvent>>,
+    /// Optional outbound HTTP proxy. When set, the client opens a
+    /// TCP connection to the proxy and runs an HTTP/1.1 CONNECT to
+    /// the tunnel host:port; TLS (if any) and h2 then run inside
+    /// the resulting tunnel. Supports basic auth via the URL's
+    /// userinfo (`http://user:pass@proxy.example:3128`). Schemes:
+    /// `http://` only (plain CONNECT). HTTPS-to-proxy and SOCKS
+    /// are out of scope; route those through a local stunnel /
+    /// SOCKS-to-HTTP shim if needed.
+    ///
+    /// Env vars (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`) are NOT
+    /// honoured automatically: the embedded callers (Swift /
+    /// Kotlin / CLI) get a deterministic surface this way.
+    pub proxy: Option<Url>,
 }
 
 impl Default for ClientConfig {
@@ -113,6 +126,7 @@ impl Default for ClientConfig {
             max_backoff: Duration::from_secs(30),
             dial_timeout: Duration::from_secs(30),
             events: None,
+            proxy: None,
         }
     }
 }

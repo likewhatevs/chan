@@ -15,13 +15,16 @@
 
 use std::sync::Arc;
 
+use base64::engine::{general_purpose::STANDARD as B64, Engine as _};
 use chan_tunnel_proto::H2Duplex;
 use http::{Method, StatusCode};
 use rustls::{ClientConfig as RustlsClientConfig, RootCertStore};
 use rustls_pki_types::ServerName;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_util::compat::Compat;
+use url::Url;
 use yamux::Connection as YamuxConnection;
 
 use crate::{handshake, ClientConfig, ClientError, Registration};
@@ -69,7 +72,7 @@ pub async fn dial_with_tls(
         ));
     }
 
-    let tcp = TcpStream::connect((host.as_str(), port)).await?;
+    let tcp = open_tcp(&host, port, cfg.proxy.as_ref()).await?;
     tcp.set_nodelay(true).ok();
 
     // Drive h2 frames in the background; the connection future has
@@ -139,6 +142,97 @@ pub async fn dial_with_tls(
     handshake(cfg, duplex).await
 }
 
+/// Open a TCP stream to `(host, port)` either directly or through
+/// an HTTP CONNECT proxy. The proxy URL's userinfo, if present, is
+/// sent as a Basic auth header. The CONNECT exchange is bounded by
+/// the parent `dial_timeout` (each leg here is non-blocking apart
+/// from one short read for the response status line + headers).
+async fn open_tcp(host: &str, port: u16, proxy: Option<&Url>) -> Result<TcpStream, ClientError> {
+    let Some(proxy) = proxy else {
+        return Ok(TcpStream::connect((host, port)).await?);
+    };
+    if proxy.scheme() != "http" {
+        return Err(ClientError::InvalidUrl(format!(
+            "proxy scheme must be http://, got {}://",
+            proxy.scheme()
+        )));
+    }
+    let proxy_host = proxy
+        .host_str()
+        .ok_or_else(|| ClientError::InvalidUrl("proxy URL missing host".into()))?;
+    let proxy_port = proxy
+        .port_or_known_default()
+        .ok_or_else(|| ClientError::InvalidUrl(format!("cannot infer proxy port from {proxy}")))?;
+
+    let mut tcp = TcpStream::connect((proxy_host, proxy_port)).await?;
+    let target = format!("{host}:{port}");
+    let mut req =
+        format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\nProxy-Connection: keep-alive\r\n");
+    // Userinfo is per RFC 3986. `Url::username` is percent-encoded;
+    // decode for the Basic credentials. An empty username is valid
+    // (no auth) and skipped.
+    let user = proxy.username();
+    if !user.is_empty() {
+        let pass = proxy.password().unwrap_or("");
+        let raw = format!("{user}:{pass}");
+        let b64 = B64.encode(raw.as_bytes());
+        req.push_str(&format!("Proxy-Authorization: Basic {b64}\r\n"));
+    }
+    req.push_str("\r\n");
+    tcp.write_all(req.as_bytes()).await?;
+
+    // Read response headers byte-by-byte, stopping exactly at the
+    // CRLF CRLF terminator. Anything after those four bytes belongs
+    // to the tunnelled upstream (h2 preface or TLS ClientHello) and
+    // must not be consumed here, so we cannot use a buffered reader
+    // that would over-read. Hard-cap at 16 KiB to bound a hostile
+    // or broken proxy that never terminates its headers.
+    let mut buf = Vec::with_capacity(256);
+    let mut byte = [0u8; 1];
+    loop {
+        let n = tcp.read(&mut byte).await?;
+        if n == 0 {
+            return Err(ClientError::Handshake(
+                "proxy closed connection during CONNECT".into(),
+            ));
+        }
+        buf.push(byte[0]);
+        if buf.ends_with(b"\r\n\r\n") {
+            break;
+        }
+        if buf.len() > 16 * 1024 {
+            return Err(ClientError::Handshake(
+                "proxy CONNECT response exceeded 16 KiB before end of headers".into(),
+            ));
+        }
+    }
+
+    // Parse the status line. Status text after the code is
+    // optional / proxy-specific; we only need the 3-digit code.
+    let head = std::str::from_utf8(&buf)
+        .map_err(|_| ClientError::Handshake("proxy CONNECT response is not UTF-8".into()))?;
+    let status_line = head.lines().next().ok_or_else(|| {
+        ClientError::Handshake("proxy CONNECT response had no status line".into())
+    })?;
+    let mut parts = status_line.splitn(3, ' ');
+    let _version = parts.next();
+    let code = parts.next().ok_or_else(|| {
+        ClientError::Handshake(format!("proxy status line malformed: {status_line:?}"))
+    })?;
+    let code: u16 = code
+        .parse()
+        .map_err(|_| ClientError::Handshake(format!("proxy status code malformed: {code:?}")))?;
+    if !(200..300).contains(&code) {
+        // 407 in particular: auth required. Surface distinctly so
+        // the caller can show "wrong proxy credentials" rather than
+        // a generic transport error.
+        return Err(ClientError::Handshake(format!(
+            "proxy CONNECT to {target} failed with status {code}"
+        )));
+    }
+    Ok(tcp)
+}
+
 pub fn build_tls_config() -> Result<RustlsClientConfig, ClientError> {
     // rustls 0.23 expects the default crypto provider to be
     // installed once per process. Re-install attempts are no-ops
@@ -168,4 +262,118 @@ pub fn build_tls_config() -> Result<RustlsClientConfig, ClientError> {
         .with_no_client_auth();
     config.alpn_protocols = vec![b"h2".to_vec()];
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn run_proxy(listener: TcpListener, response: &'static [u8]) -> Vec<u8> {
+        let (mut sock, _) = listener.accept().await.unwrap();
+        // Read up to CRLF CRLF so we capture exactly the CONNECT
+        // request the client sent, then send the canned response.
+        let mut req = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            let n = sock.read(&mut byte).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            req.push(byte[0]);
+            if req.ends_with(b"\r\n\r\n") {
+                break;
+            }
+        }
+        sock.write_all(response).await.unwrap();
+        // Echo a sentinel so the test can verify byte alignment
+        // after the response headers (i.e. no leftover swallowed).
+        // Then drop the socket; bytes already queued in the kernel
+        // buffer remain readable by the client.
+        sock.write_all(b"PREFACE").await.unwrap();
+        req
+    }
+
+    #[tokio::test]
+    async fn connect_no_auth_succeeds_and_leaves_post_header_bytes_intact() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = listener.local_addr().unwrap();
+        let proxy_url = Url::parse(&format!("http://{proxy_addr}")).unwrap();
+
+        let server = tokio::spawn(run_proxy(
+            listener,
+            b"HTTP/1.1 200 Connection Established\r\nVia: 1.1 test\r\n\r\n",
+        ));
+
+        let mut tcp = open_tcp("upstream.example", 443, Some(&proxy_url))
+            .await
+            .expect("open_tcp ok");
+        // After CONNECT 200 the next bytes from the proxy belong to
+        // the tunnelled upstream. Verify we did not swallow them.
+        let mut sentinel = [0u8; 7];
+        tcp.read_exact(&mut sentinel).await.unwrap();
+        assert_eq!(&sentinel, b"PREFACE");
+
+        let req = server.await.unwrap();
+        let text = std::str::from_utf8(&req).unwrap();
+        assert!(text.starts_with("CONNECT upstream.example:443 HTTP/1.1\r\n"));
+        assert!(text.contains("Host: upstream.example:443"));
+        assert!(!text.to_ascii_lowercase().contains("proxy-authorization"));
+    }
+
+    #[tokio::test]
+    async fn connect_sends_basic_auth_from_userinfo() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = listener.local_addr().unwrap();
+        // Embed userinfo "alice:s3cret" in the proxy URL.
+        let proxy_url = Url::parse(&format!("http://alice:s3cret@{proxy_addr}")).unwrap();
+
+        let server = tokio::spawn(run_proxy(listener, b"HTTP/1.1 200 OK\r\n\r\n"));
+
+        let _tcp = open_tcp("upstream.example", 443, Some(&proxy_url))
+            .await
+            .expect("open_tcp ok");
+        let req = server.await.unwrap();
+        let text = std::str::from_utf8(&req).unwrap();
+        // base64("alice:s3cret") == "YWxpY2U6czNjcmV0"
+        assert!(
+            text.contains("Proxy-Authorization: Basic YWxpY2U6czNjcmV0\r\n"),
+            "request was {text:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_non_2xx_status_is_an_error() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = listener.local_addr().unwrap();
+        let proxy_url = Url::parse(&format!("http://{proxy_addr}")).unwrap();
+
+        let _server = tokio::spawn(run_proxy(
+            listener,
+            b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n",
+        ));
+
+        let err = open_tcp("upstream.example", 443, Some(&proxy_url))
+            .await
+            .expect_err("407 should error");
+        match err {
+            ClientError::Handshake(msg) => {
+                assert!(msg.contains("407"), "unexpected message: {msg}");
+            }
+            other => panic!("expected Handshake error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_https_proxy_scheme() {
+        let proxy_url = Url::parse("https://proxy.example:3128").unwrap();
+        let err = open_tcp("upstream.example", 443, Some(&proxy_url))
+            .await
+            .expect_err("https proxy should be rejected");
+        match err {
+            ClientError::InvalidUrl(msg) => assert!(msg.contains("https")),
+            other => panic!("expected InvalidUrl, got {other:?}"),
+        }
+    }
 }

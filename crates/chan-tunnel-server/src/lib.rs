@@ -29,6 +29,29 @@ use yamux::{Config as YamuxConfig, Connection as YamuxConnection, Mode};
 /// on slow mobile uplinks.
 const HELLO_READ_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Cap on the HTTP/2 connection-level handshake (SETTINGS exchange).
+/// A peer that opens TCP and never speaks h2 stays bounded by this.
+pub(crate) const H2_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Cap on the wait for the peer's first stream (the POST /v1/tunnel)
+/// after the h2 handshake completes. A peer that finishes SETTINGS
+/// and then idles is bounded here.
+pub(crate) const FIRST_STREAM_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Cap on the validator round-trip. Independent of any timeout the
+/// `Validator` impl might enforce internally so a hung identity
+/// service cannot pin a tunnel handshake task indefinitely.
+pub(crate) const VALIDATE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Soft cap on how many tunnel connections can be in the
+/// authenticate + handshake phase simultaneously. Above this, new
+/// TCP accepts are rejected immediately (closing the socket) so the
+/// listener cannot be exhausted with half-open / slow-loris peers
+/// that have not yet reached the per-stage timeouts above. 1024 is
+/// plenty for normal client churn; a real outage will recover within
+/// one timeout cycle.
+pub(crate) const MAX_INFLIGHT_HANDSHAKES: usize = 1024;
+
 #[derive(Debug, Error)]
 pub enum ServerError {
     #[error("invalid token")]
@@ -37,6 +60,12 @@ pub enum ServerError {
     #[error("token does not have tunnel scope")]
     MissingScope,
 
+    /// Upstream identity service failure. The wrapped string is
+    /// logged at the listener (`tracing::warn!`) and may end up in
+    /// operator-visible journals, so `Validator` implementations
+    /// MUST NOT include the bearer token, any prefix of it, any URL
+    /// that carries it as a query parameter, or any header value
+    /// that echoes it. Treat the payload as user-visible.
     #[error("upstream identity service: {0}")]
     Identity(String),
 
@@ -79,6 +108,21 @@ pub struct Validated {
 
 /// Token validation hook. Implemented by the consumer (e.g. an
 /// identity-service client); tests use a stub.
+///
+/// **Token-handling contract.** The `token` argument is the bearer
+/// secret. Implementations MUST NOT:
+///
+/// - log it (including at debug / trace levels),
+/// - return it (or any prefix of it) inside `ServerError::Identity`,
+///   `ServerError::Handshake`, or any other error variant,
+/// - return any URL that carries it as a query parameter or path
+///   segment,
+/// - persist it beyond the call duration.
+///
+/// The chan-tunnel listener logs `ServerError` values via
+/// `tracing::warn!`, so anything echoed back will land in operator
+/// journals. The crate itself never logs the token; the seam is
+/// the only place this guarantee can be broken.
 #[async_trait]
 pub trait Validator: Send + Sync + 'static {
     async fn validate(&self, token: &str) -> Result<Validated, ServerError>;

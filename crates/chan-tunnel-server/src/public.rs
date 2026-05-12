@@ -44,15 +44,58 @@ pub struct PublicConfig {
     /// Max bytes in a forwarded request body. Defaults to
     /// `DEFAULT_REQUEST_BODY_CAP`; oversized requests get a 413.
     pub request_body_cap: usize,
+    /// Trust the `X-Forwarded-For` value on incoming requests as
+    /// the existing proxy chain. When `true`, the public router
+    /// appends its own `ConnectInfo` IP to the value it received.
+    /// When `false` (default), incoming `X-Forwarded-For` is
+    /// discarded and the value sent downstream is just the
+    /// `ConnectInfo` IP.
+    ///
+    /// Enable only when the immediate upstream (e.g. nginx) is
+    /// configured to *overwrite* the header with the real client
+    /// address (e.g. `proxy_set_header X-Forwarded-For $remote_addr`).
+    /// If the upstream uses `$proxy_add_x_forwarded_for` or passes
+    /// the public header through, the chain is attacker-controlled
+    /// and trusting it lets a public client spoof its source IP.
+    pub trust_forwarded_for: bool,
+    /// If non-empty, the `Host` header on each public request must
+    /// end with one of these suffixes (case-insensitive); otherwise
+    /// the router replies 421 Misdirected Request. Use this as a
+    /// second wall when the public listener might be exposed past
+    /// the fronting proxy (e.g. accidental direct hit, host
+    /// misconfiguration). Empty (default) disables the check and
+    /// trusts the upstream routing layer.
+    ///
+    /// Match is by ASCII suffix: `[".drive.chan.app"]` matches
+    /// `alice.drive.chan.app` but not `drive.chan.app` itself; add
+    /// the bare hostname too if that should be allowed.
+    pub allowed_host_suffixes: Vec<String>,
+    /// Wall-clock cap on the upstream (chan-serve) handshake +
+    /// response-headers phase: opens the substream, runs hyper's
+    /// h1 handshake, writes the rewritten request, and waits for
+    /// the response headers. A 504 Gateway Timeout is returned
+    /// when this elapses. Body streaming after headers is *not*
+    /// bounded by this knob; a long download is allowed to take as
+    /// long as the public client and chan-serve are happy to move
+    /// bytes. Default 30s; raise for slow LLM endpoints.
+    pub upstream_request_timeout: Duration,
 }
 
 impl Default for PublicConfig {
     fn default() -> Self {
         Self {
             request_body_cap: DEFAULT_REQUEST_BODY_CAP,
+            trust_forwarded_for: false,
+            allowed_host_suffixes: Vec::new(),
+            upstream_request_timeout: DEFAULT_UPSTREAM_REQUEST_TIMEOUT,
         }
     }
 }
+
+/// Default for `PublicConfig::upstream_request_timeout`. Covers
+/// the slowest realistic chan-serve response-headers latency
+/// (cold-start handlers, brief disk contention) with margin.
+pub const DEFAULT_UPSTREAM_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Idle cap on a hijacked upgrade (typically WebSocket). If neither
 /// side moves bytes for this long, the bridge is torn down. Keeps a
@@ -71,6 +114,10 @@ pub const DEFAULT_REQUEST_BODY_CAP: usize = 10 * 1024 * 1024;
 #[derive(Clone)]
 struct PublicState {
     registry: Arc<Registry>,
+    trust_forwarded_for: bool,
+    /// Lowercased host suffix allowlist. Empty disables the check.
+    allowed_host_suffixes: Arc<[String]>,
+    upstream_request_timeout: Duration,
 }
 
 /// Build the public router with default knobs.
@@ -82,13 +129,42 @@ pub fn public_router(registry: Arc<Registry>) -> Router {
 /// host wants a non-default body cap (media-heavy drives) or to
 /// chain in additional middleware.
 pub fn public_router_with(registry: Arc<Registry>, cfg: PublicConfig) -> Router {
-    let state = PublicState { registry };
+    let allowed_host_suffixes: Arc<[String]> = cfg
+        .allowed_host_suffixes
+        .iter()
+        .map(|s| s.to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .into();
+    let state = PublicState {
+        registry,
+        trust_forwarded_for: cfg.trust_forwarded_for,
+        allowed_host_suffixes,
+        upstream_request_timeout: cfg.upstream_request_timeout,
+    };
     Router::new()
         .route("/:user/:drive", any(handle_root))
         .route("/:user/:drive/", any(handle_root))
         .route("/:user/:drive/*rest", any(handle_rest))
         .layer(RequestBodyLimitLayer::new(cfg.request_body_cap))
         .with_state(state)
+}
+
+/// Returns true if `host` (the request's `Host` header, with any
+/// `:port` stripped) ends with one of the configured suffixes. An
+/// empty allowlist disables the check (returns true).
+fn host_allowed(host: Option<&str>, allowed: &[String]) -> bool {
+    if allowed.is_empty() {
+        return true;
+    }
+    let Some(host) = host else {
+        return false;
+    };
+    // Drop any port; matching is on hostname only.
+    let host = host.split(':').next().unwrap_or("").to_ascii_lowercase();
+    if host.is_empty() {
+        return false;
+    }
+    allowed.iter().any(|suffix| host.ends_with(suffix))
 }
 
 async fn handle_root(
@@ -117,6 +193,23 @@ async fn proxy(
     connect_info: Option<ConnectInfo<SocketAddr>>,
     mut request: Request<Body>,
 ) -> Response<Body> {
+    if !state.allowed_host_suffixes.is_empty() {
+        let host = request
+            .headers()
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok());
+        if !host_allowed(host, &state.allowed_host_suffixes) {
+            // 421 Misdirected Request signals "this server can't
+            // produce a response for the combination of scheme and
+            // authority in the target URI." Standard fit for a
+            // host-routing mismatch.
+            return error(
+                StatusCode::MISDIRECTED_REQUEST,
+                "host not allowed by router policy",
+            );
+        }
+    }
+
     let handle = match state.registry.get(&user, &drive) {
         Some(h) => h,
         None => return error(StatusCode::BAD_GATEWAY, "tunnel not connected"),
@@ -130,15 +223,26 @@ async fn proxy(
     // futures-io -> tokio AsyncRead/Write -> hyper rt::Read/Write.
     let io = TokioIo::new(substream.compat());
 
+    // Shared deadline across the h1 handshake and send_request. The
+    // body stream after response headers is intentionally not bound
+    // here: long downloads / uploads ride the substream as long as
+    // both ends are still moving bytes.
+    let deadline = tokio::time::Instant::now() + state.upstream_request_timeout;
+
     // `with_upgrades()` keeps the connection task alive past a 101
     // so the upgraded byte stream stays attached to the substream.
-    let (mut sender, conn) = match hyper::client::conn::http1::handshake(io).await {
-        Ok(pair) => pair,
-        Err(e) => {
-            tracing::warn!(error = %e, "substream h1 handshake failed");
-            return error(StatusCode::BAD_GATEWAY, "substream h1 handshake failed");
-        }
-    };
+    let (mut sender, conn) =
+        match tokio::time::timeout_at(deadline, hyper::client::conn::http1::handshake(io)).await {
+            Ok(Ok(pair)) => pair,
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "substream h1 handshake failed");
+                return error(StatusCode::BAD_GATEWAY, "substream h1 handshake failed");
+            }
+            Err(_) => {
+                tracing::warn!("substream h1 handshake timed out");
+                return error(StatusCode::GATEWAY_TIMEOUT, "upstream handshake timed out");
+            }
+        };
     tokio::spawn(async move {
         if let Err(e) = conn.with_upgrades().await {
             tracing::debug!(error = %e, "tunnel substream conn ended");
@@ -151,19 +255,27 @@ async fn proxy(
     let public_upgrade: OnUpgrade = hyper::upgrade::on(&mut request);
 
     let peer_ip = connect_info.map(|ConnectInfo(a)| a.ip().to_string());
-    let forwarded = match build_forwarded(rest, request, peer_ip.as_deref()) {
-        Ok(req) => req,
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to build forwarded request");
-            return error(StatusCode::BAD_GATEWAY, "request rewrite failed");
-        }
-    };
+    let forwarded =
+        match build_forwarded(rest, request, peer_ip.as_deref(), state.trust_forwarded_for) {
+            Ok(req) => req,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to build forwarded request");
+                return error(StatusCode::BAD_GATEWAY, "request rewrite failed");
+            }
+        };
 
-    let mut resp = match sender.send_request(forwarded).await {
-        Ok(r) => r,
-        Err(e) => {
+    let mut resp = match tokio::time::timeout_at(deadline, sender.send_request(forwarded)).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
             tracing::warn!(error = %e, "forwarded request failed");
             return error(StatusCode::BAD_GATEWAY, "upstream request failed");
+        }
+        Err(_) => {
+            tracing::warn!(
+                timeout = ?state.upstream_request_timeout,
+                "upstream response headers timed out",
+            );
+            return error(StatusCode::GATEWAY_TIMEOUT, "upstream response timed out");
         }
     };
 
@@ -240,14 +352,33 @@ async fn proxy(
 /// to drop the `/{user}/{drive}` prefix and the URI scheme/authority
 /// dropped (h1 over a substream doesn't use them).
 ///
-/// Also injects standard `X-Forwarded-*` headers so chan-serve can
-/// see the real public client IP, the original scheme, and the host
-/// the user typed. Without these, every request looks like it came
-/// from the loopback substream over plain HTTP.
+/// Header policy (defense-in-depth against header spoofing from the
+/// public side; the immediate upstream is assumed to be a trusted
+/// proxy that already normalised these but we do not rely on it):
+///
+/// - `Forwarded`, `X-Forwarded-Proto`, `X-Forwarded-Host`,
+///   `X-Real-IP` are stripped unconditionally; the public router
+///   sets these fresh from its own view of the request.
+/// - `Proxy-Authorization`, `Proxy-Authenticate` are stripped (they
+///   are hop-by-hop credentials that have no business reaching
+///   chan-serve).
+/// - `X-Forwarded-For`: if `trust_forwarded_for` is `false`
+///   (default), the incoming value is discarded and the resulting
+///   value is just the `ConnectInfo` peer IP. If `true`, the
+///   ConnectInfo IP is appended to the incoming chain. Trusting it
+///   is only safe when the immediate upstream proxy is configured
+///   to *overwrite* X-Forwarded-For (e.g. nginx
+///   `proxy_set_header X-Forwarded-For $remote_addr`); otherwise a
+///   public client can spoof its source IP.
+/// - `X-Forwarded-Proto` is set to `"https"` (production assumption:
+///   the gateway terminates TLS). Hosts running cleartext stacks
+///   can rewrite in their own middleware.
+/// - `X-Forwarded-Host` is set from the request's `Host` header.
 fn build_forwarded(
     rest: String,
     request: Request<Body>,
     peer_ip: Option<&str>,
+    trust_forwarded_for: bool,
 ) -> Result<Request<Body>, http::Error> {
     let (mut parts, body) = request.into_parts();
 
@@ -256,17 +387,32 @@ fn build_forwarded(
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
-    // Best-effort: behind nginx grpc_pass, the public scheme isn't
-    // visible directly. Honor an existing X-Forwarded-Proto from the
-    // upstream proxy if present, else default to "https" since the
-    // tunnel is always served over TLS in production. Hosts that
-    // run cleartext local stacks can rewrite this in middleware.
-    let original_proto = parts
-        .headers
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "https".to_string());
+
+    // Capture the incoming XFF *before* sanitisation, in case we
+    // are configured to trust the upstream-normalised chain.
+    let incoming_xff = if trust_forwarded_for {
+        parts
+            .headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+    } else {
+        None
+    };
+
+    // Strip every public-side-controlled forwarded / proxy header
+    // before re-injecting our own. `remove` is a no-op when absent.
+    for name in [
+        "forwarded",
+        "x-forwarded-for",
+        "x-forwarded-proto",
+        "x-forwarded-host",
+        "x-real-ip",
+        "proxy-authorization",
+        "proxy-authenticate",
+    ] {
+        parts.headers.remove(name);
+    }
 
     let path = if rest.is_empty() {
         "/".to_string()
@@ -279,14 +425,8 @@ fn build_forwarded(
     };
     parts.uri = Uri::builder().path_and_query(path_and_query).build()?;
 
-    // Append (don't replace) X-Forwarded-For so chained proxies
-    // accumulate the chain rather than clobber it.
     if let Some(ip) = peer_ip {
-        let value = match parts
-            .headers
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-        {
+        let value = match incoming_xff {
             Some(existing) => format!("{existing}, {ip}"),
             None => ip.to_string(),
         };
@@ -295,12 +435,17 @@ fn build_forwarded(
                 .headers
                 .insert(HeaderName::from_static("x-forwarded-for"), hv);
         }
+    } else if let Some(existing) = incoming_xff {
+        if let Ok(hv) = HeaderValue::from_str(&existing) {
+            parts
+                .headers
+                .insert(HeaderName::from_static("x-forwarded-for"), hv);
+        }
     }
-    if let Ok(hv) = HeaderValue::from_str(&original_proto) {
-        parts
-            .headers
-            .insert(HeaderName::from_static("x-forwarded-proto"), hv);
-    }
+    parts.headers.insert(
+        HeaderName::from_static("x-forwarded-proto"),
+        HeaderValue::from_static("https"),
+    );
     if let Some(host) = original_host {
         if let Ok(hv) = HeaderValue::from_str(&host) {
             parts
@@ -385,5 +530,132 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for Activity<S> {
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req_with(headers: &[(&str, &str)], host: Option<&str>) -> Request<Body> {
+        let mut b = Request::builder().method("GET").uri("/notes/foo");
+        if let Some(h) = host {
+            b = b.header(header::HOST, h);
+        }
+        for (k, v) in headers {
+            b = b.header(*k, *v);
+        }
+        b.body(Body::empty()).unwrap()
+    }
+
+    fn hv<'a>(req: &'a Request<Body>, name: &str) -> Option<&'a str> {
+        req.headers().get(name).and_then(|v| v.to_str().ok())
+    }
+
+    #[test]
+    fn untrusted_xff_is_replaced_with_connect_ip() {
+        let req = req_with(
+            &[("x-forwarded-for", "1.2.3.4")],
+            Some("alice.drive.chan.app"),
+        );
+        let out = build_forwarded("foo".into(), req, Some("10.0.0.1"), false).unwrap();
+        assert_eq!(hv(&out, "x-forwarded-for"), Some("10.0.0.1"));
+    }
+
+    #[test]
+    fn trusted_xff_is_appended_to_existing_chain() {
+        let req = req_with(
+            &[("x-forwarded-for", "1.2.3.4")],
+            Some("alice.drive.chan.app"),
+        );
+        let out = build_forwarded("foo".into(), req, Some("10.0.0.1"), true).unwrap();
+        assert_eq!(hv(&out, "x-forwarded-for"), Some("1.2.3.4, 10.0.0.1"));
+    }
+
+    #[test]
+    fn forwarded_and_real_ip_are_stripped() {
+        let req = req_with(
+            &[
+                ("forwarded", "for=1.2.3.4;proto=http"),
+                ("x-real-ip", "1.2.3.4"),
+            ],
+            Some("alice.drive.chan.app"),
+        );
+        let out = build_forwarded("foo".into(), req, Some("10.0.0.1"), false).unwrap();
+        assert!(out.headers().get("forwarded").is_none());
+        assert!(out.headers().get("x-real-ip").is_none());
+    }
+
+    #[test]
+    fn proxy_auth_headers_are_stripped() {
+        let req = req_with(
+            &[
+                ("proxy-authorization", "Basic AAA"),
+                ("proxy-authenticate", "Basic"),
+            ],
+            Some("alice.drive.chan.app"),
+        );
+        let out = build_forwarded("foo".into(), req, Some("10.0.0.1"), true).unwrap();
+        assert!(out.headers().get("proxy-authorization").is_none());
+        assert!(out.headers().get("proxy-authenticate").is_none());
+    }
+
+    #[test]
+    fn forwarded_proto_is_always_https() {
+        let req = req_with(
+            &[("x-forwarded-proto", "http")],
+            Some("alice.drive.chan.app"),
+        );
+        let out = build_forwarded("foo".into(), req, Some("10.0.0.1"), false).unwrap();
+        assert_eq!(hv(&out, "x-forwarded-proto"), Some("https"));
+    }
+
+    #[test]
+    fn forwarded_host_comes_from_host_header() {
+        let req = req_with(
+            &[("x-forwarded-host", "evil.example")],
+            Some("alice.drive.chan.app"),
+        );
+        let out = build_forwarded("foo".into(), req, Some("10.0.0.1"), false).unwrap();
+        assert_eq!(hv(&out, "x-forwarded-host"), Some("alice.drive.chan.app"));
+    }
+
+    #[test]
+    fn rest_is_used_as_path() {
+        let req = req_with(&[], Some("alice.drive.chan.app"));
+        let out = build_forwarded("inner/path".into(), req, Some("10.0.0.1"), false).unwrap();
+        assert_eq!(out.uri().path(), "/inner/path");
+    }
+
+    #[test]
+    fn host_allowed_empty_allowlist_lets_everything_through() {
+        assert!(host_allowed(Some("anything.example"), &[]));
+        assert!(host_allowed(None, &[]));
+    }
+
+    #[test]
+    fn host_allowed_matches_suffix_case_insensitive() {
+        let allow = vec![".drive.chan.app".to_string()];
+        assert!(host_allowed(Some("alice.drive.chan.app"), &allow));
+        assert!(host_allowed(Some("ALICE.Drive.Chan.App"), &allow));
+        assert!(host_allowed(Some("alice.drive.chan.app:8443"), &allow));
+        assert!(!host_allowed(Some("evil.example"), &allow));
+        assert!(!host_allowed(Some("drive.chan.app"), &allow)); // bare apex not in suffix
+        assert!(!host_allowed(None, &allow));
+        assert!(!host_allowed(Some(""), &allow));
+    }
+
+    #[test]
+    fn host_allowed_multiple_suffixes() {
+        let allow = vec![".drive.chan.app".to_string(), "drive.chan.app".to_string()];
+        assert!(host_allowed(Some("alice.drive.chan.app"), &allow));
+        assert!(host_allowed(Some("drive.chan.app"), &allow));
+    }
+
+    #[test]
+    fn empty_rest_becomes_root() {
+        let req = req_with(&[], Some("alice.drive.chan.app"));
+        let out = build_forwarded(String::new(), req, Some("10.0.0.1"), false).unwrap();
+        assert_eq!(out.uri().path(), "/");
     }
 }
