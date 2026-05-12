@@ -292,6 +292,18 @@
   /// block.
   let renderingMarks = false;
 
+  /// Mirrors `editingMarkOriginal` for headings. When the caret
+  /// arrives in an `h1..h6` block, the heading is swapped for a
+  /// paragraph carrying its level encoded as a `#…# ` prefix —
+  /// so the user can edit the prefix the same way they edit `**`
+  /// markers. `level` snapshots the original level for the
+  /// autosave gate / debugging; `from` and `to` carry the OUTER
+  /// edges of the expanded paragraph (with the prefix) and are
+  /// mapped through every transaction in onUpdate.
+  let editingHeadingOriginal:
+    | { level: number; from: number; to: number }
+    | null = null;
+
   /// Per-mark live source state. When the caret enters a bold /
   /// italic / strike run, we mutate the doc — the mark is stripped
   /// off the range and literal `**` / `*` / `~~` chars are inserted
@@ -861,6 +873,14 @@
         if (lastBlockStartPos !== null) {
           lastBlockStartPos = transaction.mapping.map(lastBlockStartPos, -1);
         }
+        if (editingHeadingOriginal !== null) {
+          const h = editingHeadingOriginal;
+          editingHeadingOriginal = {
+            ...h,
+            from: transaction.mapping.map(h.from, -1),
+            to: transaction.mapping.map(h.to, 1),
+          };
+        }
         // First doc-change after entry clears the initial-selection
         // short-circuit (the user has touched the label, so arrow
         // keys should resume their normal collapse semantics).
@@ -884,7 +904,8 @@
           editingImageOriginal !== null ||
           editingWikiOriginal !== null ||
           editingContactOriginal !== null ||
-          editingMarkOriginal !== null
+          editingMarkOriginal !== null ||
+          editingHeadingOriginal !== null
         ) {
           return;
         }
@@ -2917,16 +2938,23 @@
     const offsetInInner = Math.max(0, Math.min(inner.length, sel.from - from));
     const newCaret = from + marker.length + offsetInInner;
     tr.setSelection(TextSelection.create(tr.doc, newCaret));
-    // Out of undo history: the expand is a UI affordance, not a
-    // user-authored edit, and we don't want Ctrl+Z to drop the
-    // user inside a half-expanded state.
-    ed.view.dispatch(tr.setMeta("addToHistory", false));
+    // Stamp the autosave-gate flag BEFORE dispatch. PM fires
+    // onUpdate synchronously during dispatch; the autosave handler
+    // reads `editingMarkOriginal` to decide whether to write the
+    // expanded buffer to disk. If we set the flag after dispatch,
+    // the first onUpdate sees null, the file gets the expanded
+    // markers as escaped `\*\*…\*\*` plain text, and a refresh
+    // permanently demotes the mark.
     editingMarkOriginal = {
       markName,
       marker,
       from,
       to: from + wrapped.length,
     };
+    // Out of undo history: the expand is a UI affordance, not a
+    // user-authored edit, and we don't want Ctrl+Z to drop the
+    // user inside a half-expanded state.
+    ed.view.dispatch(tr.setMeta("addToHistory", false));
   }
 
   /// Collapse the currently expanded mark. Reads the OUTER range
@@ -3009,6 +3037,37 @@
     if (!resolved.parent.isTextblock) return;
     const start = resolved.start();
     const end = resolved.end();
+    // Heading promotion. Block-leave only: when the caret crosses
+    // into a different block, this function is called with
+    // `caretInBlock < 0` and an unexpanded heading prefix in the
+    // PREVIOUS block gets re-promoted. We deliberately do NOT
+    // promote when the caret merely moves past the prefix within
+    // the same paragraph — that would spin a promote / re-expand
+    // cycle (renderUnmarkedInBlock promotes → caret-enter
+    // expandHeading fires → next sync promotes again). The
+    // user's editing motion through the prefix stays smooth and
+    // the heading only re-renders when they truly leave the line
+    // (or hit Enter, handled by `HeadingOnEnter`).
+    if (caretInBlock < 0 && resolved.parent.type.name === "paragraph") {
+      const blockText = resolved.parent.textContent;
+      const hm = /^(#{1,6}) (.+)$/.exec(blockText);
+      if (hm) {
+        const prefixLen = hm[1].length + 1;
+        const prefixEnd = start + prefixLen;
+        const level = hm[1].length;
+        const headingType = ed.schema.nodes.heading;
+        if (headingType) {
+          const tr = ed.state.tr;
+          tr.delete(start, prefixEnd);
+          tr.setBlockType(start, start, headingType, { level });
+          ed.view.dispatch(tr.setMeta("addToHistory", false));
+        }
+        // Doc changed; bail. The next sync will re-enter
+        // renderUnmarkedInBlock on the now-heading block to
+        // pick up any inline marks inside it.
+        return;
+      }
+    }
     const text = ed.state.doc.textBetween(start, end, "\n", " ");
     for (const pat of MARK_RENDER_PATTERNS) {
       const markType = ed.schema.marks[pat.name];
@@ -3041,6 +3100,61 @@
       }
       ed.view.dispatch(tr.setMeta("addToHistory", false));
     }
+  }
+
+  /// Swap the heading at `headingPos` for a paragraph carrying its
+  /// `#…# ` prefix as real text. Caret repositioning rule:
+  ///   * if the caret arrived at the very start of the heading (the
+  ///     common arrow-down-from-above case), drop it at position 0
+  ///     of the new paragraph, i.e. BEFORE the `#` prefix. That's
+  ///     where the user expects "moving up" / "moving left" to take
+  ///     them when they want to edit the level marker itself.
+  ///   * otherwise preserve the caret's text-relative offset by
+  ///     shifting it right by `prefix.length`, so a click inside the
+  ///     rendered "Title" lands at the same logical position inside
+  ///     `# Title`.
+  /// editingHeadingOriginal is stamped so the autosave gate holds
+  /// the write (the markdown serializer escapes a leading `#` in a
+  /// paragraph as `\#`, which on next parse renders as plain text
+  /// and silently demotes the heading). The collapse pass lives in
+  /// `renderUnmarkedInBlock`'s heading-promote branch.
+  function expandHeading(ed: Editor, headingPos: number): void {
+    let resolved;
+    try {
+      resolved = ed.state.doc.resolve(headingPos);
+    } catch {
+      return;
+    }
+    const parent = resolved.parent;
+    if (parent.type.name !== "heading") return;
+    const paragraphType = ed.schema.nodes.paragraph;
+    if (!paragraphType) return;
+    const level = Math.min(6, Math.max(1, (parent.attrs.level as number) || 1));
+    const prefix = "#".repeat(level) + " ";
+    const blockStart = resolved.start();
+    const blockEnd = resolved.end();
+    const blockLen = blockEnd - blockStart;
+    const caretOffset = headingPos - blockStart;
+    const tr = ed.state.tr;
+    tr.insertText(prefix, blockStart);
+    // After insertText the block is still a heading; flip to paragraph
+    // so the prefix doesn't render as part of an oversized H1 title.
+    tr.setBlockType(blockStart, blockStart, paragraphType);
+    const newCaret =
+      caretOffset === 0 ? blockStart : blockStart + prefix.length + caretOffset;
+    tr.setSelection(TextSelection.create(tr.doc, newCaret));
+    // Stamp the autosave-gate flag BEFORE dispatch — same reason
+    // as expandMarkAt. PM fires onUpdate synchronously during
+    // dispatch; if the gate is still null, the autosave writes the
+    // expanded paragraph (`# Title` as plain text) which the
+    // markdown serializer escapes as `\# Title`, silently demoting
+    // the heading on the next parse.
+    editingHeadingOriginal = {
+      level,
+      from: blockStart,
+      to: blockStart + prefix.length + blockLen,
+    };
+    ed.view.dispatch(tr.setMeta("addToHistory", false));
   }
 
   function syncLiveMarkSource(): void {
@@ -3087,6 +3201,26 @@
       } finally {
         renderingMarks = false;
       }
+    }
+    // Heading expansion. If the caret is in a heading block, swap
+    // it for a paragraph carrying the `#…# ` prefix as editable
+    // text. The collapse path lives in renderUnmarkedInBlock — when
+    // the caret leaves the paragraph (or moves strictly past the
+    // prefix), the paragraph promotes back to a heading at the
+    // matching level. The flag is cleared once the doc is no longer
+    // in the expanded paragraph state.
+    if (
+      editingHeadingOriginal !== null &&
+      sel.$from?.parent.type.name !== "paragraph"
+    ) {
+      editingHeadingOriginal = null;
+    }
+    if (
+      editingHeadingOriginal === null &&
+      sel.$from?.parent.type.name === "heading"
+    ) {
+      expandHeading(editor, sel.from);
+      return;
     }
     const active = findActiveMarkRange(editor);
     if (!active) return;
@@ -4127,8 +4261,31 @@
      a code editor's syntax highlighter would give while typing /
      editing the surrounding text. */
   :global(.md-wysiwyg .md-mark-pending) {
-    color: var(--accent);
-    opacity: 0.65;
+    color: var(--text-secondary);
+    opacity: 0.7;
+  }
+
+  /* Heading expansion: while the caret is in a heading, the block is
+     temporarily a paragraph carrying its `#…# ` prefix as editable
+     text (see Wysiwyg.svelte's `expandHeading`). The `liveSource`
+     plugin stamps `data-expanded-heading-level` on the paragraph so
+     the visible size stays glued to the original heading — switching
+     to the paragraph font here would shove every block below it on
+     each caret entry / exit. The CSS only carries the size + family;
+     the prefix colour lives in `.md-mark-pending` above. Levels 4..6
+     fall through to the normal paragraph style by design (same as
+     the underlying h1..h6 rule set). */
+  :global(.md-wysiwyg p[data-expanded-heading-level="1"]) {
+    font-family: var(--chan-font-heading1-family);
+    font-size: var(--chan-font-heading1-size, 28px);
+  }
+  :global(.md-wysiwyg p[data-expanded-heading-level="2"]) {
+    font-family: var(--chan-font-heading2-family);
+    font-size: var(--chan-font-heading2-size, 22px);
+  }
+  :global(.md-wysiwyg p[data-expanded-heading-level="3"]) {
+    font-family: var(--chan-font-heading3-family);
+    font-size: var(--chan-font-heading3-size, 18px);
   }
 
   /* Inline-mark source markers (bold / italic / strike). The

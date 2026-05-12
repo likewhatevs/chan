@@ -313,6 +313,35 @@ export const LiveSourceExtension = Extension.create({
             if (parentForPending.isTextblock) {
               const blockTextStart = $from.start();
               const blockText = parentForPending.textContent;
+              // Heading prefix decoration. A paragraph that starts
+              // with `^(#{1,6}) ` is a pending heading; the prefix
+              // (the hashes AND the space) is the marker the user
+              // typed, so highlight it the same way as `*` / `**`.
+              // We ALSO stamp the block with `data-expanded-heading-
+              // level` so the CSS can size it like the matching real
+              // heading — without that the H1→paragraph swap visibly
+              // shrinks the line and shoves the rest of the doc
+              // around.
+              if (parentForPending.type.name === "paragraph") {
+                const hm = /^(#{1,6}) /.exec(blockText);
+                if (hm) {
+                  decos.push(
+                    Decoration.inline(
+                      blockTextStart,
+                      blockTextStart + hm[0].length,
+                      { class: "md-mark-pending" },
+                    ),
+                  );
+                  const blockOuterStart = $from.before($from.depth);
+                  const blockOuterEnd =
+                    blockOuterStart + parentForPending.nodeSize;
+                  decos.push(
+                    Decoration.node(blockOuterStart, blockOuterEnd, {
+                      "data-expanded-heading-level": String(hm[1].length),
+                    }),
+                  );
+                }
+              }
               const pendingPatterns: Array<{
                 name: string;
                 re: RegExp;
