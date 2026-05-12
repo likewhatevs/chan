@@ -210,7 +210,22 @@
     const ids = new Set<string>();
     if (show.img) return ids;
     for (const n of nodes) {
-      if (n.kind === "file" && classifyFile(n.path) === "img") ids.add(n.id);
+      if (n.kind === "file" && classifyFile(n.path, n.node_kind) === "img") ids.add(n.id);
+    }
+    return ids;
+  });
+
+  /// Contact-kind file-node ids hidden when the contact chip is off.
+  /// The chip is wired off the `mention` filter slot (which is now
+  /// user-labeled "contact") so toggling it has the same shape as the
+  /// img toggle: hide the nodes AND any edges touching them. Without
+  /// the node hide, the user would just see the contact rectangles
+  /// floating with their mention edges gone — half a filter.
+  const hiddenContactIds = $derived.by(() => {
+    const ids = new Set<string>();
+    if (show.mention) return ids;
+    for (const n of nodes) {
+      if (n.kind === "file" && n.node_kind === "contact") ids.add(n.id);
     }
     return ids;
   });
@@ -221,6 +236,8 @@
         show[e.kind] &&
         !hiddenImageIds.has(e.source) &&
         !hiddenImageIds.has(e.target) &&
+        !hiddenContactIds.has(e.source) &&
+        !hiddenContactIds.has(e.target) &&
         (scopedNodeIds === null ||
           (scopedNodeIds.has(e.source) && scopedNodeIds.has(e.target))),
     ),
@@ -229,7 +246,9 @@
     const ids = new Set<string>();
     for (const n of nodes) {
       if (scopedNodeIds !== null && !scopedNodeIds.has(n.id)) continue;
-      if (n.kind === "file" && !hiddenImageIds.has(n.id)) ids.add(n.id);
+      if (n.kind === "file" && !hiddenImageIds.has(n.id) && !hiddenContactIds.has(n.id)) {
+        ids.add(n.id);
+      }
     }
     for (const e of visibleEdges) {
       ids.add(e.source);
@@ -240,12 +259,17 @@
 
   /// Chip counts. Edge-kind chips report the underlying edge count;
   /// the `img` chip reports image-file-node count since that's what
-  /// it actually toggles.
+  /// it actually toggles. The mention chip (user label "contact")
+  /// adds the contact-file count on top of mention edges so the
+  /// number reflects everything the toggle hides.
   const counts = $derived.by(() => {
     const c: Record<FilterKind, number> = { link: 0, tag: 0, mention: 0, img: 0 };
     for (const e of edges) c[e.kind]++;
     for (const n of nodes) {
-      if (n.kind === "file" && classifyFile(n.path) === "img") c.img++;
+      if (n.kind !== "file") continue;
+      const cls = classifyFile(n.path, n.node_kind);
+      if (cls === "img") c.img++;
+      else if (cls === "contact") c.mention++;
     }
     return c;
   });
@@ -435,6 +459,20 @@
           shape: "round-rectangle",
           "background-color": c.doc,
           width: 14,
+          height: 18,
+        },
+      },
+      // Contact-kind file nodes: same shape as a doc, painted in
+      // --warn-text so they read as part of the contact set alongside
+      // the mention nodes and the editor pill. Slightly bigger than a
+      // doc rect because a contact label tends to be a person's name
+      // (longer than a typical note stem).
+      {
+        selector: 'node[kind = "contact"]',
+        style: {
+          shape: "round-rectangle",
+          "background-color": c.mention,
+          width: 16,
           height: 18,
         },
       },
@@ -735,11 +773,20 @@
     return ids;
   }
 
-  /// Files split into "doc" vs "img" by extension at element-build
-  /// time; the GraphView type only knows "file". Anything not a
-  /// recognised image extension counts as a document.
-  function classifyFile(path: string): "doc" | "img" {
-    return /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(path) ? "img" : "doc";
+  /// Files split into "doc", "img", or "contact" at element-build
+  /// time. Image classification is extension-based (chan-drive's
+  /// indexer skips non-text files, so image nodes get synthesized
+  /// from edge targets and don't carry node_kind). Contact
+  /// classification comes from the wire `node_kind: "contact"` stamp,
+  /// which the server populates from chan-drive's `Drive::contacts()`.
+  /// Anything else is a doc.
+  function classifyFile(
+    path: string,
+    nodeKind: "contact" | undefined,
+  ): "doc" | "img" | "contact" {
+    if (/\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(path)) return "img";
+    if (nodeKind === "contact") return "contact";
+    return "doc";
   }
 
   function buildElements(g: GraphView): {
@@ -750,10 +797,17 @@
     const edgeIds = makeEdgeIds(g);
     const els: ElementDefinition[] = [];
     for (const n of g.nodes) {
+      // Display labels: mentions arrive from chan-drive as `@@name`
+      // (the source-text form). Strip the `@@` so the canvas reads
+      // `alice` not `@@alice`; one palette and one display style for
+      // contacts across all surfaces.
+      const displayLabel =
+        n.kind === "mention" ? n.label.replace(/^@@/, "") : n.label;
       const data: Record<string, unknown> = {
         id: n.id,
-        kind: n.kind === "file" ? classifyFile(n.path) : n.kind,
-        label: n.label,
+        kind:
+          n.kind === "file" ? classifyFile(n.path, n.node_kind) : n.kind,
+        label: displayLabel,
       };
       if (n.kind === "file") {
         data.path = n.path;
@@ -1207,7 +1261,7 @@
         <label class="chip" class:on={show[kind]}>
           <input type="checkbox" bind:checked={show[kind]} />
           <span class="dot" style="background:{FILTER_COLORS[kind]}"></span>
-          {kind}
+          {kind === "mention" ? "contact" : kind}
           <span class="count">{counts[kind]}</span>
         </label>
       {/each}

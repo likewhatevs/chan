@@ -135,6 +135,14 @@ enum GraphNodeView {
         id: String,
         label: String,
         path: String,
+        /// `chan.kind` for the underlying file. "contact" for notes
+        /// flagged with `chan.kind: contact` frontmatter; absent for
+        /// regular markdown so the visualizer's default doc styling
+        /// kicks in. Image files are still classified by extension on
+        /// the frontend; this field is the indexer-side discriminator
+        /// chan-drive carries on every file node.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        node_kind: Option<&'static str>,
         /// True for ghost nodes synthesized as the target of a
         /// broken link. Frontend renders them muted.
         #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -304,6 +312,31 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
     // styles file-kind nodes by extension via classifyFile).
     let image_files = drive_image_files(&drive);
 
+    // Contact-kind file set, used to stamp `node_kind: "contact"` on
+    // file nodes so the visualizer can render `chan.kind: contact`
+    // notes (Contacts/alice.md, etc.) with the contact treatment
+    // rather than the generic doc shape. Single SQL scan; cheap
+    // compared to N per-node `node_kind` lookups.
+    //
+    // Also serves as the lookup table for the @@mention -> contact
+    // file rewrite below: a contact whose file_stem matches the
+    // mention name (case-insensitive) gets its rel_path stamped on
+    // the mention edge's dst, so `@@alice` no longer renders as a
+    // standalone yellow text node alongside the Contacts/alice.md
+    // file node — the two collapse into one.
+    let contact_rows = drive.contacts().unwrap_or_default();
+    let contact_paths: std::collections::HashSet<String> =
+        contact_rows.iter().map(|c| c.rel_path.clone()).collect();
+    let mention_to_contact: std::collections::HashMap<String, String> = contact_rows
+        .iter()
+        .filter_map(|c| {
+            std::path::Path::new(&c.rel_path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|stem| (stem.to_lowercase(), c.rel_path.clone()))
+        })
+        .collect();
+
     let mut file_set: std::collections::BTreeSet<&str> = files.iter().map(String::as_str).collect();
     for img in &image_files {
         file_set.insert(img.as_str());
@@ -313,9 +346,26 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
     // markdown links land on the real file node (clickable in the
     // inspector). Genuine ghosts get the decoded form so the label
     // reads "my note" instead of "my%20note".
+    //
+    // Mention-edge targets get a similar rewrite: `@@alice` is
+    // remapped to `Contacts/alice.md` when a contact file with the
+    // matching file_stem exists. The two would otherwise render as
+    // separate nodes (yellow `@@alice` text node + yellow rectangle
+    // contact node), even though they refer to the same person.
+    // Unresolved mentions keep their `@@name` dst and fall through to
+    // the synthesized Mention node below.
     for e in all_edges.iter_mut() {
-        if matches!(e.kind, EdgeKind::Link) {
-            e.dst = resolve_link_dst(&e.src, &e.dst, &file_set);
+        match e.kind {
+            EdgeKind::Link => {
+                e.dst = resolve_link_dst(&e.src, &e.dst, &file_set);
+            }
+            EdgeKind::Mention => {
+                let stripped = e.dst.strip_prefix("@@").unwrap_or(&e.dst).to_lowercase();
+                if let Some(contact_path) = mention_to_contact.get(&stripped) {
+                    e.dst = contact_path.clone();
+                }
+            }
+            EdgeKind::Tag => {}
         }
     }
 
@@ -344,6 +394,11 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
             id: path.clone(),
             label: file_label(path),
             path: path.clone(),
+            node_kind: if contact_paths.contains(path) {
+                Some("contact")
+            } else {
+                None
+            },
             missing: false,
         });
     }
@@ -352,6 +407,7 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
             id: img.clone(),
             label: file_label(img),
             path: img.clone(),
+            node_kind: None,
             missing: false,
         });
     }
@@ -375,7 +431,13 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
         }
         match e.kind {
             EdgeKind::Mention => {
-                mention_set.insert(e.dst.clone());
+                // Only synthesize a standalone @@name node for
+                // mentions that didn't resolve to a real contact
+                // file. Resolved mentions point at the contact's
+                // file node, which already exists in `files`.
+                if !file_set.contains(e.dst.as_str()) {
+                    mention_set.insert(e.dst.clone());
+                }
             }
             EdgeKind::Link => {
                 if !file_set.contains(e.dst.as_str()) {
@@ -396,6 +458,7 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
             id: ghost.clone(),
             label: file_label(ghost),
             path: ghost.clone(),
+            node_kind: None,
             missing: true,
         });
     }

@@ -33,13 +33,18 @@
 
   /// Visual / behavioural kind for a file reference. Images route to
   /// the fullscreen zoom overlay (editor's "Zoom" button shares the
-  /// same helper); contacts are markdown notes under `Contacts/` and
-  /// open in the editor like other docs but get their own chip color
-  /// so a glance distinguishes them. Anything else is a doc.
+  /// same helper); contacts are markdown notes flagged with the
+  /// `chan.kind: contact` frontmatter and open in the editor like
+  /// other docs but get their own chip color so a glance distinguishes
+  /// them. The contact bit comes off the server-side tree listing
+  /// (which joins chan-drive's node-kind index) rather than a path
+  /// heuristic, so contacts located outside `Contacts/` still classify
+  /// correctly. Anything else is a doc.
   type RefKind = "doc" | "image" | "contact";
   function classifyRef(path: string): RefKind {
     if (isImage(path)) return "image";
-    if (path === "Contacts" || path.startsWith("Contacts/")) return "contact";
+    const e = entryByPath.get(path);
+    if (e && !e.is_dir && e.kind === "contact") return "contact";
     return "doc";
   }
 
@@ -107,6 +112,82 @@
     if (!graphData.view) return null;
     return selectionEdgesFor(entry.path);
   });
+
+  /// Contact pills surfaced under the Contacts section. Merges three
+  /// graph-edge cases so a file that references a contact through any
+  /// path lands as a single row, and the matching entry disappears
+  /// from "Links to" so the reader doesn't see Alice listed twice:
+  ///
+  ///   1. mention -> contact file (server resolved `@@alice` to
+  ///      `Contacts/alice.md`): a navigable row using the file's
+  ///      label and path.
+  ///   2. mention -> standalone `@@name` (no matching contact file):
+  ///      a graph-only row labeled `name`.
+  ///   3. link    -> contact-kind file ([[Contacts/alice]] or a
+  ///      regular markdown link to it): same shape as case 1.
+  ///
+  /// Deduped by the target node id so authoring both `@@alice` AND a
+  /// link to `Contacts/alice.md` in the same document collapses to
+  /// one pill.
+  type ContactPill = {
+    key: string;
+    label: string;
+    path: string | null;
+    onClick: () => void;
+  };
+  const contactPills = $derived.by<ContactPill[]>(() => {
+    if (!refs) return [];
+    const out: ContactPill[] = [];
+    const seen = new Set<string>();
+    const push = (p: ContactPill) => {
+      if (seen.has(p.key)) return;
+      seen.add(p.key);
+      out.push(p);
+    };
+    for (const m of refs.mentions) {
+      if (m.kind === "file" && !m.missing) {
+        // Server-resolved mention: edge kind is still "mention" but
+        // the target landed on a real contact file node.
+        push({
+          key: m.id,
+          label: m.label,
+          path: m.path,
+          onClick: () => navigate(m.path),
+        });
+      } else {
+        // Unresolved `@@name` — no matching contact on disk yet.
+        push({
+          key: m.id,
+          label: m.label.replace(/^@@/, ""),
+          path: null,
+          onClick: () => openGraphAtNode(m.id),
+        });
+      }
+    }
+    for (const l of refs.links) {
+      if (l.kind !== "file" || l.missing) continue;
+      if (classifyRef(l.path) !== "contact") continue;
+      push({
+        key: l.id,
+        label: l.label,
+        path: l.path,
+        onClick: () => navigate(l.path),
+      });
+    }
+    return out;
+  });
+
+  /// Non-contact outgoing links. Contact-kind targets move to the
+  /// Contacts pill list above so the reader doesn't see Alice listed
+  /// twice in the inspector when the source authored both an `@@alice`
+  /// and a real markdown link to her contact file.
+  const nonContactLinks = $derived(
+    refs
+      ? refs.links.filter(
+          (l) => !(l.kind === "file" && !l.missing && classifyRef(l.path) === "contact"),
+        )
+      : [],
+  );
 
   /// Backlinks (incoming `link` edges) live behind a separate
   /// endpoint (/api/backlinks/{path}) since the graph snapshot only
@@ -181,10 +262,16 @@
 {:else}
   {@const editable = isEditableText(entry.path)}
   {@const image = isImage(entry.path)}
+  {@const contact = !entry.is_dir && entry.kind === "contact"}
   <div class="info">
     <header class="head">
-      <span class="kind-chip file" class:image class:view-only={!editable && !image}>
-        {image ? "image" : editable ? "file" : "view-only"}
+      <span
+        class="kind-chip file"
+        class:image
+        class:contact
+        class:view-only={!editable && !image}
+      >
+        {contact ? "contact" : image ? "image" : editable ? "file" : "view-only"}
       </span>
       {#if onClose}
         <button class="close" onclick={onClose} aria-label="clear selection">×</button>
@@ -221,12 +308,12 @@
       {#if showRefs && !image}
         <span class="k">tags</span>
         <span class="v">{refs ? refs.tags.length : "…"}</span>
-        <span class="k">mentions</span>
-        <span class="v">{refs ? refs.mentions.length : "…"}</span>
+        <span class="k">contacts</span>
+        <span class="v">{refs ? contactPills.length : "…"}</span>
         <span class="k">dates</span>
         <span class="v">{refs ? refs.dates.length : "…"}</span>
         <span class="k">links out</span>
-        <span class="v">{refs ? refs.links.length : "…"}</span>
+        <span class="v">{refs ? nonContactLinks.length : "…"}</span>
         <span class="k">backlinks</span>
         <span class="v">{backlinksLoading ? "…" : backlinks.length}</span>
       {:else if showRefs && image}
@@ -269,17 +356,17 @@
             </ul>
           </section>
         {/if}
-        {#if refs.mentions.length > 0}
+        {#if contactPills.length > 0}
           <section class="refs">
-            <h4>Mentions</h4>
+            <h4>Contacts</h4>
             <ul>
-              {#each refs.mentions as m (m.id)}
+              {#each contactPills as c (c.key)}
                 <li>
                   <button
-                    class="ref mention"
-                    onclick={() => openGraphAtNode(m.id)}
-                    title="open in graph"
-                  >{m.label}</button>
+                    class="ref contact"
+                    onclick={c.onClick}
+                    title={c.path ?? "open in graph"}
+                  >{c.label}</button>
                 </li>
               {/each}
             </ul>
@@ -301,11 +388,11 @@
             </ul>
           </section>
         {/if}
-        {#if refs.links.length > 0}
+        {#if nonContactLinks.length > 0}
           <section class="refs">
             <h4>Links to</h4>
             <ul>
-              {#each refs.links as l (l.id)}
+              {#each nonContactLinks as l (l.id)}
                 <li>
                   {#if l.kind !== "file"}
                     <span class="ref file">{l.label}</span>
@@ -406,6 +493,10 @@
   .kind-chip.file { background: var(--link); }
   .kind-chip.file.view-only { background: var(--text-secondary); }
   .kind-chip.file.image { background: var(--g-img); }
+  /* Contact-kind chip pulls --warn-text to line up with the contact
+     accent everywhere else (wiki pill, file tree, ref border, graph
+     mention nodes). One palette tone for contacts across all surfaces. */
+  .kind-chip.file.contact { background: var(--warn-text); }
   .kind-chip.dir { background: var(--accent); }
   /* Image preview frame: fixed max height, checkered fallback bg
      (visible while bytes are loading or for images with alpha so
@@ -532,8 +623,7 @@
     background: var(--hover-bg);
   }
   .ref.tag { color: var(--accent); }
-  .ref.mention { color: var(--warn-text); }
-  .ref.date { color: var(--info-text); }
+  .ref.date { color: var(--text-secondary); }
   /* Backlinks / link targets: use the standard text color rather
      than --link. The chip already reads as a clickable button
      thanks to the surface + hover treatment, and the doc/file
@@ -550,10 +640,32 @@
   }
   .ref.file[data-refkind="doc"] { border-left-color: var(--g-doc); }
   .ref.file[data-refkind="image"] { border-left-color: var(--g-img); }
-  .ref.file[data-refkind="contact"] { border-left-color: var(--info-text); }
+  .ref.file[data-refkind="contact"] { border-left-color: var(--warn-text); }
   .ref.file.missing {
     color: var(--text-secondary);
     font-style: italic;
+  }
+  /* Contact rows in the Contacts section: same block-button shape as
+     the other ref types, with a small person silhouette prefixed in
+     --warn-text so a glance tells you the entry is a person rather
+     than a generic doc. Icon matches the editor wiki pill's glyph for
+     visual continuity. */
+  .ref.contact {
+    color: var(--warn-text);
+    padding-left: 22px;
+    position: relative;
+  }
+  .ref.contact::before {
+    content: "";
+    position: absolute;
+    left: 6px;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    transform: translateY(-50%);
+    background: currentColor;
+    -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='5' r='3'/><path d='M2 14c0-3 3-5 6-5s6 2 6 5z'/></svg>") center / contain no-repeat;
+    mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='5' r='3'/><path d='M2 14c0-3 3-5 6-5s6 2 6 5z'/></svg>") center / contain no-repeat;
   }
   .refs-loading,
   .refs-error {

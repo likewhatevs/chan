@@ -243,6 +243,11 @@ export type TreeEntry = {
   is_dir: boolean;
   mtime: number | null;
   size: number;
+  /// Discriminator for special-kind files. Present when the file has
+  /// `chan.kind: contact` frontmatter; absent for regular files (the
+  /// frontend treats absent as "plain file"). Server-side projection
+  /// joins chan-drive's node-kind index onto the tree listing.
+  kind?: "contact";
 };
 
 export type FileResponse = {
@@ -297,6 +302,12 @@ export type GraphViewNode =
       id: string;
       label: string;
       path: string;
+      /// `chan.kind` discriminator from the indexer. "contact" for
+      /// notes flagged with `chan.kind: contact` frontmatter; absent
+      /// for regular markdown so the canvas falls back to the doc
+      /// shape. Image files keep `node_kind` absent and are routed via
+      /// the frontend's classifyFile extension check instead.
+      node_kind?: "contact";
       /// True for ghost nodes synthesized as the target of a broken
       /// link. Rendered muted; clicking is a no-op (the file doesn't
       /// exist yet).

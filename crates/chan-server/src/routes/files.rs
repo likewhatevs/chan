@@ -13,11 +13,48 @@ use crate::error::{err, err_from};
 use crate::state::AppState;
 use crate::static_assets::content_type_for;
 
+/// Tree entry shape on the wire. Adds an optional `kind` discriminator
+/// on top of chan-drive's `TreeEntry` so the file browser can render
+/// `chan.kind: contact` notes distinctly without a per-file resolve
+/// round-trip. Plain markdown / text / other regular files leave `kind`
+/// absent (which the frontend treats as "regular file").
+#[derive(Serialize)]
+struct TreeEntryView {
+    path: String,
+    is_dir: bool,
+    mtime: Option<i64>,
+    size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<&'static str>,
+}
+
 pub async fn api_list_files(State(state): State<Arc<AppState>>) -> Response {
-    match state.drive().list_tree() {
-        Ok(tree) => Json(tree).into_response(),
-        Err(e) => err_from(&e),
-    }
+    let drive = state.drive();
+    let tree = match drive.list_tree() {
+        Ok(t) => t,
+        Err(e) => return err_from(&e),
+    };
+    // Pull the contact-kind set in one shot; a single SQL scan beats N
+    // per-path node_kind lookups on big drives.
+    let contact_paths: std::collections::HashSet<String> = match drive.contacts() {
+        Ok(rows) => rows.into_iter().map(|c| c.rel_path).collect(),
+        Err(_) => std::collections::HashSet::new(),
+    };
+    let out: Vec<TreeEntryView> = tree
+        .into_iter()
+        .map(|e| TreeEntryView {
+            kind: if !e.is_dir && contact_paths.contains(&e.path) {
+                Some("contact")
+            } else {
+                None
+            },
+            path: e.path,
+            is_dir: e.is_dir,
+            mtime: e.mtime,
+            size: e.size,
+        })
+        .collect();
+    Json(out).into_response()
 }
 
 #[derive(Serialize)]

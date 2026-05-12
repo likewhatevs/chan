@@ -145,6 +145,18 @@
 
   const root = $derived<Folder>(buildTree(tree.entries));
 
+  /// Paths of contact-kind files (those with `chan.kind: contact`
+  /// frontmatter). The server sets the discriminator on the listing
+  /// payload; we lift it into a set so the row renderer doesn't have
+  /// to walk the flat entries every time.
+  const contactPaths = $derived<Set<string>>(
+    new Set(
+      tree.entries
+        .filter((e) => !e.is_dir && e.kind === "contact")
+        .map((e) => e.path),
+    ),
+  );
+
   /// Visible-row list in display order. Mirrors the walk in
   /// `rowIndexByPath` but keeps the per-node depth + isDir bits we
   /// need for keyboard navigation. Recomputed when the tree or the
@@ -558,10 +570,12 @@
       {/if}
     {:else}
       {@const editable = isEditableText(node.path)}
+      {@const contact = contactPaths.has(node.path)}
       <div
         class="row file"
         class:selected={browserSelection.path === node.path}
         class:non-editable={!editable}
+        class:contact
         class:zebra={rowIndex % 2 === 1}
         style="padding-left: {depth * 12 + 16}px"
         oncontextmenu={(e) => showMenu(e, node.path, false)}
@@ -570,7 +584,7 @@
         aria-selected={browserSelection.path === node.path}
         draggable="true"
         ondragstart={(e) => onFileDragStart(e, node.path, false)}
-        title={editable ? undefined : "view-only (not an editable text file)"}
+        title={contact ? "contact" : editable ? undefined : "view-only (not an editable text file)"}
         use:trackRow={node.path}
       >
         <!-- Single click selects (mirrors graph tab semantics);
@@ -686,6 +700,13 @@
     color: var(--text-secondary);
     font-style: italic;
     cursor: default;
+  }
+  /* Contact files (`chan.kind: contact` frontmatter): paint the name
+     in --warn-text so the row reads as "contact" at a glance. One
+     palette tone for contacts across surfaces (file tree, inspector
+     chip + ref border, editor wiki pill, graph mention nodes). */
+  .row.contact > .name {
+    color: var(--warn-text);
   }
   /* Selection highlight. Reads as a soft band rather than the full
      accent color so it doesn't fight the dirty / git status dots

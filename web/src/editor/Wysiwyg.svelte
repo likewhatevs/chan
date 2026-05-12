@@ -2958,12 +2958,12 @@
     cursor: pointer !important;
     user-select: none;
   }
-  /* Date pill: same chip shape as the wiki pill, in `--warn-text`
-     so the user can tell dates and links apart at a glance. The
-     base `.md-smart` rules supply background / cursor / user-
-     select; this rule overrides shape + size only. */
+  /* Date pill: same chip shape as the wiki pill, in --text-secondary
+     so dates read as informational (light grey) rather than alarming
+     yellow. --warn-text is now reserved for contacts across all
+     surfaces; dates step back to a neutral tone. */
   :global(.md-wysiwyg .md-smart-date) {
-    color: var(--warn-text);
+    color: var(--text-secondary);
     border-radius: 999px;
     padding: 0.05em 0.55em;
     font-size: 0.95em;
@@ -2994,8 +2994,8 @@
      kind; first paint shows the generic chip, the contact styling
      settles on the next tick. */
   :global(.md-wysiwyg .md-smart-wiki[data-refkind="contact"]) {
-    background: color-mix(in srgb, var(--link) 14%, transparent);
-    color: var(--link);
+    background: color-mix(in srgb, var(--warn-text) 14%, transparent);
+    color: var(--warn-text);
     padding-left: 1.4em;
     position: relative;
   }

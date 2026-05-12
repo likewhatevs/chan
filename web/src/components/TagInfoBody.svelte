@@ -69,12 +69,12 @@
 
 <div class="info">
   <header class="head">
-    <span class="kind-chip" style="background: {chipColor}">{kind}</span>
+    <span class="kind-chip" style="background: {chipColor}">{kind === "mention" ? "contact" : kind}</span>
     {#if onClose}
       <button class="close" onclick={onClose} aria-label="clear selection">×</button>
     {/if}
   </header>
-  <h3 class="title">{label}</h3>
+  <h3 class="title">{kind === "mention" ? label.replace(/^@@/, "") : label}</h3>
   <div class="meta-grid">
     <span class="k">documents</span>
     <span class="v">{documents.length}</span>
