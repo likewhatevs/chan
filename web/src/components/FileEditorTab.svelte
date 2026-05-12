@@ -2,7 +2,7 @@
   // Body of a file tab. The previous top "tab-bar" (Aa, page-width,
   // formatting group, reveal-in-browser, mode toggle, outline toggle)
   // is split across two surfaces: a per-tab popover anchored to the
-  // tab title click (zoom + duplicate / reveal / mode / outline /
+  // tab title click (page width + duplicate / reveal / mode / outline /
   // show-style-toolbar actions), plus a floating style toolbar pinned
   // to the top-left of the editor canvas (block kind + B/I/S/code/link/
   // lists/HR/image). The bubble's formatting row used to sit inside
@@ -26,9 +26,9 @@
     revealAndSelect,
   } from "../state/store.svelte";
   import {
-    PAGE_WIDTH_MAX,
-    PAGE_WIDTH_MIN,
-    PAGE_WIDTH_STEP,
+    PAGE_WIDTH_MAX_PCT,
+    PAGE_WIDTH_MIN_PCT,
+    PAGE_WIDTH_STEP_PCT,
     pageWidth,
     setPageWidth,
   } from "../state/pageWidth.svelte";
@@ -123,9 +123,8 @@
   }
 
   function onPageWidthSlider(e: Event): void {
-    const v = Number((e.currentTarget as HTMLInputElement).value);
-    if (v >= PAGE_WIDTH_MAX) setPageWidth(null);
-    else setPageWidth(v);
+    const pct = Number((e.currentTarget as HTMLInputElement).value);
+    setPageWidth(pct / 100);
   }
 
   function doDuplicate(): void {
@@ -170,29 +169,27 @@
       style={menuStyle}
       onmousedown={(e) => e.stopPropagation()}
     >
-      <!-- Zoom row: page-width as a real slider. The range hits
-           PAGE_WIDTH_MAX + 1 step at the top so users can land in
-           the "100% / unbounded" sentinel (stored as null) by
-           dragging all the way right. -->
-      <div class="zoom-row">
-        <span class="zoom-label">zoom</span>
+      <!-- Page-width slider: ratio of the current window width.
+           100 % is the "no cap" sentinel (drag all the way right).
+           Stored as a ratio so window resize and browser zoom both
+           keep the cap proportional to the viewport. -->
+      <div class="page-width-row">
+        <span class="page-width-label">page width</span>
         <input
-          class="zoom-slider"
+          class="page-width-slider"
           type="range"
-          min={PAGE_WIDTH_MIN}
-          max={PAGE_WIDTH_MAX}
-          step={PAGE_WIDTH_STEP}
-          value={pageWidth.value ?? PAGE_WIDTH_MAX}
+          min={PAGE_WIDTH_MIN_PCT}
+          max={PAGE_WIDTH_MAX_PCT}
+          step={PAGE_WIDTH_STEP_PCT}
+          value={Math.round(pageWidth.ratio * 100)}
           oninput={onPageWidthSlider}
           onmousedown={(e) => e.stopPropagation()}
           aria-label="page width"
         />
-        <span class="zoom-value">{pageWidth.value == null
-          ? "100%"
-          : `${Math.round((pageWidth.value / PAGE_WIDTH_MAX) * 100)}%`}</span>
+        <span class="page-width-value">{Math.round(pageWidth.ratio * 100)}%</span>
       </div>
 
-      <!-- Action rows. Keep separator between formatting/zoom and
+      <!-- Action rows. Keep separator between page-width and
            file-level actions so the affordance reads as two layers. -->
       <div class="action-list">
         <button class="mbtn" onclick={doDuplicate}>
@@ -367,23 +364,23 @@
       transform: none;
     }
   }
-  .zoom-row {
+  .page-width-row {
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 6px 4px;
     border-bottom: 1px solid var(--separator);
   }
-  .zoom-label {
+  .page-width-label {
     color: var(--text-secondary);
     font-size: 12px;
-    min-width: 36px;
+    min-width: 64px;
   }
-  .zoom-slider {
+  .page-width-slider {
     flex: 1;
     accent-color: var(--btn-hover);
   }
-  .zoom-value {
+  .page-width-value {
     min-width: 40px;
     text-align: right;
     color: var(--text-secondary);
