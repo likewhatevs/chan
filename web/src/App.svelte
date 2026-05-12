@@ -213,15 +213,23 @@
     document.addEventListener("visibilitychange", onVisibility);
   });
 
-  /// App-level keyboard shortcuts:
+  /// App-level keyboard shortcuts. Layout follows VS Code where
+  /// possible so users carry intuition in from any code editor.
   ///
-  ///   Cmd/Ctrl+,           -> Settings (open)
-  ///   Cmd/Ctrl+Shift+O     -> Files (toggle)
-  ///   Cmd/Ctrl+P           -> Assistant (toggle)
-  ///   Cmd/Ctrl+K           -> Search (toggle)
-  ///   Cmd/Ctrl+Shift+G     -> Graph (toggle)
-  ///   Alt+Shift+[ / ]      -> previous / next tab
-  ///   Ctrl+Alt+1..9        -> jump to tab N
+  ///   Cmd/Ctrl+,             -> Settings (open)
+  ///   Cmd/Ctrl+P             -> Files (toggle)            [VS Code Quick Open]
+  ///   Cmd/Ctrl+I             -> Assistant (toggle)        [VS Code Copilot inline]
+  ///   Cmd/Ctrl+Shift+F       -> Search across files       [VS Code Find in Files]
+  ///   Cmd/Ctrl+Shift+M       -> Graph (toggle)
+  ///   Alt+Shift+[ / ]        -> previous / next tab       (web fallback)
+  ///   Ctrl+Alt+1..9          -> jump to tab N             (web fallback)
+  ///   Ctrl+Alt+N             -> new file                  (web fallback)
+  ///
+  /// Native (chan-desktop) layers VS Code's browser-reserved chords
+  /// on top via its init script: Cmd+W (close tab), Cmd+N (new),
+  /// Cmd+Shift+[/] (tab nav), Cmd+1..9 (jump), Cmd+F/G/Shift+G
+  /// (find / next / prev — find-on-page lives in chan but no chord
+  /// is bound in the browser; users have the browser's native find).
   ///
   /// Mac note: bare-Alt chords are off-limits for letters / digits
   /// because Option is a dead-key for special characters there
@@ -231,26 +239,13 @@
   /// `e.code` (which is layout-independent) and preventDefault
   /// suppresses the typed `«` / `»` before they reach the editor.
   ///
-  /// Chord choices avoid browser-reserved combinations where
-  /// preventDefault can't reliably win:
-  ///   - Cmd+O (system file picker) -> Cmd+Shift+O instead.
-  ///   - Cmd+P (browser print) -> intercepted; tolerable because
-  ///     the assistant is a primary-use surface.
-  ///   - Cmd+Shift+P would clash with Firefox's private window
-  ///     (OS-level), so search uses Cmd+K (palette convention).
-  ///   - Cmd+G is browser find-next; Cmd+Shift+G is browser find-
-  ///     previous on Chrome / Safari. We override the latter for
-  ///     the graph because find-prev is the lower-traffic action
-  ///     and the chord is mnemonic.
-  ///   - Cmd+Shift+[ / ] is the browser's own tab nav, so we use
-  ///     Alt+Shift+[ / ] for in-app tab nav. e.code rather than
-  ///     e.key so the comparison stays stable when shift is held
-  ///     (browsers report "{"/"}" for e.key on US layout AND `«` /
-  ///     `»` on Mac when Option is held).
-  ///   - Cmd+1..9 is browser tab switching (claimed; preventDefault
-  ///     is unreliable for OS-level tab switching). We use
-  ///     Ctrl+Alt+1..9 instead — distinct from Cmd-based, and
-  ///     unclaimed by mainstream browsers.
+  /// Browser-reserved chord notes:
+  ///   - Cmd+P (browser print) -> preventDefault wins in Chrome /
+  ///     Safari / Firefox; tolerable cost for matching VS Code.
+  ///   - Cmd+W / Cmd+N / Cmd+Shift+[/] / Cmd+1..9 are OS-level
+  ///     reserved in browsers — preventDefault doesn't win. Hence
+  ///     the Alt+Shift / Ctrl+Alt fallbacks above; native binds
+  ///     the VS Code-shaped chords directly.
   function onWindowKey(e: KeyboardEvent): void {
     const meta = e.metaKey || e.ctrlKey;
     // Escape: pop just the topmost overlay so a stack of open
@@ -270,13 +265,13 @@
       openSettings();
       return;
     }
-    if (meta && e.shiftKey && !e.altKey && e.code === "KeyO") {
+    if (meta && !e.shiftKey && !e.altKey && e.code === "KeyP") {
       e.preventDefault();
       browserOverlay.open = !browserOverlay.open;
       if (browserOverlay.open) openBrowser();
       return;
     }
-    if (meta && !e.shiftKey && !e.altKey && e.code === "KeyP") {
+    if (meta && !e.shiftKey && !e.altKey && e.code === "KeyI") {
       // Assistant master switch: when disabled in Settings, the
       // chord falls through and the user gets no visible response,
       // matching the hidden bottom-pill button.
@@ -289,12 +284,12 @@
       }
       return;
     }
-    if (meta && !e.shiftKey && !e.altKey && e.code === "KeyK") {
+    if (meta && e.shiftKey && !e.altKey && e.code === "KeyF") {
       e.preventDefault();
       searchPanel.open = !searchPanel.open;
       return;
     }
-    if (meta && e.shiftKey && !e.altKey && e.code === "KeyG") {
+    if (meta && e.shiftKey && !e.altKey && e.code === "KeyM") {
       e.preventDefault();
       if (graphOverlay.open) {
         graphOverlay.open = false;
