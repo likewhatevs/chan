@@ -269,15 +269,13 @@ pub async fn api_move(State(state): State<Arc<AppState>>, Json(body): Json<MoveB
     let drive = state.drive().clone();
     let from = body.from.clone();
     let to = body.to.clone();
-    let outcome = match tokio::task::spawn_blocking(move || {
-        drive.rename_with_link_rewrite(&from, &to)
-    })
-    .await
-    {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => return err_from(&e),
-        Err(join) => return err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
-    };
+    let outcome =
+        match tokio::task::spawn_blocking(move || drive.rename_with_link_rewrite(&from, &to)).await
+        {
+            Ok(Ok(o)) => o,
+            Ok(Err(e)) => return err_from(&e),
+            Err(join) => return err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+        };
     // Rename emits two notify events on most kernels (a Removed at
     // `from` and a Created at `to`); the rewrite pass also touches
     // every rewritten source. Note them all so neither half of any
