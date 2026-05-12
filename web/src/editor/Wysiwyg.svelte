@@ -879,6 +879,7 @@
     editor.commands.setContent(preserveBlankParagraphs(body), false);
     decorateSmartNodes();
     decorateWikiLinks();
+    decorateWikiBrackets();
   }
 
   /// Detect a leading YAML frontmatter block in `md`. Match shape:
@@ -1025,6 +1026,113 @@
     // the $effect. Decoration is applied to the editor view
     // synchronously regardless of the meta flag, so the wikiLink
     // pill renders immediately.
+    editor.view.dispatch(
+      tr.setMeta("addToHistory", false).setMeta("preventUpdate", true),
+    );
+  }
+
+  /// Promote raw `[[target]]` / `[[target|label]]` text to wikiLink
+  /// atoms. CommonMark has no wikilink syntax, so markdown-it parses
+  /// `[[X]]` as literal text and the editor renders it as such; this
+  /// pass walks every text node, finds `[[ ... ]]` substrings, and
+  /// replaces them with the same atom kind `decorateWikiLinks`
+  /// produces for `[X](X.md)` links. Inner-text grammar mirrors the
+  /// `[[` picker:
+  ///
+  ///     [[path]]                target=path, label=basename(path)
+  ///     [[path|Display Name]]   target=path, label="Display Name"
+  ///     [[path#heading]]        target=path, anchor=heading
+  ///     [[path^block]]          target=path, anchor=^block
+  ///
+  /// A leading `/` in the path round-trips as `wasAbs=true` so the
+  /// serializer re-emits the drive-rooted form. Skips text already
+  /// carrying a `link` mark (that path is owned by decorateWikiLinks)
+  /// so a stray `[[` next to a parsed `[X](Y)` doesn't double-fire.
+  function decorateWikiBrackets(): void {
+    if (!editor) return;
+    const wikiType = editor.schema.nodes.wikiLink;
+    const linkMarkType = editor.schema.marks.link;
+    if (!wikiType) return;
+
+    type Range = {
+      from: number;
+      to: number;
+      target: string;
+      label: string;
+      anchor: string;
+      wasAbs: boolean;
+    };
+    const ranges: Range[] = [];
+    const sourceDir = currentPath
+      ? currentPath.split("/").slice(0, -1).join("/")
+      : "";
+
+    editor.state.doc.descendants((node, pos) => {
+      if (!node.isText || !node.text) return;
+      if (linkMarkType && node.marks.some((m) => m.type === linkMarkType)) {
+        return;
+      }
+      const text = node.text;
+      // Non-greedy inner so adjacent `[[a]][[b]]` parses as two
+      // atoms; `[^\[\]\n]` rejects nested brackets and newlines so
+      // the match stays inside a single line.
+      const re = /\[\[([^\[\]\n]+?)\]\]/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(text)) !== null) {
+        let inner = m[1];
+        let label: string | null = null;
+        const pipeIdx = inner.indexOf("|");
+        if (pipeIdx !== -1) {
+          label = inner.slice(pipeIdx + 1).trim();
+          inner = inner.slice(0, pipeIdx);
+        }
+        let anchor = "";
+        const blockIdx = inner.indexOf("^");
+        const headIdx = inner.indexOf("#");
+        const anchorIdx =
+          blockIdx === -1
+            ? headIdx
+            : headIdx === -1
+              ? blockIdx
+              : Math.min(blockIdx, headIdx);
+        if (anchorIdx !== -1) {
+          anchor = inner.slice(
+            anchorIdx + (inner[anchorIdx] === "#" ? 1 : 0),
+          );
+          inner = inner.slice(0, anchorIdx);
+        }
+        const path = inner.trim();
+        if (path === "") continue;
+        const wasAbs = path.startsWith("/");
+        const normalized = normalizeHref(path, sourceDir);
+        if (normalized === null) continue;
+        const displayLabel =
+          label ?? (path.split("/").pop() ?? path).replace(/\.md$/, "");
+        ranges.push({
+          from: pos + m.index,
+          to: pos + m.index + m[0].length,
+          target: normalized,
+          label: displayLabel,
+          anchor,
+          wasAbs,
+        });
+      }
+    });
+
+    if (ranges.length === 0) return;
+    const tr = editor.state.tr;
+    for (const r of ranges.reverse()) {
+      tr.replaceWith(
+        r.from,
+        r.to,
+        wikiType.create({
+          target: r.target,
+          label: r.label,
+          anchor: r.anchor,
+          wasAbs: r.wasAbs,
+        }),
+      );
+    }
     editor.view.dispatch(
       tr.setMeta("addToHistory", false).setMeta("preventUpdate", true),
     );
