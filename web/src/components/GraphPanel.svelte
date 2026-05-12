@@ -76,7 +76,15 @@
   // mentions. Dates are still filtered out at load: chan-drive's
   // graph index has stopped emitting date edges (issue #17), but
   // older indexes may still contain them.
-  type RenderedEdgeKind = "link" | "tag" | "mention";
+  /// `group` is a synthetic edge kind: cytoscape-only, never emitted
+  /// by chan-drive's graph index. We add `group` edges from a
+  /// synthetic hub node (id `SCOPE_HUB_ID`, kind `scope`) to every
+  /// file in a multi-file scope (`currentScope.kind === "group"`) so
+  /// the canvas shows which files the user has pinned together.
+  type RenderedEdgeKind = "link" | "tag" | "mention" | "group";
+  /// Stable id for the synthetic scope hub node. Prefixed with `__`
+  /// so it can't collide with a real file path.
+  const SCOPE_HUB_ID = "__scope_hub__";
   type RenderedEdge = GraphViewEdge & { kind: RenderedEdgeKind };
   type RenderedNode = Extract<GraphViewNode, { kind: "file" | "tag" | "mention" }>;
   /// Chip toggles. `link`, `tag`, `mention` are edge-kind filters
@@ -368,6 +376,9 @@
     link: "var(--text-secondary)",
     tag: "var(--g-tag)",
     mention: "var(--warn-text)",
+    // Group-scope edges read as the accent so they pop against the
+    // document edges without looking like another link kind.
+    group: "var(--accent)",
   };
 
   /// Per-chip dot color. Edge-kind chips reuse EDGE_COLORS; img is a
@@ -570,6 +581,24 @@
         },
       },
       {
+        // Synthetic scope-hub node. No icon, no label, no border;
+        // smaller than file circles so it reads as a marker rather
+        // than a peer. Backlink-based `mapData` would clamp the size
+        // to NODE_BASE_PX here (no incoming edges in `g.edges`), but
+        // we set width/height explicitly to keep the hub visibly
+        // distinct.
+        selector: 'node[kind = "scope"]',
+        style: {
+          "background-color": c.textSec,
+          "background-image": "none",
+          "border-width": 0,
+          width: 12,
+          height: 12,
+          label: "",
+          opacity: 0.7,
+        },
+      },
+      {
         selector: "node[?missing]",
         style: {
           "background-color": c.bgCard,
@@ -621,6 +650,20 @@
       {
         selector: 'edge[kind = "mention"]',
         style: { "line-color": c.mention, width: 1.0 },
+      },
+      {
+        // Group-scope synthetic edges. Dashed + slightly bolder than
+        // a real link so the eye reads them as "this is a UI hint,
+        // not a document edge"; the accent colour keeps them
+        // distinguishable from `edge[?broken]` (broken doc links,
+        // dashed greyed-out).
+        selector: 'edge[kind = "group"]',
+        style: {
+          "line-color": c.accent,
+          "line-style": "dashed",
+          width: 1.4,
+          opacity: 0.55,
+        },
       },
       {
         selector: "edge[?broken]",
@@ -802,9 +845,13 @@
   /// array for drive / global scope (no anchor wanted).
   function computeFocalNodeIds(): string[] {
     if (!currentScope) return [];
+    // Group scope: pin only the synthetic hub (added by
+    // buildElements). fcose pulls every scope file toward it via the
+    // group edges, which is what spreads the seed files around the
+    // hub instead of stacking them all at the origin.
+    if (currentScope.kind === "group") return [SCOPE_HUB_ID];
     let seedPaths: string[];
     if (currentScope.kind === "file") seedPaths = [currentScope.path];
-    else if (currentScope.kind === "group") seedPaths = [...currentScope.paths];
     else if (currentScope.kind === "dir") seedPaths = filesUnder(currentScope.path);
     else if (currentScope.kind === "git_repo")
       seedPaths = filesUnder(currentScope.root);
@@ -891,6 +938,33 @@
       };
       if (e.broken) data.broken = true;
       els.push({ group: "edges", data });
+    }
+    // Synthetic "scope" node + star edges. When the current scope is
+    // a multi-file group, drop a small grey hub node at the cluster
+    // centre and link each scope file to it. The hub gives fcose a
+    // single point to pull the seed files toward (instead of stacking
+    // them all at the origin) and shows the user, at a glance, which
+    // files the current scope binds together. Synthetic — not in
+    // `g.edges`, doesn't count toward backlink sizing.
+    if (currentScope && currentScope.kind === "group") {
+      const paths = currentScope.paths.filter((p) => nodeIds.has(p));
+      if (paths.length > 0) {
+        els.push({
+          group: "nodes",
+          data: { id: SCOPE_HUB_ID, kind: "scope", label: "" },
+        });
+        for (const p of paths) {
+          els.push({
+            group: "edges",
+            data: {
+              id: `group:${SCOPE_HUB_ID}|${p}`,
+              source: SCOPE_HUB_ID,
+              target: p,
+              kind: "group",
+            },
+          });
+        }
+      }
     }
     return { elements: els, dropped, maxBacklinks };
   }
@@ -1090,7 +1164,9 @@
   /// where they were.
   function syncVisibility(): void {
     if (!cy) return;
-    const visN = visibleNodeIds;
+    // Local copy so the synthetic scope-hub admit below doesn't
+    // leak into the derived Set (the stat counter reads its size).
+    const visN = new Set(visibleNodeIds);
     const visE = new Set<string>();
     // Mirror makeEdgeIds: walk edges in order and key by base; the
     // visibleEdges array is a subset of `edges` in the same order,
@@ -1108,6 +1184,17 @@
         (scopedNodeIds === null ||
           (scopedNodeIds.has(e.source) && scopedNodeIds.has(e.target)));
       if (wantVisible) visE.add(id);
+    }
+    // Re-admit the synthetic scope-hub node and its star edges.
+    // Neither is in `nodes` / `edges`, so the loops above would
+    // let the cy passes below hide them. The hub is always visible
+    // in group scope; an edge is visible whenever its file endpoint
+    // is in `visN`.
+    if (currentScope && currentScope.kind === "group") {
+      visN.add(SCOPE_HUB_ID);
+      for (const p of currentScope.paths) {
+        if (visN.has(p)) visE.add(`group:${SCOPE_HUB_ID}|${p}`);
+      }
     }
     cy.batch(() => {
       cy!.nodes().forEach((n) => {

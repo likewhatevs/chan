@@ -245,6 +245,13 @@ export function defaultScopeId(): string {
       if (entry && !entry.is_dir) return `file:${sel}`;
     }
   }
+  // Two or more leaf panes with distinct active files: the group
+  // scope is the natural "everything in front of me" pick. Without
+  // this, opening an overlay from a multi-pane layout would default
+  // to whichever pane happened to be focused last, hiding the other
+  // panes' files from the result set.
+  const visible = visibleFilePaths();
+  if (visible.length >= 2) return `group:${scopeKey(visible)}`;
   // Otherwise: the active pane's active file.
   const node = layout.nodes[layout.activePaneId];
   if (node && node.kind === "leaf") {
