@@ -4,6 +4,7 @@
 // assistant history) lives outside the user's notes tree, keyed by
 // the canonical drive path.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -95,6 +96,26 @@ pub struct ResolvedLink {
     /// that omit the field entirely.
     #[serde(default)]
     pub kind: crate::graph::NodeKind,
+}
+
+/// Result of `Drive::rename_with_link_rewrite`. Captures both halves
+/// of the operation: which files physically moved, and which other
+/// files had their content rewritten to keep links valid.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenameOutcome {
+    /// Every `(old_path, new_path)` pair the rename moved. For a
+    /// file-to-file rename this is a single entry; for a directory
+    /// rename it is one entry per regular-file descendant. Sorted
+    /// lexicographically by old path so callers can diff stably.
+    pub renamed: Vec<(String, String)>,
+    /// Source files whose markdown contents were rewritten to point
+    /// at the new locations. Drive-rooted POSIX paths (post-rename).
+    pub rewritten: Vec<String>,
+    /// Source files where the rewrite was aborted because the file
+    /// changed between read and write (CAS conflict). The rename
+    /// itself still stands; a follow-up reindex + rewrite-retry can
+    /// reconcile these later.
+    pub conflicts: Vec<String>,
 }
 
 /// One open drive. Holds the writer lock for as long as it lives,
@@ -673,6 +694,186 @@ impl Drive {
         Ok(())
     }
 
+    /// Rename a file or directory and rewrite every inbound link
+    /// affected by the move. Atomicity is per-file: the rename is one
+    /// filesystem op, then each affected source is rewritten via a
+    /// CAS write so concurrent edits surface as a recorded conflict
+    /// rather than a silent overwrite. The rename itself stands even
+    /// if some rewrites fail; the link-rewrite pass is idempotent and
+    /// can be retried later.
+    ///
+    /// What gets rewritten:
+    ///   * `[label](href)` and `![alt](src)` whose normalized target
+    ///     (resolved against the source file's pre-rename directory)
+    ///     matches an old path that moved.
+    ///   * `[[target]]` and `[[target|label]]` wiki links.
+    ///   * Sources that were themselves inside the renamed subtree:
+    ///     their outgoing relative links may need re-relativization
+    ///     even when the target itself did not move, because the
+    ///     source's directory changed.
+    ///
+    /// What does NOT get rewritten:
+    ///   * Reference-style links (`[label][ref]` + `[ref]: url`).
+    ///   * Bare autolinks (`<https://...>`).
+    ///   * Any link with no graph backlink to the moved target. The
+    ///     graph is the index of "what points where" and is built by
+    ///     `reindex`; a freshly-added link landed since the last
+    ///     reindex will not be picked up here. The next reindex pass
+    ///     restores accuracy.
+    ///
+    /// On a stale graph (a freshly-renamed file whose backlinks were
+    /// indexed before this call) this method behaves correctly: the
+    /// graph still records edges by pre-rename target paths, which is
+    /// exactly the lookup key we want.
+    pub fn rename_with_link_rewrite(&self, from: &str, to: &str) -> Result<RenameOutcome> {
+        // Snapshot mapping BEFORE the rename so the file walker sees
+        // the subtree in its old location. Empty mapping is fine
+        // (e.g., directory rename with no descendants) and means the
+        // rewrite pass is a no-op.
+        let from_canon = canonical_posix(from);
+        let to_canon = canonical_posix(to);
+        let mapping = self.snapshot_rename_mapping(&from_canon, &to_canon)?;
+
+        // Single rename op. From here on the on-disk tree reflects the
+        // new layout; the graph is intentionally still stale (rebuilt
+        // by the indexer later) and we use that staleness on purpose.
+        self.rename(from, to)?;
+
+        if mapping.is_empty() {
+            return Ok(RenameOutcome {
+                renamed: vec![(from_canon, to_canon)],
+                rewritten: vec![],
+                conflicts: vec![],
+            });
+        }
+
+        // Wiki-link targets are stored in the graph extensionless
+        // (`[[old]]` -> dst "old"), per chan's wiki convention. The
+        // markdown rewriter resolves them the same way — `normalize_href`
+        // returns the bare stem. Augment the mapping with extensionless
+        // pairs so both backlinks lookups and the rewrite callback
+        // succeed for either form.
+        let mut augmented = mapping.clone();
+        for (old, new) in &mapping {
+            if let (Some(old_stem), Some(new_stem)) =
+                (old.strip_suffix(".md"), new.strip_suffix(".md"))
+            {
+                augmented.insert(old_stem.to_string(), new_stem.to_string());
+            }
+        }
+
+        // Collect source files that need a rewrite pass. Two sources of
+        // candidates:
+        //   1. Backlinks into the renamed subtree. Standard inbound
+        //      references — `[label](old.md)` from outside the move.
+        //   2. Every file that itself moved. Its outgoing relative
+        //      links may need re-relativization because the source's
+        //      directory changed, even when the link target did not
+        //      move.
+        let mut sources_old: HashSet<String> = HashSet::new();
+        if let Ok(graph) = self.graph() {
+            for old in augmented.keys() {
+                if let Ok(edges) = graph.backlinks(old) {
+                    for e in edges {
+                        sources_old.insert(e.src);
+                    }
+                }
+            }
+        }
+        for old in mapping.keys() {
+            sources_old.insert(old.clone());
+        }
+
+        let mut rewritten = Vec::new();
+        let mut conflicts = Vec::new();
+        let mut sources_sorted: Vec<String> = sources_old.into_iter().collect();
+        sources_sorted.sort();
+        for src_old in sources_sorted {
+            let src_new = mapping
+                .get(&src_old)
+                .cloned()
+                .unwrap_or_else(|| src_old.clone());
+            // Only rewrite editable-text files: images and binaries
+            // can be graph nodes but never markdown sources.
+            if !fs_ops::is_editable_text(&src_new) {
+                continue;
+            }
+            let (content, stat) = match self.read_text_with_stat(&src_new) {
+                Ok(pair) => pair,
+                Err(_) => continue,
+            };
+            let src_old_dir = parent_dir(&src_old);
+            let src_new_dir = parent_dir(&src_new);
+            let new_content = markdown::links::rewrite_link_targets(&content, |link| {
+                rewrite_href_for_move(link, &src_old_dir, &src_new_dir, &augmented)
+            });
+            if let Some(new_md) = new_content {
+                match self.write_text_if_unchanged(&src_new, stat.mtime_ns, &new_md) {
+                    Ok(()) => rewritten.push(src_new),
+                    Err(_) => conflicts.push(src_new),
+                }
+            }
+        }
+
+        let mut renamed: Vec<(String, String)> = mapping.into_iter().collect();
+        renamed.sort();
+        Ok(RenameOutcome {
+            renamed,
+            rewritten,
+            conflicts,
+        })
+    }
+
+    /// Pre-rename snapshot of every concrete file under `from`, paired
+    /// with its post-rename path. Returns an empty Vec if `from` is a
+    /// single file (the caller's `(from, to)` pair already covers it)
+    /// or a non-existent path. Returns just the single pair if `from`
+    /// is one file. Directories return one entry per descendant file.
+    fn snapshot_rename_mapping(&self, from: &str, to: &str) -> Result<HashMap<String, String>> {
+        let from_rel = self.rel(from)?;
+        let meta = match self.dir.symlink_metadata(&from_rel) {
+            Ok(m) => m,
+            Err(_) => return Ok(HashMap::new()),
+        };
+        if meta.is_file() {
+            let mut m = HashMap::new();
+            m.insert(from.to_string(), to.to_string());
+            return Ok(m);
+        }
+        if !meta.is_dir() {
+            return Ok(HashMap::new());
+        }
+        // Directory walk. list_tree returns drive-rooted POSIX paths
+        // for every regular file + dir under the drive; we filter to
+        // descendants of `from/` and pair them with their new home
+        // under `to/`.
+        let entries = self.list_tree()?;
+        let prefix = if from.is_empty() {
+            String::new()
+        } else {
+            format!("{from}/")
+        };
+        let mut out = HashMap::new();
+        for e in entries {
+            if e.is_dir {
+                continue;
+            }
+            let suffix_opt = if prefix.is_empty() {
+                Some(e.path.as_str())
+            } else {
+                e.path.strip_prefix(&prefix)
+            };
+            let Some(suffix) = suffix_opt else { continue };
+            let new_path = if to.is_empty() {
+                suffix.to_string()
+            } else {
+                format!("{to}/{suffix}")
+            };
+            out.insert(e.path, new_path);
+        }
+        Ok(out)
+    }
+
     // ---- search ----
 
     /// Run a search query against this drive. Routes through the
@@ -1232,6 +1433,161 @@ fn path_under(path: &str, prefix: &str) -> bool {
         return false;
     }
     path_b[..pb.len()].eq_ignore_ascii_case(pb) && path_b[pb.len()] == b'/'
+}
+
+/// Canonicalize a drive-relative POSIX path for use as a mapping key.
+/// Strips a leading `./` and a trailing `/`; leaves an empty string
+/// for the drive root. We intentionally do NOT collapse `..` here —
+/// the rename API rejects those upstream via the cap-std sandbox.
+fn canonical_posix(p: &str) -> String {
+    let s = p.strip_prefix("./").unwrap_or(p);
+    s.trim_end_matches('/').to_string()
+}
+
+/// Parent directory of a drive-rooted POSIX path. Returns the empty
+/// string for files at the root (`"foo.md"` -> `""`). Used to seed
+/// `normalize_href` so relative link resolution matches the rules in
+/// `chan_drive::markdown::links::normalize_href`.
+fn parent_dir(rel: &str) -> String {
+    match rel.rfind('/') {
+        Some(i) => rel[..i].to_string(),
+        None => String::new(),
+    }
+}
+
+/// Compute a POSIX relative path from `source_dir` to `target`. Both
+/// inputs are drive-rooted (no leading slash). Walks up the source's
+/// path until a common prefix with the target is reached, then
+/// descends into the target. Returns `"."` if the two are equal.
+fn relative_from(source_dir: &str, target: &str) -> String {
+    let src_parts: Vec<&str> = if source_dir.is_empty() {
+        Vec::new()
+    } else {
+        source_dir.split('/').collect()
+    };
+    let tgt_parts: Vec<&str> = if target.is_empty() {
+        Vec::new()
+    } else {
+        target.split('/').collect()
+    };
+    let mut common = 0usize;
+    while common < src_parts.len()
+        && common < tgt_parts.len()
+        && src_parts[common] == tgt_parts[common]
+    {
+        common += 1;
+    }
+    let ups = src_parts.len() - common;
+    let mut out = String::new();
+    for _ in 0..ups {
+        out.push_str("../");
+    }
+    if common < tgt_parts.len() {
+        out.push_str(&tgt_parts[common..].join("/"));
+    }
+    if out.is_empty() {
+        ".".to_string()
+    } else {
+        out.trim_end_matches('/').to_string()
+    }
+}
+
+/// Rewrite-callback wired to `Drive::rename_with_link_rewrite`. Given
+/// one link surfaced by the markdown scanner, returns `Some(new_href)`
+/// to replace it. Resolves the link against the source's PRE-rename
+/// directory (so a self-referential link inside a moved file still
+/// resolves to the right target), maps the resolved target through
+/// the rename, and reconstructs the href preserving its flavor
+/// (drive-rooted vs. `./` explicit vs. bare vs. `../`-rooted) and
+/// the `?query` / `#anchor` suffix.
+fn rewrite_href_for_move(
+    link: markdown::links::LinkRef<'_>,
+    src_old_dir: &str,
+    src_new_dir: &str,
+    mapping: &HashMap<String, String>,
+) -> Option<String> {
+    let href = link.href;
+    // Split path vs ?query / #anchor.
+    let (path_part, suffix) = split_path_suffix(href);
+    if path_part.is_empty() {
+        return None;
+    }
+    // Wiki convention (mirrors `build_edges`): a bare or `/`-prefixed
+    // wiki target is drive-rooted, NOT source-relative. Only `./` or
+    // `../` prefixes flip it to source-relative. Standard markdown
+    // hrefs follow ordinary relative-path semantics.
+    let normalized_target = if matches!(link.kind, markdown::links::LinkRefKind::Wiki)
+        && !path_part.starts_with("./")
+        && !path_part.starts_with("../")
+    {
+        format!("/{}", path_part.trim_start_matches('/'))
+    } else {
+        path_part.to_string()
+    };
+    let resolved_old = markdown::links::normalize_href(&normalized_target, src_old_dir)?;
+    let resolved_new = mapping
+        .get(&resolved_old)
+        .cloned()
+        .unwrap_or_else(|| resolved_old.clone());
+    // If the target didn't move AND the source didn't move, nothing
+    // to do — bail before allocating the replacement string.
+    if resolved_old == resolved_new && src_old_dir == src_new_dir {
+        return None;
+    }
+    // Reconstruct the href as a relative path. Drive-rooted forms
+    // (markdown `/path` and wiki bare `[[name]]`) read as filesystem-
+    // rooted to anything that isn't chan's own renderer (browsers,
+    // GitHub, Obsidian on export), so every rewrite pass migrates
+    // them to the round-trippable relative form. Wiki bare `[[name]]`
+    // resolves to drive root by chan's pre-existing convention, so
+    // wiki rewrites MUST use an explicit `./` or `../` prefix to be
+    // unambiguous as relative.
+    let rel = relative_from(src_new_dir, &resolved_new);
+    let new_path = match link.kind {
+        markdown::links::LinkRefKind::Wiki => {
+            if rel.starts_with("../") || rel == "." {
+                rel
+            } else {
+                format!("./{rel}")
+            }
+        }
+        markdown::links::LinkRefKind::Markdown => {
+            // Same shape as wiki except the bare form is meaningful
+            // for standard markdown links (it's a sibling-relative
+            // path), so we only emit the `./` prefix when the original
+            // had it OR when the original was drive-rooted.
+            let dot_explicit = path_part.starts_with('/') || path_part.starts_with("./");
+            if dot_explicit && !rel.starts_with("../") && rel != "." {
+                format!("./{rel}")
+            } else {
+                rel
+            }
+        }
+    };
+    let new_href = format!("{new_path}{suffix}");
+    if new_href == href {
+        None
+    } else {
+        Some(new_href)
+    }
+}
+
+/// Split a link href into (path, suffix) where suffix is the first
+/// `?query` / `#anchor` and everything after it. Either side may be
+/// empty; whichever delimiter appears first wins.
+fn split_path_suffix(href: &str) -> (&str, &str) {
+    let q = href.find('?');
+    let a = href.find('#');
+    let cut = match (q, a) {
+        (Some(qi), Some(ai)) => Some(qi.min(ai)),
+        (Some(qi), None) => Some(qi),
+        (None, Some(ai)) => Some(ai),
+        (None, None) => None,
+    };
+    match cut {
+        Some(i) => (&href[..i], &href[i..]),
+        None => (href, ""),
+    }
 }
 
 #[cfg(test)]
@@ -2164,5 +2520,267 @@ mod tests {
     fn build_edges_wiki_dot_relative_resolves_to_source_dir() {
         let edges = build_edges("notes/post.md", &[wiki_link("./sibling")], &[]);
         assert_eq!(dsts(&edges), vec!["notes/sibling"]);
+    }
+
+    // ---- rename_with_link_rewrite ---------------------------------------
+
+    /// Set up two files and reindex so the graph knows about the
+    /// `src -> dst` link. Returns the fixture handles plus the path
+    /// strings so tests can rename and assert.
+    fn rename_fixture(src_rel: &str, src_body: &str, dst_rel: &str, dst_body: &str)
+        -> (TempDir, TempDir, Arc<Drive>)
+    {
+        let (cfg, root, drive) = fixture();
+        // Create parent directories as needed (write_text only creates
+        // the immediate parent at the cap-std layer).
+        for p in [src_rel, dst_rel] {
+            if let Some(slash) = p.rfind('/') {
+                std::fs::create_dir_all(root.path().join(&p[..slash])).unwrap();
+            }
+        }
+        drive.write_text(dst_rel, dst_body).unwrap();
+        drive.write_text(src_rel, src_body).unwrap();
+        // Build the graph so `backlinks` returns the right edge.
+        drive.reindex(None).unwrap();
+        (cfg, root, drive)
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_updates_inbound_markdown_link() {
+        let (_cfg, _root, drive) = rename_fixture(
+            "src.md",
+            "see [target](./old.md) for context\n",
+            "old.md",
+            "# Old\n",
+        );
+        let outcome = drive.rename_with_link_rewrite("old.md", "new.md").unwrap();
+        assert_eq!(outcome.renamed, vec![("old.md".into(), "new.md".into())]);
+        assert_eq!(outcome.rewritten, vec!["src.md".to_string()]);
+        assert!(outcome.conflicts.is_empty());
+        assert_eq!(
+            drive.read_text("src.md").unwrap(),
+            "see [target](./new.md) for context\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_preserves_anchor() {
+        let (_cfg, _root, drive) = rename_fixture(
+            "src.md",
+            "see [target](./old.md#section-2) for context\n",
+            "old.md",
+            "# Old\n\n## Section 2\n",
+        );
+        drive.rename_with_link_rewrite("old.md", "new.md").unwrap();
+        assert_eq!(
+            drive.read_text("src.md").unwrap(),
+            "see [target](./new.md#section-2) for context\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_demotes_drive_rooted_markdown_to_relative() {
+        // Drive-rooted markdown links (`/foo.md`) read as filesystem-
+        // rooted in any renderer that isn't chan's own (browsers,
+        // GitHub, Obsidian on export). We use every rewrite pass as
+        // an opportunity to migrate them to the relative form so the
+        // markdown round-trips outside chan.
+        let (_cfg, _root, drive) = rename_fixture(
+            "notes/src.md",
+            "see [target](/old.md) for context\n",
+            "old.md",
+            "# Old\n",
+        );
+        drive
+            .rename_with_link_rewrite("old.md", "deep/new.md")
+            .unwrap();
+        assert_eq!(
+            drive.read_text("notes/src.md").unwrap(),
+            "see [target](../deep/new.md) for context\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_demotes_drive_rooted_when_source_moves() {
+        // Demotion also kicks in when the source file itself moves
+        // and the target hadn't: the link is now relative-eligible
+        // because the source's directory changed even if the target
+        // didn't.
+        let (_cfg, root, drive) = fixture();
+        std::fs::create_dir_all(root.path().join("notes")).unwrap();
+        drive.write_text("home.md", "# Home\n").unwrap();
+        drive
+            .write_text("notes/src.md", "see [home](/home.md) tail\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+        drive
+            .rename_with_link_rewrite("notes/src.md", "archive/src.md")
+            .unwrap();
+        assert_eq!(
+            drive.read_text("archive/src.md").unwrap(),
+            "see [home](../home.md) tail\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_handles_wiki_link() {
+        // Wiki rewrites emit an explicit `./` or `../` prefix because
+        // the bare `[[name]]` form means drive-rooted by chan
+        // convention; relativization needs the prefix to disambiguate.
+        let (_cfg, _root, drive) = rename_fixture(
+            "src.md",
+            "see [[old]] for context\n",
+            "old.md",
+            "# Old\n",
+        );
+        drive.rename_with_link_rewrite("old.md", "archive/old.md").unwrap();
+        assert_eq!(
+            drive.read_text("src.md").unwrap(),
+            "see [[./archive/old]] for context\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_handles_image_ref() {
+        let (_cfg, _root, drive) = fixture();
+        std::fs::create_dir_all(_root.path().join("images")).unwrap();
+        std::fs::write(_root.path().join("images").join("cat.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+        drive.write_text("src.md", "![cat](images/cat.png) ok\n").unwrap();
+        drive.reindex(None).unwrap();
+        drive.rename_with_link_rewrite("images/cat.png", "img/cat.png").unwrap();
+        assert_eq!(
+            drive.read_text("src.md").unwrap(),
+            "![cat](img/cat.png) ok\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_directory_rewrites_all_inbound() {
+        let (_cfg, root, drive) = fixture();
+        std::fs::create_dir_all(root.path().join("A")).unwrap();
+        drive.write_text("A/x.md", "# X\n").unwrap();
+        drive.write_text("A/y.md", "# Y\n").unwrap();
+        drive
+            .write_text(
+                "src.md",
+                "links: [x](A/x.md) and [y](A/y.md) end\n",
+            )
+            .unwrap();
+        drive.reindex(None).unwrap();
+        drive.rename_with_link_rewrite("A", "B").unwrap();
+        assert_eq!(
+            drive.read_text("src.md").unwrap(),
+            "links: [x](B/x.md) and [y](B/y.md) end\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_does_not_touch_external_links() {
+        let (_cfg, _root, drive) = rename_fixture(
+            "src.md",
+            "ext [a](https://example.com/old.md) and [b](./old.md)\n",
+            "old.md",
+            "# Old\n",
+        );
+        drive.rename_with_link_rewrite("old.md", "new.md").unwrap();
+        assert_eq!(
+            drive.read_text("src.md").unwrap(),
+            "ext [a](https://example.com/old.md) and [b](./new.md)\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_self_referential_relative_link() {
+        // src lives inside the moved subtree; a relative link inside src
+        // pointing at a sibling that ALSO moves with the rename should
+        // stay valid (./sib.md still resolves correctly post-rename),
+        // so no rewrite is required.
+        let (_cfg, root, drive) = fixture();
+        std::fs::create_dir_all(root.path().join("A")).unwrap();
+        drive.write_text("A/x.md", "see [sib](./sib.md)\n").unwrap();
+        drive.write_text("A/sib.md", "# Sib\n").unwrap();
+        drive.reindex(None).unwrap();
+        drive.rename_with_link_rewrite("A", "B").unwrap();
+        assert_eq!(
+            drive.read_text("B/x.md").unwrap(),
+            "see [sib](./sib.md)\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_self_to_external_target() {
+        // src moves but a link inside it points at a file OUTSIDE the
+        // moved subtree. The relative reference must be re-relativized.
+        let (_cfg, root, drive) = fixture();
+        std::fs::create_dir_all(root.path().join("A")).unwrap();
+        std::fs::create_dir_all(root.path().join("shared")).unwrap();
+        drive.write_text("A/x.md", "see [s](../shared/note.md)\n").unwrap();
+        drive.write_text("shared/note.md", "# Shared\n").unwrap();
+        drive.reindex(None).unwrap();
+        drive.rename_with_link_rewrite("A", "deep/B").unwrap();
+        // Source is now at deep/B/x.md. Relative to that, the target
+        // is at ../../shared/note.md.
+        assert_eq!(
+            drive.read_text("deep/B/x.md").unwrap(),
+            "see [s](../../shared/note.md)\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_wiki_drive_rooted_from_subdir() {
+        // Regression: a wiki link `[[friends/alice]]` from a source
+        // file that LIVES in `friends/` must still resolve to the
+        // drive-rooted `friends/alice` — not to `friends/friends/alice`
+        // as plain `normalize_href` would do for a bare relative path.
+        // build_edges applies this rule on the index side; the rewrite
+        // callback mirrors it. After resolution, we emit the new path
+        // as an up-relative wiki target.
+        let (_cfg, root, drive) = fixture();
+        std::fs::create_dir_all(root.path().join("friends")).unwrap();
+        drive.write_text("friends/alice.md", "# Alice\n").unwrap();
+        drive
+            .write_text("friends/bob.md", "see [[friends/alice]] end\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+        drive
+            .rename_with_link_rewrite("friends/alice.md", "archive/alice.md")
+            .unwrap();
+        assert_eq!(
+            drive.read_text("friends/bob.md").unwrap(),
+            "see [[../archive/alice]] end\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_wiki_drive_rooted_in_moved_source() {
+        // When the source moves, its outgoing wiki links re-anchor
+        // against the new source dir: `[[index]]` from a file moved
+        // to `friends/` becomes `[[../index]]` so it still points at
+        // the same file outside chan's renderer too.
+        let (_cfg, root, drive) = fixture();
+        std::fs::create_dir_all(root.path().join("friends")).unwrap();
+        drive.write_text("index.md", "# Index\n").unwrap();
+        drive
+            .write_text("alice.md", "ref [[index]] tail\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+        drive
+            .rename_with_link_rewrite("alice.md", "friends/alice.md")
+            .unwrap();
+        assert_eq!(
+            drive.read_text("friends/alice.md").unwrap(),
+            "ref [[../index]] tail\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_returns_empty_outcome_for_no_backlinks() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("old.md", "# Old\n").unwrap();
+        drive.reindex(None).unwrap();
+        let outcome = drive.rename_with_link_rewrite("old.md", "new.md").unwrap();
+        assert_eq!(outcome.renamed, vec![("old.md".into(), "new.md".into())]);
+        assert!(outcome.rewritten.is_empty());
+        assert!(outcome.conflicts.is_empty());
     }
 }

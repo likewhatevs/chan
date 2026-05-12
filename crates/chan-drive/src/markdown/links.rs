@@ -152,6 +152,212 @@ pub fn normalize_href(href: &str, source_dir: &str) -> Option<String> {
     Some(stack.join("/"))
 }
 
+/// Kind of link visited by `rewrite_link_targets`. The caller may
+/// want to distinguish wiki targets (which have no `./` flavor and
+/// are always drive-rooted by convention) from standard markdown
+/// hrefs (which can carry `./`, `../`, or a leading `/`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkRefKind {
+    /// `[[target]]` or `[[target|label]]` — the `target` portion.
+    Wiki,
+    /// `[label](href)` or `![alt](src)` — the `href` portion. Title
+    /// component (`[label](href "title")`) is excluded from the
+    /// callback view and preserved verbatim on rewrite.
+    Markdown,
+}
+
+/// One link visit fed to the `rewrite_link_targets` callback. The
+/// callback returns `Some(replacement)` to rewrite the target slice,
+/// or `None` to leave the link untouched.
+pub struct LinkRef<'a> {
+    pub kind: LinkRefKind,
+    pub href: &'a str,
+}
+
+/// Replace each link target in `markdown` for which `f` returns
+/// `Some(new)`. Visits wiki link targets and standard markdown link
+/// / image hrefs in document order. Returns `Some(new_markdown)` if
+/// any replacement was made, `None` if every callback returned
+/// `None` (or there were no links). The returned string preserves
+/// every byte of the input outside the rewritten slices, including
+/// labels, titles, and surrounding whitespace, so `cargo fmt`-like
+/// reformatting doesn't sneak into the diff.
+///
+/// Skips:
+///   - Wiki and standard syntax inside fenced / indented code
+///     blocks, inline code, and raw HTML (matches `extract_links`).
+///   - Reference-style links (`[label][ref]` + `[ref]: url`) and
+///     autolinks (`<https://...>`) — not in scope for v1 since the
+///     editor doesn't emit them.
+pub fn rewrite_link_targets<F>(markdown: &str, mut f: F) -> Option<String>
+where
+    F: FnMut(LinkRef<'_>) -> Option<String>,
+{
+    let skips = skip_ranges(markdown);
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+
+    // Wiki links: hand-rolled byte scan. The target lives between
+    // `[[` and either `|` (if a label is present) or `]]`. We replace
+    // exactly that target slice, leaving the surrounding `[[ ]]`,
+    // optional `| label`, and any internal whitespace untouched.
+    let bytes = markdown.as_bytes();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'[' && bytes[i + 1] == b'[' {
+            if in_skip(&skips, i) {
+                i += 1;
+                continue;
+            }
+            let start = i + 2;
+            let mut j = start;
+            while j + 1 < bytes.len() {
+                if bytes[j] == b'\n' {
+                    j = bytes.len();
+                    break;
+                }
+                if bytes[j] == b']' && bytes[j + 1] == b']' {
+                    break;
+                }
+                j += 1;
+            }
+            if j + 1 < bytes.len() && bytes[j] == b']' && bytes[j + 1] == b']' {
+                let inner = &markdown[start..j];
+                let target_end_rel = inner.find('|').unwrap_or(inner.len());
+                let target_slice = &inner[..target_end_rel];
+                let target_trimmed = target_slice.trim();
+                if !target_trimmed.is_empty() {
+                    if let Some(replacement) = f(LinkRef {
+                        kind: LinkRefKind::Wiki,
+                        href: target_trimmed,
+                    }) {
+                        // Replace the trimmed-target byte range, not
+                        // the whole pre-`|` slice, so leading /
+                        // trailing whitespace inside `[[  target  ]]`
+                        // (rare but legal) survives the edit.
+                        let lead = target_slice.len() - target_slice.trim_start().len();
+                        let trail = target_slice.len() - target_slice.trim_end().len();
+                        let abs_start = start + lead;
+                        let abs_end = start + target_end_rel - trail;
+                        edits.push((abs_start, abs_end, replacement));
+                    }
+                }
+                i = j + 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    // Standard markdown links + images via pulldown-cmark offsets.
+    // Stack-based so a nested image inside a link's label gets
+    // visited as its own link in addition to the outer link.
+    let parser = Parser::new_ext(markdown, Options::all()).into_offset_iter();
+    let mut stack: Vec<usize> = Vec::new();
+    for (event, range) in parser {
+        match event {
+            Event::Start(Tag::Link { .. }) | Event::Start(Tag::Image { .. }) => {
+                stack.push(range.start);
+            }
+            Event::End(TagEnd::Link) | Event::End(TagEnd::Image) => {
+                let Some(start_off) = stack.pop() else {
+                    continue;
+                };
+                let end_off = range.end;
+                if end_off <= start_off || end_off > markdown.len() {
+                    continue;
+                }
+                if in_skip(&skips, start_off) {
+                    continue;
+                }
+                let chunk = &markdown[start_off..end_off];
+                // The last `](` inside the link source is the splitter
+                // between label and destination. Anything before is
+                // label (possibly with nested brackets); anything
+                // after is `dest title?)`. rfind is safe because the
+                // dest itself cannot contain `](` unescaped.
+                let Some(rel_open) = chunk.rfind("](") else {
+                    continue;
+                };
+                let dest_open = start_off + rel_open + 2;
+                // end_off includes the trailing `)`; the dest region
+                // is dest_open..end_off-1.
+                if end_off == 0 {
+                    continue;
+                }
+                let dest_close = end_off - 1;
+                if dest_close < dest_open {
+                    continue;
+                }
+                let dest_raw = &markdown[dest_open..dest_close];
+                // CommonMark link destination has two flavors:
+                //   * Bare: `[label](url)` or `[label](url "title")`.
+                //     The url ends at the first ASCII whitespace.
+                //   * Angle-wrapped: `[label](<url>)` or
+                //     `[label](<url> "title")`. The url is everything
+                //     between `<` and `>`, including spaces.
+                // We compute the byte range of just the url so the
+                // title (and the angle brackets themselves) survive
+                // the rewrite unchanged.
+                let (href_start, href_end, href_text): (usize, usize, &str) =
+                    if let Some(stripped) = dest_raw.strip_prefix('<') {
+                        match stripped.find('>') {
+                            Some(close_rel) => (
+                                dest_open + 1,
+                                dest_open + 1 + close_rel,
+                                &stripped[..close_rel],
+                            ),
+                            None => continue,
+                        }
+                    } else {
+                        let end_rel = dest_raw
+                            .find(|c: char| c.is_ascii_whitespace())
+                            .unwrap_or(dest_raw.len());
+                        (dest_open, dest_open + end_rel, &dest_raw[..end_rel])
+                    };
+                if href_text.is_empty() {
+                    continue;
+                }
+                if href_end > dest_close {
+                    continue;
+                }
+                if let Some(replacement) = f(LinkRef {
+                    kind: LinkRefKind::Markdown,
+                    href: href_text,
+                }) {
+                    edits.push((href_start, href_end, replacement));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if edits.is_empty() {
+        return None;
+    }
+    edits.sort_by_key(|e| e.0);
+    // Overlapping edits would corrupt the splice; the two scanners
+    // never overlap (wiki `[[...]]` and standard `[...](...)` are
+    // syntactically disjoint), but guard explicitly in case future
+    // scanner additions break that property.
+    let mut prev_end = 0usize;
+    for (start, end, _) in &edits {
+        if *start < prev_end {
+            tracing::warn!(start, prev_end, "rewrite_link_targets: overlapping edits; aborting rewrite");
+            return None;
+        }
+        prev_end = *end;
+    }
+    let mut out = String::with_capacity(markdown.len());
+    let mut cursor = 0;
+    for (start, end, repl) in &edits {
+        out.push_str(&markdown[cursor..*start]);
+        out.push_str(repl);
+        cursor = *end;
+    }
+    out.push_str(&markdown[cursor..]);
+    Some(out)
+}
+
 fn standard_links(markdown: &str) -> Vec<Link> {
     let parser = Parser::new_ext(markdown, Options::all());
     let mut links = Vec::new();
@@ -506,5 +712,143 @@ mod tests {
     #[test]
     fn normalize_rejects_null_byte() {
         assert!(normalize_href("a\0b.md", "notes").is_none());
+    }
+
+    // ---- rewrite_link_targets -------------------------------------------
+
+    fn rewrite_one(input: &str, from: &str, to: &str) -> Option<String> {
+        rewrite_link_targets(input, |link| {
+            if link.href == from {
+                Some(to.to_string())
+            } else {
+                None
+            }
+        })
+    }
+
+    #[test]
+    fn rewrite_standard_link_target() {
+        let out = rewrite_one("see [home](./old.md) for more", "./old.md", "./new.md");
+        assert_eq!(out.as_deref(), Some("see [home](./new.md) for more"));
+    }
+
+    #[test]
+    fn rewrite_image_target() {
+        let out = rewrite_one("![cat](images/cat.jpg) ok", "images/cat.jpg", "img/cat.jpg");
+        assert_eq!(out.as_deref(), Some("![cat](img/cat.jpg) ok"));
+    }
+
+    #[test]
+    fn rewrite_preserves_link_title() {
+        let out = rewrite_one(
+            "[home](./old.md \"the home page\") tail",
+            "./old.md",
+            "./new.md",
+        );
+        assert_eq!(
+            out.as_deref(),
+            Some("[home](./new.md \"the home page\") tail"),
+        );
+    }
+
+    #[test]
+    fn rewrite_preserves_angle_bracket_url_form() {
+        let out = rewrite_one(
+            "[label](<./old name.md>) tail",
+            "./old name.md",
+            "./new name.md",
+        );
+        assert_eq!(
+            out.as_deref(),
+            Some("[label](<./new name.md>) tail"),
+        );
+    }
+
+    #[test]
+    fn rewrite_wiki_target_no_label() {
+        let out = rewrite_one("see [[old]] now", "old", "new/folder");
+        assert_eq!(out.as_deref(), Some("see [[new/folder]] now"));
+    }
+
+    #[test]
+    fn rewrite_wiki_target_preserves_label() {
+        let out = rewrite_one(
+            "ref [[notes/x|exhibit X]]",
+            "notes/x",
+            "archive/x",
+        );
+        assert_eq!(out.as_deref(), Some("ref [[archive/x|exhibit X]]"));
+    }
+
+    #[test]
+    fn rewrite_wiki_in_code_block_skipped() {
+        let md = "before\n\n```\n[[old]]\n```\n\nafter [[old]] tail";
+        let out = rewrite_one(md, "old", "new").expect("rewrite ran");
+        // Only the second [[old]] (outside the code fence) is rewritten.
+        assert!(out.contains("```\n[[old]]\n```"));
+        assert!(out.contains("after [[new]] tail"));
+    }
+
+    #[test]
+    fn rewrite_standard_link_in_inline_code_skipped() {
+        // pulldown-cmark won't surface a link inside backticks, so the
+        // rewriter naturally skips it. Guard against regressions.
+        let md = "use `[label](./old.md)` and write [label](./old.md) tail";
+        let out = rewrite_one(md, "./old.md", "./new.md").expect("rewrite ran");
+        assert!(out.contains("`[label](./old.md)`"));
+        assert!(out.contains("[label](./new.md) tail"));
+    }
+
+    #[test]
+    fn rewrite_returns_none_when_nothing_matches() {
+        let out = rewrite_one("[home](./a.md) and [[b]]", "./other.md", "./new.md");
+        assert!(out.is_none());
+    }
+
+    #[test]
+    fn rewrite_skips_link_when_callback_returns_none() {
+        let md = "[home](./old.md) and [home](./old.md)";
+        let mut calls = 0;
+        let out = rewrite_link_targets(md, |link| {
+            calls += 1;
+            if link.href == "./old.md" && calls == 1 {
+                Some("./new.md".to_string())
+            } else {
+                None
+            }
+        });
+        assert_eq!(out.as_deref(), Some("[home](./new.md) and [home](./old.md)"));
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn rewrite_handles_nested_image_in_link() {
+        // `[label-with-image](outer)` where label is `![alt](inner)`.
+        // Both the inner image's src and the outer link's href should
+        // be rewriteable in the same pass.
+        let md = "[![alt](./img.png)](./old.md)";
+        let out = rewrite_link_targets(md, |link| match link.href {
+            "./img.png" => Some("./new-img.png".to_string()),
+            "./old.md" => Some("./new.md".to_string()),
+            _ => None,
+        });
+        assert_eq!(out.as_deref(), Some("[![alt](./new-img.png)](./new.md)"));
+    }
+
+    #[test]
+    fn rewrite_multiple_in_one_document_order() {
+        let md = "see [[a]] and [home](./b.md) and [[c|name]] end";
+        let out = rewrite_link_targets(md, |link| {
+            Some(match link.href {
+                "a" => "A".into(),
+                "./b.md" => "./B.md".into(),
+                "c" => "C".into(),
+                _ => return None,
+            })
+        });
+        assert_eq!(
+            out.as_deref(),
+            Some("see [[A]] and [home](./B.md) and [[C|name]] end"),
+        );
     }
 }

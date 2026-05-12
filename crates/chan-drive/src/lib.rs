@@ -41,8 +41,8 @@ pub use contacts::{
     PhoneNumber, ProviderKind,
 };
 pub use drive::{
-    DirEntry, Drive, FileStat, ResolvedLink, SearchOpts, TreeEntry, BYTES_WRITE_LIMIT,
-    TEXT_WRITE_LIMIT,
+    DirEntry, Drive, FileStat, RenameOutcome, ResolvedLink, SearchOpts, TreeEntry,
+    BYTES_WRITE_LIMIT, TEXT_WRITE_LIMIT,
 };
 pub use error::{ChanError, Result};
 pub use graph::{
