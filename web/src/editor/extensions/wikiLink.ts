@@ -29,12 +29,13 @@ import { api } from "../../api/client";
 import { wikiLinkToMarkdown } from "../links";
 import { openInActivePane } from "../../state/tabs.svelte";
 import { openBubbleShell, type BubbleHandle } from "../bubble";
+import { isImage } from "../../state/fileTypes";
 
 /// Module-level cache of `target -> kind` decisions so the NodeView
 /// doesn't refetch the same wiki-link's kind on every transaction.
 /// Targets that 404 (broken link) cache `"broken"` to suppress retry
 /// loops; a manual /api/index/rebuild reload will reseed the cache.
-type WikiKind = "file" | "contact" | "broken";
+type WikiKind = "file" | "contact" | "media" | "broken";
 const kindCache = new Map<string, WikiKind>();
 const kindInFlight = new Map<string, Promise<WikiKind>>();
 
@@ -43,9 +44,17 @@ const kindInFlight = new Map<string, Promise<WikiKind>>();
 /// and feeds the result back to every subscriber. Failures land as
 /// `"broken"` (cached) so a temporary network hiccup doesn't pin
 /// the pill in a perma-fetching state.
+///
+/// Image extensions short-circuit to "media" without a backend hop:
+/// the path alone is enough to classify, and chan-drive doesn't track
+/// a node_kind for binary assets anyway.
 function resolveWikiKind(target: string): Promise<WikiKind> {
   const cached = kindCache.get(target);
   if (cached) return Promise.resolve(cached);
+  if (isImage(target)) {
+    kindCache.set(target, "media");
+    return Promise.resolve("media");
+  }
   const pending = kindInFlight.get(target);
   if (pending) return pending;
   const p = api
@@ -125,24 +134,35 @@ export function createWikiLinkNode(getFromPath: () => string | null) {
           wrap.title = `→ ${target}${anchor ? `#${anchor}` : ""}`;
           wrap.textContent = lbl || target;
           // Kind-aware pill: stamp `data-refkind` on the wrap so the
-          // stylesheet can render contact mentions as a distinct
-          // chip from generic doc links. Lookup is async + cached;
-          // first paint is generic, the attribute settles on the
-          // next microtask once /api/resolve-link replies. The
-          // closure captures `target` per node, so a later atom
-          // edit that swaps targets re-fires for the new value.
+          // stylesheet can render contact / image targets as a
+          // distinct chip from generic doc links. Image extensions
+          // are decided synchronously from the path so the pill
+          // paints in the right color on the first frame; contact
+          // detection still needs a `/api/resolve-link` hop and
+          // settles on a microtask. Closure captures `target` per
+          // node, so a later atom edit that swaps targets re-fires
+          // for the new value.
           if (target) {
-            void resolveWikiKind(target).then((kind) => {
-              // Bail if the node has been swapped out in the
-              // meantime (target changed under us); the new
-              // `apply` call will re-fire its own lookup.
-              if (wrap.getAttribute("data-target") !== target) return;
-              if (kind === "contact") {
-                wrap.setAttribute("data-refkind", "contact");
-              } else {
-                wrap.removeAttribute("data-refkind");
-              }
-            });
+            if (isImage(target)) {
+              // Reuse the FileInfoBody convention: `image` is the
+              // refkind value the rest of the app uses for raster /
+              // svg targets so the same `--g-img` CSS hook lights up.
+              wrap.setAttribute("data-refkind", "image");
+            } else {
+              // Default state: clear any stale attr from a previous
+              // `apply` (e.g. target was a png, user retargeted to
+              // an md). The async resolve below may re-stamp it.
+              wrap.removeAttribute("data-refkind");
+              void resolveWikiKind(target).then((kind) => {
+                // Bail if the node has been swapped out in the
+                // meantime (target changed under us); the new
+                // `apply` call will re-fire its own lookup.
+                if (wrap.getAttribute("data-target") !== target) return;
+                if (kind === "contact") {
+                  wrap.setAttribute("data-refkind", "contact");
+                }
+              });
+            }
           }
         };
         apply(node);
@@ -315,6 +335,7 @@ interface BlockEntry {
 
 type Entry = FileEntry | HeadingEntry | BlockEntry;
 
+
 /// Split the bubble query into its three logical sections:
 ///   filePart     - text before any sigil (file selector)
 ///   anchorSigil  - "#" or "^" if present, else ""
@@ -387,6 +408,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubble {
   const preview = document.createElement("div");
   preview.className = "md-wiki-bubble-preview is-hidden";
   wrap.appendChild(preview);
+
 
   // Display-text row. Shown whenever the query carries `|`. Layout
   // is a faded "Display text" placeholder, a forward-arrow glyph,

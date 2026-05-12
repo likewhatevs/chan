@@ -321,6 +321,19 @@
     | { markName: string; marker: string; from: number; to: number }
     | null = null;
 
+  /// Live-source expansion for `link` marks. When the caret touches
+  /// (or moves into) the range of a Link-marked run, we replace it
+  /// with `[label](url)` literal source text so the user can edit
+  /// either field. On caret-leave the `renderUnmarkedInBlock` link
+  /// pass re-promotes the source to a Link mark. Same rationale as
+  /// `editingMarkOriginal` but the marker shape is asymmetric (the
+  /// href lives in the mark's attrs, not in the text), so it needs
+  /// its own helpers rather than fitting into the bold/italic
+  /// LIVE_MARK_MARKER table.
+  let editingLinkOriginal:
+    | { from: number; to: number; href: string; label: string }
+    | null = null;
+
   /// Cleanup for the floating image action overlay (zoom + edit
   /// buttons shown when a rendered image is clicked). `undefined`
   /// when no overlay is open. The function tears down the DOM and
@@ -886,6 +899,14 @@
             to: transaction.mapping.map(m.to, 1),
           };
         }
+        if (editingLinkOriginal !== null) {
+          const l = editingLinkOriginal;
+          editingLinkOriginal = {
+            ...l,
+            from: transaction.mapping.map(l.from, -1),
+            to: transaction.mapping.map(l.to, 1),
+          };
+        }
         if (lastBlockStartPos !== null) {
           lastBlockStartPos = transaction.mapping.map(lastBlockStartPos, -1);
         }
@@ -920,7 +941,8 @@
           editingImageOriginal !== null ||
           editingWikiOriginal !== null ||
           editingContactOriginal !== null ||
-          editingMarkOriginal !== null
+          editingMarkOriginal !== null ||
+          editingLinkOriginal !== null
         ) {
           return;
         }
@@ -1800,13 +1822,13 @@
     editingWikiOriginal = null;
     editingWikiBracketStart = null;
     dismissWikiBubble();
+    const ed = editor;
     // anchor is "" for file picks; only heading / block picks
     // populate it. The wikiLink node carries it onto the markdown
     // serialization so the on-disk link is `[label](path#anchor)`.
     const anchor = picked.kind === "file" ? "" : picked.anchor;
     const pending =
       picked.kind === "block" ? picked.pendingFileWrite : null;
-    const ed = editor;
     const insertNode = (): void => {
       ed.chain()
         .focus()
@@ -2961,8 +2983,21 @@
       // `*` and the caret would jump one position left of where
       // they typed. Matches PM's own semantics: typing at the
       // boundary inserts unmarked text by default.
-      if (range && sel.from > range.from && sel.from < range.to) {
-        return { markName, from: range.from, to: range.to };
+      //
+      // Single-char exception: a rendered `*x*` collapses to one
+      // marked character, leaving no integer position strictly
+      // between the endpoints — the strict check would lock the user
+      // out of editing the mark forever. For range.to-range.from===1
+      // we accept either boundary as "inside" so arrowing into the
+      // pill from either side expands the source back out.
+      if (range) {
+        const inside = sel.from > range.from && sel.from < range.to;
+        const singleCharBoundary =
+          range.to - range.from === 1 &&
+          (sel.from === range.from || sel.from === range.to);
+        if (inside || singleCharBoundary) {
+          return { markName, from: range.from, to: range.to };
+        }
       }
     }
     return null;
@@ -3056,6 +3091,117 @@
       Math.min(inner.length, sel.from - from - m.marker.length),
     );
     tr.setSelection(TextSelection.create(tr.doc, from + targetWithin));
+    ed.view.dispatch(tr.setMeta("addToHistory", false));
+  }
+
+  /// Locate the Link-mark range covering the caret. Boundary-inclusive:
+  /// touching either edge counts as "inside" so the user can edit a
+  /// link the moment their cursor reaches it (matches the unified
+  /// live-source rule). Returns null when the caret is not on a Link
+  /// mark, when a multi-char selection is active, or when an
+  /// expansion is already open (the caller drives collapse off
+  /// `editingLinkOriginal` directly).
+  function findActiveLinkRange(
+    ed: Editor,
+  ): { from: number; to: number; href: string; label: string } | null {
+    const sel = ed.state.selection;
+    if (!sel.empty) return null;
+    const linkMark = ed.schema.marks.link;
+    if (!linkMark) return null;
+    const range = getMarkRange(sel.$from, linkMark);
+    if (!range) return null;
+    if (sel.from < range.from || sel.from > range.to) return null;
+    // Read the mark's attrs off any text node carrying the mark in
+    // the range. Marked runs can split into multiple text nodes
+    // (different stored marks, atom boundaries), but every text node
+    // in the range carries the same Link mark so the first one wins.
+    let href = "";
+    ed.state.doc.nodesBetween(range.from, range.to, (node) => {
+      if (href || !node.isText) return;
+      const m = node.marks.find((mk) => mk.type === linkMark);
+      if (m) href = (m.attrs.href as string) ?? "";
+    });
+    if (!href) return null;
+    const label = ed.state.doc.textBetween(range.from, range.to, "\n", " ");
+    return { from: range.from, to: range.to, href, label };
+  }
+
+  /// Replace a Link-marked range with its `[label](url)` source form.
+  /// The Link mark is stripped from the inserted text so the render
+  /// pass sees plain source.
+  ///
+  /// Caret-preservation rule (matches the unified live-source spec —
+  /// touching the pattern reveals source without moving the cursor):
+  ///   - left boundary  → stay at `range.from` (just before `[`).
+  ///   - right boundary → jump to the new right edge (just after
+  ///     `)`), which is the same logical "after the link" position
+  ///     the user had in the rendered view.
+  ///   - strict inside  → preserve offset within `label`, +1 to skip
+  ///     the inserted `[`.
+  /// Forcing the caret into the label area was the previous behavior
+  /// and read as the editor "jumping into alt-text" the moment the
+  /// user touched the link.
+  function expandLinkAt(
+    ed: Editor,
+    range: { from: number; to: number; href: string; label: string },
+  ): void {
+    if (editingLinkOriginal !== null) return;
+    const linkMark = ed.schema.marks.link;
+    if (!linkMark) return;
+    const sourceText = `[${range.label}](${range.href})`;
+    if (sourceText.length === 0) return;
+    const tr = ed.state.tr;
+    tr.replaceWith(range.from, range.to, ed.state.schema.text(sourceText));
+    tr.removeMark(range.from, range.from + sourceText.length, linkMark);
+    const sel = ed.state.selection;
+    let newCaret: number;
+    if (sel.from <= range.from) {
+      newCaret = range.from;
+    } else if (sel.from >= range.to) {
+      newCaret = range.from + sourceText.length;
+    } else {
+      const offsetInLabel = sel.from - range.from;
+      newCaret = range.from + 1 + offsetInLabel;
+    }
+    tr.setSelection(TextSelection.create(tr.doc, newCaret));
+    editingLinkOriginal = {
+      from: range.from,
+      to: range.from + sourceText.length,
+      href: range.href,
+      label: range.label,
+    };
+    ed.view.dispatch(tr.setMeta("addToHistory", false));
+  }
+
+  /// Collapse the live link expansion back into a Link-marked text
+  /// node. Reads the current outer range; if it still parses as
+  /// `[label](url)`, re-applies the mark with the (possibly edited)
+  /// href. If the user broke the syntax (deleted a bracket, etc) the
+  /// expansion clears without re-marking — the broken source stays
+  /// in the doc for them to keep fixing, mirroring how
+  /// `collapseMarkExpansion` handles a broken `**…**` pair.
+  function collapseLinkExpansion(ed: Editor): void {
+    const orig = editingLinkOriginal;
+    editingLinkOriginal = null;
+    if (!orig) return;
+    const linkMark = ed.schema.marks.link;
+    if (!linkMark) return;
+    if (orig.to <= orig.from) return;
+    const text = ed.state.doc.textBetween(orig.from, orig.to, "\n", " ");
+    const m = /^\[([^\[\]\n]+)\]\(([^)\n]+)\)$/.exec(text);
+    if (!m) return;
+    const label = m[1];
+    const href = m[2];
+    if (!label || !href) return;
+    const tr = ed.state.tr;
+    const newNode = ed.state.schema.text(label, [linkMark.create({ href })]);
+    tr.replaceWith(orig.from, orig.to, newNode);
+    // Let PM map the user's current selection through the
+    // replacement — left-side exits stay before the link, right-side
+    // exits land after it. setStoredMarks clears the link from PM's
+    // typing state so the next keystroke at the boundary doesn't
+    // extend the link mark.
+    tr.setStoredMarks([]);
     ed.view.dispatch(tr.setMeta("addToHistory", false));
   }
 
@@ -3304,6 +3450,70 @@
         }
       }
     }
+    // Markdown-link render pass. Mirrors the image pass but for
+    // plain `[label](url)` source typing. Caret inside the matched
+    // range keeps the literal source visible so the user can edit;
+    // moving out promotes the run to a Link-marked text node. The
+    // Link mark round-trips through the markdown serializer as
+    // `[label](url)`, so a save-then-reload run promotes any
+    // drive-relative href to a wikiLink atom via decorateWikiLinks —
+    // we don't need to inline that classification here.
+    //
+    // `markdownLinkRe` is `[label](url)` not preceded by `[` (so
+    // `[[X]]` keeps going through decorateWikiBrackets) and not
+    // preceded by `!` (images stay images). The manual `before`
+    // check below covers the `[` lookbehind since JavaScript's
+    // lookbehind isn't supported on all targets.
+    const linkMarkType = ed.schema.marks.link;
+    // Skip the link render pass while an expansion is open — the
+    // expanded source IS a `[label](url)` literal, so re-promoting
+    // it here would race with `collapseLinkExpansion` and either
+    // strip the caret-tracking state or double-apply the mark.
+    if (linkMarkType && editingLinkOriginal === null) {
+      type LinkHit = { from: number; to: number; label: string; url: string };
+      const linkHits: LinkHit[] = [];
+      ed.state.doc.nodesBetween(start, end, (node, pos) => {
+        if (!node.isText || !node.text) return;
+        // Skip text already wearing a Link mark — that's the rendered
+        // form, no need to re-process.
+        if (node.marks.some((m) => m.type === linkMarkType)) return;
+        const text = node.text;
+        // `[label](url)` — bare markdown link. Greedy URL capture
+        // (no `)` / newline) keeps fragment params (`#section`) inside
+        // the href.
+        const markdownLinkRe = /\[([^\[\]\n]+?)\]\(([^)\n]+)\)/g;
+        let mm: RegExpExecArray | null;
+        while ((mm = markdownLinkRe.exec(text)) !== null) {
+          const beforeChar = mm.index > 0 ? text[mm.index - 1] : "";
+          // Manual lookbehind: `[[` belongs to the wiki bracket pass,
+          // `![` belongs to the image pass. Neither should fall
+          // through here.
+          if (beforeChar === "[" || beforeChar === "!") continue;
+          const fromPos = pos + mm.index;
+          const toPos = fromPos + mm[0].length;
+          if (caretInBlock >= fromPos && caretInBlock <= toPos) continue;
+          const label = mm[1].trim();
+          const url = mm[2].trim();
+          if (!label || !url) continue;
+          linkHits.push({ from: fromPos, to: toPos, label, url });
+        }
+      });
+      if (linkHits.length > 0) {
+        linkHits.sort((a, b) => b.from - a.from);
+        const tr = ed.state.tr;
+        for (const hit of linkHits) {
+          const node = ed.state.schema.text(hit.label, [
+            linkMarkType.create({ href: hit.url }),
+          ]);
+          tr.replaceWith(hit.from, hit.to, node);
+        }
+        ed.view.dispatch(tr.setMeta("addToHistory", false));
+        // Promote any drive-relative Link marks to wikiLink atoms so
+        // they get the pill + kind-resolver pipeline. Externals (no
+        // normalizeHref match) stay as Link marks.
+        decorateWikiLinks();
+      }
+    }
   }
 
   /// Swap the heading at `headingPos` for a paragraph carrying its
@@ -3386,12 +3596,25 @@
     lastBlockStartPos = currentBlockStart;
     if (!sel.empty) {
       if (editingMarkOriginal) collapseMarkExpansion(editor);
+      if (editingLinkOriginal) collapseLinkExpansion(editor);
       return;
     }
     if (editingMarkOriginal) {
       const m = editingMarkOriginal;
       if (sel.from >= m.from && sel.from <= m.to) return;
       collapseMarkExpansion(editor);
+    }
+    // Link expansion: caret strictly outside the expanded range
+    // collapses back to a Link-marked text run. The render-on-leave
+    // link pass in `renderUnmarkedInBlock` is gated on
+    // `editingLinkOriginal === null` so this collapse + that render
+    // don't double-fire when the user steps off the right boundary
+    // (the collapse re-applies the mark first, the render pass then
+    // finds no `[label](url)` source to convert).
+    if (editingLinkOriginal) {
+      const l = editingLinkOriginal;
+      if (sel.from >= l.from && sel.from <= l.to) return;
+      collapseLinkExpansion(editor);
     }
     // Render any pattern in the CURRENT block whose range no longer
     // contains the caret. This handles "type closing `*`, move one
@@ -3427,8 +3650,19 @@
       return;
     }
     const active = findActiveMarkRange(editor);
-    if (!active) return;
-    expandMarkAt(editor, active.markName, active.from, active.to);
+    if (active) {
+      expandMarkAt(editor, active.markName, active.from, active.to);
+      return;
+    }
+    // No bold / italic / strike under the caret: look for a Link
+    // mark to expand back to `[label](url)` source. Done last so the
+    // bold/italic rule wins when both happen to cover the caret
+    // (e.g. `**[link](url)**`), since the inner mark expansion
+    // requires the outer source to be clean.
+    const activeLink = findActiveLinkRange(editor);
+    if (activeLink) {
+      expandLinkAt(editor, activeLink);
+    }
   }
 
   /// Enter image edit mode by replacing the atom at `pos` with
@@ -3966,6 +4200,15 @@
        without dragging an asset file into the embed. */
     -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='5' r='3'/><path d='M2 14c0-3 3-5 6-5s6 2 6 5z'/></svg>") center / contain no-repeat;
     mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='5' r='3'/><path d='M2 14c0-3 3-5 6-5s6 2 6 5z'/></svg>") center / contain no-repeat;
+  }
+  /* Media (image) link pill: same chip shape as contact, tinted with
+     the graph's media color so a `[[photo.png]]` wiki-link reads at a
+     glance as the same kind of thing the graph view paints purple.
+     The refkind=image value matches FileInfoBody's classifier so the
+     two surfaces stay in sync via a single source of truth. */
+  :global(.md-wysiwyg .md-smart-wiki[data-refkind="image"]) {
+    background: color-mix(in srgb, var(--g-img) 14%, transparent);
+    color: var(--g-img);
   }
   /* Plain markdown links: pointer too (we hijack internal ones in onClick). */
   :global(.md-wysiwyg a) {
