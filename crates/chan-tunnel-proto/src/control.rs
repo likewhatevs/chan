@@ -41,8 +41,12 @@ pub struct Hello {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HelloAck {
     pub protocol: ProtocolVersion,
-    /// Public path prefix, e.g. `/u/alice/notes`. Always starts
-    /// with `/` and never ends with one.
+    /// Public path prefix on the gateway's wildcard subdomain.
+    /// Shape: `/{drive}` (one leading slash, no trailing slash).
+    /// The username lives in the host (`{user}.drive.chan.app`),
+    /// not in the path; chan-server uses this value as
+    /// `<meta name="chan-prefix">` so the SPA's relative URLs
+    /// resolve under that drive.
     pub prefix: String,
     pub user: String,
     pub drive: String,

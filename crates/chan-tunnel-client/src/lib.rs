@@ -103,7 +103,7 @@ pub struct ClientConfig {
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            tunnel_url: Url::parse("https://tunnel.chan.app/v1/tunnel")
+            tunnel_url: Url::parse("https://drive.chan.app/v1/tunnel")
                 .expect("hard-coded url is valid"),
             token: String::new(),
             drive: String::new(),

@@ -8,9 +8,10 @@
 //! When the URL scheme is `http://` we skip TLS and run h2 in
 //! cleartext (h2c) directly over the TCP socket. The server side
 //! (chan-tunnel-server) is already h2c-only in production: nginx
-//! terminates TLS at tunnel.chan.app and `grpc_pass`-es h2c into
-//! drive-proxy. The h2c branch exists so a local stack can dial the
-//! drive-proxy h2c port without standing up a TLS terminator.
+//! terminates TLS at drive.chan.app and `grpc_pass`-es `/v1/tunnel`
+//! as h2c into drive-proxy's tunnel listener. The h2c branch exists
+//! so a local stack can dial the drive-proxy h2c port without
+//! standing up a TLS terminator.
 
 use std::sync::Arc;
 

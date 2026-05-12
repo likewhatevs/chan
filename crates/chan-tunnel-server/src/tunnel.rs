@@ -1,12 +1,13 @@
 //! Tunnel listener: accepts h2c POSTs from `chan serve` clients
 //! and registers them in the shared `Registry`.
 //!
-//! nginx terminates TLS for `tunnel.chan.app` and `grpc_pass`es
-//! cleartext h2 (h2c) to this listener. We run `h2::server`
-//! directly on the TCP socket; using axum/hyper here would force
-//! us to glue the bidirectional body back together with mpsc
-//! senders. Raw h2 lets us hand the `(SendStream, RecvStream)`
-//! straight to `H2Duplex`.
+//! nginx terminates TLS for `drive.chan.app` and `grpc_pass`es
+//! `/v1/tunnel` as cleartext h2 (h2c) to this listener; everything
+//! else on the apex hits the axum HTTP listener. We run `h2::server`
+//! directly on the TCP socket; using axum/hyper here would force us
+//! to glue the bidirectional body back together with mpsc senders.
+//! Raw h2 lets us hand the `(SendStream, RecvStream)` straight to
+//! `H2Duplex`.
 //!
 //! One tunnel = one h2 connection = one accepted stream. Anything
 //! else (additional streams, wrong method, wrong path, missing

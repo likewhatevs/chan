@@ -2,10 +2,11 @@
 //!
 //! The eventual entry point is an `axum::Router` exposing
 //! `POST /v1/tunnel`; nginx (`grpc_pass`) forwards h2c from
-//! `tunnel.chan.app`. After the Hello/HelloAck handshake the
-//! duplex is handed to yamux, the registered drive is inserted
-//! into the shared `Registry`, and the server side opens new
-//! substreams to forward public requests.
+//! `drive.chan.app/v1/tunnel` to drive-proxy's tunnel listener.
+//! After the Hello/HelloAck handshake the duplex is handed to
+//! yamux, the registered drive is inserted into the shared
+//! `Registry`, and the server side opens new substreams to forward
+//! public requests.
 //!
 //! For the wire test the handshake is exposed as a free function
 //! over any tokio duplex.
@@ -83,13 +84,15 @@ pub trait Validator: Send + Sync + 'static {
     async fn validate(&self, token: &str) -> Result<Validated, ServerError>;
 }
 
-/// Public path prefix shape: `/{username}/{drive}`. The fronting
-/// proxy splits drive.chan.app traffic between its own SPA / API
-/// routes and this tunnel terminator; reserved usernames (api,
-/// admin, ...) keep the two from colliding. No trailing slash;
-/// rest of the path is the drive-relative request.
-fn make_prefix(username: &str, drive: &str) -> String {
-    format!("/{username}/{drive}")
+/// Public path prefix shape: `/{drive}`. The fronting proxy now
+/// uses wildcard subdomains (`{user}.drive.chan.app`), so the
+/// username lives in the host header, not in the path. The path
+/// prefix is exactly the drive segment so chan-server's
+/// `<meta name="chan-prefix">` makes the SPA's relative URLs
+/// resolve correctly under `{user}.drive.chan.app/{drive}/...`. No
+/// trailing slash; rest of the path is the drive-relative request.
+fn make_prefix(_username: &str, drive: &str) -> String {
+    format!("/{drive}")
 }
 
 /// Drive the Hello/HelloAck round-trip over `socket`. Validates

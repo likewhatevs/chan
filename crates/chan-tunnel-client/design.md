@@ -164,7 +164,7 @@ pub struct ClientConfig {
     pub dial_timeout: Duration,
     pub events: Option<mpsc::Sender<TunnelEvent>>,
 }
-impl Default for ClientConfig { /* tunnel.chan.app/v1/tunnel */ }
+impl Default for ClientConfig { /* drive.chan.app/v1/tunnel */ }
 
 pub struct Registration {
     pub prefix: String,

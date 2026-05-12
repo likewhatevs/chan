@@ -17,13 +17,14 @@ chan-tunnel is split across three crates in `chan-writer/chan-core`:
 
 End-to-end shape: `chan serve` calls `chan_tunnel_client::run(cfg,
 router)` which dials `{tunnel-host}/v1/tunnel`. nginx terminates
-TLS at `tunnel.chan.app` and `grpc_pass`-es h2c to
+TLS at `drive.chan.app` and `grpc_pass`-es `/v1/tunnel` as h2c to
 `serve_tunnel_listener`. Each accepted connection becomes a yamux
 session managed by a per-tunnel driver task and indexed in the
-shared `Registry`. The public router (mounted at e.g.
-`drive.chan.app`) looks up the `TunnelHandle` for `(user, drive)`,
-opens a fresh outbound substream, and runs hyper h1 client over it
-to forward the request (with WebSocket upgrade bridging).
+shared `Registry`. The wildcard router (mounted at e.g.
+`*.drive.chan.app`) parses `{user}` out of the host header, looks
+up the `TunnelHandle` for `(user, drive)`, opens a fresh outbound
+substream, and runs hyper h1 client over it to forward the request
+(with WebSocket upgrade bridging).
 
 This document covers terminator-side design. The wire format is in
 chan-tunnel-proto's design.md.
@@ -57,7 +58,7 @@ Out of scope:
 ## 2. Architecture overview
 
 ```
-                 nginx (tunnel.chan.app, TLS, grpc_pass)
+                 nginx (drive.chan.app/v1/tunnel, TLS, grpc_pass)
                               |
                               v h2c
                  +---------------------------+
@@ -233,11 +234,11 @@ streaming works through the yamux flow-control window.
 
 ### Why h2c (not TLS) on the listener
 
-nginx is the TLS terminator at `tunnel.chan.app` and forwards h2c
-via `grpc_pass`. Running rustls again here would duplicate trust
-config and complicate cert rotation. For local dev or other
-deployments the host can put any TLS layer in front; the listener
-itself is h2c-only.
+nginx is the TLS terminator at `drive.chan.app` and forwards h2c
+via `grpc_pass` on the `/v1/tunnel` path only. Running rustls again
+here would duplicate trust config and complicate cert rotation. For
+local dev or other deployments the host can put any TLS layer in
+front; the listener itself is h2c-only.
 
 ## 4. Public API surface
 
