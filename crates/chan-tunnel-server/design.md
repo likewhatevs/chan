@@ -153,10 +153,17 @@ max_drives_per_user)`:
 10. `handshake_validated(duplex, validated, pre_ack)`:
    - Defense-in-depth username check (`is_valid_username`).
    - `read_frame::<Hello>` with `HELLO_READ_TIMEOUT` (15s) bound.
-   - Reject non-V1 protocol; reject invalid drive name.
+   - Reject non-V1 protocol; reject invalid drive name. Each
+     rejection writes a `HelloAck::Refused { code, message }`
+     frame before returning so the client receives a structured
+     error instead of a transport disconnect.
    - Run `pre_ack(&hello, &validated)` for post-validate policy
-     (e.g. per-user drive cap).
-   - Build and write `HelloAck { prefix: "/{user}/{drive}", ... }`.
+     (e.g. per-user drive cap). On failure, map the
+     `ServerError` to a refusal code (see
+     `chan_tunnel_proto::error_code`) and emit
+     `HelloAck::Refused` before returning.
+   - On success, build and write
+     `HelloAck::Ok(HelloAckOk { prefix: "/{drive}", ... })`.
    - Wrap the duplex in yamux server mode with
      `tunnel_yamux_config()` (max 256 concurrent substreams).
 11. `registry.register(user, drive, public, peer_addr)` returns
@@ -313,8 +320,12 @@ pub struct PublicConfig {
     pub trust_forwarded_for: bool,
     pub allowed_host_suffixes: Vec<String>,
     pub upstream_request_timeout: Duration,
+    pub response_body_cap: usize,
+    pub rate_limit_per_second: u64,
+    pub rate_limit_burst: u32,
 }
 pub const DEFAULT_REQUEST_BODY_CAP: usize = 10 * 1024 * 1024;
+pub const DEFAULT_RESPONSE_BODY_CAP: usize = 100 * 1024 * 1024;
 pub const DEFAULT_UPSTREAM_REQUEST_TIMEOUT: Duration =
     Duration::from_secs(30);
 
@@ -449,6 +460,26 @@ Server-specific notes:
   Gateway Timeout is returned on miss. Body streaming after
   headers is intentionally uncapped so long downloads / uploads
   are not artificially limited.
+- **Response body cap**: `PublicConfig::response_body_cap`
+  (`DEFAULT_RESPONSE_BODY_CAP = 100 MiB`) wraps the upstream body
+  in `http_body_util::Limited`. Past the cap the body stream
+  errors mid-flight; the public client sees a truncated read or
+  an `IncompleteMessage`. The `Content-Length` header on the
+  response is stripped before wrapping, so a truncated body
+  cannot disagree with a declared length (hyper would otherwise
+  panic on the mismatch). Counterpart to `request_body_cap`: a
+  compromised chan-serve cannot burn unbounded egress on a single
+  request.
+- **Per-visitor rate limit**: optional, off by default.
+  `PublicConfig::rate_limit_per_second` (`0` disables) plus
+  `rate_limit_burst` (default 32) wire a `tower_governor` layer
+  keyed on `PeerIpKeyExtractor` (raw `ConnectInfo`, NOT
+  X-Forwarded-For — see the header-trust notes above). Above the
+  burst, requests return 429 Too Many Requests. When the public
+  listener sits behind nginx and the visible peer is always the
+  proxy, the rate-limit applies to one tenant (nginx itself), so
+  rate-limiting belongs upstream (`limit_req_zone
+  $binary_remote_addr`) in that deployment.
 - **Forwarded-header sanitisation**: the public router strips
   `Forwarded`, `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Real-IP`,
   `Proxy-Authorization`, and `Proxy-Authenticate` from incoming

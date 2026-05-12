@@ -16,7 +16,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chan_tunnel_proto::{read_frame, write_frame, Hello, HelloAck, ProtocolVersion};
+use chan_tunnel_proto::{error_code, read_frame, write_frame, Hello, HelloAck, ProtocolVersion};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt};
@@ -231,30 +231,74 @@ where
         }
     };
     if hello.protocol != ProtocolVersion::V1 {
-        return Err(ServerError::Handshake(format!(
-            "client requested unsupported protocol {:?}",
-            hello.protocol
-        )));
+        let msg = format!("client requested unsupported protocol {:?}", hello.protocol);
+        write_refusal(&mut socket, error_code::UNSUPPORTED_PROTOCOL, &msg).await;
+        return Err(ServerError::Handshake(msg));
     }
     if !chan_tunnel_proto::is_valid_drive_name(&hello.drive) {
-        return Err(ServerError::Handshake(format!(
-            "invalid drive name {:?}",
-            hello.drive
-        )));
+        let msg = format!("invalid drive name {:?}", hello.drive);
+        write_refusal(&mut socket, error_code::INVALID_DRIVE_NAME, &msg).await;
+        return Err(ServerError::Handshake(msg));
     }
 
-    pre_ack(&hello, &validated)?;
+    if let Err(e) = pre_ack(&hello, &validated) {
+        let (code, msg) = refusal_for(&e);
+        write_refusal(&mut socket, code, &msg).await;
+        return Err(e);
+    }
 
-    let ack = HelloAck {
+    let ack = HelloAck::Ok(chan_tunnel_proto::HelloAckOk {
         protocol: ProtocolVersion::V1,
         prefix: make_prefix(&validated.username, &hello.drive),
         user: validated.username.clone(),
         drive: hello.drive.clone(),
-    };
+    });
     write_frame(&mut socket, &ack).await?;
 
     let yamux = YamuxConnection::new(socket.compat(), tunnel_yamux_config(), Mode::Server);
     Ok((hello, validated, yamux))
+}
+
+/// Map a `ServerError` from the protocol-level pre_ack closure to a
+/// `(code, message)` pair the client can match on. Codes are stable
+/// strings defined in `chan_tunnel_proto::error_code`; messages are
+/// user-visible.
+fn refusal_for(e: &ServerError) -> (&'static str, String) {
+    match e {
+        ServerError::MissingPublicScope => (
+            error_code::MISSING_PUBLIC_SCOPE,
+            "token does not have tunnel.public scope".to_string(),
+        ),
+        ServerError::TooManyDrives { user, max } => (
+            error_code::TOO_MANY_DRIVES,
+            format!("user {user} reached max concurrent drives ({max})"),
+        ),
+        // Other variants (InvalidToken, MissingScope, Identity, Io,
+        // Handshake) are handled at the listener layer before
+        // handshake_validated is called or do not normally flow into
+        // pre_ack; surface them as INTERNAL so the wire shape stays
+        // tight without silently swallowing the diagnostic.
+        _ => (error_code::INTERNAL, e.to_string()),
+    }
+}
+
+/// Write a `HelloAck::Refused` frame, swallowing the inner I/O
+/// error so the caller's original error remains the primary
+/// outcome. Refusals are best-effort: if the client has already
+/// dropped the socket we still want the listener to report the
+/// underlying reason rather than a generic write error.
+async fn write_refusal<S>(socket: &mut S, code: &str, message: &str)
+where
+    S: AsyncWrite + Unpin,
+{
+    let frame = HelloAck::Refused(chan_tunnel_proto::HelloAckErr {
+        protocol: ProtocolVersion::V1,
+        code: code.to_string(),
+        message: message.to_string(),
+    });
+    if let Err(e) = write_frame(socket, &frame).await {
+        tracing::debug!(error = %e, code, "failed to write HelloAck::Refused");
+    }
 }
 
 /// Yamux config with tighter caps than the upstream default. The

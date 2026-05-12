@@ -10,7 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chan_tunnel_client::{dial, ClientConfig};
+use chan_tunnel_client::{dial, ClientConfig, ClientError};
+use chan_tunnel_proto::error_code;
 use chan_tunnel_server::{
     serve_tunnel_listener, Registry, ServerError, Validated, Validator, TUNNEL_PUBLIC_SCOPE,
     TUNNEL_SCOPE,
@@ -167,7 +168,18 @@ async fn missing_public_scope_refused_after_200() {
         .await
         .map(|_| ())
         .expect_err("public without tunnel.public should fail");
-    assert!(!err.to_string().is_empty());
+    // Refusal is structured: code matches the proto constant and
+    // the message is non-empty so a UI can render it directly.
+    match err {
+        ClientError::RemoteRefusal {
+            ref code,
+            ref message,
+        } => {
+            assert_eq!(code, error_code::MISSING_PUBLIC_SCOPE);
+            assert!(!message.is_empty(), "expected refusal message");
+        }
+        other => panic!("expected RemoteRefusal, got {other:?}"),
+    }
     // Drive must not appear in the registry.
     let drives = h.registry.list_drives_for("alice");
     assert!(drives.is_empty(), "got drives: {drives:?}");
@@ -229,8 +241,18 @@ async fn per_user_cap_blocks_third_drive() {
         .await
         .map(|_| ())
         .expect_err("third dial should hit the cap");
-    // Refusal is in pre_ack; client surfaces as handshake error.
-    assert!(!err.to_string().is_empty());
+    // Refusal is in pre_ack; the server emits a structured
+    // HelloAck::Refused so the client surfaces code + message.
+    match err {
+        ClientError::RemoteRefusal {
+            ref code,
+            ref message,
+        } => {
+            assert_eq!(code, error_code::TOO_MANY_DRIVES);
+            assert!(message.contains("alice"), "got: {message}");
+        }
+        other => panic!("expected RemoteRefusal, got {other:?}"),
+    }
     let drives: Vec<_> = h
         .registry
         .list_drives_for("alice")

@@ -79,6 +79,29 @@ pub struct PublicConfig {
     /// long as the public client and chan-serve are happy to move
     /// bytes. Default 30s; raise for slow LLM endpoints.
     pub upstream_request_timeout: Duration,
+    /// Max bytes in the response body streamed back to the public
+    /// client. Defaults to `DEFAULT_RESPONSE_BODY_CAP`. Counterpart
+    /// to `request_body_cap`: a misbehaving (or compromised)
+    /// chan-serve emitting an unbounded body otherwise gets to use
+    /// the tunnel server's egress bandwidth freely. The body
+    /// streams through until the cap is reached, at which point the
+    /// underlying body errors mid-stream; the public client sees a
+    /// truncated read.
+    pub response_body_cap: usize,
+    /// Per-visitor rate limit in requests per second. `0` disables
+    /// the layer entirely (default). Pairs with
+    /// `rate_limit_burst`: requests above the bucket size return
+    /// 429 Too Many Requests. Key is the peer IP from `ConnectInfo`;
+    /// behind a trusted proxy (nginx + overwriting X-Forwarded-For)
+    /// the visible peer is always the proxy itself so the limiter
+    /// keys on a single tenant, which is wrong. In that deployment
+    /// shape, the gateway should rate-limit upstream (nginx
+    /// `limit_req_zone $binary_remote_addr`) instead.
+    pub rate_limit_per_second: u64,
+    /// Burst above `rate_limit_per_second` a visitor can spend in a
+    /// short window without being throttled. Default 32; ignored
+    /// when `rate_limit_per_second == 0`.
+    pub rate_limit_burst: u32,
 }
 
 impl Default for PublicConfig {
@@ -88,6 +111,9 @@ impl Default for PublicConfig {
             trust_forwarded_for: false,
             allowed_host_suffixes: Vec::new(),
             upstream_request_timeout: DEFAULT_UPSTREAM_REQUEST_TIMEOUT,
+            response_body_cap: DEFAULT_RESPONSE_BODY_CAP,
+            rate_limit_per_second: 0,
+            rate_limit_burst: 32,
         }
     }
 }
@@ -111,6 +137,14 @@ const UPGRADE_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 /// the tunnel server's egress and chan-serve's memory.
 pub const DEFAULT_REQUEST_BODY_CAP: usize = 10 * 1024 * 1024;
 
+/// Default cap on a response body streamed back to a public client.
+/// 100 MiB covers most media downloads (full-resolution images,
+/// short audio / video clips) without blocking large reads outright;
+/// drives that serve big files (e.g. dataset snapshots) bump it
+/// explicitly. Uncapped would let a compromised chan-serve burn the
+/// tunnel server's egress bandwidth on a single request.
+pub const DEFAULT_RESPONSE_BODY_CAP: usize = 100 * 1024 * 1024;
+
 #[derive(Clone)]
 struct PublicState {
     registry: Arc<Registry>,
@@ -118,6 +152,7 @@ struct PublicState {
     /// Lowercased host suffix allowlist. Empty disables the check.
     allowed_host_suffixes: Arc<[String]>,
     upstream_request_timeout: Duration,
+    response_body_cap: u64,
 }
 
 /// Build the public router with default knobs.
@@ -140,13 +175,34 @@ pub fn public_router_with(registry: Arc<Registry>, cfg: PublicConfig) -> Router 
         trust_forwarded_for: cfg.trust_forwarded_for,
         allowed_host_suffixes,
         upstream_request_timeout: cfg.upstream_request_timeout,
+        response_body_cap: cfg.response_body_cap as u64,
     };
-    Router::new()
+    let mut router = Router::new()
         .route("/:user/:drive", any(handle_root))
         .route("/:user/:drive/", any(handle_root))
         .route("/:user/:drive/*rest", any(handle_rest))
         .layer(RequestBodyLimitLayer::new(cfg.request_body_cap))
-        .with_state(state)
+        .with_state(state);
+    if cfg.rate_limit_per_second > 0 {
+        // Per-IP token bucket. tower-governor defaults to
+        // SmartIpKeyExtractor which honours X-Forwarded-For /
+        // X-Real-IP; we don't want that, since we already strip
+        // X-Forwarded-For at the request layer (see
+        // `build_forwarded`). PeerIpKeyExtractor keys on the
+        // direct ConnectInfo only, matching the trust model: the
+        // operator is responsible for fronting nginx limit_req
+        // when the visible peer is always a proxy.
+        let conf = tower_governor::governor::GovernorConfigBuilder::default()
+            .per_second(cfg.rate_limit_per_second)
+            .burst_size(cfg.rate_limit_burst)
+            .key_extractor(tower_governor::key_extractor::PeerIpKeyExtractor)
+            .finish()
+            .expect("governor config: per_second > 0 and burst > 0");
+        router = router.layer(tower_governor::GovernorLayer {
+            config: std::sync::Arc::new(conf),
+        });
+    }
+    router
 }
 
 /// Returns true if `host` (the request's `Host` header, with any
@@ -342,8 +398,20 @@ async fn proxy(
         });
     }
 
-    let (parts, body) = resp.into_parts();
-    let body = Body::new(body.map_err(axum::Error::new));
+    let (mut parts, body) = resp.into_parts();
+    // Cap the response stream. `Limited` aborts mid-body once the
+    // cap is hit; the public client sees a truncated read. The cap
+    // is the policy hook for "a misbehaving chan-serve should not
+    // get to burn unbounded egress on a single request".
+    //
+    // Strip Content-Length: a wrapped body that truncates can no
+    // longer honour the upstream's declared length, and hyper
+    // refuses to serialise a body whose length disagrees with the
+    // header. The response goes out chunked instead, which is fine
+    // for HTTP/1.1 public clients.
+    parts.headers.remove(header::CONTENT_LENGTH);
+    let limited = http_body_util::Limited::new(body, state.response_body_cap as usize);
+    let body = Body::new(limited.map_err(axum::Error::new));
     Response::from_parts(parts, body)
 }
 

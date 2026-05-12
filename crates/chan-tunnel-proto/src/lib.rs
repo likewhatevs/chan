@@ -17,7 +17,7 @@ mod frame;
 mod h2_duplex;
 mod io;
 
-pub use control::{Hello, HelloAck, ProtocolVersion};
+pub use control::{error_code, Hello, HelloAck, HelloAckErr, HelloAckOk, ProtocolVersion};
 pub use drive_name::{
     is_valid_drive_name, is_valid_username, sanitize_drive_name, MAX_DRIVE_NAME_LEN,
     MAX_USERNAME_LEN,

@@ -44,6 +44,15 @@ pub enum ClientError {
     #[error("handshake: {0}")]
     Handshake(String),
 
+    /// Structured refusal from the server during the Hello/HelloAck
+    /// round-trip. The `code` is one of
+    /// `chan_tunnel_proto::error_code` (or an unknown string from a
+    /// newer server); the `message` is human-readable. UI / CLI
+    /// callers should match on `code` for known cases and fall back
+    /// to `message` otherwise.
+    #[error("server refused handshake: {code} ({message})")]
+    RemoteRefusal { code: String, message: String },
+
     #[error("transport closed")]
     TransportClosed,
 }
@@ -190,17 +199,26 @@ where
     write_frame(&mut socket, &hello).await?;
 
     let ack: HelloAck = read_frame(&mut socket).await?;
-    if ack.protocol != ProtocolVersion::V1 {
+    let ok = match ack {
+        HelloAck::Ok(ok) => ok,
+        HelloAck::Refused(err) => {
+            return Err(ClientError::RemoteRefusal {
+                code: err.code,
+                message: err.message,
+            });
+        }
+    };
+    if ok.protocol != ProtocolVersion::V1 {
         return Err(ClientError::Handshake(format!(
             "server returned unsupported protocol {:?}",
-            ack.protocol
+            ok.protocol
         )));
     }
 
     let registration = Registration {
-        prefix: ack.prefix,
-        user: ack.user,
-        drive: ack.drive,
+        prefix: ok.prefix,
+        user: ok.user,
+        drive: ok.drive,
     };
     let yamux = YamuxConnection::new(socket.compat(), YamuxConfig::default(), Mode::Client);
     Ok((registration, yamux))
