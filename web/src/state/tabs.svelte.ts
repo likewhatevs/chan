@@ -765,6 +765,15 @@ export async function saveTab(t: Tab): Promise<void> {
   await performSave(t);
 }
 
+/// Clear the transient error banner on a file tab. Used after a
+/// rename completes so a watcher race that briefly set "no such
+/// file" doesn't linger past the rekey. No-op if no tab matches.
+export function clearTabError(tabId: string): void {
+  const found = findFileTabById(tabId);
+  if (!found) return;
+  if (found.tab.error) found.tab.error = null;
+}
+
 /// Refresh a non-dirty tab's content from disk. Called when the
 /// watcher fires an event for an open file's path. If the buffer
 /// is dirty we leave it alone; the user's next save will hit a 409

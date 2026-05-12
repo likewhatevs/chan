@@ -19,6 +19,7 @@ import {
   type ScopeOption,
 } from "./scope.svelte";
 import {
+  clearTabError,
   refreshTabFromDisk,
   rekeyTabsForRename,
   tabsForPath,
@@ -165,6 +166,16 @@ export function watchSystemTheme(): () => void {
 
 let unwatch: (() => void) | null = null;
 
+/// Paths currently mid-rename. The watcher fires "Renamed" events
+/// while `api.move` is still awaiting, which races with our own
+/// `rekeyTabsForRename` call: `tabsForPath(oldPath)` still matches
+/// (tabs haven't been rekeyed yet), the resulting `refreshTabFromDisk`
+/// tries to load the now-gone old path and stamps a stale "io error:
+/// No such file" onto the tab. Adding both endpoints to this Set
+/// before `api.move` and clearing them after the rekey lets the
+/// watcher handler skip the refresh for paths it would have raced.
+const movingPaths = new Set<string>();
+
 /// Watcher event handler. Extracted so reconnectWatcher() can reuse
 /// the exact same callbacks as bootstrap().
 function onWatchEvent(e: unknown): void {
@@ -208,6 +219,10 @@ function onWatchEvent(e: unknown): void {
     (p): p is string => typeof p === "string" && p.length > 0,
   );
   for (const p of paths) {
+    // Skip watcher echoes for paths we're actively renaming: the
+    // tab still holds the old path during the move's `await`, and a
+    // refresh would read a vanished file and stamp a stale error.
+    if (movingPaths.has(p)) continue;
     for (const { tabId } of tabsForPath(p)) {
       void refreshTabFromDisk(tabId);
     }
@@ -1692,11 +1707,22 @@ async function performMove(path: string, target: string): Promise<void> {
     ui.status = "Moving…";
     movingTimer = null;
   }, MOVING_STATUS_DELAY_MS);
+  // Mark both endpoints so the watcher handler ignores echoes of
+  // this rename while the move is in flight (see `movingPaths`).
+  movingPaths.add(path);
+  movingPaths.add(target);
   try {
     const resp = await api.move(path, target);
     await refreshTree();
     rekeyConversationsForRename(path, target);
     rekeyTabsForRename(path, target);
+    // Defensive: if a watcher event slipped through before the Set
+    // was populated (or in any future code path that bypasses it),
+    // clear any "file not found" error sitting on the moved tab so
+    // the user doesn't keep staring at a stale message.
+    for (const { tabId } of tabsForPath(target)) {
+      clearTabError(tabId);
+    }
     revealAndSelect(target);
     // Nudge open tabs to re-check their underlying file. Server-side
     // self_writes dedupe suppresses the watcher echo for our own
@@ -1726,6 +1752,8 @@ async function performMove(path: string, target: string): Promise<void> {
   } finally {
     if (movingTimer) clearTimeout(movingTimer);
     if (ui.status === "Moving…") ui.status = null;
+    movingPaths.delete(path);
+    movingPaths.delete(target);
   }
 }
 

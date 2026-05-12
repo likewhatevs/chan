@@ -133,6 +133,11 @@
     void fileOps.duplicateFile(tab.path);
   }
 
+  function doRename(): void {
+    closeTabMenu();
+    void fileOps.rename(tab.path, false);
+  }
+
   function doToggleMode(): void {
     setMode(tab, tab.mode === "wysiwyg" ? "source" : "wysiwyg");
     closeTabMenu();
@@ -193,6 +198,10 @@
         <button class="mbtn" onclick={doDuplicate}>
           <span class="mbtn-icon">⎘</span>
           <span class="mbtn-label">Duplicate File</span>
+        </button>
+        <button class="mbtn" onclick={doRename}>
+          <span class="mbtn-icon">✎</span>
+          <span class="mbtn-label">Rename File</span>
         </button>
         <button class="mbtn" onclick={revealInBrowser}>
           <span class="mbtn-icon">📄</span>
