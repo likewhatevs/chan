@@ -51,7 +51,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ChanError, Result};
@@ -74,8 +74,14 @@ const READER_POOL_SIZE: u32 = 4;
 /// filtering (the editor's `@` picker reads only contacts; backlinks
 /// and link-autocomplete read both). Aliasing a contact onto its
 /// file row keeps the graph free of double-counted edges.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// JSON serialization is lowercase (`"file"` / `"contact"`) so the
+/// wire form matches the SQL `nodes.kind` column and consumers can
+/// switch on it without locale games. Default is `File` so legacy
+/// payloads (and the `ResolvedLink` fallback) deserialize cleanly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum NodeKind {
+    #[default]
     File,
     Contact,
 }
@@ -674,6 +680,24 @@ impl GraphView {
         Ok(out)
     }
 
+    /// Look up the node kind for a single rel path. Returns `None`
+    /// when no row exists (file isn't indexed yet, was deleted, or
+    /// the caller passed a path that isn't a markdown note). Used by
+    /// `Drive::resolve_link` so the editor can stamp a kind-aware
+    /// pill (e.g. contact pill vs generic doc link) on a wiki-link
+    /// without re-parsing the target's frontmatter.
+    pub fn node_kind(&self, rel: &str) -> Result<Option<NodeKind>> {
+        let conn = self.reader()?;
+        let mut stmt = conn.prepare_cached("SELECT kind FROM nodes WHERE rel_path = ?1")?;
+        let row: Option<String> = stmt
+            .query_row(params![rel], |r| r.get::<_, String>(0))
+            .optional()?;
+        Ok(row.map(|s| match s.as_str() {
+            "contact" => NodeKind::Contact,
+            _ => NodeKind::File,
+        }))
+    }
+
     /// All contact-kind nodes, sorted by display name. Convenience
     /// wrapper on `contacts_filtered(None, usize::MAX)` for callers
     /// (CLI, tests) that want the whole list.
@@ -1229,6 +1253,54 @@ mod tests {
             g.replace_file(rel, *title, *mtime, NodeKind::File, &[], &[], None)
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn node_kind_returns_indexed_kind_or_none() {
+        let tmp = TempDir::new().unwrap();
+        let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
+        g.replace_file(
+            "Contacts/Alice.md",
+            Some("Alice Anderson"),
+            Some(1),
+            NodeKind::Contact,
+            &[],
+            &[],
+            Some("alice@example.com"),
+        )
+        .unwrap();
+        g.replace_file(
+            "recipes/pasta.md",
+            Some("Pasta"),
+            Some(2),
+            NodeKind::File,
+            &[],
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            g.node_kind("Contacts/Alice.md").unwrap(),
+            Some(NodeKind::Contact)
+        );
+        assert_eq!(
+            g.node_kind("recipes/pasta.md").unwrap(),
+            Some(NodeKind::File)
+        );
+        // Unknown path: None so the caller can decide what to do
+        // (resolve_link uses unwrap_or_default to fall back to File).
+        assert_eq!(g.node_kind("does/not/exist.md").unwrap(), None);
+    }
+
+    /// `NodeKind` serializes lowercase on the wire so the JSON value
+    /// matches the SQL `nodes.kind` column and consumers don't have
+    /// to switch on rust enum names.
+    #[test]
+    fn node_kind_serializes_lowercase() {
+        let file = serde_json::to_string(&NodeKind::File).unwrap();
+        let contact = serde_json::to_string(&NodeKind::Contact).unwrap();
+        assert_eq!(file, "\"file\"");
+        assert_eq!(contact, "\"contact\"");
     }
 
     #[test]

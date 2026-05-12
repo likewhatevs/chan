@@ -79,12 +79,22 @@ pub struct FileStat {
 /// A wiki-link resolved to an actual drive file. `path` is the
 /// POSIX rel path of the file that exists today; `anchor` is the
 /// `#section` fragment from the original target, passed through
-/// unchanged. See `Drive::resolve_link` for the resolution rules.
+/// unchanged. `kind` is the graph-recorded node kind (file vs
+/// contact); callers (the editor) use it to render a kind-aware
+/// pill without re-parsing the target's frontmatter. See
+/// `Drive::resolve_link` for the resolution rules.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedLink {
     pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor: Option<String>,
+    /// Defaults to `File` when the graph hasn't indexed the target
+    /// yet (fresh file, indexer behind), or when a future variant
+    /// is introduced and an older client deserializes the response.
+    /// `#[serde(default)]` keeps wire compatibility with payloads
+    /// that omit the field entirely.
+    #[serde(default)]
+    pub kind: crate::graph::NodeKind,
 }
 
 /// One open drive. Holds the writer lock for as long as it lives,
@@ -891,9 +901,21 @@ impl Drive {
             path.to_string(),
         ] {
             if self.exists(&candidate) {
+                // Best-effort kind lookup against the graph. If the
+                // graph isn't open yet, the row is missing (file
+                // indexed after this resolve, or never indexed), or
+                // the query fails for any reason, fall back to
+                // `File` so the caller still gets a resolution.
+                // Kind-aware rendering is a hint, not a contract.
+                let kind = self
+                    .graph()
+                    .ok()
+                    .and_then(|g| g.node_kind(&candidate).ok().flatten())
+                    .unwrap_or_default();
                 return Some(ResolvedLink {
                     path: candidate,
                     anchor,
+                    kind,
                 });
             }
         }
@@ -1988,6 +2010,43 @@ mod tests {
         // resolve_link goes through Drive::exists which rejects
         // path traversal. Should return None, not panic.
         assert!(drive.resolve_link("../etc/passwd").is_none());
+    }
+
+    /// The graph row drives the kind. An unindexed file still
+    /// resolves (we found it on disk) but the kind defaults to
+    /// `File` so the editor can render a generic doc pill while the
+    /// indexer catches up.
+    #[test]
+    fn resolve_link_kind_defaults_to_file_when_unindexed() {
+        let (_cfg, _root, drive) = link_fixture();
+        let r = drive.resolve_link("recipes/pasta").unwrap();
+        assert_eq!(r.kind, crate::graph::NodeKind::File);
+    }
+
+    /// After indexing a contact-frontmatter file, resolve_link's kind
+    /// matches what the picker put in the graph. This is the path
+    /// that drives the editor's kind-aware pill rendering.
+    #[test]
+    fn resolve_link_returns_contact_kind_for_contact_node() {
+        let (_cfg, root, drive) = link_fixture();
+        std::fs::create_dir_all(root.path().join("Contacts")).unwrap();
+        let contact = "---\nchan:\n  kind: contact\n---\n\n# Alice Anderson\n\n- **Email**: alice@example.com\n";
+        std::fs::write(root.path().join("Contacts").join("Alice.md"), contact).unwrap();
+        drive.index_file("Contacts/Alice.md").unwrap();
+        let r = drive.resolve_link("Contacts/Alice").unwrap();
+        assert_eq!(r.path, "Contacts/Alice.md");
+        assert_eq!(r.kind, crate::graph::NodeKind::Contact);
+    }
+
+    /// Plain markdown files index as `NodeKind::File`; round-trip
+    /// resolve_link to confirm the kind reflects the indexed value
+    /// (not a constant default).
+    #[test]
+    fn resolve_link_returns_file_kind_for_plain_note() {
+        let (_cfg, _root, drive) = link_fixture();
+        drive.index_file("recipes/pasta.md").unwrap();
+        let r = drive.resolve_link("recipes/pasta").unwrap();
+        assert_eq!(r.kind, crate::graph::NodeKind::File);
     }
 
     #[test]
