@@ -51,6 +51,15 @@ pub const LIST_FILES_CAP_ENTRIES: usize = 2_000;
 pub const SEARCH_CONTENT_MAX_LIMIT: u32 = 100;
 pub const SEARCH_CONTENT_DEFAULT_LIMIT: u32 = 20;
 
+/// Cap on per-file rows returned by `repo_report` when
+/// `include_files = true`. The roll-ups and COCOMO summary stay
+/// intact; only the `files` array is truncated past this point. A
+/// drive with ~200 files of code already produces ~50 KB of JSON
+/// per call, which is the budget we're willing to spend on a
+/// single tool response. The assistant narrows with `prefix` or
+/// `paths` if it needs more detail.
+pub const REPO_REPORT_FILES_CAP: usize = 200;
+
 /// Context the tools see. Owns an `Arc<Drive>` so tool calls cross
 /// thread boundaries cheaply; the auto-apply flag is checked
 /// per-call so toggling it at runtime takes immediate effect.
@@ -80,6 +89,7 @@ pub enum StandardTool {
     WriteFile,
     ListFiles,
     SearchContent,
+    RepoReport,
 }
 
 impl StandardTool {
@@ -89,6 +99,7 @@ impl StandardTool {
             StandardTool::WriteFile => "write_file",
             StandardTool::ListFiles => "list_files",
             StandardTool::SearchContent => "search_content",
+            StandardTool::RepoReport => "repo_report",
         }
     }
 
@@ -98,6 +109,7 @@ impl StandardTool {
             "write_file" => Some(StandardTool::WriteFile),
             "list_files" => Some(StandardTool::ListFiles),
             "search_content" => Some(StandardTool::SearchContent),
+            "repo_report" => Some(StandardTool::RepoReport),
             _ => None,
         }
     }
@@ -131,6 +143,7 @@ pub fn execute(name: &str, args: &Json, ctx: &ToolContext) -> Result<ToolOutcome
         StandardTool::ReadFile => exec_read_file(args, ctx).map(ToolOutcome::Ok),
         StandardTool::ListFiles => exec_list_files(args, ctx).map(ToolOutcome::Ok),
         StandardTool::SearchContent => exec_search_content(args, ctx).map(ToolOutcome::Ok),
+        StandardTool::RepoReport => exec_repo_report(args, ctx).map(ToolOutcome::Ok),
         StandardTool::WriteFile => exec_write_file(args, ctx),
     }
 }
@@ -233,6 +246,64 @@ fn exec_search_content(args: &Json, ctx: &ToolContext) -> Result<Json> {
         },
     )?;
     serde_json::to_value(&res).map_err(|e| LlmError::Tool(format!("serialize hits: {e}")))
+}
+
+fn exec_repo_report(args: &Json, ctx: &ToolContext) -> Result<Json> {
+    // Resolve scope. `paths` wins over `prefix` (documented in
+    // REPO_REPORT_DESC) so a model that bundles both gets the
+    // narrower view it presumably wants.
+    let paths: Vec<String> = args
+        .get("paths")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let prefix = args.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
+
+    let report = if !paths.is_empty() {
+        ctx.drive.report_for_files(&paths)?
+    } else if !prefix.is_empty() {
+        ctx.drive.report_for_prefix(prefix)?
+    } else {
+        ctx.drive.report()?
+    };
+
+    let include_files = args
+        .get("include_files")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let total_files = report.files.len();
+    let mut value = serde_json::to_value(&report)
+        .map_err(|e| LlmError::Tool(format!("serialize report: {e}")))?;
+    let obj = value
+        .as_object_mut()
+        .expect("Report serializes to a JSON object");
+
+    if !include_files {
+        // Drop the per-file array entirely; the assistant asked
+        // for an overview. The other roll-up fields stay.
+        obj.remove("files");
+        obj.insert("files_omitted".into(), serde_json::json!(true));
+    } else if total_files > REPO_REPORT_FILES_CAP {
+        // Sort by path so the truncation is stable across calls
+        // and the model can predict what it'll see next time.
+        let mut sorted = report.files.clone();
+        sorted.sort_by(|a, b| a.path.cmp(&b.path));
+        sorted.truncate(REPO_REPORT_FILES_CAP);
+        obj.insert(
+            "files".into(),
+            serde_json::to_value(&sorted)
+                .map_err(|e| LlmError::Tool(format!("serialize files: {e}")))?,
+        );
+        obj.insert("truncated".into(), serde_json::json!(true));
+        obj.insert("total_files".into(), serde_json::json!(total_files));
+    }
+
+    Ok(value)
 }
 
 fn exec_write_file(args: &Json, ctx: &ToolContext) -> Result<ToolOutcome> {
@@ -339,6 +410,28 @@ pub fn standard_tool_schemas() -> Vec<ToolSchema> {
                     }
                 },
                 "required": ["query"],
+            }),
+        },
+        ToolSchema {
+            name: "repo_report",
+            description: crate::prompts::REPO_REPORT_DESC,
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "prefix": {
+                        "type": "string",
+                        "description": "Optional POSIX rel-path to scope the snapshot to a subdirectory."
+                    },
+                    "paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional explicit list of POSIX rel-paths. When non-empty, takes precedence over `prefix`."
+                    },
+                    "include_files": {
+                        "type": "boolean",
+                        "description": "Include per-file rows in the response (capped at 200). Default false: only totals, per-language roll-ups, and the COCOMO summary are returned."
+                    }
+                }
             }),
         },
     ]
@@ -516,6 +609,99 @@ mod tests {
         let out = execute("write_file", &args, &ctx).unwrap();
         assert!(matches!(out, ToolOutcome::Ok(_)));
         assert_eq!(ctx.drive.read_text("a.md").unwrap(), "v2");
+    }
+
+    #[test]
+    fn repo_report_default_omits_files() {
+        let (_cfg, root, ctx) = fixture();
+        std::fs::write(root.path().join("a.md"), "# a\n").unwrap();
+        std::fs::write(root.path().join("b.md"), "# b\n").unwrap();
+
+        let out = execute("repo_report", &serde_json::json!({}), &ctx).unwrap();
+        let v = match out {
+            ToolOutcome::Ok(v) => v,
+            _ => panic!("expected Ok"),
+        };
+        assert_eq!(v["files_omitted"], serde_json::json!(true));
+        assert!(v.get("files").is_none());
+        assert!(v["totals"]["files"].as_u64().unwrap() >= 2);
+        assert!(v["by_language"].is_array());
+        assert!(v["cocomo"]["model"].is_string());
+    }
+
+    #[test]
+    fn repo_report_include_files_returns_rows() {
+        let (_cfg, root, ctx) = fixture();
+        std::fs::write(root.path().join("a.md"), "# a\n").unwrap();
+
+        let out = execute(
+            "repo_report",
+            &serde_json::json!({"include_files": true}),
+            &ctx,
+        )
+        .unwrap();
+        let v = match out {
+            ToolOutcome::Ok(v) => v,
+            _ => panic!("expected Ok"),
+        };
+        let files = v["files"].as_array().expect("files present");
+        assert!(files.iter().any(|f| f["path"] == "a.md"));
+    }
+
+    #[test]
+    fn repo_report_prefix_scopes_subdir() {
+        let (_cfg, root, ctx) = fixture();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        std::fs::write(root.path().join("src/lib.rs"), "fn x() {}\n").unwrap();
+        std::fs::write(root.path().join("README.md"), "# r\n").unwrap();
+
+        let out = execute(
+            "repo_report",
+            &serde_json::json!({"prefix": "src", "include_files": true}),
+            &ctx,
+        )
+        .unwrap();
+        let v = match out {
+            ToolOutcome::Ok(v) => v,
+            _ => panic!("expected Ok"),
+        };
+        let files = v["files"].as_array().unwrap();
+        assert!(files
+            .iter()
+            .all(|f| f["path"].as_str().unwrap().starts_with("src/")));
+    }
+
+    #[test]
+    fn repo_report_paths_wins_over_prefix() {
+        let (_cfg, root, ctx) = fixture();
+        std::fs::write(root.path().join("a.md"), "# a\n").unwrap();
+        std::fs::write(root.path().join("b.md"), "# b\n").unwrap();
+        std::fs::create_dir_all(root.path().join("docs")).unwrap();
+        std::fs::write(root.path().join("docs/x.md"), "# x\n").unwrap();
+
+        let out = execute(
+            "repo_report",
+            &serde_json::json!({
+                "prefix": "docs",
+                "paths": ["a.md"],
+                "include_files": true,
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let v = match out {
+            ToolOutcome::Ok(v) => v,
+            _ => panic!("expected Ok"),
+        };
+        let files = v["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["path"], "a.md");
+    }
+
+    #[test]
+    fn repo_report_appears_in_standard_schemas() {
+        let schemas = standard_tool_schemas();
+        assert!(schemas.iter().any(|s| s.name == "repo_report"));
     }
 
     #[test]

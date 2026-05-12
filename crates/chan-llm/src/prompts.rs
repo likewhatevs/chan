@@ -28,6 +28,10 @@ You can call tools to interact with the drive:
                               what it contains
   - list_files()             enumerate every file in the drive
   - search_content(query)    BM25 search across the drive
+  - repo_report(...)         per-file language / SLOC counts plus \
+                              per-language roll-ups and a COCOMO \
+                              cost estimate for the whole drive \
+                              (or a subdirectory or file list)
 
 Use the tools rather than guessing at content. When you propose \
 an edit, return the FULL new file content via write_file; partial \
@@ -112,6 +116,22 @@ with relative paths, relevance scores, and short snippets around \
 the match. Useful for finding which file mentions a topic before \
 issuing read_file on it. `limit` defaults to 20 and is hard-capped \
 at 100.";
+
+/// Description of the repo_report tool.
+pub const REPO_REPORT_DESC: &str = "\
+Snapshot the drive's code/content report: per-file language, code \
+lines, comments, blanks, a complexity heuristic (keyword count, \
+not cyclomatic), plus per-language roll-ups and a Basic COCOMO \
+cost estimate. The drive maintains this index incrementally as \
+files change, so the call is cheap to repeat. Use it when the user \
+asks about repo size, language mix, where the code lives, or to \
+scope a refactor. Optional args: `prefix` (POSIX rel-path) to \
+limit the snapshot to a subdirectory, or `paths` (array) for an \
+explicit file list. When both are present, `paths` wins. \
+`include_files` (default false) controls whether the per-file rows \
+are returned; leave it off for an overview, set true when you \
+need to drill in. The per-file array is capped at 200 entries; if \
+`truncated` is true, scope further with `prefix` or `paths`.";
 
 /// Description of the read_image tool. MCP-only: not surfaced
 /// through `tools::standard_tool_schemas()` because the in-process
