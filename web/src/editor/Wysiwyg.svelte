@@ -3198,6 +3198,50 @@
         }
       }
     }
+    // Image render pass. Same shape as the wiki bracket pass: walk
+    // plain text nodes, match `![alt](src)`, render each closed run
+    // whose endpoints don't bracket the caret into an image atom.
+    // Skipped while the image bubble is open (the picker / autopair
+    // flow at `![` owns the bracket range during its commit path)
+    // or while `enterImageEditAt` has staged an edit-existing run
+    // (its own caret-leave path restores the atom).
+    if (!imageBubble && editingImageOriginal === null) {
+      const imageNodeType = ed.schema.nodes.image;
+      if (imageNodeType) {
+        type ImageHit = { from: number; to: number; alt: string; src: string };
+        const imageHits: ImageHit[] = [];
+        ed.state.doc.nodesBetween(start, end, (node, pos) => {
+          if (!node.isText || !node.text) return;
+          // `[^)\n]+` is greedy enough to keep the fragment params
+          // (`#w=200`, `#left`, …) inside the captured `src`.
+          const re = /!\[([^\]\n]*)\]\(([^)\n]+)\)/g;
+          let mm: RegExpExecArray | null;
+          while ((mm = re.exec(node.text)) !== null) {
+            const fromPos = pos + mm.index;
+            const toPos = fromPos + mm[0].length;
+            if (caretInBlock >= fromPos && caretInBlock <= toPos) continue;
+            imageHits.push({
+              from: fromPos,
+              to: toPos,
+              alt: mm[1] ?? "",
+              src: mm[2] ?? "",
+            });
+          }
+        });
+        if (imageHits.length > 0) {
+          imageHits.sort((a, b) => b.from - a.from);
+          const tr = ed.state.tr;
+          for (const hit of imageHits) {
+            tr.replaceWith(
+              hit.from,
+              hit.to,
+              imageNodeType.create({ alt: hit.alt, src: hit.src }),
+            );
+          }
+          ed.view.dispatch(tr.setMeta("addToHistory", false));
+        }
+      }
+    }
   }
 
   /// Swap the heading at `headingPos` for a paragraph carrying its

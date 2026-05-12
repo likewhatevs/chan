@@ -357,6 +357,42 @@ export const LiveSourceExtension = Extension.create({
                 // move outside the pattern.
                 { name: "wiki", re: /\[\[([^\[\]\n]+?)\]\]/g, len: 2 },
               ];
+              // Image markers (`![`, `](`, `)`) get their own pass
+              // because the open / inner / close runs have different
+              // lengths and don't fit the `len` shorthand the
+              // mark-style patterns use. The render pass in
+              // Wysiwyg.svelte turns the matched `![alt](src)` into
+              // an image atom once the caret moves outside.
+              const imageRe = /!\[([^\]\n]*)\]\(([^)\n]+)\)/g;
+              imageRe.lastIndex = 0;
+              let im: RegExpExecArray | null;
+              while ((im = imageRe.exec(blockText)) !== null) {
+                const matchFrom = blockTextStart + im.index;
+                const altLen = im[1].length;
+                const matchLen = im[0].length;
+                // `![`
+                decos.push(
+                  Decoration.inline(matchFrom, matchFrom + 2, {
+                    class: "md-mark-pending",
+                  }),
+                );
+                // `](`
+                decos.push(
+                  Decoration.inline(
+                    matchFrom + 2 + altLen,
+                    matchFrom + 2 + altLen + 2,
+                    { class: "md-mark-pending" },
+                  ),
+                );
+                // `)`
+                decos.push(
+                  Decoration.inline(
+                    matchFrom + matchLen - 1,
+                    matchFrom + matchLen,
+                    { class: "md-mark-pending" },
+                  ),
+                );
+              }
               for (const p of pendingPatterns) {
                 p.re.lastIndex = 0;
                 let mm: RegExpExecArray | null;
