@@ -490,6 +490,7 @@
     --btn-hover: #98989d;
     --accent: #3fb950;
     --warn-text: #e3b341;
+    --danger-text: #f85149;
     /* "Unsaved buffer" color used by the dirty-dot in the file
        tree and tab strip. */
     --info-text: #4ade80;
@@ -548,6 +549,7 @@
     --btn-hover: #6c6c70;
     --accent: #1a7f37;
     --warn-text: #9a6700;
+    --danger-text: #cf222e;
     --info-text: #16a34a;
     --hover-bg: rgba(0, 0, 0, 0.05);
     --selection-bg: rgba(9, 105, 218, 0.18);

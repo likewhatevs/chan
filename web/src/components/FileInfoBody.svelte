@@ -641,9 +641,15 @@
   .ref.file[data-refkind="doc"] { border-left-color: var(--g-doc); }
   .ref.file[data-refkind="image"] { border-left-color: var(--g-img); }
   .ref.file[data-refkind="contact"] { border-left-color: var(--warn-text); }
+  /* Broken link target: the linked file no longer exists on the drive.
+     Distinct color + strikethrough so a glance flags the dangling
+     reference; kind accent stripe is kept so the reader still sees
+     what was being pointed at. */
   .ref.file.missing {
-    color: var(--text-secondary);
+    color: var(--danger-text);
     font-style: italic;
+    text-decoration: line-through;
+    text-decoration-color: var(--danger-text);
   }
   /* Contact rows in the Contacts section: same block-button shape as
      the other ref types, with a small person silhouette prefixed in
