@@ -250,6 +250,21 @@ export type TreeEntry = {
   kind?: "contact";
 };
 
+/// Response from POST /api/move. The rename itself always succeeds
+/// when `renamed` is non-empty; per-source rewrite failures land in
+/// `conflicts` and do not abort the move.
+export type MoveResponse = {
+  /// (old_path, new_path) for every file the rename moved. Single
+  /// entry for a file rename; one per descendant file for a directory.
+  renamed: Array<[string, string]>;
+  /// Source files whose contents were rewritten to point at the new
+  /// locations. Drive-rooted POSIX paths (post-rename).
+  rewritten: string[];
+  /// Source files where the rewrite was abandoned because the file
+  /// changed between read and CAS-write. The on-disk rename stands.
+  conflicts: string[];
+};
+
 export type FileResponse = {
   path: string;
   content: string;

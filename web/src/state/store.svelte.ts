@@ -1367,6 +1367,14 @@ export function resolvePathPrompt(value: string | null): void {
 /// overwrite confirmation if target already exists. Refreshes the tree
 /// and re-keys conversations + open tabs so in-memory state follows the
 /// rename without a refetch round-trip.
+///
+/// The server runs the rename + link-rewrite pass synchronously. For a
+/// single-file rename with few backlinks this is sub-100ms; for a
+/// directory rename touching dozens of inbound references it can take a
+/// few hundred ms. We show a "Moving…" status indicator after a 200ms
+/// delay so a fast rename doesn't flash an indicator, but a slow one
+/// still tells the user the UI hasn't frozen.
+const MOVING_STATUS_DELAY_MS = 200;
 async function performMove(path: string, target: string): Promise<void> {
   if (target === path) return;
   const existing = tree.entries.find((e) => e.path === target);
@@ -1380,14 +1388,44 @@ async function performMove(path: string, target: string): Promise<void> {
     });
     if (!confirmed) return;
   }
+  let movingTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+    ui.status = "Moving…";
+    movingTimer = null;
+  }, MOVING_STATUS_DELAY_MS);
   try {
-    await api.move(path, target);
+    const resp = await api.move(path, target);
     await refreshTree();
     rekeyConversationsForRename(path, target);
     rekeyTabsForRename(path, target);
     revealAndSelect(target);
+    // Nudge open tabs to re-check their underlying file. Server-side
+    // self_writes dedupe suppresses the watcher echo for our own
+    // rewrites, so without this bump a tab pointing at a rewritten
+    // source would keep its stale buffer until the next save (which
+    // would then surface as a CAS conflict).
+    if (resp.rewritten.length > 0) {
+      ui.lastWatch = Date.now();
+    }
+    const linkBits: string[] = [];
+    if (resp.rewritten.length > 0) {
+      linkBits.push(
+        `${resp.rewritten.length} link${resp.rewritten.length === 1 ? "" : "s"} updated`,
+      );
+    }
+    if (resp.conflicts.length > 0) {
+      linkBits.push(
+        `${resp.conflicts.length} conflict${resp.conflicts.length === 1 ? "" : "s"}`,
+      );
+    }
+    ui.status =
+      linkBits.length > 0
+        ? `Moved '${target}' (${linkBits.join(", ")})`
+        : null;
   } catch (e) {
     ui.status = `rename failed: ${(e as Error).message}`;
+  } finally {
+    if (movingTimer) clearTimeout(movingTimer);
+    if (ui.status === "Moving…") ui.status = null;
   }
 }
 

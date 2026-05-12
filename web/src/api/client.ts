@@ -21,6 +21,7 @@ import type {
   LlmModelEntry,
   LlmStatus,
   LlmToolSpec,
+  MoveResponse,
   ResetMode,
   ResetResponse,
   SearchHit,
@@ -313,7 +314,8 @@ export const api = {
   create: (path: string, isDir: boolean, content?: string) =>
     req<void>("POST", "/api/files", { path, is_dir: isDir, content }),
   remove: (path: string) => req<void>("DELETE", `/api/files/${encPath(path)}`),
-  move: (from: string, to: string) => req<void>("POST", "/api/move", { from, to }),
+  move: (from: string, to: string) =>
+    req<MoveResponse>("POST", "/api/move", { from, to }),
   /// Filename fuzzy search (the [[ autocomplete in the editor).
   /// Hits the renamed /api/search/files endpoint; the legacy
   /// /api/search alias still exists server-side for back-compat.

@@ -262,16 +262,42 @@ pub struct MoveBody {
 }
 
 pub async fn api_move(State(state): State<Arc<AppState>>, Json(body): Json<MoveBody>) -> Response {
-    match state.drive().rename(&body.from, &body.to) {
-        Ok(()) => {
-            // Rename emits two notify events on most kernels (a
-            // Removed at `from` and a Created at `to`); note both
-            // so neither half of the pair fires an external-edit
-            // prompt.
-            state.self_writes.note(&body.from);
-            state.self_writes.note(&body.to);
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Err(e) => err_from(&e),
+    // Run the rename + link-rewrite pass on a blocking thread; the
+    // rewrite walks N source files synchronously and can take a few
+    // hundred ms on big directory moves. Keeping it off the tokio
+    // worker pool avoids blocking other requests during the walk.
+    let drive = state.drive().clone();
+    let from = body.from.clone();
+    let to = body.to.clone();
+    let outcome = match tokio::task::spawn_blocking(move || {
+        drive.rename_with_link_rewrite(&from, &to)
+    })
+    .await
+    {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => return err_from(&e),
+        Err(join) => return err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+    };
+    // Rename emits two notify events on most kernels (a Removed at
+    // `from` and a Created at `to`); the rewrite pass also touches
+    // every rewritten source. Note them all so neither half of any
+    // pair fires an external-edit prompt.
+    state.self_writes.note(&body.from);
+    state.self_writes.note(&body.to);
+    for path in &outcome.rewritten {
+        state.self_writes.note(path);
     }
+    Json(MoveResponse {
+        renamed: outcome.renamed,
+        rewritten: outcome.rewritten,
+        conflicts: outcome.conflicts,
+    })
+    .into_response()
+}
+
+#[derive(Serialize)]
+struct MoveResponse {
+    renamed: Vec<(String, String)>,
+    rewritten: Vec<String>,
+    conflicts: Vec<String>,
 }
