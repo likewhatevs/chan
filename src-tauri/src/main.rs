@@ -11,7 +11,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::menu::{Menu, MenuItemBuilder, PredefinedMenuItem, WINDOW_SUBMENU_ID};
+use tauri::menu::{Menu, MenuItemBuilder, MenuItemKind, PredefinedMenuItem, WINDOW_SUBMENU_ID};
 use tauri::{Manager, RunEvent, State, WindowEvent};
 
 use config::{Config, ConfigStore};
@@ -115,7 +115,8 @@ fn add_drive(
     path: String,
 ) -> Result<(), String> {
     let path = canonical_key(Path::new(&path));
-    let out = Command::new(chan_bin())
+    let bin = chan_bin()?;
+    let out = Command::new(&bin)
         .args(["add", &path])
         .output()
         .map_err(|e| format!("running `chan add`: {e}"))?;
@@ -131,8 +132,7 @@ fn add_drive(
     // serve immediately is what they expect; otherwise the freshly
     // added row sits there with On=off and Launch disabled, which
     // looks broken.
-    let verbose = state.store.lock().unwrap().get().map_err(err)?.dev_mode;
-    serve::start(app, Arc::clone(&state), path, chan_bin(), verbose)?;
+    serve::start(app, Arc::clone(&state), path, &bin)?;
     Ok(())
 }
 
@@ -141,7 +141,7 @@ fn remove_drive(state: State<Arc<AppState>>, path: String) -> Result<(), String>
     let key = canonical_key(Path::new(&path));
     serve::stop(&state, &key);
 
-    let out = Command::new(chan_bin())
+    let out = Command::new(chan_bin()?)
         .args(["remove", &key])
         .output()
         .map_err(|e| format!("running `chan remove`: {e}"))?;
@@ -168,8 +168,7 @@ fn set_drive_on(
 ) -> Result<(), String> {
     let key = canonical_key(Path::new(&path));
     if on {
-        let verbose = state.store.lock().unwrap().get().map_err(err)?.dev_mode;
-        serve::start(app, Arc::clone(&state), key, chan_bin(), verbose)?;
+        serve::start(app, Arc::clone(&state), key, &chan_bin()?)?;
     } else {
         serve::stop(&state, &key);
     }
@@ -179,40 +178,6 @@ fn set_drive_on(
 #[tauri::command]
 fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
     state.store.lock().unwrap().get().map_err(err)
-}
-
-#[tauri::command]
-fn show_settings(app: tauri::AppHandle) -> Result<(), String> {
-    show_window(&app, "settings")
-}
-
-#[tauri::command]
-fn set_dev_mode(
-    app: tauri::AppHandle,
-    state: State<Arc<AppState>>,
-    enabled: bool,
-) -> Result<Config, String> {
-    let mut store = state.store.lock().unwrap();
-    let mut cfg = store.get().map_err(err)?;
-    cfg.dev_mode = enabled;
-    store.save(&cfg).map_err(err)?;
-    drop(store);
-    apply_dev_mode(&app, enabled);
-    Ok(cfg)
-}
-
-/// Show or hide the console window. Called whenever dev mode flips
-/// and on startup if the persisted dev mode is on.
-fn apply_dev_mode(app: &tauri::AppHandle, enabled: bool) {
-    let Some(w) = app.get_webview_window("console") else {
-        return;
-    };
-    if enabled {
-        let _ = w.show();
-        let _ = w.set_focus();
-    } else {
-        let _ = w.hide();
-    }
 }
 
 fn show_window(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
@@ -238,10 +203,31 @@ fn basename(p: &Path) -> Option<String> {
     p.file_name().map(|s| s.to_string_lossy().into_owned())
 }
 
-/// Resolve the chan binary. Prototype: trust `$PATH`. The bundled
-/// binary path (production) is documented in design.md section 5.2.
-fn chan_bin() -> &'static str {
-    "chan"
+/// Resolve the bundled `chan` sidecar binary. Tauri's `externalBin`
+/// takes `binaries/chan-<target-triple>` at build time and stages it
+/// next to chan-desktop's own binary with the triple suffix stripped:
+/// `target/debug/chan` in dev, `Contents/MacOS/chan` in the bundled
+/// .app. Hard requirement — chan-desktop ships with chan; no
+/// `$PATH` fallback. A user who swaps the bundled binary owns the
+/// consequences.
+fn chan_bin() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("locating chan-desktop binary: {e}"))?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| "chan-desktop binary has no parent directory".to_string())?;
+    let name = if cfg!(target_os = "windows") {
+        "chan.exe"
+    } else {
+        "chan"
+    };
+    let path = dir.join(name);
+    if !path.exists() {
+        return Err(format!(
+            "bundled chan sidecar not found at {}",
+            path.display()
+        ));
+    }
+    Ok(path)
 }
 
 fn err<E: std::fmt::Display>(e: E) -> String {
@@ -263,21 +249,15 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
         .setup(|app| {
-            let state: State<Arc<AppState>> = app.state();
-            let cfg = state.store.lock().unwrap().get().unwrap_or_default();
-            if cfg.dev_mode {
-                apply_dev_mode(app.handle(), true);
-            }
-
             install_app_menu(app.handle())?;
 
             // Closing the main window via the red traffic light or
             // Cmd+W should hide it, not destroy it: hidden serve
-            // children, settings, and console windows can still keep
-            // the process alive, and reopening via Dock click or the
-            // Window > Drive Manager menu item should be instant.
-            // Without this, a closed main window cannot be brought
-            // back without quitting and relaunching.
+            // children can still keep the process alive, and
+            // reopening via Dock click or the Window > Drive Manager
+            // menu item should be instant. Without this, a closed
+            // main window cannot be brought back without quitting
+            // and relaunching.
             if let Some(main) = app.get_webview_window("main") {
                 let main_for_event = main.clone();
                 main.on_window_event(move |event| {
@@ -307,8 +287,6 @@ fn main() {
             remove_drive,
             set_drive_on,
             get_config,
-            show_settings,
-            set_dev_mode,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application");
@@ -346,22 +324,45 @@ fn main() {
 /// window has no menu path back. We prepend Drive Manager,
 /// Settings, and Logs items to that submenu so each app window
 /// is reachable by name.
+///
+/// Settings has Cmd+, but no chan-desktop-owned UI behind it:
+/// chan owns the Settings concept per-drive. The handler dispatches
+/// `app.settings.toggle` into the focused drive webview, where
+/// chan's `runCommand` opens its settings overlay. Cmd+, with the
+/// Drive Manager focused is a no-op.
 fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     let menu = Menu::default(app)?;
 
+    // Drive Manager keeps no accelerator: Cmd+1..9 is reserved for
+    // jump-to-tab in drive windows (handled by the per-drive key
+    // bridge script in serve.rs). The menu entry still surfaces the
+    // window by name.
     let drive_manager = MenuItemBuilder::with_id("win-main", "Drive Manager")
-        .accelerator("CmdOrCtrl+1")
         .build(app)?;
-    let settings = MenuItemBuilder::with_id("win-settings", "Settings…")
+    let settings = MenuItemBuilder::with_id("chan-settings", "Settings…")
         .accelerator("CmdOrCtrl+,")
-        .build(app)?;
-    let logs = MenuItemBuilder::with_id("win-console", "Logs")
-        .accelerator("CmdOrCtrl+L")
         .build(app)?;
 
     if let Some(window_submenu) = menu.get(WINDOW_SUBMENU_ID).and_then(|k| k.as_submenu().cloned()) {
         let sep = PredefinedMenuItem::separator(app)?;
-        window_submenu.prepend_items(&[&drive_manager, &settings, &logs, &sep])?;
+        window_submenu.prepend_items(&[&drive_manager, &settings, &sep])?;
+        // Strip the default "Close Window" item so Cmd+W reaches the
+        // drive webview's key bridge (which dispatches `app.tab.close`
+        // to chan). The trade-off: non-drive windows (main, console)
+        // lose their Cmd+W shortcut — closing them is still possible
+        // via the red traffic light. Match by text since muda assigns
+        // predefined items an opaque generated id.
+        if let Ok(items) = window_submenu.items() {
+            for item in items {
+                if let MenuItemKind::Predefined(p) = &item {
+                    if let Ok(text) = p.text() {
+                        if text.to_lowercase().contains("close") {
+                            let _ = window_submenu.remove(&item);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     app.set_menu(menu)?;
@@ -369,13 +370,29 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         "win-main" => {
             let _ = show_window(app, "main");
         }
-        "win-settings" => {
-            let _ = show_window(app, "settings");
-        }
-        "win-console" => {
-            let _ = show_window(app, "console");
+        "chan-settings" => {
+            dispatch_to_focused_drive(app, "app.settings.toggle");
         }
         _ => {}
     });
     Ok(())
+}
+
+/// Eval a `chan:command` dispatch on the currently-focused drive
+/// webview. Used by menu items that should defer to chan's per-drive
+/// behavior (Settings). No-op when the focused window isn't a drive,
+/// matching the "each window owns its own settings" model.
+fn dispatch_to_focused_drive(app: &tauri::AppHandle, command: &str) {
+    let Some(w) = app
+        .webview_windows()
+        .into_values()
+        .find(|w| w.label().starts_with("drive-") && w.is_focused().unwrap_or(false))
+    else {
+        return;
+    };
+    let js = format!(
+        "window.dispatchEvent(new CustomEvent('chan:command', {{detail: {{name: {}}}}}));",
+        serde_json::to_string(command).unwrap_or_else(|_| "\"\"".into())
+    );
+    let _ = w.eval(&js);
 }

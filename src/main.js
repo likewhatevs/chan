@@ -7,7 +7,6 @@ const { relaunch } = window.__TAURI__.process;
 
 const main = document.getElementById('main');
 const openBtn = document.getElementById('open-drive');
-const settingsBtn = document.getElementById('open-settings');
 
 let booted = false;
 
@@ -147,7 +146,6 @@ function escapeAttr(s) {
 }
 
 openBtn.addEventListener('click', pickAndAdd);
-settingsBtn.addEventListener('click', () => invoke('show_settings'));
 
 // Fire-and-forget update check. Runs once per process launch.
 // Endpoint / pubkey live in tauri.conf.json under `plugins.updater`.

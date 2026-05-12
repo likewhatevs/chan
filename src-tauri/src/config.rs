@@ -4,9 +4,8 @@
 //! for which drives exist. This file holds only desktop-specific
 //! state that has no place in chan proper:
 //!
-//! - `dev_mode`: open DevTools on every window.
-//! - `sidecar`: per-drive UI state (currently just the on-toggle),
-//!   keyed by canonical drive path so a `mv` on disk doesn't
+//! - `sidecar`: per-drive UI state (currently just the last bound
+//!   port), keyed by canonical drive path so a `mv` on disk doesn't
 //!   silently revive stale state for a different drive.
 //!
 //! Per-drive serve URLs are intentionally NOT persisted: chan rotates
@@ -33,8 +32,6 @@ pub struct DriveSidecar {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
-    #[serde(default)]
-    pub dev_mode: bool,
     /// Per-drive UI state, keyed by canonical drive path.
     #[serde(default)]
     pub sidecar: HashMap<String, DriveSidecar>,

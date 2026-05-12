@@ -35,17 +35,6 @@ use crate::AppState;
 /// drive list.
 pub const SERVES_CHANGED: &str = "serves-changed";
 
-/// Tauri event emitted for every captured stderr line. Payload:
-/// `{ path: String, line: String }`. The console window subscribes
-/// when dev mode is on.
-pub const CHAN_LOG: &str = "chan-log";
-
-#[derive(serde::Serialize, Clone)]
-struct LogLine<'a> {
-    path: &'a str,
-    line: &'a str,
-}
-
 /// Live state for one running serve. Held in `AppState.serves`
 /// keyed by canonical drive path.
 pub struct ServeHandle {
@@ -56,18 +45,11 @@ pub struct ServeHandle {
 /// Spawn `chan serve` for a drive. On success the child is inserted
 /// into `state.serves` under `key`; the URL is filled in
 /// asynchronously by the stderr-tailing thread once chan prints it.
-///
-/// `verbose` controls the `-vv` flag; pass `cfg.dev_mode` from the
-/// caller. Verbosity is fixed for the lifetime of one serve: the
-/// caller has to stop and restart the drive to pick up a dev-mode
-/// toggle. We accept that wart rather than adding hot-reload of a
-/// child process flag.
 pub fn start(
     app: AppHandle,
     state: Arc<AppState>,
     key: String,
-    chan_bin: &str,
-    verbose: bool,
+    chan_bin: &Path,
 ) -> Result<(), String> {
     if state.serves.lock().unwrap().contains_key(&key) {
         return Ok(());
@@ -79,9 +61,6 @@ pub fn start(
     }
 
     let mut cmd = Command::new(chan_bin);
-    if verbose {
-        cmd.arg("-vv");
-    }
     cmd.args([
         "serve",
         &key,
@@ -127,16 +106,6 @@ pub fn start(
         let mut saw_ready_banner = false;
         for line in reader.lines() {
             let Ok(line) = line else { break };
-
-            if verbose {
-                let _ = app2.emit(
-                    CHAN_LOG,
-                    LogLine {
-                        path: &key2,
-                        line: &line,
-                    },
-                );
-            }
 
             // chan's banner: "chan is ready:" then a line with the
             // URL. The URL line is the first non-empty line after
@@ -243,6 +212,12 @@ fn open_drive_window(app: &AppHandle, key: &str, label: &str, url: &str) {
         .inner_size(1200.0, 800.0)
         .min_inner_size(640.0, 400.0)
         .resizable(true)
+        .initialization_script(KEY_BRIDGE_JS)
+        // Tauri polyfill: Cmd/Ctrl + [+ = -] and mousewheel zoom,
+        // 20% per step, 20%-1000%. Requires the
+        // `core:webview:allow-set-webview-zoom` permission on
+        // drive-* windows in capabilities/default.json.
+        .zoom_hotkeys_enabled(true)
         .build()
         {
             Ok(w) => w,
@@ -278,6 +253,58 @@ fn close_drive_window(app: &AppHandle, label: &str) {
         }
     });
 }
+
+/// Native keyboard shortcuts for drive webviews. Translates chords
+/// into the host-agnostic `chan:command` window event that chan's
+/// App.svelte listens for. Runs before any page script, in capture
+/// phase with stopImmediatePropagation, so this script is the sole
+/// authority on every chord it claims — chan's onWindowKey doesn't
+/// fire for these even if its keymap drifts.
+///
+/// Layout mirrors VS Code; chords that browsers reserve at OS level
+/// (Cmd+W, Cmd+N, Cmd+Shift+[/], Cmd+1..9) are bound here because
+/// the native webview doesn't have those reservations. chan's web
+/// fallbacks (Alt+Shift, Ctrl+Alt) keep working independently.
+const KEY_BRIDGE_JS: &str = r#"
+(() => {
+  function fire(e, name, detail) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    window.dispatchEvent(new CustomEvent('chan:command',
+      { detail: Object.assign({ name: name }, detail || {}) }));
+  }
+  function onKey(e) {
+    const meta = e.metaKey || e.ctrlKey;
+    if (!meta || e.altKey) return;
+    const shift = e.shiftKey;
+    const code = e.code;
+    if (!shift) {
+      switch (code) {
+        case 'KeyP': fire(e, 'app.files.toggle');     return;
+        case 'KeyI': fire(e, 'app.assistant.toggle'); return;
+        case 'KeyN': fire(e, 'app.file.new');         return;
+        case 'KeyW': fire(e, 'app.tab.close');        return;
+        case 'KeyF': fire(e, 'app.find.open');        return;
+        case 'KeyG': fire(e, 'app.find.next');        return;
+      }
+      const m = code.match(/^Digit([1-9])$/);
+      if (m) {
+        fire(e, 'app.tab.jump', { index: Number(m[1]) - 1 });
+        return;
+      }
+    } else {
+      switch (code) {
+        case 'KeyF':         fire(e, 'app.search.toggle'); return;
+        case 'KeyG':         fire(e, 'app.find.prev');     return;
+        case 'KeyM':         fire(e, 'app.graph.toggle');  return;
+        case 'BracketLeft':  fire(e, 'app.tab.prev');      return;
+        case 'BracketRight': fire(e, 'app.tab.next');      return;
+      }
+    }
+  }
+  window.addEventListener('keydown', onKey, true);
+})();
+"#;
 
 /// Bind 127.0.0.1:0 to let the OS hand us a free port, then close
 /// the listener and return the number. Classic TOCTOU: another

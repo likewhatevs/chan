@@ -22,26 +22,6 @@
         "minHeight": 400,
         "resizable": true,
         "url": "index.html"
-      },
-      {
-        "label": "settings",
-        "title": "Chan Desktop — Settings",
-        "width": 600,
-        "height": 240,
-        "resizable": false,
-        "visible": false,
-        "url": "settings.html"
-      },
-      {
-        "label": "console",
-        "title": "Chan Desktop — Logs",
-        "width": 820,
-        "height": 480,
-        "minWidth": 480,
-        "minHeight": 240,
-        "resizable": true,
-        "visible": false,
-        "url": "console.html"
       }
     ],
     "security": {
@@ -59,6 +39,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": ["binaries/chan"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
