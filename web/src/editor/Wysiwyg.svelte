@@ -4114,6 +4114,21 @@
     box-shadow: 0 4px 12px rgba(0,0,0,.4);
     padding: .5rem;
     font-size: 15px;
+    transform-origin: top left;
+    transform: scale(1);
+    transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  :global(.md-cal:hover) {
+    transform: scale(1.015);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(.md-bubble),
+    :global(.md-bubble:hover),
+    :global(.md-cal),
+    :global(.md-cal:hover) {
+      transition: none;
+      transform: none;
+    }
   }
   /* Format dropdown row at the top of the calendar popover. The
      preview span on the right shows what the cursor's date will
@@ -4321,6 +4336,16 @@
     box-shadow: 0 4px 12px rgba(0,0,0,.4);
     font-size: 13px;
     user-select: none;
+    /* Hover wobble matches the tab-menu bubble, file-browser menu,
+       and overlay panel: easeOutBack overshoot on mouse-enter,
+       settles back on leave. Anchor at top-left so the lift grows
+       away from the caret rather than drifting sideways. */
+    transform-origin: top left;
+    transform: scale(1);
+    transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  :global(.md-bubble:hover) {
+    transform: scale(1.015);
   }
 
   /* Wiki-link bubble. Anchored under the caret while the user
@@ -5053,6 +5078,23 @@
     padding: 2px;
     backdrop-filter: blur(4px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    /* Same easeOutBack hover wobble as the editor bubbles + the
+       tab-menu pill. Anchored top-right because the overlay sits
+       at the image's top-right corner, so the lift grows toward
+       the image rather than off-screen. */
+    transform-origin: top right;
+    transform: scale(1);
+    transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  :global(.md-image-actions:hover) {
+    transform: scale(1.04);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(.md-image-actions),
+    :global(.md-image-actions:hover) {
+      transition: none;
+      transform: none;
+    }
   }
   :global(.md-image-action) {
     background: transparent;
