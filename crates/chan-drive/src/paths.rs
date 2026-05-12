@@ -104,6 +104,14 @@ pub struct DrivePaths {
     /// from the source-of-truth markdown; it's regenerable but a
     /// rebuild is more expensive than a search reindex.
     pub graph_db: PathBuf,
+    /// Per-drive directory carrying graph-related sidecar state:
+    /// the `rebuild.inprogress` marker (written before a graph
+    /// rebuild starts, removed after the search index commits;
+    /// presence on `Drive::open` flags the drive as needing a full
+    /// reindex) and the persisted `rename_log.json`. Sibling of
+    /// `graph_db` (same parent), so wiping `<state>/graph/<key>/`
+    /// reclaims both the DB and the sidecars in one step.
+    pub graph_dir: PathBuf,
     /// Per-drive lock dir. Holds the index-writer lockfile that
     /// prevents two processes from writing the same drive's index.
     pub lock: PathBuf,
@@ -122,11 +130,13 @@ pub fn drive_paths(drive_root: &Path) -> DrivePaths {
     let key = drive_key(drive_root);
     let state = state_dir();
     let cache = cache_dir();
+    let graph_dir = state.join("graph").join(&key);
     DrivePaths {
         sessions: state.join("sessions").join(&key),
         assistant: state.join("assistant").join(&key),
         index: cache.join("index").join(&key),
-        graph_db: state.join("graph").join(&key).join("graph.sqlite"),
+        graph_db: graph_dir.join("graph.sqlite"),
+        graph_dir,
         lock: state.join("locks").join(&key),
         tokens: state.join("tokens").join(&key),
         trash: state.join("trash").join(&key),

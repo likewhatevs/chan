@@ -32,6 +32,7 @@ pub mod library;
 pub mod lock;
 pub mod markdown;
 pub mod paths;
+pub mod progress;
 pub mod registry;
 pub mod trash;
 pub mod watch;
@@ -50,10 +51,11 @@ pub use graph::{
     ContactNode, Edge, EdgeKind, GraphView, HeadingRow, LinkTarget, LinkTargetKind, NodeKind, Tag,
 };
 pub use index::{
-    BuildOptions, BuildProgress, BuildStage, BuildSummary, Chunking, Hit, IndexConfig, IndexStats,
-    Mode as SearchMode, SearchResult, DEFAULT_MODEL,
+    BuildOptions, BuildSummary, Chunking, Hit, IndexConfig, IndexStats, Mode as SearchMode,
+    SearchResult, DEFAULT_MODEL,
 };
 pub use library::{Library, ResetMode, ResetReport};
+pub use progress::{progress_fn, NoProgress, ProgressCallback, ProgressEvent, ProgressStage};
 pub use registry::{KnownDrive, Registry};
 pub use trash::{TrashEntry, TRASH_RETENTION_SECS};
 pub use watch::{WatchCallback, WatchEvent, WatchHandle, WatchKind};

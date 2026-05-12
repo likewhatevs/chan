@@ -242,15 +242,13 @@ impl Index {
     /// calling `commit()` so tantivy discards every pending write
     /// queued in this run; the on-disk index is left as it was at
     /// the start.
-    pub fn build_all<F>(
+    pub fn build_all(
         &self,
         opts: BuildOptions,
-        mut on_progress: F,
+        progress: &dyn crate::progress::ProgressCallback,
         cancel: Option<&AtomicBool>,
-    ) -> Result<BuildSummary, IndexError>
-    where
-        F: FnMut(BuildProgress<'_>),
-    {
+    ) -> Result<BuildSummary, IndexError> {
+        use crate::progress::{ProgressEvent, ProgressStage};
         let files = list_indexable(&self.drive_root)?;
         let total = files.len();
         let mut indexed = 0usize;
@@ -280,11 +278,11 @@ impl Index {
                     return Err(IndexError::Cancelled);
                 }
             }
-            on_progress(BuildProgress {
-                index: i,
-                total,
-                path: rel,
-                stage: BuildStage::File,
+            progress.on_progress(ProgressEvent {
+                stage: ProgressStage::IndexFile,
+                current: i as u64,
+                total: total as u64,
+                label: Some(rel.clone()),
             });
             let abs = self.drive_root.join(rel);
             let text = match std::fs::read_to_string(&abs) {
@@ -319,14 +317,11 @@ impl Index {
                 pending_chunks += chunks.len();
                 pending.push((rel.clone(), chunks));
                 if pending_chunks >= EMBED_BATCH_CHUNKS {
-                    on_progress(BuildProgress {
-                        index: i,
-                        total,
-                        path: rel,
-                        stage: BuildStage::EmbedBatch {
-                            chunks: pending_chunks,
-                            files: pending.len(),
-                        },
+                    progress.on_progress(ProgressEvent {
+                        stage: ProgressStage::EmbedBatch,
+                        current: pending_chunks as u64,
+                        total: EMBED_BATCH_CHUNKS as u64,
+                        label: Some(format!("files={} last={rel}", pending.len())),
                     });
                     match self.flush_embed_batch(&mut pending, cancel) {
                         Ok(errs) => errors.extend(errs),
@@ -347,14 +342,11 @@ impl Index {
                 }
             }
             let last = pending.last().map(|(r, _)| r.clone()).unwrap_or_default();
-            on_progress(BuildProgress {
-                index: total.saturating_sub(1),
-                total,
-                path: &last,
-                stage: BuildStage::EmbedBatch {
-                    chunks: pending_chunks,
-                    files: pending.len(),
-                },
+            progress.on_progress(ProgressEvent {
+                stage: ProgressStage::EmbedBatch,
+                current: pending_chunks as u64,
+                total: EMBED_BATCH_CHUNKS as u64,
+                label: Some(format!("tail files={} last={last}", pending.len())),
             });
             match self.flush_embed_batch(&mut pending, cancel) {
                 Ok(errs) => errors.extend(errs),
@@ -680,26 +672,6 @@ impl Default for BuildOptions {
 }
 
 #[derive(Debug)]
-pub struct BuildProgress<'a> {
-    pub index: usize,
-    pub total: usize,
-    pub path: &'a str,
-    pub stage: BuildStage,
-}
-
-/// Which step of `build_all` the progress callback is reporting.
-/// `File` fires per file before the read+chunk+BM25 step. `EmbedBatch`
-/// fires once per cross-file embedding flush, which can be the
-/// long-running pause on a CPU-only embedder; without surfacing it
-/// the CLI's progress line would look stuck on whatever file
-/// happened to push the buffer past the batch threshold.
-#[derive(Debug, Clone, Copy)]
-pub enum BuildStage {
-    File,
-    EmbedBatch { chunks: usize, files: usize },
-}
-
-#[derive(Debug)]
 pub struct BuildSummary {
     pub files: usize,
     pub indexed: usize,
@@ -781,7 +753,9 @@ mod tests {
         std::fs::write(tmp.path().join("a.md"), "# alpha\nfoo apples\n").unwrap();
         std::fs::write(tmp.path().join("b.md"), "# beta\nbar bananas\n").unwrap();
         let idx = Index::open(tmp.path(), &idx_dir(&tmp)).unwrap();
-        let summary = idx.build_all(no_vectors(), |_| {}, None).unwrap();
+        let summary = idx
+            .build_all(no_vectors(), &crate::progress::NoProgress, None)
+            .unwrap();
         assert_eq!(summary.files, 2);
         assert_eq!(summary.indexed, 2);
         assert!(summary.errors.is_empty());
@@ -795,7 +769,8 @@ mod tests {
         let tmp = make_drive();
         std::fs::write(tmp.path().join("a.md"), "unique-token here\n").unwrap();
         let idx = Index::open(tmp.path(), &idx_dir(&tmp)).unwrap();
-        idx.build_all(no_vectors(), |_| {}, None).unwrap();
+        idx.build_all(no_vectors(), &crate::progress::NoProgress, None)
+            .unwrap();
         assert!(!idx
             .search("unique-token", Mode::Bm25, 10)
             .unwrap()
@@ -815,7 +790,8 @@ mod tests {
         std::fs::write(tmp.path().join("a.md"), "first content\n").unwrap();
         let dir = idx_dir(&tmp);
         let idx = Index::open(tmp.path(), &dir).unwrap();
-        idx.build_all(no_vectors(), |_| {}, None).unwrap();
+        idx.build_all(no_vectors(), &crate::progress::NoProgress, None)
+            .unwrap();
         assert!(!idx.search("first", Mode::Bm25, 10).unwrap().hits.is_empty());
         drop(idx);
         let idx = Index::rebuild(tmp.path(), &dir).unwrap();
@@ -832,7 +808,7 @@ mod tests {
         let idx = Index::open(tmp.path(), &idx_dir(&tmp)).unwrap();
         let cancel = AtomicBool::new(true);
         let err = idx
-            .build_all(no_vectors(), |_| {}, Some(&cancel))
+            .build_all(no_vectors(), &crate::progress::NoProgress, Some(&cancel))
             .unwrap_err();
         assert!(matches!(err, IndexError::Cancelled));
         // No commit happened; the index stays empty so an auto-rebuild

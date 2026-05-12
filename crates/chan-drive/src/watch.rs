@@ -33,6 +33,7 @@
 //     still alive after this event; further events may resume, or
 //     the consumer can rebuild the watcher entirely.
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -100,11 +101,14 @@ impl WatchHandle {
                     // logging-and-continuing left consumers silently
                     // stale.
                     tracing::warn!("watch error: {e}");
-                    cb_clone.on_event(WatchEvent {
-                        kind: WatchKind::ProviderError,
-                        path: Some(e.to_string()),
-                        to: None,
-                    });
+                    safe_call(
+                        &*cb_clone,
+                        WatchEvent {
+                            kind: WatchKind::ProviderError,
+                            path: Some(e.to_string()),
+                            to: None,
+                        },
+                    );
                 }
             })?;
         watcher.watch(drive_root, RecursiveMode::Recursive)?;
@@ -138,11 +142,54 @@ fn dispatch(root: &Path, event: notify::Event, cb: &dyn WatchCallback) {
         return;
     }
 
-    cb.on_event(WatchEvent {
-        kind,
-        path: from_rel,
-        to: to_rel,
-    });
+    safe_call(
+        cb,
+        WatchEvent {
+            kind,
+            path: from_rel,
+            to: to_rel,
+        },
+    );
+}
+
+/// Invoke the consumer's callback with one event, catching any
+/// panic so the notify worker thread doesn't die. A panic in the
+/// callback is turned into a `ProviderError` event so the consumer
+/// learns the stream is suspect (the same signal we use for
+/// inotify-queue-overflow and friends). Without this, a single
+/// `unwrap` in user code stops every subsequent watcher event
+/// silently and the editor's incremental indexer goes dark.
+fn safe_call(cb: &dyn WatchCallback, event: WatchEvent) {
+    // AssertUnwindSafe: we can't constrain consumer callbacks to
+    // UnwindSafe (the WatchCallback trait is intentionally minimal),
+    // and the alternative -- letting the panic unwind through
+    // notify's worker -- silently kills the watcher. The consumer
+    // is the one whose state may be left half-mutated by their own
+    // panic; surfacing ProviderError gives them the chance to
+    // recover via reindex.
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| cb.on_event(event))) {
+        let msg = panic_message(&payload);
+        tracing::error!("watch callback panicked: {msg}");
+        // Best-effort: if the panic-notification itself panics we
+        // log and move on. The notify worker stays alive either way.
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            cb.on_event(WatchEvent {
+                kind: WatchKind::ProviderError,
+                path: Some(format!("callback panicked: {msg}")),
+                to: None,
+            });
+        }));
+    }
+}
+
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
 }
 
 fn is_filtered(rel: &str) -> bool {
@@ -160,4 +207,90 @@ fn relativize(root: &Path, p: &Path) -> Option<String> {
 #[allow(dead_code)]
 pub(crate) fn _abs(root: &Path, rel: &str) -> PathBuf {
     root.join(rel)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    /// A callback that panics on its first event, succeeds on the
+    /// second. Used to verify the watcher thread survives a panic
+    /// and that a synthetic ProviderError is emitted after.
+    struct PanickyOnce {
+        calls: AtomicUsize,
+        events: Mutex<Vec<WatchEvent>>,
+    }
+
+    impl PanickyOnce {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                events: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl WatchCallback for PanickyOnce {
+        fn on_event(&self, event: WatchEvent) {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            // Record every successful invocation, including the
+            // ProviderError emitted after the panic so the test can
+            // assert it landed.
+            self.events.lock().unwrap().push(event.clone());
+            if n == 0 {
+                panic!("first-call panic");
+            }
+        }
+    }
+
+    #[test]
+    fn callback_panic_is_caught_and_surfaces_provider_error() {
+        let cb = PanickyOnce::new();
+        // First call: panics inside the callback. safe_call must
+        // recover; the ProviderError emitted afterwards is the
+        // second invocation and lands successfully.
+        safe_call(
+            &cb,
+            WatchEvent {
+                kind: WatchKind::Modified,
+                path: Some("a.md".into()),
+                to: None,
+            },
+        );
+        // Third call: a normal event after the panic. Must land,
+        // proving the worker (modeled here as the test thread) is
+        // alive.
+        safe_call(
+            &cb,
+            WatchEvent {
+                kind: WatchKind::Modified,
+                path: Some("b.md".into()),
+                to: None,
+            },
+        );
+        let events = cb.events.lock().unwrap();
+        assert!(
+            events.len() >= 2,
+            "expected at least 2 events; got {events:?}"
+        );
+        // First recorded event is the one that triggered the panic
+        // (callback panicked AFTER the push because we record then
+        // panic). The next event must be the synthetic ProviderError.
+        assert_eq!(events[0].kind, WatchKind::Modified);
+        assert_eq!(events[1].kind, WatchKind::ProviderError);
+        assert!(
+            events[1]
+                .path
+                .as_deref()
+                .map(|s| s.contains("callback panicked"))
+                .unwrap_or(false),
+            "ProviderError path should describe the panic: {:?}",
+            events[1].path,
+        );
+        // Subsequent normal event lands.
+        assert_eq!(events.last().unwrap().kind, WatchKind::Modified);
+        assert_eq!(events.last().unwrap().path.as_deref(), Some("b.md"));
+    }
 }

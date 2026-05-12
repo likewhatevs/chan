@@ -107,7 +107,37 @@ impl Embedder {
     /// `config.json` + `tokenizer.json` + `model.safetensors` from
     /// HuggingFace into `cache_dir` on first use; subsequent opens
     /// are local and fast.
+    ///
+    /// Two-pass guard against a corrupt hf-hub cache: a process
+    /// SIGKILLed mid-download can leave a half-written file that
+    /// hf-hub doesn't always notice on the next call. We `open_once`
+    /// then run a single-element `embed_documents` probe; if either
+    /// fails we wipe the per-model cache subdirectory and try once
+    /// more. The second failure surfaces to the caller. The probe
+    /// also catches the rare "open succeeds but forward pass dies"
+    /// shape that a truncated safetensors file can produce.
     pub fn open(model_id: &str, cache_dir: &Path) -> Result<Self, EmbedError> {
+        match Self::open_once(model_id, cache_dir).and_then(|e| e.probe().map(|_| e)) {
+            Ok(e) => Ok(e),
+            Err(first_err) => {
+                tracing::warn!(
+                    model = model_id,
+                    error = %first_err,
+                    "embedder open/probe failed; wiping model cache and retrying",
+                );
+                wipe_model_cache(model_id, cache_dir)?;
+                let e = Self::open_once(model_id, cache_dir)?;
+                e.probe()?;
+                Ok(e)
+            }
+        }
+    }
+
+    /// Cold-path bring-up: do the actual hf-hub fetch + candle load.
+    /// Pulled out of `open` so the wipe-and-retry path can call it
+    /// twice without duplicating the body. Callers should prefer
+    /// `Embedder::open`, which adds the corruption recovery.
+    fn open_once(model_id: &str, cache_dir: &Path) -> Result<Self, EmbedError> {
         let _ = lookup_model(model_id)?;
         std::fs::create_dir_all(cache_dir)?;
 
@@ -228,6 +258,29 @@ impl Embedder {
         let mut v = self.embed_documents(&[q])?;
         Ok(v.pop().unwrap_or_default())
     }
+
+    /// Single tokenize + forward pass over an empty string. Used by
+    /// `open` to catch a model that loaded but can't actually run
+    /// (truncated safetensors, mismatched config). The string is
+    /// non-empty inside the tokenizer because BERT prepends the CLS
+    /// token, so we still exercise the full code path.
+    fn probe(&self) -> Result<(), EmbedError> {
+        self.embed_documents(&[""])?;
+        Ok(())
+    }
+}
+
+/// Wipe the hf-hub cache subdirectory for `model_id`. hf-hub maps
+/// `org/name` to `models--<org>--<name>/` under the cache root, so
+/// a sha-mismatched or half-downloaded snapshot is reclaimable by
+/// removing one directory. Best-effort: if the dir doesn't exist
+/// we treat it as already clean.
+fn wipe_model_cache(model_id: &str, cache_dir: &Path) -> Result<(), EmbedError> {
+    let dir = cache_dir.join(format!("models--{}", model_id.replace('/', "--")));
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir)?;
+    }
+    Ok(())
 }
 
 fn embed_with(inner: &mut Inner, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbedError> {
@@ -354,6 +407,27 @@ mod tests {
     fn known_models_resolve() {
         assert!(lookup_model("BAAI/bge-small-en-v1.5").is_ok());
         assert!(lookup_model("BAAI/bge-m3").is_ok());
+    }
+
+    #[test]
+    fn wipe_model_cache_removes_org_name_dir() {
+        // hf-hub stores model snapshots under
+        // `<cache>/models--<org>--<name>/`; the wipe-and-retry path
+        // depends on this exact name layout. Pin it so an hf-hub
+        // upgrade that changes the convention fails this test
+        // loudly instead of silently leaking stale snapshots.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("models--BAAI--bge-small-en-v1.5");
+        std::fs::create_dir_all(dir.join("snapshots/rev/blobs")).unwrap();
+        std::fs::write(dir.join("snapshots/rev/blobs/junk"), b"partial").unwrap();
+        wipe_model_cache("BAAI/bge-small-en-v1.5", tmp.path()).unwrap();
+        assert!(
+            !dir.exists(),
+            "wipe_model_cache should have removed {}",
+            dir.display(),
+        );
+        // Repeat call is a no-op (idempotent).
+        wipe_model_cache("BAAI/bge-small-en-v1.5", tmp.path()).unwrap();
     }
 
     /// Gated on CHAN_RUN_MODEL_TESTS=1 so CI doesn't pull 130 MB

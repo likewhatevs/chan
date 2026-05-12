@@ -221,6 +221,22 @@ impl Library {
     /// Re-creation of the skeleton happens lazily on the next
     /// `open_drive` + first `index()` / `graph()` access.
     pub fn reset_drive(&self, root: &Path, mode: ResetMode) -> Result<ResetReport> {
+        self.reset_drive_with(root, mode, &crate::progress::NoProgress)
+    }
+
+    /// `reset_drive` plus a `ProgressCallback`. Fires one
+    /// `ProgressStage::Reset` event per subsystem (index, graph,
+    /// sessions, assistant, tokens) as it is wiped, so a UI can
+    /// surface "wiping <subsystem>..." without instrumenting each
+    /// caller. The label carries the subsystem name; `current` /
+    /// `total` count through the fixed five-subsystem list.
+    pub fn reset_drive_with(
+        &self,
+        root: &Path,
+        mode: ResetMode,
+        progress: &dyn crate::progress::ProgressCallback,
+    ) -> Result<ResetReport> {
+        use crate::progress::{ProgressEvent, ProgressStage};
         // In-process pre-check: a buggy caller might hold a Drive
         // and call reset_drive from another thread, expecting the
         // flock to serialize. It does (DriveLock::acquire below
@@ -241,18 +257,21 @@ impl Library {
         let drive_paths = paths::drive_paths(root);
         let _lock = DriveLock::acquire(&drive_paths.lock)?;
         let mut removed = 0;
-        let graph_dir = drive_paths
-            .graph_db
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| drive_paths.graph_db.clone());
-        for dir in [
-            &drive_paths.index,
-            &graph_dir,
-            &drive_paths.sessions,
-            &drive_paths.assistant,
-            &drive_paths.tokens,
-        ] {
+        let subsystems: [(&str, &Path); 5] = [
+            ("index", &drive_paths.index),
+            ("graph", &drive_paths.graph_dir),
+            ("sessions", &drive_paths.sessions),
+            ("assistant", &drive_paths.assistant),
+            ("tokens", &drive_paths.tokens),
+        ];
+        let total = subsystems.len() as u64;
+        for (idx, (name, dir)) in subsystems.iter().enumerate() {
+            progress.on_progress(ProgressEvent {
+                stage: ProgressStage::Reset,
+                current: idx as u64,
+                total,
+                label: Some((*name).to_string()),
+            });
             removed += wipe_dir(dir)?;
         }
         // Hold the writer lock across the registry update so a

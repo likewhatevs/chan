@@ -91,7 +91,12 @@ fn remove_single_file_drops_graph_and_index() {
         .hits
         .is_empty());
     assert_eq!(
-        drive.graph().unwrap().backlinks("notes/x.md").unwrap().len(),
+        drive
+            .graph()
+            .unwrap()
+            .backlinks("notes/x.md")
+            .unwrap()
+            .len(),
         1,
         "backlink should still be present after restore",
     );
@@ -109,10 +114,16 @@ fn remove_directory_cascades_through_graph_and_index() {
     // A subtree mixing editable text, an image, and a PDF. An outside
     // file links into the subtree to verify backlinks clear too.
     drive
-        .write_text("outside.md", "# Outside\n\n![diag](notes/media/diagram.png) and [[notes/inner]]\n")
+        .write_text(
+            "outside.md",
+            "# Outside\n\n![diag](notes/media/diagram.png) and [[notes/inner]]\n",
+        )
         .unwrap();
     drive
-        .write_text("notes/inner.md", "# Inner\n\nUnique-inner-token. See ./other.txt\n")
+        .write_text(
+            "notes/inner.md",
+            "# Inner\n\nUnique-inner-token. See ./other.txt\n",
+        )
         .unwrap();
     drive
         .write_text("notes/other.txt", "plain text body with sourdough\n")
@@ -162,14 +173,16 @@ fn remove_directory_cascades_through_graph_and_index() {
     let inner_hits = drive
         .search("Unique-inner-token", &SearchOpts::default())
         .unwrap();
-    assert!(inner_hits.hits.is_empty(), "stale BM25 row for notes/inner.md");
-    let txt_hits = drive
-        .search("sourdough", &SearchOpts::default())
-        .unwrap();
-    assert!(txt_hits.hits.is_empty(), "stale BM25 row for notes/other.txt");
-    let outside_hits = drive
-        .search("Outside", &SearchOpts::default())
-        .unwrap();
+    assert!(
+        inner_hits.hits.is_empty(),
+        "stale BM25 row for notes/inner.md"
+    );
+    let txt_hits = drive.search("sourdough", &SearchOpts::default()).unwrap();
+    assert!(
+        txt_hits.hits.is_empty(),
+        "stale BM25 row for notes/other.txt"
+    );
+    let outside_hits = drive.search("Outside", &SearchOpts::default()).unwrap();
     assert!(
         outside_hits.hits.iter().any(|h| h.path == "outside.md"),
         "outside file should still be searchable after sibling-dir remove",

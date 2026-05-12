@@ -36,6 +36,26 @@ pub const TEXT_WRITE_LIMIT: u64 = 2 * 1024 * 1024;
 /// case appears.
 pub const BYTES_WRITE_LIMIT: u64 = 50 * 1024 * 1024;
 
+/// File written to `paths.graph_dir` before `rebuild_graph` starts
+/// and removed after `Index::build_all` commits. Its presence at
+/// `Drive::open` time means a previous reindex did not run to
+/// completion: the graph may have been rebuilt while the search
+/// index never reached `bm25.commit()`, so graph + index can
+/// disagree about freshness. The consumer reads
+/// `Drive::needs_rebuild()` and reindexes before serving queries.
+const REBUILD_MARKER: &str = "rebuild.inprogress";
+
+/// Persisted form of the in-process rename log, kept under
+/// `paths.graph_dir`. Carries every `(old_path -> current_path)`
+/// pair the drive has accumulated since the last `reindex`. The
+/// editor batches link rewrites across multiple renames using this
+/// table, so losing it on a crash silently breaks the chain: a
+/// rename A->B followed by B->C would, on restart, not know that
+/// the original A name now points at C. Persisting after every
+/// append rebuilds that knowledge on the next open. Cleared
+/// together with the in-memory map at the end of `reindex_with`.
+const RENAME_LOG_FILE: &str = "rename_log.json";
+
 /// User-facing search knobs. The mode defaults to Hybrid (BM25 +
 /// dense, RRF-fused) when the binary is built with `embeddings`,
 /// otherwise the facade falls back to BM25 with `ready: false`.
@@ -158,6 +178,15 @@ pub struct Drive {
     /// `reindex` (which rebuilds the graph against the live tree,
     /// making every translation a no-op).
     rename_log: std::sync::Mutex<std::collections::HashMap<String, String>>,
+    /// Set when `Drive::open` observed a `rebuild.inprogress` marker
+    /// in `paths.graph_dir`: the last reindex did not get to call
+    /// `bm25.commit()` (process killed / power loss between graph
+    /// rebuild and search-index commit). The graph and the index
+    /// can therefore disagree about freshness, so the consumer
+    /// (chan-server's indexer, the CLI) must trigger a full reindex
+    /// before answering search queries. Cleared by `reindex_with`
+    /// after the marker file is removed on disk.
+    needs_rebuild: std::sync::atomic::AtomicBool,
 }
 
 impl std::fmt::Debug for Drive {
@@ -206,6 +235,26 @@ impl Drive {
         // Errors are swallowed: a corrupt trash dir must never block
         // a legitimate drive open.
         let _ = trash::sweep_expired(&paths.trash, TRASH_RETENTION_SECS);
+        // A stale `rebuild.inprogress` marker means the previous
+        // reindex did not finish atomically. Promote it to an
+        // in-process flag the consumer can observe via
+        // `Drive::needs_rebuild()`. We don't auto-reindex here so
+        // `open` stays fast on large drives; the consumer schedules
+        // the rebuild on its own thread when it sees the flag set.
+        let needs_rebuild = paths.graph_dir.join(REBUILD_MARKER).exists();
+        if needs_rebuild {
+            tracing::warn!(
+                drive = %entry.path.display(),
+                "rebuild.inprogress marker found at open; full reindex required",
+            );
+        }
+        // Rehydrate the rename log from disk. A previous process
+        // session's renames must remain visible to the link-rewrite
+        // path; without this, a chain spanning a crash silently
+        // breaks. Best-effort: a missing or malformed file falls
+        // back to an empty map (the next reindex would rebuild the
+        // graph either way).
+        let rename_log = load_rename_log(&paths.graph_dir);
         Ok(Arc::new(Self {
             entry,
             root_canon,
@@ -214,8 +263,21 @@ impl Drive {
             _lock: lock,
             index: std::sync::OnceLock::new(),
             graph: std::sync::OnceLock::new(),
-            rename_log: std::sync::Mutex::new(std::collections::HashMap::new()),
+            rename_log: std::sync::Mutex::new(rename_log),
+            needs_rebuild: std::sync::atomic::AtomicBool::new(needs_rebuild),
         }))
+    }
+
+    /// True when the last reindex did not run to completion (either
+    /// because the process crashed between graph rebuild and BM25
+    /// commit, or because a marker from a prior install still
+    /// lingers). Consumers (chan-server's indexer trigger, the CLI's
+    /// "index --auto" check) should treat this as a signal to call
+    /// `reindex` before answering search queries. Cleared once
+    /// reindex commits the index and removes the on-disk marker.
+    pub fn needs_rebuild(&self) -> bool {
+        self.needs_rebuild
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Validate `rel` for use with the cap-std `Dir`. Returns a
@@ -804,7 +866,23 @@ impl Drive {
         contacts: Vec<crate::contacts::Contact>,
         opts: crate::contacts::ImportOpts,
     ) -> Result<crate::contacts::ImportSummary> {
-        crate::contacts::import::run(self, dir, contacts, opts)
+        self.import_contacts_with(dir, contacts, opts, &crate::progress::NoProgress)
+    }
+
+    /// `import_contacts` plus a `ProgressCallback`. Fires one
+    /// `ProgressStage::Import` event per contact processed (wrote /
+    /// overwrote / skipped / failed), with `current` / `total`
+    /// counting through the input vec. The CLI's `chan contacts
+    /// import` uses this to show live status; the no-arg version is
+    /// fine for scripted callers that just want the summary.
+    pub fn import_contacts_with(
+        &self,
+        dir: &str,
+        contacts: Vec<crate::contacts::Contact>,
+        opts: crate::contacts::ImportOpts,
+        progress: &dyn crate::progress::ProgressCallback,
+    ) -> Result<crate::contacts::ImportSummary> {
+        crate::contacts::import::run(self, dir, contacts, opts, progress)
     }
 
     pub fn rename(&self, from: &str, to: &str) -> Result<()> {
@@ -874,6 +952,22 @@ impl Drive {
     /// graph still records edges by pre-rename target paths, which is
     /// exactly the lookup key we want.
     pub fn rename_with_link_rewrite(&self, from: &str, to: &str) -> Result<RenameOutcome> {
+        self.rename_with_link_rewrite_with(from, to, &crate::progress::NoProgress)
+    }
+
+    /// `rename_with_link_rewrite` plus a `ProgressCallback`. One
+    /// `ProgressStage::RenameRewrite` event fires per source file
+    /// the rewriter visits, with `current` / `total` counting
+    /// progress through the sorted source list. The split lets a
+    /// directory rename of a 5k-file tree show live status in the
+    /// editor instead of looking frozen.
+    pub fn rename_with_link_rewrite_with(
+        &self,
+        from: &str,
+        to: &str,
+        progress: &dyn crate::progress::ProgressCallback,
+    ) -> Result<RenameOutcome> {
+        use crate::progress::{ProgressEvent, ProgressStage};
         // Snapshot mapping BEFORE the rename so the file walker sees
         // the subtree in its old location. Empty mapping is fine
         // (e.g., directory rename with no descendants) and means the
@@ -973,12 +1067,19 @@ impl Drive {
         let mut conflicts = Vec::new();
         let mut sources_sorted: Vec<String> = sources_current.into_iter().collect();
         sources_sorted.sort();
-        for src_current in sources_sorted {
+        let total_sources = sources_sorted.len() as u64;
+        for (idx, src_current) in sources_sorted.into_iter().enumerate() {
             // Only rewrite editable-text files: images and binaries
             // can be graph nodes but never markdown sources.
             if !fs_ops::is_editable_text(&src_current) {
                 continue;
             }
+            progress.on_progress(ProgressEvent {
+                stage: ProgressStage::RenameRewrite,
+                current: idx as u64,
+                total: total_sources,
+                label: Some(src_current.clone()),
+            });
             let (content, stat) = match self.read_text_with_stat(&src_current) {
                 Ok(pair) => pair,
                 Err(_) => continue,
@@ -1002,7 +1103,10 @@ impl Drive {
 
         // Persist this rename's pairs to the cumulative log so the
         // next rename inside the same reindex window can see through
-        // to current locations.
+        // to current locations. The disk sidecar is updated in the
+        // same critical section so a crash between the in-memory
+        // mutation and the durable write would just drop the last
+        // pair (`reindex` would rebuild the graph regardless).
         {
             let mut log = self.rename_log.lock().unwrap();
             for (old, new) in &mapping {
@@ -1012,6 +1116,13 @@ impl Drive {
                     }
                 }
                 log.insert(old.clone(), new.clone());
+            }
+            if let Err(e) = persist_rename_log(&self.paths.graph_dir, &log) {
+                tracing::warn!(
+                    ?e,
+                    "failed to persist rename_log after directory rename; \
+                     cross-process chain will rely on reindex to recover",
+                );
             }
         }
 
@@ -1037,6 +1148,19 @@ impl Drive {
             }
         }
         log.insert(old.to_string(), new.to_string());
+        // Persist before releasing the mutex so a concurrent reader
+        // never sees a divergence between memory and disk. Failure
+        // here is logged at warn but does not propagate: the rename
+        // already succeeded on the filesystem, the link-rewrite
+        // pass already used the (now-updated) in-memory map, and a
+        // missed persist degrades to "next process loses cross-call
+        // rename memory" -- recoverable via reindex.
+        if let Err(e) = persist_rename_log(&self.paths.graph_dir, &log) {
+            tracing::warn!(
+                ?e,
+                "failed to persist rename_log; cross-process chain will rely on reindex to recover",
+            );
+        }
     }
 
     /// Pre-rename snapshot of every concrete file under `from`, paired
@@ -1126,44 +1250,111 @@ impl Drive {
     /// index is unaffected by cancellation: we never reach the
     /// commit, so tantivy discards every pending write.
     pub fn reindex(&self, cancel: Option<&AtomicBool>) -> Result<BuildSummary> {
-        self.reindex_with(cancel, |_| {})
+        self.reindex_with(cancel, &crate::progress::NoProgress)
     }
 
-    /// Same as `reindex`, but `on_progress` is called once per file
-    /// during the search-side pass. The graph-side pass runs first
-    /// without progress reporting (it's seconds even on big drives;
-    /// the embedding pass is the long part). The CLI uses this to
-    /// print live progress; the server's indexer uses the no-arg
-    /// `reindex` because it tracks status separately.
-    pub fn reindex_with<F>(
+    /// Same as `reindex`, but `progress` receives events from both
+    /// passes: `ProgressStage::GraphRebuild` while the graph is
+    /// being collected and `ProgressStage::IndexFile` /
+    /// `ProgressStage::EmbedBatch` while the search index is being
+    /// built. Consumers that don't care about progress pass
+    /// `&NoProgress`; the no-arg `reindex` does that for them.
+    /// Foreign-language shells pass an `Arc<dyn ProgressCallback>`
+    /// (uniffi-bridged), deref-coerced to `&dyn ProgressCallback`.
+    pub fn reindex_with(
         &self,
         cancel: Option<&AtomicBool>,
-        on_progress: F,
-    ) -> Result<BuildSummary>
-    where
-        F: FnMut(crate::index::BuildProgress<'_>),
-    {
+        progress: &dyn crate::progress::ProgressCallback,
+    ) -> Result<BuildSummary> {
         // Graph rebuild walks the tree once for headings + edges.
         // The search facade walks again for chunking + embeddings.
         // Two passes is the trade for a clean separation; per-file
         // I/O cost is trivial against the embedding work.
-        self.rebuild_graph(cancel)?;
+        //
+        // The `rebuild.inprogress` marker spans both passes: it is
+        // written before the graph rebuild starts and removed only
+        // after the search index commits. A process killed at any
+        // point in between leaves the marker on disk, which the
+        // next `Drive::open` promotes into `needs_rebuild() = true`.
+        // The consumer then knows to retry the whole reindex
+        // instead of trusting an index that may have skipped its
+        // final commit.
+        self.write_rebuild_marker()?;
+        self.rebuild_graph(cancel, progress)?;
         let summary = self
             .index()?
-            .build_all(BuildOptions::default(), on_progress, cancel)
+            .build_all(BuildOptions::default(), progress, cancel)
             .map_err(|e| match e {
                 crate::index::IndexError::Cancelled => ChanError::Cancelled,
                 other => other.into(),
             })?;
+        self.clear_rebuild_marker();
+        self.needs_rebuild
+            .store(false, std::sync::atomic::Ordering::Release);
         // Drop the cumulative rename log: the freshly-rebuilt graph
         // already reflects every current path, so any prior in-process
         // translation is now a no-op (and would be wrong if the user
         // re-creates a file at a path we'd previously redirected).
-        self.rename_log.lock().unwrap().clear();
+        // Clear the in-memory map and remove the persisted sidecar in
+        // the same critical section so a concurrent reader can't see
+        // an empty map while the file still claims entries (or vice
+        // versa).
+        {
+            let mut log = self.rename_log.lock().unwrap();
+            log.clear();
+            let path = self.paths.graph_dir.join(RENAME_LOG_FILE);
+            if let Err(e) = std::fs::remove_file(&path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(
+                        path = %path.display(),
+                        ?e,
+                        "failed to remove persisted rename_log after reindex",
+                    );
+                }
+            }
+        }
         Ok(summary)
     }
 
-    fn rebuild_graph(&self, cancel: Option<&AtomicBool>) -> Result<()> {
+    /// Stamp `paths.graph_dir/rebuild.inprogress`. Atomic write so a
+    /// crash during marker creation never leaves a half-written file
+    /// that would confuse the next open. The file body carries the
+    /// unix timestamp so a stuck marker can be diagnosed against the
+    /// drive's modification history; we don't read the contents on
+    /// open (existence is the signal).
+    fn write_rebuild_marker(&self) -> Result<()> {
+        std::fs::create_dir_all(&self.paths.graph_dir)?;
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let body = format!("started_at = {ts}\n");
+        fs_ops::atomic_write(&self.paths.graph_dir.join(REBUILD_MARKER), body.as_bytes())
+    }
+
+    /// Remove the marker. Best-effort: a stuck marker is harmless
+    /// (next open just re-triggers the rebuild), so a remove failure
+    /// here is logged but doesn't fail the reindex.
+    fn clear_rebuild_marker(&self) {
+        let path = self.paths.graph_dir.join(REBUILD_MARKER);
+        if let Err(e) = std::fs::remove_file(&path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "failed to clear rebuild.inprogress marker; \
+                     next open will still re-trigger the rebuild",
+                );
+            }
+        }
+    }
+
+    fn rebuild_graph(
+        &self,
+        cancel: Option<&AtomicBool>,
+        progress: &dyn crate::progress::ProgressCallback,
+    ) -> Result<()> {
+        use crate::progress::{ProgressEvent, ProgressStage};
         // Two-phase: collect everything in memory, then commit in a
         // single sqlite transaction via `GraphView::replace_all`. The
         // alternative (clear + per-file replace_file) left the graph
@@ -1172,6 +1363,13 @@ impl Drive {
         // by drive size and is small (a 10k-file drive holds tens of
         // MB of headings + edges, well within the editor's footprint).
         let entries = self.list_tree()?;
+        // The total for progress is "editable-text files", computed
+        // up front so consumers can render a percentage. Filtering
+        // a second time below is cheap (cap is `LIST_TREE_LIMIT`).
+        let total: u64 = entries
+            .iter()
+            .filter(|e| !e.is_dir && fs_ops::is_editable_text(&e.path))
+            .count() as u64;
         struct Owned {
             rel: String,
             title: Option<String>,
@@ -1182,6 +1380,7 @@ impl Drive {
             emails: Option<String>,
         }
         let mut owned: Vec<Owned> = Vec::new();
+        let mut seen: u64 = 0;
         for e in &entries {
             if let Some(c) = cancel {
                 if c.load(Ordering::Relaxed) {
@@ -1191,6 +1390,13 @@ impl Drive {
             if e.is_dir || !fs_ops::is_editable_text(&e.path) {
                 continue;
             }
+            progress.on_progress(ProgressEvent {
+                stage: ProgressStage::GraphRebuild,
+                current: seen,
+                total,
+                label: Some(e.path.clone()),
+            });
+            seen += 1;
             let content = match self.read_text(&e.path) {
                 Ok(s) => s,
                 Err(_) => continue,
@@ -1664,6 +1870,50 @@ fn canonical_posix(p: &str) -> String {
     s.trim_end_matches('/').to_string()
 }
 
+/// Read the persisted rename log from `graph_dir/rename_log.json`.
+/// Best-effort: a missing file returns an empty map (fresh drive,
+/// or a clean reindex landed since the last process exit), and a
+/// malformed file is logged and discarded rather than blocking
+/// `Drive::open`. The downside of "drop on parse error" is a one-
+/// time loss of cross-process rename chain memory; the next reindex
+/// rebuilds the graph from the live tree and the log becomes
+/// irrelevant anyway.
+fn load_rename_log(graph_dir: &std::path::Path) -> HashMap<String, String> {
+    let path = graph_dir.join(RENAME_LOG_FILE);
+    let raw = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return HashMap::new(),
+        Err(e) => {
+            tracing::warn!(path = %path.display(), ?e, "failed to read rename_log; starting empty");
+            return HashMap::new();
+        }
+    };
+    match serde_json::from_slice::<HashMap<String, String>>(&raw) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                ?e,
+                "rename_log decode failed; starting empty (next reindex rebuilds anyway)",
+            );
+            HashMap::new()
+        }
+    }
+}
+
+/// Atomically persist the rename log so the on-disk copy never
+/// observes a half-written body. We hold the in-memory mutex while
+/// calling this (see `rename_log_append`), so the serialization
+/// snapshot is consistent. Atomic-write is required: tearing under
+/// power loss would leave a truncated JSON file that
+/// `load_rename_log` would refuse and silently drop on next open.
+fn persist_rename_log(graph_dir: &std::path::Path, log: &HashMap<String, String>) -> Result<()> {
+    std::fs::create_dir_all(graph_dir)?;
+    let body =
+        serde_json::to_vec(log).map_err(|e| ChanError::Io(format!("rename_log encode: {e}")))?;
+    fs_ops::atomic_write(&graph_dir.join(RENAME_LOG_FILE), &body)
+}
+
 /// Parent directory of a drive-rooted POSIX path. Returns the empty
 /// string for files at the root (`"foo.md"` -> `""`). Used to seed
 /// `normalize_href` so relative link resolution matches the rules in
@@ -1993,6 +2243,115 @@ mod tests {
         let (_cfg, _root, drive) = fixture();
         drive.write_text("notes/a.md", "hello").unwrap();
         assert_eq!(drive.read_text("notes/a.md").unwrap(), "hello");
+    }
+
+    #[test]
+    fn rename_log_persists_across_drive_reopen() {
+        // Simulate "process kill after a rename, restart": rename
+        // A.md -> B.md once, drop the drive (and so the in-memory
+        // log), then re-open. The persisted sidecar must hydrate
+        // the new in-memory log so a subsequent rename B.md -> C.md
+        // still knows that A.md once mapped to B.md.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let paths = crate::paths::drive_paths(drive_dir.path());
+
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), Some("RnLog".into()))
+            .unwrap();
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        drive.write_text("A.md", "# A\n").unwrap();
+        drive.rename_with_link_rewrite("A.md", "B.md").unwrap();
+
+        // Sidecar must exist with the (A -> B) entry.
+        let log_path = paths.graph_dir.join(RENAME_LOG_FILE);
+        assert!(
+            log_path.exists(),
+            "rename_log.json should exist after first rename"
+        );
+        let raw = std::fs::read(&log_path).unwrap();
+        let parsed: std::collections::HashMap<String, String> =
+            serde_json::from_slice(&raw).unwrap();
+        assert_eq!(parsed.get("A.md").map(String::as_str), Some("B.md"));
+
+        // Drop and re-open: in-memory log starts empty, hydrates
+        // from the sidecar.
+        drop(drive);
+        let drive2 = lib.open_drive(drive_dir.path()).unwrap();
+        {
+            let mem = drive2.rename_log.lock().unwrap();
+            assert_eq!(
+                mem.get("A.md").map(String::as_str),
+                Some("B.md"),
+                "rename log should reload from disk: {:?}",
+                *mem,
+            );
+        }
+        // A follow-up rename transitively updates both old and new
+        // names so the entry rewrite covers the cross-process chain.
+        drive2.rename_with_link_rewrite("B.md", "C.md").unwrap();
+        {
+            let mem = drive2.rename_log.lock().unwrap();
+            assert_eq!(mem.get("A.md").map(String::as_str), Some("C.md"));
+            assert_eq!(mem.get("B.md").map(String::as_str), Some("C.md"));
+        }
+        let raw2 = std::fs::read(&log_path).unwrap();
+        let parsed2: std::collections::HashMap<String, String> =
+            serde_json::from_slice(&raw2).unwrap();
+        assert_eq!(parsed2.get("A.md").map(String::as_str), Some("C.md"));
+        assert_eq!(parsed2.get("B.md").map(String::as_str), Some("C.md"));
+
+        // A successful reindex clears both the in-memory map and the
+        // sidecar so a stale name doesn't outlive its usefulness.
+        drive2.reindex(None).unwrap();
+        assert!(drive2.rename_log.lock().unwrap().is_empty());
+        assert!(
+            !log_path.exists(),
+            "rename_log.json should be removed after reindex",
+        );
+    }
+
+    #[test]
+    fn needs_rebuild_flag_tracks_marker() {
+        // Pre-stamp the rebuild.inprogress marker as if a prior
+        // reindex had been killed between graph rebuild and BM25
+        // commit. Drive::open must promote it to needs_rebuild()=true
+        // so the consumer reindexes before serving queries.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let paths = crate::paths::drive_paths(drive_dir.path());
+        std::fs::create_dir_all(&paths.graph_dir).unwrap();
+        let marker = paths.graph_dir.join(REBUILD_MARKER);
+        std::fs::write(&marker, b"started_at = 1\n").unwrap();
+
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), Some("Reb".into()))
+            .unwrap();
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        assert!(
+            drive.needs_rebuild(),
+            "marker on disk should set needs_rebuild()",
+        );
+
+        // A successful reindex removes the marker and clears the flag.
+        drive.reindex(None).unwrap();
+        assert!(
+            !drive.needs_rebuild(),
+            "needs_rebuild() should clear after a clean reindex",
+        );
+        assert!(
+            !marker.exists(),
+            "marker file should be gone after a clean reindex",
+        );
+
+        // Sanity: a fresh drive without a marker reports false from
+        // the start so consumers don't reindex every time they open
+        // a known-clean drive.
+        let drive2_dir = TempDir::new().unwrap();
+        lib.register_drive(drive2_dir.path(), Some("Clean".into()))
+            .unwrap();
+        let drive2 = lib.open_drive(drive2_dir.path()).unwrap();
+        assert!(!drive2.needs_rebuild());
     }
 
     #[test]

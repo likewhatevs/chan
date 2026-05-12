@@ -33,7 +33,9 @@ pub fn run(
     dir: &str,
     contacts: Vec<Contact>,
     opts: ImportOpts,
+    progress: &dyn crate::progress::ProgressCallback,
 ) -> Result<ImportSummary> {
+    use crate::progress::{ProgressEvent, ProgressStage};
     let dir = dir.trim_matches('/').to_string();
     if !dir.is_empty() {
         drive.create_dir(&dir)?;
@@ -56,8 +58,19 @@ pub fn run(
     let mut summary = ImportSummary::default();
     let on_disk = |p: &str| drive.exists(p);
 
-    for c in contacts {
+    let total = contacts.len() as u64;
+    for (idx, c) in contacts.into_iter().enumerate() {
         let path = slug_for(&c, &dir, &mut taken, &mut unnamed, &on_disk);
+        progress.on_progress(ProgressEvent {
+            stage: ProgressStage::Import,
+            current: idx as u64,
+            total,
+            label: Some(if c.display_name.is_empty() {
+                path.clone()
+            } else {
+                c.display_name.clone()
+            }),
+        });
         let exists = drive.exists(&path);
 
         if exists && !opts.overwrite {
