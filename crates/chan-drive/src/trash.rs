@@ -140,12 +140,24 @@ pub fn list(trash_dir: &Path) -> Result<Vec<TrashEntry>> {
     Ok(out)
 }
 
+/// Summary of a successful `restore`: what came out of the trash
+/// and where it now lives. The caller (`Drive::trash_restore`) uses
+/// this to drive a graph + search re-index of the restored subtree
+/// without re-reading meta.json or re-walking from the trash side.
+#[derive(Debug, Clone)]
+pub struct RestoredEntry {
+    /// Drive-relative POSIX path the entry was restored to.
+    pub rel_path: String,
+    /// Whether the restored entry is a directory subtree.
+    pub is_dir: bool,
+}
+
 pub fn restore(
     trash_dir: &Path,
     drive_root: &Path,
     drive_root_canon: &Path,
     id: &str,
-) -> Result<()> {
+) -> Result<RestoredEntry> {
     let entry_dir = trash_dir.join(id);
     let meta_path = entry_dir.join("meta.json");
     let raw = match fs::read(&meta_path) {
@@ -204,7 +216,10 @@ pub fn restore(
     // Drop the now-empty entry. Best-effort; sweep cleans leftovers.
     let _ = fs::remove_file(&meta_path);
     let _ = fs::remove_dir(&entry_dir);
-    Ok(())
+    Ok(RestoredEntry {
+        rel_path: meta.original_path,
+        is_dir: meta.is_dir,
+    })
 }
 
 pub fn purge_one(trash_dir: &Path, id: &str) -> Result<()> {

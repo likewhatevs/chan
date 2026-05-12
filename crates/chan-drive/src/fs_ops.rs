@@ -45,11 +45,53 @@ pub fn is_chan_internal(rel: &str) -> bool {
 /// the editor can safely round-trip through a UTF-8 buffer.
 /// Whitelisted by extension to prevent corrupting binary files.
 pub fn is_editable_text(rel: &str) -> bool {
+    matches!(classify(rel), FileClass::EditableText)
+}
+
+/// Coarse content class derived from a path's extension. Drives:
+///   - which files are read/written via the UTF-8 text gate
+///     (`read_text` / `write_text`);
+///   - which files the search index ingests (any
+///     `FileClass::EditableText`);
+///   - which files the editor previews as media (`Image`, `Pdf`);
+///   - everything else falls through to `Other`: still walkable,
+///     readable as bytes, renameable / removeable, but opaque to
+///     the indexer.
+///
+/// Extension matching is ASCII case-insensitive. Files with no
+/// extension collapse to `Other`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileClass {
+    /// `.md`, `.txt`. Editable through `read_text` / `write_text`,
+    /// indexed by tantivy, parsed for graph edges + headings.
+    EditableText,
+    /// `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, `.avif`.
+    /// Read-only via `read` / `write_bytes`; the editor's inspector
+    /// pane previews these inline.
+    Image,
+    /// `.pdf`. Same I/O contract as `Image`; reserved as a separate
+    /// class so the editor renders it through a dedicated viewer
+    /// (browser PDF.js / inspector preview) rather than as a generic
+    /// download.
+    Pdf,
+    /// Anything else (archives, audio, video, code, files with no
+    /// extension). Walkable, byte-readable, renameable. Not indexed.
+    Other,
+}
+
+/// Classify a relative path by extension. See `FileClass` for the
+/// downstream behaviour each class triggers.
+pub fn classify(rel: &str) -> FileClass {
     let ext = match rel.rsplit_once('.') {
         Some((_, e)) if !e.is_empty() => e,
-        _ => return false,
+        _ => return FileClass::Other,
     };
-    matches!(ext.to_ascii_lowercase().as_str(), "md" | "txt")
+    match ext.to_ascii_lowercase().as_str() {
+        "md" | "txt" => FileClass::EditableText,
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "avif" => FileClass::Image,
+        "pdf" => FileClass::Pdf,
+        _ => FileClass::Other,
+    }
 }
 
 /// Recursive walker rooted at `root` that:
@@ -907,6 +949,27 @@ mod tests {
         assert!(!is_editable_text("image.png"));
         assert!(!is_editable_text(""));
         assert!(!is_editable_text(".gitignore"));
+    }
+
+    #[test]
+    fn classify_covers_each_class() {
+        assert_eq!(classify("note.md"), FileClass::EditableText);
+        assert_eq!(classify("a/b/c.txt"), FileClass::EditableText);
+        assert_eq!(classify("README.MD"), FileClass::EditableText);
+        assert_eq!(classify("img.png"), FileClass::Image);
+        assert_eq!(classify("photo.JPG"), FileClass::Image);
+        assert_eq!(classify("icon.svg"), FileClass::Image);
+        assert_eq!(classify("anim.gif"), FileClass::Image);
+        assert_eq!(classify("modern.webp"), FileClass::Image);
+        assert_eq!(classify("new.avif"), FileClass::Image);
+        assert_eq!(classify("doc.pdf"), FileClass::Pdf);
+        assert_eq!(classify("paper.PDF"), FileClass::Pdf);
+        assert_eq!(classify("archive.zip"), FileClass::Other);
+        assert_eq!(classify("song.mp3"), FileClass::Other);
+        assert_eq!(classify("script.sh"), FileClass::Other);
+        assert_eq!(classify(""), FileClass::Other);
+        assert_eq!(classify(".gitignore"), FileClass::Other);
+        assert_eq!(classify("Makefile"), FileClass::Other);
     }
 
     #[test]

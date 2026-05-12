@@ -128,6 +128,54 @@ The editable-text gate (`fs_ops::is_editable_text`, `.md` /
 `write_text` / `write_text_if_unchanged` only; binary I/O routes
 around it because attachments and future media browsing need it.
 
+#### Supported file types
+
+A drive is the user's directory tree, untouched. Adding a drive
+registers a root and walks everything under it (skipping `.git/`
+and `.chan/`); chan-drive never restricts what can sit on disk.
+What changes by class is how each file is handled by the API.
+`fs_ops::classify(rel)` is the single predicate; consumers (this
+crate, chan-server, the editor) should switch on `FileClass`
+rather than re-deriving extension rules.
+
+  Class           Extensions
+  --------------  ---------------------------------------------
+  EditableText    .md, .txt
+  Image           .png, .jpg, .jpeg, .gif, .webp, .svg, .avif
+  Pdf             .pdf
+  Other           everything else
+
+Behaviour by class:
+
+  - **EditableText**: full read / write through `read_text` and
+    `write_text`. Indexed by tantivy (BM25 + dense vectors when
+    embeddings are enabled). Parsed for graph edges, headings,
+    tags, mentions. The CAS pair `read_text_with_stat` +
+    `write_text_if_unchanged` is available for editor-style
+    optimistic concurrency.
+  - **Image**: opaque bytes via `read` / `write_bytes`. Not
+    indexed and not a graph node, but markdown embeds
+    (`![alt](img.png)`) emit edges pointing at the image so
+    `backlinks("media/foo.png")` returns the notes that embed
+    it. The editor renders previews inline; rename / remove are
+    supported.
+  - **Pdf**: same I/O contract as Image. Held as a distinct
+    class because the editor / inspector pane will render PDFs
+    through a dedicated viewer (browser PDF.js today,
+    inspector-side preview later).
+  - **Other**: opaque bytes via `read` / `write_bytes`. Walkable,
+    visible in `list_tree`, renameable, removeable into Trash.
+    Not indexed and not a graph node. No assumptions about
+    encoding or shape.
+
+`rename` and `remove` operate on every class. Link rewriting in
+`rename_with_link_rewrite` only touches `EditableText` bodies
+(images and other binaries have no in-body links to rewrite); the
+graph edge `dst` gets updated regardless of target class.
+
+Extension matching is ASCII case-insensitive. Files with no
+extension collapse to `Other`.
+
 `read_text_with_stat` and `write_text_if_unchanged` are the
 optimistic-concurrency pair the editor uses to detect external
 edits. The editor reads `(content, stat)`, the user types, and
@@ -816,7 +864,8 @@ Notable variants:
   - **Search index**: `IndexConfig.schema_version` field
     persisted at `<index_dir>/config.toml` alongside the
     embedding model id and chunking strategy. Current version:
-    2 (candle-backed embedder replacing fastembed/ort).
+    3 (indexer widened from `.md`-only to every
+    `FileClass::EditableText` extension, i.e. `.md` + `.txt`).
     Mismatched versions wipe `bm25/` + `embeddings/` and
     rebuild on next open. Model swaps force a rebuild because
     embedding dimensions and numerical drift differ.

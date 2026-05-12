@@ -25,7 +25,11 @@ pub const DEFAULT_MODEL: &str = "BAAI/bge-small-en-v1.5";
 ///     but small numerical drift between ONNX and the pure-Rust
 ///     transformer kernel can shift cosine scores by epsilon, so
 ///     wipe and re-embed on first open after upgrade.
-pub const SCHEMA_VERSION: u32 = 2;
+/// v3: indexer widened from `.md`-only to every `FileClass::EditableText`
+///     extension (today: `.md` + `.txt`). Existing indices were
+///     `.md`-only and would miss `.txt` content; a wipe-and-rebuild
+///     populates them.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// How a markdown file is split into indexable units.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

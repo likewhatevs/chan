@@ -251,7 +251,7 @@ impl Index {
     where
         F: FnMut(BuildProgress<'_>),
     {
-        let files = list_markdown(&self.drive_root)?;
+        let files = list_indexable(&self.drive_root)?;
         let total = files.len();
         let mut indexed = 0usize;
         let mut chunks_total = 0usize;
@@ -545,6 +545,30 @@ impl Index {
         Ok(())
     }
 
+    /// Batched `forget` for a directory delete: queue vector + BM25
+    /// deletes for every path, commit BM25 once at the end. Same
+    /// ordering invariants as `forget` (vectors first per path), so
+    /// a crash mid-batch leaves orphan vector shards at worst; the
+    /// next reindex's orphan-cleanup pass reclaims them. Empty input
+    /// is a no-op (no commit, no churn on tantivy's segments).
+    pub fn forget_many<I, S>(&self, paths: I) -> Result<(), IndexError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut any = false;
+        for p in paths {
+            let p = p.as_ref();
+            self.vectors.delete_file(p)?;
+            self.bm25.delete_file(p)?;
+            any = true;
+        }
+        if any {
+            self.bm25.commit()?;
+        }
+        Ok(())
+    }
+
     /// Run a query.
     pub fn search(
         &self,
@@ -713,19 +737,20 @@ fn wipe_index_dir(index_dir: &Path) -> Result<(), IndexError> {
     Ok(())
 }
 
-/// Walk the drive and return every `.md` file relative to root,
-/// using forward-slash separators on all platforms (matches the
-/// API's shape).
-fn list_markdown(root: &Path) -> Result<Vec<String>, IndexError> {
+/// Walk the drive and return every indexable file (any
+/// `FileClass::EditableText`: `.md` + `.txt` today) relative to
+/// root, using forward-slash separators on all platforms (matches
+/// the API's shape).
+fn list_indexable(root: &Path) -> Result<Vec<String>, IndexError> {
     let mut out: Vec<String> = fs_ops::walk_drive(root)
         .filter(|e| e.file_type().is_file())
-        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
         .filter_map(|e| {
             e.path()
                 .strip_prefix(root)
                 .ok()
                 .map(|rel| rel.to_string_lossy().replace('\\', "/"))
         })
+        .filter(|rel| fs_ops::is_editable_text(rel))
         .collect();
     out.sort();
     Ok(out)

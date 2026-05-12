@@ -564,8 +564,96 @@ impl Drive {
                 path: abs,
             });
         }
+        // Snapshot every editable-text path under `rel` BEFORE the
+        // trash move so the search index has a deterministic delete
+        // set. After the move the source paths are gone and a walk
+        // would miss them. Non-editable files (images, PDFs) aren't
+        // in BM25 / the vector store, so they're skipped here; the
+        // graph cleanup below clears their inbound edges via the
+        // prefix delete.
+        let indexed_paths = self.collect_indexed_paths_for_remove(&abs, rel, is_dir);
         let _ = trash::sweep_expired(&self.paths.trash, TRASH_RETENTION_SECS);
-        trash::move_into(&self.paths.trash, &abs, rel, is_dir)
+        trash::move_into(&self.paths.trash, &abs, rel, is_dir)?;
+        // Best-effort post-move cleanup. The user-visible operation
+        // (file disappears, restorable from trash) has already
+        // succeeded; failures here would only leave stale rows that
+        // the next reindex sweeps away, so they're logged not
+        // returned. Order: graph first (a stale BM25 hit pointing at
+        // a node-less path is recoverable when the user clicks
+        // through; a stale graph row pointing at a no-longer-indexed
+        // file is the cosmetic ghost).
+        self.cleanup_after_remove(rel, &indexed_paths);
+        Ok(())
+    }
+
+    /// Walk the (still-present) target of a `remove` and collect
+    /// the editable-text paths the search index needs to drop. For
+    /// a single file this collapses to `[rel]` when editable; for a
+    /// directory it walks the subtree, applying the same `.git/` /
+    /// `.chan/` filter as the rest of the crate.
+    fn collect_indexed_paths_for_remove(
+        &self,
+        abs: &std::path::Path,
+        rel: &str,
+        is_dir: bool,
+    ) -> Vec<String> {
+        if !is_dir {
+            return if fs_ops::is_editable_text(rel) {
+                vec![rel.to_string()]
+            } else {
+                Vec::new()
+            };
+        }
+        let mut out = Vec::new();
+        for entry in fs_ops::walk_drive(abs) {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let rel_path = match entry.path().strip_prefix(&self.entry.path) {
+                Ok(p) => p.to_string_lossy().replace('\\', "/"),
+                Err(_) => continue,
+            };
+            if fs_ops::is_editable_text(&rel_path) {
+                out.push(rel_path);
+            }
+        }
+        out
+    }
+
+    /// Drop graph rows and search-index entries for a path that
+    /// `remove` just trashed. Best-effort: `graph()` / `index()` may
+    /// not be initialized yet (a remove on a never-opened drive), or
+    /// the underlying store may transiently fail. We log and move on;
+    /// the next reindex is the safety net.
+    fn cleanup_after_remove(&self, rel: &str, indexed_paths: &[String]) {
+        match self.graph() {
+            Ok(g) => {
+                if let Err(e) = g.forget_under(rel) {
+                    tracing::warn!(rel, ?e, "remove: graph forget_under failed");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(rel, ?e, "remove: graph unavailable, skipping cleanup");
+            }
+        }
+        if indexed_paths.is_empty() {
+            return;
+        }
+        match self.index() {
+            Ok(idx) => {
+                if let Err(e) = idx.forget_many(indexed_paths) {
+                    tracing::warn!(
+                        rel,
+                        count = indexed_paths.len(),
+                        ?e,
+                        "remove: index forget_many failed",
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(rel, ?e, "remove: index unavailable, skipping cleanup");
+            }
+        }
     }
 
     /// List trashed entries for this drive, most-recent-first.
@@ -578,9 +666,54 @@ impl Drive {
     /// `TrashOccupied` if the destination already exists; the caller
     /// can rename the live entry first or `trash_purge` the trash
     /// entry to give up.
+    ///
+    /// After the filesystem restore lands, the graph and search
+    /// index are repopulated for every editable-text path that came
+    /// back (`remove` cleared them on the way into trash, so this is
+    /// the symmetric step). Cleanup of stale entries is best-effort
+    /// for the same reason as in `remove`: the trash op already
+    /// succeeded from the user's view, and a missed re-index falls
+    /// back to the next reindex pass.
     pub fn trash_restore(&self, id: &str) -> Result<()> {
         let _ = trash::sweep_expired(&self.paths.trash, TRASH_RETENTION_SECS);
-        trash::restore(&self.paths.trash, self.root(), &self.root_canon, id)
+        let restored = trash::restore(&self.paths.trash, self.root(), &self.root_canon, id)?;
+        self.reindex_after_restore(&restored);
+        Ok(())
+    }
+
+    /// Walk the freshly-restored target and feed every editable-text
+    /// path back into the graph + search index. Best-effort: a
+    /// failure here leaves the file on disk but absent from indexes,
+    /// which the next reindex rebuilds. We don't propagate the error
+    /// because the user's intent ("undo my delete") already
+    /// succeeded at the filesystem level.
+    fn reindex_after_restore(&self, restored: &trash::RestoredEntry) {
+        let abs = self.entry.path.join(&restored.rel_path);
+        let is_dir = restored.is_dir;
+        if !is_dir {
+            if !fs_ops::is_editable_text(&restored.rel_path) {
+                return;
+            }
+            if let Err(e) = self.index_file(&restored.rel_path) {
+                tracing::warn!(rel = %restored.rel_path, ?e, "restore: index_file failed");
+            }
+            return;
+        }
+        for entry in fs_ops::walk_drive(&abs) {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let rel_path = match entry.path().strip_prefix(&self.entry.path) {
+                Ok(p) => p.to_string_lossy().replace('\\', "/"),
+                Err(_) => continue,
+            };
+            if !fs_ops::is_editable_text(&rel_path) {
+                continue;
+            }
+            if let Err(e) = self.index_file(&rel_path) {
+                tracing::warn!(rel = %rel_path, ?e, "restore: index_file failed");
+            }
+        }
     }
 
     /// Permanently delete a single trash entry.
@@ -2614,9 +2747,12 @@ mod tests {
     /// Set up two files and reindex so the graph knows about the
     /// `src -> dst` link. Returns the fixture handles plus the path
     /// strings so tests can rename and assert.
-    fn rename_fixture(src_rel: &str, src_body: &str, dst_rel: &str, dst_body: &str)
-        -> (TempDir, TempDir, Arc<Drive>)
-    {
+    fn rename_fixture(
+        src_rel: &str,
+        src_body: &str,
+        dst_rel: &str,
+        dst_body: &str,
+    ) -> (TempDir, TempDir, Arc<Drive>) {
         let (cfg, root, drive) = fixture();
         // Create parent directories as needed (write_text only creates
         // the immediate parent at the cap-std layer).
@@ -2714,13 +2850,11 @@ mod tests {
         // Wiki rewrites emit an explicit `./` or `../` prefix because
         // the bare `[[name]]` form means drive-rooted by chan
         // convention; relativization needs the prefix to disambiguate.
-        let (_cfg, _root, drive) = rename_fixture(
-            "src.md",
-            "see [[old]] for context\n",
-            "old.md",
-            "# Old\n",
-        );
-        drive.rename_with_link_rewrite("old.md", "archive/old.md").unwrap();
+        let (_cfg, _root, drive) =
+            rename_fixture("src.md", "see [[old]] for context\n", "old.md", "# Old\n");
+        drive
+            .rename_with_link_rewrite("old.md", "archive/old.md")
+            .unwrap();
         assert_eq!(
             drive.read_text("src.md").unwrap(),
             "see [[./archive/old]] for context\n",
@@ -2731,10 +2865,18 @@ mod tests {
     fn rename_with_link_rewrite_handles_image_ref() {
         let (_cfg, _root, drive) = fixture();
         std::fs::create_dir_all(_root.path().join("images")).unwrap();
-        std::fs::write(_root.path().join("images").join("cat.png"), b"\x89PNG\r\n\x1a\n").unwrap();
-        drive.write_text("src.md", "![cat](images/cat.png) ok\n").unwrap();
+        std::fs::write(
+            _root.path().join("images").join("cat.png"),
+            b"\x89PNG\r\n\x1a\n",
+        )
+        .unwrap();
+        drive
+            .write_text("src.md", "![cat](images/cat.png) ok\n")
+            .unwrap();
         drive.reindex(None).unwrap();
-        drive.rename_with_link_rewrite("images/cat.png", "img/cat.png").unwrap();
+        drive
+            .rename_with_link_rewrite("images/cat.png", "img/cat.png")
+            .unwrap();
         assert_eq!(
             drive.read_text("src.md").unwrap(),
             "![cat](img/cat.png) ok\n",
@@ -2748,10 +2890,7 @@ mod tests {
         drive.write_text("A/x.md", "# X\n").unwrap();
         drive.write_text("A/y.md", "# Y\n").unwrap();
         drive
-            .write_text(
-                "src.md",
-                "links: [x](A/x.md) and [y](A/y.md) end\n",
-            )
+            .write_text("src.md", "links: [x](A/x.md) and [y](A/y.md) end\n")
             .unwrap();
         drive.reindex(None).unwrap();
         drive.rename_with_link_rewrite("A", "B").unwrap();
@@ -2788,10 +2927,7 @@ mod tests {
         drive.write_text("A/sib.md", "# Sib\n").unwrap();
         drive.reindex(None).unwrap();
         drive.rename_with_link_rewrite("A", "B").unwrap();
-        assert_eq!(
-            drive.read_text("B/x.md").unwrap(),
-            "see [sib](./sib.md)\n",
-        );
+        assert_eq!(drive.read_text("B/x.md").unwrap(), "see [sib](./sib.md)\n",);
     }
 
     #[test]
@@ -2801,7 +2937,9 @@ mod tests {
         let (_cfg, root, drive) = fixture();
         std::fs::create_dir_all(root.path().join("A")).unwrap();
         std::fs::create_dir_all(root.path().join("shared")).unwrap();
-        drive.write_text("A/x.md", "see [s](../shared/note.md)\n").unwrap();
+        drive
+            .write_text("A/x.md", "see [s](../shared/note.md)\n")
+            .unwrap();
         drive.write_text("shared/note.md", "# Shared\n").unwrap();
         drive.reindex(None).unwrap();
         drive.rename_with_link_rewrite("A", "deep/B").unwrap();
@@ -2865,27 +3003,17 @@ mod tests {
         // Rename the same file twice between reindexes. The second
         // rename must still find the inbound backlink even though the
         // graph's src column was indexed against the original path.
-        let (_cfg, _root, drive) = rename_fixture(
-            "src.md",
-            "see [a](./a.md) end\n",
-            "a.md",
-            "# A\n",
-        );
+        let (_cfg, _root, drive) =
+            rename_fixture("src.md", "see [a](./a.md) end\n", "a.md", "# A\n");
         drive.rename_with_link_rewrite("a.md", "b.md").unwrap();
         // After the first rename, src.md points at ./b.md.
-        assert_eq!(
-            drive.read_text("src.md").unwrap(),
-            "see [a](./b.md) end\n",
-        );
+        assert_eq!(drive.read_text("src.md").unwrap(), "see [a](./b.md) end\n",);
         // Now rename b.md to c.md WITHOUT reindexing. The graph still
         // records the inbound edge against the original "a.md" path,
         // so the second rename must use the cumulative log to find
         // src.md as a backlink source via the original name.
         drive.rename_with_link_rewrite("b.md", "c.md").unwrap();
-        assert_eq!(
-            drive.read_text("src.md").unwrap(),
-            "see [a](./c.md) end\n",
-        );
+        assert_eq!(drive.read_text("src.md").unwrap(), "see [a](./c.md) end\n",);
     }
 
     #[test]
@@ -2929,12 +3057,8 @@ mod tests {
         // After a reindex the graph is fresh and the cumulative log
         // becomes a liability (it could redirect a path the user has
         // re-created with new content). Reindex must clear it.
-        let (_cfg, _root, drive) = rename_fixture(
-            "src.md",
-            "see [a](./a.md) end\n",
-            "a.md",
-            "# A\n",
-        );
+        let (_cfg, _root, drive) =
+            rename_fixture("src.md", "see [a](./a.md) end\n", "a.md", "# A\n");
         drive.rename_with_link_rewrite("a.md", "b.md").unwrap();
         // Reindex now sees the fresh tree.
         drive.reindex(None).unwrap();
@@ -2949,10 +3073,7 @@ mod tests {
         // Renaming the fresh a.md to z.md should rewrite src2.md
         // without confusion from the prior log entry.
         drive.rename_with_link_rewrite("a.md", "z.md").unwrap();
-        assert_eq!(
-            drive.read_text("src2.md").unwrap(),
-            "see [a](./z.md) end\n",
-        );
+        assert_eq!(drive.read_text("src2.md").unwrap(), "see [a](./z.md) end\n",);
     }
 
     #[test]

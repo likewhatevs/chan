@@ -587,6 +587,50 @@ impl GraphView {
         Ok(())
     }
 
+    /// Drop every node, heading, and outgoing edge under `prefix`
+    /// in one transaction. Matches either an exact path
+    /// (`notes/x.md`) or a directory subtree (`notes` -> everything
+    /// under `notes/`).
+    ///
+    /// Inbound edges (where `dst` is in the removed set but `src`
+    /// is not) are deliberately left in place: they describe the
+    /// source file's body, which still contains the link text. A
+    /// `backlinks(removed)` query then returns "files that point
+    /// here as a broken link" rather than lying about the source's
+    /// content. Restoring the removed entry via `trash_restore` is
+    /// also lossless: the inbound edges that survived continue to
+    /// surface as backlinks the moment the restored node row
+    /// reappears.
+    ///
+    /// Used by `Drive::remove` to cascade a soft-delete into the
+    /// graph without waiting for the next full reindex. The op is
+    /// idempotent: re-running on an empty subtree is a no-op.
+    pub fn forget_under(&self, prefix: &str) -> Result<()> {
+        tracing::debug!(prefix, "graph::forget_under");
+        let conn = self.writer.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        // LIKE-escape the prefix so a literal `_` or `%` in a path
+        // doesn't widen the match. Pair with `ESCAPE '\\'`.
+        let subtree_like = format!("{}/%", like_escape(prefix));
+        tx.execute(
+            "DELETE FROM edges WHERE src = ?1 \
+             OR src LIKE ?2 ESCAPE '\\'",
+            params![prefix, subtree_like],
+        )?;
+        tx.execute(
+            "DELETE FROM headings WHERE rel_path = ?1 \
+             OR rel_path LIKE ?2 ESCAPE '\\'",
+            params![prefix, subtree_like],
+        )?;
+        tx.execute(
+            "DELETE FROM nodes WHERE rel_path = ?1 \
+             OR rel_path LIKE ?2 ESCAPE '\\'",
+            params![prefix, subtree_like],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Wipe every file, edge, and heading. Used by `Drive::reindex`
     /// before rebuilding from scratch.
     pub fn clear(&self) -> Result<()> {
