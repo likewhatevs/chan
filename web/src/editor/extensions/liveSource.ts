@@ -350,6 +350,12 @@ export const LiveSourceExtension = Extension.create({
                 { name: "bold", re: /\*\*([^*\n]+?)\*\*/g, len: 2 },
                 { name: "italic", re: /(?<!\*)\*([^*\n]+?)\*(?!\*)/g, len: 1 },
                 { name: "strike", re: /~~([^~\n]+?)~~/g, len: 2 },
+                // Wiki-link brackets. Same shape as the mark
+                // markers: the two-char `[[` / `]]` runs read as
+                // syntax while the bracket-aware render pass in
+                // Wysiwyg.svelte is still waiting for the caret to
+                // move outside the pattern.
+                { name: "wiki", re: /\[\[([^\[\]\n]+?)\]\]/g, len: 2 },
               ];
               for (const p of pendingPatterns) {
                 p.re.lastIndex = 0;

@@ -3100,6 +3100,104 @@
       }
       ed.view.dispatch(tr.setMeta("addToHistory", false));
     }
+    // Wiki-link bracket pass. Same inclusive-boundary contract as
+    // marks: caret AT either bracket still reads as "inside" so the
+    // user can type the closing `]]` without it instantly rendering
+    // out from under them. Skipped when the wiki picker bubble is
+    // open (its own flow owns the bracket range) or when
+    // enterWikiEditAt has staged an edit-existing run.
+    if (!wikiBubble && editingWikiOriginal === null) {
+      const wikiType = ed.schema.nodes.wikiLink;
+      if (wikiType) {
+        const linkMarkType = ed.schema.marks.link;
+        const sourceDir = currentPath
+          ? currentPath.split("/").slice(0, -1).join("/")
+          : "";
+        type WikiHit = {
+          from: number;
+          to: number;
+          target: string;
+          label: string;
+          anchor: string;
+          wasAbs: boolean;
+        };
+        const wikiHits: WikiHit[] = [];
+        ed.state.doc.nodesBetween(start, end, (node, pos) => {
+          if (!node.isText || !node.text) return;
+          // Plain text only — text already carrying a Link mark
+          // round-trips through `decorateWikiLinks` (the `[X](Y)`
+          // path), which we don't want to double-fire here.
+          if (
+            linkMarkType &&
+            node.marks.some((m) => m.type === linkMarkType)
+          ) {
+            return;
+          }
+          const re = /\[\[([^\[\]\n]+?)\]\]/g;
+          let mm: RegExpExecArray | null;
+          while ((mm = re.exec(node.text)) !== null) {
+            const fromPos = pos + mm.index;
+            const toPos = fromPos + mm[0].length;
+            if (caretInBlock >= fromPos && caretInBlock <= toPos) continue;
+            let inner = mm[1];
+            let label: string | null = null;
+            const pipeIdx = inner.indexOf("|");
+            if (pipeIdx !== -1) {
+              label = inner.slice(pipeIdx + 1).trim();
+              inner = inner.slice(0, pipeIdx);
+            }
+            let anchor = "";
+            const blockIdx = inner.indexOf("^");
+            const headIdx = inner.indexOf("#");
+            const anchorIdx =
+              blockIdx === -1
+                ? headIdx
+                : headIdx === -1
+                  ? blockIdx
+                  : Math.min(blockIdx, headIdx);
+            if (anchorIdx !== -1) {
+              anchor = inner.slice(
+                anchorIdx + (inner[anchorIdx] === "#" ? 1 : 0),
+              );
+              inner = inner.slice(0, anchorIdx);
+            }
+            const path = inner.trim();
+            if (path === "") continue;
+            const wasAbs = path.startsWith("/");
+            const normalized = normalizeHref(path, sourceDir);
+            if (normalized === null) continue;
+            const displayLabel =
+              label ??
+              (path.split("/").pop() ?? path).replace(/\.md$/, "");
+            wikiHits.push({
+              from: fromPos,
+              to: toPos,
+              target: normalized,
+              label: displayLabel,
+              anchor,
+              wasAbs,
+            });
+          }
+        });
+        if (wikiHits.length > 0) {
+          wikiHits.sort((a, b) => b.from - a.from);
+          const tr = ed.state.tr;
+          for (const hit of wikiHits) {
+            tr.replaceWith(
+              hit.from,
+              hit.to,
+              wikiType.create({
+                target: hit.target,
+                label: hit.label,
+                anchor: hit.anchor,
+                wasAbs: hit.wasAbs,
+              }),
+            );
+          }
+          ed.view.dispatch(tr.setMeta("addToHistory", false));
+        }
+      }
+    }
   }
 
   /// Swap the heading at `headingPos` for a paragraph carrying its
