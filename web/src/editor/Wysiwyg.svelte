@@ -344,8 +344,24 @@
   /// the assistant prompt quoting a selection) and want the user to
   /// keep typing past the seed rather than land at the document
   /// start where the seed text begins.
+  ///
+  /// If the doc ends with a non-empty block (typical when the seed
+  /// is a blockquote, since trailing `\n\n` in markdown doesn't
+  /// produce a separate empty paragraph), append an empty paragraph
+  /// so the caret lands on a fresh line below the seed instead of
+  /// inside it. Without this, typing would extend the blockquote.
   export function focusEnd(): void {
-    editor?.commands.focus("end");
+    if (!editor) return;
+    const { state } = editor;
+    const last = state.doc.lastChild;
+    const needsParagraph =
+      !last || last.type.name !== "paragraph" || last.content.size > 0;
+    if (needsParagraph) {
+      const paragraph = state.schema.nodes.paragraph.create();
+      const tr = state.tr.insert(state.doc.content.size, paragraph);
+      editor.view.dispatch(tr);
+    }
+    editor.commands.focus("end");
   }
 
   // ---- formatting API ---------------------------------------------------
