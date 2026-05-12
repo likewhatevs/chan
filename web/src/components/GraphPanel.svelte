@@ -400,10 +400,12 @@
     const cs = getComputedStyle(host);
     const v = (n: string, fb: string) => cs.getPropertyValue(n).trim() || fb;
     return {
-      // Node kinds in the graph: documents (orange file rectangles),
-      // images (purple circles), tags (green hashtag labels), and
-      // mentions (warn-colored @@name labels). Dates are filtered
-      // upstream.
+      // Node kinds in the graph: documents (doc), files classified as
+      // images (img), contact-kind files + @@mentions, and hashtag
+      // (tag) nodes. Every kind renders as a coloured circle with an
+      // icon glyph inside; the colour identifies the kind, the icon
+      // reinforces it, and circle size scales with the node's backlink
+      // count. Dates are filtered upstream.
       doc: v("--g-doc", "#ff8a3d"),
       img: v("--g-img", "#b07dff"),
       tag: v("--g-tag", "#6cd07a"),
@@ -416,12 +418,81 @@
     };
   }
 
-  function buildStylesheet(host: HTMLElement): cytoscape.StylesheetJson {
+  /// Wrap an inner SVG fragment in a 24x24 viewBox and emit a
+  /// data: URL suitable for cytoscape's `background-image`. The
+  /// stroke colour is baked in at build time because cytoscape
+  /// doesn't currentColor-resolve SVG backgrounds.
+  function svgStrokeIcon(inner: string, stroke: string): string {
+    // Explicit width/height on the SVG root so cytoscape's canvas
+    // image cache treats the icon as a fixed-size raster; without
+    // them browsers fall back to 300x150 intrinsic size which makes
+    // `background-fit` math unpredictable.
+    const svg =
+      `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' ` +
+      `viewBox='0 0 24 24' fill='none' stroke='${stroke}' stroke-width='2.4' ` +
+      `stroke-linecap='round' stroke-linejoin='round'>${inner}</svg>`;
+    return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+  }
+  function svgTextIcon(glyph: string, fill: string): string {
+    const svg =
+      `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' ` +
+      `viewBox='0 0 24 24'>` +
+      `<text x='12' y='18' text-anchor='middle' ` +
+      `font-family='-apple-system, system-ui, sans-serif' ` +
+      `font-size='20' font-weight='800' fill='${fill}'>${glyph}</text>` +
+      `</svg>`;
+    return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+  }
+
+  /// Base circle diameter; the largest (most-backlinked) node tops
+  /// out at NODE_BASE_PX * NODE_SIZE_RATIO. 20 % spread is enough
+  /// for a heavily-linked hub to stand out from leaf nodes without
+  /// dominating the layout.
+  const NODE_BASE_PX = 22;
+  const NODE_SIZE_RATIO = 1.2;
+  /// Icon glyph occupies this fraction of the node diameter. Leaves
+  /// a coloured ring around the icon so the kind colour still reads
+  /// at small zoom levels.
+  const ICON_FRACTION_PCT = "55%";
+
+  function buildStylesheet(
+    host: HTMLElement,
+    maxBacklinks: number,
+  ): cytoscape.StylesheetJson {
     const c = readThemeColors(host);
+    // mapData clamps to outMin when fieldMax == fieldMin, so the
+    // floor on the denominator just keeps the formula well-defined
+    // when no backlinks exist in the current view; the smallest
+    // circle still ends up at NODE_BASE_PX.
+    const maxBL = Math.max(1, maxBacklinks);
+    const sizeMap = `mapData(backlinks, 0, ${maxBL}, ${NODE_BASE_PX}, ${
+      NODE_BASE_PX * NODE_SIZE_RATIO
+    })`;
+    // Icons are stroked / filled in the page background colour so
+    // they "knock out" the coloured node beneath them. Paths come
+    // from a lucide-style 24x24 grid so they read uniformly.
+    const PATH_DOC =
+      `<path d='M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z'/>` +
+      `<polyline points='14 3 14 8 19 8'/>`;
+    const PATH_CONTACT =
+      `<circle cx='12' cy='9' r='3.4'/>` +
+      `<path d='M5 20c.6-3.6 3.6-6 7-6s6.4 2.4 7 6'/>`;
+    const PATH_IMG =
+      `<rect x='3.5' y='4' width='17' height='16' rx='2'/>` +
+      `<circle cx='9' cy='10' r='1.6'/>` +
+      `<polyline points='20 16 15 11 5 19'/>`;
+    const ICON_DOC = svgStrokeIcon(PATH_DOC, c.bg);
+    const ICON_CONTACT = svgStrokeIcon(PATH_CONTACT, c.bg);
+    const ICON_IMG = svgStrokeIcon(PATH_IMG, c.bg);
+    const ICON_TAG = svgTextIcon("#", c.bg);
+    const ICON_MENTION = svgTextIcon("@", c.bg);
     return [
       {
         selector: "node",
         style: {
+          shape: "ellipse",
+          width: sizeMap as unknown as number,
+          height: sizeMap as unknown as number,
           label: "data(label)",
           color: c.text,
           // Match the rest of the chrome (App.svelte body
@@ -429,14 +500,14 @@
           // UI rather than a separate widget.
           "font-family":
             '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-          "font-size": 11,
+          "font-size": 7,
           // Labels above the node, ellipsised at a fixed width.
           // Right-of-node placement (the prior layout) bled long
           // file names into neighbouring nodes once fcose packed
           // anything close together.
           "text-halign": "center",
           "text-valign": "top",
-          "text-margin-y": -4,
+          "text-margin-y": -3,
           "text-wrap": "ellipsis",
           "text-max-width": "110px",
           "text-outline-color": c.bg,
@@ -446,81 +517,56 @@
           "text-outline-width": 1,
           "border-width": 1.5,
           "border-color": c.bg,
-          "min-zoomed-font-size": 8,
+          "min-zoomed-font-size": 6,
+          // Icon glyph centered inside the circle. `background-fit:
+          // none` is the only mode where width/height percentages
+          // are honoured literally; `contain` ignores them and sized
+          // off the SVG's intrinsic 24px box, which overshot the
+          // node bounds and gave us file-shaped blobs instead of
+          // circles. `inside` containment clips anything that would
+          // still overhang.
+          "background-fit": "none",
+          "background-image-containment": "inside",
+          "background-clip": "node",
+          "background-width": ICON_FRACTION_PCT,
+          "background-height": ICON_FRACTION_PCT,
+          "background-position-x": "50%",
+          "background-position-y": "50%",
         },
       },
-      // Documents: small orange rounded rectangle, label below.
       {
         selector: 'node[kind = "doc"]',
         style: {
-          shape: "round-rectangle",
           "background-color": c.doc,
-          width: 14,
-          height: 18,
+          "background-image": ICON_DOC,
         },
       },
-      // Contact-kind file nodes: same shape as a doc, painted in
-      // --warn-text so they read as part of the contact set alongside
-      // the mention nodes and the editor pill. Slightly bigger than a
-      // doc rect because a contact label tends to be a person's name
-      // (longer than a typical note stem).
       {
         selector: 'node[kind = "contact"]',
         style: {
-          shape: "round-rectangle",
           "background-color": c.mention,
-          width: 16,
-          height: 18,
+          "background-image": ICON_CONTACT,
         },
       },
-      // Images: small purple circle, label below.
       {
         selector: 'node[kind = "img"]',
         style: {
-          shape: "ellipse",
           "background-color": c.img,
-          width: 10,
-          height: 10,
+          "background-image": ICON_IMG,
         },
       },
-      // Tags: green hashtag text only, no fill, label centered on
-      // the node so the "#name" string IS the visual.
       {
         selector: 'node[kind = "tag"]',
         style: {
-          shape: "rectangle",
-          "background-opacity": 0,
-          "border-width": 0,
-          width: 22,
-          height: 14,
-          color: c.tag,
-          "font-size": 12,
-          "font-weight": 600,
-          "text-valign": "center",
-          "text-halign": "center",
-          "text-margin-y": 0,
-          "text-outline-color": c.bg,
-          "text-outline-width": 1,
+          "background-color": c.tag,
+          "background-image": ICON_TAG,
         },
       },
-      // Mentions: same text-only treatment as tags but in the warn
-      // color so @@name reads as a different kind at a glance.
       {
         selector: 'node[kind = "mention"]',
         style: {
-          shape: "rectangle",
-          "background-opacity": 0,
-          "border-width": 0,
-          width: 28,
-          height: 14,
-          color: c.mention,
-          "font-size": 12,
-          "font-weight": 600,
-          "text-valign": "center",
-          "text-halign": "center",
-          "text-margin-y": 0,
-          "text-outline-color": c.bg,
-          "text-outline-width": 1,
+          "background-color": c.mention,
+          "background-image": ICON_MENTION,
         },
       },
       {
@@ -789,10 +835,25 @@
   function buildElements(g: GraphView): {
     elements: ElementDefinition[];
     dropped: number;
+    maxBacklinks: number;
   } {
     const nodeIds = new Set(g.nodes.map((n) => n.id));
     const edgeIds = makeEdgeIds(g);
     const els: ElementDefinition[] = [];
+    // Pre-count incoming edges per node. The stylesheet's `mapData`
+    // turns this into a circle diameter, so a heavily-referenced
+    // note / tag / contact ends up visibly larger than a leaf node.
+    // Only edges with both endpoints in the node set count, mirroring
+    // the dangling-endpoint filter below.
+    const backlinks = new Map<string, number>();
+    for (const e of g.edges) {
+      if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
+      backlinks.set(e.target, (backlinks.get(e.target) ?? 0) + 1);
+    }
+    let maxBacklinks = 0;
+    for (const v of backlinks.values()) {
+      if (v > maxBacklinks) maxBacklinks = v;
+    }
     for (const n of g.nodes) {
       // Display labels: mentions arrive from chan-drive as `@@name`
       // (the source-text form). Strip the `@@` so the canvas reads
@@ -805,6 +866,7 @@
         kind:
           n.kind === "file" ? classifyFile(n.path, n.node_kind) : n.kind,
         label: displayLabel,
+        backlinks: backlinks.get(n.id) ?? 0,
       };
       if (n.kind === "file") {
         data.path = n.path;
@@ -830,7 +892,7 @@
       if (e.broken) data.broken = true;
       els.push({ group: "edges", data });
     }
-    return { elements: els, dropped };
+    return { elements: els, dropped, maxBacklinks };
   }
 
   function buildCytoscape(g: GraphView): void {
@@ -843,7 +905,7 @@
     // Cleared just before forceLayout.run() so the d3-force
     // animation IS the user-visible "drawing" of the graph.
     containerEl.style.opacity = "0";
-    const { elements, dropped } = buildElements(g);
+    const { elements, dropped, maxBacklinks } = buildElements(g);
     if (dropped > 0) {
       console.warn(`graph: dropped ${dropped} edges with unknown endpoints`);
     }
@@ -857,7 +919,7 @@
     cy = cytoscape({
       container: containerEl,
       elements,
-      style: buildStylesheet(containerEl),
+      style: buildStylesheet(containerEl, maxBacklinks),
       minZoom: 0.15,
       // User-driven zoom (scroll wheel) wants headroom — capped too
       // low and the canvas hits an invisible wall while inspecting.
