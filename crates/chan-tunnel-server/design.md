@@ -271,11 +271,15 @@ pub struct Validated {
 pub enum ServerError {
     InvalidToken,
     MissingScope,
+    MissingPublicScope,
     Identity(String),
     Io(std::io::Error),
     Handshake(String),
     TooManyDrives { user: String, max: usize },
 }
+
+pub const TUNNEL_SCOPE: &str = "tunnel";
+pub const TUNNEL_PUBLIC_SCOPE: &str = "tunnel.public";
 
 // Handshake free functions
 pub async fn handshake<S, V, F>(
@@ -392,8 +396,18 @@ Server-specific notes:
   to the client distinctly. After 200, the handshake cannot
   surface auth errors.
 - **Tunnel scope**: the validator returns scopes; the listener
-  refuses tokens missing `"tunnel"` with 403. Other scopes are
-  ignored here.
+  refuses tokens missing `TUNNEL_SCOPE` (`"tunnel"`) with 403.
+- **Public scope**: `Hello.public = true` is a privilege-escalation
+  request (the public router skips the OAuth gate for that drive),
+  so it is gated on a second scope `TUNNEL_PUBLIC_SCOPE`
+  (`"tunnel.public"`). Tokens that hold only the base scope can
+  still register a drive but must run it private; if they request
+  `public = true` the handshake fails with `MissingPublicScope`
+  *before* HelloAck is written, so the client cannot grant the bit
+  to itself at runtime. A token carrying both scopes retains
+  per-drive choice: `chan serve --public` (true) or default
+  (false) both work on the same token, so one user can host both
+  a public docs drive and a private notes drive.
 - **Username validation** (`is_valid_username`): defense-in-depth.
   The username flows into the public path `/{user}/{drive}`; if
   the upstream identity service ever emits `..`, slashes, or

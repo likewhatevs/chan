@@ -31,6 +31,12 @@ pub struct Hello {
     /// this drive without an OAuth round-trip. When false (default),
     /// only the drive owner's signed-in session can reach it.
     /// Additive field; older clients omitting it default to false.
+    ///
+    /// Setting this to `true` is a privilege-escalation request:
+    /// the server gates it on an extra token scope
+    /// (`chan_tunnel_server::TUNNEL_PUBLIC_SCOPE`). Clients without
+    /// that scope are refused with `MissingPublicScope`, so the
+    /// client cannot unilaterally make its drive anonymous-readable.
     #[serde(default)]
     pub public: bool,
 }

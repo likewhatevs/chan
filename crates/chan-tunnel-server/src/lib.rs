@@ -52,6 +52,20 @@ pub(crate) const VALIDATE_TIMEOUT: Duration = Duration::from_secs(10);
 /// one timeout cycle.
 pub(crate) const MAX_INFLIGHT_HANDSHAKES: usize = 1024;
 
+/// Base scope required for any tunnel dial. The validator must
+/// return this in `Validated::scopes` for the handshake to proceed
+/// past the 200 response.
+pub const TUNNEL_SCOPE: &str = "tunnel";
+
+/// Extra scope required when the client requests `Hello.public =
+/// true` (anonymous-readable drive). Tokens carrying only
+/// `TUNNEL_SCOPE` can still register a drive, but the public bit is
+/// gated separately so a leaked / lower-privilege token cannot
+/// expose a drive to the open internet on its own. See the
+/// `MissingPublicScope` error and the listener's `pre_ack` hook
+/// (`tunnel.rs`) for enforcement.
+pub const TUNNEL_PUBLIC_SCOPE: &str = "tunnel.public";
+
 #[derive(Debug, Error)]
 pub enum ServerError {
     #[error("invalid token")]
@@ -59,6 +73,14 @@ pub enum ServerError {
 
     #[error("token does not have tunnel scope")]
     MissingScope,
+
+    /// Client asked for `Hello.public = true` but the validated
+    /// token does not carry `TUNNEL_PUBLIC_SCOPE`. Distinct from
+    /// `MissingScope` (no `TUNNEL_SCOPE` at all) so the listener
+    /// can log / report which gate failed and a future protocol
+    /// extension can surface it to the client.
+    #[error("token does not have tunnel.public scope")]
+    MissingPublicScope,
 
     /// Upstream identity service failure. The wrapped string is
     /// logged at the listener (`tracing::warn!`) and may end up in
@@ -166,7 +188,7 @@ where
     F: FnOnce(&Hello, &Validated) -> Result<(), ServerError>,
 {
     let validated = validator.validate(token).await?;
-    if !validated.scopes.iter().any(|s| s == "tunnel") {
+    if !validated.scopes.iter().any(|s| s == TUNNEL_SCOPE) {
         return Err(ServerError::MissingScope);
     }
     handshake_validated(socket, validated, pre_ack).await
