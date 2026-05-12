@@ -208,6 +208,35 @@
   /// inside the brackets doesn't desync the saved position.
   let editingWikiBracketStart: number | null = null;
 
+  /// Snapshot of the contact-kind wikiLink atom we replaced on
+  /// edit-entry. Mirrors `editingWikiOriginal`: a dismiss without
+  /// accept restores the original atom rather than leaving a stray
+  /// `@name` trigger in the doc. The contact bubble's open path
+  /// inserts `@<label>` text under the caret and re-uses the same
+  /// accept flow as a fresh `@` invocation; the only thing we need
+  /// to track separately is which atom to restore on cancel.
+  let editingContactOriginal:
+    | { target: string; label: string; anchor: string; wasAbs: boolean }
+    | null = null;
+  /// Doc position of the inserted `@` on contact-edit entry. Mapped
+  /// through every transaction so the restore-on-dismiss path can
+  /// find the `@<query>` range even after the user has moved the
+  /// caret out of it.
+  let editingContactStart: number | null = null;
+  /// Doc position of the end of the inserted `@<label>` text. Bounds
+  /// the query scan so it doesn't eat content past the original
+  /// label (e.g. " bbb" following the pill). Mapped through every
+  /// transaction alongside `editingContactStart` so it tracks typing
+  /// inside the bubble.
+  let editingContactEnd: number | null = null;
+  /// True between edit-entry and the user's first edit. While true,
+  /// ArrowLeft / ArrowRight (without modifiers) dismiss-and-restore
+  /// rather than collapse the label selection — the user entered
+  /// the pill while arrow-navigating and a single arrow out is the
+  /// expected exit gesture. Cleared on first doc-change so typed
+  /// edits don't trip the arrow-out short-circuit.
+  let contactEditInitialSelection = false;
+
   /// Image bubble. Same non-focus-stealing pattern as the wiki
   /// bubble: open while the caret sits inside `![alt](src)` source
   /// text, dismiss when the caret leaves the range. Two sub-modes
@@ -467,6 +496,35 @@
       // insert path.
       editorProps: {
         handleKeyDown: (_view, event) => {
+          // Contact-pill edit-entry exit: while the initial label
+          // selection is live (the user just arrowed into the pill
+          // and we highlighted the label), pressing a bare arrow
+          // key in either direction restores the original pill.
+          // The user navigated INTO the pill via arrow keys; one
+          // arrow out should walk them back, not collapse the label
+          // selection into "now I'm editing this label" mode. Once
+          // they actually edit the label, the flag clears and arrow
+          // keys resume their normal PM semantics.
+          if (
+            contactBubble &&
+            editingContactOriginal &&
+            contactEditInitialSelection &&
+            !event.shiftKey &&
+            !event.metaKey &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            (event.key === "ArrowLeft" || event.key === "ArrowRight")
+          ) {
+            // Land the caret on the side matching the exit direction
+            // so the next arrow continues the user's motion past the
+            // restored atom. Without this, PM's default places the
+            // caret right-adjacent to the atom and ArrowLeft re-fires
+            // NodeSelection on it, trapping the user in the pill.
+            const caretSide = event.key === "ArrowLeft" ? "before" : "after";
+            dismissContactBubble(caretSide);
+            event.preventDefault();
+            return true;
+          }
           // Bubble keyboard routing: each adapter owns its Enter /
           // Escape / Arrow semantics behind `BubbleHandle.handleKey`.
           // Only one bubble is ever open at a time (the open paths
@@ -627,6 +685,23 @@
           editingImageBracketStart = transaction.mapping.map(
             editingImageBracketStart,
           );
+        }
+        // And the contact edit-entry `@` position so a dismiss can
+        // find the trigger range even after intra-bubble edits. The
+        // matching end-position bounds the query scan so it stops
+        // at the original label rather than running into the next
+        // word.
+        if (editingContactStart !== null) {
+          editingContactStart = transaction.mapping.map(editingContactStart);
+        }
+        if (editingContactEnd !== null) {
+          editingContactEnd = transaction.mapping.map(editingContactEnd);
+        }
+        // First doc-change after entry clears the initial-selection
+        // short-circuit (the user has touched the label, so arrow
+        // keys should resume their normal collapse semantics).
+        if (contactEditInitialSelection && transaction.docChanged) {
+          contactEditInitialSelection = false;
         }
         if (applyingExternal) return;
         const raw = (editor.storage.markdown as { getMarkdown(): string }).getMarkdown();
@@ -1515,11 +1590,54 @@
   /// Spaces ARE allowed in the query so display names like
   /// "Jane Doe" are typeable; the `@<space>` early-dismiss lives
   /// in `onInput` (it's an input-event signal, not a range check).
-  function findContactRange(
+  /// Locate the `@<query>` trigger range we inserted on contact-pill
+  /// edit-entry. Anchored on the stashed `editingContactStart` /
+  /// `editingContactEnd` pair (both mapped through transactions) so
+  /// the bounds reflect the original label's geometry: typing
+  /// inside the label moves `editingContactEnd` with the caret, but
+  /// content past the label (e.g. " bbb" following the pill) is
+  /// excluded from the range. Without that bound, a labelled
+  /// contact like "Marcos Paulo" followed by " bbb" would have the
+  /// regex scan eat through " bbb" too, and accept/restore would
+  /// then operate on the wrong slice.
+  function findContactEditRange(
     ed: Editor,
   ): { start: number; end: number; query: string } | null {
+    if (editingContactStart === null || editingContactEnd === null) return null;
+    const start = editingContactStart;
+    const end = editingContactEnd;
+    const doc = ed.state.doc;
+    if (start < 0 || end > doc.content.size || start >= end) return null;
+    let resolved;
+    try {
+      resolved = doc.resolve(start);
+    } catch {
+      return null;
+    }
+    const blockStart = resolved.start();
+    const blockEnd = resolved.end();
+    if (start < blockStart || end > blockEnd) return null;
+    const text = doc.textBetween(start, end, "\n", " ");
+    if (text[0] !== "@") return null;
+    return {
+      start,
+      end,
+      query: text.slice(1),
+    };
+  }
+
+  function findContactRange(
+    ed: Editor,
+    opts: { allowSelection?: boolean } = {},
+  ): { start: number; end: number; query: string } | null {
     const sel = ed.state.selection;
-    if (!sel.empty) return null;
+    // Open / accept paths require an empty caret so a fresh `@`
+    // keystroke or an Enter doesn't fire while the user has text
+    // selected for another purpose. The sync / lifecycle path opts
+    // into `allowSelection` so shift-selecting inside the bubble's
+    // `@<query>` range (to delete part of the name and search again)
+    // doesn't tear the bubble down.
+    if (!sel.empty && !opts.allowSelection) return null;
     if (findBracketRange(ed)) return null;
     const fromPos = ed.state.doc.resolve(sel.from);
     const parent = fromPos.parent;
@@ -1553,6 +1671,12 @@
 
   function acceptContactBubble(): void {
     if (!editor || !contactBubble) return;
+    // Single accept path: scan back from sel.from for the `@<query>`
+    // trigger. Same selection-based shape as fresh-trigger accept,
+    // so edit-mode and fresh-trigger share the replace range
+    // computation. editingContactOriginal still gates the
+    // restore-on-dismiss path (we clear it below before dismissing
+    // so the dismiss doesn't double-restore).
     const range = findContactRange(editor);
     if (!range) {
       dismissContactBubble();
@@ -1560,6 +1684,17 @@
     }
     const picked = contactBubble.accept();
     if (!picked) return;
+    // Clear the edit-entry snapshot BEFORE dismissing. dismissContact
+    // Bubble triggers `restoreContactEditOriginal` when the snapshot
+    // is set, which would replace the `@<query>` text with the
+    // original atom and shift every position after it — then our
+    // `deleteRange(range.start, range.end)` below would eat into the
+    // *next* paragraph (it was computed against the pre-restore doc).
+    // Null these out first so dismiss is a clean no-op.
+    editingContactOriginal = null;
+    editingContactStart = null;
+    editingContactEnd = null;
+    contactEditInitialSelection = false;
     dismissContactBubble();
     // Insert the picked contact as a standard markdown link with a
     // file-relative URL to the contact note. We deliberately do NOT
@@ -1569,9 +1704,16 @@
     // the resolved target (graph kind, not syntax). When there's no
     // `currentPath` (assistant prompt and other no-source callers),
     // fall back to the drive-rooted form.
+    // Always emit a relative-looking URL. When `currentPath` is set
+    // (the file editor's normal case), relativize against the
+    // editing file so `[Alice](../Contacts/Alice.md)` round-trips.
+    // When it's missing (assistant prompt, fresh-unsaved buffer),
+    // assume drive root so the URL still starts with `./` rather
+    // than rendering as a bare `Contacts/Alice.md` that markdown
+    // readers ambiguously resolve.
     const rel = currentPath
       ? relativizePath(picked.path, currentPath)
-      : picked.path;
+      : `./${picked.path}`;
     const href = rel
       .split("/")
       .map((s) => encodeURIComponent(s).replace(/%2F/g, "/"))
@@ -1588,9 +1730,24 @@
       })
       .insertContent(" ")
       .run();
+    // Promote the just-inserted Link mark to a wikiLink atom so the
+    // contact pill shows up immediately (NodeView resolves kind and
+    // stamps `data-refkind="contact"` on first apply). Without this,
+    // the link reads as plain blue text until the next reload.
+    decorateWikiLinks();
   }
 
-  function dismissContactBubble(): void {
+  function dismissContactBubble(
+    caretSide: "before" | "after" = "after",
+  ): void {
+    // If this dismiss came from a contact-pill edit-entry, restore
+    // the original atom rather than leaving stray `@name` text in
+    // the doc. `caretSide` is propagated through so the arrow-out
+    // shortcut can land the caret on the side the user was exiting
+    // toward; Esc / blur dismisses default to "after". The
+    // acceptContactBubble path nulls the snapshot before reaching
+    // here, so accept-then-decorate doesn't trip this restore.
+    if (editingContactOriginal) restoreContactEditOriginal(caretSide);
     contactBubble?.dismiss();
     contactBubble = undefined;
   }
@@ -1606,7 +1763,22 @@
       return;
     }
     if (!contactBubble) return;
-    const range = findContactRange(editor);
+    // Edit-existing flow: the bubble lives over a `[label](href)`
+    // source we inserted in place of the original pill. The label
+    // inside `[...]` IS the picker query; the rest of the source is
+    // along for the ride until accept replaces it wholesale.
+    // Single query path for BOTH fresh `@<query>` triggers and
+    // edit-mode (pill clicked / arrowed into → expanded to
+    // `@<label>` text). The selection-based scan in findContactRange
+    // is the same one the wiki bubble's findBracketRange uses, so
+    // contact edit behaves the same way: caret stays inside the
+    // trigger run → bubble alive + querying; caret leaves the run
+    // → bubble dismisses. editingContactOriginal is consulted by
+    // restoreContactEditOriginal to swap the @<query> back to the
+    // original atom on dismiss-without-accept, and by
+    // acceptContactBubble for the same accept-replaces-pill path,
+    // but neither of those paths reads it for query computation.
+    const range = findContactRange(editor, { allowSelection: true });
     if (!range) {
       dismissContactBubble();
       return;
@@ -1723,6 +1895,18 @@
 
   function enterWikiEditAt(wrap: HTMLElement): void {
     if (!editor) return;
+    // Contact-kind atoms get the `@` picker instead of the generic
+    // wiki bubble. The NodeView stamps `data-refkind="contact"` on
+    // the wrap once `/api/resolve-link` confirms the target's graph
+    // kind; the attr is present from cache on every re-paint after
+    // that, so re-entering an existing contact pill routes through
+    // the contact picker (search by name + email, contact pill on
+    // accept). If the resolve hasn't returned yet we fall back to
+    // the wiki edit path; the next entry will route correctly.
+    if (wrap.getAttribute("data-refkind") === "contact") {
+      enterContactEditAt(wrap);
+      return;
+    }
     const stash = (wrap as unknown as { __wikiGetPos?: () => number | undefined })
       .__wikiGetPos;
     const pos = typeof stash === "function" ? stash() : undefined;
@@ -1754,6 +1938,118 @@
     // explicitly here so the bubble is alive on first paint with
     // the follow button populated.
     openWikiBubbleForCurrentCaret();
+  }
+
+  /// Enter contact edit mode. Replaces the clicked pill with an
+  /// `@<label>` search trigger, opens the contact picker seeded
+  /// with the current label, and SELECTS the label so the user
+  /// sees a "search for a different contact" input rather than a
+  /// label-editing affordance. Typing overwrites the selection
+  /// (becomes the new query); Enter accepts the highlighted
+  /// result; Esc / caret-out restores the original pill via
+  /// `restoreContactEditOriginal`.
+  ///
+  /// Rationale: tiptap parses `[label](href)` text into a Link mark
+  /// the moment it lands, hiding the URL and putting the user in
+  /// "edit the alt-text" mode, which is the opposite of what a
+  /// contact pill edit should do (the label is bound to the picked
+  /// contact, not free-form). Using the trigger shape keeps the
+  /// bubble in charge of the swap.
+  function enterContactEditAt(wrap: HTMLElement): void {
+    if (!editor) return;
+    const stash = (wrap as unknown as { __wikiGetPos?: () => number | undefined })
+      .__wikiGetPos;
+    const pos = typeof stash === "function" ? stash() : undefined;
+    if (typeof pos !== "number") return;
+    const atom = editor.state.doc.nodeAt(pos);
+    if (!atom || atom.type.name !== "wikiLink") return;
+    const target = (atom.attrs.target as string) || "";
+    const label = (atom.attrs.label as string) || target;
+    const anchor = (atom.attrs.anchor as string) || "";
+    const wasAbs = (atom.attrs.wasAbs as boolean) || false;
+    editingContactOriginal = { target, label, anchor, wasAbs };
+    // Both anchors are set AFTER the chain runs. PM's default mapping
+    // bias (+1) for a position AT the start of a replace range maps
+    // it to the END of the new content (= pos + insertText.length),
+    // not back to `pos` as one might expect. If we set
+    // editingContactStart=pos before the chain, the entry transaction
+    // shifts it past the inserted @, and every subsequent
+    // findContactEditRange returns null (text at the mapped position
+    // is the space after the label, not the @). Same race on
+    // contactEditInitialSelection: onUpdate fires synchronously
+    // during the chain and clears it before any user input lands.
+    editingContactStart = null;
+    editingContactEnd = null;
+    contactEditInitialSelection = false;
+    const insertText = `@${label}`;
+    // Selection range covers the label (everything after `@`) so the
+    // first keystroke overwrites it and the bubble re-queries with
+    // the new text. Enter without typing keeps the original
+    // selection and re-picks the same contact.
+    const labelStart = pos + 1;
+    const labelEnd = pos + insertText.length;
+    editor
+      .chain()
+      .focus()
+      .insertContentAt({ from: pos, to: pos + atom.nodeSize }, insertText)
+      .setTextSelection({ from: labelStart, to: labelEnd })
+      .run();
+    // After the chain runs, the @ sits at the original atom's
+    // position (the replace started AT pos and inserted there), so
+    // pinning start to pos is correct.
+    editingContactStart = pos;
+    editingContactEnd = pos + insertText.length;
+    contactEditInitialSelection = true;
+    openContactBubbleForCurrentCaret(label);
+  }
+
+  /// Restore the contact pill we replaced on edit entry when the
+  /// bubble dismissed without an accept. Uses `findContactEditRange`
+  /// to locate the `@<query>` source we inserted (even after the
+  /// caret has wandered off it) and swaps the whole source for the
+  /// original wikiLink atom. If the source has been mangled enough
+  /// that the range scan fails, we just leave the text in place;
+  /// the next `decorateWikiLinks` pass will re-pill it.
+  ///
+  /// `caretSide` decides where the caret lands after the swap:
+  /// "before" (default for arrow-LEFT exit) puts it just left of the
+  /// restored atom so the user can continue arrowing left without
+  /// re-entering the pill; "after" puts it just right. PM's default
+  /// post-replace selection puts the caret right-adjacent to the
+  /// atom, which makes ArrowLeft re-trigger NodeSelection and the
+  /// user "gets stuck on the search" — hence the explicit placement.
+  function restoreContactEditOriginal(
+    caretSide: "before" | "after" = "after",
+  ): void {
+    if (!editor || !editingContactOriginal) return;
+    const orig = editingContactOriginal;
+    const editRange = findContactEditRange(editor);
+    editingContactOriginal = null;
+    editingContactStart = null;
+    editingContactEnd = null;
+    contactEditInitialSelection = false;
+    if (!editRange) return;
+    const wikiType = editor.schema.nodes.wikiLink;
+    if (!wikiType) return;
+    const atomNode = wikiType.create({
+      target: orig.target,
+      label: orig.label,
+      anchor: orig.anchor,
+      wasAbs: orig.wasAbs,
+    });
+    let tr = editor.state.tr.replaceWith(editRange.start, editRange.end, atomNode);
+    const caretPos = caretSide === "before" ? editRange.start : editRange.start + 1;
+    try {
+      const r = tr.doc.resolve(caretPos);
+      tr = tr.setSelection(
+        TextSelection.near(r, caretSide === "before" ? -1 : 1),
+      );
+    } catch {
+      // Position out of range: fall back to PM's default selection
+      // mapping (right-adjacent to the atom).
+    }
+    tr = tr.setMeta("addToHistory", false);
+    editor.view.dispatch(tr);
   }
 
   /// Restore the wiki atom we replaced when entering edit mode.
@@ -2689,6 +2985,33 @@
   }
   :global(.md-wysiwyg .md-smart-wiki:hover) {
     filter: brightness(1.1);
+  }
+  /* Contact mention pill. Same shape as a doc wiki-link chip, but a
+     softer tinted background + an inline person glyph so a `@Alice`
+     mention reads as a person at a glance, not just "another link".
+     The `data-refkind="contact"` attr is stamped by the wikiLink
+     NodeView after /api/resolve-link confirms the target's graph
+     kind; first paint shows the generic chip, the contact styling
+     settles on the next tick. */
+  :global(.md-wysiwyg .md-smart-wiki[data-refkind="contact"]) {
+    background: color-mix(in srgb, var(--link) 14%, transparent);
+    color: var(--link);
+    padding-left: 1.4em;
+    position: relative;
+  }
+  :global(.md-wysiwyg .md-smart-wiki[data-refkind="contact"])::before {
+    content: "";
+    position: absolute;
+    left: 0.45em;
+    top: 50%;
+    width: 0.75em;
+    height: 0.75em;
+    transform: translateY(-50%);
+    background: currentColor;
+    /* Person silhouette mask: matches the chip color (currentColor)
+       without dragging an asset file into the embed. */
+    -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='5' r='3'/><path d='M2 14c0-3 3-5 6-5s6 2 6 5z'/></svg>") center / contain no-repeat;
+    mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='5' r='3'/><path d='M2 14c0-3 3-5 6-5s6 2 6 5z'/></svg>") center / contain no-repeat;
   }
   /* Plain markdown links: pointer too (we hijack internal ones in onClick). */
   :global(.md-wysiwyg a) {

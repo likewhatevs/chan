@@ -30,6 +30,41 @@ import { wikiLinkToMarkdown } from "../links";
 import { openInActivePane } from "../../state/tabs.svelte";
 import { openBubbleShell, type BubbleHandle } from "../bubble";
 
+/// Module-level cache of `target -> kind` decisions so the NodeView
+/// doesn't refetch the same wiki-link's kind on every transaction.
+/// Targets that 404 (broken link) cache `"broken"` to suppress retry
+/// loops; a manual /api/index/rebuild reload will reseed the cache.
+type WikiKind = "file" | "contact" | "broken";
+const kindCache = new Map<string, WikiKind>();
+const kindInFlight = new Map<string, Promise<WikiKind>>();
+
+/// Resolve a wiki-link target to its node kind. Returns from the
+/// in-memory cache if known; otherwise starts a single shared fetch
+/// and feeds the result back to every subscriber. Failures land as
+/// `"broken"` (cached) so a temporary network hiccup doesn't pin
+/// the pill in a perma-fetching state.
+function resolveWikiKind(target: string): Promise<WikiKind> {
+  const cached = kindCache.get(target);
+  if (cached) return Promise.resolve(cached);
+  const pending = kindInFlight.get(target);
+  if (pending) return pending;
+  const p = api
+    .resolveLink(target)
+    .then((r) => {
+      const kind: WikiKind = r.kind === "contact" ? "contact" : "file";
+      kindCache.set(target, kind);
+      kindInFlight.delete(target);
+      return kind;
+    })
+    .catch(() => {
+      kindCache.set(target, "broken");
+      kindInFlight.delete(target);
+      return "broken" as WikiKind;
+    });
+  kindInFlight.set(target, p);
+  return p;
+}
+
 /// Build a wikiLink extension that closes over `getFromPath`.
 /// When the getter returns a non-empty string, serialize emits a
 /// file-relative URL (`./foo.md` / `../foo.md`); when it returns
@@ -89,6 +124,26 @@ export function createWikiLinkNode(getFromPath: () => string | null) {
           wrap.setAttribute("data-anchor", anchor);
           wrap.title = `→ ${target}${anchor ? `#${anchor}` : ""}`;
           wrap.textContent = lbl || target;
+          // Kind-aware pill: stamp `data-refkind` on the wrap so the
+          // stylesheet can render contact mentions as a distinct
+          // chip from generic doc links. Lookup is async + cached;
+          // first paint is generic, the attribute settles on the
+          // next microtask once /api/resolve-link replies. The
+          // closure captures `target` per node, so a later atom
+          // edit that swaps targets re-fires for the new value.
+          if (target) {
+            void resolveWikiKind(target).then((kind) => {
+              // Bail if the node has been swapped out in the
+              // meantime (target changed under us); the new
+              // `apply` call will re-fire its own lookup.
+              if (wrap.getAttribute("data-target") !== target) return;
+              if (kind === "contact") {
+                wrap.setAttribute("data-refkind", "contact");
+              } else {
+                wrap.removeAttribute("data-refkind");
+              }
+            });
+          }
         };
         apply(node);
         // Stash the position getter; consumers test `typeof` before

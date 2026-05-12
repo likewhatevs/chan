@@ -348,6 +348,20 @@ export const api = {
   /// available for future "linked from" panels.
   backlinks: (path: string) =>
     req<GraphEdge[]>("GET", `/api/backlinks/${encPath(path)}`),
+  /// Resolve a wiki / markdown link target to the actual drive file
+  /// + node kind. `target` is the path portion of the link (no
+  /// `#anchor`); pass through path-encoded segments verbatim. The
+  /// server returns 404 when no file matches any of the
+  /// `path.md` / `path.txt` / `path` probes, so the client treats a
+  /// missing resolve as "broken link" rather than an error.
+  /// `kind` distinguishes contact-kind notes from generic docs so
+  /// the editor can stamp `data-refkind` and render a kind-aware
+  /// pill without re-parsing the target's frontmatter.
+  resolveLink: (target: string) =>
+    req<{ path: string; anchor?: string; kind: "file" | "contact" }>(
+      "GET",
+      `/api/resolve-link?target=${encodeURIComponent(target)}`,
+    ),
   indexStatus: () => req<IndexStatus>("GET", "/api/index/status"),
   /// Wipe and rebuild the search index from scratch. Returns when
   /// the rebuild has been kicked off; status moves through
