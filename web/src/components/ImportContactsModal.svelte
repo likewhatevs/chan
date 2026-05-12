@@ -11,7 +11,7 @@
   // component is just the step machine + the visuals.
 
   import { api } from "../api/client";
-  import { tree, refreshTree } from "../state/store.svelte";
+  import { tree, refreshTree, importStatus } from "../state/store.svelte";
 
   type Provider = { id: "google"; label: string; instructions: string };
   type Outcome = Awaited<ReturnType<typeof api.importContacts>>;
@@ -104,6 +104,11 @@
     }
     busy = true;
     error = null;
+    // Publish to the global status bar so the bottom-left pill
+    // reflects that an import is running even if the user steps
+    // away from this modal. Detail (counts, errors) stays here on
+    // the modal's "done" step.
+    importStatus.value = { label: `importing contacts from ${provider.label}…` };
     try {
       const r = await api.importContacts(file, destDir, {
         provider: provider.id,
@@ -120,6 +125,7 @@
       error = e instanceof Error ? e.message : String(e);
     } finally {
       busy = false;
+      importStatus.value = null;
     }
   }
 

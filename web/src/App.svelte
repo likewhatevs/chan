@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
+  import AppStatusBar from "./components/AppStatusBar.svelte";
   import BottomPill from "./components/BottomPill.svelte";
   import ConfirmModal from "./components/ConfirmModal.svelte";
   import ConflictModal from "./components/ConflictModal.svelte";
@@ -34,7 +35,6 @@
     settingsOverlay,
     syncOverlayStack,
     topOverlay,
-    ui,
     watchSystemTheme,
   } from "./state/store.svelte";
   import {
@@ -332,15 +332,17 @@
 <div class="app">
   <main>
     <Workspace />
-    {#if ui.status}
-      <div class="status">{ui.status}</div>
-    {/if}
   </main>
 </div>
 <!-- Floating navigation pill: every overlay (files / search /
      graph / settings / assistant) is reachable from anywhere in
      the workspace. -->
 <BottomPill />
+<!-- Bottom-left ambient status bar: indexer state, import
+     progress, transient ui.status messages. Window-level and
+     lifted above every overlay so users keep visibility on
+     long-running work no matter which panel they're in. -->
+<AppStatusBar />
 <!-- Window-level overlays. Mounted once. -->
 <PromptModal />
 <PathPromptModal />
@@ -497,14 +499,5 @@
     min-width: 0;
     min-height: 0;
     position: relative;
-  }
-  .status {
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    background: var(--bg-card);
-    color: var(--warn-text);
-    padding: .25rem .5rem;
-    font-size: 14px;
-    border-top: 1px solid var(--border);
   }
 </style>

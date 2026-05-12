@@ -654,6 +654,21 @@ export const indexStatus = $state<{ value: IndexStatus | null }>({
   value: null,
 });
 
+/// Long-running import progress surfaced in the bottom-left status
+/// bar. Set by import wizards (currently just `ImportContactsModal`)
+/// while a blocking request is in flight; cleared on completion.
+/// Detail (counts, errors) stays in the modal's "done" step; the
+/// bar's job is to be the always-visible ambient signal that
+/// something is happening, even after the user has dismissed the
+/// modal or moved to another overlay.
+///
+/// Same pattern is intended to host search-indexing progress and
+/// assistant-thinking signals once those surfaces want a global
+/// "in-flight" pill (today they live in their own panels).
+export const importStatus = $state<{ value: { label: string } | null }>({
+  value: null,
+});
+
 /// Open/closed state of the content-search command palette
 /// (`SearchPanel.svelte`). Toggled by Cmd/Ctrl+K and by the
 /// search button in the toolbar.
