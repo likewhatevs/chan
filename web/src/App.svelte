@@ -39,10 +39,13 @@
     watchSystemTheme,
   } from "./state/store.svelte";
   import {
+    activeFileTab,
     activePane,
+    closeFind,
     closeTab,
     isWindowFullyReadOnly,
     layout,
+    openFind,
     openInActivePane,
     saveTab,
     scheduleAutosave,
@@ -389,6 +392,39 @@
         const p = activePane();
         const t = p.tabs.find((x) => x.id === p.activeTabId);
         if (t) void saveTab(t);
+        return;
+      }
+      case "app.file.new":
+        void fileOps.createFile("");
+        return;
+      case "app.find.open": {
+        const t = activeFileTab();
+        if (!t) return;
+        openFind(t.id);
+        return;
+      }
+      case "app.find.next": {
+        const t = activeFileTab();
+        if (!t?.find?.open) return;
+        const n = t.find.matches.length;
+        if (n === 0) return;
+        const cur = t.find.currentIndex < 0 ? 0 : t.find.currentIndex;
+        t.find.currentIndex = (cur + 1) % n;
+        return;
+      }
+      case "app.find.prev": {
+        const t = activeFileTab();
+        if (!t?.find?.open) return;
+        const n = t.find.matches.length;
+        if (n === 0) return;
+        const cur = t.find.currentIndex < 0 ? 0 : t.find.currentIndex;
+        t.find.currentIndex = (cur - 1 + n) % n;
+        return;
+      }
+      case "app.find.close": {
+        const t = activeFileTab();
+        if (!t) return;
+        closeFind(t.id);
         return;
       }
     }

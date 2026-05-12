@@ -54,9 +54,21 @@
   } from "./extensions/contactPicker";
   import { type BubbleHandle } from "./bubble";
   import { CodeBlockFenced } from "./extensions/codeBlockFenced";
+  import {
+    createFindHighlightExtension,
+    findPluginKey,
+    SET_FIND_RANGES_META,
+    type SetFindRangesPayload,
+  } from "./extensions/findHighlight";
   import { FoldHeadingExtension } from "./extensions/foldHeading";
   import { LiveSourceExtension } from "./extensions/liveSource";
   import { createTagDecorationExtension } from "./extensions/tagDecoration";
+  import {
+    scanMatches,
+    type FindAdapter,
+    type FindOptions,
+    type FindRange,
+  } from "./find";
   import { openGraphAtNode } from "../state/store.svelte";
   import { openImageZoom } from "../state/imageZoom";
   import { api } from "../api/client";
@@ -383,6 +395,76 @@
     return editor?.isActive(name) ?? false;
   }
 
+  // ---- find-on-page adapter --------------------------------------------
+  // The FindBar (mounted by FileEditorTab) talks to whichever editor
+  // mode is active through this FindAdapter shape. The scanning is
+  // pure (find.ts); the rest dispatch decorations + scroll on the
+  // underlying ProseMirror view.
+
+  /// Walk every text node in the doc, run the shared matcher on
+  /// each node's text, and offset the resulting ranges by the
+  /// node's start position so they land in PM document coordinates.
+  /// Cross-node matches are intentionally skipped: a find query
+  /// is a single string, but headings, lists, and paragraphs each
+  /// produce separate text leaves and a search shouldn't bleed
+  /// across that structure.
+  function scanFind(query: string, opts: FindOptions): FindRange[] {
+    if (!editor) return [];
+    if (!query) return [];
+    const out: FindRange[] = [];
+    editor.state.doc.descendants((node, pos) => {
+      if (!node.isText || !node.text) return true;
+      const hits = scanMatches(node.text, query, opts);
+      for (const h of hits) {
+        out.push({ from: pos + h.from, to: pos + h.to });
+      }
+      return true;
+    });
+    return out;
+  }
+
+  function dispatchFindMeta(
+    payload: SetFindRangesPayload,
+  ): void {
+    if (!editor) return;
+    const tr = editor.state.tr.setMeta(SET_FIND_RANGES_META, payload);
+    editor.view.dispatch(tr);
+  }
+
+  /// Public adapter object. Returned by reference; FindBar holds
+  /// onto it for the lifetime of the bar's mount. Methods are
+  /// safe to call before / after the editor is destroyed (they
+  /// no-op when editor is undefined).
+  export const findAdapter: FindAdapter = {
+    scan(query: string, opts: FindOptions): FindRange[] {
+      return scanFind(query, opts);
+    },
+    highlightAll(matches: FindRange[], currentIndex: number): void {
+      dispatchFindMeta({ ranges: matches, currentIndex });
+    },
+    clearHighlights(): void {
+      dispatchFindMeta({ ranges: [], currentIndex: -1 });
+    },
+    scrollIntoView(currentIndex: number): void {
+      if (!editor) return;
+      const st = findPluginKey.getState(editor.state);
+      if (!st) return;
+      const r = st.ranges[currentIndex];
+      if (!r) return;
+      // Walk the DOM at the match start and scroll its enclosing
+      // element into view. We deliberately avoid changing the
+      // selection: the user is searching, not editing, and moving
+      // the caret would scroll the doc twice (once for selection,
+      // once for our scrollIntoView).
+      const dom = editor.view.domAtPos(r.from);
+      const el = (dom.node.nodeType === Node.ELEMENT_NODE
+        ? (dom.node as HTMLElement)
+        : dom.node.parentElement) as HTMLElement | null;
+      if (!el) return;
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    },
+  };
+
   /// Identify the block at the cursor for the heading dropdown's
   /// current value. Falls back to "normal" when no block-level node
   /// matches (covers list items, doc root, etc.).
@@ -487,6 +569,11 @@
         createTagDecorationExtension({
           onTagClick: (name) => openGraphAtNode(`#${name}`),
         }),
+        // Find-on-page highlight layer. The FindBar drives it
+        // through the imperative `findAdapter` exposed on this
+        // component; the plugin itself only renders DecorationSet
+        // state and maps ranges through unrelated edits.
+        createFindHighlightExtension(),
       ],
       content: value,
       // Cmd/Ctrl+Enter -> parent's onSubmit (assistant prompt
@@ -2747,6 +2834,15 @@
   /// atom carrying the new attrs.
   function enterImageEditAt(pos: number, atomNode: { attrs: Record<string, unknown>; nodeSize: number }): void {
     if (!editor) return;
+    // Tear down the click-overlay first. The overlay is positioned
+    // against the image's DOM node; once we swap the atom for source
+    // text the node detaches and any subsequent reposition lands at
+    // (0, 0) of the viewport — but the overlay can also persist at
+    // its last position if no reposition fires. Entries that don't
+    // route through the overlay's own Edit button (arrow-key entry,
+    // selection-driven re-open) skip the button's dismiss, so do it
+    // here unconditionally.
+    dismissImageOverlay();
     // Re-entry guard: while an edit is already in flight, a
     // follow-up selection update (focus, bubble open, etc.)
     // can land on the inserted text or trigger maybeOpen again
@@ -3864,6 +3960,21 @@
   }
   :global(.md-wysiwyg .md-tag-pill:hover) {
     filter: brightness(1.1);
+  }
+
+  /* Find-on-page match highlight. Painted by the findHighlight
+     ProseMirror plugin via inline decoration. Two flavors: every
+     match gets the soft yellow background; the active match (the
+     one prev/next is parked on) gets the orange ring so users can
+     scan to it at a glance. Theme variables keep both shades
+     legible in light + dark modes. */
+  :global(.md-wysiwyg .find-match) {
+    background: var(--find-match-bg, rgba(255, 213, 0, 0.45));
+    border-radius: 2px;
+  }
+  :global(.md-wysiwyg .find-match--current) {
+    background: var(--find-match-current-bg, rgba(255, 140, 0, 0.65));
+    outline: 1px solid var(--find-match-current-border, rgba(180, 80, 0, 0.9));
   }
 
   /* Tag autocomplete bubble. Same anchored-under-caret pattern as

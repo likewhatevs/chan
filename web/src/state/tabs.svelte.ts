@@ -13,6 +13,7 @@
 
 import { api } from "../api/client";
 import { ApiError } from "../api/errors";
+import type { FindRange } from "../editor/find";
 import { isEditableText } from "./fileTypes";
 import { notify } from "./notify.svelte";
 
@@ -22,6 +23,36 @@ function id(prefix: string): string {
 }
 
 export type Mode = "wysiwyg" | "source";
+
+/// Per-tab find-on-page state. Lives only while the bar is open
+/// (cleared on close); intentionally not serialized through
+/// SerTab so a session restore doesn't re-open the bar with a
+/// stale query.
+export type FindState = {
+  open: boolean;
+  query: string;
+  caseSensitive: boolean;
+  matches: FindRange[];
+  /// -1 when there are no matches; otherwise an index into
+  /// `matches`. The active match gets the .find-match--current
+  /// decoration; prev/next rotate this index modulo `matches.length`.
+  currentIndex: number;
+  /// True iff `matches.length` hit MAX_FIND_MATCHES on the last
+  /// scan. The counter reads "10000+" instead of "N of M" when
+  /// this is set so users know they're seeing a truncated count.
+  truncated: boolean;
+};
+
+export function makeFindState(): FindState {
+  return {
+    open: false,
+    query: "",
+    caseSensitive: false,
+    matches: [],
+    currentIndex: -1,
+    truncated: false,
+  };
+}
 
 /// File-content tab: holds the editable buffer for a markdown file.
 /// File tabs are the only tab kind today; every other surface
@@ -74,6 +105,12 @@ export type FileTab = {
   /// Per-tab so a "reading" tab can keep the chrome hidden while an
   /// adjacent editing tab shows it.
   styleToolbarOpen: boolean;
+  /// Per-tab find-on-page state. Undefined until the first
+  /// app.find.open command lands on the tab so tabs that never
+  /// use Find stay free of the extra object. Persists across the
+  /// Wysiwyg <-> Source mode toggle (same backing text); cleared
+  /// on tab close along with the tab itself.
+  find?: FindState;
 };
 
 export type Tab = FileTab;
@@ -146,6 +183,43 @@ function pane(id: string): LeafNode {
 
 export function activePane(): LeafNode {
   return pane(layout.activePaneId);
+}
+
+/// Ensure the named tab has a FindState attached and open it.
+/// Called by the chan:command "app.find.open" handler. Idempotent:
+/// reopening a bar that's already open just refocuses the input
+/// (FindBar's mount effect handles that side).
+export function openFind(tabId: string): void {
+  const found = findFileTabById(tabId);
+  if (!found) return;
+  if (!found.tab.find) found.tab.find = makeFindState();
+  found.tab.find.open = true;
+}
+
+/// Close the find bar for the named tab. Leaves the query string
+/// in place so reopening picks up where the user left off; the
+/// matches array is cleared (FindBar's onDestroy already clears
+/// the editor decorations).
+export function closeFind(tabId: string): void {
+  const found = findFileTabById(tabId);
+  if (!found || !found.tab.find) return;
+  found.tab.find.open = false;
+  found.tab.find.matches = [];
+  found.tab.find.currentIndex = -1;
+  found.tab.find.truncated = false;
+}
+
+/// Active file tab of the focused pane, or null if the pane is
+/// empty / its active tab isn't a file tab. Used by the host-
+/// driven command bridge (App.svelte runCommand) so app.find.*
+/// can target whichever tab the user is currently looking at
+/// without each call site re-deriving the lookup.
+export function activeFileTab(): FileTab | null {
+  const p = activePane();
+  if (!p.activeTabId) return null;
+  const t = p.tabs.find((tab) => tab.id === p.activeTabId);
+  if (!t || t.kind !== "file") return null;
+  return t;
 }
 
 /// Fetch a file tab's content from disk and write it into the
@@ -332,6 +406,9 @@ function cloneTab(src: Tab): Tab {
     readMode: src.readMode,
     fsWritable: src.fsWritable,
     styleToolbarOpen: src.styleToolbarOpen,
+    // Find state is per-tab UI state; drop it when the tab moves
+    // panes so the destination opens fresh without a half-mounted
+    // bar pointing at a now-defunct adapter.
   };
 }
 

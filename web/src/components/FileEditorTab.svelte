@@ -11,6 +11,7 @@
 
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import Source from "../editor/Source.svelte";
+  import FindBar from "./FindBar.svelte";
   import Inspector from "./Inspector.svelte";
   import OutlineBody, { type Heading } from "./OutlineBody.svelte";
   import FileInfoBody from "./FileInfoBody.svelte";
@@ -67,6 +68,15 @@
     if (tab.mode === "wysiwyg") wysiwygRef?.scrollToHeading(h.index);
     else sourceRef?.scrollToLine(h.line);
   }
+
+  // Find-on-page adapter for whichever editor is mounted. Both
+  // editors expose `findAdapter` (see editor/find.ts FindAdapter)
+  // with the same shape; FindBar.svelte drives it. We re-derive
+  // on mode flip so a Wysiwyg <-> Source toggle while the bar is
+  // open re-paints highlights against the new view.
+  const findAdapter = $derived(
+    tab.mode === "wysiwyg" ? wysiwygRef?.findAdapter : sourceRef?.findAdapter,
+  );
 
   /// Reveal the open file in the File Browser overlay. Expand every
   /// ancestor folder so the row is visible, set the browser
@@ -244,7 +254,9 @@
              host so the toolbar can pin to the top-left of the
              editor canvas. Without `position: relative` here the
              absolute toolbar would escape to the next ancestor
-             (the pane) and end up over the tab strip. -->
+             (the pane) and end up over the tab strip. The find
+             bar shares the same host so it can pin to the
+             top-right of the same canvas. -->
         <div class="editor-host">
           <Wysiwyg
             bind:this={wysiwygRef}
@@ -261,9 +273,30 @@
               disabled={readOnly}
             />
           {/if}
+          {#if tab.find?.open}
+            <FindBar
+              find={tab.find}
+              adapter={findAdapter}
+              docText={tab.content}
+              tabId={tab.id}
+            />
+          {/if}
         </div>
       {:else}
-        <Source bind:this={sourceRef} bind:value={tab.content} />
+        <!-- Source mode gets its own positioned host so FindBar
+             can pin to the same top-right spot it occupies in the
+             Wysiwyg view. -->
+        <div class="editor-host">
+          <Source bind:this={sourceRef} bind:value={tab.content} />
+          {#if tab.find?.open}
+            <FindBar
+              find={tab.find}
+              adapter={findAdapter}
+              docText={tab.content}
+              tabId={tab.id}
+            />
+          {/if}
+        </div>
       {/if}
       {#if tab.inspectorOpen}
         <Inspector

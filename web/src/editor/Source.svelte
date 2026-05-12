@@ -6,13 +6,31 @@
   // reconfigure on toggle without rebuilding the editor.
 
   import { onDestroy, onMount } from "svelte";
-  import { Compartment, EditorState } from "@codemirror/state";
-  import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+  import {
+    Compartment,
+    EditorState,
+    RangeSetBuilder,
+    StateEffect,
+    StateField,
+  } from "@codemirror/state";
+  import {
+    Decoration,
+    type DecorationSet,
+    EditorView,
+    keymap,
+    lineNumbers,
+  } from "@codemirror/view";
   import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
   import { markdown } from "@codemirror/lang-markdown";
   import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
   import { oneDark } from "@codemirror/theme-one-dark";
   import { drive, ui } from "../state/store.svelte";
+  import {
+    scanMatches,
+    type FindAdapter,
+    type FindOptions,
+    type FindRange,
+  } from "./find";
 
   // Editor density follows the user's line_spacing pref. Same hook
   // the Wysiwyg side uses (see Wysiwyg.svelte:820), exposed here as
@@ -27,6 +45,115 @@
   let view: EditorView | undefined;
   let applyingExternal = false;
   const themeCompartment = new Compartment();
+
+  // ---- find-on-page state field ----------------------------------------
+  // Source-side mirror of the Wysiwyg findHighlight plugin. The
+  // FindBar dispatches setFindEffect with the latest ranges + the
+  // active index; the StateField turns those into a Decoration.mark
+  // set so CodeMirror paints `.find-match` / `.find-match--current`
+  // identical to the WYSIWYG view.
+
+  type FindFieldState = {
+    ranges: FindRange[];
+    currentIndex: number;
+    decos: DecorationSet;
+  };
+
+  const setFindEffect = StateEffect.define<{
+    ranges: FindRange[];
+    currentIndex: number;
+  }>();
+
+  const findMarkMatch = Decoration.mark({ class: "find-match" });
+  const findMarkCurrent = Decoration.mark({
+    class: "find-match find-match--current",
+  });
+
+  function buildFindDecos(
+    ranges: FindRange[],
+    currentIndex: number,
+    docLen: number,
+  ): DecorationSet {
+    if (ranges.length === 0) return Decoration.none;
+    const b = new RangeSetBuilder<Decoration>();
+    for (let i = 0; i < ranges.length; i++) {
+      const r = ranges[i]!;
+      if (r.from >= r.to) continue;
+      if (r.from < 0 || r.to > docLen) continue;
+      b.add(r.from, r.to, i === currentIndex ? findMarkCurrent : findMarkMatch);
+    }
+    return b.finish();
+  }
+
+  const findField = StateField.define<FindFieldState>({
+    create(): FindFieldState {
+      return { ranges: [], currentIndex: -1, decos: Decoration.none };
+    },
+    update(prev, tr): FindFieldState {
+      let ranges = prev.ranges;
+      let currentIndex = prev.currentIndex;
+      let dirty = false;
+      for (const e of tr.effects) {
+        if (e.is(setFindEffect)) {
+          ranges = e.value.ranges;
+          currentIndex = e.value.currentIndex;
+          dirty = true;
+        }
+      }
+      if (!dirty && !tr.docChanged) return prev;
+      if (tr.docChanged && !dirty) {
+        // Map existing ranges through the edit so highlights track
+        // local insertions without a synchronous rescan. The
+        // FindBar's debounced rescan replaces them shortly after.
+        const mapped: FindRange[] = [];
+        for (const r of ranges) {
+          const from = tr.changes.mapPos(r.from, 1);
+          const to = tr.changes.mapPos(r.to, -1);
+          if (to > from) mapped.push({ from, to });
+        }
+        ranges = mapped;
+      }
+      return {
+        ranges,
+        currentIndex,
+        decos: buildFindDecos(ranges, currentIndex, tr.state.doc.length),
+      };
+    },
+    provide: (f) => EditorView.decorations.from(f, (s) => s.decos),
+  });
+
+  /// Find-on-page adapter. FileEditorTab passes whichever editor
+  /// is currently visible to FindBar; the bar drives matches +
+  /// decorations through this surface (mirror of the Wysiwyg
+  /// adapter).
+  export const findAdapter: FindAdapter = {
+    scan(query: string, opts: FindOptions): FindRange[] {
+      if (!view) return [];
+      return scanMatches(view.state.doc.toString(), query, opts);
+    },
+    highlightAll(matches: FindRange[], currentIndex: number): void {
+      if (!view) return;
+      view.dispatch({
+        effects: setFindEffect.of({ ranges: matches, currentIndex }),
+      });
+    },
+    clearHighlights(): void {
+      if (!view) return;
+      view.dispatch({
+        effects: setFindEffect.of({ ranges: [], currentIndex: -1 }),
+      });
+    },
+    scrollIntoView(currentIndex: number): void {
+      if (!view) return;
+      const f = view.state.field(findField, false);
+      if (!f) return;
+      const r = f.ranges[currentIndex];
+      if (!r) return;
+      view.dispatch({
+        effects: EditorView.scrollIntoView(r.from, { y: "center" }),
+      });
+    },
+  };
 
   /// Scroll to a specific line (0-based). Called by the inspector
   /// (outline view) when the user picks a heading and this tab is
@@ -79,6 +206,7 @@
         markdown(),
         themeCompartment.of(themeExtensions(ui.theme)),
         EditorView.lineWrapping,
+        findField,
         EditorView.updateListener.of((u) => {
           if (applyingExternal) return;
           if (u.docChanged) value = u.state.doc.toString();
@@ -177,4 +305,18 @@
      bumps to 1.7 to match the WYSIWYG's normal-mode feel. */
   :global(.md-source[data-density="tight"] .cm-line) { line-height: 1.4; }
   :global(.md-source[data-density="standard"] .cm-line) { line-height: 1.7; }
+
+  /* Find-on-page highlight (mirror of the Wysiwyg rule). The
+     CodeMirror Decoration.mark wraps each match in a <span> with
+     these classes; the active match also picks up the orange ring.
+     Same CSS variables as the WYSIWYG side so both modes look the
+     same across a Wysiwyg <-> Source toggle. */
+  :global(.md-source .find-match) {
+    background: var(--find-match-bg, rgba(255, 213, 0, 0.45));
+    border-radius: 2px;
+  }
+  :global(.md-source .find-match--current) {
+    background: var(--find-match-current-bg, rgba(255, 140, 0, 0.65));
+    outline: 1px solid var(--find-match-current-border, rgba(180, 80, 0, 0.9));
+  }
 </style>
