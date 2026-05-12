@@ -3790,10 +3790,10 @@
        to the same 1rem baseline used everywhere else. */
     padding: var(--editor-top-pad, 1rem) 1.25rem 8rem;
     transition: padding-top 180ms ease;
-    line-height: 1.6;
+    line-height: 1.5;
     /* Body text uses the drive's "normal" font preference. */
     font-family: var(--chan-font-normal-family);
-    font-size: var(--chan-font-normal-size, 15px);
+    font-size: var(--chan-font-normal-size, 16px);
     color: var(--text);
     background: var(--bg);
     overflow-y: auto;
@@ -3821,37 +3821,31 @@
   :global(.md-wysiwyg h1),
   :global(.md-wysiwyg p[data-expanded-heading-level="1"]) {
     font-family: var(--chan-font-heading1-family);
-    font-size: var(--chan-font-heading1-size, 28px);
-    font-weight: bold;
+    font-size: var(--chan-font-heading1-size, 32px);
+    font-weight: 600;
   }
   :global(.md-wysiwyg h2),
   :global(.md-wysiwyg p[data-expanded-heading-level="2"]) {
     font-family: var(--chan-font-heading2-family);
-    font-size: var(--chan-font-heading2-size, 22px);
-    font-weight: bold;
+    font-size: var(--chan-font-heading2-size, 24px);
+    font-weight: 600;
   }
   :global(.md-wysiwyg h3),
   :global(.md-wysiwyg p[data-expanded-heading-level="3"]) {
     font-family: var(--chan-font-heading3-family);
-    font-size: var(--chan-font-heading3-size, 18px);
-    font-weight: bold;
+    font-size: var(--chan-font-heading3-size, 20px);
+    font-weight: 600;
   }
-  /* Heading default margins from the UA stylesheet (the `0.67em` /
-     `0.83em` / `1em` block margins on `h1..h3`) don't carry over to
-     paragraphs, which is the other half of the "doc shifts on
-     arrow into a heading" feeling. Pin the same margins onto the
-     expanded paragraph so the line stays where the heading was. */
-  :global(.md-wysiwyg p[data-expanded-heading-level="1"]) {
-    margin-block-start: 0.67em;
-    margin-block-end: 0.67em;
-  }
-  :global(.md-wysiwyg p[data-expanded-heading-level="2"]) {
-    margin-block-start: 0.83em;
-    margin-block-end: 0.83em;
-  }
-  :global(.md-wysiwyg p[data-expanded-heading-level="3"]) {
-    margin-block-start: 1em;
-    margin-block-end: 1em;
+  /* GitHub-style heading rhythm: shared 24px-top / 16px-bottom
+     margins + tight line-height across h1..h6 (and the expanded
+     paragraph twins so an arrow into a heading doesn't visually
+     shift the line). Replaces the UA stylesheet's per-level
+     em-based margins. */
+  :global(.md-wysiwyg :is(h1, h2, h3, h4, h5, h6)),
+  :global(.md-wysiwyg p[data-expanded-heading-level]) {
+    margin-block-start: 24px;
+    margin-block-end: 16px;
+    line-height: 1.25;
   }
   /* Headings anchor the fold chevron (absolute-positioned into the
      left gutter). Without `position: relative` the chevron would
@@ -3981,7 +3975,9 @@
   :global(.md-wysiwyg[data-density="standard"] ul),
   :global(.md-wysiwyg[data-density="standard"] ol) {
     margin: 0.5em 0;
-    padding-left: 1.5em;
+    /* GitHub markdown uses padding-left: 2em for top-level lists.
+       Tight density (kept at 1.5em above) stays compact. */
+    padding-left: 2em;
   }
   :global(.md-wysiwyg[data-density="standard"] li) { margin: 0; }
   :global(.md-wysiwyg[data-density="standard"] li > p:not([data-expanded-heading-level])) { margin: 0; }
@@ -4028,14 +4024,15 @@
      `> ` at the start of a line (StarterKit's default input rule). */
   :global(.md-wysiwyg blockquote) {
     position: relative;
-    border-left: 3px solid var(--border);
-    padding: 0.4rem 0.75rem 0.4rem 0.9rem;
+    /* GitHub markdown: 0.25em solid grey left rail, no card bg, no
+       radius. The Quote badge below stays (it auto-hides on caret-
+       in via [data-cursor-in]). */
+    border-left: 0.25em solid var(--border);
+    padding: 0 1em;
     color: var(--text-secondary);
-    margin: 0.5em 0;
-    background: var(--bg-card);
-    border-radius: 4px;
+    margin: 0 0 16px 0;
     font-family: var(--chan-font-quote-family);
-    font-size: var(--chan-font-quote-size, 15px);
+    font-size: var(--chan-font-quote-size, 16px);
   }
   :global(.md-wysiwyg blockquote)::before {
     content: "Quote";
@@ -4065,9 +4062,8 @@
   }
   :global(.md-wysiwyg pre) {
     background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    padding: 16px;
     overflow-x: auto;
   }
   /* Horizontal rule: rendered as a 2px line by default; the liveSource
@@ -4076,13 +4072,16 @@
      collapses and a sibling `.md-hr-source` widget shows the literal
      `---` markdown so the user sees they can edit / delete it. */
   :global(.md-wysiwyg hr) {
+    /* GitHub markdown: 0.25em-tall filled bar rather than a 1-2px
+       hairline. Use --border so the bar follows the active palette. */
     border: 0;
-    border-top: 2px solid var(--border);
-    margin: 1em 0;
+    height: 0.25em;
+    background: var(--border);
+    margin: 24px 0;
     cursor: pointer;
   }
   :global(.md-wysiwyg hr[data-cursor-in]) {
-    border-top: 0;
+    background: transparent;
     margin: 0;
     height: 0;
   }
@@ -4100,8 +4099,22 @@
   }
   :global(.md-wysiwyg code) {
     background: var(--code-bg);
-    padding: 0 0.25rem;
-    border-radius: 3px;
+    padding: 0.2em 0.4em;
+    border-radius: 6px;
+    /* GitHub markdown: inline code rendered slightly smaller than
+       body text. Sits on top of the explicit --chan-font-code-size
+       above; the percentage compounds because we want the chip to
+       read as a callout, not a body word. */
+    font-size: 85%;
+  }
+  /* Inside a <pre>, the wrapping <code> is the full block — drop
+     the inline chip background/padding so the codeblock owns the
+     surface (background + padding live on <pre>). */
+  :global(.md-wysiwyg pre code) {
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+    font-size: 100%;
   }
 
   /* Floating popovers (calendar, file picker) live at document.body, so

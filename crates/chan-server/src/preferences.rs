@@ -88,19 +88,19 @@ impl Default for FontPrefs {
         Self {
             heading1: FontSpec {
                 family: body.into(),
-                size: 28,
+                size: 32,
             },
             heading2: FontSpec {
                 family: body.into(),
-                size: 22,
+                size: 24,
             },
             heading3: FontSpec {
                 family: body.into(),
-                size: 18,
+                size: 20,
             },
             normal: FontSpec {
                 family: body.into(),
-                size: 15,
+                size: 16,
             },
             code: FontSpec {
                 family: mono.into(),
@@ -108,7 +108,7 @@ impl Default for FontPrefs {
             },
             quote: FontSpec {
                 family: body.into(),
-                size: 15,
+                size: 16,
             },
         }
     }

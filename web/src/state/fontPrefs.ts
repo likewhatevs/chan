@@ -27,22 +27,22 @@ export const DEFAULT_FONT_PREFS: FontPrefs = {
   heading1: {
     family:
       "-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif",
-    size: 28,
+    size: 32,
   },
   heading2: {
     family:
       "-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif",
-    size: 22,
+    size: 24,
   },
   heading3: {
     family:
       "-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif",
-    size: 18,
+    size: 20,
   },
   normal: {
     family:
       "-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif",
-    size: 15,
+    size: 16,
   },
   code: {
     family: "ui-monospace, SFMono-Regular, monospace",
@@ -51,6 +51,6 @@ export const DEFAULT_FONT_PREFS: FontPrefs = {
   quote: {
     family:
       "-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif",
-    size: 15,
+    size: 16,
   },
 };
