@@ -1362,6 +1362,35 @@ export function resolvePathPrompt(value: string | null): void {
 // inline. We re-import above; the call below is now a defensive
 // idempotent layer (the modal already resolved the extension).
 
+/// Perform a move from `path` -> `target`. Shared by rename (CLI-style
+/// prompt) and drag-and-drop. No-ops if source == target. Prompts for
+/// overwrite confirmation if target already exists. Refreshes the tree
+/// and re-keys conversations + open tabs so in-memory state follows the
+/// rename without a refetch round-trip.
+async function performMove(path: string, target: string): Promise<void> {
+  if (target === path) return;
+  const existing = tree.entries.find((e) => e.path === target);
+  if (existing) {
+    const what = existing.is_dir ? "folder" : "file";
+    const confirmed = await uiConfirm({
+      title: `Overwrite existing ${what}?`,
+      message: `'${target}' already exists. The current ${what} will be replaced.`,
+      confirmLabel: "Overwrite",
+      destructive: true,
+    });
+    if (!confirmed) return;
+  }
+  try {
+    await api.move(path, target);
+    await refreshTree();
+    rekeyConversationsForRename(path, target);
+    rekeyTabsForRename(path, target);
+    revealAndSelect(target);
+  } catch (e) {
+    ui.status = `rename failed: ${(e as Error).message}`;
+  }
+}
+
 export const fileOps = {
   async createFile(parentPath: string): Promise<void> {
     // Pre-populate the input with the parent prefix so the user
@@ -1463,42 +1492,13 @@ export const fileOps = {
     });
     if (!next || next === path) return;
     const target = isDir ? next : preserveExtension(path, next);
-    if (target === path) return;
-    const existing = tree.entries.find((e) => e.path === target);
-    if (existing) {
-      const what = existing.is_dir ? "folder" : "file";
-      const confirmed = await uiConfirm({
-        title: `Overwrite existing ${what}?`,
-        message: `'${target}' already exists. The current ${what} will be replaced.`,
-        confirmLabel: "Overwrite",
-        destructive: true,
-      });
-      if (!confirmed) return;
-    }
-    try {
-      await api.move(path, target);
-      await refreshTree();
-      // Re-key in-memory assistant conversations so the chat
-      // history follows the file. The server already renamed the
-      // on-disk JSON in the same /api/move call; this keeps the
-      // in-memory map in sync without a refetch round-trip.
-      // Handles both single-file renames (exact key match) and
-      // directory renames (every key under `path/`).
-      rekeyConversationsForRename(path, target);
-      // Same idea for any open editor tab(s) pointing at the
-      // renamed file: rewrite the path in place so the buffer,
-      // cursor, and dirty state survive the rename. Without this
-      // the user would see a stale tab labelled with the old name
-      // that 404s on the next save.
-      rekeyTabsForRename(path, target);
-      // Land the user on the renamed entry in the browser tree so
-      // they don't lose track of it (especially for moves that hop
-      // into a different folder). Same helper the create paths use;
-      // expands every ancestor along the way.
-      revealAndSelect(target);
-    } catch (e) {
-      ui.status = `rename failed: ${(e as Error).message}`;
-    }
+    await performMove(path, target);
+  },
+  /// Move a file or directory to a new path without prompting. Used
+  /// by drag-and-drop in the file browser. Same overwrite-confirm and
+  /// post-move bookkeeping as rename.
+  async moveTo(from: string, to: string): Promise<void> {
+    await performMove(from, to);
   },
   /// Delete a file (or directory) from the drive.
   ///
@@ -1507,10 +1507,31 @@ export const fileOps = {
   /// assistant conversation so .chan/assistant/ doesn't accumulate
   /// orphan blobs.
   ///
-  /// We deliberately don't confirm: the disk write is irreversible
-  /// either way and Chrome/Safari throttle repeated confirm()
-  /// dialogs.
-  async remove(path: string): Promise<void> {
+  /// Prompts via uiConfirm with destructive styling. For directories
+  /// the message includes the descendant count so the user sees the
+  /// blast radius before confirming.
+  async remove(path: string, isDir = false): Promise<void> {
+    const name = path.split("/").pop() ?? path;
+    let message: string;
+    if (isDir) {
+      const prefix = `${path}/`;
+      const descendants = tree.entries.filter((e) =>
+        e.path.startsWith(prefix),
+      ).length;
+      message =
+        descendants === 0
+          ? `Delete folder "${name}"?`
+          : `Delete folder "${name}" and its ${descendants} item${descendants === 1 ? "" : "s"}?`;
+    } else {
+      message = `Delete "${name}"?`;
+    }
+    const ok = await uiConfirm({
+      title: "Delete",
+      message,
+      confirmLabel: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await api.remove(path);
       await Promise.all([refreshTree(), refreshDrive()]);

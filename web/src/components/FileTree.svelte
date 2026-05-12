@@ -19,18 +19,98 @@
 
   // Mime type recognized by Pane.onDrop. Keep in sync with Pane.svelte.
   const FILE_DRAG_MIME = "application/x-md-file";
+  // Mime type used for intra-tree moves. Separate from FILE_DRAG_MIME
+  // so Pane.onDrop (open-in-pane) does not pick up folder drags, and
+  // so tree drops only react to drags that originated in the tree.
+  const TREE_MOVE_MIME = "application/x-chan-tree-move";
 
   // Per-file unsaved-buffer indicator. Color comes from --info-text
   // in the global palette (see App.svelte).
   const editorDirty = $derived(dirtyPaths());
 
-  function onFileDragStart(e: DragEvent, path: string): void {
+  // Path of the row currently highlighted as a drop target during DnD.
+  // Empty string means the root <ul> (drop at drive root). null means
+  // no row is being hovered.
+  let dropTarget = $state<string | null>(null);
+
+  function onFileDragStart(e: DragEvent, path: string, isDir: boolean): void {
     if (!e.dataTransfer) return;
-    e.dataTransfer.effectAllowed = "copy";
-    e.dataTransfer.setData(FILE_DRAG_MIME, JSON.stringify({ path }));
+    e.dataTransfer.effectAllowed = isDir ? "move" : "copyMove";
+    const payload = JSON.stringify({ path, isDir });
+    e.dataTransfer.setData(TREE_MOVE_MIME, payload);
+    if (!isDir) {
+      // Files are also droppable into editor panes (open in tab).
+      // Folders are not, so they only carry the tree-move mime.
+      e.dataTransfer.setData(FILE_DRAG_MIME, JSON.stringify({ path }));
+    }
     // A plain-text fallback is friendly to other drop targets (e.g.
     // pasting the path into a code editor outside the app).
     e.dataTransfer.setData("text/plain", path);
+  }
+
+  /// Resolve the move source from a DragEvent. Returns null if the
+  /// drag did not originate in the tree (e.g. external file drop).
+  function readTreeDrag(e: DragEvent): { path: string; isDir: boolean } | null {
+    const raw = e.dataTransfer?.getData(TREE_MOVE_MIME);
+    if (!raw) return null;
+    try {
+      const v = JSON.parse(raw) as { path: string; isDir: boolean };
+      if (typeof v.path === "string") return v;
+    } catch {
+      // fall through
+    }
+    return null;
+  }
+
+  /// True when dropping `src` into `destDir` is a no-op or invalid:
+  /// same parent already, dropping a folder into itself or a
+  /// descendant, or dropping at the same location.
+  function isInvalidDrop(src: { path: string; isDir: boolean }, destDir: string): boolean {
+    if (src.path === destDir) return true;
+    if (src.isDir && (destDir === src.path || destDir.startsWith(`${src.path}/`))) {
+      return true;
+    }
+    const srcParent = src.path.includes("/")
+      ? src.path.slice(0, src.path.lastIndexOf("/"))
+      : "";
+    return srcParent === destDir;
+  }
+
+  /// Compute the target path for dropping `src` into `destDir`.
+  /// destDir == "" means the drive root.
+  function dropTargetPath(src: string, destDir: string): string {
+    const base = src.split("/").pop() ?? src;
+    return destDir === "" ? base : `${destDir}/${base}`;
+  }
+
+  function onRowDragOver(e: DragEvent, destDir: string): void {
+    // Only react if the drag contains our tree-move payload. We can't
+    // call getData() in dragover (only in drop), so probe types[] for
+    // the mime we set in dragstart.
+    if (!e.dataTransfer?.types.includes(TREE_MOVE_MIME)) return;
+    e.preventDefault();
+    // Stop the event from bubbling to the root <ul>'s ondragover,
+    // which would otherwise overwrite our selection with the root.
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "move";
+    dropTarget = destDir;
+  }
+
+  function onRowDragLeave(destDir: string): void {
+    // Clear only if we're leaving the row we currently highlight, so
+    // a child row's dragenter doesn't briefly unhighlight its parent.
+    if (dropTarget === destDir) dropTarget = null;
+  }
+
+  async function onRowDrop(e: DragEvent, destDir: string): Promise<void> {
+    dropTarget = null;
+    const src = readTreeDrag(e);
+    if (!src) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (isInvalidDrop(src, destDir)) return;
+    const target = dropTargetPath(src.path, destDir);
+    await fileOps.moveTo(src.path, target);
   }
 
   type Folder = {
@@ -199,8 +279,8 @@
     await fileOps.rename(path, isDir);
     menu = null;
   }
-  async function remove(path: string): Promise<void> {
-    await fileOps.remove(path);
+  async function remove(path: string, isDir: boolean): Promise<void> {
+    await fileOps.remove(path, isDir);
     menu = null;
   }
 
@@ -359,9 +439,16 @@
         e.preventDefault();
         moveToLast();
         break;
-      // Delete is intentionally NOT bound. Removing a file should
-      // require an explicit context-menu pick; a stray keystroke
-      // shouldn't be able to wipe the user's notes.
+      // Backspace (Mac "delete") and forward-Delete both trigger
+      // removal. The destructive uiConfirm in fileOps.remove is the
+      // safety gate; without it we'd want to keep this unbound.
+      case "Backspace":
+      case "Delete": {
+        if (!curRow) break;
+        e.preventDefault();
+        void remove(curRow.path, curRow.isDir);
+        break;
+      }
     }
   }
 
@@ -388,10 +475,14 @@
 
 <ul
   class="tree"
+  class:drop-root={dropTarget === ""}
   role="tree"
   tabindex="0"
   bind:this={treeRootEl}
   onkeydown={onTreeKeydown}
+  ondragover={(e) => onRowDragOver(e, "")}
+  ondragleave={() => onRowDragLeave("")}
+  ondrop={(e) => onRowDrop(e, "")}
 >
   {#each root.children as node (node.path)}
     {@render renderNode(node, 0)}
@@ -415,12 +506,18 @@
         class="row dir"
         class:selected={browserSelection.path === node.path}
         class:zebra={rowIndex % 2 === 1}
+        class:drop-target={dropTarget === node.path}
         style="padding-left: {depth * 12}px"
         oncontextmenu={(e) => showMenu(e, node.path, true)}
         role="treeitem"
         tabindex="-1"
         aria-expanded={!!expanded[node.path]}
         aria-selected={browserSelection.path === node.path}
+        draggable="true"
+        ondragstart={(e) => onFileDragStart(e, node.path, true)}
+        ondragover={(e) => onRowDragOver(e, node.path)}
+        ondragleave={() => onRowDragLeave(node.path)}
+        ondrop={(e) => onRowDrop(e, node.path)}
         use:trackRow={node.path}
       >
         <button class="twirl" onclick={() => toggle(node.path)}>
@@ -458,7 +555,7 @@
         tabindex="-1"
         aria-selected={browserSelection.path === node.path}
         draggable="true"
-        ondragstart={(e) => onFileDragStart(e, node.path)}
+        ondragstart={(e) => onFileDragStart(e, node.path, false)}
         title={editable ? undefined : "view-only (not an editable text file)"}
         use:trackRow={node.path}
       >
@@ -502,7 +599,7 @@
       </svg>
       <span>Rename / Move</span>
     </button>
-    <button class="danger" onclick={() => remove(menu!.path)}>
+    <button class="danger" onclick={() => remove(menu!.path, menu!.isDir)}>
       <svg viewBox="0 0 16 16" aria-hidden="true">
         <path d="M11 1.75V3h2.25a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1 0-1.5H5V1.75C5 .784 5.784 0 6.75 0h2.5C10.216 0 11 .784 11 1.75zM4.496 6.675l.66 6.6a.25.25 0 0 0 .249.225h5.19a.25.25 0 0 0 .249-.225l.66-6.6a.75.75 0 0 1 1.492.149l-.66 6.6A1.748 1.748 0 0 1 10.595 15h-5.19a1.75 1.75 0 0 1-1.741-1.575l-.66-6.6a.75.75 0 1 1 1.492-.15zM6.5 1.75v1.25h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25z" />
       </svg>
@@ -536,6 +633,19 @@
      stronger states override at the same specificity. */
   .row.zebra { background: var(--zebra-bg); }
   .row:hover { background: var(--hover-bg); }
+  /* Drop highlight during drag-and-drop move. Boxed outline + accent
+     tint so the user sees exactly which folder will receive the drop,
+     without disturbing the row height. */
+  .row.drop-target {
+    background: var(--accent-bg, var(--hover-bg));
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  /* Drop at drive root: outline the whole tree container so the
+     user can tell root-drop is a valid target even when the cursor
+     is over empty space below the last row. */
+  .tree.drop-root {
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
   .twirl {
     background: none;
     border: 0;
