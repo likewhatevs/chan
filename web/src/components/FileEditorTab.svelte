@@ -257,7 +257,10 @@
              (the pane) and end up over the tab strip. The find
              bar shares the same host so it can pin to the
              top-right of the same canvas. -->
-        <div class="editor-host">
+        <div
+          class="editor-host"
+          style:--editor-top-pad={tab.styleToolbarOpen ? "2.5rem" : "0.5rem"}
+        >
           <Wysiwyg
             bind:this={wysiwygRef}
             bind:value={tab.content}
@@ -488,6 +491,12 @@
     min-height: 0;
     min-width: 0;
   }
+  /* `--editor-top-pad` is read by .md-wysiwyg (Wysiwyg.svelte) to
+     set its padding-top. We bump it to 1.5rem while the style
+     toolbar is enabled in the tab menu so the first line clears
+     the floating toolbar pill (top: 8px, ~30px tall); when the
+     toolbar is hidden we reclaim that space back to the 1rem
+     baseline so the first line sits at the top of the doc. */
   /* Outline body sits at the top of the inspector and grows; the
      info disclosure pins to the bottom so the file metadata never
      pushes the heading list off-screen. */

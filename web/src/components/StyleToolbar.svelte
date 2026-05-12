@@ -1,9 +1,14 @@
 <script lang="ts">
   // Floating style toolbar pinned to the top-left of the editor
-  // canvas. Two states:
+  // canvas. Three states:
   //
-  //   - collapsed: a small "Aa" pill. Default at rest so the
-  //     editor's first few centimeters of text aren't crowded.
+  //   - hidden: the toolbar fades out after the user has been idle
+  //     in the editor for IDLE_HIDE_MS. Any cursor activity from
+  //     the editor (selVer bump on click / typing / arrow keys)
+  //     brings it back. Keeps the editor's top corner clean when
+  //     the user is reading.
+  //   - collapsed: a small "Aa" pill. Default visible state right
+  //     after activity.
   //   - expanded: full formatting toolbar (block kind selector
   //     plus B/I/S/code/link/lists/HR/image). Reveals on hover or
   //     keyboard focus.
@@ -73,9 +78,17 @@
   // for formatting buttons can swallow the focus event, so we set
   // `clickPinned` explicitly on mousedown and clear it on mouseup.
   const COLLAPSE_DELAY_MS = 2000;
+  // Idle-hide: the toolbar fades out after this long without any
+  // selVer bump from the editor (i.e. no cursor activity). Picked
+  // slightly longer than COLLAPSE_DELAY_MS so the user can hover
+  // away from an expanded toolbar without it disappearing under
+  // their cursor on the next move.
+  const IDLE_HIDE_MS = 3000;
   let expanded = $state(false);
+  let visible = $state(false);
   let clickPinned = $state(false);
   let collapseTimer: ReturnType<typeof setTimeout> | null = null;
+  let hideTimer: ReturnType<typeof setTimeout> | null = null;
 
   function cancelCollapse(): void {
     if (collapseTimer) {
@@ -96,17 +109,52 @@
     }, COLLAPSE_DELAY_MS);
   }
 
+  function cancelHide(): void {
+    if (hideTimer) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+  }
+
+  function scheduleHide(): void {
+    cancelHide();
+    hideTimer = setTimeout(() => {
+      hideTimer = null;
+      // Keep the toolbar visible while the user is actively
+      // pressing a button or hovering it expanded; the next
+      // mouseleave / mouseup will re-arm the timer.
+      if (clickPinned || expanded) return;
+      visible = false;
+    }, IDLE_HIDE_MS);
+  }
+
+  // Activity tracker: any selVer bump from the editor (click,
+  // typing, arrow keys, etc.) re-shows the toolbar and re-arms
+  // the idle-hide timer. The void cast keeps the expression
+  // typed; reading selVer inside $effect is what creates the
+  // reactive dependency.
+  $effect(() => {
+    void selVer;
+    visible = true;
+    scheduleHide();
+  });
+
   function onEnter(): void {
     cancelCollapse();
+    cancelHide();
+    visible = true;
     expanded = true;
   }
 
   function onLeave(): void {
     scheduleCollapse();
+    scheduleHide();
   }
 
   function onFocusIn(): void {
     cancelCollapse();
+    cancelHide();
+    visible = true;
     expanded = true;
   }
 
@@ -117,6 +165,7 @@
     const root = e.currentTarget as HTMLElement | null;
     if (next && root && root.contains(next)) return;
     scheduleCollapse();
+    scheduleHide();
   }
 
   // Active-mark / current-block derivations. Reading `selVer` ties
@@ -185,6 +234,7 @@
 <div
   class="style-toolbar"
   class:expanded
+  class:hidden={!visible}
   class:disabled
   class:floating
   class:inflow={!floating}
@@ -366,7 +416,16 @@
     transform-origin: top left;
     transition:
       transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1),
-      box-shadow 160ms ease;
+      box-shadow 160ms ease,
+      opacity 180ms ease;
+  }
+  /* Idle-hidden state: the toolbar fades out after no editor
+     activity for IDLE_HIDE_MS. pointer-events:none keeps an
+     invisible pill from intercepting clicks meant for the first
+     line of the document. */
+  .style-toolbar.hidden {
+    opacity: 0;
+    pointer-events: none;
   }
   /* Floating: pinned over the editor canvas. Sits above the editor's
      own decoration layer (smart-node chevrons use ~z-index 1) without

@@ -3759,8 +3759,15 @@
     min-height: 0;
     /* Extra bottom slack so the last line can scroll above the
        floating bottom pill (~92px tall counting offset + chrome).
-       8rem clears it with breathing room without feeling empty. */
-    padding: 1rem 1.25rem 8rem;
+       8rem clears it with breathing room without feeling empty.
+       Top padding reads `--editor-top-pad` from the host so
+       FileEditorTab can bump it while the style toolbar is
+       enabled (keeping the first line clear of the toolbar pill)
+       and reclaim the space when it's hidden so the first line
+       lands where the toolbar would otherwise sit. Falls back
+       to the same 1rem baseline used everywhere else. */
+    padding: var(--editor-top-pad, 1rem) 1.25rem 8rem;
+    transition: padding-top 180ms ease;
     line-height: 1.6;
     /* Body text uses the drive's "normal" font preference. */
     font-family: var(--chan-font-normal-family);
@@ -3829,6 +3836,16 @@
      anchor to the editor root, missing the per-line gutter. */
   :global(.md-wysiwyg :is(h1, h2, h3, h4, h5, h6)) {
     position: relative;
+  }
+  /* Zero the top margin of the doc's first block so spacing
+     above is owned purely by `.md-wysiwyg`'s padding-top. This is
+     what lets the toolbar-hidden state line the heading up with
+     the toolbar's normal position (top: 8px) instead of being
+     pushed an extra ~0.67em down by the browser default H1
+     margin. Only the first block is affected; subsequent
+     headings keep their natural margin so they still breathe. */
+  :global(.md-wysiwyg .ProseMirror > :first-child) {
+    margin-top: 0;
   }
   :global(.md-wysiwyg ::selection) { background: var(--selection-bg); }
   /* Read-only mode: hide the caret entirely (the user toggled into
