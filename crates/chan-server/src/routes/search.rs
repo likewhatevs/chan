@@ -13,7 +13,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_drive::SearchOpts;
+use chan_drive::{NodeKind, SearchOpts};
 use serde::{Deserialize, Serialize};
 
 use crate::error::err_from;
@@ -42,10 +42,17 @@ pub async fn api_search_files(
     State(state): State<Arc<AppState>>,
     Query(p): Query<FileSearchParams>,
 ) -> Response {
-    let tree = match state.drive().list_tree() {
+    let drive = state.drive();
+    let tree = match drive.list_tree() {
         Ok(t) => t,
         Err(e) => return err_from(&e),
     };
+    // Contact-kind notes have their own picker (`@<query>`), so skip
+    // them from the `[[` autocomplete. `graph()` may be unavailable
+    // very early in the lifecycle (index not yet open); in that case
+    // we fall back to returning all matches rather than blocking the
+    // search.
+    let graph = drive.graph().ok();
     let needle = p.q.to_lowercase();
     let mut hits = Vec::new();
     for entry in tree {
@@ -57,11 +64,17 @@ pub async fn api_search_files(
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_lowercase();
-        if needle.is_empty() || basename.contains(&needle) {
-            hits.push(entry);
-            if hits.len() >= p.limit {
-                break;
+        if !needle.is_empty() && !basename.contains(&needle) {
+            continue;
+        }
+        if let Some(ref g) = graph {
+            if let Ok(Some(NodeKind::Contact)) = g.node_kind(&entry.path) {
+                continue;
             }
+        }
+        hits.push(entry);
+        if hits.len() >= p.limit {
+            break;
         }
     }
     Json(hits).into_response()

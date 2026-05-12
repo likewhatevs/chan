@@ -791,6 +791,25 @@
           contactEditInitialSelection = false;
         }
         if (applyingExternal) return;
+        // Suspend autosave while an edit-existing flow is in flight.
+        // The image / wiki / contact edit modes replace their atom
+        // with raw source text (`![alt](src)`, `[[query]]`, `@label`)
+        // and live in the doc as a plain text node. Serializing that
+        // text back to markdown escapes the brackets and bangs, so a
+        // page refresh mid-edit lands a `\!\[alt\]\(src\)` (or the
+        // equivalent) on disk and the next parse renders it as plain
+        // text — the pill is lost. By holding the write until the
+        // bubble commits or dismisses (both paths clear the editing
+        // flag and dispatch a fresh transaction), the file on disk
+        // keeps the pre-edit atom shape; the bubble's in-memory state
+        // covers the user's transient typing.
+        if (
+          editingImageOriginal !== null ||
+          editingWikiOriginal !== null ||
+          editingContactOriginal !== null
+        ) {
+          return;
+        }
         const raw = (editor.storage.markdown as { getMarkdown(): string }).getMarkdown();
         // Strip the NBSP-paragraph markers we injected on parse so
         // the file on disk stays clean (plain blank lines, no
@@ -2121,11 +2140,19 @@
     // component in place.
     const inner = wikiEditQuery(target, label, anchor);
     const insertText = `[[${inner}]]`;
+    // Select the inner query (between `[[` and `]]`) so the bubble
+    // anchors at the start of the link (caretAnchorHost reads
+    // selection.from) and so the first keystroke replaces the query
+    // instead of appending. Same pattern as the contact / image
+    // edit flows. syncWikiBubble re-derives the query each update,
+    // so search stays in sync as the user retypes.
+    const innerStart = pos + 2;
+    const innerEnd = innerStart + inner.length;
     editor
       .chain()
       .focus()
       .insertContentAt({ from: pos, to: pos + atom.nodeSize }, insertText)
-      .setTextSelection(pos + 2 + inner.length)
+      .setTextSelection({ from: innerStart, to: innerEnd })
       .run();
     // syncWikiBubble fires from onUpdate; openWikiBubbleForCurrent
     // -Caret won't because the caret was already inside brackets,
@@ -2861,10 +2888,16 @@
     const tr = ed.state.tr;
     const textNode = ed.state.schema.text(insertText);
     tr.replaceWith(pos, pos + atomNode.nodeSize, textNode);
-    // Caret immediately before the closing `)` of the source so
-    // the bubble opens in path mode pre-populated with `src`.
-    const caretInsideSrc = pos + 2 + alt.length + 2 + src.length;
-    tr.setSelection(TextSelection.create(tr.doc, caretInsideSrc));
+    // Select the entire `src` so the bubble anchors at the start of
+    // the URL (caretAnchorHost reads selection.from) and so the first
+    // keystroke replaces the URL rather than appending to it. Same
+    // pattern the contact-pill edit flow uses for its `@<label>`
+    // range. The bubble re-derives its path query from the live
+    // doc text every onUpdate, so the search stays in sync as the
+    // user retypes.
+    const srcStart = pos + 2 + alt.length + 2;
+    const srcEnd = srcStart + src.length;
+    tr.setSelection(TextSelection.create(tr.doc, srcStart, srcEnd));
 
     editingImageOriginal = { src, alt };
     editingImageBracketStart = pos;
