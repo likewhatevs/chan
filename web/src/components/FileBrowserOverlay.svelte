@@ -208,7 +208,7 @@
 
 <svelte:window onmousedown={onWindowMousedown} />
 
-<OverlayShell open={visible} onClose={close}>
+<OverlayShell id="browser" open={visible} onClose={close}>
   <div class="browser">
     <header>
       <span class="name" title={drive.info?.root}>

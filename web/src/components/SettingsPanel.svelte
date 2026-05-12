@@ -549,7 +549,7 @@
   });
 </script>
 
-<OverlayShell open={visible} onClose={close}>
+<OverlayShell id="settings" open={visible} onClose={close}>
 <div class="settings-tab">
   <div class="tab-bar">
     <span class="title">Settings</span>

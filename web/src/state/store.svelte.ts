@@ -1141,6 +1141,103 @@ export function openBrowser(): void {
   scheduleSessionSave();
 }
 
+// ---- overlay z-order stack ----------------------------------------------
+//
+// Window-level overlays (files / search / graph / assistant / settings)
+// can stack: opening a second overlay while another is up should put the
+// newcomer on top, and Escape should pop just the topmost, returning to
+// the one underneath. The previous setup had every OverlayShell binding
+// its own window-level Escape listener, which closed every open overlay
+// at once.
+//
+// `overlayStack.ids` is the active z-order (last = top). App.svelte owns
+// a single $effect that watches each overlay's `.open` flag and diffs
+// against the stack: closed ids drop out, newly-opened ids get appended
+// (so the most-recently-opened sits on top). OverlayShell renders with
+// `z-index = 25000 + depth * 10` so paint order matches the stack.
+//
+// Escape lives in App.svelte too and only closes `topOverlay()`. The
+// per-shell click-on-scrim still closes that shell directly; since only
+// the topmost overlay is visually accessible, the scrim target is
+// naturally the same as the stack top.
+
+export type OverlayId =
+  | "browser"
+  | "search"
+  | "graph"
+  | "assistant"
+  | "settings";
+
+export const overlayStack = $state<{ ids: OverlayId[] }>({ ids: [] });
+
+/// Index of `id` in the stack, or -1 when closed. Components pass the
+/// index through to OverlayShell's z-index so newer overlays paint
+/// above older ones.
+export function overlayDepth(id: OverlayId): number {
+  return overlayStack.ids.indexOf(id);
+}
+
+/// Id of the topmost open overlay, or `null` when nothing is up. Used
+/// by the window-level Escape handler to close one overlay at a time.
+export function topOverlay(): OverlayId | null {
+  const n = overlayStack.ids.length;
+  return n === 0 ? null : overlayStack.ids[n - 1];
+}
+
+/// Close one overlay by id. Mirrors the per-shell `close()` callbacks
+/// (each sets `<overlay>.open = false`); the sync effect in App.svelte
+/// drops it from the stack.
+export function closeOverlay(id: OverlayId): void {
+  switch (id) {
+    case "browser":
+      browserOverlay.open = false;
+      return;
+    case "search":
+      searchPanel.open = false;
+      return;
+    case "graph":
+      graphOverlay.open = false;
+      return;
+    case "assistant":
+      assistantOverlay.open = false;
+      return;
+    case "settings":
+      settingsOverlay.open = false;
+      return;
+  }
+}
+
+/// Diff the five overlay `.open` flags into `overlayStack.ids`:
+/// remove ids whose overlay is closed, append ids that opened since
+/// the last run. Append-only for newcomers means the most-recently
+/// opened overlay always lands on top, which matches user intent
+/// when they hit a chord to surface a new tool over the current one.
+/// Called from a single $effect in App.svelte.
+export function syncOverlayStack(): void {
+  const open = new Set<OverlayId>();
+  if (browserOverlay.open) open.add("browser");
+  if (searchPanel.open) open.add("search");
+  if (graphOverlay.open) open.add("graph");
+  if (assistantOverlay.open) open.add("assistant");
+  if (settingsOverlay.open) open.add("settings");
+  // Drop closed entries while preserving the existing relative
+  // order of those that remain.
+  const kept = overlayStack.ids.filter((id) => open.has(id));
+  // Append any open id that wasn't already in the stack.
+  for (const id of open) {
+    if (!kept.includes(id)) kept.push(id);
+  }
+  // Mutate only when something changed; otherwise the assignment
+  // would still trigger consumers of `overlayStack.ids` even for
+  // no-op runs (the effect runs on every store mutation).
+  if (
+    kept.length !== overlayStack.ids.length ||
+    kept.some((id, i) => id !== overlayStack.ids[i])
+  ) {
+    overlayStack.ids = kept;
+  }
+}
+
 // ---- side-panel widths --------------------------------------------------
 //
 // Widths of the file editor inspector, graph details, and file

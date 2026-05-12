@@ -310,7 +310,7 @@
   }
 </script>
 
-<OverlayShell open={searchPanel.open} onClose={close}>
+<OverlayShell id="search" open={searchPanel.open} onClose={close}>
   <div class="search">
     <div class="results">
       <header>

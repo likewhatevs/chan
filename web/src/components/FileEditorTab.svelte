@@ -1,15 +1,20 @@
 <script lang="ts">
   // Body of a file tab. The previous top "tab-bar" (Aa, page-width,
   // formatting group, reveal-in-browser, mode toggle, outline toggle)
-  // has been collapsed into a single popover anchored to the tab
-  // strip's ⋯ button. This file now hosts the bubble and exposes the
-  // formatting / state hooks it needs from Wysiwyg.
+  // is split across two surfaces: a per-tab popover anchored to the
+  // tab strip's ⋯ button (zoom + duplicate / reveal / mode / outline /
+  // show-style-toolbar actions), plus a floating style toolbar pinned
+  // to the top-left of the editor canvas (block kind + B/I/S/code/link/
+  // lists/HR/image). The bubble's formatting row used to sit inside
+  // the popover; lifting it out of there reduces the chrome users have
+  // to twirl through and keeps formatting one mouse-move away.
 
-  import Wysiwyg, { type BlockKind } from "../editor/Wysiwyg.svelte";
+  import Wysiwyg from "../editor/Wysiwyg.svelte";
   import Source from "../editor/Source.svelte";
   import Inspector from "./Inspector.svelte";
   import OutlineBody, { type Heading } from "./OutlineBody.svelte";
   import FileInfoBody from "./FileInfoBody.svelte";
+  import StyleToolbar from "./StyleToolbar.svelte";
   import { setMode, type FileTab } from "../state/tabs.svelte";
   import WikiStatusBar from "./WikiStatusBar.svelte";
 
@@ -51,60 +56,16 @@
   /// a global signal fighting between panes.
   const readOnly = $derived(tab.readMode || !tab.fsWritable);
 
-  // Bumped on every selection / doc change in the WYSIWYG editor
-  // so the active-mark / current-block derivations re-run. The
-  // value itself doesn't matter; the dependency does.
+  // Bumped on every selection / doc change in the WYSIWYG editor so
+  // the StyleToolbar's active-mark / current-block derivations re-run.
+  // The value itself doesn't matter; the dependency does. Toolbar
+  // lives in a child component now; we still own the signal so any
+  // sibling (status bar, outline) can hook into it later.
   let selVer = $state(0);
 
   function jumpTo(h: Heading): void {
     if (tab.mode === "wysiwyg") wysiwygRef?.scrollToHeading(h.index);
     else sourceRef?.scrollToLine(h.line);
-  }
-
-  // Reactive accessors; reading `selVer` ties them to the editor's
-  // selection updates so the toolbar buttons reflect cursor moves.
-  // The void cast on `selVer` makes the dependency explicit without
-  // tripping the unused-expression lint.
-  const isBold = $derived.by(() => {
-    void selVer;
-    return wysiwygRef?.isActive("bold") ?? false;
-  });
-  const isItalic = $derived.by(() => {
-    void selVer;
-    return wysiwygRef?.isActive("italic") ?? false;
-  });
-  const isStrike = $derived.by(() => {
-    void selVer;
-    return wysiwygRef?.isActive("strike") ?? false;
-  });
-  const isInlineCode = $derived.by(() => {
-    void selVer;
-    return wysiwygRef?.isActive("code") ?? false;
-  });
-  const isBulletList = $derived.by(() => {
-    void selVer;
-    return wysiwygRef?.isActive("bulletList") ?? false;
-  });
-  const isOrderedList = $derived.by(() => {
-    void selVer;
-    return wysiwygRef?.isActive("orderedList") ?? false;
-  });
-  const isTaskList = $derived.by(() => {
-    void selVer;
-    return wysiwygRef?.isActive("taskList") ?? false;
-  });
-  const isLink = $derived.by(() => {
-    void selVer;
-    return wysiwygRef?.isActive("link") ?? false;
-  });
-  const blockKind = $derived.by<BlockKind>(() => {
-    void selVer;
-    return wysiwygRef?.currentBlockKind() ?? "normal";
-  });
-
-  function onBlockKindChange(e: Event): void {
-    const v = (e.currentTarget as HTMLSelectElement).value as BlockKind;
-    wysiwygRef?.setBlockKind(v);
   }
 
   /// Reveal the open file in the File Browser overlay. Expand every
@@ -179,6 +140,11 @@
     tab.inspectorOpen = !tab.inspectorOpen;
     closeTabMenu();
   }
+
+  function doToggleStyleToolbar(): void {
+    tab.styleToolbarOpen = !tab.styleToolbarOpen;
+    closeTabMenu();
+  }
 </script>
 
 <svelte:window onkeydown={onMenuKeydown} onpointerdown={onDocPointerDown} />
@@ -197,118 +163,6 @@
       style={menuStyle}
       onmousedown={(e) => e.stopPropagation()}
     >
-      <!-- Formatting toolbar row. Only enabled in WYSIWYG mode and
-           when the tab is writable; in source mode or read-only the
-           row dims to hint that the commands wouldn't apply. The
-           onmousedown=preventDefault dance keeps the editor focused
-           while clicking. -->
-      <div
-        class="fmt-row"
-        role="toolbar"
-        aria-label="Formatting"
-        class:disabled={tab.mode !== "wysiwyg" || readOnly}
-      >
-        <select
-          class="block-kind"
-          value={blockKind}
-          onchange={onBlockKindChange}
-          onmousedown={(e) => e.stopPropagation()}
-          disabled={tab.mode !== "wysiwyg" || readOnly}
-          title="block style"
-        >
-          <option value="h1">h1</option>
-          <option value="h2">h2</option>
-          <option value="h3">h3</option>
-          <option value="normal">text</option>
-          <option value="code">code</option>
-          <option value="quote">quote</option>
-        </select>
-        <button
-          class="fbtn"
-          class:on={isBold}
-          title="bold (Cmd/Ctrl+B)"
-          disabled={tab.mode !== "wysiwyg" || readOnly}
-          onmousedown={(e) => e.preventDefault()}
-          onclick={() => wysiwygRef?.toggleBold()}
-        ><b>B</b></button>
-        <button
-          class="fbtn"
-          class:on={isItalic}
-          title="italic (Cmd/Ctrl+I)"
-          disabled={tab.mode !== "wysiwyg" || readOnly}
-          onmousedown={(e) => e.preventDefault()}
-          onclick={() => wysiwygRef?.toggleItalic()}
-        ><i>I</i></button>
-        <button
-          class="fbtn"
-          class:on={isStrike}
-          title="strikethrough (Cmd/Ctrl+Shift+S)"
-          disabled={tab.mode !== "wysiwyg" || readOnly}
-          onmousedown={(e) => e.preventDefault()}
-          onclick={() => wysiwygRef?.toggleStrike()}
-        ><s>S</s></button>
-        <button
-          class="fbtn"
-          class:on={isInlineCode}
-          title="inline code (Cmd/Ctrl+E)"
-          disabled={tab.mode !== "wysiwyg" || readOnly}
-          onmousedown={(e) => e.preventDefault()}
-          onclick={() => wysiwygRef?.toggleInlineCode()}
-        ><code>{`<>`}</code></button>
-        <button
-          class="fbtn"
-          class:on={isLink}
-          title="link"
-          aria-label="toggle link"
-          disabled={tab.mode !== "wysiwyg" || readOnly}
-          onmousedown={(e) => e.preventDefault()}
-          onclick={() => wysiwygRef?.toggleLink()}
-        >🔗</button>
-        <button
-          class="fbtn"
-          class:on={isBulletList}
-          title="bullet list"
-          aria-label="bullet list"
-          disabled={tab.mode !== "wysiwyg" || readOnly}
-          onmousedown={(e) => e.preventDefault()}
-          onclick={() => wysiwygRef?.toggleBulletList()}
-        >•</button>
-        <button
-          class="fbtn"
-          class:on={isOrderedList}
-          title="ordered list"
-          aria-label="ordered list"
-          disabled={tab.mode !== "wysiwyg" || readOnly}
-          onmousedown={(e) => e.preventDefault()}
-          onclick={() => wysiwygRef?.toggleOrderedList()}
-        >1.</button>
-        <button
-          class="fbtn"
-          class:on={isTaskList}
-          title="task list"
-          aria-label="task list"
-          disabled={tab.mode !== "wysiwyg" || readOnly}
-          onmousedown={(e) => e.preventDefault()}
-          onclick={() => wysiwygRef?.toggleTaskList()}
-        >☐</button>
-        <button
-          class="fbtn"
-          title="horizontal rule (insert ---)"
-          aria-label="insert horizontal rule"
-          disabled={tab.mode !== "wysiwyg" || readOnly}
-          onmousedown={(e) => e.preventDefault()}
-          onclick={() => wysiwygRef?.insertHorizontalRule()}
-        >―</button>
-        <button
-          class="fbtn"
-          title="insert image"
-          aria-label="insert image"
-          disabled={tab.mode !== "wysiwyg" || readOnly}
-          onmousedown={(e) => e.preventDefault()}
-          onclick={() => wysiwygRef?.insertImage()}
-        >🖼</button>
-      </div>
-
       <!-- Zoom row: page-width as a real slider. The range hits
            PAGE_WIDTH_MAX + 1 step at the top so users can land in
            the "100% / unbounded" sentinel (stored as null) by
@@ -354,6 +208,16 @@
             {tab.inspectorOpen ? "Hide Outline" : "Show Outline"}
           </span>
         </button>
+        <button
+          class="mbtn"
+          onclick={doToggleStyleToolbar}
+          class:on={tab.styleToolbarOpen}
+        >
+          <span class="mbtn-icon">Aa</span>
+          <span class="mbtn-label">
+            {tab.styleToolbarOpen ? "Hide Style Toolbar" : "Show Style Toolbar"}
+          </span>
+        </button>
       </div>
     </div>
   {/if}
@@ -368,14 +232,28 @@
   {:else}
     <div class="editor-inspector-row">
       {#if tab.mode === "wysiwyg"}
-        <Wysiwyg
-          bind:this={wysiwygRef}
-          bind:value={tab.content}
-          readonly={readOnly}
-          onSelectionChange={() => (selVer = selVer + 1)}
-          wikiPickerPrefix={tab.repoRoot}
-          currentPath={tab.path}
-        />
+        <!-- Wysiwyg + floating style toolbar share a positioned
+             host so the toolbar can pin to the top-left of the
+             editor canvas. Without `position: relative` here the
+             absolute toolbar would escape to the next ancestor
+             (the pane) and end up over the tab strip. -->
+        <div class="editor-host">
+          <Wysiwyg
+            bind:this={wysiwygRef}
+            bind:value={tab.content}
+            readonly={readOnly}
+            onSelectionChange={() => (selVer = selVer + 1)}
+            wikiPickerPrefix={tab.repoRoot}
+            currentPath={tab.path}
+          />
+          {#if tab.styleToolbarOpen}
+            <StyleToolbar
+              wysiwyg={wysiwygRef}
+              selVer={selVer}
+              disabled={readOnly}
+            />
+          {/if}
+        </div>
       {:else}
         <Source bind:this={sourceRef} bind:value={tab.content} />
       {/if}
@@ -478,52 +356,6 @@
       transform: none;
     }
   }
-  .fmt-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 2px;
-    padding: 2px 4px 6px;
-    border-bottom: 1px solid var(--separator);
-  }
-  .fmt-row.disabled { opacity: 0.55; }
-  .block-kind {
-    background: transparent;
-    color: var(--text);
-    border: 1px solid var(--btn-border);
-    border-radius: 3px;
-    padding: 0 4px;
-    margin-right: 2px;
-    font: inherit;
-    font-size: 12px;
-    height: 22px;
-  }
-  .fbtn {
-    min-width: 24px;
-    height: 22px;
-    text-align: center;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 3px;
-    color: var(--text);
-    cursor: pointer;
-    font: inherit;
-    font-size: 13px;
-    padding: 0 4px;
-    line-height: 20px;
-  }
-  .fbtn:hover:not(:disabled) {
-    background: var(--hover-bg);
-    border-color: var(--btn-border);
-  }
-  .fbtn.on {
-    background: var(--hover-bg);
-    border-color: var(--btn-hover);
-  }
-  .fbtn:disabled { cursor: default; opacity: 0.55; }
-  .fbtn b, .fbtn i, .fbtn s, .fbtn code { font-size: 13px; }
-  .fbtn code { font-family: ui-monospace, monospace; }
-
   .zoom-row {
     display: flex;
     align-items: center;
@@ -598,6 +430,18 @@
      component renders a ResizeHandle as its previous sibling so
      this row sees handle + inspector as siblings at the same level. */
   .editor-inspector-row {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    min-width: 0;
+  }
+  /* Wraps the WYSIWYG editor and its floating style toolbar so the
+     toolbar can pin to the top-left of the editor canvas. position:
+     relative establishes the toolbar's containing block; flex:1 +
+     min-height:0 lets the editor inside take its full slot in the
+     surrounding flex row. */
+  .editor-host {
+    position: relative;
     flex: 1;
     display: flex;
     min-height: 0;

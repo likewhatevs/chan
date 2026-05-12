@@ -14,8 +14,19 @@
   // and avoiding a serialized field keeps tab-state simple.
 
   import { onDestroy } from "svelte";
+  import { scale } from "svelte/transition";
   import { api } from "../api/client";
   import { idle } from "../state/idle.svelte";
+
+  /// easeOutBack: 10% overshoot on the way in. Same curve as the
+  /// tab-menu bubble, OverlayShell, and StyleToolbar — collapses the
+  /// stats row with the same wobbly feel the rest of the chrome
+  /// shares so the user reads one consistent motion language.
+  function easeOutBack(t: number): number {
+    const c1 = 1.70158;
+    const c3 = c1 + 1;
+    return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+  }
 
   let {
     path,
@@ -118,39 +129,45 @@
     onmousedown={(e) => e.preventDefault()}
   >{collapsed ? "‹" : "›"}</button>
   {#if !collapsed}
-    <span class="stat" title="incoming links">
-      {backlinkCount ?? "-"}
-      <span class="lbl">backlinks</span>
-    </span>
-    <span class="sep">·</span>
-    <span class="stat" title="words">
-      {words}
-      <span class="lbl">words</span>
-    </span>
-    <span class="sep">·</span>
-    <span class="stat" title="characters">
-      {chars}
-      <span class="lbl">chars</span>
-    </span>
-    <span class="sep">·</span>
-    <button
-      class="lamp"
-      class:on={!effectiveRead}
-      class:fs-locked={!fsWritable}
-      disabled={!fsWritable}
-      title={fsWritable
-        ? effectiveRead
-          ? "switch to write mode"
-          : "switch to read-only"
-        : "file is read-only on disk"}
-      onclick={toggleReadMode}
-      onmousedown={(e) => e.preventDefault()}
+    <div
+      class="stats-row"
+      in:scale={{ duration: 260, start: 0.92, easing: easeOutBack }}
+      out:scale={{ duration: 180, start: 0.92, easing: easeOutBack }}
     >
-      <span class="dot"></span>
-      <span class="lamp-lbl"
-        >{!fsWritable ? "locked" : effectiveRead ? "read" : "write"}</span
+      <span class="stat" title="incoming links">
+        {backlinkCount ?? "-"}
+        <span class="lbl">backlinks</span>
+      </span>
+      <span class="sep">·</span>
+      <span class="stat" title="words">
+        {words}
+        <span class="lbl">words</span>
+      </span>
+      <span class="sep">·</span>
+      <span class="stat" title="characters">
+        {chars}
+        <span class="lbl">chars</span>
+      </span>
+      <span class="sep">·</span>
+      <button
+        class="lamp"
+        class:on={!effectiveRead}
+        class:fs-locked={!fsWritable}
+        disabled={!fsWritable}
+        title={fsWritable
+          ? effectiveRead
+            ? "switch to write mode"
+            : "switch to read-only"
+          : "file is read-only on disk"}
+        onclick={toggleReadMode}
+        onmousedown={(e) => e.preventDefault()}
       >
-    </button>
+        <span class="dot"></span>
+        <span class="lamp-lbl"
+          >{!fsWritable ? "locked" : effectiveRead ? "read" : "write"}</span
+        >
+      </button>
+    </div>
   {/if}
 </div>
 
@@ -179,6 +196,17 @@
   .wiki-statusbar.collapsed {
     padding: 6px;
     gap: 0;
+  }
+  /* Wraps the stats so the scale-pop transition runs against the
+     whole row as one unit. `transform-origin: right center` anchors
+     the bounce to the bar's collapse handle (which lives at the
+     row's leading edge) so the overshoot grows outward toward the
+     bar's body rather than pulling away from the screen edge. */
+  .stats-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transform-origin: right center;
   }
   /* Idle: fade out + drop pointer events so the status bar
      disappears alongside the floating fmt-bar and bottom-pill,

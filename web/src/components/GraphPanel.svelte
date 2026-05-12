@@ -1221,7 +1221,7 @@
   });
 </script>
 
-<OverlayShell open={visible} onClose={close}>
+<OverlayShell id="graph" open={visible} onClose={close}>
   <div class="graph-tab">
   <div class="bar">
     <select

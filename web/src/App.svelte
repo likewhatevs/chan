@@ -18,6 +18,7 @@
     bootstrap,
     browserOverlay,
     browserSelection,
+    closeOverlay,
     drive,
     graphOverlay,
     openAssistant,
@@ -31,6 +32,8 @@
     scheduleSessionSave,
     searchPanel,
     settingsOverlay,
+    syncOverlayStack,
+    topOverlay,
     ui,
     watchSystemTheme,
   } from "./state/store.svelte";
@@ -138,6 +141,22 @@
     setReadMode(isWindowFullyReadOnly());
   });
 
+  // Window-level overlay stack. Each overlay's `.open` flag is the
+  // single source of truth for "is it on screen"; this effect mirrors
+  // the set of currently-open overlays into `overlayStack.ids` so the
+  // most-recently-opened paints on top and Escape can pop one overlay
+  // at a time (handler below). Touching each flag explicitly is what
+  // ties the effect to their reactivity; the helper doesn't read them
+  // back through reactive paths.
+  $effect(() => {
+    void browserOverlay.open;
+    void searchPanel.open;
+    void graphOverlay.open;
+    void assistantOverlay.open;
+    void settingsOverlay.open;
+    syncOverlayStack();
+  });
+
   onMount(async () => {
     // Apply persisted theme + default fonts to the document root
     // immediately, before any component renders, to avoid a flash.
@@ -227,6 +246,18 @@
   ///     unclaimed by mainstream browsers.
   function onWindowKey(e: KeyboardEvent): void {
     const meta = e.metaKey || e.ctrlKey;
+    // Escape: pop just the topmost overlay so a stack of open
+    // surfaces unwinds one at a time. Previously each OverlayShell
+    // owned its own window keydown listener and they all fired in
+    // parallel, closing every open overlay on a single press.
+    if (e.key === "Escape" && !meta && !e.altKey && !e.shiftKey) {
+      const top = topOverlay();
+      if (top) {
+        e.preventDefault();
+        closeOverlay(top);
+        return;
+      }
+    }
     if (meta && !e.shiftKey && !e.altKey && e.key === ",") {
       e.preventDefault();
       openSettings();

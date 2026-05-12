@@ -5,9 +5,14 @@
   //   - dim backdrop layer that closes on click,
   //   - centered panel container that swallows clicks (so a click
   //     inside the panel doesn't bubble up and trigger close),
-  //   - Escape closes (window-level listener, scoped to when the
-  //     overlay is actually open),
-  //   - z-index sits above every other UI layer.
+  //   - z-index sits above every other UI layer and rises with the
+  //     overlay's depth in the global stack so a freshly-opened
+  //     overlay paints over the one it was opened from.
+  //
+  // Escape handling lives in App.svelte, not here: a per-shell
+  // listener fired once per mounted-open overlay and closed every
+  // open overlay on a single press. The window-level handler closes
+  // the topmost overlay only (see `topOverlay`).
   //
   // The overlay's body content goes through the `children` snippet
   // and renders inside the panel; the wrapped overlay owns its
@@ -22,37 +27,35 @@
   // wide enough for assistant + graph; overrides land in the
   // narrower panels.
 
-  import { onDestroy, onMount } from "svelte";
-
   import type { Snippet } from "svelte";
+  import { overlayDepth, type OverlayId } from "../state/store.svelte";
 
   let {
+    id,
     open,
     onClose,
     width = "min(1200px, calc(100vw - 48px))",
     children,
   }: {
+    id: OverlayId;
     open: boolean;
     onClose: () => void;
     width?: string;
     children: Snippet;
   } = $props();
 
-  function onWindowKey(e: KeyboardEvent): void {
-    if (!open) return;
-    if (e.key === "Escape") {
-      e.preventDefault();
-      onClose();
-    }
-  }
-  onMount(() => document.addEventListener("keydown", onWindowKey));
-  onDestroy(() => document.removeEventListener("keydown", onWindowKey));
+  // 10-step gap per depth so any same-overlay sub-layers (popovers,
+  // dropdowns) still have room above their parent without spilling
+  // into the next overlay's slot. Closed (depth -1) collapses to the
+  // base z-index, but the `{#if open}` below means we never paint
+  // anything in that state anyway.
+  const zIndex = $derived(25000 + Math.max(0, overlayDepth(id)) * 10);
 </script>
 
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="overlay" onclick={onClose}>
+  <div class="overlay" style="z-index: {zIndex};" onclick={onClose}>
     <!-- Always-on close button anchored to the top-right of the
          viewport, OUTSIDE the panel. Reachable even when the
          panel itself extends fully or its internal close header
@@ -108,7 +111,8 @@
        would otherwise hit 100vw. */
     padding-left: 16px;
     padding-right: 16px;
-    z-index: 25000;
+    /* z-index is bound inline from the overlay stack depth so a
+       freshly-opened overlay paints above the one underneath. */
     box-sizing: border-box;
     /* iOS WKWebView only fires `click` on non-button elements that
        have `cursor: pointer` declared. Without this the scrim taps

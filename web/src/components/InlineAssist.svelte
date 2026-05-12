@@ -1030,7 +1030,7 @@
   );
 </script>
 
-<OverlayShell open={visible} onClose={close}>
+<OverlayShell id="assistant" open={visible} onClose={close}>
       <header>
         <span class="title">assistant</span>
         <select
