@@ -38,9 +38,12 @@
     watchSystemTheme,
   } from "./state/store.svelte";
   import {
+    activePane,
+    closeTab,
     isWindowFullyReadOnly,
     layout,
     openInActivePane,
+    saveTab,
     scheduleAutosave,
     selectNextTabInActivePane,
     selectPrevTabInActivePane,
@@ -327,6 +330,66 @@
   }
   onMount(() => document.addEventListener("keydown", onWindowKey));
   onDestroy(() => document.removeEventListener("keydown", onWindowKey));
+
+  /// Host-driven command bridge. Native wrappers (chan-desktop) and
+  /// other embeddings dispatch a `chan:command` window event to
+  /// trigger an app action by string id without depending on any
+  /// in-app key chord. Names are stable; payload (if any) goes in
+  /// `detail`. Unknown ids are a no-op so hosts can ship ahead of
+  /// chan adding the command.
+  function runCommand(name: string, detail: Record<string, unknown>): void {
+    switch (name) {
+      case "app.settings.toggle":
+        if (settingsOverlay.open) closeOverlay("settings");
+        else openSettings();
+        return;
+      case "app.files.toggle":
+        if (browserOverlay.open) closeOverlay("browser");
+        else openBrowser();
+        return;
+      case "app.assistant.toggle":
+        if (!(drive.info?.preferences.assistant.enabled ?? true)) return;
+        if (assistantOverlay.open) closeOverlay("assistant");
+        else openAssistant();
+        return;
+      case "app.search.toggle":
+        searchPanel.open = !searchPanel.open;
+        return;
+      case "app.graph.toggle":
+        if (graphOverlay.open) closeOverlay("graph");
+        else openGraph();
+        return;
+      case "app.tab.next":
+        selectNextTabInActivePane();
+        return;
+      case "app.tab.prev":
+        selectPrevTabInActivePane();
+        return;
+      case "app.tab.jump": {
+        const i = Number(detail?.index);
+        if (Number.isInteger(i) && i >= 0) selectTabAtIndexInActivePane(i);
+        return;
+      }
+      case "app.tab.close": {
+        const p = activePane();
+        if (p.activeTabId) closeTab(p.id, p.activeTabId);
+        return;
+      }
+      case "app.save": {
+        const p = activePane();
+        const t = p.tabs.find((x) => x.id === p.activeTabId);
+        if (t) void saveTab(t);
+        return;
+      }
+    }
+  }
+  function onChanCommand(e: Event): void {
+    const detail = (e as CustomEvent).detail ?? {};
+    if (typeof detail.name !== "string") return;
+    runCommand(detail.name, detail);
+  }
+  onMount(() => window.addEventListener("chan:command", onChanCommand));
+  onDestroy(() => window.removeEventListener("chan:command", onChanCommand));
 </script>
 
 <div class="app">
