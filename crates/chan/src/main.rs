@@ -842,26 +842,38 @@ fn cmd_index(path: PathBuf) -> Result<()> {
     // file) when redirected so logs stay readable.
     use std::io::{IsTerminal, Write};
     let tty = std::io::stderr().is_terminal();
+    // chan-drive 0.7 reshaped progress: a single `ProgressEvent` with
+    // a `stage` enum (IndexFile / EmbedBatch / GraphRebuild / ...),
+    // current/total counters, and an optional label. We surface the
+    // two stages the reindex CLI cared about; everything else folds
+    // into a generic "still working" line so nothing escapes the user
+    // silently on large drives.
+    let callback = chan_drive::progress::progress_fn(move |p| {
+        let line = match p.stage {
+            chan_drive::progress::ProgressStage::IndexFile => format!(
+                "[{}/{}] {}",
+                p.current.saturating_add(1),
+                p.total,
+                p.label.as_deref().unwrap_or("")
+            ),
+            chan_drive::progress::ProgressStage::EmbedBatch => format!(
+                "[{}/{}] embedding {} chunks...",
+                p.current.saturating_add(1),
+                p.total,
+                p.current
+            ),
+            other => format!("{other:?} {}", p.label.as_deref().unwrap_or("")),
+        };
+        if tty {
+            let mut err = std::io::stderr().lock();
+            let _ = write!(err, "\r\x1b[2K{line}");
+            let _ = err.flush();
+        } else {
+            eprintln!("{line}");
+        }
+    });
     let summary = drive
-        .reindex_with(None, |p| {
-            let line = match p.stage {
-                chan_drive::BuildStage::File => {
-                    format!("[{}/{}] {}", p.index + 1, p.total, p.path)
-                }
-                chan_drive::BuildStage::EmbedBatch { chunks, files } => format!(
-                    "[{}/{}] embedding {chunks} chunks across {files} files...",
-                    p.index + 1,
-                    p.total
-                ),
-            };
-            if tty {
-                let mut err = std::io::stderr().lock();
-                let _ = write!(err, "\r\x1b[2K{line}");
-                let _ = err.flush();
-            } else {
-                eprintln!("{line}");
-            }
-        })
+        .reindex_with(None, callback.as_ref())
         .context("reindex")?;
     if tty {
         eprintln!();

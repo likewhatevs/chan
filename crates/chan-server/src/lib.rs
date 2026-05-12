@@ -637,6 +637,10 @@ pub async fn serve_via_tunnel(
         // pacific case; black-holed routes fail fast instead of
         // hanging on the OS TCP timeout.
         dial_timeout: Duration::from_secs(30),
+        // chan-tunnel-client 0.6 added an optional outbound proxy.
+        // We don't surface it through chan's CLI yet; default to
+        // direct dial.
+        proxy: None,
         events: Some(events_tx),
     };
     // Race the tunnel run loop against the shutdown signal. The
