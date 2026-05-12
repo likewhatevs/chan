@@ -3903,6 +3903,12 @@
     padding: 0 4px;
     cursor: pointer !important;
     user-select: none;
+    /* Same easeOutBack hover wobble as the editor bubbles + the
+       tab-menu pill. inline-block is needed because transform
+       doesn't apply to plain inline boxes. */
+    display: inline-block;
+    transform: scale(1);
+    transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   /* Date pill: same chip shape as the wiki pill, in --text-secondary
      so dates read as informational (light grey) rather than alarming
@@ -3916,6 +3922,7 @@
   }
   :global(.md-wysiwyg .md-smart-date:hover) {
     filter: brightness(1.1);
+    transform: scale(1.04);
   }
   /* Wiki link rendered as a rounded chip pill (Google Docs-style
      mention chip): accent text on a soft background, no underline,
@@ -3931,6 +3938,7 @@
   }
   :global(.md-wysiwyg .md-smart-wiki:hover) {
     filter: brightness(1.1);
+    transform: scale(1.04);
   }
   /* Contact mention pill. Same shape as a doc wiki-link chip, but a
      softer tinted background + an inline person glyph so a `@Alice`
@@ -4767,9 +4775,23 @@
     font-size: 0.92em;
     cursor: pointer;
     text-decoration: none;
+    /* Same easeOutBack hover wobble as the smart pills + bubbles. */
+    display: inline-block;
+    transform: scale(1);
+    transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   :global(.md-wysiwyg .md-tag-pill:hover) {
     filter: brightness(1.1);
+    transform: scale(1.04);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(.md-wysiwyg .md-smart),
+    :global(.md-wysiwyg .md-smart:hover),
+    :global(.md-wysiwyg .md-tag-pill),
+    :global(.md-wysiwyg .md-tag-pill:hover) {
+      transition: none;
+      transform: none;
+    }
   }
 
   /* Find-on-page match highlight. Painted by the findHighlight
