@@ -27,6 +27,10 @@
     wysiwyg,
     selVer,
     disabled = false,
+    showImage = true,
+    floating = true,
+    mode,
+    onModeToggle,
   }: {
     /// Live Wysiwyg ref. May be undefined during the first render
     /// pass before bind:this resolves; the buttons no-op until it's
@@ -38,8 +42,29 @@
     selVer: number;
     /// Greys out the controls when the tab is in source mode or the
     /// file is read-only. Kept as a single prop so the parent only
-    /// needs to compute the gate once.
+    /// needs to compute the gate once. The mode-toggle button, when
+    /// present, ignores this so the user can always flip back.
     disabled?: boolean;
+    /// Show the image-insert button. Defaults on for the file
+    /// editor; opt out from contexts where pasting `![alt](url)`
+    /// into the buffer doesn't make sense (the assistant prompt,
+    /// where the markdown gets serialized straight into a request).
+    showImage?: boolean;
+    /// Floating pill (position: absolute over the editor canvas)
+    /// vs in-flow row (block-level above the editor). The file
+    /// editor uses floating; the assistant prompt mounts it above
+    /// the prompt box as a row so the formatting chrome doesn't
+    /// sit on top of the text the user is typing.
+    floating?: boolean;
+    /// Optional current rendering mode. When set together with
+    /// `onModeToggle`, the toolbar grows a trailing source/wysiwyg
+    /// toggle button after a vertical separator. Both props must
+    /// be provided together; without `onModeToggle` the toggle is
+    /// hidden.
+    mode?: "wysiwyg" | "source";
+    /// Click handler for the trailing mode toggle. Called with the
+    /// new desired mode so callers don't need to invert state.
+    onModeToggle?: (next: "wysiwyg" | "source") => void;
   } = $props();
 
   // Expanded vs collapsed pill. Hover or focus expand; a debounced
@@ -161,19 +186,28 @@
   class="style-toolbar"
   class:expanded
   class:disabled
+  class:floating
+  class:inflow={!floating}
   role="toolbar"
   tabindex="-1"
   aria-label="Style toolbar"
-  onmouseenter={onEnter}
   onmouseleave={onLeave}
-  onfocusin={onFocusIn}
   onfocusout={onFocusOut}
 >
-  <!-- Aa always visible: signals the toolbar's presence at rest
-       and keeps a fixed anchor as the buttons swing in. The
-       expanded row pops out from the right of it with the same
-       easeOutBack curve the tab-menu bubble + OverlayShell use,
-       so the motion language stays consistent. -->
+  <!-- Expand trigger scoped to the Aa pill + the formatting row.
+       Hovering the trailing mode button (rendered as a sibling
+       below) does NOT expand: when the user is reaching for `</>`
+       in source mode the row would otherwise pop open and shove
+       the button to the right, making it impossible to click.
+       mouseenter doesn't bubble, so attaching it to this wrapper
+       is enough; mouseleave stays on the root so leaving past the
+       mode button still collapses the toolbar. -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="expand-zone"
+    onmouseenter={onEnter}
+    onfocusin={onFocusIn}
+  >
   <span class="pill" aria-hidden="true">Aa</span>
   {#if expanded}
     <div class="fbtn-row">
@@ -278,16 +312,35 @@
       onmouseup={onMouseUpUnpin}
       onclick={() => wysiwyg?.insertHorizontalRule()}
     >―</button>
+    {#if showImage}
+      <button
+        class="fbtn"
+        title="insert image"
+        aria-label="insert image"
+        disabled={disabled}
+        onmousedown={onMouseDownPin}
+        onmouseup={onMouseUpUnpin}
+        onclick={() => wysiwyg?.insertImage()}
+      >🖼</button>
+    {/if}
+    </div>
+  {/if}
+  </div>
+  {#if mode && onModeToggle}
+    <!-- Mode toggle stays outside `.fbtn-row` so it's always
+         visible: in source mode the row is collapsed and the user
+         still needs a way back to wysiwyg without hover-expanding
+         a toolbar that's mostly irrelevant. Also bypasses the
+         `disabled` dim for the same reason. -->
+    <span class="vsep mode-sep" aria-hidden="true"></span>
     <button
-      class="fbtn"
-      title="insert image"
-      aria-label="insert image"
-      disabled={disabled}
+      class="fbtn mode"
+      title={mode === "wysiwyg" ? "show source" : "show rendered"}
+      aria-label={mode === "wysiwyg" ? "show source" : "show rendered"}
       onmousedown={onMouseDownPin}
       onmouseup={onMouseUpUnpin}
-      onclick={() => wysiwyg?.insertImage()}
-    >🖼</button>
-    </div>
+      onclick={() => onModeToggle?.(mode === "wysiwyg" ? "source" : "wysiwyg")}
+    >{mode === "wysiwyg" ? "</>" : "¶"}</button>
   {/if}
 </div>
 
@@ -300,14 +353,7 @@
      across the chrome (mouseenter overshoots ~2%, mouseleave settles
      back through the same easeOutBack curve). */
   .style-toolbar {
-    position: absolute;
-    top: 8px;
-    left: 8px;
-    /* Sit above the editor's own decoration layer (smart-node chevrons
-       use ~z-index 1) without competing with the bottom pill (z-index
-       4500) or any overlay (>= 25000). */
-    z-index: 30;
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 2px;
     padding: 4px 6px;
@@ -322,13 +368,48 @@
       transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1),
       box-shadow 160ms ease;
   }
+  /* Floating: pinned over the editor canvas. Sits above the editor's
+     own decoration layer (smart-node chevrons use ~z-index 1) without
+     competing with the bottom pill (z-index 4500) or overlays
+     (>= 25000). */
+  .style-toolbar.floating {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 30;
+  }
+  /* In-flow: rendered as a normal block above the editor (used by
+     the assistant prompt so formatting chrome doesn't sit on top of
+     the user's typed text). Caller-controlled spacing via margins
+     on the parent flex layout. */
+  .style-toolbar.inflow {
+    align-self: flex-start;
+  }
   .style-toolbar:hover {
     transform: scale(1.02);
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
   }
-  .style-toolbar.disabled .fbtn,
+  .style-toolbar.disabled .fbtn:not(.mode),
   .style-toolbar.disabled .block-kind {
     opacity: 0.55;
+  }
+  /* Mode toggle stays at full opacity and clickable even when the
+     rest of the toolbar is disabled (source mode greys formatting,
+     but the user still needs to flip back). Monospace so `</>` and
+     `¶` read cleanly. */
+  .fbtn.mode {
+    color: var(--text-secondary);
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+  }
+  .fbtn.mode:hover { color: var(--text); }
+  /* Expand-trigger zone: the Aa pill plus the (possibly absent)
+     formatting row. Sized as a flex inline group so the trailing
+     mode button (sibling, not child) lines up flush. */
+  .expand-zone {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
   }
   /* Wraps the block-kind + buttons so we can animate it as a unit
      with the same easeOutBack pop the tab-menu bubble uses. The
