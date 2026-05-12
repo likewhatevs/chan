@@ -40,6 +40,7 @@
   function toggleAll(): void {
     if (fullyExpanded) collapseAllFolders();
     else expandAllFolders();
+    menuOpen = false;
   }
 
   /// FileTree exposes `focusTree()` for keyboard nav. Pull it on
@@ -87,7 +88,7 @@
   /// menu (4 create/action rows + separator + folder readout).
   /// The folder readout can be long but is clipped by overflow:
   /// hidden so the height stays predictable.
-  const POPOVER_HEIGHT = 208;
+  const POPOVER_HEIGHT = 256;
   const POPOVER_WIDTH = 240;
 
   /// "Copied" flash state for the folder-path row. Reset after
@@ -228,12 +229,6 @@
         </span>
         <button
           class="hbtn"
-          title={fullyExpanded ? "collapse all folders" : "expand all folders"}
-          onclick={toggleAll}
-          aria-label="toggle expand all"
-        >⇅</button>
-        <button
-          class="hbtn"
           class:on={browserOverlay.inspectorOpen}
           title={browserOverlay.inspectorOpen ? "hide inspector" : "show inspector"}
           onclick={() => (browserOverlay.inspectorOpen = !browserOverlay.inspectorOpen)}
@@ -299,6 +294,13 @@
           <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm-1.5 1.5A4.5 4.5 0 0 0 2 14h12a4.5 4.5 0 0 0-4.5-4.5h-3z"/>
         </svg>
         <span>Import contacts…</span>
+      </button>
+    </li>
+    <li class="sep" role="separator"></li>
+    <li>
+      <button role="menuitem" onclick={toggleAll}>
+        <span class="glyph" aria-hidden="true">⇅</span>
+        <span>{fullyExpanded ? "Collapse all folders" : "Expand all folders"}</span>
       </button>
     </li>
     <li class="sep" role="separator"></li>
@@ -382,28 +384,45 @@
     background: var(--hover-bg);
   }
   .menu-wrap { position: relative; display: inline-flex; }
-  /* position: fixed against viewport coords computed in script;
+  /* Bubble menu, sibling of the tab-menu bubble in FileEditorTab.
+     position: fixed against viewport coords computed in script;
      z-index above the overlay scrim (25000) so the menu paints in
-     front. */
+     front. Bouncy reveal + hover scale match the tab-menu bubble so
+     the two menus read as the same affordance across the app. */
   .browser-menu {
     position: fixed;
     z-index: 25500;
     margin: 0;
-    padding: 4px 0;
+    padding: 6px;
     list-style: none;
     background: var(--bg-card);
     border: 1px solid var(--border);
-    border-radius: 6px;
-    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
     min-width: 220px;
-    max-width: 320px;
-    font-size: 15px;
+    max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+    font-size: 13px;
+    color: var(--text);
+    transform-origin: top left;
+    animation: bubble-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .browser-menu:hover { transform: scale(1.015); }
+  @keyframes bubble-pop {
+    0% { opacity: 0; transform: scale(0.92); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .browser-menu { animation: none; transition: none; }
+    .browser-menu:hover { transform: none; }
   }
   .browser-menu li { margin: 0; }
   .browser-menu li.sep {
     height: 1px;
     background: var(--separator, var(--border));
-    margin: 4px 0;
+    margin: 4px 2px;
   }
   .browser-menu button {
     display: flex;
@@ -413,10 +432,12 @@
     text-align: left;
     background: none;
     border: 0;
+    border-radius: 4px;
     color: var(--text);
-    padding: 6px 10px;
+    padding: 6px 8px;
     cursor: pointer;
     font: inherit;
+    font-size: 13px;
   }
   .browser-menu button:hover:not(:disabled) {
     background: var(--hover-bg);
@@ -432,6 +453,14 @@
     flex-shrink: 0;
     fill: currentColor;
     color: var(--text-secondary);
+  }
+  .browser-menu .glyph {
+    width: 14px;
+    text-align: center;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+    font-size: 14px;
+    line-height: 1;
   }
   /* Folder readout: two-line inside one row. Top line is the
      "Folder" label, bottom line is the on-disk path in monospace

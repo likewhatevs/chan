@@ -469,9 +469,23 @@
       },
     };
   }
-</script>
 
-<svelte:window onclick={() => (menu = null)} />
+  /// Dismiss the context menu on any click outside it. Registered in
+  /// the capture phase on `window` so we observe the click before
+  /// `OverlayShell`'s bubble-phase `stopPropagation` swallows it
+  /// (which would otherwise leave the menu stuck open for every
+  /// click inside the file browser overlay).
+  $effect(() => {
+    const onDocClick = (e: MouseEvent): void => {
+      if (!menu) return;
+      const t = e.target as HTMLElement | null;
+      if (t && t.closest(".ctx")) return;
+      menu = null;
+    };
+    window.addEventListener("click", onDocClick, true);
+    return () => window.removeEventListener("click", onDocClick, true);
+  });
+</script>
 
 <ul
   class="tree"
