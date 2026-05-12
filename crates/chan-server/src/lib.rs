@@ -581,18 +581,24 @@ pub async fn serve_via_tunnel(
             match ev {
                 chan_tunnel_client::TunnelEvent::Connected(reg) => {
                     // Update the SPA-facing prefix so /index.html gets a
-                    // <meta name="chan-prefix" content="/{user}/{drive}">
-                    // tag and the frontend prepends the public path to
-                    // its API and WebSocket URLs. The router itself is
-                    // mounted at root: the public gateway strips the
-                    // prefix before forwarding into the tunnel.
+                    // <meta name="chan-prefix" content="/{drive}"> tag and
+                    // the frontend prepends the public path to its API and
+                    // WebSocket URLs. The router itself is mounted at
+                    // root: the public gateway strips the prefix before
+                    // forwarding into the tunnel substream.
                     *prefix_handle.write().unwrap() = reg.prefix.clone();
-                    // Trailing slash matches the gateway's canonical form:
-                    // drive.chan.app/{user}/{drive}/ serves the embedded
-                    // chan SPA whose vite `base: "./"` resolves asset URLs
-                    // relative to that prefix. Without the slash the gateway
-                    // 308s, which works but adds a hop the user can see.
-                    let public_url = format!("https://drive.chan.app{}/", reg.prefix);
+                    // Public URL shape after the wildcard-subdomain
+                    // refactor: `{user}.drive.chan.app/{drive}/`. The
+                    // username lives in the host (the gateway routes the
+                    // wildcard there); reg.prefix is `/{drive}`. Trailing
+                    // slash matches the canonical form so the chan SPA's
+                    // vite `base: "./"` resolves asset URLs relative to
+                    // the drive.
+                    let public_url = format!(
+                        "https://{user}.drive.chan.app{prefix}/",
+                        user = reg.user,
+                        prefix = reg.prefix,
+                    );
                     eprintln!("chan tunnel connected: {public_url}");
                     if !greeted {
                         greeted = true;

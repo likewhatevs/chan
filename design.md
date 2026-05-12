@@ -182,11 +182,12 @@ matters for two paths:
   reads that meta tag at boot and prepends the prefix to every
   fetch and WebSocket URL.
 - Tunnel mode: chan-server runs at root inside the tunnel
-  (`drive.chan.app/{user}/{drive}` is stripped by the gateway
-  before forwarding into the tunnel substream), but the SPA still
-  needs to know the public path so its API URLs resolve from the
-  browser's origin. On `chan_tunnel_client::TunnelEvent::Connected`
-  the server swaps the same `chan-prefix` meta value in.
+  (`{user}.drive.chan.app/{drive}` is stripped by the gateway
+  before forwarding into the tunnel substream; the upstream sees
+  `/`, `/assets/...`), but the SPA still needs to know the public
+  path so its API URLs resolve from the browser's origin. On
+  `chan_tunnel_client::TunnelEvent::Connected` the server swaps
+  the same `chan-prefix` meta value in.
 
 Single-page-app fallback: any path that isn't an `/api` route, a
 `/ws` upgrade, or a baked asset returns `index.html` so
@@ -205,12 +206,16 @@ when they expected JSON.
   trust boundary.
 - Tunnel (`CHAN_TUNNEL_TOKEN=...`): same axum router, but the
   transport is `chan_tunnel_client::run` instead of a TCP
-  listener. The tunnel client dials `tunnel.chan.app`, runs a
-  Hello/HelloAck handshake that names the drive, and serves
-  yamux substreams with the router. The bearer token is forced
-  off in tunnel mode: `drive.chan.app/{user}/{drive}` itself is
-  the trust boundary (default behavior bounces anonymous visitors
-  to id.chan.app; `--tunnel-public` opts out of that gate).
+  listener. The tunnel client dials
+  `drive.chan.app/v1/tunnel`, runs a Hello/HelloAck handshake
+  that names the drive, and serves yamux substreams with the
+  router. The bearer token is forced off in tunnel mode:
+  `{user}.drive.chan.app/{drive}/` is the trust boundary (default
+  behavior 404s anonymous visitors; the drive owner opens the
+  drive from id.chan.app's dashboard via a short-lived drive-gate
+  token, drive-proxy validates and issues a host-only session
+  cookie scoped to that drive; `--tunnel-public` opts out of that
+  gate).
 
 `build_app` produces the byte-identical axum app for both paths.
 The two `serve*` functions differ only in transport, signal

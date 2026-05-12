@@ -139,12 +139,12 @@ enum Command {
         no_settings: bool,
         /// Tunnel endpoint URL. With --tunnel-token, chan serve
         /// dials this instead of binding a local listener.
-        #[arg(long, default_value = "https://tunnel.chan.app/v1/tunnel")]
+        #[arg(long, default_value = "https://drive.chan.app/v1/tunnel")]
         tunnel_url: String,
         /// Personal access token (chan_pat_*) from id.chan.app.
         /// Setting this enables tunnel mode: chan serve does not
         /// bind a local TCP listener and instead publishes the
-        /// drive at drive.chan.app/{user}/{drive}/*. Prefer the
+        /// drive at {user}.drive.chan.app/{drive}/*. Prefer the
         /// CHAN_TUNNEL_TOKEN env var so the secret does not appear
         /// in `ps`.
         #[arg(long, env = "CHAN_TUNNEL_TOKEN")]
@@ -157,12 +157,13 @@ enum Command {
         #[arg(long)]
         tunnel_drive: Option<String>,
         /// Expose the tunneled drive without an OAuth gate. By
-        /// default, drive.chan.app/{user}/{drive} bounces anonymous
-        /// visitors to id.chan.app. With --public, anyone with the
-        /// URL can reach the drive over the same tunnel. Requires
-        /// --tunnel-token (or `CHAN_TUNNEL_TOKEN`); clap rejects the
-        /// flag otherwise so it can't silently no-op on a non-tunnel
-        /// run.
+        /// default, `{user}.drive.chan.app/{drive}/` 404s anonymous
+        /// visitors; the drive owner opens it from id.chan.app's
+        /// dashboard via a short-lived drive-gate handoff. With
+        /// --tunnel-public, anyone with the URL can reach the drive
+        /// over the same tunnel. Requires --tunnel-token (or
+        /// `CHAN_TUNNEL_TOKEN`); clap rejects the flag otherwise so
+        /// it can't silently no-op on a non-tunnel run.
         #[arg(long, requires = "tunnel_token")]
         tunnel_public: bool,
     },
@@ -506,7 +507,7 @@ fn same_path(a: &Path, b: &Path) -> bool {
 /// still see a real name in the file browser without typing
 /// `chan rename` first.
 /// Pick the URL-safe drive name to publish under
-/// `drive.chan.app/{user}/<name>`. The registry display name
+/// `{user}.drive.chan.app/<name>`. The registry display name
 /// (used in the file browser, logs, etc.) and the wire name
 /// are decoupled: the display name can be "My Notes", but the
 /// tunnel name has to satisfy `is_valid_drive_name`.

@@ -9,7 +9,7 @@ local `claude` / `gemini` CLIs.
 
 Single-user, single-machine. Loopback HTTP by default; an opt-in
 tunnel mode publishes the same drive at
-`https://drive.chan.app/{user}/{drive}/*` for cross-device access.
+`https://{user}.drive.chan.app/{drive}/*` for cross-device access.
 
 ## Layout
 
@@ -103,7 +103,7 @@ index`, `chan search`. `chan --help` documents every flag.
 ## Publish via tunnel
 
 Instead of binding a local port, `chan serve` can publish a drive
-at `https://drive.chan.app/{user}/{drive}/*` over an outbound
+at `https://{user}.drive.chan.app/{drive}/*` over an outbound
 tunnel. No inbound ports, no router config.
 
 ```
@@ -111,18 +111,18 @@ export CHAN_TUNNEL_TOKEN=chan_pat_...    # from id.chan.app/tokens
 chan serve ~/Notes
 ```
 
-`chan` dials `tunnel.chan.app`, runs a Hello/HelloAck handshake
-that names the drive, and serves every inbound request through the
-same axum router the local listener uses. The flag form
+`chan` dials `drive.chan.app/v1/tunnel`, runs a Hello/HelloAck
+handshake that names the drive, and serves every inbound request
+through the same axum router the local listener uses. The flag form
 `--tunnel-token <TOKEN>` works too but exposes the token in `ps`;
 prefer the env var. Override the endpoint with `--tunnel-url`,
 publish under a different name with `--tunnel-drive <name>`. The
 drive name must be lowercase `[a-z0-9-]`, 1-32 chars.
 
-By default `drive.chan.app/{user}/{drive}` bounces anonymous
-visitors to id.chan.app; only the drive owner's signed-in session
-reaches the tunneled drive. `--tunnel-public` skips the OAuth gate
-and exposes the URL world-readable.
+By default `{user}.drive.chan.app/{drive}/` returns a 404 to anyone
+without a fresh handoff from id.chan.app's dashboard; only the
+drive owner can open the drive from there. `--tunnel-public` makes
+the URL world-readable (no auth gate at the gateway).
 
 ## Contributing
 

@@ -97,12 +97,13 @@ No TLS at the local hop.
 
 Tunnel mode (`chan serve --tunnel-token ...`, or `CHAN_TUNNEL_TOKEN`
 env var) replaces the local listener with a `chan-tunnel-client`
-dial to `drive.chan.app/{user}/{drive}/*`. The single-user,
-single-machine assumption still holds: one chan serve process owns
-the drive's writes; the tunnel just relocates the inbound transport.
-The bearer-token gate is auto-disabled in tunnel mode (the gateway
-in front of drive.chan.app is the trust boundary; default behavior
-bounces anonymous visitors to id.chan.app, opt out with
+dial to `drive.chan.app/v1/tunnel`. The drive is then published at
+`{user}.drive.chan.app/{drive}/*` over yamux substreams. The
+single-user, single-machine assumption still holds: one chan serve
+process owns the drive's writes; the tunnel just relocates the
+inbound transport. The bearer-token gate is auto-disabled in tunnel
+mode (the gateway in front of drive.chan.app is the trust boundary;
+default behavior 404s anonymous visitors, opt out with
 `--tunnel-public`). Wire protocol lives in
 `../chan-core/crates/chan-tunnel-proto`.
 
