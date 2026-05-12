@@ -55,6 +55,11 @@
   // before tab[idx]; idx === pane.tabs.length means "after the last
   // tab".
   let dropIndicator = $state<number>(-1);
+  /// Snapshot of `pane.activeTabId` taken in a tab's onmousedown,
+  /// read in the same tab's onclick. Lets the click handler tell a
+  /// tab-switch (was a different tab) apart from a re-click on the
+  /// already-active tab (only the latter pops the menu).
+  let tabMouseDownPrevActive: string | null = null;
 
   async function onSave(): Promise<void> {
     if (!active) return;
@@ -365,15 +370,27 @@
       <div
         class="tab"
         class:active={t.id === pane.activeTabId}
-        onmousedown={() => (pane.activeTabId = t.id)}
+        onmousedown={() => {
+          // Stash the pre-switch active tab id so the onclick handler
+          // can tell whether this is a tab-switch (do NOT pop the
+          // menu) or a re-click on the already-active tab (DO pop the
+          // menu). Cleared in onclick. mousedown fires before click,
+          // so this captures the previous value before we overwrite
+          // it below.
+          tabMouseDownPrevActive = pane.activeTabId;
+          pane.activeTabId = t.id;
+        }}
         onclick={(e) => {
           // Click on the filename (anywhere on the tab body that
-          // isn't the × close button) toggles the menu. The bubble
-          // anchors to the tab's bounding rect so it always pops
-          // beneath the tab regardless of which character the click
-          // landed on.
-          if (t.kind !== "file") return;
-          pane.activeTabId = t.id;
+          // isn't the × close button) toggles the menu — but only
+          // when the tab was already active. A click on an inactive
+          // tab is a tab-switch (the onmousedown above set
+          // activeTabId); popping the menu there feels like the user
+          // committed to an action they didn't take. The next click
+          // on the now-active tab pops the menu as expected.
+          const wasActive = tabMouseDownPrevActive === t.id;
+          tabMouseDownPrevActive = null;
+          if (t.kind !== "file" || !wasActive) return;
           const row = e.currentTarget as HTMLElement;
           const r = row.getBoundingClientRect();
           toggleTabMenu(t.id, {
