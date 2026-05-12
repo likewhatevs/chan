@@ -330,8 +330,20 @@
   /// href lives in the mark's attrs, not in the text), so it needs
   /// its own helpers rather than fitting into the bold/italic
   /// LIVE_MARK_MARKER table.
+  ///
+  /// `kind` distinguishes naked URLs (`https://x` typed inline) from
+  /// bracketed `[label](url)` runs. Naked links expand by just
+  /// stripping the mark in place (the displayed text is the URL, no
+  /// source rewrite needed); bracketed links lay down `[label](url)`
+  /// source text. The two collapse paths mirror the split.
   let editingLinkOriginal:
-    | { from: number; to: number; href: string; label: string }
+    | {
+        kind: "naked" | "bracketed";
+        from: number;
+        to: number;
+        href: string;
+        label: string;
+      }
     | null = null;
 
   /// Cleanup for the floating image action overlay (zoom + edit
@@ -640,7 +652,11 @@
           isAllowedUri: () => true,
           validate: () => true,
         }),
-        Markdown.configure({ html: false, linkify: false, breaks: true }),
+        // `linkify: true` lets the markdown parser promote naked
+        // `https?://...` text in saved files to Link marks on load.
+        // The matching write path is the Link-mark serializer
+        // override below, which emits the URL bare when label === href.
+        Markdown.configure({ html: false, linkify: true, breaks: true }),
         DateNode,
         // Per-instance wikiLink extension. The factory closes over
         // `currentPath` (the prop, captured by reference each call)
@@ -3126,12 +3142,27 @@
     return { from: range.from, to: range.to, href, label };
   }
 
-  /// Replace a Link-marked range with its `[label](url)` source form.
-  /// The Link mark is stripped from the inserted text so the render
-  /// pass sees plain source.
+  /// Classify a Link-marked run as either a naked URL (the displayed
+  /// text IS the href, e.g. typed `https://example.com`) or a
+  /// bracketed `[label](url)` form. The two have different live-edit
+  /// semantics, so the expansion / collapse paths fork on this.
+  function isNakedUrlLink(label: string, href: string): boolean {
+    return label === href && NAKED_URL_FULL.test(href);
+  }
+
+  /// Replace a Link-marked range with its source form. Forks on link
+  /// kind:
+  ///   - naked URL: displayed text already equals the href, so we
+  ///     just strip the mark in place. The text is the source. Caret
+  ///     stays put. Re-promotion happens on caret-leave once the
+  ///     editing range is collapsed and the naked-URL render pass
+  ///     re-applies the mark (gated on `editingLinkOriginal === null`).
+  ///   - bracketed: lay down `[label](url)` literal text and strip
+  ///     the mark so the render pass sees plain source.
   ///
-  /// Caret-preservation rule (matches the unified live-source spec —
-  /// touching the pattern reveals source without moving the cursor):
+  /// Caret-preservation rule for bracketed links (matches the unified
+  /// live-source spec — touching the pattern reveals source without
+  /// moving the cursor):
   ///   - left boundary  → stay at `range.from` (just before `[`).
   ///   - right boundary → jump to the new right edge (just after
   ///     `)`), which is the same logical "after the link" position
@@ -3148,6 +3179,23 @@
     if (editingLinkOriginal !== null) return;
     const linkMark = ed.schema.marks.link;
     if (!linkMark) return;
+    if (isNakedUrlLink(range.label, range.href)) {
+      const tr = ed.state.tr;
+      tr.removeMark(range.from, range.to, linkMark);
+      // Drop the mark from PM's typing state so a keystroke at the
+      // boundary doesn't immediately re-apply it (which would defeat
+      // the editing affordance).
+      tr.setStoredMarks([]);
+      editingLinkOriginal = {
+        kind: "naked",
+        from: range.from,
+        to: range.to,
+        href: range.href,
+        label: range.label,
+      };
+      ed.view.dispatch(tr.setMeta("addToHistory", false));
+      return;
+    }
     const sourceText = `[${range.label}](${range.href})`;
     if (sourceText.length === 0) return;
     const tr = ed.state.tr;
@@ -3165,6 +3213,7 @@
     }
     tr.setSelection(TextSelection.create(tr.doc, newCaret));
     editingLinkOriginal = {
+      kind: "bracketed",
       from: range.from,
       to: range.from + sourceText.length,
       href: range.href,
@@ -3174,12 +3223,18 @@
   }
 
   /// Collapse the live link expansion back into a Link-marked text
-  /// node. Reads the current outer range; if it still parses as
-  /// `[label](url)`, re-applies the mark with the (possibly edited)
-  /// href. If the user broke the syntax (deleted a bracket, etc) the
-  /// expansion clears without re-marking — the broken source stays
-  /// in the doc for them to keep fixing, mirroring how
-  /// `collapseMarkExpansion` handles a broken `**…**` pair.
+  /// node. Forks on the snapshotted kind:
+  ///   - naked: re-apply the mark to whatever URL still survives in
+  ///     the editing range. The user may have edited the URL text;
+  ///     if it still parses as a naked URL, re-mark with the new
+  ///     value. If the URL is broken / no longer matches, leave it
+  ///     as plain text (the on-leave naked-URL render pass would
+  ///     re-promote the next time it appears valid, e.g. after the
+  ///     user fixes it).
+  ///   - bracketed: re-apply the mark if `[label](url)` still parses.
+  ///     Broken syntax (missing bracket, empty url) clears the
+  ///     expansion without re-marking, mirroring how
+  ///     `collapseMarkExpansion` handles a broken `**…**` pair.
   function collapseLinkExpansion(ed: Editor): void {
     const orig = editingLinkOriginal;
     editingLinkOriginal = null;
@@ -3188,6 +3243,19 @@
     if (!linkMark) return;
     if (orig.to <= orig.from) return;
     const text = ed.state.doc.textBetween(orig.from, orig.to, "\n", " ");
+    if (orig.kind === "naked") {
+      const trimmed = text.replace(URL_TRAIL, "");
+      if (!NAKED_URL_FULL.test(trimmed)) return;
+      const tr = ed.state.tr;
+      tr.addMark(
+        orig.from,
+        orig.from + trimmed.length,
+        linkMark.create({ href: trimmed }),
+      );
+      tr.setStoredMarks([]);
+      ed.view.dispatch(tr.setMeta("addToHistory", false));
+      return;
+    }
     const m = /^\[([^\[\]\n]+)\]\(([^)\n]+)\)$/.exec(text);
     if (!m) return;
     const label = m[1];
@@ -3224,6 +3292,17 @@
     { name: "italic", re: /(?<!\*)\*([^*\n]+?)\*(?!\*)/g },
     { name: "strike", re: /~~([^~\n]+?)~~/g },
   ];
+
+  /// Naked URL detection. Matches `http://` or `https://` followed
+  /// by any non-whitespace, non-bracket run; the negative classes
+  /// stop the match from gobbling characters that can't legitimately
+  /// belong to the URL but commonly sit next to one (`)`, `]`, `<`,
+  /// `>`). Trailing `.,;:!?` is stripped after the match — those are
+  /// almost always sentence punctuation, not part of the URL.
+  /// Anchored variant validates a string is purely a URL.
+  const NAKED_URL_RE = /https?:\/\/[^\s<>()\[\]]+/g;
+  const NAKED_URL_FULL = /^https?:\/\/[^\s<>()\[\]]+$/;
+  const URL_TRAIL = /[.,;:!?]+$/;
 
   /// Walk one textblock and apply marks to every closed pattern
   /// whose range does NOT contain `caretInBlock` (PM-coord position).
@@ -3512,6 +3591,64 @@
         // they get the pill + kind-resolver pipeline. Externals (no
         // normalizeHref match) stay as Link marks.
         decorateWikiLinks();
+      }
+    }
+    // Naked URL render pass. Promote `https?://...` runs in plain
+    // text (no Link mark, no surrounding `[...]()` or `![...]()`
+    // because those passes already converted their captures above)
+    // to Link-marked text so they render as clickable links. Same
+    // caret-inside guard as the other passes: leave the source
+    // visible while the user is typing it.
+    //
+    // Gated on `editingLinkOriginal === null` for the same reason as
+    // the markdown-link pass: a naked-URL expansion strips the mark
+    // from the active range and leaves the URL as plain text; without
+    // the gate this pass would re-promote it on every keystroke.
+    //
+    // Skip URLs that sit inside an unrendered `[label](url)` /
+    // `![alt](src)` capture: while the user is mid-typing the
+    // bracket form, the markdown-link / image passes haven't fired
+    // yet (caret in range) and we'd otherwise mark the URL inside
+    // the parens prematurely — that mark survives the bracket
+    // pass's own subsequent run because the regex scans per
+    // text-node and a mid-marked URL splits the node so no node
+    // contains the full pattern.
+    if (linkMarkType && editingLinkOriginal === null) {
+      type UrlHit = { from: number; to: number; url: string };
+      const urlHits: UrlHit[] = [];
+      ed.state.doc.nodesBetween(start, end, (node, pos) => {
+        if (!node.isText || !node.text) return;
+        if (node.marks.some((m) => m.type === linkMarkType)) return;
+        const text = node.text;
+        NAKED_URL_RE.lastIndex = 0;
+        let mm: RegExpExecArray | null;
+        while ((mm = NAKED_URL_RE.exec(text)) !== null) {
+          // Two-char lookbehind for `](` (markdown link or image
+          // src position). The bracket / image passes own those
+          // captures.
+          const before = text.slice(Math.max(0, mm.index - 2), mm.index);
+          if (before.endsWith("](")) continue;
+          let url = mm[0];
+          const trimmed = url.replace(URL_TRAIL, "");
+          if (trimmed.length === 0) continue;
+          url = trimmed;
+          const fromPos = pos + mm.index;
+          const toPos = fromPos + url.length;
+          if (caretInBlock >= fromPos && caretInBlock <= toPos) continue;
+          urlHits.push({ from: fromPos, to: toPos, url });
+        }
+      });
+      if (urlHits.length > 0) {
+        urlHits.sort((a, b) => b.from - a.from);
+        const tr = ed.state.tr;
+        for (const hit of urlHits) {
+          tr.addMark(
+            hit.from,
+            hit.to,
+            linkMarkType.create({ href: hit.url }),
+          );
+        }
+        ed.view.dispatch(tr.setMeta("addToHistory", false));
       }
     }
   }
