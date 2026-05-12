@@ -904,17 +904,25 @@
           editingImageOriginal !== null ||
           editingWikiOriginal !== null ||
           editingContactOriginal !== null ||
-          editingMarkOriginal !== null ||
-          editingHeadingOriginal !== null
+          editingMarkOriginal !== null
         ) {
           return;
         }
+        // editingHeadingOriginal does NOT gate the save. While the
+        // caret is in an expanded heading paragraph, the doc has
+        // `# Heading text` as plain paragraph content; the markdown
+        // serializer escapes the leading `#` to `\# Heading text`,
+        // which on re-parse renders as plain text and demotes the
+        // heading. We let the save run anyway and then unescape the
+        // leading `#…# ` ourselves below — that round-trips through
+        // markdown's own heading parser cleanly, so a refresh
+        // mid-edit lands on the heading the user just typed.
         const raw = (editor.storage.markdown as { getMarkdown(): string }).getMarkdown();
         // Strip the NBSP-paragraph markers we injected on parse so
         // the file on disk stays clean (plain blank lines, no
         // invisible characters). The next reload re-injects them
         // through `preserveBlankParagraphs`.
-        const body = stripBlankParagraphs(raw);
+        const body = unescapeHeadingPrefix(stripBlankParagraphs(raw));
         // Re-attach the YAML frontmatter we stashed at load time so
         // the file on disk keeps its `---` block intact. Editor
         // never sees this block in the doc model, but every write
@@ -1130,6 +1138,22 @@
   /// yields the 3-newline pattern the user originally typed.
   function stripBlankParagraphs(md: string): string {
     return md.replace(/ \n\n/g, "\n");
+  }
+
+  /// Un-escape a leading `\#…# ` at the start of any line. The
+  /// markdown serializer escapes `#` chars at block start because
+  /// the editor's doc model treats a heading expansion as a regular
+  /// paragraph whose text content starts with `#…# ` source — that
+  /// keeps the in-editor expand / collapse flow simple, but without
+  /// this unescape a refresh mid-edit would write `\# Title` to
+  /// disk and the next parse would render it as literal text
+  /// (silently demoting the heading the user just edited). The
+  /// trade-off: paragraphs whose author intentionally escaped a
+  /// leading `\# ` lose the escape on round-trip and become a
+  /// heading. Worth it to keep heading edits stable against
+  /// accidental refresh.
+  function unescapeHeadingPrefix(md: string): string {
+    return md.replace(/^\\(#{1,6}) /gm, "$1 ");
   }
 
   /// Restore wiki-link pills after a markdown round-trip.
@@ -3759,17 +3783,46 @@
      fall through to the normal text style; calling them out
      individually would just expand the settings UI without much
      practical benefit. */
-  :global(.md-wysiwyg h1) {
+  /* Heading style is shared between the rendered `h1..h3` elements
+     and the paragraph that liveSource stamps with
+     `data-expanded-heading-level=N` during a heading edit (see the
+     companion block below). Keeping the rules in one selector
+     guarantees that an arrow into a heading doesn't visually shift
+     font weight / family / size / margins on the way in or out. */
+  :global(.md-wysiwyg h1),
+  :global(.md-wysiwyg p[data-expanded-heading-level="1"]) {
     font-family: var(--chan-font-heading1-family);
     font-size: var(--chan-font-heading1-size, 28px);
+    font-weight: bold;
   }
-  :global(.md-wysiwyg h2) {
+  :global(.md-wysiwyg h2),
+  :global(.md-wysiwyg p[data-expanded-heading-level="2"]) {
     font-family: var(--chan-font-heading2-family);
     font-size: var(--chan-font-heading2-size, 22px);
+    font-weight: bold;
   }
-  :global(.md-wysiwyg h3) {
+  :global(.md-wysiwyg h3),
+  :global(.md-wysiwyg p[data-expanded-heading-level="3"]) {
     font-family: var(--chan-font-heading3-family);
     font-size: var(--chan-font-heading3-size, 18px);
+    font-weight: bold;
+  }
+  /* Heading default margins from the UA stylesheet (the `0.67em` /
+     `0.83em` / `1em` block margins on `h1..h3`) don't carry over to
+     paragraphs, which is the other half of the "doc shifts on
+     arrow into a heading" feeling. Pin the same margins onto the
+     expanded paragraph so the line stays where the heading was. */
+  :global(.md-wysiwyg p[data-expanded-heading-level="1"]) {
+    margin-block-start: 0.67em;
+    margin-block-end: 0.67em;
+  }
+  :global(.md-wysiwyg p[data-expanded-heading-level="2"]) {
+    margin-block-start: 0.83em;
+    margin-block-end: 0.83em;
+  }
+  :global(.md-wysiwyg p[data-expanded-heading-level="3"]) {
+    margin-block-start: 1em;
+    margin-block-end: 1em;
   }
   /* Headings anchor the fold chevron (absolute-positioned into the
      left gutter). Without `position: relative` the chevron would
@@ -3868,7 +3921,12 @@
      zero them. The body line-height drops too in tight mode so
      paragraphs of prose match the list cadence. */
   :global(.md-wysiwyg[data-density="tight"]) { line-height: 1.4; }
-  :global(.md-wysiwyg[data-density="tight"] p) { margin: 0; }
+  /* Tight density zeros paragraph margins, but the expanded-heading
+     paragraphs (where the caret is editing an `# Heading` prefix in
+     source mode) need to keep the heading's block margins so the
+     line doesn't jump on enter / exit. Excluded here via the
+     `:not(...)` clause. */
+  :global(.md-wysiwyg[data-density="tight"] p:not([data-expanded-heading-level])) { margin: 0; }
   :global(.md-wysiwyg[data-density="tight"] ul),
   :global(.md-wysiwyg[data-density="tight"] ol) {
     margin: 0;
@@ -3887,7 +3945,7 @@
     padding-left: 1.5em;
   }
   :global(.md-wysiwyg[data-density="standard"] li) { margin: 0; }
-  :global(.md-wysiwyg[data-density="standard"] li > p) { margin: 0; }
+  :global(.md-wysiwyg[data-density="standard"] li > p:not([data-expanded-heading-level])) { margin: 0; }
   :global(.md-wysiwyg[data-density="standard"] li > ul),
   :global(.md-wysiwyg[data-density="standard"] li > ol) {
     margin: 0.15em 0 0.15em 0;
@@ -4407,28 +4465,13 @@
     opacity: 0.7;
   }
 
-  /* Heading expansion: while the caret is in a heading, the block is
-     temporarily a paragraph carrying its `#…# ` prefix as editable
-     text (see Wysiwyg.svelte's `expandHeading`). The `liveSource`
-     plugin stamps `data-expanded-heading-level` on the paragraph so
-     the visible size stays glued to the original heading — switching
-     to the paragraph font here would shove every block below it on
-     each caret entry / exit. The CSS only carries the size + family;
-     the prefix colour lives in `.md-mark-pending` above. Levels 4..6
-     fall through to the normal paragraph style by design (same as
-     the underlying h1..h6 rule set). */
-  :global(.md-wysiwyg p[data-expanded-heading-level="1"]) {
-    font-family: var(--chan-font-heading1-family);
-    font-size: var(--chan-font-heading1-size, 28px);
-  }
-  :global(.md-wysiwyg p[data-expanded-heading-level="2"]) {
-    font-family: var(--chan-font-heading2-family);
-    font-size: var(--chan-font-heading2-size, 22px);
-  }
-  :global(.md-wysiwyg p[data-expanded-heading-level="3"]) {
-    font-family: var(--chan-font-heading3-family);
-    font-size: var(--chan-font-heading3-size, 18px);
-  }
+  /* Heading expansion: the visual rules for
+     `p[data-expanded-heading-level=N]` are folded into the h1..h3
+     selector at the top of this block (search for "Heading style
+     is shared"). Keeping them in one place was the only way to
+     keep arrow-into-heading visually still on every property the
+     UA stylesheet flips for headings (font weight + block margins
+     in particular). */
 
   /* Inline-mark source markers (bold / italic / strike). The
      `liveSource` plugin inserts these as non-editable widget
