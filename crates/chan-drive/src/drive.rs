@@ -144,6 +144,20 @@ pub struct Drive {
     /// on first call.
     index: std::sync::OnceLock<Index>,
     graph: std::sync::OnceLock<GraphView>,
+    /// Cumulative rename log accumulated since the last `reindex`.
+    /// Maps any path the drive has ever known a file by to its
+    /// current on-disk location, transitively closed: after `a -> b`
+    /// is appended and then `b -> c`, the log holds both `a -> c`
+    /// and `b -> c` so a lookup against either intermediate name
+    /// resolves to the same current path.
+    ///
+    /// Used by `rename_with_link_rewrite` to translate graph src
+    /// columns (frozen at last reindex) to the source's current
+    /// location, so a file moved in a prior rename still gets its
+    /// outgoing links rewritten in subsequent renames. Cleared by
+    /// `reindex` (which rebuilds the graph against the live tree,
+    /// making every translation a no-op).
+    rename_log: std::sync::Mutex<std::collections::HashMap<String, String>>,
 }
 
 impl std::fmt::Debug for Drive {
@@ -200,6 +214,7 @@ impl Drive {
             _lock: lock,
             index: std::sync::OnceLock::new(),
             graph: std::sync::OnceLock::new(),
+            rename_log: std::sync::Mutex::new(std::collections::HashMap::new()),
         }))
     }
 
@@ -740,6 +755,7 @@ impl Drive {
         self.rename(from, to)?;
 
         if mapping.is_empty() {
+            self.rename_log_append(&from_canon, &to_canon);
             return Ok(RenameOutcome {
                 renamed: vec![(from_canon, to_canon)],
                 rewritten: vec![],
@@ -747,14 +763,37 @@ impl Drive {
             });
         }
 
+        // Effective mapping = prior rename log + this rename. The log
+        // captures any moves since the last reindex; combining it with
+        // this rename's pairs lets us:
+        //   * Translate graph src columns (frozen at last reindex) to
+        //     each source's current on-disk location, so a file moved
+        //     in a prior rename still gets its outgoing links rewritten
+        //     when a later rename touches one of its outgoing targets.
+        //   * Translate stale link text whose target moved in a prior
+        //     rename to the new current path, so a link that points to
+        //     a path no longer on disk still rewrites correctly when
+        //     it's brought back into scope by this rename.
+        let mut effective: HashMap<String, String> = self.rename_log.lock().unwrap().clone();
+        for (old, new) in &mapping {
+            // Transitive close: anything previously redirected at `old`
+            // now redirects at `new`.
+            for v in effective.values_mut() {
+                if v == old {
+                    *v = new.clone();
+                }
+            }
+            effective.insert(old.clone(), new.clone());
+        }
+
         // Wiki-link targets are stored in the graph extensionless
         // (`[[old]]` -> dst "old"), per chan's wiki convention. The
         // markdown rewriter resolves them the same way — `normalize_href`
-        // returns the bare stem. Augment the mapping with extensionless
-        // pairs so both backlinks lookups and the rewrite callback
-        // succeed for either form.
-        let mut augmented = mapping.clone();
-        for (old, new) in &mapping {
+        // returns the bare stem. Augment the effective mapping with
+        // extensionless pairs so both backlinks lookups and the rewrite
+        // callback succeed for either form.
+        let mut augmented = effective.clone();
+        for (old, new) in &effective {
             if let (Some(old_stem), Some(new_stem)) =
                 (old.strip_suffix(".md"), new.strip_suffix(".md"))
             {
@@ -764,54 +803,82 @@ impl Drive {
 
         // Collect source files that need a rewrite pass. Two sources of
         // candidates:
-        //   1. Backlinks into the renamed subtree. Standard inbound
-        //      references — `[label](old.md)` from outside the move.
-        //   2. Every file that itself moved. Its outgoing relative
-        //      links may need re-relativization because the source's
-        //      directory changed, even when the link target did not
-        //      move.
-        let mut sources_old: HashSet<String> = HashSet::new();
+        //   1. Backlinks into the (cumulative) renamed set. The graph's
+        //      src column is keyed by the path at last-index time; we
+        //      translate it through `effective` to find the source's
+        //      current on-disk location.
+        //   2. Every file that moved in THIS rename. Its outgoing
+        //      relative links may need re-relativization because the
+        //      source's directory changed, even when the link target
+        //      did not move.
+        let mut sources_current: HashSet<String> = HashSet::new();
         if let Ok(graph) = self.graph() {
             for old in augmented.keys() {
                 if let Ok(edges) = graph.backlinks(old) {
                     for e in edges {
-                        sources_old.insert(e.src);
+                        let current = effective.get(&e.src).cloned().unwrap_or(e.src);
+                        sources_current.insert(current);
                     }
                 }
             }
         }
-        for old in mapping.keys() {
-            sources_old.insert(old.clone());
+        for new in mapping.values() {
+            sources_current.insert(new.clone());
         }
+
+        // Reverse view of this rename's mapping so a source that moved
+        // in this op can recover its pre-rename directory for the
+        // rewriter's source-dir resolution. Sources that did NOT move
+        // in this op fall through to the `unwrap_or` and treat their
+        // current dir as the source dir on both sides.
+        let inverse_this: HashMap<String, String> = mapping
+            .iter()
+            .map(|(k, v)| (v.clone(), k.clone()))
+            .collect();
 
         let mut rewritten = Vec::new();
         let mut conflicts = Vec::new();
-        let mut sources_sorted: Vec<String> = sources_old.into_iter().collect();
+        let mut sources_sorted: Vec<String> = sources_current.into_iter().collect();
         sources_sorted.sort();
-        for src_old in sources_sorted {
-            let src_new = mapping
-                .get(&src_old)
-                .cloned()
-                .unwrap_or_else(|| src_old.clone());
+        for src_current in sources_sorted {
             // Only rewrite editable-text files: images and binaries
             // can be graph nodes but never markdown sources.
-            if !fs_ops::is_editable_text(&src_new) {
+            if !fs_ops::is_editable_text(&src_current) {
                 continue;
             }
-            let (content, stat) = match self.read_text_with_stat(&src_new) {
+            let (content, stat) = match self.read_text_with_stat(&src_current) {
                 Ok(pair) => pair,
                 Err(_) => continue,
             };
-            let src_old_dir = parent_dir(&src_old);
-            let src_new_dir = parent_dir(&src_new);
+            let src_old_for_dir = inverse_this
+                .get(&src_current)
+                .cloned()
+                .unwrap_or_else(|| src_current.clone());
+            let src_old_dir = parent_dir(&src_old_for_dir);
+            let src_new_dir = parent_dir(&src_current);
             let new_content = markdown::links::rewrite_link_targets(&content, |link| {
                 rewrite_href_for_move(link, &src_old_dir, &src_new_dir, &augmented)
             });
             if let Some(new_md) = new_content {
-                match self.write_text_if_unchanged(&src_new, stat.mtime_ns, &new_md) {
-                    Ok(()) => rewritten.push(src_new),
-                    Err(_) => conflicts.push(src_new),
+                match self.write_text_if_unchanged(&src_current, stat.mtime_ns, &new_md) {
+                    Ok(()) => rewritten.push(src_current),
+                    Err(_) => conflicts.push(src_current),
                 }
+            }
+        }
+
+        // Persist this rename's pairs to the cumulative log so the
+        // next rename inside the same reindex window can see through
+        // to current locations.
+        {
+            let mut log = self.rename_log.lock().unwrap();
+            for (old, new) in &mapping {
+                for v in log.values_mut() {
+                    if v == old {
+                        *v = new.clone();
+                    }
+                }
+                log.insert(old.clone(), new.clone());
             }
         }
 
@@ -822,6 +889,21 @@ impl Drive {
             rewritten,
             conflicts,
         })
+    }
+
+    /// Append a single pair to the cumulative rename log. Used for
+    /// renames that don't go through the directory-snapshot path (e.g.
+    /// a file `from` that doesn't exist on disk; rename still fired
+    /// and chan-drive can't know what was on the other side without
+    /// re-reading the disk).
+    fn rename_log_append(&self, old: &str, new: &str) {
+        let mut log = self.rename_log.lock().unwrap();
+        for v in log.values_mut() {
+            if v == old {
+                *v = new.to_string();
+            }
+        }
+        log.insert(old.to_string(), new.to_string());
     }
 
     /// Pre-rename snapshot of every concrete file under `from`, paired
@@ -940,6 +1022,11 @@ impl Drive {
                 crate::index::IndexError::Cancelled => ChanError::Cancelled,
                 other => other.into(),
             })?;
+        // Drop the cumulative rename log: the freshly-rebuilt graph
+        // already reflects every current path, so any prior in-process
+        // translation is now a no-op (and would be wrong if the user
+        // re-creates a file at a path we'd previously redirected).
+        self.rename_log.lock().unwrap().clear();
         Ok(summary)
     }
 
@@ -2770,6 +2857,101 @@ mod tests {
         assert_eq!(
             drive.read_text("friends/alice.md").unwrap(),
             "ref [[../index]] tail\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_chain_of_renames_on_same_file() {
+        // Rename the same file twice between reindexes. The second
+        // rename must still find the inbound backlink even though the
+        // graph's src column was indexed against the original path.
+        let (_cfg, _root, drive) = rename_fixture(
+            "src.md",
+            "see [a](./a.md) end\n",
+            "a.md",
+            "# A\n",
+        );
+        drive.rename_with_link_rewrite("a.md", "b.md").unwrap();
+        // After the first rename, src.md points at ./b.md.
+        assert_eq!(
+            drive.read_text("src.md").unwrap(),
+            "see [a](./b.md) end\n",
+        );
+        // Now rename b.md to c.md WITHOUT reindexing. The graph still
+        // records the inbound edge against the original "a.md" path,
+        // so the second rename must use the cumulative log to find
+        // src.md as a backlink source via the original name.
+        drive.rename_with_link_rewrite("b.md", "c.md").unwrap();
+        assert_eq!(
+            drive.read_text("src.md").unwrap(),
+            "see [a](./c.md) end\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_source_moved_in_prior_rename() {
+        // The original failing scenario: source file moves first
+        // (friends/alice.md -> archive/alice-2.md), then a target the
+        // source references moves (notes/beta.md -> archive/beta.md).
+        // The graph's backlinks query for the moved target returns the
+        // source's ORIGINAL path; without the log we'd read at that
+        // stale path, fail, and skip the rewrite. With the log we
+        // translate to the source's current path and update the link.
+        let (_cfg, root, drive) = fixture();
+        std::fs::create_dir_all(root.path().join("notes")).unwrap();
+        std::fs::create_dir_all(root.path().join("friends")).unwrap();
+        drive.write_text("notes/beta.md", "# Beta\n").unwrap();
+        drive
+            .write_text("friends/alice.md", "ref [beta](../notes/beta.md)\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+        // Move 1: source moves.
+        drive
+            .rename_with_link_rewrite("friends/alice.md", "archive/alice-2.md")
+            .unwrap();
+        // Move 2: target moves. Bug 2 was here: alice-2.md kept the
+        // stale `../notes/beta.md` because the graph still had alice's
+        // pre-move src path and the lookup failed silently.
+        drive
+            .rename_with_link_rewrite("notes/beta.md", "archive/beta.md")
+            .unwrap();
+        // Original href was `../notes/beta.md` (up-relative, no `./`),
+        // so the rewritten bare-relative form is `beta.md` — the
+        // dot-explicit prefix is only added when the original used it.
+        assert_eq!(
+            drive.read_text("archive/alice-2.md").unwrap(),
+            "ref [beta](beta.md)\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_log_cleared_by_reindex() {
+        // After a reindex the graph is fresh and the cumulative log
+        // becomes a liability (it could redirect a path the user has
+        // re-created with new content). Reindex must clear it.
+        let (_cfg, _root, drive) = rename_fixture(
+            "src.md",
+            "see [a](./a.md) end\n",
+            "a.md",
+            "# A\n",
+        );
+        drive.rename_with_link_rewrite("a.md", "b.md").unwrap();
+        // Reindex now sees the fresh tree.
+        drive.reindex(None).unwrap();
+        // Recreate a fresh file at the original name `a.md`. Without
+        // the clear, the log would translate "a.md" to "b.md" and a
+        // future rename of the FRESH a.md would behave wrongly.
+        drive.write_text("a.md", "# fresh A\n").unwrap();
+        drive
+            .write_text("src2.md", "see [a](./a.md) end\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+        // Renaming the fresh a.md to z.md should rewrite src2.md
+        // without confusion from the prior log entry.
+        drive.rename_with_link_rewrite("a.md", "z.md").unwrap();
+        assert_eq!(
+            drive.read_text("src2.md").unwrap(),
+            "see [a](./z.md) end\n",
         );
     }
 
