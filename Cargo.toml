@@ -40,6 +40,7 @@ members = [
     "crates/chan-tunnel-client",
     "crates/chan-tunnel-server",
     "crates/chan-llm",
+    "crates/chan-report",
 ]
 
 [workspace.package]
