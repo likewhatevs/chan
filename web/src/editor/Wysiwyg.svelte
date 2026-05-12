@@ -18,7 +18,7 @@
   // surfaces. `@` is reserved for the contacts picker.
 
   import { onDestroy, onMount } from "svelte";
-  import { Editor } from "@tiptap/core";
+  import { Editor, getMarkRange } from "@tiptap/core";
   import { NodeSelection, TextSelection } from "@tiptap/pm/state";
   import StarterKit from "@tiptap/starter-kit";
   import TaskList from "@tiptap/extension-task-list";
@@ -61,6 +61,15 @@
     type SetFindRangesPayload,
   } from "./extensions/findHighlight";
   import { FoldHeadingExtension } from "./extensions/foldHeading";
+  import {
+    HeadingNoInputRule,
+    HeadingOnEnter,
+  } from "./extensions/headingOnEnter";
+  import {
+    BoldNoInputRule,
+    ItalicNoInputRule,
+    StrikeNoInputRule,
+  } from "./extensions/marksNoInputRules";
   import { LiveSourceExtension } from "./extensions/liveSource";
   import { createTagDecorationExtension } from "./extensions/tagDecoration";
   import {
@@ -269,6 +278,36 @@
   /// unchanged default counts as "no user input" and gets replaced
   /// by the picked file's basename.
   let editingImageDefaultAlt: string = "";
+
+  /// Start position of the textblock the caret was in at the last
+  /// sync. When the caret crosses into a new block, the previous one
+  /// is scanned end-to-end for closed `*…*` / `**…**` / `~~…~~`
+  /// pairs and any unrendered ones become real marks (with the caret
+  /// gone from that block, there's no editing position to protect).
+  /// Mapped through every transaction in onUpdate.
+  let lastBlockStartPos: number | null = null;
+  /// Re-entry guard for the render pass. The pass dispatches
+  /// transactions that fire onUpdate → syncLiveMarkSource again;
+  /// without this flag the recursive call would re-render the same
+  /// block.
+  let renderingMarks = false;
+
+  /// Per-mark live source state. When the caret enters a bold /
+  /// italic / strike run, we mutate the doc — the mark is stripped
+  /// off the range and literal `**` / `*` / `~~` chars are inserted
+  /// at its boundaries — so the markers become real, editable text.
+  /// When the caret leaves, the wrapper scans the range for a closed
+  /// pair and either re-applies the mark (rendered) or leaves the
+  /// text alone (broken markdown the user can keep fixing).
+  ///
+  /// `from` / `to` track the OUTER edges of the expanded `**text**`
+  /// range and are mapped through every transaction (mirrors
+  /// `editingImageBracketStart`). Autosave is gated on this being
+  /// `null` so a mid-expand refresh restores the pre-expansion mark
+  /// rather than escaping `**` chars into the file.
+  let editingMarkOriginal:
+    | { markName: string; marker: string; from: number; to: number }
+    | null = null;
 
   /// Cleanup for the floating image action overlay (zoom + edit
   /// buttons shown when a rendered image is clicked). `undefined`
@@ -513,7 +552,28 @@
         // Disable StarterKit's built-in CodeBlock so our
         // `CodeBlockFenced` (always-visible fences + editable
         // language) is the only code-block node in the schema.
-        StarterKit.configure({ codeBlock: false }),
+        // Drop StarterKit's bundled heading / bold / italic / strike
+        // so we can re-add them without their auto-render input
+        // rules. The rendering trigger shifts:
+        //   * heading: Enter at the end of a `^(#{1,6}) .+$` line
+        //     promotes the block. See `headingOnEnter.ts`.
+        //   * bold / italic / strike: caret leaves the closed
+        //     `*…*` / `**…**` / `~~…~~` range. See
+        //     `renderUnmarkedPatterns` below. The schema entries,
+        //     attrs, keyboard chords, and markdown serializers stay
+        //     unchanged via the extended copies.
+        StarterKit.configure({
+          codeBlock: false,
+          heading: false,
+          bold: false,
+          italic: false,
+          strike: false,
+        }),
+        HeadingNoInputRule,
+        HeadingOnEnter,
+        BoldNoInputRule,
+        ItalicNoInputRule,
+        StrikeNoInputRule,
         CodeBlockFenced,
         // `nested: true` lets a task list contain another task list
         // when the user indents (Tab inside a task item). Mirrors
@@ -784,6 +844,23 @@
         if (editingContactEnd !== null) {
           editingContactEnd = transaction.mapping.map(editingContactEnd);
         }
+        // Live-mark expansion boundaries. Map with -1/+1 bias so
+        // typing inside the range grows it (caret characters land
+        // strictly between from and to) while typing outside
+        // doesn't shift it. Without this the collapse pass would
+        // read text from a stale window and miss the leading /
+        // trailing markers.
+        if (editingMarkOriginal !== null) {
+          const m = editingMarkOriginal;
+          editingMarkOriginal = {
+            ...m,
+            from: transaction.mapping.map(m.from, -1),
+            to: transaction.mapping.map(m.to, 1),
+          };
+        }
+        if (lastBlockStartPos !== null) {
+          lastBlockStartPos = transaction.mapping.map(lastBlockStartPos, -1);
+        }
         // First doc-change after entry clears the initial-selection
         // short-circuit (the user has touched the label, so arrow
         // keys should resume their normal collapse semantics).
@@ -806,7 +883,8 @@
         if (
           editingImageOriginal !== null ||
           editingWikiOriginal !== null ||
-          editingContactOriginal !== null
+          editingContactOriginal !== null ||
+          editingMarkOriginal !== null
         ) {
           return;
         }
@@ -834,6 +912,7 @@
         syncImageBubble();
         syncTagBubble();
         syncContactBubble();
+        syncLiveMarkSource();
         updateCursorDecorations();
         maybeOpenAtomEditAtSelection();
         onSelectionChange?.();
@@ -843,6 +922,7 @@
         syncImageBubble();
         syncTagBubble();
         syncContactBubble();
+        syncLiveMarkSource();
         updateCursorDecorations();
         maybeOpenAtomEditAtSelection();
         onSelectionChange?.();
@@ -2762,6 +2842,257 @@
     }
   }
 
+  /// Marker glyph per inline mark name. Same mapping liveSource used
+  /// for its widget decoration; the doc-mutation flow now writes
+  /// these as real text into the doc on caret enter and reads them
+  /// back on caret leave.
+  const LIVE_MARK_MARKER: Record<string, string> = {
+    bold: "**",
+    italic: "*",
+    strike: "~~",
+  };
+
+  /// Find the inline mark range covering the caret position. Returns
+  /// the first match in `LIVE_MARK_MARKER` order (bold > italic >
+  /// strike) so a `**bold *and italic***` run expands the outer
+  /// bold first; the user can then arrow inward to drop into the
+  /// italic span on the next sync. Returns null if the caret is at
+  /// the end of a marked run BUT not actually inside any mark
+  /// (PM's $from at the boundary doesn't always carry the mark in
+  /// its marks array).
+  function findActiveMarkRange(
+    ed: Editor,
+  ): { markName: string; from: number; to: number } | null {
+    const sel = ed.state.selection;
+    if (!sel.empty) return null;
+    const fromPos = sel.$from;
+    for (const markName of Object.keys(LIVE_MARK_MARKER)) {
+      const type = ed.schema.marks[markName];
+      if (!type) continue;
+      const range = getMarkRange(fromPos, type);
+      // Strict-inside check: the caret must sit BETWEEN the mark's
+      // endpoints, not on them. After typing the closing `*` of a
+      // `*word*` italic, the input rule lands the caret at
+      // `range.to` (the right boundary). If we expanded there, the
+      // user's just-typed closing marker would re-appear as literal
+      // `*` and the caret would jump one position left of where
+      // they typed. Matches PM's own semantics: typing at the
+      // boundary inserts unmarked text by default.
+      if (range && sel.from > range.from && sel.from < range.to) {
+        return { markName, from: range.from, to: range.to };
+      }
+    }
+    return null;
+  }
+
+  /// Expand a mark range into its source form. Strips the mark off
+  /// the range and inserts the literal marker chars at both ends.
+  /// The caret is repositioned inside the inner text at the same
+  /// relative offset it had inside the marked text. `editingMark
+  /// Original` is stamped with the OUTER positions so the collapse
+  /// pass can find the markers later (mapped through every
+  /// subsequent transaction in onUpdate). Skips dispatch entirely
+  /// when the range is empty — there's nothing to expand and the
+  /// PM transaction would no-op anyway.
+  function expandMarkAt(
+    ed: Editor,
+    markName: string,
+    from: number,
+    to: number,
+  ): void {
+    if (to <= from) return;
+    const markType = ed.schema.marks[markName];
+    if (!markType) return;
+    const marker = LIVE_MARK_MARKER[markName]!;
+    const inner = ed.state.doc.textBetween(from, to, "\n", " ");
+    if (inner.length === 0) return;
+    const wrapped = marker + inner + marker;
+    const tr = ed.state.tr;
+    tr.replaceWith(from, to, ed.state.schema.text(wrapped));
+    tr.removeMark(from, from + wrapped.length, markType);
+    // Preserve the caret offset within the inner text; the markers
+    // grow the range on the left (+marker.length) so the caret
+    // shifts to keep the same logical position.
+    const sel = ed.state.selection;
+    const offsetInInner = Math.max(0, Math.min(inner.length, sel.from - from));
+    const newCaret = from + marker.length + offsetInInner;
+    tr.setSelection(TextSelection.create(tr.doc, newCaret));
+    // Out of undo history: the expand is a UI affordance, not a
+    // user-authored edit, and we don't want Ctrl+Z to drop the
+    // user inside a half-expanded state.
+    ed.view.dispatch(tr.setMeta("addToHistory", false));
+    editingMarkOriginal = {
+      markName,
+      marker,
+      from,
+      to: from + wrapped.length,
+    };
+  }
+
+  /// Collapse the currently expanded mark. Reads the OUTER range
+  /// text; if it still matches `<marker>…<marker>`, re-applies the
+  /// mark and strips the markers (rendered form restored). If the
+  /// user has broken the markers (deleted one half, typed past
+  /// them, etc.) the text is left as-is — the broken markdown
+  /// stays on screen and on disk for the user to keep fixing.
+  function collapseMarkExpansion(ed: Editor): void {
+    const m = editingMarkOriginal;
+    editingMarkOriginal = null;
+    if (!m) return;
+    const markType = ed.schema.marks[m.markName];
+    if (!markType) return;
+    const from = m.from;
+    const to = m.to;
+    if (to <= from) return;
+    const text = ed.state.doc.textBetween(from, to, "\n", " ");
+    if (
+      text.length < m.marker.length * 2 + 1 ||
+      !text.startsWith(m.marker) ||
+      !text.endsWith(m.marker)
+    ) {
+      return;
+    }
+    const inner = text.slice(m.marker.length, text.length - m.marker.length);
+    const tr = ed.state.tr;
+    tr.replaceWith(from, to, ed.state.schema.text(inner));
+    tr.addMark(from, from + inner.length, markType.create());
+    // Same caret-offset logic as expand, in reverse: the caret was
+    // somewhere inside the wrapped run; shift it back by
+    // marker.length so it lands at the same logical position
+    // inside the now-marked inner text. Clamp to [from, from+inner].
+    const sel = ed.state.selection;
+    const targetWithin = Math.max(
+      0,
+      Math.min(inner.length, sel.from - from - m.marker.length),
+    );
+    tr.setSelection(TextSelection.create(tr.doc, from + targetWithin));
+    ed.view.dispatch(tr.setMeta("addToHistory", false));
+  }
+
+  /// Reconcile the live-mark expansion against the current caret
+  /// position. State transitions:
+  ///   no expansion + caret inside a tracked mark  -> expand
+  ///   expansion + caret still inside its range    -> no-op
+  ///   expansion + caret left the range            -> collapse
+  ///   expansion + caret entered a different mark  -> collapse, expand
+  /// Non-empty selections collapse any open expansion (a multi-char
+  /// selection straddling the markers would otherwise grow inside a
+  /// half-rendered range).
+  /// Pattern catalog for the render-on-leave pass. Order matters:
+  /// bold is matched first so its `**` markers don't get consumed by
+  /// the italic pass. Italic uses lookbehind / lookahead to exclude
+  /// `*` chars that belong to a surrounding `**…**` pair. Nested
+  /// combos (`***bold-italic***`) are deferred.
+  const MARK_RENDER_PATTERNS: Array<{ name: string; re: RegExp }> = [
+    { name: "bold", re: /\*\*([^*\n]+?)\*\*/g },
+    { name: "italic", re: /(?<!\*)\*([^*\n]+?)\*(?!\*)/g },
+    { name: "strike", re: /~~([^~\n]+?)~~/g },
+  ];
+
+  /// Walk one textblock and apply marks to every closed pattern
+  /// whose range does NOT contain `caretInBlock` (PM-coord position).
+  /// Pass -1 (or any out-of-range value) to mean "caret is not in
+  /// this block, render all". Each mark kind runs as its own
+  /// transaction so positions stay valid right-to-left across the
+  /// in-pass sort.
+  function renderUnmarkedInBlock(
+    ed: Editor,
+    blockStart: number,
+    caretInBlock: number,
+  ): void {
+    let resolved;
+    try {
+      resolved = ed.state.doc.resolve(blockStart);
+    } catch {
+      return;
+    }
+    if (!resolved.parent.isTextblock) return;
+    const start = resolved.start();
+    const end = resolved.end();
+    const text = ed.state.doc.textBetween(start, end, "\n", " ");
+    for (const pat of MARK_RENDER_PATTERNS) {
+      const markType = ed.schema.marks[pat.name];
+      if (!markType) continue;
+      type Hit = { from: number; to: number; inner: string };
+      const hits: Hit[] = [];
+      pat.re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      // Re-read the block text each pass (a previous pass may have
+      // shortened it by applying marks, shifting subsequent offsets).
+      const passText = ed.state.doc.textBetween(start, end, "\n", " ");
+      while ((m = pat.re.exec(passText)) !== null) {
+        const from = start + m.index;
+        const to = from + m[0].length;
+        // Inclusive-boundary protection: caret AT pattern.from or
+        // pattern.to still counts as "in the pattern" — the user
+        // just typed the closing marker (caret = to) or sits at the
+        // opening edge after a delete, and either way the literal
+        // markers should stay visible until they actually move
+        // strictly outside.
+        if (caretInBlock >= from && caretInBlock <= to) continue;
+        hits.push({ from, to, inner: m[1] });
+      }
+      if (hits.length === 0) continue;
+      hits.sort((a, b) => b.from - a.from);
+      const tr = ed.state.tr;
+      for (const hit of hits) {
+        tr.replaceWith(hit.from, hit.to, ed.state.schema.text(hit.inner));
+        tr.addMark(hit.from, hit.from + hit.inner.length, markType.create());
+      }
+      ed.view.dispatch(tr.setMeta("addToHistory", false));
+    }
+  }
+
+  function syncLiveMarkSource(): void {
+    if (!editor) return;
+    if (renderingMarks) return;
+    const sel = editor.state.selection;
+    const currentBlockStart =
+      sel.$from && sel.$from.parent.isTextblock ? sel.$from.start() : null;
+    // Render any pattern in the previous block that's now caret-less.
+    // We pass `-1` as caretInBlock so renderUnmarkedInBlock treats
+    // every pattern there as "outside".
+    if (
+      !sel.$from
+        ? false
+        : currentBlockStart !== lastBlockStartPos &&
+          lastBlockStartPos !== null
+    ) {
+      renderingMarks = true;
+      try {
+        renderUnmarkedInBlock(editor, lastBlockStartPos!, -1);
+      } finally {
+        renderingMarks = false;
+      }
+    }
+    lastBlockStartPos = currentBlockStart;
+    if (!sel.empty) {
+      if (editingMarkOriginal) collapseMarkExpansion(editor);
+      return;
+    }
+    if (editingMarkOriginal) {
+      const m = editingMarkOriginal;
+      if (sel.from >= m.from && sel.from <= m.to) return;
+      collapseMarkExpansion(editor);
+    }
+    // Render any pattern in the CURRENT block whose range no longer
+    // contains the caret. This handles "type closing `*`, move one
+    // step further (space / arrow / click) → render" — caret sitting
+    // at the right boundary is still considered inside, so the user
+    // sees the markers for the moment they typed them.
+    if (currentBlockStart !== null) {
+      renderingMarks = true;
+      try {
+        renderUnmarkedInBlock(editor, currentBlockStart, sel.from);
+      } finally {
+        renderingMarks = false;
+      }
+    }
+    const active = findActiveMarkRange(editor);
+    if (!active) return;
+    expandMarkAt(editor, active.markName, active.from, active.to);
+  }
+
   /// Enter image edit mode by replacing the atom at `pos` with
   /// `![alt](src)` source text, then opening the bubble in path
   /// mode. Mirrors `enterWikiEditAt`. The original src + alt are
@@ -3787,6 +4118,17 @@
   :global(.md-wysiwyg .md-wiki-bracket) {
     color: var(--text-secondary);
     opacity: 0.5;
+  }
+
+  /* Markdown-syntax highlight for `*`, `**`, `~~` runs that bound
+     a closed inline pair in the caret's current block. The
+     `liveSource` plugin emits inline decorations on the marker
+     chars so the user gets the same "this is markdown source" cue
+     a code editor's syntax highlighter would give while typing /
+     editing the surrounding text. */
+  :global(.md-wysiwyg .md-mark-pending) {
+    color: var(--accent);
+    opacity: 0.65;
   }
 
   /* Inline-mark source markers (bold / italic / strike). The

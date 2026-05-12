@@ -33,10 +33,14 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
 /// Marker text per mark type. The plugin only adds widgets for
 /// marks whose name is a key here; the schema may carry other marks
 /// (link) we deliberately don't decorate this way.
+///
+/// Bold / italic / strike are NOT in this map any more: those marks
+/// route through Wysiwyg.svelte's `syncLiveMarkSource`, which mutates
+/// the doc on caret enter to surface the literal `**` / `*` / `~~`
+/// chars as editable text. Leaving them as widgets here too would
+/// double-paint the markers and the doc text would shift relative
+/// to the rendered output.
 const MARK_MARKER: Record<string, string> = {
-  bold: "**",
-  italic: "*",
-  strike: "~~",
   code: "`",
 };
 
@@ -292,6 +296,51 @@ export const LiveSourceExtension = Extension.create({
                     class: "md-mark-editing-strike",
                   }),
                 );
+              }
+            }
+
+            // 3. Pending-mark markers. While the caret is in a
+            //    textblock, scan its plain text for completed
+            //    `*…*` / `**…**` / `~~…~~` patterns and decorate
+            //    the marker chars so the user sees, at a glance,
+            //    that the editor has recognised the pattern and
+            //    will apply the corresponding mark once they leave
+            //    the block (the block-leave render pass lives in
+            //    Wysiwyg.svelte's `syncLiveMarkSource`). Bold and
+            //    italic share `*` so we run bold first and exclude
+            //    bordering `*` from the italic match.
+            const parentForPending = $from.parent;
+            if (parentForPending.isTextblock) {
+              const blockTextStart = $from.start();
+              const blockText = parentForPending.textContent;
+              const pendingPatterns: Array<{
+                name: string;
+                re: RegExp;
+                len: number;
+              }> = [
+                { name: "bold", re: /\*\*([^*\n]+?)\*\*/g, len: 2 },
+                { name: "italic", re: /(?<!\*)\*([^*\n]+?)\*(?!\*)/g, len: 1 },
+                { name: "strike", re: /~~([^~\n]+?)~~/g, len: 2 },
+              ];
+              for (const p of pendingPatterns) {
+                p.re.lastIndex = 0;
+                let mm: RegExpExecArray | null;
+                while ((mm = p.re.exec(blockText)) !== null) {
+                  const matchFrom = blockTextStart + mm.index;
+                  const openTo = matchFrom + p.len;
+                  const closeFrom = matchFrom + mm[0].length - p.len;
+                  const closeTo = matchFrom + mm[0].length;
+                  decos.push(
+                    Decoration.inline(matchFrom, openTo, {
+                      class: "md-mark-pending",
+                    }),
+                  );
+                  decos.push(
+                    Decoration.inline(closeFrom, closeTo, {
+                      class: "md-mark-pending",
+                    }),
+                  );
+                }
               }
             }
 
