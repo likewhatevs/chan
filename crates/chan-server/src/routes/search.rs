@@ -13,7 +13,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_drive::{NodeKind, SearchOpts};
+use chan_drive::{classify, FileClass, NodeKind, SearchOpts};
 use serde::{Deserialize, Serialize};
 
 use crate::error::err_from;
@@ -55,6 +55,13 @@ pub async fn api_search_files(
     let graph = drive.graph().ok();
     let needle = p.q.to_lowercase();
     let mut hits = Vec::new();
+    // Two-pass collection so editable-text notes (.md / .txt) sort
+    // ahead of binary assets. Linking a `[](image.png)` is legal
+    // markdown and we allow it, but the [[ picker's primary use is
+    // navigating between notes; surfacing those first keeps the
+    // picker feeling note-shaped without hiding any file.
+    let mut notes = Vec::new();
+    let mut others = Vec::new();
     for entry in tree {
         if entry.is_dir {
             continue;
@@ -67,16 +74,28 @@ pub async fn api_search_files(
         if !needle.is_empty() && !basename.contains(&needle) {
             continue;
         }
-        if let Some(ref g) = graph {
+        if let Some(g) = &graph {
             if let Ok(Some(NodeKind::Contact)) = g.node_kind(&entry.path) {
                 continue;
             }
         }
-        hits.push(entry);
-        if hits.len() >= p.limit {
+        if matches!(classify(&entry.path), FileClass::EditableText) {
+            notes.push(entry);
+        } else if others.len() < p.limit {
+            // Once we have `limit` non-note candidates buffered there
+            // is no way more of them survive the final truncate, so
+            // skip buffering further to bound memory.
+            others.push(entry);
+        }
+        if notes.len() >= p.limit {
+            // Enough notes to fill the response on their own; no need
+            // to keep scanning for fallback candidates.
             break;
         }
     }
+    hits.extend(notes);
+    hits.extend(others);
+    hits.truncate(p.limit);
     Json(hits).into_response()
 }
 
