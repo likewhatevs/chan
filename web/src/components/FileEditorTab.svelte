@@ -2,7 +2,7 @@
   // Body of a file tab. The previous top "tab-bar" (Aa, page-width,
   // formatting group, reveal-in-browser, mode toggle, outline toggle)
   // is split across two surfaces: a per-tab popover anchored to the
-  // tab strip's ⋯ button (zoom + duplicate / reveal / mode / outline /
+  // tab title click (zoom + duplicate / reveal / mode / outline /
   // show-style-toolbar actions), plus a floating style toolbar pinned
   // to the top-left of the editor canvas (block kind + B/I/S/code/link/
   // lists/HR/image). The bubble's formatting row used to sit inside
@@ -105,17 +105,19 @@
     }
   }
 
-  /// Dismiss when the click lands outside the bubble AND outside the
-  /// trigger button (the trigger's own click handler already toggles
-  /// the state, so we ignore clicks that bubble up from it).
+  /// Dismiss when the click lands outside the bubble AND outside any
+  /// tab row (the row's own click handler already toggles the state,
+  /// so we ignore clicks that bubble up from it — without this guard
+  /// the global handler closes the menu before the row handler has a
+  /// chance to reopen it, and a second click on the active tab feels
+  /// dead).
   function onDocPointerDown(e: PointerEvent): void {
     if (!menuOpen) return;
     const t = e.target as Node | null;
     if (!t) return;
     const bubble = document.querySelector(".tab-menu-bubble");
     if (bubble && bubble.contains(t)) return;
-    // Any click on a tab's ⋯ trigger is handled by Pane.svelte.
-    const trigger = (t as Element).closest?.(".tb-toggle");
+    const trigger = (t as Element).closest?.(".tab");
     if (trigger) return;
     closeTabMenu();
   }
@@ -151,7 +153,7 @@
 
 <div class="editor-tab">
   {#if menuOpen}
-    <!-- Tab menu bubble. Anchored to the ⋯ button in the pane's
+    <!-- Tab menu bubble. Anchored to the tab title in the pane's
          tab strip; rendered here so it has direct access to the
          live Wysiwyg ref + selVer signal that drives the
          formatting buttons' "on" states. -->

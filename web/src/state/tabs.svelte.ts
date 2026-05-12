@@ -67,12 +67,12 @@ export type FileTab = {
   /// accept. The watcher refreshes this when permissions change.
   fsWritable: boolean;
   /// Whether the floating style toolbar (top-left of the editor
-  /// canvas) is mounted for this tab. The toolbar collapses to a
-  /// pill when not hovered; this flag is the user's explicit
-  /// show/hide preference from the tab menu (a layer above the
-  /// hover behavior). Defaults true so new tabs surface the
-  /// affordance. Per-tab so a "reading" tab can drop the chrome
-  /// without losing it on an adjacent editing tab.
+  /// canvas) is mounted for this tab. The user's explicit show /
+  /// hide preference from the tab menu (a layer above the hover-
+  /// to-expand behavior). Defaults false so new tabs open with a
+  /// clean canvas; users opt the toolbar in from the tab menu.
+  /// Per-tab so a "reading" tab can keep the chrome hidden while an
+  /// adjacent editing tab shows it.
   styleToolbarOpen: boolean;
 };
 
@@ -211,7 +211,7 @@ export async function openInPane(paneId: string, path: string): Promise<void> {
     repoRoot: null,
     readMode: false,
     fsWritable: true,
-    styleToolbarOpen: true,
+    styleToolbarOpen: false,
   };
   p.tabs.push(newTab);
   p.activeTabId = newTab.id;
@@ -617,11 +617,11 @@ type SerTab = {
   m?: Mode;
   a?: 1;
   o?: 1;
-  /// Style toolbar visibility. Default is "shown" (1) for new
-  /// tabs; we only emit `s: 0` when the user explicitly hid it so
+  /// Style toolbar visibility. Default is "hidden" for new tabs;
+  /// we only emit `s: 1` when the user explicitly enabled it so
   /// the common case keeps the hash short. Restores without the
   /// field land on the default.
-  s?: 0;
+  s?: 1;
 };
 type SerLeaf = { k: "l"; t: SerTab[]; f?: 1 };
 type SerSplit = { k: "s"; d: "r" | "c"; a: SerNode; b: SerNode; r?: number };
@@ -641,7 +641,7 @@ function serializeNode(nodeId: string): SerNode | null {
         m: t.mode,
         ...active,
         ...(t.inspectorOpen ? { o: 1 as const } : {}),
-        ...(t.styleToolbarOpen ? {} : { s: 0 as const }),
+        ...(t.styleToolbarOpen ? { s: 1 as const } : {}),
       };
     });
     return {
@@ -716,9 +716,9 @@ export async function restoreLayout(s: SerNode): Promise<void> {
           // gets refreshed by the first loadTabContent.
           readMode: false,
           fsWritable: true,
-          // Absent `s` field = default-on; `s: 0` = user previously
-          // hid the floating style toolbar.
-          styleToolbarOpen: sertab.s !== 0,
+          // Absent `s` field = default-off; `s: 1` = user previously
+          // enabled the floating style toolbar.
+          styleToolbarOpen: sertab.s === 1,
         };
         p.tabs.push(tab);
         if (sertab.a) p.activeTabId = tab.id;

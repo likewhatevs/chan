@@ -361,10 +361,28 @@
       {#if dropIndicator === i}
         <div class="drop-bar" aria-hidden="true"></div>
       {/if}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
       <div
         class="tab"
         class:active={t.id === pane.activeTabId}
         onmousedown={() => (pane.activeTabId = t.id)}
+        onclick={(e) => {
+          // Click on the filename (anywhere on the tab body that
+          // isn't the × close button) toggles the menu. The bubble
+          // anchors to the tab's bounding rect so it always pops
+          // beneath the tab regardless of which character the click
+          // landed on.
+          if (t.kind !== "file") return;
+          pane.activeTabId = t.id;
+          const row = e.currentTarget as HTMLElement;
+          const r = row.getBoundingClientRect();
+          toggleTabMenu(t.id, {
+            left: r.left,
+            top: r.top,
+            right: r.right,
+            bottom: r.bottom,
+          });
+        }}
         role="tab"
         tabindex="0"
         title={tabTooltip(t)}
@@ -380,39 +398,14 @@
         {#if t.kind === "file" && t.loading}
           <span class="marker spinner" aria-hidden="true"></span>
         {/if}
-        <span class="path">{tabLabel(t)}</span>
+        <span
+          class="path"
+          aria-haspopup={t.kind === "file" ? "menu" : undefined}
+          aria-expanded={t.kind === "file" && tabMenu.openForTabId === t.id}
+        >{tabLabel(t)}</span>
         {#if isDirty(t)}
           <span class="dirty unsaved" title="unsaved changes">●</span>
         {/if}
-        <!-- Per-tab menu. Opens a popover anchored to this button
-             with the per-file affordances (formatting toolbar, zoom,
-             duplicate, reveal in browser, source toggle, outline
-             toggle). State is shared via tabMenu.svelte so the
-             FileEditorTab body can render the bubble in its own
-             coordinate space. -->
-        <button
-          class="tb-toggle"
-          class:on={t.kind === "file" && tabMenu.openForTabId === t.id}
-          aria-label="open tab menu"
-          aria-haspopup="menu"
-          aria-expanded={t.kind === "file" && tabMenu.openForTabId === t.id}
-          title="tab menu"
-          onmousedown={(e) => e.stopPropagation()}
-          onclick={(e) => {
-            e.stopPropagation();
-            if (t.kind !== "file") return;
-            // Make sure the click also focuses this tab so the bubble
-            // operates on the file that's about to render.
-            pane.activeTabId = t.id;
-            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-            toggleTabMenu(t.id, {
-              left: r.left,
-              top: r.top,
-              right: r.right,
-              bottom: r.bottom,
-            });
-          }}
-        >⋯</button>
         <button
           class="close"
           onclick={(e) => {
@@ -497,10 +490,21 @@
     color: var(--text-secondary);
     background: transparent;
     user-select: none;
-    /* Subtle ease so toggling between tabs doesn't pop. */
-    transition: background 80ms ease, color 80ms ease;
+    /* `transform-origin: center bottom` anchors the hover wobble to
+       the tab strip's baseline so the tab lifts upward rather than
+       drifting sideways. Same easeOutBack curve as the tab-menu
+       bubble, bottom pill, and style toolbar so the motion language
+       reads as one set. */
+    transform-origin: center bottom;
+    transition:
+      background 80ms ease,
+      color 80ms ease,
+      transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
   }
-  .tab:hover { color: var(--text); }
+  .tab:hover {
+    color: var(--text);
+    transform: scale(1.04);
+  }
   .tab.active {
     background: var(--bg-elev);
     color: var(--text);
@@ -522,26 +526,6 @@
   @keyframes tab-spin {
     to { transform: rotate(360deg); }
   }
-  /* Per-tab toolbar toggle. Sits between the dirty dot and the
-     close button. Reveals on hover or when the tab is active so a
-     packed strip doesn't pile glyphs against every label. */
-  .tab .tb-toggle {
-    background: none;
-    border: 0;
-    cursor: pointer;
-    font-size: 14px;
-    line-height: 1;
-    color: var(--text-secondary);
-    padding: 0 4px;
-    opacity: 0;
-    transition: opacity 80ms ease, color 80ms ease;
-    flex-shrink: 0;
-  }
-  .tab:hover .tb-toggle,
-  .tab.active .tb-toggle,
-  .tab .tb-toggle.on { opacity: 1; }
-  .tab .tb-toggle:hover { color: var(--text); }
-  .tab .tb-toggle.on { color: var(--text); }
   /* Close button stays invisible until the row is hovered or the
      tab is active; matches iTerm / Chrome's behavior so the strip
      reads cleanly with many tabs open. */
@@ -595,5 +579,12 @@
     -webkit-mask: url('/chan-mark.png') center / contain no-repeat;
             mask: url('/chan-mark.png') center / contain no-repeat;
     opacity: 0.18;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tab,
+    .tab:hover {
+      transition: background 80ms ease, color 80ms ease;
+      transform: none;
+    }
   }
 </style>

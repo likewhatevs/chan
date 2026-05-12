@@ -20,19 +20,8 @@
   // up. Owner re-emits selVer from the editor's selectionChange
   // callback so this toolbar reflects the live cursor position.
 
-  import { scale } from "svelte/transition";
   import type Wysiwyg from "../editor/Wysiwyg.svelte";
   import type { BlockKind } from "../editor/Wysiwyg.svelte";
-
-  /// Same easeOutBack curve the tab-menu bubble + OverlayShell use
-  /// for their open animation; passed to the scale transition so the
-  /// expanded toolbar pops in (and out) with the small overshoot the
-  /// rest of the chrome shares.
-  function easeOutBack(t: number): number {
-    const c1 = 1.70158;
-    const c3 = c1 + 1;
-    return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
-  }
 
   let {
     wysiwyg,
@@ -180,23 +169,15 @@
   onfocusin={onFocusIn}
   onfocusout={onFocusOut}
 >
-  {#if !expanded}
-    <!-- Collapsed pill: signals the toolbar's presence without
-         crowding the page. The state swap is animated by the
-         `scale` transition on the expanded group below, matching
-         the tab-menu bubble + OverlayShell open feel. -->
-    <span
-      class="pill"
-      aria-hidden="true"
-      in:scale={{ duration: 260, start: 0.92, easing: easeOutBack }}
-      out:scale={{ duration: 180, start: 0.92, easing: easeOutBack }}
-    >Aa</span>
-  {:else}
-    <div
-      class="fbtn-row"
-      in:scale={{ duration: 260, start: 0.92, easing: easeOutBack }}
-      out:scale={{ duration: 180, start: 0.92, easing: easeOutBack }}
-    >
+  <!-- Aa always visible: signals the toolbar's presence at rest
+       and keeps a fixed anchor as the buttons swing in. The
+       expanded row pops out from the right of it with the same
+       easeOutBack curve the tab-menu bubble + OverlayShell use,
+       so the motion language stays consistent. -->
+  <span class="pill" aria-hidden="true">Aa</span>
+  {#if expanded}
+    <div class="fbtn-row">
+    <span class="vsep" aria-hidden="true"></span>
     <select
       class="block-kind"
       value={blockKind}
@@ -313,7 +294,11 @@
 <style>
   /* Floating chrome anchored to the top-left of the editor canvas.
      position: absolute inside the .editor-host wrapper means the
-     toolbar stays put even as the user scrolls the editor body. */
+     toolbar stays put even as the user scrolls the editor body.
+     The hover-scale wobble + box-shadow lift match the tab-menu
+     bubble and bottom pill so the motion language stays consistent
+     across the chrome (mouseenter overshoots ~2%, mouseleave settles
+     back through the same easeOutBack curve). */
   .style-toolbar {
     position: absolute;
     top: 8px;
@@ -332,14 +317,13 @@
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
     color: var(--text);
     font-size: 13px;
-    /* easeOutBack on width/transform so the collapse / expand reads
-       as alive without flapping. */
+    transform-origin: top left;
     transition:
-      transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1),
+      transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1),
       box-shadow 160ms ease;
   }
-  .style-toolbar.expanded {
-    transform: scale(1);
+  .style-toolbar:hover {
+    transform: scale(1.02);
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
   }
   .style-toolbar.disabled .fbtn,
@@ -357,9 +341,9 @@
     gap: 2px;
     transform-origin: top left;
   }
-  /* Collapsed pill: monochrome "Aa" stays in the corner so users
-     know the toolbar lives there. The badge inherits the toolbar's
-     pill chrome so the only visual change on hover is the contents. */
+  /* Aa badge: always-on signal that the toolbar lives in this
+     corner. Acts as the toolbar's left anchor; the formatting row
+     opens to its right when expanded. */
   .pill {
     display: inline-flex;
     align-items: center;
@@ -370,6 +354,15 @@
     color: var(--text-secondary);
     font-weight: 600;
     user-select: none;
+  }
+  /* Vertical divider between the Aa badge and the heading selector
+     when the toolbar is expanded. Thin, low-contrast hairline; sits
+     inside the .fbtn-row so it scales with the wobble. */
+  .vsep {
+    align-self: stretch;
+    width: 1px;
+    margin: 2px 4px;
+    background: var(--border);
   }
   .block-kind {
     background: transparent;
@@ -409,6 +402,10 @@
   .fbtn code { font-family: ui-monospace, monospace; }
 
   @media (prefers-reduced-motion: reduce) {
-    .style-toolbar { transition: none; }
+    .style-toolbar,
+    .style-toolbar:hover {
+      transition: none;
+      transform: none;
+    }
   }
 </style>

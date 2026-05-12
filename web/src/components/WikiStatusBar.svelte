@@ -14,19 +14,8 @@
   // and avoiding a serialized field keeps tab-state simple.
 
   import { onDestroy } from "svelte";
-  import { scale } from "svelte/transition";
   import { api } from "../api/client";
   import { idle } from "../state/idle.svelte";
-
-  /// easeOutBack: 10% overshoot on the way in. Same curve as the
-  /// tab-menu bubble, OverlayShell, and StyleToolbar — collapses the
-  /// stats row with the same wobbly feel the rest of the chrome
-  /// shares so the user reads one consistent motion language.
-  function easeOutBack(t: number): number {
-    const c1 = 1.70158;
-    const c3 = c1 + 1;
-    return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
-  }
 
   let {
     path,
@@ -129,11 +118,7 @@
     onmousedown={(e) => e.preventDefault()}
   >{collapsed ? "‹" : "›"}</button>
   {#if !collapsed}
-    <div
-      class="stats-row"
-      in:scale={{ duration: 260, start: 0.92, easing: easeOutBack }}
-      out:scale={{ duration: 180, start: 0.92, easing: easeOutBack }}
-    >
+    <div class="stats-row">
       <span class="stat" title="incoming links">
         {backlinkCount ?? "-"}
         <span class="lbl">backlinks</span>
@@ -191,22 +176,29 @@
     font-size: 12px;
     color: var(--muted);
     user-select: none;
-    transition: opacity 200ms ease;
+    /* Hover wobble matches the tab-menu bubble + bottom pill:
+       easeOutBack overshoot on enter, settles back on leave, with
+       a tiny box-shadow lift so the bar reads as alive. */
+    transform-origin: right bottom;
+    transition:
+      opacity 200ms ease,
+      transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1),
+      box-shadow 160ms ease;
+  }
+  .wiki-statusbar:hover {
+    transform: scale(1.04);
+    box-shadow: 0 4px 12px rgba(0,0,0,.24);
   }
   .wiki-statusbar.collapsed {
     padding: 6px;
     gap: 0;
   }
-  /* Wraps the stats so the scale-pop transition runs against the
-     whole row as one unit. `transform-origin: right center` anchors
-     the bounce to the bar's collapse handle (which lives at the
-     row's leading edge) so the overshoot grows outward toward the
-     bar's body rather than pulling away from the screen edge. */
+  /* Wraps the stats so the layout reads as one logical row beside
+     the collapse handle. */
   .stats-row {
     display: flex;
     align-items: center;
     gap: 10px;
-    transform-origin: right center;
   }
   /* Idle: fade out + drop pointer events so the status bar
      disappears alongside the floating fmt-bar and bottom-pill,
@@ -281,4 +273,11 @@
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--warn-text) 35%, transparent);
   }
   .lamp-lbl { letter-spacing: 0.02em; }
+  @media (prefers-reduced-motion: reduce) {
+    .wiki-statusbar,
+    .wiki-statusbar:hover {
+      transition: opacity 120ms linear;
+      transform: none;
+    }
+  }
 </style>
