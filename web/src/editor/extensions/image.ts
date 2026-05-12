@@ -147,6 +147,43 @@ export function createImageNode(getFromPath: () => string | null) {
       if (align) extra["data-align"] = align;
       return ["img", mergeAttributes(HTMLAttributes, extra)];
     },
+    addStorage() {
+      return {
+        // Defensive markdown serializer. The default image
+        // serializer in prosemirror-markdown writes
+        //   `![${state.esc(node.attrs.alt)}](${state.esc(node.attrs.src)})`
+        // and `state.esc` calls `.replace` on its argument, so a
+        // node whose `src` or `alt` ended up `null` / `undefined`
+        // (malformed `![]()` patterns, partially-typed images, or
+        // a `![[...]]` chunk that fooled the parser) crashes the
+        // entire getMarkdown() pass, which then strands autosave.
+        // Coerce both attrs to strings before we hand them off so
+        // the round-trip is always safe even when the doc holds a
+        // half-formed image.
+        markdown: {
+          serialize(
+            state: unknown,
+            node: { attrs: Record<string, unknown> },
+          ) {
+            const alt =
+              typeof node.attrs.alt === "string" ? node.attrs.alt : "";
+            const src =
+              typeof node.attrs.src === "string" ? node.attrs.src : "";
+            const title =
+              typeof node.attrs.title === "string" ? node.attrs.title : "";
+            const s = state as {
+              esc(input: string): string;
+              write(text: string): void;
+            };
+            const titlePart = title
+              ? ` "${title.replace(/"/g, '\\"')}"`
+              : "";
+            s.write(`![${s.esc(alt)}](${s.esc(src)}${titlePart})`);
+          },
+          parse: { setup() {} },
+        },
+      };
+    },
     addNodeView() {
       // Wrap the `<img>` in a span with a drag-resize handle pinned
       // to the bottom-right corner. The handle is muted until the

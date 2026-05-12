@@ -917,7 +917,29 @@
         // leading `#…# ` ourselves below — that round-trips through
         // markdown's own heading parser cleanly, so a refresh
         // mid-edit lands on the heading the user just typed.
-        const raw = (editor.storage.markdown as { getMarkdown(): string }).getMarkdown();
+        // Backstop the serialize call. The default prosemirror-
+        // markdown node serializers call `state.esc(...)` on attr
+        // values without type-checking; a node with a non-string
+        // attr (malformed `![]()` images, half-typed atoms, foreign
+        // paste with odd shapes) throws `e.replace is not a
+        // function` deep inside markdown-it and the rest of this
+        // handler never runs — meaning the user's edit was made,
+        // but never propagated to `value` and never autosaved.
+        // The image extension owns a defensive serializer (see
+        // `extensions/image.ts`) for the known offender; this
+        // catch covers any future extension that lands here with
+        // the same shape. Skip this save tick and rely on the
+        // next selection-update / doc-update to retry.
+        let raw: string;
+        try {
+          raw = (editor.storage.markdown as { getMarkdown(): string }).getMarkdown();
+        } catch (err) {
+          console.warn(
+            "[chan] markdown serialize failed; skipping autosave for this update",
+            err,
+          );
+          return;
+        }
         // Strip the NBSP-paragraph markers we injected on parse so
         // the file on disk stays clean (plain blank lines, no
         // invisible characters). The next reload re-injects them
