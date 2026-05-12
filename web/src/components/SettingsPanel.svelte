@@ -87,8 +87,9 @@
   /// binary so a single fetch is enough.
   let buildInfo = $state<BuildInfo | null>(null);
 
-  /// Search-index reset state. Destructive (rebuild from scratch),
-  /// so the click goes through window.confirm before the request fires.
+  /// Search-index reset state. Destructive (rebuild from scratch).
+  /// The button's section carries an inline warning rather than a
+  /// modal confirm so the choice is visible without an extra prompt.
   let indexResetting = $state(false);
   let indexResetError = $state<string | null>(null);
 
@@ -505,13 +506,6 @@
   }
 
   async function resetIndex(): Promise<void> {
-    if (
-      !window.confirm(
-        "Wipe the search index and rebuild from scratch?\n\nFast for small drives but takes a few seconds while embeddings re-run.",
-      )
-    ) {
-      return;
-    }
     indexResetting = true;
     indexResetError = null;
     try {
@@ -1128,6 +1122,11 @@
         onclick={() => void resetIndex()}
         disabled={indexResetting}
       >{indexResetting ? "rebuilding…" : "Rebuild index"}</button>
+      <p class="warn">
+        <span class="warn-icon" aria-hidden="true">⚠</span>
+        This wipes the search index and rebuilds from scratch. Can be slow
+        on large drives while embeddings re-run.
+      </p>
       {#if indexResetError}
         <div class="err-line">{indexResetError}</div>
       {/if}
@@ -1400,6 +1399,23 @@
     color: var(--warn-text);
     font-size: 13px;
     margin: 0.25rem 0;
+  }
+  /* Inline destructive-action warning. Lives next to the Rebuild
+     index button (and any future destructive-section button); leaves
+     the action visible while the caveat reads as a label rather than
+     a modal interruption. */
+  .warn {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin: 0.4rem 0 0 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .warn-icon {
+    color: var(--warn-text);
+    flex-shrink: 0;
+    line-height: 1.4;
   }
   /* Recent drives list under the Drives section. */
   .recents-head {
