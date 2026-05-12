@@ -1,0 +1,275 @@
+//! End-to-end tests for the tunnel listener.
+//!
+//! Drives a real `chan-tunnel-client` against `serve_tunnel_listener`
+//! over a localhost socket, exercising the auth gates (base scope,
+//! public scope, cap) that unit tests can only exercise in pieces.
+//! The client dials h2c (`http://...`); no TLS plumbing on this
+//! side, since TLS is nginx's job in production.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use chan_tunnel_client::{dial, ClientConfig};
+use chan_tunnel_server::{
+    serve_tunnel_listener, Registry, ServerError, Validated, Validator, TUNNEL_PUBLIC_SCOPE,
+    TUNNEL_SCOPE,
+};
+use tokio::net::TcpListener;
+use url::Url;
+use uuid::Uuid;
+
+/// Validator stub. One expected token, one canned `Validated`.
+/// Anything else is `InvalidToken`.
+struct StubValidator {
+    expected_token: String,
+    username: String,
+    scopes: Vec<String>,
+}
+
+#[async_trait]
+impl Validator for StubValidator {
+    async fn validate(&self, token: &str) -> Result<Validated, ServerError> {
+        if token != self.expected_token {
+            return Err(ServerError::InvalidToken);
+        }
+        Ok(Validated {
+            user_id: Uuid::nil(),
+            username: self.username.clone(),
+            scopes: self.scopes.clone(),
+        })
+    }
+}
+
+struct Harness {
+    port: u16,
+    registry: Arc<Registry>,
+    /// Kept so the listener task lives at least as long as the test.
+    /// `drop(Harness)` aborts via the JoinHandle's Drop.
+    _task: tokio::task::JoinHandle<()>,
+}
+
+async fn spawn_listener(validator: Arc<dyn Validator>, max_drives_per_user: usize) -> Harness {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind 0");
+    let port = listener.local_addr().unwrap().port();
+    let registry = Registry::new();
+    let registry_for_task = registry.clone();
+    let _task = tokio::spawn(async move {
+        let _ = serve_tunnel_listener(listener, validator, registry_for_task, max_drives_per_user)
+            .await;
+    });
+    Harness {
+        port,
+        registry,
+        _task,
+    }
+}
+
+fn cfg(port: u16, token: &str, drive: &str, public: bool) -> ClientConfig {
+    ClientConfig {
+        tunnel_url: Url::parse(&format!("http://127.0.0.1:{port}/v1/tunnel"))
+            .expect("hard-coded url is valid"),
+        token: token.into(),
+        drive: drive.into(),
+        client_version: "chan/test".into(),
+        public,
+        initial_backoff: Duration::from_millis(50),
+        max_backoff: Duration::from_secs(1),
+        dial_timeout: Duration::from_secs(5),
+        events: None,
+        proxy: None,
+    }
+}
+
+/// Spin-wait briefly for the listener to insert the registration.
+/// The client's `dial` returns the moment it reads HelloAck, but
+/// the server side does `register_with_cap` a few statements later;
+/// without a wait, tests querying the registry can race that gap.
+async fn wait_registered(reg: &Registry, user: &str, drive: &str) -> bool {
+    for _ in 0..100 {
+        if reg.get(user, drive).is_some() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    false
+}
+
+#[tokio::test]
+async fn happy_path_private_drive() {
+    let validator = Arc::new(StubValidator {
+        expected_token: "good".into(),
+        username: "alice".into(),
+        scopes: vec![TUNNEL_SCOPE.into()],
+    });
+    let h = spawn_listener(validator, 0).await;
+    let (reg, _yconn) = dial(&cfg(h.port, "good", "notes", false))
+        .await
+        .expect("dial ok");
+    assert_eq!(reg.user, "alice");
+    assert_eq!(reg.drive, "notes");
+    assert_eq!(reg.prefix, "/notes");
+    assert!(wait_registered(&h.registry, "alice", "notes").await);
+    let drives = h.registry.list_drives_for("alice");
+    assert_eq!(drives.len(), 1);
+    assert!(!drives[0].public);
+}
+
+#[tokio::test]
+async fn invalid_token_returns_401() {
+    let validator = Arc::new(StubValidator {
+        expected_token: "good".into(),
+        username: "alice".into(),
+        scopes: vec![TUNNEL_SCOPE.into()],
+    });
+    let h = spawn_listener(validator, 0).await;
+    let err = dial(&cfg(h.port, "bad", "notes", false))
+        .await
+        .map(|_| ())
+        .expect_err("bad token should fail");
+    let msg = err.to_string();
+    // Client's dial layer translates 401 into "unauthorized (bad
+    // token)" before the substream handshake even starts.
+    assert!(msg.to_lowercase().contains("unauthorized"), "got: {msg}");
+    assert!(h.registry.list_drives_for("alice").is_empty());
+}
+
+#[tokio::test]
+async fn missing_base_scope_returns_403() {
+    // Token authenticates but lacks `TUNNEL_SCOPE` entirely.
+    let validator = Arc::new(StubValidator {
+        expected_token: "good".into(),
+        username: "alice".into(),
+        scopes: vec![],
+    });
+    let h = spawn_listener(validator, 0).await;
+    let err = dial(&cfg(h.port, "good", "notes", false))
+        .await
+        .map(|_| ())
+        .expect_err("missing tunnel scope should fail");
+    let msg = err.to_string();
+    assert!(msg.to_lowercase().contains("forbidden"), "got: {msg}");
+    assert!(h.registry.list_drives_for("alice").is_empty());
+}
+
+#[tokio::test]
+async fn missing_public_scope_refused_after_200() {
+    // Base scope only. Client asks for public; refusal happens in
+    // pre_ack, after the 200 / before HelloAck. The client surfaces
+    // it as a generic handshake/transport failure.
+    let validator = Arc::new(StubValidator {
+        expected_token: "good".into(),
+        username: "alice".into(),
+        scopes: vec![TUNNEL_SCOPE.into()],
+    });
+    let h = spawn_listener(validator, 0).await;
+    let err = dial(&cfg(h.port, "good", "notes", true))
+        .await
+        .map(|_| ())
+        .expect_err("public without tunnel.public should fail");
+    assert!(!err.to_string().is_empty());
+    // Drive must not appear in the registry.
+    let drives = h.registry.list_drives_for("alice");
+    assert!(drives.is_empty(), "got drives: {drives:?}");
+}
+
+#[tokio::test]
+async fn public_scope_allows_public_drive() {
+    let validator = Arc::new(StubValidator {
+        expected_token: "good".into(),
+        username: "alice".into(),
+        scopes: vec![TUNNEL_SCOPE.into(), TUNNEL_PUBLIC_SCOPE.into()],
+    });
+    let h = spawn_listener(validator, 0).await;
+    let (reg, _yconn) = dial(&cfg(h.port, "good", "docs", true))
+        .await
+        .expect("dial ok");
+    assert_eq!(reg.drive, "docs");
+    assert!(wait_registered(&h.registry, "alice", "docs").await);
+    let drives = h.registry.list_drives_for("alice");
+    assert_eq!(drives.len(), 1);
+    assert!(drives[0].public, "expected public bit set");
+}
+
+#[tokio::test]
+async fn public_scope_holder_can_still_choose_private() {
+    // Token can host public, but this dial chooses private. Per-
+    // drive choice survives once the scope is granted.
+    let validator = Arc::new(StubValidator {
+        expected_token: "good".into(),
+        username: "alice".into(),
+        scopes: vec![TUNNEL_SCOPE.into(), TUNNEL_PUBLIC_SCOPE.into()],
+    });
+    let h = spawn_listener(validator, 0).await;
+    let (_reg, _yconn) = dial(&cfg(h.port, "good", "notes", false))
+        .await
+        .expect("dial ok");
+    assert!(wait_registered(&h.registry, "alice", "notes").await);
+    let drives = h.registry.list_drives_for("alice");
+    assert!(!drives[0].public);
+}
+
+#[tokio::test]
+async fn per_user_cap_blocks_third_drive() {
+    let validator = Arc::new(StubValidator {
+        expected_token: "good".into(),
+        username: "alice".into(),
+        scopes: vec![TUNNEL_SCOPE.into()],
+    });
+    let h = spawn_listener(validator, 2).await;
+    let (_a, _y1) = dial(&cfg(h.port, "good", "d1", false))
+        .await
+        .expect("first dial");
+    assert!(wait_registered(&h.registry, "alice", "d1").await);
+    let (_b, _y2) = dial(&cfg(h.port, "good", "d2", false))
+        .await
+        .expect("second dial");
+    assert!(wait_registered(&h.registry, "alice", "d2").await);
+    let err = dial(&cfg(h.port, "good", "d3", false))
+        .await
+        .map(|_| ())
+        .expect_err("third dial should hit the cap");
+    // Refusal is in pre_ack; client surfaces as handshake error.
+    assert!(!err.to_string().is_empty());
+    let drives: Vec<_> = h
+        .registry
+        .list_drives_for("alice")
+        .into_iter()
+        .map(|d| d.drive.as_ref().to_string())
+        .collect();
+    assert_eq!(drives, vec!["d1".to_string(), "d2".to_string()]);
+}
+
+#[tokio::test]
+async fn reconnect_evicts_previous_registration() {
+    // Same user + drive registers twice. The second dial succeeds
+    // (chan serve restart reclaiming its slot) and the first
+    // registration is replaced.
+    let validator = Arc::new(StubValidator {
+        expected_token: "good".into(),
+        username: "alice".into(),
+        scopes: vec![TUNNEL_SCOPE.into()],
+    });
+    let h = spawn_listener(validator, 0).await;
+    let (_a, _y1) = dial(&cfg(h.port, "good", "notes", false))
+        .await
+        .expect("first dial");
+    assert!(wait_registered(&h.registry, "alice", "notes").await);
+    let first_at = h.registry.get("alice", "notes").unwrap().connected_at;
+    // Tiny pause so the timestamps differ unambiguously.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (_b, _y2) = dial(&cfg(h.port, "good", "notes", false))
+        .await
+        .expect("second dial");
+    // Wait for the new registration to land; it has a strictly
+    // later connected_at than the first one.
+    for _ in 0..100 {
+        if let Some(h2) = h.registry.get("alice", "notes") {
+            if h2.connected_at > first_at {
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("second registration did not supersede the first");
+}

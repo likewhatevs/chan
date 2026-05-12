@@ -669,6 +669,7 @@ dependencies = [
  "async-trait",
  "axum",
  "bytes",
+ "chan-tunnel-client",
  "chan-tunnel-proto",
  "chrono",
  "futures",
@@ -688,6 +689,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "url",
  "uuid",
  "yamux",
 ]
