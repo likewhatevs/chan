@@ -157,9 +157,23 @@
     flex-direction: column;
     overflow: hidden;
     /* Match the menu / tab-menu bounce so every overlay shares the
-       same open feel. */
+       same open feel. The hover transition takes over once the
+       open animation finishes, mirroring the floating chrome
+       (BottomPill / WikiStatusBar / AppStatusBar) so the panels
+       feel alive instead of inert. */
     transform-origin: center top;
     animation: overlay-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    transition:
+      transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1),
+      box-shadow 160ms ease;
+  }
+  /* Much subtler scale than the pills (1.04). Panels are big; even
+     a 1% factor shoves the whole modal more than it needs to. Half
+     a percent is enough to read as a lift on cursor enter without
+     making the panel feel restless. */
+  .panel:hover {
+    transform: scale(1.005);
+    box-shadow: 0 16px 50px rgba(0, 0, 0, 0.52);
   }
   @keyframes overlay-pop {
     0% {
@@ -172,6 +186,11 @@
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .panel { animation: none; }
+    .panel,
+    .panel:hover {
+      animation: none;
+      transition: none;
+      transform: none;
+    }
   }
 </style>
