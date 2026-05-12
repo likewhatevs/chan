@@ -45,6 +45,39 @@ use clap::{Parser, Subcommand};
 
 mod update;
 
+/// Extended description for `chan serve`. The keybindings list is
+/// the source of truth users land on via `chan serve --help`; the
+/// in-app handler (web/src/App.svelte) must stay in sync. Chords
+/// here are the BROWSER set; the native shell (chan-desktop) lays
+/// VS Code-shaped chords on top. On Linux / Windows substitute
+/// Ctrl for Cmd everywhere except the entries marked browser's
+/// own (those are handled by the browser regardless of platform).
+const SERVE_LONG_ABOUT: &str = "\
+Run the HTTP server. Defaults to 127.0.0.1 (loopback only).
+
+In-app keybindings (Cmd = Ctrl on Linux / Windows):
+
+  Settings                Cmd+,
+  Files                   Cmd+P
+  Assistant               Cmd+I
+  Search across files     Cmd+Shift+F
+  Graph                   Cmd+Shift+M
+  Save                    Cmd+S
+  New file                Ctrl+Alt+N
+  Next tab                Alt+Shift+]
+  Previous tab            Alt+Shift+[
+  Jump to tab N           Ctrl+Alt+1..9
+  Pop top overlay         Esc
+
+Handled by the browser:
+
+  Find on page            Cmd+F
+  Find next               Cmd+G
+  Find previous           Cmd+Shift+G
+  Close tab               Cmd+W
+  Zoom in / out / reset   Cmd+= / Cmd+- / Cmd+0
+";
+
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -83,6 +116,7 @@ enum Command {
         name: String,
     },
     /// Run the HTTP server. Defaults to 127.0.0.1 (loopback only).
+    #[command(long_about = SERVE_LONG_ABOUT)]
     Serve {
         path: Option<PathBuf>,
         /// Host address to bind. Default 127.0.0.1 (or ::1 with -6).
