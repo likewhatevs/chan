@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod auth;
 mod config;
 mod registry;
 mod serve;
@@ -322,6 +323,10 @@ fn main() {
             get_config,
             home_dir,
             reveal_in_finder,
+            auth::auth_status,
+            auth::open_signin,
+            auth::save_pat,
+            auth::signout,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application");

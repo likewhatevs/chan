@@ -8,6 +8,7 @@ const { relaunch } = window.__TAURI__.process;
 const main = document.getElementById('main');
 const openBtn = document.getElementById('open-drive');
 const themeToggle = document.getElementById('theme-toggle');
+const authBtn = document.getElementById('auth-btn');
 
 /// Theme handling. Stored values:
 ///   - null  : follow OS via prefers-color-scheme (no data-theme attr)
@@ -45,6 +46,41 @@ themeToggle.addEventListener('click', () => {
   localStorage.setItem(THEME_KEY, next);
   applyTheme();
 });
+
+/// Sign-in state. The Sign In button mints a 30-day PAT via the
+/// id.chan.app auth webview and stores it in the OS keychain; the
+/// resulting Sign Out clears the local entry (server-side revoke
+/// is a follow-up that needs the id_session cookie).
+async function refreshAuth(status) {
+  const s = status || (await invoke('auth_status'));
+  if (s.is_signed_in) {
+    authBtn.textContent = 'Sign out';
+    authBtn.title = s.label
+      ? `Signed in as ${s.label}` + (s.expires_at ? ` (expires ${s.expires_at})` : '')
+      : 'Signed in to chan.app';
+    authBtn.dataset.state = 'signed-in';
+  } else {
+    authBtn.textContent = 'Sign in';
+    authBtn.title = 'Sign in to chan.app';
+    authBtn.dataset.state = 'signed-out';
+  }
+}
+
+authBtn.addEventListener('click', async () => {
+  try {
+    if (authBtn.dataset.state === 'signed-in') {
+      await invoke('signout');
+    } else {
+      await invoke('open_signin');
+    }
+  } catch (err) {
+    showError(err);
+  }
+  await refreshAuth();
+});
+
+refreshAuth();
+listen('auth-changed', (e) => refreshAuth(e.payload));
 
 let booted = false;
 let homeDir = '';
