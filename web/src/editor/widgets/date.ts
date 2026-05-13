@@ -37,6 +37,14 @@ import { selectionInRange } from "../decorations/selection";
 import { openDatePopover } from "../overlays/date_popover";
 import { drive, persistDateFormat } from "../../state/store.svelte";
 
+/// Nodes whose interior should never get pilled. Code (inline +
+/// fenced) is obvious: dates in `2026-04-15` snippets are part of
+/// the literal text. Link nodes cover both halves of `[label](url)`
+/// so a date in the label OR in the URL stays untouched; Image is
+/// the same shape. Autolink (`<https://...>`) and bare URL nodes
+/// keep their date payloads literal too. WikiLinkBody covers
+/// `[[Journal/2026-04-15]]` even before sentinel rules would
+/// otherwise reject the body content.
 const SKIP_INSIDE = new Set<string>([
   "InlineCode",
   "FencedCode",
@@ -45,6 +53,9 @@ const SKIP_INSIDE = new Set<string>([
   "CodeMark",
   "CodeInfo",
   "URL",
+  "Link",
+  "Image",
+  "Autolink",
   "WikiLinkBody",
 ]);
 

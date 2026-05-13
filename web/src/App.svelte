@@ -590,7 +590,7 @@
     --tab-active-bg: #ffffff;
     --tab-inactive-bg: #ececec;
     --smart-bg: rgba(80, 120, 200, 0.12);
-    --pane-focus: #b9c8e8;
+    --pane-focus: #7aa6e0;
     /* Light-mode bubble tints: assistant on a warmer gray so it
        sits clearly above the white panel; user on Apple-Messages
        blue (#dbeafe-ish, slightly more saturated) so the two

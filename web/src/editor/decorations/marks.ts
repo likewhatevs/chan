@@ -132,7 +132,8 @@ function handleLink(ctx: TokenContext): void {
   // Label sits between linkMarks[0].to and linkMarks[1].from.
   const labelFrom = linkMarks[0]!.to;
   const labelTo = linkMarks[1]!.from;
-  if (labelFrom < labelTo) {
+  const labelEmpty = labelFrom >= labelTo;
+  if (!labelEmpty) {
     ctx.push(MARK_LINK_LABEL, labelFrom, labelTo);
   }
   const visible = ctx.selectionInRange(ctx.node.from, ctx.node.to);
@@ -143,7 +144,13 @@ function handleLink(ctx: TokenContext): void {
     for (const m of linkMarks) {
       if (m.from < m.to) ctx.push(HIDE, m.from, m.to);
     }
-    if (urlRange.from < urlRange.to) {
+    if (labelEmpty && urlRange.from < urlRange.to) {
+      // Empty label (`[](url)`): fall back to showing the URL as the
+      // link text so the reader sees something instead of a zero-
+      // width gap. The brackets + parens stay hidden via the loop
+      // above so the URL reads as the link's surface label.
+      ctx.push(MARK_LINK_LABEL, urlRange.from, urlRange.to);
+    } else if (urlRange.from < urlRange.to) {
       ctx.push(HIDE, urlRange.from, urlRange.to);
     }
   }

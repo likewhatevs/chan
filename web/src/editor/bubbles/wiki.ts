@@ -94,12 +94,16 @@ function classifyQuery(q: string): Mode {
 }
 
 export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
-  // Anchor under the live caret (not the trigger start) so the bubble
-  // follows the cursor as the user types — important when a long
-  // typed query wraps to a second visual line, where positioning at
-  // the trigger would leave the bubble overlapping the wrapped text.
-  const caretPos = (): number => opts.view.state.selection.main.head;
-  const anchor = createCaretAnchor(opts.view, caretPos());
+  // Anchor at the opening `[[` (triggerStart) so the bubble lines up
+  // with where the user started the link. Visually this reads better
+  // than anchoring at the live caret, which would slide the bubble
+  // sideways as the query grows and leave it floating off-axis from
+  // the link being authored. positionPopover already clamps the
+  // bubble inside the viewport when the trigger sits near the right
+  // edge, so the only cost is the long-query wrap case (the bubble
+  // can overlap the wrapped text); short queries are the common path.
+  const anchorPos = (): number => opts.triggerStart;
+  const anchor = createCaretAnchor(opts.view, anchorPos());
   const shell = openBubbleShell({
     host: anchor.el,
     className: "md-wiki-bubble cm-bubble",
@@ -462,11 +466,11 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
       return false;
     },
     setQuery(q: string): void {
-      // Always re-anchor on every spec update — the user may have
-      // arrowed inside the trigger range without changing the query
-      // text, and the bubble needs to follow the live caret so it
-      // doesn't overlap wrapped text.
-      anchor.update(opts.view, caretPos());
+      // Re-anchor on every spec update. Anchor pos is the trigger's
+      // opening `[[`, which only moves when an upstream edit shifts
+      // the whole line; recomputing keeps the bubble glued to its
+      // marker through those shifts.
+      anchor.update(opts.view, anchorPos());
       shell.reposition();
       if (q === query) return;
       query = q;
@@ -491,7 +495,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
       triggerEnd = end;
     },
     reposition(): void {
-      anchor.update(opts.view, caretPos());
+      anchor.update(opts.view, anchorPos());
       shell.reposition();
     },
     dismiss,

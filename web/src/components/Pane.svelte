@@ -673,7 +673,16 @@
     background: var(--bg);
     color: var(--text);
   }
-  .pane.focused { border-color: var(--pane-focus); }
+  /* Inset glow rather than just a border-color swap: 2px reads
+     clearly on both light and dark canvases, and the inset stays
+     inside the pane's own box so the surrounding layout doesn't
+     shift when focus moves between panes. The transparent border on
+     `.pane` keeps the box dimensions stable; this shadow paints
+     over the inside edge. */
+  .pane.focused {
+    border-color: var(--pane-focus);
+    box-shadow: inset 0 0 0 2px var(--pane-focus);
+  }
   /* iTerm-style strip: a dark bar with no per-tab dividers. The
      active tab is a rounded pill sitting on the bar rather than a
      beveled cap that "merges" with the editor below. */
