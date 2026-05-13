@@ -1300,6 +1300,20 @@
           const sim = (forceLayout as any)?.simulation;
           if (sim) sim.alphaTarget(0);
         });
+        // cytoscape-d3-force bumps alphaTarget to ~0.33 on every
+        // grab so it can re-distribute siblings around the
+        // dragged node. On dense graphs that re-heat shakes the
+        // whole canvas for the full alpha budget. We register a
+        // listener AFTER the plugin's (cy.on hands events out in
+        // registration order) and immediately pull alphaTarget
+        // back to 0 — the grabbed node is still pinned (fx/fy),
+        // siblings adjust only via the residual alpha that hasn't
+        // decayed yet, no full-canvas frenzy.
+        cy.nodes().on("grab", () => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const sim = (forceLayout as any)?.simulation;
+          if (sim) sim.alphaTarget(0);
+        });
       });
     });
     layout.run();
