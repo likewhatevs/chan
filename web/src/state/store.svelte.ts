@@ -2076,11 +2076,11 @@ export function openGraphAtNode(nodeId: string): void {
   graphOverlay.scopeId = "drive";
   graphOverlay.pendingSelectId = nodeId;
   graphOverlay.open = true;
-  // The file browser overlay paints above the graph (same overlay
-  // tier; whichever opens last is on top), so leaving it up would
-  // hide the graph the user just asked for. Close it here so this
-  // call is "switch surfaces", not "stack a new one behind".
-  browserOverlay.open = false;
+  // Stack on top of whatever overlay invoked us (typically the
+  // file browser via a tag chip). OverlayShell's z-index follows
+  // `overlayStack.ids`, so the graph paints above and Escape
+  // pops just the graph — returning to the browser instead of
+  // dismissing both at once.
   scheduleSessionSave();
 }
 
@@ -2094,7 +2094,6 @@ export function openGraphForFile(path: string): void {
   graphOverlay.scopeId = `file:${path}`;
   graphOverlay.pendingSelectId = path;
   graphOverlay.open = true;
-  browserOverlay.open = false;
   scheduleSessionSave();
 }
 
@@ -2108,7 +2107,6 @@ export function openGraphForTag(nodeId: string, _label: string): void {
   graphOverlay.scopeId = `tag:${nodeId}`;
   graphOverlay.pendingSelectId = nodeId;
   graphOverlay.open = true;
-  browserOverlay.open = false;
   scheduleSessionSave();
 }
 

@@ -1667,7 +1667,8 @@
     graphOverlay.pendingSelectId =
       currentContext.kind === "file" ? currentContext.path : null;
     graphOverlay.open = true;
-    assistantOverlay.open = false;
+    // Stack on top of the assistant — Esc pops the graph and the
+    // user is back in their conversation.
     menu?.close();
   }
 </script>

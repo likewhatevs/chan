@@ -1312,11 +1312,12 @@
         // local adjustment, not a canvas-wide shake. cy.on
         // dispatches in registration order, so this listener
         // runs after the plugin's and wins the assignment.
-        cy.nodes().on("grab", () => {
+        const liveCy = cy;
+        liveCy.nodes().on("grab", () => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const sim = (forceLayout as any)?.simulation;
           if (!sim) return;
-          const n = cy.elements(":visible").nodes().length;
+          const n = liveCy.elements(":visible").nodes().length;
           // Match the d3ForceOptions density ramp: < 40 nodes is
           // "sparse" (full heat), > 120 is "dense" (minimal),
           // linear in between.
