@@ -21,7 +21,13 @@ import { openBubbleShell } from "../bubble";
 import { createCaretAnchor } from "./anchor";
 import type { BubbleHandle } from "./types";
 import { api } from "../../api/client";
-import { isImagePath } from "../extensions/image";
+import {
+  isImagePath,
+  parseImageSrc,
+  resolveImageSrc,
+  setImageAlign,
+  type ImageAlign,
+} from "../extensions/image";
 import { relativizePath } from "../links";
 
 export interface ImageBubbleOpts {
@@ -113,12 +119,92 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
   });
   actions.appendChild(uploadBtn);
 
+  // Preview row above the result list: a thumbnail of the currently
+  // highlighted path. Empty / invisible when nothing is highlighted.
+  const preview = document.createElement("div");
+  preview.className = "md-image-preview";
+  shell.wrap.appendChild(preview);
+
+  // Alignment row, only visible in raw mode (editing an existing
+  // image). Three buttons cycle the `#left` / `#right` fragment on
+  // the URL — commits an edit to the source URL directly (no
+  // bubble dismiss). Center is "no fragment".
+  let alignRow: HTMLDivElement | null = null;
+  if (opts.templateMode === "raw") {
+    alignRow = document.createElement("div");
+    alignRow.className = "md-image-align-row";
+    const mkBtn = (label: string, target: ImageAlign | null): HTMLElement => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "md-image-align-btn";
+      btn.dataset.align = target ?? "center";
+      btn.textContent = label;
+      btn.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const url = opts.view.state.doc.sliceString(
+          opts.triggerStart,
+          triggerEnd,
+        );
+        const next = setImageAlign(url, target);
+        if (next === url) return;
+        opts.view.dispatch({
+          changes: {
+            from: opts.triggerStart,
+            to: triggerEnd,
+            insert: next,
+          },
+        });
+        // triggerEnd shifts by the length delta; setTriggerEnd will
+        // get called by the next spec update, but for the
+        // back-to-back-click case we update locally too.
+        triggerEnd = opts.triggerStart + next.length;
+        renderAlign();
+      });
+      return btn;
+    };
+    alignRow.appendChild(mkBtn("◧", "left"));
+    alignRow.appendChild(mkBtn("▢", null));
+    alignRow.appendChild(mkBtn("◨", "right"));
+    shell.wrap.appendChild(alignRow);
+  }
+
+  function renderAlign(): void {
+    if (!alignRow) return;
+    const url = opts.view.state.doc.sliceString(
+      opts.triggerStart,
+      triggerEnd,
+    );
+    const { align } = parseImageSrc(url);
+    for (const btn of Array.from(
+      alignRow.querySelectorAll(".md-image-align-btn"),
+    )) {
+      const a = (btn as HTMLElement).dataset.align;
+      const active =
+        (align === null && a === "center") || align === a;
+      btn.classList.toggle("md-image-align-btn-active", active);
+    }
+  }
+  renderAlign();
+
   const list = document.createElement("div");
   list.className = "md-bubble-list";
   shell.wrap.appendChild(list);
   const status = document.createElement("div");
   status.className = "md-bubble-status";
   shell.wrap.appendChild(status);
+
+  function renderPreview(): void {
+    preview.innerHTML = "";
+    const path = hits[selectedIndex];
+    if (!path) return;
+    const url = resolveImageSrc(path, opts.currentPath);
+    if (!url) return;
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = path;
+    preview.appendChild(img);
+  }
 
   function filter(): void {
     const q = query.toLowerCase();
@@ -155,6 +241,7 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
       });
       list.appendChild(row);
     }
+    renderPreview();
     shell.reposition();
   }
 

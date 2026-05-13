@@ -205,7 +205,12 @@ function wikiLinkAtCaret(
   ).resolveInner(pos, 0);
   while (node) {
     if (node.name === "WikiLink") {
-      // Find the WikiLinkBody child for an accurate query slice.
+      // Restrict the trigger to caret-inside-body. WikiLink spans
+      // `[[...]]`; without the body check we'd also fire when the
+      // caret sits between the two closing `]]` characters
+      // (resolveInner climbs to WikiLink because position is within
+      // node.to), opening the bubble in a weird trailing-edge
+      // position where the user is just navigating past the link.
       const cursor = node.cursor();
       if (!cursor.firstChild()) return null;
       let bodyFrom = -1;
@@ -218,11 +223,11 @@ function wikiLinkAtCaret(
         }
       } while (cursor.nextSibling());
       if (bodyFrom < 0) return null;
-      const clampedPos = Math.max(bodyFrom, Math.min(pos, bodyTo));
+      if (pos < bodyFrom || pos > bodyTo) return null;
       return {
         from: node.from,
         to: node.to,
-        queryUpToCaret: state.doc.sliceString(bodyFrom, clampedPos),
+        queryUpToCaret: state.doc.sliceString(bodyFrom, pos),
       };
     }
     node = node.parent;

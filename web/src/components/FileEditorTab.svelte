@@ -37,7 +37,11 @@
     pageWidth,
     setPageWidth,
   } from "../state/pageWidth.svelte";
-  import { tabMenu, closeTabMenu } from "../state/tabMenu.svelte";
+  import {
+    tabMenu,
+    closeTabMenu,
+    openTabMenu,
+  } from "../state/tabMenu.svelte";
 
   let { tab }: { tab: FileTab } = $props();
 
@@ -117,10 +121,6 @@
       e.preventDefault();
       closeTabMenu();
     }
-    if (e.key === "Escape" && ctxOpen) {
-      e.preventDefault();
-      closeContext();
-    }
   }
 
   /// Dismiss when the click lands outside the bubble AND outside any
@@ -130,13 +130,6 @@
   /// chance to reopen it, and a second click on the active tab feels
   /// dead).
   function onDocPointerDown(e: PointerEvent): void {
-    if (ctxOpen) {
-      const t = e.target as Node | null;
-      if (t) {
-        const menu = document.querySelector(".editor-context-menu");
-        if (!menu || !menu.contains(t)) closeContext();
-      }
-    }
     if (!menuOpen) return;
     const t = e.target as Node | null;
     if (!t) return;
@@ -168,25 +161,25 @@
   }
 
   // ---- right-click context menu --------------------------------------
-  // Body-attached panel anchored at the click coords. Lives inside
-  // FileEditorTab because each action is tab-aware.
-  let ctxOpen = $state(false);
-  let ctxX = $state(0);
-  let ctxY = $state(0);
+  // Re-uses the existing tab menu bubble (the same one that opens
+  // from the tab dot). The bubble carries Duplicate / Rename /
+  // mode-toggle / outline / style-toolbar plus our three new
+  // actions (Reload / Call assistant / Show in graph). Anchored at
+  // the click coords by synthesizing a zero-size rect.
 
   function onEditorContext(e: MouseEvent): void {
     e.preventDefault();
-    ctxX = e.clientX;
-    ctxY = e.clientY;
-    ctxOpen = true;
+    e.stopPropagation();
+    openTabMenu(tab.id, {
+      left: e.clientX,
+      top: e.clientY,
+      right: e.clientX,
+      bottom: e.clientY,
+    });
   }
 
-  function closeContext(): void {
-    ctxOpen = false;
-  }
-
-  async function ctxReload(): Promise<void> {
-    closeContext();
+  async function doReload(): Promise<void> {
+    closeTabMenu();
     try {
       const res = await api.read(tab.path);
       tab.content = res.content;
@@ -197,18 +190,13 @@
     }
   }
 
-  function ctxToggleMode(): void {
-    closeContext();
-    setMode(tab, tab.mode === "wysiwyg" ? "source" : "wysiwyg");
-  }
-
-  function ctxOpenAssistant(): void {
-    closeContext();
+  function doOpenAssistant(): void {
+    closeTabMenu();
     openAssistant();
   }
 
-  function ctxOpenGraph(): void {
-    closeContext();
+  function doOpenGraph(): void {
+    closeTabMenu();
     openGraphAtNode(tab.path);
   }
 
@@ -262,6 +250,18 @@
       <!-- Action rows. Keep separator between page-width and
            file-level actions so the affordance reads as two layers. -->
       <div class="action-list">
+        <button class="mbtn" onclick={doReload}>
+          <span class="mbtn-icon">↻</span>
+          <span class="mbtn-label">Reload from Disk</span>
+        </button>
+        <button class="mbtn" onclick={doOpenAssistant}>
+          <span class="mbtn-icon">✦</span>
+          <span class="mbtn-label">Call Assistant</span>
+        </button>
+        <button class="mbtn" onclick={doOpenGraph}>
+          <span class="mbtn-icon">⛬</span>
+          <span class="mbtn-label">Show in Graph</span>
+        </button>
         <button class="mbtn" onclick={doDuplicate}>
           <span class="mbtn-icon">⎘</span>
           <span class="mbtn-label">Duplicate File</span>
@@ -408,24 +408,6 @@
   {/if}
 </div>
 
-{#if ctxOpen}
-  <!-- Body-scoped right-click context menu. Anchored at the
-       click position; dismisses via the shared svelte:window
-       handlers (onDocPointerDown + onMenuKeydown). -->
-  <div
-    class="editor-context-menu"
-    style:left="{ctxX}px"
-    style:top="{ctxY}px"
-    role="menu"
-  >
-    <button class="ctx-row" onclick={ctxReload}>Reload from disk</button>
-    <button class="ctx-row" onclick={ctxToggleMode}>
-      {tab.mode === "wysiwyg" ? "Show source" : "Show preview"}
-    </button>
-    <button class="ctx-row" onclick={ctxOpenAssistant}>Call assistant</button>
-    <button class="ctx-row" onclick={ctxOpenGraph}>Show in graph</button>
-  </div>
-{/if}
 
 <style>
   .editor-tab {
@@ -436,35 +418,6 @@
     min-width: 0;
     background: var(--bg);
     color: var(--text);
-  }
-  /* Right-click context menu. Body-scoped so it floats above the
-     editor canvas; positioned at click coords via inline style. */
-  :global(.editor-context-menu) {
-    position: fixed;
-    z-index: 30000;
-    background: var(--bg-card, #fff);
-    border: 1px solid var(--border, #ddd);
-    border-radius: 6px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
-    padding: 4px;
-    min-width: 180px;
-    font-family: var(--chan-font-text-family);
-    font-size: 13px;
-  }
-  :global(.editor-context-menu .ctx-row) {
-    display: block;
-    width: 100%;
-    text-align: left;
-    background: none;
-    border: 0;
-    padding: 6px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-    color: var(--text);
-    font: inherit;
-  }
-  :global(.editor-context-menu .ctx-row:hover) {
-    background: var(--hover-bg, rgba(0, 0, 0, 0.06));
   }
   /* Tab menu bubble. Fixed-position so it anchors to the trigger
      button regardless of which pane the user clicked in; the

@@ -627,6 +627,24 @@
     padding: 4px;
     font-family: var(--chan-font-text-family);
     font-size: 14px;
+    /* Bouncy reveal + hover wobble — matches the tab-menu bubble's
+       easeOutBack motion so the editor's pickers feel of-a-piece. */
+    transform-origin: top left;
+    animation: cm-bubble-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  :global(.md-bubble.cm-bubble:hover) {
+    transform: scale(1.015);
+  }
+  @keyframes cm-bubble-pop {
+    0% {
+      opacity: 0;
+      transform: scale(0.92);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
   }
   :global(.md-bubble .md-bubble-list) {
     display: flex;
@@ -675,6 +693,48 @@
   :global(.md-bubble .md-bubble-action) {
     color: var(--accent, #2563b8);
     font-weight: 500;
+  }
+  :global(.md-image-preview) {
+    display: block;
+    max-width: 100%;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--border, #eee);
+    padding-bottom: 4px;
+    text-align: center;
+    line-height: 0;
+  }
+  :global(.md-image-preview img) {
+    max-width: 100%;
+    max-height: 140px;
+    object-fit: contain;
+    border-radius: 4px;
+  }
+  :global(.md-image-align-row) {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    border-bottom: 1px solid var(--border, #eee);
+    margin-bottom: 4px;
+  }
+  :global(.md-image-align-btn) {
+    flex: 1;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-family: inherit;
+    font-size: 14px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  :global(.md-image-align-btn:hover) {
+    background: var(--hover-bg, rgba(0, 0, 0, 0.06));
+    border-color: var(--border, #ddd);
+  }
+  :global(.md-image-align-btn-active) {
+    background: var(--accent-bg, rgba(106, 168, 255, 0.18));
+    color: var(--accent, #2563b8);
+    border-color: var(--accent, #2563b8);
   }
   :global(.md-image-action-overlay) {
     display: flex;
@@ -752,6 +812,12 @@
     min-width: 240px;
     font-family: var(--chan-font-text-family);
     font-size: 13px;
+    transform-origin: top left;
+    animation: cm-bubble-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  :global(.md-date-popover:hover) {
+    transform: scale(1.015);
   }
   :global(.md-date-header) {
     display: flex;
