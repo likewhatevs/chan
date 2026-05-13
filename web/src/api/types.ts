@@ -177,6 +177,11 @@ export type LlmCompletionRequest = {
   tools?: LlmToolSpec[];
   max_tokens?: number;
   temperature?: number;
+  /// Client-generated correlation id echoed on every llm.* WS frame
+  /// the server emits while this request is in flight. Lets the
+  /// frontend filter the broadcast channel to its own turn so
+  /// streaming deltas from a sibling window don't crosstalk.
+  session_id?: string;
 };
 
 export type LlmStopReason =

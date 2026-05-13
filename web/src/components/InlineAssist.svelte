@@ -18,10 +18,14 @@
   //       entire drive. In-memory only; replaces the "ask"
   //       tab that used to live in the search palette.
   //
-  // File edits land through the existing `propose_file_edit`
-  // tool; the model can target any path in scope (the single
-  // file in file context, any of the visible files in group
-  // context, any path it discovers in drive context).
+  // File edits land through chan-llm's standard `write_file` tool.
+  // When `auto_apply_writes` is off (default), chan-llm returns
+  // `Pending`, pauses with `stop_reason = ToolUse`, and we render
+  // the proposed write as an edit card; Apply / Discard inject the
+  // real tool result back so the next round closes the loop. The
+  // model can target any path in scope (the single file in file
+  // context, any of the visible files in group context, any path
+  // it discovers in drive context).
 
   import { onDestroy, onMount } from "svelte";
   import { Check, Copy } from "lucide-svelte";
@@ -41,10 +45,13 @@
   import {
     assistantConversations,
     assistantOverlay,
+    assistantStream,
     availableAssistantContexts,
+    beginAssistantStream,
     clearFileConversation,
     clearGroupConversation,
     clearDriveConversation,
+    endAssistantStream,
     loadGroupConversation,
     openAssistant,
     refreshTree,
@@ -232,6 +239,20 @@
   /// governs initial behavior, and subsequent tool availability
   /// is enforced at the request level by sending `tools = []`.
 
+  /// Shared formatting clause every system prompt ends with. The
+  /// chat surface renders assistant replies through `renderMarkdown`
+  /// (headings, lists, fenced code, inline code, blockquotes, bold,
+  /// italic, links), so an explicit instruction here makes the
+  /// model lean into structured output instead of wall-of-text
+  /// prose. We don't enable raw HTML on purpose — `renderMarkdown`
+  /// sanitizes anyway, but discouraging it keeps the model focused
+  /// on the formats that actually round-trip.
+  const FORMAT_CLAUSE =
+    "REPLY FORMAT\n" +
+    "  - Reply in GitHub-flavored markdown. Use headings, bullet/numbered lists, fenced code blocks (with a language tag when relevant), inline `code`, blockquotes, and **bold** / *italic* where they aid scanning.\n" +
+    "  - Don't emit raw HTML; the renderer sanitizes it out anyway.\n" +
+    "  - Keep code samples in fenced blocks even when short — never inline a multi-line snippet.";
+
   const PROMPT_FILE_TOOLS =
     "You are the user's writing assistant inside chan, a personal-notes editor. " +
     "This conversation is scoped to ONE file in the user's drive; the file's CURRENT content ships on every user turn under '# File', and the user's prompt under '# Instruction'. " +
@@ -240,30 +261,32 @@
     "  - read_file(path): read another markdown file.\n" +
     "  - list_files(prefix?): list files (optional path prefix).\n" +
     "  - search_content(query, limit?): hybrid keyword + semantic search.\n" +
-    "  - propose_file_edit(path, content, summary): propose a complete file replacement; the user reviews and clicks Apply or Discard.\n" +
-    "  - write_file(path, content): direct atomic write, only succeeds when 'auto-apply writes' is on in Settings. Prefer propose_file_edit.\n\n" +
+    "  - write_file(path, content): propose a complete file replacement. When 'auto-apply writes' is off (default), the user reviews and clicks Apply or Discard before the write hits disk; when on, the write lands atomically. Always emit the FULL revised file content (no diffs, no partials).\n\n" +
     "DISCIPLINE\n" +
     "  - One category of tool call per turn (investigate OR propose). Don't mix.\n" +
     "  - Preserve frontmatter + unrelated sections in proposed edits.\n" +
-    "  - Reply concisely; discuss before acting when intent is ambiguous.";
+    "  - Reply concisely; discuss before acting when intent is ambiguous.\n\n" +
+    FORMAT_CLAUSE;
 
   const PROMPT_FILE_CHAT =
-    "You are the user's writing assistant inside chan. This conversation is scoped to ONE file; the current content ships under '# File' on every user turn, and the prompt under '# Instruction'. Selected text (when any) appears under '# Selection'. Reply in plain markdown; the current model can't call tools.";
+    "You are the user's writing assistant inside chan. This conversation is scoped to ONE file; the current content ships under '# File' on every user turn, and the prompt under '# Instruction'. Selected text (when any) appears under '# Selection'. The current model can't call tools.\n\n" +
+    FORMAT_CLAUSE;
 
   const PROMPT_GROUP_TOOLS =
     "You are the user's writing assistant inside chan. This conversation is scoped to a GROUP of files visible in the user's layout; each file's CURRENT content ships on every user turn under its own '## <path>' heading inside the '# Files' block, with the user's prompt under '# Instruction'.\n\n" +
     "TOOLS\n" +
     "  - read_file(path): read any other markdown file.\n" +
     "  - list_files(prefix?), search_content(query, limit?): explore the wider drive.\n" +
-    "  - propose_file_edit(path, content, summary): propose a complete replacement for any path; the user reviews per-edit.\n" +
-    "  - write_file(path, content): gated by 'auto-apply writes'; prefer propose_file_edit.\n\n" +
+    "  - write_file(path, content): propose a complete replacement for any path. When 'auto-apply writes' is off (default), the user reviews per-edit; when on, the write lands atomically. Target ONE file per call and emit the FULL revised content.\n\n" +
     "DISCIPLINE\n" +
     "  - When proposing edits, target ONE specific file at a time via its path.\n" +
     "  - One category of tool call per turn (investigate OR propose). Don't mix.\n" +
-    "  - Preserve frontmatter + unrelated sections in each proposed edit.";
+    "  - Preserve frontmatter + unrelated sections in each proposed edit.\n\n" +
+    FORMAT_CLAUSE;
 
   const PROMPT_GROUP_CHAT =
-    "You are the user's writing assistant inside chan. This conversation is scoped to a GROUP of files; each ships under its own '## <path>' heading inside the '# Files' block, with the prompt under '# Instruction'. Reply in plain markdown; the current model can't call tools.";
+    "You are the user's writing assistant inside chan. This conversation is scoped to a GROUP of files; each ships under its own '## <path>' heading inside the '# Files' block, with the prompt under '# Instruction'. The current model can't call tools.\n\n" +
+    FORMAT_CLAUSE;
 
   const PROMPT_UNIVERSE_TOOLS =
     "You are answering questions about the user's personal-notes drive in chan. " +
@@ -273,11 +296,12 @@
     "When the excerpts don't answer the question, say so plainly.\n\n" +
     "TOOLS\n" +
     "  - read_file(path) / list_files(prefix?) / search_content(query, limit?): refine your retrieval if the initial excerpts are insufficient.\n" +
-    "  - propose_file_edit(path, content, summary): only when the user explicitly asks for an edit; the user reviews the proposal.\n" +
-    "  - write_file(path, content): gated by 'auto-apply writes'; prefer propose_file_edit.";
+    "  - write_file(path, content): only when the user explicitly asks for an edit. When 'auto-apply writes' is off (default), the user reviews the proposal; when on, the write lands atomically. Emit the FULL revised content.\n\n" +
+    FORMAT_CLAUSE;
 
   const PROMPT_UNIVERSE_CHAT =
-    "You are answering questions about the user's personal-notes drive in chan. Each turn ships hybrid-search excerpts under '# Excerpts' and the user's question under '# Instruction'. Use ONLY the excerpts as context; cite sources by their bracket number. If the excerpts don't answer, say so plainly. Keep responses concise (3-6 sentences). The current model can't call tools.";
+    "You are answering questions about the user's personal-notes drive in chan. Each turn ships hybrid-search excerpts under '# Excerpts' and the user's question under '# Instruction'. Use ONLY the excerpts as context; cite sources by their bracket number. If the excerpts don't answer, say so plainly. Keep responses concise (3-6 sentences). The current model can't call tools.\n\n" +
+    FORMAT_CLAUSE;
 
   function systemPromptFor(
     kind: ScopeOption["kind"],
@@ -508,6 +532,17 @@
     if (loading) queueMicrotask(scrollToBottom);
   });
 
+  /// Keep the chat pinned to the bottom while deltas stream in:
+  /// reading `assistantStream.text` ties this effect to every
+  /// fragment, and queueMicrotask defers the scroll past the DOM
+  /// update so the new content is laid out before we measure.
+  $effect(() => {
+    if (!loading) return;
+    const _ = assistantStream.text.length;
+    void _;
+    queueMicrotask(scrollToBottom);
+  });
+
   function close(): void {
     // If a proposal is dangling unanswered, treat the close as a
     // dismiss so the next round has a valid tool_result.
@@ -600,20 +635,15 @@
     return s.replace(/<\/?b>/g, "");
   }
 
-  const PROPOSE_TOOL: LlmToolSpec = {
-    name: "propose_file_edit",
-    description:
-      "Propose a complete replacement for a markdown file. Use when the user asks for an edit and you want to make a concrete change. The user reviews and chooses to apply or discard. Output the FULL revised file content (no fences, no commentary).",
-    input_schema: {
-      type: "object",
-      required: ["path", "content"],
-      properties: {
-        path: { type: "string" },
-        content: { type: "string" },
-        summary: { type: "string" },
-      },
-    },
-  };
+  /// chan-llm gates `write_file` calls behind `auto_apply_writes`:
+  /// when off, the tool returns `Pending`, chan-llm pauses with
+  /// `stop_reason = ToolUse`, and the host (us) is responsible for
+  /// surfacing a confirmation UI. We render those Pending writes as
+  /// edit cards in the scrollback; Apply / Discard inject the real
+  /// tool result back into the next round so the model sees the
+  /// outcome. There is no separate `propose_file_edit` tool — the
+  /// model only sees `write_file` (the chan-llm standard schema).
+  const WRITE_FILE_TOOL = "write_file";
 
   /// Timestamp captured when the user submits a prompt; drives
   /// the relative timestamp on the in-flight ASSISTANT placeholder
@@ -644,16 +674,34 @@
       clearCurrent();
       return;
     }
+    const conv = conversationFor(ctx);
+    // Auto-dismiss any still-pending edit before pushing the new
+    // user turn. Anthropic and Gemini both reject a request where
+    // an assistant tool_use isn't paired with a matching tool_result
+    // in the very next user turn; if the user types over a pending
+    // proposal without clicking Apply/Discard, the dangling tool_use
+    // would 400 the next round. Treat it as a soft dismissal so the
+    // model sees the user moved on.
+    const lastTurn = conv.turns[conv.turns.length - 1];
+    if (lastTurn && lastTurn.kind === "edit" && lastTurn.edit.status === "pending") {
+      dismissEdit(lastTurn.edit, "user moved on without acting");
+    }
     loading = true;
     error = null;
     pendingTurnTime = Date.now();
-    const conv = conversationFor(ctx);
     // For drive context we retrieve excerpts before composing
     // the user message; for file/group the context IS the file
     // contents, no retrieval needed.
     let excerpts: ContentHit[] | null = null;
     const ctl = new AbortController();
     inflight = ctl;
+    // Mint a per-request correlation id and arm the streaming buffer
+    // BEFORE the HTTP request leaves so the first `llm.delta` frame
+    // (which can arrive while the POST is still hanging) lands in the
+    // matching session. crypto.randomUUID is available in every
+    // browser chan targets; no fallback needed.
+    const sessionId = crypto.randomUUID();
+    beginAssistantStream(sessionId);
     try {
       if (ctx.kind === "drive") {
         const r = await api.searchContent(trimmed, { limit: 8 });
@@ -674,17 +722,20 @@
       // Tool list is gated on the backend's current capability.
       // Sending a `tools` array to a non-tool-capable model causes
       // Ollama to refuse the request outright; omit the field
-      // entirely so the request is plain chat. propose_file_edit
-      // is client-handled but still ships as a tool spec, so it's
-      // gated alongside the rest.
-      const tools = supportsTools()
-        ? [PROPOSE_TOOL, ...serverTools]
-        : undefined;
+      // entirely so the request is plain chat.
+      //
+      // Server-side (chan-llm) currently uses `standard_tool_schemas`
+      // unconditionally; the request's `tools` field is observed for
+      // forward compatibility but not plumbed. We still ship the
+      // catalog so the frontend's contract stays honest if/when the
+      // server starts honoring it.
+      const tools = supportsTools() ? serverTools : undefined;
       const resp = await api.llmComplete(
         {
           messages: conv.messages,
           tools,
           max_tokens: 4000,
+          session_id: sessionId,
           // Temperature intentionally omitted: every backend has
           // a sensible default, and reasoning / extended-thinking
           // models reject any explicit value. Letting the model
@@ -712,6 +763,10 @@
       loading = false;
       inflight = null;
       pendingTurnTime = null;
+      // End the stream AFTER the response has been folded into
+      // `conv.turns` so the live bubble's contents don't blink to
+      // empty between deltas-clear and the final turn render.
+      endAssistantStream();
       queueMicrotask(scrollToBottom);
     }
   }
@@ -758,21 +813,58 @@
         ...(excerpts && excerpts.length > 0 ? { citations: excerpts } : {}),
       });
     }
+    // Pair every tool call from this assistant turn with a tool
+    // message in the same conversation order so Anthropic / Gemini
+    // accept the next round (both reject a tool_use without a
+    // matching tool_result).
+    //
+    //   - read_file / list_files / search_content / repo_report:
+    //     chan-llm auto-executed these; the real result arrived
+    //     via the `llm.tool_result` WS frame and lives in
+    //     `assistantStream.toolResults`. Inject it verbatim.
+    //   - write_file: chan-llm paused with a PENDING_STATUS
+    //     placeholder. We do NOT push the placeholder; instead we
+    //     render an edit card and let Apply / Discard inject the
+    //     real result (mtime echo or dismissal note) at the moment
+    //     the user acts. The dangling tool_use is safe as long as
+    //     the user acts (or close/submit auto-dismisses it) before
+    //     the next /api/llm/complete fires.
+    const captured = assistantStream.toolResults;
     for (const call of resp.tool_calls) {
-      if (call.name !== "propose_file_edit") continue;
-      const input = (call.input ?? {}) as {
-        path?: string;
-        content?: string;
-        summary?: string;
-      };
-      const edit: AssistantPendingEdit = {
-        toolCallId: call.id,
-        path: input.path ?? defaultEditPath(ctx),
-        content: input.content ?? "",
-        summary: input.summary ?? null,
-        status: "pending",
-      };
-      conv.turns.push({ kind: "edit", edit, created_at: Date.now() });
+      if (call.name === WRITE_FILE_TOOL) {
+        const input = (call.input ?? {}) as {
+          path?: string;
+          content?: string;
+        };
+        const edit: AssistantPendingEdit = {
+          toolCallId: call.id,
+          path: input.path ?? defaultEditPath(ctx),
+          content: input.content ?? "",
+          // write_file's schema doesn't carry a model-supplied
+          // summary; leave null so the edit card hides the row.
+          summary: null,
+          status: "pending",
+        };
+        conv.turns.push({ kind: "edit", edit, created_at: Date.now() });
+        continue;
+      }
+      // Non-write tool: ship the captured result back as a tool
+      // message. Fall back to a generic "(no result)" stub when the
+      // WS frame didn't land (rare; usually a backend that emits
+      // `on_done` without the matching tool_result, e.g. error
+      // path) so the assistant turn still has a paired result.
+      const result = captured[call.id];
+      const body =
+        result === undefined
+          ? JSON.stringify({ error: "tool result missing from stream" })
+          : typeof result === "string"
+            ? result
+            : JSON.stringify(result);
+      conv.messages.push({
+        role: "tool",
+        content: body,
+        tool_call_id: call.id,
+      });
     }
   }
 
@@ -814,8 +906,9 @@
         openTabUpdated = true;
       }
     }
+    let writeResult: { mtime: number | null };
     try {
-      await api.write(edit.path, edit.content);
+      writeResult = await api.write(edit.path, edit.content);
     } catch (e) {
       // Surface the failure in the chat error line and keep the
       // proposal as pending so the user can retry; flipping it to
@@ -832,12 +925,19 @@
     if (!openTabUpdated) {
       void refreshTree();
     }
-    appendToolResult(
-      edit.toolCallId,
-      openTabUpdated
-        ? "user applied the proposed edit (open buffer + disk updated)"
-        : "user applied the proposed edit (file written to disk)",
-    );
+    // Inject a structured tool_result that mirrors chan-llm's
+    // write_file success shape (status + path + size + applied_by).
+    // The model already knows what it asked to write; reflecting
+    // the on-disk bytes back is what closes the loop and lets the
+    // next turn reason about the new state.
+    appendToolResultJson(edit.toolCallId, {
+      status: "ok",
+      tool: WRITE_FILE_TOOL,
+      path: edit.path,
+      bytes: edit.content.length,
+      mtime_ns: writeResult.mtime,
+      applied_by: "user",
+    });
     if (currentContext) scheduleSave(currentContext);
     queueMicrotask(scrollToBottom);
   }
@@ -865,17 +965,22 @@
   function dismissEdit(edit: AssistantPendingEdit, reason: string): void {
     if (edit.status !== "pending") return;
     edit.status = "dismissed";
-    appendToolResult(edit.toolCallId, `user dismissed: ${reason}`);
+    appendToolResultJson(edit.toolCallId, {
+      status: "rejected",
+      tool: WRITE_FILE_TOOL,
+      path: edit.path,
+      reason,
+    });
     if (currentContext) scheduleSave(currentContext);
     queueMicrotask(scrollToBottom);
   }
 
-  function appendToolResult(toolCallId: string, message: string): void {
+  function appendToolResultJson(toolCallId: string, body: unknown): void {
     if (!currentContext) return;
     const conv = conversationFor(currentContext);
     conv.messages.push({
       role: "tool",
-      content: message,
+      content: JSON.stringify(body),
       tool_call_id: toolCallId,
     });
   }
@@ -1079,17 +1184,30 @@
           {/if}
         {/each}
         {#if loading && pendingTurnTime}
-          <!-- In-flight assistant turn placeholder. Lives outside
-               the turns array so it disappears automatically when
-               the real reply lands (which pushes a real assistant
-               turn into `turns`). The animated dots make it
-               obvious that work is happening. -->
+          <!-- In-flight assistant turn. Lives outside the turns array
+               so it disappears automatically when the real reply
+               lands (which pushes a real assistant turn into
+               `turns`). Two display modes:
+                 - No deltas yet: animated "thinking…" dots so the
+                   user sees the request landed.
+                 - Deltas streaming: render the accumulated text
+                   live with a trailing caret. We render as plain
+                   text (white-space:pre-wrap) instead of markdown
+                   while streaming so a half-typed code fence or
+                   list marker doesn't flicker between layouts on
+                   every token. The final assistant turn (in the
+                   turns array) re-renders as markdown once the
+                   response lands. -->
           <div class="bubble assistant pending">
             <div class="role-line">
               <span class="role">assistant</span>
               <span class="ts">{formatRelative(pendingTurnTime)}</span>
             </div>
-            <div class="body">thinking{".".repeat(thinkingDots)}</div>
+            {#if assistantStream.text.length > 0}
+              <div class="body streaming">{assistantStream.text}<span class="caret" aria-hidden="true"></span></div>
+            {:else}
+              <div class="body">thinking{".".repeat(thinkingDots)}</div>
+            {/if}
           </div>
         {/if}
       </div>
@@ -1244,6 +1362,34 @@
     color: var(--text-secondary);
     font-style: italic;
     font-variant-numeric: tabular-nums;
+  }
+  /* While streaming we override the italic + muted dots styling
+     since the body is now real assistant text being built up live.
+     Plain text rendering (the markdown rerender happens once the
+     turn is finalized) keeps the same white-space:pre-wrap as the
+     standard bubble. */
+  .bubble.assistant.pending .body.streaming {
+    color: var(--text);
+    font-style: normal;
+    font-variant-numeric: normal;
+  }
+  /* Trailing caret: 2px-wide vertical bar that blinks at 1Hz to
+     signal the bubble is alive even when the model pauses between
+     tokens. Inline-block so it sits flush against the last
+     character without breaking onto its own line, and uses
+     `currentColor` so it inherits the bubble's theme color. */
+  .bubble .caret {
+    display: inline-block;
+    width: 2px;
+    height: 0.95em;
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    background: currentColor;
+    opacity: 0.7;
+    animation: chan-caret-blink 1s steps(2, start) infinite;
+  }
+  @keyframes chan-caret-blink {
+    to { opacity: 0; }
   }
   /* Role + timestamp on one line above each bubble. The user-side
      bubble aligns to the right, so the row also right-aligns to

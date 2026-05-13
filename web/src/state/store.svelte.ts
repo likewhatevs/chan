@@ -192,6 +192,46 @@ function onWatchEvent(e: unknown): void {
     );
     return;
   }
+  // chan-llm session events: delta text, tool calls, tool results,
+  // terminal done/error. Filter by session_id so a stale frame from
+  // a previous turn (or a sibling window) doesn't bleed into the
+  // current bubble.
+  if (
+    frameType === "llm.delta" ||
+    frameType === "llm.tool_result" ||
+    frameType === "llm.done" ||
+    frameType === "llm.error"
+  ) {
+    const f = e as {
+      session_id?: string;
+      text?: string;
+      error?: string;
+      result?: { id?: string; output?: unknown };
+    };
+    if (!assistantStream.sessionId || f.session_id !== assistantStream.sessionId) {
+      return;
+    }
+    if (frameType === "llm.delta") {
+      assistantStream.text += f.text ?? "";
+    } else if (frameType === "llm.tool_result") {
+      // Capture every tool_result chan-llm emits during this turn so
+      // the synchronous /api/llm/complete consumer (InlineAssist) can
+      // rebuild the message history. The HTTP response only carries
+      // assistant text + tool_calls — tool results live exclusively
+      // on the WS side channel.
+      const id = f.result?.id;
+      if (typeof id === "string" && id.length > 0) {
+        assistantStream.toolResults[id] = f.result?.output ?? null;
+      }
+    } else if (frameType === "llm.error") {
+      assistantStream.error = f.error ?? "stream error";
+    }
+    // llm.done is just a marker; the POST handler completes via the
+    // synchronous JSON response. We don't end the stream here because
+    // the caller's `finally` block does it after the response is
+    // committed to the conversation log.
+    return;
+  }
   const kind = (e as { kind?: string } | null)?.kind;
   if (kind === "config_changed") {
     // A sibling window flipped a setting (theme, fonts, drive name,
@@ -1128,6 +1168,52 @@ export const assistantOverlay = $state<{
   contextId: "drive",
   prompt: "",
 });
+
+/// Streaming buffer for the assistant turn currently in flight.
+/// Fed by `llm.delta` WS frames in `onWatchEvent`; consumed by
+/// InlineAssist to render a live-updating assistant bubble in
+/// place of the static "thinking…" placeholder.
+///
+/// Lifecycle: `beginAssistantStream` flips `sessionId` to the id
+/// shipped on the /api/llm/complete request; deltas arriving with
+/// a different id are dropped. `endAssistantStream` clears the
+/// buffer once the synchronous JSON response has been folded into
+/// the conversation log so a stale tail can't reappear on the
+/// next submit.
+export const assistantStream = $state<{
+  sessionId: string | null;
+  text: string;
+  /// Tool results chan-llm emitted during this turn, keyed by tool
+  /// call id. Populated by the `llm.tool_result` WS frame handler;
+  /// consumed by InlineAssist's `handleResponse` to rebuild a
+  /// well-formed message history (assistant turn -> tool messages)
+  /// so the next round's request doesn't break Anthropic's strict
+  /// tool_use/tool_result pairing.
+  toolResults: Record<string, unknown>;
+  /// Non-null when the backend emitted `llm.error` over the WS
+  /// before (or instead of) the HTTP response landing. The HTTP
+  /// path surfaces its own error via the catch block in
+  /// InlineAssist.submit; this field is for the streaming side.
+  error: string | null;
+}>({ sessionId: null, text: "", toolResults: {}, error: null });
+
+export function beginAssistantStream(sessionId: string): void {
+  assistantStream.sessionId = sessionId;
+  assistantStream.text = "";
+  // Replace the map outright (not just clear keys) so any prior-
+  // turn reference held by a `$derived` block stops tracking the
+  // new buffer; Svelte 5 proxies the assignment into a fresh
+  // reactive object.
+  assistantStream.toolResults = {};
+  assistantStream.error = null;
+}
+
+export function endAssistantStream(): void {
+  assistantStream.sessionId = null;
+  assistantStream.text = "";
+  assistantStream.toolResults = {};
+  assistantStream.error = null;
+}
 
 /** Build the context dropdown options for the assistant overlay.
  *  Thin wrapper over the shared scope helper so other overlays
