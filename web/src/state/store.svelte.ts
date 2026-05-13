@@ -1829,6 +1829,59 @@ function labelForToolCall(name: string, input: unknown): string {
     const tag = typeof args.tag === "string" ? args.tag : "";
     return tag ? `files tagged ${tag}` : "files for tag";
   }
+  // Native claude-cli / gemini-cli tools the agent reaches for when
+  // our chan MCP catalog doesn't cover a need. Argument field names
+  // come from claude-code's published tool schemas (Read uses
+  // file_path; Grep / Glob use pattern + optional path; Bash uses
+  // command; WebFetch uses url; WebSearch uses query; Task uses
+  // description). We mirror those keys so the chip surfaces the
+  // user-visible piece of context (the path / query / pattern)
+  // instead of the bare tool name.
+  if (bare === "Read") return `reading ${shortPath(args.file_path) || "file"}`;
+  if (bare === "Write") return `writing ${shortPath(args.file_path) || "file"}`;
+  if (bare === "Edit" || bare === "MultiEdit") {
+    return `editing ${shortPath(args.file_path) || "file"}`;
+  }
+  if (bare === "Glob") {
+    const pat = typeof args.pattern === "string" ? args.pattern : "";
+    return pat ? `glob ${shortPath(pat)}` : "glob";
+  }
+  if (bare === "Grep") {
+    const pat = typeof args.pattern === "string" ? args.pattern : "";
+    const trimmed = pat.length <= 32 ? pat : `${pat.slice(0, 31)}…`;
+    return pat ? `grep "${trimmed}"` : "grep";
+  }
+  if (bare === "Bash") {
+    const cmd = typeof args.command === "string" ? args.command : "";
+    const trimmed = cmd.length <= 40 ? cmd : `${cmd.slice(0, 39)}…`;
+    return cmd ? `$ ${trimmed}` : "shell";
+  }
+  if (bare === "WebFetch") {
+    const url = typeof args.url === "string" ? args.url : "";
+    return url ? `fetching ${shortPath(url)}` : "fetching url";
+  }
+  if (bare === "WebSearch" || bare === "ToolSearch") {
+    const q = typeof args.query === "string" ? args.query : "";
+    const trimmed = q.length <= 32 ? q : `${q.slice(0, 31)}…`;
+    return q ? `searching "${trimmed}"` : "searching";
+  }
+  if (bare === "Task") {
+    const desc = typeof args.description === "string" ? args.description : "";
+    const trimmed = desc.length <= 36 ? desc : `${desc.slice(0, 35)}…`;
+    return desc ? `subtask: ${trimmed}` : "subtask";
+  }
+  if (bare === "TodoWrite") return "updating todos";
+  // Generic fallback: when the tool name isn't one we know, try
+  // the common arg keys for a hint. Order from most-specific to
+  // most-generic so a tool with both `path` and `query` shows the
+  // path (which is usually the load-bearing context).
+  for (const key of ["file_path", "path", "url", "query", "pattern", "command"]) {
+    const v = args[key];
+    if (typeof v === "string" && v.length > 0) {
+      const short = v.length <= 36 ? v : `${v.slice(0, 35)}…`;
+      return `${bare} ${short}`;
+    }
+  }
   return bare;
 }
 
