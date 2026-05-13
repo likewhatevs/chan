@@ -141,12 +141,10 @@
     align-items: center;
     padding: 5px 10px;
     background: transparent;
-    border: 1px solid transparent;
     box-shadow: none;
     border-radius: 999px;
     transition:
       background 220ms ease,
-      border-color 220ms ease,
       box-shadow 220ms ease;
   }
   /* Invisible placeholder reserving horizontal room for the enso
@@ -214,11 +212,15 @@
     min-width: 62px;
     border-radius: 50%;
     padding: 0;
-    /* Always-on translucent shade behind the logo — same value the
-       other fbtns get on :hover. Without this the lone ensō would
-       float over the page bg with no anchor visible until the user
-       hovers; the constant halo makes the affordance discoverable. */
-    background: var(--hover-bg);
+    /* Always-on translucent shade behind the logo. The pill chrome
+       carries the same --hover-bg value, and we want the ensō to
+       read as slightly DARKER than the chrome — so it pops out as
+       a distinct circle when the bar is expanded. Trick: stack two
+       --hover-bg layers via linear-gradient so the effective alpha
+       roughly doubles (theme-agnostic, no hard-coded rgba). When
+       the chrome isn't visible (idle state), the same stack still
+       paints over the page bg so the ensō stays discoverable. */
+    background: linear-gradient(var(--hover-bg), var(--hover-bg));
     /* translate(-50%, -50%) centers exactly on the pill's centre.
        The X portion lives in every rule that touches transform so
        the hover wobble doesn't yank the centering. */

@@ -124,13 +124,49 @@
     padding: 0 9px;
     border-width: 1px;
   }
-  /* Chrome reveal: matches the side-icon expansion. Background is
-     the same --hover-bg the ensō wears at idle so the whole bar
-     reads as one cohesive translucent halo when expanded. */
+  /* Chrome reveal: matches the side-icon expansion. Inverted theme
+     so the pill always carries the OPPOSITE palette to the page —
+     dark-mode users see a light pill, light-mode users see a dark
+     pill. Implementation: re-declare the theme custom properties
+     on the :hover scope so every descendant (chrome bg, icons,
+     hover tints, the ensō halo) flips together. No translucent
+     surface — body text behind the pill was bleeding through and
+     hurting legibility. No border either — the outline drew a
+     chord across the ensō where they overlapped; the box-shadow
+     gives the lift on its own.
+
+     Default (dark-mode) values are the LIGHT theme palette; the
+     [data-theme="light"] block below switches to the DARK palette
+     so the inversion holds in either direction. */
+  .bottom-pill:hover {
+    --bg-card: #f5f5f7;
+    --text: #1c1c1e;
+    --hover-bg: rgba(0, 0, 0, 0.05);
+    --btn-hover: #6c6c70;
+    --border: #d1d1d6;
+  }
+  :global([data-theme="light"]) .bottom-pill:hover {
+    --bg-card: #232325;
+    --text: #ebebf0;
+    --hover-bg: rgba(255, 255, 255, 0.06);
+    --btn-hover: #98989d;
+    --border: #3a3a3c;
+  }
   .bottom-pill:hover :global(.pill-chrome) {
-    background: var(--hover-bg);
-    border-color: var(--border);
+    background: var(--bg-card);
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  }
+  /* While expanded, the ensō paints the pill's bg with a single
+     extra --hover-bg layer on top — just enough tint to keep a
+     whisper of the halo visible without re-introducing the full
+     doughnut. The opaque --bg-card sits underneath so the body
+     text behind the pill never bleeds through. At idle (pill
+     hidden), AccessoryPill.svelte's own rule paints the stronger
+     halo so the ensō stays discoverable against the page bg. */
+  .bottom-pill:hover :global(.fbtn.enso) {
+    background:
+      linear-gradient(var(--hover-bg), var(--hover-bg)),
+      var(--bg-card);
   }
   @media (prefers-reduced-motion: reduce) {
     .bottom-pill :global(.fbtn.side),
