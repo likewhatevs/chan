@@ -29,9 +29,16 @@
   } from "./base";
   import { chanMarkdown } from "./markdown/grammar";
   import { chanDecorations } from "./decorations";
+  import { tagDecorations } from "./widgets/tag";
   import type { FindAdapter } from "../editor/find";
 
-  let { value = $bindable("") }: { value: string } = $props();
+  let {
+    value = $bindable(""),
+    onTagClick = () => {},
+  }: {
+    value: string;
+    onTagClick?: (tag: string) => void;
+  } = $props();
 
   const density = $derived(drive.info?.preferences?.line_spacing ?? "tight");
 
@@ -58,6 +65,7 @@
         EditorView.lineWrapping,
         findField,
         chanDecorations(),
+        tagDecorations({ onTagClick }),
         EditorView.updateListener.of((u) => {
           sync.onDocChanged(u, (s) => (value = s));
         }),
@@ -171,6 +179,17 @@
     margin: 0 0.4em 0 0;
     vertical-align: middle;
     cursor: pointer;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-tag) {
+    background: var(--tag-bg, rgba(106, 168, 255, 0.18));
+    color: var(--tag-fg, #2563b8);
+    padding: 0.05em 0.4em;
+    border-radius: 999px;
+    font-size: 0.92em;
+    cursor: pointer;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-tag:hover) {
+    background: var(--tag-bg-hover, rgba(106, 168, 255, 0.28));
   }
 
   /* ---- heading line classes ---- */
