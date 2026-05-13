@@ -12,6 +12,7 @@
   // only now.
 
   import { untrack } from "svelte";
+  import { ArrowLeft, ArrowRight } from "lucide-svelte";
   import { api } from "../api/client";
   import type { ContentHit } from "../api/types";
   import { isImage } from "../state/fileTypes";
@@ -564,7 +565,11 @@
        parity with the file browser / graph menus. -->
   <li>
     <button role="menuitem" onclick={toggleInspector}>
-      <span class="glyph" aria-hidden="true">◫</span>
+      {#if searchPanel.inspectorOpen}
+        <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
+      {:else}
+        <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
+      {/if}
       <span>{searchPanel.inspectorOpen ? "Hide Details" : "Show Details"}</span>
     </button>
   </li>

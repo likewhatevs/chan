@@ -23,13 +23,30 @@
 
   let {
     content,
+    caretLine = null,
     onSelect,
   }: {
     content: string;
+    /// 0-indexed source line the caret sits on. When provided, the
+    /// outline highlights the most recent heading at or above that
+    /// line as "active" (Google-Docs-style current-position marker).
+    /// Null disables the marker.
+    caretLine?: number | null;
     onSelect: (h: Heading) => void;
   } = $props();
 
   const headings = $derived(parseHeadings(content));
+  const activeIndex = $derived(computeActiveIndex(headings, caretLine));
+
+  function computeActiveIndex(hs: Heading[], line: number | null): number | null {
+    if (line == null || hs.length === 0) return null;
+    let best: number | null = null;
+    for (const h of hs) {
+      if (h.line <= line) best = h.index;
+      else break;
+    }
+    return best;
+  }
 
   function parseHeadings(src: string): Heading[] {
     const out: Heading[] = [];
@@ -94,10 +111,10 @@
 {:else}
   <ul>
     {#each headings as h (h.index)}
-      <li>
+      <li class:active={h.index === activeIndex}>
         <button
           class="row"
-          style="padding-left: {(h.depth - 1) * 12 + 8}px"
+          style="padding-right: {(h.depth - 1) * 14 + 14}px"
           title={h.text}
           onclick={() => onSelect(h)}
         >{h.text}</button>
@@ -112,7 +129,38 @@
     color: var(--text-secondary);
     font-style: italic;
   }
-  ul { list-style: none; margin: 0; padding: 0.25rem 0; }
+  /* Google-Docs-style outline, mirrored for chan's right-side
+     inspector: every heading hangs off a single vertical guide
+     line at the RIGHT (toward the editor edge), with items
+     extending leftward. The line is the same colour as the panel
+     border so it reads as structure, not decoration. Depth is
+     encoded purely in right-padding; the line itself does not
+     branch per level. The 10px gap between the line and the
+     panel edge gives the tree breathing room from the inspector
+     chrome. */
+  ul {
+    list-style: none;
+    margin: 0 10px 0 0;
+    padding: 0.35rem 0;
+    border-right: 1px solid var(--border);
+  }
+  li { position: relative; }
+  /* Active-heading marker. The 2px accent bar sits on top of the
+     ul's 1px guide line on the right edge (right: -1px overlaps by
+     1px outward, the bar is 2px wide, so it fully covers the 1px
+     guide and extends 1px further into the gutter). top/bottom =
+     2px crop the bar to the row's vertical center. */
+  li.active::before {
+    content: "";
+    position: absolute;
+    right: -1px;
+    top: 2px;
+    bottom: 2px;
+    width: 2px;
+    background: var(--link);
+    border-radius: 1px;
+  }
+  li.active .row { color: var(--link); font-weight: 500; }
   .row {
     display: block;
     width: 100%;
@@ -120,9 +168,16 @@
     background: none;
     border: 0;
     cursor: pointer;
-    padding: 0.2rem 0.6rem;
+    padding: 0.22rem 0.6rem;
     color: inherit;
-    font: inherit;
+    /* Use the editor theme's body family so the outline matches
+       the document's typography. Size and weight are inherited
+       from the inspector chrome so the outline reads as chrome,
+       not as body text spilled into the side panel. */
+    font-family: var(--chan-editor-body-family, inherit);
+    font-size: inherit;
+    font-weight: inherit;
+    line-height: inherit;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

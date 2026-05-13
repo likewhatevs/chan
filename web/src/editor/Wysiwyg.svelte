@@ -54,6 +54,7 @@
   import { headingFold } from "./fold";
   import * as fmt from "./commands/format";
   import type { BlockKind } from "./commands/format";
+  import { expandDateMacro, openDateAtCaret } from "./commands/date_macros";
   import type { FindAdapter } from "./find";
 
   let {
@@ -297,6 +298,24 @@
         // insert a newline first). Returning true consumes the event.
         Prec.high(
           keymap.of([
+            // Mod-Enter at a date pill opens the calendar / format
+            // popover (keyboard equivalent of clicking the pill).
+            // Returns false when the caret isn't on a date so the
+            // next entry below — assistant submit — gets the
+            // keypress.
+            {
+              key: "Mod-Enter",
+              run: (view) => openDateAtCaret(view),
+            },
+            // ArrowDown / Mod-Enter / Enter-on-closer escape a fenced
+            // code block that sits at the end of the doc. Without
+            // this, Enter inserts a literal newline inside the fence
+            // and ArrowDown is a no-op — the user has no way out.
+            // Each returns false when the trap conditions don't
+            // apply so the keys keep their default behaviour
+            // (cursorDown / assistant submit / new line in code).
+            { key: "ArrowDown", run: (view) => fmt.escapeFenceAtDocEnd(view) },
+            { key: "Mod-Enter", run: (view) => fmt.escapeFenceAtDocEnd(view) },
             {
               key: "Mod-Enter",
               run: () => {
@@ -311,6 +330,22 @@
             // user typing `>` mid-paragraph still gets a literal `>`.
             { key: ">", run: (view) => fmt.quoteLines(view) },
             { key: "<", run: (view) => fmt.unquoteLines(view) },
+            // `!/today` and `!/date` expand to a date when the user
+            // commits with Space or Enter. Returns false on no
+            // match so the typed Space/Enter falls through to
+            // normal input.
+            { key: " ", run: (view) => expandDateMacro(view) },
+            // Enter on the closing fence line at doc-end exits the
+            // block. Mobile keyboards typically lack a reliable
+            // Mod modifier and may not surface ArrowDown, so this
+            // path is the touch-only escape hatch. Strictly limited
+            // to the closer line so Enter inside the code body still
+            // inserts a literal newline.
+            {
+              key: "Enter",
+              run: (view) => fmt.escapeFenceOnEnterAtCloser(view),
+            },
+            { key: "Enter", run: (view) => expandDateMacro(view) },
           ]),
         ),
       ],

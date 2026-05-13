@@ -15,6 +15,7 @@
   // neighbours. Drive / global scope leaves all nodes free.
 
   import { onDestroy, onMount } from "svelte";
+  import { ArrowLeft, ArrowRight } from "lucide-svelte";
   import cytoscape from "cytoscape";
   import type { Core, ElementDefinition, EventObject, Layouts } from "cytoscape";
   // @ts-expect-error fcose ships no .d.ts; the layout name is enough
@@ -1626,7 +1627,11 @@
 {#snippet menuItems()}
   <li>
     <button role="menuitem" onclick={toggleInspector}>
-      <span class="glyph" aria-hidden="true">◫</span>
+      {#if graphOverlay.inspectorOpen}
+        <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
+      {:else}
+        <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
+      {/if}
       <span>{graphOverlay.inspectorOpen ? "Hide Details" : "Show Details"}</span>
     </button>
   </li>

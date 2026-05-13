@@ -33,6 +33,12 @@ export interface DatePopoverOpts {
 }
 
 const DOW_LABELS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+const ARROW_DELTAS: Record<string, number> = {
+  ArrowLeft: -1,
+  ArrowRight: 1,
+  ArrowUp: -7,
+  ArrowDown: 7,
+};
 const MONTH_LABELS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
@@ -131,7 +137,9 @@ export function openDatePopover(opts: DatePopoverOpts): { dismiss: () => void } 
       cell.type = "button";
       cell.className = "md-date-day";
       cell.textContent = String(d);
+      cell.tabIndex = -1;
       const cellDate = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), d);
+      cell.dataset.ts = String(cellDate.getTime());
       if (cellDate.getTime() === today.getTime()) {
         cell.classList.add("md-date-day-today");
       }
@@ -147,6 +155,24 @@ export function openDatePopover(opts: DatePopoverOpts): { dismiss: () => void } 
       grid.appendChild(cell);
     }
     wrap.appendChild(grid);
+
+    // Focus the currently-selected day so keyboard navigation has
+    // a starting point. tabIndex was -1 on every cell; we promote
+    // the focused one to 0 so it accepts focus + can be Tab'd in
+    // when needed. setTimeout(0) pushes past CM6's own post-dispatch
+    // focus-restore so the popover actually wins the focus race
+    // — requestAnimationFrame wasn't late enough (the editor's
+    // contentDOM was re-focused inside that frame).
+    const focusCell = grid.querySelector<HTMLButtonElement>(
+      `button.md-date-day[data-ts="${selected.getTime()}"]`,
+    );
+    if (focusCell) {
+      focusCell.tabIndex = 0;
+      setTimeout(() => {
+        if (!alive) return;
+        focusCell.focus({ preventScroll: true });
+      }, 0);
+    }
 
     // Format dropdown.
     const formatRow = document.createElement("div");
@@ -168,6 +194,11 @@ export function openDatePopover(opts: DatePopoverOpts): { dismiss: () => void } 
     }
     select.addEventListener("change", () => {
       formatId = select.value as DateFormatId;
+      // Picking a format commits immediately — the user just told us
+      // how they want the date written. Without this, changing the
+      // dropdown was a silent no-op until the user also clicked a
+      // day, which most users didn't expect.
+      commit();
     });
     formatRow.appendChild(select);
     wrap.appendChild(formatRow);
@@ -198,9 +229,46 @@ export function openDatePopover(opts: DatePopoverOpts): { dismiss: () => void } 
   }
 
   function escListener(e: KeyboardEvent): void {
+    if (!alive) return;
     if (e.key === "Escape") {
       e.preventDefault();
+      e.stopImmediatePropagation();
       dismiss();
+      return;
+    }
+    // Arrow-key navigation: shift the selected date by a day / week.
+    // Crossing month boundaries jumps the view-month to the new
+    // date's month and re-renders. Enter commits whichever cell is
+    // selected.
+    // stopImmediatePropagation is required: this listener lives in
+    // the capture phase (see addEventListener below), so CM6 still
+    // sees the event by default — and CM6's keymap would move the
+    // editor cursor on ArrowDown / insert a newline on Enter even
+    // after we preventDefault'd. stopping propagation here keeps
+    // the keys exclusively for the popover.
+    const delta = ARROW_DELTAS[e.key];
+    if (delta !== undefined) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const next = new Date(
+        selected.getFullYear(),
+        selected.getMonth(),
+        selected.getDate() + delta,
+      );
+      selected = next;
+      if (
+        next.getFullYear() !== viewMonth.getFullYear() ||
+        next.getMonth() !== viewMonth.getMonth()
+      ) {
+        viewMonth = new Date(next.getFullYear(), next.getMonth(), 1);
+      }
+      render();
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      commit();
     }
   }
 

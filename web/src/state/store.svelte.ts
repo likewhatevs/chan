@@ -1527,6 +1527,36 @@ function clamp(n: number): number {
   return Math.max(PANE_WIDTH_MIN, Math.min(PANE_WIDTH_MAX, Math.round(n)));
 }
 
+/// Persist the chosen date format so the next `!/today` / `!/date`
+/// expansion uses it as the default. Called by the date popover's
+/// format-change callback (commit path). Idempotent — skips the PATCH
+/// when the server already has the same value.
+let dateFormatPersistInflight: Promise<unknown> = Promise.resolve();
+export function persistDateFormat(formatId: string): void {
+  dateFormatPersistInflight = dateFormatPersistInflight
+    .catch(() => {})
+    .then(async () => {
+      const cfg = await api.config();
+      if (cfg.preferences.date_format === formatId) return;
+      const next = await api.updateConfig({
+        ...cfg,
+        preferences: { ...cfg.preferences, date_format: formatId },
+      });
+      // Mirror the response into drive.info so the next macro
+      // expansion reads the new default without a fresh /api/drive
+      // round-trip.
+      if (drive.info) {
+        drive.info = {
+          ...drive.info,
+          preferences: {
+            ...drive.info.preferences,
+            date_format: next.preferences.date_format,
+          },
+        };
+      }
+    });
+}
+
 /// Expanded-folder map for the file browser tree. Lifted out of
 /// `FileTree.svelte` so the state survives tab switches (the
 /// component unmounts every time the active tab changes). Shared

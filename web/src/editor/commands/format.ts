@@ -200,6 +200,95 @@ export function quoteLines(view: EditorView): boolean {
   return true;
 }
 
+/// Escape hatch for a fenced code block that sits at the very end of
+/// the document. Inside such a block the user has no natural way
+/// out: Enter inserts a literal newline INSIDE the fence, and
+/// ArrowDown is a no-op because there's no line below. Wired up to
+/// ArrowDown and Mod-Enter on desktop; Enter-on-closer-line covers
+/// mobile keyboards that don't have a reliable Mod modifier or
+/// arrow keys. All three paths route here and dispatch the same
+/// "insert newline after the block, park caret there" edit.
+function isCaretInsideFenceAtDocEnd(view: EditorView): boolean {
+  const sel = view.state.selection.main;
+  if (!sel.empty) return false;
+  // Find the enclosing FencedCode (if any).
+  let n: import("@lezer/common").SyntaxNode | null = syntaxTree(
+    view.state,
+  ).resolveInner(sel.head, 0);
+  let fence: import("@lezer/common").SyntaxNode | null = null;
+  while (n) {
+    if (n.name === "FencedCode") {
+      fence = n;
+      break;
+    }
+    n = n.parent;
+  }
+  if (!fence) return false;
+  // The block must extend to (or beyond, modulo a trailing newline)
+  // the end of the doc — otherwise there's content after the closer
+  // and the user can just ArrowDown into it.
+  if (fence.to < view.state.doc.length - 1) return false;
+  // Caret must be on the actual last line of the doc. If there's
+  // any line below — even the closer fence — ArrowDown should keep
+  // its default behaviour (just move down by one). We only insert
+  // a fresh line when standing on the closer with nowhere to go,
+  // so we don't grow the file uninvited.
+  const caretLine = view.state.doc.lineAt(sel.head).number;
+  return caretLine === view.state.doc.lines;
+}
+
+function exitFenceAtDocEnd(view: EditorView): boolean {
+  // Always exit past the closer, not at the caret's line — when the
+  // caret is on the last body line, splicing at line.to would inject
+  // a newline INSIDE the block. Anchor the insertion at doc.length
+  // so the new line lands after the closing fence regardless of
+  // whether the caret was on a body line or the closer itself.
+  const end = view.state.doc.length;
+  view.dispatch({
+    changes: { from: end, to: end, insert: "\n" },
+    selection: { anchor: end + 1 },
+  });
+  return true;
+}
+
+/// ArrowDown + Mod-Enter binding: exit a fenced code block when the
+/// caret sits inside one on the last line of the doc. Returns false
+/// otherwise so the key keeps its default behaviour (cursorDown /
+/// assistant submit).
+export function escapeFenceAtDocEnd(view: EditorView): boolean {
+  if (!isCaretInsideFenceAtDocEnd(view)) return false;
+  return exitFenceAtDocEnd(view);
+}
+
+/// Mobile-friendly Enter binding: when the caret is on the closing
+/// fence line (e.g. ``` on its own line) AND that line is the last
+/// line of the doc, Enter exits the block. Keeps normal Enter (which
+/// inserts a literal newline into the code body) intact for the
+/// content lines above the closer.
+const CLOSER_FENCE_RE = /^\s*(`{3,}|~{3,})\s*$/;
+export function escapeFenceOnEnterAtCloser(view: EditorView): boolean {
+  const sel = view.state.selection.main;
+  if (!sel.empty) return false;
+  const line = view.state.doc.lineAt(sel.head);
+  // Closer must be the last line of the doc (allowing one optional
+  // trailing newline that the doc itself bakes into doc.length).
+  if (line.to < view.state.doc.length - 1) return false;
+  if (!CLOSER_FENCE_RE.test(line.text)) return false;
+  let n: import("@lezer/common").SyntaxNode | null = syntaxTree(
+    view.state,
+  ).resolveInner(sel.head, 0);
+  let inFence = false;
+  while (n) {
+    if (n.name === "FencedCode") {
+      inFence = true;
+      break;
+    }
+    n = n.parent;
+  }
+  if (!inFence) return false;
+  return exitFenceAtDocEnd(view);
+}
+
 /// `<` chord: strip one level of `> ` (or `>` alone) from every
 /// line in a multi-line full-line selection. Falls through if no
 /// line has a quote prefix (so an unrelated `<` stays a literal

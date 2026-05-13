@@ -35,6 +35,7 @@ import {
 import { findDateMatches, type DateFormatId } from "../dateFormats";
 import { selectionInRange } from "../decorations/selection";
 import { openDatePopover } from "../overlays/date_popover";
+import { persistDateFormat } from "../../state/store.svelte";
 
 const SKIP_INSIDE = new Set<string>([
   "InlineCode",
@@ -83,11 +84,24 @@ class DateWidget extends WidgetType {
         anchor: el,
         initialDate: this.date,
         initialFormatId: this.formatId,
-        onCommit: (formatted) => {
+        onCommit: (formatted, formatId) => {
+          // Drop a trailing space + park the caret past it so the
+          // user can keep typing right after the date, matching
+          // the !/date macro flow. Skip the extra space when one
+          // already sits after the existing date (avoids
+          // double-spacing inline edits).
+          const after = view.state.doc.sliceString(to, to + 1);
+          const trailing = after === " " ? "" : " ";
+          const insert = formatted + trailing;
           view.dispatch({
-            changes: { from, to, insert: formatted },
-            selection: { anchor: from + formatted.length },
+            changes: { from, to, insert },
+            selection: { anchor: from + insert.length },
           });
+          // Picking a different format from the popover sticks as
+          // the new default so subsequent !/today / !/date macros
+          // honor the user's choice.
+          if (formatId !== this.formatId) persistDateFormat(formatId);
+          view.focus();
         },
         onDismiss: () => {},
       });

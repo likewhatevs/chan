@@ -11,6 +11,7 @@
 
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import Source from "../editor/Source.svelte";
+  import { ArrowLeft, ArrowRight } from "lucide-svelte";
   import FindBar from "./FindBar.svelte";
   import Inspector from "./Inspector.svelte";
   import OutlineBody, { type Heading } from "./OutlineBody.svelte";
@@ -80,6 +81,18 @@
   /// Per-tab so multi-pane layouts can mix read/write without
   /// a global signal fighting between panes.
   const readOnly = $derived(tab.readMode || !tab.fsWritable);
+
+  /// 0-indexed source line under the caret. Drives the outline's
+  /// active-heading marker (Google-Docs-style "you are here" bar
+  /// on the guide line). Counts newlines up to tab.caret.from in
+  /// O(n) which is fine for the buffer sizes chan deals with.
+  const caretLine = $derived.by((): number | null => {
+    if (!tab.caret) return null;
+    const upto = tab.content.slice(0, tab.caret.from);
+    let n = 0;
+    for (let i = 0; i < upto.length; i++) if (upto.charCodeAt(i) === 10) n++;
+    return n;
+  });
 
   // Bumped on every selection / doc change in the WYSIWYG editor so
   // the StyleToolbar's active-mark / current-block derivations re-run.
@@ -299,7 +312,13 @@
           </span>
         </button>
         <button class="mbtn" onclick={doToggleOutline} class:on={tab.inspectorOpen}>
-          <span class="mbtn-icon">◫</span>
+          <span class="mbtn-icon">
+            {#if tab.inspectorOpen}
+              <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
+            {:else}
+              <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
+            {/if}
+          </span>
           <span class="mbtn-label">
             {tab.inspectorOpen ? "Hide Details" : "Show Details"}
           </span>
@@ -466,7 +485,7 @@
           </button>
           <div class="inspector-body">
             {#if inspectorTab === "outline"}
-              <OutlineBody content={tab.content} onSelect={jumpTo} />
+              <OutlineBody content={tab.content} {caretLine} onSelect={jumpTo} />
             {:else}
               <FileInfoBody
                 path={tab.path}

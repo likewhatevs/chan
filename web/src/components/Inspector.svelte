@@ -12,6 +12,7 @@
   // file browser uses paneWidths.browser; defaults differ).
 
   import type { Snippet } from "svelte";
+  import { ArrowRight } from "lucide-svelte";
   import ResizeHandle from "./ResizeHandle.svelte";
 
   let {
@@ -41,7 +42,13 @@
         aria-label="Close {title}"
         onclick={onClose}
       >
-        ×
+        <!-- Right-pointing arrow matches the panel's collapse
+             direction (the inspector lives on the right edge and
+             slides off to the right when closed). Visual idiom
+             copied from Google Docs' left-panel close (which uses
+             a left-pointing arrow because that panel sits on the
+             left). -->
+        <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
       </button>
     {/if}
   </div>
@@ -90,10 +97,12 @@
     border: none;
     color: var(--text-secondary);
     cursor: pointer;
-    font-size: 18px;
-    line-height: 1;
-    padding: 0 0.2rem;
+    padding: 0.15rem 0.25rem;
     border-radius: 3px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 0;
   }
   .close:hover {
     background: var(--hover-bg, rgba(127, 127, 127, 0.15));

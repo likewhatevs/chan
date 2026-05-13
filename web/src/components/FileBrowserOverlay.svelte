@@ -8,6 +8,8 @@
 
   import { tick } from "svelte";
   import {
+    ArrowLeft,
+    ArrowRight,
     FilePlus,
     FolderOpen,
     FolderPlus,
@@ -233,7 +235,11 @@
        gets a separator above the next. -->
   <li>
     <button role="menuitem" onclick={toggleInspector}>
-      <span class="glyph" aria-hidden="true">◫</span>
+      {#if browserOverlay.inspectorOpen}
+        <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
+      {:else}
+        <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
+      {/if}
       <span>{browserOverlay.inspectorOpen ? "Hide Details" : "Show Details"}</span>
     </button>
   </li>
