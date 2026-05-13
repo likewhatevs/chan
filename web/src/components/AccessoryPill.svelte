@@ -33,6 +33,16 @@
     searchPanel,
     settingsDisabled,
   } from "../state/store.svelte";
+  import { chordFor } from "../state/shortcuts";
+
+  /// Tooltip helper. Pulls the chord from the central shortcuts
+  /// registry so the pill's labels stay aligned with App.svelte's
+  /// keymap (and the empty-pane / `chan serve --help` tables) instead
+  /// of carrying hand-written chord strings that silently drift.
+  function tip(label: string, id: string): string {
+    const c = chordFor(id);
+    return c ? `${label} (${c})` : label;
+  }
 
   /// Master switch state. When off we keep the button visible but
   /// inert + greyed so the entry point stays discoverable and the
@@ -55,7 +65,7 @@
     <button
       class="fbtn side left"
       class:on={browserOverlay.open}
-      title="Files (⌘⇧O)"
+      title={tip("Files", "app.files.toggle")}
       aria-label="Files"
       onclick={openBrowser}
     >
@@ -63,7 +73,7 @@
     </button>
     <button
       class="fbtn side left"
-      title="Search (⌘K)"
+      title={tip("Search", "app.search.toggle")}
       aria-label="Search"
       onclick={() => (searchPanel.open = true)}
     >
@@ -75,7 +85,7 @@
     <div class="enso-slot" aria-hidden="true"></div>
     <button
       class="fbtn side right"
-      title="Graph (⌘⇧G)"
+      title={tip("Graph", "app.graph.toggle")}
       aria-label="Graph"
       onclick={openGraph}
     >
@@ -86,7 +96,7 @@
       class:disabled={settingsLocked}
       title={settingsLocked
         ? "Settings disabled while this drive is shared via a tunnel"
-        : "Settings (⌘,)"}
+        : tip("Settings", "app.settings.toggle")}
       aria-label="Settings"
       aria-disabled={settingsLocked}
       disabled={settingsLocked}
@@ -100,7 +110,7 @@
     class:on={assistantOverlay.open && assistantEnabled}
     class:disabled={!assistantEnabled}
     title={assistantEnabled
-      ? "Assistant (⌘P)"
+      ? tip("Assistant", "app.assistant.toggle")
       : "Assistant is off — enable it in Settings"}
     aria-label="Assistant"
     aria-disabled={!assistantEnabled}

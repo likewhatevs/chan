@@ -196,6 +196,19 @@ export function currentOS(): OS {
   return "linux";
 }
 
+/// Return the formatted chord for a shortcut id on the current
+/// platform + OS, or `null` if the shortcut isn't wired (the chord
+/// for the resolved platform is undefined). Tooltips and button
+/// labels use this to stay in sync with the keymap layer without
+/// duplicating chord strings inline.
+export function chordFor(id: string): string | null {
+  const s = SHORTCUTS.find((x) => x.id === id);
+  if (!s) return null;
+  const chord = s[currentPlatform()];
+  if (!chord) return null;
+  return formatChord(chord, currentOS());
+}
+
 /// Tauri injects `window.__TAURI_INTERNALS__` (newer versions) or
 /// `window.__TAURI__` (older). Either marker means we're inside the
 /// native shell and chan-desktop's init script owns the OS-reserved
