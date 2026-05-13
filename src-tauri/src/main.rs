@@ -277,6 +277,7 @@ fn main() {
     let state_for_exit = Arc::clone(&state);
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
@@ -284,6 +285,24 @@ fn main() {
         .manage(state)
         .setup(|app| {
             install_app_menu(app.handle())?;
+
+            // Deep-link callbacks from the system browser
+            // (`chan://auth/callback#...`). Cold-start URLs and
+            // runtime URLs both flow through the same handler so the
+            // sign-in completes whether the user clicked "Open with
+            // chan-desktop" before or after the app was running.
+            use tauri_plugin_deep_link::DeepLinkExt;
+            let app_for_links = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                for url in event.urls() {
+                    auth::handle_callback(&app_for_links, url.as_str());
+                }
+            });
+            if let Ok(Some(urls)) = app.deep_link().get_current() {
+                for url in urls {
+                    auth::handle_callback(app.handle(), url.as_str());
+                }
+            }
 
             // Closing the main window via the red traffic light or
             // Cmd+W should hide it, not destroy it: hidden serve
@@ -325,7 +344,6 @@ fn main() {
             reveal_in_finder,
             auth::auth_status,
             auth::open_signin,
-            auth::save_pat,
             auth::signout,
         ])
         .build(tauri::generate_context!())

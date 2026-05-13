@@ -29,6 +29,11 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["chan"]
+      }
+    },
     "updater": {
       "endpoints": [
         "https://chan.app/dl/desktop/{{target}}/{{current_version}}/latest.json"

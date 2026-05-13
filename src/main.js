@@ -81,6 +81,10 @@ authBtn.addEventListener('click', async () => {
 
 refreshAuth();
 listen('auth-changed', (e) => refreshAuth(e.payload));
+listen('auth-error', (e) => {
+  showError(typeof e.payload === 'string' ? e.payload : 'Sign-in failed');
+  refreshAuth();
+});
 
 let booted = false;
 let homeDir = '';
