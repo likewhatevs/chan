@@ -93,22 +93,27 @@
 //!     orchestration loop treats `Outcome.tool_calls` as empty so
 //!     it exits after one backend turn.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::Value as Json;
 use tempfile::NamedTempFile;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::Command;
+use tokio::time::timeout;
 
 use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall, ToolResult};
 use crate::tools::ToolSchema;
 
-use super::{sanitize_env, Backend, Outcome};
+use super::{
+    read_line_capped, sanitize_env, Backend, Outcome, NDJSON_LINE_CAP_BYTES, PARSE_ERROR_EMIT_LIMIT,
+};
 
 /// Default command to launch claude. Plain `claude` so PATH wins;
 /// users can override via `LlmConfig.claude_cli.cmd` when claude
@@ -164,6 +169,10 @@ pub struct ClaudeCliBackend {
     model: Option<String>,
     cwd: PathBuf,
     mcp: Option<McpWiring>,
+    /// Max time between consecutive stdout lines before the
+    /// subprocess is treated as wedged. Resolved upstream by
+    /// `backends::build` from `LlmConfig.stream_inactivity_timeout_secs`.
+    inactivity_timeout: Duration,
 }
 
 impl ClaudeCliBackend {
@@ -173,6 +182,7 @@ impl ClaudeCliBackend {
         model: Option<String>,
         cwd: PathBuf,
         mcp: Option<McpWiring>,
+        inactivity_timeout: Duration,
     ) -> Self {
         Self {
             cmd,
@@ -180,6 +190,7 @@ impl ClaudeCliBackend {
             model,
             cwd,
             mcp,
+            inactivity_timeout,
         }
     }
 }
@@ -299,16 +310,22 @@ impl Backend for ClaudeCliBackend {
         };
         let stderr = child.stderr.take();
 
-        let mut reader = BufReader::new(stdout).lines();
+        let mut reader = BufReader::new(stdout);
+        let mut line_buf: Vec<u8> = Vec::new();
         let mut assistant_text = String::new();
         let mut stop = StopReason::EndOfTurn;
         let mut saw_result = false;
-        // Set once any token-level `text_delta` arrives via a
-        // `stream_event` envelope. Used to suppress the redundant
-        // `on_delta` on the final `assistant` event (which carries
-        // the fully assembled text); the partial path has already
-        // emitted and accumulated it.
-        let mut streamed_partial_text = false;
+        // Token-level partial text accumulated per content-block index
+        // for the current assistant message. Reset on every
+        // `message_start` partial event. Used to suppress the
+        // redundant text on the final `assistant` event without
+        // dropping text that wasn't streamed via partials (e.g. a
+        // second text block in the same message that claude buffered
+        // instead of streaming, or a whole subsequent message that
+        // skipped partials altogether).
+        let mut partial_text_by_index: HashMap<usize, String> = HashMap::new();
+        let mut parse_errors_emitted = 0usize;
+        let mut parse_errors_silenced = 0usize;
 
         loop {
             if cancel.load(Ordering::Relaxed) {
@@ -319,42 +336,86 @@ impl Backend for ClaudeCliBackend {
                 let _ = child.wait().await;
                 return Outcome::cancelled(assistant_text);
             }
-            let line = match reader.next_line().await {
-                Ok(Some(l)) => l,
-                Ok(None) => break,
-                Err(e) => {
+            let read = timeout(
+                self.inactivity_timeout,
+                read_line_capped(&mut reader, &mut line_buf, NDJSON_LINE_CAP_BYTES),
+            )
+            .await;
+            let got_line = match read {
+                Ok(Ok(true)) => true,
+                Ok(Ok(false)) => break,
+                Ok(Err(e)) => {
+                    // Either an I/O failure on the pipe or the per-line
+                    // cap fired. Both are unrecoverable for this turn.
                     listener.on_error(format!("claude_cli stdout: {e}"));
                     let _ = child.kill().await;
                     return Outcome::error();
+                }
+                Err(_elapsed) => {
+                    listener.on_error(format!(
+                        "claude_cli: no output for {}s; subprocess wedged",
+                        self.inactivity_timeout.as_secs(),
+                    ));
+                    let _ = child.kill().await;
+                    return Outcome::error();
+                }
+            };
+            if !got_line {
+                break;
+            }
+            // The trailing '\n' is harmless to serde_json but we strip
+            // it for the parse-error preview. Non-UTF-8 bytes mean a
+            // garbled pipe; surface as a parse error and keep going.
+            let line = match std::str::from_utf8(&line_buf) {
+                Ok(s) => s.trim_end_matches('\n'),
+                Err(_) => {
+                    if parse_errors_emitted < PARSE_ERROR_EMIT_LIMIT {
+                        listener.on_error("claude_cli stdout: non-utf8 line".into());
+                        parse_errors_emitted += 1;
+                    } else {
+                        parse_errors_silenced += 1;
+                    }
+                    continue;
                 }
             };
             if line.trim().is_empty() {
                 continue;
             }
-            let event: StreamEvent = match serde_json::from_str(&line) {
+            let event: StreamEvent = match serde_json::from_str(line) {
                 Ok(e) => e,
                 Err(e) => {
-                    // Don't fail the whole turn on a single
-                    // unrecognized line; claude may add new event
-                    // shapes in future versions. Surface once and
-                    // keep reading.
-                    listener.on_error(format!(
-                        "claude_cli parse: {e}; raw: {}",
-                        truncate(&line, 400)
-                    ));
+                    if parse_errors_emitted < PARSE_ERROR_EMIT_LIMIT {
+                        listener.on_error(format!(
+                            "claude_cli parse: {e}; raw: {}",
+                            truncate(line, 400)
+                        ));
+                        parse_errors_emitted += 1;
+                    } else {
+                        parse_errors_silenced += 1;
+                    }
                     continue;
                 }
             };
             match event {
-                StreamEvent::Partial { event: partial } => {
-                    if let PartialEvent::ContentBlockDelta {
+                StreamEvent::Partial { event: partial } => match partial {
+                    PartialEvent::MessageStart => {
+                        // Each assistant message has its own content
+                        // blocks indexed from 0. Reset the per-block
+                        // tracker so the next final `assistant` event
+                        // compares against the right partials.
+                        partial_text_by_index.clear();
+                    }
+                    PartialEvent::ContentBlockDelta {
+                        index,
                         delta: PartialDelta::TextDelta { text },
-                    } = partial
-                    {
+                    } => {
                         if !text.is_empty() {
-                            streamed_partial_text = true;
                             listener.on_delta(Delta { text: text.clone() });
                             assistant_text.push_str(&text);
+                            partial_text_by_index
+                                .entry(index)
+                                .or_default()
+                                .push_str(&text);
                             if assistant_text.len() > super::ASSISTANT_TEXT_CAP_BYTES {
                                 listener.on_error(format!(
                                     "claude_cli stream: assistant text exceeded {} bytes; aborting",
@@ -365,22 +426,41 @@ impl Backend for ClaudeCliBackend {
                             }
                         }
                     }
-                }
+                    PartialEvent::ContentBlockDelta { .. } | PartialEvent::Other => {}
+                },
                 StreamEvent::Assistant { message } => {
-                    for block in message.content {
+                    for (i, block) in message.content.into_iter().enumerate() {
                         match block {
                             ContentBlock::Text { text } => {
-                                // When partials already streamed this
-                                // text, the final assistant event is
-                                // a redundant repeat; swallow it so
-                                // the UI doesn't see the message twice
-                                // and `assistant_text` doesn't double.
-                                if streamed_partial_text {
-                                    continue;
-                                }
-                                if !text.is_empty() {
-                                    listener.on_delta(Delta { text: text.clone() });
-                                    assistant_text.push_str(&text);
+                                // Emit only the slice of the canonical
+                                // block that wasn't already streamed
+                                // via partials at this index. Covers
+                                // three cases:
+                                //   1. All partials matched: skip.
+                                //   2. No partials for this index
+                                //      (claude buffered): emit full.
+                                //   3. Partials covered a prefix
+                                //      (unusual; happens if a network
+                                //      drop kills mid-block): emit
+                                //      the suffix.
+                                let already = partial_text_by_index
+                                    .get(&i)
+                                    .map(String::as_str)
+                                    .unwrap_or("");
+                                // Drift between partials and the
+                                // canonical block (the `else` branch
+                                // of `strip_prefix`) should not
+                                // happen in practice. When it does,
+                                // emit the full canonical text; the
+                                // host sees the correct content even
+                                // though assistant_text may carry
+                                // duplicate bytes for this index.
+                                let suffix = text.strip_prefix(already).unwrap_or(text.as_str());
+                                if !suffix.is_empty() {
+                                    listener.on_delta(Delta {
+                                        text: suffix.to_string(),
+                                    });
+                                    assistant_text.push_str(suffix);
                                     if assistant_text.len() > super::ASSISTANT_TEXT_CAP_BYTES {
                                         listener.on_error(format!(
                                             "claude_cli stream: assistant text exceeded {} bytes; aborting",
@@ -475,11 +555,24 @@ impl Backend for ClaudeCliBackend {
             listener.on_error(format!("claude_cli exit {status}: {snippet}"));
             return Outcome::error();
         }
+        if parse_errors_silenced > 0 {
+            // The first PARSE_ERROR_EMIT_LIMIT failures arrived as
+            // their own on_error events with the raw-line preview;
+            // anything past that gets summarised here so the host
+            // knows the cap fired without seeing thousands of frames.
+            listener.on_error(format!(
+                "claude_cli parse: {parse_errors_silenced} additional parse errors suppressed",
+            ));
+        }
         if !saw_result && stop != StopReason::Error {
-            // claude ended cleanly but never emitted a `result`
-            // event. Treat as end_of_turn but flag the anomaly so
-            // we notice if the protocol shifts.
+            // claude exited cleanly but never emitted a `result`
+            // event. The transcript may be incomplete (truncated
+            // mid-message, missing the final stop reason). Treat as
+            // an error so the host renders an actionable state
+            // instead of presenting a half-message as a complete
+            // reply.
             listener.on_error("claude_cli: stream ended without a result event".into());
+            stop = StopReason::Error;
         }
 
         // Drop the temp config now that claude has exited; named
@@ -632,9 +725,14 @@ enum StreamEvent {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum PartialEvent {
-    ContentBlockDelta {
-        delta: PartialDelta,
-    },
+    /// Boundary marker between assistant messages. The per-block
+    /// partial-text tracker resets here so the next final
+    /// `assistant` event compares against a fresh slate.
+    MessageStart,
+    /// Incremental delta for the content block at `index`. Indexes
+    /// are positional within a single assistant message and reset
+    /// at every `MessageStart`.
+    ContentBlockDelta { index: usize, delta: PartialDelta },
     #[serde(other)]
     Other,
 }
@@ -748,6 +846,7 @@ mod tests {
             None,
             tmp.path().to_path_buf(),
             None,
+            Duration::from_secs(60),
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -824,6 +923,7 @@ mod tests {
             None,
             tmp.path().to_path_buf(),
             None,
+            Duration::from_secs(60),
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -891,6 +991,7 @@ mod tests {
             None,
             tmp.path().to_path_buf(),
             None,
+            Duration::from_secs(60),
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -963,6 +1064,323 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn message_start_resets_per_block_partials_so_second_message_is_not_dropped() {
+        // Regression for the bug captured in design.md section 6.2:
+        // a per-run "streamed_partial_text" flag would suppress the
+        // text of message N+1 if message N had streamed partials and
+        // message N+1 had not. Per-message reset on `message_start`
+        // is what this test pins.
+        //
+        // Fixture: message 1 streams its text via partials; message 2
+        // ships only the final assistant event (no partials), with
+        // text "from msg2". Both must appear in the deltas, neither
+        // duplicated nor dropped.
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"system","subtype":"init"}
+{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"msg1 text"}}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"msg1 text"}]}}
+{"type":"stream_event","event":{"type":"message_start","message":{"id":"m2"}}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"from msg2"}]}}
+{"type":"result","subtype":"success","result":"from msg2","is_error":false}"#;
+        let script = fake_claude(tmp.path(), body);
+        let backend = ClaudeCliBackend::new(
+            vec![script.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            tmp.path().to_path_buf(),
+            None,
+            Duration::from_secs(60),
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                vec![Message::user("hi")],
+                Vec::new(),
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        let events = listener.0.lock().unwrap();
+        let deltas: Vec<String> = events
+            .iter()
+            .filter_map(|e| {
+                if let Event::Delta(t) = e {
+                    Some(t.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            deltas,
+            vec!["msg1 text".to_string(), "from msg2".to_string()]
+        );
+        assert_eq!(outcome.assistant_text, "msg1 textfrom msg2");
+        assert_eq!(outcome.stop_reason, StopReason::EndOfTurn);
+    }
+
+    #[tokio::test]
+    async fn second_text_block_without_partials_in_same_message_is_emitted() {
+        // The partial tracker is keyed by content-block index inside
+        // a single assistant message. If claude streams partials for
+        // index 0 and ships index 1 only in the final assistant
+        // event (no partials), index 1's text must still reach the
+        // listener. The previous global-bool model dropped this case
+        // silently.
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"system","subtype":"init"}
+{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"streamed"}}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"streamed"},{"type":"text","text":" buffered"}]}}
+{"type":"result","subtype":"success","result":"streamed buffered","is_error":false}"#;
+        let script = fake_claude(tmp.path(), body);
+        let backend = ClaudeCliBackend::new(
+            vec![script.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            tmp.path().to_path_buf(),
+            None,
+            Duration::from_secs(60),
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                vec![Message::user("hi")],
+                Vec::new(),
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        let events = listener.0.lock().unwrap();
+        let deltas: Vec<String> = events
+            .iter()
+            .filter_map(|e| {
+                if let Event::Delta(t) = e {
+                    Some(t.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            deltas,
+            vec!["streamed".to_string(), " buffered".to_string()]
+        );
+        assert_eq!(outcome.assistant_text, "streamed buffered");
+    }
+
+    #[tokio::test]
+    async fn stream_ended_without_result_event_is_error() {
+        // A clean EOF on stdout with no `result` event means the
+        // turn is incomplete (e.g. claude was killed mid-reply by
+        // the OS, or the protocol drifted). Surfacing this as
+        // EndOfTurn would lie to the UI; the listener should see
+        // on_error and the orchestrator should see Outcome::error.
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"partial"}]}}"#;
+        let script = fake_claude(tmp.path(), body);
+        let backend = ClaudeCliBackend::new(
+            vec![script.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            tmp.path().to_path_buf(),
+            None,
+            Duration::from_secs(60),
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                vec![Message::user("hi")],
+                Vec::new(),
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.stop_reason, StopReason::Error);
+        let events = listener.0.lock().unwrap();
+        let errs: Vec<String> = events
+            .iter()
+            .filter_map(|e| {
+                if let Event::Error(t) = e {
+                    Some(t.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            errs.iter().any(|e| e.contains("stream ended without")),
+            "expected stream-ended error, got: {errs:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn parse_error_emissions_are_rate_limited() {
+        // PARSE_ERROR_EMIT_LIMIT distinct error frames, then the
+        // overflow is counted silently and summarised once at the
+        // end. Without this cap a malformed-line flood could fan
+        // out into thousands of WebSocket frames.
+        let tmp = TempDir::new().unwrap();
+        // 12 bad JSON lines, then a valid result so the stream ends
+        // cleanly without tripping the no-result error path.
+        let mut body = String::new();
+        for i in 0..12 {
+            body.push_str(&format!("not json line {i}\n"));
+        }
+        body.push_str(r#"{"type":"result","subtype":"success","result":"","is_error":false}"#);
+        let script = fake_claude(tmp.path(), &body);
+        let backend = ClaudeCliBackend::new(
+            vec![script.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            tmp.path().to_path_buf(),
+            None,
+            Duration::from_secs(60),
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let _ = backend
+            .run(
+                vec![Message::user("hi")],
+                Vec::new(),
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        let events = listener.0.lock().unwrap();
+        let parse_errs: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Error(t) if t.contains("parse:") => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        // 5 detailed parse errors + 1 summary line = 6 frames.
+        assert_eq!(
+            parse_errs.len(),
+            super::super::PARSE_ERROR_EMIT_LIMIT + 1,
+            "expected {} parse errors, got: {:?}",
+            super::super::PARSE_ERROR_EMIT_LIMIT + 1,
+            parse_errs,
+        );
+        assert!(
+            parse_errs
+                .iter()
+                .any(|e| e.contains("additional parse errors suppressed")),
+            "expected summary line: {parse_errs:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn oversize_line_aborts_with_error() {
+        // A single very large stdout line must not be buffered past
+        // NDJSON_LINE_CAP_BYTES. The cap fires during the read; the
+        // backend surfaces an error and returns Outcome::error.
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("flood.sh");
+        // 5 MiB of 'x' on one line; the cap is 4 MiB.
+        std::fs::write(
+            &path,
+            "#!/bin/sh\nawk 'BEGIN { for (i=0;i<5242880;i++) printf \"x\"; print \"\" }'\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let backend = ClaudeCliBackend::new(
+            vec![path.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            tmp.path().to_path_buf(),
+            None,
+            Duration::from_secs(60),
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                vec![Message::user("hi")],
+                Vec::new(),
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.stop_reason, StopReason::Error);
+        let events = listener.0.lock().unwrap();
+        let errs: Vec<String> = events
+            .iter()
+            .filter_map(|e| {
+                if let Event::Error(t) = e {
+                    Some(t.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            errs.iter().any(|e| e.contains("line exceeds")),
+            "expected line-cap error: {errs:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn inactivity_timeout_fires_when_subprocess_emits_nothing() {
+        // A child that never writes to stdout would wedge the loop
+        // forever under the previous (uncapped) reader. With the
+        // timeout in place the loop kills the child and surfaces an
+        // error after the configured duration.
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("silent.sh");
+        std::fs::write(&path, "#!/bin/sh\nsleep 30\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let backend = ClaudeCliBackend::new(
+            vec![path.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            tmp.path().to_path_buf(),
+            None,
+            Duration::from_millis(200),
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let start = std::time::Instant::now();
+        let outcome = backend
+            .run(
+                vec![Message::user("hi")],
+                Vec::new(),
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        let elapsed = start.elapsed();
+        assert_eq!(outcome.stop_reason, StopReason::Error);
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "loop must exit on timeout, not on the sleep ending; elapsed={elapsed:?}",
+        );
+        let events = listener.0.lock().unwrap();
+        let errs: Vec<String> = events
+            .iter()
+            .filter_map(|e| {
+                if let Event::Error(t) = e {
+                    Some(t.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            errs.iter().any(|e| e.contains("subprocess wedged")),
+            "expected wedged-subprocess error: {errs:?}",
+        );
+    }
+
+    #[tokio::test]
     async fn nonzero_exit_emits_on_error() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("fail.sh");
@@ -978,6 +1396,7 @@ mod tests {
             None,
             tmp.path().to_path_buf(),
             None,
+            Duration::from_secs(60),
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend

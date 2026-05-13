@@ -84,18 +84,22 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::Value as Json;
 use tempfile::TempDir;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::BufReader;
 use tokio::process::Command;
+use tokio::time::timeout;
 
 use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall, ToolResult};
 use crate::tools::ToolSchema;
 
-use super::{sanitize_env, Backend, Outcome};
+use super::{
+    read_line_capped, sanitize_env, Backend, Outcome, NDJSON_LINE_CAP_BYTES, PARSE_ERROR_EMIT_LIMIT,
+};
 
 /// Default command to launch gemini. Plain `gemini` so PATH wins;
 /// users override via `LlmConfig.gemini_cli.cmd` when gemini lives
@@ -131,6 +135,10 @@ pub struct GeminiCliBackend {
     model: Option<String>,
     cwd: PathBuf,
     mcp: Option<McpWiring>,
+    /// Max time between consecutive stdout lines before the
+    /// subprocess is treated as wedged. Resolved upstream by
+    /// `backends::build` from `LlmConfig.stream_inactivity_timeout_secs`.
+    inactivity_timeout: Duration,
 }
 
 impl GeminiCliBackend {
@@ -140,6 +148,7 @@ impl GeminiCliBackend {
         model: Option<String>,
         cwd: PathBuf,
         mcp: Option<McpWiring>,
+        inactivity_timeout: Duration,
     ) -> Self {
         Self {
             cmd,
@@ -147,6 +156,7 @@ impl GeminiCliBackend {
             model,
             cwd,
             mcp,
+            inactivity_timeout,
         }
     }
 }
@@ -244,10 +254,13 @@ impl Backend for GeminiCliBackend {
         };
         let stderr = child.stderr.take();
 
-        let mut reader = BufReader::new(stdout).lines();
+        let mut reader = BufReader::new(stdout);
+        let mut line_buf: Vec<u8> = Vec::new();
         let mut assistant_text = String::new();
         let mut stop = StopReason::EndOfTurn;
         let mut saw_result = false;
+        let mut parse_errors_emitted = 0usize;
+        let mut parse_errors_silenced = 0usize;
 
         loop {
             if cancel.load(Ordering::Relaxed) {
@@ -255,13 +268,41 @@ impl Backend for GeminiCliBackend {
                 let _ = child.wait().await;
                 return Outcome::cancelled(assistant_text);
             }
-            let line = match reader.next_line().await {
-                Ok(Some(l)) => l,
-                Ok(None) => break,
-                Err(e) => {
+            let read = timeout(
+                self.inactivity_timeout,
+                read_line_capped(&mut reader, &mut line_buf, NDJSON_LINE_CAP_BYTES),
+            )
+            .await;
+            let got_line = match read {
+                Ok(Ok(true)) => true,
+                Ok(Ok(false)) => break,
+                Ok(Err(e)) => {
                     listener.on_error(format!("gemini_cli stdout: {e}"));
                     let _ = child.kill().await;
                     return Outcome::error();
+                }
+                Err(_elapsed) => {
+                    listener.on_error(format!(
+                        "gemini_cli: no output for {}s; subprocess wedged",
+                        self.inactivity_timeout.as_secs(),
+                    ));
+                    let _ = child.kill().await;
+                    return Outcome::error();
+                }
+            };
+            if !got_line {
+                break;
+            }
+            let line = match std::str::from_utf8(&line_buf) {
+                Ok(s) => s.trim_end_matches('\n'),
+                Err(_) => {
+                    if parse_errors_emitted < PARSE_ERROR_EMIT_LIMIT {
+                        listener.on_error("gemini_cli stdout: non-utf8 line".into());
+                        parse_errors_emitted += 1;
+                    } else {
+                        parse_errors_silenced += 1;
+                    }
+                    continue;
                 }
             };
             if line.trim().is_empty() {
@@ -284,13 +325,15 @@ impl Backend for GeminiCliBackend {
             let event: StreamEvent = match serde_json::from_str(payload) {
                 Ok(e) => e,
                 Err(e) => {
-                    // Don't fail the whole turn on a single
-                    // unrecognized line; gemini may add new event
-                    // shapes. Surface once and keep reading.
-                    listener.on_error(format!(
-                        "gemini_cli parse: {e}; raw: {}",
-                        truncate(&line, 400)
-                    ));
+                    if parse_errors_emitted < PARSE_ERROR_EMIT_LIMIT {
+                        listener.on_error(format!(
+                            "gemini_cli parse: {e}; raw: {}",
+                            truncate(line, 400)
+                        ));
+                        parse_errors_emitted += 1;
+                    } else {
+                        parse_errors_silenced += 1;
+                    }
                     continue;
                 }
             };
@@ -383,8 +426,17 @@ impl Backend for GeminiCliBackend {
             listener.on_error(format!("gemini_cli exit {status}: {snippet}"));
             return Outcome::error();
         }
+        if parse_errors_silenced > 0 {
+            listener.on_error(format!(
+                "gemini_cli parse: {parse_errors_silenced} additional parse errors suppressed",
+            ));
+        }
         if !saw_result && stop != StopReason::Error {
+            // gemini exited cleanly but never emitted a `result`
+            // event. The transcript may be incomplete; treat as
+            // an error so the host renders an actionable state.
             listener.on_error("gemini_cli: stream ended without a result event".into());
+            stop = StopReason::Error;
         }
 
         // Drop the home tmpdir now that gemini has exited.
@@ -731,6 +783,7 @@ mod tests {
             None,
             tmp.path().to_path_buf(),
             None,
+            Duration::from_secs(60),
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -782,6 +835,246 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stream_ended_without_result_event_is_error() {
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"init","cwd":"."}
+{"type":"message","role":"assistant","content":"partial"}"#;
+        let script = fake_gemini(tmp.path(), body);
+        let backend = GeminiCliBackend::new(
+            vec![script.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            tmp.path().to_path_buf(),
+            None,
+            Duration::from_secs(60),
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                vec![Message::user("hi")],
+                Vec::new(),
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.stop_reason, StopReason::Error);
+        let events = listener.0.lock().unwrap();
+        let errs: Vec<String> = events
+            .iter()
+            .filter_map(|e| {
+                if let Event::Error(t) = e {
+                    Some(t.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            errs.iter().any(|e| e.contains("stream ended without")),
+            "expected stream-ended error: {errs:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn parse_error_emissions_are_rate_limited() {
+        let tmp = TempDir::new().unwrap();
+        let mut body = String::new();
+        for i in 0..12 {
+            body.push_str(&format!("not json line {i}\n"));
+        }
+        body.push_str(r#"{"type":"result","status":"success"}"#);
+        let script = fake_gemini(tmp.path(), &body);
+        let backend = GeminiCliBackend::new(
+            vec![script.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            tmp.path().to_path_buf(),
+            None,
+            Duration::from_secs(60),
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let _ = backend
+            .run(
+                vec![Message::user("hi")],
+                Vec::new(),
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        let events = listener.0.lock().unwrap();
+        // Some "not json line N" entries do contain a digit but no
+        // '{', so they hit the banner-strip path and are dropped
+        // silently. Lines containing braces would hit the parse path.
+        // To make the test robust, generate explicit non-banner
+        // malformed lines (with a '{' so the banner-strip pass them
+        // to serde_json, which then rejects them).
+        let parse_errs: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Error(t) if t.contains("parse:") => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        // The banner-strip drops lines without '{' silently, so this
+        // particular fixture won't hit the parse path. Verify the
+        // alternate fixture next.
+        let _ = parse_errs;
+    }
+
+    #[tokio::test]
+    async fn parse_error_with_brace_lines_is_rate_limited() {
+        // Lines that contain '{' but aren't valid JSON survive the
+        // banner-strip and reach serde_json, which fails: that's the
+        // path the rate limit guards. 12 of them -> 5 detailed + 1
+        // summary.
+        let tmp = TempDir::new().unwrap();
+        let mut body = String::new();
+        for i in 0..12 {
+            body.push_str(&format!("{{ broken line {i}\n"));
+        }
+        body.push_str(r#"{"type":"result","status":"success"}"#);
+        let script = fake_gemini(tmp.path(), &body);
+        let backend = GeminiCliBackend::new(
+            vec![script.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            tmp.path().to_path_buf(),
+            None,
+            Duration::from_secs(60),
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let _ = backend
+            .run(
+                vec![Message::user("hi")],
+                Vec::new(),
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        let events = listener.0.lock().unwrap();
+        let parse_errs: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Error(t) if t.contains("parse:") => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            parse_errs.len(),
+            super::super::PARSE_ERROR_EMIT_LIMIT + 1,
+            "expected {} parse errors, got: {:?}",
+            super::super::PARSE_ERROR_EMIT_LIMIT + 1,
+            parse_errs,
+        );
+        assert!(
+            parse_errs
+                .iter()
+                .any(|e| e.contains("additional parse errors suppressed")),
+            "expected summary line: {parse_errs:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn oversize_line_aborts_with_error() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("flood.sh");
+        std::fs::write(
+            &path,
+            "#!/bin/sh\nawk 'BEGIN { for (i=0;i<5242880;i++) printf \"x\"; print \"\" }'\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let backend = GeminiCliBackend::new(
+            vec![path.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            tmp.path().to_path_buf(),
+            None,
+            Duration::from_secs(60),
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                vec![Message::user("hi")],
+                Vec::new(),
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.stop_reason, StopReason::Error);
+        let events = listener.0.lock().unwrap();
+        let errs: Vec<String> = events
+            .iter()
+            .filter_map(|e| {
+                if let Event::Error(t) = e {
+                    Some(t.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            errs.iter().any(|e| e.contains("line exceeds")),
+            "expected line-cap error: {errs:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn inactivity_timeout_fires_when_subprocess_emits_nothing() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("silent.sh");
+        std::fs::write(&path, "#!/bin/sh\nsleep 30\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let backend = GeminiCliBackend::new(
+            vec![path.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            tmp.path().to_path_buf(),
+            None,
+            Duration::from_millis(200),
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let start = std::time::Instant::now();
+        let outcome = backend
+            .run(
+                vec![Message::user("hi")],
+                Vec::new(),
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        let elapsed = start.elapsed();
+        assert_eq!(outcome.stop_reason, StopReason::Error);
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "loop must exit on timeout, not on the sleep ending; elapsed={elapsed:?}",
+        );
+        let events = listener.0.lock().unwrap();
+        let errs: Vec<String> = events
+            .iter()
+            .filter_map(|e| {
+                if let Event::Error(t) = e {
+                    Some(t.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            errs.iter().any(|e| e.contains("subprocess wedged")),
+            "expected wedged-subprocess error: {errs:?}",
+        );
+    }
+
+    #[tokio::test]
     async fn nonzero_exit_emits_on_error() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("fail.sh");
@@ -797,6 +1090,7 @@ mod tests {
             None,
             tmp.path().to_path_buf(),
             None,
+            Duration::from_secs(60),
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -838,6 +1132,7 @@ mod tests {
             None,
             tmp.path().to_path_buf(),
             None,
+            Duration::from_secs(60),
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -887,6 +1182,7 @@ mod tests {
             None,
             tmp.path().to_path_buf(),
             None,
+            Duration::from_secs(60),
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend

@@ -415,47 +415,66 @@ listener does not slow the upstream stream. The per-turn text
 cap protects against a runaway buffer if the listener blocks
 indefinitely.
 
-### 6.2 Known failure modes
+### 6.2 Failure modes
 
-The streaming path has the following observed or theoretical
-failure modes. "Today's behaviour" is what the code does right
-now; planned mitigations live in section 13.
+The streaming path has the following failure modes. "Behaviour"
+is what the code does today (after Bite A landed); the privacy
+and structured-error items still on the roadmap live in section
+13.
 
 ```
-Failure mode                       Today's behaviour
+Failure mode                       Behaviour
 ---------------------------------  ----------------------------
 Subprocess spawn fails             on_error("<backend> spawn:
                                    <io error>"), Outcome::error
 stdin write fails (broken pipe)    on_error, kill child,
                                    Outcome::error
-stdout pipe closed unexpectedly    line reader returns None,
-                                   loop exits cleanly; if no
-                                   `result` event was seen,
-                                   on_error("stream ended
-                                   without a result event")
-                                   but stop_reason stays
-                                   EndOfTurn
-NDJSON line is not valid JSON      on_error per offending line,
-                                   loop continues
-Per-message reset for partials     `streamed_partial_text` is a
-(claude_cli only)                  single bool for the whole
-                                   `run`; if message N streams
-                                   partials and message N+1
-                                   does not, message N+1's text
-                                   is dropped
-NDJSON line size                   unbounded; the per-turn text
-                                   cap is the only ceiling
-Subprocess inactivity              no timeout; chan-llm waits
-                                   on `lines().next_line()`
-                                   indefinitely
+stdout pipe closed without         on_error("stream ended
+`result` event                     without a result event"),
+                                   Outcome::error. The transcript
+                                   may be incomplete; the host
+                                   renders an actionable error
+                                   state instead of presenting
+                                   a half reply as complete.
+NDJSON line is not valid JSON      on_error for the first five
+                                   distinct failures with the
+                                   raw-line preview; further
+                                   failures counted silently,
+                                   one summary line emitted at
+                                   the end of the turn (see
+                                   `PARSE_ERROR_EMIT_LIMIT`).
+Per-message reset for partials     Partial-text tracker is keyed
+(claude_cli)                       by content-block index and
+                                   cleared on every
+                                   `message_start`; the final
+                                   `assistant` event emits the
+                                   un-streamed suffix per block,
+                                   so neither a buffered second
+                                   block nor a partials-free
+                                   second message gets dropped.
+NDJSON line size                   Capped at
+                                   `NDJSON_LINE_CAP_BYTES`
+                                   (4 MiB). The cap is enforced
+                                   during the read; lines past
+                                   the cap abort the stream with
+                                   a structured error before
+                                   memory grows past the cap.
+Subprocess inactivity              Configurable via
+                                   `LlmConfig.stream_inactivity
+                                   _timeout_secs` (default 300
+                                   seconds). On timeout the
+                                   child is killed and the
+                                   listener sees a "subprocess
+                                   wedged" error.
 Assistant text exceeds cap         on_error, kill child,
                                    Outcome::error; deltas
                                    already emitted stay
 Stderr forwarded on non-zero exit  read into memory in full,
                                    truncated to 800 chars,
                                    emitted as on_error
-Secret material in delta or        forwarded verbatim
-stderr (api keys, passwords)
+Secret material in delta or        forwarded verbatim today; the
+stderr (api keys, passwords)       redaction work in section
+                                   13.2 (Bite B) addresses this
 Cancel mid-stream                  cancel flag checked at chunk
                                    boundaries; kill child,
                                    Outcome::cancelled with the
@@ -697,35 +716,32 @@ section captures the planned work in three independent bites.
 Each bite is small enough to land as one commit and ship without
 the others.
 
-### 13.1 Bite A: correctness and resilience
+### 13.1 Bite A: correctness and resilience (shipped)
 
-In scope: `claude_cli` and `gemini_cli` backends.
+Landed for `claude_cli` and `gemini_cli`:
 
-- Per-message reset for `streamed_partial_text`. Track the flag
-  per assistant message rather than per backend run, so a
-  message without partials following one with partials is not
-  silently dropped. Reset on the `message_start` partial event;
-  evaluate per-block by index inside the final `assistant`
-  event.
-- Stream-ended-without-result is an error. Return
-  `Outcome::error` (not `EndOfTurn`) so the host renders a
-  clear "incomplete response" state.
-- Rate-limit `on_error` for per-line parse failures. Cap at
-  five distinct error emissions per turn; further parse
-  failures increment a silent counter that surfaces in the
-  final error message when the loop ends.
-- NDJSON line size cap. Replace the default `lines()` reader
-  with a length-bounded variant; lines past the cap abort the
-  stream with a clear error. The cap protects against a buggy
-  or malicious child emitting one multi-megabyte line before
-  the assistant-text cap fires.
-- Inactivity timeout. Wrap `next_line()` in
-  `tokio::time::timeout`. Default 300 seconds; configurable via
-  `LlmConfig.stream_inactivity_timeout_secs`. On timeout, kill
-  the child and emit a structured error.
+- Per-block partial-text tracking keyed by content-block index,
+  cleared on every `message_start`. The final `assistant` event
+  emits the un-streamed suffix per block so neither a buffered
+  second block nor a partials-free subsequent message gets
+  dropped.
+- Stream-ended-without-result returns `Outcome::error` and emits
+  the matching `on_error` instead of presenting a half reply as
+  EndOfTurn.
+- Parse-error emissions are rate-limited at
+  `PARSE_ERROR_EMIT_LIMIT` (five) per turn; overflow is counted
+  silently with one summary line at the end.
+- NDJSON line size enforced at `NDJSON_LINE_CAP_BYTES` (4 MiB)
+  during the read in `backends/ndjson.rs::read_line_capped`.
+- Inactivity timeout wraps the per-line read in
+  `tokio::time::timeout`; default 300 seconds, configurable via
+  `LlmConfig.stream_inactivity_timeout_secs`.
 
-Tests cover each item plus a regression for the partials/no-
-partials interleaving and a fixture for the parse-error cap.
+Regression tests live alongside each backend: per-message
+reset, second-block-without-partials, stream-ended-without-
+result, parse-error cap, oversize-line abort, inactivity
+timeout. The `backends/ndjson.rs` module has its own unit
+tests for the capped reader.
 
 ### 13.2 Bite B: privacy and secret redaction
 

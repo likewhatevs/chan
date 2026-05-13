@@ -46,10 +46,12 @@ pub mod claude_cli;
 mod error_body;
 pub mod gemini;
 pub mod gemini_cli;
+mod ndjson;
 pub mod ollama;
 mod retry;
 mod subprocess_env;
 pub(crate) use error_body::{read_capped_text, DEFAULT_BODY_CAP_BYTES};
+pub(crate) use ndjson::{read_line_capped, NDJSON_LINE_CAP_BYTES, PARSE_ERROR_EMIT_LIMIT};
 pub use retry::{send_with_retry, RetryPolicy};
 pub(crate) use subprocess_env::sanitize_env;
 
@@ -245,12 +247,15 @@ pub fn build(kind: BackendKind, config: &LlmConfig, drive_root: &Path) -> Result
                 command,
                 auto_apply_writes: config.auto_apply_writes,
             });
+            let inactivity =
+                ndjson::resolve_inactivity_timeout(config.stream_inactivity_timeout_secs);
             Ok(Arc::new(claude_cli::ClaudeCliBackend::new(
                 cli.cmd.unwrap_or_else(claude_cli::default_cmd),
                 cli.extra_args,
                 model,
                 drive_root.to_path_buf(),
                 mcp,
+                inactivity,
             )))
         }
         BackendKind::GeminiCli => {
@@ -270,12 +275,15 @@ pub fn build(kind: BackendKind, config: &LlmConfig, drive_root: &Path) -> Result
                 auto_apply_writes: config.auto_apply_writes,
                 api_key,
             });
+            let inactivity =
+                ndjson::resolve_inactivity_timeout(config.stream_inactivity_timeout_secs);
             Ok(Arc::new(gemini_cli::GeminiCliBackend::new(
                 cli.cmd.unwrap_or_else(gemini_cli::default_cmd),
                 cli.extra_args,
                 model,
                 drive_root.to_path_buf(),
                 mcp,
+                inactivity,
             )))
         }
     }

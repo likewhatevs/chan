@@ -81,6 +81,15 @@ pub struct LlmConfig {
     /// extra args). Empty for any other backend.
     #[serde(default, skip_serializing_if = "GeminiCli::is_empty")]
     pub gemini_cli: GeminiCli,
+    /// Inactivity timeout (in seconds) between consecutive lines of
+    /// streaming output from a subprocess backend (ClaudeCli,
+    /// GeminiCli). `None` means "use the chan-llm default" (300
+    /// seconds today). Set this lower on a fast local network to
+    /// detect a wedged child sooner; raise it for slow remote
+    /// inference. Ignored by HTTP backends, which manage their own
+    /// per-request timeouts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_inactivity_timeout_secs: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -378,6 +387,7 @@ mod tests {
             gemini_cli: GeminiCli::default(),
             max_tokens: MaxTokens::default(),
             mcp_image_max_bytes: None,
+            stream_inactivity_timeout_secs: None,
         };
         cfg.save_to(&p).unwrap();
         let loaded = LlmConfig::load_from(&p).unwrap();
