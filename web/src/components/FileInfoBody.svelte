@@ -241,9 +241,6 @@
   <div class="info">
     <header class="head">
       <span class="kind-chip dir">folder</span>
-      {#if onClose}
-        <button class="close" onclick={onClose} aria-label="clear selection">×</button>
-      {/if}
     </header>
     <h3 class="title" title={entry.path || "/"}>{basename(entry.path) || "(root)"}</h3>
     {#if dirStats}
@@ -273,9 +270,6 @@
       >
         {contact ? "contact" : image ? "image" : editable ? "file" : "view-only"}
       </span>
-      {#if onClose}
-        <button class="close" onclick={onClose} aria-label="clear selection">×</button>
-      {/if}
     </header>
     <h3 class="title" title={entry.path}>{basename(entry.path)}</h3>
     {#if image}
@@ -538,16 +532,6 @@
     font-style: italic;
     margin: .4rem 0 0 0;
   }
-  .close {
-    background: transparent;
-    border: 0;
-    color: var(--text-secondary);
-    cursor: pointer;
-    font-size: 16px;
-    line-height: 1;
-    padding: 0 4px;
-  }
-  .close:hover { color: var(--text); }
   .title {
     margin: 0 0 0.5rem 0;
     font-size: 16px;

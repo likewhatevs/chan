@@ -283,6 +283,10 @@
 
   function showMenu(ev: MouseEvent, path: string, isDir: boolean): void {
     ev.preventDefault();
+    // Stop the FileBrowserOverlay's drive-actions context menu from
+    // also firing — row right-click stays row-scoped (rename, delete,
+    // new under here); only empty-area right-clicks reach the parent.
+    ev.stopPropagation();
     menu = { x: ev.clientX, y: ev.clientY, path, isDir };
   }
 

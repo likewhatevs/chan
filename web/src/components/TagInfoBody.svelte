@@ -70,9 +70,6 @@
 <div class="info">
   <header class="head">
     <span class="kind-chip" style="background: {chipColor}">{kind === "mention" ? "contact" : kind}</span>
-    {#if onClose}
-      <button class="close" onclick={onClose} aria-label="clear selection">×</button>
-    {/if}
   </header>
   <h3 class="title">{kind === "mention" ? label.replace(/^@@/, "") : label}</h3>
   <div class="meta-grid">
@@ -126,16 +123,6 @@
     flex: 1;
     text-align: center;
   }
-  .close {
-    background: transparent;
-    border: 0;
-    color: var(--text-secondary);
-    cursor: pointer;
-    font-size: 16px;
-    line-height: 1;
-    padding: 0 4px;
-  }
-  .close:hover { color: var(--text); }
   .title {
     margin: 0 0 0.5rem 0;
     font-size: 16px;

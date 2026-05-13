@@ -25,6 +25,7 @@
   import { api } from "../api/client";
   import type { GraphView, GraphViewEdge, GraphViewNode } from "../api/types";
   import { openInActivePane } from "../state/tabs.svelte";
+  import { isImage } from "../state/fileTypes";
   import {
     availableGraphScopes,
     browserOverlay,
@@ -37,6 +38,8 @@
   } from "../state/store.svelte";
   import { type ScopeOption, defaultScopeId } from "../state/scope.svelte";
   import ResizeHandle from "./ResizeHandle.svelte";
+  import HamburgerMenu from "./HamburgerMenu.svelte";
+  import Inspector from "./Inspector.svelte";
   import OverlayShell from "./OverlayShell.svelte";
   import InspectorBody, { type InspectorSelection } from "./InspectorBody.svelte";
 
@@ -138,6 +141,41 @@
   // auto-open on click; the panel's Open button is the only path to
   // opening a file from here.
   let selectedId = $state<string | null>(null);
+
+  /// Hamburger menu. Same affordance as the file browser / search
+  /// overlays. The depth slider, reload, and details toggle all
+  /// live inside it now so the bar above the canvas keeps only the
+  /// stateful selectors (scope, filter chips).
+  let menu: HamburgerMenu | undefined = $state();
+  let menuOpen = $state(false);
+  /// Bigger than the other overlays because the menu carries the
+  /// scope-conditional depth slider on top of toggle + reload.
+  const POPOVER_HEIGHT = 200;
+  const POPOVER_WIDTH = 260;
+  /// Cap matches the slider's `max` attribute below. Lifting it past
+  /// 5 gave room for sparse drives where the seed file's neighborhood
+  /// fans out wider than the previous limit allowed; 10 is well
+  /// short of the diameter of any realistic drive.
+  const DEPTH_MAX = 10;
+
+  function toggleInspector(): void {
+    graphOverlay.inspectorOpen = !graphOverlay.inspectorOpen;
+    menu?.close();
+  }
+
+  async function reloadGraph(): Promise<void> {
+    menu?.close();
+    await load();
+  }
+
+  function onGraphContextMenu(e: MouseEvent): void {
+    const t = e.target as HTMLElement | null;
+    // Don't hijack right-click on the scope select or input controls
+    // in the bar; let the browser's native UI fire there.
+    if (t?.closest("select, input, .scope-select, .filters")) return;
+    e.preventDefault();
+    menu?.openAtCursor(e.clientX, e.clientY);
+  }
 
   // ---- derived: scope-filtered render set --------------------------------
   //
@@ -287,6 +325,19 @@
     selectedId ? (nodeById.get(selectedId) ?? null) : null,
   );
 
+  /// True when the graph claims the node is a real file but the
+  /// current tree listing doesn't have its path. This happens when
+  /// the search index hasn't been rebuilt after a bulk drive change
+  /// (drive switch, mass delete). Treat these as ghosts so the
+  /// inspector renders an inline summary instead of FileInfoBody's
+  /// "click a file" empty state.
+  const treeHasPath = $derived(new Set(tree.entries.map((e) => e.path)));
+  const isFileGhost = $derived<boolean>(
+    selectedNode != null &&
+      selectedNode.kind === "file" &&
+      (selectedNode.missing || !treeHasPath.has(selectedNode.path)),
+  );
+
   /// Documents that reference the currently-selected tag or mention
   /// node, restricted to nodes drawn in the current subgraph. Passed
   /// to InspectorBody as `documentsOverride` so the inspector stays
@@ -358,7 +409,7 @@
     selectedNode === null
       ? null
       : selectedNode.kind === "file"
-        ? selectedNode.missing
+        ? isFileGhost
           ? null
           : { kind: "file", path: selectedNode.path }
         : {
@@ -1371,7 +1422,7 @@
 </script>
 
 <OverlayShell id="graph" open={visible} onClose={close}>
-  <div class="graph-tab">
+  <div class="graph-tab" oncontextmenu={onGraphContextMenu} role="presentation">
   <div class="bar">
     <select
       class="scope-select"
@@ -1386,22 +1437,6 @@
         </option>
       {/each}
     </select>
-    {#if currentScope && currentScope.kind !== "drive" && currentScope.kind !== "global"}
-      <!-- Depth slider only matters when the scope is anchored to
-           specific files; the drive (and eventual global) scopes
-           always show everything regardless of hop count. -->
-      <label class="depth" title="hops to expand from the seed file(s)">
-        <span>depth</span>
-        <input
-          type="range"
-          min="1"
-          max="5"
-          step="1"
-          bind:value={graphOverlay.depth}
-        />
-        <span class="depth-val">{graphOverlay.depth}</span>
-      </label>
-    {/if}
     <div class="filters">
       {#each ["link", "tag", "mention", "img"] as const as kind (kind)}
         <label class="chip" class:on={show[kind]}>
@@ -1412,14 +1447,15 @@
         </label>
       {/each}
     </div>
-    <span class="actions">
-      <button class="reload" onclick={() => void load()} title="Reload graph">↻</button>
-      <button
-        class="reload"
-        class:on={graphOverlay.inspectorOpen}
-        onclick={() => (graphOverlay.inspectorOpen = !graphOverlay.inspectorOpen)}
-        title={graphOverlay.inspectorOpen ? "Hide details panel" : "Show details panel"}
-      >◫</button>
+    <span class="bar-menu">
+      <HamburgerMenu
+        bind:this={menu}
+        bind:open={menuOpen}
+        width={POPOVER_WIDTH}
+        height={POPOVER_HEIGHT}
+      >
+        {@render menuItems()}
+      </HamburgerMenu>
     </span>
   </div>
 
@@ -1440,32 +1476,44 @@
   </div>
 
   {#if graphOverlay.inspectorOpen}
-  <ResizeHandle
-    bind:width={paneWidths.graph}
-    onChange={() => persistPaneWidths()}
-  />
-  <aside class="details" style="width: {paneWidths.graph}px">
-    {#if selectedNode && selectedNode.kind === "file" && selectedNode.missing}
-      <!-- Ghost / broken-link target. Not in the file tree, so
-           FileInfoBody can't render it; surface it inline. -->
-      <header class="head">
-        <span class="kind-chip ghost">doc</span>
-        <button class="close" onclick={() => (selectedId = null)}>×</button>
-      </header>
-      <h3 class="title" title={selectedNode.path}>{selectedNode.label}</h3>
-      <div class="path mono">{selectedNode.path}</div>
-      <div class="missing">file does not exist (broken-link target)</div>
-    {:else}
-      <InspectorBody
-        selection={inspectorSelection}
-        onClose={() => (selectedId = null)}
-        onOpen={openSelectedFile}
-        onReveal={revealSelectedFile}
-        onNavigate={selectByPath}
-        documentsOverride={selectionDocumentsInScope}
-      />
-    {/if}
-  </aside>
+    <Inspector
+      title="Details"
+      bind:width={paneWidths.graph}
+      onResize={persistPaneWidths}
+      onClose={() => (graphOverlay.inspectorOpen = false)}
+    >
+      {#if selectedNode && selectedNode.kind === "file" && isFileGhost}
+        <!-- Ghost: either an explicit broken-link target, or the
+             graph claims the file exists but it's not in the current
+             tree listing (stale search index, common after a bulk
+             drive change). FileInfoBody can't render either; surface
+             inline inside the shared Inspector header. -->
+        {@const ghostKind = isImage(selectedNode.path)
+          ? "image"
+          : selectedNode.node_kind === "contact"
+            ? "contact"
+            : "doc"}
+        {@const hint = selectedNode.missing
+          ? "file does not exist (broken-link target)"
+          : "not in the current file listing (try Reload / chan index)"}
+        <div class="ghost-body">
+          <header class="head">
+            <span class="kind-chip ghost {ghostKind}">{ghostKind}</span>
+          </header>
+          <h3 class="title" title={selectedNode.path}>{selectedNode.label}</h3>
+          <div class="path mono">{selectedNode.path}</div>
+          <div class="missing">{hint}</div>
+        </div>
+      {:else}
+        <InspectorBody
+          selection={inspectorSelection}
+          onOpen={openSelectedFile}
+          onReveal={revealSelectedFile}
+          onNavigate={selectByPath}
+          documentsOverride={selectionDocumentsInScope}
+        />
+      {/if}
+    </Inspector>
   {/if}
   </div>
   <div class="statusbar">
@@ -1474,6 +1522,44 @@
   </div>
   </div>
 </OverlayShell>
+
+{#snippet menuItems()}
+  <li>
+    <button role="menuitem" onclick={toggleInspector}>
+      <span class="glyph" aria-hidden="true">◫</span>
+      <span>{graphOverlay.inspectorOpen ? "Hide Details" : "Show Details"}</span>
+    </button>
+  </li>
+  {#if currentScope && currentScope.kind !== "drive" && currentScope.kind !== "global"}
+    <li class="sep" role="separator"></li>
+    <li>
+      <!-- Depth slider only matters when the scope is anchored to
+           specific files; drive / global scopes always show everything
+           regardless of hop count. Slider lives in the menu so the
+           top bar stays free of view-settings widgets. -->
+      <div class="menu-slider-row">
+        <span class="menu-slider-label">Depth</span>
+        <input
+          type="range"
+          min="1"
+          max={DEPTH_MAX}
+          step="1"
+          bind:value={graphOverlay.depth}
+          onmousedown={(e) => e.stopPropagation()}
+          aria-label="depth"
+        />
+        <span class="menu-slider-value">{graphOverlay.depth}</span>
+      </div>
+    </li>
+  {/if}
+  <li class="sep" role="separator"></li>
+  <li>
+    <button role="menuitem" onclick={reloadGraph}>
+      <span class="glyph" aria-hidden="true">↻</span>
+      <span>Reload</span>
+    </button>
+  </li>
+{/snippet}
 
 <style>
   .graph-tab {
@@ -1507,40 +1593,29 @@
     cursor: pointer;
   }
   .scope-select:focus { outline: none; border-color: var(--link); }
-  .depth {
+  /* Slider row used inside the hamburger menu. Mirrors the file
+     tab menu's page-width row so all in-menu sliders read alike. */
+  :global(.menu-slider-row) {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 6px;
+    padding: 6px 8px;
     color: var(--text-secondary);
     font-size: 13px;
   }
-  .depth input[type="range"] {
-    width: 80px;
+  :global(.menu-slider-label) {
+    color: var(--text);
+    min-width: 4.5em;
+  }
+  :global(.menu-slider-row input[type="range"]) {
+    flex: 1;
     accent-color: var(--link);
   }
-  .depth-val {
+  :global(.menu-slider-value) {
     font-variant-numeric: tabular-nums;
     color: var(--text);
-    min-width: 1ch;
-    text-align: center;
-  }
-  .reload {
-    background: transparent;
-    border: 1px solid var(--btn-border);
-    color: var(--text-secondary);
-    border-radius: 4px;
-    width: 22px;
-    height: 22px;
-    cursor: pointer;
-  }
-  .reload:hover {
-    color: var(--text);
-    border-color: var(--btn-hover);
-  }
-  .reload.on {
-    color: var(--text);
-    border-color: var(--btn-hover);
-    background: var(--hover-bg);
+    min-width: 2ch;
+    text-align: right;
   }
   .statusbar {
     display: flex;
@@ -1571,10 +1646,10 @@
     align-items: center;
     flex-wrap: wrap;
   }
-  .bar > .actions {
+  .bar-menu {
     margin-left: auto;
     display: flex;
-    gap: 2px;
+    align-items: center;
   }
   .chip {
     display: inline-flex;
@@ -1632,26 +1707,21 @@
   .cy.dim {
     opacity: 0.4;
   }
-  .details {
-    flex-shrink: 0;
-    border-left: 1px solid var(--border);
-    background: var(--bg-card);
-    color: var(--text);
-    overflow-y: auto;
+  /* Inline ghost branch for nodes that exist in the graph but
+     not in the tree (FileInfoBody can't render those). Mounted
+     inside the shared `<Inspector>` wrapper, so we only style
+     the body — the title bar / close × comes from Inspector. */
+  .ghost-body {
     padding: 0.6rem 0.7rem 0.8rem 0.7rem;
     font-size: 12.5px;
   }
-  /* Most of the inspector now renders inside `<InspectorBody>` (file
-     / tag / mention / date kinds share its styles). The rules below
-     only style the inline ghost branch (file does not exist) since
-     FileInfoBody can't render a path that's missing from the tree. */
-  .details .head {
+  .ghost-body .head {
     display: flex;
     align-items: center;
     gap: 0.4rem;
     margin-bottom: 0.4rem;
   }
-  .kind-chip {
+  .ghost-body .kind-chip {
     color: #fff;
     text-transform: uppercase;
     font-size: 12px;
@@ -1662,31 +1732,23 @@
     flex: 1;
     text-align: center;
   }
-  .kind-chip.ghost { background: var(--g-doc); opacity: 0.55; }
-  .details .close {
-    background: transparent;
-    border: 0;
-    color: var(--text-secondary);
-    cursor: pointer;
-    font-size: 16px;
-    line-height: 1;
-    padding: 0 4px;
-  }
-  .details .close:hover { color: var(--text); }
-  .details .title {
+  .ghost-body .kind-chip.ghost { background: var(--g-doc); opacity: 0.55; }
+  .ghost-body .kind-chip.ghost.image { background: var(--g-img); }
+  .ghost-body .kind-chip.ghost.contact { background: var(--warn-text); }
+  .ghost-body .title {
     margin: 0 0 0.15rem 0;
     font-size: 16px;
     font-weight: 600;
     word-break: break-word;
   }
-  .details .path {
+  .ghost-body .path {
     color: var(--text-secondary);
     font-size: 13px;
     margin-bottom: 0.5rem;
     word-break: break-all;
   }
-  .details .mono { font-family: ui-monospace, monospace; }
-  .details .missing {
+  .ghost-body .mono { font-family: ui-monospace, monospace; }
+  .ghost-body .missing {
     color: var(--warn-text);
     font-style: italic;
     margin: 0.3rem 0 0.6rem 0;

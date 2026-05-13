@@ -30,6 +30,7 @@
     searchPanel,
     tree,
   } from "../state/store.svelte";
+  import HamburgerMenu from "./HamburgerMenu.svelte";
   import Inspector from "./Inspector.svelte";
   import InspectorBody, { type InspectorSelection } from "./InspectorBody.svelte";
   import OverlayShell from "./OverlayShell.svelte";
@@ -308,23 +309,43 @@
     const slash = path.lastIndexOf("/");
     return slash >= 0 ? path.slice(slash + 1) : path;
   }
+
+  /// Hamburger menu state. Mirrors the file browser / graph
+  /// overlays: a single (≡) on the left, plus the same items
+  /// available via right-click anywhere in the search body.
+  let menu: HamburgerMenu | undefined = $state();
+  let menuOpen = $state(false);
+  const POPOVER_HEIGHT = 80;
+  const POPOVER_WIDTH = 240;
+
+  function toggleInspector(): void {
+    searchPanel.inspectorOpen = !searchPanel.inspectorOpen;
+    menu?.close();
+  }
+
+  function onSearchContextMenu(e: MouseEvent): void {
+    // Bail if the right-click landed on the input — let the browser
+    // show its native context menu (paste, spell, etc.) there.
+    const t = e.target as HTMLElement | null;
+    if (t?.closest("input, textarea")) return;
+    e.preventDefault();
+    menu?.openAtCursor(e.clientX, e.clientY);
+  }
 </script>
 
 <OverlayShell id="search" open={searchPanel.open} onClose={close}>
-  <div class="search">
+  <div class="search" oncontextmenu={onSearchContextMenu} role="presentation">
     <div class="results">
       <header>
         <span class="title">Search</span>
-        <span class="actions">
-          <button
-            type="button"
-            class="hbtn"
-            class:on={searchPanel.inspectorOpen}
-            title={searchPanel.inspectorOpen ? "hide inspector" : "show inspector"}
-            aria-label="toggle inspector"
-            onclick={() => (searchPanel.inspectorOpen = !searchPanel.inspectorOpen)}
-          >◫</button>
-        </span>
+        <HamburgerMenu
+          bind:this={menu}
+          bind:open={menuOpen}
+          width={POPOVER_WIDTH}
+          height={POPOVER_HEIGHT}
+        >
+          {@render menuItems()}
+        </HamburgerMenu>
       </header>
       <ul class="hits">
         {#each rows as r, i (r.key)}
@@ -398,6 +419,7 @@
         title="Details"
         bind:width={paneWidths.search}
         onResize={persistPaneWidths}
+        onClose={() => (searchPanel.inspectorOpen = false)}
       >
         <InspectorBody
           selection={selection}
@@ -427,6 +449,18 @@
     {/if}
   </div>
 </OverlayShell>
+
+{#snippet menuItems()}
+  <!-- Search is read-only by design — only the Details toggle goes
+       in the menu. Keeping the slot present (vs. a bare button) for
+       parity with the file browser / graph menus. -->
+  <li>
+    <button role="menuitem" onclick={toggleInspector}>
+      <span class="glyph" aria-hidden="true">◫</span>
+      <span>{searchPanel.inspectorOpen ? "Hide Details" : "Show Details"}</span>
+    </button>
+  </li>
+{/snippet}
 
 <style>
   .search {
@@ -459,7 +493,6 @@
     flex-shrink: 0;
   }
   header .title { flex: 1; }
-  header .actions { display: flex; gap: 2px; }
   /* Input row anchored at the bottom of the results column; status
      and results stack above it. Top border (was bottom) so the
      seam reads as "input separated from the content above it". */
@@ -480,23 +513,6 @@
     outline: none;
   }
   .head input:focus { border-color: var(--link); }
-  .hbtn {
-    background: none;
-    border: 1px solid transparent;
-    border-radius: 3px;
-    cursor: pointer;
-    color: var(--text-secondary);
-    font: inherit;
-    padding: 0 8px;
-    line-height: 1;
-    height: 30px;
-  }
-  .hbtn:hover { color: var(--text); border-color: var(--btn-border); }
-  .hbtn.on {
-    color: var(--text);
-    border-color: var(--btn-hover);
-    background: var(--hover-bg);
-  }
   .status-line {
     padding: 4px 10px;
     font-size: 13px;

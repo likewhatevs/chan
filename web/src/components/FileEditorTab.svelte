@@ -55,7 +55,13 @@
   /// state; intentionally not persisted (would grow the tab schema
   /// for a small UI affordance and the disclosure starts collapsed
   /// every tab restore is fine).
-  let showInfo = $state(false);
+  /// Active inspector tab. "outline" lists the file's headings (with
+  /// click-to-scroll); "info" shows the same FileInfoBody surface the
+  /// file browser inspector uses (tags, backlinks, refs). Per-tab
+  /// state lives on the FileTab so each open file remembers its own
+  /// choice across pane / tab focus changes.
+  type InspectorTab = "outline" | "info";
+  let inspectorTab = $state<InspectorTab>("outline");
 
   /// Read-only mode for this tab. The status bar's lamp toggle
   /// drives `tab.readMode` directly; an OS-level read-only file
@@ -247,33 +253,12 @@
         <span class="page-width-value">{Math.round(pageWidth.ratio * 100)}%</span>
       </div>
 
-      <!-- Action rows. Keep separator between page-width and
-           file-level actions so the affordance reads as two layers. -->
+      <!-- Action rows. Grouping mirrors the overlay menus: view
+           toggles first, then content (reload), then file ops,
+           then navigation. Page-width slider above stays in its
+           own visual layer (already separated by the action-list
+           top border). -->
       <div class="action-list">
-        <button class="mbtn" onclick={doReload}>
-          <span class="mbtn-icon">↻</span>
-          <span class="mbtn-label">Reload from Disk</span>
-        </button>
-        <button class="mbtn" onclick={doOpenAssistant}>
-          <span class="mbtn-icon">✦</span>
-          <span class="mbtn-label">Call Assistant</span>
-        </button>
-        <button class="mbtn" onclick={doOpenGraph}>
-          <span class="mbtn-icon">⛬</span>
-          <span class="mbtn-label">Show in Graph</span>
-        </button>
-        <button class="mbtn" onclick={doDuplicate}>
-          <span class="mbtn-icon">⎘</span>
-          <span class="mbtn-label">Duplicate File</span>
-        </button>
-        <button class="mbtn" onclick={doRename}>
-          <span class="mbtn-icon">✎</span>
-          <span class="mbtn-label">Rename File</span>
-        </button>
-        <button class="mbtn" onclick={revealInBrowser}>
-          <span class="mbtn-icon">📄</span>
-          <span class="mbtn-label">Show in File Browser</span>
-        </button>
         <button class="mbtn" onclick={doToggleMode}>
           <span class="mbtn-icon">{tab.mode === "wysiwyg" ? "</>" : "¶"}</span>
           <span class="mbtn-label">
@@ -283,7 +268,7 @@
         <button class="mbtn" onclick={doToggleOutline} class:on={tab.inspectorOpen}>
           <span class="mbtn-icon">◫</span>
           <span class="mbtn-label">
-            {tab.inspectorOpen ? "Hide Outline" : "Show Outline"}
+            {tab.inspectorOpen ? "Hide Details" : "Show Details"}
           </span>
         </button>
         <button
@@ -295,6 +280,32 @@
           <span class="mbtn-label">
             {tab.styleToolbarOpen ? "Hide Style Toolbar" : "Show Style Toolbar"}
           </span>
+        </button>
+        <div class="msep" role="separator"></div>
+        <button class="mbtn" onclick={doReload}>
+          <span class="mbtn-icon">↻</span>
+          <span class="mbtn-label">Reload from Disk</span>
+        </button>
+        <button class="mbtn" onclick={doDuplicate}>
+          <span class="mbtn-icon">⎘</span>
+          <span class="mbtn-label">Duplicate File</span>
+        </button>
+        <button class="mbtn" onclick={doRename}>
+          <span class="mbtn-icon">✎</span>
+          <span class="mbtn-label">Rename File</span>
+        </button>
+        <div class="msep" role="separator"></div>
+        <button class="mbtn" onclick={revealInBrowser}>
+          <span class="mbtn-icon">📄</span>
+          <span class="mbtn-label">Show in File Browser</span>
+        </button>
+        <button class="mbtn" onclick={doOpenGraph}>
+          <span class="mbtn-icon">⛬</span>
+          <span class="mbtn-label">Show in Graph</span>
+        </button>
+        <button class="mbtn" onclick={doOpenAssistant}>
+          <span class="mbtn-icon">✦</span>
+          <span class="mbtn-label">Call Assistant</span>
         </button>
       </div>
     </div>
@@ -383,27 +394,37 @@
       {/if}
       {#if tab.inspectorOpen}
         <Inspector
-          title="Outline"
+          title="Details"
           bind:width={paneWidths.inspector}
           onResize={persistPaneWidths}
           onClose={() => (tab.inspectorOpen = false)}
         >
-          <!-- File info lives at the TOP of the inspector. At the
-               bottom it visually fights with the status bar that
-               pins below the editor. -->
-          <button
-            class="info-disclosure"
-            onclick={() => (showInfo = !showInfo)}
-            aria-expanded={showInfo}
-          >
-            <span class="caret">{showInfo ? "▾" : "▸"}</span>
-            {showInfo ? "hide info" : "show info"}
-          </button>
-          {#if showInfo}
-            <FileInfoBody path={tab.path} />
-          {/if}
-          <div class="outline-slot">
-            <OutlineBody content={tab.content} onSelect={jumpTo} />
+          <div class="inspector-tabs" role="tablist">
+            <button
+              role="tab"
+              class="inspector-tab"
+              class:on={inspectorTab === "outline"}
+              aria-selected={inspectorTab === "outline"}
+              onclick={() => (inspectorTab = "outline")}
+            >Outline</button>
+            <button
+              role="tab"
+              class="inspector-tab"
+              class:on={inspectorTab === "info"}
+              aria-selected={inspectorTab === "info"}
+              onclick={() => (inspectorTab = "info")}
+            >File info</button>
+          </div>
+          <div class="inspector-body">
+            {#if inspectorTab === "outline"}
+              <OutlineBody content={tab.content} onSelect={jumpTo} />
+            {:else}
+              <FileInfoBody
+                path={tab.path}
+                showRefs
+                onNavigate={(p) => void openInActivePane(p)}
+              />
+            {/if}
           </div>
         </Inspector>
       {/if}
@@ -537,6 +558,14 @@
     flex-shrink: 0;
   }
   .mbtn-label { flex: 1; }
+  /* Group separator inside the action list. Same shape as the
+     hamburger menu's `li.sep` so the overlay menus and the file
+     tab menu read alike. */
+  .msep {
+    height: 1px;
+    background: var(--separator, var(--border));
+    margin: 4px 2px;
+  }
 
   /* One-off error surfacing for the active tab. Save is implicit
      via Cmd/Ctrl+S handled at the pane level. */
@@ -582,33 +611,38 @@
      the floating toolbar pill (top: 8px, ~30px tall); when the
      toolbar is hidden we reclaim that space back to the 1rem
      baseline so the first line sits at the top of the doc. */
-  /* Outline body sits at the top of the inspector and grows; the
-     info disclosure pins to the bottom so the file metadata never
-     pushes the heading list off-screen. */
-  .outline-slot {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
+  /* Tab strip across the top of the inspector body. Switches the
+     pane between the outline heading list and the same FileInfoBody
+     the file browser uses for tags / refs / backlinks. */
+  .inspector-tabs {
+    display: flex;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--separator);
   }
-  .info-disclosure {
+  .inspector-tab {
+    flex: 1;
     background: none;
     border: 0;
-    border-top: 1px solid var(--separator);
+    border-bottom: 2px solid transparent;
     color: var(--text-secondary);
     cursor: pointer;
     font: inherit;
-    font-size: 13px;
-    text-align: left;
-    padding: 0.4rem 0.6rem;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    flex-shrink: 0;
-  }
-  .info-disclosure:hover { color: var(--text); }
-  .info-disclosure .caret {
-    width: 10px;
-    display: inline-block;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.45rem 0.6rem;
     text-align: center;
+  }
+  .inspector-tab:hover { color: var(--text); }
+  .inspector-tab.on {
+    color: var(--text);
+    border-bottom-color: var(--pane-focus, var(--text));
+  }
+  .inspector-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
   }
 </style>
