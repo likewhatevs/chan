@@ -202,13 +202,21 @@ export const api = {
       "DELETE",
       `/api/assistant/conversation?path=${encodeURIComponent(key)}`,
     ),
-  /// Save a Q&A exchange under the configured answers_dir.
-  /// Returns the relative path that was written.
-  saveAnswer: (body: {
-    prompt: string;
-    answer: string;
-    citations?: Array<{ path: string; heading?: string | null; snippet?: string | null }>;
-  }) => req<{ path: string }>("POST", "/api/answers", body),
+  /// List every assistant-blob key on disk (per-file hashes, the
+  /// group manifest, the group blobs, the drive blob). The scope-
+  /// history overlay reads this to enumerate persisted threads;
+  /// every other caller knows its key up front.
+  listAssistantBlobs: () =>
+    req<string[]>("GET", "/api/assistant/conversations"),
+  /// Save a markdown blob under the configured answers_dir.
+  /// Body shape matches the server's `AnswerBody`: `content` is
+  /// the raw markdown; optional `name` overrides the filename
+  /// stem (the server falls back to the first H1, then a
+  /// timestamp slug). Returns the drive-relative path that was
+  /// written. Used by the scope-history overlay's "Export to .md"
+  /// action.
+  saveAnswerMarkdown: (body: { content: string; name?: string }) =>
+    req<{ path: string }>("POST", "/api/answers", body),
   /** Upload an image attachment. Multipart POST that the editor's `![`
    *  picker, drag-and-drop, and clipboard paste all funnel through.
    *  Returns the drive-relative path of the saved file.

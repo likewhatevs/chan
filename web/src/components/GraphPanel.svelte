@@ -15,7 +15,7 @@
   // neighbours. Drive / global scope leaves all nodes free.
 
   import { onDestroy, onMount } from "svelte";
-  import { ArrowLeft, ArrowRight } from "lucide-svelte";
+  import { ArrowLeft, ArrowRight, Clock } from "lucide-svelte";
   import cytoscape from "cytoscape";
   import type { Core, ElementDefinition, EventObject, Layouts } from "cytoscape";
   // @ts-expect-error fcose ships no .d.ts; the layout name is enough
@@ -32,6 +32,7 @@
     browserOverlay,
     graphOverlay,
     openBrowser,
+    openScopeHistory,
     paneWidths,
     persistPaneWidths,
     revealAndSelect,
@@ -1495,6 +1496,14 @@
         </option>
       {/each}
     </select>
+    <button
+      class="scope-history-btn"
+      onclick={openScopeHistory}
+      title="Open scope history"
+      aria-label="Open scope history"
+    >
+      <Clock size={14} strokeWidth={1.75} aria-hidden="true" />
+    </button>
     <div class="filters">
       {#each ["link", "tag", "mention", "img"] as const as kind (kind)}
         <label class="chip" class:on={show[kind]}>
@@ -1707,6 +1716,25 @@
     cursor: pointer;
   }
   .scope-select:focus { outline: none; border-color: var(--link); }
+  .scope-history-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 24px;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+    flex-shrink: 0;
+  }
+  .scope-history-btn:hover {
+    color: var(--text);
+    border-color: var(--btn-hover);
+  }
   /* Slider row used inside the hamburger menu. Mirrors the file
      tab menu's page-width row so all in-menu sliders read alike. */
   :global(.menu-slider-row) {

@@ -21,6 +21,15 @@
 const STORAGE_KEY = "chan.pageWidth.ratio";
 const CSS_VAR = "--chan-page-max-width";
 
+/// Independent cap for the assistant overlay's prompt column. Lives
+/// next to `pageWidth` because it shares the slider bounds + ratio
+/// idiom, but writes to its own localStorage key and a separate CSS
+/// variable so adjusting one doesn't move the other. The assistant
+/// menu's slider feeds this state, and the prompt-wrap consumes the
+/// resolved percentage as a `max-width` (% of the overlay column, so
+/// no resize bookkeeping is needed).
+const ASSISTANT_STORAGE_KEY = "chan.assistantPromptWidth.ratio";
+
 /// Slider bounds in percent. 100 % is the "no cap" sentinel; below
 /// 25 % the editor would be unusably narrow on any normal window,
 /// so we clamp there.
@@ -33,6 +42,8 @@ export const PAGE_WIDTH_STEP_PCT = 5;
 const MIN_RESOLVED_PX = 240;
 
 export const pageWidth = $state<{ ratio: number }>({ ratio: 1 });
+
+export const assistantPromptWidth = $state<{ ratio: number }>({ ratio: 1 });
 
 function clampRatio(r: number): number {
   if (!Number.isFinite(r)) return 1;
@@ -79,6 +90,32 @@ export function applyInitialPageWidth(): void {
   if (typeof window === "undefined") return;
   pageWidth.ratio = readRatio();
   applyToDom(pageWidth.ratio);
+  assistantPromptWidth.ratio = readAssistantRatio();
+}
+
+function readAssistantRatio(): number {
+  try {
+    const raw = localStorage.getItem(ASSISTANT_STORAGE_KEY);
+    if (!raw) return 1;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return 1;
+    return clampRatio(n);
+  } catch {
+    return 1;
+  }
+}
+
+/// User-driven update for the assistant prompt cap. Pure state +
+/// persistence; the prompt-wrap reads `assistantPromptWidth.ratio`
+/// directly as a `max-width` percentage, so no DOM apply is needed.
+export function setAssistantPromptWidth(r: number): void {
+  const next = clampRatio(r);
+  assistantPromptWidth.ratio = next;
+  try {
+    localStorage.setItem(ASSISTANT_STORAGE_KEY, String(next));
+  } catch {
+    /* quota or disabled storage; in-memory value still applies */
+  }
 }
 
 /// User-driven update. Pass a ratio in (0, 1]; 1 means unbounded.

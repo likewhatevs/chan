@@ -85,20 +85,38 @@ function findHeadingFold(
 const headingFoldGutter = gutter({
   class: "cm-md-fold-gutter",
   lineMarker(view, blockInfo) {
-    const text = view.state.doc.sliceString(blockInfo.from, blockInfo.to);
-    if (headingLevel(text) === 0) return null;
-    const line = { from: blockInfo.from, to: blockInfo.to };
-    return findHeadingFold(view, line)
+    // Resolve to the actual document line: blockInfo can extend
+    // through folded ranges that follow this heading, so sampling
+    // text via `sliceString(blockInfo.from, blockInfo.to)` would
+    // return the heading + the folded body and our heading regex
+    // would still match — but `findHeadingFold` (below) needs the
+    // exact line.to to locate the fold start, which is what the
+    // foldService emits.
+    const line = view.state.doc.lineAt(blockInfo.from);
+    if (headingLevel(line.text) === 0) return null;
+    return findHeadingFold(view, { from: line.from, to: line.to })
       ? CHEVRON_FOLDED
       : CHEVRON_UNFOLDED;
+  },
+  // Re-render gutter markers whenever the fold state changes; without
+  // this the chevron stays on `▾` after a click even though the fold
+  // applied (lineMarker is otherwise only re-evaluated on doc /
+  // viewport changes, which folding alone doesn't trigger).
+  lineMarkerChange: (update) => {
+    for (const tr of update.transactions) {
+      for (const e of tr.effects) {
+        if (e.is(foldEffect) || e.is(unfoldEffect)) return true;
+      }
+    }
+    return false;
   },
   initialSpacer: () => CHEVRON_UNFOLDED,
   domEventHandlers: {
     click(view, blockInfo) {
-      const text = view.state.doc.sliceString(blockInfo.from, blockInfo.to);
-      if (headingLevel(text) === 0) return false;
-      const line = { from: blockInfo.from, to: blockInfo.to };
-      const existing = findHeadingFold(view, line);
+      const line = view.state.doc.lineAt(blockInfo.from);
+      const level = headingLevel(line.text);
+      if (level === 0) return false;
+      const existing = findHeadingFold(view, { from: line.from, to: line.to });
       if (existing) {
         view.dispatch({ effects: unfoldEffect.of(existing) });
         return true;
@@ -106,11 +124,9 @@ const headingFoldGutter = gutter({
       // Compute the fold range from the heading service inline
       // (foldedRanges is read-only; we don't get the range from
       // foldService output here, so re-derive).
-      const level = headingLevel(text);
       const total = view.state.doc.lines;
-      const fromLine = view.state.doc.lineAt(blockInfo.from);
       let foldTo = view.state.doc.length;
-      for (let n = fromLine.number + 1; n <= total; n++) {
+      for (let n = line.number + 1; n <= total; n++) {
         const next = view.state.doc.line(n);
         const nextLevel = headingLevel(next.text);
         if (nextLevel > 0 && nextLevel <= level) {
@@ -118,9 +134,9 @@ const headingFoldGutter = gutter({
           break;
         }
       }
-      if (foldTo <= blockInfo.to) return false;
+      if (foldTo <= line.to) return false;
       view.dispatch({
-        effects: foldEffect.of({ from: blockInfo.to, to: foldTo }),
+        effects: foldEffect.of({ from: line.to, to: foldTo }),
       });
       return true;
     },

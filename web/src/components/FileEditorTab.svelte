@@ -449,6 +449,16 @@
               void openInActivePane(args.target);
             }}
             onTagClick={(name) => openGraphForTag(`#${name}`, name)}
+            onMentionClick={(args) => {
+              // Mention widget resolved the contact via api.contacts
+              // and (in read-only contexts) already opened the preview
+              // popover. We get here on commit (Cmd/Ctrl+Enter from
+              // the popover) or on a writable plain click. Open the
+              // resolved contact file; the widget passes a null path
+              // when the name didn't match any contact (silent no-op
+              // for now — could surface a status hint later).
+              if (args.path) void openInActivePane(args.path);
+            }}
           />
           {#if tab.styleToolbarOpen}
             <StyleToolbar

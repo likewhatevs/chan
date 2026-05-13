@@ -13,7 +13,10 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_llm::{BackendKind, LlmSession, Message as LlmMessage, Role as LlmRole, SessionListener};
+use chan_llm::{
+    BackendKind, ImageInput as LlmImageInput, LlmSession, Message as LlmMessage, Role as LlmRole,
+    SessionListener,
+};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
@@ -325,6 +328,20 @@ struct ApiMessage {
     content: String,
     #[serde(default)]
     tool_call_id: Option<String>,
+    /// Optional multimodal payload from the frontend. Each entry
+    /// is a base64-encoded image with its MIME type; chan-llm
+    /// forwards these to the active backend (Anthropic image
+    /// content block, Gemini inline_data, Ollama images array).
+    /// We don't validate here — the model rejects oversized /
+    /// unsupported MIMEs with a 400 the host bubbles back.
+    #[serde(default)]
+    images: Vec<ApiImageInput>,
+}
+
+#[derive(Deserialize)]
+struct ApiImageInput {
+    mime_type: String,
+    data: String,
 }
 
 #[derive(Deserialize)]
@@ -349,6 +366,14 @@ impl From<ApiMessage> for LlmMessage {
             content: m.content,
             tool_call_id: m.tool_call_id,
             tool_calls: Vec::new(),
+            images: m
+                .images
+                .into_iter()
+                .map(|img| LlmImageInput {
+                    mime_type: img.mime_type,
+                    data: img.data,
+                })
+                .collect(),
         }
     }
 }

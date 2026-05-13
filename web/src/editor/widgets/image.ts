@@ -117,6 +117,36 @@ class ImageWidget extends WidgetType {
     if (resolved) img.src = resolved;
     if (width != null) img.style.width = `${width}px`;
     img.draggable = false;
+    // Broken-image placeholder: when the resolved URL 404s or
+    // resolution itself returned empty (relative path against a
+    // null fromPath in chat bubbles, etc.), swap in a visible
+    // "missing image" badge so the user sees something is wrong
+    // instead of an invisible empty span. Mirror the markdown
+    // source in the badge so the user can spot the bad path.
+    const showBroken = () => {
+      wrap.dataset.broken = "true";
+      img.remove();
+      const badge = document.createElement("span");
+      badge.className = "cm-md-image-broken";
+      const icon = document.createElement("span");
+      icon.className = "cm-md-image-broken-icon";
+      icon.textContent = "🖼";
+      icon.setAttribute("aria-hidden", "true");
+      badge.appendChild(icon);
+      const label = document.createElement("span");
+      label.className = "cm-md-image-broken-label";
+      label.textContent = this.alt
+        ? `${this.alt} (image not found: ${this.src})`
+        : `image not found: ${this.src}`;
+      badge.appendChild(label);
+      wrap.insertBefore(badge, wrap.firstChild);
+    };
+    if (!resolved) {
+      // Empty resolution = no point even trying to load.
+      queueMicrotask(showBroken);
+    } else {
+      img.addEventListener("error", showBroken, { once: true });
+    }
     img.addEventListener("mousedown", (e) => {
       if (e.button !== 0) return;
       e.preventDefault();
@@ -133,29 +163,38 @@ class ImageWidget extends WidgetType {
     });
     wrap.appendChild(img);
 
-    const handle = document.createElement("span");
-    handle.className = "cm-md-image-handle";
-    handle.addEventListener("mousedown", (e) =>
-      startResize(e, wrap, img, view),
-    );
-    wrap.appendChild(handle);
+    // Read-only contexts (assistant chat replies, user-toggled
+    // read mode, fs-locked file) suppress the write-side chrome:
+    // no resize handle and no Edit button. The View / zoom button
+    // stays so the user can fullscreen the image. Same live-facet
+    // check the date / wiki widgets use.
+    const editable = view.state.facet(EditorView.editable);
 
-    // Hover action overlay: Edit + Zoom buttons. Visible on wrap
-    // hover via CSS (opacity/pointer-events flip). Each button has
-    // a mousedown handler that fires the action; the wrap-level
-    // mousedown on `img` remains so plain-click anywhere on the
-    // image still works (drops caret in URL via the bubble trigger).
+    if (editable) {
+      const handle = document.createElement("span");
+      handle.className = "cm-md-image-handle";
+      handle.addEventListener("mousedown", (e) =>
+        startResize(e, wrap, img, view),
+      );
+      wrap.appendChild(handle);
+    }
+
+    // Hover action overlay. In writable mode we offer Edit + View;
+    // in read-only we offer View only.
     const actions = document.createElement("span");
     actions.className = "cm-md-image-actions";
-    const editBtn = document.createElement("button");
-    editBtn.type = "button";
-    editBtn.className = "cm-md-image-action";
-    editBtn.textContent = "Edit";
-    editBtn.addEventListener("mousedown", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      placeCaretInImageUrl(view, this.nodePos);
-    });
+    if (editable) {
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "cm-md-image-action";
+      editBtn.textContent = "Edit";
+      editBtn.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        placeCaretInImageUrl(view, this.nodePos);
+      });
+      actions.appendChild(editBtn);
+    }
     const zoomBtn = document.createElement("button");
     zoomBtn.type = "button";
     zoomBtn.className = "cm-md-image-action";
@@ -167,7 +206,6 @@ class ImageWidget extends WidgetType {
         this.onClick({ src: this.src, alt: this.alt, pos: this.nodePos });
       }
     });
-    actions.appendChild(editBtn);
     actions.appendChild(zoomBtn);
     wrap.appendChild(actions);
 

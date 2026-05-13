@@ -158,6 +158,18 @@ export type LlmMessage = {
   content: string;
   tool_call_id?: string;
   tool_calls?: LlmToolCall[];
+  /// Optional multimodal payload on `Role::User` messages. Each
+  /// entry is base64-encoded image bytes plus the MIME. The
+  /// chan-llm backend that handles the request forwards them
+  /// natively (Anthropic image content block, Gemini inline_data,
+  /// Ollama images array); backends without image support drop
+  /// them silently — the text content is still authoritative.
+  images?: LlmImageInput[];
+};
+
+export type LlmImageInput = {
+  mime_type: string;
+  data: string;
 };
 
 export type LlmToolSpec = {

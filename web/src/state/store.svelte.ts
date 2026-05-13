@@ -464,6 +464,7 @@ const HASH_SEARCH = "search";
 const HASH_GRAPH = "graph";
 const HASH_ASSIST = "assist";
 const HASH_SETTINGS = "settings";
+const HASH_SCOPE_HISTORY = "scopes";
 
 function hashParams(): URLSearchParams {
   const h = window.location.hash;
@@ -590,6 +591,12 @@ function applyOverlaysFromHash(): void {
   if (params.has(HASH_SETTINGS) && !SETTINGS_DISABLED) {
     settingsOverlay.open = true;
   }
+  if (params.has(HASH_SCOPE_HISTORY)) {
+    // Going through `openScopeHistory` rather than flipping `.open`
+    // directly so the refresh fires on the restored open path the
+    // same way it does for a fresh user-triggered open.
+    openScopeHistory();
+  }
 }
 
 /// Write the current layout + overlay state to `location.hash` via
@@ -646,6 +653,11 @@ export function persistStateToHash(): void {
     params.set(HASH_SETTINGS, "1");
   } else {
     params.delete(HASH_SETTINGS);
+  }
+  if (scopeHistoryOverlay.open) {
+    params.set(HASH_SCOPE_HISTORY, "1");
+  } else {
+    params.delete(HASH_SCOPE_HISTORY);
   }
   const next = params.toString();
   url.hash = next ? `#${next}` : "";
@@ -1156,9 +1168,10 @@ export function clearGroupConversation(key: string): void {
   void clearGroupConversationOnDisk(key);
 }
 
-/** Drop the drive conversation entirely. */
+/** Drop the drive conversation, in memory AND on disk. */
 export function clearDriveConversation(): void {
   assistantConversations.drive = null;
+  void deleteDriveConversation();
 }
 
 // ---- group LRU persistence ----------------------------------------------
@@ -1329,6 +1342,79 @@ export async function saveGroupConversation(
     delete assistantConversations.byGroup[e.key];
   }
   await saveGroupIndex({ schema_version: 1, entries: kept });
+}
+
+// ---- drive conversation persistence -------------------------------------
+//
+// The drive-scope conversation used to live in-memory only because
+// the retrieval-driven excerpts felt too lossy to replay later. The
+// scope-history overlay flips that calculus: a persisted thread is
+// the only way the user can revisit a previous drive Q&A.
+//
+// Same blob store as file / group conversations; fixed key so the
+// listing endpoint (`/api/assistant/conversations`) surfaces it
+// without a manifest. `loadDriveConversation` is idempotent and
+// safe to call any time the drive scope is about to be opened.
+
+const DRIVE_BLOB_KEY = "drive.json";
+
+export async function loadDriveConversation(): Promise<void> {
+  if (assistantConversations.drive) return; // already in memory
+  try {
+    const raw = await api.getAssistantBlob(DRIVE_BLOB_KEY);
+    if (!raw) return;
+    if (assistantConversations.drive) return; // race
+    const parsed = raw as {
+      messages?: LlmMessage[];
+      turns?: AssistantTurn[];
+      created_at?: number;
+      last_touched?: number;
+      url?: string;
+    };
+    const turns = parsed.turns ?? [];
+    assistantConversations.drive = {
+      messages: parsed.messages ?? [],
+      turns,
+      created_at: parsed.created_at ?? earliestTurnCreatedAt(turns),
+      last_touched: parsed.last_touched,
+      url: parsed.url,
+    };
+  } catch {
+    // Server unreachable / decode error: leave drive null so the
+    // next submit creates a fresh thread.
+  }
+}
+
+export async function saveDriveConversation(
+  conv: AssistantConversation,
+): Promise<void> {
+  const now = Date.now();
+  if (conv.created_at === undefined) {
+    conv.created_at = earliestTurnCreatedAt(conv.turns) ?? now;
+  }
+  conv.last_touched = now;
+  conv.url = currentLayoutUrl();
+  try {
+    await api.putAssistantBlob(DRIVE_BLOB_KEY, {
+      schema_version: 1,
+      kind: "drive",
+      messages: conv.messages,
+      turns: conv.turns,
+      created_at: conv.created_at,
+      last_touched: now,
+      url: conv.url,
+    });
+  } catch {
+    // Best-effort: server outage doesn't block the in-memory thread.
+  }
+}
+
+export async function deleteDriveConversation(): Promise<void> {
+  try {
+    await api.deleteAssistantBlob(DRIVE_BLOB_KEY);
+  } catch {
+    // Same best-effort policy as the group eviction path.
+  }
 }
 
 async function clearGroupConversationOnDisk(key: string): Promise<void> {
@@ -2026,7 +2112,8 @@ export type OverlayId =
   | "search"
   | "graph"
   | "assistant"
-  | "settings";
+  | "settings"
+  | "scope-history";
 
 export const overlayStack = $state<{ ids: OverlayId[] }>({ ids: [] });
 
@@ -2064,6 +2151,9 @@ export function closeOverlay(id: OverlayId): void {
     case "settings":
       settingsOverlay.open = false;
       return;
+    case "scope-history":
+      scopeHistoryOverlay.open = false;
+      return;
   }
 }
 
@@ -2080,6 +2170,7 @@ export function syncOverlayStack(): void {
   if (graphOverlay.open) open.add("graph");
   if (assistantOverlay.open) open.add("assistant");
   if (settingsOverlay.open) open.add("settings");
+  if (scopeHistoryOverlay.open) open.add("scope-history");
   // Drop closed entries while preserving the existing relative
   // order of those that remain.
   const kept = overlayStack.ids.filter((id) => open.has(id));
@@ -2096,6 +2187,410 @@ export function syncOverlayStack(): void {
   ) {
     overlayStack.ids = kept;
   }
+}
+
+// ---- scope history overlay ----------------------------------------------
+//
+// Window-level overlay that lists every persisted assistant
+// conversation (per-file, per-group, drive) in one place. The
+// aggregator below pulls from the three on-disk stores:
+//
+//   - file blobs:  per-path JSON under .chan/assistant/<sha>.json,
+//                  identified by listing the assistant-blob keys and
+//                  ignoring the manifest / group / drive blobs.
+//   - group LRU:   `g_index.json` manifest carries `{key, paths,
+//                  last_touched}` for the last GROUP_LRU_MAX threads
+//                  without us reading every per-group blob first.
+//   - drive:       single `drive.json` blob.
+//
+// Filter chips mirror the graph overlay shape (on/off per kind).
+
+export type ScopeHistoryKind = "file" | "group" | "drive";
+
+export type ScopeHistoryEntry = {
+  /// Stable id for keying. `file:<path>`, `group:<key>`, `drive`.
+  id: string;
+  kind: ScopeHistoryKind;
+  /// Human title: file path / "N files" / "Drive".
+  title: string;
+  /// File paths included in this scope. Empty for drive.
+  paths: string[];
+  /// Saved URL for "Open in new window". May be undefined for
+  /// blobs written before the field existed.
+  url?: string;
+  created_at?: number;
+  last_touched?: number;
+  /// `turns.length` — the chat scrollback size; cheap proxy for
+  /// thread depth in the bubble preview.
+  turn_count: number;
+  /// `key` is the group's raw `sortedKey` — needed to look up the
+  /// in-memory conversation and to drive resume / clear. Undefined
+  /// for file (use `paths[0]`) and drive (no key).
+  group_key?: string;
+};
+
+export const scopeHistoryOverlay = $state<{
+  open: boolean;
+  /// Filter chips. Independent on/off toggles per scope kind;
+  /// initially all on so the list is complete on first open.
+  filters: { file: boolean; group: boolean; drive: boolean };
+  /// Most-recently-touched first (default true). Off = creation
+  /// time. Acts on the listed entries only.
+  sortByRecent: boolean;
+  /// In-memory cache of the aggregated list; refreshed on open
+  /// and after deletions so the overlay doesn't refetch on every
+  /// scroll.
+  entries: ScopeHistoryEntry[];
+  /// True while `refreshScopeHistory` is in flight. Drives a small
+  /// loading indicator in the overlay header.
+  loading: boolean;
+  /// Last error from the listing fetch, surfaced inline.
+  error: string | null;
+}>({
+  open: false,
+  filters: { file: true, group: true, drive: true },
+  sortByRecent: true,
+  entries: [],
+  loading: false,
+  error: null,
+});
+
+/// Open the assistant overlay on the history tab and (re)load
+/// the entries. Scope history lives as a tab inside the assistant
+/// (not its own floating panel) so the user navigates one surface;
+/// `scopeHistoryOverlay.open` is the source of truth for "the
+/// history tab is active". The reload is fire-and-forget; the
+/// list renders with the previous cache until the fresh listing
+/// lands so the open feels instant. Idempotent.
+export function openScopeHistory(): void {
+  scopeHistoryOverlay.open = true;
+  assistantOverlay.open = true;
+  void refreshScopeHistory();
+  scheduleSessionSave();
+}
+
+/// Switch the assistant back to the chat tab. Leaves the assistant
+/// overlay open: the user explicitly asked for the history view to
+/// hide, not for the whole panel to close.
+export function closeScopeHistory(): void {
+  scopeHistoryOverlay.open = false;
+}
+
+/// Aggregate the three on-disk stores into a single list and
+/// publish it to `scopeHistoryOverlay.entries`. Idempotent and
+/// safe to call repeatedly; the loading flag debounces the UI.
+export async function refreshScopeHistory(): Promise<void> {
+  scopeHistoryOverlay.loading = true;
+  scopeHistoryOverlay.error = null;
+  try {
+    const out: ScopeHistoryEntry[] = [];
+
+    // ---- group entries (cheap: manifest carries paths) ------------
+    try {
+      const idx = await loadGroupIndex();
+      for (const e of idx.entries) {
+        // Best-effort enrich with full blob data so we get
+        // `created_at` / `url` / `turn_count`. If it fails, fall
+        // back to the manifest fields.
+        let created_at: number | undefined;
+        let url: string | undefined;
+        let turn_count = 0;
+        try {
+          const raw = await api.getAssistantBlob(blobKeyForGroupHash(e.hash));
+          if (raw) {
+            const parsed = raw as {
+              turns?: AssistantTurn[];
+              created_at?: number;
+              url?: string;
+            };
+            turn_count = parsed.turns?.length ?? 0;
+            created_at = parsed.created_at ?? earliestTurnCreatedAt(parsed.turns ?? []);
+            url = parsed.url;
+          }
+        } catch {
+          // ignore, fall through to manifest-only fields.
+        }
+        out.push({
+          id: `group:${e.key}`,
+          kind: "group",
+          title: e.paths.length === 1 ? e.paths[0] : `${e.paths.length} files`,
+          paths: e.paths.slice(),
+          url,
+          created_at,
+          last_touched: e.last_touched,
+          turn_count,
+          group_key: e.key,
+        });
+      }
+    } catch {
+      // Group manifest is best-effort; an empty drive still produces
+      // a usable list from the file + drive sources below.
+    }
+
+    // ---- file entries (need to fetch each blob for path + meta) --
+    // The per-file blob key is sha256(path)[..16].json and the path
+    // is stored inside the JSON; we can't recover it from the key
+    // alone. New blobs (slice 2) include `path` + metadata; older
+    // ones may not, in which case we skip the entry rather than
+    // surface a hash-keyed mystery row.
+    try {
+      const keys = await api.listAssistantBlobs();
+      for (const key of keys) {
+        if (
+          key === GROUP_INDEX_KEY ||
+          key === DRIVE_BLOB_KEY ||
+          key.startsWith("g_")
+        ) {
+          continue;
+        }
+        try {
+          const raw = await api.getAssistantBlob(key);
+          if (!raw) continue;
+          const parsed = raw as {
+            path?: string;
+            turns?: AssistantTurn[];
+            created_at?: number;
+            last_touched?: number;
+            url?: string;
+          };
+          if (!parsed.path) continue;
+          const turns = parsed.turns ?? [];
+          out.push({
+            id: `file:${parsed.path}`,
+            kind: "file",
+            title: parsed.path,
+            paths: [parsed.path],
+            url: parsed.url,
+            created_at: parsed.created_at ?? earliestTurnCreatedAt(turns),
+            last_touched: parsed.last_touched,
+            turn_count: turns.length,
+          });
+        } catch {
+          // Skip unreadable entries; rest of the list still loads.
+        }
+      }
+    } catch {
+      // Listing failure is non-fatal; group + drive entries above /
+      // below still render.
+    }
+
+    // ---- drive entry ----------------------------------------------
+    try {
+      const raw = await api.getAssistantBlob(DRIVE_BLOB_KEY);
+      if (raw) {
+        const parsed = raw as {
+          turns?: AssistantTurn[];
+          created_at?: number;
+          last_touched?: number;
+          url?: string;
+        };
+        const turns = parsed.turns ?? [];
+        out.push({
+          id: "drive",
+          kind: "drive",
+          title: "Drive",
+          paths: [],
+          url: parsed.url,
+          created_at: parsed.created_at ?? earliestTurnCreatedAt(turns),
+          last_touched: parsed.last_touched,
+          turn_count: turns.length,
+        });
+      }
+    } catch {
+      // Drive blob missing is fine; the list just omits it.
+    }
+
+    scopeHistoryOverlay.entries = out;
+  } catch (e) {
+    scopeHistoryOverlay.error = (e as Error).message ?? String(e);
+  } finally {
+    scopeHistoryOverlay.loading = false;
+  }
+}
+
+/// Resume a saved scope in the current window. File / drive flip
+/// the assistant overlay to that scope (file scopes also pop the
+/// file open so the visible-files derivation picks it up); group
+/// scopes can't bind in-place because the group key is derived
+/// from currently visible files, so we route the caller to the
+/// peek expansion instead. Returns whether the resume landed; the
+/// overlay uses the false return as a hint to expand the bubble
+/// inline.
+export async function resumeScopeHistoryEntry(
+  entry: ScopeHistoryEntry,
+): Promise<boolean> {
+  if (entry.kind === "file") {
+    const path = entry.paths[0];
+    if (!path) return false;
+    // File needs to be visible for the scope option to surface;
+    // openInActivePane is the smallest layout change that gets us
+    // there. The caller has already gated on path existence.
+    await openInActivePane(path);
+    closeScopeHistory();
+    openAssistant();
+    assistantOverlay.contextId = `file:${path}`;
+    return true;
+  }
+  if (entry.kind === "drive") {
+    closeScopeHistory();
+    openAssistant();
+    assistantOverlay.contextId = "drive";
+    return true;
+  }
+  // group: caller should expand the bubble inline; nothing to do
+  // here. Returning false signals the overlay to render the peek.
+  return false;
+}
+
+/// Open a saved scope in a new window via the snapshotted URL.
+/// The URL is origin-relative (no auth token), so the new window
+/// inherits whatever token the launcher injects. Returns false
+/// when no URL is captured (old blobs predate slice 2); the
+/// overlay hides the button in that case.
+export function openScopeHistoryInNewWindow(entry: ScopeHistoryEntry): boolean {
+  if (!entry.url) return false;
+  if (typeof window === "undefined") return false;
+  window.open(entry.url, "_blank", "noopener");
+  return true;
+}
+
+/// Render the saved conversation as a markdown document and save
+/// it under the drive's answers_dir. The frontmatter captures the
+/// scope kind, paths, and timestamps so the exported file is
+/// self-describing; the body is one heading per turn. Returns the
+/// drive-relative path written, or throws on failure.
+export async function exportScopeHistoryToDrive(
+  entry: ScopeHistoryEntry,
+): Promise<string> {
+  const turns = await fetchScopeHistoryTurns(entry);
+  const md = renderScopeHistoryMarkdown(entry, turns);
+  const stem = scopeHistoryExportName(entry);
+  const { path } = await api.saveAnswerMarkdown({ content: md, name: stem });
+  return path;
+}
+
+/// Delete a saved scope from disk and drop the in-memory mirror.
+/// Refreshes the overlay's entry list so the row disappears.
+export async function deleteScopeHistoryEntry(
+  entry: ScopeHistoryEntry,
+): Promise<void> {
+  if (entry.kind === "file") {
+    const path = entry.paths[0];
+    if (!path) return;
+    await api.deleteConversation(path);
+    delete assistantConversations.byFile[path];
+  } else if (entry.kind === "group") {
+    const key = entry.group_key;
+    if (!key) return;
+    // clearGroupConversation drops both the in-memory bucket AND
+    // the on-disk blob via clearGroupConversationOnDisk; the
+    // manifest entry is rewritten in the same pass.
+    clearGroupConversation(key);
+  } else {
+    await deleteDriveConversation();
+    assistantConversations.drive = null;
+  }
+  await refreshScopeHistory();
+}
+
+/// Fetch the persisted turns for a scope entry. Used by the
+/// inline peek (group scopes) and by the markdown export.
+export async function fetchScopeHistoryTurns(
+  entry: ScopeHistoryEntry,
+): Promise<AssistantTurn[]> {
+  if (entry.kind === "file") {
+    const path = entry.paths[0];
+    if (!path) return [];
+    const raw = await api.getConversation(path);
+    if (!raw) return [];
+    return (raw as { turns?: AssistantTurn[] }).turns ?? [];
+  }
+  if (entry.kind === "group") {
+    const key = entry.group_key;
+    if (!key) return [];
+    const hash = await assistantHash16(key);
+    const raw = await api.getAssistantBlob(blobKeyForGroupHash(hash));
+    if (!raw) return [];
+    return (raw as { turns?: AssistantTurn[] }).turns ?? [];
+  }
+  const raw = await api.getAssistantBlob(DRIVE_BLOB_KEY);
+  if (!raw) return [];
+  return (raw as { turns?: AssistantTurn[] }).turns ?? [];
+}
+
+function scopeHistoryExportName(entry: ScopeHistoryEntry): string {
+  if (entry.kind === "file") {
+    const path = entry.paths[0] ?? "scope";
+    const slash = path.lastIndexOf("/");
+    const stem = slash >= 0 ? path.slice(slash + 1) : path;
+    const dot = stem.lastIndexOf(".");
+    const bare = dot > 0 ? stem.slice(0, dot) : stem;
+    return `assistant-${bare}`;
+  }
+  if (entry.kind === "group") {
+    return `assistant-group-${entry.paths.length}-files`;
+  }
+  return "assistant-drive";
+}
+
+function renderScopeHistoryMarkdown(
+  entry: ScopeHistoryEntry,
+  turns: AssistantTurn[],
+): string {
+  const lines: string[] = [];
+  const title =
+    entry.kind === "file"
+      ? entry.paths[0]
+      : entry.kind === "group"
+        ? `Group (${entry.paths.length} files)`
+        : "Drive";
+  lines.push(`# Assistant conversation — ${title}`);
+  lines.push("");
+  lines.push(`- kind: ${entry.kind}`);
+  if (entry.paths.length > 0) {
+    lines.push(`- files: ${entry.paths.length}`);
+    for (const p of entry.paths) lines.push(`  - ${p}`);
+  }
+  if (entry.created_at) {
+    lines.push(`- started: ${new Date(entry.created_at).toISOString()}`);
+  }
+  if (entry.last_touched) {
+    lines.push(`- last activity: ${new Date(entry.last_touched).toISOString()}`);
+  }
+  lines.push(`- turns: ${turns.length}`);
+  lines.push("");
+  for (const t of turns) {
+    if (t.kind === "user") {
+      lines.push("## You");
+      lines.push("");
+      lines.push(t.content);
+      lines.push("");
+    } else if (t.kind === "assistant") {
+      lines.push("## Assistant");
+      lines.push("");
+      lines.push(t.content);
+      lines.push("");
+    } else if (t.kind === "edit") {
+      lines.push(`## Edit proposal — ${t.edit.path}`);
+      lines.push("");
+      if (t.edit.summary) {
+        lines.push(`> ${t.edit.summary}`);
+        lines.push("");
+      }
+      lines.push("```");
+      lines.push(t.edit.content);
+      lines.push("```");
+      lines.push("");
+    } else {
+      // tool turn: short summary line so the transcript stays
+      // readable without dragging in protocol-only payloads.
+      lines.push(
+        `_${t.event.label} (${t.event.status}${t.event.result_summary ? `: ${t.event.result_summary}` : ""})_`,
+      );
+      lines.push("");
+    }
+  }
+  return lines.join("\n");
 }
 
 // ---- side-panel widths --------------------------------------------------

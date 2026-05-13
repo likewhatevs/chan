@@ -32,6 +32,7 @@
     ArrowLeft,
     ArrowRight,
     Check,
+    Clock,
     Code,
     Copy,
     Eye,
@@ -46,10 +47,12 @@
   import type {
     ContentHit,
     LlmCompletionResponse,
+    LlmImageInput,
     LlmMessage,
     LlmStatus,
     LlmToolSpec,
   } from "../api/types";
+  import { resolveImageSrc } from "../editor/extensions/image";
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import Source from "../editor/Source.svelte";
   import StyleToolbar from "./StyleToolbar.svelte";
@@ -67,9 +70,15 @@
     clearFileConversation,
     clearGroupConversation,
     clearDriveConversation,
+    currentLayoutUrl,
+    earliestTurnCreatedAt,
     endAssistantStream,
     graphOverlay,
+    loadDriveConversation,
     loadGroupConversation,
+    openScopeHistory,
+    saveDriveConversation,
+    scopeHistoryOverlay,
     openAssistant,
     refreshTree,
     saveGroupConversation,
@@ -90,8 +99,8 @@
     PAGE_WIDTH_MAX_PCT,
     PAGE_WIDTH_MIN_PCT,
     PAGE_WIDTH_STEP_PCT,
-    pageWidth,
-    setPageWidth,
+    assistantPromptWidth,
+    setAssistantPromptWidth,
   } from "../state/pageWidth.svelte";
   import { layout, openInActivePane } from "../state/tabs.svelte";
   import DiffOverlay from "./DiffOverlay.svelte";
@@ -505,6 +514,10 @@
       // Group threads round-trip through the LRU manifest so the
       // last 10 are restored across reloads.
       void loadGroupConversation(currentContext.key);
+    } else if (currentContext.kind === "drive") {
+      // Drive Q&A persists too now (was in-memory only) so the
+      // scope-history overlay can resurface previous threads.
+      void loadDriveConversation();
     }
     queueMicrotask(scrollToBottom);
   });
@@ -520,15 +533,25 @@
       const parsed = remote as {
         messages?: LlmMessage[];
         turns?: AssistantTurn[];
+        created_at?: number;
+        last_touched?: number;
+        url?: string;
       };
       // Migration is forgiving: missing fields fall back to a
       // fresh seed so an old / partial file doesn't break the UI.
+      const turns = parsed.turns ?? [];
       assistantConversations.byFile[path] = {
         messages:
           parsed.messages && parsed.messages.length > 0
             ? parsed.messages
             : [{ role: "system", content: systemPromptFor("file", supportsTools()) }],
-        turns: parsed.turns ?? [],
+        turns,
+        // Backfill the metadata fields for blobs written before
+        // they existed: earliest turn timestamp is the best proxy
+        // we have for the original create time.
+        created_at: parsed.created_at ?? earliestTurnCreatedAt(turns),
+        last_touched: parsed.last_touched,
+        url: parsed.url,
       };
       queueMicrotask(scrollToBottom);
     } catch {
@@ -553,11 +576,21 @@
         saveTimer = null;
         const conv = assistantConversations.byFile[path];
         if (!conv) return;
+        const now = Date.now();
+        if (conv.created_at === undefined) {
+          conv.created_at = earliestTurnCreatedAt(conv.turns) ?? now;
+        }
+        conv.last_touched = now;
+        conv.url = currentLayoutUrl();
         void api.putConversation(path, {
           schema_version: 1,
+          kind: "file",
           path,
           messages: conv.messages,
           turns: conv.turns,
+          created_at: conv.created_at,
+          last_touched: now,
+          url: conv.url,
         });
       }, 400);
     } else if (ctx.kind === "group") {
@@ -569,6 +602,14 @@
         const conv = assistantConversations.byGroup[key];
         if (!conv) return;
         void saveGroupConversation(key, paths, conv);
+      }, 400);
+    } else if (ctx.kind === "drive") {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        saveTimer = null;
+        const conv = assistantConversations.drive;
+        if (!conv) return;
+        void saveDriveConversation(conv);
       }, 400);
     }
   }
@@ -780,7 +821,20 @@
       tracingWarn(`retrieval failed: ${(e as Error).message}`);
     }
     const userBody = buildUserMessage(ctx, trimmed, savedSelection, excerpts);
-    conv.messages.push({ role: "user", content: userBody });
+    // Detect markdown image refs in the prompt and ship the bytes
+    // alongside as base64 so the direct backends (Anthropic /
+    // Gemini / Ollama) can actually see the image. claude-cli /
+    // gemini-cli ignore this — they use MCP read_image instead.
+    // Relative paths resolve against the file in scope so
+    // `![](attachments/foo.png)` works from any file-context
+    // conversation. Fetch failures fall through silently: the
+    // model still gets the text reference.
+    const images = await collectPromptImages(trimmed, fromPathForBubble);
+    conv.messages.push({
+      role: "user",
+      content: userBody,
+      ...(images.length > 0 ? { images } : {}),
+    });
     conv.turns.push({ kind: "user", content: trimmed, created_at: Date.now() });
     assistantOverlay.prompt = "";
     scheduleSave(ctx);
@@ -864,6 +918,70 @@
       assistantStatusClearTimer = null;
       if (ui.status === stamp) ui.status = null;
     }, 2500);
+  }
+
+  /// Walk the prompt for markdown image refs (`![](path)`),
+  /// resolve each through chan's image URL helper, fetch the
+  /// bytes, and return them as base64-encoded chan-llm image
+  /// inputs. External URLs (http / https / data / blob) are
+  /// skipped — the direct backends would re-fetch over the open
+  /// internet anyway. Fetch / encode failures fall through
+  /// silently: the model still gets the markdown path in text.
+  async function collectPromptImages(
+    prompt: string,
+    fromPath: string | null,
+  ): Promise<LlmImageInput[]> {
+    const re = /!\[[^\]]*\]\(([^)]+)\)/g;
+    const paths: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(prompt)) !== null) {
+      paths.push(m[1]!);
+    }
+    if (paths.length === 0) return [];
+    const out: LlmImageInput[] = [];
+    for (const raw of paths) {
+      if (/^(https?:|data:|blob:)/i.test(raw)) continue;
+      const mime = mimeFromPath(raw);
+      if (!mime) continue;
+      const url = resolveImageSrc(raw, fromPath);
+      if (!url) continue;
+      try {
+        const r = await fetch(url);
+        if (!r.ok) continue;
+        const blob = await r.blob();
+        const data = await blobToBase64(blob);
+        out.push({ mime_type: mime, data });
+      } catch {
+        // Single-image failure shouldn't sink the turn — others
+        // may still succeed and the text reference is intact.
+      }
+    }
+    return out;
+  }
+
+  function mimeFromPath(p: string): string | null {
+    const i = p.lastIndexOf(".");
+    if (i < 0) return null;
+    const ext = p.slice(i + 1).toLowerCase();
+    if (ext === "png") return "image/png";
+    if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+    if (ext === "webp") return "image/webp";
+    if (ext === "gif") return "image/gif";
+    return null;
+  }
+
+  async function blobToBase64(blob: Blob): Promise<string> {
+    const buf = await blob.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    // Chunked to keep String.fromCharCode from overflowing on big
+    // images (its `arguments` limit is platform-dependent).
+    let bin = "";
+    const CHUNK = 32 * 1024;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
+      bin += String.fromCharCode(...slice);
+    }
+    return btoa(bin);
   }
 
   function tracingWarn(message: string): void {
@@ -1160,6 +1278,13 @@
       e.preventDefault();
       if (!loading && currentContext) void submit();
     } else if (e.key === "Escape" && visible) {
+      // Defer to App.svelte's overlay-stack Esc when scope history
+      // is the topmost overlay (it lives in its own panel above the
+      // assistant). The stack handler pops it one layer at a time:
+      // first press closes scope history, second press closes the
+      // assistant. We only handle Esc here when the assistant is
+      // genuinely the topmost surface.
+      if (scopeHistoryOverlay.open) return;
       // Wysiwyg / ProseMirror doesn't intercept Escape, so a
       // window-level handler reaches it cleanly even with the
       // editor focused.
@@ -1320,6 +1445,74 @@
           : (assistantConversations.drive?.lastSeenTurnIndex ?? null),
   );
 
+  /// Best-effort "current path" for the bubble's read-only
+  /// Wysiwyg + the collectPromptImages helper. Relative image /
+  /// wiki refs in user prompts resolve against this when the
+  /// conversation is scoped to one file; group scope picks the
+  /// first member; drive scope leaves it null and only drive-
+  /// rooted paths resolve.
+  const fromPathForBubble = $derived<string | null>(
+    !currentContext
+      ? null
+      : currentContext.kind === "file"
+        ? currentContext.path
+        : currentContext.kind === "group"
+          ? (currentContext.paths[0] ?? null)
+          : null,
+  );
+
+  /// Pending proposals in the active conversation, surfaced as a
+  /// sticky bulk-action bar at the top of the scrollback when 2+
+  /// are queued. Each cleanup action mutates the same edit objects
+  /// the chat cards render, so the bar count and the per-card
+  /// status badges stay in lockstep.
+  const pendingEdits = $derived<AssistantPendingEdit[]>(
+    turns
+      .filter(
+        (t): t is Extract<AssistantTurn, { kind: "edit" }> => t.kind === "edit",
+      )
+      .map((t) => t.edit)
+      .filter((e) => e.status === "pending"),
+  );
+
+  /// Apply every pending proposal in order. Sequential — atomic
+  /// writes finish in ~5 ms locally, and serial errors are easier
+  /// to surface ("apply #3 of 5 failed") than a concurrent fan-out.
+  /// Each applyEdit mutates its edit object's status, which the
+  /// pendingEdits derived above re-reads, so the bar's count
+  /// shrinks live as we go.
+  async function applyAll(): Promise<void> {
+    // Snapshot the list before the loop because applyEdit removes
+    // entries from `pendingEdits` (status flips to "applied").
+    // Iterating over a live $derived would skip alternate items.
+    const queue = pendingEdits.slice();
+    let ok = 0;
+    let fail = 0;
+    for (const edit of queue) {
+      if (edit.status !== "pending") continue;
+      const before = edit.status;
+      await applyEdit(edit);
+      // applyEdit returns void; check the status it set.
+      if ((edit.status as string) === "applied") ok++;
+      else if (edit.status === before) fail++;
+    }
+    if (fail > 0) {
+      ui.status = `applied ${ok}/${queue.length} — ${fail} failed (see chat)`;
+    } else if (ok > 0) {
+      ui.status = `applied ${ok} edits`;
+    }
+  }
+
+  function discardAll(): void {
+    const queue = pendingEdits.slice();
+    for (const edit of queue) {
+      if (edit.status === "pending") {
+        dismissEdit(edit, "bulk discard");
+      }
+    }
+    if (queue.length > 0) ui.status = `discarded ${queue.length} edits`;
+  }
+
   /// Right-click context menu. Mirrors the file-browser / search /
   /// graph overlays: a `⋮` trigger in the header and a right-click
   /// handler on the body share the same item list. Native browser
@@ -1346,10 +1539,21 @@
     menu?.close();
   }
 
-  function onPageWidthSlider(e: Event): void {
+  function onPromptWidthSlider(e: Event): void {
     const pct = Number((e.currentTarget as HTMLInputElement).value);
-    setPageWidth(pct / 100);
+    setAssistantPromptWidth(pct / 100);
   }
+
+  /// Percentage cap for the prompt column. Ratio < 1 maps to a CSS
+  /// `max-width` percentage (of the overlay column); ratio 1 means
+  /// the prompt fills the column. Percent-of-parent keeps the cap
+  /// honest under window resize / browser zoom without our own
+  /// ResizeObserver bookkeeping.
+  const promptMaxWidth = $derived(
+    assistantPromptWidth.ratio >= 1
+      ? "none"
+      : `${Math.round(assistantPromptWidth.ratio * 100)}%`,
+  );
 
   function doShowInGraph(): void {
     if (!currentContext) return;
@@ -1384,6 +1588,19 @@
             </option>
           {/each}
         </select>
+        <!-- Clock toggles into the History view. The History view's
+             own toolbar carries a back affordance, and Esc steps
+             the user back to chat too. Sits next to the picker so
+             the user reaches "what conversations do I have?" without
+             traveling to the hamburger. -->
+        <button
+          class="scope-history-btn"
+          onclick={openScopeHistory}
+          title="Show scope history"
+          aria-label="Show scope history"
+        >
+          <Clock size={14} strokeWidth={1.75} aria-hidden="true" />
+        </button>
         {#if currentContext?.kind === "file" && savedSelection}
           <span class="sel-badge" title={savedSelection}>
             selection: {savedSelection.length} chars
@@ -1420,6 +1637,30 @@
         {#if turns.length === 0}
           <div class="empty">
             <div class="empty-title">No conversation yet</div>
+          </div>
+        {/if}
+        {#if pendingEdits.length >= 2}
+          <!-- Bulk-action bar. Sticks to the top of the chat
+               scrollback whenever 2+ proposals are waiting on the
+               user. Per-card buttons keep working; this bar is
+               additive. Apply / Discard run sequentially through
+               the same applyEdit / dismissEdit code paths, so the
+               edit-card status badges flip live. -->
+          <div class="bulk-bar">
+            <span class="bulk-count">
+              {pendingEdits.length} pending edits
+            </span>
+            <button
+              type="button"
+              class="primary"
+              title="apply every pending proposal in order"
+              onclick={() => void applyAll()}
+            >Apply all</button>
+            <button
+              type="button"
+              title="dismiss every pending proposal"
+              onclick={discardAll}
+            >Discard all</button>
           </div>
         {/if}
         {#each turns as turn, i (i)}
@@ -1500,10 +1741,14 @@
                     <Wysiwyg
                       value={turn.content}
                       readonly={true}
+                      currentPath={fromPathForBubble}
                       onWikiClick={(args) => {
                         void openInActivePane(args.target);
                       }}
                       onTagClick={(name) => openGraphForTag(`#${name}`, name)}
+                      onMentionClick={(args) => {
+                        if (args.path) void openInActivePane(args.path);
+                      }}
                     />
                   </div>
                 {:else}
@@ -1589,10 +1834,14 @@
                     <Wysiwyg
                       value={turn.content}
                       readonly={true}
+                      currentPath={fromPathForBubble}
                       onWikiClick={(args) => {
                         void openInActivePane(args.target);
                       }}
                       onTagClick={(name) => openGraphForTag(`#${name}`, name)}
+                      onMentionClick={(args) => {
+                        if (args.path) void openInActivePane(args.path);
+                      }}
                     />
                   </div>
                 {:else}
@@ -1734,7 +1983,10 @@
            prompt-wrap's top padding tracks the toggle so the
            first line of the prompt clears the toolbar pill when
            it's enabled and reclaims the space when it's off. -->
-      <div class="prompt-area">
+      <div
+        class="prompt-area"
+        style:max-width={promptMaxWidth}
+      >
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
           class="prompt-resize-handle"
@@ -1750,9 +2002,20 @@
           style:--prompt-top-pad={assistantOverlay.styleToolbarOpen ? "2.5rem" : "0.5rem"}
         >
           {#if promptMode === "wysiwyg"}
+            <!-- Pin the prompt's currentPath to the conversation's
+                 scope so:
+                  - pasted images get relativized against the file
+                    in scope (image_drop's getCurrentPath path), and
+                  - the inserted `![](rel)` ref later resolves the
+                    same way in the chat-bubble Wysiwyg (which also
+                    runs with this fromPath).
+                 Without this, the prompt's null currentPath caused
+                 image_drop to insert a drive-rooted-without-slash
+                 path that the bubble then mis-treated as relative. -->
             <Wysiwyg
               bind:this={wysiwygRef}
               bind:value={assistantOverlay.prompt}
+              currentPath={fromPathForBubble}
               onSelectionChange={() => (selVer = selVer + 1)}
             />
           {:else}
@@ -1804,24 +2067,26 @@
 </OverlayShell>
 
 {#snippet menuItems()}
-  <!-- Page-width slider mirrors the file editor tab menu so the
-       assistant scrollback respects the same column cap the user
-       set elsewhere. Sits at the top of the popover in its own
-       visual band; the action list below carries the toggles. -->
+  <!-- Prompt-width slider. Caps the assistant prompt's column
+       independently from the global page-width (which the file
+       editors share); writing comfortably here often calls for a
+       different width than reading. Sits at the top of the popover
+       in its own visual band; the action list below carries the
+       toggles. -->
   <li class="page-width-row" role="presentation">
-    <span class="page-width-label">Page width</span>
+    <span class="page-width-label">Prompt width</span>
     <input
       class="page-width-slider"
       type="range"
       min={PAGE_WIDTH_MIN_PCT}
       max={PAGE_WIDTH_MAX_PCT}
       step={PAGE_WIDTH_STEP_PCT}
-      value={Math.round(pageWidth.ratio * 100)}
-      oninput={onPageWidthSlider}
+      value={Math.round(assistantPromptWidth.ratio * 100)}
+      oninput={onPromptWidthSlider}
       onmousedown={(e) => e.stopPropagation()}
-      aria-label="page width"
+      aria-label="prompt width"
     />
-    <span class="page-width-value">{Math.round(pageWidth.ratio * 100)}%</span>
+    <span class="page-width-value">{Math.round(assistantPromptWidth.ratio * 100)}%</span>
   </li>
   <li class="sep" role="separator"></li>
   <li>
@@ -1891,6 +2156,29 @@
     min-height: 0;
     min-width: 0;
   }
+  /* Scope-history shortcut next to the context picker. Visual
+     parity with HamburgerMenu's trigger: 24x22 icon button,
+     border + bg matches the select so the trio reads as one
+     control cluster. */
+  header .scope-history-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 22px;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+    flex-shrink: 0;
+  }
+  header .scope-history-btn:hover {
+    color: var(--text);
+    border-color: var(--btn-hover);
+  }
   header {
     display: flex;
     align-items: center;
@@ -1948,6 +2236,47 @@
     padding-top: 1.5rem;
   }
   .empty-title { color: var(--text); font-weight: 600; }
+
+  /* Bulk-action bar. Sticky-pinned to the top of the scrollable
+     chat area when 2+ proposals are pending. position: sticky
+     means it stays visible as the user scrolls through the
+     conversation looking for proposals to review. */
+  .bulk-bar {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    margin-bottom: 4px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 13px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+  }
+  .bulk-bar .bulk-count {
+    flex: 1;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .bulk-bar button {
+    background: var(--btn-bg);
+    color: var(--text);
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    padding: 3px 10px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+  }
+  .bulk-bar button:hover { border-color: var(--btn-hover); }
+  .bulk-bar button.primary {
+    background: var(--link);
+    color: #fff;
+    border-color: var(--link);
+  }
 
   /* Chat bubbles. User aligns right with a tinted background; the
      assistant aligns left and uses the bg color. Both grow as
@@ -2618,11 +2947,19 @@
   /* Container that holds the prompt input and its drag-resize
      handle. The StyleToolbar (when enabled) is rendered as a
      floating pill anchored top-left of .prompt-wrap (position:
-     relative), matching the file editor's chrome. */
+     relative), matching the file editor's chrome.
+
+     `max-width` is bound inline from the Prompt-width slider; the
+     auto margins center the capped column inside the overlay so a
+     narrower prompt still sits on the overlay's horizontal axis
+     instead of left-anchored. */
   .prompt-area {
     display: flex;
     flex-direction: column;
     min-height: 0;
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
   }
 
   /* Page-width slider row inside the hamburger popover. Mirrors

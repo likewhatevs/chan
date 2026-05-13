@@ -11,6 +11,7 @@
   import InlineAssist from "./components/InlineAssist.svelte";
   import PathPromptModal from "./components/PathPromptModal.svelte";
   import PromptModal from "./components/PromptModal.svelte";
+  import ScopeHistoryOverlay from "./components/ScopeHistoryOverlay.svelte";
   import SearchPanel from "./components/SearchPanel.svelte";
   import SettingsPanel from "./components/SettingsPanel.svelte";
   import Workspace from "./components/Workspace.svelte";
@@ -34,6 +35,7 @@
     refreshDrive,
     refreshTree,
     scheduleSessionSave,
+    scopeHistoryOverlay,
     searchPanel,
     settingsOverlay,
     syncOverlayStack,
@@ -128,6 +130,7 @@
     void graphOverlay.filters.mention;
     void graphOverlay.filters.img;
     void graphOverlay.inspectorOpen;
+    void scopeHistoryOverlay.open;
     persistLayoutToHash();
     scheduleSessionSave();
   });
@@ -165,6 +168,7 @@
     void graphOverlay.open;
     void assistantOverlay.open;
     void settingsOverlay.open;
+    void scopeHistoryOverlay.open;
     syncOverlayStack();
   });
 
@@ -457,6 +461,7 @@
 <GraphPanel />
 <SettingsPanel />
 <FileBrowserOverlay />
+<ScopeHistoryOverlay />
 <!-- CAS conflict prompt: surfaces when a save returns 409. Mounted
      once per window so any pane can trigger it; the dialog itself
      keys off `conflictDialog.tabId`. -->

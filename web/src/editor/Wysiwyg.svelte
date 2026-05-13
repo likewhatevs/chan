@@ -31,6 +31,10 @@
   import { chanMarkdown } from "./markdown/grammar";
   import { chanDecorations } from "./decorations";
   import { tagDecorations } from "./widgets/tag";
+  import {
+    mentionDecorations,
+    type MentionClickArgs,
+  } from "./widgets/mention";
   import { dateDecorations } from "./widgets/date";
   import {
     wikiLinkDecorations,
@@ -69,6 +73,7 @@
     onTagClick = () => {},
     onWikiClick = () => {},
     onImageClick = () => {},
+    onMentionClick = () => {},
   }: {
     value: string;
     readonly?: boolean;
@@ -81,6 +86,7 @@
     onTagClick?: (tag: string) => void;
     onWikiClick?: (args: WikiLinkClickArgs) => void;
     onImageClick?: (args: ImageClickArgs) => void;
+    onMentionClick?: (args: MentionClickArgs) => void;
   } = $props();
 
   /// True once we've placed the caret at `initialCaret` after the
@@ -267,6 +273,7 @@
         findField,
         chanDecorations(),
         tagDecorations({ onTagClick }),
+        mentionDecorations({ onMentionClick }),
         dateDecorations(),
         wikiLinkDecorations({
           onWikiClick,
@@ -718,6 +725,22 @@
   :global(.md-wysiwyg-cm6 .cm-md-tag:hover) {
     background: var(--pill-tag-bg-hover);
   }
+  /* `@@mention` pills. Same shape as tag pills, separate palette
+     (--pill-contact-*) so contacts read as a distinct kind from
+     hashtags. Both kinds use Decoration.mark, so the underlying
+     text remains source-editable; the pill is pure styling. */
+  :global(.md-wysiwyg-cm6 .cm-md-mention) {
+    background: var(--pill-contact-bg);
+    color: var(--pill-contact-fg);
+    padding: 0.05em 0.4em;
+    border-radius: 999px;
+    font-size: 0.92em;
+    cursor: pointer;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mention:hover) {
+    background: var(--pill-contact-bg, var(--pill-contact-bg));
+    filter: brightness(1.08);
+  }
   :global(.md-wysiwyg-cm6 .cm-md-date-pill) {
     background: var(--pill-date-bg);
     color: var(--pill-date-fg);
@@ -784,6 +807,47 @@
     position: relative;
     line-height: 0;
     max-width: 100%;
+  }
+  /* Broken-image placeholder. Renders when the image's URL 404s
+     or resolution returned empty (relative path with no
+     resolvable fromPath, missing attachment, etc.). The icon +
+     label give the user a visible signal of where the bad ref
+     is in the source, instead of an invisible empty span. */
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-broken="true"]) {
+    /* Block-style so the badge takes a clean row aligned with
+       surrounding paragraph margins. Inline-block (the writable
+       default) leaves it dangling at the wrong width. */
+    display: block;
+    line-height: 1.4;
+    background: var(--pill-broken-bg, rgba(220, 50, 50, 0.08));
+    color: var(--pill-broken-fg, #b00020);
+    border: 1px dashed var(--pill-broken-fg, #b00020);
+    border-radius: 4px;
+    padding: 4px 8px;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  /* Hide the hover overlay (Edit / View) and the resize handle
+     on a broken image — there's no image to edit or view, and
+     the controls competed with the badge's own right edge. */
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-broken="true"] .cm-md-image-actions),
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-broken="true"] .cm-md-image-handle) {
+    display: none;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-broken) {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-family: var(--chan-editor-body-family);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-broken-icon) {
+    font-size: 18px;
+    filter: grayscale(0.8);
+    opacity: 0.7;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-broken-label) {
+    word-break: break-all;
   }
   /* Inline mode (image mixed with paragraph text). Alignment makes
      the image float so surrounding text wraps around it. */
