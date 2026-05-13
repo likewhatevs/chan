@@ -205,13 +205,25 @@ function startResize(
   e.stopPropagation();
   const startX = e.clientX;
   const startW = img.getBoundingClientRect().width;
+  // Drag threshold: a plain click on the handle (no movement) should
+  // NOT commit a width. Without this guard, clicking the handle on
+  // an image that has no explicit `#w=N` reads the rendered width
+  // (the editor canvas width when the image is wide) and writes it
+  // back as `#w=<canvas-width>`, shrinking the image visibly the
+  // next render.
+  const DRAG_THRESHOLD_PX = 3;
+  let moved = false;
   const onMove = (ev: MouseEvent): void => {
-    const newW = Math.max(MIN_IMG_WIDTH, Math.round(startW + (ev.clientX - startX)));
+    const dx = ev.clientX - startX;
+    if (!moved && Math.abs(dx) < DRAG_THRESHOLD_PX) return;
+    moved = true;
+    const newW = Math.max(MIN_IMG_WIDTH, Math.round(startW + dx));
     img.style.width = `${newW}px`;
   };
   const onUp = (): void => {
     document.removeEventListener("mousemove", onMove);
     document.removeEventListener("mouseup", onUp);
+    if (!moved) return;
     const finalW = Math.round(img.getBoundingClientRect().width);
     commitImageWidth(view, wrap, finalW);
   };
