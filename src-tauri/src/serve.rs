@@ -23,10 +23,22 @@ use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+/// Per-process monotonic counter appended to every drive-window
+/// label so the user can open more than one window for the same
+/// drive (local or tunneled). Tauri requires unique window labels
+/// per process; the prefix encodes the drive identity and the seq
+/// disambiguates instances.
+static WINDOW_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn next_window_seq() -> u64 {
+    WINDOW_SEQ.fetch_add(1, Ordering::Relaxed)
+}
+
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::AppState;
 
@@ -87,7 +99,6 @@ pub fn start(
         .take()
         .ok_or_else(|| "no stderr handle".to_string())?;
 
-    let window_label = window_label_for(&key);
     state
         .serves
         .lock()
@@ -100,7 +111,6 @@ pub fn start(
     let app2 = app.clone();
     let state2 = state.clone();
     let key2 = key.clone();
-    let window_label2 = window_label.clone();
     thread::spawn(move || {
         let reader = BufReader::new(stderr);
         let mut saw_ready_banner = false;
@@ -118,7 +128,7 @@ pub fn start(
             } else if !line.trim().is_empty() && state2.set_serve_url(&key2, line.trim()) {
                 let _ = app2.emit(SERVES_CHANGED, ());
                 saw_ready_banner = false; // only capture the first URL
-                open_drive_window(&app2, &key2, &window_label2, line.trim());
+                spawn_local_drive_window(&app2, &key2, line.trim());
             }
         }
 
@@ -132,11 +142,11 @@ pub fn start(
                 let _ = h.child.wait();
             }
         }
-        // Tear down the drive window if it's still around (e.g. the
-        // serve died on its own, or the user toggled Off). Closing
-        // the window in response to the user clicking its X already
-        // happens via the window's own CloseRequested handler.
-        close_drive_window(&app2, &window_label2);
+        // Tear down every drive window we opened for this key.
+        // Window CloseRequested is a no-op now (multi-window means
+        // closing one window must NOT stop the serve), so this is
+        // the single point where on-exit cleanup happens.
+        close_local_drive_windows(&app2, &key2);
         let _ = app2.emit(SERVES_CHANGED, ());
     });
 
@@ -162,13 +172,23 @@ pub fn stop_all(state: &AppState) {
     }
 }
 
-/// Stable Tauri window label for a drive. Tauri labels must match
-/// `[a-zA-Z0-9_-]+`, and drive keys are filesystem paths, so we hash
-/// the key and prefix it. Same key always maps to the same label.
-fn window_label_for(key: &str) -> String {
+/// Stable Tauri window-label prefix for a local drive. Used to
+/// recognise every window that belongs to the drive when the user
+/// has opened more than one (close-all on serve exit, capability
+/// matching). Tauri labels must match `[a-zA-Z0-9_-]+`, and drive
+/// keys are filesystem paths, so we hash the key.
+pub fn drive_window_prefix(key: &str) -> String {
     let mut h = DefaultHasher::new();
     key.hash(&mut h);
     format!("drive-{:016x}", h.finish())
+}
+
+/// Fresh, unique window label for a new local-drive webview.
+/// Every call yields a distinct label so multi-window works; the
+/// prefix is still identifiable for cleanup. Format:
+/// `drive-<hash>-<seq>` where `seq` is a per-process atomic.
+pub fn new_drive_window_label(key: &str) -> String {
+    format!("{}-{}", drive_window_prefix(key), next_window_seq())
 }
 
 /// Best-effort window title: drive folder basename, fall back to the
@@ -183,53 +203,70 @@ fn drive_title(key: &str) -> String {
     format!("chan: {base}")
 }
 
-/// Open the drive's webview window on the main thread. The window
-/// loads chan's local URL directly. Closing the window stops the
-/// serve, so this is the inverse of `set_drive_on(false)`.
-fn open_drive_window(app: &AppHandle, key: &str, label: &str, url: &str) {
+/// Stable window-label prefix for a tunneled drive, namespaced
+/// separately from `drive-*` so a local drive and a tunneled drive
+/// with the same canonical name don't collide.
+pub fn tunnel_window_prefix(tenant_label: &str, drive: &str) -> String {
+    let mut h = DefaultHasher::new();
+    tenant_label.hash(&mut h);
+    drive.hash(&mut h);
+    format!("tunnel-{:016x}", h.finish())
+}
+
+/// Fresh, unique window label for a tunneled drive webview. Same
+/// shape as `new_drive_window_label`.
+pub fn new_tunnel_window_label(tenant_label: &str, drive: &str) -> String {
+    format!(
+        "{}-{}",
+        tunnel_window_prefix(tenant_label, drive),
+        next_window_seq()
+    )
+}
+
+/// Spawn a new local-drive webview window pointing at `url`. Each
+/// call opens an independent window; multiple windows per drive are
+/// supported. The Tauri close handler is a no-op — closing the
+/// window does NOT stop the underlying `chan serve`. The On toggle
+/// (and `close_local_drive_windows` from the reader thread on EOF)
+/// is the single authority on drive lifecycle.
+pub fn spawn_local_drive_window(app: &AppHandle, key: &str, url: &str) {
+    let label = new_drive_window_label(key);
     let title = drive_title(key);
-    let key_for_close = key.to_string();
-    spawn_drive_window(app, label, &title, url, move |app| {
-        let state = app.state::<Arc<AppState>>();
-        stop(&state, &key_for_close);
-    });
+    build_drive_window(app, &label, &title, url);
+}
+
+/// Spawn a new tunneled-drive webview window. Same multi-window
+/// semantics as the local variant; same no-op close handler.
+pub fn spawn_tunneled_drive_window(app: &AppHandle, tenant_label: &str, drive: &str, url: &str) {
+    let label = new_tunnel_window_label(tenant_label, drive);
+    let title = format!("chan: {tenant_label} \u{00b7} {drive}");
+    build_drive_window(app, &label, &title, url);
 }
 
 /// Build and show a chan-style drive webview window on the main
-/// thread. Generic over how (or whether) the caller wants to react
-/// to the user closing the window:
-///
-/// * **Local drives** pass a closure that stops the per-drive
-///   `chan serve` child, mirroring the Off toggle.
-/// * **Tunneled drives** pass a no-op (or any other cleanup) — the
-///   `chan serve` lifecycle is owned by the remote machine, so
-///   closing the window must NOT kill the remote.
-///
-/// Centralising the builder here keeps the key-bridge JS, the size
-/// defaults, the zoom-hotkey polyfill, the drag-drop handler off,
-/// and the collision-recovery (destroy stale window with the same
-/// label) in one place — drive UX changes don't fork.
-pub fn spawn_drive_window<F>(app: &AppHandle, label: &str, title: &str, url: &str, on_close: F)
-where
-    F: Fn(&AppHandle) + Send + Sync + 'static,
-{
+/// thread. Internal — call `spawn_local_drive_window` /
+/// `spawn_tunneled_drive_window` from outside. Centralising the
+/// key-bridge JS, the size defaults, the zoom-hotkey polyfill, and
+/// the drag-drop handler off in one place means drive UX changes
+/// don't fork between the local and tunneled paths.
+fn build_drive_window(app: &AppHandle, window_label: &str, title: &str, url: &str) {
     let Ok(parsed) = url.parse::<tauri::Url>() else {
-        eprintln!("chan-desktop: bad chan URL for {label}: {url}");
+        eprintln!("chan-desktop: bad chan URL for {window_label}: {url}");
         return;
     };
     let app_owned = app.clone();
-    let label_owned = label.to_string();
+    let label_owned = window_label.to_string();
     let title_owned = title.to_string();
     let res = app.run_on_main_thread(move || {
-        // Tear down any leftover window with the same label (e.g.
-        // a quick Off-then-On cycle where the previous window's
-        // cleanup hasn't fully landed yet). Labels must be unique
-        // and `build` panics on collision.
+        // Defensive: window labels are unique-per-instance now, so
+        // a collision shouldn't happen. If it ever does (e.g. some
+        // future code reusing a stable label), destroy the stale
+        // window so `build` doesn't panic.
         if let Some(old) = app_owned.get_webview_window(&label_owned) {
             let _ = old.destroy();
         }
-        let win =
-            match WebviewWindowBuilder::new(&app_owned, &label_owned, WebviewUrl::External(parsed))
+        if let Err(e) =
+            WebviewWindowBuilder::new(&app_owned, &label_owned, WebviewUrl::External(parsed))
                 .title(title_owned)
                 .inner_size(1200.0, 800.0)
                 .min_inner_size(640.0, 400.0)
@@ -238,7 +275,7 @@ where
                 // Tauri polyfill: Cmd/Ctrl + [+ = -] and mousewheel zoom,
                 // 20% per step, 20%-1000%. Requires the
                 // `core:webview:allow-set-webview-zoom` permission on
-                // drive-* windows in capabilities/default.json.
+                // drive-* / tunnel-* windows in capabilities/drive.json.
                 .zoom_hotkeys_enabled(true)
                 // Hand HTML5 drag-and-drop to the page. Tauri's OS-level
                 // drag handler swallows dragover events otherwise, so
@@ -246,45 +283,58 @@ where
                 // drop the receiving pane expects.
                 .disable_drag_drop_handler()
                 .build()
-            {
-                Ok(w) => w,
-                Err(e) => {
-                    eprintln!("chan-desktop: opening drive window for {label_owned}: {e}");
-                    return;
-                }
-            };
-        let app_for_event = app_owned.clone();
-        win.on_window_event(move |event| {
-            if matches!(event, WindowEvent::CloseRequested { .. }) {
-                on_close(&app_for_event);
-            }
-        });
+        {
+            eprintln!("chan-desktop: opening drive window for {label_owned}: {e}");
+        }
     });
     if let Err(e) = res {
-        eprintln!("chan-desktop: scheduling drive window for {label}: {e}");
+        eprintln!("chan-desktop: scheduling drive window for {window_label}: {e}");
     }
 }
 
-/// Stable Tauri window label for a tunneled drive, namespaced
-/// separately from `drive-*` so a local drive and a tunneled drive
-/// with the same canonical name can coexist as distinct webviews.
-pub fn tunnel_window_label_for(tenant_label: &str, drive: &str) -> String {
-    let mut h = DefaultHasher::new();
-    tenant_label.hash(&mut h);
-    drive.hash(&mut h);
-    format!("tunnel-{:016x}", h.finish())
+/// Destroy every webview window opened for this local drive. Used
+/// by the reader thread when the serve has gone away (intentional
+/// kill or crash) so stale windows don't linger pointing at a dead
+/// port. Walks `webview_windows()` and matches by prefix because
+/// the user may have opened several windows for the same drive.
+pub fn close_local_drive_windows(app: &AppHandle, key: &str) {
+    close_windows_with_prefix(app, &drive_window_prefix(key))
 }
 
-/// Destroy the drive's webview window if it still exists. Used by
-/// the reader thread when the serve has gone away on its own (so the
-/// stale window doesn't linger pointing at a dead port). Safe to
-/// call when no such window exists.
-fn close_drive_window(app: &AppHandle, label: &str) {
+/// Destroy every webview window opened for this tunneled drive.
+/// Used by the tunnel supervisor when a (label, drive) pair drops
+/// out of the registry — the remote has gone away, so the per-tenant
+/// listener no longer routes for it and any open window now points
+/// at nothing useful.
+pub fn close_tunneled_drive_windows(app: &AppHandle, tenant_label: &str, drive: &str) {
+    close_windows_with_prefix(app, &tunnel_window_prefix(tenant_label, drive))
+}
+
+/// Destroy every tunneled-drive webview window in the process,
+/// regardless of which (label, drive) it belongs to. Used by the
+/// tunnel module on `stop_listening`: the tunnel listener and
+/// every per-tenant listener are about to be cancelled, so the
+/// open windows would all error on their next request anyway.
+pub fn close_all_tunneled_drive_windows(app: &AppHandle) {
+    close_windows_with_prefix(app, "tunnel-")
+}
+
+fn close_windows_with_prefix(app: &AppHandle, prefix: &str) {
     let app_owned = app.clone();
-    let label_owned = label.to_string();
+    let prefix_owned = prefix.to_string();
     let _ = app.run_on_main_thread(move || {
-        if let Some(w) = app_owned.get_webview_window(&label_owned) {
-            let _ = w.destroy();
+        // Snapshot first; destroying inside the iterator would
+        // mutate the underlying map mid-walk.
+        let labels: Vec<String> = app_owned
+            .webview_windows()
+            .keys()
+            .filter(|l| l.starts_with(&prefix_owned))
+            .cloned()
+            .collect();
+        for l in labels {
+            if let Some(w) = app_owned.get_webview_window(&l) {
+                let _ = w.destroy();
+            }
         }
     });
 }

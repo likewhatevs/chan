@@ -239,6 +239,12 @@ pub fn stop_listening(app: &AppHandle, state: &Arc<TunnelState>) {
         }
     }
     state.bound_port.store(0, Ordering::Release);
+    // Tear down every tunneled drive webview. The per-tenant
+    // listeners are already cancelled above, so any open window
+    // would either show a connection error on its next request or
+    // sit on a cached page; neither is useful, and Stop is the
+    // user explicitly retiring all tunneled state.
+    crate::serve::close_all_tunneled_drive_windows(app);
     let _ = app.emit(
         TUNNEL_STATE_CHANGED,
         serde_json::json!({ "listening": false, "port": serde_json::Value::Null }),
@@ -349,15 +355,14 @@ async fn supervisor(app: AppHandle, state: Arc<TunnelState>, cancel: Cancellatio
                         .collect()
                 };
                 for (label, drive, url) in urls {
-                    // Open the same kind of Tauri webview window we
-                    // give local drives — same key-bridge JS, same
-                    // zoom polyfill, same drag-drop handling. Close
-                    // is a no-op: the remote machine owns the
-                    // chan-serve lifecycle, so closing the local
-                    // window just hides the editor.
-                    let title = format!("chan: {label} \u{00b7} {drive}");
-                    let window_label = crate::serve::tunnel_window_label_for(&label, &drive);
-                    crate::serve::spawn_drive_window(&app, &window_label, &title, &url, |_| {});
+                    // Open the same kind of Tauri webview window
+                    // we give local drives — same key-bridge JS,
+                    // same zoom polyfill, same drag-drop handling.
+                    // Each Launch click also spawns a fresh window;
+                    // this first-registration open is just one of
+                    // them. Closing a window never affects the
+                    // remote chan-serve lifecycle.
+                    crate::serve::spawn_tunneled_drive_window(&app, &label, &drive, &url);
                     // Still emit the event so the drive table /
                     // header chip can react (refresh, badge, etc.)
                     // without parsing logs.
@@ -370,6 +375,17 @@ async fn supervisor(app: AppHandle, state: Arc<TunnelState>, cancel: Cancellatio
                         }),
                     );
                 }
+            }
+            // Pairs that disappeared between ticks: the remote
+            // disconnected (yamux close, registry eviction, etc.).
+            // Close every webview window the user had open for that
+            // drive — keeping a stale window around would just show
+            // a "tunnel disconnected" error once the per-tenant
+            // listener tears down too.
+            let removed: Vec<(String, String)> =
+                last_pairs.difference(&live_pairs).cloned().collect();
+            for (label, drive) in removed {
+                crate::serve::close_tunneled_drive_windows(&app, &label, &drive);
             }
             last_pairs = live_pairs;
             changed = true;

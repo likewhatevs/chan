@@ -1,6 +1,5 @@
 const { invoke } = window.__TAURI__.core;
 const { open, ask } = window.__TAURI__.dialog;
-const { openUrl } = window.__TAURI__.opener;
 const { listen } = window.__TAURI__.event;
 const { check: checkForUpdate } = window.__TAURI__.updater;
 const { relaunch } = window.__TAURI__.process;
@@ -262,8 +261,14 @@ function bindRowEvents() {
     });
 
     tr.querySelector('[data-act="launch"]').addEventListener('click', async () => {
-      const url = tr.querySelector('.url-input').value.trim();
-      if (url) await openUrl(url);
+      // In-app Tauri webview; each click adds another window so
+      // multi-window per drive is the default. The URL stays in
+      // the row's input for users who want to copy it elsewhere.
+      try {
+        await invoke('open_local_drive', { path });
+      } catch (e) {
+        showError(e);
+      }
     });
 
     tr.querySelector('[data-act="remove"]').addEventListener('click', async () => {
@@ -501,10 +506,10 @@ function bindTunnelPanelEvents(_status) {
 
 tunnelBtn.addEventListener('click', toggleTunnelPanel);
 
-/// `tunneled-drive-ready` is informational on this side: the Rust
-/// supervisor already opened the in-app webview window the moment
-/// the per-tenant listener bound. We just refresh the drive table
-/// so the new row shows up alongside its URL.
+// `tunneled-drive-ready` is informational on this side: the Rust
+// supervisor already opened the in-app webview window the moment
+// the per-tenant listener bound. We just refresh the drive table
+// so the new row shows up alongside its URL.
 listen('tunneled-drive-ready', () => { refresh().catch(showError); });
 
 listen('tunnel-state-changed', () => { renderTunnelPanel().catch(showError); });

@@ -390,11 +390,34 @@ fn tunnel_stop(app: tauri::AppHandle, state: State<Arc<AppState>>) {
     tunnel::stop_listening(&app, &state.tunnel);
 }
 
-/// Reopen / focus the in-app Tauri webview for a tunneled drive.
-/// The supervisor opens this window automatically the first time a
-/// remote registers; this command exists for the Launch button on
-/// the drive row so the user can bring the window back if they've
-/// closed it manually.
+/// Open an additional in-app Tauri webview for a running local
+/// drive. The first window is auto-opened by the serve supervisor
+/// when chan prints its URL; subsequent clicks on Launch reach
+/// here and add new windows alongside it. Errors if the drive is
+/// not currently running (no URL captured yet).
+#[tauri::command]
+fn open_local_drive(
+    app: tauri::AppHandle,
+    state: State<Arc<AppState>>,
+    path: String,
+) -> Result<(), String> {
+    let key = canonical_key(Path::new(&path));
+    let url = state
+        .serves
+        .lock()
+        .unwrap()
+        .get(&key)
+        .and_then(|h| h.url.clone())
+        .ok_or_else(|| format!("drive {key} is not running"))?;
+    serve::spawn_local_drive_window(&app, &key, &url);
+    Ok(())
+}
+
+/// Open an additional in-app Tauri webview for a tunneled drive.
+/// Each call yields a NEW window — the first one is opened by the
+/// supervisor on registration, and the Launch button calls this
+/// for subsequent windows. Errors if the per-tenant listener
+/// hasn't bound yet (URL not formed).
 #[tauri::command]
 fn open_tunneled_drive(
     app: tauri::AppHandle,
@@ -414,15 +437,7 @@ fn open_tunneled_drive(
             "tunneled drive {label}/{drive} has no URL yet; per-tenant listener still binding",
         ));
     }
-    let title = format!("chan: {label} \u{00b7} {drive}");
-    let window_label = serve::tunnel_window_label_for(&label, &drive);
-    // Focus existing window if present; otherwise rebuild it.
-    if let Some(w) = app.get_webview_window(&window_label) {
-        let _ = w.show();
-        let _ = w.set_focus();
-        return Ok(());
-    }
-    serve::spawn_drive_window(&app, &window_label, &title, &url, |_| {});
+    serve::spawn_tunneled_drive_window(&app, &label, &drive, &url);
     Ok(())
 }
 
@@ -599,6 +614,7 @@ fn main() {
             tunnel_status,
             tunnel_start,
             tunnel_stop,
+            open_local_drive,
             open_tunneled_drive,
             auth::auth_status,
             auth::open_signin,
