@@ -65,6 +65,22 @@ export function computeBubbleSpec(state: EditorState): BubbleSpec | null {
       templateMode: "raw",
     };
   }
+  // Caret inside an existing `[[...]]` source range (the wikilink
+  // pill is suppressed because selection-intersect revealed source).
+  // The matchBracket text-scan below would happily fire too, but its
+  // triggerEnd = caret, so a commit only replaces from `[[` to caret
+  // and leaves the trailing `]]` behind. Detect the WikiLink syntax
+  // node and use ITS full range so commit replaces the whole pill.
+  const wikiNode = wikiLinkAtCaret(state, pos);
+  if (wikiNode !== null) {
+    return {
+      kind: "wiki",
+      triggerStart: wikiNode.from,
+      triggerEnd: wikiNode.to,
+      query: wikiNode.queryUpToCaret,
+      templateMode: "wrap",
+    };
+  }
   const line = state.doc.lineAt(pos);
   const before = line.text.slice(0, pos - line.from);
   // Wiki: `[[query` (caret after the typed query, no `]` between).
@@ -173,6 +189,45 @@ function linkUrlAtCaret(
   pos: number,
 ): { from: number; to: number; queryUpToCaret: string } | null {
   return urlSlotAtCaret(state, pos, "Link");
+}
+
+/// Walk up from pos looking for a WikiLink syntax node. When found
+/// returns the OUTER node range (covering `[[`...`]]`) plus a query
+/// extracted from the body up to the caret — what the user has typed
+/// so far inside the existing pill. The bubble then replaces the
+/// whole node on commit instead of just the prefix-before-caret.
+function wikiLinkAtCaret(
+  state: EditorState,
+  pos: number,
+): { from: number; to: number; queryUpToCaret: string } | null {
+  let node: ReturnType<typeof syntaxTree>["topNode"] | null = syntaxTree(
+    state,
+  ).resolveInner(pos, 0);
+  while (node) {
+    if (node.name === "WikiLink") {
+      // Find the WikiLinkBody child for an accurate query slice.
+      const cursor = node.cursor();
+      if (!cursor.firstChild()) return null;
+      let bodyFrom = -1;
+      let bodyTo = -1;
+      do {
+        if (cursor.name === "WikiLinkBody") {
+          bodyFrom = cursor.from;
+          bodyTo = cursor.to;
+          break;
+        }
+      } while (cursor.nextSibling());
+      if (bodyFrom < 0) return null;
+      const clampedPos = Math.max(bodyFrom, Math.min(pos, bodyTo));
+      return {
+        from: node.from,
+        to: node.to,
+        queryUpToCaret: state.doc.sliceString(bodyFrom, clampedPos),
+      };
+    }
+    node = node.parent;
+  }
+  return null;
 }
 
 function imageUrlAtCaret(

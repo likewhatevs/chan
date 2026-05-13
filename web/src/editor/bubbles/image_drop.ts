@@ -12,6 +12,7 @@ import { EditorView } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 import { api } from "../../api/client";
 import { invalidateImageCatalog } from "./image";
+import { relativizePath } from "../links";
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
@@ -20,6 +21,10 @@ export interface ImageDropOptions {
   /// known, otherwise the server's configured attachments_dir. Read
   /// lazily so swapping tabs picks up the new path.
   getUploadDir: () => string | null;
+  /// Editing file's drive-rooted path. The uploaded `path` is
+  /// relativized against this so the inserted `![](src)` resolves
+  /// correctly through resolveImageSrc.
+  getCurrentPath: () => string | null;
 }
 
 export function imageDropHandlers(opts: ImageDropOptions): Extension {
@@ -31,7 +36,13 @@ export function imageDropHandlers(opts: ImageDropOptions): Extension {
       if (images.length === 0) return false;
       event.preventDefault();
       const pos = posFromEvent(view, event);
-      uploadAndInsertAll(view, images, pos, opts.getUploadDir());
+      uploadAndInsertAll(
+        view,
+        images,
+        pos,
+        opts.getUploadDir(),
+        opts.getCurrentPath(),
+      );
       return true;
     },
     paste(event, view) {
@@ -47,7 +58,13 @@ export function imageDropHandlers(opts: ImageDropOptions): Extension {
       if (images.length === 0) return false;
       event.preventDefault();
       const pos = view.state.selection.main.head;
-      uploadAndInsertAll(view, images, pos, opts.getUploadDir());
+      uploadAndInsertAll(
+        view,
+        images,
+        pos,
+        opts.getUploadDir(),
+        opts.getCurrentPath(),
+      );
       return true;
     },
   });
@@ -65,6 +82,7 @@ function uploadAndInsertAll(
   files: File[],
   pos: number,
   uploadDir: string | null,
+  currentPath: string | null,
 ): void {
   // Upload sequentially so we can chain the inserts at adjacent
   // positions (each insert shifts subsequent positions; we map
@@ -76,7 +94,10 @@ function uploadAndInsertAll(
       try {
         const res = await api.uploadAttachment(file, uploadDir);
         invalidateImageCatalog();
-        const insert = `![](${res.path})\n`;
+        const pathArg = currentPath
+          ? relativizePath(res.path, currentPath)
+          : res.path;
+        const insert = `![](${pathArg})\n`;
         view.dispatch({
           changes: { from: cursor, to: cursor, insert },
           selection: { anchor: cursor + insert.length },

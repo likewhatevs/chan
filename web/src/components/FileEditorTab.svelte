@@ -21,6 +21,7 @@
 
   import {
     fileOps,
+    openAssistant,
     openBrowser,
     openGraphAtNode,
     paneWidths,
@@ -28,6 +29,7 @@
     revealAndSelect,
   } from "../state/store.svelte";
   import { openInActivePane } from "../state/tabs.svelte";
+  import { api } from "../api/client";
   import {
     PAGE_WIDTH_MAX_PCT,
     PAGE_WIDTH_MIN_PCT,
@@ -115,6 +117,10 @@
       e.preventDefault();
       closeTabMenu();
     }
+    if (e.key === "Escape" && ctxOpen) {
+      e.preventDefault();
+      closeContext();
+    }
   }
 
   /// Dismiss when the click lands outside the bubble AND outside any
@@ -124,6 +130,13 @@
   /// chance to reopen it, and a second click on the active tab feels
   /// dead).
   function onDocPointerDown(e: PointerEvent): void {
+    if (ctxOpen) {
+      const t = e.target as Node | null;
+      if (t) {
+        const menu = document.querySelector(".editor-context-menu");
+        if (!menu || !menu.contains(t)) closeContext();
+      }
+    }
     if (!menuOpen) return;
     const t = e.target as Node | null;
     if (!t) return;
@@ -152,6 +165,51 @@
   function doToggleMode(): void {
     setMode(tab, tab.mode === "wysiwyg" ? "source" : "wysiwyg");
     closeTabMenu();
+  }
+
+  // ---- right-click context menu --------------------------------------
+  // Body-attached panel anchored at the click coords. Lives inside
+  // FileEditorTab because each action is tab-aware.
+  let ctxOpen = $state(false);
+  let ctxX = $state(0);
+  let ctxY = $state(0);
+
+  function onEditorContext(e: MouseEvent): void {
+    e.preventDefault();
+    ctxX = e.clientX;
+    ctxY = e.clientY;
+    ctxOpen = true;
+  }
+
+  function closeContext(): void {
+    ctxOpen = false;
+  }
+
+  async function ctxReload(): Promise<void> {
+    closeContext();
+    try {
+      const res = await api.read(tab.path);
+      tab.content = res.content;
+      tab.saved = res.content;
+      tab.savedMtime = res.mtime;
+    } catch (err) {
+      console.error("[chan] reload failed", err);
+    }
+  }
+
+  function ctxToggleMode(): void {
+    closeContext();
+    setMode(tab, tab.mode === "wysiwyg" ? "source" : "wysiwyg");
+  }
+
+  function ctxOpenAssistant(): void {
+    closeContext();
+    openAssistant();
+  }
+
+  function ctxOpenGraph(): void {
+    closeContext();
+    openGraphAtNode(tab.path);
   }
 
   function doToggleOutline(): void {
@@ -262,6 +320,8 @@
         <div
           class="editor-host"
           style:--editor-top-pad={tab.styleToolbarOpen ? "2.5rem" : "0.5rem"}
+          oncontextmenu={onEditorContext}
+          role="presentation"
         >
           <Wysiwyg
             bind:this={wysiwygRef}
@@ -298,7 +358,11 @@
         <!-- Source mode gets its own positioned host so FindBar
              can pin to the same top-right spot it occupies in the
              Wysiwyg view. -->
-        <div class="editor-host">
+        <div
+          class="editor-host"
+          oncontextmenu={onEditorContext}
+          role="presentation"
+        >
           <Source bind:this={sourceRef} bind:value={tab.content} />
           {#if tab.find?.open}
             <FindBar
@@ -344,6 +408,25 @@
   {/if}
 </div>
 
+{#if ctxOpen}
+  <!-- Body-scoped right-click context menu. Anchored at the
+       click position; dismisses via the shared svelte:window
+       handlers (onDocPointerDown + onMenuKeydown). -->
+  <div
+    class="editor-context-menu"
+    style:left="{ctxX}px"
+    style:top="{ctxY}px"
+    role="menu"
+  >
+    <button class="ctx-row" onclick={ctxReload}>Reload from disk</button>
+    <button class="ctx-row" onclick={ctxToggleMode}>
+      {tab.mode === "wysiwyg" ? "Show source" : "Show preview"}
+    </button>
+    <button class="ctx-row" onclick={ctxOpenAssistant}>Call assistant</button>
+    <button class="ctx-row" onclick={ctxOpenGraph}>Show in graph</button>
+  </div>
+{/if}
+
 <style>
   .editor-tab {
     display: flex;
@@ -353,6 +436,35 @@
     min-width: 0;
     background: var(--bg);
     color: var(--text);
+  }
+  /* Right-click context menu. Body-scoped so it floats above the
+     editor canvas; positioned at click coords via inline style. */
+  :global(.editor-context-menu) {
+    position: fixed;
+    z-index: 30000;
+    background: var(--bg-card, #fff);
+    border: 1px solid var(--border, #ddd);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    padding: 4px;
+    min-width: 180px;
+    font-family: var(--chan-font-text-family);
+    font-size: 13px;
+  }
+  :global(.editor-context-menu .ctx-row) {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    padding: 6px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text);
+    font: inherit;
+  }
+  :global(.editor-context-menu .ctx-row:hover) {
+    background: var(--hover-bg, rgba(0, 0, 0, 0.06));
   }
   /* Tab menu bubble. Fixed-position so it anchors to the trigger
      button regardless of which pane the user clicked in; the

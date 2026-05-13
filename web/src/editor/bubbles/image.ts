@@ -22,6 +22,7 @@ import { createCaretAnchor } from "./anchor";
 import type { BubbleHandle } from "./types";
 import { api } from "../../api/client";
 import { isImagePath } from "../extensions/image";
+import { relativizePath } from "../links";
 
 export interface ImageBubbleOpts {
   view: EditorView;
@@ -31,6 +32,12 @@ export interface ImageBubbleOpts {
   /// Upload destination; defaults to the editing file's directory if
   /// known, otherwise the server's configured attachments_dir.
   uploadDir: string | null;
+  /// Drive-rooted path of the editing file. Used to relativize the
+  /// committed image path so the inserted `![](src)` resolves
+  /// correctly through the image widget's resolveImageSrc (which is
+  /// fromPath-aware). null keeps the path drive-rooted (no /` prefix
+  /// adjustment).
+  currentPath: string | null;
   /// "wrap" -> commit inserts `![](path)`; "raw" -> commit inserts
   /// just `path` (used when editing an existing image's URL portion).
   templateMode?: "wrap" | "raw";
@@ -152,7 +159,17 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
   }
 
   function commitPath(path: string): void {
-    const insert = opts.templateMode === "raw" ? path : `![](${path})`;
+    // Relativize against the editing file's directory so the inserted
+    // `![](src)` resolves correctly. The api.search / api.list /
+    // api.uploadAttachment endpoints all return drive-rooted paths
+    // without leading slash; inserted verbatim those would be
+    // interpreted as relative-to-currentPath-dir by the image widget's
+    // resolver (resolveImageSrc → normalizeHref), doubling the dir
+    // when the editing file isn't at drive root.
+    const pathArg = opts.currentPath
+      ? relativizePath(path, opts.currentPath)
+      : path;
+    const insert = opts.templateMode === "raw" ? pathArg : `![](${pathArg})`;
     opts.view.dispatch({
       changes: { from: opts.triggerStart, to: triggerEnd, insert },
       selection: { anchor: opts.triggerStart + insert.length },

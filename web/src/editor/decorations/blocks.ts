@@ -45,6 +45,9 @@ const LINE_CODE_BLOCK = Decoration.line({
 const MARK_FENCE_INFO = Decoration.mark({
   attributes: { class: "cm-md-fence-info" },
 });
+const LINE_FRONTMATTER = Decoration.line({
+  attributes: { class: "cm-md-frontmatter" },
+});
 const HIDE = Decoration.replace({});
 
 const handleBlockquote: TokenHandler = (ctx) => {
@@ -139,9 +142,24 @@ const handleTask: TokenHandler = (ctx) => {
   } while (cursor.nextSibling());
 };
 
+const handleFrontmatter: TokenHandler = (ctx) => {
+  // Dim every line in the frontmatter range with a line decoration.
+  // The Frontmatter node from markdown/frontmatter.ts covers the
+  // opening `---`, the YAML body, and the closing `---`.
+  const startLine = ctx.state.doc.lineAt(ctx.node.from).number;
+  const endLine = ctx.state.doc.lineAt(
+    Math.min(ctx.node.to, ctx.state.doc.length),
+  ).number;
+  for (let n = startLine; n <= endLine; n++) {
+    const line = ctx.state.doc.line(n);
+    ctx.push(LINE_FRONTMATTER, line.from, line.from);
+  }
+};
+
 export const blockHandlers = {
   Blockquote: handleBlockquote,
   HorizontalRule: handleHorizontalRule,
   FencedCode: handleFencedCode,
   Task: handleTask,
+  Frontmatter: handleFrontmatter,
 };

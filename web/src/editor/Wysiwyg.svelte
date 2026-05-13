@@ -178,6 +178,7 @@
         triggerEnd: spec.triggerEnd,
         initialQuery: spec.query,
         uploadDir: dirOf(currentPath),
+        currentPath,
         templateMode: spec.templateMode ?? "wrap",
         onOpenLink: (path) => openImageZoom(path, currentPath),
         onDismiss,
@@ -259,7 +260,10 @@
         tableDecorations(),
         bubbleListener({ onSpec: handleSpec }),
         bubbleKeymap(() => activeBubble),
-        imageDropHandlers({ getUploadDir: () => dirOf(currentPath) }),
+        imageDropHandlers({
+          getUploadDir: () => dirOf(currentPath),
+          getCurrentPath: () => currentPath,
+        }),
         // HTML-paste handler runs ahead of CM6's default plain-text
         // paste so rich pastes get converted to markdown. Image-file
         // pastes (clipboard with image/* MIME) are owned by
@@ -404,6 +408,23 @@
   :global(.md-wysiwyg-cm6 .cm-foldGutter .cm-gutterElement:hover) {
     color: var(--text);
   }
+  /* Folded-heading inline placeholder ("..." dropped at EOL when a
+     heading collapses). CM6's baseTheme paints it as a bordered chip
+     with #eee bg + #ddd border which reads as too heavy. Switch to a
+     light, borderless `…` that hints at the fold without competing
+     with the heading text. */
+  :global(.md-wysiwyg-cm6 .cm-foldPlaceholder) {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary, #aaa);
+    margin: 0 0.25em;
+    padding: 0 0.2em;
+    font-weight: normal;
+    cursor: pointer;
+  }
+  :global(.md-wysiwyg-cm6 .cm-foldPlaceholder:hover) {
+    color: var(--text);
+  }
   :global(.md-wysiwyg-cm6[data-density="tight"] .cm-line) { line-height: 1.5; }
   :global(.md-wysiwyg-cm6[data-density="standard"] .cm-line) { line-height: 1.8; }
 
@@ -463,6 +484,12 @@
     margin: 0 0.4em 0 0;
     vertical-align: middle;
     cursor: pointer;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-frontmatter) {
+    color: var(--text-secondary, #888);
+    font-family: var(--chan-font-code-family, monospace);
+    font-size: 0.88em;
+    opacity: 0.7;
   }
   :global(.md-wysiwyg-cm6 .cm-md-tag) {
     background: var(--tag-bg, rgba(106, 168, 255, 0.18));
