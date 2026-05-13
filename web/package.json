@@ -12,6 +12,7 @@
     "@sveltejs/vite-plugin-svelte": "^7.1.1",
     "@tsconfig/svelte": "^5.0.4",
     "@types/cytoscape": "^3.21.0",
+    "@types/turndown": "^5.0.6",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
     "typescript": "^5.6.0",
@@ -39,6 +40,7 @@
     "cytoscape-d3-force": "^1.1.4",
     "cytoscape-fcose": "^2.2.0",
     "dompurify": "^3.4.2",
-    "marked": "^18.0.3"
+    "marked": "^18.0.3",
+    "turndown": "^7.2.4"
   }
 }

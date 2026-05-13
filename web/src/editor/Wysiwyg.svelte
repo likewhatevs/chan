@@ -40,6 +40,7 @@
     imageDecorations,
     type ImageClickArgs,
   } from "./widgets/image";
+  import { tableDecorations } from "./widgets/table";
   import { bubbleKeymap, bubbleListener } from "./bubbles/controller";
   import type { BubbleHandle, BubbleSpec } from "./bubbles/types";
   import { openWikiBubble } from "./bubbles/wiki";
@@ -47,6 +48,7 @@
   import { openContactBubble } from "./bubbles/contact";
   import { openImageBubble } from "./bubbles/image";
   import { imageDropHandlers } from "./bubbles/image_drop";
+  import { htmlPasteHandler } from "./paste_html";
   import { openImageZoom } from "../state/imageZoom";
   import { headingFold } from "./fold";
   import * as fmt from "./commands/format";
@@ -254,9 +256,15 @@
           getCurrentPath: () => currentPath,
           onImageClick: handleImageClick,
         }),
+        tableDecorations(),
         bubbleListener({ onSpec: handleSpec }),
         bubbleKeymap(() => activeBubble),
         imageDropHandlers({ getUploadDir: () => dirOf(currentPath) }),
+        // HTML-paste handler runs ahead of CM6's default plain-text
+        // paste so rich pastes get converted to markdown. Image-file
+        // pastes (clipboard with image/* MIME) are owned by
+        // imageDropHandlers; this handler skips them.
+        htmlPasteHandler(),
         editableCompartment.of(EditorView.editable.of(!readonly)),
         EditorView.updateListener.of((u) => {
           sync.onDocChanged(u, (s) => (value = s));
@@ -547,6 +555,30 @@
   }
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap:hover .cm-md-image-handle) {
     opacity: 1;
+  }
+
+  /* ---- table widget ---- */
+  :global(.md-wysiwyg-cm6 .cm-md-table-wrap) {
+    overflow-x: auto;
+    margin: 0.5em 0;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-table) {
+    border-collapse: collapse;
+    font-size: 0.95em;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-table th),
+  :global(.md-wysiwyg-cm6 .cm-md-table td) {
+    border: 1px solid var(--border, #ddd);
+    padding: 0.3em 0.6em;
+    text-align: left;
+    vertical-align: top;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-table th) {
+    background: var(--bg-card, rgba(0, 0, 0, 0.04));
+    font-weight: 600;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-table tr:nth-child(even) td) {
+    background: var(--bg-card, rgba(0, 0, 0, 0.02));
   }
 
   /* ---- bubble shells ---- */
