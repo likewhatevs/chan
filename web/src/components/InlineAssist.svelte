@@ -3164,6 +3164,19 @@
     padding: 8px 12px;
     line-height: 1.5;
   }
+  /* The Wysiwyg component picks up the global `chan-page-capped`
+     treatment (page-shade tint on .md-wysiwyg-cm6, the global
+     --chan-page-max-width cap on .cm-editor). The prompt has its
+     OWN cap (Prompt-width slider on .prompt-wrap) and its own
+     off-page tint (.assistant-body.capped); without the overrides
+     here we get double-shaded bands inside the wrap and the
+     editor content gets pinched to the global page width even
+     when the prompt itself wants its full wrap. */
+  .prompt-wrap :global(.md-wysiwyg-cm6),
+  .prompt-wrap :global(.md-wysiwyg-cm6 .cm-editor) {
+    background: transparent !important;
+    max-width: none !important;
+  }
 
   /* Container that holds the prompt input and its drag-resize
      handle. The StyleToolbar (when enabled) is rendered as a
