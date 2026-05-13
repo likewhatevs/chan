@@ -530,6 +530,27 @@
     --g-doc: #ff8a3d;
     --g-img: #b07dff;
     --g-tag: #6cd07a;
+    /* Inline editor pill palette (tag, date, wiki link, contact,
+       image, broken). Six distinct hues drawn from Apple's system
+       colors. Dark-mode values are intentionally brighter / less
+       saturated than light-mode — perceived chroma rises against
+       a dark background, so a "vivid" hue picked for light mode
+       will read as garish on dark. Backgrounds are tinted (alpha)
+       so the pill reads as a badge, not a button. */
+    --pill-tag-fg: #6ab0ff;
+    --pill-tag-bg: rgba(100, 168, 255, 0.18);
+    --pill-tag-bg-hover: rgba(100, 168, 255, 0.28);
+    --pill-date-fg: #ff9f0a;
+    --pill-date-bg: rgba(255, 159, 10, 0.18);
+    --pill-wiki-fg: #8e8af5;
+    --pill-wiki-bg: rgba(142, 138, 245, 0.18);
+    --pill-wiki-bg-hover: rgba(142, 138, 245, 0.28);
+    --pill-contact-fg: #ff7aa6;
+    --pill-contact-bg: rgba(255, 55, 95, 0.18);
+    --pill-image-fg: #4bd17b;
+    --pill-image-bg: rgba(75, 209, 123, 0.20);
+    --pill-broken-fg: #ff6961;
+    --pill-broken-bg: rgba(255, 80, 75, 0.20);
   }
   :global([data-theme="light"]) {
     --bg: #ffffff;
@@ -575,6 +596,24 @@
     --g-doc: #c25a1f;
     --g-img: #7a4cd8;
     --g-tag: #2f9444;
+    /* Light-mode pill palette: deeper foregrounds, lower alpha
+       backgrounds. Same hues as dark mode so the semantic mapping
+       (tag=blue, date=orange, wiki=indigo, contact=pink,
+       image=green, broken=red) stays stable across modes. */
+    --pill-tag-fg: #0a64c8;
+    --pill-tag-bg: rgba(10, 132, 255, 0.12);
+    --pill-tag-bg-hover: rgba(10, 132, 255, 0.20);
+    --pill-date-fg: #b25000;
+    --pill-date-bg: rgba(255, 149, 0, 0.14);
+    --pill-wiki-fg: #4a47b8;
+    --pill-wiki-bg: rgba(88, 86, 214, 0.12);
+    --pill-wiki-bg-hover: rgba(88, 86, 214, 0.20);
+    --pill-contact-fg: #b8336a;
+    --pill-contact-bg: rgba(255, 45, 85, 0.10);
+    --pill-image-fg: #1a7f37;
+    --pill-image-bg: rgba(52, 199, 89, 0.14);
+    --pill-broken-fg: #c93232;
+    --pill-broken-bg: rgba(255, 59, 48, 0.12);
   }
 
   :global(html), :global(body), :global(#app) {
