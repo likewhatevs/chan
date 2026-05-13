@@ -85,17 +85,19 @@ class DateWidget extends WidgetType {
         initialDate: this.date,
         initialFormatId: this.formatId,
         onCommit: (formatted, formatId) => {
-          // Drop a trailing space + park the caret past it so the
-          // user can keep typing right after the date, matching
-          // the !/date macro flow. Skip the extra space when one
-          // already sits after the existing date (avoids
-          // double-spacing inline edits).
+          // Caret must always land OUTSIDE the date range so the
+          // pill re-renders (anywhere inside / at the boundary
+          // keeps it in source-edit mode). Two cases:
+          //   - next char is a space: jump the caret past it.
+          //   - next char isn't a space (or we're at EOF): insert
+          //     a space so the caret has a valid landing spot one
+          //     past the date.
           const after = view.state.doc.sliceString(to, to + 1);
-          const trailing = after === " " ? "" : " ";
-          const insert = formatted + trailing;
+          const needsSpace = after !== " ";
+          const insert = formatted + (needsSpace ? " " : "");
           view.dispatch({
             changes: { from, to, insert },
-            selection: { anchor: from + insert.length },
+            selection: { anchor: from + formatted.length + 1 },
           });
           // Picking a different format from the popover sticks as
           // the new default so subsequent !/today / !/date macros

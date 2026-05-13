@@ -135,16 +135,16 @@ export function openDateAtCaret(view: EditorView): boolean {
     initialDate: hit.date,
     initialFormatId: hit.formatId,
     onCommit: (replacement, pickedFormatId) => {
-      // Same trailing-space behaviour as the !/date macro and the
-      // click-a-pill paths: drop a space + park the caret past
-      // the date so the user can keep typing. Skip when the next
-      // char is already a space.
+      // Caret must always land OUTSIDE the date range so the pill
+      // re-renders. If the next char is already a space, jump
+      // past it; otherwise insert one so there's a valid landing
+      // spot at to+1. Matches the click-a-pill and !/date paths.
       const after = view.state.doc.sliceString(hit.to, hit.to + 1);
-      const trailing = after === " " ? "" : " ";
-      const insert = replacement + trailing;
+      const needsSpace = after !== " ";
+      const insert = replacement + (needsSpace ? " " : "");
       view.dispatch({
         changes: { from: hit.from, to: hit.to, insert },
-        selection: { anchor: hit.from + insert.length },
+        selection: { anchor: hit.from + replacement.length + 1 },
       });
       if (pickedFormatId !== hit.formatId) persistDateFormat(pickedFormatId);
       anchor.remove();
@@ -184,21 +184,21 @@ export function expandDateMacro(view: EditorView): boolean {
         initialFormatId: formatId,
         onCommit: (replacement, pickedFormatId) => {
           // Macro flow: rewrite the bake-as-today placeholder with
-          // the popover's pick, then drop a trailing space + park
-          // the caret past it so the user can keep typing. Skip the
-          // extra space when there's already one immediately after
-          // the date (avoids the double-space "alice  is here").
+          // the popover's pick. Caret always lands one past the
+          // date (past an existing space, or past one we just
+          // inserted) so the pill re-renders and the user can keep
+          // typing without nudging out of source-edit mode.
           const end = hit.from + formatted.length;
           const after = view.state.doc.sliceString(end, end + 1);
-          const trailing = after === " " ? "" : " ";
-          const insert = replacement + trailing;
+          const needsSpace = after !== " ";
+          const insert = replacement + (needsSpace ? " " : "");
           view.dispatch({
             changes: {
               from: hit.from,
               to: end,
               insert,
             },
-            selection: { anchor: hit.from + insert.length },
+            selection: { anchor: hit.from + replacement.length + 1 },
           });
           if (pickedFormatId !== formatId) persistDateFormat(pickedFormatId);
           anchor.remove();
