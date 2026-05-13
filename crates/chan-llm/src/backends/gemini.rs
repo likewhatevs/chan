@@ -671,6 +671,7 @@ mod tests {
                 content: "ghost result".into(),
                 tool_call_id: Some("never-existed".into()),
                 tool_calls: Vec::new(),
+                images: Vec::new(),
             },
         ];
         let (_, contents) = build_contents(&msgs);
@@ -693,12 +694,14 @@ mod tests {
                     name: "list_files".into(),
                     args: serde_json::json!({"prefix": "notes"}),
                 }],
+                images: Vec::new(),
             },
             Message {
                 role: Role::Tool,
                 content: "[\"notes/a.md\"]".into(),
                 tool_call_id: Some("gemini-0".into()),
                 tool_calls: Vec::new(),
+                images: Vec::new(),
             },
         ];
         let (_, contents) = build_contents(&msgs);
@@ -727,12 +730,14 @@ mod tests {
                     name: "read_file".into(),
                     args: serde_json::json!({"path": "a.md"}),
                 }],
+                images: Vec::new(),
             },
             Message {
                 role: Role::Tool,
                 content: "alpha".into(),
                 tool_call_id: Some("gemini-0-0".into()),
                 tool_calls: Vec::new(),
+                images: Vec::new(),
             },
             Message::user("now do another"),
             Message {
@@ -744,12 +749,14 @@ mod tests {
                     name: "list_files".into(),
                     args: serde_json::json!({"prefix": "notes"}),
                 }],
+                images: Vec::new(),
             },
             Message {
                 role: Role::Tool,
                 content: "[]".into(),
                 tool_call_id: Some("gemini-1-0".into()),
                 tool_calls: Vec::new(),
+                images: Vec::new(),
             },
         ];
         let (_, contents) = build_contents(&msgs);
@@ -783,12 +790,14 @@ mod tests {
                     name: "search_content".into(),
                     args: serde_json::json!({"q": "foo"}),
                 }],
+                images: Vec::new(),
             },
             Message {
                 role: Role::Tool,
                 content: "no hits".into(),
                 tool_call_id: Some("gemini-0".into()),
                 tool_calls: Vec::new(),
+                images: Vec::new(),
             },
         ];
         let (_, contents) = build_contents(&msgs);

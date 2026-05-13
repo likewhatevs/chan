@@ -63,6 +63,27 @@ pub struct Message {
     /// can reference them across the conversation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCall>,
+    /// Optional multimodal payload — base64-encoded images that
+    /// accompany this message. Today only `Role::User` messages
+    /// carry them; backends that support multimodal input
+    /// (Anthropic via `image` content blocks, Gemini via
+    /// `inline_data` parts, Ollama via its top-level `images`
+    /// array) serialize these alongside the text. Backends without
+    /// image support drop them silently — the text content is
+    /// still authoritative.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageInput>,
+}
+
+/// One base64-encoded image attached to a `Message`. `mime_type`
+/// is the standard MIME (`image/png`, `image/jpeg`, etc.); `data`
+/// is the raw base64 payload WITHOUT a `data:` URI prefix. Hosts
+/// (chan-server, native shells) are responsible for capping size
+/// before they construct one — chan-llm trusts the caller.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageInput {
+    pub mime_type: String,
+    pub data: String,
 }
 
 impl Message {
@@ -72,6 +93,7 @@ impl Message {
             content: content.into(),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            images: Vec::new(),
         }
     }
     pub fn system(content: impl Into<String>) -> Self {
@@ -80,6 +102,7 @@ impl Message {
             content: content.into(),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            images: Vec::new(),
         }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
@@ -88,6 +111,7 @@ impl Message {
             content: content.into(),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            images: Vec::new(),
         }
     }
     pub fn tool(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
@@ -96,6 +120,7 @@ impl Message {
             content: content.into(),
             tool_call_id: Some(tool_call_id.into()),
             tool_calls: Vec::new(),
+            images: Vec::new(),
         }
     }
 }
@@ -514,6 +539,7 @@ async fn run_loop(
             content: outcome.assistant_text.clone(),
             tool_call_id: None,
             tool_calls: outcome.tool_calls.clone(),
+            images: Vec::new(),
         });
 
         // Track every tool call from this turn that we still owe a
@@ -960,6 +986,7 @@ mod tests {
                     name: "write_file".into(),
                     args,
                 }],
+                images: Vec::new(),
             },
             Message::tool(call_id, serde_json::to_string(&placeholder).unwrap()),
         ]

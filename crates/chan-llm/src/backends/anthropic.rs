@@ -440,10 +440,30 @@ fn split_system(msgs: &[Message]) -> (Option<String>, Vec<AnthropicMessage<'_>>)
     for m in msgs {
         match m.role {
             Role::System => system_chunks.push(&m.content),
-            Role::User => out.push(AnthropicMessage {
-                role: "user",
-                content: vec![AnthropicMessageContent::Text { text: &m.content }],
-            }),
+            Role::User => {
+                // Anthropic wants images listed BEFORE the text in
+                // a multimodal user message — the model reads the
+                // visuals first then the instruction. We mirror
+                // that ordering so prompts like "what's in this
+                // image?" attach cleanly.
+                let mut blocks: Vec<AnthropicMessageContent<'_>> = m
+                    .images
+                    .iter()
+                    .map(|img| AnthropicMessageContent::Image {
+                        source: AnthropicImageSource::Base64 {
+                            media_type: &img.mime_type,
+                            data: &img.data,
+                        },
+                    })
+                    .collect();
+                if !m.content.is_empty() || blocks.is_empty() {
+                    blocks.push(AnthropicMessageContent::Text { text: &m.content });
+                }
+                out.push(AnthropicMessage {
+                    role: "user",
+                    content: blocks,
+                });
+            }
             Role::Assistant => {
                 let mut blocks = Vec::new();
                 if !m.content.is_empty() {
@@ -558,6 +578,15 @@ enum AnthropicMessageContent<'a> {
     Text {
         text: &'a str,
     },
+    /// Base64-encoded image attached to a user message. Anthropic
+    /// expects `{ "type": "image", "source": { "type": "base64",
+    /// "media_type": "image/png", "data": "..." } }`. We accept
+    /// the standard set of MIMEs Anthropic supports (png, jpeg,
+    /// webp, gif); callers are responsible for clamping size
+    /// (model-side cap is 5 MiB / image, 20 images / request).
+    Image {
+        source: AnthropicImageSource<'a>,
+    },
     ToolUse {
         id: &'a str,
         name: &'a str,
@@ -566,6 +595,15 @@ enum AnthropicMessageContent<'a> {
     ToolResult {
         tool_use_id: &'a str,
         content: &'a str,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AnthropicImageSource<'a> {
+    Base64 {
+        media_type: &'a str,
+        data: &'a str,
     },
 }
 

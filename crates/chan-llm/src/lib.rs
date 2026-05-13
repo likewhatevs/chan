@@ -63,8 +63,8 @@ pub use config::{LlmConfig, MaxTokens};
 pub use error::LlmError;
 pub use keys::KeyStatus;
 pub use session::{
-    apply_resume, is_pending_placeholder, CancelHandle, Delta, LlmSession, Message, ResumeOutcome,
-    Role, SessionListener, StopReason, ToolCall, ToolResult, FAILED_STATUS, PENDING_STATUS,
-    REJECTED_STATUS,
+    apply_resume, is_pending_placeholder, CancelHandle, Delta, ImageInput, LlmSession, Message,
+    ResumeOutcome, Role, SessionListener, StopReason, ToolCall, ToolResult, FAILED_STATUS,
+    PENDING_STATUS, REJECTED_STATUS,
 };
 pub use tools::{StandardTool, ToolContext};

@@ -163,6 +163,12 @@ impl Backend for OllamaBackend {
                             },
                         })
                         .collect(),
+                    // Ollama's chat API takes images as a top-level
+                    // `images` array on the message, holding the raw
+                    // base64 payload (no `data:` prefix). Only the
+                    // multimodal models (llava, llama3.2-vision, etc.)
+                    // act on them; the rest ignore the field.
+                    images: m.images.iter().map(|img| img.data.as_str()).collect(),
                 })
                 .collect(),
             tools: tools
@@ -387,6 +393,8 @@ struct ChatMessage<'a> {
     content: &'a str,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tool_calls: Vec<OutToolCall<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    images: Vec<&'a str>,
 }
 
 #[derive(Serialize)]
