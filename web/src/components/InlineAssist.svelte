@@ -28,7 +28,7 @@
   // it discovers in drive context).
 
   import { onDestroy, onMount } from "svelte";
-  import { Check, Copy } from "lucide-svelte";
+  import { Check, Code, Copy, Eye, PenLine } from "lucide-svelte";
 
   import { api } from "../api/client";
   import { renderMarkdown } from "../api/markdown";
@@ -61,6 +61,7 @@
     saveGroupConversation,
     confirmState,
     drive,
+    openDiffOverlay,
     type AssistantConversation,
     type AssistantPendingEdit,
     type AssistantTurn,
@@ -69,6 +70,7 @@
   } from "../state/store.svelte";
   import { defaultScopeId, type ScopeOption } from "../state/scope.svelte";
   import { layout, openInActivePane } from "../state/tabs.svelte";
+  import DiffOverlay from "./DiffOverlay.svelte";
   import OverlayShell from "./OverlayShell.svelte";
 
   /// Dropdown options derived from the live layout. Updated
@@ -207,6 +209,26 @@
     return new Date(ts).toISOString().slice(0, 10);
   }
 
+  /// Per-bubble render mode for assistant turns. Three options:
+  ///   - "editor" (default): read-only Wysiwyg with chan's full
+  ///     widget set, so wiki-links / mentions / tags / dates render
+  ///     as pills exactly as in a file tab.
+  ///   - "rendered": sanitized GFM HTML via renderMarkdown. Chan-
+  ///     specific syntax ships as plain text here — marked doesn't
+  ///     speak chan.
+  ///   - "source": raw markdown text in a monospace block. Compare
+  ///     against the model's literal output.
+  /// Keyed by turn index; absent entries default to "editor".
+  /// In-memory only; not persisted with the conversation.
+  type BubbleMode = "rendered" | "editor" | "source";
+  let bubbleMode = $state<Record<number, BubbleMode>>({});
+  function bubbleModeFor(i: number): BubbleMode {
+    return bubbleMode[i] ?? "editor";
+  }
+  function setBubbleMode(i: number, m: BubbleMode): void {
+    bubbleMode[i] = m;
+  }
+
 /// Index of the most recently copied turn; the matching button
   /// briefly says "copied" so the user gets feedback. Reset to
   /// null after 1.2 s. Storing one index (not a set) is enough
@@ -255,20 +277,35 @@
   /// on the formats that actually round-trip.
   const FORMAT_CLAUSE =
     "REPLY FORMAT\n" +
-    "  - Reply in GitHub-flavored markdown. Use headings, bullet/numbered lists, fenced code blocks (with a language tag when relevant), inline `code`, blockquotes, and **bold** / *italic* where they aid scanning.\n" +
+    "  - Reply in GitHub-flavored markdown. Use headings, bullet/numbered lists, fenced code blocks (with a language tag when relevant), blockquotes, and **bold** / *italic* where they aid scanning.\n" +
+    "  - Reserve inline backticks `code` for ACTUAL code or shell snippets. Do NOT backtick file paths, tag names (#travel), wiki links ([[Foo]]), identifiers, configuration keys, or proper nouns — write those as plain text. Backticking everything turns replies into a wall of boxed tokens.\n" +
     "  - Don't emit raw HTML; the renderer sanitizes it out anyway.\n" +
     "  - Keep code samples in fenced blocks even when short — never inline a multi-line snippet.";
+
+  /// Tool catalog every context shares. Keep in sync with chan-llm's
+  /// `standard_tool_schemas` so the model's prompt reflects what's
+  /// actually wired. read_image is omitted because the in-process
+  /// backends (Anthropic / Gemini / Ollama) don't accept multimodal
+  /// content slots today — it's MCP-only.
+  const TOOL_CATALOG =
+    "TOOLS\n" +
+    "  - read_file(path): read any markdown file in the drive.\n" +
+    "  - list_files(prefix?): enumerate files, optionally scoped to a POSIX rel-path prefix. Capped at 2,000 entries.\n" +
+    "  - search_content(query, limit?): BM25 + semantic hybrid search. Prefer over list_files when the user named a topic, not a path.\n" +
+    "  - graph_neighbors(path, direction?, kinds?): the file's outbound links / tags / mentions AND its backlinks (other files pointing at it). Direction is `out` / `in` / `both` (default `both`); kinds filter to a subset of link / tag / mention.\n" +
+    "  - graph_tags(): every `#tag` in the drive with the number of files that carry it. No args.\n" +
+    "  - graph_files_with_tag(tag): files carrying the given tag (include the leading `#`).\n" +
+    "  - repo_report(prefix?, paths?, include_files?): code/content snapshot — per-file language and SLOC counts, per-language roll-ups, COCOMO cost estimate. `include_files=true` adds the per-file rows (capped at 200). Use this when the user asks about repo size, language mix, where the content lives, or to scope a refactor.\n" +
+    "  - write_file(path, content): propose a complete file replacement. When 'auto-apply writes' is off (default), the user reviews and clicks Apply or Discard before the write hits disk; when on, the write lands atomically. Always emit the FULL revised file content (no diffs, no partials).";
 
   const PROMPT_FILE_TOOLS =
     "You are the user's writing assistant inside chan, a personal-notes editor. " +
     "This conversation is scoped to ONE file in the user's drive; the file's CURRENT content ships on every user turn under '# File', and the user's prompt under '# Instruction'. " +
     "If the user has text selected, it appears under '# Selection'.\n\n" +
-    "TOOLS\n" +
-    "  - read_file(path): read another markdown file.\n" +
-    "  - list_files(prefix?): list files (optional path prefix).\n" +
-    "  - search_content(query, limit?): hybrid keyword + semantic search.\n" +
-    "  - write_file(path, content): propose a complete file replacement. When 'auto-apply writes' is off (default), the user reviews and clicks Apply or Discard before the write hits disk; when on, the write lands atomically. Always emit the FULL revised file content (no diffs, no partials).\n\n" +
+    TOOL_CATALOG +
+    "\n\n" +
     "DISCIPLINE\n" +
+    "  - Use graph_neighbors / graph_tags / graph_files_with_tag for relationship questions (backlinks, related notes, tag census) before resorting to scanning every file.\n" +
     "  - One category of tool call per turn (investigate OR propose). Don't mix.\n" +
     "  - Preserve frontmatter + unrelated sections in proposed edits.\n" +
     "  - Reply concisely; discuss before acting when intent is ambiguous.\n\n" +
@@ -280,11 +317,10 @@
 
   const PROMPT_GROUP_TOOLS =
     "You are the user's writing assistant inside chan. This conversation is scoped to a GROUP of files visible in the user's layout; each file's CURRENT content ships on every user turn under its own '## <path>' heading inside the '# Files' block, with the user's prompt under '# Instruction'.\n\n" +
-    "TOOLS\n" +
-    "  - read_file(path): read any other markdown file.\n" +
-    "  - list_files(prefix?), search_content(query, limit?): explore the wider drive.\n" +
-    "  - write_file(path, content): propose a complete replacement for any path. When 'auto-apply writes' is off (default), the user reviews per-edit; when on, the write lands atomically. Target ONE file per call and emit the FULL revised content.\n\n" +
+    TOOL_CATALOG +
+    "\n\n" +
     "DISCIPLINE\n" +
+    "  - Use graph_neighbors to discover related files outside the group before reading them blindly with read_file.\n" +
     "  - When proposing edits, target ONE specific file at a time via its path.\n" +
     "  - One category of tool call per turn (investigate OR propose). Don't mix.\n" +
     "  - Preserve frontmatter + unrelated sections in each proposed edit.\n\n" +
@@ -300,9 +336,11 @@
     "Use the excerpts as primary context; cite sources by their bracket number, like [1] or [3]. " +
     "Keep responses concise (3-6 sentences) unless more detail is clearly needed. " +
     "When the excerpts don't answer the question, say so plainly.\n\n" +
-    "TOOLS\n" +
-    "  - read_file(path) / list_files(prefix?) / search_content(query, limit?): refine your retrieval if the initial excerpts are insufficient.\n" +
-    "  - write_file(path, content): only when the user explicitly asks for an edit. When 'auto-apply writes' is off (default), the user reviews the proposal; when on, the write lands atomically. Emit the FULL revised content.\n\n" +
+    TOOL_CATALOG +
+    "\n\n" +
+    "DISCIPLINE\n" +
+    "  - Tools are available for follow-up: refine retrieval with search_content, expand with graph_neighbors / graph_files_with_tag, snapshot scope with repo_report.\n" +
+    "  - Propose edits (write_file) only when the user explicitly asks for one.\n\n" +
     FORMAT_CLAUSE;
 
   const PROMPT_UNIVERSE_CHAT =
@@ -1200,11 +1238,43 @@
       resolveStop("stop_close");
     }
   }
+  /// Resolve a pending edit by tool_call_id across every
+  /// conversation bucket. The DiffOverlay dispatches actions by
+  /// id so it stays decoupled from which scope owns the edit;
+  /// this lookup finds the matching pending edit so we can route
+  /// it through the same applyEdit / dismissEdit / saveEditAsNew
+  /// helpers the in-chat buttons use.
+  function findPendingEditById(id: string): AssistantPendingEdit | null {
+    const buckets: (AssistantConversation | null | undefined)[] = [
+      assistantConversations.drive,
+      ...Object.values(assistantConversations.byFile),
+      ...Object.values(assistantConversations.byGroup),
+    ];
+    for (const conv of buckets) {
+      if (!conv) continue;
+      for (const t of conv.turns) {
+        if (t.kind === "edit" && t.edit.toolCallId === id) return t.edit;
+      }
+    }
+    return null;
+  }
+
+  function onDiffEditAction(e: Event): void {
+    const ev = e as CustomEvent<{ action: "apply" | "dismiss" | "save-as"; toolCallId: string }>;
+    const edit = findPendingEditById(ev.detail.toolCallId);
+    if (!edit) return;
+    if (ev.detail.action === "apply") void applyEdit(edit);
+    else if (ev.detail.action === "dismiss") dismissEdit(edit, "from diff view");
+    else if (ev.detail.action === "save-as") void saveEditAsNew(edit);
+  }
+
   onMount(() => {
     document.addEventListener("keydown", onWindowKey);
+    window.addEventListener("chan:assistant-edit-action", onDiffEditAction);
   });
   onDestroy(() => {
     document.removeEventListener("keydown", onWindowKey);
+    window.removeEventListener("chan:assistant-edit-action", onDiffEditAction);
   });
 
   // Reactive accessor for the currently-rendered scrollback.
@@ -1316,16 +1386,25 @@
                 <span class="role">you</span>
                 <span class="ts">{formatRelative(turn.created_at)}</span>
               </div>
-              <div class="body">{turn.content}</div>
+              <!-- User prompts render as markdown too. Whatever the
+                   user types into the Wysiwyg prompt (headings, code
+                   fences, blockquotes, bold/italic) round-trips into
+                   the scrollback with the same .md styling the
+                   assistant bubble uses. The model still receives
+                   the raw markdown source via the `# Instruction`
+                   block of buildUserMessage; this is purely a
+                   display choice. -->
+              <div class="body md">{@html renderMarkdown(turn.content)}</div>
             </div>
           {:else if turn.kind === "assistant"}
             <div class="bubble assistant">
               <div class="role-line">
                 <span class="role">assistant</span>
                 <span class="ts">{formatRelative(turn.created_at)}</span>
-                <!-- Copy hands the user the raw markdown the model
-                     emitted (not the sanitized HTML), so pasting
-                     into another markdown buffer keeps formatting. -->
+                <!-- Copy first (always visible) so its position
+                     stays glued to the timestamp regardless of
+                     whether the hover-only mode-toggle below is
+                     showing or not. -->
                 <button
                   class="copy-btn"
                   title="copy this reply (markdown)"
@@ -1339,12 +1418,51 @@
                   {/if}
                 </button>
               </div>
-              <!-- Assistant output is markdown; render it (sanitized)
-                   so headers / lists / code blocks / inline code /
-                   links read like the rest of the editor. User
-                   bubbles stay plain so the user's own typing
-                   doesn't get reinterpreted. -->
-              <div class="body md">{@html renderMarkdown(turn.content)}</div>
+              <!-- Body wrapper hosts the (absolutely-positioned)
+                   mode toggle in its top-right corner. Visible on
+                   bubble hover; lazy-mounts the editor view when
+                   that mode is selected so long conversations
+                   don't pay the CM6 cost up-front. -->
+              <div class="body-wrap">
+                <div class="mode-toggle" role="group" aria-label="render mode">
+                  <button
+                    type="button"
+                    class:active={bubbleModeFor(i) === "editor"}
+                    title="editor view (chan pills: wiki / tags / mentions / dates) — default"
+                    aria-label="editor view"
+                    onclick={() => setBubbleMode(i, "editor")}
+                  >
+                    <PenLine size={12} strokeWidth={1.75} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    class:active={bubbleModeFor(i) === "rendered"}
+                    title="rendered markdown"
+                    aria-label="rendered markdown"
+                    onclick={() => setBubbleMode(i, "rendered")}
+                  >
+                    <Eye size={12} strokeWidth={1.75} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    class:active={bubbleModeFor(i) === "source"}
+                    title="raw markdown source"
+                    aria-label="raw source"
+                    onclick={() => setBubbleMode(i, "source")}
+                  >
+                    <Code size={12} strokeWidth={1.75} aria-hidden="true" />
+                  </button>
+                </div>
+                {#if bubbleModeFor(i) === "rendered"}
+                  <div class="body md">{@html renderMarkdown(turn.content)}</div>
+                {:else if bubbleModeFor(i) === "editor"}
+                  <div class="body editor-mode">
+                    <Wysiwyg value={turn.content} readonly={true} />
+                  </div>
+                {:else}
+                  <pre class="body source">{turn.content}</pre>
+                {/if}
+              </div>
               {#if turn.citations && turn.citations.length > 0}
                 <h4 class="cites-title">Sources</h4>
                 <ul class="cites">
@@ -1403,6 +1521,12 @@
               {#if turn.edit.status === "pending"}
                 <div class="actions">
                   <button type="button" class="primary" onclick={(e) => { e.stopPropagation(); void applyEdit(turn.edit); }}>Apply</button>
+                  <!-- Side-by-side diff against the file's current
+                       content (open-tab buffer or disk). Opens a
+                       fullscreen DiffOverlay that carries its own
+                       Apply / Discard / Save-as so the user can
+                       act from inside the diff. -->
+                  <button type="button" class="diff" title="show side-by-side diff against current content" onclick={(e) => { e.stopPropagation(); openDiffOverlay(turn.edit); }}>Diff</button>
                   <!-- Save as new file: writes the proposal content
                        to a user-chosen path instead of overwriting
                        the target. Useful when the user wants to
@@ -1540,6 +1664,12 @@
         {/if}
       </div>
 </OverlayShell>
+
+<!-- Fullscreen side-by-side diff for a pending edit. Lives at the
+     InlineAssist level (not App.svelte) since it's a strict child
+     of the assistant subsystem and its state only makes sense
+     while the assistant overlay is reachable. -->
+<DiffOverlay />
 
 {#if stopPrompt.open}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -1713,6 +1843,92 @@
     transition: color 0.15s ease, border-color 0.15s ease;
   }
   .bubble .copy-btn:hover { color: var(--text); border-color: var(--btn-hover); }
+  /* Body wrapper. Position context for the absolutely-positioned
+     mode-toggle that overlays the top-right corner of each
+     assistant reply. */
+  .bubble .body-wrap {
+    position: relative;
+    width: 100%;
+  }
+  /* Three-way render-mode toggle. Floats at the top-right corner
+     of the reply body. Hidden until the bubble is hovered so the
+     reading view stays uncluttered. Solid backdrop so it occludes
+     any first-line text that happens to extend underneath. */
+  .bubble .mode-toggle {
+    display: none;
+    gap: 2px;
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    z-index: 2;
+    padding: 2px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  }
+  .bubble.assistant:hover .mode-toggle,
+  .bubble.assistant:focus-within .mode-toggle {
+    display: inline-flex;
+  }
+  .bubble .mode-toggle button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 16px;
+    padding: 0;
+    border: 1px solid var(--btn-border);
+    border-radius: 3px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  }
+  .bubble .mode-toggle button:hover {
+    color: var(--text);
+    border-color: var(--btn-hover);
+  }
+  .bubble .mode-toggle button.active {
+    color: #fff;
+    background: var(--link);
+    border-color: var(--link);
+  }
+  /* "Source" variant: the model's literal markdown rendered as a
+     monospace pre block. Same look as a fenced code block so the
+     visual hierarchy stays consistent with the rendered mode. */
+  .bubble .body.source {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-family: ui-monospace, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+    margin: 0;
+  }
+  /* "Editor" variant: read-only chan Wysiwyg. Strip the default
+     bubble bg + padding so the editor's own chrome (line numbers,
+     widget pills) reads cleanly inside the bubble frame. */
+  .bubble .body.editor-mode {
+    background: var(--bg-card);
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    /* Cap height so a very long reply doesn't dominate the
+       scrollback; the inner CM6 keeps its own scroll. */
+    max-height: 50vh;
+    overflow-y: auto;
+  }
+  /* Tighten the chan editor's default padding so the read-only
+     view feels like a quote panel, not a full editor pane. */
+  .bubble .body.editor-mode :global(.md-wysiwyg) {
+    padding: 8px 12px;
+  }
   .bubble .body {
     background: var(--assistant-bubble-bg);
     padding: 6px 10px;
@@ -1747,12 +1963,21 @@
     padding-left: 1.4em;
   }
   .bubble .body.md :global(li) { margin: 0.1em 0; }
+  /* Inline `code` spans in assistant replies. We deliberately do
+     NOT paint a tinted background here: many models (especially
+     claude-cli) wrap every file path, tag, and identifier in
+     backticks, which used to make replies look like a wall of
+     code blocks. Monospace + a touch of letter-spacing keeps
+     genuine `code` recognisable without the boxed-up look. The
+     prompt also instructs the model to be sparing with inline
+     code, so this is the safety net for when it isn't. */
   .bubble .body.md :global(code) {
-    background: var(--bg);
-    padding: 0 4px;
-    border-radius: 3px;
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
     font-family: ui-monospace, monospace;
     font-size: 0.92em;
+    color: var(--text);
   }
   .bubble .body.md :global(pre) {
     background: var(--bg);

@@ -1265,6 +1265,98 @@ export const assistantOverlay = $state<{
   prompt: "",
 });
 
+/// Fullscreen side-by-side diff view for a pending assistant edit.
+/// Opened from the edit card's "Diff" button; reads the file's
+/// current bytes from the open tab (if any) or from disk so the
+/// left side shows what's on the user's machine right now and the
+/// right side shows the assistant's proposal. The overlay carries
+/// its own Apply / Save-as / Discard actions so the user can act
+/// without bouncing back to the chat.
+export const diffOverlay = $state<{
+  open: boolean;
+  /// The pending edit being diffed. Captured by reference so the
+  /// overlay's Apply / Discard buttons mutate the same record the
+  /// chat scrollback renders.
+  edit: AssistantPendingEdit | null;
+  /// File path, mirrored from edit.path so the overlay can render
+  /// it independent of any later edit mutation.
+  path: string;
+  /// Original content for the left pane. Resolved at open-time:
+  /// open-tab buffer wins, falls back to api.read. Empty string
+  /// when the path doesn't exist yet (the proposal is creating a
+  /// brand-new file).
+  original: string;
+  /// True while the overlay is fetching the original content; the
+  /// view shows a small "loading…" indicator instead of empty L.
+  loading: boolean;
+  /// Error string from the api.read fallback; non-null only when
+  /// both the open-tab and disk reads failed. Surfaced in the
+  /// overlay header so the user knows the diff baseline is empty.
+  error: string | null;
+}>({
+  open: false,
+  edit: null,
+  path: "",
+  original: "",
+  loading: false,
+  error: null,
+});
+
+/// Open the diff overlay for `edit`, resolving the original
+/// content from the open tab (if the path is loaded) or from
+/// disk. Returns immediately; the overlay shows a brief
+/// "loading…" placeholder while the read completes.
+export function openDiffOverlay(edit: AssistantPendingEdit): void {
+  diffOverlay.edit = edit;
+  diffOverlay.path = edit.path;
+  diffOverlay.original = "";
+  diffOverlay.loading = true;
+  diffOverlay.error = null;
+  diffOverlay.open = true;
+  // First: check open tabs for a buffer at this path. Wins over
+  // disk because a user may have unsaved edits that the assistant's
+  // proposal will replace; the diff should be against what they
+  // see, not what's persisted.
+  for (const node of Object.values(layout.nodes)) {
+    if (node.kind !== "leaf") continue;
+    for (const t of node.tabs) {
+      if (t.kind === "file" && t.path === edit.path) {
+        diffOverlay.original = t.content;
+        diffOverlay.loading = false;
+        return;
+      }
+    }
+  }
+  // Fall back to disk. Treat 404 as "new file" (left side empty);
+  // any other error surfaces in the header.
+  void api.read(edit.path).then(
+    (resp) => {
+      diffOverlay.original = resp.content ?? "";
+      diffOverlay.loading = false;
+    },
+    (e) => {
+      const msg = (e as Error).message ?? String(e);
+      if (msg.includes("404") || msg.toLowerCase().includes("not found")) {
+        diffOverlay.original = "";
+        diffOverlay.loading = false;
+      } else {
+        diffOverlay.original = "";
+        diffOverlay.error = msg;
+        diffOverlay.loading = false;
+      }
+    },
+  );
+}
+
+export function closeDiffOverlay(): void {
+  diffOverlay.open = false;
+  diffOverlay.edit = null;
+  diffOverlay.path = "";
+  diffOverlay.original = "";
+  diffOverlay.loading = false;
+  diffOverlay.error = null;
+}
+
 /// Streaming buffer for the assistant turn currently in flight.
 /// Fed by `llm.delta` WS frames in `onWatchEvent`; consumed by
 /// InlineAssist to render a live-updating assistant bubble in
@@ -1420,6 +1512,23 @@ function summarizeToolResult(output: unknown): string | null {
   if (Array.isArray(o.hits)) return `${o.hits.length} hits`;
   if (Array.isArray(o.entries)) return `${o.entries.length} entries`;
   if (Array.isArray(o.files)) return `${o.files.length} files`;
+  // graph_tags returns { tags: [...] }
+  if (Array.isArray(o.tags)) return `${o.tags.length} tags`;
+  // graph_neighbors returns { out: [...], in: [...] } — collapse to
+  // one count so the chip stays readable.
+  if (Array.isArray(o.out) || Array.isArray(o.in)) {
+    const out = Array.isArray(o.out) ? o.out.length : 0;
+    const inLen = Array.isArray(o.in) ? o.in.length : 0;
+    return `${out} out · ${inLen} in`;
+  }
+  // repo_report returns { totals: {files, code, ...}, ... }
+  if (o.totals && typeof o.totals === "object") {
+    const t = o.totals as Record<string, unknown>;
+    const files = typeof t.files === "number" ? t.files : null;
+    const code = typeof t.code === "number" ? t.code : null;
+    if (files !== null && code !== null) return `${files} files · ${code} LOC`;
+    if (files !== null) return `${files} files`;
+  }
   if (typeof o.content === "string") return formatBytes(o.content.length);
   if (typeof o.bytes === "number" && Number.isFinite(o.bytes)) {
     return formatBytes(o.bytes);
@@ -1474,7 +1583,24 @@ function labelForToolCall(name: string, input: unknown): string {
     return q ? `searching "${trimmed}"` : "searching drive";
   }
   if (bare === "read_image") return `viewing ${shortPath(args.path) || "image"}`;
-  if (bare === "repo_report") return "scanning repo";
+  if (bare === "repo_report") {
+    const prefix = typeof args.prefix === "string" ? args.prefix : "";
+    if (prefix) return `scanning ${shortPath(prefix)}`;
+    const paths = Array.isArray(args.paths) ? args.paths.length : 0;
+    if (paths > 0) return `scanning ${paths} files`;
+    return "scanning drive";
+  }
+  if (bare === "graph_neighbors") {
+    const dir = typeof args.direction === "string" ? args.direction : "both";
+    const path = shortPath(args.path) || "file";
+    const arrow = dir === "out" ? "→" : dir === "in" ? "←" : "↔";
+    return `graph ${arrow} ${path}`;
+  }
+  if (bare === "graph_tags") return "listing tags";
+  if (bare === "graph_files_with_tag") {
+    const tag = typeof args.tag === "string" ? args.tag : "";
+    return tag ? `files tagged ${tag}` : "files for tag";
+  }
   return bare;
 }
 

@@ -4,6 +4,7 @@
   import BottomPill from "./components/BottomPill.svelte";
   import ConfirmModal from "./components/ConfirmModal.svelte";
   import ConflictModal from "./components/ConflictModal.svelte";
+  import DiffOverlay from "./components/DiffOverlay.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
   import FileBrowserOverlay from "./components/FileBrowserOverlay.svelte";
   import GraphPanel from "./components/GraphPanel.svelte";
@@ -447,6 +448,7 @@
 <ConfirmModal />
 <SearchPanel />
 <InlineAssist />
+<DiffOverlay />
 <GraphPanel />
 <SettingsPanel />
 <FileBrowserOverlay />
