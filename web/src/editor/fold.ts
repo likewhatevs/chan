@@ -14,6 +14,7 @@
 // drive fold / unfold via the existing foldEffect / unfoldEffect.
 
 import {
+  codeFolding,
   foldEffect,
   foldedRanges,
   foldService,
@@ -144,5 +145,10 @@ const headingFoldGutter = gutter({
 });
 
 export function headingFold(): Extension {
-  return [headingFoldService, headingFoldGutter];
+  // `codeFolding()` registers the fold state field that foldEffect /
+  // unfoldEffect mutate. Without it the chevron click dispatches
+  // an effect that nothing listens to and the fold silently no-ops —
+  // gutter clicks logged the right blockInfo and dispatched, but
+  // foldedRanges stayed empty.
+  return [codeFolding(), headingFoldService, headingFoldGutter];
 }
