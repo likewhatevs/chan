@@ -168,7 +168,9 @@ function render(drives) {
         d.connected_at ? `connected ${d.connected_at}` : null,
       ].filter(Boolean).join(' · ');
       return `
-      <tr data-kind="tunneled">
+      <tr data-kind="tunneled"
+          data-tunnel-label="${escapeAttr(d.label || '')}"
+          data-tunnel-drive="${escapeAttr(d.drive || '')}">
         <td><span class="tag tag-tunnel" title="${escapeAttr(tip)}">tunnel</span></td>
         <td class="path-cell muted">${escapeHtml(d.label || '')}</td>
         <td class="name-cell">${escapeHtml(d.drive || d.name)}</td>
@@ -231,8 +233,18 @@ function bindRowEvents() {
     const launch = tr.querySelector('[data-act="launch"]');
     if (launch) {
       launch.addEventListener('click', async () => {
-        const url = tr.querySelector('.url-input').value.trim();
-        if (url) await openUrl(url);
+        // Launch reuses the same in-app Tauri webview the
+        // supervisor opens on first registration. Going to the
+        // system browser would split the editor experience across
+        // two surfaces and break the key-bridge shortcuts.
+        const label = tr.dataset.tunnelLabel || '';
+        const drive = tr.dataset.tunnelDrive || '';
+        if (!label || !drive) return;
+        try {
+          await invoke('open_tunneled_drive', { label, drive });
+        } catch (e) {
+          showError(e);
+        }
       });
     }
   });
@@ -489,16 +501,11 @@ function bindTunnelPanelEvents(_status) {
 
 tunnelBtn.addEventListener('click', toggleTunnelPanel);
 
-/// Auto-launch a tunneled drive's editor as soon as the per-tenant
-/// listener has bound and the URL is reachable. We open in the
-/// system browser, matching the Launch button on regular tunneled
-/// rows; making this an in-app Tauri WebviewWindow is a follow-up.
-listen('tunneled-drive-ready', async (e) => {
-  const url = e && e.payload && e.payload.url;
-  if (typeof url === 'string' && url) {
-    try { await openUrl(url); } catch { /* user can still click Launch */ }
-  }
-});
+/// `tunneled-drive-ready` is informational on this side: the Rust
+/// supervisor already opened the in-app webview window the moment
+/// the per-tenant listener bound. We just refresh the drive table
+/// so the new row shows up alongside its URL.
+listen('tunneled-drive-ready', () => { refresh().catch(showError); });
 
 listen('tunnel-state-changed', () => { renderTunnelPanel().catch(showError); });
 

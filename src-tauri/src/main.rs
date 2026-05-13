@@ -272,9 +272,14 @@ struct TunnelStatus {
 /// `TUNNEL_PATH`) lives in exactly one place in the codebase.
 fn build_snippets(port: u16, label: &str, drive: &str) -> (String, String) {
     let ssh = format!("ssh -R {port}:localhost:{port} user@remote");
+    // `--no-browser` keeps chan serve from launching the remote's
+    // default browser at startup (it has nothing to point at — the
+    // visitor URL belongs to chan-desktop, which is what auto-opens
+    // the drive webview on this side instead). `PATH` goes last so
+    // the user only needs to edit one trailing argument.
     let chan = format!(
-        "chan serve PATH --tunnel-url=http://127.0.0.1:{port}{path} \
-         --tunnel-token={label} --tunnel-drive={drive}",
+        "chan serve --tunnel-url=http://127.0.0.1:{port}{path} \
+         --tunnel-token={label} --tunnel-drive={drive} --no-browser PATH",
         path = chan_tunnel_proto::TUNNEL_PATH,
     );
     (ssh, chan)
@@ -383,6 +388,42 @@ async fn tunnel_start(
 #[tauri::command]
 fn tunnel_stop(app: tauri::AppHandle, state: State<Arc<AppState>>) {
     tunnel::stop_listening(&app, &state.tunnel);
+}
+
+/// Reopen / focus the in-app Tauri webview for a tunneled drive.
+/// The supervisor opens this window automatically the first time a
+/// remote registers; this command exists for the Launch button on
+/// the drive row so the user can bring the window back if they've
+/// closed it manually.
+#[tauri::command]
+fn open_tunneled_drive(
+    app: tauri::AppHandle,
+    state: State<Arc<AppState>>,
+    label: String,
+    drive: String,
+) -> Result<(), String> {
+    let url = state
+        .tunnel
+        .snapshot()
+        .into_iter()
+        .find(|d| d.label == label && d.drive == drive)
+        .map(|d| d.url)
+        .ok_or_else(|| format!("no tunneled drive {label}/{drive}"))?;
+    if url.is_empty() {
+        return Err(format!(
+            "tunneled drive {label}/{drive} has no URL yet; per-tenant listener still binding",
+        ));
+    }
+    let title = format!("chan: {label} \u{00b7} {drive}");
+    let window_label = serve::tunnel_window_label_for(&label, &drive);
+    // Focus existing window if present; otherwise rebuild it.
+    if let Some(w) = app.get_webview_window(&window_label) {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    serve::spawn_drive_window(&app, &window_label, &title, &url, |_| {});
+    Ok(())
 }
 
 /// User's home directory as a plain string, for the Drive Manager
@@ -558,6 +599,7 @@ fn main() {
             tunnel_status,
             tunnel_start,
             tunnel_stop,
+            open_tunneled_drive,
             auth::auth_status,
             auth::open_signin,
             auth::signout,

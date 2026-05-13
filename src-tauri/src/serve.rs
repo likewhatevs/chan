@@ -187,14 +187,39 @@ fn drive_title(key: &str) -> String {
 /// loads chan's local URL directly. Closing the window stops the
 /// serve, so this is the inverse of `set_drive_on(false)`.
 fn open_drive_window(app: &AppHandle, key: &str, label: &str, url: &str) {
+    let title = drive_title(key);
+    let key_for_close = key.to_string();
+    spawn_drive_window(app, label, &title, url, move |app| {
+        let state = app.state::<Arc<AppState>>();
+        stop(&state, &key_for_close);
+    });
+}
+
+/// Build and show a chan-style drive webview window on the main
+/// thread. Generic over how (or whether) the caller wants to react
+/// to the user closing the window:
+///
+/// * **Local drives** pass a closure that stops the per-drive
+///   `chan serve` child, mirroring the Off toggle.
+/// * **Tunneled drives** pass a no-op (or any other cleanup) — the
+///   `chan serve` lifecycle is owned by the remote machine, so
+///   closing the window must NOT kill the remote.
+///
+/// Centralising the builder here keeps the key-bridge JS, the size
+/// defaults, the zoom-hotkey polyfill, the drag-drop handler off,
+/// and the collision-recovery (destroy stale window with the same
+/// label) in one place — drive UX changes don't fork.
+pub fn spawn_drive_window<F>(app: &AppHandle, label: &str, title: &str, url: &str, on_close: F)
+where
+    F: Fn(&AppHandle) + Send + Sync + 'static,
+{
     let Ok(parsed) = url.parse::<tauri::Url>() else {
-        eprintln!("chan-desktop: bad chan URL for {key}: {url}");
+        eprintln!("chan-desktop: bad chan URL for {label}: {url}");
         return;
     };
     let app_owned = app.clone();
-    let key_owned = key.to_string();
     let label_owned = label.to_string();
-    let title = drive_title(key);
+    let title_owned = title.to_string();
     let res = app.run_on_main_thread(move || {
         // Tear down any leftover window with the same label (e.g.
         // a quick Off-then-On cycle where the previous window's
@@ -205,7 +230,7 @@ fn open_drive_window(app: &AppHandle, key: &str, label: &str, url: &str) {
         }
         let win =
             match WebviewWindowBuilder::new(&app_owned, &label_owned, WebviewUrl::External(parsed))
-                .title(title)
+                .title(title_owned)
                 .inner_size(1200.0, 800.0)
                 .min_inner_size(640.0, 400.0)
                 .resizable(true)
@@ -224,22 +249,30 @@ fn open_drive_window(app: &AppHandle, key: &str, label: &str, url: &str) {
             {
                 Ok(w) => w,
                 Err(e) => {
-                    eprintln!("chan-desktop: opening drive window for {key_owned}: {e}");
+                    eprintln!("chan-desktop: opening drive window for {label_owned}: {e}");
                     return;
                 }
             };
         let app_for_event = app_owned.clone();
-        let key_for_event = key_owned.clone();
         win.on_window_event(move |event| {
             if matches!(event, WindowEvent::CloseRequested { .. }) {
-                let state = app_for_event.state::<Arc<AppState>>();
-                stop(&state, &key_for_event);
+                on_close(&app_for_event);
             }
         });
     });
     if let Err(e) = res {
-        eprintln!("chan-desktop: scheduling drive window for {key}: {e}");
+        eprintln!("chan-desktop: scheduling drive window for {label}: {e}");
     }
+}
+
+/// Stable Tauri window label for a tunneled drive, namespaced
+/// separately from `drive-*` so a local drive and a tunneled drive
+/// with the same canonical name can coexist as distinct webviews.
+pub fn tunnel_window_label_for(tenant_label: &str, drive: &str) -> String {
+    let mut h = DefaultHasher::new();
+    tenant_label.hash(&mut h);
+    drive.hash(&mut h);
+    format!("tunnel-{:016x}", h.finish())
 }
 
 /// Destroy the drive's webview window if it still exists. Used by

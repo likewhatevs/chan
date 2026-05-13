@@ -330,23 +330,45 @@ async fn supervisor(app: AppHandle, state: Arc<TunnelState>, cancel: Cancellatio
             // tick: the user already opted in by clicking Listen,
             // and the supervisor doesn't see the registration until
             // the per-tenant listener has bound a port (so the URL
-            // we emit is immediately reachable).
+            // we open is immediately reachable).
             let newly_added: Vec<(String, String)> =
                 live_pairs.difference(&last_pairs).cloned().collect();
             if !newly_added.is_empty() {
-                let listeners = state.listeners.lock().unwrap();
-                for (label, drive) in newly_added {
-                    if let Some(l) = listeners.get(label.as_str()) {
-                        let url = format!("http://127.0.0.1:{}/{}/", l.port, drive);
-                        let _ = app.emit(
-                            TUNNELED_DRIVE_READY,
-                            serde_json::json!({
-                                "label": label,
-                                "drive": drive,
-                                "url": url,
-                            }),
-                        );
-                    }
+                // Snapshot the listener map: we drop the lock
+                // before spawning windows (run_on_main_thread can
+                // block briefly waiting for the main thread).
+                let urls: Vec<(String, String, String)> = {
+                    let listeners = state.listeners.lock().unwrap();
+                    newly_added
+                        .into_iter()
+                        .filter_map(|(label, drive)| {
+                            let port = listeners.get(label.as_str())?.port;
+                            let url = format!("http://127.0.0.1:{port}/{drive}/");
+                            Some((label, drive, url))
+                        })
+                        .collect()
+                };
+                for (label, drive, url) in urls {
+                    // Open the same kind of Tauri webview window we
+                    // give local drives — same key-bridge JS, same
+                    // zoom polyfill, same drag-drop handling. Close
+                    // is a no-op: the remote machine owns the
+                    // chan-serve lifecycle, so closing the local
+                    // window just hides the editor.
+                    let title = format!("chan: {label} \u{00b7} {drive}");
+                    let window_label = crate::serve::tunnel_window_label_for(&label, &drive);
+                    crate::serve::spawn_drive_window(&app, &window_label, &title, &url, |_| {});
+                    // Still emit the event so the drive table /
+                    // header chip can react (refresh, badge, etc.)
+                    // without parsing logs.
+                    let _ = app.emit(
+                        TUNNELED_DRIVE_READY,
+                        serde_json::json!({
+                            "label": label,
+                            "drive": drive,
+                            "url": url,
+                        }),
+                    );
                 }
             }
             last_pairs = live_pairs;
