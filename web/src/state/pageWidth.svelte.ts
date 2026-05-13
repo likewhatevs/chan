@@ -65,10 +65,12 @@ function applyToDom(r: number): void {
   const root = document.documentElement;
   if (r >= 1) {
     root.style.removeProperty(CSS_VAR);
+    root.classList.remove("chan-page-capped");
     return;
   }
   const px = Math.max(MIN_RESOLVED_PX, Math.round(window.innerWidth * r));
   root.style.setProperty(CSS_VAR, `${px}px`);
+  root.classList.add("chan-page-capped");
 }
 
 /// First-paint apply. Runs synchronously before any editor mounts

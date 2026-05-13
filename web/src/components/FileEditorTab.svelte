@@ -232,7 +232,7 @@
            Stored as a ratio so window resize and browser zoom both
            keep the cap proportional to the viewport. -->
       <div class="page-width-row">
-        <span class="page-width-label">page width</span>
+        <span class="page-width-label">Page width</span>
         <input
           class="page-width-slider"
           type="range"
@@ -327,6 +327,8 @@
             bind:this={wysiwygRef}
             bind:value={tab.content}
             readonly={readOnly}
+            initialCaret={tab.caret ?? null}
+            onCaretChange={(from, to) => (tab.caret = { from, to })}
             onSelectionChange={() => (selVer = selVer + 1)}
             wikiPickerPrefix={tab.repoRoot}
             currentPath={tab.path}
@@ -363,7 +365,12 @@
           oncontextmenu={onEditorContext}
           role="presentation"
         >
-          <Source bind:this={sourceRef} bind:value={tab.content} />
+          <Source
+            bind:this={sourceRef}
+            bind:value={tab.content}
+            initialCaret={tab.caret ?? null}
+            onCaretChange={(from, to) => (tab.caret = { from, to })}
+          />
           {#if tab.find?.open}
             <FindBar
               find={tab.find}
@@ -379,6 +386,7 @@
           title="Outline"
           bind:width={paneWidths.inspector}
           onResize={persistPaneWidths}
+          onClose={() => (tab.inspectorOpen = false)}
         >
           <!-- File info lives at the TOP of the inspector. At the
                bottom it visually fights with the status bar that

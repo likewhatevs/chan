@@ -26,7 +26,21 @@
   // (older roomier) without rebuilding the CodeMirror editor.
   const density = $derived(drive.info?.preferences?.line_spacing ?? "tight");
 
-  let { value = $bindable("") }: { value: string } = $props();
+  let {
+    value = $bindable(""),
+    initialCaret = null,
+    onCaretChange,
+  }: {
+    value: string;
+    initialCaret?: { from: number; to: number } | null;
+    onCaretChange?: (from: number, to: number) => void;
+  } = $props();
+
+  /// True once we've placed the caret at `initialCaret` after the
+  /// first non-empty content apply. Prevents the next external
+  /// content update (autosave echo, sibling mirror) from snapping
+  /// the caret back to the saved position.
+  let caretRestored = false;
 
   let host: HTMLDivElement | undefined;
   let view: EditorView | undefined;
@@ -68,20 +82,46 @@
         findField,
         EditorView.updateListener.of((u) => {
           sync.onDocChanged(u, (s) => (value = s));
+          if (u.selectionSet && onCaretChange) {
+            const sel = u.state.selection.main;
+            onCaretChange(sel.from, sel.to);
+          }
         }),
       ],
     });
     view = new EditorView({ state, parent: host });
     // Drop cursor at start of doc and focus so the editor is ready to
-    // type immediately after opening / switching tabs.
+    // type immediately after opening / switching tabs. The restore
+    // pass (below) will move it again once the persisted caret is
+    // available and the doc is non-empty.
     view.dispatch({ selection: { anchor: 0 } });
     view.focus();
+    maybeRestoreCaret();
   });
+
+  /// Apply `initialCaret` once we have a doc to land it in. Idempotent;
+  /// subsequent calls no-op via the `caretRestored` flag.
+  function maybeRestoreCaret(): void {
+    if (caretRestored || !view || !initialCaret) return;
+    const lim = view.state.doc.length;
+    if (lim === 0) return;
+    const from = Math.min(Math.max(0, initialCaret.from), lim);
+    const to = Math.min(Math.max(0, initialCaret.to), lim);
+    view.dispatch({
+      selection: { anchor: from, head: to },
+      effects: EditorView.scrollIntoView(from, { y: "center" }),
+    });
+    caretRestored = true;
+  }
 
   onDestroy(() => view?.destroy());
 
   $effect(() => {
     sync.applyExternal(view, value);
+    // Once the first non-empty content lands, place the caret at the
+    // persisted offset. We intentionally read `initialCaret` lazily
+    // (no $effect dep) so a later prop update doesn't re-restore.
+    maybeRestoreCaret();
   });
 
   // Reconfigure the theme compartment whenever the app theme flips.
@@ -143,6 +183,14 @@
   :global(.md-source .cm-editor .cm-line),
   :global(.md-source .cm-editor .cm-activeLine) {
     background-color: transparent !important;
+  }
+  /* Off-page tint while the page-width cap is active. See the
+     matching rule in Wysiwyg.svelte for rationale. */
+  :global(.chan-page-capped .md-source) {
+    background: var(--page-shade);
+  }
+  :global(.chan-page-capped .md-source .cm-editor) {
+    background-color: var(--bg) !important;
   }
   /* Line-spacing pref. Mirrors the Wysiwyg's data-density rules so
      toggling between tight (default, gdocs-like) and standard

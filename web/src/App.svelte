@@ -496,6 +496,9 @@
     --info-text: #4ade80;
     --hover-bg: rgba(255, 255, 255, 0.06);
     --selection-bg: rgba(56, 139, 253, 0.4);
+    /* Subtle tint on the off-page area when the page-width cap is
+       active. Sits below --hover-bg so the page itself still pops. */
+    --page-shade: rgba(255, 255, 255, 0.025);
     /* Subtle alternating row tint for tree views (file browser).
        Sits well below --hover-bg in opacity so hover/selection still
        wins over zebra striping at the cascade level. */
@@ -553,6 +556,7 @@
     --info-text: #16a34a;
     --hover-bg: rgba(0, 0, 0, 0.05);
     --selection-bg: rgba(9, 105, 218, 0.18);
+    --page-shade: rgba(0, 0, 0, 0.035);
     --zebra-bg: rgba(0, 0, 0, 0.025);
     /* Light mode: pull the inspector several shades off white so the
        resize handle's seam reads as a real boundary instead of a

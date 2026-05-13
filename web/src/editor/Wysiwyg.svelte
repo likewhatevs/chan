@@ -61,8 +61,10 @@
     readonly = false,
     currentPath = null,
     wikiPickerPrefix = null,
+    initialCaret = null,
     onSubmit,
     onSelectionChange,
+    onCaretChange,
     onTagClick = () => {},
     onWikiClick = () => {},
     onImageClick = () => {},
@@ -71,12 +73,18 @@
     readonly?: boolean;
     currentPath?: string | null;
     wikiPickerPrefix?: string | null;
+    initialCaret?: { from: number; to: number } | null;
     onSubmit?: () => void;
     onSelectionChange?: () => void;
+    onCaretChange?: (from: number, to: number) => void;
     onTagClick?: (tag: string) => void;
     onWikiClick?: (args: WikiLinkClickArgs) => void;
     onImageClick?: (args: ImageClickArgs) => void;
   } = $props();
+
+  /// True once we've placed the caret at `initialCaret` after the
+  /// first non-empty content apply. Same gate as Source.svelte.
+  let caretRestored = false;
 
   const density = $derived(drive.info?.preferences?.line_spacing ?? "tight");
 
@@ -279,6 +287,10 @@
           if (u.docChanged || u.selectionSet) {
             onSelectionChange?.();
           }
+          if (u.selectionSet && onCaretChange) {
+            const sel = u.state.selection.main;
+            onCaretChange(sel.from, sel.to);
+          }
         }),
         // Cmd/Ctrl+Enter -> onSubmit (assistant prompt). Registered
         // via Prec.high so it beats CM6 default Enter (which would
@@ -299,7 +311,25 @@
     view = new EditorView({ state, parent: host });
     view.dispatch({ selection: { anchor: 0 } });
     view.focus();
+    maybeRestoreCaret();
   });
+
+  /// Apply `initialCaret` once we have a doc to land it in. Idempotent;
+  /// the `caretRestored` flag prevents a later content swap (autosave
+  /// echo, sibling mirror) from yanking the caret back to the saved
+  /// offset.
+  function maybeRestoreCaret(): void {
+    if (caretRestored || !view || !initialCaret) return;
+    const lim = view.state.doc.length;
+    if (lim === 0) return;
+    const from = Math.min(Math.max(0, initialCaret.from), lim);
+    const to = Math.min(Math.max(0, initialCaret.to), lim);
+    view.dispatch({
+      selection: { anchor: from, head: to },
+      effects: EditorView.scrollIntoView(from, { y: "center" }),
+    });
+    caretRestored = true;
+  }
 
   onDestroy(() => {
     if (activeBubble) activeBubble.dismiss();
@@ -308,6 +338,7 @@
 
   $effect(() => {
     sync.applyExternal(view, value);
+    maybeRestoreCaret();
   });
 
   $effect(() => {
@@ -386,6 +417,15 @@
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-activeLine) {
     background-color: transparent !important;
+  }
+  /* When the page-width cap is active, paint the container with a
+     subtle off-page tint and give the centered .cm-editor its own
+     --bg so the "page" pops out of the surrounding shade. */
+  :global(.chan-page-capped .md-wysiwyg-cm6) {
+    background: var(--page-shade);
+  }
+  :global(.chan-page-capped .md-wysiwyg-cm6 .cm-editor) {
+    background-color: var(--bg) !important;
   }
   /* CM6 paints `outline: 1px dotted` on .cm-editor.cm-focused as a
      focus indicator. We don't want it — the cursor itself is

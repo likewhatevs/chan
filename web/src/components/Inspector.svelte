@@ -18,18 +18,33 @@
     title,
     width = $bindable(220),
     onResize,
+    onClose,
     children,
   }: {
     title: string;
     width?: number;
     onResize?: () => void;
+    onClose?: () => void;
     children?: Snippet;
   } = $props();
 </script>
 
 <ResizeHandle bind:width onChange={onResize} />
 <aside class="inspector" style="width: {width}px">
-  <div class="title">{title}</div>
+  <div class="title">
+    <span class="title-text">{title}</span>
+    {#if onClose}
+      <button
+        class="close"
+        type="button"
+        title="Close"
+        aria-label="Close {title}"
+        onclick={onClose}
+      >
+        ×
+      </button>
+    {/if}
+  </div>
   <div class="body">
     {#if children}
       {@render children()}
@@ -58,6 +73,31 @@
     letter-spacing: 0.05em;
     border-bottom: 1px solid var(--separator);
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .title-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .close {
+    flex-shrink: 0;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    padding: 0 0.2rem;
+    border-radius: 3px;
+  }
+  .close:hover {
+    background: var(--hover-bg, rgba(127, 127, 127, 0.15));
+    color: var(--text);
   }
   .body {
     flex: 1;

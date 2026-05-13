@@ -111,6 +111,12 @@ export type FileTab = {
   /// Wysiwyg <-> Source mode toggle (same backing text); cleared
   /// on tab close along with the tab itself.
   find?: FindState;
+  /// Last known caret position (doc offsets), persisted across the
+  /// Wysiwyg <-> Source mode toggle and across page reloads via
+  /// the URL-hash session. The active editor pushes updates here
+  /// on every selection change; the editor that mounts next reads
+  /// it once on first content apply to restore the caret.
+  caret?: { from: number; to: number };
 };
 
 export type Tab = FileTab;
@@ -699,6 +705,10 @@ type SerTab = {
   /// the common case keeps the hash short. Restores without the
   /// field land on the default.
   s?: 1;
+  /// Persisted caret as `[from, to]`. Omitted when at offset 0 so
+  /// fresh tabs keep the hash short. The active editor mirrors
+  /// `tab.caret` here on every selection change.
+  c?: [number, number];
 };
 type SerLeaf = { k: "l"; t: SerTab[]; f?: 1 };
 type SerSplit = { k: "s"; d: "r" | "c"; a: SerNode; b: SerNode; r?: number };
@@ -713,12 +723,20 @@ function serializeNode(nodeId: string): SerNode | null {
       const active = t.id === n.activeTabId ? { a: 1 as const } : {};
       // Only file tabs exist; omit `k:"f"` since "f" is the default
       // (smaller hash).
+      // Skip the caret field when it sits at the doc start. New tabs
+      // (and never-focused restored tabs) have caret==undefined; only
+      // emit it when the user has moved off offset 0.
+      const c =
+        t.caret && (t.caret.from !== 0 || t.caret.to !== 0)
+          ? { c: [t.caret.from, t.caret.to] as [number, number] }
+          : {};
       return {
         p: t.path,
         m: t.mode,
         ...active,
         ...(t.inspectorOpen ? { o: 1 as const } : {}),
         ...(t.styleToolbarOpen ? { s: 1 as const } : {}),
+        ...c,
       };
     });
     return {
@@ -796,6 +814,12 @@ export async function restoreLayout(s: SerNode): Promise<void> {
           // Absent `s` field = default-off; `s: 1` = user previously
           // enabled the floating style toolbar.
           styleToolbarOpen: sertab.s === 1,
+          // Restored caret rides through to the editor via tab.caret;
+          // the editor lands it once content finishes loading.
+          caret:
+            Array.isArray(sertab.c) && sertab.c.length === 2
+              ? { from: sertab.c[0], to: sertab.c[1] }
+              : undefined,
         };
         p.tabs.push(tab);
         if (sertab.a) p.activeTabId = tab.id;

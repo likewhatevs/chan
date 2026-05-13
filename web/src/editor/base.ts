@@ -221,9 +221,20 @@ export function createValueSync(): {
       if (cur === value) return;
       applying = true;
       try {
+        // Preserve the user's selection across the external replace.
+        // Forcing the caret to position 0 ("first line jump") was the
+        // old behavior; it surfaced as a cursor-yank during typing if
+        // a sibling write briefly desynced `value` from the live doc.
+        // We clamp to the new doc length so a shorter incoming value
+        // cannot place the caret past the end.
+        const prev = view.state.selection.main;
+        const lim = value.length;
         view.dispatch({
           changes: { from: 0, to: cur.length, insert: value },
-          selection: { anchor: 0 },
+          selection: {
+            anchor: Math.min(prev.anchor, lim),
+            head: Math.min(prev.head, lim),
+          },
         });
       } finally {
         applying = false;
