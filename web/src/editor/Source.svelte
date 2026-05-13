@@ -6,31 +6,18 @@
   // reconfigure on toggle without rebuilding the editor.
 
   import { onDestroy, onMount } from "svelte";
-  import {
-    Compartment,
-    EditorState,
-    RangeSetBuilder,
-    StateEffect,
-    StateField,
-  } from "@codemirror/state";
-  import {
-    Decoration,
-    type DecorationSet,
-    EditorView,
-    keymap,
-    lineNumbers,
-  } from "@codemirror/view";
+  import { EditorState } from "@codemirror/state";
+  import { EditorView, keymap, lineNumbers } from "@codemirror/view";
   import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
   import { markdown } from "@codemirror/lang-markdown";
-  import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
-  import { oneDark } from "@codemirror/theme-one-dark";
   import { drive, ui } from "../state/store.svelte";
   import {
-    scanMatches,
-    type FindAdapter,
-    type FindOptions,
-    type FindRange,
-  } from "./find";
+    createValueSync,
+    findField,
+    makeFindAdapter,
+    makeThemeCompartment,
+  } from "./base";
+  import type { FindAdapter } from "./find";
 
   // Editor density follows the user's line_spacing pref. Same hook
   // the Wysiwyg side uses (see Wysiwyg.svelte:820), exposed here as
@@ -43,117 +30,14 @@
 
   let host: HTMLDivElement | undefined;
   let view: EditorView | undefined;
-  let applyingExternal = false;
-  const themeCompartment = new Compartment();
+  const sync = createValueSync();
+  const theme = makeThemeCompartment(ui.theme);
 
-  // ---- find-on-page state field ----------------------------------------
-  // Source-side mirror of the Wysiwyg findHighlight plugin. The
-  // FindBar dispatches setFindEffect with the latest ranges + the
-  // active index; the StateField turns those into a Decoration.mark
-  // set so CodeMirror paints `.find-match` / `.find-match--current`
-  // identical to the WYSIWYG view.
-
-  type FindFieldState = {
-    ranges: FindRange[];
-    currentIndex: number;
-    decos: DecorationSet;
-  };
-
-  const setFindEffect = StateEffect.define<{
-    ranges: FindRange[];
-    currentIndex: number;
-  }>();
-
-  const findMarkMatch = Decoration.mark({ class: "find-match" });
-  const findMarkCurrent = Decoration.mark({
-    class: "find-match find-match--current",
-  });
-
-  function buildFindDecos(
-    ranges: FindRange[],
-    currentIndex: number,
-    docLen: number,
-  ): DecorationSet {
-    if (ranges.length === 0) return Decoration.none;
-    const b = new RangeSetBuilder<Decoration>();
-    for (let i = 0; i < ranges.length; i++) {
-      const r = ranges[i]!;
-      if (r.from >= r.to) continue;
-      if (r.from < 0 || r.to > docLen) continue;
-      b.add(r.from, r.to, i === currentIndex ? findMarkCurrent : findMarkMatch);
-    }
-    return b.finish();
-  }
-
-  const findField = StateField.define<FindFieldState>({
-    create(): FindFieldState {
-      return { ranges: [], currentIndex: -1, decos: Decoration.none };
-    },
-    update(prev, tr): FindFieldState {
-      let ranges = prev.ranges;
-      let currentIndex = prev.currentIndex;
-      let dirty = false;
-      for (const e of tr.effects) {
-        if (e.is(setFindEffect)) {
-          ranges = e.value.ranges;
-          currentIndex = e.value.currentIndex;
-          dirty = true;
-        }
-      }
-      if (!dirty && !tr.docChanged) return prev;
-      if (tr.docChanged && !dirty) {
-        // Map existing ranges through the edit so highlights track
-        // local insertions without a synchronous rescan. The
-        // FindBar's debounced rescan replaces them shortly after.
-        const mapped: FindRange[] = [];
-        for (const r of ranges) {
-          const from = tr.changes.mapPos(r.from, 1);
-          const to = tr.changes.mapPos(r.to, -1);
-          if (to > from) mapped.push({ from, to });
-        }
-        ranges = mapped;
-      }
-      return {
-        ranges,
-        currentIndex,
-        decos: buildFindDecos(ranges, currentIndex, tr.state.doc.length),
-      };
-    },
-    provide: (f) => EditorView.decorations.from(f, (s) => s.decos),
-  });
-
-  /// Find-on-page adapter. FileEditorTab passes whichever editor
-  /// is currently visible to FindBar; the bar drives matches +
-  /// decorations through this surface (mirror of the Wysiwyg
-  /// adapter).
-  export const findAdapter: FindAdapter = {
-    scan(query: string, opts: FindOptions): FindRange[] {
-      if (!view) return [];
-      return scanMatches(view.state.doc.toString(), query, opts);
-    },
-    highlightAll(matches: FindRange[], currentIndex: number): void {
-      if (!view) return;
-      view.dispatch({
-        effects: setFindEffect.of({ ranges: matches, currentIndex }),
-      });
-    },
-    clearHighlights(): void {
-      if (!view) return;
-      view.dispatch({
-        effects: setFindEffect.of({ ranges: [], currentIndex: -1 }),
-      });
-    },
-    scrollIntoView(currentIndex: number): void {
-      if (!view) return;
-      const f = view.state.field(findField, false);
-      if (!f) return;
-      const r = f.ranges[currentIndex];
-      if (!r) return;
-      view.dispatch({
-        effects: EditorView.scrollIntoView(r.from, { y: "center" }),
-      });
-    },
-  };
+  /// Find-on-page adapter. FileEditorTab passes whichever editor is
+  /// currently visible to FindBar; the bar drives matches + decorations
+  /// through this surface. Shared shape with the WYSIWYG adapter via
+  /// editor-cm6/base.ts.
+  export const findAdapter: FindAdapter = makeFindAdapter(() => view);
 
   /// Scroll to a specific line (0-based). Called by the inspector
   /// (outline view) when the user picks a heading and this tab is
@@ -170,31 +54,6 @@
     view.focus();
   }
 
-  function themeExtensions(theme: "light" | "dark") {
-    // Bg paints on the outer host (`.md-source`) only; the CM
-    // internals stay transparent so a short doc doesn't show two
-    // different darks where `.cm-content` (sized to longest line)
-    // ends and the parent's bg takes over. Theme ordering inside
-    // CM's class injection isn't reliable across versions, so
-    // the actual transparency rule lives in plain CSS at the
-    // bottom of this file with `!important`; the theme block
-    // below only carries non-bg styling.
-    if (theme === "dark") return [oneDark];
-    return [
-      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-      EditorView.theme({
-        "&": { color: "var(--text)" },
-        ".cm-gutters": {
-          backgroundColor: "var(--bg-card)",
-          color: "var(--text-secondary)",
-          border: "none",
-        },
-        ".cm-activeLineGutter": { backgroundColor: "var(--hover-bg)" },
-        ".cm-cursor": { borderLeftColor: "var(--text)" },
-      }),
-    ];
-  }
-
   onMount(() => {
     if (!host) return;
     const state = EditorState.create({
@@ -204,12 +63,11 @@
         history(),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         markdown(),
-        themeCompartment.of(themeExtensions(ui.theme)),
+        theme.extension,
         EditorView.lineWrapping,
         findField,
         EditorView.updateListener.of((u) => {
-          if (applyingExternal) return;
-          if (u.docChanged) value = u.state.doc.toString();
+          sync.onDocChanged(u, (s) => (value = s));
         }),
       ],
     });
@@ -223,25 +81,13 @@
   onDestroy(() => view?.destroy());
 
   $effect(() => {
-    if (!view) return;
-    const cur = view.state.doc.toString();
-    if (cur !== value) {
-      applyingExternal = true;
-      view.dispatch({
-        changes: { from: 0, to: cur.length, insert: value },
-        selection: { anchor: 0 },
-      });
-      applyingExternal = false;
-      view.focus();
-    }
+    sync.applyExternal(view, value);
   });
 
   // Reconfigure the theme compartment whenever the app theme flips.
   $effect(() => {
     if (!view) return;
-    view.dispatch({
-      effects: themeCompartment.reconfigure(themeExtensions(ui.theme)),
-    });
+    theme.reconfigure(view, ui.theme);
   });
 </script>
 

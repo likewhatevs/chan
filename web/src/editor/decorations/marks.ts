@@ -1,0 +1,210 @@
+// Inline mark handlers: bold, italic, strike, code, link, naked URL.
+//
+// Each outer-mark handler:
+//   1. Emits a `Decoration.mark` over the inner content with a class
+//      that the CSS layer styles (`cm-md-bold`, `cm-md-italic`, etc.).
+//   2. If the active selection does NOT intersect the OUTER mark's
+//      range, emits `Decoration.replace({})` over each marker child to
+//      hide the source punctuation. Outer-range intersection (not per-
+//      child) so caret near *a* reveals BOTH `*` chars together — a
+//      per-child rule would show `*a` then `a*` as the caret crossed,
+//      which is the bug class the rewrite exists to eliminate.
+//
+// Naked URLs: lezer-markdown's GFM Autolink emits a bare `URL` node
+// for `https://x` text in paragraphs (also for emails). The URL node
+// also appears as a child of `Link` and `Autolink`. We dispatch the
+// URL handler to behave differently per parent:
+//   - parent is Link / Image / Autolink → handled by the parent;
+//     URL handler does nothing.
+//   - parent is anything else (Paragraph, Heading, etc.) → naked URL,
+//     apply the link mark style. No hide; the URL text IS the user-
+//     visible content.
+
+import { Decoration } from "@codemirror/view";
+import type { TokenContext, TokenHandler } from "./walker";
+
+// ---- shared decorations --------------------------------------------------
+
+const HIDE = Decoration.replace({});
+
+const MARK_BOLD = Decoration.mark({ class: "cm-md-bold" });
+const MARK_ITALIC = Decoration.mark({ class: "cm-md-italic" });
+const MARK_STRIKE = Decoration.mark({ class: "cm-md-strike" });
+const MARK_CODE = Decoration.mark({ class: "cm-md-code" });
+const MARK_LINK_LABEL = Decoration.mark({ class: "cm-md-link" });
+const MARK_LINK_URL = Decoration.mark({ class: "cm-md-link-url" });
+const MARK_NAKED_URL = Decoration.mark({ class: "cm-md-link" });
+
+// ---- helpers -------------------------------------------------------------
+
+/// Walk the node's children and return the open (first) and close (last)
+/// child boundaries. Returns null if the node has no children — a
+/// well-formed Emphasis / StrongEmphasis / Strikethrough / InlineCode
+/// always carries at least its opening + closing marker children, so a
+/// null return means the parser saw a malformed run we should skip.
+function openCloseRange(
+  ctx: TokenContext,
+): { openFrom: number; openTo: number; closeFrom: number; closeTo: number } | null {
+  const cursor = ctx.node.node.cursor();
+  if (!cursor.firstChild()) return null;
+  const openFrom = cursor.from;
+  const openTo = cursor.to;
+  let closeFrom = openFrom;
+  let closeTo = openTo;
+  do {
+    closeFrom = cursor.from;
+    closeTo = cursor.to;
+  } while (cursor.nextSibling());
+  return { openFrom, openTo, closeFrom, closeTo };
+}
+
+/// Standard "outer marks with markers at both ends" handler. Used for
+/// Emphasis, StrongEmphasis, Strikethrough, InlineCode — all of which
+/// have the same shape: open marker, content, close marker.
+function handlePairedMark(contentDeco: Decoration): TokenHandler {
+  return (ctx) => {
+    const range = openCloseRange(ctx);
+    if (!range) return;
+    const { openFrom, openTo, closeFrom, closeTo } = range;
+    if (openTo < closeFrom) {
+      ctx.push(contentDeco, openTo, closeFrom);
+    }
+    const visible = ctx.selectionInRange(ctx.node.from, ctx.node.to);
+    if (!visible) {
+      // Hide each marker. open and close ranges must be non-empty; the
+      // parser guarantees this for well-formed marks.
+      if (openFrom < openTo) ctx.push(HIDE, openFrom, openTo);
+      if (closeFrom < closeTo && closeFrom > openTo) {
+        ctx.push(HIDE, closeFrom, closeTo);
+      }
+    }
+  };
+}
+
+// ---- handlers ------------------------------------------------------------
+
+const handleEmphasis = handlePairedMark(MARK_ITALIC);
+const handleStrong = handlePairedMark(MARK_BOLD);
+const handleStrike = handlePairedMark(MARK_STRIKE);
+const handleCode = handlePairedMark(MARK_CODE);
+
+/// Link `[label](url)` — external markdown links (internal paths get
+/// promoted to atomic wikilink widgets in step 6). Children layout per
+/// lezer-markdown:
+///   LinkMark `[`
+///   <inline content for label> (zero or more nodes)
+///   LinkMark `]`
+///   LinkMark `(`
+///   URL
+///   LinkMark `)`
+///
+/// We collect all LinkMark + URL child positions, decide visibility by
+/// outer-range intersection, then:
+///   - mark the label range (between the first `]` and the previous
+///     `[`) with link style
+///   - hide each LinkMark unless visible
+///   - hide the URL unless visible (when visible it gets the "url"
+///     dimmed style instead)
+function handleLink(ctx: TokenContext): void {
+  const cursor = ctx.node.node.cursor();
+  if (!cursor.firstChild()) return;
+  type Range = { from: number; to: number };
+  const linkMarks: Range[] = [];
+  let urlRange: Range | null = null;
+  do {
+    if (cursor.name === "LinkMark") {
+      linkMarks.push({ from: cursor.from, to: cursor.to });
+    } else if (cursor.name === "URL") {
+      urlRange = { from: cursor.from, to: cursor.to };
+    }
+  } while (cursor.nextSibling());
+  if (linkMarks.length < 4 || !urlRange) {
+    // Reference-style link or otherwise non-`[label](url)` shape.
+    // Punt for now — references aren't part of v1 scope.
+    return;
+  }
+  // Skip internal links — those are owned by widgets/wikilink.ts and
+  // render as atomic pills. We detect "internal" cheaply by URL-scheme
+  // absence; the wikilink walker does the real normalizeHref check
+  // (and falls through to here if the path is unresolvable).
+  const url = ctx.state.doc.sliceString(urlRange.from, urlRange.to);
+  if (isInternalUrl(url)) return;
+  // Label sits between linkMarks[0].to and linkMarks[1].from.
+  const labelFrom = linkMarks[0]!.to;
+  const labelTo = linkMarks[1]!.from;
+  if (labelFrom < labelTo) {
+    ctx.push(MARK_LINK_LABEL, labelFrom, labelTo);
+  }
+  const visible = ctx.selectionInRange(ctx.node.from, ctx.node.to);
+  if (visible) {
+    // URL stays visible-but-dimmed via the "url" mark class.
+    ctx.push(MARK_LINK_URL, urlRange.from, urlRange.to);
+  } else {
+    for (const m of linkMarks) {
+      if (m.from < m.to) ctx.push(HIDE, m.from, m.to);
+    }
+    if (urlRange.from < urlRange.to) {
+      ctx.push(HIDE, urlRange.from, urlRange.to);
+    }
+  }
+}
+
+function isInternalUrl(url: string): boolean {
+  if (!url) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return false; // scheme prefix → external
+  if (url.startsWith("#")) return false; // intra-doc anchor → leave alone
+  return true;
+}
+
+/// Bare URL handler. Fires for both naked URLs in paragraphs and the
+/// URL nodes inside Links / Images / Autolinks. The latter are owned
+/// by their parent's handler — detect parent context and skip.
+function handleUrl(ctx: TokenContext): void {
+  const parent = ctx.node.node.parent;
+  if (!parent) return;
+  switch (parent.name) {
+    case "Link":
+    case "Image":
+    case "Autolink":
+      return; // parent handler owns it
+    default:
+      ctx.push(MARK_NAKED_URL, ctx.node.from, ctx.node.to);
+  }
+}
+
+/// `<https://x>` autolink: hide the angle brackets unless visible,
+/// style the URL as a link.
+function handleAutolink(ctx: TokenContext): void {
+  const cursor = ctx.node.node.cursor();
+  if (!cursor.firstChild()) return;
+  type Range = { from: number; to: number };
+  const linkMarks: Range[] = [];
+  let urlRange: Range | null = null;
+  do {
+    if (cursor.name === "LinkMark") {
+      linkMarks.push({ from: cursor.from, to: cursor.to });
+    } else if (cursor.name === "URL") {
+      urlRange = { from: cursor.from, to: cursor.to };
+    }
+  } while (cursor.nextSibling());
+  if (!urlRange) return;
+  ctx.push(MARK_NAKED_URL, urlRange.from, urlRange.to);
+  const visible = ctx.selectionInRange(ctx.node.from, ctx.node.to);
+  if (!visible) {
+    for (const m of linkMarks) {
+      if (m.from < m.to) ctx.push(HIDE, m.from, m.to);
+    }
+  }
+}
+
+// ---- exported registry ---------------------------------------------------
+
+export const inlineMarkHandlers = {
+  Emphasis: handleEmphasis,
+  StrongEmphasis: handleStrong,
+  Strikethrough: handleStrike,
+  InlineCode: handleCode,
+  Link: handleLink,
+  URL: handleUrl,
+  Autolink: handleAutolink,
+};

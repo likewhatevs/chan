@@ -66,17 +66,40 @@ export function openBubbleShell(opts: BubbleShellOpts): BubbleShell {
   positionPopover(opts.host, wrap);
   const stopWatch = watchViewport(opts.host, wrap);
   let alive = true;
+
+  // Outside-mousedown dismiss. Without this, the bubble stays open
+  // until the controller sees a selection change that invalidates the
+  // trigger spec — and a click in the doc that lands inside the still-
+  // valid trigger range (or on a button that preventDefaults) won't
+  // dismiss. With outside-mousedown, clicks anywhere not inside the
+  // bubble close it immediately AND let the underlying click through
+  // to move the caret. Deferred one tick so the bubble's own opening
+  // event doesn't immediately trigger dismiss.
+  const onOutsideMouseDown = (e: MouseEvent): void => {
+    if (!alive) return;
+    const t = e.target as Node | null;
+    if (t && wrap.contains(t)) return;
+    if (t && opts.host.contains(t)) return;
+    dismissSelf();
+  };
+  window.setTimeout(() => {
+    if (alive) document.addEventListener("mousedown", onOutsideMouseDown, true);
+  }, 0);
+
+  function dismissSelf(): void {
+    if (!alive) return;
+    alive = false;
+    stopWatch();
+    document.removeEventListener("mousedown", onOutsideMouseDown, true);
+    wrap.remove();
+  }
+
   return {
     wrap,
     reposition(): void {
       if (alive && wrap.isConnected) positionPopover(opts.host, wrap);
     },
-    dismiss(): void {
-      if (!alive) return;
-      alive = false;
-      stopWatch();
-      wrap.remove();
-    },
+    dismiss: dismissSelf,
   };
 }
 

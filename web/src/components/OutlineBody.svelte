@@ -56,10 +56,36 @@
         index: out.length,
         line: i,
         depth: m[1]!.length,
-        text: m[2]!.trim(),
+        text: stripInlineMarkdown(m[2]!.trim()),
       });
     }
     return out;
+  }
+
+  /// Strip the common inline markdown markers from a heading's text
+  /// so the outline renders as readable plain text. Order matters:
+  /// `**bold**` runs first so `*x*` doesn't eat the inner `*` of a
+  /// double-asterisk pair.
+  function stripInlineMarkdown(text: string): string {
+    return text
+      // Bold ** ** and __ __
+      .replace(/\*\*([^*\n]+?)\*\*/g, "$1")
+      .replace(/__([^_\n]+?)__/g, "$1")
+      // Italic * * and _ _
+      .replace(/(?<![*_])\*([^*\n]+?)\*(?![*_])/g, "$1")
+      .replace(/(?<![_*])_([^_\n]+?)_(?![_*])/g, "$1")
+      // Strikethrough ~~ ~~
+      .replace(/~~([^~\n]+?)~~/g, "$1")
+      // Inline code ` `
+      .replace(/`([^`\n]+?)`/g, "$1")
+      // Wikilinks [[target|label]] / [[target]] -> label or target
+      .replace(/\[\[([^\[\]\n|]+?)\|([^\[\]\n]+?)\]\]/g, "$2")
+      .replace(/\[\[([^\[\]\n]+?)\]\]/g, (_, body: string) => {
+        const last = body.split("/").pop() ?? body;
+        return last.replace(/\.md$/, "");
+      })
+      // Markdown links [label](url) -> label
+      .replace(/\[([^\[\]\n]+?)\]\([^)\n]+?\)/g, "$1");
   }
 </script>
 

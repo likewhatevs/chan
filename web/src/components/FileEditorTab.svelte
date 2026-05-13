@@ -21,11 +21,15 @@
 
   import {
     fileOps,
+    openAssistant,
     openBrowser,
+    openGraphAtNode,
     paneWidths,
     persistPaneWidths,
     revealAndSelect,
   } from "../state/store.svelte";
+  import { openInActivePane } from "../state/tabs.svelte";
+  import { api } from "../api/client";
   import {
     PAGE_WIDTH_MAX_PCT,
     PAGE_WIDTH_MIN_PCT,
@@ -33,7 +37,11 @@
     pageWidth,
     setPageWidth,
   } from "../state/pageWidth.svelte";
-  import { tabMenu, closeTabMenu } from "../state/tabMenu.svelte";
+  import {
+    tabMenu,
+    closeTabMenu,
+    openTabMenu,
+  } from "../state/tabMenu.svelte";
 
   let { tab }: { tab: FileTab } = $props();
 
@@ -152,6 +160,46 @@
     closeTabMenu();
   }
 
+  // ---- right-click context menu --------------------------------------
+  // Re-uses the existing tab menu bubble (the same one that opens
+  // from the tab dot). The bubble carries Duplicate / Rename /
+  // mode-toggle / outline / style-toolbar plus our three new
+  // actions (Reload / Call assistant / Show in graph). Anchored at
+  // the click coords by synthesizing a zero-size rect.
+
+  function onEditorContext(e: MouseEvent): void {
+    e.preventDefault();
+    e.stopPropagation();
+    openTabMenu(tab.id, {
+      left: e.clientX,
+      top: e.clientY,
+      right: e.clientX,
+      bottom: e.clientY,
+    });
+  }
+
+  async function doReload(): Promise<void> {
+    closeTabMenu();
+    try {
+      const res = await api.read(tab.path);
+      tab.content = res.content;
+      tab.saved = res.content;
+      tab.savedMtime = res.mtime;
+    } catch (err) {
+      console.error("[chan] reload failed", err);
+    }
+  }
+
+  function doOpenAssistant(): void {
+    closeTabMenu();
+    openAssistant();
+  }
+
+  function doOpenGraph(): void {
+    closeTabMenu();
+    openGraphAtNode(tab.path);
+  }
+
   function doToggleOutline(): void {
     tab.inspectorOpen = !tab.inspectorOpen;
     closeTabMenu();
@@ -202,6 +250,18 @@
       <!-- Action rows. Keep separator between page-width and
            file-level actions so the affordance reads as two layers. -->
       <div class="action-list">
+        <button class="mbtn" onclick={doReload}>
+          <span class="mbtn-icon">↻</span>
+          <span class="mbtn-label">Reload from Disk</span>
+        </button>
+        <button class="mbtn" onclick={doOpenAssistant}>
+          <span class="mbtn-icon">✦</span>
+          <span class="mbtn-label">Call Assistant</span>
+        </button>
+        <button class="mbtn" onclick={doOpenGraph}>
+          <span class="mbtn-icon">⛬</span>
+          <span class="mbtn-label">Show in Graph</span>
+        </button>
         <button class="mbtn" onclick={doDuplicate}>
           <span class="mbtn-icon">⎘</span>
           <span class="mbtn-label">Duplicate File</span>
@@ -260,6 +320,8 @@
         <div
           class="editor-host"
           style:--editor-top-pad={tab.styleToolbarOpen ? "2.5rem" : "0.5rem"}
+          oncontextmenu={onEditorContext}
+          role="presentation"
         >
           <Wysiwyg
             bind:this={wysiwygRef}
@@ -268,6 +330,13 @@
             onSelectionChange={() => (selVer = selVer + 1)}
             wikiPickerPrefix={tab.repoRoot}
             currentPath={tab.path}
+            onWikiClick={(args) => {
+              // Navigation: click on a wikilink pill opens the
+              // target in the active pane (or a new pane on Cmd /
+              // Ctrl click).
+              void openInActivePane(args.target);
+            }}
+            onTagClick={(name) => openGraphAtNode(`#${name}`)}
           />
           {#if tab.styleToolbarOpen}
             <StyleToolbar
@@ -289,7 +358,11 @@
         <!-- Source mode gets its own positioned host so FindBar
              can pin to the same top-right spot it occupies in the
              Wysiwyg view. -->
-        <div class="editor-host">
+        <div
+          class="editor-host"
+          oncontextmenu={onEditorContext}
+          role="presentation"
+        >
           <Source bind:this={sourceRef} bind:value={tab.content} />
           {#if tab.find?.open}
             <FindBar
@@ -307,9 +380,9 @@
           bind:width={paneWidths.inspector}
           onResize={persistPaneWidths}
         >
-          <div class="outline-slot">
-            <OutlineBody content={tab.content} onSelect={jumpTo} />
-          </div>
+          <!-- File info lives at the TOP of the inspector. At the
+               bottom it visually fights with the status bar that
+               pins below the editor. -->
           <button
             class="info-disclosure"
             onclick={() => (showInfo = !showInfo)}
@@ -321,6 +394,9 @@
           {#if showInfo}
             <FileInfoBody path={tab.path} />
           {/if}
+          <div class="outline-slot">
+            <OutlineBody content={tab.content} onSelect={jumpTo} />
+          </div>
         </Inspector>
       {/if}
     </div>
@@ -334,6 +410,7 @@
     {/if}
   {/if}
 </div>
+
 
 <style>
   .editor-tab {
