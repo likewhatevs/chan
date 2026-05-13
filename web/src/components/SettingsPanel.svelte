@@ -63,12 +63,18 @@
   // form re-reads readiness.
   let llmStatus = $state<LlmStatus | null>(null);
   /// Curated model shortlists for the local CLIs (`claude_cli` /
-  /// `gemini_cli`). The CLIs don't expose a programmatic catalog
-  /// and their accepted `--model` aliases are a small, stable set
-  /// — better to hand-pin than to reuse the API's live list (which
-  /// includes versioned aliases not always accepted by the CLI).
-  /// Sorted newest / most-capable first.
+  /// `gemini_cli`). Neither CLI exposes `--list-models`; both
+  /// accept the API-namespace model names verbatim, and `claude`
+  /// additionally accepts the short aliases `opus` / `sonnet` /
+  /// `haiku` that always resolve to the current latest of each
+  /// tier (per `claude --help`). The aliases are the recommended
+  /// default — they survive a model bump without a config edit —
+  /// so they sit at the top of the list; the pinned full names
+  /// follow for users who want to lock to a specific generation.
   const CLAUDE_CLI_MODELS = [
+    "opus",
+    "sonnet",
+    "haiku",
     "claude-opus-4-7",
     "claude-sonnet-4-6",
     "claude-haiku-4-5",
