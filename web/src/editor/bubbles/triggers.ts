@@ -37,6 +37,21 @@ export function computeBubbleSpec(state: EditorState): BubbleSpec | null {
   if (!sel.empty) return null;
   const pos = sel.head;
   if (caretInsideSkipRange(state, pos)) return null;
+  // Special case: caret inside an existing Image's URL portion ->
+  // image bubble in "raw" template mode. Detect this BEFORE the
+  // generic `[[` / `![` text scans because the caret is inside an
+  // already-rendered `![alt](url)` and the surrounding brackets must
+  // not be eaten on commit.
+  const imageUrl = imageUrlAtCaret(state, pos);
+  if (imageUrl !== null) {
+    return {
+      kind: "image",
+      triggerStart: imageUrl.from,
+      triggerEnd: imageUrl.to,
+      query: imageUrl.queryUpToCaret,
+      templateMode: "raw",
+    };
+  }
   const line = state.doc.lineAt(pos);
   const before = line.text.slice(0, pos - line.from);
   // Wiki: `[[query` (caret after the typed query, no `]` between).
@@ -57,6 +72,7 @@ export function computeBubbleSpec(state: EditorState): BubbleSpec | null {
       triggerStart: line.from + image.start,
       triggerEnd: pos,
       query: image.query,
+      templateMode: "wrap",
     };
   }
   // Contact: `@word` at start-of-word. `\b@` -- but JS \b doesn't
@@ -137,4 +153,28 @@ function caretInsideSkipRange(state: EditorState, pos: number): boolean {
     cur = cur.parent;
   }
   return false;
+}
+
+function imageUrlAtCaret(
+  state: EditorState,
+  pos: number,
+): { from: number; to: number; queryUpToCaret: string } | null {
+  let node: ReturnType<typeof syntaxTree>["topNode"] | null = syntaxTree(
+    state,
+  ).resolveInner(pos, 0);
+  while (node) {
+    if (node.name === "URL" && node.parent?.name === "Image") {
+      // Caret must be within URL bounds; resolveInner(pos, 0) at the
+      // exact `(` boundary may climb up to URL via parent chain even
+      // when pos is just outside. Verify.
+      if (pos < node.from || pos > node.to) return null;
+      return {
+        from: node.from,
+        to: node.to,
+        queryUpToCaret: state.doc.sliceString(node.from, pos),
+      };
+    }
+    node = node.parent;
+  }
+  return null;
 }

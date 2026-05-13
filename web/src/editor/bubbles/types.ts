@@ -19,6 +19,14 @@ export type BubbleSpec = {
   triggerStart: number;
   triggerEnd: number;
   query: string;
+  /// Image-only: how the bubble formats its commit.
+  ///   "wrap" (default): replace the trigger with `![](path)`. Used
+  ///     when the user typed `![` from scratch.
+  ///   "raw": replace the trigger with just `path`. Used when the
+  ///     caret is inside an existing image's URL portion (the
+  ///     surrounding `![alt](`...`)` is already there and we don't
+  ///     want to nuke it).
+  templateMode?: "wrap" | "raw";
 };
 
 /// Active-bubble handle exposed back to the host. Mirrors the legacy

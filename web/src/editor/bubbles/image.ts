@@ -31,6 +31,9 @@ export interface ImageBubbleOpts {
   /// Upload destination; defaults to the editing file's directory if
   /// known, otherwise the server's configured attachments_dir.
   uploadDir: string | null;
+  /// "wrap" -> commit inserts `![](path)`; "raw" -> commit inserts
+  /// just `path` (used when editing an existing image's URL portion).
+  templateMode?: "wrap" | "raw";
   onDismiss: () => void;
 }
 
@@ -140,7 +143,7 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
   }
 
   function commitPath(path: string): void {
-    const insert = `![](${path})`;
+    const insert = opts.templateMode === "raw" ? path : `![](${path})`;
     opts.view.dispatch({
       changes: { from: opts.triggerStart, to: triggerEnd, insert },
       selection: { anchor: opts.triggerStart + insert.length },

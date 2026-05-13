@@ -177,6 +177,7 @@
         triggerEnd: spec.triggerEnd,
         initialQuery: spec.query,
         uploadDir: dirOf(currentPath),
+        templateMode: spec.templateMode ?? "wrap",
         onDismiss,
       });
       activeKind = "image";
@@ -702,6 +703,20 @@
   :global(.md-wysiwyg-cm6 .cm-md-h4) { font-size: 1.15em; font-weight: 600; line-height: 1.4; }
   :global(.md-wysiwyg-cm6 .cm-md-h5) { font-size: 1.0em; font-weight: 600; line-height: 1.4; }
   :global(.md-wysiwyg-cm6 .cm-md-h6) { font-size: 0.95em; font-weight: 600; line-height: 1.4; color: var(--text-secondary); }
+  /* defaultHighlightStyle paints tags.heading with text-decoration:
+     underline. Strip it on every descendant of the heading line so
+     the styled spans CM6 injects don't show the underline either. */
+  :global(.md-wysiwyg-cm6 .cm-md-h1),
+  :global(.md-wysiwyg-cm6 .cm-md-h2),
+  :global(.md-wysiwyg-cm6 .cm-md-h3),
+  :global(.md-wysiwyg-cm6 .cm-md-h4),
+  :global(.md-wysiwyg-cm6 .cm-md-h5),
+  :global(.md-wysiwyg-cm6 .cm-md-h6) {
+    text-decoration: none;
+  }
+  :global(.md-wysiwyg-cm6 [class*="cm-md-h"] > span) {
+    text-decoration: none !important;
+  }
 
   /* find-on-page (mirror of Source/WYSIWYG) */
   :global(.md-wysiwyg-cm6 .find-match) {

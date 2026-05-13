@@ -66,12 +66,12 @@ pub async fn api_search_files(
         if entry.is_dir {
             continue;
         }
-        let basename = std::path::Path::new(&entry.path)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        if !needle.is_empty() && !basename.contains(&needle) {
+        // Match against the full path (lowercased) so directory names
+        // count as a prefix the user can type. Typing "reci" finds
+        // every file under "Recipes/" even when the basename doesn't
+        // contain "reci".
+        let full = entry.path.to_lowercase();
+        if !needle.is_empty() && !full.contains(&needle) {
             continue;
         }
         if let Some(g) = &graph {

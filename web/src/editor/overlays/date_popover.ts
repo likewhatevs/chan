@@ -54,8 +54,31 @@ export function openDatePopover(opts: DatePopoverOpts): { dismiss: () => void } 
 
   function positionUnderAnchor(): void {
     const rect = opts.anchor.getBoundingClientRect();
-    wrap.style.left = `${Math.round(rect.left + window.scrollX)}px`;
-    wrap.style.top = `${Math.round(rect.bottom + window.scrollY + 4)}px`;
+    const popH = wrap.offsetHeight; // 0 on first call (before render)
+    const popW = wrap.offsetWidth;
+    const viewH = window.innerHeight;
+    const viewW = window.innerWidth;
+    const GAP = 4;
+    // Vertical: prefer below; flip above when below would overflow
+    // and there's more room above.
+    const spaceBelow = viewH - rect.bottom;
+    const spaceAbove = rect.top;
+    let top: number;
+    if (popH > 0 && spaceBelow < popH + GAP && spaceAbove > spaceBelow) {
+      // Flip above: anchor the popover's bottom to the pill's top.
+      top = rect.top + window.scrollY - popH - GAP;
+    } else {
+      top = rect.bottom + window.scrollY + GAP;
+    }
+    // Horizontal: keep left-aligned with the pill, but clamp so the
+    // popover stays inside the viewport.
+    let left = rect.left + window.scrollX;
+    if (popW > 0) {
+      const maxLeft = window.scrollX + viewW - popW - GAP;
+      if (left > maxLeft) left = Math.max(window.scrollX + GAP, maxLeft);
+    }
+    wrap.style.left = `${Math.round(left)}px`;
+    wrap.style.top = `${Math.round(top)}px`;
   }
 
   function render(): void {
