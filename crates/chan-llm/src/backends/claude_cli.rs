@@ -447,20 +447,52 @@ impl Backend for ClaudeCliBackend {
                                     .get(&i)
                                     .map(String::as_str)
                                     .unwrap_or("");
-                                // Drift between partials and the
-                                // canonical block (the `else` branch
-                                // of `strip_prefix`) should not
-                                // happen in practice. When it does,
-                                // emit the full canonical text; the
-                                // host sees the correct content even
-                                // though assistant_text may carry
-                                // duplicate bytes for this index.
-                                let suffix = text.strip_prefix(already).unwrap_or(text.as_str());
-                                if !suffix.is_empty() {
-                                    listener.on_delta(Delta {
-                                        text: suffix.to_string(),
-                                    });
-                                    assistant_text.push_str(suffix);
+                                // Decide what (if anything) to emit
+                                // from this canonical block:
+                                //
+                                //   1. No partials seen for this
+                                //      index: claude buffered the
+                                //      whole block; emit the full
+                                //      canonical text.
+                                //   2. Partials are an exact prefix
+                                //      of the canonical text: emit
+                                //      only the missing suffix (the
+                                //      common case is suffix=="", a
+                                //      complete match, which skips).
+                                //   3. Partials/canonical drift (the
+                                //      partials don't prefix-match
+                                //      the canonical block): keep
+                                //      the partials' view and DROP
+                                //      the canonical. Re-emitting it
+                                //      would double both the host's
+                                //      on_delta snapshot and our
+                                //      assistant_text. The user has
+                                //      already seen the partials
+                                //      live; a one-block divergence
+                                //      is preferable to N copies of
+                                //      the same paragraph.
+                                let emit: Option<&str> = if already.is_empty() {
+                                    Some(text.as_str())
+                                } else if let Some(suffix) = text.strip_prefix(already) {
+                                    if suffix.is_empty() {
+                                        None
+                                    } else {
+                                        Some(suffix)
+                                    }
+                                } else {
+                                    tracing::warn!(
+                                        block_index = i,
+                                        partials_bytes = already.len(),
+                                        canonical_bytes = text.len(),
+                                        "claude_cli: partials/canonical drift; \
+                                         keeping partials, dropping canonical block to avoid \
+                                         doubled assistant_text",
+                                    );
+                                    None
+                                };
+                                if let Some(s) = emit {
+                                    listener.on_delta(Delta { text: s.to_string() });
+                                    assistant_text.push_str(s);
                                     if assistant_text.len() > super::ASSISTANT_TEXT_CAP_BYTES {
                                         listener.on_error(format!(
                                             "claude_cli stream: assistant text exceeded {} bytes; aborting",
@@ -1168,6 +1200,60 @@ mod tests {
             vec!["streamed".to_string(), " buffered".to_string()]
         );
         assert_eq!(outcome.assistant_text, "streamed buffered");
+    }
+
+    #[tokio::test]
+    async fn partials_canonical_drift_drops_canonical_no_doubling() {
+        // Regression for the doubling bug: when claude's partial
+        // text_delta events don't form an exact prefix of the
+        // canonical content block (whitespace / encoding drift
+        // between the two streams), the old code re-emitted the
+        // full canonical text, doubling both on_delta and
+        // assistant_text. The fix keeps the partials' view and
+        // drops the canonical block.
+        //
+        // Fixture: partials stream "weekly is gone." but the
+        // canonical block reports "weekly is gone" (no trailing
+        // period). The two don't prefix-match; we expect a single
+        // delta with the partials' text and assistant_text equal
+        // to it.
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"system","subtype":"init"}
+{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"weekly is gone."}}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"weekly is gone"}]}}
+{"type":"result","subtype":"success","result":"weekly is gone","is_error":false}"#;
+        let script = fake_claude(tmp.path(), body);
+        let backend = ClaudeCliBackend::new(
+            vec![script.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            tmp.path().to_path_buf(),
+            None,
+            Duration::from_secs(60),
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                vec![Message::user("hi")],
+                Vec::new(),
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        let events = listener.0.lock().unwrap();
+        let deltas: Vec<String> = events
+            .iter()
+            .filter_map(|e| {
+                if let Event::Delta(t) = e {
+                    Some(t.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(deltas, vec!["weekly is gone.".to_string()]);
+        assert_eq!(outcome.assistant_text, "weekly is gone.");
     }
 
     #[tokio::test]
