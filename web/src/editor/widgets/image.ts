@@ -34,7 +34,7 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
-import { type Extension } from "@codemirror/state";
+import { type Extension, StateField } from "@codemirror/state";
 import {
   parseImageSrc,
   resolveImageSrc,
@@ -326,17 +326,22 @@ export function imageCaretRedirect(): Extension {
 }
 
 export function imageDecorations(opts: ImageOptions): Extension {
+  // Inline replace + line clear decorations live in a ViewPlugin so
+  // they recompute on viewport changes (cheap, scoped to visible
+  // tree). CM6 forbids ViewPlugins from emitting block decorations,
+  // so the editing-mode block preview lives in a separate StateField
+  // below.
   const plugin = ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
 
       constructor(view: EditorView) {
-        this.decorations = scanImages(view, opts);
+        this.decorations = scanImagesInline(view, opts);
       }
 
       update(u: ViewUpdate): void {
         if (u.docChanged || u.viewportChanged || u.selectionSet) {
-          this.decorations = scanImages(u.view, opts);
+          this.decorations = scanImagesInline(u.view, opts);
         }
       }
     },
@@ -344,15 +349,30 @@ export function imageDecorations(opts: ImageOptions): Extension {
       decorations: (v) => v.decorations,
     },
   );
+  // Block preview StateField. Recomputes per-transaction on doc or
+  // selection change. Only emits widgets for images whose source range
+  // intersects the selection (caret-in-image edit mode). Doc-wide tree
+  // walk is cheap relative to a typical doc's image count.
+  const blockField = StateField.define<DecorationSet>({
+    create(state): DecorationSet {
+      return scanImagesBlock(state, opts);
+    },
+    update(value, tr): DecorationSet {
+      if (!tr.docChanged && !tr.selection) return value.map(tr.changes);
+      return scanImagesBlock(tr.state, opts);
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
   return [
     plugin,
+    blockField,
     EditorView.atomicRanges.of(
       (view) => view.plugin(plugin)?.decorations ?? Decoration.none,
     ),
   ];
 }
 
-function scanImages(view: EditorView, opts: ImageOptions): DecorationSet {
+function scanImagesInline(view: EditorView, opts: ImageOptions): DecorationSet {
   const { state } = view;
   const sel = state.selection;
   const { from, to } = view.viewport;
@@ -389,55 +409,105 @@ function scanImages(view: EditorView, opts: ImageOptions): DecorationSet {
       const standalone =
         line.text.trim() === state.doc.sliceString(outerFrom, outerTo).trim();
       const editing = selectionInRange(sel, outerFrom, outerTo);
+      // Editing mode: skip the inline replace so the source `![alt](url)`
+      // stays as editable text. The block-above preview comes from
+      // scanImagesBlock (StateField). Float-clear line decoration is
+      // also skipped — the preview is a separate block, no float.
+      if (editing) return;
       const widget = new ImageWidget(
         alt,
         src,
         fromPath,
         outerFrom,
         standalone,
-        editing,
+        false,
         opts.onImageClick,
       );
-      if (editing) {
-        // Editing mode: image stays visible AS A BLOCK PREVIEW above
-        // the source line; source `![alt](url)` stays as editable
-        // text. Block widget with side: -1 places the preview before
-        // the line. Width / alignment are read from the live source,
-        // so typing in the URL updates the preview in real time —
-        // dropping a `#w=N` or `#left` fragment is reflected
-        // immediately. Atom replacement skipped here so caret can
-        // walk through the source text freely.
-        decos.push({
-          from: line.from,
-          to: line.from,
-          deco: Decoration.widget({ widget, side: -1, block: true }),
-        });
-      } else {
-        decos.push({
-          from: outerFrom,
-          to: outerTo,
-          deco: Decoration.replace({ widget }),
-        });
-        // Inline (non-standalone) image with left/right align: float
-        // keeps wrapping subsequent lines around the image. Add
-        // clear:both on the next line so only the same line flows
-        // beside the image. Skipped while editing — the preview is
-        // a separate block above the source, no float to clear.
-        if (!standalone) {
-          const { align } = parseImageSrc(src);
-          if (align === "left" || align === "right") {
-            const nextLineNum = line.number + 1;
-            if (nextLineNum <= state.doc.lines) {
-              const nextLine = state.doc.line(nextLineNum);
-              decos.push({
-                from: nextLine.from,
-                to: nextLine.from,
-                deco: CLEAR_AFTER_IMAGE,
-              });
-            }
+      decos.push({
+        from: outerFrom,
+        to: outerTo,
+        deco: Decoration.replace({ widget }),
+      });
+      // Inline (non-standalone) image with left/right align: float
+      // keeps wrapping subsequent lines around the image. Add
+      // clear:both on the next line so only the same line flows
+      // beside the image.
+      if (!standalone) {
+        const { align } = parseImageSrc(src);
+        if (align === "left" || align === "right") {
+          const nextLineNum = line.number + 1;
+          if (nextLineNum <= state.doc.lines) {
+            const nextLine = state.doc.line(nextLineNum);
+            decos.push({
+              from: nextLine.from,
+              to: nextLine.from,
+              deco: CLEAR_AFTER_IMAGE,
+            });
           }
         }
       }
+    },
+  });
+  decos.sort((a, b) => a.from - b.from);
+  return Decoration.set(
+    decos.map((d) => d.deco.range(d.from, d.to)),
+    true,
+  );
+}
+
+function scanImagesBlock(
+  state: import("@codemirror/state").EditorState,
+  opts: ImageOptions,
+): DecorationSet {
+  const sel = state.selection;
+  const decos: Array<{ from: number; to: number; deco: Decoration }> = [];
+  const fromPath = opts.getCurrentPath();
+  // Doc-wide tree walk. StateFields don't see viewport, but the doc-
+  // wide pass emits widgets only for selection-intersected images, so
+  // the cost is bounded by selection count, not doc size.
+  syntaxTree(state).iterate({
+    from: 0,
+    to: state.doc.length,
+    enter(node) {
+      if (node.name !== "Image") return;
+      const outerFrom = node.from;
+      const outerTo = node.to;
+      if (!selectionInRange(sel, outerFrom, outerTo)) return;
+      const cursor = node.node.cursor();
+      if (!cursor.firstChild()) return;
+      const linkMarks: Array<{ from: number; to: number }> = [];
+      let urlFrom = -1;
+      let urlTo = -1;
+      do {
+        if (cursor.name === "LinkMark") {
+          linkMarks.push({ from: cursor.from, to: cursor.to });
+        } else if (cursor.name === "URL") {
+          urlFrom = cursor.from;
+          urlTo = cursor.to;
+        }
+      } while (cursor.nextSibling());
+      if (linkMarks.length < 4 || urlFrom < 0) return;
+      const altFrom = linkMarks[0]!.to;
+      const altTo = linkMarks[1]!.from;
+      const alt = state.doc.sliceString(altFrom, altTo);
+      const src = state.doc.sliceString(urlFrom, urlTo);
+      const line = state.doc.lineAt(outerFrom);
+      const standalone =
+        line.text.trim() === state.doc.sliceString(outerFrom, outerTo).trim();
+      const widget = new ImageWidget(
+        alt,
+        src,
+        fromPath,
+        outerFrom,
+        standalone,
+        true,
+        opts.onImageClick,
+      );
+      decos.push({
+        from: line.from,
+        to: line.from,
+        deco: Decoration.widget({ widget, side: -1, block: true }),
+      });
     },
   });
   decos.sort((a, b) => a.from - b.from);
