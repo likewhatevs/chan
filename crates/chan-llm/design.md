@@ -374,6 +374,129 @@ There is a per-turn cap on accumulated assistant text
 when they cross it; silently truncating would corrupt the
 transcript fed back to the model on the next turn.
 
+### 6.1 End-to-end event flow
+
+The streaming path crosses three address spaces for the chan-server
+consumer, and two for a native shell.
+
+```
+chan-server consumer:
+
+  backend subprocess / HTTP        stdout NDJSON or SSE
+    |
+    v
+  Backend::run (chan-llm)          translates wire events
+    |
+    v
+  run_loop (chan-llm/session.rs)   orchestrates tool calls,
+    |                              emits on_done at the end
+    v
+  SessionListener (host impl)      chan-server's
+    |                              LlmBroadcastListener
+    v
+  tokio broadcast::Sender<String>  one channel, all sessions
+    |
+    v
+  WebSocket frames                 frontend dispatches by
+                                   `type` field
+
+Native shell consumer:
+
+  backend                          same as above
+    |
+    v
+  Backend::run -> run_loop -> SessionListener (Swift/Kotlin
+                                              impl over uniffi)
+```
+
+Every listener callback is fire-and-forget from the backend's
+point of view. The backend does not block on `on_delta`; a slow
+listener does not slow the upstream stream. The per-turn text
+cap protects against a runaway buffer if the listener blocks
+indefinitely.
+
+### 6.2 Known failure modes
+
+The streaming path has the following observed or theoretical
+failure modes. "Today's behaviour" is what the code does right
+now; planned mitigations live in section 13.
+
+```
+Failure mode                       Today's behaviour
+---------------------------------  ----------------------------
+Subprocess spawn fails             on_error("<backend> spawn:
+                                   <io error>"), Outcome::error
+stdin write fails (broken pipe)    on_error, kill child,
+                                   Outcome::error
+stdout pipe closed unexpectedly    line reader returns None,
+                                   loop exits cleanly; if no
+                                   `result` event was seen,
+                                   on_error("stream ended
+                                   without a result event")
+                                   but stop_reason stays
+                                   EndOfTurn
+NDJSON line is not valid JSON      on_error per offending line,
+                                   loop continues
+Per-message reset for partials     `streamed_partial_text` is a
+(claude_cli only)                  single bool for the whole
+                                   `run`; if message N streams
+                                   partials and message N+1
+                                   does not, message N+1's text
+                                   is dropped
+NDJSON line size                   unbounded; the per-turn text
+                                   cap is the only ceiling
+Subprocess inactivity              no timeout; chan-llm waits
+                                   on `lines().next_line()`
+                                   indefinitely
+Assistant text exceeds cap         on_error, kill child,
+                                   Outcome::error; deltas
+                                   already emitted stay
+Stderr forwarded on non-zero exit  read into memory in full,
+                                   truncated to 800 chars,
+                                   emitted as on_error
+Secret material in delta or        forwarded verbatim
+stderr (api keys, passwords)
+Cancel mid-stream                  cancel flag checked at chunk
+                                   boundaries; kill child,
+                                   Outcome::cancelled with the
+                                   partial text accumulated
+                                   so far
+Max tool iterations reached        on_error("max tool
+                                   iterations ... reached"),
+                                   on_done(Error)
+Tool execution panics              caught by catch_unwind;
+                                   scrubbed generic error
+                                   returned to the model;
+                                   full payload logged via
+                                   tracing::error
+```
+
+The cancel path is the only place where a non-error stop is
+expected to carry partial state. Every other failure mode either
+completes (EndOfTurn / ToolUse / MaxTokens / StopSequence) or
+errors (Error). The host treats `on_done(Error)` as terminal;
+chan-server forwards it as an `llm.error` followed by `llm.done`
+WebSocket frame so the frontend can render an actionable state.
+
+### 6.3 Listener contract
+
+Hosts implementing `SessionListener` must hold the following
+invariants:
+
+1. The five callbacks may arrive on any tokio worker thread.
+   `Send + Sync` is required.
+2. `on_done` is emitted exactly once per `send` call. Every
+   other callback may arrive zero or more times before
+   `on_done`.
+3. `on_error` is informational. The orchestrator decides whether
+   the run continues; in practice every `on_error` today is
+   followed by `on_done(Error)`.
+4. Callbacks must not panic. A panicking listener brings down
+   the runtime worker that dispatched the event.
+5. Callbacks should return quickly. Heavy work (database
+   writes, network calls) must be offloaded by the listener
+   itself; chan-llm does not buffer between callbacks.
+
 ## 7. Tool sandbox details
 
 Four built-in tools dispatched by name. Every tool routes through
@@ -565,3 +688,119 @@ shaped to make that mechanical:
   would add a list / read surface scoped to the drive's media
   directory (the model picks files without first calling
   `list_files`).
+
+## 13. Streaming hardening plan
+
+The audit in section 6.2 identifies failure modes that today
+either degrade silently or surface as opaque error strings. This
+section captures the planned work in three independent bites.
+Each bite is small enough to land as one commit and ship without
+the others.
+
+### 13.1 Bite A: correctness and resilience
+
+In scope: `claude_cli` and `gemini_cli` backends.
+
+- Per-message reset for `streamed_partial_text`. Track the flag
+  per assistant message rather than per backend run, so a
+  message without partials following one with partials is not
+  silently dropped. Reset on the `message_start` partial event;
+  evaluate per-block by index inside the final `assistant`
+  event.
+- Stream-ended-without-result is an error. Return
+  `Outcome::error` (not `EndOfTurn`) so the host renders a
+  clear "incomplete response" state.
+- Rate-limit `on_error` for per-line parse failures. Cap at
+  five distinct error emissions per turn; further parse
+  failures increment a silent counter that surfaces in the
+  final error message when the loop ends.
+- NDJSON line size cap. Replace the default `lines()` reader
+  with a length-bounded variant; lines past the cap abort the
+  stream with a clear error. The cap protects against a buggy
+  or malicious child emitting one multi-megabyte line before
+  the assistant-text cap fires.
+- Inactivity timeout. Wrap `next_line()` in
+  `tokio::time::timeout`. Default 300 seconds; configurable via
+  `LlmConfig.stream_inactivity_timeout_secs`. On timeout, kill
+  the child and emit a structured error.
+
+Tests cover each item plus a regression for the partials/no-
+partials interleaving and a fixture for the parse-error cap.
+
+### 13.2 Bite B: privacy and secret redaction
+
+In scope: every listener callback that carries free-form text
+out of chan-llm.
+
+- New `redact` module with a single `redact(input) -> Cow<str>`
+  pass covering common secret shapes:
+  - Provider key prefixes: `sk-`, `sk-ant-`, `ghp_`, `gho_`,
+    `ghu_`, `ghs_`, `xoxb-`, `xoxp-`, `AKIA`
+  - Bearer and Basic tokens in `Authorization:` style lines
+  - `password = ...`, `passwd: ...`, `passwd=...` and the
+    common variants
+  - Optional opt-in: high-entropy base64-ish strings of length
+    >= 40. Off by default because legitimate code often
+    matches.
+- Redaction applies at two chokepoints:
+  - `on_delta` text from the assistant
+  - `on_error` strings, with particular attention to stderr
+    snippets from subprocess failures
+- New `LlmConfig.redact_secrets: bool`, default `true`. Users
+  who want raw output can opt out; chan-server exposes the flag
+  in settings.
+- System prompt addition. A short paragraph instructs the
+  agent to prefix any line it suspects carries a secret with
+  a sentinel marker; the redactor masks the marked content
+  aggressively. This handles the cases regex cannot catch
+  (custom credential formats, naturally-phrased disclosures).
+- Tests:
+  - Fixture tests for each regex
+  - End-to-end test that asks the real `claude` to emit a
+    fake key matching one of the prefixes and asserts the
+    listener observes a `[REDACTED:...]` marker
+  - Test that the sentinel-prefix path scrubs even non-
+    pattern-matching content
+
+### 13.3 Bite C: structured error channel
+
+In scope: the `SessionListener` API and the chan-server
+broadcast frame.
+
+- New `LlmEventError` enum exposed alongside the existing
+  free-form string. Variants follow the failure modes the host
+  can act on differently:
+  - `SpawnFailed`
+  - `BackendUnreachable`
+  - `Auth`
+  - `RateLimited`
+  - `ParseError`
+  - `StreamTruncated`
+  - `Timeout`
+  - `Cancelled`
+  - `Other(String)`
+- Extension to `SessionListener`. A new
+  `on_error_kind(LlmEventError)` callback with a default impl
+  that delegates to `on_error(String)`, so existing
+  implementations keep working without changes.
+- chan-server bridge. `LlmBroadcastListener` adds a `code`
+  field to the `llm.error` JSON frame, derived from the kind.
+  The frontend branches on the code to drive UX (retry
+  button, settings link, auth prompt) instead of pattern
+  matching on the message string.
+- uniffi safety. `LlmEventError` uses owned `String` payloads
+  only; no lifetimes, no foreign error types, no `Box<dyn
+  Error>`. The variant list is `#[non_exhaustive]` so adding
+  a new kind later is not a breaking change.
+
+### 13.4 Out of scope for the plan
+
+The following are tracked but not scheduled here:
+
+- gemini_cli token-level streaming. Upstream has no flag for
+  it; UI consumers wanting typewriter updates use the HTTP
+  `Gemini` backend instead. Documented in section 8.
+- Tunnel-side body capping interaction. `chan-tunnel-server`
+  already enforces a response body cap; redaction at the
+  chan-llm boundary is upstream of that, so the two are
+  independent.

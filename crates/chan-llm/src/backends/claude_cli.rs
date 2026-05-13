@@ -1,5 +1,12 @@
 //! ClaudeCli backend: shell-executor wrapper around the `claude` CLI.
 //!
+//! End-to-end streaming flow, failure modes, the listener contract,
+//! and the in-flight hardening plan (per-message partials reset,
+//! NDJSON line cap, inactivity timeout, secret redaction, structured
+//! error kinds) live in `crates/chan-llm/design.md` sections 6.1
+//! through 6.3 and section 13. Keep this header focused on what
+//! claude itself does.
+//!
 //! Two modes, selected at construction time:
 //!
 //! ### v1: black-box (legacy, `mcp = None`)

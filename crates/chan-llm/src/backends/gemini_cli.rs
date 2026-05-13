@@ -1,5 +1,12 @@
 //! GeminiCli backend: shell-executor wrapper around the `gemini` CLI.
 //!
+//! End-to-end streaming flow, failure modes, and the in-flight
+//! hardening plan are documented in `crates/chan-llm/design.md`
+//! sections 6.1 through 6.3 and section 13. Note that gemini-cli's
+//! NDJSON output has no upstream flag for token-level partials, so
+//! `on_delta` granularity here is per-message; consumers wanting
+//! typewriter updates use the HTTP `Gemini` backend.
+//!
 //! Two modes, selected at construction time, mirroring `claude_cli`:
 //!
 //! ### v1: black-box (legacy, `mcp = None`)
