@@ -22,10 +22,12 @@
   import {
     fileOps,
     openBrowser,
+    openGraphAtNode,
     paneWidths,
     persistPaneWidths,
     revealAndSelect,
   } from "../state/store.svelte";
+  import { openInActivePane } from "../state/tabs.svelte";
   import {
     PAGE_WIDTH_MAX_PCT,
     PAGE_WIDTH_MIN_PCT,
@@ -268,6 +270,13 @@
             onSelectionChange={() => (selVer = selVer + 1)}
             wikiPickerPrefix={tab.repoRoot}
             currentPath={tab.path}
+            onWikiClick={(args) => {
+              // Navigation: click on a wikilink pill opens the
+              // target in the active pane (or a new pane on Cmd /
+              // Ctrl click).
+              void openInActivePane(args.target);
+            }}
+            onTagClick={(name) => openGraphAtNode(`#${name}`)}
           />
           {#if tab.styleToolbarOpen}
             <StyleToolbar

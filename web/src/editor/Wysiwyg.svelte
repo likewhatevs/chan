@@ -245,7 +245,10 @@
         chanDecorations(),
         tagDecorations({ onTagClick }),
         dateDecorations(),
-        wikiLinkDecorations({ onWikiClick }),
+        wikiLinkDecorations({
+          onWikiClick,
+          getCurrentPath: () => currentPath,
+        }),
         imageDecorations({
           getCurrentPath: () => currentPath,
           onImageClick: handleImageClick,
@@ -457,6 +460,21 @@
   }
   :global(.md-wysiwyg-cm6 .cm-md-wiki-pill:hover) {
     background: var(--wiki-bg-hover, rgba(168, 130, 255, 0.28));
+  }
+  /* Kind variants. data-refkind populates after the async resolve
+     lands; pills default to file styling until then. */
+  :global(.md-wysiwyg-cm6 .cm-md-wiki-pill[data-refkind="contact"]) {
+    background: var(--contact-bg, rgba(255, 170, 100, 0.20));
+    color: var(--contact-fg, #b35f10);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-wiki-pill[data-refkind="image"]) {
+    background: var(--image-bg, rgba(120, 200, 120, 0.20));
+    color: var(--image-fg, #2a7d2a);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-wiki-pill[data-refkind="broken"]) {
+    background: var(--broken-bg, rgba(220, 80, 80, 0.18));
+    color: var(--broken-fg, #b32020);
+    text-decoration: line-through;
   }
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap) {
     display: inline-block;

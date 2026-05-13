@@ -123,6 +123,12 @@ function handleLink(ctx: TokenContext): void {
     // Punt for now — references aren't part of v1 scope.
     return;
   }
+  // Skip internal links — those are owned by widgets/wikilink.ts and
+  // render as atomic pills. We detect "internal" cheaply by URL-scheme
+  // absence; the wikilink walker does the real normalizeHref check
+  // (and falls through to here if the path is unresolvable).
+  const url = ctx.state.doc.sliceString(urlRange.from, urlRange.to);
+  if (isInternalUrl(url)) return;
   // Label sits between linkMarks[0].to and linkMarks[1].from.
   const labelFrom = linkMarks[0]!.to;
   const labelTo = linkMarks[1]!.from;
@@ -141,6 +147,13 @@ function handleLink(ctx: TokenContext): void {
       ctx.push(HIDE, urlRange.from, urlRange.to);
     }
   }
+}
+
+function isInternalUrl(url: string): boolean {
+  if (!url) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return false; // scheme prefix → external
+  if (url.startsWith("#")) return false; // intra-doc anchor → leave alone
+  return true;
 }
 
 /// Bare URL handler. Fires for both naked URLs in paragraphs and the
