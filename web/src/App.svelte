@@ -536,25 +536,27 @@
     --g-doc: #ff8a3d;
     --g-img: #b07dff;
     --g-tag: #6cd07a;
-    /* Inline editor pill palette (tag, date, wiki link, contact,
-       image, broken). Six distinct hues drawn from Apple's system
-       colors. Dark-mode values are intentionally brighter / less
-       saturated than light-mode — perceived chroma rises against
-       a dark background, so a "vivid" hue picked for light mode
-       will read as garish on dark. Backgrounds are tinted (alpha)
-       so the pill reads as a badge, not a button. */
-    --pill-tag-fg: #6ab0ff;
-    --pill-tag-bg: rgba(100, 168, 255, 0.18);
-    --pill-tag-bg-hover: rgba(100, 168, 255, 0.28);
-    --pill-date-fg: #ff9f0a;
-    --pill-date-bg: rgba(255, 159, 10, 0.18);
-    --pill-wiki-fg: #8e8af5;
-    --pill-wiki-bg: rgba(142, 138, 245, 0.18);
-    --pill-wiki-bg-hover: rgba(142, 138, 245, 0.28);
-    --pill-contact-fg: #ff7aa6;
-    --pill-contact-bg: rgba(255, 55, 95, 0.18);
-    --pill-image-fg: #4bd17b;
-    --pill-image-bg: rgba(75, 209, 123, 0.20);
+    /* Inline editor pills (wiki link, image, tag, contact, date,
+       broken). Hues track the canonical concept palette so the
+       same item reads with the same color across the graph, the
+       file tree, the info panel, and the editor: document ->
+       orange, media -> purple, tag -> green, contact -> yellow,
+       date/time -> grey, broken -> red. See web/src/design.md
+       for the full cross-surface table. Backgrounds are alpha
+       tints of the foreground so each pill reads as a badge
+       rather than a button. */
+    --pill-wiki-fg: #ff8a3d;
+    --pill-wiki-bg: rgba(255, 138, 61, 0.18);
+    --pill-wiki-bg-hover: rgba(255, 138, 61, 0.28);
+    --pill-image-fg: #b07dff;
+    --pill-image-bg: rgba(176, 125, 255, 0.20);
+    --pill-tag-fg: #6cd07a;
+    --pill-tag-bg: rgba(108, 208, 122, 0.18);
+    --pill-tag-bg-hover: rgba(108, 208, 122, 0.28);
+    --pill-contact-fg: #e3b341;
+    --pill-contact-bg: rgba(227, 179, 65, 0.18);
+    --pill-date-fg: #98989d;
+    --pill-date-bg: rgba(152, 152, 157, 0.15);
     --pill-broken-fg: #ff6961;
     --pill-broken-bg: rgba(255, 80, 75, 0.20);
   }
@@ -602,22 +604,23 @@
     --g-doc: #c25a1f;
     --g-img: #7a4cd8;
     --g-tag: #2f9444;
-    /* Light-mode pill palette: deeper foregrounds, lower alpha
-       backgrounds. Same hues as dark mode so the semantic mapping
-       (tag=blue, date=orange, wiki=indigo, contact=pink,
-       image=green, broken=red) stays stable across modes. */
-    --pill-tag-fg: #0a64c8;
-    --pill-tag-bg: rgba(10, 132, 255, 0.12);
-    --pill-tag-bg-hover: rgba(10, 132, 255, 0.20);
-    --pill-date-fg: #b25000;
-    --pill-date-bg: rgba(255, 149, 0, 0.14);
-    --pill-wiki-fg: #4a47b8;
-    --pill-wiki-bg: rgba(88, 86, 214, 0.12);
-    --pill-wiki-bg-hover: rgba(88, 86, 214, 0.20);
-    --pill-contact-fg: #b8336a;
-    --pill-contact-bg: rgba(255, 45, 85, 0.10);
-    --pill-image-fg: #1a7f37;
-    --pill-image-bg: rgba(52, 199, 89, 0.14);
+    /* Light-mode pill palette. Same canonical mapping as dark
+       (document orange, media purple, tag green, contact yellow,
+       date grey, broken red), but deeper foreground hues and
+       lower-alpha backgrounds so the pills still read as badges
+       against the bright canvas. */
+    --pill-wiki-fg: #c25a1f;
+    --pill-wiki-bg: rgba(255, 138, 61, 0.14);
+    --pill-wiki-bg-hover: rgba(255, 138, 61, 0.22);
+    --pill-image-fg: #7a4cd8;
+    --pill-image-bg: rgba(122, 76, 216, 0.10);
+    --pill-tag-fg: #2f9444;
+    --pill-tag-bg: rgba(47, 148, 68, 0.12);
+    --pill-tag-bg-hover: rgba(47, 148, 68, 0.20);
+    --pill-contact-fg: #9a6700;
+    --pill-contact-bg: rgba(154, 103, 0, 0.10);
+    --pill-date-fg: #6c6c70;
+    --pill-date-bg: rgba(108, 108, 112, 0.10);
     --pill-broken-fg: #c93232;
     --pill-broken-bg: rgba(255, 59, 48, 0.12);
   }

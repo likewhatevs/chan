@@ -18,8 +18,8 @@ import {
   type DecorationSet,
   EditorView,
 } from "@codemirror/view";
-import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
-import { oneDark } from "@codemirror/theme-one-dark";
+import { syntaxHighlighting } from "@codemirror/language";
+import { githubDarkHighlight, githubLightHighlight } from "./highlight";
 import {
   scanMatches,
   type FindAdapter,
@@ -34,29 +34,40 @@ export type ChanTheme = "light" | "dark";
 /// host CSS (see Source.svelte's <style> block) because CM injects theme
 /// rules as generated classes whose ordering we cannot rely on.
 export function themeExtensions(theme: ChanTheme): Extension[] {
-  // Light vs dark is still the only axis CM cares about: the
-  // editor-theme dimension (github / google_docs / word) flows
+  // The editor-theme dimension (github / google_docs / word) flows
   // through CSS vars on documentElement, which both .cm-content
-  // (typography) and the host CSS (chrome) already read. The CM
-  // syntax-highlight palette retuning per editor theme is a
-  // follow-up; phase-1 keeps oneDark for dark and the default
-  // highlight style for light.
-  if (theme === "dark") return [oneDark];
+  // (typography) and the host CSS (chrome) read. The syntax-
+  // highlight palette is deliberately NOT per-editor-theme — all
+  // three editor themes share a single GitHub Primer palette,
+  // branching only on light / dark. This keeps code snippets
+  // reading the same regardless of which document chrome is
+  // active (gh is the de-facto reference for syntax color).
+  const palette = theme === "dark" ? githubDarkHighlight : githubLightHighlight;
   return [
-    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+    syntaxHighlighting(palette, { fallback: true }),
     EditorView.theme({
       // Ink follows the active editor theme; falls back to the
       // app's --text so a partial theme override still reads.
       "&": { color: "var(--chan-editor-body-color, var(--text))" },
+      // Caret color. The browser's native caret on .cm-content
+      // honors `caret-color`; CM6's synthetic cursor (used for
+      // multi-select etc.) reads `borderLeftColor` on .cm-cursor.
+      // Both pull from --chan-editor-body-color so the caret
+      // flips with the active editor theme + color scheme. The
+      // previous oneDark extension set both; dropping it without
+      // restoring caret-color left the caret black on dark.
+      ".cm-content": {
+        caretColor: "var(--chan-editor-body-color, var(--text))",
+      },
+      ".cm-cursor, .cm-dropCursor": {
+        borderLeftColor: "var(--chan-editor-body-color, var(--text))",
+      },
       ".cm-gutters": {
         backgroundColor: "var(--bg-card)",
         color: "var(--text-secondary)",
         border: "none",
       },
       ".cm-activeLineGutter": { backgroundColor: "var(--hover-bg)" },
-      ".cm-cursor": {
-        borderLeftColor: "var(--chan-editor-body-color, var(--text))",
-      },
     }),
   ];
 }
