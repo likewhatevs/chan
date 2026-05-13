@@ -47,6 +47,7 @@
   import { openImageBubble } from "./bubbles/image";
   import { imageDropHandlers } from "./bubbles/image_drop";
   import { openImageActionOverlay } from "./overlays/image_action";
+  import { headingFold } from "./fold";
   import type { FindAdapter } from "../editor/find";
 
   let {
@@ -192,6 +193,7 @@
         history(),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         chanMarkdown(),
+        headingFold(),
         theme.extension,
         EditorView.lineWrapping,
         findField,
