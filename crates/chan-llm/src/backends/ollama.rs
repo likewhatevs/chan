@@ -71,7 +71,7 @@ pub async fn list_models(base_url: &str) -> Result<Vec<String>, crate::error::Ll
         .map_err(|e| crate::error::LlmError::Http(format!("ollama tags: {e}")))?;
     let status = resp.status();
     if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
+        let (body, _) = super::read_capped_text(resp, super::DEFAULT_BODY_CAP_BYTES).await;
         return Err(crate::error::LlmError::Http(format!(
             "ollama tags {status}: {body}"
         )));
@@ -213,8 +213,11 @@ impl Backend for OllamaBackend {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            listener.on_error(format!("ollama {status}: {body}"));
+            let (body, truncated) =
+                super::read_capped_text(resp, super::DEFAULT_BODY_CAP_BYTES).await;
+            let snippet: String = body.chars().take(800).collect();
+            let suffix = if truncated { " (body truncated)" } else { "" };
+            listener.on_error(format!("ollama {status}: {snippet}{suffix}"));
             return Outcome::error();
         }
 

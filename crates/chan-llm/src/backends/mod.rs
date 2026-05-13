@@ -43,11 +43,15 @@
 
 pub mod anthropic;
 pub mod claude_cli;
+mod error_body;
 pub mod gemini;
 pub mod gemini_cli;
 pub mod ollama;
 mod retry;
+mod subprocess_env;
+pub(crate) use error_body::{read_capped_text, DEFAULT_BODY_CAP_BYTES};
 pub use retry::{send_with_retry, RetryPolicy};
+pub(crate) use subprocess_env::sanitize_env;
 
 /// Hard cap on a single turn's accumulated assistant text. The
 /// listener (`on_delta`) is fire-and-forget; if it blocks or if the

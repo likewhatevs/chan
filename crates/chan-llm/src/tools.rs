@@ -60,6 +60,15 @@ pub const SEARCH_CONTENT_DEFAULT_LIMIT: u32 = 20;
 /// `paths` if it needs more detail.
 pub const REPO_REPORT_FILES_CAP: usize = 200;
 
+/// Hard cap on the `content` arg of `write_file`. Mirrors
+/// `chan_drive::TEXT_WRITE_LIMIT` (2 MiB) so a runaway model emitting
+/// a multi-GB string fails fast inside chan-llm rather than reaching
+/// chan-drive (which would have rejected it anyway, but only after
+/// the full string had been deserialized, cloned, and handed across
+/// the tool dispatch boundary). The MCP layer applies the same
+/// check before crossing into chan-llm.
+pub const WRITE_FILE_CONTENT_CAP_BYTES: usize = 2 * 1024 * 1024;
+
 /// Context the tools see. Owns an `Arc<Drive>` so tool calls cross
 /// thread boundaries cheaply; the auto-apply flag is checked
 /// per-call so toggling it at runtime takes immediate effect.
@@ -309,6 +318,20 @@ fn exec_repo_report(args: &Json, ctx: &ToolContext) -> Result<Json> {
 fn exec_write_file(args: &Json, ctx: &ToolContext) -> Result<ToolOutcome> {
     let path = arg_string(args, "path")?;
     let content = arg_string(args, "content")?;
+    // Reject oversized payloads before the tool result clones the
+    // content into the next turn's transcript and before chan-drive
+    // gets a chance to allocate the write buffer. chan-drive caps the
+    // same value (TEXT_WRITE_LIMIT) but only after the string has
+    // already crossed into its API; bailing here saves a clone and
+    // keeps a runaway model from charging tokens on a write that
+    // can't possibly land.
+    if content.len() > WRITE_FILE_CONTENT_CAP_BYTES {
+        return Err(LlmError::Tool(format!(
+            "write_file: content {} bytes exceeds {} byte cap",
+            content.len(),
+            WRITE_FILE_CONTENT_CAP_BYTES
+        )));
+    }
     // Optional optimistic-concurrency token. The assistant gets
     // mtime_ns back from `read_file`; passing it here makes the
     // write a compare-and-swap against the file's current mtime,

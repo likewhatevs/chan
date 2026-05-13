@@ -30,6 +30,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
+zeroize = { workspace = true }
 
 # `mcp` feature deps. rmcp's defaults already pull macros + server +
 # transport-async-rw + schemars, which is everything we need for a

@@ -76,7 +76,12 @@ where
                     return Ok(r);
                 }
                 let wait = pick_wait(&r, attempt, policy);
-                let body = r.text().await.unwrap_or_default();
+                // Read the body with a hard byte cap; we only need a
+                // short snippet for the log line and a runaway upstream
+                // returning megabytes of HTML on a 503 must not force
+                // us to allocate it just to discard it. 2 KiB is well
+                // above what any structured error envelope needs.
+                let (body, _) = super::error_body::read_capped_text(r, 2 * 1024).await;
                 tracing::warn!(
                     backend = label,
                     %status,

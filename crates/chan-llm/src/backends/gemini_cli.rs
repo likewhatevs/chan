@@ -88,7 +88,7 @@ use tokio::process::Command;
 use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall, ToolResult};
 use crate::tools::ToolSchema;
 
-use super::{Backend, Outcome};
+use super::{sanitize_env, Backend, Outcome};
 
 /// Default command to launch gemini. Plain `gemini` so PATH wins;
 /// users override via `LlmConfig.gemini_cli.cmd` when gemini lives
@@ -161,6 +161,18 @@ impl Backend for GeminiCliBackend {
         };
 
         let mut command = Command::new(bin);
+        // Drop the parent env so unrelated secrets (OPENAI_API_KEY,
+        // GH_TOKEN, AWS_*) don't leak into a spawned child's
+        // /proc/<pid>/environ. GOOGLE_/GEMINI_ are forwarded so
+        // gemini can pick up its own auth knobs from the shell when
+        // the user configured them. The explicit `.env(...)` calls
+        // below for GEMINI_CLI_HOME / GEMINI_API_KEY run after this
+        // and override anything the shell forwarded.
+        sanitize_env(&mut command, &["GOOGLE_", "GEMINI_"]);
+        // Kill the spawned gemini on Drop. Normal exit paths call
+        // `child.kill().await` explicitly; this guards against a
+        // panic anywhere below leaving the subprocess running.
+        command.kill_on_drop(true);
         command
             .args(leading)
             .arg("--prompt")

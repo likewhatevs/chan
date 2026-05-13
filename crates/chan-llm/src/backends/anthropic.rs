@@ -33,6 +33,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use crate::error::LlmError;
 use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall};
@@ -92,7 +93,7 @@ pub async fn list_models(api_key: &str) -> Result<Vec<String>, LlmError> {
             .map_err(|e| LlmError::Http(format!("anthropic models: {e}")))?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let (body, _) = super::read_capped_text(resp, super::DEFAULT_BODY_CAP_BYTES).await;
             return Err(LlmError::Http(format!("anthropic models {status}: {body}")));
         }
         let page: ModelsPage = resp
@@ -125,7 +126,11 @@ struct ModelInfo {
 }
 
 pub struct AnthropicBackend {
-    api_key: String,
+    // Wrapped in Zeroizing so the heap allocation is overwritten
+    // with zeros on Drop. Defense-in-depth: an attacker with a
+    // post-mortem heap snapshot (core dump, swap, container reuse)
+    // would otherwise still see the raw key.
+    api_key: Zeroizing<String>,
     model: String,
     max_tokens: u32,
     client: reqwest::Client,
@@ -160,7 +165,7 @@ impl AnthropicBackend {
             .build()
             .expect("reqwest client builds with default rustls config");
         Self {
-            api_key,
+            api_key: Zeroizing::new(api_key),
             model,
             max_tokens,
             client,
@@ -208,7 +213,7 @@ impl Backend for AnthropicBackend {
             || {
                 self.client
                     .post(ENDPOINT)
-                    .header("x-api-key", &self.api_key)
+                    .header("x-api-key", self.api_key.as_str())
                     .header("anthropic-version", ANTHROPIC_VERSION)
                     .header("content-type", "application/json")
                     .body(body_bytes.clone())
@@ -229,12 +234,17 @@ impl Backend for AnthropicBackend {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let raw = resp.text().await.unwrap_or_default();
-            // Truncate so a stray HTML error page doesn't flood the
-            // chat surface. 800 chars is enough for Anthropic's
-            // structured error envelopes.
+            // Drain a capped slice of the body rather than calling
+            // `resp.text()` (which would allocate the full body even
+            // if upstream returned megabytes of HTML). 16 KiB is more
+            // than enough for Anthropic's JSON error envelopes; the
+            // truncation marker lets a reader notice when the upstream
+            // returned something unexpectedly large.
+            let (raw, truncated) =
+                super::read_capped_text(resp, super::DEFAULT_BODY_CAP_BYTES).await;
             let snippet: String = raw.chars().take(800).collect();
-            listener.on_error(format!("anthropic {status}: {snippet}"));
+            let suffix = if truncated { " (body truncated)" } else { "" };
+            listener.on_error(format!("anthropic {status}: {snippet}{suffix}"));
             return Outcome::error();
         }
 

@@ -84,7 +84,7 @@ use tokio::process::Command;
 use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall, ToolResult};
 use crate::tools::ToolSchema;
 
-use super::{Backend, Outcome};
+use super::{sanitize_env, Backend, Outcome};
 
 /// Default command to launch claude. Plain `claude` so PATH wins;
 /// users can override via `LlmConfig.claude_cli.cmd` when claude
@@ -177,6 +177,20 @@ impl Backend for ClaudeCliBackend {
         };
 
         let mut command = Command::new(bin);
+        // Drop the parent env so unrelated secrets (OPENAI_API_KEY,
+        // GH_TOKEN, AWS_*) don't leak into a spawned child's
+        // /proc/<pid>/environ. ANTHROPIC_* is forwarded so claude can
+        // pick up its own auth knobs (API key, base URL, Bedrock
+        // toggles) when the user configured them in the shell.
+        sanitize_env(&mut command, &["ANTHROPIC_", "CLAUDE_"]);
+        // Kill the spawned claude on Drop. Every normal exit path
+        // already calls `child.kill().await` explicitly, but a panic
+        // inside this async fn would otherwise leave the subprocess
+        // running until it noticed its stdin was closed (or
+        // forever if no I/O was pending). The guard ensures that an
+        // unexpected unwind from anywhere below (deserialization,
+        // listener callback, channel write) reaps the child.
+        command.kill_on_drop(true);
         command
             .args(leading)
             .arg("--print")

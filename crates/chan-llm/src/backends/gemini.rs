@@ -36,6 +36,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use crate::error::LlmError;
 use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall};
@@ -59,7 +60,9 @@ pub fn default_max_output_tokens() -> u32 {
 const SSE_BUF_CAP_BYTES: usize = 1024 * 1024;
 
 pub struct GeminiBackend {
-    api_key: String,
+    // Wrapped in Zeroizing so the heap allocation is overwritten
+    // with zeros on Drop. Same rationale as `AnthropicBackend`.
+    api_key: Zeroizing<String>,
     model: String,
     max_output_tokens: u32,
     client: reqwest::Client,
@@ -87,7 +90,7 @@ impl GeminiBackend {
             .build()
             .expect("reqwest client builds with default rustls config");
         Self {
-            api_key,
+            api_key: Zeroizing::new(api_key),
             model,
             max_output_tokens,
             client,
@@ -153,7 +156,7 @@ impl Backend for GeminiBackend {
                 // out of access logs) compared to ?key=.
                 self.client
                     .post(&url)
-                    .header("x-goog-api-key", &self.api_key)
+                    .header("x-goog-api-key", self.api_key.as_str())
                     .header("content-type", "application/json")
                     .body(body_bytes.clone())
             },
@@ -173,9 +176,13 @@ impl Backend for GeminiBackend {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let raw = resp.text().await.unwrap_or_default();
+            // See anthropic.rs: cap the body read so a runaway upstream
+            // can't force a multi-GB allocation on the error path.
+            let (raw, truncated) =
+                super::read_capped_text(resp, super::DEFAULT_BODY_CAP_BYTES).await;
             let snippet: String = raw.chars().take(800).collect();
-            listener.on_error(format!("gemini {status}: {snippet}"));
+            let suffix = if truncated { " (body truncated)" } else { "" };
+            listener.on_error(format!("gemini {status}: {snippet}{suffix}"));
             return Outcome::error();
         }
 
@@ -324,7 +331,7 @@ pub async fn list_models(api_key: &str) -> Result<Vec<String>, LlmError> {
             .map_err(|e| LlmError::Http(format!("gemini models: {e}")))?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let (body, _) = super::read_capped_text(resp, super::DEFAULT_BODY_CAP_BYTES).await;
             return Err(LlmError::Http(format!("gemini models {status}: {body}")));
         }
         let page: ModelsPage = resp
