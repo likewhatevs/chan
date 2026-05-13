@@ -78,6 +78,15 @@ export type GeminiPrefs = {
   max_tokens?: number | null;
 };
 
+/// Per-CLI override surface. Only carries `model` today (the local
+/// `claude` / `gemini` CLIs own auth and most other knobs via their
+/// own configs). Maps to `chan_llm::LlmConfig.models.{claude,gemini}_cli`
+/// — when null / empty, chan-llm passes no `--model` flag and the
+/// CLI uses whichever default its own config selects.
+export type CliPrefs = {
+  model?: string | null;
+};
+
 export type AssistantPrefs = {
   /// Master switch. When false, the inline-assist overlay and the
   /// search palette's "ask" mode are hidden. Defaults to true on
@@ -93,6 +102,11 @@ export type AssistantPrefs = {
   claude: ClaudePrefs;
   ollama: OllamaPrefs;
   gemini: GeminiPrefs;
+  /// Optional model override for the `claude` CLI (`claude_cli`
+  /// backend). Null lets the CLI's own config win.
+  claude_cli: CliPrefs;
+  /// Same shape for the `gemini` CLI (`gemini_cli` backend).
+  gemini_cli: CliPrefs;
 };
 
 export type LlmModelEntry = {

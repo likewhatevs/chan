@@ -62,6 +62,19 @@
   // on mount + after every save so changing the backend in the
   // form re-reads readiness.
   let llmStatus = $state<LlmStatus | null>(null);
+  /// Curated model shortlists for the local CLIs (`claude_cli` /
+  /// `gemini_cli`). The CLIs don't expose a programmatic catalog
+  /// and their accepted `--model` aliases are a small, stable set
+  /// — better to hand-pin than to reuse the API's live list (which
+  /// includes versioned aliases not always accepted by the CLI).
+  /// Sorted newest / most-capable first.
+  const CLAUDE_CLI_MODELS = [
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+  ];
+  const GEMINI_CLI_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash"];
+
   // Per-provider model catalogs for the dropdowns. Each provider
   // tracks loading state so the refresh button can show a spinner
   // and an error string so a failed live fetch surfaces inline
@@ -912,6 +925,54 @@
         {#if ollamaError}
           <div class="muted err-line">Ollama: {ollamaError}</div>
         {/if}
+      {:else if editing.assistant.backend === "claude_cli"}
+        <!-- The local `claude` CLI doesn't expose a programmatic
+             catalog and its accepted `--model` aliases are a stable,
+             short set. Use a hardcoded curated list rather than the
+             Anthropic API catalog: the live API list includes
+             versioned aliases (e.g. claude-opus-3-5-20240620) that
+             aren't always valid CLI inputs, and refreshing the API
+             catalog shouldn't change CLI options. "(use CLI default)"
+             clears the override so `claude config`'s pick wins. -->
+        <label class:dim={!editing.assistant.enabled}>
+          <span>Model</span>
+          <select
+            bind:value={editing.assistant.claude_cli.model}
+            disabled={!editing.assistant.enabled}
+          >
+            <option value={null}>(use CLI default)</option>
+            {#each CLAUDE_CLI_MODELS as name (name)}
+              <option value={name}>{name}</option>
+            {/each}
+          </select>
+        </label>
+        <div class="muted err-line">
+          Auth + max-tokens for the claude CLI are managed by the CLI
+          itself (run <code class="mono">claude config</code>). The
+          model picker above maps to <code class="mono">--model</code>
+          on the CLI invocation; "(use CLI default)" passes no flag.
+        </div>
+      {:else if editing.assistant.backend === "gemini_cli"}
+        <!-- Same shape as claude_cli, against a hardcoded Gemini-CLI
+             shortlist. -->
+        <label class:dim={!editing.assistant.enabled}>
+          <span>Model</span>
+          <select
+            bind:value={editing.assistant.gemini_cli.model}
+            disabled={!editing.assistant.enabled}
+          >
+            <option value={null}>(use CLI default)</option>
+            {#each GEMINI_CLI_MODELS as name (name)}
+              <option value={name}>{name}</option>
+            {/each}
+          </select>
+        </label>
+        <div class="muted err-line">
+          Auth + max-tokens for the gemini CLI are managed by the CLI
+          itself (run <code class="mono">gemini config</code>). The
+          model picker above maps to <code class="mono">--model</code>;
+          "(use CLI default)" passes no flag.
+        </div>
       {/if}
 
       <!-- 4. Auto-apply + tooltip. Disabled until the backend is

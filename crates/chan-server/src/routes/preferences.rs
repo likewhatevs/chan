@@ -55,6 +55,20 @@ pub struct AssistantPrefsView {
     pub claude: ProviderPrefsView,
     pub ollama: OllamaPrefsView,
     pub gemini: ProviderPrefsView,
+    /// Optional `--model` override passed to the local `claude` CLI
+    /// when the backend is `claude_cli`. None lets the CLI's own
+    /// default win. Mirrors `chan_llm::LlmConfig.models.claude_cli`.
+    #[serde(default)]
+    pub claude_cli: CliPrefsView,
+    /// Same shape as `claude_cli` for the `gemini` CLI.
+    #[serde(default)]
+    pub gemini_cli: CliPrefsView,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CliPrefsView {
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -144,6 +158,8 @@ pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
             claude: ProviderPrefsView::default(),
             ollama: OllamaPrefsView::default(),
             gemini: ProviderPrefsView::default(),
+            claude_cli: CliPrefsView::default(),
+            gemini_cli: CliPrefsView::default(),
         }
     } else {
         let backend_kind = llm.backend.unwrap_or(BackendKind::ClaudeCli);
@@ -164,6 +180,12 @@ pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
             gemini: ProviderPrefsView {
                 model: llm.models.gemini.clone(),
                 max_tokens: llm.max_tokens.gemini,
+            },
+            claude_cli: CliPrefsView {
+                model: llm.models.claude_cli.clone(),
+            },
+            gemini_cli: CliPrefsView {
+                model: llm.models.gemini_cli.clone(),
             },
         }
     };
@@ -383,6 +405,19 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
         llm.models.anthropic = view.assistant.claude.model;
         llm.models.gemini = view.assistant.gemini.model;
         llm.models.ollama = view.assistant.ollama.model;
+        // CLI overrides: empty / None falls back to "let the CLI's
+        // own config pick", which is what we want when the user
+        // clears the field.
+        llm.models.claude_cli = view
+            .assistant
+            .claude_cli
+            .model
+            .filter(|s| !s.is_empty());
+        llm.models.gemini_cli = view
+            .assistant
+            .gemini_cli
+            .model
+            .filter(|s| !s.is_empty());
         // None clears the override so backends fall back to their
         // built-in defaults; see chan-llm `MaxTokens` resolution.
         llm.max_tokens.anthropic = view.assistant.claude.max_tokens;

@@ -9,6 +9,7 @@
   import FileBrowserOverlay from "./components/FileBrowserOverlay.svelte";
   import GraphPanel from "./components/GraphPanel.svelte";
   import InlineAssist from "./components/InlineAssist.svelte";
+  import MissingTokenOverlay from "./components/MissingTokenOverlay.svelte";
   import PathPromptModal from "./components/PathPromptModal.svelte";
   import PromptModal from "./components/PromptModal.svelte";
   import ScopeHistoryOverlay from "./components/ScopeHistoryOverlay.svelte";
@@ -469,6 +470,10 @@
 <!-- Disconnect overlay applies in every mode: any window is just
      as broken when the watcher dies, regardless of layout. -->
 <DisconnectOverlay />
+<!-- Missing-token overlay: surfaces when the user landed on the
+     SPA shell without the launch token, so /api 401s and the app
+     is unusable until they reopen the original URL. -->
+<MissingTokenOverlay />
 
 <style>
   /* Theme palette. Defaults to dark; [data-theme="light"] overrides.
