@@ -18,8 +18,10 @@
   import { ExternalLink, Eye, FileDown, Trash2 } from "lucide-svelte";
   import { untrack } from "svelte";
   import Bubble from "./Bubble.svelte";
+  import HamburgerMenu from "./HamburgerMenu.svelte";
   import OverlayShell from "./OverlayShell.svelte";
   import {
+    clearAllScopeHistory,
     closeScopeHistory,
     deleteScopeHistoryEntry,
     exportScopeHistoryToDrive,
@@ -83,11 +85,32 @@
   const visible = $derived.by<ScopeHistoryEntry[]>(() => {
     const f = scopeHistoryOverlay.filters;
     const rows = scopeHistoryOverlay.entries.filter((e) => f[e.kind]);
-    const key = (e: ScopeHistoryEntry): number =>
-      scopeHistoryOverlay.sortByRecent
-        ? (e.last_touched ?? e.created_at ?? 0)
-        : (e.created_at ?? e.last_touched ?? 0);
-    return [...rows].sort((a, b) => key(b) - key(a));
+    const sorted = [...rows];
+    switch (scopeHistoryOverlay.sortBy) {
+      case "recent":
+        sorted.sort(
+          (a, b) =>
+            (b.last_touched ?? b.created_at ?? 0) -
+            (a.last_touched ?? a.created_at ?? 0),
+        );
+        break;
+      case "created":
+        sorted.sort(
+          (a, b) =>
+            (b.created_at ?? b.last_touched ?? 0) -
+            (a.created_at ?? a.last_touched ?? 0),
+        );
+        break;
+      case "title":
+        sorted.sort((a, b) =>
+          a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
+        );
+        break;
+      case "turns":
+        sorted.sort((a, b) => b.turn_count - a.turn_count);
+        break;
+    }
+    return sorted;
   });
 
   /// Pill color per kind, mirroring the search overlay palette so
@@ -131,28 +154,28 @@
     return { present, missing };
   }
 
-  /// Inline peek state. Group scopes can't bind to the current
+  /// Inline peek toggle. Group scopes can't bind to the current
   /// window's assistant overlay (the context key is derived from
   /// visible files), so "Resume" toggles a read-only expansion
   /// here instead. Single-entry expand: opening another collapses
-  /// the previous so the panel stays at a reasonable height.
-  let expandedId = $state<string | null>(null);
-  let expandedTurns = $state<AssistantTurn[]>([]);
-  let expandedLoading = $state(false);
-
+  /// the previous so the panel stays at a reasonable height. The
+  /// `expandedId` / `expandedTurns` / `expandedLoading` fields
+  /// live on `scopeHistoryOverlay` (not local state) so closing
+  /// and reopening the overlay restores the previously-expanded
+  /// bubble without refetching.
   async function togglePeek(entry: ScopeHistoryEntry): Promise<void> {
-    if (expandedId === entry.id) {
-      expandedId = null;
-      expandedTurns = [];
+    if (scopeHistoryOverlay.expandedId === entry.id) {
+      scopeHistoryOverlay.expandedId = null;
+      scopeHistoryOverlay.expandedTurns = [];
       return;
     }
-    expandedId = entry.id;
-    expandedTurns = [];
-    expandedLoading = true;
+    scopeHistoryOverlay.expandedId = entry.id;
+    scopeHistoryOverlay.expandedTurns = [];
+    scopeHistoryOverlay.expandedLoading = true;
     try {
-      expandedTurns = await fetchScopeHistoryTurns(entry);
+      scopeHistoryOverlay.expandedTurns = await fetchScopeHistoryTurns(entry);
     } finally {
-      expandedLoading = false;
+      scopeHistoryOverlay.expandedLoading = false;
     }
   }
 
@@ -186,6 +209,29 @@
     }
   }
 
+  let menu: HamburgerMenu | undefined = $state();
+  let menuOpen = $state(false);
+  const POPOVER_WIDTH = 220;
+  const POPOVER_HEIGHT = 60;
+
+  async function onClearAll(): Promise<void> {
+    menu?.close();
+    const total = scopeHistoryOverlay.entries.length;
+    if (total === 0) return;
+    const ok = await uiConfirm({
+      title: "Clear all scope history?",
+      message: `This drops all ${total} persisted thread${total === 1 ? "" : "s"} on disk and cannot be undone.`,
+      confirmLabel: "Clear all",
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await clearAllScopeHistory();
+    } catch (e) {
+      scopeHistoryOverlay.error = `clear failed: ${(e as Error).message ?? String(e)}`;
+    }
+  }
+
   async function onDelete(entry: ScopeHistoryEntry): Promise<void> {
     const ok = await uiConfirm({
       title: "Delete scope history?",
@@ -194,9 +240,9 @@
       destructive: true,
     });
     if (!ok) return;
-    if (expandedId === entry.id) {
-      expandedId = null;
-      expandedTurns = [];
+    if (scopeHistoryOverlay.expandedId === entry.id) {
+      scopeHistoryOverlay.expandedId = null;
+      scopeHistoryOverlay.expandedTurns = [];
     }
     try {
       await deleteScopeHistoryEntry(entry);
@@ -228,12 +274,30 @@
         {/each}
       </div>
       <label class="sort-toggle">
-        <input
-          type="checkbox"
-          bind:checked={scopeHistoryOverlay.sortByRecent}
-        />
-        sort by recent
+        sort by
+        <select
+          class="sort-select"
+          value={scopeHistoryOverlay.sortBy}
+          onchange={(e) =>
+            (scopeHistoryOverlay.sortBy = (e.currentTarget as HTMLSelectElement)
+              .value as typeof scopeHistoryOverlay.sortBy)}
+        >
+          <option value="recent">recent activity</option>
+          <option value="created">created</option>
+          <option value="title">title</option>
+          <option value="turns">turns</option>
+        </select>
       </label>
+      <span class="bar-menu">
+        <HamburgerMenu
+          bind:this={menu}
+          bind:open={menuOpen}
+          width={POPOVER_WIDTH}
+          height={POPOVER_HEIGHT}
+        >
+          {@render menuItems()}
+        </HamburgerMenu>
+      </span>
     </header>
 
     <ul class="rows">
@@ -326,15 +390,15 @@
                 <Trash2 size={13} strokeWidth={1.75} aria-hidden="true" />
               </button>
             </div>
-            {#if expandedId === e.id}
+            {#if scopeHistoryOverlay.expandedId === e.id}
               <div class="peek">
-                {#if expandedLoading}
+                {#if scopeHistoryOverlay.expandedLoading}
                   <div class="peek-status">loading…</div>
-                {:else if expandedTurns.length === 0}
+                {:else if scopeHistoryOverlay.expandedTurns.length === 0}
                   <div class="peek-status muted">empty conversation</div>
                 {:else}
                   <ul class="peek-turns">
-                    {#each expandedTurns as t, i (i)}
+                    {#each scopeHistoryOverlay.expandedTurns as t, i (i)}
                       {#if t.kind === "user"}
                         <li class="peek-turn user"><span class="who">you</span>{t.content}</li>
                       {:else if t.kind === "assistant"}
@@ -370,6 +434,19 @@
     </div>
   </div>
 </OverlayShell>
+
+{#snippet menuItems()}
+  <li>
+    <button
+      role="menuitem"
+      disabled={scopeHistoryOverlay.entries.length === 0}
+      onclick={() => void onClearAll()}
+    >
+      <Trash2 size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span>Clear all history</span>
+    </button>
+  </li>
+{/snippet}
 
 <style>
   .scope-history {
@@ -414,8 +491,28 @@
     gap: 0.3rem;
     font-size: 13px;
     color: var(--text-secondary);
-    cursor: pointer;
     user-select: none;
+  }
+  .sort-select {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .sort-select:focus {
+    outline: none;
+    border-color: var(--link);
+  }
+  /* Hamburger sits right of the sort dropdown. The sort cluster
+     already carries margin-left:auto so it floats right; this is
+     just a tight gap to keep them visually paired. */
+  .bar-menu {
+    display: inline-flex;
+    align-items: center;
   }
 
   /* Chip styling mirrors the graph overlay so the two surfaces

@@ -2229,14 +2229,22 @@ export type ScopeHistoryEntry = {
   group_key?: string;
 };
 
+/// Sort key for the scope-history list. Each option has a fixed
+/// natural direction so the user can't pick "title descending":
+///   - recent: `last_touched` desc (fallback `created_at`)
+///   - created: `created_at` desc (fallback `last_touched`)
+///   - title:   alphabetic asc (case-insensitive)
+///   - turns:   `turn_count` desc
+export type ScopeHistorySort = "recent" | "created" | "title" | "turns";
+
 export const scopeHistoryOverlay = $state<{
   open: boolean;
   /// Filter chips. Independent on/off toggles per scope kind;
   /// initially all on so the list is complete on first open.
   filters: { file: boolean; group: boolean; drive: boolean };
-  /// Most-recently-touched first (default true). Off = creation
-  /// time. Acts on the listed entries only.
-  sortByRecent: boolean;
+  /// Active sort key. See `ScopeHistorySort` for the per-option
+  /// natural direction.
+  sortBy: ScopeHistorySort;
   /// In-memory cache of the aggregated list; refreshed on open
   /// and after deletions so the overlay doesn't refetch on every
   /// scroll.
@@ -2246,13 +2254,30 @@ export const scopeHistoryOverlay = $state<{
   loading: boolean;
   /// Last error from the listing fetch, surfaced inline.
   error: string | null;
+  /// Id of the entry whose inline read-only peek is currently
+  /// expanded, or null when no bubble is expanded. Group scopes
+  /// drive this through "preview"; file / drive scopes never
+  /// expand in place (they resume directly). Persisted on the
+  /// overlay state so closing + reopening the overlay restores
+  /// the previous expansion without a fresh fetch.
+  expandedId: string | null;
+  /// Cached turns for `expandedId`. Lives alongside the id so a
+  /// reopen renders immediately; togglePeek refreshes it whenever
+  /// the id changes.
+  expandedTurns: AssistantTurn[];
+  /// True while `togglePeek` is awaiting fresh turns from disk.
+  /// The bubble shows a "loading…" placeholder during the gap.
+  expandedLoading: boolean;
 }>({
   open: false,
   filters: { file: true, group: true, drive: true },
-  sortByRecent: true,
+  sortBy: "recent",
   entries: [],
   loading: false,
   error: null,
+  expandedId: null,
+  expandedTurns: [],
+  expandedLoading: false,
 });
 
 /// Open the assistant overlay on the history tab and (re)load
@@ -2493,6 +2518,44 @@ export async function deleteScopeHistoryEntry(
   await refreshScopeHistory();
 }
 
+/// Wipe every scope history entry from disk + memory. Iterates
+/// through the currently-cached entries (the same set the user
+/// sees in the overlay) so the action is bounded by what the
+/// listing surfaced; entries written by another window after the
+/// refresh land are left alone until the next refresh, which
+/// will pick them up. The final `refreshScopeHistory` repopulates
+/// the entry list (now empty) and resets the loading flag.
+export async function clearAllScopeHistory(): Promise<void> {
+  // Snapshot the entry list so we don't mutate the underlying
+  // reactive array as we iterate.
+  const snapshot = scopeHistoryOverlay.entries.slice();
+  for (const e of snapshot) {
+    try {
+      if (e.kind === "file") {
+        const path = e.paths[0];
+        if (path) {
+          await api.deleteConversation(path);
+          delete assistantConversations.byFile[path];
+        }
+      } else if (e.kind === "group") {
+        if (e.group_key) clearGroupConversation(e.group_key);
+      } else {
+        await deleteDriveConversation();
+        assistantConversations.drive = null;
+      }
+    } catch {
+      // Best-effort: a single failed delete shouldn't abort the
+      // whole sweep. The refresh below will reflect whatever did
+      // land.
+    }
+  }
+  // Reset peek state so a now-deleted bubble doesn't stay
+  // notionally expanded in the overlay's state.
+  scopeHistoryOverlay.expandedId = null;
+  scopeHistoryOverlay.expandedTurns = [];
+  await refreshScopeHistory();
+}
+
 /// Fetch the persisted turns for a scope entry. Used by the
 /// inline peek (group scopes) and by the markdown export.
 export async function fetchScopeHistoryTurns(
@@ -2518,7 +2581,7 @@ export async function fetchScopeHistoryTurns(
   return (raw as { turns?: AssistantTurn[] }).turns ?? [];
 }
 
-function scopeHistoryExportName(entry: ScopeHistoryEntry): string {
+export function scopeHistoryExportName(entry: ScopeHistoryEntry): string {
   if (entry.kind === "file") {
     const path = entry.paths[0] ?? "scope";
     const slash = path.lastIndexOf("/");
@@ -2533,7 +2596,7 @@ function scopeHistoryExportName(entry: ScopeHistoryEntry): string {
   return "assistant-drive";
 }
 
-function renderScopeHistoryMarkdown(
+export function renderScopeHistoryMarkdown(
   entry: ScopeHistoryEntry,
   turns: AssistantTurn[],
 ): string {
