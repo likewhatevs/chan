@@ -164,13 +164,16 @@ const handleBlockquote: TokenHandler = (ctx) => {
 
 const handleHorizontalRule: TokenHandler = (ctx) => {
   const line = ctx.state.doc.lineAt(ctx.node.from);
+  // While the caret sits on this line, skip the rule entirely:
+  // the `cm-md-hr` class paints a transparent-foreground horizontal
+  // rule (border-bottom + color: transparent), which means the
+  // `---` source becomes both unreadable and visually fused with
+  // the rendered rule the moment the user tries to edit it. Showing
+  // raw source while editing matches the other block widgets'
+  // "click-to-edit reveals the literal markdown" pattern.
+  if (ctx.lineIntersect(ctx.node.from, ctx.node.to)) return;
   ctx.push(LINE_HR, line.from, line.from);
-  // When caret isn't on this line, hide the source chars so the line
-  // looks like an actual horizontal rule (the `cm-md-hr` class paints
-  // the border).
-  if (!ctx.lineIntersect(ctx.node.from, ctx.node.to)) {
-    if (line.from < line.to) ctx.push(HIDE, line.from, line.to);
-  }
+  if (line.from < line.to) ctx.push(HIDE, line.from, line.to);
 };
 
 const handleFencedCode: TokenHandler = (ctx) => {
