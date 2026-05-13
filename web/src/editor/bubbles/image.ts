@@ -73,7 +73,10 @@ export function invalidateImageCatalog(): void {
 }
 
 export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
-  const anchor = createCaretAnchor(opts.view, opts.triggerStart);
+  // Anchor under the live caret; see bubbles/wiki.ts for the
+  // wrapped-line rationale.
+  const caretPos = (): number => opts.view.state.selection.main.head;
+  const anchor = createCaretAnchor(opts.view, caretPos());
   const shell = openBubbleShell({
     host: anchor.el,
     className: "md-image-bubble cm-bubble",
@@ -227,6 +230,8 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
       return false;
     },
     setQuery(q) {
+      anchor.update(opts.view, caretPos());
+      shell.reposition();
       if (q === query) return;
       query = q;
       filter();
@@ -235,7 +240,7 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
       triggerEnd = end;
     },
     reposition() {
-      anchor.update(opts.view, opts.triggerStart);
+      anchor.update(opts.view, caretPos());
       shell.reposition();
     },
     dismiss,

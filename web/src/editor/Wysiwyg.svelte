@@ -600,6 +600,48 @@
     border-color: var(--border, #ddd);
   }
 
+  /* ---- link action popover ---- */
+  :global(.md-link-action) {
+    background: var(--bg-card, #fff);
+    border: 1px solid var(--border, #ddd);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    padding: 6px;
+    min-width: 220px;
+    max-width: 360px;
+    font-family: var(--chan-font-text-family);
+    font-size: 13px;
+  }
+  :global(.md-link-action-target) {
+    padding: 4px 6px 6px;
+    color: var(--text-secondary, #666);
+    font-family: var(--chan-font-code-family, monospace);
+    font-size: 12px;
+    border-bottom: 1px solid var(--border, #eee);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  :global(.md-link-action-buttons) {
+    display: flex;
+    flex-direction: column;
+    margin-top: 4px;
+  }
+  :global(.md-link-action-btn) {
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 6px 8px;
+    text-align: left;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  :global(.md-link-action-btn:hover) {
+    background: var(--hover-bg, rgba(0, 0, 0, 0.06));
+  }
+
   /* ---- date popover ---- */
   :global(.md-date-popover) {
     background: var(--bg-card, #fff);

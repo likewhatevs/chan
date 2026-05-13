@@ -44,6 +44,7 @@ import { selectionInRange } from "../decorations/selection";
 import { normalizeHref } from "../links";
 import { isImagePath } from "../extensions/image";
 import { api } from "../../api/client";
+import { openLinkAction } from "../overlays/link_action";
 
 export type LinkKind = "file" | "contact" | "image" | "broken";
 
@@ -186,6 +187,7 @@ class WikiLinkWidget extends WidgetType {
   constructor(
     readonly parsed: ParsedWikiLink,
     readonly kind: LinkKind | undefined,
+    readonly sourceLen: number,
     readonly onClick: (args: WikiLinkClickArgs) => void,
   ) {
     super();
@@ -196,11 +198,12 @@ class WikiLinkWidget extends WidgetType {
       this.parsed.target === other.parsed.target &&
       this.parsed.label === other.parsed.label &&
       this.parsed.anchor === other.parsed.anchor &&
-      this.kind === other.kind
+      this.kind === other.kind &&
+      this.sourceLen === other.sourceLen
     );
   }
 
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     const el = document.createElement("span");
     el.className = "cm-md-wiki-pill";
     el.dataset.target = this.parsed.target;
@@ -211,9 +214,26 @@ class WikiLinkWidget extends WidgetType {
       if (e.button !== 0) return;
       e.preventDefault();
       e.stopPropagation();
-      this.onClick({
-        ...this.parsed,
-        openInNewPane: e.metaKey || e.ctrlKey,
+      // Cmd/Ctrl-click bypasses the popover and goes straight to
+      // open-in-new-pane (the power-user shortcut).
+      if (e.metaKey || e.ctrlKey) {
+        this.onClick({ ...this.parsed, openInNewPane: true });
+        return;
+      }
+      // Plain click opens the link-action popover under the pill.
+      const pillFrom = view.posAtDOM(el);
+      if (pillFrom < 0) {
+        // posAtDOM failed; fall back to direct open.
+        this.onClick({ ...this.parsed, openInNewPane: false });
+        return;
+      }
+      openLinkAction({
+        view,
+        anchor: el,
+        parsed: this.parsed,
+        pillFrom,
+        pillTo: pillFrom + this.sourceLen,
+        onOpen: this.onClick,
       });
     });
     return el;
@@ -304,7 +324,12 @@ function scanWikiLinks(
           from: outerFrom,
           to: outerTo,
           deco: Decoration.replace({
-            widget: new WikiLinkWidget(parsed, kind, opts.onWikiClick),
+            widget: new WikiLinkWidget(
+              parsed,
+              kind,
+              outerTo - outerFrom,
+              opts.onWikiClick,
+            ),
           }),
         });
         return;
@@ -341,7 +366,12 @@ function scanWikiLinks(
           from: outerFrom,
           to: outerTo,
           deco: Decoration.replace({
-            widget: new WikiLinkWidget(parsed, kind, opts.onWikiClick),
+            widget: new WikiLinkWidget(
+              parsed,
+              kind,
+              outerTo - outerFrom,
+              opts.onWikiClick,
+            ),
           }),
         });
         return;

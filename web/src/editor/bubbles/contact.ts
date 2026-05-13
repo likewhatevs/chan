@@ -33,7 +33,8 @@ interface ContactBubbleHandle extends BubbleHandle {
 }
 
 export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle {
-  const anchor = createCaretAnchor(opts.view, opts.triggerStart);
+  const caretPos = (): number => opts.view.state.selection.main.head;
+  const anchor = createCaretAnchor(opts.view, caretPos());
   const shell = openBubbleShell({
     host: anchor.el,
     className: "md-contact-bubble cm-bubble",
@@ -159,6 +160,8 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle 
       return false;
     },
     setQuery(q) {
+      anchor.update(opts.view, caretPos());
+      shell.reposition();
       if (q === query) return;
       query = q;
       fetchContacts();
@@ -167,7 +170,7 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle 
       triggerEnd = end;
     },
     reposition() {
-      anchor.update(opts.view, opts.triggerStart);
+      anchor.update(opts.view, caretPos());
       shell.reposition();
     },
     dismiss,

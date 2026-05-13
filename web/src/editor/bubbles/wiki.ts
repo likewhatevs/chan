@@ -69,7 +69,12 @@ function classifyQuery(q: string): Mode {
 }
 
 export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
-  const anchor = createCaretAnchor(opts.view, opts.triggerStart);
+  // Anchor under the live caret (not the trigger start) so the bubble
+  // follows the cursor as the user types — important when a long
+  // typed query wraps to a second visual line, where positioning at
+  // the trigger would leave the bubble overlapping the wrapped text.
+  const caretPos = (): number => opts.view.state.selection.main.head;
+  const anchor = createCaretAnchor(opts.view, caretPos());
   const shell = openBubbleShell({
     host: anchor.el,
     className: "md-wiki-bubble cm-bubble",
@@ -273,6 +278,12 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
       return false;
     },
     setQuery(q: string): void {
+      // Always re-anchor on every spec update — the user may have
+      // arrowed inside the trigger range without changing the query
+      // text, and the bubble needs to follow the live caret so it
+      // doesn't overlap wrapped text.
+      anchor.update(opts.view, caretPos());
+      shell.reposition();
       if (q === query) return;
       query = q;
       const newMode = classifyQuery(q);
@@ -296,7 +307,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
       triggerEnd = end;
     },
     reposition(): void {
-      anchor.update(opts.view, opts.triggerStart);
+      anchor.update(opts.view, caretPos());
       shell.reposition();
     },
     dismiss,
