@@ -531,25 +531,43 @@
      scope — 4 class selectors total — and `!important` ties the
      priority bucket. Without this the slab stays invisible. */
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-fence-opener),
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-fence-closer) {
-    color: var(--text-secondary, #888);
-    font-family: var(--chan-editor-code-family, monospace);
-    font-size: var(--chan-editor-code-size, 0.92em);
-    background: var(
-      --chan-editor-code-block-bg,
-      var(--bg-card, rgba(0, 0, 0, 0.04))
-    ) !important;
-    position: relative;
-  }
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-fence-closer),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-code-block) {
-    font-family: var(--chan-editor-code-family, monospace);
-    font-size: var(--chan-editor-code-size, 0.92em);
     background: var(
       --chan-editor-code-block-bg,
       var(--bg-card, rgba(0, 0, 0, 0.04))
     ) !important;
     color: var(--chan-editor-code-block-color, inherit);
-    padding-inline: 0.75em;
+    font-family: var(--chan-editor-code-family, monospace);
+    font-size: var(--chan-editor-code-size, 0.92em);
+    /* Equal gutters on both sides so the body doesn't visually
+       crash into the slab's right edge (the floating badge sits in
+       this padded zone too). padding-left + padding-right written
+       out separately because `padding-inline` was being overridden
+       by CM6's own `.cm-line` default `padding: 0 2px` — separate
+       longhand props beat the shorthand-default cascade order. */
+    padding-left: 0.75em !important;
+    padding-right: 0.75em !important;
+    /* The CM6 fold gutter eats ~18px on the LEFT of the editor; the
+       right side has no gutter, so the slab bleeds to the editor's
+       right edge while the left edge sits flush with the post-
+       gutter content edge — visibly lopsided. A transparent right
+       border + `background-clip: padding-box` paints the slab up to
+       the padding edge only, leaving a matching empty strip on the
+       right that mirrors the gutter on the left.
+       !important on background-clip is required: the `background:
+       ... !important` shorthand above implicitly sets
+       `background-clip: border-box !important`, and without
+       !important here the longhand loses the cascade. */
+    border-right: 18px solid transparent;
+    background-clip: padding-box !important;
+    box-sizing: border-box;
+  }
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-fence-opener),
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-fence-closer) {
+    color: var(--text-secondary, #888);
+    /* Opener row hosts the floating badge widget. */
+    position: relative;
   }
   :global(.md-wysiwyg-cm6 .cm-md-fence-info) {
     color: var(--chan-editor-link-color, var(--link, #0a64c8));
@@ -611,40 +629,40 @@
     opacity: 0.7;
   }
   :global(.md-wysiwyg-cm6 .cm-md-tag) {
-    background: var(--tag-bg, rgba(106, 168, 255, 0.18));
-    color: var(--tag-fg, #2563b8);
+    background: var(--pill-tag-bg);
+    color: var(--pill-tag-fg);
     padding: 0.05em 0.4em;
     border-radius: 999px;
     font-size: 0.92em;
     cursor: pointer;
   }
   :global(.md-wysiwyg-cm6 .cm-md-tag:hover) {
-    background: var(--tag-bg-hover, rgba(106, 168, 255, 0.28));
+    background: var(--pill-tag-bg-hover);
   }
   :global(.md-wysiwyg-cm6 .cm-md-date-pill) {
-    background: var(--date-bg, rgba(120, 200, 120, 0.18));
-    color: var(--date-fg, #2a7d2a);
+    background: var(--pill-date-bg);
+    color: var(--pill-date-fg);
     padding: 0.05em 0.4em;
     border-radius: 4px;
     font-size: 0.92em;
     cursor: text;
   }
   :global(.md-wysiwyg-cm6 .cm-md-wiki-pill) {
-    background: var(--wiki-bg, rgba(168, 130, 255, 0.18));
-    color: var(--wiki-fg, #6831c8);
+    background: var(--pill-wiki-bg);
+    color: var(--pill-wiki-fg);
     padding: 0.05em 0.4em;
     border-radius: 4px;
     font-size: 0.95em;
     cursor: pointer;
   }
   :global(.md-wysiwyg-cm6 .cm-md-wiki-pill:hover) {
-    background: var(--wiki-bg-hover, rgba(168, 130, 255, 0.28));
+    background: var(--pill-wiki-bg-hover);
   }
   /* Kind variants. data-refkind populates after the async resolve
      lands; pills default to file styling until then. */
   :global(.md-wysiwyg-cm6 .cm-md-wiki-pill[data-refkind="contact"]) {
-    background: var(--contact-bg, rgba(255, 170, 100, 0.20));
-    color: var(--contact-fg, #b35f10);
+    background: var(--pill-contact-bg);
+    color: var(--pill-contact-fg);
   }
   /* Lucide `user` glyph leading the contact pill. Sized to the
      pill's line-height; stroke = currentColor so it follows the
@@ -657,8 +675,8 @@
     display: inline-block;
   }
   :global(.md-wysiwyg-cm6 .cm-md-wiki-pill[data-refkind="image"]) {
-    background: var(--image-bg, rgba(120, 200, 120, 0.20));
-    color: var(--image-fg, #2a7d2a);
+    background: var(--pill-image-bg);
+    color: var(--pill-image-fg);
   }
   :global(.md-wysiwyg-cm6 .cm-md-wiki-pill-image) {
     display: inline-block;
@@ -678,8 +696,8 @@
     display: block;
   }
   :global(.md-wysiwyg-cm6 .cm-md-wiki-pill[data-refkind="broken"]) {
-    background: var(--broken-bg, rgba(220, 80, 80, 0.18));
-    color: var(--broken-fg, #b32020);
+    background: var(--pill-broken-bg);
+    color: var(--pill-broken-fg);
     text-decoration: line-through;
   }
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap) {
