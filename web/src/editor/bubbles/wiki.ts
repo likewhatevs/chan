@@ -34,6 +34,16 @@ export interface WikiBubbleOpts {
   /// Optional path scope passed through to /api/search/files (project-
   /// bound suggestions). null for unscoped global search.
   prefix: string | null;
+  /// "wrap" (default): commit inserts `[[path]]`. Used when the user
+  /// typed `[[` from scratch.
+  /// "raw": commit inserts just `path`. Used when the caret is inside
+  /// an existing `[label](path)` URL portion (the brackets stay).
+  templateMode?: "wrap" | "raw";
+  /// Cmd+Enter handler. Called with the currently-selected hit's
+  /// target (or the trigger's parsed target if no hit is selected).
+  /// Returns the navigation surface to the host (FileEditorTab calls
+  /// openInActivePane). Optional — when omitted, Cmd+Enter is a no-op.
+  onOpenLink?: (target: string, anchor: string | null) => void;
   onDismiss: () => void;
 }
 
@@ -122,9 +132,10 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
       shell.reposition();
       return;
     }
+    const openHint = opts.onOpenLink ? " · ⌘↵ open" : "";
     status.textContent = mode.kind === "heading"
-      ? `${hits.length} heading${hits.length === 1 ? "" : "s"} in ${mode.target} · ↵ to insert`
-      : `${hits.length} result${hits.length === 1 ? "" : "s"} · ↵ to insert`;
+      ? `${hits.length} heading${hits.length === 1 ? "" : "s"} in ${mode.target} · ↵ insert${openHint}`
+      : `${hits.length} result${hits.length === 1 ? "" : "s"} · ↵ insert${openHint}`;
     for (let i = 0; i < hits.length; i++) {
       const hit = hits[i]!;
       const row = document.createElement("div");
@@ -221,17 +232,44 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
   }
 
   function commit(hit: SearchHit | HeadingHit): void {
+    const raw = opts.templateMode === "raw";
     let insert: string;
     if (mode.kind === "heading") {
       const h = hit as HeadingHit;
-      insert = `[[${mode.target}#${h.anchor}]]`;
+      const ref = `${mode.target}#${h.anchor}`;
+      insert = raw ? ref : `[[${ref}]]`;
     } else {
-      insert = `[[${(hit as SearchHit).path}]]`;
+      const path = (hit as SearchHit).path;
+      insert = raw ? path : `[[${path}]]`;
     }
     opts.view.dispatch({
       changes: { from: opts.triggerStart, to: triggerEnd, insert },
       selection: { anchor: opts.triggerStart + insert.length },
     });
+    dismiss();
+  }
+
+  function openSelected(): void {
+    if (!opts.onOpenLink) return;
+    const hits = activeHits();
+    const hit = hits[selectedIndex];
+    let target: string;
+    let anchor: string | null = null;
+    if (mode.kind === "heading") {
+      // Heading-mode: target is the file portion, anchor is the picked
+      // heading anchor. If no hit selected (empty list), navigate to
+      // the file alone.
+      target = mode.target;
+      if (hit) anchor = (hit as HeadingHit).anchor;
+    } else if (hit) {
+      target = (hit as SearchHit).path;
+    } else {
+      // No hit available — fall back to the typed query as a target.
+      // Useful for "I clicked a wikilink, no search ran yet, just
+      // open the existing target."
+      target = query;
+    }
+    opts.onOpenLink(target, anchor);
     dismiss();
   }
 
@@ -256,6 +294,16 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
       }
       const hits = activeHits();
       if (event.key === "Enter") {
+        // Cmd/Ctrl+Enter -> open the selected hit (or trigger target)
+        // instead of committing a replace. The host wires this to
+        // openInActivePane via onOpenLink.
+        if (event.metaKey || event.ctrlKey) {
+          if (opts.onOpenLink) {
+            openSelected();
+            return true;
+          }
+          return false;
+        }
         const hit = hits[selectedIndex];
         if (hit) {
           commit(hit);

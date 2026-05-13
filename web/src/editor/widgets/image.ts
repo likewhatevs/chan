@@ -96,11 +96,19 @@ class ImageWidget extends WidgetType {
     if (resolved) img.src = resolved;
     if (width != null) img.style.width = `${width}px`;
     img.draggable = false;
-    img.addEventListener("click", (e) => {
-      if (!this.onClick) return;
+    img.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
       e.preventDefault();
       e.stopPropagation();
-      this.onClick({ src: this.src, alt: this.alt, pos: this.nodePos });
+      // Cmd/Ctrl-click -> trigger the host's onClick handler
+      // (which opens the image-zoom modal). Plain click drops the
+      // caret inside the URL so the image bubble auto-opens via the
+      // imageUrlAtCaret trigger.
+      if ((e.metaKey || e.ctrlKey) && this.onClick) {
+        this.onClick({ src: this.src, alt: this.alt, pos: this.nodePos });
+        return;
+      }
+      placeCaretInImageUrl(view, wrap);
     });
     wrap.appendChild(img);
 
@@ -117,6 +125,29 @@ class ImageWidget extends WidgetType {
   ignoreEvent(): boolean {
     return true;
   }
+}
+
+function placeCaretInImageUrl(view: EditorView, wrap: HTMLElement): void {
+  const wrapPos = view.posAtDOM(wrap);
+  if (wrapPos < 0) return;
+  const tree = syntaxTree(view.state);
+  let node = tree.resolveInner(wrapPos, 1);
+  while (node && node.name !== "Image") node = node.parent ?? null!;
+  if (!node || node.name !== "Image") return;
+  const cursor = node.cursor();
+  if (!cursor.firstChild()) return;
+  let urlTo = -1;
+  do {
+    if (cursor.name === "URL") {
+      urlTo = cursor.to;
+      break;
+    }
+  } while (cursor.nextSibling());
+  if (urlTo < 0) return;
+  // Caret at URL.to (just before `)`) — inside the URL range so the
+  // imageUrlAtCaret trigger fires and the bubble auto-opens.
+  view.dispatch({ selection: { anchor: urlTo } });
+  view.focus();
 }
 
 function startResize(

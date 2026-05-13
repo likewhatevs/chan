@@ -47,7 +47,7 @@
   import { openContactBubble } from "./bubbles/contact";
   import { openImageBubble } from "./bubbles/image";
   import { imageDropHandlers } from "./bubbles/image_drop";
-  import { openImageActionOverlay } from "./overlays/image_action";
+  import { openImageZoom } from "../state/imageZoom";
   import { headingFold } from "./fold";
   import * as fmt from "./commands/format";
   import type { BlockKind } from "./commands/format";
@@ -89,24 +89,14 @@
   /// reference (no stale closure).
   let activeBubble: BubbleHandle | null = null;
   let activeKind: BubbleSpec["kind"] | null = null;
-  let imageOverlay: { dismiss: () => void } | null = null;
 
-  function dismissImageOverlay(): void {
-    if (imageOverlay) {
-      imageOverlay.dismiss();
-      imageOverlay = null;
-    }
-  }
-
+  /// Image atom Cmd/Ctrl-click handler. The image widget only fires
+  /// onImageClick on Cmd/Ctrl-click now (plain click drops the caret
+  /// inside the URL so the image bubble auto-opens via the
+  /// imageUrlAtCaret trigger). We treat Cmd/Ctrl-click as "open" —
+  /// route to the existing image-zoom modal.
   function handleImageClick(args: ImageClickArgs): void {
-    if (!view) return;
-    dismissImageOverlay();
-    imageOverlay = openImageActionOverlay({
-      view,
-      src: args.src,
-      pos: args.pos,
-      fromPath: currentPath,
-    });
+    openImageZoom(args.src, currentPath);
     onImageClick(args);
   }
 
@@ -149,6 +139,15 @@
         triggerEnd: spec.triggerEnd,
         initialQuery: spec.query,
         prefix: wikiPickerPrefix,
+        templateMode: spec.templateMode ?? "wrap",
+        onOpenLink: (target, anchor) =>
+          onWikiClick({
+            target,
+            label: target,
+            anchor: anchor ?? "",
+            wasAbs: target.startsWith("/"),
+            openInNewPane: false,
+          }),
         onDismiss,
       });
       activeKind = "wiki";
@@ -178,6 +177,7 @@
         initialQuery: spec.query,
         uploadDir: dirOf(currentPath),
         templateMode: spec.templateMode ?? "wrap",
+        onOpenLink: (path) => openImageZoom(path, currentPath),
         onDismiss,
       });
       activeKind = "image";
@@ -286,7 +286,6 @@
   });
 
   onDestroy(() => {
-    dismissImageOverlay();
     if (activeBubble) activeBubble.dismiss();
     view?.destroy();
   });

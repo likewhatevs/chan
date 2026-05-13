@@ -52,6 +52,19 @@ export function computeBubbleSpec(state: EditorState): BubbleSpec | null {
       templateMode: "raw",
     };
   }
+  // Same idea for an existing Link's URL portion (the `[label](path)`
+  // form). The wiki bubble takes over in raw mode — commit replaces
+  // just the URL, leaves the surrounding `[label](`...`)` intact.
+  const linkUrl = linkUrlAtCaret(state, pos);
+  if (linkUrl !== null) {
+    return {
+      kind: "wiki",
+      triggerStart: linkUrl.from,
+      triggerEnd: linkUrl.to,
+      query: linkUrl.queryUpToCaret,
+      templateMode: "raw",
+    };
+  }
   const line = state.doc.lineAt(pos);
   const before = line.text.slice(0, pos - line.from);
   // Wiki: `[[query` (caret after the typed query, no `]` between).
@@ -153,6 +166,27 @@ function caretInsideSkipRange(state: EditorState, pos: number): boolean {
     cur = cur.parent;
   }
   return false;
+}
+
+function linkUrlAtCaret(
+  state: EditorState,
+  pos: number,
+): { from: number; to: number; queryUpToCaret: string } | null {
+  let node: ReturnType<typeof syntaxTree>["topNode"] | null = syntaxTree(
+    state,
+  ).resolveInner(pos, 0);
+  while (node) {
+    if (node.name === "URL" && node.parent?.name === "Link") {
+      if (pos < node.from || pos > node.to) return null;
+      return {
+        from: node.from,
+        to: node.to,
+        queryUpToCaret: state.doc.sliceString(node.from, pos),
+      };
+    }
+    node = node.parent;
+  }
+  return null;
 }
 
 function imageUrlAtCaret(

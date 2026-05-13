@@ -44,7 +44,6 @@ import { selectionInRange } from "../decorations/selection";
 import { normalizeHref } from "../links";
 import { isImagePath } from "../extensions/image";
 import { api } from "../../api/client";
-import { openLinkAction } from "../overlays/link_action";
 
 export type LinkKind = "file" | "contact" | "image" | "broken";
 
@@ -214,27 +213,33 @@ class WikiLinkWidget extends WidgetType {
       if (e.button !== 0) return;
       e.preventDefault();
       e.stopPropagation();
-      // Cmd/Ctrl-click bypasses the popover and goes straight to
-      // open-in-new-pane (the power-user shortcut).
+      // Cmd/Ctrl-click navigates immediately (open-in-new-pane).
+      // Plain click reveals the source AND lands the caret in a
+      // position the trigger detector recognizes — the wiki bubble
+      // pops up with the existing target as the query, and the user
+      // can pick a new target with Enter or open via Cmd+Enter.
       if (e.metaKey || e.ctrlKey) {
         this.onClick({ ...this.parsed, openInNewPane: true });
         return;
       }
-      // Plain click opens the link-action popover under the pill.
       const pillFrom = view.posAtDOM(el);
       if (pillFrom < 0) {
-        // posAtDOM failed; fall back to direct open.
         this.onClick({ ...this.parsed, openInNewPane: false });
         return;
       }
-      openLinkAction({
-        view,
-        anchor: el,
-        parsed: this.parsed,
-        pillFrom,
-        pillTo: pillFrom + this.sourceLen,
-        onOpen: this.onClick,
-      });
+      // Caret position depends on form:
+      //   [[...]]      -> just before the closing ]] (sourceLen-2)
+      //   [label](url) -> middle of the URL portion (sourceLen-1
+      //                   lands just before the closing `)`)
+      // Both positions are inside an existing source range that the
+      // trigger detector recognizes (matchBracket for [[, the new
+      // internalLinkUrlAtCaret detector for [..](..)).
+      const pillTo = pillFrom + this.sourceLen;
+      const isWikiForm =
+        view.state.doc.sliceString(pillFrom, pillFrom + 2) === "[[";
+      const caret = isWikiForm ? pillTo - 2 : pillTo - 1;
+      view.dispatch({ selection: { anchor: caret } });
+      view.focus();
     });
     return el;
   }

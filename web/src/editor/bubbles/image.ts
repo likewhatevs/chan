@@ -34,6 +34,11 @@ export interface ImageBubbleOpts {
   /// "wrap" -> commit inserts `![](path)`; "raw" -> commit inserts
   /// just `path` (used when editing an existing image's URL portion).
   templateMode?: "wrap" | "raw";
+  /// Cmd+Enter handler. Called with the selected hit's path so the
+  /// host can open the image zoom modal (or do whatever "open the
+  /// image" means in context). Optional — when omitted, Cmd+Enter is
+  /// a no-op.
+  onOpenLink?: (path: string) => void;
   onDismiss: () => void;
 }
 
@@ -128,7 +133,8 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
       shell.reposition();
       return;
     }
-    status.textContent = `${hits.length} result${hits.length === 1 ? "" : "s"} · ↵ to insert`;
+    const openHint = opts.onOpenLink ? " · ⌘↵ open" : "";
+    status.textContent = `${hits.length} result${hits.length === 1 ? "" : "s"} · ↵ insert${openHint}`;
     for (let i = 0; i < hits.length; i++) {
       const path = hits[i]!;
       const row = document.createElement("div");
@@ -208,6 +214,16 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
         return true;
       }
       if (event.key === "Enter") {
+        if (event.metaKey || event.ctrlKey) {
+          // Cmd/Ctrl+Enter -> "open" the selected (or queried) path.
+          // For images this is the host's zoom modal.
+          if (!opts.onOpenLink) return false;
+          const path = hits[selectedIndex] ?? query;
+          if (!path) return false;
+          opts.onOpenLink(path);
+          dismiss();
+          return true;
+        }
         const path = hits[selectedIndex];
         if (path) {
           commitPath(path);
