@@ -42,6 +42,8 @@
   import { bubbleKeymap, bubbleListener } from "./bubbles/controller";
   import type { BubbleHandle, BubbleSpec } from "./bubbles/types";
   import { openWikiBubble } from "./bubbles/wiki";
+  import { openTagBubble } from "./bubbles/tag";
+  import { openContactBubble } from "./bubbles/contact";
   import type { FindAdapter } from "../editor/find";
 
   let {
@@ -102,6 +104,10 @@
       activeBubble = null;
       activeKind = null;
     }
+    const onDismiss = () => {
+      activeBubble = null;
+      activeKind = null;
+    };
     if (spec.kind === "wiki") {
       activeBubble = openWikiBubble({
         view,
@@ -109,14 +115,29 @@
         triggerEnd: spec.triggerEnd,
         initialQuery: spec.query,
         prefix: wikiPickerPrefix,
-        onDismiss: () => {
-          activeBubble = null;
-          activeKind = null;
-        },
+        onDismiss,
       });
       activeKind = "wiki";
+    } else if (spec.kind === "tag") {
+      activeBubble = openTagBubble({
+        view,
+        triggerStart: spec.triggerStart,
+        triggerEnd: spec.triggerEnd,
+        initialQuery: spec.query,
+        onDismiss,
+      });
+      activeKind = "tag";
+    } else if (spec.kind === "contact") {
+      activeBubble = openContactBubble({
+        view,
+        triggerStart: spec.triggerStart,
+        triggerEnd: spec.triggerEnd,
+        initialQuery: spec.query,
+        onDismiss,
+      });
+      activeKind = "contact";
     }
-    // image / tag / contact bubbles: step 7b/7c.
+    // image bubble: step 7c.
   }
 
   /// Find-on-page adapter (same shape as Source.svelte and the legacy
@@ -369,6 +390,10 @@
     font-size: 12px;
     border-top: 1px solid var(--border, #eee);
     margin-top: 2px;
+  }
+  :global(.md-bubble .md-bubble-row-sub) {
+    color: var(--text-secondary, #888);
+    font-size: 12px;
   }
 
   /* ---- heading line classes ---- */
