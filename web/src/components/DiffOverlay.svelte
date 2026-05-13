@@ -114,24 +114,6 @@
     closeDiffOverlay();
   }
 
-  function onDiscard(): void {
-    dispatchAction("dismiss");
-    closeDiffOverlay();
-  }
-
-  function onSaveAs(): void {
-    dispatchAction("save-as");
-    // Keep the overlay open: Save-as opens a path prompt that
-    // sits over this view. The user may want to keep diffing
-    // after save (the original is unchanged).
-  }
-
-  function onCopy(): void {
-    dispatchAction("copy");
-    // Keep the overlay open. The proposal stays pending — the
-    // user may want to copy AND apply, or copy AND save-as.
-  }
-
   function onKey(e: KeyboardEvent): void {
     if (e.key === "Escape") {
       // Stop propagation so the document-level keydown in
@@ -185,10 +167,14 @@
       <div class="merge-host" bind:this={host}></div>
       {#if diffOverlay.edit && diffOverlay.edit.status === "pending"}
         <footer class="actions">
-          <button type="button" class="primary" onclick={onApply}>Apply</button>
-          <button type="button" onclick={onCopy}>Copy</button>
-          <button type="button" onclick={onSaveAs}>Save as…</button>
-          <button type="button" onclick={onDiscard}>Discard</button>
+          <!-- Diff review is read-only: just Accept (apply now) or
+               Close (back to the chat). All the other actions —
+               Copy / Save as… / Discard — live on the chat bubble
+               so the user can pick them after a quick review,
+               without the diff overlay competing with PathPrompt
+               modal z-indexes or surfacing redundant chrome here. -->
+          <button type="button" class="primary" onclick={onApply}>Accept</button>
+          <button type="button" onclick={closeDiffOverlay}>Close</button>
         </footer>
       {:else if diffOverlay.edit}
         <footer class="actions status-only">

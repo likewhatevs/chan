@@ -38,6 +38,7 @@
     settingsOverlay,
     syncOverlayStack,
     topOverlay,
+    watchBubbleDisplayMode,
     watchSystemTheme,
   } from "./state/store.svelte";
   import {
@@ -178,6 +179,10 @@
     watchSystemTheme();
     // Cross-window sync of the page-width setting via the storage event.
     watchPageWidth();
+    // Same storage-event sync for the assistant chat's bubble
+    // render mode so flipping it in one window propagates to
+    // every other open window live.
+    watchBubbleDisplayMode();
     // Idle tracker: after 2.5s without scroll/click/keypress, the
     // floating pills fade. Any input flips them back on.
     installIdleTracker();

@@ -61,6 +61,9 @@
     availableAssistantContexts,
     bareToolName,
     beginAssistantStream,
+    bubbleDisplayMode,
+    type BubbleDisplayMode,
+    setBubbleDisplayMode,
     clearFileConversation,
     clearGroupConversation,
     clearDriveConversation,
@@ -230,24 +233,18 @@
     return new Date(ts).toISOString().slice(0, 10);
   }
 
-  /// Per-bubble render mode for assistant turns. Three options:
-  ///   - "editor" (default): read-only Wysiwyg with chan's full
-  ///     widget set, so wiki-links / mentions / tags / dates render
-  ///     as pills exactly as in a file tab.
-  ///   - "rendered": sanitized GFM HTML via renderMarkdown. Chan-
-  ///     specific syntax ships as plain text here — marked doesn't
-  ///     speak chan.
-  ///   - "source": raw markdown text in a monospace block. Compare
-  ///     against the model's literal output.
-  /// Keyed by turn index; absent entries default to "editor".
-  /// In-memory only; not persisted with the conversation.
-  type BubbleMode = "rendered" | "editor" | "source";
-  let bubbleMode = $state<Record<number, BubbleMode>>({});
-  function bubbleModeFor(i: number): BubbleMode {
-    return bubbleMode[i] ?? "editor";
+  /// Bubble render mode is a single GLOBAL preference (one choice
+  /// for the whole chat, persisted via localStorage in
+  /// state/store.svelte.ts). The helpers ignore their per-turn
+  /// argument so the call-sites stay stable, but every bubble
+  /// reads from `bubbleDisplayMode.value` and every toggle click
+  /// writes through `setBubbleDisplayMode`.
+  type BubbleMode = BubbleDisplayMode;
+  function bubbleModeFor(_turn: AssistantTurn): BubbleMode {
+    return bubbleDisplayMode.value;
   }
-  function setBubbleMode(i: number, m: BubbleMode): void {
-    bubbleMode[i] = m;
+  function setBubbleMode(_turn: AssistantTurn, m: BubbleMode): void {
+    setBubbleDisplayMode(m);
   }
 
 /// Index of the most recently copied turn; the matching button
@@ -1460,15 +1457,59 @@
                 <span class="role">you</span>
                 <span class="ts">{formatRelative(turn.created_at)}</span>
               </div>
-              <!-- User prompts render as markdown too. Whatever the
-                   user types into the Wysiwyg prompt (headings, code
-                   fences, blockquotes, bold/italic) round-trips into
-                   the scrollback with the same .md styling the
-                   assistant bubble uses. The model still receives
-                   the raw markdown source via the `# Instruction`
-                   block of buildUserMessage; this is purely a
-                   display choice. -->
-              <div class="body md">{@html renderMarkdown(turn.content)}</div>
+              <!-- User prompts get the same three-way toggle the
+                   assistant bubbles have, since the user often types
+                   chan-native syntax (#tags, [[wiki]], @@mentions,
+                   YYYY-MM-DD dates) that marked alone renders as
+                   literal text. Default is "editor" so the pills
+                   appear out of the box. -->
+              <div class="body-wrap user-body-wrap">
+                <div class="mode-toggle" role="group" aria-label="render mode">
+                  <button
+                    type="button"
+                    class:active={bubbleModeFor(turn) === "editor"}
+                    title="editor view (chan pills: wiki / tags / mentions / dates) — default"
+                    aria-label="editor view"
+                    onclick={() => setBubbleMode(turn, "editor")}
+                  >
+                    <PenLine size={12} strokeWidth={1.75} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    class:active={bubbleModeFor(turn) === "rendered"}
+                    title="rendered markdown"
+                    aria-label="rendered markdown"
+                    onclick={() => setBubbleMode(turn, "rendered")}
+                  >
+                    <Eye size={12} strokeWidth={1.75} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    class:active={bubbleModeFor(turn) === "source"}
+                    title="raw markdown source"
+                    aria-label="raw source"
+                    onclick={() => setBubbleMode(turn, "source")}
+                  >
+                    <Code size={12} strokeWidth={1.75} aria-hidden="true" />
+                  </button>
+                </div>
+                {#if bubbleModeFor(turn) === "rendered"}
+                  <div class="body md">{@html renderMarkdown(turn.content)}</div>
+                {:else if bubbleModeFor(turn) === "editor"}
+                  <div class="body editor-mode">
+                    <Wysiwyg
+                      value={turn.content}
+                      readonly={true}
+                      onWikiClick={(args) => {
+                        void openInActivePane(args.target);
+                      }}
+                      onTagClick={(name) => openGraphForTag(`#${name}`, name)}
+                    />
+                  </div>
+                {:else}
+                  <pre class="body source">{turn.content}</pre>
+                {/if}
+              </div>
             </div>
           {:else if turn.kind === "assistant"}
             <div class="bubble assistant">
@@ -1501,35 +1542,35 @@
                 <div class="mode-toggle" role="group" aria-label="render mode">
                   <button
                     type="button"
-                    class:active={bubbleModeFor(i) === "editor"}
+                    class:active={bubbleModeFor(turn) === "editor"}
                     title="editor view (chan pills: wiki / tags / mentions / dates) — default"
                     aria-label="editor view"
-                    onclick={() => setBubbleMode(i, "editor")}
+                    onclick={() => setBubbleMode(turn, "editor")}
                   >
                     <PenLine size={12} strokeWidth={1.75} aria-hidden="true" />
                   </button>
                   <button
                     type="button"
-                    class:active={bubbleModeFor(i) === "rendered"}
+                    class:active={bubbleModeFor(turn) === "rendered"}
                     title="rendered markdown"
                     aria-label="rendered markdown"
-                    onclick={() => setBubbleMode(i, "rendered")}
+                    onclick={() => setBubbleMode(turn, "rendered")}
                   >
                     <Eye size={12} strokeWidth={1.75} aria-hidden="true" />
                   </button>
                   <button
                     type="button"
-                    class:active={bubbleModeFor(i) === "source"}
+                    class:active={bubbleModeFor(turn) === "source"}
                     title="raw markdown source"
                     aria-label="raw source"
-                    onclick={() => setBubbleMode(i, "source")}
+                    onclick={() => setBubbleMode(turn, "source")}
                   >
                     <Code size={12} strokeWidth={1.75} aria-hidden="true" />
                   </button>
                 </div>
-                {#if bubbleModeFor(i) === "rendered"}
+                {#if bubbleModeFor(turn) === "rendered"}
                   <div class="body md">{@html renderMarkdown(turn.content)}</div>
-                {:else if bubbleModeFor(i) === "editor"}
+                {:else if bubbleModeFor(turn) === "editor"}
                   <div class="body editor-mode">
                     <!-- Read-only Wysiwyg. The widget click handlers
                          (tag, wiki, image, date) stay live — they
@@ -2022,8 +2063,8 @@
     border-radius: 4px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
   }
-  .bubble.assistant:hover .mode-toggle,
-  .bubble.assistant:focus-within .mode-toggle {
+  .bubble:hover .mode-toggle,
+  .bubble:focus-within .mode-toggle {
     display: inline-flex;
   }
   .bubble .mode-toggle button {

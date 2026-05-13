@@ -977,6 +977,66 @@ export type AssistantPendingEdit = {
 /// these as a clickable "Sources" list below the answer. File and
 /// group contexts leave it absent (their context is the open file
 /// content, not a search excerpt).
+/// Render mode applied to every chat bubble (user and assistant).
+/// Lives as a global preference rather than per-bubble: the user
+/// picks once and every conversation reflects the choice. Same
+/// persistence shape as `pageWidth` (localStorage), so a reload
+/// or restart restores the last selection.
+///
+///   - "editor": read-only chan Wysiwyg (default). Renders the
+///     full editor with wiki / tag / mention / date widgets.
+///   - "rendered": sanitized GFM HTML via marked + DOMPurify.
+///   - "source": raw markdown text in a monospace block.
+export type BubbleDisplayMode = "editor" | "rendered" | "source";
+
+const BUBBLE_MODE_STORAGE_KEY = "chan.assistant.bubbleMode";
+const DEFAULT_BUBBLE_MODE: BubbleDisplayMode = "editor";
+
+function readBubbleMode(): BubbleDisplayMode {
+  try {
+    const raw = localStorage.getItem(BUBBLE_MODE_STORAGE_KEY);
+    if (raw === "editor" || raw === "rendered" || raw === "source") return raw;
+  } catch {
+    // localStorage can throw in private-mode Safari; fall through.
+  }
+  return DEFAULT_BUBBLE_MODE;
+}
+
+export const bubbleDisplayMode = $state<{ value: BubbleDisplayMode }>({
+  value: readBubbleMode(),
+});
+
+/// Update the global bubble render mode and persist. Tabs / windows
+/// that read `bubbleDisplayMode.value` reactively will rerender;
+/// the storage event hook below also picks the change up in
+/// sibling browser tabs.
+export function setBubbleDisplayMode(m: BubbleDisplayMode): void {
+  if (bubbleDisplayMode.value === m) return;
+  bubbleDisplayMode.value = m;
+  try {
+    localStorage.setItem(BUBBLE_MODE_STORAGE_KEY, m);
+  } catch {
+    // Same safety net as readBubbleMode.
+  }
+}
+
+/// Subscribe to localStorage changes from sibling tabs / windows so
+/// flipping the mode in one window propagates everywhere live.
+/// Mirrors `watchPageWidth`. Returns a disposer; call once from
+/// the app bootstrap.
+export function watchBubbleDisplayMode(): () => void {
+  if (typeof window === "undefined") return () => {};
+  const handler = (e: StorageEvent) => {
+    if (e.key !== BUBBLE_MODE_STORAGE_KEY) return;
+    const next = e.newValue;
+    if (next === "editor" || next === "rendered" || next === "source") {
+      bubbleDisplayMode.value = next;
+    }
+  };
+  window.addEventListener("storage", handler);
+  return () => window.removeEventListener("storage", handler);
+}
+
 export type AssistantTurn =
   | { kind: "user"; content: string; created_at?: number }
   | {
