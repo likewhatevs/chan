@@ -152,7 +152,11 @@ const ALLOWED_TOOLS: &str = concat!(
     "mcp__chan__write_file,",
     "mcp__chan__list_files,",
     "mcp__chan__search_content,",
-    "mcp__chan__read_image",
+    "mcp__chan__read_image,",
+    "mcp__chan__graph_neighbors,",
+    "mcp__chan__graph_tags,",
+    "mcp__chan__graph_files_with_tag,",
+    "mcp__chan__repo_report",
 );
 
 /// Tools claude is explicitly NOT allowed to use in v2 mode.
@@ -429,6 +433,15 @@ impl Backend for ClaudeCliBackend {
                     PartialEvent::ContentBlockDelta { .. } | PartialEvent::Other => {}
                 },
                 StreamEvent::Assistant { message } => {
+                    tracing::debug!(
+                        block_count = message.content.len(),
+                        partials_indices = ?partial_text_by_index.keys().collect::<Vec<_>>(),
+                        partials_lens = ?partial_text_by_index
+                            .iter()
+                            .map(|(k, v)| (*k, v.len()))
+                            .collect::<Vec<_>>(),
+                        "claude_cli: Assistant event received",
+                    );
                     for (i, block) in message.content.into_iter().enumerate() {
                         match block {
                             ContentBlock::Text { text } => {
@@ -1566,6 +1579,10 @@ mod tests {
             "mcp__chan__list_files",
             "mcp__chan__search_content",
             "mcp__chan__read_image",
+            "mcp__chan__graph_neighbors",
+            "mcp__chan__graph_tags",
+            "mcp__chan__graph_files_with_tag",
+            "mcp__chan__repo_report",
         ] {
             assert!(
                 ALLOWED_TOOLS.contains(tool),

@@ -212,6 +212,44 @@ pub struct ReadImageParams {
     pub path: String,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GraphNeighborsParams {
+    /// POSIX-style relative path of the file whose graph adjacency
+    /// you want.
+    pub path: String,
+    /// `out` (this file's outbound edges), `in` (backlinks), or
+    /// `both`. Defaults to `both` when omitted.
+    #[serde(default)]
+    pub direction: Option<String>,
+    /// Subset of `link` / `tag` / `mention` to include. Omit for
+    /// every kind.
+    #[serde(default)]
+    pub kinds: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GraphFilesWithTagParams {
+    /// Tag name including the leading `#`, e.g. `#design`.
+    pub tag: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RepoReportParams {
+    /// Optional POSIX rel-path prefix to scope the snapshot to a
+    /// subdirectory.
+    #[serde(default)]
+    pub prefix: Option<String>,
+    /// Optional explicit list of POSIX rel-paths. When non-empty,
+    /// takes precedence over `prefix`.
+    #[serde(default)]
+    pub paths: Option<Vec<String>>,
+    /// Include per-file rows in the response (capped at 200).
+    /// Default false: only totals, per-language roll-ups, and the
+    /// COCOMO summary are returned.
+    #[serde(default)]
+    pub include_files: Option<bool>,
+}
+
 // ---- tool dispatch ----------------------------------------------------
 
 // Tool descriptions duplicate `crate::prompts::*_DESC` as string
@@ -339,6 +377,89 @@ have widened or narrowed this cap via config).")]
         let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
         Ok(Content::image(b64, mime))
     }
+
+    #[tool(description = "\
+Read the drive's link graph for a single file. Returns `out` (this \
+file's outbound edges: wiki/markdown `[[links]]`, `#tags`, and \
+`@@mentions`) and `in` (backlinks: every other file that points at \
+this one). Use it for backlink-aware questions ('what links here?'), \
+to discover a tag's neighbourhood without reading every file, or to \
+plan an edit that should also touch the files that reference this \
+one. Optional `direction` (`out` / `in` / `both`, default `both`) \
+and `kinds` (subset of `link`/`tag`/`mention`) narrow the response.")]
+    fn graph_neighbors(
+        &self,
+        Parameters(p): Parameters<GraphNeighborsParams>,
+    ) -> std::result::Result<String, ErrorData> {
+        let mut args = serde_json::json!({"path": p.path});
+        if let Some(dir) = p.direction {
+            args["direction"] = serde_json::Value::String(dir);
+        }
+        if let Some(kinds) = p.kinds {
+            args["kinds"] = serde_json::json!(kinds);
+        }
+        run_tool("graph_neighbors", &args, &self.ctx)
+    }
+
+    #[tool(description = "\
+List every `#tag` known to the drive's graph index with the number \
+of files that carry it. No arguments. Use it when the user asks \
+about tag usage, before a rename / merge, or to discover the actual \
+taxonomy instead of guessing. Pair with `graph_files_with_tag` to \
+expand a tag into its file list.")]
+    fn graph_tags(
+        &self,
+        Parameters(_): Parameters<EmptyParams>,
+    ) -> std::result::Result<String, ErrorData> {
+        run_tool("graph_tags", &serde_json::json!({}), &self.ctx)
+    }
+
+    #[tool(description = "\
+Return every file that carries the given `#tag`. The argument \
+includes the leading `#`. Cheap: the graph index keeps this \
+membership as a direct lookup, so it's preferable to scanning every \
+file with search_content when the user has a specific tag in mind.")]
+    fn graph_files_with_tag(
+        &self,
+        Parameters(p): Parameters<GraphFilesWithTagParams>,
+    ) -> std::result::Result<String, ErrorData> {
+        run_tool(
+            "graph_files_with_tag",
+            &serde_json::json!({"tag": p.tag}),
+            &self.ctx,
+        )
+    }
+
+    #[tool(description = "\
+Snapshot the drive's code/content report: per-file language, code \
+lines, comments, blanks, a complexity heuristic (keyword count, \
+not cyclomatic), plus per-language roll-ups and a Basic COCOMO \
+cost estimate. The drive maintains this index incrementally as \
+files change, so the call is cheap to repeat. Use it when the user \
+asks about repo size, language mix, where the code lives, or to \
+scope a refactor. Optional args: `prefix` (POSIX rel-path) to \
+limit the snapshot to a subdirectory, or `paths` (array) for an \
+explicit file list. When both are present, `paths` wins. \
+`include_files` (default false) controls whether the per-file rows \
+are returned; leave it off for an overview, set true when you \
+need to drill in. The per-file array is capped at 200 entries; if \
+`truncated` is true, scope further with `prefix` or `paths`.")]
+    fn repo_report(
+        &self,
+        Parameters(p): Parameters<RepoReportParams>,
+    ) -> std::result::Result<String, ErrorData> {
+        let mut args = serde_json::json!({});
+        if let Some(prefix) = p.prefix {
+            args["prefix"] = serde_json::Value::String(prefix);
+        }
+        if let Some(paths) = p.paths {
+            args["paths"] = serde_json::json!(paths);
+        }
+        if let Some(b) = p.include_files {
+            args["include_files"] = serde_json::Value::Bool(b);
+        }
+        run_tool("repo_report", &args, &self.ctx)
+    }
 }
 
 #[tool_handler(
@@ -459,6 +580,26 @@ mod tests {
         assert_eq!(
             image.description.as_deref(),
             Some(crate::prompts::READ_IMAGE_DESC)
+        );
+        let neighbors = Server::graph_neighbors_tool_attr();
+        assert_eq!(
+            neighbors.description.as_deref(),
+            Some(crate::prompts::GRAPH_NEIGHBORS_DESC)
+        );
+        let tags = Server::graph_tags_tool_attr();
+        assert_eq!(
+            tags.description.as_deref(),
+            Some(crate::prompts::GRAPH_TAGS_DESC)
+        );
+        let files_with_tag = Server::graph_files_with_tag_tool_attr();
+        assert_eq!(
+            files_with_tag.description.as_deref(),
+            Some(crate::prompts::GRAPH_FILES_WITH_TAG_DESC)
+        );
+        let report = Server::repo_report_tool_attr();
+        assert_eq!(
+            report.description.as_deref(),
+            Some(crate::prompts::REPO_REPORT_DESC)
         );
     }
 

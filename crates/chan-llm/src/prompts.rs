@@ -32,6 +32,15 @@ You can call tools to interact with the drive:
                               per-language roll-ups and a COCOMO \
                               cost estimate for the whole drive \
                               (or a subdirectory or file list)
+  - graph_neighbors(path)    outbound links/tags/mentions for a \
+                              file plus its backlinks (other files \
+                              that point at it). Use this to answer \
+                              'what links here?' or to find related \
+                              notes without reading the whole drive.
+  - graph_tags()             every `#tag` in the drive with file \
+                              counts. Pair with graph_files_with_tag \
+                              to expand a tag to its files.
+  - graph_files_with_tag(t)  list every file carrying the given tag.
 
 Use the tools rather than guessing at content. When you propose \
 an edit, return the FULL new file content via write_file; partial \
@@ -132,6 +141,32 @@ explicit file list. When both are present, `paths` wins. \
 are returned; leave it off for an overview, set true when you \
 need to drill in. The per-file array is capped at 200 entries; if \
 `truncated` is true, scope further with `prefix` or `paths`.";
+
+/// Description of the graph_neighbors tool.
+pub const GRAPH_NEIGHBORS_DESC: &str = "\
+Read the drive's link graph for a single file. Returns `out` (this \
+file's outbound edges: wiki/markdown `[[links]]`, `#tags`, and \
+`@@mentions`) and `in` (backlinks: every other file that points at \
+this one). Use it for backlink-aware questions ('what links here?'), \
+to discover a tag's neighbourhood without reading every file, or to \
+plan an edit that should also touch the files that reference this \
+one. Optional `direction` (`out` / `in` / `both`, default `both`) \
+and `kinds` (subset of `link`/`tag`/`mention`) narrow the response.";
+
+/// Description of the graph_tags tool.
+pub const GRAPH_TAGS_DESC: &str = "\
+List every `#tag` known to the drive's graph index with the number \
+of files that carry it. No arguments. Use it when the user asks \
+about tag usage, before a rename / merge, or to discover the actual \
+taxonomy instead of guessing. Pair with `graph_files_with_tag` to \
+expand a tag into its file list.";
+
+/// Description of the graph_files_with_tag tool.
+pub const GRAPH_FILES_WITH_TAG_DESC: &str = "\
+Return every file that carries the given `#tag`. The argument \
+includes the leading `#`. Cheap: the graph index keeps this \
+membership as a direct lookup, so it's preferable to scanning every \
+file with search_content when the user has a specific tag in mind.";
 
 /// Description of the read_image tool. MCP-only: not surfaced
 /// through `tools::standard_tool_schemas()` because the in-process

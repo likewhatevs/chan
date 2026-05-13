@@ -99,6 +99,18 @@ pub enum StandardTool {
     ListFiles,
     SearchContent,
     RepoReport,
+    /// Graph adjacency for a single file: outbound links / tags /
+    /// mentions, and inbound backlinks. Lets the assistant answer
+    /// "what links here?" and "what does this point at?" without
+    /// reading every file.
+    GraphNeighbors,
+    /// Global tag census: every `#tag` known to the drive with the
+    /// number of files that carry it. Cheap; useful for the
+    /// assistant to plan a tag rename or pivot.
+    GraphTags,
+    /// All files carrying a given `#tag`. Pairs with GraphTags
+    /// when the assistant has a tag name and wants the files.
+    GraphFilesWithTag,
 }
 
 impl StandardTool {
@@ -109,6 +121,9 @@ impl StandardTool {
             StandardTool::ListFiles => "list_files",
             StandardTool::SearchContent => "search_content",
             StandardTool::RepoReport => "repo_report",
+            StandardTool::GraphNeighbors => "graph_neighbors",
+            StandardTool::GraphTags => "graph_tags",
+            StandardTool::GraphFilesWithTag => "graph_files_with_tag",
         }
     }
 
@@ -119,6 +134,9 @@ impl StandardTool {
             "list_files" => Some(StandardTool::ListFiles),
             "search_content" => Some(StandardTool::SearchContent),
             "repo_report" => Some(StandardTool::RepoReport),
+            "graph_neighbors" => Some(StandardTool::GraphNeighbors),
+            "graph_tags" => Some(StandardTool::GraphTags),
+            "graph_files_with_tag" => Some(StandardTool::GraphFilesWithTag),
             _ => None,
         }
     }
@@ -153,8 +171,119 @@ pub fn execute(name: &str, args: &Json, ctx: &ToolContext) -> Result<ToolOutcome
         StandardTool::ListFiles => exec_list_files(args, ctx).map(ToolOutcome::Ok),
         StandardTool::SearchContent => exec_search_content(args, ctx).map(ToolOutcome::Ok),
         StandardTool::RepoReport => exec_repo_report(args, ctx).map(ToolOutcome::Ok),
+        StandardTool::GraphNeighbors => exec_graph_neighbors(args, ctx).map(ToolOutcome::Ok),
+        StandardTool::GraphTags => exec_graph_tags(args, ctx).map(ToolOutcome::Ok),
+        StandardTool::GraphFilesWithTag => {
+            exec_graph_files_with_tag(args, ctx).map(ToolOutcome::Ok)
+        }
         StandardTool::WriteFile => exec_write_file(args, ctx),
     }
+}
+
+/// `link` / `mention` / `tag` lowercase tag for one edge. The
+/// `EdgeKind::as_str` helper inside chan-drive is private, so we
+/// mirror the mapping here to keep this crate from reaching into
+/// chan-drive's internals.
+fn edge_kind_tag(k: chan_drive::EdgeKind) -> &'static str {
+    match k {
+        chan_drive::EdgeKind::Link => "link",
+        chan_drive::EdgeKind::Mention => "mention",
+        chan_drive::EdgeKind::Tag => "tag",
+    }
+}
+
+fn exec_graph_neighbors(args: &Json, ctx: &ToolContext) -> Result<Json> {
+    let path = arg_string(args, "path")?;
+    let direction = args
+        .get("direction")
+        .and_then(|v| v.as_str())
+        .unwrap_or("both");
+    // Optional filter. Compared by the lowercase tag the result
+    // shape uses ("link" / "tag" / "mention") so the model's filter
+    // matches its own output verbatim.
+    let kinds: Option<Vec<String>> = args.get("kinds").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect()
+    });
+    let kind_allowed = |kind: &str| -> bool {
+        match &kinds {
+            Some(k) => k.iter().any(|s| s == kind),
+            None => true,
+        }
+    };
+    let graph = ctx
+        .drive
+        .graph()
+        .map_err(|e| LlmError::Tool(format!("graph: {e}")))?;
+    let want_out = matches!(direction, "out" | "both");
+    let want_in = matches!(direction, "in" | "both");
+    let mut out_edges: Vec<Json> = Vec::new();
+    let mut in_edges: Vec<Json> = Vec::new();
+    if want_out {
+        let edges = graph
+            .neighbors(path)
+            .map_err(|e| LlmError::Tool(format!("graph_neighbors: {e}")))?;
+        for e in edges {
+            let tag = edge_kind_tag(e.kind);
+            if !kind_allowed(tag) {
+                continue;
+            }
+            out_edges.push(serde_json::json!({
+                "kind": tag,
+                "target": e.dst,
+                "anchor": e.anchor,
+            }));
+        }
+    }
+    if want_in {
+        let edges = graph
+            .backlinks(path)
+            .map_err(|e| LlmError::Tool(format!("graph_backlinks: {e}")))?;
+        for e in edges {
+            let tag = edge_kind_tag(e.kind);
+            if !kind_allowed(tag) {
+                continue;
+            }
+            in_edges.push(serde_json::json!({
+                "kind": tag,
+                "source": e.src,
+                "anchor": e.anchor,
+            }));
+        }
+    }
+    Ok(serde_json::json!({
+        "path": path,
+        "out": out_edges,
+        "in": in_edges,
+    }))
+}
+
+fn exec_graph_tags(_args: &Json, ctx: &ToolContext) -> Result<Json> {
+    let graph = ctx
+        .drive
+        .graph()
+        .map_err(|e| LlmError::Tool(format!("graph: {e}")))?;
+    let tags = graph
+        .tags()
+        .map_err(|e| LlmError::Tool(format!("graph_tags: {e}")))?;
+    let entries: Vec<Json> = tags
+        .into_iter()
+        .map(|t| serde_json::json!({"name": t.name, "count": t.count}))
+        .collect();
+    Ok(serde_json::json!({ "tags": entries }))
+}
+
+fn exec_graph_files_with_tag(args: &Json, ctx: &ToolContext) -> Result<Json> {
+    let tag = arg_string(args, "tag")?;
+    let graph = ctx
+        .drive
+        .graph()
+        .map_err(|e| LlmError::Tool(format!("graph: {e}")))?;
+    let files = graph
+        .files_with_tag(tag)
+        .map_err(|e| LlmError::Tool(format!("graph_files_with_tag: {e}")))?;
+    Ok(serde_json::json!({ "tag": tag, "files": files }))
 }
 
 fn arg_string<'a>(args: &'a Json, key: &str) -> Result<&'a str> {
@@ -455,6 +584,52 @@ pub fn standard_tool_schemas() -> Vec<ToolSchema> {
                         "description": "Include per-file rows in the response (capped at 200). Default false: only totals, per-language roll-ups, and the COCOMO summary are returned."
                     }
                 }
+            }),
+        },
+        ToolSchema {
+            name: "graph_neighbors",
+            description: crate::prompts::GRAPH_NEIGHBORS_DESC,
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "POSIX rel-path of the file whose graph adjacency you want."
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["out", "in", "both"],
+                        "description": "`out` = edges this file points at (links/tags/mentions); `in` = backlinks (other files pointing here); `both` = both. Default `both`."
+                    },
+                    "kinds": {
+                        "type": "array",
+                        "items": { "type": "string", "enum": ["link", "tag", "mention"] },
+                        "description": "Optional filter; omit for all kinds. `link` = wiki/markdown links; `tag` = `#hashtags` on the file; `mention` = `@@person` references."
+                    }
+                },
+                "required": ["path"],
+            }),
+        },
+        ToolSchema {
+            name: "graph_tags",
+            description: crate::prompts::GRAPH_TAGS_DESC,
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
+        ToolSchema {
+            name: "graph_files_with_tag",
+            description: crate::prompts::GRAPH_FILES_WITH_TAG_DESC,
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "tag": {
+                        "type": "string",
+                        "description": "Tag name with the leading `#`, e.g. `#design`."
+                    }
+                },
+                "required": ["tag"],
             }),
         },
     ]
