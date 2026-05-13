@@ -172,40 +172,50 @@ function linkUrlAtCaret(
   state: EditorState,
   pos: number,
 ): { from: number; to: number; queryUpToCaret: string } | null {
-  let node: ReturnType<typeof syntaxTree>["topNode"] | null = syntaxTree(
-    state,
-  ).resolveInner(pos, 0);
-  while (node) {
-    if (node.name === "URL" && node.parent?.name === "Link") {
-      if (pos < node.from || pos > node.to) return null;
-      return {
-        from: node.from,
-        to: node.to,
-        queryUpToCaret: state.doc.sliceString(node.from, pos),
-      };
-    }
-    node = node.parent;
-  }
-  return null;
+  return urlSlotAtCaret(state, pos, "Link");
 }
 
 function imageUrlAtCaret(
   state: EditorState,
   pos: number,
 ): { from: number; to: number; queryUpToCaret: string } | null {
+  return urlSlotAtCaret(state, pos, "Image");
+}
+
+/// Common URL-slot detector for both Link and Image syntax nodes.
+/// Anchor on the LinkMark `(` / `)` children rather than the URL
+/// child: when the URL is empty (`![]()`) or the caret sits at a
+/// URL boundary (`![](|foo)` with caret at `(`), there's no URL node
+/// to resolveInner onto. Falling back to the slot-between-parens
+/// gives a consistent trigger range and an empty query.
+function urlSlotAtCaret(
+  state: EditorState,
+  pos: number,
+  parentName: "Link" | "Image",
+): { from: number; to: number; queryUpToCaret: string } | null {
   let node: ReturnType<typeof syntaxTree>["topNode"] | null = syntaxTree(
     state,
   ).resolveInner(pos, 0);
   while (node) {
-    if (node.name === "URL" && node.parent?.name === "Image") {
-      // Caret must be within URL bounds; resolveInner(pos, 0) at the
-      // exact `(` boundary may climb up to URL via parent chain even
-      // when pos is just outside. Verify.
-      if (pos < node.from || pos > node.to) return null;
+    if (node.name === parentName) {
+      const cursor = node.cursor();
+      if (!cursor.firstChild()) return null;
+      const linkMarks: Array<{ from: number; to: number }> = [];
+      do {
+        if (cursor.name === "LinkMark") {
+          linkMarks.push({ from: cursor.from, to: cursor.to });
+        }
+      } while (cursor.nextSibling());
+      // Link / Image have four LinkMarks: [, ], (, ). The URL slot
+      // sits between linkMarks[2] (`(`) and linkMarks[3] (`)`).
+      if (linkMarks.length < 4) return null;
+      const slotFrom = linkMarks[2]!.to;
+      const slotTo = linkMarks[3]!.from;
+      if (pos < slotFrom || pos > slotTo) return null;
       return {
-        from: node.from,
-        to: node.to,
-        queryUpToCaret: state.doc.sliceString(node.from, pos),
+        from: slotFrom,
+        to: slotTo,
+        queryUpToCaret: state.doc.sliceString(slotFrom, pos),
       };
     }
     node = node.parent;
