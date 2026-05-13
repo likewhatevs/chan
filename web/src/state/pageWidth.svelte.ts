@@ -136,12 +136,36 @@ function readOverlayMaximized(): boolean {
   }
 }
 
+/// Panel width an OverlayShell resolves to for a given maximize
+/// state. Mirrors the CSS `width` in OverlayShell.svelte exactly,
+/// kept in sync by hand: normal mode caps at 1200px (with a 24px
+/// gutter on each side); maximized mode trims a symmetric 44px so
+/// the side gap visually matches the top safe-area + chrome buffer.
+function panelWidthFor(maxed: boolean): number {
+  if (typeof window === "undefined") return 0;
+  const vw = window.innerWidth;
+  return maxed ? vw - 88 : Math.min(1200, vw - 48);
+}
+
 export function setOverlayMaximized(on: boolean): void {
+  if (overlayMaximized.on === on) return;
+  // Recalibrate the assistant prompt-width ratio so the rendered
+  // prompt-wrap retains its absolute pixel width across the
+  // maximize toggle. Without this, a 70% cap on a 1200px panel
+  // (840px wrap) would jump to 70% of a much wider maximized
+  // panel and visually balloon. The clamp inside
+  // setAssistantPromptWidth keeps the new ratio in [0.25, 1].
+  const before = panelWidthFor(overlayMaximized.on);
+  const after = panelWidthFor(on);
   overlayMaximized.on = on;
   try {
     localStorage.setItem(OVERLAY_MAX_KEY, on ? "1" : "0");
   } catch {
     /* quota or disabled storage; in-memory value still applies */
+  }
+  if (before > 0 && after > 0 && before !== after) {
+    const targetPx = assistantPromptWidth.ratio * before;
+    setAssistantPromptWidth(targetPx / after);
   }
 }
 
