@@ -2302,6 +2302,15 @@
   .assistant-body.capped {
     background: var(--page-shade);
   }
+  /* Wrap reads as "the page" against the assistant-body tint. The
+     default --bg-card in light mode (#f5f5f7) sits visually on top
+     of --page-shade (≈#f6f6f6), so the off-page band was
+     indistinguishable from the prompt itself. Promote the wrap to
+     --bg so the contrast mirrors the file editor's page-cap look:
+     bright page on a lightly tinted off-page surface. */
+  .assistant-body.capped .prompt-wrap {
+    background: var(--bg);
+  }
   /* Prompt-fill mode (driven by the up-chevron snap button). The
      chat scrollback collapses to zero so the prompt-area can claim
      every pixel between the header and the status line; the wrap
