@@ -129,7 +129,7 @@ class ImageWidget extends WidgetType {
         this.onClick({ src: this.src, alt: this.alt, pos: this.nodePos });
         return;
       }
-      placeCaretInImageUrl(view, wrap);
+      placeCaretInImageUrl(view, this.nodePos);
     });
     wrap.appendChild(img);
 
@@ -154,7 +154,7 @@ class ImageWidget extends WidgetType {
     editBtn.addEventListener("mousedown", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      placeCaretInImageUrl(view, wrap);
+      placeCaretInImageUrl(view, this.nodePos);
     });
     const zoomBtn = document.createElement("button");
     zoomBtn.type = "button";
@@ -179,12 +179,20 @@ class ImageWidget extends WidgetType {
   }
 }
 
-function placeCaretInImageUrl(view: EditorView, wrap: HTMLElement): void {
-  const wrapPos = view.posAtDOM(wrap);
-  if (wrapPos < 0) return;
+function placeCaretInImageUrl(view: EditorView, hintPos: number): void {
+  // hintPos is the Image node's start as captured when the widget
+  // was constructed. Looking up via syntaxTree is more reliable than
+  // posAtDOM on the wrap — the wrap may sit at line.from when the
+  // widget renders as block-above (edit mode), where resolveInner
+  // walks up through Paragraph / Document and never reaches the
+  // Image node. Using the captured nodePos lands directly inside
+  // the Image.
   const tree = syntaxTree(view.state);
-  let node = tree.resolveInner(wrapPos, 1);
-  while (node && node.name !== "Image") node = node.parent ?? null!;
+  let node: import("@lezer/common").SyntaxNode | null = tree.resolveInner(
+    hintPos,
+    1,
+  );
+  while (node && node.name !== "Image") node = node.parent ?? null;
   if (!node || node.name !== "Image") return;
   const cursor = node.cursor();
   if (!cursor.firstChild()) return;
@@ -196,8 +204,6 @@ function placeCaretInImageUrl(view: EditorView, wrap: HTMLElement): void {
     }
   } while (cursor.nextSibling());
   if (urlTo < 0) return;
-  // Caret at URL.to (just before `)`) — inside the URL range so the
-  // imageUrlAtCaret trigger fires and the bubble auto-opens.
   view.dispatch({ selection: { anchor: urlTo } });
   view.focus();
 }

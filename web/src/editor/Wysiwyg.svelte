@@ -579,27 +579,30 @@
     margin-left: 1em;
   }
   /* Standalone mode (image alone on its source line). Alignment
-     positions the image within the line via flex justify-content —
-     no float, no text wrap. Default is centered. */
+     positions the image within the line via margin — no float, no
+     text wrap. The wrap is shrink-to-fit so the absolutely
+     positioned overlay (Edit / View / resize handle) anchors to
+     the IMAGE'S edges, not the line's full width. */
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-standalone="true"]) {
-    display: flex;
-    width: 100%;
-    justify-content: center;
+    display: block;
+    width: fit-content;
+    margin: 0 auto; /* center */
   }
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-standalone="true"][data-align="left"]) {
-    justify-content: flex-start;
+    margin-left: 0;
+    margin-right: auto;
   }
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-standalone="true"][data-align="right"]) {
-    justify-content: flex-end;
+    margin-left: auto;
+    margin-right: 0;
   }
   /* In-edit preview: image stays visible AS A BLOCK above the
      editable source line. Fade slightly so the user reads it as a
-     preview, not a final commit; the source row below is where
-     the actual edits happen. */
+     preview, not a final commit. Pointer events stay enabled so the
+     hover Edit / View overlay still works on the preview. */
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-editing="true"]) {
     display: block;
     opacity: 0.55;
-    pointer-events: none;
     margin: 0.25em 0;
   }
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-editing="true"] img) {
