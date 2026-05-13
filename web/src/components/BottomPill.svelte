@@ -124,6 +124,14 @@
     padding: 0 9px;
     border-width: 1px;
   }
+  /* Chrome reveal: matches the side-icon expansion. Background is
+     the same --hover-bg the ensō wears at idle so the whole bar
+     reads as one cohesive translucent halo when expanded. */
+  .bottom-pill:hover :global(.pill-chrome) {
+    background: var(--hover-bg);
+    border-color: var(--border);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  }
   @media (prefers-reduced-motion: reduce) {
     .bottom-pill :global(.fbtn.side),
     .bottom-pill:hover :global(.fbtn.side) {

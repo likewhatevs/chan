@@ -119,18 +119,25 @@
     display: inline-flex;
     align-items: center;
   }
-  /* Rounded chrome surrounding the side buttons. Used to live on
-     .bottom-pill; moved here so the enso (the chan logo) can sit
-     above the chrome with NO background, exactly as the user
-     intended. */
+  /* Rounded chrome surrounding the side buttons. Invisible at
+     idle (no bg, no border, no shadow) so only the ensō is on
+     screen when the bar isn't being interacted with. Hover on the
+     ensō flips .bottom-pill:hover on, which fades the chrome in
+     and unfurls the sides (see BottomPill.svelte). The shown bg
+     reuses --hover-bg so the chrome reads as a translucent halo
+     the same shade as the ensō's idle backdrop. */
   .pill-chrome {
     display: flex;
     align-items: center;
     padding: 5px 10px;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+    background: transparent;
+    border: 1px solid transparent;
+    box-shadow: none;
     border-radius: 999px;
+    transition:
+      background 220ms ease,
+      border-color 220ms ease,
+      box-shadow 220ms ease;
   }
   /* Invisible placeholder reserving horizontal room for the enso
      button so the four side icons stay symmetric around the center
@@ -197,6 +204,11 @@
     min-width: 62px;
     border-radius: 50%;
     padding: 0;
+    /* Always-on translucent shade behind the logo — same value the
+       other fbtns get on :hover. Without this the lone ensō would
+       float over the page bg with no anchor visible until the user
+       hovers; the constant halo makes the affordance discoverable. */
+    background: var(--hover-bg);
     /* translate(-50%, -50%) centers exactly on the pill's centre.
        The X portion lives in every rule that touches transform so
        the hover wobble doesn't yank the centering. */
