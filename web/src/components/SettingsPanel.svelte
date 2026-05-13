@@ -31,6 +31,7 @@
     ui,
     drive,
   } from "../state/store.svelte";
+  import { DATE_FORMATS } from "../editor/dateFormats";
   import OverlayShell from "./OverlayShell.svelte";
 
   const visible = $derived(settingsOverlay.open);
@@ -329,6 +330,15 @@
     if (!info) return;
     if (!editing) {
       editing = clone(info.preferences);
+      // Migrate dead format ids (e.g. the retired "short" no-year
+      // variant) to the catalog's default so the <select> below
+      // doesn't render a blank option. The settings auto-save will
+      // persist the corrected value on the next dirty edit, or the
+      // user can re-pick explicitly.
+      const knownIds = new Set(DATE_FORMATS.map((f) => f.id));
+      if (!knownIds.has(editing.date_format as never)) {
+        editing.date_format = DATE_FORMATS[0]!.id;
+      }
     }
   });
 
@@ -1063,9 +1073,9 @@
       <label class="font-row">
         <span>Default</span>
         <select class="family" bind:value={editing.date_format}>
-          <option value="iso">2026-05-05 (ISO)</option>
-          <option value="medium">02 Jan 2029</option>
-          <option value="short">Mon, 18 Feb (no year)</option>
+          {#each DATE_FORMATS as f (f.id)}
+            <option value={f.id}>{f.label}</option>
+          {/each}
         </select>
       </label>
     </section>
