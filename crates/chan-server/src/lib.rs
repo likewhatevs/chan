@@ -39,7 +39,7 @@ pub use error::Error;
 pub use preferences::{EditorPrefs, EditorTheme, LineSpacing, PaneWidths, ThemeChoice};
 
 use auth::{auth_middleware, load_or_create_token};
-use bus::make_watch_bridge;
+use bus::{make_progress_broadcast, make_watch_bridge};
 use routes::{
     api_backlinks, api_build_info, api_clear_assistant, api_cloud_drives, api_create_file,
     api_delete_assistant, api_delete_file, api_delete_session, api_get_assistant, api_get_config,
@@ -283,10 +283,17 @@ async fn build_app(
     // Background indexer: subscribes to index_events_tx, runs the
     // initial build if the index is empty, debounces incremental
     // reindexes 1s per path. Lives for the server's lifetime.
+    // Progress fan-out: every `Drive::reindex_with` tick (per-file
+    // index, graph rebuild, embed batch) lands on the same /ws
+    // stream as watch + LLM frames, with `type: "progress"`. The
+    // status bar in the web app subscribes to drive the live
+    // indexer pill.
+    let progress_sink = make_progress_broadcast(&events_tx);
     let indexer = Arc::new(indexer::Indexer::spawn(
         drive.clone(),
         index_events_tx.subscribe(),
         true,
+        progress_sink,
     ));
     let indexer_handle = indexer.clone();
 

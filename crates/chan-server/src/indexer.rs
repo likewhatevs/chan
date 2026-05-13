@@ -21,7 +21,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chan_drive::{Drive, WatchEvent, WatchKind};
+use chan_drive::{
+    Drive, ProgressCallback, ProgressEvent, ProgressStage, WatchEvent, WatchKind,
+};
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
@@ -79,11 +81,15 @@ impl std::fmt::Debug for Indexer {
 impl Indexer {
     /// Spawn the indexer over `drive`, tied to `watch_events`. If
     /// `initial_build` is true and the drive's index reports zero
-    /// chunks, kicks off a full rebuild on boot.
+    /// chunks, kicks off a full rebuild on boot. `progress_sink` is
+    /// the WS fan-out (see `bus::make_progress_broadcast`); per-file
+    /// progress events forward there in addition to updating the
+    /// local `IndexStatus` mutex behind `/api/index/status`.
     pub fn spawn(
         drive: Arc<Drive>,
         watch_events: broadcast::Receiver<WatchEvent>,
         initial_build: bool,
+        progress_sink: Arc<dyn ProgressCallback>,
     ) -> Self {
         let stats = drive.index_stats().unwrap_or_else(|e| {
             tracing::warn!("indexer: initial stats failed: {e}");
@@ -108,8 +114,13 @@ impl Indexer {
         // leave the index stale.
         let cancel = Arc::new(AtomicBool::new(false));
         let (rebuild_tx, rebuild_rx) = mpsc::unbounded_channel::<()>();
-        let coordinator_task =
-            spawn_coordinator(drive.clone(), status.clone(), rebuild_rx, cancel.clone());
+        let coordinator_task = spawn_coordinator(
+            drive.clone(),
+            status.clone(),
+            rebuild_rx,
+            cancel.clone(),
+            progress_sink.clone(),
+        );
         // Trigger a full rebuild when either side of the index is
         // empty. Checking BM25 alone misses the case where a prior
         // rebuild was killed mid-graph-pass: the graph DB stays
@@ -186,15 +197,18 @@ impl Indexer {
 }
 
 /// Coordinator task: blocks on the rebuild channel and runs one
-/// full reindex per request. Updates the status mutex through
-/// `Drive::reindex`'s own progress hook by polling stats after the
-/// fact (chan-drive's reindex is one-shot; the per-file progress
-/// callback path is a future enhancement).
+/// full reindex per request. Drives `Drive::reindex_with` with a
+/// callback that updates the local status mutex AND forwards each
+/// tick to the WS fan-out so the frontend's status pill animates
+/// in real time. Without the WS forward we'd be polling
+/// `/api/index/status` at a coarse cadence; with it we get every
+/// per-file event.
 fn spawn_coordinator(
     drive: Arc<Drive>,
     status: Arc<Mutex<IndexStatus>>,
     mut rx: mpsc::UnboundedReceiver<()>,
     cancel: Arc<AtomicBool>,
+    progress_sink: Arc<dyn ProgressCallback>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         while rx.recv().await.is_some() {
@@ -207,13 +221,20 @@ fn spawn_coordinator(
             let drive_w = drive.clone();
             let status_w = status.clone();
             let cancel_w = cancel.clone();
+            let progress_w = progress_sink.clone();
             *status_w.lock().unwrap() = IndexStatus::Building {
                 current: 0,
                 total: 0,
                 file: String::new(),
             };
-            let result =
-                tokio::task::spawn_blocking(move || drive_w.reindex(Some(&cancel_w))).await;
+            let result = tokio::task::spawn_blocking(move || {
+                let progress = StatusUpdater {
+                    status: status_w,
+                    forward: progress_w,
+                };
+                drive_w.reindex_with(Some(&cancel_w), &progress)
+            })
+            .await;
             match result {
                 Ok(Ok(_summary)) => set_idle(&drive, &status),
                 Ok(Err(chan_drive::ChanError::Cancelled)) => {
@@ -423,6 +444,46 @@ fn collect_due(
         }
     }
     out
+}
+
+/// `ProgressCallback` wrapper that mirrors progress events into two
+/// places: the local `IndexStatus` mutex (so `/api/index/status`
+/// reflects the in-flight build for clients that poll instead of
+/// subscribing to /ws) AND a forwarded sink (the WS broadcast). The
+/// status flips to `Building` on file / graph stages; other stages
+/// (model load, contact import, reset) are forwarded to /ws but
+/// don't override the indexer status — they live on their own
+/// frontend surfaces.
+struct StatusUpdater {
+    status: Arc<Mutex<IndexStatus>>,
+    forward: Arc<dyn ProgressCallback>,
+}
+
+impl ProgressCallback for StatusUpdater {
+    fn on_progress(&self, event: ProgressEvent) {
+        match event.stage {
+            ProgressStage::GraphRebuild | ProgressStage::IndexFile => {
+                let file = event.label.clone().unwrap_or_default();
+                let current = event.current as usize;
+                let total = event.total as usize;
+                if let Ok(mut s) = self.status.lock() {
+                    *s = IndexStatus::Building {
+                        current,
+                        total,
+                        file,
+                    };
+                }
+            }
+            // Embed batch, model load, contact import, reset, rename
+            // rewrite, heartbeat: WS subscribers see the event; the
+            // local index status mutex stays where it is. Imports
+            // have their own status field on the frontend (driven by
+            // the import wizard); embed batches are part of an
+            // already-Building indexer state.
+            _ => {}
+        }
+        self.forward.on_progress(event);
+    }
 }
 
 fn set_idle(drive: &Drive, status: &Mutex<IndexStatus>) {

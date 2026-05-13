@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use chan_drive::{WatchCallback, WatchEvent};
+use chan_drive::{ProgressCallback, ProgressEvent, WatchCallback, WatchEvent};
 use chan_llm::{Delta, SessionListener, StopReason, ToolCall, ToolResult};
 use tokio::sync::broadcast;
 
@@ -77,6 +77,40 @@ fn event_is_self_echo(event: &WatchEvent, sw: &SelfWrites) -> bool {
         }
     }
     false
+}
+
+/// Bridge from chan-drive's `ProgressCallback` into the shared
+/// JSON-envelope broadcast channel. Every progress tick (per-file
+/// during reindex, per-batch during embedding, etc.) lands on the
+/// same `/ws` stream every other producer uses, with `type` set to
+/// `"progress"` so the frontend can route the frame distinctly
+/// from `watch` and `llm.*`.
+///
+/// `Send + Sync` because `ProgressCallback` can fire from worker
+/// threads inside the embedder and graph rebuilders.
+pub fn make_progress_broadcast(
+    events_tx: &broadcast::Sender<String>,
+) -> Arc<dyn ProgressCallback> {
+    Arc::new(ProgressBroadcast {
+        tx: events_tx.clone(),
+    })
+}
+
+struct ProgressBroadcast {
+    tx: broadcast::Sender<String>,
+}
+
+impl ProgressCallback for ProgressBroadcast {
+    fn on_progress(&self, event: ProgressEvent) {
+        let frame = serde_json::json!({"type": "progress", "event": event});
+        if let Ok(s) = serde_json::to_string(&frame) {
+            // Best-effort: lagged subscribers are dropped by the
+            // broadcast channel naturally; a no-subscriber send
+            // returns an error we ignore for the same reason as
+            // the watch bridge above.
+            let _ = self.tx.send(s);
+        }
+    }
 }
 
 /// Bridge from chan-llm's SessionListener into the shared broadcast

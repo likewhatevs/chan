@@ -17,7 +17,7 @@ use axum::Json;
 use chan_drive::ResetMode;
 use serde::{Deserialize, Serialize};
 
-use crate::bus::make_watch_bridge;
+use crate::bus::{make_progress_broadcast, make_watch_bridge};
 use crate::error::{err, err_from};
 use crate::indexer::Indexer;
 use crate::state::{AppState, DriveCell};
@@ -154,6 +154,7 @@ fn perform_reset(state: &AppState, mode: ResetMode) -> Result<chan_drive::ResetR
             drive_strong.clone(),
             state.index_events_tx.subscribe(),
             true,
+            make_progress_broadcast(&state.events_tx),
         ));
         *cell_guard = Some(DriveCell {
             drive: drive_strong,
@@ -183,6 +184,7 @@ fn perform_reset(state: &AppState, mode: ResetMode) -> Result<chan_drive::ResetR
         drive.clone(),
         state.index_events_tx.subscribe(),
         true,
+        make_progress_broadcast(&state.events_tx),
     ));
     *cell_guard = Some(DriveCell {
         drive,

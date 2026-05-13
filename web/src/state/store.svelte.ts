@@ -180,6 +180,18 @@ const movingPaths = new Set<string>();
 /// the exact same callbacks as bootstrap().
 function onWatchEvent(e: unknown): void {
   ui.lastWatch = Date.now();
+  // The /ws stream carries multiple frame types under different
+  // `type` discriminators (see chan-server/src/bus.rs). Watch
+  // events fall through to the legacy path below; progress events
+  // route to the indexer-status sink so the bottom-left status pill
+  // animates live as `Drive::reindex_with` walks the drive.
+  const frameType = (e as { type?: string } | null)?.type;
+  if (frameType === "progress") {
+    applyProgressEvent(
+      (e as { event?: ProgressFrame } | null)?.event ?? null,
+    );
+    return;
+  }
   const kind = (e as { kind?: string } | null)?.kind;
   if (kind === "config_changed") {
     // A sibling window flipped a setting (theme, fonts, drive name,
@@ -736,6 +748,46 @@ export const indexStatus = $state<{ value: IndexStatus | null }>({
   value: null,
 });
 
+/// Wire shape of a chan-drive `ProgressEvent`, mirrored from
+/// chan-core's `progress::ProgressEvent`. Pinned here because the
+/// frontend doesn't import a generated type; the chan-server WS
+/// bus.rs renders the same shape and we read it verbatim.
+type ProgressFrame = {
+  stage:
+    | "GraphRebuild"
+    | "IndexFile"
+    | "EmbedBatch"
+    | "RenameRewrite"
+    | "Import"
+    | "Reset"
+    | "ModelLoad"
+    | "Heartbeat";
+  current: number;
+  total: number;
+  label: string | null;
+};
+
+/// Apply a single progress event to the live indexer status pill.
+/// Two stages drive the Building animation:
+///   - GraphRebuild: per-file walk during the graph pass.
+///   - IndexFile: per-file step of the BM25 + dense build.
+/// Other stages (EmbedBatch, Reset, ModelLoad, Heartbeat, Import,
+/// RenameRewrite) don't override the indexer status today — they
+/// live in their own surfaces (import wizard, etc.). The poller
+/// continues to run; on the next idle tick it resets the pill to
+/// the Idle counts.
+function applyProgressEvent(ev: ProgressFrame | null): void {
+  if (!ev) return;
+  if (ev.stage === "GraphRebuild" || ev.stage === "IndexFile") {
+    indexStatus.value = {
+      state: "building",
+      current: ev.current,
+      total: ev.total,
+      file: ev.label ?? "",
+    };
+  }
+}
+
 /// Long-running import progress surfaced in the bottom-left status
 /// bar. Set by import wizards (currently just `ImportContactsModal`)
 /// while a blocking request is in flight; cleared on completion.
@@ -1187,6 +1239,20 @@ export function openGraphAtNode(nodeId: string): void {
   // tier; whichever opens last is on top), so leaving it up would
   // hide the graph the user just asked for. Close it here so this
   // call is "switch surfaces", not "stack a new one behind".
+  browserOverlay.open = false;
+  scheduleSessionSave();
+}
+
+/** Open the graph overlay scoped to a specific file and pre-select
+ *  that file's node. The file tab menu's "Show in Graph" routes
+ *  here so the resulting subgraph is the file's neighbourhood, not
+ *  the entire drive — matching the user's mental model that
+ *  invoking the graph FROM a file means "show me what's around
+ *  THIS file". */
+export function openGraphForFile(path: string): void {
+  graphOverlay.scopeId = `file:${path}`;
+  graphOverlay.pendingSelectId = path;
+  graphOverlay.open = true;
   browserOverlay.open = false;
   scheduleSessionSave();
 }
