@@ -660,9 +660,14 @@ Algorithm:
 
   - Canonicalize the input. Skip the leaf (we report only strict
     ancestors so a user who picked the repo root sees `None`).
-  - For each ancestor, check for `.git` (file OR directory; the
-    file form covers worktrees and submodules), `.hg/`, `.svn/`.
-    First match wins.
+  - For each ancestor, check for `.git` (real directory OR real
+    regular file; the file form covers worktrees and submodules),
+    `.hg/`, `.svn/`. First match wins.
+  - Marker checks use `symlink_metadata` (lstat) plus a file-type
+    gate: symlinks, FIFOs, sockets, char/block devices at `.git`
+    / `.hg` / `.svn` are rejected. Same "lstat, never stat, on
+    user paths" invariant the rest of the crate enforces; a
+    planted symlink or special file can't fool the suggestion.
   - Stop at: a mount boundary (`st_dev` change on Unix; skipped
     on Windows), at `$HOME` (never inspected; dotfiles-as-git is
     unrelated to drive-root selection), or at the filesystem root.
