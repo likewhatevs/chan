@@ -13,9 +13,9 @@
 
   import { untrack } from "svelte";
   import { ArrowLeft, ArrowRight } from "lucide-svelte";
-  import { api } from "../api/client";
+  import { api, withTokenQuery } from "../api/client";
   import type { ContentHit } from "../api/types";
-  import { isImage } from "../state/fileTypes";
+  import { isEditableText, isImage } from "../state/fileTypes";
   import {
     ensureGraphLoaded,
     graphData,
@@ -40,14 +40,18 @@
   import InspectorBody, { type InspectorSelection } from "./InspectorBody.svelte";
   import OverlayShell from "./OverlayShell.svelte";
 
-  /// Unified row type. Chunk hits come from the server; tag and
-  /// image hits are computed client-side from the already-loaded
-  /// graph and tree. The discriminant on `kind` lets the row
-  /// renderer pick the right chip and lets the inspector
-  /// dispatcher know what selection to construct.
+  /// Unified row type. Chunk hits come from the server (BM25 +
+  /// dense over file content); tag, image, file, and contact hits
+  /// are computed client-side from the already-loaded graph and
+  /// tree (filename / label substring matches). The discriminant
+  /// on `kind` lets the row renderer pick the right chip + preview
+  /// shape and lets the inspector dispatcher know what selection
+  /// to construct.
   type SearchRow =
     | { kind: "chunk"; hit: ContentHit; key: string }
     | { kind: "image"; path: string; key: string }
+    | { kind: "file"; path: string; key: string }
+    | { kind: "contact"; path: string; key: string }
     | {
         kind: "tag";
         nodeId: string;
@@ -224,10 +228,12 @@
 
 
   /// Per-kind caps so a query like "n" doesn't drown the chunk
-  /// hits under hundreds of folder/image rows. Chunks come from
-  /// the server already capped at 25.
+  /// hits under hundreds of folder / image / file / contact rows.
+  /// Chunks come from the server already capped at 25.
   const TAG_LIMIT = 8;
   const IMAGE_LIMIT = 8;
+  const FILE_LIMIT = 8;
+  const CONTACT_LIMIT = 8;
 
   /// Image hits: filenames matching the typed query, drawn from
   /// the in-memory tree. Substring match is case-insensitive and
@@ -246,6 +252,59 @@
     }
     return out;
   });
+
+  /// Contact hits: tree entries the server tagged as `chan.kind:
+  /// contact` whose path matches the typed query. Surfaced as a
+  /// distinct row kind so a search for "alex" lands on the contact
+  /// file in addition to any markdown that mentions them. Substring
+  /// match across the full path (not just basename) so contacts
+  /// nested in subfolders still surface.
+  const contactRows = $derived.by<SearchRow[]>(() => {
+    const q = searchPanel.query.trim().toLowerCase();
+    if (!q) return [];
+    const out: SearchRow[] = [];
+    for (const e of tree.entries) {
+      if (e.is_dir) continue;
+      if (e.kind !== "contact") continue;
+      if (!e.path.toLowerCase().includes(q)) continue;
+      out.push({ kind: "contact", path: e.path, key: `contact:${e.path}` });
+      if (out.length >= CONTACT_LIMIT) break;
+    }
+    return out;
+  });
+
+  /// Markdown / text file hits: filename matches separate from the
+  /// BM25 content chunks above. A file that matches by NAME (the
+  /// user typed part of its title) is a different signal from a
+  /// file that matches by content, and surfacing both lets the user
+  /// pick whichever they were after. Contact-kind files are
+  /// excluded — they get their own row kind above. Files that also
+  /// appear in chunk hits are deduped in the `rows` combiner so the
+  /// same path doesn't render twice.
+  const markdownFileRows = $derived.by<SearchRow[]>(() => {
+    const q = searchPanel.query.trim().toLowerCase();
+    if (!q) return [];
+    const out: SearchRow[] = [];
+    for (const e of tree.entries) {
+      if (e.is_dir) continue;
+      if (!isEditableText(e.path)) continue;
+      if (e.kind === "contact") continue;
+      if (!e.path.toLowerCase().includes(q)) continue;
+      out.push({ kind: "file", path: e.path, key: `file:${e.path}` });
+      if (out.length >= FILE_LIMIT) break;
+    }
+    return out;
+  });
+
+  /// Helper: format a contact entry's display name from its path.
+  /// Strips the .md extension and leaves whatever folder structure
+  /// the user has (e.g. `Contacts/Alex Park.md` -> `Alex Park`).
+  /// Mirrors what FileInfoBody does for the contact name pill.
+  function contactDisplayName(path: string): string {
+    const base = basename(path);
+    return base.replace(/\.(md|txt)$/i, "");
+  }
+
 
   /// Tag hits: tag-kind nodes whose label contains the typed query.
   /// Doc counts are SCOPE-aware: when the scope narrows to a file /
@@ -300,16 +359,31 @@
   });
 
   /// Final ordered row list: tags first (compact, high signal),
-  /// images next, then content chunks (the long tail). Each row
-  /// has a stable key for the {#each}. The scope predicate filters
-  /// chunks + images by path; tags fall through unfiltered (a tag
-  /// is a graph node, not a file, and the document-count column
-  /// already gives the user a sense of breadth).
+  /// then contacts (people get top billing among file-name matches),
+  /// images, markdown filename matches, and finally content chunks
+  /// (the long tail). Each row has a stable key for the {#each}.
+  /// The scope predicate filters file-bearing kinds by path; tags
+  /// fall through unfiltered (a tag is a graph node, not a file,
+  /// and the document-count column already gives the user a sense
+  /// of breadth). Markdown filename matches are deduped against
+  /// chunk hits so a file that surfaces under both shows once.
   const rows = $derived.by<SearchRow[]>(() => {
     const out: SearchRow[] = [];
+    const chunkPaths = new Set<string>();
+    for (const h of chunkHits) chunkPaths.add(h.path);
     out.push(...tagRows);
+    for (const r of contactRows) {
+      if (r.kind === "contact" && !pathInScope(r.path)) continue;
+      out.push(r);
+    }
     for (const r of imageRows) {
       if (r.kind === "image" && !pathInScope(r.path)) continue;
+      out.push(r);
+    }
+    for (const r of markdownFileRows) {
+      if (r.kind !== "file") continue;
+      if (!pathInScope(r.path)) continue;
+      if (chunkPaths.has(r.path)) continue;
       out.push(r);
     }
     for (const h of chunkHits) {
@@ -327,6 +401,8 @@
     if (!r) return null;
     if (r.kind === "chunk") return { kind: "file", path: r.hit.path };
     if (r.kind === "image") return { kind: "file", path: r.path };
+    if (r.kind === "file") return { kind: "file", path: r.path };
+    if (r.kind === "contact") return { kind: "file", path: r.path };
     return { kind: "tag", nodeId: r.nodeId, label: r.label };
   });
 
@@ -339,6 +415,12 @@
     if (r.kind === "chunk") {
       close();
       await openInActivePane(r.hit.path);
+    } else if (r.kind === "file" || r.kind === "contact") {
+      // Filename / contact matches open the underlying file in the
+      // editor exactly like a chunk hit would — the path IS the
+      // payload, no chunk anchor to honour.
+      close();
+      await openInActivePane(r.path);
     } else if (r.kind === "image") {
       // Images can't be opened in the editor; treat the row click
       // as "select" only. The inspector pane already shows the
@@ -346,9 +428,7 @@
       // further action is needed here.
     } else {
       // Tag hits route to a tag-scoped graph (depth-hop
-      // neighbourhood around the tag) rather than drive scope. The
-      // remaining SearchRow variants today are tag-only; if mention
-      // / date kinds get added back, give them their own branch.
+      // neighbourhood around the tag) rather than drive scope.
       close();
       openGraphForTag(r.nodeId, r.label);
     }
@@ -469,11 +549,50 @@
                 </div>
                 <div class="snippet">{@html renderSnippet(r.hit.snippet)}</div>
               {:else if r.kind === "image"}
-                <div class="row1">
+                <!-- Image-name match. Thumbnail floats to the right
+                     of the path so the bubble stays the same height
+                     as doc / file rows; the image loads through
+                     `withTokenQuery` because the browser's `<img>`
+                     can't carry an auth header. The capped height
+                     keeps portrait + landscape both sitting cleanly
+                     in the row without making the bubble taller
+                     than the neighbouring kinds. -->
+                <div class="row1 image-row">
                   <span class="kind-pill img">image</span>
                   <span class="path">{r.path}</span>
+                  <span class="image-thumb">
+                    <img
+                      src={withTokenQuery(`/api/files/${encodeURIComponent(r.path).replace(/%2F/g, "/")}`)}
+                      alt={basename(r.path)}
+                      loading="lazy"
+                    />
+                  </span>
                 </div>
-                <div class="snippet muted">{basename(r.path)}</div>
+              {:else if r.kind === "contact"}
+                <!-- Contact-name match. Displays the contact's name
+                     (basename with the .md/.txt suffix stripped) and
+                     the underlying drive path below it. Same row
+                     shape as image / file so the bubbles read alike
+                     once preview content fills the body. -->
+                <div class="row1">
+                  <span class="kind-pill contact">contact</span>
+                  <span class="path">{contactDisplayName(r.path)}</span>
+                </div>
+                <div class="preview muted mono">{r.path}</div>
+              {:else if r.kind === "file"}
+                <!-- Markdown / text filename match (deduped against
+                     chunk hits in the rows combiner). The preview
+                     line carries the basename so the user can scan
+                     filenames quickly when the path is long; the
+                     full path stays in row1 for disambiguation. No
+                     trailing metadata — the doc score below is a
+                     relevance signal worth showing; bytes / mtime
+                     aren't, and would just clutter the row. -->
+                <div class="row1">
+                  <span class="kind-pill file">file</span>
+                  <span class="path">{r.path}</span>
+                </div>
+                <div class="preview muted">{basename(r.path)}</div>
               {:else}
                 <div class="row1">
                   <span class="kind-pill tag">tag</span>
@@ -485,24 +604,12 @@
           </li>
         {/each}
       </ul>
-      <div class="status-line">
-        {#if loading}
-          <span>searching…</span>
-        {:else if error}
-          <span class="err">{error}</span>
-        {:else if searchPanel.query.trim() && rows.length === 0}
-          <span>no matches</span>
-        {:else if rows.length > 0}
-          <span>
-            {rows.length} hit{rows.length === 1 ? "" : "s"}
-            {#if tagRows.length > 0 || imageRows.length > 0}
-              ({chunkHits.length} doc · {imageRows.length} image · {tagRows.length} tag)
-            {/if}
-          </span>
-        {:else}
-          <span class="muted">type to search · ↵ open · ↑↓ select</span>
-        {/if}
-      </div>
+      <!-- Input row first, then the status line beneath it. The
+           status reads as a footer hint anchored to the bottom of
+           the panel ("type to search · ↵ open · ↑↓ select" /
+           "12 hits (5 doc · 2 image · …)" / "no matches") so the
+           cursor and the kbd hint live next to each other instead
+           of with the results list above. -->
       <div class="head">
         <input
           bind:this={inputEl}
@@ -513,6 +620,26 @@
           spellcheck="false"
           autocomplete="off"
         />
+      </div>
+      <div class="status-line">
+        {#if loading}
+          <span>searching…</span>
+        {:else if error}
+          <span class="err">{error}</span>
+        {:else if searchPanel.query.trim() && rows.length === 0}
+          <span>no matches</span>
+        {:else if rows.length > 0}
+          <span>
+            {rows.length} hit{rows.length === 1 ? "" : "s"}
+            {#if tagRows.length + imageRows.length + contactRows.length + markdownFileRows.length > 0}
+              ({chunkHits.length} doc · {imageRows.length} image · {tagRows.length} tag
+              {#if contactRows.length > 0} · {contactRows.length} contact{/if}
+              {#if markdownFileRows.length > 0} · {markdownFileRows.length} file{/if})
+            {/if}
+          </span>
+        {:else}
+          <span class="muted">type to search · ↵ open · ↑↓ select</span>
+        {/if}
       </div>
     </div>
     {#if searchPanel.inspectorOpen}
@@ -719,6 +846,15 @@
   .kind-pill.doc { background: var(--g-doc); }
   .kind-pill.img { background: var(--g-img); }
   .kind-pill.tag { background: var(--g-tag); }
+  /* Filename-match rows share the doc hue (both end on a markdown
+     file) but tone it down so the chip reads as "same family, less
+     emphasis" than a content chunk. Contact uses the amber warn
+     palette that the rest of chan uses for contact pills. */
+  .kind-pill.file { background: var(--g-doc); opacity: 0.65; }
+  .kind-pill.contact {
+    background: var(--pill-contact-bg, var(--smart-bg));
+    color: var(--pill-contact-fg, var(--text));
+  }
   .snippet {
     margin-top: 2px;
     font-size: 14px;
@@ -731,11 +867,69 @@
     line-clamp: 2;
     -webkit-box-orient: vertical;
   }
-  .snippet.muted { font-style: italic; }
   :global(.snippet mark) {
     background: var(--smart-bg);
     color: inherit;
     padding: 0 2px;
     border-radius: 2px;
+  }
+
+  /* Generic preview lives below the row1 in image / file / contact
+     rows; matches the chunk snippet's spacing rhythm so all bubbles
+     have the same vertical cadence. `.muted` is the secondary-text
+     variant used by file + contact rows; image rows replace the
+     text preview with a thumbnail (see `.image-preview` below). */
+  .preview {
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--text);
+    line-height: 1.4;
+  }
+  .preview.muted { color: var(--text-secondary); }
+  .preview.mono { font-family: ui-monospace, monospace; font-size: 12px; }
+  /* Image thumbnail floats to the right of the path so the bubble
+     keeps the same one-line height as doc / file / contact rows.
+     `margin-left: auto` pins it past the score column; the fixed
+     height + object-fit:contain keeps portrait + landscape sitting
+     cleanly inside the same vertical box. A subtle border + radius
+     lets transparent PNGs / SVGs read as cards instead of bleeding
+     into the bubble body. */
+  .image-row { align-items: center; }
+  .image-thumb {
+    margin-left: auto;
+    flex-shrink: 0;
+    line-height: 0;
+  }
+  .image-thumb img {
+    height: 36px;
+    max-width: 80px;
+    object-fit: contain;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    display: block;
+  }
+
+  /* Body stretch: the Bubble component leaves the body at content
+     width so right-aligned chat user bubbles stay tight. In the
+     search list we want every body to fill the row so the panel
+     reads as a uniform column of cards regardless of how much
+     content the kind brings. The min-height matches a two-line
+     row (row1 + preview/snippet) so single-line kinds (image,
+     tag) sit at the same height as doc / file / contact and the
+     scroll rhythm stays even. Center the row1 in single-line
+     bodies so a lone path doesn't read as top-anchored against
+     a taller doc neighbour. */
+  .hits li :global(.bubble) {
+    align-items: stretch;
+  }
+  .hits li :global(.bubble .body) {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 58px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
   }
 </style>

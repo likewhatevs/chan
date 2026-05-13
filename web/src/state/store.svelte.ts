@@ -1073,6 +1073,24 @@ export type AssistantConversation = {
   /// can see where they left off. Cleared when the user reopens
   /// the conversation (one-shot signal, not a permanent bookmark).
   lastSeenTurnIndex?: number;
+  /// ms-since-epoch the conversation was first created. Set when
+  /// the first turn lands; preserved across all subsequent saves
+  /// so the scope-history overlay can show how long a thread has
+  /// been alive. Backfilled on load from the earliest turn's
+  /// `created_at` for blobs written before this field existed.
+  created_at?: number;
+  /// ms-since-epoch of the most recent persistence write. Updated
+  /// on every save (file + group); read by the scope-history
+  /// overlay for the "last activity" timestamp.
+  last_touched?: number;
+  /// Origin-relative URL (pathname + hash, no search params) at
+  /// the moment of the most recent save. The pane / tab layout is
+  /// encoded in the hash, so re-opening this URL in a new window
+  /// rehydrates the same pane configuration that was active when
+  /// the user last interacted with this scope. Search params are
+  /// stripped because they include the auth token; the new
+  /// window's origin contributes its own.
+  url?: string;
 };
 
 /**
@@ -1210,6 +1228,28 @@ async function saveGroupIndex(idx: GroupIndex): Promise<void> {
   }
 }
 
+/// Snapshot the current pane / tab layout as an origin-relative
+/// URL. The layout encoder writes it to `location.hash`; the
+/// auth token rides on the search params which we drop so the
+/// stored URL can be opened in a different window / launch with
+/// its own token. Returns null in non-browser contexts (tests).
+export function currentLayoutUrl(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  return window.location.pathname + window.location.hash;
+}
+
+/// Earliest `created_at` across `turns`, or undefined if none
+/// carry a timestamp. Used to backfill `AssistantConversation.created_at`
+/// when loading a blob that predates the field.
+export function earliestTurnCreatedAt(turns: AssistantTurn[]): number | undefined {
+  let earliest: number | undefined;
+  for (const t of turns) {
+    if (t.created_at === undefined) continue;
+    if (earliest === undefined || t.created_at < earliest) earliest = t.created_at;
+  }
+  return earliest;
+}
+
 /// Lazy load the persisted group conversation for `key` into
 /// `byGroup[key]`. No-op if the bucket already has an entry or no
 /// blob exists. Race-safe: if a concurrent submit creates the
@@ -1226,10 +1266,17 @@ export async function loadGroupConversation(key: string): Promise<void> {
     const parsed = raw as {
       messages?: LlmMessage[];
       turns?: AssistantTurn[];
+      created_at?: number;
+      last_touched?: number;
+      url?: string;
     };
+    const turns = parsed.turns ?? [];
     assistantConversations.byGroup[key] = {
       messages: parsed.messages ?? [],
-      turns: parsed.turns ?? [],
+      turns,
+      created_at: parsed.created_at ?? earliestTurnCreatedAt(turns),
+      last_touched: parsed.last_touched,
+      url: parsed.url,
     };
   } catch {
     // Server unreachable / decode error: leave the bucket empty so
@@ -1248,6 +1295,14 @@ export async function saveGroupConversation(
   const hash = await assistantHash16(key);
   const blobKey = blobKeyForGroupHash(hash);
   const now = Date.now();
+  // Stamp the conversation as we go so the in-memory view stays in
+  // sync with what we just wrote (the scope-history overlay reads
+  // these fields without a re-fetch).
+  if (conv.created_at === undefined) {
+    conv.created_at = earliestTurnCreatedAt(conv.turns) ?? now;
+  }
+  conv.last_touched = now;
+  conv.url = currentLayoutUrl();
   try {
     await api.putAssistantBlob(blobKey, {
       schema_version: 1,
@@ -1256,7 +1311,9 @@ export async function saveGroupConversation(
       paths,
       messages: conv.messages,
       turns: conv.turns,
+      created_at: conv.created_at,
       last_touched: now,
+      url: conv.url,
     });
   } catch {
     // Skip manifest update so we don't promote an entry whose
