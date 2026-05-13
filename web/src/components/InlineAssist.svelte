@@ -28,7 +28,16 @@
   // it discovers in drive context).
 
   import { onDestroy, onMount } from "svelte";
-  import { Check, Code, Copy, Eye, PenLine } from "lucide-svelte";
+  import {
+    ArrowLeft,
+    ArrowRight,
+    Check,
+    Code,
+    Copy,
+    Eye,
+    Network,
+    PenLine,
+  } from "lucide-svelte";
 
   import { api } from "../api/client";
   import { renderMarkdown } from "../api/markdown";
@@ -44,6 +53,7 @@
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import Source from "../editor/Source.svelte";
   import StyleToolbar from "./StyleToolbar.svelte";
+  import HamburgerMenu from "./HamburgerMenu.svelte";
   import {
     assistantConversations,
     assistantOverlay,
@@ -55,6 +65,7 @@
     clearGroupConversation,
     clearDriveConversation,
     endAssistantStream,
+    graphOverlay,
     loadGroupConversation,
     openAssistant,
     refreshTree,
@@ -62,13 +73,22 @@
     confirmState,
     drive,
     openDiffOverlay,
+    openGraphForTag,
     type AssistantConversation,
     type AssistantPendingEdit,
     type AssistantTurn,
+    ui,
     uiConfirm,
     uiPathPrompt,
   } from "../state/store.svelte";
   import { defaultScopeId, type ScopeOption } from "../state/scope.svelte";
+  import {
+    PAGE_WIDTH_MAX_PCT,
+    PAGE_WIDTH_MIN_PCT,
+    PAGE_WIDTH_STEP_PCT,
+    pageWidth,
+    setPageWidth,
+  } from "../state/pageWidth.svelte";
   import { layout, openInActivePane } from "../state/tabs.svelte";
   import DiffOverlay from "./DiffOverlay.svelte";
   import OverlayShell from "./OverlayShell.svelte";
@@ -249,13 +269,6 @@
       // chan since we're on localhost); swallow the error and
       // leave the button label unchanged.
     }
-  }
-
-  function captureSelection(): string | null {
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return null;
-    const text = sel.toString();
-    return text.trim().length === 0 ? null : text;
   }
 
   /// System prompts per context kind. Each gets a focused
@@ -475,28 +488,16 @@
       }, 0);
     }
     if (needSave) scheduleSave(ctxSnap);
-    const sel = captureSelection();
+    // Selection capture (window.getSelection -> blockquote prefill)
+    // moved into `openAssistant()` in the store so it only fires on
+    // the user-initiated open path (Cmd+P / toolbar / file-tab menu).
+    // Running it here re-fired on every visible-transition, including
+    // URL-hash reload: some browsers preserve the prior text
+    // selection across reload, which caused the open-effect to
+    // clobber the round-tripped prompt with a quoted version of
+    // that stale selection on every refresh.
     error = null;
-    // If the user had real text selected when they hit the assistant
-    // shortcut, prefill the prompt with the selection as a markdown
-    // blockquote followed by a blank line so the caret lands on a
-    // fresh paragraph beneath. Making the reference explicit in the
-    // prompt avoids the "what selection?" confusion of the silent
-    // `# Selection` block, and the model still sees the same text
-    // since the quote ships as part of the instruction. We clear
-    // `savedSelection` in this branch so the user message doesn't
-    // duplicate the same text under both `# Instruction` and
-    // `# Selection`.
-    if (sel) {
-      assistantOverlay.prompt = formatQuotePrefill(sel);
-      savedSelection = null;
-      queueMicrotask(() => wysiwygRef?.focusEnd());
-    } else {
-      // Don't clobber a URL-restored prompt with "" when the
-      // overlay opens. Only reset when there isn't one to preserve.
-      if (!assistantOverlay.prompt) assistantOverlay.prompt = "";
-      savedSelection = null;
-    }
+    savedSelection = null;
     void ensureToolsLoaded();
     void refreshLlmStatus();
     if (currentContext.kind === "file") {
@@ -509,24 +510,6 @@
     }
     queueMicrotask(scrollToBottom);
   });
-
-  /// Format a selection as a markdown blockquote prefix for the
-  /// prompt: each line gets `> `, blank inner lines become bare `>`,
-  /// and we terminate with `\n\n` so the caret lands on a fresh,
-  /// empty paragraph below the quote. A single trailing newline on
-  /// the selection (common when the user triple-clicked a paragraph)
-  /// is stripped before quoting so it doesn't become a phantom
-  /// empty `>` line at the bottom of the block. CR/LF is normalised
-  /// so a paste from Windows-style sources still renders one quote
-  /// block instead of N short ones.
-  function formatQuotePrefill(text: string): string {
-    const normalised = text.replace(/\r\n?/g, "\n").replace(/\n$/, "");
-    const quoted = normalised
-      .split("\n")
-      .map((l) => (l.length === 0 ? ">" : `> ${l}`))
-      .join("\n");
-    return `${quoted}\n\n`;
-  }
 
   /// Read the persisted file conversation back from
   /// `.chan/assistant/<sha256>.json`. Only called for file
@@ -770,6 +753,7 @@
     loading = true;
     error = null;
     pendingTurnTime = Date.now();
+    notifyAssistantStatus("assistant started");
     // For drive context we retrieve excerpts before composing
     // the user message; for file/group the context IS the file
     // contents, no retrieval needed.
@@ -832,14 +816,17 @@
       );
       handleResponse(ctx, conv, resp, excerpts);
       scheduleSave(ctx);
+      notifyAssistantStatus("assistant finished", true);
     } catch (e) {
       // AbortError surfaces as DOMException("...","AbortError") on
       // most runtimes; treat it as a soft cancellation rather than
       // an error so the chat doesn't show a scary red message.
       if ((e as Error).name === "AbortError") {
         error = "stopped";
+        notifyAssistantStatus("assistant stopped", true);
       } else {
         error = (e as Error).message;
+        notifyAssistantStatus(`assistant error: ${error}`, true);
       }
       // Roll back the optimistic user message? No: keep it visible
       // so the user can retry without retyping. Their prompt stays
@@ -857,6 +844,28 @@
       endAssistantStream(sessionId);
       queueMicrotask(scrollToBottom);
     }
+  }
+
+  /// Set the bottom-left status-bar message for one assistant
+  /// lifecycle event. `autoClear=true` schedules a clear after a
+  /// short TTL so the bar goes quiet on its own; "started" passes
+  /// false so the message persists until the teardown event
+  /// overwrites it. We only clear if the value we wrote is still
+  /// there — if some other producer (rename, move) has stamped a
+  /// different message in the meantime, we leave theirs alone.
+  let assistantStatusClearTimer: ReturnType<typeof setTimeout> | null = null;
+  function notifyAssistantStatus(msg: string, autoClear = false): void {
+    if (assistantStatusClearTimer) {
+      clearTimeout(assistantStatusClearTimer);
+      assistantStatusClearTimer = null;
+    }
+    ui.status = msg;
+    if (!autoClear) return;
+    const stamp = msg;
+    assistantStatusClearTimer = setTimeout(() => {
+      assistantStatusClearTimer = null;
+      if (ui.status === stamp) ui.status = null;
+    }, 2500);
   }
 
   function tracingWarn(message: string): void {
@@ -1304,9 +1313,57 @@
           ? (assistantConversations.byGroup[currentContext.key]?.lastSeenTurnIndex ?? null)
           : (assistantConversations.drive?.lastSeenTurnIndex ?? null),
   );
+
+  /// Right-click context menu. Mirrors the file-browser / search /
+  /// graph overlays: a `⋮` trigger in the header and a right-click
+  /// handler on the body share the same item list. Native browser
+  /// menus stay reachable inside the prompt input + CM6 editor body.
+  let menu: HamburgerMenu | undefined = $state();
+  let menuOpen = $state(false);
+  const POPOVER_WIDTH = 260;
+  const POPOVER_HEIGHT = 220;
+
+  function onAssistantContextMenu(e: MouseEvent): void {
+    const t = e.target as HTMLElement | null;
+    if (t?.closest("input, textarea, .cm-content, .cm-editor")) return;
+    e.preventDefault();
+    menu?.openAtCursor(e.clientX, e.clientY);
+  }
+
+  function doToggleStyleToolbar(): void {
+    assistantOverlay.styleToolbarOpen = !assistantOverlay.styleToolbarOpen;
+    menu?.close();
+  }
+
+  function doToggleSourceMode(): void {
+    promptMode = promptMode === "wysiwyg" ? "source" : "wysiwyg";
+    menu?.close();
+  }
+
+  function onPageWidthSlider(e: Event): void {
+    const pct = Number((e.currentTarget as HTMLInputElement).value);
+    setPageWidth(pct / 100);
+  }
+
+  function doShowInGraph(): void {
+    if (!currentContext) return;
+    // The assistant and graph overlays share the same scope-id
+    // namespace ("drive" / "file:<path>" / "group:<key>"), so the
+    // current contextId routes straight into graphOverlay without
+    // any translation. Pre-select the focal entity (file path for
+    // file scope) so the graph inspector lands on something useful.
+    graphOverlay.scopeId = currentContext.id;
+    graphOverlay.pendingSelectId =
+      currentContext.kind === "file" ? currentContext.path : null;
+    graphOverlay.open = true;
+    assistantOverlay.open = false;
+    menu?.close();
+  }
 </script>
 
 <OverlayShell id="assistant" open={visible} onClose={close}>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="assistant-body" oncontextmenu={onAssistantContextMenu} role="presentation">
       <header>
         <span class="title">Scope</span>
         <select
@@ -1326,6 +1383,14 @@
             selection: {savedSelection.length} chars
           </span>
         {/if}
+        <HamburgerMenu
+          bind:this={menu}
+          bind:open={menuOpen}
+          width={POPOVER_WIDTH}
+          height={POPOVER_HEIGHT}
+        >
+          {@render menuItems()}
+        </HamburgerMenu>
       </header>
 
       <div class="scroll" bind:this={scrollEl}>
@@ -1457,7 +1522,28 @@
                   <div class="body md">{@html renderMarkdown(turn.content)}</div>
                 {:else if bubbleModeFor(i) === "editor"}
                   <div class="body editor-mode">
-                    <Wysiwyg value={turn.content} readonly={true} />
+                    <!-- Read-only Wysiwyg. The widget click handlers
+                         (tag, wiki, image, date) stay live — they
+                         navigate instead of opening edit affordances:
+                           - tag pill -> graph scoped to that tag
+                           - wiki link / contact -> open file in
+                             the active pane (Cmd/Ctrl-click goes
+                             to a new pane via the existing flag)
+                           - image atom -> fullscreen zoom (handled
+                             inside Wysiwyg.handleImageClick)
+                           - date pill -> read-only calendar popover
+                         The bubble listener that pops the autocomplete
+                         pickers is gated off by readonly inside
+                         Wysiwyg, so caret motion can't trigger an
+                         edit bubble either. -->
+                    <Wysiwyg
+                      value={turn.content}
+                      readonly={true}
+                      onWikiClick={(args) => {
+                        void openInActivePane(args.target);
+                      }}
+                      onTagClick={(name) => openGraphForTag(`#${name}`, name)}
+                    />
                   </div>
                 {:else}
                   <pre class="body source">{turn.content}</pre>
@@ -1589,24 +1675,16 @@
         {/if}
       </div>
 
-      <!-- "Aa" StyleToolbar (same component the file editor uses)
-           rendered in-flow above the prompt box so the formatting
-           chrome doesn't sit on top of the text. Always mounted in
-           both modes so the trailing `</>` / `¶` toggle stays
-           reachable; the formatting controls grey out in source
-           mode while the mode toggle stays clickable. -->
+      <!-- Prompt input. The "Aa" StyleToolbar mirrors the file
+           editor's floating chrome: pinned top-left of the prompt
+           canvas (position: relative on .prompt-wrap), idle-fades
+           after no activity, expands on hover. It only mounts
+           when the user toggles "Show Style Toolbar" from the
+           right-click menu (parity with the per-tab knob). The
+           prompt-wrap's top padding tracks the toggle so the
+           first line of the prompt clears the toolbar pill when
+           it's enabled and reclaims the space when it's off. -->
       <div class="prompt-area">
-        <div class="prompt-toolbar-row">
-          <StyleToolbar
-            wysiwyg={wysiwygRef}
-            selVer={selVer}
-            disabled={!currentContext || promptMode !== "wysiwyg"}
-            showImage={false}
-            floating={false}
-            mode={promptMode}
-            onModeToggle={(next) => (promptMode = next)}
-          />
-        </div>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
           class="prompt-resize-handle"
@@ -1618,7 +1696,8 @@
         <div
           class="prompt-wrap"
           class:disabled={!currentContext}
-          style="height: {promptHeight}px"
+          style:height={`${promptHeight}px`}
+          style:--prompt-top-pad={assistantOverlay.styleToolbarOpen ? "2.5rem" : "0.5rem"}
         >
           {#if promptMode === "wysiwyg"}
             <Wysiwyg
@@ -1628,6 +1707,14 @@
             />
           {:else}
             <Source bind:value={assistantOverlay.prompt} />
+          {/if}
+          {#if assistantOverlay.styleToolbarOpen && promptMode === "wysiwyg"}
+            <StyleToolbar
+              wysiwyg={wysiwygRef}
+              selVer={selVer}
+              disabled={!currentContext}
+              showImage={false}
+            />
           {/if}
         </div>
       </div>
@@ -1663,7 +1750,52 @@
           >→</button>
         {/if}
       </div>
+  </div>
 </OverlayShell>
+
+{#snippet menuItems()}
+  <!-- Page-width slider mirrors the file editor tab menu so the
+       assistant scrollback respects the same column cap the user
+       set elsewhere. Sits at the top of the popover in its own
+       visual band; the action list below carries the toggles. -->
+  <li class="page-width-row" role="presentation">
+    <span class="page-width-label">Page width</span>
+    <input
+      class="page-width-slider"
+      type="range"
+      min={PAGE_WIDTH_MIN_PCT}
+      max={PAGE_WIDTH_MAX_PCT}
+      step={PAGE_WIDTH_STEP_PCT}
+      value={Math.round(pageWidth.ratio * 100)}
+      oninput={onPageWidthSlider}
+      onmousedown={(e) => e.stopPropagation()}
+      aria-label="page width"
+    />
+    <span class="page-width-value">{Math.round(pageWidth.ratio * 100)}%</span>
+  </li>
+  <li class="sep" role="separator"></li>
+  <li>
+    <button role="menuitem" onclick={doToggleSourceMode}>
+      <span class="glyph" aria-hidden="true">{promptMode === "wysiwyg" ? "</>" : "¶"}</span>
+      <span>{promptMode === "wysiwyg" ? "Show Source Code" : "Show Rendered"}</span>
+    </button>
+  </li>
+  <li>
+    <button role="menuitem" onclick={doToggleStyleToolbar}>
+      <span class="glyph" aria-hidden="true">Aa</span>
+      <span>
+        {assistantOverlay.styleToolbarOpen ? "Hide Style Toolbar" : "Show Style Toolbar"}
+      </span>
+    </button>
+  </li>
+  <li class="sep" role="separator"></li>
+  <li>
+    <button role="menuitem" onclick={doShowInGraph} disabled={!currentContext}>
+      <Network size={14} strokeWidth={1.75} aria-hidden="true" />
+      <span>Show in Graph</span>
+    </button>
+  </li>
+{/snippet}
 
 <!-- Fullscreen side-by-side diff for a pending edit. Lives at the
      InlineAssist level (not App.svelte) since it's a strict child
@@ -1698,6 +1830,17 @@
 {/if}
 
 <style>
+  /* Single flex column that fills the OverlayShell panel. The
+     context-menu wrapper used to live on the panel itself; pulling
+     it onto an inner div lets us hang `oncontextmenu` here without
+     re-styling the shared OverlayShell. */
+  .assistant-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+  }
   header {
     display: flex;
     align-items: center;
@@ -1707,6 +1850,9 @@
     font-size: 14px;
     color: var(--text-secondary);
   }
+  /* Pin the hamburger trigger to the far right of the header so it
+     mirrors the other overlay menus (file browser / search / graph). */
+  header :global(.hamburger-trigger) { margin-left: auto; }
   header .title {
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -2384,6 +2530,14 @@
     display: flex;
     flex-direction: column;
     overflow: auto;
+    /* Top padding tracks `--prompt-top-pad` set inline from the
+       style-toolbar toggle: 2.5rem when the toolbar is mounted so
+       the first line of the prompt clears the floating Aa pill,
+       0.5rem when it isn't so the input sits where the toolbar
+       would have been. Mirrors the file editor's `--editor-top-pad`
+       so the same toggle reads the same in every surface. */
+    padding-top: var(--prompt-top-pad, 0.5rem);
+    transition: padding-top 180ms ease;
   }
   /* Drag-to-resize bar on top of the prompt input. Sits above the
      .prompt-wrap so a drag upward grows the input height. Same
@@ -2411,21 +2565,41 @@
     line-height: 1.5;
   }
 
-  /* Container that holds the prompt input. The StyleToolbar is
-     rendered in-flow as its own row above the resize handle and
-     the prompt body so the chrome doesn't overlay the user's text. */
+  /* Container that holds the prompt input and its drag-resize
+     handle. The StyleToolbar (when enabled) is rendered as a
+     floating pill anchored top-left of .prompt-wrap (position:
+     relative), matching the file editor's chrome. */
   .prompt-area {
     display: flex;
     flex-direction: column;
     min-height: 0;
   }
-  /* Row hosting the StyleToolbar above the prompt. Padded to align
-     with the prompt body's left edge, plus 10px below so the
-     toolbar's hover-scale wobble doesn't visually crowd the
-     prompt's top edge or the resize handle. */
-  .prompt-toolbar-row {
+
+  /* Page-width slider row inside the hamburger popover. Mirrors
+     the file-editor tab menu's slider so the in-menu slider reads
+     the same in every overlay. */
+  :global(.hamburger-menu .page-width-row) {
     display: flex;
-    align-items: flex-start;
-    padding: 4px 12px 10px;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    margin: 0;
+    border-bottom: 1px solid var(--separator, var(--border));
+  }
+  :global(.hamburger-menu .page-width-label) {
+    color: var(--text-secondary);
+    font-size: 12px;
+    min-width: 64px;
+  }
+  :global(.hamburger-menu .page-width-slider) {
+    flex: 1;
+    accent-color: var(--btn-hover);
+  }
+  :global(.hamburger-menu .page-width-value) {
+    min-width: 40px;
+    text-align: right;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
   }
 </style>

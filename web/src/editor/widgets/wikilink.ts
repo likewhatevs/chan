@@ -44,6 +44,7 @@ import { selectionInRange } from "../decorations/selection";
 import { normalizeHref } from "../links";
 import { isImagePath, resolveImageSrc } from "../extensions/image";
 import { api } from "../../api/client";
+import { openPreviewPopover } from "../overlays/preview_popover";
 
 export type LinkKind = "file" | "contact" | "image" | "broken";
 
@@ -262,6 +263,33 @@ class WikiLinkWidget extends WidgetType {
       if (e.button !== 0) return;
       e.preventDefault();
       e.stopPropagation();
+      // Read-only mode (chat replies, user-toggled read mode, an
+      // fs-locked file) replaces the source-reveal-and-edit path
+      // with a non-destructive preview: click pops a popover with
+      // the target file's content (markdown rendered) or, for
+      // image targets, the image inline. Cmd/Ctrl+Enter inside
+      // the popover (or the Open button) commits to fully opening
+      // the file. Same widget covers chat / read toggle / fs-lock
+      // via the live editable facet.
+      const editable = view.state.facet(EditorView.editable);
+      if (!editable) {
+        // Cmd/Ctrl-click skips the preview and opens directly —
+        // power-user shortcut that matches the write-mode
+        // Cmd-click semantics.
+        if (e.metaKey || e.ctrlKey) {
+          this.onClick({ ...this.parsed, openInNewPane: true });
+          return;
+        }
+        const parsed = this.parsed;
+        const onClick = this.onClick;
+        openPreviewPopover({
+          anchor: el,
+          path: parsed.target,
+          onOpen: (openInNewPane) =>
+            onClick({ ...parsed, openInNewPane }),
+        });
+        return;
+      }
       // Cmd/Ctrl-click navigates immediately (open-in-new-pane).
       // Plain click reveals the source AND lands the caret in a
       // position the trigger detector recognizes — the wiki bubble

@@ -720,6 +720,12 @@ type SerTab = {
   /// the common case keeps the hash short. Restores without the
   /// field land on the default.
   s?: 1;
+  /// User-toggled read mode. Default is write; we only emit
+  /// `r: 1` when the user explicitly flipped a tab into read
+  /// mode so the common case keeps the hash short. fsWritable
+  /// is NOT persisted (it's a disk property; refreshed on first
+  /// loadTabContent).
+  r?: 1;
   /// Persisted caret as `[from, to]`. Omitted when at offset 0 so
   /// fresh tabs keep the hash short. The active editor mirrors
   /// `tab.caret` here on every selection change.
@@ -751,6 +757,7 @@ function serializeNode(nodeId: string): SerNode | null {
         ...active,
         ...(t.inspectorOpen ? { o: 1 as const } : {}),
         ...(t.styleToolbarOpen ? { s: 1 as const } : {}),
+        ...(t.readMode ? { r: 1 as const } : {}),
         ...c,
       };
     });
@@ -821,10 +828,12 @@ export async function restoreLayout(s: SerNode): Promise<void> {
           // restored sessions start with null and get the real value
           // once the file fetches.
           repoRoot: null,
-          // Read mode is intentionally ephemeral: a session restored
-          // after restart starts every tab in write mode. fsWritable
-          // gets refreshed by the first loadTabContent.
-          readMode: false,
+          // Restore the user-toggled read mode if it was persisted.
+          // fsWritable is NOT carried in the session payload — it's
+          // a disk property; the first loadTabContent refreshes it
+          // (and an `!fsWritable` will dominate even if readMode is
+          // false, so we don't need to fake it here).
+          readMode: sertab.r === 1,
           fsWritable: true,
           // Absent `s` field = default-off; `s: 1` = user previously
           // enabled the floating style toolbar.

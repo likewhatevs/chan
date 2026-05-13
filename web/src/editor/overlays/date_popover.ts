@@ -30,6 +30,13 @@ export interface DatePopoverOpts {
   onCommit: (formatted: string, formatId: DateFormatId) => void;
   /// Called when the user dismisses without committing.
   onDismiss: () => void;
+  /// When true, the popover renders as a pure visualization: the
+  /// format-row controls are omitted, day cells aren't clickable,
+  /// keyboard navigation is disabled, and Enter / day-click never
+  /// fire `onCommit`. Used by the assistant chat's read-only
+  /// editor view and by any other surface (fs-locked file, user
+  /// "read" toggle) where the date pill is informational only.
+  readonly?: boolean;
 }
 
 const DOW_LABELS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
@@ -146,12 +153,19 @@ export function openDatePopover(opts: DatePopoverOpts): { dismiss: () => void } 
       if (cellDate.getTime() === selected.getTime()) {
         cell.classList.add("md-date-day-selected");
       }
-      cell.addEventListener("mousedown", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        selected = cellDate;
-        commit();
-      });
+      if (opts.readonly) {
+        // Visual-only: disable the button so it doesn't capture
+        // mousedown, and de-emphasize it visually (the .md-date-day
+        // CSS already dims `:disabled` cells).
+        cell.disabled = true;
+      } else {
+        cell.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          selected = cellDate;
+          commit();
+        });
+      }
       grid.appendChild(cell);
     }
     wrap.appendChild(grid);
@@ -174,7 +188,15 @@ export function openDatePopover(opts: DatePopoverOpts): { dismiss: () => void } 
       }, 0);
     }
 
-    // Format dropdown.
+    // Format dropdown. Only relevant when committing back to the
+    // doc; the read-only view (chat reply, fs-locked file, user
+    // "read" toggle) hides this row since picking a format here
+    // can't take effect.
+    if (opts.readonly) {
+      positionUnderAnchor();
+      return;
+    }
+
     const formatRow = document.createElement("div");
     formatRow.className = "md-date-format-row";
     const label = document.createElement("span");
@@ -257,6 +279,9 @@ export function openDatePopover(opts: DatePopoverOpts): { dismiss: () => void } 
       dismiss();
       return;
     }
+    // Read-only mode: keyboard nav and Enter-commit are off (the
+    // popover is purely visual). Esc above still closes.
+    if (opts.readonly) return;
     // Arrow-key navigation: shift the selected date by a day / week.
     // Crossing month boundaries jumps the view-month to the new
     // date's month and re-renders. Enter commits whichever cell is

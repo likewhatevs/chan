@@ -17,7 +17,7 @@
   // corresponding behavior.
 
   import { onDestroy, onMount } from "svelte";
-  import { Compartment, EditorState, Prec } from "@codemirror/state";
+  import { Compartment, EditorState, Prec, type Extension } from "@codemirror/state";
   import { EditorView, keymap } from "@codemirror/view";
   import { syntaxTree } from "@codemirror/language";
   import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
@@ -94,6 +94,13 @@
   const sync = createValueSync();
   const theme = makeThemeCompartment(ui.theme);
   const editableCompartment = new Compartment();
+  /// Compartment for the write-side bundle (bubble listener / bubble
+  /// keymap / image drop / HTML paste). Wraps these so flipping
+  /// `readonly` at runtime — e.g. user clicks the editor's "read"
+  /// toggle, or the file's user-write bit flips off on disk — tears
+  /// down the autocomplete pickers AND the paste/drop handlers
+  /// without rebuilding the editor.
+  const writeSideCompartment = new Compartment();
 
   /// Active bubble handle (or null when no bubble is open). Updated by
   /// the controller's onSpec callback; the keymap reads it via the
@@ -271,17 +278,10 @@
         }),
         imageCaretRedirect(),
         tableDecorations(),
-        bubbleListener({ onSpec: handleSpec }),
-        bubbleKeymap(() => activeBubble),
-        imageDropHandlers({
-          getUploadDir: () => dirOf(currentPath),
-          getCurrentPath: () => currentPath,
-        }),
-        // HTML-paste handler runs ahead of CM6's default plain-text
-        // paste so rich pastes get converted to markdown. Image-file
-        // pastes (clipboard with image/* MIME) are owned by
-        // imageDropHandlers; this handler skips them.
-        htmlPasteHandler(),
+        // Inline edit bubbles + paste/drop handlers go through the
+        // write-side compartment so toggling `readonly` at runtime
+        // tears them down without rebuilding the editor.
+        writeSideCompartment.of(writeSideExtensions(readonly)),
         editableCompartment.of(EditorView.editable.of(!readonly)),
         EditorView.updateListener.of((u) => {
           sync.onDocChanged(u, (s) => (value = s));
@@ -396,6 +396,50 @@
       effects: editableCompartment.reconfigure(
         EditorView.editable.of(!readonly),
       ),
+    });
+  });
+
+  /// Build the write-side extension bundle. Inline edit bubbles
+  /// (wiki / tag / contact / image / date pickers) and the
+  /// paste/drop handlers only make sense when the document is
+  /// editable. In read-only mode we hand back `[]` so clicks on
+  /// widgets (which still set the caret via CM6's default
+  /// behavior) can't accidentally trigger an autocomplete picker.
+  function writeSideExtensions(ro: boolean): Extension[] {
+    if (ro) return [];
+    return [
+      bubbleListener({ onSpec: handleSpec }),
+      bubbleKeymap(() => activeBubble),
+      imageDropHandlers({
+        getUploadDir: () => dirOf(currentPath),
+        getCurrentPath: () => currentPath,
+      }),
+      // HTML-paste handler runs ahead of CM6's default plain-text
+      // paste so rich pastes get converted to markdown. Image-file
+      // pastes (clipboard with image/* MIME) are owned by
+      // imageDropHandlers; the HTML handler skips them. Both are
+      // write-side, so they're disabled together.
+      htmlPasteHandler(),
+    ];
+  }
+
+  /// Reconfigure the write-side bundle when readonly flips at
+  /// runtime. Without this, toggling "read" mode on a file tab
+  /// would leave the bubble listener mounted, and clicking a
+  /// wiki-link / hashtag / date in the now-read-only view would
+  /// still pop the autocomplete picker.
+  $effect(() => {
+    if (!view) return;
+    // Also dismiss any open bubble at the moment of the flip; a
+    // stale handle held across a reconfigure can't be dismissed
+    // through the keymap anymore.
+    if (activeBubble) {
+      activeBubble.dismiss();
+      activeBubble = null;
+      activeKind = null;
+    }
+    view.dispatch({
+      effects: writeSideCompartment.reconfigure(writeSideExtensions(readonly)),
     });
   });
 
@@ -1187,6 +1231,133 @@
   }
   :global(.md-date-region-flip:hover:not(:disabled)) {
     background: var(--hover-bg, #f0f0f0);
+  }
+
+  /* ---- preview popover ---- */
+  /* File preview popover anchored under a clicked widget (wiki /
+     contact / image) in read-only contexts. Same chrome family as
+     the date popover; wider so a markdown body has room to breathe. */
+  :global(.md-preview-popover) {
+    background: var(--bg-card, #fff);
+    color: var(--text, #111);
+    border: 1px solid var(--border, #ddd);
+    border-radius: 6px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+    width: 560px;
+    max-width: 80vw;
+    max-height: 60vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    font-family: var(--chan-editor-body-family);
+    font-size: 14px;
+    animation: cm-bubble-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  :global(.md-preview-header) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border, #eee);
+    background: var(--bg-elev, var(--bg-card));
+  }
+  :global(.md-preview-path) {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, monospace;
+    font-size: 13px;
+    color: var(--text);
+  }
+  :global(.md-preview-open) {
+    background: var(--link, #0a66ff);
+    color: #fff;
+    border: 1px solid var(--link, #0a66ff);
+    border-radius: 4px;
+    padding: 2px 10px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  :global(.md-preview-open:hover) {
+    opacity: 0.92;
+  }
+  :global(.md-preview-body) {
+    padding: 8px 12px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+    line-height: 1.5;
+  }
+  /* Body markdown rendering: same vibe as the assistant bubbles'
+     .md class but scoped to the preview body so the rules apply
+     to children sanitized by DOMPurify. */
+  :global(.md-preview-md p) { margin: 0 0 0.4em 0; }
+  :global(.md-preview-md p:last-child) { margin-bottom: 0; }
+  :global(.md-preview-md h1),
+  :global(.md-preview-md h2),
+  :global(.md-preview-md h3),
+  :global(.md-preview-md h4) {
+    margin: 0.4em 0 0.2em 0;
+    font-weight: 600;
+  }
+  :global(.md-preview-md h1) { font-size: 17px; }
+  :global(.md-preview-md h2) { font-size: 15px; }
+  :global(.md-preview-md h3),
+  :global(.md-preview-md h4) { font-size: 14px; }
+  :global(.md-preview-md ul),
+  :global(.md-preview-md ol) {
+    margin: 0.2em 0;
+    padding-left: 1.4em;
+  }
+  :global(.md-preview-md li) { margin: 0.1em 0; }
+  :global(.md-preview-md code) {
+    font-family: ui-monospace, monospace;
+    font-size: 0.92em;
+  }
+  :global(.md-preview-md pre) {
+    background: var(--bg, #f5f5f7);
+    border: 1px solid var(--border, #eee);
+    border-radius: 4px;
+    padding: 6px 8px;
+    overflow-x: auto;
+    margin: 0.4em 0;
+  }
+  :global(.md-preview-md a) {
+    color: var(--link, #0a66ff);
+    text-decoration: underline;
+  }
+  :global(.md-preview-md blockquote) {
+    margin: 0.3em 0;
+    padding: 0.1em 0.6em;
+    border-left: 3px solid var(--border, #ddd);
+    color: var(--text-secondary, #666);
+  }
+  :global(.md-preview-img) {
+    display: block;
+    max-width: 100%;
+    max-height: 55vh;
+    margin: 0 auto;
+    border-radius: 3px;
+  }
+  :global(.md-preview-binary) {
+    color: var(--text-secondary, #666);
+    font-style: italic;
+    text-align: center;
+    padding: 16px;
+  }
+  :global(.md-preview-footer) {
+    padding: 5px 10px;
+    border-top: 1px solid var(--border, #eee);
+    background: var(--bg-elev, var(--bg-card));
+    color: var(--text-secondary, #666);
+    font-size: 12px;
+  }
+  :global(.md-preview-hint) {
+    font-variant-numeric: tabular-nums;
   }
 
   /* ---- heading line classes ---- */

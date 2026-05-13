@@ -1259,10 +1259,16 @@ export const assistantOverlay = $state<{
   /// reopens the assistant with whatever the user had typed but
   /// not yet submitted.
   prompt: string;
+  /// Style toolbar visibility. Mirrors the per-tab knob in the
+  /// file editor; the toolbar mounts only when this flips on,
+  /// and the prompt's top padding grows to keep the first line
+  /// clear of the floating pill.
+  styleToolbarOpen: boolean;
 }>({
   open: false,
   contextId: "drive",
   prompt: "",
+  styleToolbarOpen: false,
 });
 
 /// Fullscreen side-by-side diff view for a pending assistant edit.
@@ -1621,11 +1627,57 @@ export function availableAssistantContexts(): ScopeOption[] {
  *  active file when applicable. Idempotent: opening an already-
  *  open overlay just resets the context to the latest sensible
  *  pick (handy when the user clicked the toolbar button after
- *  the layout shifted). */
+ *  the layout shifted).
+ *
+ *  Selection prefill: if the user had real text selected when
+ *  they invoked the assistant (e.g. via Cmd+P from the editor),
+ *  seed the prompt with that selection as a markdown blockquote
+ *  so the model sees the explicit reference. Runs ONLY on this
+ *  user-initiated open path so reload-driven `assistantOverlay.open`
+ *  flips (URL hash restore) don't re-quote whatever the browser
+ *  may have left selected, which would otherwise grow / clobber
+ *  the round-tripped prompt on every refresh. */
 export function openAssistant(): void {
+  // Only seed the prompt with the current text selection when this
+  // is a fresh open. Re-invoking on an already-open overlay (the
+  // user clicked the pill while it was up) leaves whatever they
+  // had typed in place so an accidental click doesn't clobber an
+  // in-progress prompt with a quoted selection.
+  const wasOpen = assistantOverlay.open;
   assistantOverlay.contextId = defaultScopeId();
+  if (!wasOpen) {
+    const sel = captureWindowSelection();
+    if (sel) assistantOverlay.prompt = formatQuotePrefill(sel);
+  }
   assistantOverlay.open = true;
   scheduleSessionSave();
+}
+
+/// Snapshot any non-empty plain-text selection in the document.
+/// Used only by openAssistant; the assistant's open-effect no
+/// longer reads window.getSelection on reload to avoid the
+/// browser-preserved-selection re-quote loop.
+function captureWindowSelection(): string | null {
+  if (typeof window === "undefined") return null;
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const text = sel.toString();
+  return text.trim().length === 0 ? null : text;
+}
+
+/// Format a selection as a markdown blockquote prefix for the
+/// assistant prompt: each line gets `> `, blank inner lines
+/// become bare `>`, then we terminate with two blank lines so
+/// the caret lands one empty line below the quote (the +1 line
+/// gap the user expects between the reference and where they
+/// start typing).
+export function formatQuotePrefill(text: string): string {
+  const normalised = text.replace(/\r\n?/g, "\n").replace(/\n$/, "");
+  const quoted = normalised
+    .split("\n")
+    .map((l) => (l.length === 0 ? ">" : `> ${l}`))
+    .join("\n");
+  return `${quoted}\n\n\n`;
 }
 
 // ---- graph overlay -----------------------------------------------------

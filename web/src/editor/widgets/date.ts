@@ -91,10 +91,16 @@ class DateWidget extends WidgetType {
       if (pos < 0) return;
       const from = pos;
       const to = pos + this.text.length;
+      // Live read-only check so the same widget covers all three
+      // surfaces (chat replies, user "read" toggle, fs-locked file)
+      // without rebuilding decorations. The editable facet reflects
+      // the current Wysiwyg.readonly state through editableCompartment.
+      const editable = view.state.facet(EditorView.editable);
       openDatePopover({
         anchor: el,
         initialDate: this.date,
         initialFormatId: this.formatId,
+        readonly: !editable,
         onCommit: (formatted, formatId) => {
           // Caret must always land OUTSIDE the date range so the
           // pill re-renders (anywhere inside / at the boundary

@@ -70,7 +70,23 @@ export function tagDecorations(opts: TagOptions): Extension {
       },
     ),
     EditorView.domEventHandlers({
-      click(event, view) {
+      // Suppress CM6's default caret-set on mousedown over a tag
+      // pill. Without this, clicking on a tag drops the caret INSIDE
+      // the `#word` range, which trips the bubble listener's tag-
+      // trigger detection and pops the autocomplete picker — even
+      // though the user's intent was navigation (opens the graph
+      // via the click handler below). Returning true tells CM6 we
+      // handled it; preventDefault keeps the browser from giving
+      // the click element focus the way it normally would.
+      mousedown(event, _view) {
+        const target = event.target as HTMLElement | null;
+        if (!target) return false;
+        const el = target.closest(".cm-md-tag");
+        if (!el) return false;
+        event.preventDefault();
+        return true;
+      },
+      click(event, _view) {
         const target = event.target as HTMLElement | null;
         if (!target) return false;
         const el = target.closest(".cm-md-tag");
