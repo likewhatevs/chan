@@ -204,6 +204,20 @@ fn should_open_browser(open_browser: bool) -> bool {
     !matches!(std::env::var("BROWSER"), Ok(v) if v.is_empty())
 }
 
+/// True iff the tunnel dial endpoint points at the production
+/// `drive.chan.app` terminator. On that path chan-serve can predict
+/// the public visitor URL (wildcard subdomain shape); anywhere else
+/// the terminator (chan-desktop, dev gateway, third-party host)
+/// owns the URL scheme so we can't fabricate one. The QR and
+/// browser-open paths key on this so we never advertise a
+/// hallucinated `tunnel.drive.chan.app`-style URL for a dial that
+/// went to a local loopback or an unrelated host.
+fn is_production_tunnel_url(tunnel_url: &str) -> bool {
+    url::Url::parse(tunnel_url)
+        .map(|u| u.scheme() == "https" && u.host_str() == Some("drive.chan.app"))
+        .unwrap_or(false)
+}
+
 /// Bundle returned by `build_app`: the prefixed axum app plus the
 /// pieces `serve()` needs out-of-band (token for the launch URL,
 /// last_activity for the idle watcher). The watch handle and
@@ -579,6 +593,14 @@ pub async fn serve_via_tunnel(
     // The channel is bounded; chan-tunnel-client uses try_send so a
     // slow drainer drops events instead of stalling the run loop.
     let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(8);
+    // Capture for the spawned task: the hostname / scheme of the
+    // tunnel dial endpoint decides whether we know the public URL
+    // shape on the visitor side. The production `drive.chan.app`
+    // gateway uses wildcard subdomains; any other terminator
+    // (embedded chan-tunnel-server, local dev, third-party host)
+    // owns its own URL scheme and chan-serve has no way to predict
+    // the visitor URL from this side of the dial.
+    let production_public = is_production_tunnel_url(tunnel_url);
     tokio::spawn(async move {
         // First-connect-only flag: print the QR + open the browser
         // once. Reconnect storms must not re-trigger either side
@@ -594,29 +616,44 @@ pub async fn serve_via_tunnel(
                     // root: the public gateway strips the prefix before
                     // forwarding into the tunnel substream.
                     *prefix_handle.write().unwrap() = reg.prefix.clone();
-                    // Public URL shape after the wildcard-subdomain
-                    // refactor: `{user}.drive.chan.app/{drive}/`. The
-                    // username lives in the host (the gateway routes the
-                    // wildcard there); reg.prefix is `/{drive}`. Trailing
-                    // slash matches the canonical form so the chan SPA's
-                    // vite `base: "./"` resolves asset URLs relative to
-                    // the drive.
-                    let public_url = format!(
-                        "https://{user}.drive.chan.app{prefix}/",
-                        user = reg.user,
-                        prefix = reg.prefix,
-                    );
-                    eprintln!("chan tunnel connected: {public_url}");
-                    if !greeted {
-                        greeted = true;
-                        print_qr_if_tty(&public_url);
-                        if should_open_browser(open_browser) {
-                            if let Err(e) = open::that_detached(&public_url) {
-                                eprintln!(
-                                    "NOTE: could not open browser ({e}); visit the URL above."
-                                );
+                    if production_public {
+                        // Wildcard-subdomain shape on drive.chan.app:
+                        // `{user}.drive.chan.app/{drive}/`. User is in
+                        // the host; reg.prefix is `/{drive}`. Trailing
+                        // slash matches the canonical form so the chan
+                        // SPA's vite `base: "./"` resolves asset URLs
+                        // relative to the drive.
+                        let public_url = format!(
+                            "https://{user}.drive.chan.app{prefix}/",
+                            user = reg.user,
+                            prefix = reg.prefix,
+                        );
+                        eprintln!("chan tunnel connected: {public_url}");
+                        if !greeted {
+                            greeted = true;
+                            print_qr_if_tty(&public_url);
+                            if should_open_browser(open_browser) {
+                                if let Err(e) = open::that_detached(&public_url) {
+                                    eprintln!(
+                                        "NOTE: could not open browser ({e}); visit the URL above."
+                                    );
+                                }
                             }
                         }
+                    } else {
+                        // Non-production terminator: we know `reg.user`
+                        // and `reg.drive` from HelloAck but the visitor
+                        // URL belongs to whoever is hosting the tunnel
+                        // server (e.g. chan-desktop maps each label to a
+                        // per-tenant loopback port the desktop chose).
+                        // Print identity only and skip the QR / browser
+                        // open — those would point at a wrong URL.
+                        eprintln!(
+                            "chan tunnel connected as {user}/{drive}",
+                            user = reg.user,
+                            drive = reg.drive,
+                        );
+                        greeted = true;
                     }
                 }
                 chan_tunnel_client::TunnelEvent::Disconnected { retry_in } => {
