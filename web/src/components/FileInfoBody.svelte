@@ -29,7 +29,12 @@
     selectionEdgesFor,
   } from "../state/graphData.svelte";
   import { openImageZoom } from "../state/imageZoom";
-  import { openGraphAtNode, tree } from "../state/store.svelte";
+  import {
+    openGraphAtNode,
+    openGraphForFile,
+    openGraphForTag,
+    tree,
+  } from "../state/store.svelte";
 
   /// Visual / behavioural kind for a file reference. Images route to
   /// the fullscreen zoom overlay (editor's "Zoom" button shares the
@@ -147,15 +152,21 @@
     for (const m of refs.mentions) {
       if (m.kind === "file" && !m.missing) {
         // Server-resolved mention: edge kind is still "mention" but
-        // the target landed on a real contact file node.
+        // the target landed on a real contact file node. Click
+        // scopes the graph to that contact's file rather than
+        // opening it in the editor — contacts are network anchors,
+        // not destinations.
         push({
           key: m.id,
           label: m.label,
           path: m.path,
-          onClick: () => navigate(m.path),
+          onClick: () => openGraphForFile(m.path),
         });
       } else {
         // Unresolved `@@name` — no matching contact on disk yet.
+        // Falls back to drive-scoped graph with the mention node
+        // pre-selected (openGraphAtNode), since there's no file
+        // to scope to.
         push({
           key: m.id,
           label: m.label.replace(/^@@/, ""),
@@ -171,7 +182,7 @@
         key: l.id,
         label: l.label,
         path: l.path,
-        onClick: () => navigate(l.path),
+        onClick: () => openGraphForFile(l.path),
       });
     }
     return out;
@@ -342,8 +353,8 @@
                 <li>
                   <button
                     class="ref tag"
-                    onclick={() => openGraphAtNode(t.id)}
-                    title="open in graph"
+                    onclick={() => openGraphForTag(t.id, t.label)}
+                    title="open in graph (scoped to this tag)"
                   >{t.label}</button>
                 </li>
               {/each}
@@ -359,7 +370,9 @@
                   <button
                     class="ref contact"
                     onclick={c.onClick}
-                    title={c.path ?? "open in graph"}
+                    title={c.path
+                      ? `open in graph (scoped to ${c.path})`
+                      : "open in graph"}
                   >{c.label}</button>
                 </li>
               {/each}

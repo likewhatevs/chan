@@ -80,6 +80,16 @@ export type ScopeOption =
       paths: string[];
       enabled?: boolean;
     }
+  | {
+      id: string;
+      kind: "tag";
+      label: string;
+      /// Graph node id of the tag (e.g. `#search`). The graph
+      /// scoping logic seeds BFS from this id directly — no need to
+      /// resolve to a path list like the file-kind scopes do.
+      nodeId: string;
+      enabled?: boolean;
+    }
   | { id: "drive"; kind: "drive"; label: string; enabled?: boolean }
   | { id: "global"; kind: "global"; label: string; enabled?: boolean };
 

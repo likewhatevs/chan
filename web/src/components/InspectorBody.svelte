@@ -28,6 +28,7 @@
     onReveal,
     onClose,
     onNavigate,
+    onSetAsScope,
     showRefs = true,
     documentsOverride,
   }: {
@@ -41,6 +42,10 @@
     onReveal?: () => void;
     onClose?: () => void;
     onNavigate?: (path: string) => void;
+    /// Forwarded to TagInfoBody as the "Set as Scope" handler.
+    /// GraphPanel uses it to re-scope the current graph; search
+    /// overlay closes itself and opens a tag-scoped graph.
+    onSetAsScope?: () => void;
     showRefs?: boolean;
     /// Forwarded to TagInfoBody. GraphPanel uses this to keep the
     /// tag inspector scoped to docs visible in the rendered subgraph.
@@ -69,6 +74,8 @@
     kind={selection.kind}
     {onClose}
     {onNavigate}
+    {onSetAsScope}
+    {onOpen}
     {documentsOverride}
   />
 {/if}

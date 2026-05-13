@@ -203,6 +203,30 @@
     if (currentScope.kind === "drive" || currentScope.kind === "global") {
       return null;
     }
+    // Tag scope: seed with the tag node itself; BFS expands across
+    // every doc that references it (depth 1) and further along
+    // those docs' edges (depth 2+). No path resolution needed —
+    // the node id IS the seed.
+    if (currentScope.kind === "tag") {
+      const seedIds = new Set<string>([currentScope.nodeId]);
+      const visited = new Set(seedIds);
+      let frontier = new Set(seedIds);
+      for (let i = 0; i < graphOverlay.depth; i++) {
+        const next = new Set<string>();
+        for (const e of edges) {
+          if (frontier.has(e.source) && !visited.has(e.target)) {
+            next.add(e.target);
+            visited.add(e.target);
+          } else if (frontier.has(e.target) && !visited.has(e.source)) {
+            next.add(e.source);
+            visited.add(e.source);
+          }
+        }
+        if (next.size === 0) break;
+        frontier = next;
+      }
+      return visited;
+    }
     let seedPaths: string[];
     if (currentScope.kind === "git_repo" || currentScope.kind === "dir") {
       const root =
@@ -366,6 +390,34 @@
       close();
     }
   }
+
+  /// Try to resolve a mention/contact label to a real .md file on
+  /// disk: scan tree.entries for a contact-kind entry whose basename
+  /// (sans .md) includes the mention label case-insensitively. Loose
+  /// match on purpose — `alice` should hit `Contacts/Alice Chen.md`
+  /// without requiring an exact server-side resolution table on the
+  /// frontend. Returns the first match; null when nothing fits.
+  function resolveContactToPath(label: string): string | null {
+    const needle = label.replace(/^@@/, "").toLowerCase().trim();
+    if (!needle) return null;
+    for (const e of tree.entries) {
+      if (e.is_dir || e.kind !== "contact") continue;
+      const base = e.path.split("/").pop() ?? e.path;
+      const stem = base.replace(/\.md$/i, "").toLowerCase();
+      if (stem.includes(needle)) return e.path;
+    }
+    return null;
+  }
+
+  /// Path the currently-selected mention/contact node resolves to,
+  /// or null when the mention is unresolved (no contact file on
+  /// disk yet). Drives whether the inspector renders the "Open in
+  /// this pane" and "Set as Scope" buttons for mention rows.
+  const selectedContactPath = $derived<string | null>(
+    selectedNode && selectedNode.kind === "mention"
+      ? resolveContactToPath(selectedNode.label)
+      : null,
+  );
 
   /// "Show in file browser" handler for image nodes in the inspector.
   /// FileInfoBody only renders the button when this is set + the
@@ -901,6 +953,10 @@
     // group edges, which is what spreads the seed files around the
     // hub instead of stacking them all at the origin.
     if (currentScope.kind === "group") return [SCOPE_HUB_ID];
+    // Tag scope: pin the tag node itself so fcose pulls the docs
+    // referencing it into a halo around the tag (same shape file
+    // scopes get around the file node).
+    if (currentScope.kind === "tag") return [currentScope.nodeId];
     let seedPaths: string[];
     if (currentScope.kind === "file") seedPaths = [currentScope.path];
     else if (currentScope.kind === "dir") seedPaths = filesUnder(currentScope.path);
@@ -1508,9 +1564,52 @@
       {:else}
         <InspectorBody
           selection={inspectorSelection}
-          onOpen={openSelectedFile}
+          onOpen={
+            inspectorSelection?.kind === "file"
+              ? openSelectedFile
+              : inspectorSelection?.kind === "mention" && selectedContactPath
+                ? () => {
+                    // Mention/contact "Open in this pane": route the
+                    // resolved contact file (looked up via
+                    // tree.kind === "contact") through the active
+                    // pane and close the graph.
+                    void openInActivePane(selectedContactPath!);
+                    close();
+                  }
+                : undefined
+          }
           onReveal={revealSelectedFile}
           onNavigate={selectByPath}
+          onSetAsScope={
+            selectedNode?.kind === "tag" ||
+            (selectedNode?.kind === "mention" && selectedContactPath)
+              ? () => {
+                  // "Set as Scope" inside the graph re-scopes the
+                  // current graph. Tag: to the tag's neighbourhood.
+                  // Mention: to the resolved contact's file so the
+                  // user can use a contact as a graph anchor without
+                  // leaving the overlay.
+                  if (selectedNode?.kind === "tag") {
+                    graphOverlay.scopeId = `tag:${selectedNode.id}`;
+                    graphOverlay.pendingSelectId = selectedNode.id;
+                  } else if (
+                    selectedNode?.kind === "mention" &&
+                    selectedContactPath
+                  ) {
+                    graphOverlay.scopeId = `file:${selectedContactPath}`;
+                    const fileNode = nodes.find(
+                      (n) =>
+                        n.kind === "file" &&
+                        n.path === selectedContactPath,
+                    );
+                    if (fileNode) {
+                      graphOverlay.pendingSelectId = fileNode.id;
+                      selectedId = fileNode.id;
+                    }
+                  }
+                }
+              : undefined
+          }
           documentsOverride={selectionDocumentsInScope}
         />
       {/if}

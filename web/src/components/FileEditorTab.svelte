@@ -29,6 +29,7 @@
     fileOps,
     openAssistant,
     openGraphForFile,
+    openGraphForTag,
     openSettings,
     searchPanel,
     openBrowser,
@@ -394,7 +395,7 @@
               // Ctrl click).
               void openInActivePane(args.target);
             }}
-            onTagClick={(name) => openGraphAtNode(`#${name}`)}
+            onTagClick={(name) => openGraphForTag(`#${name}`, name)}
           />
           {#if tab.styleToolbarOpen}
             <StyleToolbar

@@ -21,6 +21,8 @@
     kind,
     onClose,
     onNavigate,
+    onSetAsScope,
+    onOpen,
     documentsOverride,
   }: {
     nodeId: string;
@@ -31,6 +33,16 @@
     /// path. Hosts decide whether to open it in the active pane and
     /// close themselves; absent = entries render as non-clickable.
     onNavigate?: (path: string) => void;
+    /// "Set as Scope" action. For tag kind: re-scope to the tag's
+    /// neighbourhood. For mention kind: hosts that can resolve the
+    /// mention to a contact file scope to that file (e.g. clicking
+    /// `alice` scopes the graph to `Contacts/Alice Chen.md`); when
+    /// no file resolves, the action is unavailable.
+    onSetAsScope?: () => void;
+    /// "Open in this pane" action. Set on mention/contact nodes when
+    /// the host can resolve the mention to a real .md file; absent
+    /// for tags / dates / unresolved mentions.
+    onOpen?: () => void;
     /// Optional scope-filtered document list. When provided, this
     /// replaces the full-graph `documentsReferencing(nodeId)` lookup.
     /// GraphPanel passes its scope-filtered selectionEdges.documents
@@ -76,6 +88,20 @@
     <span class="k">documents</span>
     <span class="v">{documents.length}</span>
   </div>
+  {#if onOpen || (onSetAsScope && (kind === "tag" || kind === "mention"))}
+    <div class="actions">
+      {#if onOpen}
+        <button class="set-as-scope" onclick={onOpen} type="button">
+          Open in this pane
+        </button>
+      {/if}
+      {#if onSetAsScope && (kind === "tag" || kind === "mention")}
+        <button class="set-as-scope" onclick={onSetAsScope} type="button">
+          Set as Scope
+        </button>
+      {/if}
+    </div>
+  {/if}
 
   {#if !graphData.view && graphData.loading}
     <div class="muted">loading references…</div>
@@ -128,6 +154,26 @@
     font-size: 16px;
     font-weight: 600;
     word-break: break-word;
+  }
+  .actions {
+    margin: 0.5rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .set-as-scope {
+    background: transparent;
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    padding: 4px 8px;
+    width: 100%;
+  }
+  .set-as-scope:hover {
+    background: var(--hover-bg);
   }
   .meta-grid {
     display: grid;

@@ -24,7 +24,7 @@ import {
   rekeyTabsForRename,
   tabsForPath,
 } from "./tabs.svelte";
-import { invalidateGraph, ensureGraphLoaded } from "./graphData.svelte";
+import { graphData, invalidateGraph, ensureGraphLoaded } from "./graphData.svelte";
 import { SETTINGS_DISABLED, withTokenQuery } from "../api/transport";
 export const drive = $state<{ info: DriveInfo | null }>({ info: null });
 
@@ -1167,13 +1167,33 @@ export function openAssistant(): void {
  *  the eventual cross-drive graph but is disabled until backend
  *  cross-drive indexing exists. */
 export function availableGraphScopes(): ScopeOption[] {
-  return availableScopeOptions({
+  const out = availableScopeOptions({
     driveLabel: "Whole drive",
     global: {
       label: "All drives (cross-drive, coming soon)",
       enabled: false,
     },
   });
+  // Inject the currently-active tag scope as an option so the
+  // dropdown can both display the selection and let the user pick
+  // back to it after switching away. Tag scopes are entered via
+  // openGraphForTag(nodeId, label) from the editor / inspectors and
+  // don't appear in the layout-derived option list otherwise.
+  if (graphOverlay.scopeId.startsWith("tag:")) {
+    const nodeId = graphOverlay.scopeId.slice("tag:".length);
+    if (nodeId) {
+      const view = graphData.view;
+      const node = view?.nodes.find((n) => n.kind === "tag" && n.id === nodeId);
+      const label = node?.label ?? nodeId.replace(/^#/, "");
+      out.unshift({
+        id: graphOverlay.scopeId,
+        kind: "tag",
+        label: `tag: ${label}`,
+        nodeId,
+      });
+    }
+  }
+  return out;
 }
 
 /** Build the dropdown options for the search overlay. Today the
@@ -1271,6 +1291,20 @@ export function openGraphAtNode(nodeId: string): void {
 export function openGraphForFile(path: string): void {
   graphOverlay.scopeId = `file:${path}`;
   graphOverlay.pendingSelectId = path;
+  graphOverlay.open = true;
+  browserOverlay.open = false;
+  scheduleSessionSave();
+}
+
+/** Open the graph overlay scoped to a tag, with the tag node itself
+ *  pre-selected. The resulting subgraph is the tag's neighbourhood
+ *  (every file referencing the tag, plus their depth-limited
+ *  neighbours). Called from every "click a tag chip" surface:
+ *  editor tag pills, FileInfoBody's tag list, search overlay tag
+ *  hits, TagInfoBody's Open-in-Graph button. */
+export function openGraphForTag(nodeId: string, _label: string): void {
+  graphOverlay.scopeId = `tag:${nodeId}`;
+  graphOverlay.pendingSelectId = nodeId;
   graphOverlay.open = true;
   browserOverlay.open = false;
   scheduleSessionSave();

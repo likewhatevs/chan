@@ -24,7 +24,7 @@
     availableSearchScopes,
     browserOverlay,
     openBrowser,
-    openGraphAtNode,
+    openGraphForTag,
     paneWidths,
     persistPaneWidths,
     revealAndSelect,
@@ -343,8 +343,12 @@
       // preview thanks to the active-row selection effect, so no
       // further action is needed here.
     } else {
+      // Tag hits route to a tag-scoped graph (depth-hop
+      // neighbourhood around the tag) rather than drive scope. The
+      // remaining SearchRow variants today are tag-only; if mention
+      // / date kinds get added back, give them their own branch.
       close();
-      openGraphAtNode(r.nodeId);
+      openGraphForTag(r.nodeId, r.label);
     }
   }
 
@@ -537,6 +541,16 @@
               browserOverlay.inspectorOpen = true;
               close();
             }
+          }}
+          onSetAsScope={() => {
+            const sel = selection;
+            if (sel?.kind === "tag") {
+              close();
+              openGraphForTag(sel.nodeId, sel.label);
+            }
+            // Mention "Set as Scope" stays unwired here — the
+            // search panel doesn't surface mention rows yet, so
+            // resolving a contact label would never fire.
           }}
         />
       </Inspector>
