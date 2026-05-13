@@ -28,7 +28,19 @@
   /// view inherits from `ui.theme` via a data attribute on the
   /// host so we don't have to rebuild on toggle).
   let host: HTMLDivElement | undefined = $state();
+  let panelEl: HTMLDivElement | undefined = $state();
   let mv: MergeView | null = null;
+
+  /// Focus the panel as soon as the overlay opens so Esc lands in
+  /// this component's onkeydown handler instead of bubbling up
+  /// through `document` and hitting InlineAssist.onWindowKey,
+  /// which would call close() and auto-dismiss the pending edit
+  /// the user is just trying to review.
+  $effect(() => {
+    if (diffOverlay.open) {
+      queueMicrotask(() => panelEl?.focus());
+    }
+  });
 
   /// (Re)build the MergeView whenever the underlying edit changes.
   /// Reading `diffOverlay.edit?.content`, `.original`, and `host`
@@ -84,7 +96,8 @@
   // dispatch a `chan:assistant-edit-action` event the
   // InlineAssist instance listens for, so the overlay stays
   // decoupled from that component's internals.
-  function dispatchAction(action: "apply" | "dismiss" | "save-as"): void {
+  type DiffAction = "apply" | "dismiss" | "save-as" | "copy";
+  function dispatchAction(action: DiffAction): void {
     const edit = diffOverlay.edit;
     if (!edit) return;
     window.dispatchEvent(
@@ -113,9 +126,23 @@
     // after save (the original is unchanged).
   }
 
+  function onCopy(): void {
+    dispatchAction("copy");
+    // Keep the overlay open. The proposal stays pending — the
+    // user may want to copy AND apply, or copy AND save-as.
+  }
+
   function onKey(e: KeyboardEvent): void {
     if (e.key === "Escape") {
+      // Stop propagation so the document-level keydown in
+      // InlineAssist doesn't also fire its own close(), which
+      // would auto-dismiss the pending edit we just decided not
+      // to accept yet. Closing the diff overlay should always be
+      // a no-op on the underlying proposal — the user can come
+      // back to the chat and Apply / Discard from there.
       e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
       closeDiffOverlay();
     }
   }
@@ -127,6 +154,7 @@
   <div class="diff-overlay" onclick={closeDiffOverlay} onkeydown={onKey} data-theme={ui.theme}>
     <div
       class="diff-panel"
+      bind:this={panelEl}
       onclick={(e) => e.stopPropagation()}
       role="dialog"
       aria-modal="true"
@@ -158,6 +186,7 @@
       {#if diffOverlay.edit && diffOverlay.edit.status === "pending"}
         <footer class="actions">
           <button type="button" class="primary" onclick={onApply}>Apply</button>
+          <button type="button" onclick={onCopy}>Copy</button>
           <button type="button" onclick={onSaveAs}>Save as…</button>
           <button type="button" onclick={onDiscard}>Discard</button>
         </footer>

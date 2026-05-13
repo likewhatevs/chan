@@ -71,6 +71,7 @@
     refreshTree,
     saveGroupConversation,
     confirmState,
+    diffOverlay,
     drive,
     openDiffOverlay,
     openGraphForTag,
@@ -1145,10 +1146,14 @@
   }
 
   function onWindowKey(e: KeyboardEvent): void {
-    // The confirm modal is a fullscreen overlay with its own
-    // keydown listener (Esc cancels, Enter confirms); let it own
-    // every key while it's up so we don't double-handle.
+    // Defer to any fullscreen overlay that owns its own keys:
+    //   - confirm modal (Esc cancels, Enter confirms)
+    //   - diff overlay (Esc closes WITHOUT dismissing the pending
+    //     edit; this guard is the safety net for cases where the
+    //     diff panel didn't have focus and Esc bubbled straight to
+    //     `document` before the diff's onkeydown could intercept)
     if (confirmState.open) return;
+    if (diffOverlay.open) return;
     if (visible && (e.metaKey || e.ctrlKey) && e.key === "Enter") {
       // Cmd/Ctrl+Enter sends from anywhere in the overlay
       // (prompt editor, source view, even chat scrollback). The
@@ -1269,12 +1274,16 @@
   }
 
   function onDiffEditAction(e: Event): void {
-    const ev = e as CustomEvent<{ action: "apply" | "dismiss" | "save-as"; toolCallId: string }>;
+    const ev = e as CustomEvent<{
+      action: "apply" | "dismiss" | "save-as" | "copy";
+      toolCallId: string;
+    }>;
     const edit = findPendingEditById(ev.detail.toolCallId);
     if (!edit) return;
     if (ev.detail.action === "apply") void applyEdit(edit);
     else if (ev.detail.action === "dismiss") dismissEdit(edit, "from diff view");
     else if (ev.detail.action === "save-as") void saveEditAsNew(edit);
+    else if (ev.detail.action === "copy") void copyEdit(edit);
   }
 
   onMount(() => {

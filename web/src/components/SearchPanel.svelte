@@ -34,6 +34,7 @@
   } from "../state/store.svelte";
   import { type ScopeOption, defaultScopeId } from "../state/scope.svelte";
   import { chordFor } from "../state/shortcuts";
+  import Bubble from "./Bubble.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import Inspector from "./Inspector.svelte";
   import InspectorBody, { type InspectorSelection } from "./InspectorBody.svelte";
@@ -451,7 +452,6 @@
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <li
-            class:active={i === active}
             onmousedown={(e) => {
               e.preventDefault();
               selectRow(i);
@@ -459,27 +459,29 @@
             ondblclick={() => void activate(r)}
             onmouseenter={() => (active = i)}
           >
-            {#if r.kind === "chunk"}
-              <div class="row1">
-                <span class="kind-pill doc">doc</span>
-                <span class="path">{r.hit.path}</span>
-                {#if r.hit.heading}<span class="heading">· {r.hit.heading}</span>{/if}
-                <span class="score">{r.hit.score.toFixed(4)}</span>
-              </div>
-              <div class="snippet">{@html renderSnippet(r.hit.snippet)}</div>
-            {:else if r.kind === "image"}
-              <div class="row1">
-                <span class="kind-pill img">image</span>
-                <span class="path">{r.path}</span>
-              </div>
-              <div class="snippet muted">{basename(r.path)}</div>
-            {:else}
-              <div class="row1">
-                <span class="kind-pill tag">tag</span>
-                <span class="path">{r.label}</span>
-                <span class="score">{r.documents} doc{r.documents === 1 ? "" : "s"}</span>
-              </div>
-            {/if}
+            <Bubble active={i === active}>
+              {#if r.kind === "chunk"}
+                <div class="row1">
+                  <span class="kind-pill doc">doc</span>
+                  <span class="path">{r.hit.path}</span>
+                  {#if r.hit.heading}<span class="heading">· {r.hit.heading}</span>{/if}
+                  <span class="score">{r.hit.score.toFixed(4)}</span>
+                </div>
+                <div class="snippet">{@html renderSnippet(r.hit.snippet)}</div>
+              {:else if r.kind === "image"}
+                <div class="row1">
+                  <span class="kind-pill img">image</span>
+                  <span class="path">{r.path}</span>
+                </div>
+                <div class="snippet muted">{basename(r.path)}</div>
+              {:else}
+                <div class="row1">
+                  <span class="kind-pill tag">tag</span>
+                  <span class="path">{r.label}</span>
+                  <span class="score">{r.documents} doc{r.documents === 1 ? "" : "s"}</span>
+                </div>
+              {/if}
+            </Bubble>
           </li>
         {/each}
       </ul>
@@ -663,19 +665,25 @@
   .hits {
     list-style: none;
     margin: 0;
-    padding: 4px 0;
+    padding: 6px 10px;
     overflow-y: auto;
     flex: 1;
     min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
   }
   .hits li {
-    padding: 6px 10px;
     cursor: pointer;
-    border-left: 2px solid transparent;
+    display: flex;
+    /* Stretch the bubble's flex-start alignment to fill the row so
+       result cards extend across the panel width (the 85% cap on
+       the bubble component is for chat use). */
+    align-self: stretch;
   }
-  .hits li.active {
-    background: var(--hover-bg);
-    border-left-color: var(--link);
+  .hits li :global(.bubble) {
+    max-width: none;
+    width: 100%;
   }
   .row1 {
     display: flex;
