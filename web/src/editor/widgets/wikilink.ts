@@ -47,6 +47,32 @@ import { api } from "../../api/client";
 
 export type LinkKind = "file" | "contact" | "image" | "broken";
 
+/// Build a small lucide `user` icon as a stand-alone SVG node.
+/// Inline because the wikilink widget builds DOM directly (no svelte
+/// runtime); we'd lose the per-pill class and a11y attrs by mounting
+/// a Svelte component just for the glyph. Stroke = currentColor so
+/// the icon picks up the pill's text colour automatically.
+const SVG_NS = "http://www.w3.org/2000/svg";
+function makeUserIcon(): SVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", "cm-md-wiki-pill-icon");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS(SVG_NS, "path");
+  path.setAttribute("d", "M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2");
+  const circle = document.createElementNS(SVG_NS, "circle");
+  circle.setAttribute("cx", "12");
+  circle.setAttribute("cy", "7");
+  circle.setAttribute("r", "4");
+  svg.append(path, circle);
+  return svg;
+}
+
 export interface ParsedWikiLink {
   target: string;
   label: string;
@@ -222,6 +248,13 @@ class WikiLinkWidget extends WidgetType {
       if (resolved) img.src = resolved;
       img.draggable = false;
       el.replaceChildren(img);
+    } else if (this.kind === "contact") {
+      // Contact-kind wikilinks lead with a lucide `user` icon so the
+      // pill reads as "a person" at a glance, matching the file-tab
+      // icon and the file-browser inspector chip. Plain text label
+      // follows the icon.
+      el.classList.add("cm-md-wiki-pill-contact");
+      el.replaceChildren(makeUserIcon(), document.createTextNode(this.parsed.label));
     } else {
       el.textContent = this.parsed.label;
     }

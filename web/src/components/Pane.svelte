@@ -16,8 +16,10 @@
     type LeafNode,
   } from "../state/tabs.svelte";
 
+  import { FileText, User } from "lucide-svelte";
   import FileEditorTab from "./FileEditorTab.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
+  import { tree } from "../state/store.svelte";
   import { tabLabel, tabTooltip } from "../state/tabs.svelte";
   import {
     SHORTCUTS,
@@ -33,6 +35,20 @@
   let { pane }: { pane: LeafNode } = $props();
 
   const active = $derived(pane.tabs.find((t) => t.id === pane.activeTabId) ?? null);
+
+  /// Per-path "is this file a contact?" lookup. Drives the tab-strip
+  /// icon (User glyph for contacts, FileText otherwise) so a row of
+  /// tabs reads as "person, file, file, person" rather than a wall
+  /// of equally-weighted text. The kind comes from the tree listing's
+  /// `chan.kind: contact` discriminator; re-derives whenever the
+  /// tree refreshes.
+  const contactPaths = $derived<Set<string>>(
+    new Set(
+      tree.entries
+        .filter((e) => !e.is_dir && e.kind === "contact")
+        .map((e) => e.path),
+    ),
+  );
 
   /// ASCII shortcut table painted on the empty-pane background.
   /// Picks the chord set (web vs native) and Mod label (Cmd vs Ctrl)
@@ -506,10 +522,19 @@
         ondrop={(e) => onTabDrop(e, i)}
       >
         <!-- Spinner appears while the file is still loading from
-             disk; once loaded the tab leads straight with the
-             filename so the strip reads as plain text. -->
+             disk; once loaded the tab leads with a kind icon (User
+             for contacts, FileText otherwise) so the row reads
+             scannably. -->
         {#if t.kind === "file" && t.loading}
           <span class="marker spinner" aria-hidden="true"></span>
+        {:else if t.kind === "file"}
+          <span class="tab-icon" aria-hidden="true">
+            {#if contactPaths.has(t.path)}
+              <User size={14} strokeWidth={1.75} />
+            {:else}
+              <FileText size={14} strokeWidth={1.75} />
+            {/if}
+          </span>
         {/if}
         <span
           class="path"
@@ -725,6 +750,16 @@
     color: var(--info-text);
   }
   .path { white-space: nowrap; }
+  /* Per-tab kind icon: User for contact-kind files, FileText
+     otherwise. Sized to the tab font and stroked with text-secondary
+     so it sits one step below the label. */
+  .tab-icon {
+    display: inline-flex;
+    align-items: center;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+  .tab.active .tab-icon { color: var(--text); }
   .actions { margin-left: auto; display: flex; align-items: center; padding-left: 4px; }
   .editor-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   /* Empty pane: muted chan logo watermark above the keyboard-

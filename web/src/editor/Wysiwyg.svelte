@@ -577,6 +577,16 @@
     background: var(--contact-bg, rgba(255, 170, 100, 0.20));
     color: var(--contact-fg, #b35f10);
   }
+  /* Lucide `user` glyph leading the contact pill. Sized to the
+     pill's line-height; stroke = currentColor so it follows the
+     pill's text colour automatically. */
+  :global(.md-wysiwyg-cm6 .cm-md-wiki-pill-icon) {
+    width: 0.95em;
+    height: 0.95em;
+    vertical-align: -0.15em;
+    margin-right: 0.25em;
+    display: inline-block;
+  }
   :global(.md-wysiwyg-cm6 .cm-md-wiki-pill[data-refkind="image"]) {
     background: var(--image-bg, rgba(120, 200, 120, 0.20));
     color: var(--image-fg, #2a7d2a);
