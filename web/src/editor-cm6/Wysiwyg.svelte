@@ -46,6 +46,7 @@
   import { openContactBubble } from "./bubbles/contact";
   import { openImageBubble } from "./bubbles/image";
   import { imageDropHandlers } from "./bubbles/image_drop";
+  import { openImageActionOverlay } from "./overlays/image_action";
   import type { FindAdapter } from "../editor/find";
 
   let {
@@ -77,6 +78,26 @@
   /// reference (no stale closure).
   let activeBubble: BubbleHandle | null = null;
   let activeKind: BubbleSpec["kind"] | null = null;
+  let imageOverlay: { dismiss: () => void } | null = null;
+
+  function dismissImageOverlay(): void {
+    if (imageOverlay) {
+      imageOverlay.dismiss();
+      imageOverlay = null;
+    }
+  }
+
+  function handleImageClick(args: ImageClickArgs): void {
+    if (!view) return;
+    dismissImageOverlay();
+    imageOverlay = openImageActionOverlay({
+      view,
+      src: args.src,
+      pos: args.pos,
+      fromPath: currentPath,
+    });
+    onImageClick(args);
+  }
 
   function handleSpec(spec: BubbleSpec | null): void {
     if (!view) return;
@@ -180,7 +201,7 @@
         wikiLinkDecorations({ onWikiClick }),
         imageDecorations({
           getCurrentPath: () => currentPath,
-          onImageClick,
+          onImageClick: handleImageClick,
         }),
         bubbleListener({ onSpec: handleSpec }),
         bubbleKeymap(() => activeBubble),
@@ -196,6 +217,7 @@
   });
 
   onDestroy(() => {
+    dismissImageOverlay();
     if (activeBubble) activeBubble.dismiss();
     view?.destroy();
   });
@@ -421,6 +443,29 @@
   :global(.md-bubble .md-bubble-action) {
     color: var(--accent, #2563b8);
     font-weight: 500;
+  }
+  :global(.md-image-action-overlay) {
+    display: flex;
+    gap: 4px;
+    background: var(--bg-card, #fff);
+    border: 1px solid var(--border, #ddd);
+    border-radius: 6px;
+    padding: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+  :global(.md-image-action-btn) {
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  :global(.md-image-action-btn:hover) {
+    background: var(--hover-bg, rgba(0, 0, 0, 0.06));
+    border-color: var(--border, #ddd);
   }
 
   /* ---- heading line classes ---- */
