@@ -599,6 +599,102 @@
     border-color: var(--border, #ddd);
   }
 
+  /* ---- date popover ---- */
+  :global(.md-date-popover) {
+    background: var(--bg-card, #fff);
+    border: 1px solid var(--border, #ddd);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    padding: 8px;
+    min-width: 240px;
+    font-family: var(--chan-font-text-family);
+    font-size: 13px;
+  }
+  :global(.md-date-header) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 4px 6px;
+    border-bottom: 1px solid var(--border, #eee);
+    margin-bottom: 6px;
+  }
+  :global(.md-date-title) {
+    font-weight: 600;
+  }
+  :global(.md-date-nav) {
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 16px;
+    line-height: 1;
+    color: var(--text);
+    cursor: pointer;
+  }
+  :global(.md-date-nav:hover) {
+    background: var(--hover-bg, rgba(0, 0, 0, 0.06));
+    border-color: var(--border, #ddd);
+  }
+  :global(.md-date-grid) {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+  }
+  :global(.md-date-dow) {
+    text-align: center;
+    color: var(--text-secondary, #888);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    padding: 4px 0;
+  }
+  :global(.md-date-blank) {
+    visibility: hidden;
+  }
+  :global(.md-date-day) {
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 6px 0;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+    text-align: center;
+  }
+  :global(.md-date-day:hover) {
+    background: var(--hover-bg, rgba(0, 0, 0, 0.06));
+  }
+  :global(.md-date-day-today) {
+    border-color: var(--accent, #2563b8);
+  }
+  :global(.md-date-day-selected) {
+    background: var(--accent, #2563b8);
+    color: var(--bg-card, #fff);
+  }
+  :global(.md-date-format-row) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border, #eee);
+  }
+  :global(.md-date-format-label) {
+    color: var(--text-secondary, #888);
+    font-size: 12px;
+  }
+  :global(.md-date-format-select) {
+    flex: 1;
+    background: var(--bg-card, #fff);
+    border: 1px solid var(--border, #ddd);
+    border-radius: 4px;
+    padding: 4px 6px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 12px;
+  }
+
   /* ---- heading line classes ---- */
   :global(.md-wysiwyg-cm6 .cm-md-h1) { font-size: 2.0em; font-weight: 700; line-height: 1.25; }
   :global(.md-wysiwyg-cm6 .cm-md-h2) { font-size: 1.6em; font-weight: 700; line-height: 1.3; }

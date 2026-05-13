@@ -32,8 +32,9 @@ import {
   type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
-import { findDateMatches } from "../dateFormats";
+import { findDateMatches, type DateFormatId } from "../dateFormats";
 import { selectionInRange } from "../decorations/selection";
+import { openDatePopover } from "../overlays/date_popover";
 
 const SKIP_INSIDE = new Set<string>([
   "InlineCode",
@@ -47,27 +48,57 @@ const SKIP_INSIDE = new Set<string>([
 ]);
 
 class DateWidget extends WidgetType {
-  constructor(readonly text: string, readonly formatId: string) {
+  constructor(
+    readonly text: string,
+    readonly formatId: DateFormatId,
+    readonly date: Date,
+  ) {
     super();
   }
 
   eq(other: DateWidget): boolean {
-    return this.text === other.text && this.formatId === other.formatId;
+    return (
+      this.text === other.text &&
+      this.formatId === other.formatId &&
+      this.date.getTime() === other.date.getTime()
+    );
   }
 
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     const el = document.createElement("span");
     el.className = "cm-md-date-pill";
     el.dataset.formatId = this.formatId;
     el.textContent = this.text;
+    el.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // Resolve the live source range via posAtDOM — captured `from`
+      // at construction time may have shifted by upstream edits.
+      const pos = view.posAtDOM(el);
+      if (pos < 0) return;
+      const from = pos;
+      const to = pos + this.text.length;
+      openDatePopover({
+        anchor: el,
+        initialDate: this.date,
+        initialFormatId: this.formatId,
+        onCommit: (formatted) => {
+          view.dispatch({
+            changes: { from, to, insert: formatted },
+            selection: { anchor: from + formatted.length },
+          });
+        },
+        onDismiss: () => {},
+      });
+    });
     return el;
   }
 
   ignoreEvent(): boolean {
-    // Allow CM6 to handle clicks naturally — clicking the pill places
-    // the caret at its boundary, which collapses the widget on the
-    // next update via the selection-intersect rule.
-    return false;
+    // We own click via the mousedown handler above; CM6 should not
+    // double-process and place the caret as a side effect.
+    return true;
   }
 }
 
@@ -130,7 +161,7 @@ function scanDates(view: EditorView): DecorationSet {
       // range ALSO disappears (since it tracks decorations) so the
       // caret can navigate through the source freely.
       if (selectionInRange(sel, matchFrom, matchTo)) continue;
-      const widget = new DateWidget(m.text, m.formatId);
+      const widget = new DateWidget(m.text, m.formatId, m.date);
       decos.push({
         from: matchFrom,
         to: matchTo,
