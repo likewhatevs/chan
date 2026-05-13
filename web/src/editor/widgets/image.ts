@@ -119,6 +119,37 @@ class ImageWidget extends WidgetType {
     );
     wrap.appendChild(handle);
 
+    // Hover action overlay: Edit + Zoom buttons. Visible on wrap
+    // hover via CSS (opacity/pointer-events flip). Each button has
+    // a mousedown handler that fires the action; the wrap-level
+    // mousedown on `img` remains so plain-click anywhere on the
+    // image still works (drops caret in URL via the bubble trigger).
+    const actions = document.createElement("span");
+    actions.className = "cm-md-image-actions";
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "cm-md-image-action";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      placeCaretInImageUrl(view, wrap);
+    });
+    const zoomBtn = document.createElement("button");
+    zoomBtn.type = "button";
+    zoomBtn.className = "cm-md-image-action";
+    zoomBtn.textContent = "Zoom";
+    zoomBtn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (this.onClick) {
+        this.onClick({ src: this.src, alt: this.alt, pos: this.nodePos });
+      }
+    });
+    actions.appendChild(editBtn);
+    actions.appendChild(zoomBtn);
+    wrap.appendChild(actions);
+
     return wrap;
   }
 
@@ -205,6 +236,53 @@ function commitImageWidth(
   if (newSrc === oldSrc) return;
   view.dispatch({
     changes: { from: urlFrom, to: urlTo, insert: newSrc },
+  });
+}
+
+/// Redirect the caret into an Image's URL slot when the user's
+/// arrow key would have skipped over the atom. Without this, keyboard
+/// navigation past an image lands the caret at the Image's outer
+/// boundary — selection-intersect reveals source but the caret is
+/// in alt-text or just outside the URL, so the user has to keep
+/// arrowing to reach the URL portion where the bubble fires.
+///
+/// We catch the boundary landing (cur.head === Image.from || === to)
+/// when the previous selection was outside the Image, and dispatch
+/// a follow-up that lands the caret at URL.from (rightward motion)
+/// or URL.to (leftward). The bubble's imageUrlAtCaret trigger then
+/// fires on the next update tick and the user is editing.
+export function imageCaretRedirect(): Extension {
+  return EditorView.updateListener.of((u) => {
+    if (!u.selectionSet || u.docChanged) return;
+    const prev = u.startState.selection.main;
+    const cur = u.state.selection.main;
+    if (!cur.empty || !prev.empty) return;
+    if (prev.head === cur.head) return;
+    const tree = syntaxTree(u.state);
+    let node: import("@lezer/common").SyntaxNode | null = tree.resolveInner(
+      cur.head,
+      0,
+    );
+    while (node && node.name !== "Image") node = node.parent;
+    if (!node) return;
+    // Only redirect on the atomic-range jump landing (caret at
+    // Image.from or Image.to). Caret already inside the URL via
+    // mouse-click or earlier redirect is left alone.
+    if (cur.head !== node.from && cur.head !== node.to) return;
+    if (prev.head >= node.from && prev.head <= node.to) return;
+    const cursor = node.cursor();
+    if (!cursor.firstChild()) return;
+    const linkMarks: Array<{ from: number; to: number }> = [];
+    do {
+      if (cursor.name === "LinkMark") {
+        linkMarks.push({ from: cursor.from, to: cursor.to });
+      }
+    } while (cursor.nextSibling());
+    if (linkMarks.length < 4) return;
+    const urlFrom = linkMarks[2]!.to;
+    const urlTo = linkMarks[3]!.from;
+    const target = prev.head < cur.head ? urlFrom : urlTo;
+    u.view.dispatch({ selection: { anchor: target } });
   });
 }
 

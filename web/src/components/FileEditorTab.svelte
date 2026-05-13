@@ -380,9 +380,9 @@
           bind:width={paneWidths.inspector}
           onResize={persistPaneWidths}
         >
-          <div class="outline-slot">
-            <OutlineBody content={tab.content} onSelect={jumpTo} />
-          </div>
+          <!-- File info lives at the TOP of the inspector. At the
+               bottom it visually fights with the status bar that
+               pins below the editor. -->
           <button
             class="info-disclosure"
             onclick={() => (showInfo = !showInfo)}
@@ -394,6 +394,9 @@
           {#if showInfo}
             <FileInfoBody path={tab.path} />
           {/if}
+          <div class="outline-slot">
+            <OutlineBody content={tab.content} onSelect={jumpTo} />
+          </div>
         </Inspector>
       {/if}
     </div>

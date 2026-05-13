@@ -37,6 +37,7 @@
     type WikiLinkClickArgs,
   } from "./widgets/wikilink";
   import {
+    imageCaretRedirect,
     imageDecorations,
     type ImageClickArgs,
   } from "./widgets/image";
@@ -257,6 +258,7 @@
           getCurrentPath: () => currentPath,
           onImageClick: handleImageClick,
         }),
+        imageCaretRedirect(),
         tableDecorations(),
         bubbleListener({ onSpec: handleSpec }),
         bubbleKeymap(() => activeBubble),
@@ -590,6 +592,44 @@
   }
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap:hover .cm-md-image-handle) {
     opacity: 1;
+  }
+  /* Hover action overlay (Edit / Zoom). Visible only when the mouse
+     is over the image wrap; uses the same bouncy reveal as the other
+     bubble surfaces. */
+  :global(.md-wysiwyg-cm6 .cm-md-image-actions) {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    display: flex;
+    gap: 4px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s, transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    transform: scale(0.95);
+    transform-origin: top right;
+    line-height: 1;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap:hover .cm-md-image-actions) {
+    opacity: 1;
+    pointer-events: auto;
+    transform: scale(1);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-action) {
+    background: var(--bg-card, #fff);
+    border: 1px solid var(--border, #ddd);
+    border-radius: 4px;
+    padding: 3px 10px;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1),
+      background 0.12s;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-action:hover) {
+    background: var(--hover-bg, rgba(0, 0, 0, 0.06));
+    transform: scale(1.05);
   }
 
   /* ---- table widget ---- */
