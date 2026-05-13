@@ -17,12 +17,73 @@
   } from "../state/tabs.svelte";
 
   import FileEditorTab from "./FileEditorTab.svelte";
+  import HamburgerMenu from "./HamburgerMenu.svelte";
   import { tabLabel, tabTooltip } from "../state/tabs.svelte";
+  import {
+    SHORTCUTS,
+    currentOS,
+    currentPlatform,
+    formatChord,
+    renderTable,
+  } from "../state/shortcuts";
   import { tabMenu, toggleTabMenu } from "../state/tabMenu.svelte";
 
   let { pane }: { pane: LeafNode } = $props();
 
   const active = $derived(pane.tabs.find((t) => t.id === pane.activeTabId) ?? null);
+
+  /// ASCII shortcut table painted on the empty-pane background.
+  /// Picks the chord set (web vs native) and Mod label (Cmd vs Ctrl)
+  /// once at module init — these don't change at runtime.
+  const platform = currentPlatform();
+  const os = currentOS();
+  const shortcutTable = renderTable(platform, os);
+
+  /// Subset of the registry shown in the empty-pane right-click
+  /// menu. Tabs + Esc are excluded: there are no tabs in this pane
+  /// (it's empty) and Esc only matters when an overlay is up.
+  const emptyPaneMenuItems = SHORTCUTS.filter(
+    (s) => s.group !== "Tabs" && s.id !== "ui.overlay.dismiss" && s[platform],
+  );
+
+  /// Right-click menu state. The HamburgerMenu component owns the
+  /// bubble chrome and outside-click dismiss; we just hold the
+  /// handle so the contextmenu handler can open it at the cursor.
+  let emptyPaneMenu: HamburgerMenu | undefined = $state();
+  let emptyPaneMenuOpen = $state(false);
+
+  function onEmptyPaneContextMenu(e: MouseEvent): void {
+    e.preventDefault();
+    emptyPaneMenu?.openAtCursor(e.clientX, e.clientY);
+  }
+
+  /// Pane chrome menu: the ⋮ in the tab strip that replaces the
+  /// per-button split / close controls.
+  let paneMenu: HamburgerMenu | undefined = $state();
+  let paneMenuOpen = $state(false);
+
+  function onSplitRight(): void {
+    paneMenu?.close();
+    splitActive("row");
+  }
+  function onSplitDown(): void {
+    paneMenu?.close();
+    splitActive("column");
+  }
+  function onClosePane(): void {
+    paneMenu?.close();
+    closePane(pane.id);
+  }
+
+  /// Fire the same `chan:command` event the keymap layer uses so
+  /// every shortcut row routes through the existing dispatcher in
+  /// App.svelte. Avoids re-implementing the actions here.
+  function dispatchCommand(id: string): void {
+    emptyPaneMenu?.close();
+    window.dispatchEvent(
+      new CustomEvent("chan:command", { detail: { name: id } }),
+    );
+  }
   // Single-pane layouts hide the focus highlight: it's only useful
   // when there's more than one pane to disambiguate. Re-derives on
   // every layout mutation so the highlight reappears the moment a
@@ -437,16 +498,39 @@
       <div class="drop-bar" aria-hidden="true"></div>
     {/if}
     <div class="actions">
-      <!-- Pane-only controls. Tab-specific buttons live in each
-           tab body's own top bar. Split buttons hide entirely when
-           the platform doesn't allow any splits (iPhone) and grey
-           out when the platform's cap is reached (iPad after one
-           split, native desktop / web have no cap). -->
-      {#if splitsAllowed}
-        <button title="split right" onclick={() => splitActive("row")}>⇢</button>
-        <button title="split down" onclick={() => splitActive("column")}>⇣</button>
-      {/if}
-      <button title={closeLabel} onclick={() => closePane(pane.id)}>⊠</button>
+      <!-- Pane-only controls live inside a single hamburger menu
+           to match the file browser / search / graph overlays.
+           Split rows hide when the platform doesn't allow any splits
+           (iPhone) and grey out when the platform's cap is reached
+           (iPad after one split, native desktop / web have no cap). -->
+      <HamburgerMenu
+        bind:this={paneMenu}
+        bind:open={paneMenuOpen}
+        width={220}
+        height={140}
+      >
+        {#if splitsAllowed}
+          <li>
+            <button role="menuitem" onclick={onSplitRight}>
+              <span class="glyph" aria-hidden="true">⇢</span>
+              <span>Split right</span>
+            </button>
+          </li>
+          <li>
+            <button role="menuitem" onclick={onSplitDown}>
+              <span class="glyph" aria-hidden="true">⇣</span>
+              <span>Split down</span>
+            </button>
+          </li>
+          <li class="sep" role="separator"></li>
+        {/if}
+        <li>
+          <button role="menuitem" onclick={onClosePane}>
+            <span class="glyph" aria-hidden="true">⊠</span>
+            <span>{closeLabel}</span>
+          </button>
+        </li>
+      </HamburgerMenu>
     </div>
   </div>
 
@@ -454,7 +538,46 @@
     {#if active}
       <FileEditorTab tab={active} />
     {:else}
-      <div class="placeholder" aria-label="no tab open"></div>
+      <div
+        class="placeholder"
+        aria-label="no tab open"
+        oncontextmenu={onEmptyPaneContextMenu}
+        role="presentation"
+      >
+        <div class="placeholder-stack">
+          <div class="placeholder-mark"></div>
+          <!-- Hint + shortcut table only on the lone-pane case. In a
+               multi-pane layout the extra panes are workspace setup
+               (the user is about to drop files in), so the chrome
+               just gets in the way; the logo alone is enough. -->
+          {#if !multiPane}
+            <p class="placeholder-hint">
+              Each pane's visible tab is part of the scope<br />
+              for Search, Assistant, and Graph.
+            </p>
+            <pre class="placeholder-shortcuts">{shortcutTable}</pre>
+          {/if}
+        </div>
+        <!-- Right-click menu. Triggerless: opens only via the
+             contextmenu handler above. Same `chan:command` ids as
+             the keymap layer so actions stay unified. -->
+        <HamburgerMenu
+          bind:this={emptyPaneMenu}
+          bind:open={emptyPaneMenuOpen}
+          showTrigger={false}
+          width={280}
+          height={260}
+        >
+          {#each emptyPaneMenuItems as s (s.id)}
+            <li>
+              <button role="menuitem" onclick={() => dispatchCommand(s.id)}>
+                <span class="empty-pane-menu-label">{s.label}</span>
+                <span class="empty-pane-menu-chord">{formatChord(s[platform]!, os)}</span>
+              </button>
+            </li>
+          {/each}
+        </HamburgerMenu>
+      </div>
     {/if}
   </div>
 </div>
@@ -567,35 +690,68 @@
     color: var(--info-text);
   }
   .path { white-space: nowrap; }
-  .actions { margin-left: auto; display: flex; gap: 2px; padding-left: 4px; }
-  .actions button {
-    background: none;
-    border: 0;
-    cursor: pointer;
-    padding: 2px 6px;
-    font-size: 14px;
-    line-height: 1;
-    color: var(--text-secondary);
-    border-radius: 3px;
-  }
-  .actions button:hover { color: var(--text); background: var(--hover-bg); }
+  .actions { margin-left: auto; display: flex; align-items: center; padding-left: 4px; }
   .editor-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-  /* Empty pane: muted chan logo watermark, centered. CSS mask
-     paints the silhouette in the current text-secondary color so
-     it adapts to light / dark themes automatically. The image
-     itself (web/public/chan-mark.png) is alpha-only; the visible
-     color comes from background-color. */
+  /* Empty pane: muted chan logo watermark above the keyboard-
+     shortcut table, both centered. CSS mask paints the silhouette
+     in the current text-secondary color so it adapts to light /
+     dark themes; the image itself (web/public/chan-mark.png) is
+     alpha-only. The shortcut table comes from
+     state/shortcuts.ts so the surface stays in sync with the
+     `chan serve --help` text — resync via
+     `node web/scripts/shortcuts-table.mjs`. */
   .placeholder {
-    flex: 1; display: flex; align-items: center; justify-content: center;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem 1rem;
+    overflow: auto;
   }
-  .placeholder::before {
-    content: '';
-    width: 200px;
-    height: 200px;
+  .placeholder-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.25rem;
+    color: var(--text-secondary);
+    opacity: 0.6;
+  }
+  .placeholder-mark {
+    width: 160px;
+    height: 160px;
     background-color: var(--text-secondary);
     -webkit-mask: url('/chan-mark.png') center / contain no-repeat;
             mask: url('/chan-mark.png') center / contain no-repeat;
-    opacity: 0.18;
+    opacity: 0.45;
+  }
+  .placeholder-shortcuts {
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre;
+    color: var(--text-secondary);
+  }
+  .placeholder-hint {
+    margin: 0;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.4;
+    max-width: 360px;
+  }
+  /* Empty-pane right-click menu rows. Two columns: label flush left
+     and chord flush right. Reuses the shared bubble chrome from
+     HamburgerMenu (.hamburger-menu via :global) so spacing and
+     hover state match the overlay menus. */
+  :global(.empty-pane-menu-label) {
+    flex: 1;
+  }
+  :global(.empty-pane-menu-chord) {
+    margin-left: 1.5rem;
+    color: var(--text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
   }
   @media (prefers-reduced-motion: reduce) {
     .tab,

@@ -40,11 +40,17 @@
     open = $bindable(false),
     width = 240,
     height = 256,
+    showTrigger = true,
     children,
   }: {
     open?: boolean;
     width?: number;
     height?: number;
+    /// Drop the trigger button when the menu is opened only via
+    /// `openAtCursor` (e.g. a right-click handler in the parent).
+    /// The bubble still portals to <body> and dismisses on outside
+    /// click as usual.
+    showTrigger?: boolean;
     children?: Snippet;
   } = $props();
 
@@ -109,17 +115,19 @@
 
 <svelte:window onmousedown={onWindowMousedown} />
 
-<button
-  bind:this={triggerEl}
-  class="hamburger-trigger hbtn"
-  class:on={open}
-  type="button"
-  title="Menu"
-  aria-label="Menu"
-  aria-haspopup="menu"
-  aria-expanded={open}
-  onclick={openFromTrigger}
->⋮</button>
+{#if showTrigger}
+  <button
+    bind:this={triggerEl}
+    class="hamburger-trigger hbtn"
+    class:on={open}
+    type="button"
+    title="Menu"
+    aria-label="Menu"
+    aria-haspopup="menu"
+    aria-expanded={open}
+    onclick={openFromTrigger}
+  >⋮</button>
+{/if}
 
 {#if open}
   <!-- Portal the bubble out to <body> so it pins to the viewport

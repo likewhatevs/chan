@@ -183,20 +183,9 @@
     // initial load still flushes any in-flight session changes.
     installSessionFlushHook();
     await bootstrap();
-    // First-launch experience: if the URL hash didn't restore any
-    // tabs AND no overlay is already up (the hash may have asked
-    // for assistant / graph / search on a tabless drive), pop the
-    // file browser so the user has somewhere to start.
-    const hasTabs = Object.values(layout.nodes).some(
-      (n) => n.kind === "leaf" && n.tabs.length > 0,
-    );
-    const anyOverlayOpen =
-      browserOverlay.open ||
-      searchPanel.open ||
-      assistantOverlay.open ||
-      graphOverlay.open ||
-      settingsOverlay.open;
-    if (!hasTabs && !anyOverlayOpen) openBrowser();
+    // First-launch experience: the empty pane now carries the chan
+    // logo + ASCII shortcut table + scope hint + right-click menu,
+    // so we no longer auto-pop the file browser on a tabless drive.
     bootstrapped = true;
     // Visibility-change resume hook. Browsers throttle / suspend
     // backgrounded tabs and the WebSocket reconnect can stretch
