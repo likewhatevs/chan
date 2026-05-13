@@ -32,6 +32,8 @@
 
   import { api } from "../api/client";
   import { renderMarkdown } from "../api/markdown";
+  import { isEditableText } from "../state/fileTypes";
+  import { appendDefaultMd } from "../state/pathValidate";
   import type {
     ContentHit,
     LlmCompletionResponse,
@@ -47,6 +49,7 @@
     assistantOverlay,
     assistantStream,
     availableAssistantContexts,
+    bareToolName,
     beginAssistantStream,
     clearFileConversation,
     clearGroupConversation,
@@ -56,10 +59,13 @@
     openAssistant,
     refreshTree,
     saveGroupConversation,
+    confirmState,
     drive,
     type AssistantConversation,
     type AssistantPendingEdit,
     type AssistantTurn,
+    uiConfirm,
+    uiPathPrompt,
   } from "../state/store.svelte";
   import { defaultScopeId, type ScopeOption } from "../state/scope.svelte";
   import { layout, openInActivePane } from "../state/tabs.svelte";
@@ -403,6 +409,34 @@
     const id = currentContext.id;
     if (lastOpenedContextId === id) return;
     lastOpenedContextId = id;
+    // The user just landed on this conversation; clear any unread
+    // marker so the tab's bell icon swaps back to FileText. The
+    // marker was set in handleResponse when a response landed
+    // while the overlay was closed or focused elsewhere; this is
+    // the canonical "user has seen it" signal.
+    // Snapshot the active context so any deferred work below uses
+    // the context as of the moment the user landed here (the user
+    // could switch scopes mid-defer; the conv we want to clear is
+    // the one they just opened).
+    const ctxSnap = currentContext;
+    const convForUnread = conversationFor(ctxSnap);
+    let needSave = false;
+    if (convForUnread.hasUnread) {
+      convForUnread.hasUnread = false;
+      needSave = true;
+    }
+    // Clear the one-shot scrollback divider AFTER the current
+    // paint so the user actually sees it on the trip back; the
+    // setTimeout(0) buys one render pass before we wipe the
+    // bookmark. Without this defer, the effect runs synchronously
+    // with the open and the divider never gets a chance to show.
+    if (convForUnread.lastSeenTurnIndex !== undefined) {
+      setTimeout(() => {
+        convForUnread.lastSeenTurnIndex = undefined;
+        scheduleSave(ctxSnap);
+      }, 0);
+    }
+    if (needSave) scheduleSave(ctxSnap);
     const sel = captureSelection();
     error = null;
     // If the user had real text selected when they hit the assistant
@@ -667,6 +701,15 @@
   async function submit(): Promise<void> {
     const ctx = currentContext;
     if (!ctx || loading) return;
+    // Also refuse when a background request is still in flight on
+    // this same context (the user picked "close, keep running"
+    // and reopened on the same scope). Letting them pile on a
+    // second query would push two assistant turns onto the same
+    // conv for one question. Esc -> Stop is the documented path.
+    if (assistantStream.sessionId !== null && assistantStream.contextId === ctx.id) {
+      error = "a previous request is still running on this scope — press Esc to stop";
+      return;
+    }
     const trimmed = assistantOverlay.prompt.trim();
     if (!trimmed) return;
     // Slash commands: handled locally, no LLM round-trip.
@@ -701,7 +744,11 @@
     // matching session. crypto.randomUUID is available in every
     // browser chan targets; no fallback needed.
     const sessionId = crypto.randomUUID();
-    beginAssistantStream(sessionId);
+    // Pin the stream to this conversation's context id so the
+    // "close, keep running" Esc choice survives a context switch:
+    // the WS frame router uses this stored id (not the live
+    // assistantOverlay.contextId) to attribute tool turns.
+    beginAssistantStream(sessionId, ctx.id);
     try {
       if (ctx.kind === "drive") {
         const r = await api.searchContent(trimmed, { limit: 8 });
@@ -766,7 +813,10 @@
       // End the stream AFTER the response has been folded into
       // `conv.turns` so the live bubble's contents don't blink to
       // empty between deltas-clear and the final turn render.
-      endAssistantStream();
+      // Scope the clear to THIS session id so a late-finishing
+      // background request can't clobber a fresh stream the user
+      // already started.
+      endAssistantStream(sessionId);
       queueMicrotask(scrollToBottom);
     }
   }
@@ -813,6 +863,14 @@
         ...(excerpts && excerpts.length > 0 ? { citations: excerpts } : {}),
       });
     }
+    // Mark the conversation unread when the user isn't currently
+    // viewing it (overlay closed, or open on a different scope).
+    // Tab strips read this through `assistantHasUnreadForPath` to
+    // swap the file icon for a bell. Cleared in the open-overlay
+    // effect when the user lands on this conv.
+    if (!assistantOverlay.open || assistantOverlay.contextId !== ctx.id) {
+      conv.hasUnread = true;
+    }
     // Pair every tool call from this assistant turn with a tool
     // message in the same conversation order so Anthropic / Gemini
     // accept the next round (both reject a tool_use without a
@@ -831,7 +889,14 @@
     //     the next /api/llm/complete fires.
     const captured = assistantStream.toolResults;
     for (const call of resp.tool_calls) {
-      if (call.name === WRITE_FILE_TOOL) {
+      // Normalize the tool name so the same dispatch works for the
+      // bare-name backends (Anthropic / Gemini / Ollama emit
+      // `write_file`) and the MCP-namespaced agentic CLIs (claude-cli
+      // / gemini-cli emit `mcp__chan__write_file`). Without this the
+      // edit card never rendered for claude-cli even though the
+      // tool_use block was correctly received.
+      const bare = bareToolName(call.name);
+      if (bare === WRITE_FILE_TOOL) {
         const input = (call.input ?? {}) as {
           path?: string;
           content?: string;
@@ -942,6 +1007,53 @@
     queueMicrotask(scrollToBottom);
   }
 
+  /// Save a proposed edit to a NEW path instead of overwriting the
+  /// model's target. The proposal stays in `pending` so the user
+  /// can still Apply (overwrite original) or Discard afterward; we
+  /// don't inject a synthetic tool_result either, because the
+  /// model's pending write_file call hasn't been resolved one way
+  /// or the other. The user's intent here is "keep both versions",
+  /// not "accept the edit".
+  ///
+  /// Pre-seeds the prompt with `<base>-revision.md` so the common
+  /// case (save a variant alongside the source) is one Enter away.
+  async function saveEditAsNew(edit: AssistantPendingEdit): Promise<void> {
+    if (edit.status !== "pending") return;
+    const original = edit.path;
+    // Build a default destination next to the original. Strip a
+    // trailing `.md`/`.txt` if present so we can append `-revision`
+    // before the extension; an extensionless path just gets
+    // `-revision` and the modal's `appendDefaultMd` validator adds
+    // `.md` on its own.
+    const m = original.match(/^(.*?)(\.(md|txt))?$/i);
+    const stem = m?.[1] ?? original;
+    const ext = m?.[2] ?? "";
+    const defaultValue = `${stem}-revision${ext}`;
+    const target = await uiPathPrompt({
+      title: "save proposal to new file (.md added if no extension)",
+      defaultValue,
+      kind: "file",
+      mode: "create",
+      validate: (p) =>
+        isEditableText(p)
+          ? null
+          : `'${p}' is not an editable text file (only .md and .txt)`,
+    });
+    if (!target) return;
+    const path = appendDefaultMd(target);
+    try {
+      await api.create(path, false, edit.content);
+    } catch (e) {
+      error = `save-as failed: ${(e as Error).message}`;
+      return;
+    }
+    // Refresh the tree so the new file appears in the file browser
+    // immediately; the watcher event will arrive shortly but the
+    // explicit refresh keeps the UX snappy.
+    void refreshTree();
+    error = null;
+  }
+
   /// Track which proposal was just copied so the matching button
   /// briefly switches to a check icon. Keyed by toolCallId because
   /// turn indexes shift as the conversation grows.
@@ -986,6 +1098,10 @@
   }
 
   function onWindowKey(e: KeyboardEvent): void {
+    // The confirm modal is a fullscreen overlay with its own
+    // keydown listener (Esc cancels, Enter confirms); let it own
+    // every key while it's up so we don't double-handle.
+    if (confirmState.open) return;
     if (visible && (e.metaKey || e.ctrlKey) && e.key === "Enter") {
       // Cmd/Ctrl+Enter sends from anywhere in the overlay
       // (prompt editor, source view, even chat scrollback). The
@@ -997,15 +1113,91 @@
     } else if (e.key === "Escape" && visible) {
       // Wysiwyg / ProseMirror doesn't intercept Escape, so a
       // window-level handler reaches it cleanly even with the
-      // editor focused. If a request is in flight, Escape cancels
-      // it instead of closing the panel; the user expects the
-      // visible Stop button to also be reachable from the keyboard.
+      // editor focused.
       e.preventDefault();
       if (loading) {
-        cancel();
+        // Ask before yanking the user out: someone hitting Esc to
+        // stop a runaway tool loop usually wants to refine their
+        // prompt (stop only); someone hitting Esc to get back to
+        // editing wants to close (stop + close). Pre-fix this was
+        // hard-wired to cancel-only; now the choice is explicit.
+        void promptStopOrClose();
       } else {
         close();
       }
+    }
+  }
+
+  /// State for the three-way Esc-while-running modal. Local to
+  /// InlineAssist (the global `uiConfirm` is binary; this case
+  /// needs three real choices).
+  type StopChoice = "stop_close" | "close_keep" | "stop_only" | null;
+  let stopPrompt = $state<{
+    open: boolean;
+    resolve: ((v: StopChoice) => void) | null;
+  }>({ open: false, resolve: null });
+
+  function askStopChoice(): Promise<StopChoice> {
+    return new Promise((resolve) => {
+      stopPrompt.resolve?.(null);
+      stopPrompt.resolve = resolve;
+      stopPrompt.open = true;
+    });
+  }
+
+  function resolveStop(v: StopChoice): void {
+    const r = stopPrompt.resolve;
+    stopPrompt.resolve = null;
+    stopPrompt.open = false;
+    r?.(v);
+  }
+
+  /// Focus the stop-prompt modal once it opens so its onkeydown
+  /// (Esc / Enter) fires without the user clicking first.
+  let stopModalEl: HTMLDivElement | null = $state(null);
+  $effect(() => {
+    if (stopPrompt.open) {
+      queueMicrotask(() => stopModalEl?.focus());
+    }
+  });
+
+  /// Map a three-way Esc choice onto cancel / close calls. Backdrop
+  /// dismissal (`null`) leaves everything alone so the user can
+  /// keep waiting if they Esc'd by accident.
+  async function promptStopOrClose(): Promise<void> {
+    const choice = await askStopChoice();
+    if (choice === "stop_close") {
+      cancel();
+      close();
+    } else if (choice === "close_keep") {
+      // Close the overlay but let the in-flight HTTP request finish
+      // in the background. The assistant turn will land in
+      // conv.turns the next time the user opens this scope, so the
+      // conversation log stays honest. We deliberately do NOT call
+      // cancel(); the request keeps running.
+      //
+      // Remember where the user left off so any turns that land
+      // while they're away get a one-time divider when they come
+      // back. This is THE signal for "stuff arrived after I closed
+      // the dialog"; the tab bell is the cross-scope counterpart.
+      if (currentContext) {
+        const conv = conversationFor(currentContext);
+        conv.lastSeenTurnIndex = conv.turns.length;
+        scheduleSave(currentContext);
+      }
+      close();
+    } else if (choice === "stop_only") {
+      cancel();
+    }
+  }
+
+  function onStopKey(e: KeyboardEvent): void {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      resolveStop("stop_only");
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      resolveStop("stop_close");
     }
   }
   onMount(() => {
@@ -1027,6 +1219,20 @@
         : currentContext.kind === "group"
           ? (assistantConversations.byGroup[currentContext.key]?.turns ?? [])
           : (assistantConversations.drive?.turns ?? []),
+  );
+  /// Position (in `turns`) at which to render the "new since you
+  /// stepped away" divider. Set by the "close, keep running" Esc
+  /// choice; cleared one paint after the user reopens the conv.
+  /// Read reactively so the divider hides as soon as the deferred
+  /// clear fires.
+  const unreadDividerAt = $derived<number | null>(
+    !currentContext
+      ? null
+      : currentContext.kind === "file"
+        ? (assistantConversations.byFile[currentContext.path]?.lastSeenTurnIndex ?? null)
+        : currentContext.kind === "group"
+          ? (assistantConversations.byGroup[currentContext.key]?.lastSeenTurnIndex ?? null)
+          : (assistantConversations.drive?.lastSeenTurnIndex ?? null),
   );
 </script>
 
@@ -1076,6 +1282,19 @@
           </div>
         {/if}
         {#each turns as turn, i (i)}
+          {#if unreadDividerAt !== null && i === unreadDividerAt && i < turns.length}
+            <!-- One-shot scrollback divider: everything from here
+                 down arrived after the user picked "close, keep
+                 running" on a still-running request. Cleared a
+                 paint after the user reopens the conv (see the
+                 open-overlay $effect), so it shows once and goes
+                 away. -->
+            <div class="unread-divider" aria-label="new since you stepped away">
+              <span class="line"></span>
+              <span class="label">new since you stepped away</span>
+              <span class="line"></span>
+            </div>
+          {/if}
           {#if turn.kind === "user"}
             <div class="bubble user">
               <div class="role-line">
@@ -1144,6 +1363,23 @@
                 </ul>
               {/if}
             </div>
+          {:else if turn.kind === "tool"}
+            <!-- Compact chip narrating one non-write tool call the
+                 model made during this turn. Status dot animates
+                 amber while running, lands on green (ok) or red
+                 (error) when the matching result arrives. Tail
+                 carries a short summary ("12 hits", "1.2 KB").
+                 Lives in conv.turns so it persists in the
+                 scrollback the next time the user opens the
+                 overlay on this scope. -->
+            <div class="tool-chip" class:running={turn.event.status === "running"} class:ok={turn.event.status === "ok"} class:err={turn.event.status === "error"}>
+              <span class="dot"></span>
+              <span class="label">{turn.event.label}</span>
+              {#if turn.event.result_summary}
+                <span class="sep">·</span>
+                <span class="summary">{turn.event.result_summary}</span>
+              {/if}
+            </div>
           {:else}
             <div class="edit-card" class:applied={turn.edit.status === "applied"} class:dismissed={turn.edit.status === "dismissed"}>
               <div class="edit-head">
@@ -1156,16 +1392,31 @@
               {/if}
               <details>
                 <summary>show full proposal</summary>
-                <pre class="proposal">{turn.edit.content}</pre>
+                <!-- The proposal IS markdown (.md or .txt destined
+                     for the drive); render it through the same
+                     markdown pipeline as assistant bubbles so the
+                     user sees what the rendered file will look
+                     like, not the raw source. Source text is still
+                     available via the Copy button next to Apply. -->
+                <div class="proposal md">{@html renderMarkdown(turn.edit.content)}</div>
               </details>
               {#if turn.edit.status === "pending"}
                 <div class="actions">
-                  <button class="primary" onclick={() => void applyEdit(turn.edit)}>Apply</button>
+                  <button type="button" class="primary" onclick={(e) => { e.stopPropagation(); void applyEdit(turn.edit); }}>Apply</button>
+                  <!-- Save as new file: writes the proposal content
+                       to a user-chosen path instead of overwriting
+                       the target. Useful when the user wants to
+                       preserve the original file and side-by-side
+                       diff the suggestion. The path prompt seeds
+                       with a `-revision.md` suffix on the original
+                       path as a friendly starting point. -->
+                  <button type="button" class="save-as" title="save proposal to a new file" onclick={(e) => { e.stopPropagation(); void saveEditAsNew(turn.edit); }}>Save as…</button>
                   <button
+                    type="button"
                     class="copy"
                     title="copy proposal to clipboard"
                     aria-label="copy proposal"
-                    onclick={() => void copyEdit(turn.edit)}
+                    onclick={(e) => { e.stopPropagation(); void copyEdit(turn.edit); }}
                   >
                     {#if copiedEditId === turn.edit.toolCallId}
                       <Check size={12} strokeWidth={2} aria-hidden="true" /><span>Copied</span>
@@ -1173,7 +1424,7 @@
                       <Copy size={12} strokeWidth={1.75} aria-hidden="true" /><span>Copy</span>
                     {/if}
                   </button>
-                  <button onclick={() => dismissEdit(turn.edit, "manual")}>Discard</button>
+                  <button type="button" onclick={(e) => { e.stopPropagation(); dismissEdit(turn.edit, "manual"); }}>Discard</button>
                 </div>
               {:else if turn.edit.status === "applied"}
                 <div class="status-tag ok">applied</div>
@@ -1183,28 +1434,30 @@
             </div>
           {/if}
         {/each}
-        {#if loading && pendingTurnTime}
-          <!-- In-flight assistant turn. Lives outside the turns array
-               so it disappears automatically when the real reply
-               lands (which pushes a real assistant turn into
-               `turns`). Two display modes:
+        {#if assistantStream.sessionId !== null && currentContext && assistantStream.contextId === currentContext.id}
+          <!-- In-flight assistant turn. Render gate keyed off the
+               GLOBAL stream (not the local `loading` flag) so a
+               user who closed the overlay mid-request via the
+               "close, keep running" Esc choice still sees the
+               streaming bubble when they reopen on the same
+               scope. Two display modes:
                  - No deltas yet: animated "thinking…" dots so the
                    user sees the request landed.
                  - Deltas streaming: render the accumulated text
-                   live with a trailing caret. We render as plain
-                   text (white-space:pre-wrap) instead of markdown
-                   while streaming so a half-typed code fence or
-                   list marker doesn't flicker between layouts on
-                   every token. The final assistant turn (in the
-                   turns array) re-renders as markdown once the
-                   response lands. -->
+                   live as markdown (same renderer the final turn
+                   uses) so headings / lists / code fences match
+                   the rest of the chat as they form. A trailing
+                   caret signals the bubble is still being written.
+                   Half-parsed fences may flicker between paragraph
+                   and code-block layout — that's preferable to a
+                   styling jump when streaming ends. -->
           <div class="bubble assistant pending">
             <div class="role-line">
               <span class="role">assistant</span>
-              <span class="ts">{formatRelative(pendingTurnTime)}</span>
+              <span class="ts">{formatRelative(pendingTurnTime ?? undefined)}</span>
             </div>
             {#if assistantStream.text.length > 0}
-              <div class="body streaming">{assistantStream.text}<span class="caret" aria-hidden="true"></span></div>
+              <div class="body md streaming">{@html renderMarkdown(assistantStream.text)}<span class="caret" aria-hidden="true"></span></div>
             {:else}
               <div class="body">thinking{".".repeat(thinkingDots)}</div>
             {/if}
@@ -1288,6 +1541,32 @@
       </div>
 </OverlayShell>
 
+{#if stopPrompt.open}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="stop-overlay" onclick={() => resolveStop(null)}>
+    <div
+      class="stop-modal"
+      bind:this={stopModalEl}
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={onStopKey}
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+    >
+      <div class="title">Assistant is working</div>
+      <div class="message">
+        A request is in flight. Pick what should happen next.
+      </div>
+      <div class="actions">
+        <button type="button" onclick={() => resolveStop("stop_only")}>Stop only</button>
+        <button type="button" onclick={() => resolveStop("close_keep")}>Close, keep running</button>
+        <button type="button" class="primary" onclick={() => resolveStop("stop_close")}>Stop &amp; close</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   header {
     display: flex;
@@ -1365,9 +1644,9 @@
   }
   /* While streaming we override the italic + muted dots styling
      since the body is now real assistant text being built up live.
-     Plain text rendering (the markdown rerender happens once the
-     turn is finalized) keeps the same white-space:pre-wrap as the
-     standard bubble. */
+     Markdown rendering happens on every delta so the same .md
+     scoped rules above (h1..h4, ul/ol/li, code, pre, blockquote,
+     a) apply identically to streaming and finalized bubbles. */
   .bubble.assistant.pending .body.streaming {
     color: var(--text);
     font-style: normal;
@@ -1500,6 +1779,51 @@
     color: var(--text-secondary);
   }
 
+  /* Compact in-line chip narrating one tool call. Sits at full
+     width but reads as a sub-action between conversation turns:
+     small font, muted color, status dot on the left, optional
+     result summary on the right. Running pulses amber; ok lands
+     on the accent green; error lands on the warn red. */
+  .tool-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding: 2px 8px;
+    border-left: 2px solid var(--border);
+    margin-left: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .tool-chip .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--muted);
+    flex-shrink: 0;
+  }
+  .tool-chip.running .dot {
+    background: #d29922;
+    box-shadow: 0 0 4px rgba(210, 153, 34, 0.55);
+    animation: chan-tool-pulse 1.1s ease-in-out infinite;
+  }
+  .tool-chip.ok .dot { background: var(--accent, #2ea043); }
+  .tool-chip.err .dot { background: var(--warn-text, #d33); }
+  .tool-chip.err { color: var(--warn-text, #d33); }
+  .tool-chip .label { color: var(--text); }
+  .tool-chip .sep { color: var(--border); }
+  .tool-chip .summary {
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 28ch;
+  }
+  @keyframes chan-tool-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+
   /* Pending edit cards: full-width, distinct from chat bubbles
      so the user reads them as actionable artifacts rather than
      conversation. The collapsed details/summary keeps the
@@ -1545,17 +1869,71 @@
   }
   .edit-card .proposal {
     margin: 6px 0 0 0;
-    padding: 8px;
+    padding: 8px 10px;
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 4px;
-    font-family: ui-monospace, monospace;
-    font-size: 11.5px;
-    line-height: 1.45;
-    white-space: pre-wrap;
+    font-size: 15px;
+    line-height: 1.5;
     word-break: break-word;
     max-height: 40vh;
     overflow: auto;
+  }
+  /* Inherit the same .md scoped rules the assistant bubbles use
+     so the proposal preview formats identically to how the file
+     will render in the editor (headings, lists, fenced code,
+     blockquotes). The .md selector lives in a separate block
+     keyed on `.bubble .body.md`; redeclare for the proposal
+     container so the same :global rules apply. */
+  .edit-card .proposal :global(p) { margin: 0 0 0.4em 0; }
+  .edit-card .proposal :global(p:last-child) { margin-bottom: 0; }
+  .edit-card .proposal :global(h1),
+  .edit-card .proposal :global(h2),
+  .edit-card .proposal :global(h3),
+  .edit-card .proposal :global(h4) {
+    margin: 0.4em 0 0.2em 0;
+    font-weight: 600;
+  }
+  .edit-card .proposal :global(h1) { font-size: 16px; }
+  .edit-card .proposal :global(h2) { font-size: 15px; }
+  .edit-card .proposal :global(h3),
+  .edit-card .proposal :global(h4) { font-size: 16px; }
+  .edit-card .proposal :global(ul),
+  .edit-card .proposal :global(ol) {
+    margin: 0.2em 0;
+    padding-left: 1.4em;
+  }
+  .edit-card .proposal :global(li) { margin: 0.1em 0; }
+  .edit-card .proposal :global(code) {
+    background: var(--bg-elev);
+    padding: 0 4px;
+    border-radius: 3px;
+    font-family: ui-monospace, monospace;
+    font-size: 0.92em;
+  }
+  .edit-card .proposal :global(pre) {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    overflow-x: auto;
+    margin: 0.4em 0;
+  }
+  .edit-card .proposal :global(pre code) {
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+    font-size: 14px;
+  }
+  .edit-card .proposal :global(a) {
+    color: var(--link);
+    text-decoration: underline;
+  }
+  .edit-card .proposal :global(blockquote) {
+    margin: 0.3em 0;
+    padding: 0.1em 0.6em;
+    border-left: 3px solid var(--border);
+    color: var(--text-secondary);
   }
   .edit-card .actions {
     display: flex;
@@ -1585,6 +1963,91 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
+  }
+  /* "Save as…" reuses the neutral chrome of Discard; no extra
+     rule needed beyond the `.edit-card .actions button` base. */
+
+  /* "New since you stepped away" divider: a thin line + tiny
+     centered label across the chat column. Shown once after the
+     user picks "close, keep running" and reopens; cleared on next
+     paint. Uses the same accent color the disconnect overlay uses
+     so the user reads it as a system signal, not part of any
+     bubble. */
+  .unread-divider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 2px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--link);
+  }
+  .unread-divider .line {
+    flex: 1;
+    height: 1px;
+    background: var(--link);
+    opacity: 0.4;
+  }
+  .unread-divider .label {
+    font-variant-numeric: tabular-nums;
+    color: var(--link);
+  }
+
+  /* Three-way Esc-while-running prompt. Self-contained modal
+     (the global uiConfirm is binary; this case has three real
+     choices). Sits above the OverlayShell scrim via a higher
+     z-index. Same neutral chrome as ConfirmModal so it reads as
+     part of the system, not the conversation. */
+  .stop-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 26500;
+  }
+  .stop-modal {
+    background: var(--bg-elev);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    padding: 1rem;
+    min-width: 360px;
+    max-width: 480px;
+  }
+  .stop-modal .title {
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .stop-modal .message {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+  }
+  .stop-modal .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-end;
+  }
+  .stop-modal .actions button {
+    background: var(--btn-bg);
+    color: var(--text);
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    padding: 5px 12px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 14px;
+  }
+  .stop-modal .actions button:hover { border-color: var(--btn-hover); }
+  .stop-modal .actions button.primary {
+    background: var(--link);
+    color: #fff;
+    border-color: var(--link);
   }
   .edit-card .status-tag {
     font-size: 13px;

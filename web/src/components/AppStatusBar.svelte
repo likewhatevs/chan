@@ -12,8 +12,10 @@
   //   - status   : transient `ui.status` messages (move/rename/delete
   //                failures, etc).
   //
-  // Same pattern will host search-indexing and assistant-thinking
-  // signals later; add another store + section here when needed.
+  // Note: assistant activity intentionally does NOT live here.
+  // The per-tab flashing dot on file tabs covers in-scope files;
+  // tool-loop narration streams inline in the chat. Surfacing the
+  // same signal in a third place added noise without information.
   //
   // Hide model: bar disappears entirely when no section has
   // content, and collapses to a pill on click. No idle fade and no
@@ -23,7 +25,11 @@
   //
   // Position: fixed bottom-left so it's independent of the workspace
   // layout, matching how BottomPill is anchored.
-  import { indexStatus, importStatus, ui } from "../state/store.svelte";
+  import {
+    indexStatus,
+    importStatus,
+    ui,
+  } from "../state/store.svelte";
 
   let collapsed = $state(false);
 
@@ -34,7 +40,9 @@
   );
   const importVisible = $derived(importStatus.value !== null);
   const statusVisible = $derived(!!ui.status);
-  const anyVisible = $derived(indexVisible || importVisible || statusVisible);
+  const anyVisible = $derived(
+    indexVisible || importVisible || statusVisible,
+  );
 
   function toggleCollapse(): void {
     collapsed = !collapsed;

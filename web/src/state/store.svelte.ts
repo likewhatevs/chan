@@ -198,6 +198,7 @@ function onWatchEvent(e: unknown): void {
   // current bubble.
   if (
     frameType === "llm.delta" ||
+    frameType === "llm.tool_call" ||
     frameType === "llm.tool_result" ||
     frameType === "llm.done" ||
     frameType === "llm.error"
@@ -206,6 +207,7 @@ function onWatchEvent(e: unknown): void {
       session_id?: string;
       text?: string;
       error?: string;
+      call?: { id?: string; name?: string; args?: unknown };
       result?: { id?: string; output?: unknown };
     };
     if (!assistantStream.sessionId || f.session_id !== assistantStream.sessionId) {
@@ -213,6 +215,37 @@ function onWatchEvent(e: unknown): void {
     }
     if (frameType === "llm.delta") {
       assistantStream.text += f.text ?? "";
+    } else if (frameType === "llm.tool_call") {
+      // Narrate the call inline in the chat by appending a `tool`
+      // turn to the currently-active conversation. The user sees
+      // chips like `reading docs/foo.md` / `searching "X"` /
+      // `listing drive` form as the model works through its tool
+      // loop. Skip `write_file` (bare or MCP-namespaced): those
+      // calls become richer edit cards via handleResponse so the
+      // user can Apply / Discard.
+      const rawName = typeof f.call?.name === "string" ? f.call.name : "";
+      const callId = typeof f.call?.id === "string" ? f.call.id : "";
+      if (rawName && callId) {
+        const bare = bareToolName(rawName);
+        if (bare !== "write_file") {
+          const conv = currentAssistantConversation();
+          if (conv) {
+            const now = Date.now();
+            conv.turns.push({
+              kind: "tool",
+              event: {
+                tool_call_id: callId,
+                name: bare,
+                label: labelForToolCall(rawName, f.call?.args),
+                status: "running",
+                result_summary: null,
+                created_at: now,
+              },
+              created_at: now,
+            });
+          }
+        }
+      }
     } else if (frameType === "llm.tool_result") {
       // Capture every tool_result chan-llm emits during this turn so
       // the synchronous /api/llm/complete consumer (InlineAssist) can
@@ -222,6 +255,24 @@ function onWatchEvent(e: unknown): void {
       const id = f.result?.id;
       if (typeof id === "string" && id.length > 0) {
         assistantStream.toolResults[id] = f.result?.output ?? null;
+        // Find the matching tool chip in the active conversation
+        // (walk backward — the call is usually the most-recent
+        // running entry) and flip it to ok/error with a short
+        // result summary. The chip stays in the scrollback as
+        // permanent history.
+        const conv = currentAssistantConversation();
+        if (conv) {
+          for (let i = conv.turns.length - 1; i >= 0; i--) {
+            const t = conv.turns[i];
+            if (t && t.kind === "tool" && t.event.tool_call_id === id) {
+              const out = f.result?.output;
+              const err = isErrorOutput(out);
+              t.event.status = err ? "error" : "ok";
+              t.event.result_summary = summarizeToolResult(out);
+              break;
+            }
+          }
+        }
       }
     } else if (frameType === "llm.error") {
       assistantStream.error = f.error ?? "stream error";
@@ -876,6 +927,35 @@ export const searchPanel = $state<{
 /// In-memory only for v1; lost on full app reload. Persisting to
 /// localStorage or `.chan/` is a follow-up if the use case
 /// demands it.
+/// Live narration of one tool call inside the assistant's chat
+/// timeline. Created by the `llm.tool_call` WS handler the moment
+/// the model invokes a tool, then updated to `ok` / `error` (with
+/// a short result summary) when the matching `llm.tool_result`
+/// frame arrives. Rendered inline in the chat scrollback as a
+/// compact chip; persists alongside regular turns so reopening
+/// the overlay shows the full tool-loop history.
+///
+/// Excludes `write_file` calls: those get their own richer edit
+/// card via the existing `AssistantPendingEdit` pathway because
+/// they require user action (Apply / Discard).
+export type AssistantToolEvent = {
+  tool_call_id: string;
+  /// Bare tool name (the `mcp__<server>__` prefix is stripped by
+  /// the WS handler before construction). Backend-agnostic.
+  name: string;
+  /// Pre-rendered human-readable label, e.g. `reading docs/foo.md`.
+  /// Same shape used for the status pill so the two surfaces stay
+  /// in sync without recomputing.
+  label: string;
+  status: "running" | "ok" | "error";
+  /// Short tail like `12 hits`, `1.2 KB`, `67 entries`. Null while
+  /// the call is still in flight; null when the result shape
+  /// didn't yield an obvious summary (the chip still renders
+  /// status alone).
+  result_summary: string | null;
+  created_at: number;
+};
+
 export type AssistantPendingEdit = {
   toolCallId: string;
   path: string;
@@ -905,7 +985,8 @@ export type AssistantTurn =
       created_at?: number;
       citations?: import("../api/types").ContentHit[];
     }
-  | { kind: "edit"; edit: AssistantPendingEdit; created_at?: number };
+  | { kind: "edit"; edit: AssistantPendingEdit; created_at?: number }
+  | { kind: "tool"; event: AssistantToolEvent; created_at?: number };
 
 export type AssistantConversation = {
   /// Verbatim message log we ship to /api/llm/complete. Includes
@@ -917,6 +998,21 @@ export type AssistantConversation = {
   /// and protocol-only tool_result entries; rendered in the
   /// chat panel.
   turns: AssistantTurn[];
+  /// True when an assistant response landed while the user wasn't
+  /// looking at this conversation (overlay closed, or open on a
+  /// different scope). Cleared the next time the user opens the
+  /// overlay on this conversation. Surfaced on file tabs as a
+  /// bell-icon swap so the user knows a background reply is
+  /// waiting. Persists with the conversation so a chan relaunch
+  /// preserves the unread signal.
+  hasUnread?: boolean;
+  /// Position in `turns` at the moment the user picked "close,
+  /// keep running" on a request still in flight. Anything added
+  /// after this index landed while the user was away; the chat
+  /// renders a one-time divider at this position so the user
+  /// can see where they left off. Cleared when the user reopens
+  /// the conversation (one-shot signal, not a permanent bookmark).
+  lastSeenTurnIndex?: number;
 };
 
 /**
@@ -1182,6 +1278,12 @@ export const assistantOverlay = $state<{
 /// next submit.
 export const assistantStream = $state<{
   sessionId: string | null;
+  /// Context id the in-flight turn is bound to (file:<path> /
+  /// group:<key> / drive). Captured at stream-begin so tool-turn
+  /// attribution stays correct even when the user closes the
+  /// overlay and switches to a different file mid-request via
+  /// the "close, keep running" Esc choice.
+  contextId: string | null;
   text: string;
   /// Tool results chan-llm emitted during this turn, keyed by tool
   /// call id. Populated by the `llm.tool_result` WS frame handler;
@@ -1195,10 +1297,20 @@ export const assistantStream = $state<{
   /// path surfaces its own error via the catch block in
   /// InlineAssist.submit; this field is for the streaming side.
   error: string | null;
-}>({ sessionId: null, text: "", toolResults: {}, error: null });
+}>({
+  sessionId: null,
+  contextId: null,
+  text: "",
+  toolResults: {},
+  error: null,
+});
 
-export function beginAssistantStream(sessionId: string): void {
+export function beginAssistantStream(
+  sessionId: string,
+  contextId: string,
+): void {
   assistantStream.sessionId = sessionId;
+  assistantStream.contextId = contextId;
   assistantStream.text = "";
   // Replace the map outright (not just clear keys) so any prior-
   // turn reference held by a `$derived` block stops tracking the
@@ -1208,11 +1320,162 @@ export function beginAssistantStream(sessionId: string): void {
   assistantStream.error = null;
 }
 
-export function endAssistantStream(): void {
+/// End the in-flight stream. The optional `sessionId` argument
+/// scopes the clear to a specific request: a late-arriving
+/// background request whose user has already started a new one
+/// must NOT clobber the new stream's state. When the id doesn't
+/// match the current stream, the call is a no-op.
+export function endAssistantStream(sessionId?: string): void {
+  if (sessionId && assistantStream.sessionId !== sessionId) return;
   assistantStream.sessionId = null;
+  assistantStream.contextId = null;
   assistantStream.text = "";
   assistantStream.toolResults = {};
   assistantStream.error = null;
+}
+
+/// True when an assistant response landed on a conversation
+/// scoped to `path` that the user hasn't viewed yet. Tab strips
+/// swap the file icon for a bell when this is true. Covers both
+/// single-file conversations and group conversations that include
+/// `path` as a member.
+export function assistantHasUnreadForPath(path: string): boolean {
+  if (assistantConversations.byFile[path]?.hasUnread) return true;
+  for (const [key, conv] of Object.entries(assistantConversations.byGroup)) {
+    if (!conv.hasUnread) continue;
+    if (key.split("|").includes(path)) return true;
+  }
+  return false;
+}
+
+/// True when `path` falls inside the assistant's currently-active
+/// scope. Tab strips use this together with
+/// `assistantStream.sessionId !== null` to render a flashing
+/// "assistant working" dot on file tabs whose content is feeding
+/// the in-flight turn.
+///
+/// Scope semantics:
+///   - file:<path>   → single path match
+///   - group:<key>   → path is one of the sorted paths joined by `|`
+///   - drive         → no specific file scope; returns false (the
+///                     drive turn doesn't single out any tab)
+export function pathInAssistantScope(path: string): boolean {
+  const id = assistantOverlay.contextId;
+  if (!id) return false;
+  if (id.startsWith("file:")) return id.slice("file:".length) === path;
+  if (id.startsWith("group:")) {
+    const key = id.slice("group:".length);
+    return key.split("|").includes(path);
+  }
+  return false;
+}
+
+/// Resolve the currently-active assistant conversation from
+/// `assistantOverlay.contextId`. Used by the `llm.tool_call` /
+/// `llm.tool_result` WS handlers to find the conversation they
+/// should narrate into. Returns null when the conversation hasn't
+/// been seeded yet (lazy seed happens in InlineAssist.submit
+/// before the request fires, so this only nulls for in-flight
+/// turns whose conv vanished — e.g. user clicked `/clear` mid-
+/// request, very rare).
+function currentAssistantConversation(): AssistantConversation | null {
+  // Use the contextId captured at stream-begin so a user who
+  // closed the overlay and switched files mid-request still gets
+  // their tool turns routed to the right conversation. Falls back
+  // to `assistantOverlay.contextId` for compatibility if a code
+  // path ever forgot to seed contextId on the stream (defensive).
+  const id = assistantStream.contextId ?? assistantOverlay.contextId;
+  if (!id) return null;
+  if (id === "drive") {
+    return assistantConversations.drive;
+  }
+  if (id.startsWith("file:")) {
+    return assistantConversations.byFile[id.slice("file:".length)] ?? null;
+  }
+  if (id.startsWith("group:")) {
+    return assistantConversations.byGroup[id.slice("group:".length)] ?? null;
+  }
+  return null;
+}
+
+/// Truthy when a tool result JSON shape signals failure. chan-llm
+/// emits errors as `{"error": "..."}`, while success shapes carry
+/// tool-specific keys (content / hits / entries / bytes / etc.).
+function isErrorOutput(output: unknown): boolean {
+  if (!output || typeof output !== "object") return false;
+  const o = output as Record<string, unknown>;
+  return typeof o.error === "string";
+}
+
+/// One-line summary of a tool result for the chip's tail (e.g.
+/// `12 hits`, `1.2 KB`, `67 entries`). Returns null when the
+/// result shape doesn't yield an obvious metric; the chip still
+/// renders with status alone.
+function summarizeToolResult(output: unknown): string | null {
+  if (!output || typeof output !== "object") return null;
+  const o = output as Record<string, unknown>;
+  if (typeof o.error === "string") {
+    return o.error.length <= 60 ? o.error : `${o.error.slice(0, 59)}…`;
+  }
+  if (Array.isArray(o.hits)) return `${o.hits.length} hits`;
+  if (Array.isArray(o.entries)) return `${o.entries.length} entries`;
+  if (Array.isArray(o.files)) return `${o.files.length} files`;
+  if (typeof o.content === "string") return formatBytes(o.content.length);
+  if (typeof o.bytes === "number" && Number.isFinite(o.bytes)) {
+    return formatBytes(o.bytes);
+  }
+  return null;
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/// Normalize a tool call name. Anthropic API and Ollama emit the
+/// bare tool name (e.g. `write_file`); the claude-cli and
+/// gemini-cli backends emit MCP-namespaced names (`mcp__chan__write_file`)
+/// because chan's tools are exposed to those agents via the chan-llm
+/// MCP bridge. Strip the `mcp__<server>__` prefix so downstream
+/// dispatch (status-bar label, edit-card filter, etc.) stays
+/// backend-agnostic.
+export function bareToolName(name: string): string {
+  if (!name.startsWith("mcp__")) return name;
+  const rest = name.slice("mcp__".length);
+  const idx = rest.indexOf("__");
+  if (idx < 0) return name;
+  return rest.slice(idx + 2);
+}
+
+/// Short, human-readable label for a tool call. Truncates path /
+/// query strings so a single line still fits in the status pill
+/// even on a narrow window. Unknown tool names fall through to
+/// their raw name so a future addition shows up legibly without
+/// a frontend bump.
+function labelForToolCall(name: string, input: unknown): string {
+  const bare = bareToolName(name);
+  const args = (input ?? {}) as Record<string, unknown>;
+  const shortPath = (p: unknown): string => {
+    if (typeof p !== "string" || p.length === 0) return "";
+    return p.length <= 40 ? p : `…${p.slice(p.length - 39)}`;
+  };
+  if (bare === "read_file") return `reading ${shortPath(args.path) || "file"}`;
+  if (bare === "write_file") {
+    return `proposing edit to ${shortPath(args.path) || "file"}`;
+  }
+  if (bare === "list_files") {
+    const prefix = typeof args.prefix === "string" ? args.prefix : "";
+    return prefix ? `listing ${shortPath(prefix)}` : "listing drive";
+  }
+  if (bare === "search_content") {
+    const q = typeof args.query === "string" ? args.query : "";
+    const trimmed = q.length <= 32 ? q : `${q.slice(0, 31)}…`;
+    return q ? `searching "${trimmed}"` : "searching drive";
+  }
+  if (bare === "read_image") return `viewing ${shortPath(args.path) || "image"}`;
+  if (bare === "repo_report") return "scanning repo";
+  return bare;
 }
 
 /** Build the context dropdown options for the assistant overlay.
