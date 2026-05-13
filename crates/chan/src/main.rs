@@ -119,6 +119,17 @@ enum Command {
     #[command(long_about = SERVE_LONG_ABOUT)]
     Serve {
         path: Option<PathBuf>,
+        /// Serve the given path verbatim instead of suggesting the
+        /// enclosing VCS repository root. Without this flag, `chan
+        /// serve` refuses to start when the drive path lives inside
+        /// a Git / Mercurial / Subversion working tree (exit 70 +
+        /// `chan-error: vcs-parent` marker on stderr) because the
+        /// repo root is almost always a better drive root: it
+        /// keeps cross-file links, the graph, and search aligned
+        /// with the project boundary. Pass `--here` when you
+        /// genuinely want to scope the drive to a subdir.
+        #[arg(long)]
+        here: bool,
         /// Host address to bind. Default 127.0.0.1 (or ::1 with -6).
         /// Use 0.0.0.0 / :: to listen on all interfaces. chan has no
         /// TLS and only a bearer-token gate, so any non-loopback host
@@ -324,6 +335,7 @@ fn main() -> Result<()> {
         Command::Rename { path, name } => cmd_rename(path, name),
         Command::Serve {
             path,
+            here,
             host,
             ipv4,
             ipv6,
@@ -352,6 +364,7 @@ fn main() -> Result<()> {
                 prefix,
                 timeout,
                 path,
+                here,
                 no_token,
                 no_browser,
                 no_settings,
@@ -744,12 +757,65 @@ fn resolve_listen_addr(
     Ok(SocketAddr::new(ip, port))
 }
 
+/// Emit the structured `vcs-parent` refusal to stderr. The shape is
+/// a contract consumed by chan-desktop (and any other wrapping
+/// shell):
+///
+///   - Exit code `70` (set by the caller after this returns).
+///   - One stderr line begins with `chan-error: vcs-parent ` and
+///     carries `kind=<git|hg|svn> repo_root=<abs path> path=<abs
+///     path>` in that order, single-line, space-separated. Values
+///     run to end-of-line so paths with spaces don't break the
+///     parse; wrappers split on `key=` boundaries, not on spaces.
+///   - The surrounding human-readable lines are advisory and may
+///     change wording; the marker is the stable bit.
+///
+/// Documented in the desktop hand-off; do NOT reshape without
+/// bumping the marker prefix (e.g. `chan-error-v2: ...`) so old
+/// shells fail closed instead of silently misparsing.
+fn print_vcs_parent_error(root: &Path, parent: &chan_drive::VcsParent) {
+    // Canonicalize both paths for the marker so wrappers get
+    // absolute, symlink-resolved forms. Fall back to the input
+    // when canonicalize fails (root may not yet exist on disk).
+    let root_abs = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let repo_abs = std::fs::canonicalize(&parent.repo_root)
+        .unwrap_or_else(|_| parent.repo_root.clone());
+    let kind_human = match parent.kind {
+        chan_drive::VcsKind::Git => "Git",
+        chan_drive::VcsKind::Mercurial => "Mercurial",
+        chan_drive::VcsKind::Subversion => "Subversion",
+    };
+    eprintln!(
+        "error: drive '{}' is inside a {} repository at '{}'.",
+        root_abs.display(),
+        kind_human,
+        repo_abs.display(),
+    );
+    eprintln!("       Serving the repository root keeps cross-file links, the graph,");
+    eprintln!("       and search aligned with the project boundary.");
+    eprintln!(
+        "chan-error: vcs-parent kind={} repo_root={} path={}",
+        parent.kind.as_str(),
+        repo_abs.display(),
+        root_abs.display(),
+    );
+    eprintln!(
+        "hint: serve repo root:    chan serve {}",
+        repo_abs.display()
+    );
+    eprintln!(
+        "hint: serve only subdir:  chan serve --here {}",
+        root_abs.display(),
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn cmd_serve(
     addr: SocketAddr,
     prefix: String,
     idle_timeout: Option<Duration>,
     path: Option<PathBuf>,
+    here: bool,
     no_token: bool,
     no_browser: bool,
     no_settings: bool,
@@ -765,6 +831,19 @@ async fn cmd_serve(
     let root = path
         .or_else(|| lib.default_drive_root())
         .unwrap_or_else(|| lib.effective_default_drive_root());
+    // VCS-parent gate. If `root` is inside a Git / Mercurial /
+    // Subversion working tree, refuse with a structured error so a
+    // wrapping shell (chan-desktop) can parse the marker line and
+    // offer the user a choice between repo root and the subdir.
+    // Runs before any state mutation: no directory creation, no
+    // registry write. `--here` opts the caller out for the case
+    // where serving the subdir is the genuine intent.
+    if !here {
+        if let Some(parent) = chan_drive::detect_parent_vcs(&root) {
+            print_vcs_parent_error(&root, &parent);
+            std::process::exit(70);
+        }
+    }
     if !root.exists() {
         std::fs::create_dir_all(&root)
             .with_context(|| format!("creating drive root {}", root.display()))?;
