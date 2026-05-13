@@ -557,6 +557,15 @@
     color: var(--text-secondary, #888);
     font-size: 12px;
   }
+  :global(.md-bubble .md-bubble-row-level) {
+    display: inline-block;
+    min-width: 2em;
+    margin-right: 0.5em;
+    color: var(--text-secondary, #888);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
   :global(.md-bubble .md-bubble-actions) {
     border-bottom: 1px solid var(--border, #eee);
     margin-bottom: 4px;
