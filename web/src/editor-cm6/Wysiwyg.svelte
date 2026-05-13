@@ -30,14 +30,21 @@
   import { chanMarkdown } from "./markdown/grammar";
   import { chanDecorations } from "./decorations";
   import { tagDecorations } from "./widgets/tag";
+  import { dateDecorations } from "./widgets/date";
+  import {
+    wikiLinkDecorations,
+    type WikiLinkClickArgs,
+  } from "./widgets/wikilink";
   import type { FindAdapter } from "../editor/find";
 
   let {
     value = $bindable(""),
     onTagClick = () => {},
+    onWikiClick = () => {},
   }: {
     value: string;
     onTagClick?: (tag: string) => void;
+    onWikiClick?: (args: WikiLinkClickArgs) => void;
   } = $props();
 
   const density = $derived(drive.info?.preferences?.line_spacing ?? "tight");
@@ -66,6 +73,8 @@
         findField,
         chanDecorations(),
         tagDecorations({ onTagClick }),
+        dateDecorations(),
+        wikiLinkDecorations({ onWikiClick }),
         EditorView.updateListener.of((u) => {
           sync.onDocChanged(u, (s) => (value = s));
         }),
@@ -190,6 +199,25 @@
   }
   :global(.md-wysiwyg-cm6 .cm-md-tag:hover) {
     background: var(--tag-bg-hover, rgba(106, 168, 255, 0.28));
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-date-pill) {
+    background: var(--date-bg, rgba(120, 200, 120, 0.18));
+    color: var(--date-fg, #2a7d2a);
+    padding: 0.05em 0.4em;
+    border-radius: 4px;
+    font-size: 0.92em;
+    cursor: text;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-wiki-pill) {
+    background: var(--wiki-bg, rgba(168, 130, 255, 0.18));
+    color: var(--wiki-fg, #6831c8);
+    padding: 0.05em 0.4em;
+    border-radius: 4px;
+    font-size: 0.95em;
+    cursor: pointer;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-wiki-pill:hover) {
+    background: var(--wiki-bg-hover, rgba(168, 130, 255, 0.28));
   }
 
   /* ---- heading line classes ---- */
