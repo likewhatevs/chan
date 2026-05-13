@@ -6,7 +6,7 @@
 // `[[<contact-path>]]` (a wikilink to the contact note).
 
 import type { EditorView } from "@codemirror/view";
-import { openBubbleShell } from "../../editor/bubble";
+import { openBubbleShell } from "../bubble";
 import { createCaretAnchor } from "./anchor";
 import type { BubbleHandle } from "./types";
 import { api } from "../../api/client";

@@ -213,10 +213,17 @@ export function insertImage(view: EditorView): void {
   });
 }
 
-export function toggleLink(view: EditorView, url: string): void {
+/// Apply a Link mark. Without an explicit URL, prompts the user (the
+/// legacy editor's behavior). Returns early if the user cancels.
+export function toggleLink(view: EditorView, url?: string): void {
+  let target = url;
+  if (target === undefined) {
+    target = window.prompt("URL")?.trim() ?? "";
+    if (!target) return;
+  }
   const sel = view.state.selection.main;
   if (sel.empty) {
-    const insert = `[](${url})`;
+    const insert = `[](${target})`;
     view.dispatch({
       changes: { from: sel.from, to: sel.to, insert },
       selection: { anchor: sel.from + 1 }, // caret in the label
@@ -225,7 +232,7 @@ export function toggleLink(view: EditorView, url: string): void {
   }
   const text = view.state.doc.sliceString(sel.from, sel.to);
   view.dispatch({
-    changes: { from: sel.from, to: sel.to, insert: `[${text}](${url})` },
+    changes: { from: sel.from, to: sel.to, insert: `[${text}](${target})` },
   });
 }
 

@@ -25,7 +25,7 @@ import {
   type FindAdapter,
   type FindOptions,
   type FindRange,
-} from "../editor/find";
+} from "./find";
 
 export type ChanTheme = "light" | "dark";
 

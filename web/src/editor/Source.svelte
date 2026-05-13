@@ -16,7 +16,7 @@
     findField,
     makeFindAdapter,
     makeThemeCompartment,
-  } from "../editor-cm6/base";
+  } from "./base";
   import type { FindAdapter } from "./find";
 
   // Editor density follows the user's line_spacing pref. Same hook

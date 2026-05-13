@@ -32,7 +32,7 @@ import {
   type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
-import { findDateMatches } from "../../editor/dateFormats";
+import { findDateMatches } from "../dateFormats";
 import { selectionInRange } from "../decorations/selection";
 
 const SKIP_INSIDE = new Set<string>([

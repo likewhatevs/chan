@@ -39,7 +39,7 @@ import {
   parseImageSrc,
   resolveImageSrc,
   setImageWidth,
-} from "../../editor/extensions/image";
+} from "../extensions/image";
 import { selectionInRange } from "../decorations/selection";
 
 const MIN_IMG_WIDTH = 40;

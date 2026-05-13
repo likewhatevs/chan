@@ -17,11 +17,11 @@
 // so the user can fall back to in-drive selection.
 
 import type { EditorView } from "@codemirror/view";
-import { openBubbleShell } from "../../editor/bubble";
+import { openBubbleShell } from "../bubble";
 import { createCaretAnchor } from "./anchor";
 import type { BubbleHandle } from "./types";
 import { api } from "../../api/client";
-import { isImagePath } from "../../editor/extensions/image";
+import { isImagePath } from "../extensions/image";
 
 export interface ImageBubbleOpts {
   view: EditorView;

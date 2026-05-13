@@ -9,7 +9,7 @@
 // in-memory filter). Mirrors the legacy editor's tag picker behavior.
 
 import type { EditorView } from "@codemirror/view";
-import { openBubbleShell } from "../../editor/bubble";
+import { openBubbleShell } from "../bubble";
 import { createCaretAnchor } from "./anchor";
 import type { BubbleHandle } from "./types";
 import { api } from "../../api/client";

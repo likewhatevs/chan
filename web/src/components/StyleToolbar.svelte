@@ -26,7 +26,7 @@
   // callback so this toolbar reflects the live cursor position.
 
   import type Wysiwyg from "../editor/Wysiwyg.svelte";
-  import type { BlockKind } from "../editor/Wysiwyg.svelte";
+  import type { BlockKind } from "../editor/commands/format";
 
   let {
     wysiwyg,

@@ -22,7 +22,7 @@
 // failed" footer; the list stays empty so nothing commits.
 
 import type { EditorView } from "@codemirror/view";
-import { openBubbleShell, type BubbleShell } from "../../editor/bubble";
+import { openBubbleShell, type BubbleShell } from "../bubble";
 import type { BubbleHandle } from "./types";
 import { createCaretAnchor, type CaretAnchor } from "./anchor";
 import { api } from "../../api/client";
