@@ -1810,21 +1810,21 @@
                 <div class="mode-toggle" role="group" aria-label="render mode">
                   <button
                     type="button"
-                    class:active={bubbleModeFor(turn) === "editor"}
-                    title="editor view (chan pills: wiki / tags / mentions / dates) — default"
-                    aria-label="editor view"
-                    onclick={() => setBubbleMode(turn, "editor")}
-                  >
-                    <PenLine size={12} strokeWidth={1.75} aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
                     class:active={bubbleModeFor(turn) === "rendered"}
-                    title="rendered markdown"
+                    title="rendered markdown — default"
                     aria-label="rendered markdown"
                     onclick={() => setBubbleMode(turn, "rendered")}
                   >
                     <Eye size={12} strokeWidth={1.75} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    class:active={bubbleModeFor(turn) === "editor"}
+                    title="editor view (chan pills: wiki / tags / mentions / dates)"
+                    aria-label="editor view"
+                    onclick={() => setBubbleMode(turn, "editor")}
+                  >
+                    <PenLine size={12} strokeWidth={1.75} aria-hidden="true" />
                   </button>
                   <button
                     type="button"
@@ -1889,21 +1889,21 @@
                 <div class="mode-toggle" role="group" aria-label="render mode">
                   <button
                     type="button"
-                    class:active={bubbleModeFor(turn) === "editor"}
-                    title="editor view (chan pills: wiki / tags / mentions / dates) — default"
-                    aria-label="editor view"
-                    onclick={() => setBubbleMode(turn, "editor")}
-                  >
-                    <PenLine size={12} strokeWidth={1.75} aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
                     class:active={bubbleModeFor(turn) === "rendered"}
-                    title="rendered markdown"
+                    title="rendered markdown — default"
                     aria-label="rendered markdown"
                     onclick={() => setBubbleMode(turn, "rendered")}
                   >
                     <Eye size={12} strokeWidth={1.75} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    class:active={bubbleModeFor(turn) === "editor"}
+                    title="editor view (chan pills: wiki / tags / mentions / dates)"
+                    aria-label="editor view"
+                    onclick={() => setBubbleMode(turn, "editor")}
+                  >
+                    <PenLine size={12} strokeWidth={1.75} aria-hidden="true" />
                   </button>
                   <button
                     type="button"

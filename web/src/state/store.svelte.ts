@@ -1016,8 +1016,12 @@ export type AssistantPendingEdit = {
 ///   - "source": raw markdown text in a monospace block.
 export type BubbleDisplayMode = "editor" | "rendered" | "source";
 
-const BUBBLE_MODE_STORAGE_KEY = "chan.assistant.bubbleMode";
-const DEFAULT_BUBBLE_MODE: BubbleDisplayMode = "editor";
+// v2 of the key: the default flipped from "editor" back to
+// "rendered". Bumping the key drops the stale per-browser cache so
+// users land on the new default; explicit picks happen against the
+// new key going forward.
+const BUBBLE_MODE_STORAGE_KEY = "chan.assistant.bubbleMode.v2";
+const DEFAULT_BUBBLE_MODE: BubbleDisplayMode = "rendered";
 
 function readBubbleMode(): BubbleDisplayMode {
   try {
