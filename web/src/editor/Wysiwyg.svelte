@@ -379,6 +379,14 @@
   :global(.md-wysiwyg-cm6 .cm-editor .cm-activeLine) {
     background-color: transparent !important;
   }
+  /* CM6 paints `outline: 1px dotted` on .cm-editor.cm-focused as a
+     focus indicator. We don't want it — the cursor itself is
+     indicator enough, and the dotted outline spans the editor's
+     entire bounding box including the gutter, which looks like a
+     vertical divider in the gutter column. */
+  :global(.md-wysiwyg-cm6 .cm-editor.cm-focused) {
+    outline: none !important;
+  }
   /* Fold gutter: drop the default greyish gutter background. The
      chevron itself stays clickable; only the container goes
      transparent so the editor bg shows through. */
