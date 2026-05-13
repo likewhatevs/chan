@@ -813,10 +813,18 @@ export const searchPanel = $state<{
   /// component so it round-trips through the URL hash: copy-paste of
   /// a chan URL with `search=foo` lands on the same query.
   query: string;
+  /// Selected scope id (file:<path> / dir:<path> / git_repo:<root> /
+  /// group:<key> / drive / global). Matches the same scope picker
+  /// shape Graph + Assistant use, fed by availableScopeOptions().
+  /// Today the server-side /api/search/content has no scope param,
+  /// so the SearchPanel filters hits client-side against this id;
+  /// `drive` and `global` mean "no filter".
+  scopeId: string;
 }>({
   open: false,
   inspectorOpen: false,
   query: "",
+  scopeId: "drive",
 });
 
 /// Per-file assistant conversation state. Keyed by the file's
@@ -1166,6 +1174,17 @@ export function availableGraphScopes(): ScopeOption[] {
       enabled: false,
     },
   });
+}
+
+/** Build the dropdown options for the search overlay. Today the
+ *  list is just the whole drive: /api/search/content has no scope
+ *  param yet, so narrow scopes can't be honored honestly and we'd
+ *  rather not show options that don't work. The selector UI stays
+ *  live for visual parity with Graph + Assistant; when the backend
+ *  grows a scope param, switch this body to the same
+ *  availableScopeOptions(...) call those other surfaces use. */
+export function availableSearchScopes(): ScopeOption[] {
+  return [{ id: "drive", kind: "drive", label: "Whole drive" }];
 }
 
 /** Edge-kind / node-kind chip toggles on the graph. `link`, `tag`,

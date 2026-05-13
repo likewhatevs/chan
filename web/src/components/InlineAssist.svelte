@@ -927,7 +927,7 @@
 
 <OverlayShell id="assistant" open={visible} onClose={close}>
       <header>
-        <span class="title">assistant</span>
+        <span class="title">Scope</span>
         <select
           class="context-select"
           value={assistantOverlay.contextId}

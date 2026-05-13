@@ -27,6 +27,8 @@
     renderTable,
   } from "../state/shortcuts";
   import { tabMenu, toggleTabMenu } from "../state/tabMenu.svelte";
+  import { onDestroy } from "svelte";
+  import { applyPageWidthToElement, pageWidth } from "../state/pageWidth.svelte";
 
   let { pane }: { pane: LeafNode } = $props();
 
@@ -61,6 +63,39 @@
   /// per-button split / close controls.
   let paneMenu: HamburgerMenu | undefined = $state();
   let paneMenuOpen = $state(false);
+
+  /// Per-pane page-width cap. The ratio (state/pageWidth) is
+  /// global, but the px cap is pane-relative so splitting one
+  /// pane into two halves correctly halves the cap. A
+  /// ResizeObserver on .editor-wrap fires whenever the pane
+  /// resizes (split, close, window resize, browser zoom) and
+  /// pushes a fresh `--chan-page-max-width` onto the wrapper as
+  /// inline style. CSS cascade beats the document-root fallback.
+  let editorWrapEl: HTMLDivElement | undefined = $state();
+  let editorWrapWidth = $state(0);
+  let resizeObs: ResizeObserver | null = null;
+  $effect(() => {
+    if (!editorWrapEl) return;
+    resizeObs?.disconnect();
+    const target = editorWrapEl;
+    resizeObs = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        editorWrapWidth = Math.round(entry.contentRect.width);
+      }
+    });
+    resizeObs.observe(target);
+    // Prime synchronously so the first paint already has the cap.
+    editorWrapWidth = Math.round(target.getBoundingClientRect().width);
+    return () => {
+      resizeObs?.disconnect();
+      resizeObs = null;
+    };
+  });
+  $effect(() => {
+    if (!editorWrapEl) return;
+    applyPageWidthToElement(editorWrapEl, editorWrapWidth, pageWidth.ratio);
+  });
+  onDestroy(() => resizeObs?.disconnect());
 
   function onSplitRight(): void {
     paneMenu?.close();
@@ -534,7 +569,7 @@
     </div>
   </div>
 
-  <div class="editor-wrap">
+  <div class="editor-wrap" bind:this={editorWrapEl}>
     {#if active}
       <FileEditorTab tab={active} />
     {:else}
@@ -553,7 +588,7 @@
           {#if !multiPane}
             <p class="placeholder-hint">
               Each pane's visible tab is part of the scope<br />
-              for Search, Assistant, and Graph.
+              for Assistant and Graph.
             </p>
             <pre class="placeholder-shortcuts">{shortcutTable}</pre>
           {/if}

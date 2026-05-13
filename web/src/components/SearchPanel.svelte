@@ -21,6 +21,7 @@
   } from "../state/graphData.svelte";
   import { openInActivePane } from "../state/tabs.svelte";
   import {
+    availableSearchScopes,
     browserOverlay,
     openBrowser,
     openGraphAtNode,
@@ -30,6 +31,8 @@
     searchPanel,
     tree,
   } from "../state/store.svelte";
+  import { type ScopeOption, defaultScopeId } from "../state/scope.svelte";
+  import { chordFor } from "../state/shortcuts";
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import Inspector from "./Inspector.svelte";
   import InspectorBody, { type InspectorSelection } from "./InspectorBody.svelte";
@@ -137,6 +140,55 @@
     searchPanel.open = false;
   }
 
+  /// Scope picker shape — same dropdown contract as Graph and
+  /// Assistant. Re-derives whenever the layout shifts so opening a
+  /// new pane or switching the visible tab refreshes the options
+  /// without reopening the panel.
+  const scopeOptions = $derived<ScopeOption[]>(availableSearchScopes());
+  const currentScope = $derived<ScopeOption | null>(
+    scopeOptions.find((o) => o.id === searchPanel.scopeId) ?? null,
+  );
+
+  /// Pinned to "drive" for now: the selector UI is live (it'll be
+  /// wired to actual scoped queries once /api/search/content takes
+  /// a scope param), but every open snaps back to the whole drive
+  /// so the result set stays predictable in the meantime.
+  $effect(() => {
+    if (!searchPanel.open) return;
+    untrack(() => {
+      searchPanel.scopeId = "drive";
+    });
+  });
+
+  /// Predicate: does `path` belong to the active scope? Currently
+  /// short-circuits to true while the search overlay is pinned to
+  /// the whole drive (the selector UI is live but the filter is
+  /// disabled until /api/search/content takes a scope param). The
+  /// previous narrow-scope branches are kept below the early
+  /// return for the moment so reactivating per-kind filtering is a
+  /// one-line revert.
+  function pathInScope(_path: string): boolean {
+    return true;
+    /*
+    const s = currentScope;
+    if (!s) return true;
+    if (s.kind === "drive" || s.kind === "global") return true;
+    if (s.kind === "file") return _path === s.path;
+    if (s.kind === "dir") {
+      if (!s.path) return true;
+      return _path === s.path || _path.startsWith(`${s.path}/`);
+    }
+    if (s.kind === "git_repo") {
+      if (!s.root) return true;
+      return _path === s.root || _path.startsWith(`${s.root}/`);
+    }
+    if (s.kind === "group") {
+      return s.paths.includes(_path);
+    }
+    return true;
+    */
+  }
+
   function scheduleSearch(): void {
     if (debounceTimer) clearTimeout(debounceTimer);
     const q = searchPanel.query.trim();
@@ -145,12 +197,15 @@
       loading = false;
       return;
     }
+    // Search is pinned to the whole drive for now; the snappy
+    // 25-row cap is the right size for drive-wide queries.
+    const limit = 25;
     queryToken += 1;
     const myToken = queryToken;
     loading = true;
     debounceTimer = setTimeout(async () => {
       try {
-        const res = await api.searchContent(q, { limit: 25 });
+        const res = await api.searchContent(q, { limit });
         if (myToken !== queryToken) return; // stale
         chunkHits = res.hits;
         active = 0;
@@ -164,6 +219,7 @@
       }
     }, 200);
   }
+
 
   /// Per-kind caps so a query like "n" doesn't drown the chunk
   /// hits under hundreds of folder/image rows. Chunks come from
@@ -190,27 +246,45 @@
   });
 
   /// Tag hits: tag-kind nodes whose label contains the typed query.
-  /// We surface the document count so the user can pick the more
-  /// active tag when several near-matches share a prefix.
+  /// Doc counts are SCOPE-aware: when the scope narrows to a file /
+  /// dir / repo / group, we count only edges whose source doc is in
+  /// scope, and a tag with zero in-scope refs is dropped. Drive /
+  /// global scopes count everything. Surfacing the count lets the
+  /// user pick the more active tag when several near-matches share
+  /// a prefix.
   const tagRows = $derived.by<SearchRow[]>(() => {
     const q = searchPanel.query.trim().toLowerCase();
     if (!q) return [];
     const view = graphData.view;
     if (!view) return [];
+    // Map node id -> file path so we can scope-test the edge source.
+    // The graph view emits file nodes with `kind: "file"` carrying a
+    // path; tag / mention / date nodes don't.
+    const filePath = new Map<string, string>();
+    for (const n of view.nodes) {
+      if (n.kind === "file" && n.path) filePath.set(n.id, n.path);
+    }
     const docCounts = new Map<string, number>();
     for (const e of view.edges) {
       if (e.kind !== "tag") continue;
+      const src = filePath.get(e.source);
+      if (src && !pathInScope(src)) continue;
       docCounts.set(e.target, (docCounts.get(e.target) ?? 0) + 1);
     }
     const out: SearchRow[] = [];
     for (const n of view.nodes) {
       if (n.kind !== "tag") continue;
       if (!n.label.toLowerCase().includes(q)) continue;
+      const refs = docCounts.get(n.id) ?? 0;
+      // Drop tags that don't touch the current scope. drive / global
+      // scopes leave every tag with a positive count so nothing is
+      // hidden there.
+      if (refs === 0) continue;
       out.push({
         kind: "tag",
         nodeId: n.id,
         label: n.label,
-        documents: docCounts.get(n.id) ?? 0,
+        documents: refs,
         key: `tag:${n.id}`,
       });
       if (out.length >= TAG_LIMIT) break;
@@ -225,12 +299,19 @@
 
   /// Final ordered row list: tags first (compact, high signal),
   /// images next, then content chunks (the long tail). Each row
-  /// has a stable key for the {#each}.
+  /// has a stable key for the {#each}. The scope predicate filters
+  /// chunks + images by path; tags fall through unfiltered (a tag
+  /// is a graph node, not a file, and the document-count column
+  /// already gives the user a sense of breadth).
   const rows = $derived.by<SearchRow[]>(() => {
     const out: SearchRow[] = [];
     out.push(...tagRows);
-    out.push(...imageRows);
+    for (const r of imageRows) {
+      if (r.kind === "image" && !pathInScope(r.path)) continue;
+      out.push(r);
+    }
     for (const h of chunkHits) {
+      if (!pathInScope(h.path)) continue;
       out.push({ kind: "chunk", hit: h, key: `chunk:${h.path}#${h.chunk_id}` });
     }
     return out;
@@ -337,7 +418,20 @@
   <div class="search" oncontextmenu={onSearchContextMenu} role="presentation">
     <div class="results">
       <header>
-        <span class="title">Search</span>
+        <span class="title">Scope</span>
+        <select
+          class="scope-select"
+          value={searchPanel.scopeId}
+          onchange={(e) =>
+            (searchPanel.scopeId = (e.currentTarget as HTMLSelectElement).value)}
+          title="search scope"
+        >
+          {#each scopeOptions as opt (opt.id)}
+            <option value={opt.id} disabled={opt.enabled === false}>
+              {opt.label}
+            </option>
+          {/each}
+        </select>
         <HamburgerMenu
           bind:this={menu}
           bind:open={menuOpen}
@@ -408,7 +502,7 @@
           bind:value={searchPanel.query}
           oninput={scheduleSearch}
           onkeydown={onKeyDown}
-          placeholder="search content, tags, images (Cmd+K)"
+          placeholder={`search content, tags, images${chordFor("app.search.toggle") ? " (" + chordFor("app.search.toggle") + ")" : ""}`}
           spellcheck="false"
           autocomplete="off"
         />
@@ -492,7 +586,19 @@
     color: var(--text-heading);
     flex-shrink: 0;
   }
-  header .title { flex: 1; }
+  header .title {
+    flex-shrink: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  /* SCOPE label + select sit on the left; the hamburger gets
+     margin-left: auto via the wrapping :global() rule below so it
+     pins to the right edge. */
+  header { gap: 0.5rem; }
+  header :global(.hamburger-trigger) { margin-left: auto; }
   /* Input row anchored at the bottom of the results column; status
      and results stack above it. Top border (was bottom) so the
      seam reads as "input separated from the content above it". */
@@ -513,6 +619,20 @@
     outline: none;
   }
   .head input:focus { border-color: var(--link); }
+  header .scope-select {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 6px;
+    font: inherit;
+    font-size: 13px;
+    max-width: 220px;
+    cursor: pointer;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+  header .scope-select:focus { outline: none; border-color: var(--link); }
   .status-line {
     padding: 4px 10px;
     font-size: 13px;

@@ -1424,6 +1424,7 @@
 <OverlayShell id="graph" open={visible} onClose={close}>
   <div class="graph-tab" oncontextmenu={onGraphContextMenu} role="presentation">
   <div class="bar">
+    <span class="scope-label">Scope</span>
     <select
       class="scope-select"
       value={graphOverlay.scopeId}
@@ -1583,6 +1584,12 @@
     font-size: 14px;
     color: var(--text-secondary);
     flex-shrink: 0;
+  }
+  .scope-label {
+    color: var(--text-secondary);
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
   .scope-select {
     background: var(--bg);

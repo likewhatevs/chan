@@ -110,6 +110,7 @@
     void settingsOverlay.open;
     void searchPanel.open;
     void searchPanel.query;
+    void searchPanel.scopeId;
     void searchPanel.inspectorOpen;
     void assistantOverlay.open;
     void assistantOverlay.contextId;

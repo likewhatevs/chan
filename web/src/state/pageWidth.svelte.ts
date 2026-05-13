@@ -89,6 +89,25 @@ export function setPageWidth(r: number): void {
   writeRatio(next);
 }
 
+/// Per-element apply. Each Pane.svelte instance subscribes to its
+/// own .editor-wrap width via ResizeObserver and calls this; the
+/// resulting cap is pane-relative instead of window-relative, so
+/// splitting one pane into two halves correctly halves the cap.
+/// Window resize / browser zoom also flow through the same
+/// observer because the pane shrinks with the window.
+export function applyPageWidthToElement(
+  el: HTMLElement,
+  containerWidth: number,
+  r: number,
+): void {
+  if (r >= 1 || containerWidth <= 0) {
+    el.style.removeProperty(CSS_VAR);
+    return;
+  }
+  const px = Math.max(MIN_RESOLVED_PX, Math.round(containerWidth * r));
+  el.style.setProperty(CSS_VAR, `${px}px`);
+}
+
 /// Re-apply on viewport changes (resize, browser zoom) and pick up
 /// updates from other windows on the same origin via the `storage`
 /// event.
