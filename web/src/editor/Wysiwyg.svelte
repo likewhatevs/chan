@@ -513,22 +513,84 @@
     height: 0.5em;
     color: transparent;
   }
-  :global(.md-wysiwyg-cm6 .cm-md-fence-opener),
-  :global(.md-wysiwyg-cm6 .cm-md-fence-closer) {
+  /* Opener / closer / content rows share the code-block background
+     so the whole fenced block reads as one continuous slab.
+     `position: relative` anchors the floating badge widget on the
+     opener row.
+     Specificity note: the earlier `.md-wysiwyg-cm6 .cm-editor
+     .cm-line { background: transparent !important }` rule has THREE
+     class selectors. To beat it we chain `.cm-line.cm-md-X` (two
+     classes on the same element) inside the same `.cm-editor`
+     scope — 4 class selectors total — and `!important` ties the
+     priority bucket. Without this the slab stays invisible. */
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-fence-opener),
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-fence-closer) {
     color: var(--text-secondary, #888);
     font-family: var(--chan-editor-code-family, monospace);
     font-size: var(--chan-editor-code-size, 0.92em);
+    background: var(
+      --chan-editor-code-block-bg,
+      var(--bg-card, rgba(0, 0, 0, 0.04))
+    ) !important;
+    position: relative;
   }
-  :global(.md-wysiwyg-cm6 .cm-md-code-block) {
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-code-block) {
     font-family: var(--chan-editor-code-family, monospace);
     font-size: var(--chan-editor-code-size, 0.92em);
-    background: var(--chan-editor-code-block-bg, var(--bg-card, rgba(0, 0, 0, 0.04)));
+    background: var(
+      --chan-editor-code-block-bg,
+      var(--bg-card, rgba(0, 0, 0, 0.04))
+    ) !important;
     color: var(--chan-editor-code-block-color, inherit);
-    padding-left: 0.75em;
+    padding-inline: 0.75em;
   }
   :global(.md-wysiwyg-cm6 .cm-md-fence-info) {
     color: var(--chan-editor-link-color, var(--link, #0a64c8));
     font-weight: 500;
+  }
+  /* Floating lang + copy badge anchored to the top-right of the
+     fenced block. Lives at the end of the opener line via a CM6
+     widget decoration; the opener row carries `position: relative`
+     above so this absolute position resolves against it. */
+  :global(.md-wysiwyg-cm6 .cm-md-fence-badge) {
+    position: absolute;
+    top: 2px;
+    right: 6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--chan-editor-code-family, monospace);
+    font-size: 11px;
+    line-height: 1;
+    color: var(--text-secondary, #888);
+    user-select: none;
+    pointer-events: auto;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-fence-badge-lang) {
+    text-transform: lowercase;
+    letter-spacing: 0.04em;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-fence-badge-copy) {
+    background: transparent;
+    border: 0;
+    border-radius: 3px;
+    color: inherit;
+    cursor: pointer;
+    padding: 2px;
+    line-height: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-fence-badge-copy:hover) {
+    color: var(--text);
+    background: var(--hover-bg, rgba(127, 127, 127, 0.12));
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-fence-badge-copy.copied) {
+    color: var(--accent, #3fb950);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-fence-badge-copy.copy-failed) {
+    color: var(--danger-text, #f85149);
   }
   :global(.md-wysiwyg-cm6 .cm-md-task-checkbox) {
     margin: 0 0.4em 0 0;

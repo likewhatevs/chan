@@ -529,6 +529,21 @@ export function setMode(tab: Tab, mode: Mode): void {
   if (tab.kind === "file") tab.mode = mode;
 }
 
+/// Tab-state mutators. These exist so child components (FileEditorTab
+/// etc.) don't write tab.X = ... directly on a non-bindable prop —
+/// Svelte 5's ownership tracking warns about that pattern. Centralizing
+/// the writes here also gives us one place to add side-effects
+/// (persistence, telemetry) later.
+export function setTabCaret(tab: FileTab, from: number, to: number): void {
+  tab.caret = { from, to };
+}
+export function setTabInspectorOpen(tab: FileTab, open: boolean): void {
+  tab.inspectorOpen = open;
+}
+export function setTabStyleToolbarOpen(tab: FileTab, open: boolean): void {
+  tab.styleToolbarOpen = open;
+}
+
 /// Whether a tab represents an unsaved buffer.
 export function isDirty(t: Tab): boolean {
   return t.content !== t.saved;

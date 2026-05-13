@@ -27,9 +27,107 @@
 //   - BulletList / OrderedList / ListItem / ListMark: bullets stay as
 //     plain source; CSS gives them indent if needed.
 
-import { Decoration } from "@codemirror/view";
+import { Decoration, WidgetType } from "@codemirror/view";
 import type { TokenContext, TokenHandler } from "./walker";
 import { CheckboxWidget } from "../widgets/checkbox";
+
+/// Floating badge anchored at the top-right of a fenced-code block.
+/// Shows the language label (from the ```lang opener) and a copy
+/// button that lifts the block's body text into the clipboard.
+///
+/// Widget is rendered ONCE per block at the end of the opener line;
+/// the surrounding line has `position: relative` so the badge's
+/// `position: absolute` resolves against it. The badge therefore
+/// sits at the top-right of the visible block (the opener line is
+/// the topmost row of the block in the rendered flow).
+class FenceBadgeWidget extends WidgetType {
+  constructor(
+    readonly lang: string,
+    readonly code: string,
+  ) {
+    super();
+  }
+
+  eq(other: FenceBadgeWidget): boolean {
+    return this.lang === other.lang && this.code === other.code;
+  }
+
+  toDOM(): HTMLElement {
+    const wrap = document.createElement("span");
+    wrap.className = "cm-md-fence-badge";
+    wrap.contentEditable = "false";
+    if (this.lang) {
+      const lang = document.createElement("span");
+      lang.className = "cm-md-fence-badge-lang";
+      lang.textContent = this.lang;
+      wrap.append(lang);
+    }
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cm-md-fence-badge-copy";
+    btn.title = "Copy code";
+    btn.setAttribute("aria-label", "Copy code");
+    btn.append(makeCopyIcon());
+    btn.addEventListener("mousedown", (e) => {
+      // Prevent CM6 from absorbing the click into its selection
+      // handling (which would steal focus + collapse the caret).
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      void navigator.clipboard.writeText(this.code).then(
+        () => flashCopied(btn),
+        () => flashCopied(btn, "fail"),
+      );
+    });
+    wrap.append(btn);
+    return wrap;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+function makeCopyIcon(): SVGElement {
+  // Lucide `copy` icon (2 stacked rectangles). Stroke = currentColor
+  // so the glyph follows the badge's text colour.
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  const rect = document.createElementNS(SVG_NS, "rect");
+  rect.setAttribute("width", "14");
+  rect.setAttribute("height", "14");
+  rect.setAttribute("x", "8");
+  rect.setAttribute("y", "8");
+  rect.setAttribute("rx", "2");
+  rect.setAttribute("ry", "2");
+  const path = document.createElementNS(SVG_NS, "path");
+  path.setAttribute(
+    "d",
+    "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2",
+  );
+  svg.append(rect, path);
+  return svg;
+}
+
+function flashCopied(btn: HTMLButtonElement, kind: "ok" | "fail" = "ok"): void {
+  btn.classList.add(kind === "ok" ? "copied" : "copy-failed");
+  setTimeout(() => {
+    btn.classList.remove("copied");
+    btn.classList.remove("copy-failed");
+  }, 900);
+}
 
 const LINE_QUOTE = Decoration.line({ attributes: { class: "cm-md-quote" } });
 const LINE_HR = Decoration.line({ attributes: { class: "cm-md-hr" } });
@@ -82,13 +180,19 @@ const handleFencedCode: TokenHandler = (ctx) => {
   // (last CodeMark child), and CodeInfo (optional, immediately
   // after the opener).
   let openMarkFrom = -1;
+  let openMarkTo = -1;
   let closeMarkFrom = -1;
+  let closeMarkTo = -1;
   let infoFrom = -1;
   let infoTo = -1;
   do {
     if (cursor.name === "CodeMark") {
-      if (openMarkFrom === -1) openMarkFrom = cursor.from;
+      if (openMarkFrom === -1) {
+        openMarkFrom = cursor.from;
+        openMarkTo = cursor.to;
+      }
       closeMarkFrom = cursor.from;
+      closeMarkTo = cursor.to;
     } else if (cursor.name === "CodeInfo") {
       infoFrom = cursor.from;
       infoTo = cursor.to;
@@ -96,14 +200,10 @@ const handleFencedCode: TokenHandler = (ctx) => {
   } while (cursor.nextSibling());
   if (openMarkFrom === -1) return;
 
-  if (infoFrom !== -1 && infoTo !== -1 && infoFrom < infoTo) {
-    ctx.push(MARK_FENCE_INFO, infoFrom, infoTo);
-  }
-
-  const openLine = ctx.state.doc.lineAt(openMarkFrom).number;
-  // closeMarkFrom may equal openMarkFrom if the parser saw an
-  // unclosed fence; lineAt is safe either way.
-  const closeLine = ctx.state.doc.lineAt(closeMarkFrom).number;
+  const openLineObj = ctx.state.doc.lineAt(openMarkFrom);
+  const closeLineObj = ctx.state.doc.lineAt(closeMarkFrom);
+  const openLine = openLineObj.number;
+  const closeLine = closeLineObj.number;
   const blockEndLine = ctx.state.doc.lineAt(
     Math.min(ctx.node.to, ctx.state.doc.length),
   ).number;
@@ -111,6 +211,54 @@ const handleFencedCode: TokenHandler = (ctx) => {
   // range when the parser is recovering from a missing fence; clamp
   // to be safe.
   const lastLine = Math.max(closeLine, blockEndLine);
+
+  // Show the fence verbatim (backticks + lang inline) whenever the
+  // caret is ANYWHERE inside the block — not just on the opener /
+  // closer rows. Editing a code block usually means cursoring
+  // through the body, and the user expects the source to stay
+  // intact while they're "inside" it. Outside the block, hide the
+  // markers so the slab reads as a finished render. lineIntersect
+  // over the full block range covers all of opener / content /
+  // closer in one shot.
+  const caretInBlock = ctx.lineIntersect(openLineObj.from, closeLineObj.to);
+  if (!caretInBlock) {
+    if (openMarkFrom < openMarkTo) {
+      ctx.push(HIDE, openMarkFrom, openMarkTo);
+    }
+    // The lang text rides into the floating badge; hide its inline
+    // copy too so the opener row reads as an empty bar with the
+    // badge floating at the right edge.
+    if (infoFrom !== -1 && infoTo !== -1 && infoFrom < infoTo) {
+      ctx.push(HIDE, infoFrom, infoTo);
+    }
+    if (
+      closeMarkFrom !== openMarkFrom &&
+      closeMarkFrom < closeMarkTo
+    ) {
+      ctx.push(HIDE, closeMarkFrom, closeMarkTo);
+    }
+  } else if (infoFrom !== -1 && infoTo !== -1 && infoFrom < infoTo) {
+    // Caret IS in the block: keep the lang readable inline with
+    // the link-style underline so the user can edit it.
+    ctx.push(MARK_FENCE_INFO, infoFrom, infoTo);
+  }
+
+  // Compute the inner block text once for the copy button.
+  // Range: from start of first content line to end of last content
+  // line. If the block has no content lines (opener+closer adjacent
+  // or unclosed), the slice degenerates to "".
+  let codeText = "";
+  if (closeLine > openLine + 1) {
+    const firstContent = ctx.state.doc.line(openLine + 1);
+    const lastContent = ctx.state.doc.line(closeLine - 1);
+    codeText = ctx.state.doc.sliceString(firstContent.from, lastContent.to);
+  } else if (closeLine === openLine && lastLine > openLine) {
+    // Unclosed block: everything after the opener line up to lastLine.
+    const firstContent = ctx.state.doc.line(openLine + 1);
+    const lastContent = ctx.state.doc.line(lastLine);
+    codeText = ctx.state.doc.sliceString(firstContent.from, lastContent.to);
+  }
+  const langText = infoFrom !== -1 ? ctx.state.doc.sliceString(infoFrom, infoTo) : "";
 
   for (let n = openLine; n <= lastLine; n++) {
     const line = ctx.state.doc.line(n);
@@ -120,6 +268,17 @@ const handleFencedCode: TokenHandler = (ctx) => {
     else deco = LINE_CODE_BLOCK;
     ctx.push(deco, line.from, line.from);
   }
+
+  // Floating badge anchored on the opener line. Placed at the END
+  // of the line so an arrow-right that lands at line.to still sees
+  // the user's text content (the badge is past line.to). Position:
+  // absolute inside the .cm-md-fence-opener row pins it visually
+  // to the top-right of the block.
+  const badge = Decoration.widget({
+    widget: new FenceBadgeWidget(langText, codeText),
+    side: 1,
+  });
+  ctx.push(badge, openLineObj.to, openLineObj.to);
 };
 
 const handleTask: TokenHandler = (ctx) => {

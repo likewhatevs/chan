@@ -16,7 +16,13 @@
   import OutlineBody, { type Heading } from "./OutlineBody.svelte";
   import FileInfoBody from "./FileInfoBody.svelte";
   import StyleToolbar from "./StyleToolbar.svelte";
-  import { setMode, type FileTab } from "../state/tabs.svelte";
+  import {
+    setMode,
+    setTabCaret,
+    setTabInspectorOpen,
+    setTabStyleToolbarOpen,
+    type FileTab,
+  } from "../state/tabs.svelte";
   import WikiStatusBar from "./WikiStatusBar.svelte";
 
   import {
@@ -233,12 +239,12 @@
   }
 
   function doToggleOutline(): void {
-    tab.inspectorOpen = !tab.inspectorOpen;
+    setTabInspectorOpen(tab, !tab.inspectorOpen);
     closeTabMenu();
   }
 
   function doToggleStyleToolbar(): void {
-    tab.styleToolbarOpen = !tab.styleToolbarOpen;
+    setTabStyleToolbarOpen(tab, !tab.styleToolbarOpen);
     closeTabMenu();
   }
 </script>
@@ -378,7 +384,7 @@
             bind:value={tab.content}
             readonly={readOnly}
             initialCaret={tab.caret ?? null}
-            onCaretChange={(from, to) => (tab.caret = { from, to })}
+            onCaretChange={(from, to) => setTabCaret(tab, from, to)}
             onSelectionChange={() => (selVer = selVer + 1)}
             wikiPickerPrefix={tab.repoRoot}
             currentPath={tab.path}
@@ -419,7 +425,7 @@
             bind:this={sourceRef}
             bind:value={tab.content}
             initialCaret={tab.caret ?? null}
-            onCaretChange={(from, to) => (tab.caret = { from, to })}
+            onCaretChange={(from, to) => setTabCaret(tab, from, to)}
           />
           {#if tab.find?.open}
             <FindBar
@@ -436,7 +442,7 @@
           title="Details"
           bind:width={paneWidths.inspector}
           onResize={persistPaneWidths}
-          onClose={() => (tab.inspectorOpen = false)}
+          onClose={() => setTabInspectorOpen(tab, false)}
         >
           <!-- Single toggle button instead of a tab strip. Reads as
                "you're on Outline; click to swap to File info" (and
