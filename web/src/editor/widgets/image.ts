@@ -68,25 +68,31 @@ class ImageWidget extends WidgetType {
     readonly src: string,
     readonly fromPath: string | null,
     readonly nodePos: number,
+    /// True when the image is the only content on its source line
+    /// (no surrounding text). Standalone images take the block-level
+    /// layout — alignment moves the image LEFT / CENTER / RIGHT
+    /// within its own line via flex justify-content. Inline images
+    /// (mixed with paragraph text) keep the existing float layout
+    /// so text wraps around them.
+    readonly standalone: boolean,
     readonly onClick: ((args: ImageClickArgs) => void) | undefined,
   ) {
     super();
   }
 
   eq(other: ImageWidget): boolean {
-    // Compare the source-of-truth fields. Two widgets producing the
-    // same image at the same path can share their DOM across
-    // unrelated transactions.
     return (
       this.alt === other.alt &&
       this.src === other.src &&
-      this.fromPath === other.fromPath
+      this.fromPath === other.fromPath &&
+      this.standalone === other.standalone
     );
   }
 
   toDOM(view: EditorView): HTMLElement {
     const wrap = document.createElement("span");
     wrap.className = "cm-md-image-wrap";
+    if (this.standalone) wrap.dataset.standalone = "true";
     const { width, align } = parseImageSrc(this.src);
     if (align) wrap.dataset.align = align;
 
@@ -347,11 +353,20 @@ function scanImages(view: EditorView, opts: ImageOptions): DecorationSet {
       const altTo = linkMarks[1]!.from;
       const alt = state.doc.sliceString(altFrom, altTo);
       const src = state.doc.sliceString(urlFrom, urlTo);
+      // Standalone: the image's source range is the only non-blank
+      // content on its line. When true, alignment positions the image
+      // within the line via flex; otherwise the image flows with
+      // surrounding paragraph text and float-left / float-right wraps
+      // text around it.
+      const line = state.doc.lineAt(outerFrom);
+      const standalone =
+        line.text.trim() === state.doc.sliceString(outerFrom, outerTo).trim();
       const widget = new ImageWidget(
         alt,
         src,
         fromPath,
         outerFrom,
+        standalone,
         opts.onImageClick,
       );
       decos.push({

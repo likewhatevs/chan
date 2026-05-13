@@ -561,15 +561,31 @@
     line-height: 0;
     max-width: 100%;
   }
-  :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-align="left"]) {
+  /* Inline mode (image mixed with paragraph text). Alignment makes
+     the image float so surrounding text wraps around it. */
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap:not([data-standalone])[data-align="left"]) {
     display: block;
     float: left;
     margin-right: 1em;
   }
-  :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-align="right"]) {
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap:not([data-standalone])[data-align="right"]) {
     display: block;
     float: right;
     margin-left: 1em;
+  }
+  /* Standalone mode (image alone on its source line). Alignment
+     positions the image within the line via flex justify-content —
+     no float, no text wrap. Default is centered. */
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-standalone="true"]) {
+    display: flex;
+    width: 100%;
+    justify-content: center;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-standalone="true"][data-align="left"]) {
+    justify-content: flex-start;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-standalone="true"][data-align="right"]) {
+    justify-content: flex-end;
   }
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap img) {
     max-width: 100%;
