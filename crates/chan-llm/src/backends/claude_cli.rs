@@ -56,18 +56,35 @@
 //!
 //!   - Output: claude emits NDJSON on stdout. Events of interest:
 //!     - `{"type":"system","subtype":"init",...}` (ignored)
+//!     - `{"type":"stream_event","event":{...}}` (token-level
+//!       partials, see below)
 //!     - `{"type":"assistant","message":{...}}` (text + tools)
 //!     - `{"type":"user","message":{...}}` (tool results)
 //!     - `{"type":"result","subtype":"...",...}` (end of turn)
 //!
+//!     We launch claude with `--include-partial-messages` so each
+//!     assistant turn arrives twice: first as a sequence of
+//!     `stream_event` envelopes carrying Anthropic SDK partial
+//!     events (`content_block_delta` with `text_delta`), then once
+//!     more as the final `assistant` event with the assembled
+//!     content. We emit `on_delta` from partial `text_delta`s so
+//!     UI consumers see typewriter-style updates, and suppress the
+//!     redundant `on_delta` on the final assistant event when any
+//!     partial text streamed (we still accumulate the canonical
+//!     text into the Outcome from one path or the other, never
+//!     both). Tool-use blocks are not streamed incrementally:
+//!     `on_tool_call` fires from the final assistant event so the
+//!     listener gets a complete `input` payload.
+//!
 //!     Inside an assistant message, content blocks are either
-//!     `{"type":"text","text":"..."}` (emit on_delta) or
-//!     `{"type":"tool_use","id":"...","name":"...","input":...}`
-//!     (forward to listener via on_tool_call for visibility; not
-//!     executed by chan-llm). Tool results inside user messages
-//!     are forwarded as on_tool_result. Both are observational in
-//!     v1; the orchestration loop treats `Outcome.tool_calls` as
-//!     empty so it exits after one backend turn.
+//!     `{"type":"text","text":"..."}` (emit on_delta when no
+//!     partials preceded it) or `{"type":"tool_use","id":"...",
+//!     "name":"...","input":...}` (forward to listener via
+//!     on_tool_call for visibility; not executed by chan-llm).
+//!     Tool results inside user messages are forwarded as
+//!     on_tool_result. Both are observational in v1; the
+//!     orchestration loop treats `Outcome.tool_calls` as empty so
+//!     it exits after one backend turn.
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -198,6 +215,7 @@ impl Backend for ClaudeCliBackend {
             .arg("stream-json")
             .arg("--input-format")
             .arg("text")
+            .arg("--include-partial-messages")
             .arg("--verbose")
             .current_dir(&self.cwd)
             .stdin(Stdio::piped())
@@ -278,6 +296,12 @@ impl Backend for ClaudeCliBackend {
         let mut assistant_text = String::new();
         let mut stop = StopReason::EndOfTurn;
         let mut saw_result = false;
+        // Set once any token-level `text_delta` arrives via a
+        // `stream_event` envelope. Used to suppress the redundant
+        // `on_delta` on the final `assistant` event (which carries
+        // the fully assembled text); the partial path has already
+        // emitted and accumulated it.
+        let mut streamed_partial_text = false;
 
         loop {
             if cancel.load(Ordering::Relaxed) {
@@ -315,10 +339,38 @@ impl Backend for ClaudeCliBackend {
                 }
             };
             match event {
+                StreamEvent::Partial { event: partial } => {
+                    if let PartialEvent::ContentBlockDelta {
+                        delta: PartialDelta::TextDelta { text },
+                    } = partial
+                    {
+                        if !text.is_empty() {
+                            streamed_partial_text = true;
+                            listener.on_delta(Delta { text: text.clone() });
+                            assistant_text.push_str(&text);
+                            if assistant_text.len() > super::ASSISTANT_TEXT_CAP_BYTES {
+                                listener.on_error(format!(
+                                    "claude_cli stream: assistant text exceeded {} bytes; aborting",
+                                    super::ASSISTANT_TEXT_CAP_BYTES,
+                                ));
+                                let _ = child.kill().await;
+                                return Outcome::error();
+                            }
+                        }
+                    }
+                }
                 StreamEvent::Assistant { message } => {
                     for block in message.content {
                         match block {
                             ContentBlock::Text { text } => {
+                                // When partials already streamed this
+                                // text, the final assistant event is
+                                // a redundant repeat; swallow it so
+                                // the UI doesn't see the message twice
+                                // and `assistant_text` doesn't double.
+                                if streamed_partial_text {
+                                    continue;
+                                }
                                 if !text.is_empty() {
                                     listener.on_delta(Delta { text: text.clone() });
                                     assistant_text.push_str(&text);
@@ -546,6 +598,17 @@ enum StreamEvent {
     User {
         message: UserMessage,
     },
+    /// Anthropic SDK partial event envelope, emitted when claude is
+    /// launched with `--include-partial-messages`. We only decode
+    /// `content_block_delta` -> `text_delta` for token-level UI
+    /// streaming; other partial event types (`message_start`,
+    /// `content_block_start`, `input_json_delta`, `message_delta`,
+    /// `message_stop`, ...) pass through as `Other` and are
+    /// resolved from the final `assistant` event instead.
+    #[serde(rename = "stream_event")]
+    Partial {
+        event: PartialEvent,
+    },
     Result {
         #[serde(default)]
         subtype: String,
@@ -554,7 +617,27 @@ enum StreamEvent {
         #[serde(default)]
         is_error: Option<bool>,
     },
-    /// system / partial / future event types pass through silently.
+    /// system / future event types pass through silently.
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum PartialEvent {
+    ContentBlockDelta {
+        delta: PartialDelta,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum PartialDelta {
+    TextDelta {
+        text: String,
+    },
     #[serde(other)]
     Other,
 }
@@ -706,6 +789,170 @@ mod tests {
             })
             .collect();
         assert_eq!(tool_results, vec!["call_1"]);
+    }
+
+    #[tokio::test]
+    async fn streams_token_level_deltas_from_partial_events() {
+        // With --include-partial-messages, claude emits each token as
+        // a content_block_delta inside a stream_event envelope, then
+        // sends the final assistant message with the assembled text.
+        // We must emit on_delta per partial and suppress the final
+        // assistant text (it would otherwise re-emit the whole turn).
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"system","subtype":"init"}
+{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}
+{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hel"}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"lo "}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"world"}}}
+{"type":"stream_event","event":{"type":"content_block_stop","index":0}}
+{"type":"stream_event","event":{"type":"message_stop"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"hello world"},{"type":"tool_use","id":"call_1","name":"Read","input":{"path":"a.md"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call_1","content":"ok"}]}}
+{"type":"result","subtype":"success","result":"hello world","is_error":false}"#;
+        let script = fake_claude(tmp.path(), body);
+        let backend = ClaudeCliBackend::new(
+            vec![script.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            tmp.path().to_path_buf(),
+            None,
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                vec![Message::user("hi")],
+                Vec::new(),
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.assistant_text, "hello world");
+        assert_eq!(outcome.stop_reason, StopReason::EndOfTurn);
+
+        let events = listener.0.lock().unwrap();
+        let deltas: Vec<&str> = events
+            .iter()
+            .filter_map(|e| {
+                if let Event::Delta(t) = e {
+                    Some(t.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // Three partial chunks, then NOT a fourth "hello world" from
+        // the final assistant event.
+        assert_eq!(deltas, vec!["hel", "lo ", "world"]);
+        let tool_calls: Vec<&str> = events
+            .iter()
+            .filter_map(|e| {
+                if let Event::ToolCall(n) = e {
+                    Some(n.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // Tool calls still arrive from the final assistant event so
+        // the listener gets a complete `input` payload.
+        assert_eq!(tool_calls, vec!["Read"]);
+    }
+
+    /// E2E against a real `claude` binary on the host. Skipped in CI
+    /// (and by default locally) because it hits the live Anthropic
+    /// API: `cargo test ... -- --ignored real_claude_streams_tokens`.
+    /// Requires `claude` on PATH and a logged-in CLI. The cost is a
+    /// few tokens (1 turn, max ~5 output tokens by the prompt).
+    ///
+    /// Purpose: lock in that the wire-format we decode
+    /// (`stream_event` -> `content_block_delta` -> `text_delta`) is
+    /// what claude actually emits, so a future upstream rename would
+    /// fail here instead of silently dropping the UI typewriter
+    /// effect. The exact delta count varies (claude's token boundaries
+    /// shift run-to-run), so we assert on shape: multiple deltas
+    /// arrived AND each individual delta is shorter than the full
+    /// assistant text (proving it was streamed, not delivered as
+    /// one chunk by the final `assistant` event).
+    #[tokio::test]
+    #[ignore]
+    async fn real_claude_streams_tokens() {
+        let tmp = TempDir::new().unwrap();
+        let backend = ClaudeCliBackend::new(
+            default_cmd(),
+            Vec::new(),
+            None,
+            tmp.path().to_path_buf(),
+            None,
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                vec![Message::user(
+                    "Reply with exactly the single word: streaming",
+                )],
+                Vec::new(),
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+
+        let events = listener.0.lock().unwrap();
+        let errors: Vec<&str> = events
+            .iter()
+            .filter_map(|e| {
+                if let Event::Error(t) = e {
+                    Some(t.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "claude reported errors: {errors:?}; outcome={:?}",
+            outcome.stop_reason
+        );
+        assert_eq!(outcome.stop_reason, StopReason::EndOfTurn);
+        assert!(
+            !outcome.assistant_text.is_empty(),
+            "assistant_text was empty; stream may not be reaching us"
+        );
+
+        let deltas: Vec<String> = events
+            .iter()
+            .filter_map(|e| {
+                if let Event::Delta(t) = e {
+                    Some(t.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            deltas.len() >= 2,
+            "expected token-level streaming (>=2 deltas), got {}: {deltas:?}",
+            deltas.len()
+        );
+        // Each delta must be a strict prefix-piece of the total, not
+        // the whole reply at once (which is what we'd see if partials
+        // were disabled and the final assistant event fired on_delta).
+        for d in &deltas {
+            assert!(
+                d.len() < outcome.assistant_text.len(),
+                "single delta {d:?} matches the entire assistant_text \
+                 ({:?}); partial streaming is not actually engaged",
+                outcome.assistant_text,
+            );
+        }
+        // Concatenated partials must equal the canonical assistant
+        // text. If we ever double-counted (partials + final event),
+        // this would be 2x. If we lost any, it'd be shorter.
+        let joined: String = deltas.concat();
+        assert_eq!(
+            joined, outcome.assistant_text,
+            "joined deltas != assistant_text; deltas={deltas:?}"
+        );
     }
 
     #[tokio::test]

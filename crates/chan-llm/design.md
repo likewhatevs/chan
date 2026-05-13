@@ -432,6 +432,12 @@ ClaudeCli   Drives a local `claude` CLI subprocess. v1 runs
             allowlists chan-llm's tools plus claude's read-only
             tools, and drops `--permission-mode bypassPermissions`,
             so writes still stage through `auto_apply_writes`.
+            Spawned with `--include-partial-messages` so the
+            listener sees token-level `on_delta` updates (one
+            per Anthropic SDK `content_block_delta` text_delta);
+            the final `assistant` event's text is suppressed
+            when partials already streamed it to avoid double-
+            counting.
 GeminiCli   Drives a local `gemini` CLI subprocess. Same v1/v2
             split as ClaudeCli. v2 rewrites `GEMINI_CLI_HOME` to
             a tmpdir we own (gemini-cli has no per-invocation
@@ -443,6 +449,11 @@ GeminiCli   Drives a local `gemini` CLI subprocess. Same v1/v2
             chan-llm-resolved Gemini key via `GEMINI_API_KEY`
             since redirecting the home dir blocks gemini from
             reading the user's real `~/.gemini` auth.
+            Streaming granularity is one `on_delta` per assistant
+            message (gemini-cli's stream-json output emits whole
+            assistant messages, no upstream flag for token-level
+            partials). UI consumers wanting typewriter-style
+            updates should prefer the HTTP `Gemini` backend.
 ```
 
 Each backend:
