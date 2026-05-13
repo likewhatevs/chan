@@ -83,6 +83,11 @@ class ImageWidget extends WidgetType {
     /// (mixed with paragraph text) keep the existing float layout
     /// so text wraps around them.
     readonly standalone: boolean,
+    /// True when the widget is rendered AS A BLOCK PREVIEW above an
+    /// editable source line (caret is inside the image's source).
+    /// In edit mode the float-around-text layout doesn't apply —
+    /// the preview is a sibling to the source row, not a replacement.
+    readonly editing: boolean,
     readonly onClick: ((args: ImageClickArgs) => void) | undefined,
   ) {
     super();
@@ -93,7 +98,8 @@ class ImageWidget extends WidgetType {
       this.alt === other.alt &&
       this.src === other.src &&
       this.fromPath === other.fromPath &&
-      this.standalone === other.standalone
+      this.standalone === other.standalone &&
+      this.editing === other.editing
     );
   }
 
@@ -101,6 +107,7 @@ class ImageWidget extends WidgetType {
     const wrap = document.createElement("span");
     wrap.className = "cm-md-image-wrap";
     if (this.standalone) wrap.dataset.standalone = "true";
+    if (this.editing) wrap.dataset.editing = "true";
     const { width, align } = parseImageSrc(this.src);
     if (align) wrap.dataset.align = align;
 
@@ -152,7 +159,7 @@ class ImageWidget extends WidgetType {
     const zoomBtn = document.createElement("button");
     zoomBtn.type = "button";
     zoomBtn.className = "cm-md-image-action";
-    zoomBtn.textContent = "Zoom";
+    zoomBtn.textContent = "View";
     zoomBtn.addEventListener("mousedown", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -352,7 +359,6 @@ function scanImages(view: EditorView, opts: ImageOptions): DecorationSet {
       if (node.name !== "Image") return;
       const outerFrom = node.from;
       const outerTo = node.to;
-      if (selectionInRange(sel, outerFrom, outerTo)) return;
       // Read the alt text (between the first and second LinkMark) and
       // the URL (between `(` and `)`).
       const cursor = node.node.cursor();
@@ -373,43 +379,56 @@ function scanImages(view: EditorView, opts: ImageOptions): DecorationSet {
       const altTo = linkMarks[1]!.from;
       const alt = state.doc.sliceString(altFrom, altTo);
       const src = state.doc.sliceString(urlFrom, urlTo);
-      // Standalone: the image's source range is the only non-blank
-      // content on its line. When true, alignment positions the image
-      // within the line via flex; otherwise the image flows with
-      // surrounding paragraph text and float-left / float-right wraps
-      // text around it.
       const line = state.doc.lineAt(outerFrom);
       const standalone =
         line.text.trim() === state.doc.sliceString(outerFrom, outerTo).trim();
+      const editing = selectionInRange(sel, outerFrom, outerTo);
       const widget = new ImageWidget(
         alt,
         src,
         fromPath,
         outerFrom,
         standalone,
+        editing,
         opts.onImageClick,
       );
-      decos.push({
-        from: outerFrom,
-        to: outerTo,
-        deco: Decoration.replace({ widget }),
-      });
-      // Inline (non-standalone) image with left/right align: float
-      // keeps wrapping subsequent lines around the image. The user
-      // only wants the SAME line to flow beside the image; lines
-      // below should drop below it. Add a clear:both decoration on
-      // the next line so the float effect ends at the line break.
-      if (!standalone) {
-        const { align } = parseImageSrc(src);
-        if (align === "left" || align === "right") {
-          const nextLineNum = line.number + 1;
-          if (nextLineNum <= state.doc.lines) {
-            const nextLine = state.doc.line(nextLineNum);
-            decos.push({
-              from: nextLine.from,
-              to: nextLine.from,
-              deco: CLEAR_AFTER_IMAGE,
-            });
+      if (editing) {
+        // Editing mode: image stays visible AS A BLOCK PREVIEW above
+        // the source line; source `![alt](url)` stays as editable
+        // text. Block widget with side: -1 places the preview before
+        // the line. Width / alignment are read from the live source,
+        // so typing in the URL updates the preview in real time —
+        // dropping a `#w=N` or `#left` fragment is reflected
+        // immediately. Atom replacement skipped here so caret can
+        // walk through the source text freely.
+        decos.push({
+          from: line.from,
+          to: line.from,
+          deco: Decoration.widget({ widget, side: -1, block: true }),
+        });
+      } else {
+        decos.push({
+          from: outerFrom,
+          to: outerTo,
+          deco: Decoration.replace({ widget }),
+        });
+        // Inline (non-standalone) image with left/right align: float
+        // keeps wrapping subsequent lines around the image. Add
+        // clear:both on the next line so only the same line flows
+        // beside the image. Skipped while editing — the preview is
+        // a separate block above the source, no float to clear.
+        if (!standalone) {
+          const { align } = parseImageSrc(src);
+          if (align === "left" || align === "right") {
+            const nextLineNum = line.number + 1;
+            if (nextLineNum <= state.doc.lines) {
+              const nextLine = state.doc.line(nextLineNum);
+              decos.push({
+                from: nextLine.from,
+                to: nextLine.from,
+                deco: CLEAR_AFTER_IMAGE,
+              });
+            }
           }
         }
       }

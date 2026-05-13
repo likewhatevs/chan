@@ -592,6 +592,19 @@
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-standalone="true"][data-align="right"]) {
     justify-content: flex-end;
   }
+  /* In-edit preview: image stays visible AS A BLOCK above the
+     editable source line. Fade slightly so the user reads it as a
+     preview, not a final commit; the source row below is where
+     the actual edits happen. */
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-editing="true"]) {
+    display: block;
+    opacity: 0.55;
+    pointer-events: none;
+    margin: 0.25em 0;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-editing="true"] img) {
+    max-width: 100%;
+  }
   /* Line after a floated inline image: clear the float so following
      lines drop BELOW the image instead of continuing to wrap. */
   :global(.md-wysiwyg-cm6 .cm-md-image-clear-after) {
@@ -605,13 +618,19 @@
   }
   :global(.md-wysiwyg-cm6 .cm-md-image-handle) {
     position: absolute;
-    right: -4px;
-    bottom: -4px;
-    width: 12px;
-    height: 12px;
-    background: var(--text-secondary, #888);
-    border: 2px solid var(--bg, #fff);
-    border-radius: 50%;
+    right: 0;
+    bottom: 0;
+    width: 0;
+    height: 0;
+    /* Lower-right triangle "tick" — drag handle that mirrors the
+       legacy editor's resize affordance. Built with CSS borders so
+       the shape scales cleanly without a glyph. The colored bottom
+       border + transparent right form the hypotenuse running
+       top-left → bottom-right. */
+    border-style: solid;
+    border-width: 0 0 12px 12px;
+    border-color: transparent transparent var(--text-secondary, #888)
+      transparent;
     cursor: nwse-resize;
     opacity: 0;
     transition: opacity 0.15s;
