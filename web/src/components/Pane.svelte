@@ -156,12 +156,12 @@
     void Object.keys(layout.nodes).length;
     return canSplit();
   });
-  // The button is always live: on a non-root pane it collapses the pane;
-  // on the only/root pane it clears all tabs (since we can't have zero
-  // panes on screen).
-  const closeLabel = $derived(
-    layout.rootId === pane.id ? "close all tabs" : "close pane",
-  );
+  // Show "close pane" only on non-root panes. The root pane is the
+  // only one on screen; "close all tabs" used to live here as the
+  // root-pane variant but it's a destructive bulk action that doesn't
+  // belong in a right-click surface (tabs have their own × handle,
+  // and Cmd+W closes the active tab one at a time).
+  const showClosePane = $derived(layout.rootId !== pane.id);
 
   // Drag state: highlight the tab strip while another pane's tab is being
   // dragged over it. Keyed by pane id so we don't bleed state between
@@ -604,12 +604,14 @@
           </li>
           <li class="sep" role="separator"></li>
         {/if}
-        <li>
-          <button role="menuitem" onclick={onClosePane}>
-            <span class="glyph" aria-hidden="true">⊠</span>
-            <span>{closeLabel}</span>
-          </button>
-        </li>
+        {#if showClosePane}
+          <li>
+            <button role="menuitem" onclick={onClosePane}>
+              <span class="glyph" aria-hidden="true">⊠</span>
+              <span>close pane</span>
+            </button>
+          </li>
+        {/if}
       </HamburgerMenu>
     </div>
   </div>
@@ -648,6 +650,33 @@
           width={280}
           height={260}
         >
+          {#if splitsAllowed}
+            <li>
+              <button
+                role="menuitem"
+                onclick={() => {
+                  emptyPaneMenu?.close();
+                  splitActive("row");
+                }}
+              >
+                <span class="empty-pane-menu-label">Split right</span>
+                <span class="empty-pane-menu-chord"></span>
+              </button>
+            </li>
+            <li>
+              <button
+                role="menuitem"
+                onclick={() => {
+                  emptyPaneMenu?.close();
+                  splitActive("column");
+                }}
+              >
+                <span class="empty-pane-menu-label">Split down</span>
+                <span class="empty-pane-menu-chord"></span>
+              </button>
+            </li>
+            <li class="sep" role="separator"></li>
+          {/if}
           {#each emptyPaneMenuItems as s (s.id)}
             <li>
               <button role="menuitem" onclick={() => dispatchCommand(s.id)}>

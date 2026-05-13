@@ -19,6 +19,7 @@
   import StyleToolbar from "./StyleToolbar.svelte";
   import { clampMenu } from "./menuClamp";
   import {
+    layout,
     setMode,
     setTabCaret,
     setTabInspectorOpen,
@@ -40,7 +41,7 @@
     persistPaneWidths,
     revealAndSelect,
   } from "../state/store.svelte";
-  import { openInActivePane } from "../state/tabs.svelte";
+  import { canSplit, openInActivePane, splitActive } from "../state/tabs.svelte";
   import { api } from "../api/client";
   import {
     PAGE_WIDTH_MAX_PCT,
@@ -263,6 +264,26 @@
     setTabStyleToolbarOpen(tab, !tab.styleToolbarOpen);
     closeTabMenu();
   }
+
+  /// Right-click menu split actions. Mirror the per-pane hamburger
+  /// menu but live here too so the tab/editor context menu can fan
+  /// out the current file into a side-by-side view without making
+  /// the user reach for the pane chrome. `splitsAllowed` re-derives
+  /// on every layout mutation so the row greys out the moment the
+  /// platform's split cap is hit (iPad after one split).
+  const splitsAllowed = $derived.by(() => {
+    void layout.rootId;
+    void Object.keys(layout.nodes).length;
+    return canSplit();
+  });
+  function doSplitRight(): void {
+    closeTabMenu();
+    splitActive("row");
+  }
+  function doSplitDown(): void {
+    closeTabMenu();
+    splitActive("column");
+  }
 </script>
 
 <svelte:window onkeydown={onMenuKeydown} onpointerdown={onDocPointerDown} />
@@ -370,6 +391,17 @@
           <span class="mbtn-label">Call Assistant</span>
         </button>
         <div class="msep" role="separator"></div>
+        {#if splitsAllowed}
+          <button class="mbtn" onclick={doSplitRight}>
+            <span class="mbtn-icon">⇢</span>
+            <span class="mbtn-label">Split right</span>
+          </button>
+          <button class="mbtn" onclick={doSplitDown}>
+            <span class="mbtn-icon">⇣</span>
+            <span class="mbtn-label">Split down</span>
+          </button>
+          <div class="msep" role="separator"></div>
+        {/if}
         <button class="mbtn" onclick={doOpenSettings}>
           <span class="mbtn-icon">⚙</span>
           <span class="mbtn-label">Settings</span>
