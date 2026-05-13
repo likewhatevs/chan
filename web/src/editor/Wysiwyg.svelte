@@ -488,6 +488,23 @@
     background: var(--image-bg, rgba(120, 200, 120, 0.20));
     color: var(--image-fg, #2a7d2a);
   }
+  :global(.md-wysiwyg-cm6 .cm-md-wiki-pill-image) {
+    display: inline-block;
+    padding: 0;
+    background: none;
+    line-height: 0;
+    vertical-align: middle;
+    border-radius: 4px;
+    overflow: hidden;
+    max-width: 160px;
+    max-height: 96px;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-wiki-pill-image img) {
+    max-width: 160px;
+    max-height: 96px;
+    object-fit: contain;
+    display: block;
+  }
   :global(.md-wysiwyg-cm6 .cm-md-wiki-pill[data-refkind="broken"]) {
     background: var(--broken-bg, rgba(220, 80, 80, 0.18));
     color: var(--broken-fg, #b32020);

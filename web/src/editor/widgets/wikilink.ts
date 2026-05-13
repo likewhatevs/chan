@@ -42,7 +42,7 @@ import { syntaxTree } from "@codemirror/language";
 import { type Extension, StateEffect } from "@codemirror/state";
 import { selectionInRange } from "../decorations/selection";
 import { normalizeHref } from "../links";
-import { isImagePath } from "../extensions/image";
+import { isImagePath, resolveImageSrc } from "../extensions/image";
 import { api } from "../../api/client";
 
 export type LinkKind = "file" | "contact" | "image" | "broken";
@@ -208,7 +208,23 @@ class WikiLinkWidget extends WidgetType {
     el.dataset.target = this.parsed.target;
     if (this.parsed.anchor) el.dataset.anchor = this.parsed.anchor;
     if (this.kind) el.dataset.refkind = this.kind;
-    el.textContent = this.parsed.label;
+    if (this.kind === "image") {
+      // Image-kind wikilinks render the actual file as an inline
+      // thumbnail rather than a text pill — a `[[Recipes/photo.jpg]]`
+      // link to a media asset is more useful when you can see what
+      // it points to. The pill stays a wrapping span so click +
+      // selection-intersect behavior still applies; the only change
+      // is the inner content.
+      el.classList.add("cm-md-wiki-pill-image");
+      const img = document.createElement("img");
+      img.alt = this.parsed.label;
+      const resolved = resolveImageSrc(this.parsed.target, null);
+      if (resolved) img.src = resolved;
+      img.draggable = false;
+      el.replaceChildren(img);
+    } else {
+      el.textContent = this.parsed.label;
+    }
     el.addEventListener("mousedown", (e) => {
       if (e.button !== 0) return;
       e.preventDefault();

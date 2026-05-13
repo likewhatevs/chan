@@ -25,6 +25,13 @@ import { openBubbleShell } from "../bubble";
 import type { BubbleHandle } from "./types";
 import { createCaretAnchor } from "./anchor";
 import { api } from "../../api/client";
+import {
+  filterBlocks,
+  insertBlockAnchor,
+  makeBlockId,
+  parseBlocks,
+  type ParsedBlock,
+} from "../extensions/wikiBlocks";
 
 export interface WikiBubbleOpts {
   view: EditorView;
@@ -49,6 +56,7 @@ export interface WikiBubbleOpts {
 
 const SEARCH_LIMIT = 5;
 const HEADING_LIMIT = 8;
+const BLOCK_LIMIT = 8;
 const FETCH_DEBOUNCE_MS = 60;
 
 interface SearchHit {
@@ -66,16 +74,23 @@ interface WikiBubbleHandle extends BubbleHandle {
 
 type Mode =
   | { kind: "file" }
-  | { kind: "heading"; target: string; filter: string };
+  | { kind: "heading"; target: string; filter: string }
+  | { kind: "block"; target: string; filter: string };
 
+/// Split the query into target + anchor-filter. Whichever separator
+/// (`#` for heading, `^` for block) appears FIRST wins. `target^id`
+/// switches to block mode; `target#text` to heading mode. The user
+/// can backspace past the separator to drop back to file mode.
 function classifyQuery(q: string): Mode {
-  const hashIdx = q.indexOf("#");
-  if (hashIdx < 0) return { kind: "file" };
-  return {
-    kind: "heading",
-    target: q.slice(0, hashIdx),
-    filter: q.slice(hashIdx + 1),
-  };
+  const headIdx = q.indexOf("#");
+  const blockIdx = q.indexOf("^");
+  const idx =
+    blockIdx < 0 ? headIdx : headIdx < 0 ? blockIdx : Math.min(blockIdx, headIdx);
+  if (idx < 0) return { kind: "file" };
+  const target = q.slice(0, idx);
+  const filter = q.slice(idx + 1);
+  if (q[idx] === "^") return { kind: "block", target, filter };
+  return { kind: "heading", target, filter };
 }
 
 export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
@@ -100,6 +115,13 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
   let headingTarget: string | null = null;
   let headingAll: HeadingHit[] = [];
   let headingHits: HeadingHit[] = [];
+  // Block-mode cache: parsed blocks + the file's mtime (needed for the
+  // CAS write when committing a block that doesn't yet have an `^id`).
+  let blockTarget: string | null = null;
+  let blockAll: ParsedBlock[] = [];
+  let blockOriginalText = "";
+  let blockMtime: number | null = null;
+  let blockHits: ParsedBlock[] = [];
   let selectedIndex = 0;
   let reqSeq = 0;
   let debounceTimer: number | undefined;
@@ -112,8 +134,10 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
   status.className = "md-bubble-status";
   shell.wrap.appendChild(status);
 
-  function activeHits(): Array<SearchHit | HeadingHit> {
-    return mode.kind === "heading" ? headingHits : fileHits;
+  function activeHits(): Array<SearchHit | HeadingHit | ParsedBlock> {
+    if (mode.kind === "heading") return headingHits;
+    if (mode.kind === "block") return blockHits;
+    return fileHits;
   }
 
   function render(): void {
@@ -124,18 +148,26 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
         status.textContent = query.length === 0
           ? "Type to search files"
           : "No matches";
-      } else {
+      } else if (mode.kind === "heading") {
         status.textContent = headingTarget === mode.target
           ? "No matching headings"
           : "Loading headings...";
+      } else {
+        status.textContent = blockTarget === mode.target
+          ? "No matching blocks"
+          : "Loading blocks...";
       }
       shell.reposition();
       return;
     }
     const openHint = opts.onOpenLink ? " · ⌘↵ open" : "";
-    status.textContent = mode.kind === "heading"
-      ? `${hits.length} heading${hits.length === 1 ? "" : "s"} in ${mode.target} · ↵ insert${openHint}`
-      : `${hits.length} result${hits.length === 1 ? "" : "s"} · ↵ insert${openHint}`;
+    if (mode.kind === "heading") {
+      status.textContent = `${hits.length} heading${hits.length === 1 ? "" : "s"} in ${mode.target} · ↵ insert${openHint}`;
+    } else if (mode.kind === "block") {
+      status.textContent = `${hits.length} block${hits.length === 1 ? "" : "s"} in ${mode.target} · ↵ insert${openHint}`;
+    } else {
+      status.textContent = `${hits.length} result${hits.length === 1 ? "" : "s"} · ↵ insert${openHint}`;
+    }
     for (let i = 0; i < hits.length; i++) {
       const hit = hits[i]!;
       const row = document.createElement("div");
@@ -149,6 +181,19 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
         const text = document.createElement("span");
         text.textContent = h.text;
         row.appendChild(level);
+        row.appendChild(text);
+      } else if (mode.kind === "block") {
+        const b = hit as ParsedBlock;
+        const tag = document.createElement("span");
+        tag.className = "md-bubble-row-level";
+        tag.textContent = b.existingAnchor ? "ID" : "BLK";
+        const text = document.createElement("span");
+        // First line of the block, ellipsised if very long. Anchor
+        // suffix is stripped from the visible text since the row tag
+        // already signals it.
+        const firstLine = b.text.split("\n")[0] ?? "";
+        text.textContent = firstLine.replace(/\s*\^[A-Za-z0-9-]{4,}\s*$/, "");
+        row.appendChild(tag);
         row.appendChild(text);
       } else {
         row.textContent = (hit as SearchHit).path;
@@ -223,16 +268,65 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     render();
   }
 
+  function fetchBlocks(target: string): void {
+    if (blockTarget === target) {
+      filterBlocksLocal();
+      return;
+    }
+    if (debounceTimer !== undefined) clearTimeout(debounceTimer);
+    const seq = ++reqSeq;
+    blockAll = [];
+    blockHits = [];
+    blockTarget = null;
+    blockOriginalText = "";
+    blockMtime = null;
+    render();
+    api
+      .read(target)
+      .then((res) => {
+        if (!alive || seq !== reqSeq) return;
+        if (mode.kind !== "block" || mode.target !== target) return;
+        blockTarget = target;
+        blockOriginalText = res.content;
+        blockMtime = res.mtime;
+        blockAll = parseBlocks(res.content);
+        filterBlocksLocal();
+      })
+      .catch((err) => {
+        if (!alive || seq !== reqSeq) return;
+        blockAll = [];
+        blockHits = [];
+        status.textContent = `Blocks failed: ${err.message ?? err}`;
+      });
+  }
+
+  function filterBlocksLocal(): void {
+    if (mode.kind !== "block") return;
+    blockHits = filterBlocks(blockAll, mode.filter, BLOCK_LIMIT);
+    if (selectedIndex >= blockHits.length) selectedIndex = 0;
+    render();
+  }
+
   function refetchForMode(): void {
     if (mode.kind === "file") {
       fetchFile();
-    } else {
+    } else if (mode.kind === "heading") {
       fetchHeadings(mode.target);
+    } else {
+      fetchBlocks(mode.target);
     }
   }
 
-  function commit(hit: SearchHit | HeadingHit): void {
+  function commit(hit: SearchHit | HeadingHit | ParsedBlock): void {
     const raw = opts.templateMode === "raw";
+    if (mode.kind === "block") {
+      // Block commit may need a fresh `^id` written to the target file.
+      // Run async, then dispatch the link insert. The bubble stays
+      // open during the write; show a transient status.
+      const block = hit as ParsedBlock;
+      void commitBlock(block, raw);
+      return;
+    }
     let insert: string;
     if (mode.kind === "heading") {
       const h = hit as HeadingHit;
@@ -249,6 +343,45 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     dismiss();
   }
 
+  async function commitBlock(
+    block: ParsedBlock,
+    raw: boolean,
+  ): Promise<void> {
+    if (mode.kind !== "block" || !blockTarget) return;
+    const target = mode.target;
+    let anchorId: string;
+    if (block.existingAnchor) {
+      // Strip leading `^` — we store the anchor as `^id` in
+      // ParsedBlock but the link form is `target^id` (no double ^).
+      anchorId = block.existingAnchor.replace(/^\^/, "");
+    } else {
+      // Generate a fresh id, write to the target file via CAS, then
+      // insert the link. If the write fails (mtime conflict, network),
+      // surface the error and leave the bubble open.
+      anchorId = makeBlockId();
+      const newContent = insertBlockAnchor(blockOriginalText, block, anchorId);
+      status.textContent = "Adding anchor...";
+      try {
+        const res = await api.write(target, newContent, blockMtime);
+        if (!alive) return;
+        blockOriginalText = newContent;
+        blockMtime = res.mtime;
+      } catch (err: unknown) {
+        const msg =
+          err instanceof Error ? err.message : String(err);
+        status.textContent = `Anchor write failed: ${msg}`;
+        return;
+      }
+    }
+    const ref = `${target}^${anchorId}`;
+    const insert = raw ? ref : `[[${ref}]]`;
+    opts.view.dispatch({
+      changes: { from: opts.triggerStart, to: triggerEnd, insert },
+      selection: { anchor: opts.triggerStart + insert.length },
+    });
+    dismiss();
+  }
+
   function openSelected(): void {
     if (!opts.onOpenLink) return;
     const hits = activeHits();
@@ -256,17 +389,20 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     let target: string;
     let anchor: string | null = null;
     if (mode.kind === "heading") {
-      // Heading-mode: target is the file portion, anchor is the picked
-      // heading anchor. If no hit selected (empty list), navigate to
-      // the file alone.
       target = mode.target;
       if (hit) anchor = (hit as HeadingHit).anchor;
+    } else if (mode.kind === "block") {
+      target = mode.target;
+      if (hit) {
+        const b = hit as ParsedBlock;
+        if (b.existingAnchor) anchor = b.existingAnchor; // includes leading ^
+        // No anchor write happens on Cmd+Enter — opening doesn't
+        // mutate the target file. The host just navigates to the
+        // file (anchor scroll TBD).
+      }
     } else if (hit) {
       target = (hit as SearchHit).path;
     } else {
-      // No hit available — fall back to the typed query as a target.
-      // Useful for "I clicked a wikilink, no search ran yet, just
-      // open the existing target."
       target = query;
     }
     opts.onOpenLink(target, anchor);
