@@ -13,10 +13,12 @@ import type { Extension } from "@codemirror/state";
 import { decorationWalker, type HandlerRegistry } from "./walker";
 import { inlineMarkHandlers } from "./marks";
 import { headingHandlers } from "./headings";
+import { blockHandlers } from "./blocks";
 
 const ALL_HANDLERS: HandlerRegistry = {
   ...inlineMarkHandlers,
   ...headingHandlers,
+  ...blockHandlers,
 };
 
 export function chanDecorations(): Extension {

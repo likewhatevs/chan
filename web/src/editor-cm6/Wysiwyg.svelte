@@ -138,6 +138,41 @@
     opacity: 0.75;
   }
 
+  /* ---- block-level line classes ---- */
+  :global(.md-wysiwyg-cm6 .cm-md-quote) {
+    border-left: 3px solid var(--text-secondary, #888);
+    padding-left: 0.75em;
+    color: var(--text-secondary, #888);
+    font-style: italic;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-hr) {
+    border-bottom: 1px solid var(--border, #ddd);
+    margin: 0.5em 0;
+    height: 0.5em;
+    color: transparent;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-fence-opener),
+  :global(.md-wysiwyg-cm6 .cm-md-fence-closer) {
+    color: var(--text-secondary, #888);
+    font-family: var(--chan-font-code-family, monospace);
+    font-size: 0.92em;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-code-block) {
+    font-family: var(--chan-font-code-family, monospace);
+    font-size: 0.92em;
+    background: var(--bg-card, rgba(0, 0, 0, 0.04));
+    padding-left: 0.75em;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-fence-info) {
+    color: var(--link, #0a64c8);
+    font-weight: 500;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-task-checkbox) {
+    margin: 0 0.4em 0 0;
+    vertical-align: middle;
+    cursor: pointer;
+  }
+
   /* ---- heading line classes ---- */
   :global(.md-wysiwyg-cm6 .cm-md-h1) { font-size: 2.0em; font-weight: 700; line-height: 1.25; }
   :global(.md-wysiwyg-cm6 .cm-md-h2) { font-size: 1.6em; font-weight: 700; line-height: 1.3; }
