@@ -641,6 +641,37 @@ NodeKind::{File, Contact}
 ContactNode { rel_path, basename, title }
 ```
 
+### VCS-parent detection
+
+```rust
+vcs::detect_parent_vcs(path: &Path) -> Option<VcsParent>
+
+enum VcsKind { Git, Mercurial, Subversion }
+impl VcsKind { fn as_str(&self) -> &'static str }       // "git" | "hg" | "svn"
+struct VcsParent { kind: VcsKind, repo_root: PathBuf }
+```
+
+Pure stat-walk. Used by `chan serve` (and any future shell) to
+decide whether a drive path is inside a Git / Mercurial /
+Subversion working tree and would be better served at the repo
+root instead of an arbitrary subdir.
+
+Algorithm:
+
+  - Canonicalize the input. Skip the leaf (we report only strict
+    ancestors so a user who picked the repo root sees `None`).
+  - For each ancestor, check for `.git` (file OR directory; the
+    file form covers worktrees and submodules), `.hg/`, `.svn/`.
+    First match wins.
+  - Stop at: a mount boundary (`st_dev` change on Unix; skipped
+    on Windows), at `$HOME` (never inspected; dotfiles-as-git is
+    unrelated to drive-root selection), or at the filesystem root.
+
+The function never invokes `git`/`hg`/`svn` and never reads
+repository contents. The shell layer (`chan serve`, desktop) is
+responsible for the user-facing decision (refuse and suggest the
+repo root, present a dialog, accept an explicit override).
+
 ### Public types (selected)
 
 `SearchMode { Bm25, Dense, Hybrid }`, `SearchOpts`, `SearchResult`,
@@ -649,7 +680,8 @@ ContactNode { rel_path, basename, title }
 `BuildStage`, `BuildSummary`. `ResetMode { Cache, Everything }`,
 `ResetReport`. `KnownDrive`, `Registry`. `Edge`, `EdgeKind`, `Tag`,
 `HeadingRow`, `LinkTarget`, `LinkTargetKind`. `WatchEvent`,
-`WatchKind`, `WatchHandle`, `WatchCallback`. `ChanError`, `Result`.
+`WatchKind`, `WatchHandle`, `WatchCallback`. `VcsKind`,
+`VcsParent`. `ChanError`, `Result`.
 
 All public types are owned (no lifetimes) and `Send + Sync`.
 

@@ -36,6 +36,7 @@ pub mod progress;
 pub mod registry;
 mod report;
 pub mod trash;
+pub mod vcs;
 pub mod watch;
 
 pub use chan_report::{
@@ -65,4 +66,5 @@ pub use library::{Library, ResetMode, ResetReport};
 pub use progress::{progress_fn, NoProgress, ProgressCallback, ProgressEvent, ProgressStage};
 pub use registry::{KnownDrive, Registry};
 pub use trash::{TrashEntry, TRASH_RETENTION_SECS};
+pub use vcs::{detect_parent_vcs, VcsKind, VcsParent};
 pub use watch::{WatchCallback, WatchEvent, WatchHandle, WatchKind};
