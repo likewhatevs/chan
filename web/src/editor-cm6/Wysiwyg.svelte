@@ -39,17 +39,22 @@
     imageDecorations,
     type ImageClickArgs,
   } from "./widgets/image";
+  import { bubbleKeymap, bubbleListener } from "./bubbles/controller";
+  import type { BubbleHandle, BubbleSpec } from "./bubbles/types";
+  import { openWikiBubble } from "./bubbles/wiki";
   import type { FindAdapter } from "../editor/find";
 
   let {
     value = $bindable(""),
     currentPath = null,
+    wikiPickerPrefix = null,
     onTagClick = () => {},
     onWikiClick = () => {},
     onImageClick = () => {},
   }: {
     value: string;
     currentPath?: string | null;
+    wikiPickerPrefix?: string | null;
     onTagClick?: (tag: string) => void;
     onWikiClick?: (args: WikiLinkClickArgs) => void;
     onImageClick?: (args: ImageClickArgs) => void;
@@ -61,6 +66,58 @@
   let view: EditorView | undefined;
   const sync = createValueSync();
   const theme = makeThemeCompartment(ui.theme);
+
+  /// Active bubble handle (or null when no bubble is open). Updated by
+  /// the controller's onSpec callback; the keymap reads it via the
+  /// `() => activeBubble` accessor so each keydown sees the live
+  /// reference (no stale closure).
+  let activeBubble: BubbleHandle | null = null;
+  let activeKind: BubbleSpec["kind"] | null = null;
+
+  function handleSpec(spec: BubbleSpec | null): void {
+    if (!view) return;
+    if (spec === null) {
+      if (activeBubble) {
+        activeBubble.dismiss();
+        activeBubble = null;
+        activeKind = null;
+      }
+      return;
+    }
+    // Same bubble kind already open: update its query / trigger end
+    // in place. Different kind or no bubble open: dismiss the old
+    // and mount fresh.
+    if (activeBubble && activeKind === spec.kind) {
+      activeBubble.setQuery(spec.query);
+      // Cast: only wiki bubble carries setTriggerEnd today; harmless
+      // for others until they implement the same shape.
+      const ext = activeBubble as BubbleHandle & {
+        setTriggerEnd?: (end: number) => void;
+      };
+      ext.setTriggerEnd?.(spec.triggerEnd);
+      return;
+    }
+    if (activeBubble) {
+      activeBubble.dismiss();
+      activeBubble = null;
+      activeKind = null;
+    }
+    if (spec.kind === "wiki") {
+      activeBubble = openWikiBubble({
+        view,
+        triggerStart: spec.triggerStart,
+        triggerEnd: spec.triggerEnd,
+        initialQuery: spec.query,
+        prefix: wikiPickerPrefix,
+        onDismiss: () => {
+          activeBubble = null;
+          activeKind = null;
+        },
+      });
+      activeKind = "wiki";
+    }
+    // image / tag / contact bubbles: step 7b/7c.
+  }
 
   /// Find-on-page adapter (same shape as Source.svelte and the legacy
   /// WYSIWYG; FileEditorTab passes whichever editor is mounted to
@@ -87,6 +144,8 @@
           getCurrentPath: () => currentPath,
           onImageClick,
         }),
+        bubbleListener({ onSpec: handleSpec }),
+        bubbleKeymap(() => activeBubble),
         EditorView.updateListener.of((u) => {
           sync.onDocChanged(u, (s) => (value = s));
         }),
@@ -97,7 +156,10 @@
     view.focus();
   });
 
-  onDestroy(() => view?.destroy());
+  onDestroy(() => {
+    if (activeBubble) activeBubble.dismiss();
+    view?.destroy();
+  });
 
   $effect(() => {
     sync.applyExternal(view, value);
@@ -268,6 +330,45 @@
   }
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap:hover .cm-md-image-handle) {
     opacity: 1;
+  }
+
+  /* ---- bubble shells ---- */
+  :global(.md-bubble.cm-bubble) {
+    background: var(--bg-card, #fff);
+    border: 1px solid var(--border, #ddd);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    min-width: 240px;
+    max-width: 480px;
+    padding: 4px;
+    font-family: var(--chan-font-text-family);
+    font-size: 14px;
+  }
+  :global(.md-bubble .md-bubble-list) {
+    display: flex;
+    flex-direction: column;
+  }
+  :global(.md-bubble .md-bubble-row) {
+    padding: 6px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  :global(.md-bubble .md-bubble-row:hover) {
+    background: var(--hover-bg, rgba(0, 0, 0, 0.04));
+  }
+  :global(.md-bubble .md-bubble-row-selected) {
+    background: var(--accent-bg, rgba(106, 168, 255, 0.18));
+    color: var(--accent, #2563b8);
+  }
+  :global(.md-bubble .md-bubble-status) {
+    padding: 4px 8px;
+    color: var(--text-secondary, #888);
+    font-size: 12px;
+    border-top: 1px solid var(--border, #eee);
+    margin-top: 2px;
   }
 
   /* ---- heading line classes ---- */

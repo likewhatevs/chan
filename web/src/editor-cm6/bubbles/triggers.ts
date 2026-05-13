@@ -1,0 +1,140 @@
+// Trigger detection: scan the doc text immediately around the caret for
+// `[[`, `![`, `#`, `@` patterns and return the corresponding BubbleSpec.
+//
+// Rules:
+//   - Empty selection only (a non-point selection is editing, not a
+//     trigger). Multi-cursor: only the primary range is checked.
+//   - Trigger may not span lines (if the user puts a `[[` on one line
+//     and the caret on the next line, no trigger).
+//   - Wiki / image triggers must not contain a `]` (which would close
+//     the bracket pattern; a closed `[[x]]` shouldn't keep the bubble
+//     open while the caret is at end).
+//   - Tag / contact triggers require a word boundary before the
+//     trigger char (so `foo#bar` and `email@domain.com` don't open
+//     bubbles).
+//   - Skip when the caret is inside an InlineCode / FencedCode
+//     syntax range — those characters are literal source.
+//
+// Multiple patterns can never overlap (their trigger characters are
+// disjoint) so we check in order: wiki > image > contact > tag. The
+// first match wins.
+
+import { syntaxTree } from "@codemirror/language";
+import type { EditorState } from "@codemirror/state";
+import type { BubbleSpec } from "./types";
+
+const SKIP_INSIDE = new Set<string>([
+  "InlineCode",
+  "FencedCode",
+  "CodeBlock",
+  "CodeText",
+  "CodeMark",
+  "CodeInfo",
+]);
+
+export function computeBubbleSpec(state: EditorState): BubbleSpec | null {
+  const sel = state.selection.main;
+  if (!sel.empty) return null;
+  const pos = sel.head;
+  if (caretInsideSkipRange(state, pos)) return null;
+  const line = state.doc.lineAt(pos);
+  const before = line.text.slice(0, pos - line.from);
+  // Wiki: `[[query` (caret after the typed query, no `]` between).
+  const wiki = matchBracket(before, "[[", "]");
+  if (wiki !== null) {
+    return {
+      kind: "wiki",
+      triggerStart: line.from + wiki.start,
+      triggerEnd: pos,
+      query: wiki.query,
+    };
+  }
+  // Image: `![query` similarly. The opener is `![` (2 chars).
+  const image = matchBracket(before, "![", "]");
+  if (image !== null) {
+    return {
+      kind: "image",
+      triggerStart: line.from + image.start,
+      triggerEnd: pos,
+      query: image.query,
+    };
+  }
+  // Contact: `@word` at start-of-word. `\b@` -- but JS \b doesn't
+  // include `@`, so we anchor manually.
+  const contact = matchAtTrigger(before, "@");
+  if (contact !== null) {
+    return {
+      kind: "contact",
+      triggerStart: line.from + contact.start,
+      triggerEnd: pos,
+      query: contact.query,
+    };
+  }
+  // Tag: `#word` at start-of-word. Decoration walker handles the
+  // rendered pill; the bubble is only for picker assistance during
+  // typing.
+  const tag = matchAtTrigger(before, "#");
+  if (tag !== null) {
+    return {
+      kind: "tag",
+      triggerStart: line.from + tag.start,
+      triggerEnd: pos,
+      query: tag.query,
+    };
+  }
+  return null;
+}
+
+/// Match `opener` followed by query chars (no `forbidden` char in
+/// between, no opener char repeated which would mean a NEW opener took
+/// over). Returns the start offset of the opener within `line` and the
+/// query text. Returns null when no match.
+function matchBracket(
+  line: string,
+  opener: string,
+  forbidden: string,
+): { start: number; query: string } | null {
+  const lastOpen = line.lastIndexOf(opener);
+  if (lastOpen < 0) return null;
+  const queryStart = lastOpen + opener.length;
+  const query = line.slice(queryStart);
+  if (query.includes(forbidden)) return null;
+  // For wiki `[[`, also reject when query contains `[` (a new `[[`
+  // started between this opener and the caret).
+  if (query.includes("[")) return null;
+  // Newline guard: matchBracket runs on a single line already, so this
+  // is implicit, but be defensive.
+  if (query.includes("\n")) return null;
+  return { start: lastOpen, query };
+}
+
+/// Match `trigger` (single char like `#` / `@`) followed by word
+/// chars, with a word boundary before the trigger. Returns the
+/// trigger offset within `line` and the matched query text.
+function matchAtTrigger(
+  line: string,
+  trigger: string,
+): { start: number; query: string } | null {
+  // Walk back from end of line. The trigger must be the last
+  // non-word/dash run terminated by the trigger char.
+  // Pattern: (^|[^A-Za-z0-9_])({trigger})([A-Za-z0-9_-]*)$
+  const safe = trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`(?:^|[^A-Za-z0-9_])(${safe})([A-Za-z0-9_-]*)$`);
+  const m = re.exec(line);
+  if (!m) return null;
+  const triggerLen = m[1]!.length;
+  const queryLen = m[2]!.length;
+  // Reconstruct the offset of the trigger char.
+  const triggerOffset = m.index + (m[0].length - queryLen - triggerLen);
+  return { start: triggerOffset, query: m[2]! };
+}
+
+function caretInsideSkipRange(state: EditorState, pos: number): boolean {
+  const node = syntaxTree(state).resolveInner(pos, -1);
+  let cur: typeof node | null = node;
+  while (cur) {
+    if (SKIP_INSIDE.has(cur.name)) return true;
+    cur = cur.parent;
+  }
+  return false;
+}
