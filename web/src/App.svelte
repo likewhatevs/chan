@@ -17,6 +17,7 @@
     applyInitialTheme,
     assistantOverlay,
     bootstrap,
+    installSessionFlushHook,
     browserOverlay,
     browserSelection,
     closeOverlay,
@@ -178,6 +179,9 @@
     // Idle tracker: after 2.5s without scroll/click/keypress, the
     // floating pills fade. Any input flips them back on.
     installIdleTracker();
+    // Hook pagehide BEFORE bootstrap so a fast reload during the
+    // initial load still flushes any in-flight session changes.
+    installSessionFlushHook();
     await bootstrap();
     // First-launch experience: if the URL hash didn't restore any
     // tabs AND no overlay is already up (the hash may have asked

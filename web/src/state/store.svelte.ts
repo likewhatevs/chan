@@ -25,7 +25,7 @@ import {
   tabsForPath,
 } from "./tabs.svelte";
 import { invalidateGraph, ensureGraphLoaded } from "./graphData.svelte";
-import { SETTINGS_DISABLED } from "../api/transport";
+import { SETTINGS_DISABLED, withTokenQuery } from "../api/transport";
 export const drive = $state<{ info: DriveInfo | null }>({ info: null });
 
 export const tree = $state<{ entries: TreeEntry[]; loading: boolean }>({
@@ -268,7 +268,19 @@ export async function bootstrap(): Promise<void> {
     const fromHash = fresh ? null : readLayoutHash();
     try {
       if (fromHash) {
+        // URL hash wins on layout (copy-pasted links must reproduce
+        // tabs verbatim), but personal UI prefs — tree-expansion,
+        // assistant scope, etc — still come from session.json. The
+        // hash deliberately doesn't carry these so a shared link
+        // doesn't leak the recipient's folder state into the sender's
+        // session.
         await restoreLayout(fromHash);
+        if (!fresh) {
+          const remote = await api.getSession();
+          if (remote && !isLegacyLayoutPayload(remote)) {
+            applySessionSidecars(remote as SessionPayload);
+          }
+        }
       } else if (!fresh) {
         const remote = await api.getSession();
         if (remote) {
@@ -419,8 +431,14 @@ function applyOverlaysFromHash(): void {
     // Encoding: `<inspectorBit>:<path>`. Both fields optional.
     const [ins, path] = splitInspectorBit(params.get(HASH_BROWSER) ?? "");
     if (ins !== null) browserOverlay.inspectorOpen = ins;
-    if (path) revealAndSelect(path);
-    else browserSelection.path = null;
+    // Just plant the selection — DO NOT auto-expand ancestors. The
+    // hash always carries the last-selected entry as the user moves
+    // around, so reusing `revealAndSelect` here would clobber the
+    // user's persisted collapse state on every reload (and re-save
+    // the auto-expansion via persistTreeExpanded). If the selected
+    // row isn't visible because an ancestor is collapsed, opening
+    // that ancestor reveals it — the saved collapse wins.
+    browserSelection.path = path || null;
     browserOverlay.open = true;
   }
   if (params.has(HASH_SEARCH)) {
@@ -609,6 +627,20 @@ async function restoreSession(p: SessionPayload): Promise<void> {
   // flags are intentionally ignored on restore so a user who quit
   // the app with an overlay up doesn't get stuck behind it on the
   // next launch.
+  applySessionSidecars(p);
+  if (p.layout) {
+    await restoreLayout(p.layout);
+  }
+}
+
+/// Apply the non-layout slices of a session payload: file-browser
+/// tree-expansion + per-overlay scope/context. Pulled out of
+/// `restoreSession` so the URL-hash bootstrap path (which owns the
+/// layout but not the personal UI prefs) can still load these from
+/// session.json. The hash is meant to be shareable; folder
+/// open/closed state and assistant context are per-user and stay in
+/// session.json regardless of where the layout came from.
+function applySessionSidecars(p: SessionPayload): void {
   if (p.treeExpanded && typeof p.treeExpanded === "object") {
     treeExpanded.map = { "": true, ...p.treeExpanded };
     markTreeExpansionRestored();
@@ -620,9 +652,6 @@ async function restoreSession(p: SessionPayload): Promise<void> {
   if (ov.graph?.scopeId) graphOverlay.scopeId = ov.graph.scopeId;
   if (ov.graph && typeof ov.graph.depth === "number") {
     graphOverlay.depth = ov.graph.depth;
-  }
-  if (p.layout) {
-    await restoreLayout(p.layout);
   }
 }
 
@@ -653,6 +682,44 @@ export function scheduleSessionSave(): void {
       void api.putSession(payload);
     }
   }, SESSION_DEBOUNCE_MS);
+}
+
+/// Fire any pending session save synchronously via `fetch({ keepalive:
+/// true })` so the request survives the page unload. Without this,
+/// quick "expand folder; Cmd-R" cycles lose the toggle: the 750 ms
+/// debounce hasn't elapsed, the page reloads, the in-flight payload
+/// is discarded. Registered on `pagehide` (which also fires on bfcache
+/// suspends, unlike `beforeunload`).
+function flushSessionSaveOnExit(): void {
+  if (sessionTimer) {
+    clearTimeout(sessionTimer);
+    sessionTimer = null;
+  }
+  const payload = serializeSession();
+  const next = payload ? JSON.stringify(payload) : "";
+  if (next === lastSessionSnapshot) return;
+  lastSessionSnapshot = next;
+  const url = withTokenQuery("/api/session?w=default");
+  const body = payload === null ? "null" : next;
+  try {
+    fetch(url, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body,
+      keepalive: true,
+    }).catch(() => {});
+  } catch {
+    /* page is going away; nothing useful we can do */
+  }
+}
+
+/// Register the pagehide flush once. Idempotent so HMR re-evaluations
+/// don't stack listeners.
+let pagehideHooked = false;
+export function installSessionFlushHook(): void {
+  if (pagehideHooked || typeof window === "undefined") return;
+  pagehideHooked = true;
+  window.addEventListener("pagehide", flushSessionSaveOnExit);
 }
 
 export function teardown(): void {
