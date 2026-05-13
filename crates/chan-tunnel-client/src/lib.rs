@@ -354,9 +354,32 @@ pub async fn run(cfg: ClientConfig, router: axum::Router) -> Result<(), ClientEr
                 );
             }
         }
-        tokio::time::sleep(backoff).await;
+        // Jitter the sleep by +/- 20% so a fleet of clients that
+        // all disconnected at the same moment (server restart,
+        // upstream blip) does not synchronise reconnects into a
+        // thundering herd. The base is still doubled deterministically
+        // below; only the actual sleep duration is randomised.
+        tokio::time::sleep(jittered(backoff)).await;
         backoff = (backoff * 2).min(cfg.max_backoff);
     }
+}
+
+/// Apply +/- 20% jitter to a backoff duration. The entropy source
+/// is the low bits of the system clock in nanoseconds; this is
+/// not cryptographic but reconnect jitter does not need to be.
+/// Using a clock-derived seed avoids pulling a `rand` dependency
+/// into the client crate.
+fn jittered(base: Duration) -> Duration {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    // Map nanos into [-20%, +20%]: pick a value in [-2000, 2000]
+    // basis points, scale base by 1.0 + bps/10000.
+    let bps = (nanos % 4001) as i64 - 2000;
+    let scaled_micros = base.as_micros() as i64 * (10_000 + bps) / 10_000;
+    Duration::from_micros(scaled_micros.max(0) as u64)
 }
 
 /// Best-effort send. Drops the event if the receiver is gone or
@@ -396,3 +419,23 @@ async fn serve_one_substream(stream: yamux::Stream, router: axum::Router) {
 }
 
 use axum::response::IntoResponse;
+
+#[cfg(test)]
+mod backoff_tests {
+    use super::*;
+
+    #[test]
+    fn jittered_within_band() {
+        let base = Duration::from_millis(500);
+        for _ in 0..100 {
+            let j = jittered(base);
+            assert!(j >= Duration::from_millis(400), "{j:?} below 80% of base");
+            assert!(j <= Duration::from_millis(600), "{j:?} above 120% of base");
+        }
+    }
+
+    #[test]
+    fn jittered_handles_zero() {
+        assert_eq!(jittered(Duration::ZERO), Duration::ZERO);
+    }
+}
