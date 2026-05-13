@@ -17,6 +17,7 @@
   import OutlineBody, { type Heading } from "./OutlineBody.svelte";
   import FileInfoBody from "./FileInfoBody.svelte";
   import StyleToolbar from "./StyleToolbar.svelte";
+  import { clampMenu } from "./menuClamp";
   import {
     setMode,
     setTabCaret,
@@ -136,13 +137,14 @@
   /// to `wysiwygRef` + the reactive `selVer` signal.
   const menuOpen = $derived(tabMenu.openForTabId === tab.id);
 
-  /// Bubble positioning. We pin the bubble's top-left to the anchor's
-  /// bottom-left and let the CSS clamp it to the viewport so a tab
-  /// docked near the right edge still renders the menu on-screen.
-  const menuStyle = $derived.by(() => {
+  /// Bubble positioning. The desired anchor is the trigger's bottom-
+  /// left; the actual placement runs through `clampMenu` so a tab
+  /// docked near the right or bottom edge still renders fully on-
+  /// screen (clamp re-flips to the left / above as needed).
+  const menuPos = $derived.by(() => {
     const a = tabMenu.anchor;
-    if (!a) return "";
-    return `top: ${Math.round(a.bottom + 4)}px; left: ${Math.round(a.left)}px;`;
+    if (!a) return { x: 0, y: 0 };
+    return { x: Math.round(a.left), y: Math.round(a.bottom + 4) };
   });
 
   function onMenuKeydown(e: KeyboardEvent): void {
@@ -276,7 +278,7 @@
       role="menu"
       tabindex="-1"
       aria-label="tab menu"
-      style={menuStyle}
+      use:clampMenu={menuPos}
       onmousedown={(e) => e.stopPropagation()}
     >
       <!-- Page-width slider: ratio of the current window width.

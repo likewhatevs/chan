@@ -6,6 +6,7 @@
   // menu for create/rename/delete.
 
   import { FilePlus, FolderPlus, Pencil, Trash2 } from "lucide-svelte";
+  import { clampMenu } from "./menuClamp";
   import type { TreeEntry } from "../api/types";
   import { isEditableText } from "../state/fileTypes";
   import { dirtyPaths, openInActivePane } from "../state/tabs.svelte";
@@ -618,7 +619,7 @@
 {/snippet}
 
 {#if menu}
-  <div class="ctx" style="left: {menu.x}px; top: {menu.y}px">
+  <div class="ctx" use:clampMenu={{ x: menu.x, y: menu.y }}>
     {#if menu.isDir}
       <button onclick={() => newFile(menu!.path)}>
         <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />

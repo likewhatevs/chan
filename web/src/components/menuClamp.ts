@@ -1,0 +1,85 @@
+// Shared clamping helper for popovers / context menus.
+//
+// All right-click and hamburger menus across the app need the same
+// "show near (x, y) but keep the whole thing on-screen" behaviour.
+// Doing this inline was inconsistent: some menus only clamped using
+// an estimated height (drifting off-screen when the actual menu was
+// taller); others didn't clamp at all (the FileTree row menu used
+// raw `left: {x}px; top: {y}px`).
+//
+// This module owns the math in one place. Callers either invoke
+// `clampToViewport(rect, ...)` directly (when they already have a
+// position to massage) or use the `clampMenu` Svelte action to
+// auto-place the element on mount.
+
+export interface ClampOpts {
+  /// Cursor / desired-top-left position in viewport coords.
+  x: number;
+  y: number;
+  /// Inset from the viewport edges so the menu never butts up flush.
+  margin?: number;
+}
+
+/// Given a target rect (already rendered with width/height), return
+/// the {left, top} position that keeps it within the viewport while
+/// staying as close to (x, y) as possible. Picks above / left flips
+/// when the menu would otherwise overflow the bottom / right edges.
+export function clampToViewport(
+  width: number,
+  height: number,
+  { x, y, margin = 8 }: ClampOpts,
+): { left: number; top: number } {
+  const vw = window.innerWidth;
+  const vh = window.visualViewport?.height ?? window.innerHeight;
+  let left = x;
+  let top = y;
+  if (left + width > vw - margin) {
+    // Flip left: anchor right edge near the cursor.
+    left = Math.max(margin, x - width);
+  }
+  if (left + width > vw - margin) {
+    // Still doesn't fit (menu wider than viewport minus margins);
+    // pin to the right edge with the margin honoured.
+    left = Math.max(margin, vw - margin - width);
+  }
+  if (top + height > vh - margin) {
+    // Flip up: anchor bottom edge near the cursor.
+    top = Math.max(margin, y - height);
+  }
+  if (top + height > vh - margin) {
+    top = Math.max(margin, vh - margin - height);
+  }
+  return { left, top };
+}
+
+/// Svelte action: place the element near (x, y), clamping into the
+/// viewport using the element's ACTUAL rendered size. Re-runs when
+/// the params change so the menu re-clamps if the caller moves it.
+/// Sets `position: fixed` plus left / top inline styles; the caller
+/// only needs to add styling.
+export function clampMenu(
+  node: HTMLElement,
+  params: ClampOpts,
+): { update(p: ClampOpts): void } {
+  let current = params;
+  function place(): void {
+    // Make the element measurable without paint-flicker. The caller
+    // pre-renders it with position:fixed; we just measure + adjust.
+    const r = node.getBoundingClientRect();
+    const { left, top } = clampToViewport(r.width, r.height, current);
+    node.style.left = `${left}px`;
+    node.style.top = `${top}px`;
+  }
+  // Pre-set so the first paint lands near the target; the rAF then
+  // refines using the measured size.
+  node.style.position = "fixed";
+  node.style.left = `${current.x}px`;
+  node.style.top = `${current.y}px`;
+  requestAnimationFrame(place);
+  return {
+    update(p: ClampOpts): void {
+      current = p;
+      requestAnimationFrame(place);
+    },
+  };
+}

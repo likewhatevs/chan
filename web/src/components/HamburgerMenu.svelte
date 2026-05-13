@@ -21,6 +21,7 @@
   //     parent's `oncontextmenu` so right-click feels native.
 
   import type { Snippet } from "svelte";
+  import { clampToViewport } from "./menuClamp";
 
   /// Move the element out to <body> so its `position: fixed` resolves
   /// against the viewport even when an ancestor has a transform set
@@ -56,30 +57,39 @@
 
   let pos = $state<{ top: number; left: number }>({ top: 0, left: 0 });
   let triggerEl: HTMLButtonElement | undefined = $state();
+  let menuEl: HTMLElement | undefined = $state();
 
-  /// Clamp the bubble into the viewport. `rightEdge` is the x we
-  /// want the bubble's right edge to align to; below-vs-above is
-  /// chosen by comparing the room available on each side.
-  function placeAt(rightEdge: number, bottomEdge: number, topEdge: number): void {
-    const viewportH =
-      typeof window !== "undefined" && window.visualViewport
-        ? window.visualViewport.height
-        : window.innerHeight;
-    const viewportW = window.innerWidth;
+  /// Two-phase placement: first paint at the estimated position so
+  /// the bubble doesn't pop in at (0,0); then, once mounted, measure
+  /// its REAL bounding box and re-clamp into the viewport. The
+  /// estimated `width` / `height` props are only used for the first
+  /// frame — actual content size wins thereafter.
+  function placeNearCursor(x: number, y: number): void {
+    pos = clampToViewport(width, height, { x, y });
+    refineAfterMount(x, y);
+  }
+
+  /// Open below the trigger's bottom-right corner. The clamp helper
+  /// keeps the bubble on-screen if the trigger sits close to the
+  /// viewport edge (e.g., when its container is near the right or
+  /// bottom of the window).
+  function placeUnderTrigger(r: DOMRect): void {
     const gap = 6;
-    const margin = 8;
-    const spaceBelow = viewportH - bottomEdge;
-    const spaceAbove = topEdge;
-    const top =
-      spaceBelow >= height + gap || spaceBelow >= spaceAbove
-        ? bottomEdge + gap
-        : topEdge - height - gap;
-    let left = rightEdge - width;
-    if (left < margin) left = margin;
-    if (left + width > viewportW - margin) {
-      left = viewportW - margin - width;
-    }
-    pos = { top, left };
+    // Default: align right edge of bubble with right edge of trigger.
+    const desiredX = r.right - width;
+    const desiredY = r.bottom + gap;
+    pos = clampToViewport(width, height, { x: desiredX, y: desiredY });
+    refineAfterMount(desiredX, desiredY);
+  }
+
+  /// After the bubble renders, swap the estimated size for the real
+  /// one and re-clamp. Runs at next-frame to catch the painted box.
+  function refineAfterMount(x: number, y: number): void {
+    requestAnimationFrame(() => {
+      if (!menuEl) return;
+      const r = menuEl.getBoundingClientRect();
+      pos = clampToViewport(r.width, r.height, { x, y });
+    });
   }
 
   export function openFromTrigger(): void {
@@ -91,13 +101,12 @@
       open = true;
       return;
     }
-    const r = triggerEl.getBoundingClientRect();
-    placeAt(r.right, r.bottom, r.top);
+    placeUnderTrigger(triggerEl.getBoundingClientRect());
     open = true;
   }
 
   export function openAtCursor(x: number, y: number): void {
-    placeAt(x + width, y, y);
+    placeNearCursor(x, y);
     open = true;
   }
 
@@ -136,6 +145,7 @@
        relative to that ancestor (the "menu lands ~8cm away from
        the click" bug). -->
   <ul
+    bind:this={menuEl}
     class="hamburger-menu"
     role="menu"
     style="top: {pos.top}px; left: {pos.left}px; min-width: {width}px;"
