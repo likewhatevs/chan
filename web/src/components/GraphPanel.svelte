@@ -1301,18 +1301,28 @@
           if (sim) sim.alphaTarget(0);
         });
         // cytoscape-d3-force bumps alphaTarget to ~0.33 on every
-        // grab so it can re-distribute siblings around the
-        // dragged node. On dense graphs that re-heat shakes the
-        // whole canvas for the full alpha budget. We register a
-        // listener AFTER the plugin's (cy.on hands events out in
-        // registration order) and immediately pull alphaTarget
-        // back to 0 — the grabbed node is still pinned (fx/fy),
-        // siblings adjust only via the residual alpha that hasn't
-        // decayed yet, no full-canvas frenzy.
+        // grab so siblings can redistribute around the dragged
+        // node. Sparse graphs settle that off quickly; dense
+        // graphs (150+ nodes) ricochet for the full alpha budget
+        // because every node pushes every other. We override the
+        // plugin's bump with a density-scaled value: full re-heat
+        // when the graph is small enough that the redistribution
+        // is just a nudge, and a much smaller heat (0.05) for
+        // dense graphs where the visible effect should be a
+        // local adjustment, not a canvas-wide shake. cy.on
+        // dispatches in registration order, so this listener
+        // runs after the plugin's and wins the assignment.
         cy.nodes().on("grab", () => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const sim = (forceLayout as any)?.simulation;
-          if (sim) sim.alphaTarget(0);
+          if (!sim) return;
+          const n = cy.elements(":visible").nodes().length;
+          // Match the d3ForceOptions density ramp: < 40 nodes is
+          // "sparse" (full heat), > 120 is "dense" (minimal),
+          // linear in between.
+          const t = Math.max(0, Math.min(1, (n - 40) / 80));
+          const heat = 0.33 - (0.33 - 0.05) * t;
+          sim.alphaTarget(heat);
         });
       });
     });
