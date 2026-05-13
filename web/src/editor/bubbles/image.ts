@@ -57,6 +57,7 @@ export interface ImageBubbleOpts {
 
 const RESULT_LIMIT = 5;
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+const DEFAULT_INSERT_WIDTH_PX = 250;
 
 interface ImageBubbleHandle extends BubbleHandle {
   setTriggerEnd(end: number): void;
@@ -281,7 +282,16 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
     const pathArg = opts.currentPath
       ? relativizePath(path, opts.currentPath)
       : path;
-    const insert = opts.templateMode === "raw" ? pathArg : `![](${pathArg})`;
+    // Wrap mode is a fresh `![](path)` insert: default to 250px
+    // wide via the `#w=N` fragment so a newly-dropped image
+    // isn't full-bleed (corner handle still allows resize). Raw
+    // mode is a URL-only edit of an existing image; leave the
+    // user's width fragment alone — they may have set it
+    // intentionally on a prior pass.
+    const insert =
+      opts.templateMode === "raw"
+        ? pathArg
+        : `![](${pathArg}#w=${DEFAULT_INSERT_WIDTH_PX})`;
     opts.view.dispatch({
       changes: { from: opts.triggerStart, to: triggerEnd, insert },
       selection: { anchor: opts.triggerStart + insert.length },

@@ -15,6 +15,7 @@ import { invalidateImageCatalog } from "./image";
 import { relativizePath } from "../links";
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+const DEFAULT_INSERT_WIDTH_PX = 250;
 
 export interface ImageDropOptions {
   /// Upload destination; defaults to the editing file's directory if
@@ -97,7 +98,12 @@ function uploadAndInsertAll(
         const pathArg = currentPath
           ? relativizePath(res.path, currentPath)
           : res.path;
-        const insert = `![](${pathArg})\n`;
+        // Default new images to 250px wide. The widget reads
+        // `#w=N` from the src fragment and clamps via CSS; the
+        // user can drag the corner handle to resize. Dropped /
+        // pasted images are almost always too big at intrinsic
+        // size on a notes page, hence the small default.
+        const insert = `![](${pathArg}#w=${DEFAULT_INSERT_WIDTH_PX})\n`;
         view.dispatch({
           changes: { from: cursor, to: cursor, insert },
           selection: { anchor: cursor + insert.length },
