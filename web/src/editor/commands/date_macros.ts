@@ -107,7 +107,10 @@ export function dateAtCaret(view: EditorView): {
   if (!sel.empty) return null;
   const pos = sel.head;
   const line = view.state.doc.lineAt(pos);
-  const matches = findDateMatches(line.text);
+  const matches = findDateMatches(
+    line.text,
+    drive.info?.preferences?.date_format,
+  );
   for (const m of matches) {
     const from = line.from + m.start;
     const to = line.from + m.end;

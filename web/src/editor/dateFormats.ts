@@ -6,16 +6,23 @@
 // to a pill) and for round-trip parsing (the markdown carries the
 // formatted string verbatim; on load the regex re-pills it).
 //
-// Year-less formats (e.g. "Mon, 18 Feb") store only month + day on
-// disk; the underlying date attribute reattaches the current year
-// on parse. That's a deliberate trade-off: a "Mon, 18 Feb" written
-// last December reads as this year next time the file is opened.
-// If the user wants stable years they pick a year-bearing format.
+// Year-bearing only: every catalog entry stores enough to
+// round-trip without losing the year. A previous "Mon, 18 Feb"
+// no-year variant existed and was dropped because it surprised
+// users when files written in one year re-pilled as a different
+// one on next open.
 //
 // Adding a new format means: extend `DATE_FORMATS`, add the
 // matching `<select>` option (auto-derived), and bump nothing.
 // Detection is regex-driven and runs every catalog entry on every
 // scan, so old documents keep being auto-pilled.
+//
+// Ambiguity: pure numeric slash formats can't be told apart from
+// the text alone ("04/05/2024" is May 4th in British DMY but April
+// 5th in American MDY). `findDateMatches` accepts an optional
+// `preferredId`; when both DMY and MDY regexes match the same
+// span, the user's preference wins. Day > 12 (DMY) or month > 12
+// (MDY) is the natural tiebreaker for the rest.
 
 const MONTH_LONG = [
   "January", "February", "March", "April", "May", "June",
@@ -25,16 +32,32 @@ const MONTH_SHORT = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
-const DOW_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
+const MONTH_LONG_RE = MONTH_LONG.join("|");
 const MONTH_SHORT_RE = MONTH_SHORT.join("|");
-const DOW_SHORT_RE = DOW_SHORT.join("|");
 
 function pad2(n: number): string {
   return n.toString().padStart(2, "0");
 }
 
-export type DateFormatId = "iso" | "medium" | "short";
+/// English ordinal suffix for a day-of-month (1..31).
+function ordinal(d: number): string {
+  if (d >= 11 && d <= 13) return `${d}th`;
+  switch (d % 10) {
+    case 1: return `${d}st`;
+    case 2: return `${d}nd`;
+    case 3: return `${d}rd`;
+    default: return `${d}th`;
+  }
+}
+
+export type DateFormatId =
+  | "iso"
+  | "medium"
+  | "british-long"
+  | "british-ord"
+  | "american-long"
+  | "dmy-slash"
+  | "mdy-slash";
 
 export type DateFormatDef = {
   id: DateFormatId;
@@ -55,11 +78,12 @@ export type DateFormatDef = {
   parse: (s: string) => Date | null;
 };
 
-/// Year-less parses default to the current year. Pulled into a
-/// function so tests can stub it; production code calls without
-/// args and gets `new Date().getFullYear()`.
-function currentYear(): number {
-  return new Date().getFullYear();
+/// Validate a Date object built via `new Date(y, m, d)` against the
+/// numeric components we passed in. JS silently rolls over invalid
+/// dates (Feb 30 -> Mar 2), and we don't want pills on impossible
+/// inputs.
+function ymdValid(d: Date, y: number, m0: number, da: number): boolean {
+  return d.getFullYear() === y && d.getMonth() === m0 && d.getDate() === da;
 }
 
 const ISO: DateFormatDef = {
@@ -73,14 +97,7 @@ const ISO: DateFormatDef = {
     if (!m) return null;
     const [, y, mo, da] = m;
     const d = new Date(Number(y), Number(mo) - 1, Number(da));
-    if (
-      d.getFullYear() !== Number(y) ||
-      d.getMonth() !== Number(mo) - 1 ||
-      d.getDate() !== Number(da)
-    ) {
-      return null;
-    }
-    return d;
+    return ymdValid(d, Number(y), Number(mo) - 1, Number(da)) ? d : null;
   },
 };
 
@@ -98,42 +115,123 @@ const MEDIUM: DateFormatDef = {
     const moIdx = MONTH_SHORT.indexOf(mo);
     if (moIdx < 0) return null;
     const d = new Date(Number(y), moIdx, Number(da));
-    if (
-      d.getFullYear() !== Number(y) ||
-      d.getMonth() !== moIdx ||
-      d.getDate() !== Number(da)
-    ) {
-      return null;
-    }
-    return d;
+    return ymdValid(d, Number(y), moIdx, Number(da)) ? d : null;
   },
 };
 
-const SHORT: DateFormatDef = {
-  id: "short",
-  label: "Mon, 18 Feb (no year)",
-  hasYear: false,
-  format: (d) => `${DOW_SHORT[d.getDay()]}, ${pad2(d.getDate())} ${MONTH_SHORT[d.getMonth()]}`,
-  pattern: `(?:${DOW_SHORT_RE}), \\d{2} (?:${MONTH_SHORT_RE})`,
+/// "13 April 2024" — British long form. Day first, full month name,
+/// no comma. `\d{1,2}` to accept both "2 April 2024" and "02 April
+/// 2024" since either reads naturally in prose.
+const BRITISH_LONG: DateFormatDef = {
+  id: "british-long",
+  label: "13 April 2024 (British)",
+  hasYear: true,
+  format: (d) => `${d.getDate()} ${MONTH_LONG[d.getMonth()]} ${d.getFullYear()}`,
+  pattern: `\\d{1,2} (?:${MONTH_LONG_RE}) \\d{4}`,
   parse: (s) => {
-    const re = new RegExp(`^(${DOW_SHORT_RE}), (\\d{2}) (${MONTH_SHORT_RE})$`);
+    const re = new RegExp(`^(\\d{1,2}) (${MONTH_LONG_RE}) (\\d{4})$`);
     const m = re.exec(s);
     if (!m) return null;
-    const [, , da, mo] = m;
-    const moIdx = MONTH_SHORT.indexOf(mo);
+    const [, da, mo, y] = m;
+    const moIdx = MONTH_LONG.indexOf(mo);
     if (moIdx < 0) return null;
-    const y = currentYear();
-    const d = new Date(y, moIdx, Number(da));
-    if (d.getMonth() !== moIdx || d.getDate() !== Number(da)) return null;
-    // We deliberately don't validate that the weekday matches:
-    // matching today's calendar would force users to manually pick
-    // a future "Mon, 18 Feb" out of an inexact set, and a typed
-    // weekday is probably the user's intent regardless.
-    return d;
+    const d = new Date(Number(y), moIdx, Number(da));
+    return ymdValid(d, Number(y), moIdx, Number(da)) ? d : null;
   },
 };
 
-export const DATE_FORMATS: readonly DateFormatDef[] = [ISO, MEDIUM, SHORT];
+/// "13th April 2024" — British with ordinal day. The ordinal suffix
+/// keeps this distinct from `british-long` so the two coexist; the
+/// matcher emits whichever the user actually typed.
+const BRITISH_ORD: DateFormatDef = {
+  id: "british-ord",
+  label: "13th April 2024 (ordinal)",
+  hasYear: true,
+  format: (d) => `${ordinal(d.getDate())} ${MONTH_LONG[d.getMonth()]} ${d.getFullYear()}`,
+  pattern: `\\d{1,2}(?:st|nd|rd|th) (?:${MONTH_LONG_RE}) \\d{4}`,
+  parse: (s) => {
+    const re = new RegExp(`^(\\d{1,2})(?:st|nd|rd|th) (${MONTH_LONG_RE}) (\\d{4})$`);
+    const m = re.exec(s);
+    if (!m) return null;
+    const [, da, mo, y] = m;
+    const moIdx = MONTH_LONG.indexOf(mo);
+    if (moIdx < 0) return null;
+    const d = new Date(Number(y), moIdx, Number(da));
+    return ymdValid(d, Number(y), moIdx, Number(da)) ? d : null;
+  },
+};
+
+/// "April 13, 2024" — American long form. Month first, comma after
+/// the day. `\d{1,2}` to accept "April 5, 2024" as well as the
+/// zero-padded variant.
+const AMERICAN_LONG: DateFormatDef = {
+  id: "american-long",
+  label: "April 13, 2024 (American)",
+  hasYear: true,
+  format: (d) => `${MONTH_LONG[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`,
+  pattern: `(?:${MONTH_LONG_RE}) \\d{1,2}, \\d{4}`,
+  parse: (s) => {
+    const re = new RegExp(`^(${MONTH_LONG_RE}) (\\d{1,2}), (\\d{4})$`);
+    const m = re.exec(s);
+    if (!m) return null;
+    const [, mo, da, y] = m;
+    const moIdx = MONTH_LONG.indexOf(mo);
+    if (moIdx < 0) return null;
+    const d = new Date(Number(y), moIdx, Number(da));
+    return ymdValid(d, Number(y), moIdx, Number(da)) ? d : null;
+  },
+};
+
+/// "13/04/2024" — British numeric (day-month-year). Shares the same
+/// regex shape as MDY but parses with day first; the parser rejects
+/// impossible months (>12) so a clearly-DMY string with day > 12
+/// still pills correctly even if MDY is the user's preference.
+const DMY_SLASH: DateFormatDef = {
+  id: "dmy-slash",
+  label: "13/04/2024 (DD/MM/YYYY)",
+  hasYear: true,
+  format: (d) => `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`,
+  pattern: "\\d{2}/\\d{2}/\\d{4}",
+  parse: (s) => {
+    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
+    if (!m) return null;
+    const [, da, mo, y] = m;
+    const moIdx = Number(mo) - 1;
+    const d = new Date(Number(y), moIdx, Number(da));
+    return ymdValid(d, Number(y), moIdx, Number(da)) ? d : null;
+  },
+};
+
+/// "04/13/2024" — American numeric (month-day-year). Same regex
+/// shape as DMY; parser rejects impossible days (>31) and months
+/// (>12). For the genuinely ambiguous middle range (both day and
+/// month <= 12) the user's preferred format wins; see
+/// findDateMatches.
+const MDY_SLASH: DateFormatDef = {
+  id: "mdy-slash",
+  label: "04/13/2024 (MM/DD/YYYY)",
+  hasYear: true,
+  format: (d) => `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}/${d.getFullYear()}`,
+  pattern: "\\d{2}/\\d{2}/\\d{4}",
+  parse: (s) => {
+    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
+    if (!m) return null;
+    const [, mo, da, y] = m;
+    const moIdx = Number(mo) - 1;
+    const d = new Date(Number(y), moIdx, Number(da));
+    return ymdValid(d, Number(y), moIdx, Number(da)) ? d : null;
+  },
+};
+
+export const DATE_FORMATS: readonly DateFormatDef[] = [
+  ISO,
+  MEDIUM,
+  BRITISH_LONG,
+  BRITISH_ORD,
+  AMERICAN_LONG,
+  DMY_SLASH,
+  MDY_SLASH,
+];
 
 const BY_ID = new Map<DateFormatId, DateFormatDef>(
   DATE_FORMATS.map((f) => [f.id, f]),
@@ -182,49 +280,86 @@ export type DateMatch = {
   date: Date;
 };
 
+/// Sentinel characters for word-boundary detection. We treat any
+/// alphanumeric / dash / slash / dot adjacent to a candidate as a
+/// "still part of a longer token" signal; otherwise the match
+/// stands. Dash keeps "2026-05-05" from bleeding into hyphenated
+/// identifiers, slash keeps "/path/04/05/2024.txt" from pilling.
+const SENTINEL_BAD = "A-Za-z0-9./\\-";
+
 /// Find every date occurrence in `text` across every catalog format.
-/// Matches are returned in document order; overlapping matches resolve
-/// by taking the LONGEST match starting at the leftmost position
-/// (so "2026-05-05" doesn't lose to a partial alternative).
-///
-/// Word boundaries: we anchor the regex on either side with a
-/// non-alphanumeric / non-dash sentinel so partial typing
-/// ("2026-05-0") and dates embedded in identifiers ("v2026-05-05.1")
-/// don't false-positive. The trailing sentinel is required, which
-/// is what defers detection while the user is still typing the
-/// final character group.
-export function findDateMatches(text: string): DateMatch[] {
-  const out: DateMatch[] = [];
-  // Combine all patterns into one global regex with named groups
-  // so we know which format produced each hit.
-  const parts = DATE_FORMATS.map((f, i) => `(?<g${i}>${f.pattern})`);
-  // Sentinel: start of string OR a non-word, non-dash char before;
-  // end of string OR a non-word, non-dash char after. Dash is in
-  // the exclusion list so "2026-05-05" doesn't match the leading
-  // "0" of a longer hyphenated token.
-  const re = new RegExp(`(?:^|[^A-Za-z0-9-])(?:${parts.join("|")})(?=$|[^A-Za-z0-9-])`, "g");
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    // Find which alternative matched.
-    let formatIdx = -1;
-    for (let i = 0; i < DATE_FORMATS.length; i++) {
-      if (m.groups && m.groups[`g${i}`] !== undefined) {
-        formatIdx = i;
-        break;
-      }
+/// Matches are returned in document order. Overlap resolution uses
+/// a longest-match-wins rule plus an optional `preferredId` so the
+/// user's chosen format wins ambiguous ties (DMY vs MDY slash
+/// numerics being the canonical case).
+export function findDateMatches(
+  text: string,
+  preferredId?: string,
+): DateMatch[] {
+  // Collect every (start, end, format) candidate by scanning each
+  // pattern independently. Cheaper than the previous combined-
+  // alternation regex when patterns produce overlapping matches,
+  // and lets parse-failure of one format fall through to another
+  // instead of silently dropping the span.
+  type Candidate = {
+    start: number;
+    end: number;
+    text: string;
+    formatId: DateFormatId;
+    date: Date;
+    /// Index in DATE_FORMATS for the secondary sort key.
+    rank: number;
+  };
+  const cands: Candidate[] = [];
+  for (let i = 0; i < DATE_FORMATS.length; i++) {
+    const fmt = DATE_FORMATS[i]!;
+    const re = new RegExp(
+      `(?:^|[^${SENTINEL_BAD}])(${fmt.pattern})(?=$|[^${SENTINEL_BAD}])`,
+      "g",
+    );
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const matched = m[1]!;
+      const offset = m[0].lastIndexOf(matched);
+      const start = m.index + offset;
+      const end = start + matched.length;
+      const date = fmt.parse(matched);
+      // Advance past this match so back-to-back dates separated by
+      // a single non-word char both fire (the leading sentinel
+      // would otherwise be re-consumed and we'd miss the next one).
+      re.lastIndex = end;
+      if (!date) continue;
+      cands.push({ start, end, text: matched, formatId: fmt.id, date, rank: i });
     }
-    if (formatIdx < 0) continue;
-    const fmt = DATE_FORMATS[formatIdx];
-    const matched = m.groups![`g${formatIdx}`];
-    // The whole match m[0] may include a leading sentinel char
-    // (when the date isn't at offset 0). Compute the date's own
-    // offset as the position of the matched text within m[0].
-    const offsetWithin = m[0].lastIndexOf(matched);
-    const start = m.index + offsetWithin;
-    const end = start + matched.length;
-    const date = fmt.parse(matched);
-    if (!date) continue;
-    out.push({ start, end, text: matched, formatId: fmt.id, date });
+  }
+  // Stable sort: position ascending, then longest first, then
+  // preferred-id first, then catalog rank. Stability across equal
+  // keys keeps the result deterministic.
+  cands.sort((a, b) => {
+    if (a.start !== b.start) return a.start - b.start;
+    const lenA = a.end - a.start;
+    const lenB = b.end - b.start;
+    if (lenA !== lenB) return lenB - lenA;
+    if (preferredId) {
+      const aPref = a.formatId === preferredId ? 0 : 1;
+      const bPref = b.formatId === preferredId ? 0 : 1;
+      if (aPref !== bPref) return aPref - bPref;
+    }
+    return a.rank - b.rank;
+  });
+  // Greedy take in document order, skipping overlaps.
+  const out: DateMatch[] = [];
+  let pos = 0;
+  for (const c of cands) {
+    if (c.start < pos) continue;
+    out.push({
+      start: c.start,
+      end: c.end,
+      text: c.text,
+      formatId: c.formatId,
+      date: c.date,
+    });
+    pos = c.end;
   }
   return out;
 }

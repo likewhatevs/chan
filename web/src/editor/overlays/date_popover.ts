@@ -201,6 +201,27 @@ export function openDatePopover(opts: DatePopoverOpts): { dismiss: () => void } 
       commit();
     });
     formatRow.appendChild(select);
+
+    // US ↔ rest-of-world flip for the numeric slash format. Only
+    // active when the current format is one of the two slash
+    // variants; otherwise the button is disabled so the layout
+    // doesn't reflow as the user clicks through the dropdown.
+    const flip = document.createElement("button");
+    flip.type = "button";
+    flip.className = "md-date-region-flip";
+    flip.title = "Swap day/month order (DD/MM ↔ MM/DD)";
+    const isSlash = formatId === "dmy-slash" || formatId === "mdy-slash";
+    flip.textContent = formatId === "mdy-slash" ? "MM/DD" : "DD/MM";
+    flip.disabled = !isSlash;
+    flip.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!isSlash) return;
+      formatId = formatId === "dmy-slash" ? "mdy-slash" : "dmy-slash";
+      commit();
+    });
+    formatRow.appendChild(flip);
+
     wrap.appendChild(formatRow);
     positionUnderAnchor();
   }

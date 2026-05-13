@@ -1166,6 +1166,28 @@
     font-family: inherit;
     font-size: 12px;
   }
+  /* Quick flip between DD/MM and MM/DD when a slash numeric format
+     is selected. Disabled (greyed) for any other format so the
+     button still occupies its slot and the row doesn't reflow. */
+  :global(.md-date-region-flip) {
+    background: var(--bg-card, #fff);
+    border: 1px solid var(--border, #ddd);
+    border-radius: 4px;
+    padding: 4px 8px;
+    color: var(--text);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    min-width: 56px;
+    text-align: center;
+  }
+  :global(.md-date-region-flip:disabled) {
+    cursor: default;
+    opacity: 0.45;
+  }
+  :global(.md-date-region-flip:hover:not(:disabled)) {
+    background: var(--hover-bg, #f0f0f0);
+  }
 
   /* ---- heading line classes ---- */
   :global(.md-wysiwyg-cm6 .cm-md-h1),
