@@ -386,7 +386,150 @@ Future settings additions are deferred until they have concrete
 demand: tunnel publishing (`--tunnel-token`, `--public`) probably
 belongs in a per-drive "Share" panel rather than a global setting.
 
-## 10. Open questions
+## 10. Tunneled drives
+
+chan-desktop embeds `chan-tunnel-server` from chan-core so a remote
+`chan serve` can register a drive over an SSH tunnel and show up in
+Drive Manager alongside locally-supervised drives. The remote drive
+opens in a regular drive webview window pointed at a loopback URL on
+the laptop; the request body rides yamux substreams back through the
+SSH tunnel to the remote `chan serve`.
+
+### 10.1 Topology
+
+```
+laptop (chan-desktop)               remote host
+─────────────────────               ───────────
+tunnel listener   127.0.0.1:7777  <── ssh -R 7777:localhost:7777
+   │
+   ├─ Arc<Registry>: (label, drive) → TunnelHandle
+   │
+   └─ per-tenant axum listener  127.0.0.1:<port>
+        GET /<drive>/...  →  PrependPathLayer  →  public_router
+                              (sees /<label>/<drive>/...)
+```
+
+The user opens an SSH session like:
+
+```
+ssh -R 7777:localhost:7777 remote-host
+# on remote
+chan serve PATH \
+  --tunnel-url=http://127.0.0.1:7777 \
+  --tunnel-token=<label> \
+  --tunnel-drive=<drive>
+```
+
+`<label>` is opaque to the protocol; chan-desktop returns it
+verbatim as the validated username and renders it in Drive Manager.
+A natural convention is `<hostname>-<osuser>` (e.g. `alex-laptop`),
+which keeps multiple machines distinguishable. Charset is
+`chan_tunnel_proto::is_valid_username`: ASCII alphanumeric plus
+`-` and `_`, ≤64, first char alphanumeric.
+
+### 10.2 Security boundary
+
+Both the tunnel listener and every per-tenant listener bind
+`127.0.0.1` only. There is no config knob to change the bind host.
+
+- The tunnel listener speaks h2c (cleartext). The SSH `-R` forward
+  is what makes that safe; sshd's default `GatewayPorts no` keeps
+  the remote's `:7777` reachable only by processes on the remote
+  host itself. Operators who flip `GatewayPorts yes` expose
+  `:7777` to the remote's network and should know what they're
+  doing.
+- The bearer token is the tenant label; there is no shared secret
+  and no mapping table. Any local process on the laptop that can
+  open `127.0.0.1:7777` can register a drive under any label.
+  This matches the OS process-trust boundary of a single-user
+  desktop app: every local process can already read your files.
+  Raising the bar (a config-file secret) is deferred to when this
+  surface gets shared between users.
+- Per-tenant listeners use separate origins (`127.0.0.1:<portA>`
+  vs `127.0.0.1:<portB>`), so the browser's same-origin policy
+  delivers cross-tenant isolation analogous to wildcard subdomain
+  isolation in production. JS served from one tenant cannot fetch
+  from another.
+- The audited `chan_tunnel_server::public_router` is used
+  unchanged. A thin path-rewrite layer prepends `/<label>` to every
+  incoming request before routing, so the upstream's
+  `/:user/:drive/*rest` match still picks the registered handle.
+  The prepended segment is captured at listener bring-up from the
+  desktop's tenant string; it is never derived from any request
+  byte.
+
+### 10.3 Lifecycle
+
+- Explicit start. Boot does not bind anything; the user clicks
+  "Listen…" in the Drive Manager header to open a panel that
+  accepts an optional port (`0` / blank = OS-assigned). Clicking
+  Start invokes `tunnel_start`, which binds `127.0.0.1:<port>`
+  and spawns both the tunnel accept loop and the supervisor.
+  The actual bound port plus a `ssh -R` snippet and a sample
+  `chan serve` command appear in the same panel.
+- Persistence is limited to the user's preferred port (saved in
+  the sidecar config so the input is pre-filled on next launch).
+  The listening state itself is NOT persisted: every desktop
+  start comes up off.
+- A supervisor task polls the registry every 500 ms and reconciles
+  the per-tenant listener set: spin up a fresh `127.0.0.1:0` axum
+  listener when a new label first appears, tear it down when its
+  last drive deregisters. Polling is fine for the tiny set
+  involved; promote to a notify channel if this ever shows up in
+  a profile. On every newly-observed `(label, drive)` the
+  supervisor emits `tunneled-drive-ready { label, drive, url }`,
+  which the frontend uses to auto-launch the editor for the
+  freshly-registered drive in the system browser.
+- Eviction is upstream's last-writer-wins: two `chan serve`
+  instances registering `(label, drive)` collapse to the most
+  recent. The previous yamux connection is closed; the client
+  reconnects with backoff per `chan-tunnel-client`. UI shows the
+  current `peer_addr` and `connected_at` so collisions are
+  visible.
+- Stop tears down the tunnel listener, the supervisor, and every
+  per-tenant listener via a cascading cancel token. The registry
+  empties as yamux connections close. On app exit the same
+  shutdown runs unconditionally so children don't outlive the
+  desktop process.
+
+### 10.4 UI
+
+Header strip: a "Listen…" button toggles an inline tunnel panel
+above the drives table. While idle the panel offers a port input
+and Start button; while listening it shows the bound port, a
+copy-on-click `ssh -R` snippet, a copy-on-click `chan serve`
+snippet, and a Stop button.
+
+A tunneled drive row in Drive Manager has:
+
+- A `tunnel` tag in the On column (no toggle; the remote owns
+  the lifecycle).
+- Label in the Path column (no real path).
+- Drive name from the Hello frame.
+- URL = `http://127.0.0.1:<port>/<drive>/`, Launch button opens
+  it in the default browser.
+- No Close button; closing a tunneled drive means shutting down
+  `chan serve` on the remote.
+
+Newly-registered drives auto-open in the system browser via the
+`tunneled-drive-ready` event so the user doesn't have to click
+Launch for the first registration.
+
+### 10.5 Deferred
+
+- Per-tenant listener port persistence across Stop/Start cycles
+  within one session, and across desktop restarts. Open browser
+  tabs on a tunneled drive lose their target on Stop.
+- Pre-shared secret in the token to raise the bar above
+  "any local process can register". Add when shared / multi-user.
+- Notify-channel from registry (replaces 500 ms polling).
+- Surfacing Hello.public on the UI explicitly (currently in the
+  row tooltip only).
+- In-app Tauri WebviewWindow for tunneled drives (currently the
+  auto-launch and Launch button open the system browser, while
+  locally-supervised drives get an in-app webview).
+
+## 11. Open questions
 
 - (resolved) `chan serve` token: desktop-spawned serves pass
   `--no-token`. See section 3.3.

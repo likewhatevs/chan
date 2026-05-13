@@ -14,6 +14,7 @@
       <b>chan</b><span class="accent">desktop</span>
     </div>
     <div class="actions">
+      <button class="btn" id="tunnel-btn" title="Receive a drive from another machine over an SSH tunnel">Listen…</button>
       <button class="btn" id="auth-btn" title="Sign in to chan.app">Sign in</button>
       <button class="btn icon" id="theme-toggle" title="Toggle light/dark mode" aria-label="Toggle theme">
         <!-- Sun: shown in dark mode (click switches to light) -->
@@ -30,6 +31,7 @@
     </div>
   </header>
 
+  <div id="tunnel-panel-slot"></div>
   <main id="main"></main>
 
   <script src="main.js"></script>

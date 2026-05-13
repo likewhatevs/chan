@@ -200,20 +200,14 @@ fn do_handle_callback(app: &AppHandle, raw: &str) -> Result<(), String> {
     let url = Url::parse(raw).map_err(|e| format!("malformed callback URL: {e}"))?;
     // Only accept our exact path. Anything else is a confused redirect
     // or a maliciously crafted chan:// URL.
-    if url.scheme() != "chan"
-        || url.host_str() != Some("auth")
-        || url.path() != "/callback"
-    {
+    if url.scheme() != "chan" || url.host_str() != Some("auth") || url.path() != "/callback" {
         return Err(format!("unexpected callback URL: {raw}"));
     }
     let fragment = url.fragment().unwrap_or("");
     let mut params = std::collections::HashMap::<String, String>::new();
     for pair in fragment.split('&').filter(|s| !s.is_empty()) {
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-        params.insert(
-            urldecode(k).to_string(),
-            urldecode(v).to_string(),
-        );
+        params.insert(urldecode(k).to_string(), urldecode(v).to_string());
     }
 
     // Pop the in-flight state regardless of outcome — a failed leg

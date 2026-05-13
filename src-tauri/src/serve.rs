@@ -203,34 +203,31 @@ fn open_drive_window(app: &AppHandle, key: &str, label: &str, url: &str) {
         if let Some(old) = app_owned.get_webview_window(&label_owned) {
             let _ = old.destroy();
         }
-        let win = match WebviewWindowBuilder::new(
-            &app_owned,
-            &label_owned,
-            WebviewUrl::External(parsed),
-        )
-        .title(title)
-        .inner_size(1200.0, 800.0)
-        .min_inner_size(640.0, 400.0)
-        .resizable(true)
-        .initialization_script(KEY_BRIDGE_JS)
-        // Tauri polyfill: Cmd/Ctrl + [+ = -] and mousewheel zoom,
-        // 20% per step, 20%-1000%. Requires the
-        // `core:webview:allow-set-webview-zoom` permission on
-        // drive-* windows in capabilities/default.json.
-        .zoom_hotkeys_enabled(true)
-        // Hand HTML5 drag-and-drop to the page. Tauri's OS-level
-        // drag handler swallows dragover events otherwise, so
-        // chan's pane-to-pane tab moves never see the highlight /
-        // drop the receiving pane expects.
-        .disable_drag_drop_handler()
-        .build()
-        {
-            Ok(w) => w,
-            Err(e) => {
-                eprintln!("chan-desktop: opening drive window for {key_owned}: {e}");
-                return;
-            }
-        };
+        let win =
+            match WebviewWindowBuilder::new(&app_owned, &label_owned, WebviewUrl::External(parsed))
+                .title(title)
+                .inner_size(1200.0, 800.0)
+                .min_inner_size(640.0, 400.0)
+                .resizable(true)
+                .initialization_script(KEY_BRIDGE_JS)
+                // Tauri polyfill: Cmd/Ctrl + [+ = -] and mousewheel zoom,
+                // 20% per step, 20%-1000%. Requires the
+                // `core:webview:allow-set-webview-zoom` permission on
+                // drive-* windows in capabilities/default.json.
+                .zoom_hotkeys_enabled(true)
+                // Hand HTML5 drag-and-drop to the page. Tauri's OS-level
+                // drag handler swallows dragover events otherwise, so
+                // chan's pane-to-pane tab moves never see the highlight /
+                // drop the receiving pane expects.
+                .disable_drag_drop_handler()
+                .build()
+            {
+                Ok(w) => w,
+                Err(e) => {
+                    eprintln!("chan-desktop: opening drive window for {key_owned}: {e}");
+                    return;
+                }
+            };
         let app_for_event = app_owned.clone();
         let key_for_event = key_owned.clone();
         win.on_window_event(move |event| {

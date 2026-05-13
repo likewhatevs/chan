@@ -4,6 +4,7 @@ mod auth;
 mod config;
 mod registry;
 mod serve;
+mod tunnel;
 mod watcher;
 
 use std::collections::HashMap;
@@ -17,6 +18,7 @@ use tauri::{Manager, RunEvent, State, WindowEvent};
 
 use config::{Config, ConfigStore};
 use serve::ServeHandle;
+use tunnel::TunnelState;
 
 /// Process-wide state. Shared via `Arc` because the serve supervisor
 /// hands clones to per-drive reader threads.
@@ -25,6 +27,11 @@ pub struct AppState {
     /// Live `chan serve` children keyed by canonical drive path.
     /// Holds the captured URL once chan prints it.
     serves: Mutex<HashMap<String, ServeHandle>>,
+    /// Embedded chan-tunnel-server. Owns the tunnel listener on
+    /// 127.0.0.1:7777, the shared registry, and the per-tenant
+    /// loopback listeners that proxy into registered remote
+    /// `chan serve` instances.
+    tunnel: Arc<TunnelState>,
 }
 
 impl AppState {
@@ -66,14 +73,36 @@ impl AppState {
     }
 }
 
-/// Merged drive view returned to the frontend. Combines a chan
-/// registry entry with desktop sidecar state and the live serve URL.
+/// Merged drive view returned to the frontend. Two flavours share
+/// the wire shape so the existing renderer can iterate one list:
+///
+/// * `kind = "local"`: a chan-registry entry, backed by a
+///   `chan serve` child the desktop spawned. Includes the canonical
+///   filesystem path, registry-derived name, and live URL.
+/// * `kind = "tunneled"`: a remote `chan serve` that dialed into
+///   the embedded tunnel server. No path; `name` is `"{label} ·
+///   {drive}"`; `url` points at the per-tenant loopback listener.
+///
+/// Fields specific to tunneled rows are optional so the JSON shape
+/// is a strict superset of the local row; the renderer reads `kind`
+/// once and chooses which optionals to surface.
 #[derive(Debug, Clone, Serialize)]
 struct Drive {
+    kind: &'static str,
     path: String,
     name: String,
     on: bool,
     url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    drive: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    public: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peer_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connected_at: Option<String>,
 }
 
 #[tauri::command]
@@ -86,7 +115,7 @@ fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
     // (matching reality: nothing is actually running yet) and
     // there is no chance of a stale on=true sticking around after
     // chan died unexpectedly.
-    let merged = entries
+    let mut merged: Vec<Drive> = entries
         .into_iter()
         .map(|e| {
             let key = canonical_key(&e.path);
@@ -99,13 +128,40 @@ fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
             let on = handle.is_some();
             let url = handle.and_then(|h| h.url.clone()).unwrap_or_default();
             Drive {
+                kind: "local",
                 path: display_path,
                 name,
                 on,
                 url,
+                label: None,
+                drive: None,
+                public: None,
+                peer_addr: None,
+                connected_at: None,
             }
         })
         .collect();
+
+    // Tunneled rows: one per registered (label, drive) in the
+    // embedded chan-tunnel-server. URL is populated by the
+    // supervisor as soon as the per-tenant listener binds; an
+    // empty URL means "just registered, the listener will follow
+    // on the next 500ms tick".
+    for t in state.tunnel.snapshot() {
+        merged.push(Drive {
+            kind: "tunneled",
+            path: String::new(),
+            name: format!("{} \u{00b7} {}", t.label, t.drive),
+            on: true,
+            url: t.url,
+            label: Some(t.label),
+            drive: Some(t.drive),
+            public: Some(t.public),
+            peer_addr: t.peer_addr,
+            connected_at: Some(t.connected_at),
+        });
+    }
+
     Ok(merged)
 }
 
@@ -179,6 +235,154 @@ fn set_drive_on(
 #[tauri::command]
 fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
     state.store.lock().unwrap().get().map_err(err)
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TunnelStatus {
+    /// True while the tunnel listener is bound.
+    listening: bool,
+    /// Actual bound port (only populated while `listening`).
+    port: Option<u16>,
+    /// User's preferred port from the sidecar config. `0` means
+    /// "let the OS assign one". UI uses this to populate the port
+    /// input field.
+    preferred_port: u16,
+    /// Either the user's saved label or a freshly-suggested one if
+    /// they've never typed anything. Suggestions avoid colliding
+    /// with labels currently registered in the running tunnel:
+    /// "tunnel" → "tunnel-1" → ... up to 999.
+    preferred_label: String,
+    /// User's saved drive name or a default ("notes"). No
+    /// collision check — drive uniqueness is scoped per label, and
+    /// the desktop doesn't track which labels are remotely
+    /// preferred.
+    preferred_drive: String,
+    /// Pre-formatted `ssh -R` reverse-forward snippet. `None` when
+    /// the tunnel isn't listening (no port to reference yet).
+    ssh_snippet: Option<String>,
+    /// Pre-formatted `chan serve` command with the bound port,
+    /// canonical TUNNEL_PATH, and the user's chosen label/drive
+    /// already substituted. Copy-paste ready.
+    chan_serve_snippet: Option<String>,
+}
+
+/// Build the `ssh -R` and `chan serve` snippets that the listen
+/// panel renders verbatim. Pre-formatting them here means JS does
+/// zero templating — and the canonical URL path (with
+/// `TUNNEL_PATH`) lives in exactly one place in the codebase.
+fn build_snippets(port: u16, label: &str, drive: &str) -> (String, String) {
+    let ssh = format!("ssh -R {port}:localhost:{port} user@remote");
+    let chan = format!(
+        "chan serve PATH --tunnel-url=http://127.0.0.1:{port}{path} \
+         --tunnel-token={label} --tunnel-drive={drive}",
+        path = chan_tunnel_proto::TUNNEL_PATH,
+    );
+    (ssh, chan)
+}
+
+/// Pick a label suggestion: if the user has one saved, use it
+/// verbatim. Otherwise try "tunnel"; if a remote is already
+/// registered under that label, walk "tunnel-1", "tunnel-2", ...
+/// until we find a free one. Falls back to `tunnel` at the end of
+/// the range (uniqueness is best-effort; the registry's
+/// last-writer-wins eviction is the real arbiter).
+fn suggest_label(saved: &str, state: &AppState) -> String {
+    if !saved.is_empty() {
+        return saved.to_string();
+    }
+    let in_use: std::collections::HashSet<String> = state
+        .tunnel
+        .snapshot()
+        .into_iter()
+        .map(|d| d.label)
+        .collect();
+    let base = "tunnel";
+    if !in_use.contains(base) {
+        return base.to_string();
+    }
+    for i in 1..1000 {
+        let candidate = format!("{base}-{i}");
+        if !in_use.contains(&candidate) {
+            return candidate;
+        }
+    }
+    base.to_string()
+}
+
+fn suggest_drive(saved: &str) -> String {
+    if saved.is_empty() {
+        "notes".to_string()
+    } else {
+        saved.to_string()
+    }
+}
+
+#[tauri::command]
+fn tunnel_status(state: State<Arc<AppState>>) -> Result<TunnelStatus, String> {
+    let cfg = state.store.lock().unwrap().get().map_err(err)?.tunnel;
+    let preferred_label = suggest_label(&cfg.preferred_label, &state);
+    let preferred_drive = suggest_drive(&cfg.preferred_drive);
+    let port = state.tunnel.tunnel_port();
+    let listening = state.tunnel.is_listening();
+    let (ssh_snippet, chan_serve_snippet) = match (listening, port) {
+        (true, Some(p)) => {
+            let (s, c) = build_snippets(p, &preferred_label, &preferred_drive);
+            (Some(s), Some(c))
+        }
+        _ => (None, None),
+    };
+    Ok(TunnelStatus {
+        listening,
+        port,
+        preferred_port: cfg.preferred_port,
+        preferred_label,
+        preferred_drive,
+        ssh_snippet,
+        chan_serve_snippet,
+    })
+}
+
+/// Start the tunnel listener with the user's chosen port, label,
+/// and drive. Validates `label` / `drive` against the protocol's
+/// charset rules so the rendered snippet matches what the wire
+/// will actually accept. Persists all three for the next session.
+#[tauri::command]
+async fn tunnel_start(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    preferred_port: u16,
+    label: String,
+    drive: String,
+) -> Result<u16, String> {
+    let label = label.trim().to_string();
+    let drive = drive.trim().to_string();
+    if !chan_tunnel_proto::is_valid_username(&label) {
+        return Err(format!(
+            "invalid label {label:?}: ASCII alphanumerics plus '-' / '_', \
+             first char alphanumeric, ≤64 chars",
+        ));
+    }
+    if !chan_tunnel_proto::is_valid_drive_name(&drive) {
+        return Err(format!(
+            "invalid drive name {drive:?}: lowercase ASCII alphanumerics plus '-', \
+             first and last char alphanumeric, ≤32 chars",
+        ));
+    }
+    {
+        let mut store = state.store.lock().unwrap();
+        let mut cfg = store.get().map_err(err)?;
+        cfg.tunnel.preferred_port = preferred_port;
+        cfg.tunnel.preferred_label = label;
+        cfg.tunnel.preferred_drive = drive;
+        store.save(&cfg).map_err(err)?;
+    }
+    let tunnel = Arc::clone(&state.tunnel);
+    tunnel::start_listening(app, tunnel, preferred_port).await
+}
+
+#[tauri::command]
+fn tunnel_stop(app: tauri::AppHandle, state: State<Arc<AppState>>) {
+    tunnel::stop_listening(&app, &state.tunnel);
 }
 
 /// User's home directory as a plain string, for the Drive Manager
@@ -273,8 +477,10 @@ fn main() {
     let state = Arc::new(AppState {
         store: Mutex::new(store),
         serves: Mutex::new(HashMap::new()),
+        tunnel: TunnelState::new(),
     });
     let state_for_exit = Arc::clone(&state);
+    let state_for_setup = Arc::clone(&state);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
@@ -283,7 +489,7 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
-        .setup(|app| {
+        .setup(move |app| {
             install_app_menu(app.handle())?;
 
             // Deep-link callbacks from the system browser
@@ -332,6 +538,13 @@ fn main() {
                 }
                 Err(e) => eprintln!("chan-desktop: registry watcher disabled: {e}"),
             }
+
+            // Tunnel listener is OFF until the user explicitly
+            // clicks "Listen" in Drive Manager. We just construct
+            // the empty TunnelState during boot; binding 127.0.0.1
+            // happens on the IPC `tunnel_start` call.
+            let _ = state_for_setup.tunnel.clone();
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -342,6 +555,9 @@ fn main() {
             get_config,
             home_dir,
             reveal_in_finder,
+            tunnel_status,
+            tunnel_start,
+            tunnel_stop,
             auth::auth_status,
             auth::open_signin,
             auth::signout,
@@ -356,6 +572,11 @@ fn main() {
                 // they don't outlive the desktop. The OS reclaims
                 // the ports within seconds.
                 serve::stop_all(&state_for_exit);
+                // Cancel the tunnel listener (if active) and every
+                // per-tenant listener. Tasks exit when their cancel
+                // token fires; the process is on its way out, so we
+                // don't await them.
+                tunnel::shutdown(&state_for_exit.tunnel);
             }
             // macOS: Dock click or `open -a` while the process is
             // still alive. If no windows are visible (main has been
@@ -363,12 +584,10 @@ fn main() {
             // open), bring the main window back.
             #[cfg(target_os = "macos")]
             RunEvent::Reopen {
-                has_visible_windows,
+                has_visible_windows: false,
                 ..
             } => {
-                if !has_visible_windows {
-                    let _ = show_window(app, "main");
-                }
+                let _ = show_window(app, "main");
             }
             _ => {}
         }
@@ -395,13 +614,15 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     // jump-to-tab in drive windows (handled by the per-drive key
     // bridge script in serve.rs). The menu entry still surfaces the
     // window by name.
-    let drive_manager = MenuItemBuilder::with_id("win-main", "Drive Manager")
-        .build(app)?;
+    let drive_manager = MenuItemBuilder::with_id("win-main", "Drive Manager").build(app)?;
     let settings = MenuItemBuilder::with_id("chan-settings", "Settings…")
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
 
-    if let Some(window_submenu) = menu.get(WINDOW_SUBMENU_ID).and_then(|k| k.as_submenu().cloned()) {
+    if let Some(window_submenu) = menu
+        .get(WINDOW_SUBMENU_ID)
+        .and_then(|k| k.as_submenu().cloned())
+    {
         let sep = PredefinedMenuItem::separator(app)?;
         window_submenu.prepend_items(&[&drive_manager, &settings, &sep])?;
         // Strip the default "Close Window" item so Cmd+W reaches the

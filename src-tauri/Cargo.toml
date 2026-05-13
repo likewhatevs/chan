@@ -35,6 +35,25 @@ notify-debouncer-mini = "0.4"
 keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
 getrandom = "0.2"
 
+# Tunnel: embed chan-tunnel-server so a remote `chan serve --tunnel-url`
+# (delivered over SSH `-R 7777:localhost:7777`) registers as a drive
+# in Drive Manager. Path deps point at the sibling chan-core checkout.
+chan-tunnel-server = { path = "../../chan-core/crates/chan-tunnel-server" }
+chan-tunnel-proto = { path = "../../chan-core/crates/chan-tunnel-proto" }
+async-trait = "0.1"
+axum = "0.7"
+tower = "0.5"
+http = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+tokio-util = "0.7"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+
+[dev-dependencies]
+chan-tunnel-client = { path = "../../chan-core/crates/chan-tunnel-client" }
+url = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

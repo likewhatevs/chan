@@ -202,6 +202,69 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
 .url-cell { display: flex; gap: 6px; align-items: center; }
 .url-cell .url-input { flex: 1; }
 
+/* Tunnel panel — inline above the drives table while the user is
+   configuring or actively running the loopback tunnel listener. */
+.tunnel-panel {
+  margin: 14px 14px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tunnel-panel header {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.tunnel-panel p.muted { margin: 0; color: var(--muted); }
+.tunnel-panel .tunnel-row {
+  display: flex; align-items: center; gap: 10px;
+}
+.tunnel-panel .tunnel-row label {
+  display: inline-flex; align-items: center; gap: 6px; color: var(--muted);
+}
+.tunnel-panel .tunnel-row input[type="number"] {
+  width: 100px;
+  padding: 4px 6px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+}
+.tunnel-panel .seg-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 12px;
+}
+.tunnel-panel .seg-toggle .seg {
+  appearance: none;
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  padding: 4px 10px;
+  cursor: pointer;
+  font: inherit;
+}
+.tunnel-panel .seg-toggle .seg + .seg { border-left: 1px solid var(--border); }
+.tunnel-panel .seg-toggle .seg.on { background: var(--accent); color: var(--bg); }
+.tunnel-panel .snippet {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  cursor: copy;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 .error-banner {
   background: rgba(248, 81, 73, 0.12);
   color: var(--danger);

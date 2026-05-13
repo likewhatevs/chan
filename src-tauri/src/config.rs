@@ -31,10 +31,41 @@ pub struct DriveSidecar {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TunnelConfig {
+    /// Port the tunnel listener should try to bind on the next
+    /// "Listen On" toggle. `0` means "let the OS pick". Persisted
+    /// across desktop restarts so a user who has a specific port in
+    /// mind (matched by an `ssh -R` config) does not have to retype
+    /// it on every launch.
+    ///
+    /// The "listening" state itself is NOT persisted: every desktop
+    /// start comes up with the tunnel off, matching the explicit
+    /// click-to-listen UX.
+    #[serde(default)]
+    pub preferred_port: u16,
+    /// Last bearer/label the user typed into the listen panel.
+    /// Empty means "no preference; suggest a default". Persisted so
+    /// a user who picked a memorable label keeps it across restarts.
+    /// Sanitised before save: enforced to pass
+    /// `chan_tunnel_proto::is_valid_username` on the way in.
+    #[serde(default)]
+    pub preferred_label: String,
+    /// Last drive name the user typed. Empty means "no preference".
+    /// Persisted with the same sanitisation contract as
+    /// `preferred_label` (`is_valid_drive_name`).
+    #[serde(default)]
+    pub preferred_drive: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     /// Per-drive UI state, keyed by canonical drive path.
     #[serde(default)]
     pub sidecar: HashMap<String, DriveSidecar>,
+    /// Tunnel listener preferences. Defaults to `preferred_port = 0`
+    /// (OS-assigned) until the user types a specific number.
+    #[serde(default)]
+    pub tunnel: TunnelConfig,
 }
 
 pub struct ConfigStore {

@@ -9,6 +9,7 @@ const main = document.getElementById('main');
 const openBtn = document.getElementById('open-drive');
 const themeToggle = document.getElementById('theme-toggle');
 const authBtn = document.getElementById('auth-btn');
+const tunnelBtn = document.getElementById('tunnel-btn');
 
 /// Theme handling. Stored values:
 ///   - null  : follow OS via prefers-color-scheme (no data-theme attr)
@@ -155,6 +156,31 @@ function render(drives) {
 
   const rows = drives.map((d) => {
     const hasUrl = !!d.url;
+    if (d.kind === 'tunneled') {
+      // Tunneled row: no On toggle (the remote owns the lifecycle),
+      // no Path (it's a remote folder), no Close (the remote drops
+      // the registration by shutting `chan serve` down). The label
+      // is the bearer token the remote chose; we show it verbatim
+      // and trust the user's naming convention.
+      const tip = [
+        d.peer_addr ? `peer ${d.peer_addr}` : null,
+        d.public ? 'public' : null,
+        d.connected_at ? `connected ${d.connected_at}` : null,
+      ].filter(Boolean).join(' · ');
+      return `
+      <tr data-kind="tunneled">
+        <td><span class="tag tag-tunnel" title="${escapeAttr(tip)}">tunnel</span></td>
+        <td class="path-cell muted">${escapeHtml(d.label || '')}</td>
+        <td class="name-cell">${escapeHtml(d.drive || d.name)}</td>
+        <td>
+          <div class="url-cell">
+            <input class="url-input" value="${escapeAttr(d.url)}" placeholder="—" readonly />
+            <button class="btn" data-act="launch" ${hasUrl ? '' : 'disabled'}>Launch</button>
+          </div>
+        </td>
+        <td></td>
+      </tr>`;
+    }
     return `
     <tr data-path="${escapeAttr(d.path)}">
       <td>
@@ -197,6 +223,20 @@ function render(drives) {
 }
 
 function bindRowEvents() {
+  // Tunneled rows: only the Launch button is interactive. No
+  // toggle / reveal / remove handlers because there is no
+  // desktop-side lifecycle to control — the remote `chan serve`
+  // owns it.
+  main.querySelectorAll('tr[data-kind="tunneled"]').forEach((tr) => {
+    const launch = tr.querySelector('[data-act="launch"]');
+    if (launch) {
+      launch.addEventListener('click', async () => {
+        const url = tr.querySelector('.url-input').value.trim();
+        if (url) await openUrl(url);
+      });
+    }
+  });
+
   main.querySelectorAll('tr[data-path]').forEach((tr) => {
     const path = tr.dataset.path;
 
@@ -287,6 +327,180 @@ async function maybeOfferUpdate() {
 // TOML directly), or when a serve starts / discovers its URL / exits.
 listen('registry-changed', () => { refresh().catch(showError); });
 listen('serves-changed', () => { refresh().catch(showError); });
+
+/// Tunnel panel. Hidden until the user clicks "Listen…", then
+/// rendered inline above the drives table. Two states:
+///
+///   1. Setup: port input (placeholder "auto") + Start button.
+///   2. Listening: bound port + `chan serve` snippet + Stop button.
+///
+/// A remote drive that registers while the panel is in state 2 is
+/// auto-launched via `openUrl`; the panel stays visible so the user
+/// can connect more remotes from the same listening session.
+let tunnelPanelOpen = false;
+
+async function toggleTunnelPanel() {
+  tunnelPanelOpen = !tunnelPanelOpen;
+  await renderTunnelPanel();
+}
+
+async function renderTunnelPanel() {
+  const slot = document.getElementById('tunnel-panel-slot');
+  if (!slot) return;
+  if (!tunnelPanelOpen) {
+    slot.innerHTML = '';
+    tunnelBtn.textContent = 'Listen…';
+    return;
+  }
+  let status;
+  try {
+    status = await invoke('tunnel_status');
+  } catch (e) {
+    showError(e);
+    slot.innerHTML = '';
+    tunnelPanelOpen = false;
+    return;
+  }
+  tunnelBtn.textContent = status.listening ? 'Hide' : 'Listen…';
+  slot.innerHTML = renderTunnelPanelHtml(status);
+  bindTunnelPanelEvents(status);
+}
+
+/// Whether to render the SSH `-R` snippet alongside the `chan serve`
+/// snippet. `local` means "the remote chan serve runs on the same
+/// machine as this desktop, no SSH needed". `tunnel` means "chan
+/// serve lives on a remote host and an SSH reverse-forward bridges
+/// to this desktop's loopback port". Persisted in localStorage; the
+/// backend doesn't care since both snippets are pre-formatted.
+const TUNNEL_MODE_KEY = 'chanDesktopTunnelMode';
+function tunnelMode() {
+  const v = localStorage.getItem(TUNNEL_MODE_KEY);
+  return v === 'local' ? 'local' : 'tunnel';
+}
+function setTunnelMode(mode) {
+  localStorage.setItem(TUNNEL_MODE_KEY, mode === 'local' ? 'local' : 'tunnel');
+}
+
+function renderTunnelPanelHtml(status) {
+  if (status.listening && status.port != null) {
+    const ssh = status.ssh_snippet || '';
+    const cmd = status.chan_serve_snippet || '';
+    const mode = tunnelMode();
+    const isTunnel = mode === 'tunnel';
+    const sshBlock = isTunnel
+      ? `<p class="muted">SSH from this machine to the remote with a reverse forward:</p>
+         <pre class="snippet" data-copy="${escapeAttr(ssh)}" title="click to copy">${escapeHtml(ssh)}</pre>
+         <p class="muted">Then on the remote run:</p>`
+      : `<p class="muted">On this machine, run:</p>`;
+    return `
+      <section class="tunnel-panel">
+        <header>
+          <strong>Listening on 127.0.0.1:${status.port}</strong>
+          <div class="seg-toggle" role="tablist" aria-label="Where will chan serve run?">
+            <button class="seg ${mode === 'local' ? 'on' : ''}" data-mode="local"
+                    role="tab" aria-selected="${mode === 'local'}">Local</button>
+            <button class="seg ${mode === 'tunnel' ? 'on' : ''}" data-mode="tunnel"
+                    role="tab" aria-selected="${mode === 'tunnel'}">Tunnel</button>
+          </div>
+          <button class="btn danger" data-act="tunnel-stop">Stop</button>
+        </header>
+        ${sshBlock}
+        <pre class="snippet" data-copy="${escapeAttr(cmd)}" title="click to copy">${escapeHtml(cmd)}</pre>
+        <p class="muted">Connected drives appear in the list below and open automatically.</p>
+      </section>`;
+  }
+  return `
+    <section class="tunnel-panel">
+      <header><strong>Receive a remote drive</strong></header>
+      <p class="muted">Bind a loopback port to accept incoming <code>chan serve --tunnel-url</code> from another machine over an SSH reverse forward.</p>
+      <div class="tunnel-row">
+        <label>Port
+          <input id="tunnel-port-input" type="number" min="0" max="65535" placeholder="auto"
+                 value="${status.preferred_port ? status.preferred_port : ''}"/>
+        </label>
+        <label>Label
+          <input id="tunnel-label-input" type="text" maxlength="64"
+                 value="${escapeAttr(status.preferred_label || '')}"/>
+        </label>
+        <label>Drive
+          <input id="tunnel-drive-input" type="text" maxlength="32"
+                 value="${escapeAttr(status.preferred_drive || '')}"/>
+        </label>
+        <button class="btn primary" data-act="tunnel-start">Start listening</button>
+      </div>
+      <p class="muted">Port 0 / empty lets the OS pick. Label appears as the first URL segment. Drive name is lowercase ASCII + hyphens.</p>
+    </section>`;
+}
+
+function bindTunnelPanelEvents(_status) {
+  // Mode toggle (Local | Tunnel). Pure UI state — persisted in
+  // localStorage, no backend round-trip. Switching just re-renders
+  // the snippet block.
+  document.querySelectorAll('.seg-toggle .seg').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      setTunnelMode(btn.dataset.mode);
+      await renderTunnelPanel();
+    });
+  });
+
+  const startBtn = document.querySelector('[data-act="tunnel-start"]');
+  if (startBtn) {
+    startBtn.addEventListener('click', async () => {
+      const portInp = document.getElementById('tunnel-port-input');
+      const rawPort = (portInp && portInp.value || '').trim();
+      const preferred = rawPort === '' ? 0 : Math.max(0, Math.min(65535, Number(rawPort) | 0));
+      const label = (document.getElementById('tunnel-label-input').value || '').trim();
+      const drive = (document.getElementById('tunnel-drive-input').value || '').trim();
+      try {
+        await invoke('tunnel_start', { preferredPort: preferred, label, drive });
+      } catch (e) {
+        showError(e);
+        return;
+      }
+      await renderTunnelPanel();
+    });
+  }
+  const stopBtn = document.querySelector('[data-act="tunnel-stop"]');
+  if (stopBtn) {
+    stopBtn.addEventListener('click', async () => {
+      try {
+        await invoke('tunnel_stop');
+      } catch (e) {
+        showError(e);
+        return;
+      }
+      await renderTunnelPanel();
+      await refresh();
+    });
+  }
+  document.querySelectorAll('.tunnel-panel .snippet[data-copy]').forEach((node) => {
+    node.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(node.dataset.copy);
+        const old = node.textContent;
+        node.textContent = 'Copied';
+        setTimeout(() => { node.textContent = old; }, 1200);
+      } catch {
+        // Clipboard denied; nothing to do.
+      }
+    });
+  });
+}
+
+tunnelBtn.addEventListener('click', toggleTunnelPanel);
+
+/// Auto-launch a tunneled drive's editor as soon as the per-tenant
+/// listener has bound and the URL is reachable. We open in the
+/// system browser, matching the Launch button on regular tunneled
+/// rows; making this an in-app Tauri WebviewWindow is a follow-up.
+listen('tunneled-drive-ready', async (e) => {
+  const url = e && e.payload && e.payload.url;
+  if (typeof url === 'string' && url) {
+    try { await openUrl(url); } catch { /* user can still click Launch */ }
+  }
+});
+
+listen('tunnel-state-changed', () => { renderTunnelPanel().catch(showError); });
 
 boot().catch(showError);
 maybeOfferUpdate().catch((e) => console.warn('update flow error:', e));
