@@ -12,7 +12,11 @@
   // only now.
 
   import { untrack } from "svelte";
-  import { ArrowLeft, ArrowRight } from "lucide-svelte";
+  import { ArrowLeft, ArrowRight, Maximize2, Minimize2 } from "lucide-svelte";
+  import {
+    overlayMaximized,
+    setOverlayMaximized,
+  } from "../state/pageWidth.svelte";
   import { api, withTokenQuery } from "../api/client";
   import type { ContentHit } from "../api/types";
   import { isEditableText, isImage } from "../state/fileTypes";
@@ -490,6 +494,11 @@
     menu?.close();
   }
 
+  function doToggleOverlayMaximized(): void {
+    setOverlayMaximized(!overlayMaximized.on);
+    menu?.close();
+  }
+
   function onSearchContextMenu(e: MouseEvent): void {
     // Bail if the right-click landed on the input — let the browser
     // show its native context menu (paste, spell, etc.) there.
@@ -699,6 +708,17 @@
         <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
       {/if}
       <span>{searchPanel.inspectorOpen ? "Hide Details" : "Show Details"}</span>
+    </button>
+  </li>
+  <li>
+    <button role="menuitem" onclick={doToggleOverlayMaximized}>
+      {#if overlayMaximized.on}
+        <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        <span>Restore size</span>
+      {:else}
+        <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        <span>Maximize</span>
+      {/if}
     </button>
   </li>
 {/snippet}

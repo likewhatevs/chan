@@ -15,7 +15,18 @@
   // describing markdown transcript under the drive's answers_dir),
   // Delete (drops the on-disk blob + in-memory mirror).
 
-  import { ExternalLink, Eye, FileDown, Trash2 } from "lucide-svelte";
+  import {
+    ExternalLink,
+    Eye,
+    FileDown,
+    Maximize2,
+    Minimize2,
+    Trash2,
+  } from "lucide-svelte";
+  import {
+    overlayMaximized,
+    setOverlayMaximized,
+  } from "../state/pageWidth.svelte";
   import { untrack } from "svelte";
   import Bubble from "./Bubble.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
@@ -213,6 +224,11 @@
   let menuOpen = $state(false);
   const POPOVER_WIDTH = 220;
   const POPOVER_HEIGHT = 60;
+
+  function doToggleOverlayMaximized(): void {
+    setOverlayMaximized(!overlayMaximized.on);
+    menu?.close();
+  }
 
   async function onClearAll(): Promise<void> {
     menu?.close();
@@ -436,6 +452,17 @@
 </OverlayShell>
 
 {#snippet menuItems()}
+  <li>
+    <button role="menuitem" onclick={doToggleOverlayMaximized}>
+      {#if overlayMaximized.on}
+        <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        <span>Restore size</span>
+      {:else}
+        <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        <span>Maximize</span>
+      {/if}
+    </button>
+  </li>
   <li>
     <button
       role="menuitem"

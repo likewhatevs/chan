@@ -47,6 +47,7 @@ use routes::{
     api_headings, api_health, api_index_rebuild, api_index_status, api_link_targets, api_links,
     api_list_assistant, api_list_files, api_list_sessions, api_llm_anthropic_models,
     api_llm_clear_anthropic_key, api_llm_clear_gemini_key, api_llm_complete, api_llm_gemini_models,
+    api_llm_resume,
     api_llm_ollama_models, api_llm_set_anthropic_key, api_llm_set_gemini_key, api_llm_status,
     api_llm_tools, api_move, api_patch_config, api_patch_drive, api_patch_server_config,
     api_post_answer, api_post_attachment, api_post_contacts_import, api_put_assistant,
@@ -751,6 +752,10 @@ fn router(state: Arc<AppState>) -> Router {
     // separate layer carries the assistant-completion lockdown.
     let tunnel_public_block = Router::new()
         .route("/api/llm/complete", post(api_llm_complete))
+        // Resume is a sibling cost-bearing route: it sends a second
+        // turn to the backend after applying / discarding the
+        // paused write. Same lockdown gate as /complete.
+        .route("/api/llm/resume", post(api_llm_resume))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             tunnel_guard::tunnel_public_guard,

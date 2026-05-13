@@ -45,6 +45,15 @@ export const pageWidth = $state<{ ratio: number }>({ ratio: 1 });
 
 export const assistantPromptWidth = $state<{ ratio: number }>({ ratio: 1 });
 
+/// Global overlay-maximize toggle. When on, every OverlayShell
+/// widens its panel from `min(1200px, calc(100vw - 48px))` to
+/// `calc(100vw - 88px)` so the side gap matches the top safe-area
+/// + 44px chrome buffer. Lives next to the page-width state because
+/// both knobs persist across reloads under the same module and the
+/// menu items that toggle them sit in the same hamburger surfaces.
+const OVERLAY_MAX_KEY = "chan.overlayMaximized";
+export const overlayMaximized = $state<{ on: boolean }>({ on: false });
+
 function clampRatio(r: number): number {
   if (!Number.isFinite(r)) return 1;
   const lo = PAGE_WIDTH_MIN_PCT / 100;
@@ -91,6 +100,7 @@ export function applyInitialPageWidth(): void {
   pageWidth.ratio = readRatio();
   applyToDom(pageWidth.ratio);
   assistantPromptWidth.ratio = readAssistantRatio();
+  overlayMaximized.on = readOverlayMaximized();
 }
 
 function readAssistantRatio(): number {
@@ -113,6 +123,23 @@ export function setAssistantPromptWidth(r: number): void {
   assistantPromptWidth.ratio = next;
   try {
     localStorage.setItem(ASSISTANT_STORAGE_KEY, String(next));
+  } catch {
+    /* quota or disabled storage; in-memory value still applies */
+  }
+}
+
+function readOverlayMaximized(): boolean {
+  try {
+    return localStorage.getItem(OVERLAY_MAX_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function setOverlayMaximized(on: boolean): void {
+  overlayMaximized.on = on;
+  try {
+    localStorage.setItem(OVERLAY_MAX_KEY, on ? "1" : "0");
   } catch {
     /* quota or disabled storage; in-memory value still applies */
   }

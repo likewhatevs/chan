@@ -211,6 +211,33 @@ export type LlmCompletionResponse = {
   model: string;
 };
 
+/// Decision passed to `/api/llm/resume` when the user acts on a
+/// paused `write_file`. `apply` runs the model's original args
+/// through chan-drive's sandbox; `apply_as` substitutes user-edited
+/// path / content; `discard` rejects with an optional reason.
+export type LlmResumeOutcome =
+  | { kind: "apply" }
+  | { kind: "apply_as"; path: string; content: string }
+  | { kind: "discard"; reason?: string | null };
+
+export type LlmResumeRequest = {
+  session_id?: string;
+  call_id: string;
+  messages: LlmMessage[];
+  outcome: LlmResumeOutcome;
+};
+
+export type LlmResumeResponse = {
+  content: string;
+  tool_calls: LlmToolCall[];
+  stop_reason: LlmStopReason;
+  model: string;
+  /// Server-canonical message history after the placeholder swap.
+  /// Frontend replaces `conv.messages` with this so the next round's
+  /// transcript matches what chan-llm just sent to the backend.
+  messages: LlmMessage[];
+};
+
 export type ThemeChoice = "system" | "light" | "dark";
 
 export type PaneWidths = {

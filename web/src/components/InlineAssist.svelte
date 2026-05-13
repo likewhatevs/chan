@@ -32,10 +32,14 @@
     ArrowLeft,
     ArrowRight,
     Check,
+    ChevronsDown,
+    ChevronsUp,
     Clock,
     Code,
     Copy,
     Eye,
+    Maximize2,
+    Minimize2,
     Network,
     PenLine,
   } from "lucide-svelte";
@@ -100,7 +104,9 @@
     PAGE_WIDTH_MIN_PCT,
     PAGE_WIDTH_STEP_PCT,
     assistantPromptWidth,
+    overlayMaximized,
     setAssistantPromptWidth,
+    setOverlayMaximized,
   } from "../state/pageWidth.svelte";
   import { layout, openInActivePane } from "../state/tabs.svelte";
   import DiffOverlay from "./DiffOverlay.svelte";
@@ -144,14 +150,33 @@
   /// previous `30vh` cap on a typical 1080p panel so existing users
   /// don't see a jump on first load.
   const PROMPT_HEIGHT_MIN = 80;
-  const PROMPT_HEIGHT_MAX = 600;
+  const PROMPT_HEIGHT_MAX = 2000;
   let promptHeight = $state(220);
   let promptResizing = $state(false);
+  /// "Filled" mode: the prompt grows to consume every pixel between
+  /// the header and the status line. Driven by the up-chevron snap
+  /// button. Drag starts capture the rendered height as the new
+  /// baseline so a downward drag exits fill smoothly instead of
+  /// snapping back to whatever the nominal `promptHeight` was.
+  let promptFilled = $state(false);
 
   function onPromptResizeDown(e: PointerEvent): void {
     e.preventDefault();
     const startY = e.clientY;
-    const startH = promptHeight;
+    // Exit fill on drag start: capture the wrap's rendered height
+    // so the user keeps editing from where they see the bar.
+    let startH = promptHeight;
+    if (promptFilled) {
+      const wrap = document.querySelector(
+        ".assistant-body .prompt-wrap",
+      ) as HTMLElement | null;
+      if (wrap) startH = wrap.getBoundingClientRect().height;
+      promptFilled = false;
+      promptHeight = Math.max(
+        PROMPT_HEIGHT_MIN,
+        Math.min(PROMPT_HEIGHT_MAX, startH),
+      );
+    }
     const target = e.currentTarget as HTMLElement;
     target.setPointerCapture(e.pointerId);
     promptResizing = true;
@@ -179,6 +204,19 @@
     target.addEventListener("pointermove", onMove);
     target.addEventListener("pointerup", onUp);
     target.addEventListener("pointercancel", onUp);
+  }
+
+  /// Jump the prompt to one of the size extremes. The "max" target
+  /// flips into fill mode so the prompt consumes every pixel the
+  /// assistant body has to offer (instead of stopping at a hard
+  /// pixel cap); "min" exits fill mode and clamps to the floor.
+  function setPromptExtreme(target: "max" | "min"): void {
+    if (target === "max") {
+      promptFilled = true;
+    } else {
+      promptFilled = false;
+      promptHeight = PROMPT_HEIGHT_MIN;
+    }
   }
 
   /// Refs into the prompt editor so the floating StyleToolbar above
@@ -315,7 +353,7 @@
     "  - graph_tags(): every `#tag` in the drive with the number of files that carry it. No args.\n" +
     "  - graph_files_with_tag(tag): files carrying the given tag (include the leading `#`).\n" +
     "  - repo_report(prefix?, paths?, include_files?): code/content snapshot — per-file language and SLOC counts, per-language roll-ups, COCOMO cost estimate. `include_files=true` adds the per-file rows (capped at 200). Use this when the user asks about repo size, language mix, where the content lives, or to scope a refactor.\n" +
-    "  - write_file(path, content): propose a complete file replacement. When 'auto-apply writes' is off (default), the user reviews and clicks Apply or Discard before the write hits disk; when on, the write lands atomically. Always emit the FULL revised file content (no diffs, no partials).";
+    "  - write_file(path, content): propose a complete file replacement. CALL THE TOOL — do NOT paste the proposed content into chat and ask the user to confirm. The host always shows your write_file call as a reviewable diff card with Apply / Discard buttons; that IS the confirmation UI. Even if the user explicitly says 'let me review' or 'don't auto-apply', you should still emit the tool call so the diff card renders. Always emit the FULL revised file content (no diffs, no partials).";
 
   const PROMPT_FILE_TOOLS =
     "You are the user's writing assistant inside chan, a personal-notes editor. " +
@@ -1106,14 +1144,9 @@
   /// "applied" in green but the file never reached disk).
   async function applyEdit(edit: AssistantPendingEdit): Promise<void> {
     if (edit.status !== "pending") return;
-    // Refuse if any open tab on this path is filesystem-locked. The
-    // user can keep the readonly file in scope (the assistant can
-    // still see it and answer questions) but accepting an edit
-    // requires a writable target. We only check open tabs because
-    // that's where fsWritable is known client-side; for paths with
-    // no open tab the server's write will reject with a permission
-    // error, which still surfaces in the catch below.
-    let openTabUpdated = false;
+    // Refuse if any open tab on this path is filesystem-locked.
+    // Server-side write would reject too; pre-check spares a
+    // round-trip.
     for (const node of Object.values(layout.nodes)) {
       if (node.kind !== "leaf") continue;
       for (const t of node.tabs) {
@@ -1122,46 +1155,120 @@
           error = `'${edit.path}' is read-only on disk; cannot apply edit`;
           return;
         }
-        t.content = edit.content;
-        // Mark clean so the autosave loop doesn't re-write what
-        // we're about to flush explicitly below.
-        t.saved = edit.content;
-        openTabUpdated = true;
       }
     }
-    let writeResult: { mtime: number | null };
-    try {
-      writeResult = await api.write(edit.path, edit.content);
-    } catch (e) {
-      // Surface the failure in the chat error line and keep the
-      // proposal as pending so the user can retry; flipping it to
-      // "applied" with no file on disk is exactly the bug we are
-      // fixing.
-      error = `apply failed: ${(e as Error).message}`;
-      return;
-    }
-    edit.status = "applied";
-    // Refresh the file tree so a brand-new path shows up in the
-    // browser without waiting for the watcher's debounce. Skipped
-    // when an open tab matched, since the watcher event for the
-    // existing path already fans out a refresh.
-    if (!openTabUpdated) {
-      void refreshTree();
-    }
-    // Inject a structured tool_result that mirrors chan-llm's
-    // write_file success shape (status + path + size + applied_by).
-    // The model already knows what it asked to write; reflecting
-    // the on-disk bytes back is what closes the loop and lets the
-    // next turn reason about the new state.
-    appendToolResultJson(edit.toolCallId, {
-      status: "ok",
-      tool: WRITE_FILE_TOOL,
+    // `apply_as` (vs `apply`) because the model's original
+    // write_file args may differ from what the user is about to
+    // commit — the diff overlay lets the user inspect, and Save-as
+    // / future inline-edit lets them change. Pass the path +
+    // content the user actually wants on disk; the server runs
+    // it through chan-drive and returns the canonical history.
+    await runResume(edit, {
+      kind: "apply_as",
       path: edit.path,
-      bytes: edit.content.length,
-      mtime_ns: writeResult.mtime,
-      applied_by: "user",
+      content: edit.content,
     });
-    if (currentContext) scheduleSave(currentContext);
+  }
+
+  /// Tool-call ids whose resume round-trip is currently
+  /// outstanding. Used to disable the Apply / Discard buttons
+  /// during the (multi-second on claude-cli) request and to
+  /// short-circuit double clicks.
+  let resumingIds = $state<Set<string>>(new Set());
+
+  /// Drive the /api/llm/resume round-trip. Replaces conv.messages
+  /// with the server-canonical history (chan-llm's PENDING_STATUS
+  /// placeholder swapped for the real result, plus any tool
+  /// messages chan-llm emitted while running the continuation),
+  /// flips the edit card to its terminal state, appends the
+  /// model's continuation as a fresh assistant turn, and pushes
+  /// any follow-up edit proposals as new cards. Errors leave the
+  /// edit in `pending` so the user can retry.
+  async function runResume(
+    edit: AssistantPendingEdit,
+    outcome:
+      | { kind: "apply" }
+      | { kind: "apply_as"; path: string; content: string }
+      | { kind: "discard"; reason: string | null },
+  ): Promise<void> {
+    const ctx = currentContext;
+    if (!ctx) return;
+    if (resumingIds.has(edit.toolCallId)) return; // double-click guard
+    const conv = conversationFor(ctx);
+    // Mark the edit as in-flight so the buttons render an
+    // "applying…" / "discarding…" state and a second click is a
+    // no-op. Without this the user re-clicks during the multi-
+    // second claude-cli round-trip thinking nothing happened.
+    resumingIds = new Set([...resumingIds, edit.toolCallId]);
+    ui.status =
+      outcome.kind === "discard" ? "discarding edit…" : "applying edit…";
+    try {
+      const resp = await api.llmResume({
+        call_id: edit.toolCallId,
+        messages: conv.messages,
+        outcome,
+      });
+      conv.messages = resp.messages;
+      edit.status = outcome.kind === "discard" ? "dismissed" : "applied";
+      // Refresh the tree so a brand-new path appears in the
+      // browser without waiting for the watcher's debounce.
+      void refreshTree();
+      // Update any open tabs at the affected path so the editor
+      // view doesn't drift behind disk.
+      if (outcome.kind === "apply_as") {
+        for (const node of Object.values(layout.nodes)) {
+          if (node.kind !== "leaf") continue;
+          for (const t of node.tabs) {
+            if (t.kind !== "file" || t.path !== outcome.path) continue;
+            t.content = outcome.content;
+            t.saved = outcome.content;
+          }
+        }
+      }
+      if (resp.content.trim()) {
+        conv.turns.push({
+          kind: "assistant",
+          content: resp.content,
+          created_at: Date.now(),
+        });
+      }
+      // The model may have proposed another edit in the
+      // continuation. Surface those as fresh edit cards just like
+      // handleResponse does for the /complete path.
+      for (const call of resp.tool_calls) {
+        const bare = bareToolName(call.name);
+        if (bare !== WRITE_FILE_TOOL) continue;
+        const input = (call.input ?? {}) as { path?: string; content?: string };
+        const nextEdit: AssistantPendingEdit = {
+          toolCallId: call.id,
+          path: input.path ?? defaultEditPath(ctx),
+          content: input.content ?? "",
+          summary: null,
+          status: "pending",
+        };
+        conv.turns.push({ kind: "edit", edit: nextEdit, created_at: Date.now() });
+      }
+      scheduleSave(ctx);
+      ui.status = outcome.kind === "discard" ? "edit discarded" : "edit applied";
+      // Brief acknowledgment that auto-clears.
+      setTimeout(() => {
+        if (
+          ui.status === "edit applied" ||
+          ui.status === "edit discarded"
+        ) {
+          ui.status = null;
+        }
+      }, 2000);
+    } catch (e) {
+      error = `resume failed: ${(e as Error).message}`;
+      ui.status = `resume failed: ${(e as Error).message}`;
+    } finally {
+      // Always clear the in-flight flag so the user can retry on
+      // error (the edit stays pending) or interact with siblings.
+      resumingIds = new Set(
+        Array.from(resumingIds).filter((id) => id !== edit.toolCallId),
+      );
+    }
     queueMicrotask(scrollToBottom);
   }
 
@@ -1234,25 +1341,13 @@
 
   function dismissEdit(edit: AssistantPendingEdit, reason: string): void {
     if (edit.status !== "pending") return;
-    edit.status = "dismissed";
-    appendToolResultJson(edit.toolCallId, {
-      status: "rejected",
-      tool: WRITE_FILE_TOOL,
-      path: edit.path,
-      reason,
-    });
-    if (currentContext) scheduleSave(currentContext);
-    queueMicrotask(scrollToBottom);
-  }
-
-  function appendToolResultJson(toolCallId: string, body: unknown): void {
-    if (!currentContext) return;
-    const conv = conversationFor(currentContext);
-    conv.messages.push({
-      role: "tool",
-      content: JSON.stringify(body),
-      tool_call_id: toolCallId,
-    });
+    // Route through the same resume endpoint as Apply so the
+    // canonical chan-llm REJECTED_STATUS payload lands in history
+    // and the model gets to react to the dismissal in its next
+    // turn (instead of waiting for the user to prompt). Fire-and-
+    // forget: a network error leaves the edit pending and surfaces
+    // via the chat error line.
+    void runResume(edit, { kind: "discard", reason });
   }
 
   function onWindowKey(e: KeyboardEvent): void {
@@ -1519,13 +1614,24 @@
 
   function onAssistantContextMenu(e: MouseEvent): void {
     const t = e.target as HTMLElement | null;
-    if (t?.closest("input, textarea, .cm-content, .cm-editor")) return;
+    // Plain inputs / textareas keep their native context menu so
+    // password fields, autocomplete, etc. still reach the user.
+    // The CM6 prompt opts into our menu — copy / paste live on the
+    // bubble keymap (Cmd-C / Cmd-V) and the overlay shortcuts; the
+    // browser's spellcheck menu is rarely useful here and the menu
+    // gives consistent access to mode / width controls instead.
+    if (t?.closest("input, textarea")) return;
     e.preventDefault();
     menu?.openAtCursor(e.clientX, e.clientY);
   }
 
   function doToggleStyleToolbar(): void {
     assistantOverlay.styleToolbarOpen = !assistantOverlay.styleToolbarOpen;
+    menu?.close();
+  }
+
+  function doToggleOverlayMaximized(): void {
+    setOverlayMaximized(!overlayMaximized.on);
     menu?.close();
   }
 
@@ -1568,7 +1674,13 @@
 
 <OverlayShell id="assistant" open={visible} onClose={close}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="assistant-body" oncontextmenu={onAssistantContextMenu} role="presentation">
+  <div
+    class="assistant-body"
+    class:capped={assistantPromptWidth.ratio < 1}
+    class:prompt-filled={promptFilled}
+    oncontextmenu={onAssistantContextMenu}
+    role="presentation"
+  >
       <header>
         <span class="title">Scope</span>
         <select
@@ -1894,25 +2006,20 @@
                 <div class="proposal md">{@html renderMarkdown(turn.edit.content)}</div>
               </details>
               {#if turn.edit.status === "pending"}
+                {@const resuming = resumingIds.has(turn.edit.toolCallId)}
                 <div class="actions">
-                  <button type="button" class="primary" onclick={(e) => { e.stopPropagation(); void applyEdit(turn.edit); }}>Apply</button>
+                  <button type="button" class="primary" disabled={resuming} onclick={(e) => { e.stopPropagation(); void applyEdit(turn.edit); }}>{resuming ? "Applying…" : "Apply"}</button>
                   <!-- Side-by-side diff against the file's current
                        content (open-tab buffer or disk). Opens a
                        fullscreen DiffOverlay that carries its own
                        Apply / Discard / Save-as so the user can
                        act from inside the diff. -->
-                  <button type="button" class="diff" title="show side-by-side diff against current content" onclick={(e) => { e.stopPropagation(); openDiffOverlay(turn.edit); }}>Diff</button>
-                  <!-- Save as new file: writes the proposal content
-                       to a user-chosen path instead of overwriting
-                       the target. Useful when the user wants to
-                       preserve the original file and side-by-side
-                       diff the suggestion. The path prompt seeds
-                       with a `-revision.md` suffix on the original
-                       path as a friendly starting point. -->
-                  <button type="button" class="save-as" title="save proposal to a new file" onclick={(e) => { e.stopPropagation(); void saveEditAsNew(turn.edit); }}>Save as…</button>
+                  <button type="button" class="diff" disabled={resuming} title="show side-by-side diff against current content" onclick={(e) => { e.stopPropagation(); openDiffOverlay(turn.edit); }}>Diff</button>
+                  <button type="button" class="save-as" disabled={resuming} title="save proposal to a new file" onclick={(e) => { e.stopPropagation(); void saveEditAsNew(turn.edit); }}>Save as…</button>
                   <button
                     type="button"
                     class="copy"
+                    disabled={resuming}
                     title="copy proposal to clipboard"
                     aria-label="copy proposal"
                     onclick={(e) => { e.stopPropagation(); void copyEdit(turn.edit); }}
@@ -1923,7 +2030,7 @@
                       <Copy size={12} strokeWidth={1.75} aria-hidden="true" /><span>Copy</span>
                     {/if}
                   </button>
-                  <button type="button" onclick={(e) => { e.stopPropagation(); dismissEdit(turn.edit, "manual"); }}>Discard</button>
+                  <button type="button" disabled={resuming} onclick={(e) => { e.stopPropagation(); dismissEdit(turn.edit, "manual"); }}>{resuming ? "…" : "Discard"}</button>
                 </div>
               {:else if turn.edit.status === "applied"}
                 <div class="status-tag ok">applied</div>
@@ -1973,22 +2080,51 @@
            prompt-wrap's top padding tracks the toggle so the
            first line of the prompt clears the toolbar pill when
            it's enabled and reclaims the space when it's off. -->
-      <div
-        class="prompt-area"
-        style:max-width={promptMaxWidth}
-      >
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div
-          class="prompt-resize-handle"
-          class:active={promptResizing}
-          onpointerdown={onPromptResizeDown}
-          aria-label="resize prompt"
-          title="drag to resize the prompt"
-        ></div>
+      <div class="prompt-area">
+        <!-- Drag-resize divider. The handle stays the full overlay
+             width regardless of the prompt-width cap below it
+             (matches the wider chrome treatment) and the toggle
+             pair on the right snaps to the size extremes without
+             requiring a precise drag. -->
+        <div class="prompt-divider">
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div
+            class="prompt-resize-handle"
+            class:active={promptResizing}
+            onpointerdown={onPromptResizeDown}
+            aria-label="resize prompt"
+            title="drag to resize the prompt"
+          ></div>
+          <div class="prompt-toggle" role="group" aria-label="prompt size">
+            <button
+              type="button"
+              class="prompt-toggle-btn"
+              onclick={() => setPromptExtreme("max")}
+              onpointerdown={(e) => e.stopPropagation()}
+              disabled={promptFilled}
+              title="expand prompt"
+              aria-label="expand prompt"
+            >
+              <ChevronsUp size={12} strokeWidth={2} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              class="prompt-toggle-btn"
+              onclick={() => setPromptExtreme("min")}
+              onpointerdown={(e) => e.stopPropagation()}
+              disabled={!promptFilled && promptHeight <= PROMPT_HEIGHT_MIN}
+              title="collapse prompt"
+              aria-label="collapse prompt"
+            >
+              <ChevronsDown size={12} strokeWidth={2} aria-hidden="true" />
+            </button>
+          </div>
+        </div>
         <div
           class="prompt-wrap"
           class:disabled={!currentContext}
           style:height={`${promptHeight}px`}
+          style:max-width={promptMaxWidth}
           style:--editor-top-pad={assistantOverlay.styleToolbarOpen ? "2.5rem" : "0.5rem"}
         >
           {#if promptMode === "wysiwyg"}
@@ -2078,7 +2214,6 @@
     />
     <span class="page-width-value">{Math.round(assistantPromptWidth.ratio * 100)}%</span>
   </li>
-  <li class="sep" role="separator"></li>
   <li>
     <button role="menuitem" onclick={doToggleSourceMode}>
       <span class="glyph" aria-hidden="true">{promptMode === "wysiwyg" ? "</>" : "¶"}</span>
@@ -2091,6 +2226,17 @@
       <span>
         {assistantOverlay.styleToolbarOpen ? "Hide Style Toolbar" : "Show Style Toolbar"}
       </span>
+    </button>
+  </li>
+  <li>
+    <button role="menuitem" onclick={doToggleOverlayMaximized}>
+      {#if overlayMaximized.on}
+        <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        <span>Restore size</span>
+      {:else}
+        <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        <span>Maximize</span>
+      {/if}
     </button>
   </li>
   <li class="sep" role="separator"></li>
@@ -2145,6 +2291,34 @@
     flex: 1;
     min-height: 0;
     min-width: 0;
+  }
+  /* When the prompt-width cap is active, tint the entire assistant
+     panel interior with --page-shade so the off-page area reads as
+     one consistent shade. Painting just .prompt-area created a
+     visible second tone next to the overlay backdrop at the panel
+     edge ("double shade"); lifting the tint to the whole body lets
+     the prompt-wrap and chat bubbles read as cards on top of the
+     same surface. */
+  .assistant-body.capped {
+    background: var(--page-shade);
+  }
+  /* Prompt-fill mode (driven by the up-chevron snap button). The
+     chat scrollback collapses to zero so the prompt-area can claim
+     every pixel between the header and the status line; the wrap
+     inside flexes to fit. `min-height: 0` on the column items lets
+     them shrink past their content size. */
+  .assistant-body.prompt-filled .scroll {
+    flex: 0 0 0;
+    overflow: hidden;
+  }
+  .assistant-body.prompt-filled .prompt-area {
+    flex: 1;
+    min-height: 0;
+  }
+  .assistant-body.prompt-filled .prompt-wrap {
+    flex: 1;
+    height: auto !important;
+    min-height: 0;
   }
   /* Scope-history shortcut next to the context picker. Visual
      parity with HamburgerMenu's trigger: 24x22 icon button,
@@ -2892,6 +3066,12 @@
     display: flex;
     flex-direction: column;
     overflow: auto;
+    width: 100%;
+    /* Centered inside .prompt-area so the Prompt-width cap lands
+       symmetrically; auto margins consume any extra horizontal
+       space when max-width clamps the column. */
+    margin-left: auto;
+    margin-right: auto;
     /* Padding-top is consumed by the editor inside (Wysiwyg's
        .cm-content reads `--editor-top-pad`), set inline from the
        style-toolbar toggle: 2.5rem when the toolbar is mounted so
@@ -2899,22 +3079,82 @@
        isn't. Same variable + same wiring as FileEditorTab so both
        surfaces share one knob. */
   }
-  /* Drag-to-resize bar on top of the prompt input. Sits above the
-     .prompt-wrap so a drag upward grows the input height. Same
-     "thin neutral bar that thickens on hover" look as
-     ResizeHandle.svelte, just rotated to the horizontal axis. */
-  .prompt-resize-handle {
-    height: 4px;
+  /* Divider row above the prompt input. Hosts the drag-resize
+     bar (full overlay width) and the snap-to-extreme toggle pair.
+     Position-relative so the toggle buttons can anchor over the
+     bar without nudging its layout. */
+  .prompt-divider {
+    position: relative;
     flex-shrink: 0;
-    background: var(--separator);
+    align-self: stretch;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    /* Height matches the resize bar exactly; the toggle buttons
+       overlay it via absolute positioning so they don't push the
+       divider taller. */
+    height: 4px;
+    transition: height 0.1s;
+  }
+  .prompt-divider:hover {
+    height: 6px;
+  }
+  /* Drag-to-resize bar. Spans the divider's full width regardless
+     of the prompt-width cap below; the bar reads as panel chrome,
+     not as part of the column it's sizing.
+
+     `--border` instead of `--separator` so the bar reads against
+     the panel even at rest — the default separator hue blends
+     into the chat background and the bar visually shrinks to
+     just the toggle cluster on the right. */
+  .prompt-resize-handle {
+    flex: 1;
+    align-self: stretch;
+    background: var(--border);
     cursor: row-resize;
     touch-action: none;
-    transition: height 0.1s, background 0.1s;
+    transition: background 0.1s;
   }
   .prompt-resize-handle:hover,
   .prompt-resize-handle.active {
-    height: 6px;
     background: var(--separator-hover);
+  }
+  /* Snap-to-extreme button pair, anchored to the right of the
+     divider. Buttons are taller than the bar but stay centered on
+     it via translate(-50%) on the wrapper. Pointer events stay on
+     the buttons; the rest of the bar still receives drag events
+     because the wrapper is positioned absolute (out of the flex
+     row's hit path). */
+  .prompt-toggle {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    transform: translateY(-50%);
+    display: flex;
+    gap: 2px;
+    z-index: 1;
+  }
+  .prompt-toggle-btn {
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-elev);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    cursor: pointer;
+    transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+  }
+  .prompt-toggle-btn:hover:not(:disabled) {
+    color: var(--text);
+    border-color: var(--btn-hover, var(--text-secondary));
+  }
+  .prompt-toggle-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
   .prompt-wrap.disabled { opacity: 0.55; pointer-events: none; }
   /* Trim the file editor's generous default padding so the
@@ -2930,17 +3170,16 @@
      floating pill anchored top-left of .prompt-wrap (position:
      relative), matching the file editor's chrome.
 
-     `max-width` is bound inline from the Prompt-width slider; the
-     auto margins center the capped column inside the overlay so a
-     narrower prompt still sits on the overlay's horizontal axis
-     instead of left-anchored. */
+     The cap from the Prompt-width slider is applied INSIDE this
+     container (on .prompt-wrap) so the divider above the input
+     keeps the full overlay width. When capped, this area tints
+     with --page-shade so the empty sides read as off-page,
+     matching the document editor's page-cap treatment. */
   .prompt-area {
     display: flex;
     flex-direction: column;
     min-height: 0;
     width: 100%;
-    margin-left: auto;
-    margin-right: auto;
   }
 
   /* Page-width slider row inside the hamburger popover. Mirrors

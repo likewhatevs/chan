@@ -13,9 +13,15 @@
     FilePlus,
     FolderOpen,
     FolderPlus,
+    Maximize2,
+    Minimize2,
     Pencil,
     Users,
   } from "lucide-svelte";
+  import {
+    overlayMaximized,
+    setOverlayMaximized,
+  } from "../state/pageWidth.svelte";
   import FileTree from "./FileTree.svelte";
   import Inspector from "./Inspector.svelte";
   import FileInfoBody from "./FileInfoBody.svelte";
@@ -141,6 +147,11 @@
     menu?.close();
   }
 
+  function doToggleOverlayMaximized(): void {
+    setOverlayMaximized(!overlayMaximized.on);
+    menu?.close();
+  }
+
   async function reloadTree(): Promise<void> {
     menu?.close();
     await refreshTree();
@@ -241,6 +252,17 @@
         <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
       {/if}
       <span>{browserOverlay.inspectorOpen ? "Hide Details" : "Show Details"}</span>
+    </button>
+  </li>
+  <li>
+    <button role="menuitem" onclick={doToggleOverlayMaximized}>
+      {#if overlayMaximized.on}
+        <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        <span>Restore size</span>
+      {:else}
+        <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        <span>Maximize</span>
+      {/if}
     </button>
   </li>
   <li class="sep" role="separator"></li>

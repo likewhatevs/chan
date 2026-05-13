@@ -14,8 +14,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chan_llm::{
-    BackendKind, ImageInput as LlmImageInput, LlmSession, Message as LlmMessage, Role as LlmRole,
-    SessionListener,
+    apply_resume, is_pending_placeholder, BackendKind, ImageInput as LlmImageInput, LlmSession,
+    Message as LlmMessage, ResumeOutcome, Role as LlmRole, SessionListener, PENDING_STATUS,
 };
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -328,6 +328,13 @@ struct ApiMessage {
     content: String,
     #[serde(default)]
     tool_call_id: Option<String>,
+    /// Tool calls on `assistant` messages. The frontend's
+    /// `LlmMessage` carries these on every assistant turn that
+    /// invoked a tool; the resume route needs them to find the
+    /// turn that proposed a paused `write_file`. Dropping them
+    /// silently broke `apply_resume`'s placeholder lookup.
+    #[serde(default)]
+    tool_calls: Vec<ApiToolCall>,
     /// Optional multimodal payload from the frontend. Each entry
     /// is a base64-encoded image with its MIME type; chan-llm
     /// forwards these to the active backend (Anthropic image
@@ -336,6 +343,17 @@ struct ApiMessage {
     /// unsupported MIMEs with a 400 the host bubbles back.
     #[serde(default)]
     images: Vec<ApiImageInput>,
+}
+
+#[derive(Deserialize)]
+struct ApiToolCall {
+    id: String,
+    name: String,
+    /// Renamed at the wire seam: the frontend uses Anthropic-style
+    /// `input` while chan-llm's `ToolCall` uses `args`. Same JSON
+    /// payload, different field name.
+    #[serde(default)]
+    input: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -365,7 +383,15 @@ impl From<ApiMessage> for LlmMessage {
             role,
             content: m.content,
             tool_call_id: m.tool_call_id,
-            tool_calls: Vec::new(),
+            tool_calls: m
+                .tool_calls
+                .into_iter()
+                .map(|c| chan_llm::ToolCall {
+                    id: c.id,
+                    name: c.name,
+                    args: c.input,
+                })
+                .collect(),
             images: m
                 .images
                 .into_iter()
@@ -614,6 +640,271 @@ pub async fn api_llm_complete(
         tool_calls,
         stop_reason: stop_reason_tag(stop),
         model,
+    })
+    .into_response()
+}
+
+/// Body for `POST /api/llm/resume`. Replaces the chan-llm
+/// placeholder for a paused `write_file` tool call with the user's
+/// decision and then resumes the conversation by re-sending the
+/// updated transcript to the active backend. Returns the model's
+/// next turn AND the updated message list so the frontend can
+/// replace its local `conv.messages` with the server-canonical
+/// version (placeholder swapped, continuation appended).
+#[derive(Deserialize)]
+pub struct ResumeBody {
+    /// Optional WS correlation id, same shape as `CompleteBody`.
+    #[serde(default)]
+    session_id: Option<String>,
+    /// The paused tool call's id. Must match a `tool_use` block in
+    /// the most recent Assistant turn of `messages`.
+    call_id: String,
+    /// Full conversation transcript up to the paused turn.
+    /// May or may not already include the chan-llm `PENDING_STATUS`
+    /// placeholder for `call_id`; we insert one when absent.
+    messages: Vec<ApiMessage>,
+    /// What the user did at the confirmation UI.
+    outcome: ResumeOutcomeBody,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ResumeOutcomeBody {
+    /// User accepted unchanged: chan-llm runs the tool with
+    /// `auto_apply_writes` forced on for this single execution
+    /// (via `LlmSession::approve_pending`), so the standard
+    /// sandbox writes the file and the canonical result JSON
+    /// lands in history.
+    Apply,
+    /// User accepted but supplied edited content via the diff
+    /// review surface. We bypass `approve_pending` (which uses
+    /// the model's original args) and call `apply_resume` with
+    /// the user's `path` / `content` instead.
+    ApplyAs {
+        path: String,
+        content: String,
+    },
+    /// User rejected. Optional reason surfaces to the model so it
+    /// can adapt its plan.
+    Discard {
+        #[serde(default)]
+        reason: Option<String>,
+    },
+}
+
+/// Response shape for `/api/llm/resume`. Same `content` / `tool_calls`
+/// / `stop_reason` / `model` as `/complete`, plus `messages`: the
+/// chan-llm-canonical history after the placeholder swap. The
+/// frontend writes `conv.messages = response.messages` and appends
+/// the response's `content` as a new assistant turn.
+#[derive(Serialize)]
+struct LlmResumeResponse {
+    content: String,
+    tool_calls: Vec<LlmToolCallView>,
+    stop_reason: &'static str,
+    model: String,
+    messages: Vec<ApiMessageOut>,
+}
+
+/// Mirror of chan-llm's `Message` for the outbound side. We can't
+/// re-serialize `LlmMessage` directly because its Rust field shape
+/// (`tool_calls: Vec<ToolCall>` etc.) doesn't match the simpler
+/// frontend `LlmMessage` exactly. Keeping a wire DTO sidesteps
+/// future field-by-field drift.
+#[derive(Serialize)]
+struct ApiMessageOut {
+    role: String,
+    content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tool_calls: Vec<LlmToolCallView>,
+}
+
+fn role_tag(r: LlmRole) -> &'static str {
+    match r {
+        LlmRole::System => "system",
+        LlmRole::User => "user",
+        LlmRole::Assistant => "assistant",
+        LlmRole::Tool => "tool",
+    }
+}
+
+fn message_to_out(m: &LlmMessage) -> ApiMessageOut {
+    ApiMessageOut {
+        role: role_tag(m.role).to_string(),
+        content: m.content.clone(),
+        tool_call_id: m.tool_call_id.clone(),
+        tool_calls: m
+            .tool_calls
+            .iter()
+            .map(|c| LlmToolCallView {
+                id: c.id.clone(),
+                name: c.name.clone(),
+                input: c.args.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// Find the position right after the Assistant turn that carries
+/// `call_id`. Used to anchor a fresh PENDING_STATUS placeholder
+/// when the frontend's transcript doesn't already have one.
+fn assistant_with_call_index(history: &[LlmMessage], call_id: &str) -> Option<usize> {
+    history.iter().rposition(|m| {
+        m.role == LlmRole::Assistant && m.tool_calls.iter().any(|c| c.id == call_id)
+    })
+}
+
+/// True when `history` already has the chan-llm placeholder Tool
+/// message for `call_id`. The frontend may have inserted one to
+/// pre-validate the transcript shape; we don't duplicate it.
+fn has_pending_placeholder_for(history: &[LlmMessage], call_id: &str) -> bool {
+    history
+        .iter()
+        .any(|m| m.tool_call_id.as_deref() == Some(call_id) && is_pending_placeholder(m))
+}
+
+/// Ensure the placeholder Tool message exists for `call_id` so
+/// `apply_resume` (which expects one) can find and replace it.
+/// Inserts immediately after the Assistant turn that proposed the
+/// call so Anthropic / Gemini's strict pairing stays valid.
+fn ensure_pending_placeholder(history: &mut Vec<LlmMessage>, call_id: &str) -> Result<(), String> {
+    if has_pending_placeholder_for(history, call_id) {
+        return Ok(());
+    }
+    let idx = assistant_with_call_index(history, call_id)
+        .ok_or_else(|| format!("no Assistant turn carries tool call {call_id}"))?;
+    let call = history[idx]
+        .tool_calls
+        .iter()
+        .find(|c| c.id == call_id)
+        .cloned()
+        .ok_or_else(|| format!("tool call {call_id} not found on Assistant turn"))?;
+    let placeholder = LlmMessage::tool(
+        call_id.to_string(),
+        serde_json::json!({
+            "status": PENDING_STATUS,
+            "tool": call.name,
+        })
+        .to_string(),
+    );
+    history.insert(idx + 1, placeholder);
+    Ok(())
+}
+
+pub async fn api_llm_resume(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ResumeBody>,
+) -> Response {
+    let mut config = state.llm_config.lock().unwrap().clone();
+    let active = config.backend.unwrap_or(BackendKind::Anthropic);
+    let model = config
+        .models
+        .for_backend(active)
+        .map(str::to_owned)
+        .unwrap_or_else(|| active.default_model().to_string());
+    let session_id = body.session_id.clone().unwrap_or_else(random_session_id);
+
+    // Mirror the MCP wiring /complete uses so the agentic CLIs stay
+    // sandboxed. The pause -> resume flow today is only meaningful
+    // for non-CLI backends (claude-cli / gemini-cli auto-execute
+    // write_file natively without ever returning a chan-llm Pending),
+    // but matching /complete's setup keeps the route uniform.
+    let socket = state.mcp_socket_path.as_deref();
+    match active {
+        BackendKind::ClaudeCli => {
+            if let Some(cmd) = mcp_subcommand_for(socket) {
+                config.claude_cli.mcp_command = Some(cmd);
+            }
+        }
+        BackendKind::GeminiCli => {
+            if let Some(cmd) = mcp_subcommand_for(socket) {
+                config.gemini_cli.mcp_command = Some(cmd);
+            }
+        }
+        _ => {}
+    }
+
+    let drive = state.drive().clone();
+    let session = LlmSession::new(drive.clone(), config);
+
+    let mut messages: Vec<LlmMessage> = body.messages.into_iter().map(LlmMessage::from).collect();
+    if let Err(e) = ensure_pending_placeholder(&mut messages, &body.call_id) {
+        return err(StatusCode::BAD_REQUEST, e);
+    }
+
+    let resolved = match body.outcome {
+        ResumeOutcomeBody::Apply => session
+            .approve_pending(messages, &body.call_id)
+            .map_err(|e| e.to_string()),
+        ResumeOutcomeBody::ApplyAs { path, content } => {
+            // User-edited diff: write through chan-drive directly,
+            // then synthesize the canonical Applied result so the
+            // model sees the same shape as the unmodified-Apply
+            // path. Failures route through ResumeOutcome::Failed
+            // so the model can adapt.
+            let outcome = match drive.write_text(&path, &content) {
+                Ok(()) => {
+                    // chan-drive's write_text returns (); fetch the
+                    // post-write mtime via stat so the model gets a
+                    // canonical mtime_ns it can pair against a future
+                    // read_file. Stat failure isn't fatal: we still
+                    // surface Applied without mtime_ns.
+                    let mtime_ns = drive.stat(&path).ok().map(|s| s.mtime_ns);
+                    ResumeOutcome::Applied(serde_json::json!({
+                        "path": path,
+                        "bytes_written": content.len() as u64,
+                        "mtime_ns": mtime_ns,
+                    }))
+                }
+                Err(e) => ResumeOutcome::Failed {
+                    error: e.to_string(),
+                },
+            };
+            apply_resume(messages, &body.call_id, outcome).map_err(|e| e.to_string())
+        }
+        ResumeOutcomeBody::Discard { reason } => {
+            apply_resume(messages, &body.call_id, ResumeOutcome::Rejected { reason })
+                .map_err(|e| e.to_string())
+        }
+    };
+    let resumed = match resolved {
+        Ok(v) => v,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    };
+
+    let collect = Arc::new(CollectListener::new(LlmBroadcastListener {
+        tx: state.events_tx.clone(),
+        session_id,
+    }));
+    let listener: Arc<dyn SessionListener> = collect.clone();
+    let messages_for_response: Vec<ApiMessageOut> = resumed.iter().map(message_to_out).collect();
+    session.send(resumed, listener);
+    collect.done.notified().await;
+
+    let snapshot = collect.state.lock().expect("collect state poisoned");
+    if let Some(err_msg) = snapshot.error.clone() {
+        return err(StatusCode::BAD_GATEWAY, err_msg);
+    }
+    let stop = snapshot
+        .stop_reason
+        .unwrap_or(chan_llm::StopReason::EndOfTurn);
+    let tool_calls = snapshot
+        .tool_calls
+        .iter()
+        .map(|c| LlmToolCallView {
+            id: c.id.clone(),
+            name: c.name.clone(),
+            input: c.args.clone(),
+        })
+        .collect();
+    Json(LlmResumeResponse {
+        content: snapshot.text.clone(),
+        tool_calls,
+        stop_reason: stop_reason_tag(stop),
+        model,
+        messages: messages_for_response,
     })
     .into_response()
 }

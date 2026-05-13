@@ -15,7 +15,17 @@
   // neighbours. Drive / global scope leaves all nodes free.
 
   import { onDestroy, onMount } from "svelte";
-  import { ArrowLeft, ArrowRight, Clock } from "lucide-svelte";
+  import {
+    ArrowLeft,
+    ArrowRight,
+    Clock,
+    Maximize2,
+    Minimize2,
+  } from "lucide-svelte";
+  import {
+    overlayMaximized,
+    setOverlayMaximized,
+  } from "../state/pageWidth.svelte";
   import cytoscape from "cytoscape";
   import type { Core, ElementDefinition, EventObject, Layouts } from "cytoscape";
   // @ts-expect-error fcose ships no .d.ts; the layout name is enough
@@ -162,6 +172,11 @@
 
   function toggleInspector(): void {
     graphOverlay.inspectorOpen = !graphOverlay.inspectorOpen;
+    menu?.close();
+  }
+
+  function doToggleOverlayMaximized(): void {
+    setOverlayMaximized(!overlayMaximized.on);
     menu?.close();
   }
 
@@ -1642,6 +1657,17 @@
         <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
       {/if}
       <span>{graphOverlay.inspectorOpen ? "Hide Details" : "Show Details"}</span>
+    </button>
+  </li>
+  <li>
+    <button role="menuitem" onclick={doToggleOverlayMaximized}>
+      {#if overlayMaximized.on}
+        <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        <span>Restore size</span>
+      {:else}
+        <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        <span>Maximize</span>
+      {/if}
     </button>
   </li>
   <li class="sep" role="separator"></li>

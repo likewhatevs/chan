@@ -2,7 +2,7 @@
 // One module-level singleton per concern; components import them directly.
 
 import type { IndexStatus, LlmMessage, TreeEntry, DriveInfo } from "../api/types";
-import { api, assistantHash16, openWatchSocket, type WsStatus } from "../api/client";
+import { ApiError, api, assistantHash16, authToken, openWatchSocket, type WsStatus } from "../api/client";
 import {
   closeTab,
   layout,
@@ -72,12 +72,19 @@ export const ui = $state<{
   themeChoice: ThemeChoice;
   /// Resolved value applied to `document.documentElement[data-theme]`.
   theme: "light" | "dark";
+  /// Set when the SPA shell loaded but bootstrap's first API call
+  /// returned 401 and there was no token in the URL or sessionStorage.
+  /// Drives `MissingTokenOverlay`. Users land here when they copy the
+  /// loopback URL out of the address bar but lose the `?t=...` token
+  /// the server prints at launch.
+  authMissing: boolean;
 }>({
   status: null,
   lastWatch: 0,
   ws: "connecting",
   themeChoice: "system",
   theme: effectiveTheme("system"),
+  authMissing: false,
 });
 
 // Route leaf-module notify() calls to the shared status line.
@@ -409,6 +416,14 @@ export async function bootstrap(): Promise<void> {
     }
     startIndexStatusPoller();
   } catch (e) {
+    // Friendly path for the common "copied the URL without the token"
+    // case: the SPA shell is static and loads fine, but the first
+    // /api call comes back 401. Surface the missing-token overlay
+    // instead of a terse status-bar message buried in the corner.
+    if (e instanceof ApiError && e.status === 401 && authToken() === null) {
+      ui.authMissing = true;
+      return;
+    }
     ui.status = `bootstrap failed: ${(e as Error).message}`;
   }
 }

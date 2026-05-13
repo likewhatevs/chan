@@ -29,12 +29,13 @@
 
   import type { Snippet } from "svelte";
   import { overlayDepth, type OverlayId } from "../state/store.svelte";
+  import { overlayMaximized } from "../state/pageWidth.svelte";
 
   let {
     id,
     open,
     onClose,
-    width = "min(1200px, calc(100vw - 48px))",
+    width,
     children,
   }: {
     id: OverlayId;
@@ -50,6 +51,19 @@
   // base z-index, but the `{#if open}` below means we never paint
   // anything in that state anyway.
   const zIndex = $derived(25000 + Math.max(0, overlayDepth(id)) * 10);
+
+  // Resolved panel width. An explicit `width` prop from the caller
+  // wins (no overlay sets one today, but the override stays useful
+  // for narrower future surfaces). Otherwise we honor the global
+  // overlay-maximize toggle: 1200px cap by default, full viewport
+  // minus a symmetric 44px gutter when maximized so the side margin
+  // matches the top safe-area + chrome buffer.
+  const resolvedWidth = $derived(
+    width ??
+      (overlayMaximized.on
+        ? "calc(100vw - 88px)"
+        : "min(1200px, calc(100vw - 48px))"),
+  );
 </script>
 
 {#if open}
@@ -73,7 +87,7 @@
     >×</button>
     <div
       class="panel"
-      style="width: {width};"
+      style="width: {resolvedWidth};"
       onclick={(e) => e.stopPropagation()}
       role="dialog"
       tabindex="-1"
