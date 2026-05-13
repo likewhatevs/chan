@@ -320,6 +320,15 @@ pub struct CompleteBody {
     #[serde(default)]
     #[allow(dead_code)]
     temperature: Option<f32>,
+    /// Per-turn auto-apply override. The composer toggle (next to
+    /// Send) supplies this on every request. When Some, both the
+    /// per-request config clone (used by in-process backends) and
+    /// the live AppState config (read by the MCP bridge at connect
+    /// time) are updated so claude_cli / gemini_cli subprocesses
+    /// see the same value via their MCP child. None preserves the
+    /// existing config (legacy callers without the toggle).
+    #[serde(default)]
+    auto_apply_writes: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -545,6 +554,15 @@ pub async fn api_llm_complete(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CompleteBody>,
 ) -> Response {
+    // Apply the per-turn auto-apply override (composer toggle) to
+    // the live config BEFORE cloning, so the MCP bridge closure
+    // (which reads from this same Mutex on each new connection) and
+    // the per-request config clone agree. Single-user, single-machine
+    // invariant: concurrent requests with different overrides aren't
+    // a concern.
+    if let Some(override_) = body.auto_apply_writes {
+        state.llm_config.lock().unwrap().auto_apply_writes = override_;
+    }
     let mut config = state.llm_config.lock().unwrap().clone();
     // Active backend determines the model echoed back in the
     // response. Falls through the same way /api/llm/status does

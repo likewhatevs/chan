@@ -1068,6 +1068,46 @@ export function watchBubbleDisplayMode(): () => void {
   return () => window.removeEventListener("storage", handler);
 }
 
+/// Per-turn auto-apply state. The composer toggle next to Send sets
+/// this; every /api/llm/complete request forwards it as
+/// `auto_apply_writes` so the MCP bridge sees the live value when
+/// claude-cli / gemini-cli's MCP child connects. Persisted to
+/// localStorage so the user's last choice survives reload; default
+/// is `false` (safe: writes pause for review through the diff card).
+const AUTO_APPLY_STORAGE_KEY = "chan.assistant.autoApply";
+
+function readAutoApply(): boolean {
+  try {
+    return localStorage.getItem(AUTO_APPLY_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export const autoApplyWrites = $state<{ value: boolean }>({
+  value: readAutoApply(),
+});
+
+export function setAutoApplyWrites(v: boolean): void {
+  if (autoApplyWrites.value === v) return;
+  autoApplyWrites.value = v;
+  try {
+    localStorage.setItem(AUTO_APPLY_STORAGE_KEY, v ? "true" : "false");
+  } catch {
+    // private-mode Safari et al.
+  }
+}
+
+export function watchAutoApplyWrites(): () => void {
+  if (typeof window === "undefined") return () => {};
+  const handler = (e: StorageEvent) => {
+    if (e.key !== AUTO_APPLY_STORAGE_KEY) return;
+    autoApplyWrites.value = e.newValue === "true";
+  };
+  window.addEventListener("storage", handler);
+  return () => window.removeEventListener("storage", handler);
+}
+
 export type AssistantTurn =
   | { kind: "user"; content: string; created_at?: number }
   | {

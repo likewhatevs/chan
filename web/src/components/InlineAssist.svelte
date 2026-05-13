@@ -42,6 +42,8 @@
     Minimize2,
     Network,
     PenLine,
+    ShieldCheck,
+    ShieldOff,
   } from "lucide-svelte";
 
   import { api } from "../api/client";
@@ -65,11 +67,13 @@
     assistantConversations,
     assistantOverlay,
     assistantStream,
+    autoApplyWrites,
     availableAssistantContexts,
     bareToolName,
     beginAssistantStream,
     bubbleDisplayMode,
     type BubbleDisplayMode,
+    setAutoApplyWrites,
     setBubbleDisplayMode,
     clearFileConversation,
     clearGroupConversation,
@@ -890,6 +894,11 @@
           tools,
           max_tokens: 4000,
           session_id: sessionId,
+          // Per-turn auto-apply toggle (composer button next to
+          // Send). Forwarded on every request so the MCP bridge
+          // reads the live value when claude-cli / gemini-cli's
+          // MCP child connects.
+          auto_apply_writes: autoApplyWrites.value,
           // Temperature intentionally omitted: every backend has
           // a sensible default, and reasoning / extended-thinking
           // models reject any explicit value. Letting the model
@@ -2173,6 +2182,28 @@
             <span class="muted">Cmd+Enter to send  ·  /clear to reset</span>
           {/if}
         </span>
+        <!-- Auto-apply toggle sits left of Send so the user can flip
+             it per turn without leaving the chat. Persisted via
+             localStorage (chan.assistant.autoApply); the value rides
+             on every /api/llm/complete request so the MCP bridge
+             reads the live state when claude-cli / gemini-cli's
+             MCP child connects. -->
+        <button
+          class="action-btn auto-apply"
+          class:on={autoApplyWrites.value}
+          onclick={() => setAutoApplyWrites(!autoApplyWrites.value)}
+          title={autoApplyWrites.value
+            ? "auto-apply ON — writes land without confirmation (click to disable)"
+            : "auto-apply OFF — writes pause for review (click to enable)"}
+          aria-label={autoApplyWrites.value ? "auto-apply on" : "auto-apply off"}
+          aria-pressed={autoApplyWrites.value}
+        >
+          {#if autoApplyWrites.value}
+            <ShieldCheck size={14} strokeWidth={1.75} aria-hidden="true" />
+          {:else}
+            <ShieldOff size={14} strokeWidth={1.75} aria-hidden="true" />
+          {/if}
+        </button>
         {#if loading}
           <button
             class="action-btn stop"
@@ -3030,6 +3061,24 @@
   }
   .action-btn.stop:hover {
     background: #d33;
+    color: #fff;
+  }
+  /* Auto-apply shield: muted while OFF (the safe default), accent
+     while ON so the diff-card-bypass mode is hard to miss. */
+  .action-btn.auto-apply {
+    color: var(--text-secondary);
+    border-color: var(--btn-border);
+  }
+  .action-btn.auto-apply:hover {
+    color: var(--text);
+    border-color: var(--text-secondary);
+  }
+  .action-btn.auto-apply.on {
+    color: var(--link);
+    border-color: var(--link);
+  }
+  .action-btn.auto-apply.on:hover {
+    background: var(--link);
     color: #fff;
   }
 

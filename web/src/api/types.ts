@@ -208,6 +208,10 @@ export type LlmCompletionRequest = {
   /// frontend filter the broadcast channel to its own turn so
   /// streaming deltas from a sibling window don't crosstalk.
   session_id?: string;
+  /// Per-turn auto-apply override. Set by the composer toggle next
+  /// to Send. When true, tool-driven writes apply without surfacing
+  /// the diff card; when false, write_file calls pause for review.
+  auto_apply_writes?: boolean;
 };
 
 export type LlmStopReason =

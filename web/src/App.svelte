@@ -41,6 +41,7 @@
     settingsOverlay,
     syncOverlayStack,
     topOverlay,
+    watchAutoApplyWrites,
     watchBubbleDisplayMode,
     watchSystemTheme,
   } from "./state/store.svelte";
@@ -188,6 +189,8 @@
     // render mode so flipping it in one window propagates to
     // every other open window live.
     watchBubbleDisplayMode();
+    // And for the composer's auto-apply toggle (next to Send).
+    watchAutoApplyWrites();
     // Idle tracker: after 2.5s without scroll/click/keypress, the
     // floating pills fade. Any input flips them back on.
     installIdleTracker();

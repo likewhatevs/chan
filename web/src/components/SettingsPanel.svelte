@@ -981,24 +981,11 @@
         </div>
       {/if}
 
-      <!-- 4. Auto-apply + tooltip. Disabled until the backend is
-           both ready AND on a tool-capable model: until then,
-           "auto-apply writes" has no writes to apply, so the
-           checkbox would just be a confusing inert toggle. -->
-      <label class="toggle-row">
-        <input
-          type="checkbox"
-          bind:checked={editing.assistant.auto_apply_writes}
-          disabled={!llmStatus?.ready || !llmStatus?.supports_tools || !editing.assistant.enabled}
-        />
-        <span>Auto-apply writes</span>
-        <span class="hint-text">
-          apply tool-driven writes without confirmation
-          {#if llmStatus?.ready && !llmStatus?.supports_tools}
-            (current model has no tool support)
-          {/if}
-        </span>
-      </label>
+      <!-- Auto-apply moved out of Settings: the toggle now lives in
+           the chat composer (next to Send), so it can be flipped
+           per turn without leaving the conversation. The persisted
+           pref still rides on the backend's editor TOML as the
+           default the toggle initializes from. -->
 
       <!-- 5 + 6. Status block at the bottom: ready/not-ready
            pill, then the tools row with a longer explanation when
