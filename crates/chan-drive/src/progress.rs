@@ -35,12 +35,13 @@
 //                   silent internal phases (orphan-shard cleanup,
 //                   trash sweeps)
 
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Which long-running operation the event belongs to. Kept narrow so
 /// a UI can switch on it to pick a label / icon without parsing the
 /// `label` string.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProgressStage {
     /// Walking the drive and rebuilding the graph in memory before
     /// the single-tx commit. Long on large drives but rarely the
@@ -79,7 +80,7 @@ pub enum ProgressStage {
 /// are domain-specific (see `ProgressStage`); the consumer treats
 /// `total == 0` as "indeterminate" and renders a spinner instead of
 /// a percentage.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgressEvent {
     pub stage: ProgressStage,
     pub current: u64,

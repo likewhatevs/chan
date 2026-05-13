@@ -586,13 +586,14 @@ call; callers exceeding them get `ChanError::TooLarge`.
 ```rust
 Drive::search(query: &str, opts: &SearchOpts) -> Result<SearchResult>
 Drive::reindex(cancel: Option<&AtomicBool>) -> Result<BuildSummary>
-Drive::reindex_with<F>(cancel: Option<&AtomicBool>, progress: F)
-    -> Result<BuildSummary>
-    where F: FnMut(BuildProgress)
+Drive::reindex_with(cancel: Option<&AtomicBool>,
+    progress: &dyn ProgressCallback) -> Result<BuildSummary>
 Drive::index_file(rel: &str) -> Result<()>
 Drive::forget_file(rel: &str) -> Result<()>
 Drive::num_indexed() -> Result<u64>
 Drive::index_stats() -> Result<IndexStats>
+Drive::needs_rebuild() -> bool
+Drive::is_reindexing() -> bool
 Drive::link_targets(q: &str, limit: u32) -> Result<Vec<LinkTarget>>
 Drive::resolve_link(target: &str) -> Option<ResolvedLink>
 
@@ -616,6 +617,79 @@ trait WatchCallback: Send + Sync {
     fn on_event(&self, event: WatchEvent);
 }
 ```
+
+### Drive: progress and indexing status
+
+Long-running operations (reindex, rename with link rewrite, contacts
+import, drive reset, embedding model load) report progress through
+one umbrella callback type. The same sink shape carries every stage,
+so a consumer (chan-server's WebSocket fan-out, the CLI's progress
+bar, future native shells) wires one listener instead of one per op.
+
+```rust
+trait ProgressCallback: Send + Sync {
+    fn on_progress(&self, event: ProgressEvent);
+}
+
+struct ProgressEvent {
+    stage: ProgressStage,
+    current: u64,
+    total: u64,        // 0 means "indeterminate"
+    label: Option<String>,
+}
+
+enum ProgressStage {
+    GraphRebuild,    // one event per editable-text file walked
+    IndexFile,       // one event per file before BM25 enqueue
+    EmbedBatch,      // one event per cross-file embedding flush
+    RenameRewrite,   // one event per source file rewritten
+    Import,          // one event per contact written
+    Reset,           // one event per subsystem wiped
+    ModelLoad,       // phase boundaries: resolve, download, load
+    Heartbeat,       // sparse keep-alive for silent internal phases
+}
+
+// In-process pull side of the same signal.
+Drive::is_reindexing(&self) -> bool
+Drive::needs_rebuild(&self) -> bool
+
+// Helpers for consumers that don't need a full type.
+fn progress_fn<F: Fn(ProgressEvent) + Send + Sync + 'static>(f: F)
+    -> Arc<dyn ProgressCallback>
+struct NoProgress;                       // discards every event
+```
+
+`ProgressEvent` and `ProgressStage` derive `Serialize` /
+`Deserialize`. The wire shape is the field names verbatim with
+`stage` serialized as its PascalCase variant name (`"IndexFile"`,
+`"GraphRebuild"`, etc.). `label: None` serializes as JSON `null`.
+Pinned by `tests/progress_events.rs::progress_event_serializes_for_the_wire`,
+so a future change to the wire shape is an explicit edit, not
+silent breakage of every connected client.
+
+Push vs. pull, and how the three signals relate:
+
+  - `ProgressCallback::on_progress` is the push side: zero or more
+    events per long-running call, fired on the producer's thread.
+    Events are best-effort hints, not a stream contract; a slow
+    consumer may drop ticks. The on-disk state is the authority.
+  - `Drive::is_reindexing()` is the pull side: true while a
+    `reindex_with` is in flight in this process, cleared on every
+    exit path (success, error, cancellation, panic) via a RAII
+    guard. A Web App / WebSocket client uses this on first connect
+    to render "indexing..." without waiting for the next push.
+  - `Drive::needs_rebuild()` is orthogonal: set by `Drive::open`
+    when it finds a stale `rebuild.inprogress` marker from a prior
+    crashed reindex, cleared after the next successful `reindex_with`
+    commits. Survives across process restarts, which the in-memory
+    `is_reindexing()` cannot.
+
+Cardinality is per-file for `IndexFile` / `RenameRewrite` /
+`GraphRebuild` and per-batch for `EmbedBatch`; on a 10k-file drive
+a full reindex can push tens of thousands of events. Consumers that
+fan out over a transport (chan-server WebSocket, native FFI bridge)
+should coalesce or rate-limit upstream of the socket; the producer
+side does not throttle.
 
 ### Contacts
 
@@ -681,14 +755,18 @@ repo root, present a dialog, accept an explicit override).
 
 `SearchMode { Bm25, Dense, Hybrid }`, `SearchOpts`, `SearchResult`,
 `Hit`, `Chunking { Headings, WholeDoc, Fixed { chars } }`,
-`IndexConfig`, `IndexStats`, `BuildOptions`, `BuildProgress`,
-`BuildStage`, `BuildSummary`. `ResetMode { Cache, Everything }`,
-`ResetReport`. `KnownDrive`, `Registry`. `Edge`, `EdgeKind`, `Tag`,
-`HeadingRow`, `LinkTarget`, `LinkTargetKind`. `WatchEvent`,
-`WatchKind`, `WatchHandle`, `WatchCallback`. `VcsKind`,
-`VcsParent`. `ChanError`, `Result`.
+`IndexConfig`, `IndexStats`, `BuildOptions`, `BuildSummary`.
+`ProgressCallback`, `ProgressEvent`, `ProgressStage`, `NoProgress`,
+`progress_fn`. `ResetMode { Cache, Everything }`, `ResetReport`.
+`KnownDrive`, `Registry`. `Edge`, `EdgeKind`, `Tag`, `HeadingRow`,
+`LinkTarget`, `LinkTargetKind`. `WatchEvent`, `WatchKind`,
+`WatchHandle`, `WatchCallback`. `VcsKind`, `VcsParent`. `ChanError`,
+`Result`.
 
 All public types are owned (no lifetimes) and `Send + Sync`.
+`WatchEvent`, `WatchKind`, `ProgressEvent`, and `ProgressStage`
+derive `Serialize` / `Deserialize` so a consumer can forward them
+across a WebSocket / FFI bridge without an intermediate copy type.
 
 ## 5. Invariants and trust boundaries
 
@@ -961,7 +1039,14 @@ Usage shape:
     Arc<Drive>>>` populated lazily on first request.
   - WebSocket handler installs a `WatchCallback` that
     serializes `WatchEvent`s onto the socket; drops the
-    `WatchHandle` on disconnect.
+    `WatchHandle` on disconnect. The same socket (or a sibling
+    one) carries `ProgressEvent`s by installing a
+    `ProgressCallback` that forwards each tick as JSON, and
+    answers a "status on connect" probe with
+    `Drive::is_reindexing()` / `Drive::needs_rebuild()` /
+    `Drive::index_stats()` so a freshly attached Web App client
+    can render the indexing state without waiting for the next
+    push.
   - All HTTP filesystem ops route through `Drive` so the
     sandbox, special-file refusal, atomic writes, and editable-
     text gate apply automatically. `chan-server` never reads or

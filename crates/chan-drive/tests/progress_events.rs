@@ -213,6 +213,103 @@ fn reset_drive_with_emits_one_event_per_subsystem() {
 }
 
 #[test]
+fn is_reindexing_flips_during_reindex_with() {
+    // The Web App / WebSocket fan-out wants both push (ProgressEvent)
+    // and pull (is_reindexing()) so a freshly connected client can
+    // render "indexing..." without waiting for the next tick. This
+    // test wires the two together: the callback observes the live
+    // flag at the moment of each push and asserts it is true; the
+    // flag is checked false before the call and after it returns.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    struct FlagWatcher {
+        drive: Arc<chan_drive::Drive>,
+        seen_true: AtomicBool,
+    }
+    impl ProgressCallback for FlagWatcher {
+        fn on_progress(&self, _e: ProgressEvent) {
+            // Every event must fire while is_reindexing() is true.
+            // If this ever sees false, the guard is broken (cleared
+            // too early) or the flag was never set.
+            assert!(
+                self.drive.is_reindexing(),
+                "is_reindexing() must be true while ProgressCallback fires"
+            );
+            self.seen_true.store(true, Ordering::Release);
+        }
+    }
+
+    let cfg = TempDir::new().unwrap();
+    let drive_root = TempDir::new().unwrap();
+    let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+    lib.register_drive(drive_root.path(), Some("Live".into()))
+        .unwrap();
+    let drive = lib.open_drive(drive_root.path()).unwrap();
+    drive.write_text("a.md", "# A\n\nbody\n").unwrap();
+    drive.write_text("b.md", "# B\n\nbody\n").unwrap();
+
+    assert!(
+        !drive.is_reindexing(),
+        "fresh drive should not report a reindex in progress"
+    );
+
+    let watcher = FlagWatcher {
+        drive: drive.clone(),
+        seen_true: AtomicBool::new(false),
+    };
+    drive.reindex_with(None, &watcher).unwrap();
+
+    assert!(
+        watcher.seen_true.load(Ordering::Acquire),
+        "expected at least one ProgressEvent so the flag could be observed",
+    );
+    assert!(
+        !drive.is_reindexing(),
+        "is_reindexing() must clear after reindex_with returns"
+    );
+}
+
+#[test]
+fn progress_event_serializes_for_the_wire() {
+    // Lock the JSON shape the Web App / WebSocket consumer will see.
+    // Field names are stable contract: changing them silently breaks
+    // every connected client, so this test pins them.
+    let ev = ProgressEvent {
+        stage: ProgressStage::IndexFile,
+        current: 3,
+        total: 10,
+        label: Some("notes/x.md".into()),
+    };
+    let json = serde_json::to_value(&ev).unwrap();
+    assert_eq!(json["stage"], "IndexFile");
+    assert_eq!(json["current"], 3);
+    assert_eq!(json["total"], 10);
+    assert_eq!(json["label"], "notes/x.md");
+
+    // Round-trip must reconstruct the value (proves Deserialize too,
+    // which the consumer side of a tunnel/WS would use).
+    let back: ProgressEvent = serde_json::from_value(json).unwrap();
+    assert_eq!(back.stage, ProgressStage::IndexFile);
+    assert_eq!(back.current, 3);
+    assert_eq!(back.total, 10);
+    assert_eq!(back.label.as_deref(), Some("notes/x.md"));
+
+    // `label: None` must serialize (the field is mandatory in the
+    // struct; we don't skip None today, so the wire shows null).
+    // Pin this so a future "skip_serializing_if" change is explicit.
+    let ev2 = ProgressEvent {
+        stage: ProgressStage::Heartbeat,
+        current: 0,
+        total: 0,
+        label: None,
+    };
+    let json2 = serde_json::to_value(&ev2).unwrap();
+    assert_eq!(json2["stage"], "Heartbeat");
+    assert!(json2["label"].is_null());
+}
+
+#[test]
 fn progress_fn_adapter_lets_closures_be_callbacks() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();

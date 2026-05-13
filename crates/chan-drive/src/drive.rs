@@ -189,6 +189,18 @@ pub struct Drive {
     /// before answering search queries. Cleared by `reindex_with`
     /// after the marker file is removed on disk.
     needs_rebuild: std::sync::atomic::AtomicBool,
+    /// Live flag for "a `reindex_with` is currently running in this
+    /// process." Set on entry, cleared on every exit path (including
+    /// cancellation and errors) via a RAII guard. Surfaces through
+    /// `is_reindexing()` so a connecting Web App / WebSocket consumer
+    /// can pull current state instead of waiting for the next push
+    /// from `ProgressCallback`. Cross-process visibility is not the
+    /// goal: the `rebuild.inprogress` marker covers crash recovery
+    /// and `needs_rebuild()` exposes that. This flag answers "is the
+    /// in-memory rebuild going right now?" which the on-disk marker
+    /// can't, because the marker is also set during a successful
+    /// in-flight reindex.
+    reindexing: std::sync::atomic::AtomicBool,
     /// Lazily-initialized SLOC / language / COCOMO report. First
     /// touch (`report()` or `watch()`) does a full scan; further
     /// access reads the cached state, and the watcher fanout
@@ -273,6 +285,7 @@ impl Drive {
             graph: std::sync::OnceLock::new(),
             rename_log: std::sync::Mutex::new(rename_log),
             needs_rebuild: std::sync::atomic::AtomicBool::new(needs_rebuild),
+            reindexing: std::sync::atomic::AtomicBool::new(false),
             report: std::sync::OnceLock::new(),
         }))
     }
@@ -287,6 +300,17 @@ impl Drive {
     pub fn needs_rebuild(&self) -> bool {
         self.needs_rebuild
             .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// True while a `reindex_with` is in flight in this process. The
+    /// Web App / WebSocket fan-out uses this on first connect to
+    /// render "indexing..." without having to wait for the next
+    /// `ProgressEvent` push; combine with `index_stats()` for the
+    /// chunk count and `needs_rebuild()` for the "needs catch-up"
+    /// signal. The flag is cleared on every exit path of
+    /// `reindex_with` (success, error, cancellation) via a guard.
+    pub fn is_reindexing(&self) -> bool {
+        self.reindexing.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Validate `rel` for use with the cap-std `Dir`. Returns a
@@ -1275,6 +1299,21 @@ impl Drive {
         cancel: Option<&AtomicBool>,
         progress: &dyn crate::progress::ProgressCallback,
     ) -> Result<BuildSummary> {
+        // Guard flips `reindexing` true for the lifetime of this call
+        // and back to false on every exit path (`?` early return,
+        // cancellation, panic). The flag is what `is_reindexing()`
+        // returns and is the pull-side of the progress notification
+        // story for the Web App.
+        struct ReindexGuard<'a>(&'a std::sync::atomic::AtomicBool);
+        impl<'a> Drop for ReindexGuard<'a> {
+            fn drop(&mut self) {
+                self.0.store(false, std::sync::atomic::Ordering::Release);
+            }
+        }
+        self.reindexing
+            .store(true, std::sync::atomic::Ordering::Release);
+        let _guard = ReindexGuard(&self.reindexing);
+
         // Graph rebuild walks the tree once for headings + edges.
         // The search facade walks again for chunking + embeddings.
         // Two passes is the trade for a clean separation; per-file
