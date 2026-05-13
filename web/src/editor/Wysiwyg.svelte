@@ -393,21 +393,24 @@
   :global(.md-wysiwyg-cm6 .cm-editor.cm-focused) {
     outline: none !important;
   }
-  /* Fold gutter: drop the default greyish gutter background. The
-     chevron itself stays clickable; only the container goes
-     transparent so the editor bg shows through. */
+  /* Heading-only fold gutter (custom). Strips the default gutter
+     background + border so the chevron column blends into the
+     editor canvas. */
   :global(.md-wysiwyg-cm6 .cm-gutters),
-  :global(.md-wysiwyg-cm6 .cm-foldGutter),
-  :global(.md-wysiwyg-cm6 .cm-foldGutter .cm-gutterElement) {
+  :global(.md-wysiwyg-cm6 .cm-md-fold-gutter),
+  :global(.md-wysiwyg-cm6 .cm-md-fold-gutter .cm-gutterElement) {
     background: transparent !important;
     border: none !important;
   }
-  :global(.md-wysiwyg-cm6 .cm-foldGutter .cm-gutterElement) {
-    color: var(--text-secondary, #888);
+  :global(.md-wysiwyg-cm6 .cm-md-fold-gutter .cm-gutterElement) {
     cursor: pointer;
     padding: 0 0.25em;
   }
-  :global(.md-wysiwyg-cm6 .cm-foldGutter .cm-gutterElement:hover) {
+  :global(.md-wysiwyg-cm6 .cm-md-fold-chevron) {
+    color: var(--text-secondary, #aaa);
+    transition: color 0.12s;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-fold-gutter .cm-gutterElement:hover .cm-md-fold-chevron) {
     color: var(--text);
   }
   /* Folded-heading inline placeholder ("..." dropped at EOL when a

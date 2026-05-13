@@ -196,13 +196,21 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
 
   function renderPreview(): void {
     preview.innerHTML = "";
-    const path = hits[selectedIndex];
-    if (!path) return;
-    const url = resolveImageSrc(path, opts.currentPath);
+    // Prefer the hit under selection; fall back (raw mode editing
+    // an existing image) to the source URL the user is editing so
+    // the preview always shows SOMETHING. The fallback uses the
+    // current URL slot text — `query` is set to that text at open
+    // time and updated on every keystroke.
+    let src: string | null = hits[selectedIndex] ?? null;
+    if (src === null && opts.templateMode === "raw" && query.length > 0) {
+      src = query;
+    }
+    if (!src) return;
+    const url = resolveImageSrc(src, opts.currentPath);
     if (!url) return;
     const img = document.createElement("img");
     img.src = url;
-    img.alt = path;
+    img.alt = src;
     preview.appendChild(img);
   }
 
