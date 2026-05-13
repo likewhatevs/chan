@@ -371,6 +371,23 @@
   :global(.md-wysiwyg-cm6 .cm-editor .cm-activeLine) {
     background-color: transparent !important;
   }
+  /* Fold gutter: drop the default greyish gutter background. The
+     chevron itself stays clickable; only the container goes
+     transparent so the editor bg shows through. */
+  :global(.md-wysiwyg-cm6 .cm-gutters),
+  :global(.md-wysiwyg-cm6 .cm-foldGutter),
+  :global(.md-wysiwyg-cm6 .cm-foldGutter .cm-gutterElement) {
+    background: transparent !important;
+    border: none !important;
+  }
+  :global(.md-wysiwyg-cm6 .cm-foldGutter .cm-gutterElement) {
+    color: var(--text-secondary, #888);
+    cursor: pointer;
+    padding: 0 0.25em;
+  }
+  :global(.md-wysiwyg-cm6 .cm-foldGutter .cm-gutterElement:hover) {
+    color: var(--text);
+  }
   :global(.md-wysiwyg-cm6[data-density="tight"] .cm-line) { line-height: 1.5; }
   :global(.md-wysiwyg-cm6[data-density="standard"] .cm-line) { line-height: 1.8; }
 
