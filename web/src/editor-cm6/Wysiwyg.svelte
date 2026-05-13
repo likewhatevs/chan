@@ -44,6 +44,8 @@
   import { openWikiBubble } from "./bubbles/wiki";
   import { openTagBubble } from "./bubbles/tag";
   import { openContactBubble } from "./bubbles/contact";
+  import { openImageBubble } from "./bubbles/image";
+  import { imageDropHandlers } from "./bubbles/image_drop";
   import type { FindAdapter } from "../editor/find";
 
   let {
@@ -136,8 +138,23 @@
         onDismiss,
       });
       activeKind = "contact";
+    } else if (spec.kind === "image") {
+      activeBubble = openImageBubble({
+        view,
+        triggerStart: spec.triggerStart,
+        triggerEnd: spec.triggerEnd,
+        initialQuery: spec.query,
+        uploadDir: dirOf(currentPath),
+        onDismiss,
+      });
+      activeKind = "image";
     }
-    // image bubble: step 7c.
+  }
+
+  function dirOf(p: string | null): string | null {
+    if (!p) return null;
+    const idx = p.lastIndexOf("/");
+    return idx <= 0 ? null : p.slice(0, idx);
   }
 
   /// Find-on-page adapter (same shape as Source.svelte and the legacy
@@ -167,6 +184,7 @@
         }),
         bubbleListener({ onSpec: handleSpec }),
         bubbleKeymap(() => activeBubble),
+        imageDropHandlers({ getUploadDir: () => dirOf(currentPath) }),
         EditorView.updateListener.of((u) => {
           sync.onDocChanged(u, (s) => (value = s));
         }),
@@ -394,6 +412,15 @@
   :global(.md-bubble .md-bubble-row-sub) {
     color: var(--text-secondary, #888);
     font-size: 12px;
+  }
+  :global(.md-bubble .md-bubble-actions) {
+    border-bottom: 1px solid var(--border, #eee);
+    margin-bottom: 4px;
+    padding-bottom: 4px;
+  }
+  :global(.md-bubble .md-bubble-action) {
+    color: var(--accent, #2563b8);
+    font-weight: 500;
   }
 
   /* ---- heading line classes ---- */
