@@ -504,6 +504,18 @@
   :global(.md-wysiwyg-cm6 .cm-content) {
     font-family: var(--chan-editor-body-family);
     color: var(--chan-editor-body-color, var(--text));
+    /* `--editor-top-pad` is set by the host (FileEditorTab on its
+       .editor-host, InlineAssist on the prompt wrap) and consumed
+       here so the first line of the editor clears the floating
+       style toolbar pill when it's enabled (2.5rem) and reclaims
+       that space when it's hidden (0.5rem). The variable was
+       orphaned during the CM6 migration — its old consumer lived
+       on the legacy `.md-wysiwyg` class. Restoring the wiring
+       lets the file editor's "Show Style Toolbar" toggle actually
+       shift the document, matching what the assistant prompt
+       already does. */
+    padding-top: var(--editor-top-pad, 0.5rem) !important;
+    transition: padding-top 180ms ease;
   }
   :global(.md-wysiwyg-cm6 .cm-editor),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-scroller),

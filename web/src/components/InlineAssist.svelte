@@ -201,7 +201,6 @@
   // keeps the binding sites compact.
   let loading = $state(false);
   let error = $state<string | null>(null);
-  let savedSelection = $state<string | null>(null);
 
   /// Animated "thinking" indicator: dots cycle 0..3 every 400ms
   /// while a request is in flight. Bare timeline animation, no
@@ -504,7 +503,6 @@
     // clobber the round-tripped prompt with a quoted version of
     // that stale selection on every refresh.
     error = null;
-    savedSelection = null;
     void ensureToolsLoaded();
     void refreshLlmStatus();
     if (currentContext.kind === "file") {
@@ -677,15 +675,12 @@
   function buildUserMessage(
     ctx: ScopeOption,
     userPrompt: string,
-    selection: string | null,
     excerpts: ContentHit[] | null,
   ): string {
     if (ctx.kind === "file") {
       const content = currentFileContent(ctx.path);
-      const selBlock = selection ? `\n\n# Selection\n\n${selection}` : "";
       return (
         `# File\n\nPath: ${ctx.path}\n\n${content}` +
-        selBlock +
         `\n\n# Instruction\n\n${userPrompt}`
       );
     }
@@ -820,7 +815,7 @@
       // excerpts so the model still answers what it can.
       tracingWarn(`retrieval failed: ${(e as Error).message}`);
     }
-    const userBody = buildUserMessage(ctx, trimmed, savedSelection, excerpts);
+    const userBody = buildUserMessage(ctx, trimmed, excerpts);
     // Detect markdown image refs in the prompt and ship the bytes
     // alongside as base64 so the direct backends (Anthropic /
     // Gemini / Ollama) can actually see the image. claude-cli /
@@ -1601,11 +1596,6 @@
         >
           <Clock size={14} strokeWidth={1.75} aria-hidden="true" />
         </button>
-        {#if currentContext?.kind === "file" && savedSelection}
-          <span class="sel-badge" title={savedSelection}>
-            selection: {savedSelection.length} chars
-          </span>
-        {/if}
         <HamburgerMenu
           bind:this={menu}
           bind:open={menuOpen}
@@ -1999,7 +1989,7 @@
           class="prompt-wrap"
           class:disabled={!currentContext}
           style:height={`${promptHeight}px`}
-          style:--prompt-top-pad={assistantOverlay.styleToolbarOpen ? "2.5rem" : "0.5rem"}
+          style:--editor-top-pad={assistantOverlay.styleToolbarOpen ? "2.5rem" : "0.5rem"}
         >
           {#if promptMode === "wysiwyg"}
             <!-- Pin the prompt's currentPath to the conversation's
@@ -2213,13 +2203,6 @@
     max-width: 320px;
   }
   header .context-select:focus { outline: none; border-color: var(--link); }
-  header .sel-badge {
-    background: var(--smart-bg);
-    color: var(--text);
-    padding: 1px 6px;
-    border-radius: 3px;
-    font-size: 13px;
-  }
   /* Scrollable chat history; takes the remaining vertical space. */
   .scroll {
     flex: 1;
@@ -2909,14 +2892,12 @@
     display: flex;
     flex-direction: column;
     overflow: auto;
-    /* Top padding tracks `--prompt-top-pad` set inline from the
+    /* Padding-top is consumed by the editor inside (Wysiwyg's
+       .cm-content reads `--editor-top-pad`), set inline from the
        style-toolbar toggle: 2.5rem when the toolbar is mounted so
-       the first line of the prompt clears the floating Aa pill,
-       0.5rem when it isn't so the input sits where the toolbar
-       would have been. Mirrors the file editor's `--editor-top-pad`
-       so the same toggle reads the same in every surface. */
-    padding-top: var(--prompt-top-pad, 0.5rem);
-    transition: padding-top 180ms ease;
+       the first line clears the floating Aa pill, 0.5rem when it
+       isn't. Same variable + same wiring as FileEditorTab so both
+       surfaces share one knob. */
   }
   /* Drag-to-resize bar on top of the prompt input. Sits above the
      .prompt-wrap so a drag upward grows the input height. Same
