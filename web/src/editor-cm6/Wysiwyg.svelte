@@ -17,8 +17,9 @@
   // corresponding behavior.
 
   import { onDestroy, onMount } from "svelte";
-  import { EditorState } from "@codemirror/state";
+  import { Compartment, EditorState, Prec } from "@codemirror/state";
   import { EditorView, keymap } from "@codemirror/view";
+  import { syntaxTree } from "@codemirror/language";
   import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
   import { drive, ui } from "../state/store.svelte";
   import {
@@ -48,19 +49,27 @@
   import { imageDropHandlers } from "./bubbles/image_drop";
   import { openImageActionOverlay } from "./overlays/image_action";
   import { headingFold } from "./fold";
+  import * as fmt from "./commands/format";
+  import type { BlockKind } from "./commands/format";
   import type { FindAdapter } from "../editor/find";
 
   let {
     value = $bindable(""),
+    readonly = false,
     currentPath = null,
     wikiPickerPrefix = null,
+    onSubmit,
+    onSelectionChange,
     onTagClick = () => {},
     onWikiClick = () => {},
     onImageClick = () => {},
   }: {
     value: string;
+    readonly?: boolean;
     currentPath?: string | null;
     wikiPickerPrefix?: string | null;
+    onSubmit?: () => void;
+    onSelectionChange?: () => void;
     onTagClick?: (tag: string) => void;
     onWikiClick?: (args: WikiLinkClickArgs) => void;
     onImageClick?: (args: ImageClickArgs) => void;
@@ -72,6 +81,7 @@
   let view: EditorView | undefined;
   const sync = createValueSync();
   const theme = makeThemeCompartment(ui.theme);
+  const editableCompartment = new Compartment();
 
   /// Active bubble handle (or null when no bubble is open). Updated by
   /// the controller's onSpec callback; the keymap reads it via the
@@ -181,9 +191,36 @@
 
   /// Find-on-page adapter (same shape as Source.svelte and the legacy
   /// WYSIWYG; FileEditorTab passes whichever editor is mounted to
-  /// FindBar). Step 4 satisfies the contract; later steps add the
-  /// rest of the imperative API.
+  /// FindBar).
   export const findAdapter: FindAdapter = makeFindAdapter(() => view);
+
+  /// Style-toolbar contract. Each method routes to the corresponding
+  /// editor-cm6/commands/format function with the live view ref.
+  /// Mirrors the legacy editor's exported imperative API so
+  /// StyleToolbar.svelte works at cutover with no edits.
+  export function toggleBold(): void { if (view) fmt.toggleBold(view); }
+  export function toggleItalic(): void { if (view) fmt.toggleItalic(view); }
+  export function toggleStrike(): void { if (view) fmt.toggleStrike(view); }
+  export function toggleInlineCode(): void { if (view) fmt.toggleInlineCode(view); }
+  export function toggleBulletList(): void { if (view) fmt.toggleBulletList(view); }
+  export function toggleOrderedList(): void { if (view) fmt.toggleOrderedList(view); }
+  export function toggleTaskList(): void { if (view) fmt.toggleTaskList(view); }
+  export function setBlockKind(kind: BlockKind): void {
+    if (view) fmt.setBlockKind(view, kind);
+  }
+  export function insertHorizontalRule(): void {
+    if (view) fmt.insertHorizontalRule(view);
+  }
+  export function insertImage(): void { if (view) fmt.insertImage(view); }
+  export function toggleLink(url: string): void {
+    if (view) fmt.toggleLink(view, url);
+  }
+  export function isActive(name: string): boolean {
+    return view ? fmt.isActive(view, name) : false;
+  }
+  export function currentBlockKind(): BlockKind {
+    return view ? fmt.currentBlockKind(view) : "normal";
+  }
 
   onMount(() => {
     if (!host) return;
@@ -208,9 +245,27 @@
         bubbleListener({ onSpec: handleSpec }),
         bubbleKeymap(() => activeBubble),
         imageDropHandlers({ getUploadDir: () => dirOf(currentPath) }),
+        editableCompartment.of(EditorView.editable.of(!readonly)),
         EditorView.updateListener.of((u) => {
           sync.onDocChanged(u, (s) => (value = s));
+          if (u.docChanged || u.selectionSet) {
+            onSelectionChange?.();
+          }
         }),
+        // Cmd/Ctrl+Enter -> onSubmit (assistant prompt). Registered
+        // via Prec.high so it beats CM6 default Enter (which would
+        // insert a newline first). Returning true consumes the event.
+        Prec.high(
+          keymap.of([
+            {
+              key: "Mod-Enter",
+              run: () => {
+                onSubmit?.();
+                return true;
+              },
+            },
+          ]),
+        ),
       ],
     });
     view = new EditorView({ state, parent: host });
@@ -232,6 +287,45 @@
     if (!view) return;
     theme.reconfigure(view, ui.theme);
   });
+
+  // Reconfigure editability when the readonly prop flips. Runs in its
+  // own effect so theme reconfigs don't bundle with it.
+  $effect(() => {
+    if (!view) return;
+    view.dispatch({
+      effects: editableCompartment.reconfigure(
+        EditorView.editable.of(!readonly),
+      ),
+    });
+  });
+
+  /// Scroll to the i-th heading (0-based, document order). Called by
+  /// the inspector outline when the user picks a heading.
+  export function scrollToHeading(i: number): void {
+    if (!view) return;
+    const headings: number[] = [];
+    syntaxTree(view.state).iterate({
+      enter(node) {
+        if (
+          node.name === "ATXHeading1" ||
+          node.name === "ATXHeading2" ||
+          node.name === "ATXHeading3" ||
+          node.name === "ATXHeading4" ||
+          node.name === "ATXHeading5" ||
+          node.name === "ATXHeading6"
+        ) {
+          headings.push(node.from);
+        }
+      },
+    });
+    const target = headings[Math.max(0, Math.min(i, headings.length - 1))];
+    if (target === undefined) return;
+    view.dispatch({
+      selection: { anchor: target },
+      effects: EditorView.scrollIntoView(target, { y: "start" }),
+    });
+    view.focus();
+  }
 </script>
 
 <div class="md-wysiwyg-cm6" data-density={density} bind:this={host}></div>
