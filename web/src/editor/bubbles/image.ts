@@ -91,10 +91,14 @@ export function invalidateImageCatalog(): void {
 }
 
 export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
-  // Anchor under the live caret; see bubbles/wiki.ts for the
-  // wrapped-line rationale.
-  const caretPos = (): number => opts.view.state.selection.main.head;
-  const anchor = createCaretAnchor(opts.view, caretPos());
+  // Anchor at the START of the editable range — for raw mode that's
+  // the URL slot's open boundary (just after `(`), for wrap mode
+  // it's the `!` of `![`. Stable across typing inside the trigger:
+  // unlike the live caret, this doesn't shift as the user edits,
+  // so the bubble stays put. Matches the legacy editor's "bubble
+  // under the `(` of `![](`" placement.
+  const anchorPos = (): number => opts.triggerStart;
+  const anchor = createCaretAnchor(opts.view, anchorPos());
   const shell = openBubbleShell({
     host: anchor.el,
     className: "md-image-bubble cm-bubble",
@@ -231,6 +235,11 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
         : query.length === 0
           ? "No images in drive"
           : "No matches";
+      // Still render the preview even with empty hits — in raw mode
+      // the fallback uses the current URL slot text, so the user
+      // sees the image they're editing even when the catalog
+      // doesn't match.
+      renderPreview();
       shell.reposition();
       return;
     }
@@ -358,7 +367,7 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
       return false;
     },
     setQuery(q) {
-      anchor.update(opts.view, caretPos());
+      anchor.update(opts.view, anchorPos());
       shell.reposition();
       if (q === query) return;
       query = q;
@@ -368,7 +377,7 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
       triggerEnd = end;
     },
     reposition() {
-      anchor.update(opts.view, caretPos());
+      anchor.update(opts.view, anchorPos());
       shell.reposition();
     },
     dismiss,
