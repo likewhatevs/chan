@@ -138,6 +138,14 @@
   /// identity, so the effect only acts on real transitions.
   let lastScopeId: string | null = null;
 
+  /// Set of node ids currently shown on the canvas. Maintained by
+  /// the depth-rewarm path so it can diff against the next
+  /// `visibleNodeIds` to find which nodes just appeared (and seed
+  /// them near a previously-visible neighbour, instead of letting
+  /// them pop in from their stale global-fcose coordinates).
+  /// Reset on every full rebuild and on overlay teardown.
+  let prevVisibleIds: Set<string> = new Set();
+
   let nodes: RenderedNode[] = $state([]);
   let edges: RenderedEdge[] = $state([]);
   let loading = $state(true);
@@ -862,11 +870,34 @@
   /// satellites off the canvas. Scale repulsion down and centering
   /// up as the visible count drops.
   function d3ForceOptions(visibleCount: number) {
-    // Smooth interpolation between sparse (≤8 nodes) and dense
-    // (≥40 nodes) regimes.
-    const t = Math.max(0, Math.min(1, (visibleCount - 8) / 32));
-    const manyBody = -20 + (-90 - -20) * t;
+    // Smooth interpolation across the size range, normalised to
+    // [0, 1] between 8 and 160 nodes. The previous ramp saturated
+    // at 40 nodes, which left dense graphs (100+) running with
+    // sparse-graph damping — every node pushing every other node
+    // and nothing draining the energy, hence the "frenzy" where
+    // big graphs jitter for the whole alpha budget without
+    // settling.
+    const t = Math.max(0, Math.min(1, (visibleCount - 8) / 152));
+    // Repulsion: ramps from -20 to -65 with density. Capped softer
+    // than before (was -90) because past ~80 nodes the dominant
+    // separation force is `collideStrength` (effectively a hard
+    // non-overlap); extra many-body repulsion on top of it feeds
+    // the oscillation rather than improving spacing.
+    const manyBody = -20 + (-65 - -20) * t;
+    // Centering pull: weaker as the graph grows so the cluster has
+    // room to spread without being yanked back to origin.
     const xy = 0.25 - (0.25 - 0.05) * t;
+    // Velocity damping: tighter for dense graphs. 0.45 keeps the
+    // sparse boot shake fluid; 0.78 is nearly overdamped, which is
+    // what big graphs need to kill momentum before nodes overshoot
+    // each other and ricochet back.
+    const velocityDecay = 0.45 + (0.78 - 0.45) * t;
+    // Alpha cooldown ticks: ~90 at sparse (~1.5s at 60fps),
+    // ~35 at dense. Dense graphs finish their relax pass faster,
+    // which is what "less frenzy" actually means visually — the
+    // shake window shrinks as node count grows.
+    const ticks = 90 - 55 * t;
+    const alphaMin = 0.05;
     return {
       name: "d3-force",
       animate: true,
@@ -876,16 +907,10 @@
       ungrabifyWhileSimulating: false,
       fixedAfterDragging: true,
       alpha: 1,
-      alphaMin: 0.05,
-      // ~90 ticks (~1.5s at 60fps) for the simulation to cool from
-      // alpha=1 to alphaMin: a brief shake-then-settle rather than
-      // a long simmer.
-      alphaDecay: 1 - Math.pow(0.05, 1 / 90),
+      alphaMin,
+      alphaDecay: 1 - Math.pow(alphaMin, 1 / ticks),
       alphaTarget: 0,
-      // Velocity damping. Loose enough that the shake stays visible
-      // across the 90-tick budget; tight enough that nodes stop on
-      // a definite resting point.
-      velocityDecay: 0.45,
+      velocityDecay,
       // Collide radius approximates the label's visual footprint,
       // not just the node circle: doc labels can be ~110px wide
       // (text-max-width) so we use ~55 as a half-width bubble that
@@ -896,7 +921,9 @@
         return 22;
       },
       collideStrength: 0.95,
-      collideIterations: 2,
+      // Extra collide iterations for dense graphs so overlaps
+      // resolve in fewer ticks instead of bouncing back and forth.
+      collideIterations: visibleCount > 80 ? 3 : 2,
       manyBodyStrength: manyBody,
       linkDistance: (e: { kind?: string }) =>
         e.kind === "link" ? 120 : 70,
@@ -1280,6 +1307,9 @@
     // Suppress the first re-firing of the currentScope effect: the
     // current scope IS the one we just built for.
     lastScopeId = `${currentScope?.id ?? null}|${graphOverlay.depth}`;
+    // Snapshot the freshly-revealed visible set so the next depth
+    // change can diff against it (see `rewarmForDepthChange`).
+    prevVisibleIds = new Set(visibleNodeIds);
   }
 
   /// Apply current scope + edge-kind filters by toggling the
@@ -1370,6 +1400,7 @@
       cy?.destroy();
       cy = null;
       lastScopeId = null;
+      prevVisibleIds = new Set();
       return;
     }
     if (!containerEl) return; // wait for bind:this to fire
@@ -1451,21 +1482,102 @@
     buildCytoscape(g);
   }
 
-  // Scope or depth change → full rebuild. The visible-only fcose
-  // pass that runs after the global layout sizes itself to whatever
-  // node set is currently in scope; toggling depth grows that set,
-  // so the new nodes need fresh positions or they show up at their
-  // (now stale) global-fcose coordinates. Cheap at our scale (low
-  // hundreds of nodes). Gated on the (id, depth) pair so the
-  // tree-derived scopeOptions re-deriving doesn't kick a rebuild.
+  /// Incremental relayout when only the depth slider moves: keep
+  /// the cytoscape instance, position newly-revealed nodes near a
+  /// previously-visible neighbour so they grow out of the cluster
+  /// instead of popping in from their stale global-fcose
+  /// coordinates, then restart d3-force with a small alpha kick so
+  /// the cluster relaxes around the additions / removals. Avoids
+  /// the destroy-and-rebuild jolt the user gets on every slider
+  /// tick.
+  function rewarmForDepthChange(): void {
+    if (!cy) return;
+    const newVis = new Set(visibleNodeIds);
+    const newlyVisible: string[] = [];
+    for (const id of newVis) {
+      if (!prevVisibleIds.has(id)) newlyVisible.push(id);
+    }
+    if (newlyVisible.length > 0) {
+      // Adjacency list over the rendered graph (both directions),
+      // built per call because depth changes are rare and the
+      // graph is small. Used to find a visible neighbour to seed
+      // each newly-revealed node next to.
+      const adj = new Map<string, string[]>();
+      for (const e of edges) {
+        const a = adj.get(e.source) ?? [];
+        a.push(e.target);
+        adj.set(e.source, a);
+        const b = adj.get(e.target) ?? [];
+        b.push(e.source);
+        adj.set(e.target, b);
+      }
+      for (const id of newlyVisible) {
+        const neighbours = adj.get(id) ?? [];
+        const anchorId = neighbours.find((n) => prevVisibleIds.has(n));
+        if (!anchorId) continue;
+        const anchor = cy.getElementById(anchorId);
+        if (anchor.empty()) continue;
+        const p = anchor.position();
+        const ele = cy.getElementById(id);
+        if (ele.nonempty()) {
+          ele.position({
+            x: p.x + (Math.random() - 0.5) * 40,
+            y: p.y + (Math.random() - 0.5) * 40,
+          });
+        }
+      }
+    }
+    prevVisibleIds = newVis;
+    // Flip the .hidden masks before restarting d3-force so the
+    // layout's :visible filter matches the new set. The
+    // visibleNodeIds effect would do this too, but ordering is
+    // unspecified across the two effects and we want the
+    // simulation to see the updated set on its first tick.
+    syncVisibility();
+    forceLayout?.stop();
+    const liveEles = cy.elements(":visible");
+    // Lower alpha than a fresh rebuild: existing nodes already
+    // sit near their resting positions, we're only nudging the
+    // cluster to absorb the new arrivals (or close the gap left
+    // by removals). High alpha here is what produced the "frenzy"
+    // on every slider tick.
+    // d3ForceOptions returns a cast cytoscape.LayoutOptions; the
+    // spread erases that cast (TS union narrows back to built-in
+    // layouts which don't list `alpha`), so re-assert it here.
+    forceLayout = liveEles.layout({
+      ...d3ForceOptions(liveEles.nodes().length),
+      alpha: newlyVisible.length > 0 ? 0.35 : 0.15,
+    } as unknown as cytoscape.LayoutOptions);
+    forceLayout.run();
+    // Same forceCenter strip as the initial build path: the
+    // built-in centering force fights our (0, 0) focal lock when
+    // the canvas centroid drifts.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sim = (forceLayout as any).simulation;
+    if (sim) sim.force("center", null);
+  }
+
+  // Scope or depth change → relayout. Scope change rebuilds from
+  // scratch (different anchor / seed set; the new focal needs a
+  // fresh fcose pass). Depth-only change takes the incremental
+  // path: keep cy, position new arrivals near a visible neighbour,
+  // re-warm d3-force with a small alpha. Gated on the (id, depth)
+  // pair so the tree-derived scopeOptions re-deriving doesn't
+  // kick a rebuild.
   $effect(() => {
     const id = currentScope?.id ?? null;
     const depth = graphOverlay.depth;
     if (!cy) return;
     const sig = `${id}|${depth}`;
     if (sig === lastScopeId) return;
+    const prevId = lastScopeId ? lastScopeId.split("|")[0] : null;
     lastScopeId = sig;
-    if (nodes.length > 0) void buildCytoscapeWhenSized({ nodes, edges });
+    if (nodes.length === 0) return;
+    if (prevId !== String(id)) {
+      void buildCytoscapeWhenSized({ nodes, edges });
+      return;
+    }
+    rewarmForDepthChange();
   });
 
   // Re-apply visibility filters when scope/depth/edge-kind chips
