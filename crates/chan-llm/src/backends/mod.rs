@@ -240,13 +240,12 @@ pub fn build(kind: BackendKind, config: &LlmConfig, drive_root: &Path) -> Result
             // user explicitly set one.
             let model = if model.is_empty() { None } else { Some(model) };
             // v2 MCP-mediated mode kicks in when the host supplied
-            // `mcp_command`. The auto-apply flag rides along so the
-            // subprocess we spawn (chan-llm-mcp / `chan __mcp`)
-            // honors the user's confirmation preference.
-            let mcp = cli.mcp_command.map(|command| claude_cli::McpWiring {
-                command,
-                auto_apply_writes: config.auto_apply_writes,
-            });
+            // `mcp_command`. The auto-apply gate is owned by the MCP
+            // server side (in chan-server, the bridge reads it per
+            // connection), so it isn't threaded through the wiring.
+            let mcp = cli
+                .mcp_command
+                .map(|command| claude_cli::McpWiring { command });
             let inactivity =
                 ndjson::resolve_inactivity_timeout(config.stream_inactivity_timeout_secs);
             Ok(Arc::new(claude_cli::ClaudeCliBackend::new(
@@ -270,11 +269,9 @@ pub fn build(kind: BackendKind, config: &LlmConfig, drive_root: &Path) -> Result
             // and no chan-llm key is stored; the v2 launch surfaces
             // an auth error in that case).
             let api_key = keys::resolve(BackendKind::Gemini, config).0;
-            let mcp = cli.mcp_command.map(|command| gemini_cli::McpWiring {
-                command,
-                auto_apply_writes: config.auto_apply_writes,
-                api_key,
-            });
+            let mcp = cli
+                .mcp_command
+                .map(|command| gemini_cli::McpWiring { command, api_key });
             let inactivity =
                 ndjson::resolve_inactivity_timeout(config.stream_inactivity_timeout_secs);
             Ok(Arc::new(gemini_cli::GeminiCliBackend::new(

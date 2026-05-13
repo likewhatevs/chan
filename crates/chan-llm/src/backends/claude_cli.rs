@@ -46,10 +46,11 @@
 //!   - `--permission-mode default` (we drop `bypassPermissions`):
 //!     anything not allow-listed blocks, which matches the contract.
 //!
-//! The MCP subprocess receives `--auto-apply` only when the user
-//! enabled it; otherwise `write_file` returns a "deferred" error
-//! to claude (the host-approval side channel for resuming claude
-//! mid-call is tracked in chan-llm issue #1).
+//! The auto-apply gate is owned by the MCP server side (in chan-
+//! server, the bridge reads `auto_apply_writes` per connection from
+//! the live config). When it's off, `write_file` returns a "deferred"
+//! error to claude (the host-approval side channel for resuming
+//! claude mid-call is tracked in chan-llm issue #1).
 //!
 //! Wire format:
 //!
@@ -126,13 +127,12 @@ pub fn default_cmd() -> Vec<String> {
 /// Host-supplied wiring that switches the backend into v2
 /// MCP-mediated mode. `command` is the full argv used to spawn the
 /// MCP server (typically the host binary plus a hidden subcommand
-/// and the drive path); `auto_apply_writes` mirrors `LlmConfig`'s
-/// flag and decides whether the MCP subprocess is launched with
-/// `--auto-apply`.
+/// and a socket path or drive root). The auto-apply gate is owned
+/// by the MCP server itself (in chan-server it lives on the bridge
+/// and is read per-connection), so it's not threaded through here.
 #[derive(Debug, Clone)]
 pub struct McpWiring {
     pub command: Vec<String>,
-    pub auto_apply_writes: bool,
 }
 
 /// MCP server name as it appears under `mcpServers` in the
@@ -275,9 +275,24 @@ impl Backend for ClaudeCliBackend {
             }
         };
 
-        if let Some(sys) = system.as_deref() {
-            command.arg("--append-system-prompt").arg(sys);
-        }
+        // Always inject the chan host's CLI session directive so
+        // the agent doesn't fall back to its "paste proposal in
+        // chat and wait for verbal approval" default — chan wraps
+        // every write_file in a diff-card review UI, so the model
+        // must emit the tool call directly. Order: chan directive
+        // first, then the host's system message (which carries
+        // per-conversation scope + tool catalog). claude-code
+        // appends both to its own built-in agent instructions via
+        // --append-system-prompt; the most-recent block wins for
+        // conflicts, so per-session host rules still ride above
+        // the directive's general guidance.
+        let combined_system = match system.as_deref() {
+            Some(host) => format!("{}\n\n{}", crate::prompts::CLI_SESSION_DIRECTIVE, host),
+            None => crate::prompts::CLI_SESSION_DIRECTIVE.to_string(),
+        };
+        command
+            .arg("--append-system-prompt")
+            .arg(&combined_system);
         if let Some(model) = self.model.as_deref() {
             command.arg("--model").arg(model);
         }
@@ -643,19 +658,15 @@ impl Backend for ClaudeCliBackend {
 /// ```
 ///
 /// The host-supplied `wiring.command` is split into argv[0] (the
-/// binary) and the rest (its args); we tack on `--auto-apply` only
-/// when the user opted in, so the MCP subprocess defers writes
-/// (returns a "deferred" tool error to claude) when auto-apply is
-/// off. The returned `NamedTempFile` must outlive the claude
-/// subprocess so the path remains valid.
+/// binary) and the rest (its args); we forward it verbatim. The
+/// auto-apply gate is owned by the MCP server side, so no extra
+/// flag is appended here. The returned `NamedTempFile` must outlive
+/// the claude subprocess so the path remains valid.
 fn write_mcp_config(wiring: &McpWiring) -> std::io::Result<NamedTempFile> {
     let (bin, base_args) = wiring.command.split_first().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "empty mcp_command")
     })?;
-    let mut args: Vec<String> = base_args.to_vec();
-    if wiring.auto_apply_writes {
-        args.push("--auto-apply".to_string());
-    }
+    let args: Vec<String> = base_args.to_vec();
     let body = serde_json::json!({
         "mcpServers": {
             MCP_SERVER_KEY: {
@@ -1548,10 +1559,14 @@ mod tests {
     }
 
     #[test]
-    fn mcp_config_omits_auto_apply_when_off() {
+    fn mcp_config_forwards_command_verbatim() {
+        // The MCP server owns the auto-apply gate; the proxy / MCP
+        // command line is forwarded as-is. The v2 chan-server proxy
+        // subcommand (`chan __mcp-proxy <socket>`) doesn't accept a
+        // `--auto-apply` flag and would clap-error if we appended one,
+        // so it's important that we don't.
         let f = write_mcp_config(&McpWiring {
-            command: vec!["chan".into(), "__mcp".into(), "/d".into()],
-            auto_apply_writes: false,
+            command: vec!["chan".into(), "__mcp-proxy".into(), "/tmp/s".into()],
         })
         .unwrap();
         let body = std::fs::read_to_string(f.path()).unwrap();
@@ -1561,7 +1576,7 @@ mod tests {
         let args = entry["args"].as_array().unwrap();
         assert_eq!(
             args.iter().map(|a| a.as_str().unwrap()).collect::<Vec<_>>(),
-            vec!["__mcp", "/d"]
+            vec!["__mcp-proxy", "/tmp/s"]
         );
     }
 
@@ -1591,19 +1606,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn mcp_config_appends_auto_apply_when_on() {
-        let f = write_mcp_config(&McpWiring {
-            command: vec!["chan".into(), "__mcp".into(), "/d".into()],
-            auto_apply_writes: true,
-        })
-        .unwrap();
-        let body = std::fs::read_to_string(f.path()).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let args = v["mcpServers"]["chan"]["args"].as_array().unwrap();
-        assert_eq!(
-            args.iter().map(|a| a.as_str().unwrap()).collect::<Vec<_>>(),
-            vec!["__mcp", "/d", "--auto-apply"]
-        );
-    }
 }

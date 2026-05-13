@@ -84,6 +84,49 @@ open. You don't have tools to read or modify files in this turn; \
 answer based on the conversation context and any content the user \
 has pasted into the messages. Be concise.";
 
+/// Per-session directive prepended to whatever system prompt the
+/// host passes to the agentic CLI backends (`claude_cli`,
+/// `gemini_cli`). These backends are full agents with their own
+/// tool-use heuristics, and they tend to default to a cautious
+/// \"show the user the proposal and wait for confirmation\" mode
+/// when run interactively — pasting the would-be file content as
+/// a chat fence instead of emitting the actual `write_file` MCP
+/// call. The directive overrides that for chan's host context:
+/// chan ALWAYS surfaces a confirmation diff card, so the model
+/// must emit the tool call directly and trust the host to gate
+/// the write. Same shape works for read-only tools too (don't
+/// pre-narrate a proposed read in chat — just call read_file).
+pub const CLI_SESSION_DIRECTIVE: &str = "\
+You are running inside chan, a host application that wraps your \
+MCP tool calls in a confirmation diff card the user reviews \
+explicitly (Apply / Discard / Save-as). Because chan ALWAYS \
+shows your write_file call to the user before any bytes hit \
+disk, you must emit the MCP tool call directly — never paste \
+the proposed file content into chat as a code fence and wait \
+for verbal approval. The diff card IS the review surface.\n\n\
+Operational rules for this session:\n\
+  - When the user asks for a file change, call \
+`mcp__chan__write_file` with the full revised content. Do not \
+pre-narrate the proposal or ask permission first.\n\
+  - If `mcp__chan__write_file` returns an error containing \
+`awaiting_user_approval` or `deferred`, chan has received your \
+proposal and is showing it to the user via the diff card. \
+Confirm the proposal is in flight in ONE short sentence and \
+STOP. Do not retry the tool, rephrase the proposal, paste the \
+content as text, or propose alternatives.\n\
+  - For investigation, prefer the MCP tools (`mcp__chan__read_file`, \
+`mcp__chan__list_files`, `mcp__chan__search_content`, \
+`mcp__chan__graph_neighbors`, `mcp__chan__graph_tags`, \
+`mcp__chan__graph_files_with_tag`, `mcp__chan__repo_report`) over \
+your own Read / Glob / Grep when the target is in the user's drive — \
+they go through chan-drive's sandbox and graph index, which match the \
+user's visible scope exactly.\n\
+  - Even when the user explicitly says \"let me review\", \
+\"don't auto-apply\", or \"show me the proposal first\", you \
+should still emit the tool call. Those phrasings describe the \
+host's diff-card UX — they are not a request to defer to a \
+verbal exchange.";
+
 /// Description of the read_file tool, surfaced in the tool schema
 /// the backend sees.
 pub const READ_FILE_DESC: &str = "\

@@ -52,9 +52,9 @@
 //! launches without a key on disk surface an auth error from
 //! gemini itself.
 //!
-//! The MCP subprocess receives `--auto-apply` only when the user
-//! enabled it; otherwise `write_file` returns a deferred error to
-//! gemini (same contract as the claude_cli v2 path).
+//! The auto-apply gate is owned by the MCP server side; when it's
+//! off, `write_file` returns a deferred error to gemini (same
+//! contract as the claude_cli v2 path).
 //!
 //! Wire format:
 //!
@@ -111,15 +111,15 @@ pub fn default_cmd() -> Vec<String> {
 /// Host-supplied wiring that switches the backend into v2
 /// MCP-mediated mode. `command` is the full argv used to spawn the
 /// MCP server (typically the host binary plus a hidden subcommand
-/// and the drive path); `auto_apply_writes` mirrors `LlmConfig`'s
-/// flag and decides whether the MCP subprocess is launched with
-/// `--auto-apply`. `api_key` is the chan-llm-resolved Gemini API
-/// key forwarded to the subprocess via `GEMINI_API_KEY` so the
-/// rewritten `GEMINI_CLI_HOME` doesn't break auth.
+/// and a socket path or drive root). The auto-apply gate is owned
+/// by the MCP server itself (in chan-server it lives on the bridge
+/// and is read per-connection), so it's not threaded through here.
+/// `api_key` is the chan-llm-resolved Gemini API key forwarded to
+/// the subprocess via `GEMINI_API_KEY` so the rewritten
+/// `GEMINI_CLI_HOME` doesn't break auth.
 #[derive(Debug, Clone)]
 pub struct McpWiring {
     pub command: Vec<String>,
-    pub auto_apply_writes: bool,
     pub api_key: Option<String>,
 }
 
@@ -487,10 +487,7 @@ fn write_gemini_home_with_user(
     let (bin, base_args) = wiring.command.split_first().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "empty mcp_command")
     })?;
-    let mut args: Vec<String> = base_args.to_vec();
-    if wiring.auto_apply_writes {
-        args.push("--auto-apply".to_string());
-    }
+    let args: Vec<String> = base_args.to_vec();
 
     let home = TempDir::new()?;
     let dot_gemini = home.path().join(".gemini");
@@ -604,8 +601,16 @@ fn link_or_copy(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result
 /// string. gemini-cli's `-p` accepts a single user-shaped query,
 /// so prior assistant turns become labelled prose. Same v1 lossy
 /// trade-off as `claude_cli::split_system_and_prompt`.
+///
+/// Always leads with the chan CLI session directive — gemini-cli
+/// doesn't expose `--system-prompt` / `--append-system-prompt` so
+/// we can't push a true system message, but seeding the prompt
+/// body with a `[system]` block at the top is the next-best
+/// override for the CLI's default "ask before writing" stance.
 fn render_prompt(messages: &[Message]) -> String {
     let mut body = String::new();
+    body.push_str("[system]\n");
+    body.push_str(crate::prompts::CLI_SESSION_DIRECTIVE);
     for m in messages {
         if !body.is_empty() {
             body.push_str("\n\n");
@@ -1218,11 +1223,15 @@ mod tests {
     }
 
     #[test]
-    fn mcp_home_omits_auto_apply_when_off() {
+    fn mcp_home_forwards_command_verbatim() {
+        // The MCP server owns the auto-apply gate; the proxy / MCP
+        // command line is forwarded as-is. The v2 chan-server proxy
+        // subcommand (`chan __mcp-proxy <socket>`) doesn't accept a
+        // `--auto-apply` flag and would clap-error if we appended one,
+        // so it's important that we don't.
         let home = write_gemini_home_with_user(
             &McpWiring {
-                command: vec!["chan".into(), "__mcp".into(), "/d".into()],
-                auto_apply_writes: false,
+                command: vec!["chan".into(), "__mcp-proxy".into(), "/tmp/s".into()],
                 api_key: None,
             },
             None,
@@ -1240,30 +1249,7 @@ mod tests {
             .iter()
             .map(|a| a.as_str().unwrap())
             .collect();
-        assert_eq!(args, vec!["__mcp", "/d"]);
-    }
-
-    #[test]
-    fn mcp_home_appends_auto_apply_when_on() {
-        let home = write_gemini_home_with_user(
-            &McpWiring {
-                command: vec!["chan".into(), "__mcp".into(), "/d".into()],
-                auto_apply_writes: true,
-                api_key: None,
-            },
-            None,
-        )
-        .unwrap();
-        let body =
-            std::fs::read_to_string(home.path().join(".gemini").join("settings.json")).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let args: Vec<&str> = v["mcpServers"][MCP_SERVER_KEY]["args"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|a| a.as_str().unwrap())
-            .collect();
-        assert_eq!(args, vec!["__mcp", "/d", "--auto-apply"]);
+        assert_eq!(args, vec!["__mcp-proxy", "/tmp/s"]);
     }
 
     #[test]
@@ -1271,7 +1257,6 @@ mod tests {
         let home = write_gemini_home_with_user(
             &McpWiring {
                 command: vec!["chan".into()],
-                auto_apply_writes: false,
                 api_key: None,
             },
             None,
@@ -1317,7 +1302,6 @@ mod tests {
         let home = write_gemini_home_with_user(
             &McpWiring {
                 command: vec!["chan".into(), "__mcp".into(), "/d".into()],
-                auto_apply_writes: false,
                 api_key: None,
             },
             Some(user_dot.clone()),
@@ -1349,7 +1333,6 @@ mod tests {
         let home = write_gemini_home_with_user(
             &McpWiring {
                 command: vec!["chan".into()],
-                auto_apply_writes: false,
                 api_key: None,
             },
             Some(user_dot.clone()),
@@ -1377,7 +1360,6 @@ mod tests {
         let home = write_gemini_home_with_user(
             &McpWiring {
                 command: vec!["chan".into()],
-                auto_apply_writes: false,
                 api_key: None,
             },
             Some(absent),
