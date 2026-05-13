@@ -71,6 +71,14 @@ pub async fn dial_with_tls(
             "tunnel URL scheme must be https:// or http://".into(),
         ));
     }
+    // Normalize: callers commonly pass just a `host:port` base
+    // (e.g. an embed UI rendering `http://127.0.0.1:PORT`). The
+    // server only accepts POSTs at `chan_tunnel_proto::TUNNEL_PATH`,
+    // so a bare path or `/` would 404. Defaulting here keeps the
+    // wire constant single-sourced and removes the footgun for new
+    // callers; explicit paths the caller chose are preserved so a
+    // typo like `/v2/tunnel` still surfaces as a 404 they can see.
+    let tunnel_url = normalize_tunnel_url(&cfg.tunnel_url);
 
     let tcp = open_tcp(&host, port, cfg.proxy.as_ref()).await?;
     tcp.set_nodelay(true).ok();
@@ -112,7 +120,7 @@ pub async fn dial_with_tls(
 
     let req = http::Request::builder()
         .method(Method::POST)
-        .uri(cfg.tunnel_url.as_str())
+        .uri(tunnel_url.as_str())
         .header(http::header::AUTHORIZATION, format!("Bearer {}", cfg.token))
         .body(())
         .map_err(|e| ClientError::Handshake(format!("build request: {e}")))?;
@@ -144,6 +152,27 @@ pub async fn dial_with_tls(
 
 /// Open a TCP stream to `(host, port)` either directly or through
 /// an HTTP CONNECT proxy. The proxy URL's userinfo, if present, is
+/// Return `url` with its path replaced by
+/// `chan_tunnel_proto::TUNNEL_PATH` when the caller provided no
+/// path (just `http://host:port`) or only `/`. Any non-trivial path
+/// the caller chose explicitly is preserved verbatim — a typo like
+/// `/v2/tunnel` still 404s at the server, where the operator can
+/// see and fix it.
+///
+/// Centralising this means the wire constant lives in exactly one
+/// place (`chan_tunnel_proto::TUNNEL_PATH`); new callers (embed
+/// UIs, scripts, etc.) can pass just a base URL and the dial path
+/// stays right.
+fn normalize_tunnel_url(url: &Url) -> Url {
+    let path = url.path();
+    if !path.is_empty() && path != "/" {
+        return url.clone();
+    }
+    let mut out = url.clone();
+    out.set_path(chan_tunnel_proto::TUNNEL_PATH);
+    out
+}
+
 /// sent as a Basic auth header. The CONNECT exchange is bounded by
 /// the parent `dial_timeout` (each leg here is non-blocking apart
 /// from one short read for the response status line + headers).
@@ -269,6 +298,46 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    #[test]
+    fn normalize_tunnel_url_appends_default_path_when_missing() {
+        let normalized = normalize_tunnel_url(&Url::parse("http://127.0.0.1:7777").unwrap());
+        assert_eq!(normalized.as_str(), "http://127.0.0.1:7777/v1/tunnel");
+    }
+
+    #[test]
+    fn normalize_tunnel_url_appends_default_path_when_root_slash() {
+        let normalized = normalize_tunnel_url(&Url::parse("http://127.0.0.1:7777/").unwrap());
+        assert_eq!(normalized.as_str(), "http://127.0.0.1:7777/v1/tunnel");
+    }
+
+    #[test]
+    fn normalize_tunnel_url_preserves_explicit_canonical_path() {
+        let original = Url::parse("https://drive.chan.app/v1/tunnel").unwrap();
+        let normalized = normalize_tunnel_url(&original);
+        assert_eq!(normalized.as_str(), original.as_str());
+    }
+
+    #[test]
+    fn normalize_tunnel_url_preserves_caller_typos() {
+        // A typo like /v2/tunnel is kept so the resulting 404 is
+        // visible at the operator level rather than being silently
+        // corrected.
+        let typo = Url::parse("https://drive.chan.app/v2/tunnel").unwrap();
+        let normalized = normalize_tunnel_url(&typo);
+        assert_eq!(normalized.as_str(), typo.as_str());
+    }
+
+    #[test]
+    fn normalize_tunnel_url_preserves_query_and_fragment_when_path_missing() {
+        // url::Url parses "http://h:p?q=1" with path "/", so this
+        // exercises the path-replacement branch while keeping the
+        // query intact.
+        let with_query = Url::parse("http://127.0.0.1:7777?retry=1").unwrap();
+        let normalized = normalize_tunnel_url(&with_query);
+        assert_eq!(normalized.path(), "/v1/tunnel");
+        assert_eq!(normalized.query(), Some("retry=1"));
+    }
 
     async fn run_proxy(listener: TcpListener, response: &'static [u8]) -> Vec<u8> {
         let (mut sock, _) = listener.accept().await.unwrap();
