@@ -153,6 +153,73 @@ export function setBlockKind(view: EditorView, kind: BlockKind): void {
   });
 }
 
+/// Detect a "block selection": every line touched by the active
+/// selection is fully covered. Two acceptable shapes:
+///   - from === startLine.from && to === endLine.to (clean
+///     full-line span, e.g. triple-click)
+///   - from === startLine.from && to === endLine.from with
+///     endLine.number > startLine.number (selection extends into the
+///     next line's start, so the last fully-selected line is the
+///     one BEFORE endLine — this is what dragging from line N start
+///     to line N+M start produces)
+/// Returns null when the selection is empty, partial, or invalid.
+/// Used by the multi-line quote / unquote chords below; passing
+/// through to text input when null means a typed `>` / `<` lands
+/// as a character.
+function blockLineRange(view: EditorView): {
+  firstLine: number;
+  lastLine: number;
+} | null {
+  const sel = view.state.selection.main;
+  if (sel.empty) return null;
+  const startLine = view.state.doc.lineAt(sel.from);
+  if (sel.from !== startLine.from) return null;
+  const endPosLine = view.state.doc.lineAt(sel.to);
+  if (sel.to === endPosLine.to) {
+    return { firstLine: startLine.number, lastLine: endPosLine.number };
+  }
+  if (sel.to === endPosLine.from && endPosLine.number > startLine.number) {
+    return { firstLine: startLine.number, lastLine: endPosLine.number - 1 };
+  }
+  return null;
+}
+
+/// `>` chord: prefix every line in a multi-line full-line selection
+/// with `> `. Returns true (consume the keypress) when the
+/// selection qualifies; false (let the `>` character fall through)
+/// otherwise so the user can still type a literal `>` in prose.
+export function quoteLines(view: EditorView): boolean {
+  const range = blockLineRange(view);
+  if (!range) return false;
+  const changes: { from: number; to: number; insert: string }[] = [];
+  for (let n = range.firstLine; n <= range.lastLine; n++) {
+    const line = view.state.doc.line(n);
+    changes.push({ from: line.from, to: line.from, insert: "> " });
+  }
+  view.dispatch({ changes });
+  return true;
+}
+
+/// `<` chord: strip one level of `> ` (or `>` alone) from every
+/// line in a multi-line full-line selection. Falls through if no
+/// line has a quote prefix (so an unrelated `<` stays a literal
+/// character). Single-level only — pressing `<` twice on a
+/// `> > foo` line peels both levels in sequence.
+export function unquoteLines(view: EditorView): boolean {
+  const range = blockLineRange(view);
+  if (!range) return false;
+  const changes: { from: number; to: number; insert: string }[] = [];
+  for (let n = range.firstLine; n <= range.lastLine; n++) {
+    const line = view.state.doc.line(n);
+    const m = /^> ?/.exec(line.text);
+    if (!m) continue;
+    changes.push({ from: line.from, to: line.from + m[0].length, insert: "" });
+  }
+  if (changes.length === 0) return false;
+  view.dispatch({ changes });
+  return true;
+}
+
 /// Toggle a list prefix on the current line. If the line already starts
 /// with the target prefix, strip it; otherwise replace any existing
 /// list / heading / quote prefix with the new one.

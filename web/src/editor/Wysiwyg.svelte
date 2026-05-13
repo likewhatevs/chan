@@ -304,6 +304,13 @@
                 return true;
               },
             },
+            // `>` and `<` on a block selection (every line fully
+            // covered) wrap / unwrap the lines in a `> ` blockquote
+            // prefix. Returns false when the selection doesn't
+            // qualify so the chars fall through to text input — a
+            // user typing `>` mid-paragraph still gets a literal `>`.
+            { key: ">", run: (view) => fmt.quoteLines(view) },
+            { key: "<", run: (view) => fmt.unquoteLines(view) },
           ]),
         ),
       ],
