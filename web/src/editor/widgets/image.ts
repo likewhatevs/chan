@@ -44,6 +44,14 @@ import { selectionInRange } from "../decorations/selection";
 
 const MIN_IMG_WIDTH = 40;
 
+/// Line decoration applied to the line AFTER an inline-floated image.
+/// CSS clears the float there so only the SAME line as the image
+/// flows beside it; the next paragraph drops below the image. Reused
+/// across all matching images per pass.
+const CLEAR_AFTER_IMAGE = Decoration.line({
+  attributes: { class: "cm-md-image-clear-after" },
+});
+
 export interface ImageClickArgs {
   src: string;
   alt: string;
@@ -374,6 +382,25 @@ function scanImages(view: EditorView, opts: ImageOptions): DecorationSet {
         to: outerTo,
         deco: Decoration.replace({ widget }),
       });
+      // Inline (non-standalone) image with left/right align: float
+      // keeps wrapping subsequent lines around the image. The user
+      // only wants the SAME line to flow beside the image; lines
+      // below should drop below it. Add a clear:both decoration on
+      // the next line so the float effect ends at the line break.
+      if (!standalone) {
+        const { align } = parseImageSrc(src);
+        if (align === "left" || align === "right") {
+          const nextLineNum = line.number + 1;
+          if (nextLineNum <= state.doc.lines) {
+            const nextLine = state.doc.line(nextLineNum);
+            decos.push({
+              from: nextLine.from,
+              to: nextLine.from,
+              deco: CLEAR_AFTER_IMAGE,
+            });
+          }
+        }
+      }
     },
   });
   decos.sort((a, b) => a.from - b.from);

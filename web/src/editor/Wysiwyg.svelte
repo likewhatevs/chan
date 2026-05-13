@@ -587,6 +587,11 @@
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-standalone="true"][data-align="right"]) {
     justify-content: flex-end;
   }
+  /* Line after a floated inline image: clear the float so following
+     lines drop BELOW the image instead of continuing to wrap. */
+  :global(.md-wysiwyg-cm6 .cm-md-image-clear-after) {
+    clear: both;
+  }
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap img) {
     max-width: 100%;
     height: auto;
