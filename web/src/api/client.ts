@@ -22,6 +22,8 @@ import type {
   LlmStatus,
   LlmToolSpec,
   MoveResponse,
+  ReportFileStats,
+  ReportPrefix,
   ResetMode,
   ResetResponse,
   SearchHit,
@@ -350,6 +352,24 @@ export const api = {
   /// available for future "linked from" panels.
   backlinks: (path: string) =>
     req<GraphEdge[]>("GET", `/api/backlinks/${encPath(path)}`),
+  /// chan-report per-file stats: language, SLOC, comments, blanks,
+  /// complexity. 404 when the path isn't in the index (binary file,
+  /// gitignored, or unknown language) — callers treat that as
+  /// "no report for this file" rather than an error.
+  reportFile: (path: string) =>
+    req<ReportFileStats>(
+      "GET",
+      `/api/report/file?path=${encodeURIComponent(path)}`,
+    ),
+  /// chan-report folder roll-up: totals, by-language, and COCOMO.
+  /// Empty `path` returns the whole-drive roll-up. The per-file
+  /// array is dropped server-side; only the summary fields come
+  /// back so big folders stay cheap to fetch.
+  reportPrefix: (path: string) =>
+    req<ReportPrefix>(
+      "GET",
+      `/api/report/prefix?path=${encodeURIComponent(path)}`,
+    ),
   /// Resolve a wiki / markdown link target to the actual drive file
   /// + node kind. `target` is the path portion of the link (no
   /// `#anchor`); pass through path-encoded segments verbatim. The

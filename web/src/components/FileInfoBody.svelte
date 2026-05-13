@@ -20,7 +20,12 @@
   // tracking does the gating).
 
   import { api, withTokenQuery } from "../api/client";
-  import type { GraphEdge } from "../api/types";
+  import { ApiError } from "../api/errors";
+  import type {
+    GraphEdge,
+    ReportFileStats,
+    ReportPrefix,
+  } from "../api/types";
   import { isEditableText, isImage } from "../state/fileTypes";
   import { basename, formatMtime, formatSize } from "../state/format";
   import {
@@ -241,6 +246,96 @@
     if (!targetPath) return;
     onNavigate?.(targetPath);
   }
+
+  /// chan-report integration. The "Code" section shows language /
+  /// SLOC / complexity for files, and the per-folder roll-up
+  /// (totals + top languages + COCOMO) for directories. Fetched
+  /// lazily whenever the selected path changes; a request-id guard
+  /// drops stale responses if the user clicks through several
+  /// entries faster than the round-trip.
+  ///
+  /// 404 on the file endpoint is normal (binary / gitignored /
+  /// unknown language) and silently hides the section. Other errors
+  /// surface a one-line failure note so the user knows the call
+  /// happened but didn't return data.
+  let fileReport = $state<ReportFileStats | null>(null);
+  let prefixReport = $state<ReportPrefix | null>(null);
+  let reportLoading = $state(false);
+  let reportError = $state<string | null>(null);
+  let reportReq = 0;
+
+  /// "Top N + see more" toggle for the per-language list in folder
+  /// mode. Default of 5 matches the inspector's appetite for compact
+  /// sections; the full list is one click away. Resets to collapsed
+  /// whenever the selection changes so a new folder doesn't inherit
+  /// the previous one's expand state.
+  const LANG_PREVIEW = 5;
+  let langExpanded = $state(false);
+
+  $effect(() => {
+    fileReport = null;
+    prefixReport = null;
+    reportError = null;
+    langExpanded = false;
+    if (!entry) {
+      reportLoading = false;
+      return;
+    }
+    const req = ++reportReq;
+    const target = entry;
+    reportLoading = true;
+    const fetcher: Promise<ReportFileStats | ReportPrefix | null> = target.is_dir
+      ? api.reportPrefix(target.path)
+      : api.reportFile(target.path).catch((err: unknown) => {
+          // 404 is the "no report row" case; treat it as an empty
+          // result rather than an error so the section just hides.
+          if (err instanceof ApiError && err.status === 404) return null;
+          throw err;
+        });
+    void fetcher
+      .then((res) => {
+        if (req !== reportReq) return;
+        if (target.is_dir) {
+          prefixReport = (res as ReportPrefix | null) ?? null;
+        } else {
+          fileReport = (res as ReportFileStats | null) ?? null;
+        }
+        reportLoading = false;
+      })
+      .catch((err: unknown) => {
+        if (req !== reportReq) return;
+        reportError = (err as Error).message;
+        reportLoading = false;
+      });
+  });
+
+  /// Per-language roll-up sliced for display: collapse to top N by
+  /// SLOC unless the user clicked "see more". The hidden count
+  /// drives the "+N more" affordance label.
+  const visibleLanguages = $derived.by(() => {
+    if (!prefixReport) return [];
+    const all = prefixReport.by_language;
+    if (langExpanded || all.length <= LANG_PREVIEW) return all;
+    return all.slice(0, LANG_PREVIEW);
+  });
+  const hiddenLanguageCount = $derived(
+    prefixReport
+      ? Math.max(0, prefixReport.by_language.length - visibleLanguages.length)
+      : 0,
+  );
+
+  /// COCOMO formatting helpers. We deliberately drop estimated cost
+  /// from the inspector: the dollar number is a default-salary
+  /// extrapolation that's noisy for a personal notes app. Effort,
+  /// schedule, and developer-count carry the useful signal.
+  function fmtMonths(n: number): string {
+    if (!Number.isFinite(n)) return "—";
+    return n >= 10 ? `${Math.round(n)} mo` : `${n.toFixed(1)} mo`;
+  }
+  function fmtDevs(n: number): string {
+    if (!Number.isFinite(n)) return "—";
+    return n >= 10 ? `${Math.round(n)}` : n.toFixed(1);
+  }
 </script>
 
 {#if !entry}
@@ -265,6 +360,62 @@
         <span class="k">last change</span>
         <span class="v">{formatMtime(dirStats.latest)}</span>
       </div>
+    {/if}
+    {#if prefixReport && prefixReport.totals.files > 0}
+      <section class="refs">
+        <h4>Code</h4>
+        <div class="meta-grid">
+          <span class="k">indexed</span>
+          <span class="v">{prefixReport.totals.files}</span>
+          <span class="k">SLOC</span>
+          <span class="v">{prefixReport.totals.code.toLocaleString()}</span>
+          <span class="k">comments</span>
+          <span class="v">{prefixReport.totals.comments.toLocaleString()}</span>
+          <span class="k">blanks</span>
+          <span class="v">{prefixReport.totals.blanks.toLocaleString()}</span>
+          <span class="k">complexity</span>
+          <span class="v">{prefixReport.totals.complexity.toLocaleString()}</span>
+        </div>
+        {#if prefixReport.by_language.length > 0}
+          <ul class="lang-list">
+            {#each visibleLanguages as lang (lang.name)}
+              <li class="lang-row">
+                <span class="lang-name" title={lang.name}>{lang.name}</span>
+                <span class="lang-files">{lang.files} file{lang.files === 1 ? "" : "s"}</span>
+                <span class="lang-sloc">{lang.code.toLocaleString()} SLOC</span>
+              </li>
+            {/each}
+          </ul>
+          {#if hiddenLanguageCount > 0}
+            <button
+              type="button"
+              class="see-more"
+              onclick={() => (langExpanded = true)}
+            >+{hiddenLanguageCount} more</button>
+          {:else if langExpanded && prefixReport.by_language.length > LANG_PREVIEW}
+            <button
+              type="button"
+              class="see-more"
+              onclick={() => (langExpanded = false)}
+            >show fewer</button>
+          {/if}
+        {/if}
+        <div class="cocomo">
+          <div class="cocomo-title">COCOMO ({prefixReport.cocomo.model})</div>
+          <div class="meta-grid">
+            <span class="k">effort</span>
+            <span class="v">{fmtMonths(prefixReport.cocomo.effort_person_months)}</span>
+            <span class="k">schedule</span>
+            <span class="v">{fmtMonths(prefixReport.cocomo.schedule_months)}</span>
+            <span class="k">developers</span>
+            <span class="v">{fmtDevs(prefixReport.cocomo.developers)}</span>
+          </div>
+        </div>
+      </section>
+    {:else if reportLoading}
+      <div class="refs-loading">loading report…</div>
+    {:else if reportError}
+      <div class="refs-error">report unavailable: {reportError}</div>
     {/if}
   </div>
 {:else}
@@ -326,6 +477,25 @@
         <span class="v">{backlinksLoading ? "…" : backlinks.length}</span>
       {/if}
     </div>
+    {#if fileReport}
+      <section class="refs">
+        <h4>Code</h4>
+        <div class="meta-grid">
+          <span class="k">language</span>
+          <span class="v">{fileReport.language}</span>
+          <span class="k">SLOC</span>
+          <span class="v">{fileReport.code.toLocaleString()}</span>
+          <span class="k">comments</span>
+          <span class="v">{fileReport.comments.toLocaleString()}</span>
+          <span class="k">blanks</span>
+          <span class="v">{fileReport.blanks.toLocaleString()}</span>
+          <span class="k">complexity</span>
+          <span class="v">{fileReport.complexity.toLocaleString()}</span>
+        </div>
+      </section>
+    {:else if reportError}
+      <div class="refs-error">report unavailable: {reportError}</div>
+    {/if}
     {#if image}
       {#if onReveal}
         <button class="open" onclick={onReveal}>Show in file browser</button>
@@ -678,4 +848,60 @@
     font-style: italic;
   }
   .refs-error { color: var(--warn-text); font-style: normal; }
+  /* Per-language row in the Code section. Three columns: language
+     name on the left (allowed to grow), file count + SLOC on the
+     right (tabular-nums so the digit columns line up across rows). */
+  .lang-list {
+    list-style: none;
+    padding: 0;
+    margin: 0.4rem 0 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .lang-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 0.5rem;
+    font-size: 13px;
+    align-items: baseline;
+  }
+  .lang-name {
+    color: var(--text);
+    word-break: break-word;
+  }
+  .lang-files,
+  .lang-sloc {
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .see-more {
+    display: block;
+    margin: 0.3rem 0 0 0;
+    background: none;
+    border: none;
+    color: var(--link);
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    padding: 0;
+  }
+  .see-more:hover { text-decoration: underline; }
+  .cocomo {
+    margin-top: 0.5rem;
+    padding-top: 0.4rem;
+    border-top: 1px dashed var(--border);
+  }
+  .cocomo-title {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    margin-bottom: 0.2rem;
+  }
+  .cocomo .meta-grid {
+    margin: 0;
+  }
 </style>

@@ -400,3 +400,50 @@ export type ResetMode = "drive" | "everything";
 export type ResetResponse = {
   removed_entries: number;
 };
+
+/// chan-report shapes. Mirror `crates/chan-core/crates/chan-report/src/summary.rs`
+/// and the server's `routes::report::PrefixReport`. The file
+/// inspector renders the per-file row; the folder inspector renders
+/// the prefix roll-up (totals + by_language + COCOMO).
+
+export type ReportFileStats = {
+  path: string;
+  language: string;
+  code: number;
+  comments: number;
+  blanks: number;
+  complexity: number;
+  bytes: number;
+  mtime?: string | null;
+};
+
+export type ReportLanguageStats = {
+  name: string;
+  files: number;
+  code: number;
+  comments: number;
+  blanks: number;
+  complexity: number;
+};
+
+export type ReportTotals = {
+  files: number;
+  code: number;
+  comments: number;
+  blanks: number;
+  complexity: number;
+};
+
+export type ReportCocomoSummary = {
+  model: string;
+  effort_person_months: number;
+  schedule_months: number;
+  developers: number;
+  estimated_cost_usd: number;
+};
+
+export type ReportPrefix = {
+  totals: ReportTotals;
+  by_language: ReportLanguageStats[];
+  cocomo: ReportCocomoSummary;
+};

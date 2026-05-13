@@ -14,6 +14,7 @@ mod graph;
 mod health;
 mod llm;
 mod preferences;
+mod report;
 mod search;
 mod sessions;
 mod storage;
@@ -38,6 +39,7 @@ pub use llm::{
 pub use preferences::{
     api_get_config, api_get_server_config, api_patch_config, api_patch_server_config,
 };
+pub use report::{api_report_file, api_report_prefix};
 pub use search::{api_index_rebuild, api_index_status, api_search_content, api_search_files};
 pub use sessions::{
     api_clear_assistant, api_delete_assistant, api_delete_session, api_get_assistant,
