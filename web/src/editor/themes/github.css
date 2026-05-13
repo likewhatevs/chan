@@ -38,6 +38,14 @@
   --chan-editor-h6-weight: 600;
   --chan-editor-h6-line-height: 1.4;
   --chan-editor-h6-color: #59636e;
+  /* GitHub renders H1 and H2 with a 1px bottom rule the same
+     colour as horizontal rules (border #d0d7de in light, #3d444d
+     in dark). Padding-bottom 0.3em matches github.com's spacing
+     so the rule sits one line-gap below the text. */
+  --chan-editor-h1-border-bottom: 1px solid var(--chan-editor-hr-color);
+  --chan-editor-h1-padding-bottom: 0.3em;
+  --chan-editor-h2-border-bottom: 1px solid var(--chan-editor-hr-color);
+  --chan-editor-h2-padding-bottom: 0.3em;
 
   --chan-editor-code-family:
     ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,

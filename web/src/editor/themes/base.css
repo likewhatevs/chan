@@ -41,6 +41,16 @@
   --chan-editor-h6-weight: 600;
   --chan-editor-h6-line-height: 1.4;
   --chan-editor-h6-color: var(--text-secondary);
+  /* Hairline under H1 / H2 (GitHub-style "page title" rule).
+     Defaulted OFF here so Google Docs / Word themes stay
+     authentic to their originals. The GitHub theme opts in
+     (github.css) by overriding these to a real border. The
+     padding-bottom matches whatever the border is set to so a
+     no-border theme doesn't reserve dead space. */
+  --chan-editor-h1-border-bottom: none;
+  --chan-editor-h1-padding-bottom: 0;
+  --chan-editor-h2-border-bottom: none;
+  --chan-editor-h2-padding-bottom: 0;
 
   /* Code */
   --chan-editor-code-family:

@@ -470,9 +470,15 @@
     --bg-card: #232325;
     --bg-elev: #2a2a2c;
     --border: #3a3a3c;
-    --text: #f5f5f7;
-    --text-secondary: #98989d;
-    --text-heading: #f5f5f7;
+    /* Softened dark-mode text. Pure white #f5f5f7 on near-black
+       #1c1c1e measures ~17:1 contrast, far above Apple's spec for
+       primary label on system dark (which lands ~13:1). #ebebf0
+       is Apple's "primary label" off-white; --text-heading dimmed
+       a notch further so H1/H2 don't fight the body. Light mode
+       is intentionally untouched. */
+    --text: #ebebf0;
+    --text-secondary: #8e8e93;
+    --text-heading: #d8d8de;
     --link: #58a6ff;
     /* Code background needs a clear step away from --bg (#1c1c1e) so
        fenced blocks and inline `code` read as a slab; #232325 collided

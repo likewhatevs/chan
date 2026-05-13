@@ -1146,11 +1146,19 @@
     font-size: var(--chan-editor-h1-size);
     font-weight: var(--chan-editor-h1-weight);
     line-height: var(--chan-editor-h1-line-height);
+    /* GitHub-style page-title rule. Themes that don't want this
+       set --chan-editor-h1-border-bottom: none in their own block.
+       padding-bottom adds to CM6's `.cm-line` padding without
+       clobbering the horizontal padding shorthand. */
+    border-bottom: var(--chan-editor-h1-border-bottom);
+    padding-bottom: var(--chan-editor-h1-padding-bottom);
   }
   :global(.md-wysiwyg-cm6 .cm-md-h2) {
     font-size: var(--chan-editor-h2-size);
     font-weight: var(--chan-editor-h2-weight);
     line-height: var(--chan-editor-h2-line-height);
+    border-bottom: var(--chan-editor-h2-border-bottom);
+    padding-bottom: var(--chan-editor-h2-padding-bottom);
   }
   :global(.md-wysiwyg-cm6 .cm-md-h3) {
     font-size: var(--chan-editor-h3-size);
@@ -1186,6 +1194,16 @@
   }
   :global(.md-wysiwyg-cm6 [class*="cm-md-h"] > span) {
     text-decoration: none !important;
+  }
+  /* Same defense for color: CM6's defaultHighlightStyle (registered
+     with fallback: true in base.ts) paints inner heading tokens
+     using whatever tag @lezer/markdown puts on them, which in
+     practice leaks a salmon / pink hue onto heading text in dark
+     mode. Force every descendant of a heading line to inherit the
+     heading's color so the heading is monochrome regardless of how
+     the markdown grammar tags inner spans. */
+  :global(.md-wysiwyg-cm6 [class*="cm-md-h"] *) {
+    color: inherit !important;
   }
 
   /* find-on-page (mirror of Source/WYSIWYG) */
