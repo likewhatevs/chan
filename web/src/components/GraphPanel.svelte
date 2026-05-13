@@ -1442,7 +1442,7 @@
         <label class="chip" class:on={show[kind]}>
           <input type="checkbox" bind:checked={show[kind]} />
           <span class="dot" style="background:{FILTER_COLORS[kind]}"></span>
-          {kind === "mention" ? "contact" : kind}
+          {kind === "mention" ? "contact" : kind === "img" ? "media" : kind}
           <span class="count">{counts[kind]}</span>
         </label>
       {/each}
@@ -1530,28 +1530,31 @@
       <span>{graphOverlay.inspectorOpen ? "Hide Details" : "Show Details"}</span>
     </button>
   </li>
-  {#if currentScope && currentScope.kind !== "drive" && currentScope.kind !== "global"}
-    <li class="sep" role="separator"></li>
-    <li>
-      <!-- Depth slider only matters when the scope is anchored to
-           specific files; drive / global scopes always show everything
-           regardless of hop count. Slider lives in the menu so the
-           top bar stays free of view-settings widgets. -->
-      <div class="menu-slider-row">
-        <span class="menu-slider-label">Depth</span>
-        <input
-          type="range"
-          min="1"
-          max={DEPTH_MAX}
-          step="1"
-          bind:value={graphOverlay.depth}
-          onmousedown={(e) => e.stopPropagation()}
-          aria-label="depth"
-        />
-        <span class="menu-slider-value">{graphOverlay.depth}</span>
-      </div>
-    </li>
-  {/if}
+  <li class="sep" role="separator"></li>
+  <!-- Depth slider is always in the menu so it doesn't disappear
+       under the user when the scope toggles. Disabled on
+       drive / global scopes (those always render everything
+       regardless of hop count) so the affordance stays visible. -->
+  {@const depthDisabled =
+    !currentScope ||
+    currentScope.kind === "drive" ||
+    currentScope.kind === "global"}
+  <li>
+    <div class="menu-slider-row" class:disabled={depthDisabled}>
+      <span class="menu-slider-label">Depth</span>
+      <input
+        type="range"
+        min="1"
+        max={DEPTH_MAX}
+        step="1"
+        bind:value={graphOverlay.depth}
+        disabled={depthDisabled}
+        onmousedown={(e) => e.stopPropagation()}
+        aria-label="depth"
+      />
+      <span class="menu-slider-value">{graphOverlay.depth}</span>
+    </div>
+  </li>
   <li class="sep" role="separator"></li>
   <li>
     <button role="menuitem" onclick={reloadGraph}>
@@ -1616,6 +1619,16 @@
     color: var(--text);
     min-width: 2ch;
     text-align: right;
+  }
+  /* Disabled state: dim the row and disable pointer interactions
+     on the range input. The native disabled attribute already
+     blocks dragging; this is the visual cue. */
+  :global(.menu-slider-row.disabled) {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  :global(.menu-slider-row.disabled input[type="range"]) {
+    cursor: not-allowed;
   }
   .statusbar {
     display: flex;

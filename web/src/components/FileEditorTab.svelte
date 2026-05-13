@@ -22,6 +22,9 @@
   import {
     fileOps,
     openAssistant,
+    openGraphForFile,
+    openSettings,
+    searchPanel,
     openBrowser,
     openGraphAtNode,
     paneWidths,
@@ -151,6 +154,11 @@
     setPageWidth(pct / 100);
   }
 
+  function doNewFile(): void {
+    closeTabMenu();
+    void fileOps.createFile("");
+  }
+
   function doDuplicate(): void {
     closeTabMenu();
     void fileOps.duplicateFile(tab.path);
@@ -201,9 +209,27 @@
     openAssistant();
   }
 
+  function doOpenSettings(): void {
+    closeTabMenu();
+    openSettings();
+  }
+
+  function doOpenSearch(): void {
+    closeTabMenu();
+    // SearchPanel's open-effect calls extractSearchSeed() on the
+    // open transition, which reads window.getSelection() and pre-
+    // fills `searchPanel.query` when the user had text highlighted.
+    // Same flow as the Mod+Shift+F chord — no extra wiring needed
+    // beyond setting the open bit here.
+    searchPanel.open = true;
+  }
+
   function doOpenGraph(): void {
     closeTabMenu();
-    openGraphAtNode(tab.path);
+    // "Show in Graph" from a file's menu scopes the graph to that
+    // file (file:<path>), not the whole drive. Hashtags etc. still
+    // route through openGraphAtNode at drive scope.
+    openGraphForFile(tab.path);
   }
 
   function doToggleOutline(): void {
@@ -282,9 +308,9 @@
           </span>
         </button>
         <div class="msep" role="separator"></div>
-        <button class="mbtn" onclick={doReload}>
-          <span class="mbtn-icon">↻</span>
-          <span class="mbtn-label">Reload from Disk</span>
+        <button class="mbtn" onclick={doNewFile}>
+          <span class="mbtn-icon">＋</span>
+          <span class="mbtn-label">New File</span>
         </button>
         <button class="mbtn" onclick={doDuplicate}>
           <span class="mbtn-icon">⎘</span>
@@ -294,10 +320,18 @@
           <span class="mbtn-icon">✎</span>
           <span class="mbtn-label">Rename File</span>
         </button>
+        <button class="mbtn" onclick={doReload}>
+          <span class="mbtn-icon">↻</span>
+          <span class="mbtn-label">Reload from Disk</span>
+        </button>
         <div class="msep" role="separator"></div>
         <button class="mbtn" onclick={revealInBrowser}>
           <span class="mbtn-icon">📄</span>
           <span class="mbtn-label">Show in File Browser</span>
+        </button>
+        <button class="mbtn" onclick={doOpenSearch}>
+          <span class="mbtn-icon">⌕</span>
+          <span class="mbtn-label">Search</span>
         </button>
         <button class="mbtn" onclick={doOpenGraph}>
           <span class="mbtn-icon">⛬</span>
@@ -306,6 +340,11 @@
         <button class="mbtn" onclick={doOpenAssistant}>
           <span class="mbtn-icon">✦</span>
           <span class="mbtn-label">Call Assistant</span>
+        </button>
+        <div class="msep" role="separator"></div>
+        <button class="mbtn" onclick={doOpenSettings}>
+          <span class="mbtn-icon">⚙</span>
+          <span class="mbtn-label">Settings</span>
         </button>
       </div>
     </div>
@@ -399,22 +438,25 @@
           onResize={persistPaneWidths}
           onClose={() => (tab.inspectorOpen = false)}
         >
-          <div class="inspector-tabs" role="tablist">
-            <button
-              role="tab"
-              class="inspector-tab"
-              class:on={inspectorTab === "outline"}
-              aria-selected={inspectorTab === "outline"}
-              onclick={() => (inspectorTab = "outline")}
-            >Outline</button>
-            <button
-              role="tab"
-              class="inspector-tab"
-              class:on={inspectorTab === "info"}
-              aria-selected={inspectorTab === "info"}
-              onclick={() => (inspectorTab = "info")}
-            >File info</button>
-          </div>
+          <!-- Single toggle button instead of a tab strip. Reads as
+               "you're on Outline; click to swap to File info" (and
+               vice-versa). The swap glyph hints at the toggle action;
+               the label always names the *current* view so the user
+               sees what they're looking at, not what's behind it. -->
+          <button
+            class="inspector-toggle"
+            type="button"
+            aria-label={inspectorTab === "outline"
+              ? "Switch to file info"
+              : "Switch to outline"}
+            onclick={() =>
+              (inspectorTab = inspectorTab === "outline" ? "info" : "outline")}
+          >
+            <span class="inspector-toggle-label">
+              {inspectorTab === "outline" ? "Outline" : "File info"}
+            </span>
+            <span class="inspector-toggle-glyph" aria-hidden="true">⇄</span>
+          </button>
           <div class="inspector-body">
             {#if inspectorTab === "outline"}
               <OutlineBody content={tab.content} onSelect={jumpTo} />
@@ -611,32 +653,36 @@
      the floating toolbar pill (top: 8px, ~30px tall); when the
      toolbar is hidden we reclaim that space back to the 1rem
      baseline so the first line sits at the top of the doc. */
-  /* Tab strip across the top of the inspector body. Switches the
-     pane between the outline heading list and the same FileInfoBody
-     the file browser uses for tags / refs / backlinks. */
-  .inspector-tabs {
+  /* Single-button toggle across the top of the inspector body.
+     Names the *current* view ("Outline" or "File info") so the
+     user sees what they're looking at; the swap glyph hints that
+     clicking flips to the other view. */
+  .inspector-toggle {
     display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    width: 100%;
     flex-shrink: 0;
-    border-bottom: 1px solid var(--separator);
-  }
-  .inspector-tab {
-    flex: 1;
     background: none;
     border: 0;
-    border-bottom: 2px solid transparent;
-    color: var(--text-secondary);
+    border-bottom: 1px solid var(--separator);
+    color: var(--text);
     cursor: pointer;
     font: inherit;
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    font-size: 13px;
     padding: 0.45rem 0.6rem;
-    text-align: center;
+    text-align: left;
   }
-  .inspector-tab:hover { color: var(--text); }
-  .inspector-tab.on {
-    color: var(--text);
-    border-bottom-color: var(--pane-focus, var(--text));
+  .inspector-toggle:hover {
+    background: var(--hover-bg);
+  }
+  .inspector-toggle-label {
+    font-weight: 600;
+  }
+  .inspector-toggle-glyph {
+    color: var(--text-secondary);
+    font-size: 14px;
   }
   .inspector-body {
     flex: 1;
