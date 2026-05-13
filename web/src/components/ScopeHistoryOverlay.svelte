@@ -251,47 +251,6 @@
                 ? `started ${formatRelative(e.created_at)}`
                 : undefined}
           >
-            {#snippet header()}
-              <span class="actions">
-                {#if canResume}
-                  <button
-                    class="act"
-                    title={e.kind === "group"
-                      ? "Read-only preview (group scope can't resume in place)"
-                      : "Resume in current window"}
-                    onclick={() => void onResume(e)}
-                  >
-                    <Eye size={13} strokeWidth={1.75} aria-hidden="true" />
-                    {e.kind === "group" ? "preview" : "resume"}
-                  </button>
-                {/if}
-                {#if canOpenNew}
-                  <button
-                    class="act"
-                    title="Open the saved pane / tab layout in a new window"
-                    onclick={() => onOpenInNewWindow(e)}
-                  >
-                    <ExternalLink size={13} strokeWidth={1.75} aria-hidden="true" />
-                    new window
-                  </button>
-                {/if}
-                <button
-                  class="act"
-                  title="Export the transcript to a markdown file in the drive"
-                  onclick={() => void onExport(e)}
-                >
-                  <FileDown size={13} strokeWidth={1.75} aria-hidden="true" />
-                  export
-                </button>
-                <button
-                  class="act danger"
-                  title="Delete this scope history"
-                  onclick={() => void onDelete(e)}
-                >
-                  <Trash2 size={13} strokeWidth={1.75} aria-hidden="true" />
-                </button>
-              </span>
-            {/snippet}
             <div class="row1">
               <span class="kind-pill" style="background:{KIND_COLOR[e.kind]}"
                 >{e.kind}</span
@@ -328,6 +287,45 @@
                 {/if}
               </div>
             {/if}
+            <div class="actions">
+              {#if canResume}
+                <button
+                  class="act"
+                  title={e.kind === "group"
+                    ? "Read-only preview (group scope can't resume in place)"
+                    : "Resume in current window"}
+                  onclick={() => void onResume(e)}
+                >
+                  <Eye size={13} strokeWidth={1.75} aria-hidden="true" />
+                  {e.kind === "group" ? "preview" : "resume"}
+                </button>
+              {/if}
+              {#if canOpenNew}
+                <button
+                  class="act"
+                  title="Open the saved pane / tab layout in a new window"
+                  onclick={() => onOpenInNewWindow(e)}
+                >
+                  <ExternalLink size={13} strokeWidth={1.75} aria-hidden="true" />
+                  new window
+                </button>
+              {/if}
+              <button
+                class="act"
+                title="Export the transcript to a markdown file in the drive"
+                onclick={() => void onExport(e)}
+              >
+                <FileDown size={13} strokeWidth={1.75} aria-hidden="true" />
+                export
+              </button>
+              <button
+                class="act danger"
+                title="Delete this scope history"
+                onclick={() => void onDelete(e)}
+              >
+                <Trash2 size={13} strokeWidth={1.75} aria-hidden="true" />
+              </button>
+            </div>
             {#if expandedId === e.id}
               <div class="peek">
                 {#if expandedLoading}
@@ -562,15 +560,16 @@
     opacity: 0.8;
   }
 
-  /* Action row in the bubble header. Slot lands to the right of
-     the timestamp; the actions cluster keeps them visually
-     grouped and fixed-height so the role-line doesn't reflow as
-     buttons hover. */
+  /* Action row sits at the bottom-right of each bubble, below
+     the meta / timestamp lines so the eye finishes on the
+     conversation summary and then lands on the buttons. The
+     row stays right-aligned regardless of how many buttons the
+     scope kind exposes (file / drive / group differ). */
   .actions {
-    display: inline-flex;
-    align-items: center;
+    display: flex;
+    justify-content: flex-end;
     gap: 4px;
-    margin-left: auto;
+    margin-top: 8px;
   }
   .act {
     display: inline-flex;

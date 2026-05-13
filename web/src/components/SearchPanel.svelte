@@ -545,7 +545,6 @@
                   <span class="kind-pill doc">doc</span>
                   <span class="path">{r.hit.path}</span>
                   {#if r.hit.heading}<span class="heading">· {r.hit.heading}</span>{/if}
-                  <span class="score">{r.hit.score.toFixed(4)}</span>
                 </div>
                 <div class="snippet">{@html renderSnippet(r.hit.snippet)}</div>
               {:else if r.kind === "image"}
