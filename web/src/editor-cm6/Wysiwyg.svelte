@@ -35,16 +35,24 @@
     wikiLinkDecorations,
     type WikiLinkClickArgs,
   } from "./widgets/wikilink";
+  import {
+    imageDecorations,
+    type ImageClickArgs,
+  } from "./widgets/image";
   import type { FindAdapter } from "../editor/find";
 
   let {
     value = $bindable(""),
+    currentPath = null,
     onTagClick = () => {},
     onWikiClick = () => {},
+    onImageClick = () => {},
   }: {
     value: string;
+    currentPath?: string | null;
     onTagClick?: (tag: string) => void;
     onWikiClick?: (args: WikiLinkClickArgs) => void;
+    onImageClick?: (args: ImageClickArgs) => void;
   } = $props();
 
   const density = $derived(drive.info?.preferences?.line_spacing ?? "tight");
@@ -75,6 +83,10 @@
         tagDecorations({ onTagClick }),
         dateDecorations(),
         wikiLinkDecorations({ onWikiClick }),
+        imageDecorations({
+          getCurrentPath: () => currentPath,
+          onImageClick,
+        }),
         EditorView.updateListener.of((u) => {
           sync.onDocChanged(u, (s) => (value = s));
         }),
@@ -218,6 +230,44 @@
   }
   :global(.md-wysiwyg-cm6 .cm-md-wiki-pill:hover) {
     background: var(--wiki-bg-hover, rgba(168, 130, 255, 0.28));
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap) {
+    display: inline-block;
+    position: relative;
+    line-height: 0;
+    max-width: 100%;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-align="left"]) {
+    display: block;
+    float: left;
+    margin-right: 1em;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-align="right"]) {
+    display: block;
+    float: right;
+    margin-left: 1em;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap img) {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    border-radius: 4px;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-handle) {
+    position: absolute;
+    right: -4px;
+    bottom: -4px;
+    width: 12px;
+    height: 12px;
+    background: var(--text-secondary, #888);
+    border: 2px solid var(--bg, #fff);
+    border-radius: 50%;
+    cursor: nwse-resize;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap:hover .cm-md-image-handle) {
+    opacity: 1;
   }
 
   /* ---- heading line classes ---- */
