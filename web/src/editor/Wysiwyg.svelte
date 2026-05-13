@@ -117,13 +117,15 @@
     // in place. Different kind or no bubble open: dismiss the old
     // and mount fresh.
     if (activeBubble && activeKind === spec.kind) {
-      activeBubble.setQuery(spec.query);
-      // Cast: only wiki bubble carries setTriggerEnd today; harmless
-      // for others until they implement the same shape.
+      // setTriggerEnd MUST run BEFORE setQuery: setQuery re-renders
+      // the bubble (including the image preview, which reads
+      // triggerStart..triggerEnd from the doc), and a stale
+      // triggerEnd at that point produces a truncated URL preview.
       const ext = activeBubble as BubbleHandle & {
         setTriggerEnd?: (end: number) => void;
       };
       ext.setTriggerEnd?.(spec.triggerEnd);
+      activeBubble.setQuery(spec.query);
       return;
     }
     if (activeBubble) {

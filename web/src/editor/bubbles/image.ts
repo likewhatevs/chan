@@ -200,14 +200,22 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
 
   function renderPreview(): void {
     preview.innerHTML = "";
-    // Prefer the hit under selection; fall back (raw mode editing
-    // an existing image) to the source URL the user is editing so
-    // the preview always shows SOMETHING. The fallback uses the
-    // current URL slot text — `query` is set to that text at open
-    // time and updated on every keystroke.
-    let src: string | null = hits[selectedIndex] ?? null;
-    if (src === null && opts.templateMode === "raw" && query.length > 0) {
-      src = query;
+    // In raw mode (editing an existing image's URL), the preview is
+    // ALWAYS the live URL the user is editing — never a catalog hit.
+    // Using `hits[selectedIndex]` here is wrong: after an align
+    // toggle, the URL length changes, caret collapses to slot start,
+    // query becomes "", filter() picks the first catalog image, and
+    // the preview suddenly shows an unrelated image. Pulling the
+    // text straight from the doc keeps preview locked to the source.
+    let src: string | null;
+    if (opts.templateMode === "raw") {
+      const url = opts.view.state.doc.sliceString(
+        opts.triggerStart,
+        triggerEnd,
+      );
+      src = url || null;
+    } else {
+      src = hits[selectedIndex] ?? null;
     }
     if (!src) return;
     const url = resolveImageSrc(src, opts.currentPath);
