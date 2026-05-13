@@ -7,6 +7,13 @@
   // native-only special-tab WebviewWindow.
 
   import { tick } from "svelte";
+  import {
+    FilePlus,
+    FolderOpen,
+    FolderPlus,
+    Pencil,
+    Users,
+  } from "lucide-svelte";
   import FileTree from "./FileTree.svelte";
   import Inspector from "./Inspector.svelte";
   import FileInfoBody from "./FileInfoBody.svelte";
@@ -233,25 +240,19 @@
   <li class="sep" role="separator"></li>
   <li>
     <button role="menuitem" onclick={newFileHere}>
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M2 1.75C2 .784 2.784 0 3.75 0h5.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 12.25 16h-8.5A1.75 1.75 0 0 1 2 14.25V1.75zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 8 4.25V1.5H3.75zM9.5 1.5v2.75c0 .138.112.25.25.25h2.5l-2.75-3z" />
-      </svg>
+      <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
       <span>New file</span>
     </button>
   </li>
   <li>
     <button role="menuitem" onclick={newDirHere}>
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5l-1.4-1.55A1.75 1.75 0 0 0 4.81 1H1.75z" />
-      </svg>
+      <FolderPlus size={16} strokeWidth={1.75} aria-hidden="true" />
       <span>New folder</span>
     </button>
   </li>
   <li>
     <button role="menuitem" onclick={openImportContacts}>
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm-1.5 1.5A4.5 4.5 0 0 0 2 14h12a4.5 4.5 0 0 0-4.5-4.5h-3z"/>
-      </svg>
+      <Users size={16} strokeWidth={1.75} aria-hidden="true" />
       <span>Import contacts…</span>
     </button>
   </li>
@@ -271,9 +272,7 @@
   <li class="sep" role="separator"></li>
   <li>
     <button role="menuitem" onclick={renameDrive}>
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.756l8.61-8.61zm.176 4.823L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064l6.286-6.286zM10.811 3.75 12.25 5.189l1.227-1.227a.25.25 0 0 0 0-.354l-1.085-1.085a.25.25 0 0 0-.354 0L10.811 3.75z" />
-      </svg>
+      <Pencil size={16} strokeWidth={1.75} aria-hidden="true" />
       <span>Rename drive…</span>
     </button>
   </li>
@@ -288,9 +287,7 @@
       title={drive.info?.root}
       disabled={!drive.info?.root}
     >
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25V13.25c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V6.75a.25.25 0 0 0-.25-.25h-1.5a.75.75 0 0 1 0-1.5h1.5c.966 0 1.75.784 1.75 1.75v6.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25V6.75z M7.25 0a.75.75 0 0 1 .75.75v6.5l1.97-1.97a.749.749 0 1 1 1.06 1.06l-3.25 3.25a.749.749 0 0 1-1.06 0L3.47 6.34a.749.749 0 1 1 1.06-1.06l1.97 1.97V.75A.75.75 0 0 1 7.25 0z" />
-      </svg>
+      <FolderOpen size={16} strokeWidth={1.75} aria-hidden="true" />
       <span class="folder-text">
         <span class="folder-label">Folder</span>
         <span class="folder-path mono">{drive.info?.root ?? ""}</span>

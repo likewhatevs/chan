@@ -24,6 +24,7 @@
   // context, any path it discovers in drive context).
 
   import { onDestroy, onMount } from "svelte";
+  import { Check, Copy } from "lucide-svelte";
 
   import { api } from "../api/client";
   import { renderMarkdown } from "../api/markdown";
@@ -193,22 +194,7 @@
     return new Date(ts).toISOString().slice(0, 10);
   }
 
-  // Octicon-style 16x16 SVGs lifted from sdme's site/static/js/copy.js
-  // for the per-turn copy button (with check confirmation), plus
-  // the prompt-bar's send + stop affordances. Kept as inline
-  // strings rendered via {@html} so we can swap them through a
-  // plain {#if} without a child component.
-  const ICON_COPY =
-    '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true">' +
-    '<path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"></path>' +
-    '<path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"></path>' +
-    "</svg>";
-  const ICON_CHECK =
-    '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true">' +
-    '<path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"></path>' +
-    "</svg>";
-
-  /// Index of the most recently copied turn; the matching button
+/// Index of the most recently copied turn; the matching button
   /// briefly says "copied" so the user gets feedback. Reset to
   /// null after 1.2 s. Storing one index (not a set) is enough
   /// because rapid copies just shift the indicator forward.
@@ -998,9 +984,9 @@
                   onclick={() => void copyTurn(i, turn.content)}
                 >
                   {#if copiedTurn === i}
-                    {@html ICON_CHECK}
+                    <Check size={12} strokeWidth={2} aria-hidden="true" />
                   {:else}
-                    {@html ICON_COPY}
+                    <Copy size={12} strokeWidth={1.75} aria-hidden="true" />
                   {/if}
                 </button>
                 <span class="role">you</span>
@@ -1023,9 +1009,9 @@
                   onclick={() => void copyTurn(i, turn.content)}
                 >
                   {#if copiedTurn === i}
-                    {@html ICON_CHECK}
+                    <Check size={12} strokeWidth={2} aria-hidden="true" />
                   {:else}
-                    {@html ICON_COPY}
+                    <Copy size={12} strokeWidth={1.75} aria-hidden="true" />
                   {/if}
                 </button>
               </div>
@@ -1077,9 +1063,9 @@
                     onclick={() => void copyEdit(turn.edit)}
                   >
                     {#if copiedEditId === turn.edit.toolCallId}
-                      {@html ICON_CHECK}<span>Copied</span>
+                      <Check size={12} strokeWidth={2} aria-hidden="true" /><span>Copied</span>
                     {:else}
-                      {@html ICON_COPY}<span>Copy</span>
+                      <Copy size={12} strokeWidth={1.75} aria-hidden="true" /><span>Copy</span>
                     {/if}
                   </button>
                   <button onclick={() => dismissEdit(turn.edit, "manual")}>Discard</button>

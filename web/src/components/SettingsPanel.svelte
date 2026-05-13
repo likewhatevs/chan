@@ -1,31 +1,27 @@
 <script lang="ts">
-  // Settings overlay. Per-device-global preferences form (fonts,
-  // assistant, attachments_dir, default-drive path) plus the
+  // Settings overlay. Per-device-global preferences form (editor
+  // theme, assistant, attachments_dir, default-drive path) plus the
   // keychain controls for the assistant API key.
   //
   // The drive display name is edited from the file-browser
   // hamburger, not here, so the settings overlay is purely
   // about device-wide preferences.
   //
-  // Auto-saves on change (500 ms debounce). Font changes preview
-  // live by writing CSS variables on document.documentElement; the
-  // debounced PATCH then persists them to the global config.
-  // Keychain writes are a separate flow with their own button
-  // because the keychain backend is OS-specific and the operation
-  // must surface its own pass/fail.
+  // Auto-saves on change (500 ms debounce). Keychain writes are a
+  // separate flow with their own button because the keychain
+  // backend is OS-specific and the operation must surface its own
+  // pass/fail.
 
   import { onMount } from "svelte";
   import { api } from "../api/client";
   import type {
     BuildInfo,
-    FontPrefs,
+    EditorTheme,
     GlobalConfig,
     LlmModelEntry,
     LlmStatus,
     Preferences,
   } from "../api/types";
-  import { applyFontPrefs } from "../state/fontPrefs";
-  import { FONT_FAMILIES, findFontOption } from "../state/fontFamilies";
   import {
     indexStatus,
     refreshDrive,
@@ -418,9 +414,6 @@
         editing = clone(info.preferences);
         editedDefaultRoot = cfg.default_drive_root ?? "";
       }
-      // Push fonts globally so the editor picks them up via the
-      // CSS variables on document.documentElement.
-      applyFontPrefs(info.preferences.fonts);
       // Backend / model may have flipped; re-check readiness.
       void loadLlmStatus();
       saveStatus = "saved";
@@ -489,12 +482,18 @@
     scheduleSave();
   });
 
-  /// Apply the edited fonts as a live preview on every change. The
-  /// auto-save effect persists them on the next debounce; previewing
-  /// before the round-trip avoids a visible flicker.
-  function previewFonts(fp: FontPrefs): void {
-    applyFontPrefs(fp);
-  }
+  // Live-apply the editor-theme attribute on every change so the
+  // editor in the background re-skins instantly, without waiting
+  // for the 500 ms autosave + server round-trip. The App.svelte
+  // post-save $effect later reapplies from the authoritative
+  // drive.info; both paths produce the same DOM attribute.
+  $effect(() => {
+    if (!editing) return;
+    document.documentElement.setAttribute(
+      "data-editor-theme",
+      editing.editor_theme,
+    );
+  });
 
   async function loadBuildInfo(): Promise<void> {
     try {
@@ -965,12 +964,44 @@
     </section>
 
     <section>
-      <h3>Theme</h3>
+      <h3>Editor theme</h3>
+      <p class="hint">
+        Style of the markdown editor only — typography, headings,
+        code blocks, links, tables. Light and dark variants are
+        picked from the appearance setting below.
+      </p>
+      <div class="theme-row" role="radiogroup" aria-label="Editor theme">
+        {#each [
+          { value: "github", label: "GitHub" },
+          { value: "google_docs", label: "Google Docs" },
+          { value: "word", label: "Microsoft Word" },
+        ] as opt (opt.value)}
+          <label
+            class="theme-opt"
+            class:on={editing.editor_theme === opt.value}
+          >
+            <input
+              type="radio"
+              name="editor-theme"
+              value={opt.value}
+              checked={editing.editor_theme === opt.value}
+              onchange={() => {
+                editing!.editor_theme = opt.value as EditorTheme;
+              }}
+            />
+            <span>{opt.label}</span>
+          </label>
+        {/each}
+      </div>
+    </section>
+
+    <section>
+      <h3>Appearance</h3>
       <p class="hint">
         Per-device only; lives in browser storage. "System" follows
         your OS appearance setting live.
       </p>
-      <div class="theme-row" role="radiogroup" aria-label="Theme">
+      <div class="theme-row" role="radiogroup" aria-label="Appearance">
         {#each [
           { value: "system", label: "System" },
           { value: "light", label: "Light" },
@@ -988,53 +1019,6 @@
           </label>
         {/each}
       </div>
-    </section>
-
-    <section>
-      <h3>Fonts</h3>
-      {#each ["heading1", "heading2", "heading3", "normal", "code", "quote"] as role}
-        {@const spec = editing.fonts[role as keyof FontPrefs]}
-        {@const known = findFontOption(spec.family)}
-        <label class="font-row">
-          <span>{role}</span>
-          <select
-            class="family"
-            value={known ? known.value : "__custom__"}
-            onchange={(e) => {
-              const v = (e.currentTarget as HTMLSelectElement).value;
-              if (v === "__custom__") return;
-              editing!.fonts[role as keyof FontPrefs].family = v;
-              previewFonts(editing!.fonts);
-            }}
-          >
-            {#if !known}
-              <!-- Stored family doesn't match any catalog entry
-                   (hand-edited TOML, removed catalog entry, etc.).
-                   Surface it explicitly so the user understands the
-                   dropdown won't reproduce the current state until
-                   they pick a known option. -->
-              <option value="__custom__">(custom: {spec.family})</option>
-            {/if}
-            {#each FONT_FAMILIES as opt}
-              <option value={opt.value} style="font-family: {opt.value}">{opt.label}</option>
-            {/each}
-          </select>
-          <!-- Preview swatch in the chosen face. Capped at 18px so
-               a large heading doesn't blow the row out of shape;
-               the heading still renders at its real size in the
-               editor. -->
-          <span class="font-preview" style="font-family: {spec.family}">Aa</span>
-          <input
-            class="size"
-            type="number"
-            min="8"
-            max="72"
-            bind:value={editing.fonts[role as keyof FontPrefs].size}
-            oninput={() => previewFonts(editing!.fonts)}
-          />
-          <span class="size-suffix">px</span>
-        </label>
-      {/each}
     </section>
 
     <section>
@@ -1493,26 +1477,6 @@
   .keychain button:hover:not(:disabled) { border-color: var(--btn-hover); }
   .keychain button:disabled { opacity: 0.55; cursor: default; }
   .keychain-err { flex-basis: 100%; color: var(--warn-text); font-size: 13px; }
-  .font-row {
-    grid-template-columns: 7em 1fr 2.5em 5em auto;
-    align-items: center;
-  }
-  .font-row .family {
-    width: auto;
-    min-width: 0;
-  }
-  .font-row .size { width: auto; }
-  .font-preview {
-    text-align: center;
-    color: var(--text);
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 1px 4px;
-    line-height: 1.1;
-    font-size: 16px;
-  }
-  .size-suffix { color: var(--text-secondary); font-size: 14px; }
   /* Tab-bar autosave indicator. Sits between the title and the
      actions strip. Empty when idle (no extra padding). */
   .save-status { font-size: 14px; min-width: 60px; text-align: right; }

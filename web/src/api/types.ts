@@ -38,19 +38,11 @@ export type KnownDrive = {
   last_opened: string;
 };
 
-export type FontSpec = {
-  family: string;
-  size: number;
-};
-
-export type FontPrefs = {
-  heading1: FontSpec;
-  heading2: FontSpec;
-  heading3: FontSpec;
-  normal: FontSpec;
-  code: FontSpec;
-  quote: FontSpec;
-};
+/// Editor theme. Drives the markdown renderer + source view
+/// typography and chrome. Light/dark variants are selected from
+/// the active ThemeChoice; density from LineSpacing. App chrome
+/// (toolbar, panes, status bar) is not affected.
+export type EditorTheme = "github" | "google_docs" | "word";
 
 export type AssistantBackendKind =
   | "claude"
@@ -217,7 +209,7 @@ export type PaneWidths = {
 export type LineSpacing = "tight" | "standard";
 
 export type Preferences = {
-  fonts: FontPrefs;
+  editor_theme: EditorTheme;
   assistant: AssistantPrefs;
   /// Where image uploads land (relative to drive root). Default
   /// `attachments/`. Not exposed in the Settings UI; round-tripped

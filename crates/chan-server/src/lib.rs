@@ -36,7 +36,7 @@ mod util;
 
 pub use config::ServerConfig;
 pub use error::Error;
-pub use preferences::{EditorPrefs, FontPrefs, FontSpec, LineSpacing, PaneWidths, ThemeChoice};
+pub use preferences::{EditorPrefs, EditorTheme, LineSpacing, PaneWidths, ThemeChoice};
 
 use auth::{auth_middleware, load_or_create_token};
 use bus::make_watch_bridge;

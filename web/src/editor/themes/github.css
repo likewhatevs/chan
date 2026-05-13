@@ -1,0 +1,89 @@
+/*
+ * GitHub markdown theme.
+ *
+ * Light palette mirrors github.com's "light" primer markdown render
+ * (the classic README look). Dark palette mirrors the "dark" primer
+ * (text #f0f6fc, code-block bg #151b23, blockquote #9198a1 etc.).
+ *
+ * Selected on a fresh install; the default in EditorPrefs.editor_theme.
+ */
+
+:root[data-editor-theme="github"] {
+  --chan-editor-body-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica,
+    Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --chan-editor-body-size: 16px;
+  --chan-editor-body-color: #1f2328;
+
+  --chan-editor-heading-family: var(--chan-editor-body-family);
+  --chan-editor-heading-color: #1f2328;
+  /* GitHub's heading scale: h1 2em / h2 1.5em / h3 1.25em / h4 1em /
+     h5 0.875em / h6 0.85em. Weight 600 across the board. */
+  --chan-editor-h1-size: 2em;
+  --chan-editor-h1-weight: 600;
+  --chan-editor-h1-line-height: 1.25;
+  --chan-editor-h2-size: 1.5em;
+  --chan-editor-h2-weight: 600;
+  --chan-editor-h2-line-height: 1.25;
+  --chan-editor-h3-size: 1.25em;
+  --chan-editor-h3-weight: 600;
+  --chan-editor-h3-line-height: 1.3;
+  --chan-editor-h4-size: 1em;
+  --chan-editor-h4-weight: 600;
+  --chan-editor-h4-line-height: 1.35;
+  --chan-editor-h5-size: 0.875em;
+  --chan-editor-h5-weight: 600;
+  --chan-editor-h5-line-height: 1.4;
+  --chan-editor-h6-size: 0.85em;
+  --chan-editor-h6-weight: 600;
+  --chan-editor-h6-line-height: 1.4;
+  --chan-editor-h6-color: #59636e;
+
+  --chan-editor-code-family:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  --chan-editor-code-size: 0.85em;
+  --chan-editor-inline-code-bg: rgba(175, 184, 193, 0.2);
+  --chan-editor-inline-code-color: inherit;
+  --chan-editor-code-block-bg: #f6f8fa;
+  --chan-editor-code-block-color: #1f2328;
+  --chan-editor-code-block-border: transparent;
+
+  --chan-editor-link-color: #0969da;
+
+  --chan-editor-quote-color: #59636e;
+  --chan-editor-quote-border: #d0d7de;
+  --chan-editor-hr-color: #d0d7de;
+  --chan-editor-table-border: #d0d7de;
+  --chan-editor-table-header-bg: #f6f8fa;
+  --chan-editor-table-stripe-bg: #f6f8fa;
+}
+
+/*
+ * Dark variant. Colors come from GitHub Primer dark — picked off
+ * github.com's rendered markdown surface, NOT from the editor
+ * surface (which is a different palette). The body color #f0f6fc
+ * and link #4493f8 are the load-bearing tokens; code-block bg
+ * #151b23 is GitHub's current dark fenced-block color (older
+ * builds used #161b22).
+ */
+:root[data-editor-theme="github"][data-theme="dark"] {
+  --chan-editor-body-color: #f0f6fc;
+
+  --chan-editor-heading-color: #f0f6fc;
+  --chan-editor-h6-color: #9198a1;
+
+  --chan-editor-inline-code-bg: rgba(101, 108, 118, 0.4);
+  --chan-editor-code-block-bg: #151b23;
+  --chan-editor-code-block-color: #f0f6fc;
+  --chan-editor-code-block-border: transparent;
+
+  --chan-editor-link-color: #4493f8;
+
+  --chan-editor-quote-color: #9198a1;
+  --chan-editor-quote-border: #3d444d;
+  --chan-editor-hr-color: #3d444d;
+  --chan-editor-table-border: #3d444d;
+  --chan-editor-table-header-bg: #151b23;
+  --chan-editor-table-stripe-bg: #151b23;
+}

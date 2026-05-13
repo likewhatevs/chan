@@ -54,7 +54,7 @@
     selectPrevTabInActivePane,
     selectTabAtIndexInActivePane,
   } from "./state/tabs.svelte";
-  import { applyFontPrefs, DEFAULT_FONT_PREFS } from "./state/fontPrefs";
+  import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
   import {
     applyInitialPageWidth,
     watchPageWidth,
@@ -129,12 +129,12 @@
     scheduleSessionSave();
   });
 
-  // Push the latest font preferences into CSS variables whenever the
-  // server-known drive info changes. The settings tab also calls
-  // applyFontPrefs() locally for live preview between saves.
+  // Push the active editor theme onto the document root whenever
+  // the server-known drive info changes. The CSS in editor/themes/*
+  // keys typography + chrome off this attribute.
   $effect(() => {
-    const fonts = drive.info?.preferences?.fonts;
-    applyFontPrefs(fonts ?? DEFAULT_FONT_PREFS);
+    const theme = drive.info?.preferences?.editor_theme;
+    applyEditorTheme(theme ?? DEFAULT_EDITOR_THEME);
   });
 
   // Single-writer bridge from per-tab read mode to the window-level
@@ -166,10 +166,10 @@
   });
 
   onMount(async () => {
-    // Apply persisted theme + default fonts to the document root
-    // immediately, before any component renders, to avoid a flash.
+    // Apply persisted theme + default editor theme to the document
+    // root immediately, before any component renders, to avoid a flash.
     applyInitialTheme();
-    applyFontPrefs(DEFAULT_FONT_PREFS);
+    applyEditorTheme(DEFAULT_EDITOR_THEME);
     applyInitialPageWidth();
     // While in "system" mode, follow OS-level theme changes live.
     // The listener stays alive for the whole app's lifetime.

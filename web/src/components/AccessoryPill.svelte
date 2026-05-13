@@ -7,15 +7,21 @@
   // Cmd/Ctrl+Shift+E, Cmd/Ctrl+,); the pill just makes the
   // affordance discoverable.
   //
-  // The Assistant button sits in the middle of the row and renders
-  // a touch larger than its neighbours: it's the brand attractor
-  // and the most actionable surface in the pill, so the size +
-  // yellow stroke double up to draw the eye there first.
+  // Layout (top → bottom along the z stack):
+  //   - .pill-chrome: rounded background containing the four side
+  //     icons (Files / Search / Graph / Settings) plus a transparent
+  //     `.enso-slot` reserving 62px of horizontal space in the row's
+  //     centre. The chrome owns the bg / border / shadow.
+  //   - .fbtn.enso: positioned absolutely above the chrome, centered
+  //     horizontally, bottom flush with the chrome's top so the logo
+  //     "perches" above the pill rather than expanding it.
   //
-  // The component renders only the buttons; chrome (rounded
-  // background, shadow, positioning) is the caller's responsibility
-  // since the surrounding container varies.
+  // The side icons collapse to width:0 + opacity:0 while idle (see
+  // BottomPill.svelte for the hover-expand cascade), so the chrome
+  // shrinks down to just the enso slot when the user isn't over the
+  // bar — and unfurls outward on hover.
 
+  import { Folder, Search, Share2, Settings } from "lucide-svelte";
   import {
     assistantOverlay,
     browserOverlay,
@@ -44,71 +50,98 @@
   const settingsLocked = settingsDisabled;
 </script>
 
-<button
-  class="fbtn"
-  class:on={browserOverlay.open}
-  title="Files (⌘⇧O)"
-  aria-label="Files"
-  onclick={openBrowser}
->
-  <svg viewBox="0 0 16 16" aria-hidden="true">
-    <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5l-1.4-1.55A1.75 1.75 0 0 0 4.81 1H1.75z" />
-  </svg>
-</button>
-<button
-  class="fbtn"
-  title="Search (⌘K)"
-  aria-label="Search"
-  onclick={() => (searchPanel.open = true)}
->
-  <svg viewBox="0 0 16 16" aria-hidden="true">
-    <path
-      d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.097.114l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.114-.098zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"
-    />
-  </svg>
-</button>
-<button
-  class="fbtn enso"
-  class:on={assistantOverlay.open && assistantEnabled}
-  class:disabled={!assistantEnabled}
-  title={assistantEnabled
-    ? "Assistant (⌘P)"
-    : "Assistant is off — enable it in Settings"}
-  aria-label="Assistant"
-  aria-disabled={!assistantEnabled}
-  disabled={!assistantEnabled}
-  onclick={openAssistant}
->
-  <span class="enso-mark" aria-hidden="true"></span>
-</button>
-<button
-  class="fbtn"
-  title="Graph (⌘⇧G)"
-  aria-label="Graph"
-  onclick={openGraph}
->
-  <svg viewBox="0 0 16 16" aria-hidden="true">
-    <path d="M3.5 4a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm0 11a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm9-5.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z" />
-    <path d="M4.27 3.05l7 4.5-.54.84-7-4.5.54-.84zM4.27 12.95l7-4.5-.54-.84-7 4.5.54.84z" />
-  </svg>
-</button>
-<button
-  class="fbtn"
-  class:disabled={settingsLocked}
-  title={settingsLocked
-    ? "Settings disabled while this drive is shared via a tunnel"
-    : "Settings (⌘,)"}
-  aria-label="Settings"
-  aria-disabled={settingsLocked}
-  disabled={settingsLocked}
-  onclick={openSettings}
->
-  <svg viewBox="0 0 16 16" aria-hidden="true">
-    <path d="M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492zM5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0z M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 0 1-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 0 1-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 0 1 .52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 0 1 1.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 0 1 1.255-.52l.292.16c1.64.893 3.434-.901 2.54-2.541l-.159-.292a.873.873 0 0 1 .52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 0 1-.52-1.255l.16-.292c.893-1.64-.901-3.433-2.541-2.54l-.292.159a.873.873 0 0 1-1.255-.52l-.094-.319zm-2.633.283c.246-.835 1.428-.835 1.674 0l.094.319a1.873 1.873 0 0 0 2.693 1.115l.291-.16c.764-.415 1.6.42 1.184 1.185l-.159.292a1.873 1.873 0 0 0 1.116 2.692l.318.094c.835.246.835 1.428 0 1.674l-.319.094a1.873 1.873 0 0 0-1.115 2.693l.16.291c.415.764-.42 1.6-1.185 1.184l-.291-.159a1.873 1.873 0 0 0-2.693 1.116l-.094.318c-.246.835-1.428.835-1.674 0l-.094-.319a1.873 1.873 0 0 0-2.692-1.115l-.292.16c-.764.415-1.6-.42-1.184-1.185l.159-.291A1.873 1.873 0 0 0 1.945 8.93l-.319-.094c-.835-.246-.835-1.428 0-1.674l.319-.094A1.873 1.873 0 0 0 3.06 4.377l-.16-.292c-.415-.764.42-1.6 1.185-1.184l.292.159a1.873 1.873 0 0 0 2.692-1.115l.094-.319z" />
-  </svg>
-</button>
+<div class="pill-stack">
+  <div class="pill-chrome">
+    <button
+      class="fbtn side left"
+      class:on={browserOverlay.open}
+      title="Files (⌘⇧O)"
+      aria-label="Files"
+      onclick={openBrowser}
+    >
+      <Folder size={19} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+    <button
+      class="fbtn side left"
+      title="Search (⌘K)"
+      aria-label="Search"
+      onclick={() => (searchPanel.open = true)}
+    >
+      <Search size={19} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+    <!-- Reserves horizontal space for the enso so the side icons
+         stay symmetric around the center even though the enso is
+         no longer in the same flex container. -->
+    <div class="enso-slot" aria-hidden="true"></div>
+    <button
+      class="fbtn side right"
+      title="Graph (⌘⇧G)"
+      aria-label="Graph"
+      onclick={openGraph}
+    >
+      <Share2 size={19} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+    <button
+      class="fbtn side right"
+      class:disabled={settingsLocked}
+      title={settingsLocked
+        ? "Settings disabled while this drive is shared via a tunnel"
+        : "Settings (⌘,)"}
+      aria-label="Settings"
+      aria-disabled={settingsLocked}
+      disabled={settingsLocked}
+      onclick={openSettings}
+    >
+      <Settings size={19} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+  </div>
+  <button
+    class="fbtn enso"
+    class:on={assistantOverlay.open && assistantEnabled}
+    class:disabled={!assistantEnabled}
+    title={assistantEnabled
+      ? "Assistant (⌘P)"
+      : "Assistant is off — enable it in Settings"}
+    aria-label="Assistant"
+    aria-disabled={!assistantEnabled}
+    disabled={!assistantEnabled}
+    onclick={openAssistant}
+  >
+    <span class="enso-mark" aria-hidden="true"></span>
+  </button>
+</div>
 
 <style>
+  /* Anchor for the absolutely-positioned enso. Sized to its inline
+     children, so the bottom pill can flex around it. */
+  .pill-stack {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
+  /* Rounded chrome surrounding the side buttons. Used to live on
+     .bottom-pill; moved here so the enso (the chan logo) can sit
+     above the chrome with NO background, exactly as the user
+     intended. */
+  .pill-chrome {
+    display: flex;
+    align-items: center;
+    padding: 5px 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+    border-radius: 999px;
+  }
+  /* Invisible placeholder reserving horizontal room for the enso
+     button so the four side icons stay symmetric around the center
+     (two on each side). Matches the enso button width + a 4px gap
+     on each side. */
+  .enso-slot {
+    width: 62px;
+    height: 38px;
+    flex-shrink: 0;
+    margin: 0 4px;
+  }
   .fbtn {
     min-width: 38px;
     height: 38px;
@@ -140,29 +173,51 @@
     background: transparent;
     cursor: not-allowed;
   }
-  .fbtn svg {
-    width: 19px;
-    height: 19px;
-    fill: currentColor;
+  .fbtn :global(svg) {
     display: block;
   }
   /* The ensō uses the same chan-mark.png artwork as the empty-pane
      watermark, painted via CSS mask so the silhouette can take the
-     theme accent (brand orange, matches chan.app). Bigger circle
-     than the neighbours so it still reads as the primary attractor,
-     but everything in the bar scales together so nothing looks like
-     an afterthought. */
+     theme accent (brand orange, matches chan.app).
+     Positioned ABSOLUTELY at the centre of the .pill-stack so it
+     sits visually IN FRONT of the chrome (depth, not height). The
+     chrome's rounded background still spans the chord-style pill,
+     but the logo paints on top so the pill bg does NOT surround
+     the ensō. Because the logo is taller than the chrome it pokes
+     a few px above and below — that's the intended overhang.
+     z-index keeps the logo above .pill-chrome regardless of source
+     order. */
   .fbtn.enso {
-    width: 52px;
-    height: 52px;
-    min-width: 52px;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    z-index: 2;
+    width: 62px;
+    height: 62px;
+    min-width: 62px;
     border-radius: 50%;
-    margin: 0 4px;
     padding: 0;
+    /* translate(-50%, -50%) centers exactly on the pill's centre.
+       The X portion lives in every rule that touches transform so
+       the hover wobble doesn't yank the centering. */
+    transform: translate(-50%, -50%);
+    transition: transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
   }
+  .fbtn.enso:hover {
+    transform: translate(-50%, -50%) scale(1.06);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fbtn.enso,
+    .fbtn.enso:hover {
+      transition: none;
+      transform: translate(-50%, -50%);
+    }
+  }
+  /* Mark sized to nearly fill the enso button so the logo dominates
+     the row visually. */
   .fbtn.enso .enso-mark {
-    width: 38px;
-    height: 38px;
+    width: 56px;
+    height: 56px;
     background-color: var(--assistant-accent);
     -webkit-mask: url('/chan-mark.png') center / contain no-repeat;
             mask: url('/chan-mark.png') center / contain no-repeat;

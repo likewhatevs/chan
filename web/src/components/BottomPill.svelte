@@ -1,13 +1,14 @@
 <script lang="ts">
   // Window-level floating bottom pill. Single instance per window;
-  // hosts the navigation button list (AccessoryPill) inside a
-  // rounded-pill chrome anchored at the bottom-center of the
-  // viewport.
+  // hosts the navigation buttons (AccessoryPill) anchored at the
+  // bottom-center of the viewport. The pill chrome (rounded bg,
+  // border, shadow) lives inside AccessoryPill so the assistant
+  // ensō can float above it without dragging the chrome along.
   //
   // Idle hide: when `idle.active` flips on (5s of no input), the
-  // pill fades to transparent + drops pointer events. Any scroll /
-  // click / keypress flips it back via the global tracker. While
-  // the mouse is over the pill itself, pinAccessory() keeps it
+  // whole bar fades to transparent + drops pointer events. Any
+  // scroll / click / keypress flips it back via the global tracker.
+  // While the mouse is over the bar itself, pinAccessory() keeps it
   // visible so the user can't have it fade from under their cursor.
 
   import AccessoryPill from "./AccessoryPill.svelte";
@@ -43,6 +44,10 @@
 </div>
 
 <style>
+  /* Positioning + fade-state container. NO chrome here; the rounded
+     bg + border + shadow live on AccessoryPill's .pill-chrome (so
+     the chrome wraps only the side buttons, never the floating
+     ensō). */
   .bottom-pill {
     position: fixed;
     left: 50%;
@@ -52,18 +57,6 @@
        that touches transform or the centering jumps. */
     transform: translateX(-50%) scale(1);
     z-index: 4500;
-    display: flex;
-    gap: 4px;
-    align-items: center;
-    padding: 5px 10px;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
-    border-radius: 999px;
-    font-size: 15px;
-    color: var(--text);
-    max-width: calc(100vw - 16px);
-    overflow: visible;
     /* easeOutBack: ~10% overshoot on the way in so the reveal and
        hover read as alive rather than mechanical. */
     transition:
@@ -94,13 +87,53 @@
   }
   /* Read mode: fade the bar so it reads as ambient chrome rather
      than an active control surface. The grayscale filter desaturates
-     the assistant attractor (yellow stroke in AccessoryPill) into
-     the same muted palette; combined with the lower opacity the
-     entire bar reads as "you're reading; controls are still there
-     if you reach for them". The .idle rule still wins when both
-     are active. */
+     the assistant attractor (orange ensō) into the same muted
+     palette; combined with the lower opacity the entire bar reads
+     as "you're reading; controls are still there if you reach for
+     them". The .idle rule still wins when both are active. */
   .bottom-pill.read-mode {
     opacity: 0.55;
     filter: grayscale(0.8);
+  }
+  /* Side icons (Files / Search on the left, Graph / Settings on
+     the right) collapse their width AND opacity to zero so the
+     chrome itself shrinks down to just the ensō slot when idle.
+     `pointer-events: none` while collapsed means the only
+     hit-testable button is the ensō; once the user reaches the
+     bar via the logo, the chrome :hover state propagates upward
+     and the sides unfurl. */
+  .bottom-pill :global(.fbtn.side) {
+    opacity: 0;
+    pointer-events: none;
+    min-width: 0;
+    width: 0;
+    padding: 0;
+    border-width: 0;
+    overflow: hidden;
+    transition:
+      opacity 200ms ease,
+      width 280ms cubic-bezier(0.34, 1.56, 0.64, 1),
+      min-width 280ms cubic-bezier(0.34, 1.56, 0.64, 1),
+      padding 280ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .bottom-pill:hover :global(.fbtn.side) {
+    opacity: 1;
+    pointer-events: auto;
+    min-width: 38px;
+    width: 38px;
+    padding: 0 9px;
+    border-width: 1px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .bottom-pill :global(.fbtn.side),
+    .bottom-pill:hover :global(.fbtn.side) {
+      transition: opacity 120ms linear;
+      width: 38px;
+      min-width: 38px;
+      padding: 0 9px;
+      border-width: 1px;
+      opacity: 1;
+      pointer-events: auto;
+    }
   }
 </style>

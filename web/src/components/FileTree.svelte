@@ -5,6 +5,7 @@
   // then renders rows with expand/collapse, click-to-open, and a context
   // menu for create/rename/delete.
 
+  import { FilePlus, FolderPlus, Pencil, Trash2 } from "lucide-svelte";
   import type { TreeEntry } from "../api/types";
   import { isEditableText } from "../state/fileTypes";
   import { dirtyPaths, openInActivePane } from "../state/tabs.svelte";
@@ -620,28 +621,20 @@
   <div class="ctx" style="left: {menu.x}px; top: {menu.y}px">
     {#if menu.isDir}
       <button onclick={() => newFile(menu!.path)}>
-        <svg viewBox="0 0 16 16" aria-hidden="true">
-          <path d="M2 1.75C2 .784 2.784 0 3.75 0h5.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 12.25 16h-8.5A1.75 1.75 0 0 1 2 14.25V1.75zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 8 4.25V1.5H3.75zM9.5 1.5v2.75c0 .138.112.25.25.25h2.5l-2.75-3z" />
-        </svg>
+        <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
         <span>New file</span>
       </button>
       <button onclick={() => newDir(menu!.path)}>
-        <svg viewBox="0 0 16 16" aria-hidden="true">
-          <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5l-1.4-1.55A1.75 1.75 0 0 0 4.81 1H1.75z" />
-        </svg>
+        <FolderPlus size={16} strokeWidth={1.75} aria-hidden="true" />
         <span>New folder</span>
       </button>
     {/if}
     <button onclick={() => rename(menu!.path, menu!.isDir)}>
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25a1.75 1.75 0 0 1 .445-.758l8.61-8.61zm.585.745L3.45 10.32a.25.25 0 0 0-.064.108l-.558 1.953 1.953-.558a.25.25 0 0 0 .108-.064l8.148-8.147a.25.25 0 0 0 0-.354l-1.086-1.086a.25.25 0 0 0-.353 0z" />
-      </svg>
+      <Pencil size={16} strokeWidth={1.75} aria-hidden="true" />
       <span>Rename / Move</span>
     </button>
     <button class="danger" onclick={() => remove(menu!.path, menu!.isDir)}>
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M11 1.75V3h2.25a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1 0-1.5H5V1.75C5 .784 5.784 0 6.75 0h2.5C10.216 0 11 .784 11 1.75zM4.496 6.675l.66 6.6a.25.25 0 0 0 .249.225h5.19a.25.25 0 0 0 .249-.225l.66-6.6a.75.75 0 0 1 1.492.149l-.66 6.6A1.748 1.748 0 0 1 10.595 15h-5.19a1.75 1.75 0 0 1-1.741-1.575l-.66-6.6a.75.75 0 1 1 1.492-.15zM6.5 1.75v1.25h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25z" />
-      </svg>
+      <Trash2 size={16} strokeWidth={1.75} aria-hidden="true" />
       <span>Delete</span>
     </button>
   </div>
@@ -784,12 +777,11 @@
   }
   .ctx button:hover { background: var(--hover-bg); }
   .ctx button.danger { color: var(--warn-text); }
-  .ctx svg {
+  .ctx :global(svg) {
     width: 14px;
     height: 14px;
     flex-shrink: 0;
-    fill: currentColor;
     color: var(--text-secondary);
   }
-  .ctx button.danger svg { color: var(--warn-text); }
+  .ctx button.danger :global(svg) { color: var(--warn-text); }
 </style>

@@ -15,7 +15,7 @@
 //! What's left lives here, persisted to
 //! `<config>/chan/preferences.toml`:
 //!
-//!   - fonts (per-role family + size)
+//!   - editor_theme (github / google_docs / word)
 //!   - theme  (system / light / dark)
 //!   - pane_widths (inspector / graph / file-browser sidebars)
 //!   - line_spacing (tight / standard)
@@ -32,14 +32,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::Error;
 
-/// Fields persisted to `<config>/chan/preferences.toml`. Default
-/// values are chosen to match the frontend's compiled-in defaults
-/// in `web/src/state/fontPrefs.ts` so a fresh install renders
-/// identically before the user touches anything.
+/// Fields persisted to `<config>/chan/preferences.toml`. A fresh
+/// install defaults to the GitHub editor theme so the renderer
+/// matches what most users expect from a markdown editor without
+/// any further configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EditorPrefs {
     #[serde(default)]
-    pub fonts: FontPrefs,
+    pub editor_theme: EditorTheme,
     #[serde(default)]
     pub theme: ThemeChoice,
     #[serde(default)]
@@ -53,7 +53,7 @@ pub struct EditorPrefs {
 impl Default for EditorPrefs {
     fn default() -> Self {
         Self {
-            fonts: FontPrefs::default(),
+            editor_theme: EditorTheme::default(),
             theme: ThemeChoice::default(),
             pane_widths: PaneWidths::default(),
             line_spacing: LineSpacing::default(),
@@ -62,56 +62,18 @@ impl Default for EditorPrefs {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FontSpec {
-    pub family: String,
-    pub size: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FontPrefs {
-    pub heading1: FontSpec,
-    pub heading2: FontSpec,
-    pub heading3: FontSpec,
-    pub normal: FontSpec,
-    pub code: FontSpec,
-    pub quote: FontSpec,
-}
-
-impl Default for FontPrefs {
-    fn default() -> Self {
-        // Match web/src/state/fontPrefs.ts DEFAULT_FONT_PREFS so a
-        // fresh server returns the same defaults the frontend's
-        // pre-fetch fallback would draw with.
-        let body = "-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif";
-        let mono = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-        Self {
-            heading1: FontSpec {
-                family: body.into(),
-                size: 32,
-            },
-            heading2: FontSpec {
-                family: body.into(),
-                size: 24,
-            },
-            heading3: FontSpec {
-                family: body.into(),
-                size: 20,
-            },
-            normal: FontSpec {
-                family: body.into(),
-                size: 16,
-            },
-            code: FontSpec {
-                family: mono.into(),
-                size: 13,
-            },
-            quote: FontSpec {
-                family: body.into(),
-                size: 16,
-            },
-        }
-    }
+/// Editor theme. Drives the markdown renderer + source view
+/// typography and chrome (headings, body, code blocks, blockquotes,
+/// tables). Light/dark variants are picked from the active
+/// `ThemeChoice`; density from `LineSpacing`. App chrome
+/// (toolbar, panes, status bar) is not affected.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EditorTheme {
+    #[default]
+    Github,
+    GoogleDocs,
+    Word,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -246,5 +208,20 @@ mod tests {
         };
         let s = toml::to_string(&prefs).unwrap();
         assert!(s.contains("theme = \"dark\""), "got: {s}");
+    }
+
+    #[test]
+    fn editor_theme_defaults_to_github_and_serializes_snake_case() {
+        let prefs = EditorPrefs::default();
+        assert_eq!(prefs.editor_theme, EditorTheme::Github);
+        let prefs = EditorPrefs {
+            editor_theme: EditorTheme::GoogleDocs,
+            ..Default::default()
+        };
+        let s = toml::to_string(&prefs).unwrap();
+        assert!(
+            s.contains("editor_theme = \"google_docs\""),
+            "got: {s}"
+        );
     }
 }

@@ -1,0 +1,95 @@
+/*
+ * Microsoft Word theme.
+ *
+ * Aptos is M365's default body face (replaced Calibri in Feb 2024);
+ * Calibri stays as the fallback for users still on the older default,
+ * and the rest of the stack covers systems without either installed.
+ * Headings inherit the body face but pick up Word's classic blue tint
+ * (#2F5496) at weight 600 — the look most readers recognize from
+ * "Heading 1" / "Heading 2" in the default Word style set.
+ *
+ * Links use #0563C1 (Word's "Hyperlink" character style). Tables get
+ * thinner borders than the GitHub theme since Word's default grid is
+ * a single hairline rather than the heavier Primer ruling.
+ */
+
+:root[data-editor-theme="word"] {
+  --chan-editor-body-family:
+    Aptos, Calibri, "Segoe UI", "Helvetica Neue", Helvetica, Arial,
+    sans-serif;
+  --chan-editor-body-size: 11pt;
+  --chan-editor-body-color: #000000;
+
+  --chan-editor-heading-family: var(--chan-editor-body-family);
+  --chan-editor-heading-color: #2f5496;
+  /* Word's default style-set: H1 16pt bold, H2 13pt bold, H3 12pt
+     bold (each in #2F5496); H4–H6 step down in size and switch to a
+     darker blue. Expressed in em against the 11pt body. */
+  --chan-editor-h1-size: 1.45em;
+  --chan-editor-h1-weight: 600;
+  --chan-editor-h1-line-height: 1.3;
+  --chan-editor-h2-size: 1.18em;
+  --chan-editor-h2-weight: 600;
+  --chan-editor-h2-line-height: 1.3;
+  --chan-editor-h3-size: 1.09em;
+  --chan-editor-h3-weight: 600;
+  --chan-editor-h3-line-height: 1.35;
+  --chan-editor-h4-size: 1em;
+  --chan-editor-h4-weight: 600;
+  --chan-editor-h4-line-height: 1.4;
+  --chan-editor-h5-size: 1em;
+  --chan-editor-h5-weight: 600;
+  --chan-editor-h5-line-height: 1.4;
+  --chan-editor-h6-size: 1em;
+  --chan-editor-h6-weight: 600;
+  --chan-editor-h6-line-height: 1.4;
+  --chan-editor-h6-color: #1f3864;
+
+  --chan-editor-code-family:
+    Consolas, "Cascadia Code", "Cascadia Mono", "Courier New", monospace;
+  --chan-editor-code-size: 0.9em;
+  --chan-editor-source-size: 13px;
+  --chan-editor-inline-code-bg: #f2f2f2;
+  --chan-editor-inline-code-color: #000000;
+  --chan-editor-code-block-bg: #f7f7f7;
+  --chan-editor-code-block-color: #000000;
+  --chan-editor-code-block-border: #d4d4d4;
+
+  --chan-editor-link-color: #0563c1;
+
+  --chan-editor-quote-color: #595959;
+  --chan-editor-quote-border: #d4d4d4;
+  --chan-editor-hr-color: #d4d4d4;
+  --chan-editor-table-border: #bfbfbf;
+  --chan-editor-table-header-bg: #f2f2f2;
+  --chan-editor-table-stripe-bg: #fafafa;
+}
+
+/*
+ * Dark variant. Word's "Black" theme uses a dark canvas with light
+ * body text; we keep the editor bg sourced from the app theme and
+ * only shift the editor tokens. Headings drop the saturated blue
+ * (illegible on dark) for a brighter cyan-blue picked from Word's
+ * dark-mode accent.
+ */
+:root[data-editor-theme="word"][data-theme="dark"] {
+  --chan-editor-body-color: #ededed;
+
+  --chan-editor-heading-color: #8ab4f8;
+  --chan-editor-h6-color: #b8c4dc;
+
+  --chan-editor-inline-code-bg: #2b2b2b;
+  --chan-editor-inline-code-color: #ededed;
+  --chan-editor-code-block-bg: #1f1f1f;
+  --chan-editor-code-block-color: #ededed;
+  --chan-editor-code-block-border: #3a3a3a;
+
+  --chan-editor-link-color: #4cc2ff;
+
+  --chan-editor-quote-color: #bcbcbc;
+  --chan-editor-quote-border: #3a3a3a;
+  --chan-editor-hr-color: #3a3a3a;
+  --chan-editor-table-border: #3a3a3a;
+  --chan-editor-table-header-bg: #2b2b2b;
+  --chan-editor-table-stripe-bg: #232323;
+}

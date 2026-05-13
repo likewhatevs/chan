@@ -154,7 +154,7 @@
      a code editor, after all). */
   :global(.md-source .cm-editor) {
     height: 100%;
-    font-size: var(--chan-font-code-size, 14px);
+    font-size: var(--chan-editor-source-size, 14px);
     /* Center the whole CM editor (gutter + content together) within
        the cap when --chan-page-max-width is set (per-device pref
        written by state/pageWidth). Putting the cap on .cm-content
@@ -167,7 +167,7 @@
     margin-inline: auto;
   }
   :global(.md-source .cm-content) {
-    font-family: var(--chan-font-code-family);
+    font-family: var(--chan-editor-code-family);
   }
   /* Force every CM internal that could paint a background to
      transparent so `.md-source`'s `var(--bg)` shows uniformly,

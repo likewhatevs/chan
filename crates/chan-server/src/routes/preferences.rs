@@ -22,19 +22,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{err, Error};
 use crate::state::AppState;
-use crate::{FontPrefs, LineSpacing, PaneWidths, ThemeChoice};
+use crate::{EditorTheme, LineSpacing, PaneWidths, ThemeChoice};
 
 /// Unified Preferences shape returned over /api/drive and
 /// /api/config. The fields are owned by three different stores:
 ///
-/// - fonts / theme / pane_widths / line_spacing / date_format:
+/// - editor_theme / theme / pane_widths / line_spacing / date_format:
 ///   EditorPrefs (preferences.toml)
 /// - attachments_dir: ServerConfig (server.toml; the answers_dir
 ///   field there is mirrored into the assistant subtree below)
 /// - assistant: LlmConfig (llm.toml) + ServerConfig.answers_dir
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreferencesView {
-    pub fonts: FontPrefs,
+    pub editor_theme: EditorTheme,
     pub assistant: AssistantPrefsView,
     pub attachments_dir: String,
     pub theme: ThemeChoice,
@@ -168,7 +168,7 @@ pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
         }
     };
     PreferencesView {
-        fonts: editor.fonts.clone(),
+        editor_theme: editor.editor_theme,
         assistant,
         attachments_dir: server.attachments_dir.clone(),
         theme: editor.theme,
@@ -348,7 +348,7 @@ pub async fn api_patch_config(
 fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Error> {
     {
         let mut editor = state.editor_prefs.lock().expect("editor prefs poisoned");
-        editor.fonts = view.fonts;
+        editor.editor_theme = view.editor_theme;
         editor.theme = view.theme;
         editor.pane_widths = view.pane_widths;
         editor.line_spacing = view.line_spacing;

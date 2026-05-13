@@ -404,12 +404,13 @@
 
   :global(.md-wysiwyg-cm6 .cm-editor) {
     height: 100%;
-    font-size: var(--chan-font-text-size, 16px);
+    font-size: var(--chan-editor-body-size, 16px);
     max-width: var(--chan-page-max-width, none);
     margin-inline: auto;
   }
   :global(.md-wysiwyg-cm6 .cm-content) {
-    font-family: var(--chan-font-text-family);
+    font-family: var(--chan-editor-body-family);
+    color: var(--chan-editor-body-color, var(--text));
   }
   :global(.md-wysiwyg-cm6 .cm-editor),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-scroller),
@@ -480,14 +481,15 @@
   :global(.md-wysiwyg-cm6 .cm-md-italic) { font-style: italic; }
   :global(.md-wysiwyg-cm6 .cm-md-strike) { text-decoration: line-through; }
   :global(.md-wysiwyg-cm6 .cm-md-code) {
-    font-family: var(--chan-font-code-family, monospace);
-    font-size: 0.92em;
-    background: var(--bg-card, rgba(0,0,0,0.06));
+    font-family: var(--chan-editor-code-family, monospace);
+    font-size: var(--chan-editor-code-size, 0.92em);
+    background: var(--chan-editor-inline-code-bg, var(--bg-card, rgba(0,0,0,0.06)));
+    color: var(--chan-editor-inline-code-color, inherit);
     padding: 0.05em 0.25em;
     border-radius: 3px;
   }
   :global(.md-wysiwyg-cm6 .cm-md-link) {
-    color: var(--link, #0a64c8);
+    color: var(--chan-editor-link-color, var(--link, #0a64c8));
     text-decoration: underline;
     text-underline-offset: 2px;
   }
@@ -500,13 +502,13 @@
 
   /* ---- block-level line classes ---- */
   :global(.md-wysiwyg-cm6 .cm-md-quote) {
-    border-left: 3px solid var(--text-secondary, #888);
+    border-left: 3px solid var(--chan-editor-quote-border, var(--text-secondary, #888));
     padding-left: 0.75em;
-    color: var(--text-secondary, #888);
+    color: var(--chan-editor-quote-color, var(--text-secondary, #888));
     font-style: italic;
   }
   :global(.md-wysiwyg-cm6 .cm-md-hr) {
-    border-bottom: 1px solid var(--border, #ddd);
+    border-bottom: 1px solid var(--chan-editor-hr-color, var(--border, #ddd));
     margin: 0.5em 0;
     height: 0.5em;
     color: transparent;
@@ -514,17 +516,18 @@
   :global(.md-wysiwyg-cm6 .cm-md-fence-opener),
   :global(.md-wysiwyg-cm6 .cm-md-fence-closer) {
     color: var(--text-secondary, #888);
-    font-family: var(--chan-font-code-family, monospace);
-    font-size: 0.92em;
+    font-family: var(--chan-editor-code-family, monospace);
+    font-size: var(--chan-editor-code-size, 0.92em);
   }
   :global(.md-wysiwyg-cm6 .cm-md-code-block) {
-    font-family: var(--chan-font-code-family, monospace);
-    font-size: 0.92em;
-    background: var(--bg-card, rgba(0, 0, 0, 0.04));
+    font-family: var(--chan-editor-code-family, monospace);
+    font-size: var(--chan-editor-code-size, 0.92em);
+    background: var(--chan-editor-code-block-bg, var(--bg-card, rgba(0, 0, 0, 0.04)));
+    color: var(--chan-editor-code-block-color, inherit);
     padding-left: 0.75em;
   }
   :global(.md-wysiwyg-cm6 .cm-md-fence-info) {
-    color: var(--link, #0a64c8);
+    color: var(--chan-editor-link-color, var(--link, #0a64c8));
     font-weight: 500;
   }
   :global(.md-wysiwyg-cm6 .cm-md-task-checkbox) {
@@ -534,7 +537,7 @@
   }
   :global(.md-wysiwyg-cm6 .cm-md-frontmatter) {
     color: var(--text-secondary, #888);
-    font-family: var(--chan-font-code-family, monospace);
+    font-family: var(--chan-editor-code-family, monospace);
     font-size: 0.88em;
     opacity: 0.7;
   }
@@ -731,17 +734,17 @@
   }
   :global(.md-wysiwyg-cm6 .cm-md-table th),
   :global(.md-wysiwyg-cm6 .cm-md-table td) {
-    border: 1px solid var(--border, #ddd);
+    border: 1px solid var(--chan-editor-table-border, var(--border, #ddd));
     padding: 0.3em 0.6em;
     text-align: left;
     vertical-align: top;
   }
   :global(.md-wysiwyg-cm6 .cm-md-table th) {
-    background: var(--bg-card, rgba(0, 0, 0, 0.04));
+    background: var(--chan-editor-table-header-bg, var(--bg-card, rgba(0, 0, 0, 0.04)));
     font-weight: 600;
   }
   :global(.md-wysiwyg-cm6 .cm-md-table tr:nth-child(even) td) {
-    background: var(--bg-card, rgba(0, 0, 0, 0.02));
+    background: var(--chan-editor-table-stripe-bg, var(--bg-card, rgba(0, 0, 0, 0.02)));
   }
 
   /* ---- bubble shells ---- */
@@ -753,7 +756,7 @@
     min-width: 240px;
     max-width: 480px;
     padding: 4px;
-    font-family: var(--chan-font-text-family);
+    font-family: var(--chan-editor-body-family);
     font-size: 14px;
     /* Bouncy reveal + hover wobble — matches the tab-menu bubble's
        easeOutBack motion so the editor's pickers feel of-a-piece. */
@@ -897,13 +900,13 @@
     padding: 6px;
     min-width: 220px;
     max-width: 360px;
-    font-family: var(--chan-font-text-family);
+    font-family: var(--chan-editor-body-family);
     font-size: 13px;
   }
   :global(.md-link-action-target) {
     padding: 4px 6px 6px;
     color: var(--text-secondary, #666);
-    font-family: var(--chan-font-code-family, monospace);
+    font-family: var(--chan-editor-code-family, monospace);
     font-size: 12px;
     border-bottom: 1px solid var(--border, #eee);
     overflow: hidden;
@@ -938,7 +941,7 @@
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
     padding: 8px;
     min-width: 240px;
-    font-family: var(--chan-font-text-family);
+    font-family: var(--chan-editor-body-family);
     font-size: 13px;
     transform-origin: top left;
     animation: cm-bubble-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -1033,12 +1036,46 @@
   }
 
   /* ---- heading line classes ---- */
-  :global(.md-wysiwyg-cm6 .cm-md-h1) { font-size: 2.0em; font-weight: 700; line-height: 1.25; }
-  :global(.md-wysiwyg-cm6 .cm-md-h2) { font-size: 1.6em; font-weight: 700; line-height: 1.3; }
-  :global(.md-wysiwyg-cm6 .cm-md-h3) { font-size: 1.3em; font-weight: 600; line-height: 1.35; }
-  :global(.md-wysiwyg-cm6 .cm-md-h4) { font-size: 1.15em; font-weight: 600; line-height: 1.4; }
-  :global(.md-wysiwyg-cm6 .cm-md-h5) { font-size: 1.0em; font-weight: 600; line-height: 1.4; }
-  :global(.md-wysiwyg-cm6 .cm-md-h6) { font-size: 0.95em; font-weight: 600; line-height: 1.4; color: var(--text-secondary); }
+  :global(.md-wysiwyg-cm6 .cm-md-h1),
+  :global(.md-wysiwyg-cm6 .cm-md-h2),
+  :global(.md-wysiwyg-cm6 .cm-md-h3),
+  :global(.md-wysiwyg-cm6 .cm-md-h4),
+  :global(.md-wysiwyg-cm6 .cm-md-h5),
+  :global(.md-wysiwyg-cm6 .cm-md-h6) {
+    font-family: var(--chan-editor-heading-family);
+    color: var(--chan-editor-heading-color, var(--text));
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-h1) {
+    font-size: var(--chan-editor-h1-size);
+    font-weight: var(--chan-editor-h1-weight);
+    line-height: var(--chan-editor-h1-line-height);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-h2) {
+    font-size: var(--chan-editor-h2-size);
+    font-weight: var(--chan-editor-h2-weight);
+    line-height: var(--chan-editor-h2-line-height);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-h3) {
+    font-size: var(--chan-editor-h3-size);
+    font-weight: var(--chan-editor-h3-weight);
+    line-height: var(--chan-editor-h3-line-height);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-h4) {
+    font-size: var(--chan-editor-h4-size);
+    font-weight: var(--chan-editor-h4-weight);
+    line-height: var(--chan-editor-h4-line-height);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-h5) {
+    font-size: var(--chan-editor-h5-size);
+    font-weight: var(--chan-editor-h5-weight);
+    line-height: var(--chan-editor-h5-line-height);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-h6) {
+    font-size: var(--chan-editor-h6-size);
+    font-weight: var(--chan-editor-h6-weight);
+    line-height: var(--chan-editor-h6-line-height);
+    color: var(--chan-editor-h6-color, var(--text-secondary));
+  }
   /* defaultHighlightStyle paints tags.heading with text-decoration:
      underline. Strip it on every descendant of the heading line so
      the styled spans CM6 injects don't show the underline either. */

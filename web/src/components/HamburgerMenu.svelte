@@ -240,7 +240,6 @@
     width: 14px;
     height: 14px;
     flex-shrink: 0;
-    fill: currentColor;
     color: var(--text-secondary);
   }
   :global(.hamburger-menu .glyph) {

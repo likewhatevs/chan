@@ -34,18 +34,29 @@ export type ChanTheme = "light" | "dark";
 /// host CSS (see Source.svelte's <style> block) because CM injects theme
 /// rules as generated classes whose ordering we cannot rely on.
 export function themeExtensions(theme: ChanTheme): Extension[] {
+  // Light vs dark is still the only axis CM cares about: the
+  // editor-theme dimension (github / google_docs / word) flows
+  // through CSS vars on documentElement, which both .cm-content
+  // (typography) and the host CSS (chrome) already read. The CM
+  // syntax-highlight palette retuning per editor theme is a
+  // follow-up; phase-1 keeps oneDark for dark and the default
+  // highlight style for light.
   if (theme === "dark") return [oneDark];
   return [
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     EditorView.theme({
-      "&": { color: "var(--text)" },
+      // Ink follows the active editor theme; falls back to the
+      // app's --text so a partial theme override still reads.
+      "&": { color: "var(--chan-editor-body-color, var(--text))" },
       ".cm-gutters": {
         backgroundColor: "var(--bg-card)",
         color: "var(--text-secondary)",
         border: "none",
       },
       ".cm-activeLineGutter": { backgroundColor: "var(--hover-bg)" },
-      ".cm-cursor": { borderLeftColor: "var(--text)" },
+      ".cm-cursor": {
+        borderLeftColor: "var(--chan-editor-body-color, var(--text))",
+      },
     }),
   ];
 }
