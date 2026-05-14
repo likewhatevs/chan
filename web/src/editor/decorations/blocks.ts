@@ -22,10 +22,15 @@
 //   - Task (GFM task-list item): TaskMarker `[ ]` / `[x]` is replaced
 //     by the CheckboxWidget from widgets/checkbox.ts. The replace is
 //     boundary-inclusive — clicking the box edits the source.
-//
-// Not handled here (intentionally):
-//   - BulletList / OrderedList / ListItem / ListMark: bullets stay as
-//     plain source; CSS gives them indent if needed.
+//   - BulletList: each item's ListMark (`-` / `*` / `+`) is replaced
+//     by a `•` widget. Items that carry a TaskMarker keep their
+//     source marker so the checkbox handler stays in charge of the
+//     visual.
+//   - OrderedList: no marker replacement (numbers are content the
+//     user types); only the per-line indent decoration applies.
+//   - All three list kinds emit a `cm-md-list-line` line decoration
+//     on every line within their range so CSS can add the small
+//     left indent that signals "this is a list".
 
 import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import type { TokenContext, TokenHandler } from "./walker";
@@ -145,6 +150,9 @@ const MARK_FENCE_INFO = Decoration.mark({
 });
 const LINE_FRONTMATTER = Decoration.line({
   attributes: { class: "cm-md-frontmatter" },
+});
+const LINE_LIST = Decoration.line({
+  attributes: { class: "cm-md-list-line" },
 });
 const HIDE = Decoration.replace({});
 
@@ -351,6 +359,8 @@ const handleTask: TokenHandler = (ctx) => {
   // Walk children to find the TaskMarker (lezer-markdown's GFM
   // TaskList emits a Task block-level node with a TaskMarker child
   // covering exactly `[ ]` / `[x]` / `[X]` — 3 chars).
+  const line = ctx.state.doc.lineAt(ctx.node.from);
+  ctx.push(LINE_LIST, line.from, line.from);
   const cursor = ctx.node.node.cursor();
   if (!cursor.firstChild()) return;
   do {
@@ -365,6 +375,98 @@ const handleTask: TokenHandler = (ctx) => {
       return;
     }
   } while (cursor.nextSibling());
+};
+
+/// Replaces a bullet-list ListMark (`-` / `*` / `+`) with a centered
+/// `•` glyph. Pure visual: the underlying source character stays
+/// unchanged, so toolbar toggles + Enter/Tab list editing see the
+/// raw markdown they expect.
+class BulletWidget extends WidgetType {
+  eq(_other: BulletWidget): boolean {
+    return true;
+  }
+
+  toDOM(): HTMLElement {
+    const el = document.createElement("span");
+    el.className = "cm-md-bullet";
+    el.textContent = "•";
+    return el;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+const BULLET_DECO = Decoration.replace({ widget: new BulletWidget() });
+
+/// True when the ListItem's direct children include a TaskMarker —
+/// i.e. this item is actually a task. The GFM extension emits the
+/// TaskMarker as a sibling of ListMark inside the same ListItem,
+/// so a single shallow walk is enough; we don't descend into
+/// Paragraph etc.
+function itemHasTaskMarker(item: import("@lezer/common").SyntaxNode): boolean {
+  const cursor = item.cursor();
+  if (!cursor.firstChild()) return false;
+  do {
+    if (cursor.name === "TaskMarker") return true;
+  } while (cursor.nextSibling());
+  return false;
+}
+
+const handleBulletList: TokenHandler = (ctx) => {
+  // Per-line indent decoration. Walking the BulletList's full line
+  // range also covers nested lists; CM6 dedupes identical line
+  // attributes, so the duplicate is harmless.
+  const startLine = ctx.state.doc.lineAt(ctx.node.from).number;
+  const endLine = ctx.state.doc.lineAt(
+    Math.min(ctx.node.to, ctx.state.doc.length),
+  ).number;
+  for (let n = startLine; n <= endLine; n++) {
+    const line = ctx.state.doc.line(n);
+    ctx.push(LINE_LIST, line.from, line.from);
+  }
+  // Replace `*` markers with a • glyph so the asterisk reads as a
+  // proper bullet; leave `-` and `+` literal so the rendered text
+  // still tells the user exactly what's in the source. Skip task
+  // items either way: the checkbox handler owns their visual.
+  const cursor = ctx.node.node.cursor();
+  if (!cursor.firstChild()) return;
+  do {
+    if (cursor.name !== "ListItem") continue;
+    const item = cursor.node;
+    if (itemHasTaskMarker(item)) continue;
+    const sub = item.cursor();
+    if (!sub.firstChild()) continue;
+    do {
+      if (sub.name === "ListMark") {
+        const mark = ctx.state.doc.sliceString(sub.from, sub.to);
+        // Require a trailing whitespace after the marker. lezer-markdown
+        // tentatively flags a lone `*` on an empty line as a ListMark
+        // while the user is still typing; without this gate the
+        // asterisk flips to • before the user even hits space, which
+        // reads as the editor "swallowing" the keystroke.
+        const next = sub.to < ctx.state.doc.length
+          ? ctx.state.doc.sliceString(sub.to, sub.to + 1)
+          : "";
+        if (mark === "*" && (next === " " || next === "\t")) {
+          ctx.push(BULLET_DECO, sub.from, sub.to);
+        }
+        break;
+      }
+    } while (sub.nextSibling());
+  } while (cursor.nextSibling());
+};
+
+const handleOrderedList: TokenHandler = (ctx) => {
+  const startLine = ctx.state.doc.lineAt(ctx.node.from).number;
+  const endLine = ctx.state.doc.lineAt(
+    Math.min(ctx.node.to, ctx.state.doc.length),
+  ).number;
+  for (let n = startLine; n <= endLine; n++) {
+    const line = ctx.state.doc.line(n);
+    ctx.push(LINE_LIST, line.from, line.from);
+  }
 };
 
 const handleFrontmatter: TokenHandler = (ctx) => {
@@ -385,6 +487,8 @@ export const blockHandlers = {
   Blockquote: handleBlockquote,
   HorizontalRule: handleHorizontalRule,
   FencedCode: handleFencedCode,
+  BulletList: handleBulletList,
+  OrderedList: handleOrderedList,
   Task: handleTask,
   Frontmatter: handleFrontmatter,
 };

@@ -782,6 +782,23 @@
     vertical-align: middle;
     cursor: pointer;
   }
+  /* Bullet glyph that replaces `-` / `*` / `+` for non-task items.
+     Width matches the source char so the trailing text doesn't
+     reflow; centred via inline-block. Slightly bolder than the
+     ambient text so the bullet reads clearly at small sizes. */
+  :global(.md-wysiwyg-cm6 .cm-md-bullet) {
+    display: inline-block;
+    width: 1ch;
+    text-align: center;
+    color: var(--text-secondary, #888);
+    font-weight: 700;
+  }
+  /* Left indent on every line of every list (bullet, ordered, task).
+     Three-class chain matches the fence-row pattern so the rule
+     beats CM6's `.cm-line` default cascade. */
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-line) {
+    padding-left: 20px !important;
+  }
   :global(.md-wysiwyg-cm6 .cm-md-frontmatter) {
     color: var(--text-secondary, #888);
     font-family: var(--chan-editor-code-family, monospace);
