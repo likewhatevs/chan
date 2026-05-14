@@ -43,7 +43,7 @@ use crate::session::{Delta, LlmEventError, Message, Role, SessionListener, StopR
 use crate::tools::ToolSchema;
 
 use super::retry::{send_with_retry, RetryError, RetryPolicy};
-use super::{Backend, Outcome};
+use super::{Backend, Outcome, PARSE_ERROR_EMIT_LIMIT};
 
 const ENDPOINT_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -198,6 +198,10 @@ impl Backend for GeminiBackend {
         let mut assistant_text = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut finish_reason: Option<String> = None;
+        // Rate-limited parse-error emission. Same shape as the
+        // anthropic backend and the CLI backends.
+        let mut parse_errors_emitted = 0usize;
+        let mut parse_errors_silenced = 0usize;
 
         while let Some(chunk) = stream.next().await {
             if cancel.load(Ordering::Relaxed) {
@@ -206,7 +210,14 @@ impl Backend for GeminiBackend {
             let chunk = match chunk {
                 Ok(b) => b,
                 Err(e) => {
-                    listener.on_error(format!("gemini stream: {e}"));
+                    // Mid-stream reqwest error: surface as
+                    // StreamTruncated. Same reasoning as anthropic.rs:
+                    // retrying mid-stream isn't safe; host owns the
+                    // retry / "reconnecting" UX.
+                    listener.on_error_kind(LlmEventError::StreamTruncated {
+                        backend: "gemini".into(),
+                        message: e.to_string(),
+                    });
                     return Outcome::error();
                 }
             };
@@ -227,9 +238,18 @@ impl Backend for GeminiBackend {
                 let parsed: GeminiResponseChunk = match serde_json::from_str(&payload) {
                     Ok(p) => p,
                     Err(e) => {
-                        // Single bad frame: log and continue. Same
-                        // rationale as the anthropic backend.
-                        tracing::warn!(?e, raw = %truncate_payload(&payload, 400), "gemini parse: skipping bad frame");
+                        // Single bad frame: rate-limited emission so a
+                        // hostile proxy injecting garbage between
+                        // valid frames can't flood the listener.
+                        if parse_errors_emitted < PARSE_ERROR_EMIT_LIMIT {
+                            listener.on_error_kind(LlmEventError::ParseError {
+                                backend: "gemini".into(),
+                                message: format!("{e}; raw: {}", truncate_payload(&payload, 400)),
+                            });
+                            parse_errors_emitted += 1;
+                        } else {
+                            parse_errors_silenced += 1;
+                        }
                         continue;
                     }
                 };
@@ -292,6 +312,27 @@ impl Backend for GeminiBackend {
                 }
             }
             buf.clear();
+        }
+
+        if parse_errors_silenced > 0 {
+            listener.on_error_kind(LlmEventError::ParseError {
+                backend: "gemini".into(),
+                message: format!("{parse_errors_silenced} additional parse errors suppressed"),
+            });
+        }
+
+        // Stream ended without a finish_reason AND no tool calls AND
+        // no text. Treat as truncated. (A turn with text only is
+        // accepted as `EndOfTurn` even when finish_reason is None to
+        // tolerate upstream gateways that strip the field, which has
+        // been observed; the empty-everything case is what we cannot
+        // distinguish from a real cut-off.)
+        if finish_reason.is_none() && tool_calls.is_empty() && assistant_text.is_empty() {
+            listener.on_error_kind(LlmEventError::StreamTruncated {
+                backend: "gemini".into(),
+                message: "stream ended without a finishReason or any content".into(),
+            });
+            return Outcome::error();
         }
 
         let stop_reason = if !tool_calls.is_empty() {

@@ -40,7 +40,7 @@ use crate::session::{Delta, LlmEventError, Message, Role, SessionListener, StopR
 use crate::tools::ToolSchema;
 
 use super::retry::{send_with_retry, RetryError, RetryPolicy};
-use super::{Backend, Outcome};
+use super::{Backend, Outcome, PARSE_ERROR_EMIT_LIMIT};
 
 const ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const MODELS_ENDPOINT: &str = "https://api.anthropic.com/v1/models";
@@ -268,6 +268,18 @@ impl Backend for AnthropicBackend {
             std::collections::BTreeMap::new();
         let mut completed_tools: Vec<ToolCall> = Vec::new();
         let mut stop = StopReason::EndOfTurn;
+        // Mirror of the CLI `saw_result` guard: when the stream ends
+        // without ever delivering MessageStop (or a stop_reason on
+        // MessageDelta), the response was truncated mid-flight.
+        // Surface as `StreamTruncated` rather than letting an empty
+        // turn look like a natural EndOfTurn.
+        let mut saw_terminal_event = false;
+        // Rate-limited parse-error emission. The CLI backends' design
+        // (PARSE_ERROR_EMIT_LIMIT then silent count + one summary)
+        // mirrored here so a hostile proxy injecting newline-separated
+        // garbage between valid frames can't spam the listener.
+        let mut parse_errors_emitted = 0usize;
+        let mut parse_errors_silenced = 0usize;
 
         while let Some(chunk) = stream.next().await {
             if cancel.load(Ordering::Relaxed) {
@@ -281,7 +293,17 @@ impl Backend for AnthropicBackend {
             let chunk = match chunk {
                 Ok(b) => b,
                 Err(e) => {
-                    listener.on_error(format!("anthropic stream: {e}"));
+                    // Mid-stream reqwest error after some bytes were
+                    // emitted: the transcript is half-formed. Surface
+                    // as `StreamTruncated` so the host can show a
+                    // "reconnecting" affordance distinct from a
+                    // permanent failure. Retrying mid-stream isn't
+                    // safe (upstream may have already accounted for
+                    // the request); the host owns the retry policy.
+                    listener.on_error_kind(LlmEventError::StreamTruncated {
+                        backend: "anthropic".into(),
+                        message: e.to_string(),
+                    });
                     return Outcome::error();
                 }
             };
@@ -307,11 +329,22 @@ impl Backend for AnthropicBackend {
                 let parsed: SseEvent = match serde_json::from_str(&payload) {
                     Ok(p) => p,
                     Err(e) => {
-                        // Single bad frame: log and continue. Some
-                        // proxies inject keepalive lines that aren't
-                        // valid JSON; bailing on the whole turn for
-                        // a transient parse blip is the wrong trade.
-                        tracing::warn!(?e, raw = %truncate_payload(&payload, 400), "anthropic parse: skipping bad frame");
+                        // Single bad frame: rate-limited emission so a
+                        // hostile proxy injecting garbage between
+                        // valid frames can't flood the listener.
+                        // First PARSE_ERROR_EMIT_LIMIT distinct
+                        // failures fire on_error_kind with a preview;
+                        // overflow is counted silently and summarised
+                        // at the end of the turn.
+                        if parse_errors_emitted < PARSE_ERROR_EMIT_LIMIT {
+                            listener.on_error_kind(LlmEventError::ParseError {
+                                backend: "anthropic".into(),
+                                message: format!("{e}; raw: {}", truncate_payload(&payload, 400)),
+                            });
+                            parse_errors_emitted += 1;
+                        } else {
+                            parse_errors_silenced += 1;
+                        }
                         continue;
                     }
                 };
@@ -376,6 +409,7 @@ impl Backend for AnthropicBackend {
                     }
                     SseEvent::MessageDelta { delta } => {
                         if let Some(reason) = delta.stop_reason {
+                            saw_terminal_event = true;
                             stop = parse_stop_reason(&reason);
                             // Surface a structured error when the
                             // model stopped early for any reason
@@ -393,10 +427,14 @@ impl Backend for AnthropicBackend {
                             }
                         }
                     }
-                    SseEvent::MessageStart { .. }
-                    | SseEvent::MessageStop
-                    | SseEvent::Ping
-                    | SseEvent::Other => {}
+                    SseEvent::MessageStop => {
+                        // Canonical end-of-turn marker. Even when no
+                        // MessageDelta carried a stop_reason (rare,
+                        // but happens on cancel-style closures), this
+                        // proves the upstream finished the stream.
+                        saw_terminal_event = true;
+                    }
+                    SseEvent::MessageStart { .. } | SseEvent::Ping | SseEvent::Other => {}
                     SseEvent::Error { error } => {
                         // Mid-stream `error` event: Anthropic embeds
                         // the upstream failure inside the SSE channel
@@ -432,10 +470,17 @@ impl Backend for AnthropicBackend {
         if !buf.is_empty() {
             if let Some(payload) = extract_data(&buf) {
                 if let Ok(parsed) = serde_json::from_str::<SseEvent>(&payload) {
-                    if let SseEvent::MessageDelta { delta } = parsed {
-                        if let Some(reason) = delta.stop_reason {
-                            stop = parse_stop_reason(&reason);
+                    match parsed {
+                        SseEvent::MessageDelta { delta } => {
+                            if let Some(reason) = delta.stop_reason {
+                                saw_terminal_event = true;
+                                stop = parse_stop_reason(&reason);
+                            }
                         }
+                        SseEvent::MessageStop => {
+                            saw_terminal_event = true;
+                        }
+                        _ => {}
                     }
                 } else {
                     tracing::warn!(
@@ -445,6 +490,26 @@ impl Backend for AnthropicBackend {
                 }
             }
             buf.clear();
+        }
+
+        if parse_errors_silenced > 0 {
+            listener.on_error_kind(LlmEventError::ParseError {
+                backend: "anthropic".into(),
+                message: format!("{parse_errors_silenced} additional parse errors suppressed",),
+            });
+        }
+
+        // Stream ended without ever seeing MessageStop or a final
+        // stop_reason. Treat as truncated unless the model emitted
+        // tool calls (Anthropic's `tool_use` path sometimes ends
+        // cleanly via content_block_stop alone, which the loop
+        // already accounted for by collecting completed_tools).
+        if !saw_terminal_event && completed_tools.is_empty() {
+            listener.on_error_kind(LlmEventError::StreamTruncated {
+                backend: "anthropic".into(),
+                message: "stream ended without a terminal event".into(),
+            });
+            return Outcome::error();
         }
 
         // tool_use stop_reason wins over text-only end_turn when the
