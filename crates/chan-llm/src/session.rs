@@ -309,6 +309,16 @@ pub trait SessionListener: Send + Sync {
     fn on_tool_result(&self, result: ToolResult);
     fn on_done(&self, reason: StopReason);
     fn on_error(&self, error: String);
+    /// Canonical post-turn transcript. Fires immediately before
+    /// `on_done` for successful terminations only (EndOfTurn and
+    /// ToolUse). Carries the full history chan-llm built during the
+    /// turn, including the final assistant message and any tool
+    /// pairings appended by the loop.
+    ///
+    /// Skipped on Cancelled / Error / max-iter so hosts don't replace
+    /// their pre-call transcript with a partial one. Default no-op
+    /// so existing listeners keep compiling.
+    fn on_messages_snapshot(&self, _history: &[Message]) {}
 }
 
 pub struct LlmSession {
@@ -525,6 +535,24 @@ async fn run_loop(
         }
 
         if outcome.tool_calls.is_empty() {
+            // Push the final assistant turn into `history` before
+            // snapshotting so hosts that rely on the snapshot for
+            // canonical post-turn state see the closing message.
+            // The previous code never appended this because run_loop
+            // returns here without another iteration; the message
+            // was only surfaced via on_delta. Empty-text turns can
+            // happen (tool-only model that just ran out of tools);
+            // skip the push in that case to avoid a stub message.
+            if !outcome.assistant_text.is_empty() {
+                history.push(Message {
+                    role: Role::Assistant,
+                    content: outcome.assistant_text.clone(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    images: Vec::new(),
+                });
+            }
+            listener.on_messages_snapshot(&history);
             listener.on_done(outcome.stop_reason);
             return;
         }
@@ -662,6 +690,7 @@ async fn run_loop(
         }
 
         if paused_call.is_some() {
+            listener.on_messages_snapshot(&history);
             listener.on_done(StopReason::ToolUse);
             return;
         }
@@ -729,6 +758,7 @@ mod tests {
         ToolResult(String),
         Done(StopReason),
         Error(String),
+        Snapshot(Vec<Message>),
     }
 
     impl SessionListener for Collector {
@@ -746,6 +776,12 @@ mod tests {
         }
         fn on_error(&self, e: String) {
             self.0.lock().unwrap().push(Event::Error(e));
+        }
+        fn on_messages_snapshot(&self, history: &[Message]) {
+            self.0
+                .lock()
+                .unwrap()
+                .push(Event::Snapshot(history.to_vec()));
         }
     }
 
@@ -862,6 +898,7 @@ mod tests {
                     Event::Done(r) => format!("done({r:?})"),
                     Event::Delta(_) => "delta".into(),
                     Event::Error(s) => format!("err({s})"),
+                    Event::Snapshot(h) => format!("snap(len={})", h.len()),
                 })
                 .collect::<Vec<_>>()
         );
@@ -869,6 +906,133 @@ mod tests {
         assert!(matches!(last, Event::Done(StopReason::ToolUse)));
         // The drive must NOT have been written; auto_apply was off.
         assert!(!drive.exists("a.md"));
+        // The ToolUse pause must surface a messages snapshot
+        // immediately before on_done so the host can echo the
+        // canonical (assistant + placeholder tool_result)
+        // transcript back to the client without rebuilding it
+        // from streamed events.
+        let snap = events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                Event::Snapshot(h) => Some(h.clone()),
+                _ => None,
+            })
+            .expect("snapshot fired before on_done(ToolUse)");
+        assert!(
+            snap.iter().any(|m| m.role == Role::Assistant
+                && m.tool_calls.iter().any(|c| c.id == "call-1")),
+            "snapshot carries the assistant turn that proposed call-1"
+        );
+        assert!(
+            snap.iter()
+                .any(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("call-1")),
+            "snapshot carries the placeholder tool_result for call-1"
+        );
+    }
+
+    /// Backend that ends the turn on the first call with text only.
+    /// Used to verify the EndOfTurn snapshot includes the final
+    /// assistant message — previously run_loop returned without
+    /// pushing it into `history`, so any host trying to echo back
+    /// canonical post-turn state lost the closing assistant turn.
+    struct TextOnlyBackend {
+        text: String,
+    }
+
+    #[async_trait::async_trait]
+    impl backends::Backend for TextOnlyBackend {
+        async fn run(
+            &self,
+            _messages: Vec<Message>,
+            _tools: Vec<crate::tools::ToolSchema>,
+            _listener: Arc<dyn SessionListener>,
+            _cancel: Arc<AtomicBool>,
+        ) -> backends::Outcome {
+            backends::Outcome {
+                assistant_text: self.text.clone(),
+                tool_calls: Vec::new(),
+                stop_reason: StopReason::EndOfTurn,
+            }
+        }
+    }
+
+    #[test]
+    fn end_of_turn_snapshot_includes_final_assistant_message() {
+        let (_cfg, _root, drive) = fixture();
+        let backend = Arc::new(TextOnlyBackend {
+            text: "all done".into(),
+        });
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let tool_ctx = crate::tools::ToolContext::new(drive, false);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(super::run_loop(
+            backend,
+            vec![Message::user("anything")],
+            Vec::new(),
+            tool_ctx,
+            listener.clone(),
+            Arc::new(AtomicBool::new(false)),
+        ));
+        let events = listener.0.lock().unwrap();
+        // Snapshot must precede on_done so the host can capture
+        // it before the request handler unblocks.
+        let snap_idx = events
+            .iter()
+            .position(|e| matches!(e, Event::Snapshot(_)))
+            .expect("snapshot fired");
+        let done_idx = events
+            .iter()
+            .position(|e| matches!(e, Event::Done(_)))
+            .expect("done fired");
+        assert!(snap_idx < done_idx, "snapshot before done");
+        let Event::Snapshot(history) = &events[snap_idx] else {
+            unreachable!()
+        };
+        let last = history.last().expect("non-empty snapshot");
+        assert_eq!(last.role, Role::Assistant);
+        assert_eq!(last.content, "all done");
+    }
+
+    /// EndOfTurn with empty assistant_text must not push a stub
+    /// message into the snapshot. Some backends emit an empty
+    /// closing turn after tools have run; a stub Assistant{""}
+    /// is wire-invalid for Anthropic and round-trips badly.
+    #[test]
+    fn end_of_turn_snapshot_skips_empty_assistant_text() {
+        let (_cfg, _root, drive) = fixture();
+        let backend = Arc::new(TextOnlyBackend {
+            text: String::new(),
+        });
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let tool_ctx = crate::tools::ToolContext::new(drive, false);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(super::run_loop(
+            backend,
+            vec![Message::user("anything")],
+            Vec::new(),
+            tool_ctx,
+            listener.clone(),
+            Arc::new(AtomicBool::new(false)),
+        ));
+        let events = listener.0.lock().unwrap();
+        let Event::Snapshot(history) = events
+            .iter()
+            .find(|e| matches!(e, Event::Snapshot(_)))
+            .expect("snapshot fired")
+        else {
+            unreachable!()
+        };
+        assert!(
+            !history.iter().any(|m| m.role == Role::Assistant),
+            "no synthetic empty assistant message"
+        );
     }
 
     /// Backend that simulates a long-running stream by sleeping
@@ -949,6 +1113,7 @@ mod tests {
                 Event::ToolResult(id) => write!(f, "ToolResult({id})"),
                 Event::Done(r) => write!(f, "Done({r:?})"),
                 Event::Error(e) => write!(f, "Error({e})"),
+                Event::Snapshot(h) => write!(f, "Snapshot(len={})", h.len()),
             }
         }
     }
