@@ -1520,35 +1520,67 @@ impl Drive {
         progress: &dyn crate::progress::ProgressCallback,
     ) -> Result<()> {
         use crate::progress::{eta_secs_from, ProgressEvent, ProgressStage};
-        // Two-phase: collect everything in memory, then commit in a
-        // single sqlite transaction via `GraphView::replace_all`. The
-        // alternative (clear + per-file replace_file) left the graph
-        // half-populated on mid-rebuild error, lying to the server's
-        // auto-rebuild trigger about freshness. Memory cost is bounded
-        // by drive size and is small (a 10k-file drive holds tens of
-        // MB of headings + edges, well within the editor's footprint).
-        //
-        // The filtered walk skips blocked dir names (`node_modules`,
-        // `target`, ...). The graph stays consistent with the search
-        // index: both back-ends index the same set of files.
+        // Staged-and-swap: parse each file straight into sqlite
+        // staging tables, then atomically swap them into the live
+        // tables at the end. The staging rows are committed
+        // per-file by the writer, so a mid-rebuild crash leaves a
+        // durable parse cursor (MAX(rel_path) in staging_nodes).
+        // The next reindex reads the cursor and resumes the walk
+        // past it, skipping the redo of every already-staged file.
+        // The swap is the only point where live tables are
+        // mutated, so the previously-committed graph stays visible
+        // to readers (autocomplete, backlinks) for the entire
+        // duration of the rebuild and atomically flips to the new
+        // shape at the end.
+        let graph = self.graph()?;
         let entries = fs_ops::list_tree_filtered(self.root(), &self.walk_filter)?;
-        // The total for progress is "editable-text files", computed
-        // up front so consumers can render a percentage. Filtering
-        // a second time below is cheap (cap is `LIST_TREE_LIMIT`).
         let total: u64 = entries
             .iter()
             .filter(|e| !e.is_dir && fs_ops::is_editable_text(&e.path))
             .count() as u64;
-        struct Owned {
-            rel: String,
-            title: Option<String>,
-            node_kind: crate::graph::NodeKind,
-            mtime: Option<i64>,
-            edges: Vec<crate::graph::Edge>,
-            headings: Vec<markdown::Heading>,
-            emails: Option<String>,
+
+        // Resume-or-fresh decision. A non-empty cursor means a
+        // prior reindex crashed mid-parse and left staged rows;
+        // those represent honest parse output for the files at or
+        // below the cursor and should not be redone. We do
+        // sanitize against the current disk file set so a file
+        // that was staged but has since been deleted from disk
+        // gets purged from staging before the swap.
+        let initial_cursor: Option<String> = graph.staging_cursor()?;
+        if initial_cursor.is_some() {
+            tracing::info!(
+                cursor = ?initial_cursor,
+                "rebuild_graph: resuming from staged cursor",
+            );
+            let live: std::collections::HashSet<String> = entries
+                .iter()
+                .filter(|e| !e.is_dir && fs_ops::is_editable_text(&e.path))
+                .map(|e| e.path.clone())
+                .collect();
+            let purged = graph.sanitize_staging(&live)?;
+            if purged > 0 {
+                tracing::info!(
+                    purged,
+                    "rebuild_graph: removed staged rows for files no longer on disk",
+                );
+            }
+        } else {
+            // Belt-and-braces clear in the fresh path: in
+            // principle staging is already empty when cursor
+            // is None, but a previous swap that committed live
+            // but failed to clear staging would leave junk.
+            // Cheap to run unconditionally on the no-resume
+            // path.
+            graph.clear_staging()?;
         }
-        let mut owned: Vec<Owned> = Vec::new();
+        // Re-read the cursor AFTER sanitize so the skip below
+        // uses the post-purge value. Sanitize can move the cursor
+        // backwards (or to None) by deleting the tail of staged
+        // rows, and using the pre-sanitize value would cause the
+        // walk to skip past files that are no longer represented
+        // in staging.
+        let cursor: Option<String> = graph.staging_cursor()?;
+
         let mut seen: u64 = 0;
         let started = std::time::Instant::now();
         for e in &entries {
@@ -1559,6 +1591,15 @@ impl Drive {
             }
             if e.is_dir || !fs_ops::is_editable_text(&e.path) {
                 continue;
+            }
+            // Resume skip: the walk is sorted, so a strictly-
+            // less-or-equal comparison against the cursor matches
+            // every file already staged in a prior session.
+            if let Some(c) = cursor.as_deref() {
+                if e.path.as_str() <= c {
+                    seen += 1;
+                    continue;
+                }
             }
             progress.on_progress(ProgressEvent {
                 stage: ProgressStage::GraphRebuild,
@@ -1573,34 +1614,26 @@ impl Drive {
                 Err(_) => continue,
             };
             let (title, node_kind, headings, edges, emails) = parse_for_graph(&e.path, &content);
-            owned.push(Owned {
-                rel: e.path.clone(),
-                title,
-                node_kind,
+            let fg = crate::graph::FileGraph {
+                rel: e.path.as_str(),
+                title: title.as_deref(),
                 mtime: e.mtime,
-                edges,
-                headings,
-                emails,
-            });
+                node_kind,
+                edges: &edges,
+                headings: &headings,
+                emails: emails.as_deref(),
+            };
+            graph.stage_file(&fg)?;
         }
         if let Some(c) = cancel {
             if c.load(Ordering::Relaxed) {
                 return Err(ChanError::Cancelled);
             }
         }
-        let borrowed: Vec<crate::graph::FileGraph<'_>> = owned
-            .iter()
-            .map(|o| crate::graph::FileGraph {
-                rel: &o.rel,
-                title: o.title.as_deref(),
-                mtime: o.mtime,
-                node_kind: o.node_kind,
-                edges: &o.edges,
-                headings: &o.headings,
-                emails: o.emails.as_deref(),
-            })
-            .collect();
-        self.graph()?.replace_all(&borrowed)?;
+        // Swap staging into the live tables in one atomic txn.
+        // Past this commit the previous live state is gone and the
+        // new one is visible to readers.
+        graph.swap_staging()?;
         Ok(())
     }
 
@@ -3499,6 +3532,86 @@ mod tests {
             .collect();
         hit_paths.sort();
         assert_eq!(hit_paths, vec!["a.md".to_string(), "b.md".to_string()]);
+    }
+
+    #[test]
+    fn reindex_resumes_from_staged_cursor_after_simulated_crash() {
+        // Simulate a reindex that crashed mid-parse: pre-stage some
+        // of the files via graph.stage_file (bypassing the full
+        // reindex), leave the marker, then call reindex. The
+        // resume path must skip the already-staged files (no second
+        // parse) and the final live graph must include both the
+        // pre-staged and the newly-parsed entries.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        drive.write_text("a.md", "# a\n").unwrap();
+        drive.write_text("b.md", "# b\n").unwrap();
+        drive.write_text("c.md", "# c\n").unwrap();
+        // Stage a.md and b.md as if a prior reindex got that far
+        // and crashed before reaching c.md.
+        let graph = drive.graph().unwrap();
+        for rel in ["a.md", "b.md"] {
+            let fg = crate::graph::FileGraph {
+                rel,
+                title: Some("staged-title-must-be-overwritten"),
+                mtime: Some(42),
+                node_kind: crate::graph::NodeKind::File,
+                edges: &[],
+                headings: &[],
+                emails: None,
+            };
+            graph.stage_file(&fg).unwrap();
+        }
+        assert_eq!(graph.staging_cursor().unwrap().as_deref(), Some("b.md"));
+
+        // Reindex: should skip a.md + b.md (already staged) and
+        // parse c.md only. Swap then promotes the staged set.
+        drive.reindex(None).unwrap();
+        // Live graph contains all three.
+        let mut files = drive.graph().unwrap().files().unwrap();
+        files.sort();
+        assert_eq!(files, vec!["a.md", "b.md", "c.md"]);
+        // Staging is empty after the swap.
+        assert!(drive.graph().unwrap().staging_cursor().unwrap().is_none());
+    }
+
+    #[test]
+    fn reindex_sanitizes_staging_when_files_disappear_between_runs() {
+        // Pre-stage a file that's no longer on disk; reindex must
+        // purge it before the swap so the live graph does not end
+        // up with a ghost row pointing at a missing file.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        drive.write_text("alive.md", "# alive\n").unwrap();
+        // Stage a row for a file that does not exist on disk.
+        let fg = crate::graph::FileGraph {
+            rel: "ghost.md",
+            title: None,
+            mtime: Some(1),
+            node_kind: crate::graph::NodeKind::File,
+            edges: &[],
+            headings: &[],
+            emails: None,
+        };
+        drive.graph().unwrap().stage_file(&fg).unwrap();
+        assert_eq!(
+            drive.graph().unwrap().staging_cursor().unwrap().as_deref(),
+            Some("ghost.md"),
+        );
+
+        drive.reindex(None).unwrap();
+        let files = drive.graph().unwrap().files().unwrap();
+        assert!(files.iter().any(|f| f == "alive.md"));
+        assert!(
+            !files.iter().any(|f| f == "ghost.md"),
+            "sanitize must drop staged files not on disk: {files:?}",
+        );
     }
 
     #[test]

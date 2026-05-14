@@ -1102,11 +1102,26 @@ Notable variants:
 
   - **Graph DB**: `PRAGMA user_version`. Migrations are
     idempotent and applied on every `GraphView::open`. Current
-    version: 2 (basename-backfill bump on top of v1's initial
-    schema). The migration writes the schema change and the
-    `user_version` bump in a single transaction so a crash
-    mid-migration leaves the DB at the previous version with
-    intact data.
+    version: 4 (v2 added basename, v3 added emails, v4 added
+    staging tables for resumable reindex). The migration writes
+    the schema change and the `user_version` bump in a single
+    transaction so a crash mid-migration leaves the DB at the
+    previous version with intact data.
+
+  - **Reindex resumability** (v4): `rebuild_graph` parses each
+    file straight into `staging_nodes` / `staging_edges` /
+    `staging_headings`. Each file's stage is its own committed
+    transaction, so the parse cursor (`MAX(rel_path)` over
+    `staging_nodes`) advances durably without holding a long-lived
+    transaction. The atomic `swap_staging` at the end clears live
+    tables and copies from staging in one transaction; readers
+    (autocomplete, backlinks) see the previous live state until
+    that single commit, then the new state. A crash mid-rebuild
+    is detected at next open by the `rebuild.inprogress` marker
+    plus a non-empty staging cursor; the resumed reindex calls
+    `sanitize_staging` (purges staged rows for files deleted from
+    disk between sessions) then walks files strictly greater than
+    the cursor, so already-parsed files are not redone.
   - **Search index**: `IndexConfig.schema_version` field
     persisted at `<index_dir>/config.toml` alongside the
     embedding model id and chunking strategy. Current version:

@@ -410,6 +410,51 @@ impl GraphView {
             }
             conn.execute_batch("PRAGMA user_version = 3;")?;
         }
+        if v < 4 {
+            // v4: staging tables for `Drive::reindex_with`. Each
+            // full rebuild stages parse output into these tables
+            // per-file (committed by the writer thread), then
+            // executes a single atomic swap into the live tables
+            // at the end of the parse phase. A crash mid-rebuild
+            // leaves staging with the parse output for files
+            // processed so far; the next reindex reads the cursor
+            // (MAX rel_path in staging_nodes) and resumes the walk
+            // past it, skipping the redo. The swap is the durable
+            // commit boundary for the rebuild.
+            //
+            // Shape mirrors the live tables exactly; we avoid
+            // computed columns or denormalization so the swap is
+            // a straight INSERT INTO ... SELECT.
+            conn.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS staging_nodes (
+                    rel_path TEXT PRIMARY KEY,
+                    kind     TEXT NOT NULL,
+                    mtime    INTEGER,
+                    title    TEXT,
+                    basename TEXT,
+                    emails   TEXT
+                );
+                CREATE TABLE IF NOT EXISTS staging_edges (
+                    src    TEXT NOT NULL,
+                    dst    TEXT NOT NULL,
+                    kind   TEXT NOT NULL,
+                    anchor TEXT,
+                    PRIMARY KEY (src, dst, kind)
+                );
+                CREATE INDEX IF NOT EXISTS staging_edges_dst_idx ON staging_edges(dst);
+                CREATE TABLE IF NOT EXISTS staging_headings (
+                    rel_path TEXT NOT NULL,
+                    level    INTEGER NOT NULL,
+                    text     TEXT NOT NULL,
+                    anchor   TEXT NOT NULL,
+                    ord      INTEGER NOT NULL,
+                    PRIMARY KEY (rel_path, ord)
+                );
+                PRAGMA user_version = 4;
+                "#,
+            )?;
+        }
         Ok(())
     }
 
@@ -627,6 +672,170 @@ impl GraphView {
              OR rel_path LIKE ?2 ESCAPE '\\'",
             params![prefix, subtree_like],
         )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Reindex staging support: clear every staging table. Use
+    /// before starting a reindex on a clean drive; resume paths
+    /// skip this so partial parse state from a prior crash is
+    /// preserved.
+    pub fn clear_staging(&self) -> Result<()> {
+        tracing::debug!("graph::clear_staging");
+        let conn = self.writer.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM staging_edges", [])?;
+        tx.execute("DELETE FROM staging_headings", [])?;
+        tx.execute("DELETE FROM staging_nodes", [])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Stage one file's parse output into the staging tables.
+    /// Each call commits its own transaction; on a crash mid-call
+    /// the in-flight row gets rolled back and the cursor stays at
+    /// the last fully-staged file. Use for `Drive::reindex_with`'s
+    /// resumable parse phase; the swap into live tables happens
+    /// once at the end via `swap_staging`.
+    pub fn stage_file(&self, fg: &FileGraph<'_>) -> Result<()> {
+        let conn = self.writer.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let basename = std::path::Path::new(fg.rel)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(fg.rel);
+        tx.execute(
+            "INSERT OR REPLACE INTO staging_nodes(rel_path, kind, mtime, title, basename, emails) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+            params![
+                fg.rel,
+                fg.node_kind.as_str(),
+                fg.mtime,
+                fg.title,
+                basename,
+                fg.emails,
+            ],
+        )?;
+        // Re-stage clears previous edges + headings for this file
+        // so a partial-parse retry (file content changed since the
+        // crash) leaves the staged row consistent with the new
+        // parse.
+        tx.execute("DELETE FROM staging_edges WHERE src = ?", params![fg.rel])?;
+        tx.execute(
+            "DELETE FROM staging_headings WHERE rel_path = ?",
+            params![fg.rel],
+        )?;
+        {
+            let mut ins_edge = tx.prepare_cached(
+                "INSERT OR IGNORE INTO staging_edges(src, dst, kind, anchor) VALUES (?, ?, ?, ?)",
+            )?;
+            for e in fg.edges {
+                ins_edge.execute(params![fg.rel, e.dst, e.kind.as_str(), e.anchor])?;
+            }
+            let mut ins_heading = tx.prepare_cached(
+                "INSERT INTO staging_headings(rel_path, level, text, anchor, ord) \
+                 VALUES (?, ?, ?, ?, ?)",
+            )?;
+            for h in fg.headings {
+                let anchor = markdown::heading_anchor(&h.text);
+                ins_heading.execute(params![
+                    fg.rel,
+                    h.level as i64,
+                    h.text,
+                    anchor,
+                    h.ord as i64,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Lexicographically-greatest rel_path currently in the staging
+    /// node table. `None` when staging is empty; used by reindex
+    /// to decide where to resume the walk. The walk produces files
+    /// in sorted order, so a strictly-greater comparison against
+    /// this cursor skips every file already staged.
+    pub fn staging_cursor(&self) -> Result<Option<String>> {
+        let conn = self.reader()?;
+        let v: Option<String> = conn
+            .query_row("SELECT MAX(rel_path) FROM staging_nodes", [], |r| r.get(0))
+            .optional()?
+            .flatten();
+        Ok(v)
+    }
+
+    /// Drop staging rows whose rel_path is not in `live_files`.
+    /// Used at the top of a resumed reindex: a file staged in a
+    /// prior incomplete run that has since been deleted from disk
+    /// would otherwise survive into the live tables at swap time
+    /// as a ghost row pointing at a missing path.
+    pub fn sanitize_staging(
+        &self,
+        live_files: &std::collections::HashSet<String>,
+    ) -> Result<usize> {
+        let conn = self.writer.lock().unwrap();
+        let staged: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT rel_path FROM staging_nodes")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            out
+        };
+        let stale: Vec<&String> = staged.iter().filter(|p| !live_files.contains(*p)).collect();
+        if stale.is_empty() {
+            return Ok(0);
+        }
+        let tx = conn.unchecked_transaction()?;
+        for rel in &stale {
+            tx.execute("DELETE FROM staging_edges WHERE src = ?", params![rel])?;
+            tx.execute(
+                "DELETE FROM staging_headings WHERE rel_path = ?",
+                params![rel],
+            )?;
+            tx.execute("DELETE FROM staging_nodes WHERE rel_path = ?", params![rel])?;
+        }
+        tx.commit()?;
+        Ok(stale.len())
+    }
+
+    /// Atomically swap staging into the live tables. Clears live,
+    /// copies from staging, clears staging. Single transaction so
+    /// a crash mid-swap leaves either the old live state intact
+    /// (transaction rolled back) or the new one fully committed.
+    pub fn swap_staging(&self) -> Result<()> {
+        tracing::debug!("graph::swap_staging");
+        let conn = self.writer.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        // Delete-then-insert vs. drop-and-rename: ALTER TABLE
+        // RENAME is sqlite-supported, but we keep the schema
+        // shape stable (callers might be holding readers against
+        // the live tables; renaming would break them mid-query).
+        // Delete-then-insert inside one transaction gives the same
+        // atomicity without touching the schema.
+        tx.execute("DELETE FROM edges", [])?;
+        tx.execute("DELETE FROM headings", [])?;
+        tx.execute("DELETE FROM nodes", [])?;
+        tx.execute(
+            "INSERT INTO nodes(rel_path, kind, mtime, title, basename, emails) \
+             SELECT rel_path, kind, mtime, title, basename, emails FROM staging_nodes",
+            [],
+        )?;
+        tx.execute(
+            "INSERT INTO edges(src, dst, kind, anchor) \
+             SELECT src, dst, kind, anchor FROM staging_edges",
+            [],
+        )?;
+        tx.execute(
+            "INSERT INTO headings(rel_path, level, text, anchor, ord) \
+             SELECT rel_path, level, text, anchor, ord FROM staging_headings",
+            [],
+        )?;
+        tx.execute("DELETE FROM staging_edges", [])?;
+        tx.execute("DELETE FROM staging_headings", [])?;
+        tx.execute("DELETE FROM staging_nodes", [])?;
         tx.commit()?;
         Ok(())
     }
@@ -1129,7 +1338,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let db = tmp.path().join("graph.sqlite");
         let g = GraphView::open(&db).unwrap();
-        assert_eq!(count(&g, "PRAGMA user_version"), 3);
+        assert_eq!(count(&g, "PRAGMA user_version"), 4);
     }
 
     #[test]
@@ -1682,7 +1891,7 @@ mod tests {
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 3);
+        assert_eq!(v, 4);
     }
 
     #[test]
@@ -1747,7 +1956,7 @@ mod tests {
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 3);
+        assert_eq!(v, 4);
     }
 
     #[test]
@@ -1797,7 +2006,7 @@ mod tests {
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 3);
+        assert_eq!(v, 4);
         let cols: Vec<String> = {
             let mut stmt = conn.prepare("PRAGMA table_info(nodes)").unwrap();
             stmt.query_map([], |r| r.get::<_, String>(1))
@@ -1821,5 +2030,120 @@ mod tests {
         )
         .unwrap();
         assert!(!g.contacts_need_email_backfill().unwrap());
+    }
+
+    /// Stages a few files into the staging tables, verifies the
+    /// cursor advances, swaps, and verifies the live tables reflect
+    /// the staged data and staging is empty.
+    #[test]
+    fn staging_cursor_swap_round_trip() {
+        let tmp = TempDir::new().unwrap();
+        let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
+        assert!(g.staging_cursor().unwrap().is_none());
+
+        // `stage_file` overrides the edge's `src` with the
+        // FileGraph's rel, so the field's value here is filled in
+        // for API completeness only.
+        let edges_b = vec![Edge {
+            src: "ignored".to_string(),
+            dst: "a".to_string(),
+            kind: EdgeKind::Link,
+            anchor: None,
+        }];
+        for (rel, edges) in [
+            ("a.md", &[][..]),
+            ("b.md", edges_b.as_slice()),
+            ("c.md", &[][..]),
+        ] {
+            let fg = FileGraph {
+                rel,
+                title: None,
+                mtime: Some(1),
+                node_kind: NodeKind::File,
+                edges,
+                headings: &[],
+                emails: None,
+            };
+            g.stage_file(&fg).unwrap();
+        }
+        assert_eq!(g.staging_cursor().unwrap().as_deref(), Some("c.md"));
+
+        g.swap_staging().unwrap();
+        assert!(g.staging_cursor().unwrap().is_none());
+        let mut files = g.files().unwrap();
+        files.sort();
+        assert_eq!(files, vec!["a.md", "b.md", "c.md"]);
+        // Edge survived the swap.
+        let backlinks = g.backlinks("a").unwrap();
+        assert!(backlinks.iter().any(|e| e.src == "b.md"));
+    }
+
+    /// Stages files, runs sanitize_staging with a smaller live set,
+    /// verifies the missing files are purged out of staging before
+    /// the next swap.
+    #[test]
+    fn sanitize_staging_drops_rows_not_in_live_set() {
+        let tmp = TempDir::new().unwrap();
+        let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
+        for rel in ["a.md", "b.md", "c.md"] {
+            let fg = FileGraph {
+                rel,
+                title: None,
+                mtime: Some(1),
+                node_kind: NodeKind::File,
+                edges: &[],
+                headings: &[],
+                emails: None,
+            };
+            g.stage_file(&fg).unwrap();
+        }
+        let live: std::collections::HashSet<String> = ["a.md".to_string(), "c.md".to_string()]
+            .into_iter()
+            .collect();
+        let purged = g.sanitize_staging(&live).unwrap();
+        assert_eq!(purged, 1);
+        g.swap_staging().unwrap();
+        let mut files = g.files().unwrap();
+        files.sort();
+        assert_eq!(files, vec!["a.md", "c.md"]);
+    }
+
+    /// A swap is atomic against readers: while staging holds the
+    /// new shape, the live tables still serve the previous one.
+    /// After swap, the live tables serve the new shape and staging
+    /// is empty.
+    #[test]
+    fn swap_staging_atomically_replaces_live_state() {
+        let tmp = TempDir::new().unwrap();
+        let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
+        // Seed live with a single file via the existing replace_file.
+        g.replace_file(
+            "old.md",
+            Some("Old"),
+            Some(1),
+            NodeKind::File,
+            &[],
+            &[],
+            None,
+        )
+        .unwrap();
+        // Stage a different file. While we haven't swapped yet,
+        // the live state still surfaces only the original entry.
+        let fg = FileGraph {
+            rel: "new.md",
+            title: None,
+            mtime: Some(2),
+            node_kind: NodeKind::File,
+            edges: &[],
+            headings: &[],
+            emails: None,
+        };
+        g.stage_file(&fg).unwrap();
+        assert_eq!(g.files().unwrap(), vec!["old.md".to_string()]);
+        // After swap, only the staged file remains.
+        g.swap_staging().unwrap();
+        assert_eq!(g.files().unwrap(), vec!["new.md".to_string()]);
+        // Staging is empty after the swap.
+        assert!(g.staging_cursor().unwrap().is_none());
     }
 }
