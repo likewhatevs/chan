@@ -27,7 +27,7 @@
 //   - BulletList / OrderedList / ListItem / ListMark: bullets stay as
 //     plain source; CSS gives them indent if needed.
 
-import { Decoration, WidgetType } from "@codemirror/view";
+import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import type { TokenContext, TokenHandler } from "./walker";
 import { CheckboxWidget } from "../widgets/checkbox";
 
@@ -214,16 +214,26 @@ const handleFencedCode: TokenHandler = (ctx) => {
   // range when the parser is recovering from a missing fence; clamp
   // to be safe.
   const lastLine = Math.max(closeLine, blockEndLine);
+  // For an unclosed fence @lezer/markdown emits a single CodeMark
+  // (the opener) and stretches the FencedCode node to doc end.
+  // We detect that here so we can (a) keep the opener visible
+  // while the caret sits anywhere in the block, even on body lines
+  // BELOW the opener — without this, the markers hide and the user
+  // has no signal they're typing inside an unclosed code block;
+  // (b) drop a ghost ` ``` ` placeholder on the line past the last
+  // body line so the missing closer is visually obvious.
+  const isUnclosed = closeMarkFrom === openMarkFrom;
 
   // Show the fence verbatim (backticks + lang inline) whenever the
   // caret is ANYWHERE inside the block — not just on the opener /
-  // closer rows. Editing a code block usually means cursoring
-  // through the body, and the user expects the source to stay
-  // intact while they're "inside" it. Outside the block, hide the
-  // markers so the slab reads as a finished render. lineIntersect
-  // over the full block range covers all of opener / content /
-  // closer in one shot.
-  const caretInBlock = ctx.lineIntersect(openLineObj.from, closeLineObj.to);
+  // closer rows. For closed fences the opener-to-closer line span
+  // covers everything; for unclosed fences the closer line equals
+  // the opener line, so we must use the FencedCode node's full
+  // extent instead, otherwise the opener marker hides as soon as
+  // the caret leaves line 1 and the user has no visual signal
+  // they're still inside a code block.
+  const blockEnd = Math.max(closeLineObj.to, ctx.node.to);
+  const caretInBlock = ctx.lineIntersect(openLineObj.from, blockEnd);
   if (!caretInBlock) {
     if (openMarkFrom < openMarkTo) {
       ctx.push(HIDE, openMarkFrom, openMarkTo);
@@ -282,7 +292,60 @@ const handleFencedCode: TokenHandler = (ctx) => {
     side: 1,
   });
   ctx.push(badge, openLineObj.to, openLineObj.to);
+
+  // Ghost closer for unclosed fences. Drops a dimmed ` ``` ` widget
+  // at the end of the last body line so the user can see the
+  // block isn't closed. Without it, an unclosed fence reads as
+  // "regular text inside a slightly-shaded slab" and traps the
+  // caret silently — typed content keeps extending the fence with
+  // no visible cue.
+  if (isUnclosed) {
+    const lastLineObj = ctx.state.doc.line(lastLine);
+    const ghost = Decoration.widget({
+      widget: new GhostCloserWidget(),
+      side: 1,
+    });
+    ctx.push(ghost, lastLineObj.to, lastLineObj.to);
+  }
 };
+
+/// Dimmed inline placeholder for an unclosed code fence. Renders
+/// as a faint `\`\`\`` chip at the end of the fence's last body
+/// line so the user can see the block lacks a closer. Click
+/// inserts a real closer on a fresh line below.
+class GhostCloserWidget extends WidgetType {
+  eq(_other: GhostCloserWidget): boolean {
+    return true;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const wrap = document.createElement("span");
+    wrap.className = "cm-md-fence-ghost-closer";
+    wrap.contentEditable = "false";
+    wrap.title = "Unclosed code block — click to add the closing ```";
+    wrap.textContent = "```";
+    wrap.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const pos = view.posAtDOM(wrap);
+      const line = view.state.doc.lineAt(pos);
+      const insert = line.text.length === 0 ? "```\n" : "\n```\n";
+      const at = line.to;
+      view.dispatch({
+        changes: { from: at, to: at, insert },
+        selection: { anchor: at + insert.length },
+      });
+      view.focus();
+    });
+    return wrap;
+  }
+
+  ignoreEvent(): boolean {
+    // Let our explicit mousedown above run; CM6's default handling
+    // would otherwise eat the click into selection placement.
+    return false;
+  }
+}
 
 const handleTask: TokenHandler = (ctx) => {
   // Walk children to find the TaskMarker (lezer-markdown's GFM

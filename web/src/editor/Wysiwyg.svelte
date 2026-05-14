@@ -329,6 +329,13 @@
             // apply so the keys keep their default behaviour
             // (cursorDown / assistant submit / new line in code).
             { key: "ArrowDown", run: (view) => fmt.escapeFenceAtDocEnd(view) },
+            // Mod-Enter inside any fenced code block: append a fresh
+            // line just past the block end and place the caret
+            // there. Always-on escape, independent of the block's
+            // position in the doc — for cases the doc-end-only
+            // rule above can't catch (unclosed fence followed by
+            // content, opener inside a list, etc.).
+            { key: "Mod-Enter", run: (view) => fmt.exitFenceAnywhere(view) },
             { key: "Mod-Enter", run: (view) => fmt.escapeFenceAtDocEnd(view) },
             {
               key: "Mod-Enter",
@@ -749,6 +756,26 @@
   }
   :global(.md-wysiwyg-cm6 .cm-md-fence-badge-copy.copy-failed) {
     color: var(--danger-text, #f85149);
+  }
+  /* Ghost closer for an unclosed fenced code block. Dimmed `\`\`\``
+     pinned at the end of the fence's last body line so the user can
+     see at a glance that the block isn't terminated. Click-to-close
+     handler lives on the widget itself. */
+  :global(.md-wysiwyg-cm6 .cm-md-fence-ghost-closer) {
+    margin-left: 0.5em;
+    padding: 0 0.35em;
+    font-family: var(--chan-editor-code-family, monospace);
+    font-size: var(--chan-editor-code-size, 0.92em);
+    color: var(--danger-text, #b3261e);
+    background: transparent;
+    border: 1px dashed var(--danger-text, #b3261e);
+    border-radius: 3px;
+    opacity: 0.7;
+    cursor: pointer;
+    user-select: none;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-fence-ghost-closer:hover) {
+    opacity: 1;
   }
   :global(.md-wysiwyg-cm6 .cm-md-task-checkbox) {
     margin: 0 0.4em 0 0;

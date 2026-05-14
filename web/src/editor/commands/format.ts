@@ -211,18 +211,11 @@ export function quoteLines(view: EditorView): boolean {
 function isCaretInsideFenceAtDocEnd(view: EditorView): boolean {
   const sel = view.state.selection.main;
   if (!sel.empty) return false;
-  // Find the enclosing FencedCode (if any).
-  let n: import("@lezer/common").SyntaxNode | null = syntaxTree(
-    view.state,
-  ).resolveInner(sel.head, 0);
-  let fence: import("@lezer/common").SyntaxNode | null = null;
-  while (n) {
-    if (n.name === "FencedCode") {
-      fence = n;
-      break;
-    }
-    n = n.parent;
-  }
+  // Find the enclosing FencedCode (if any). Use side=-1 because the
+  // caret most often sits at the END of the fence's content (last
+  // body line, no text after) — at that boundary side=0 resolves to
+  // the parent Document and we'd miss the fence entirely.
+  const fence = enclosingFence(view.state, sel.head);
   if (!fence) return false;
   // The block must extend to (or beyond, modulo a trailing newline)
   // the end of the doc — otherwise there's content after the closer
@@ -243,12 +236,44 @@ function exitFenceAtDocEnd(view: EditorView): boolean {
   // a newline INSIDE the block. Anchor the insertion at doc.length
   // so the new line lands after the closing fence regardless of
   // whether the caret was on a body line or the closer itself.
+  //
+  // When the fence is UNCLOSED (no `\`\`\`` line yet — the user
+  // typed an opener and started writing), appending a bare `\n`
+  // just extends the unclosed fence, so the next ArrowDown is
+  // still trapped. Insert the closer first in that case so the
+  // new caret lands OUTSIDE the block.
   const end = view.state.doc.length;
+  const closed = isFenceClosedAtDocEnd(view);
+  const insert = closed ? "\n" : "\n```\n";
   view.dispatch({
-    changes: { from: end, to: end, insert: "\n" },
-    selection: { anchor: end + 1 },
+    changes: { from: end, to: end, insert },
+    selection: { anchor: end + insert.length },
   });
   return true;
+}
+
+/// True when the doc-end fence already has a closing `\`\`\`` line.
+/// We check the doc text rather than walking the syntax tree because
+/// @lezer/markdown happily extends an unclosed FencedCode all the
+/// way to doc end and reports both the open and close CodeMark on
+/// the same opener line — making the syntax tree alone unreliable
+/// for this question.
+function isFenceClosedAtDocEnd(view: EditorView): boolean {
+  const doc = view.state.doc;
+  // Strip a single trailing newline so a doc that ends with
+  // "```\n" still finds the closer on the last meaningful line.
+  let lastLineNumber = doc.lines;
+  while (lastLineNumber > 1) {
+    const line = doc.line(lastLineNumber);
+    if (line.text.length > 0) break;
+    lastLineNumber--;
+  }
+  const lastLine = doc.line(lastLineNumber);
+  if (!CLOSER_FENCE_RE.test(lastLine.text)) return false;
+  // The closer can't be the same line as the opener — if the doc
+  // is just "```" on its own, that's an opener with no body, no
+  // closer.
+  return lastLineNumber > 1;
 }
 
 /// ArrowDown + Mod-Enter binding: exit a fenced code block when the
@@ -274,19 +299,80 @@ export function escapeFenceOnEnterAtCloser(view: EditorView): boolean {
   // trailing newline that the doc itself bakes into doc.length).
   if (line.to < view.state.doc.length - 1) return false;
   if (!CLOSER_FENCE_RE.test(line.text)) return false;
-  let n: import("@lezer/common").SyntaxNode | null = syntaxTree(
-    view.state,
-  ).resolveInner(sel.head, 0);
-  let inFence = false;
-  while (n) {
-    if (n.name === "FencedCode") {
-      inFence = true;
-      break;
-    }
-    n = n.parent;
-  }
-  if (!inFence) return false;
+  if (!enclosingFence(view.state, sel.head)) return false;
   return exitFenceAtDocEnd(view);
+}
+
+/// Mod-Enter from anywhere inside a fenced code block: append a
+/// blank line just past the block end and park the caret on it.
+/// This is the always-on escape hatch — independent of where the
+/// block sits in the doc, whether the caret is on the opener / a
+/// body line / the closer, and whether the block is closed at all.
+///
+/// The earlier "must be at doc end + caret on last line" rules
+/// kept missing edge cases (empty trailing line, lezer's
+/// resolveInner side-bias, unclosed fence parsing); this command
+/// is the user-controlled out: press Mod-Enter, get out. If the
+/// caret is not in any fence, return false so Mod-Enter keeps its
+/// other meaning (assistant submit).
+export function exitFenceAnywhere(view: EditorView): boolean {
+  const sel = view.state.selection.main;
+  if (!sel.empty) return false;
+  const fence = enclosingFence(view.state, sel.head);
+  if (!fence) return false;
+  const closed = isFenceNodeClosed(view.state, fence);
+  // Anchor the insertion at the fence's end. For an unclosed fence
+  // that runs to doc end this is doc.length; for a closed fence
+  // mid-doc this is the position right after the closer's last
+  // backtick. Inserting a closer line in the unclosed case ensures
+  // the new caret position sits OUTSIDE the (newly closed) block.
+  const at = Math.min(fence.to, view.state.doc.length);
+  const insert = closed ? "\n" : "\n```\n";
+  view.dispatch({
+    changes: { from: at, to: at, insert },
+    selection: { anchor: at + insert.length },
+  });
+  return true;
+}
+
+/// True when the fence node's last line is a `\`\`\`` closer (or
+/// `~~~`). Walks the node's text instead of its child tree because
+/// @lezer/markdown sometimes emits both open/close CodeMark on the
+/// opener line for unclosed fences, which makes the child-based
+/// "two distinct CodeMarks" check unreliable.
+function isFenceNodeClosed(
+  state: import("@codemirror/state").EditorState,
+  fence: import("@lezer/common").SyntaxNode,
+): boolean {
+  const fenceEndLine = state.doc.lineAt(
+    Math.min(fence.to, state.doc.length),
+  );
+  // The closer must be on a different line from the opener — a
+  // single-line `\`\`\`` is just an opener with no body / no
+  // closer.
+  if (fenceEndLine.from <= fence.from) return false;
+  return CLOSER_FENCE_RE.test(fenceEndLine.text);
+}
+
+/// Walk syntax-tree ancestors at `pos` looking for a FencedCode
+/// node. Tries side=-1 first (preferred for end-of-doc carets) and
+/// falls back to side=1 so a caret sitting just before an opener
+/// fence still resolves into it. Centralizes the boundary handling
+/// so callers don't need to repeat the side trick.
+function enclosingFence(
+  state: import("@codemirror/state").EditorState,
+  pos: number,
+): import("@lezer/common").SyntaxNode | null {
+  for (const side of [-1, 1] as const) {
+    let n: import("@lezer/common").SyntaxNode | null = syntaxTree(
+      state,
+    ).resolveInner(pos, side);
+    while (n) {
+      if (n.name === "FencedCode") return n;
+      n = n.parent;
+    }
+  }
+  return null;
 }
 
 /// `<` chord: strip one level of `> ` (or `>` alone) from every
