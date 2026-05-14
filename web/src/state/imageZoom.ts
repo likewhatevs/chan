@@ -3,9 +3,12 @@
 // overlay. Click the backdrop or press Escape to dismiss; the
 // overlay cleans itself up.
 //
-// Styles live next to the editor in Wysiwyg.svelte (.md-image-zoom);
-// reusing the same class keeps the visual identical without dragging
-// the CSS into every host.
+// Styles are applied inline so the helper is self-contained — the
+// previous "CSS lives in Wysiwyg.svelte" arrangement broke during
+// the CM6 cutover when the `:global(.md-image-zoom)` block was
+// dropped, leaving the View button technically working (backdrop
+// appended) but invisibly stacked below the editor in static flow.
+// Inline keeps the helper resilient to future component shuffles.
 
 import { resolveImageSrc } from "../editor/extensions/image";
 
@@ -27,10 +30,18 @@ export function openImageZoom(src: string, fromPath: string | null = null): void
 
   const backdrop = document.createElement("div");
   backdrop.className = "md-image-zoom";
+  backdrop.style.cssText =
+    "position:fixed;inset:0;z-index:40000;" +
+    "background:rgba(0,0,0,0.92);" +
+    "display:flex;align-items:center;justify-content:center;" +
+    "cursor:zoom-out;";
   const img = document.createElement("img");
   img.src = resolved;
   img.alt = "";
   img.draggable = false;
+  img.style.cssText =
+    "max-width:92vw;max-height:92vh;width:auto;height:auto;" +
+    "object-fit:contain;box-shadow:0 8px 32px rgba(0,0,0,0.5);";
   backdrop.appendChild(img);
   document.body.appendChild(backdrop);
 
