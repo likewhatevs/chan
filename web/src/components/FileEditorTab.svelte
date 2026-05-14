@@ -675,8 +675,11 @@
   .mbtn-icon {
     width: 18px;
     text-align: center;
-    color: var(--text-secondary);
+    color: var(--text);
     flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
   .mbtn-label { flex: 1; }
   /* Group separator inside the action list. Same shape as the
