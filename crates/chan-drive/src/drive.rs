@@ -1675,10 +1675,20 @@ impl Drive {
     }
 
     fn index_file_inner(&self, rel: &str) -> Result<()> {
-        let content = self.read_text(rel)?;
+        // Stat BEFORE read. If a concurrent writer lands between the
+        // two calls, the graph then holds the older (mtime, size)
+        // tuple alongside the newer content; reconcile compares the
+        // stamped tuple against the live stat on its next pass and
+        // catches the drift. The opposite order (read-then-stat)
+        // would stamp the post-write (mtime, size) onto the pre-write
+        // content, leaving graph.stat == disk.stat and the drift
+        // invisible to reconcile.
         let stat = self.stat(rel).ok();
         let mtime = stat.as_ref().and_then(|s| s.mtime);
         let size = stat.as_ref().map(|s| size_to_i64(s.size));
+        #[cfg(test)]
+        index_file_between_stat_and_read_hook();
+        let content = self.read_text(rel)?;
         let (title, node_kind, headings, edges, emails) = parse_for_graph(rel, &content);
         // Graph first, then search index. The graph is what the
         // editor consults for backlinks and link-autocomplete on
@@ -2220,6 +2230,35 @@ fn check_size(kind: &'static str, size: usize, limit: u64, prev_size: Option<u64
 /// usable for the reconcile `(mtime, size)` equality check.
 fn size_to_i64(size: u64) -> i64 {
     i64::try_from(size).unwrap_or(i64::MAX)
+}
+
+// Test-only hook fired by `index_file_inner` between the `stat`
+// and `read` syscalls so tests can deterministically simulate a
+// concurrent writer landing in that window. The hook is a
+// thread-local one-shot: `take()`'d on fire so a single
+// `index_file` invocation triggers it at most once. In production
+// builds the entire helper is `cfg(test)`-gated and there is no
+// call site.
+#[cfg(test)]
+thread_local! {
+    static INDEX_FILE_STAT_READ_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn index_file_between_stat_and_read_hook() {
+    let hook = INDEX_FILE_STAT_READ_HOOK.with(|h| h.borrow_mut().take());
+    if let Some(f) = hook {
+        f();
+    }
+}
+
+/// Arm the one-shot stat/read interleave hook for tests. The next
+/// `index_file_inner` call on this thread fires `f` after the stat
+/// and before the read, then clears the slot.
+#[cfg(test)]
+fn arm_index_file_stat_read_hook(f: Box<dyn FnOnce()>) {
+    INDEX_FILE_STAT_READ_HOOK.with(|h| *h.borrow_mut() = Some(f));
 }
 
 /// Map a `std::io::Error` returned by a cap-std op into our error
@@ -3603,6 +3642,82 @@ mod tests {
             .hits
             .iter()
             .any(|h| h.path == "twin.md"));
+    }
+
+    #[test]
+    fn index_file_stamps_pre_read_stat_so_concurrent_writes_stay_visible() {
+        // TOCTOU between `stat` and `read_text` inside
+        // `index_file_inner`. We use a test-only thread-local hook
+        // that fires AFTER stat returns and BEFORE read_text begins
+        // to deterministically simulate a concurrent writer landing
+        // in that window.
+        //
+        // Required invariant: the graph row ends up with the
+        // POST-write content (because read_text runs after the hook)
+        // alongside the PRE-write `(mtime, size)` stamp (because
+        // stat ran before the hook). Reconcile, comparing the
+        // stamped tuple against the live disk stat, must then see
+        // the size delta and trigger a reindex on its next pass.
+        //
+        // The opposite ordering (read-then-stat) would stamp the
+        // POST-write `(mtime, size)` onto the PRE-write content;
+        // reconcile would see graph.stat == disk.stat and skip,
+        // leaving the drift in place. That regression is exactly
+        // what this test pins.
+        use std::fs;
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+
+        drive.write_text("race.md", "# race\nv1 small\n").unwrap();
+        drive.index_file("race.md").unwrap();
+
+        let pre_stat = drive.stat("race.md").unwrap();
+        let pre_size = pre_stat.size;
+
+        // Arm the one-shot hook: between stat and read inside the
+        // next `index_file_inner`, overwrite the file with a body
+        // that differs in size so the graph ends up with the
+        // pre-write stat + post-write content if the ordering is
+        // correct.
+        let file_path = drive_dir.path().join("race.md");
+        let new_body = b"# race\nv2 with a noticeably larger payload than v1\n";
+        let new_body_len = new_body.len() as u64;
+        super::arm_index_file_stat_read_hook(Box::new(move || {
+            fs::write(&file_path, new_body).unwrap();
+        }));
+
+        drive.index_file("race.md").unwrap();
+
+        // Post-conditions: the file on disk is the new body, and the
+        // graph row carries the pre-write size. The size delta is
+        // the load-bearing observable proof of stat-before-read.
+        let disk_size = fs::metadata(drive_dir.path().join("race.md"))
+            .unwrap()
+            .len();
+        assert_eq!(disk_size, new_body_len, "writer hook must have run");
+        let graph_rows = drive.graph().unwrap().files_with_stat().unwrap();
+        let (_, _graph_mtime, graph_size) = graph_rows
+            .into_iter()
+            .find(|(rel, _, _)| rel == "race.md")
+            .expect("race.md must have a graph row after index_file");
+        assert_eq!(
+            graph_size,
+            Some(size_to_i64(pre_size)),
+            "graph must hold the PRE-write size; got {:?} (pre={pre_size}, post={new_body_len})",
+            graph_size,
+        );
+
+        // Reconcile must catch the drift (graph size != disk size)
+        // and reindex the file on its next pass.
+        let report = drive.reconcile().unwrap();
+        assert!(
+            report.upserted.iter().any(|p| p == "race.md"),
+            "reconcile should detect the stat/content drift; got {:?}",
+            report,
+        );
     }
 
     #[test]
