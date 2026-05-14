@@ -280,12 +280,14 @@ fn progress_event_serializes_for_the_wire() {
         current: 3,
         total: 10,
         label: Some("notes/x.md".into()),
+        eta_secs: Some(42),
     };
     let json = serde_json::to_value(&ev).unwrap();
     assert_eq!(json["stage"], "IndexFile");
     assert_eq!(json["current"], 3);
     assert_eq!(json["total"], 10);
     assert_eq!(json["label"], "notes/x.md");
+    assert_eq!(json["eta_secs"], 42);
 
     // Round-trip must reconstruct the value (proves Deserialize too,
     // which the consumer side of a tunnel/WS would use).
@@ -294,6 +296,16 @@ fn progress_event_serializes_for_the_wire() {
     assert_eq!(back.current, 3);
     assert_eq!(back.total, 10);
     assert_eq!(back.label.as_deref(), Some("notes/x.md"));
+    assert_eq!(back.eta_secs, Some(42));
+
+    // A payload without `eta_secs` must still deserialize: it's a
+    // newer field and old clients persisting events shouldn't break
+    // when the field is absent.
+    let legacy: ProgressEvent = serde_json::from_value(
+        serde_json::json!({"stage": "IndexFile", "current": 1, "total": 2, "label": null}),
+    )
+    .unwrap();
+    assert_eq!(legacy.eta_secs, None);
 
     // `label: None` must serialize (the field is mandatory in the
     // struct; we don't skip None today, so the wire shows null).
@@ -303,6 +315,7 @@ fn progress_event_serializes_for_the_wire() {
         current: 0,
         total: 0,
         label: None,
+        eta_secs: None,
     };
     let json2 = serde_json::to_value(&ev2).unwrap();
     assert_eq!(json2["stage"], "Heartbeat");

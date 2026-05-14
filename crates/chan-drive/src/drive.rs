@@ -207,6 +207,12 @@ pub struct Drive {
     /// keeps it current incrementally. Kept behind `OnceLock` so
     /// drives that never query the report skip the scan entirely.
     report: std::sync::OnceLock<Arc<ReportState>>,
+    /// Directory-name blocklist applied to reindex walks (graph
+    /// rebuild + index facade). Captured at `Drive::open` time
+    /// from the parent `Library`. Other walks (editor file tree,
+    /// trash, restore) ignore this filter so the user can still
+    /// see / restore files inside a blocked directory on demand.
+    walk_filter: Arc<fs_ops::WalkFilter>,
 }
 
 impl std::fmt::Debug for Drive {
@@ -219,7 +225,10 @@ impl std::fmt::Debug for Drive {
 }
 
 impl Drive {
-    pub(crate) fn open(entry: KnownDrive) -> Result<Arc<Self>> {
+    pub(crate) fn open(
+        entry: KnownDrive,
+        walk_filter: Arc<fs_ops::WalkFilter>,
+    ) -> Result<Arc<Self>> {
         // Defensive check: the registered path must still resolve to
         // a directory. A user (or another tool) could have replaced
         // the drive directory with a symlink, file, or socket since
@@ -287,6 +296,7 @@ impl Drive {
             needs_rebuild: std::sync::atomic::AtomicBool::new(needs_rebuild),
             reindexing: std::sync::atomic::AtomicBool::new(false),
             report: std::sync::OnceLock::new(),
+            walk_filter,
         }))
     }
 
@@ -334,6 +344,14 @@ impl Drive {
     /// own state alongside chan-drive's.
     pub fn paths(&self) -> &DrivePaths {
         &self.paths
+    }
+
+    /// The directory-name blocklist this Drive applies to its
+    /// reindex walks. Snapshot from the parent Library at open
+    /// time; survives across reindex calls. Editor-visible walks
+    /// (the file tree, search, trash) do not consult it.
+    pub fn walk_filter(&self) -> &fs_ops::WalkFilter {
+        &self.walk_filter
     }
 
     // ---- filesystem primitives (path-based, rel-only) ----
@@ -1112,6 +1130,7 @@ impl Drive {
                 current: idx as u64,
                 total: total_sources,
                 label: Some(src_current.clone()),
+                eta_secs: None,
             });
             let (content, stat) = match self.read_text_with_stat(&src_current) {
                 Ok(pair) => pair,
@@ -1329,8 +1348,12 @@ impl Drive {
         // final commit.
         self.write_rebuild_marker()?;
         self.rebuild_graph(cancel, progress)?;
-        let summary = self
-            .index()?
+        let index = self.index()?;
+        // Push the current filter snapshot to the index facade so the
+        // walk under `build_all` agrees with the graph rebuild on which
+        // subtrees to skip.
+        index.set_walk_filter(Arc::clone(&self.walk_filter));
+        let summary = index
             .build_all(BuildOptions::default(), progress, cancel)
             .map_err(|e| match e {
                 crate::index::IndexError::Cancelled => ChanError::Cancelled,
@@ -1402,7 +1425,7 @@ impl Drive {
         cancel: Option<&AtomicBool>,
         progress: &dyn crate::progress::ProgressCallback,
     ) -> Result<()> {
-        use crate::progress::{ProgressEvent, ProgressStage};
+        use crate::progress::{eta_secs_from, ProgressEvent, ProgressStage};
         // Two-phase: collect everything in memory, then commit in a
         // single sqlite transaction via `GraphView::replace_all`. The
         // alternative (clear + per-file replace_file) left the graph
@@ -1410,7 +1433,11 @@ impl Drive {
         // auto-rebuild trigger about freshness. Memory cost is bounded
         // by drive size and is small (a 10k-file drive holds tens of
         // MB of headings + edges, well within the editor's footprint).
-        let entries = self.list_tree()?;
+        //
+        // The filtered walk skips blocked dir names (`node_modules`,
+        // `target`, ...). The graph stays consistent with the search
+        // index: both back-ends index the same set of files.
+        let entries = fs_ops::list_tree_filtered(self.root(), &self.walk_filter)?;
         // The total for progress is "editable-text files", computed
         // up front so consumers can render a percentage. Filtering
         // a second time below is cheap (cap is `LIST_TREE_LIMIT`).
@@ -1429,6 +1456,7 @@ impl Drive {
         }
         let mut owned: Vec<Owned> = Vec::new();
         let mut seen: u64 = 0;
+        let started = std::time::Instant::now();
         for e in &entries {
             if let Some(c) = cancel {
                 if c.load(Ordering::Relaxed) {
@@ -1443,6 +1471,7 @@ impl Drive {
                 current: seen,
                 total,
                 label: Some(e.path.clone()),
+                eta_secs: eta_secs_from(started, seen, total),
             });
             seen += 1;
             let content = match self.read_text(&e.path) {

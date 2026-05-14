@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::drive::Drive;
 use crate::error::{ChanError, Result};
+use crate::fs_ops::WalkFilter;
 use crate::lock::DriveLock;
 use crate::paths;
 use crate::registry::{KnownDrive, Registry};
@@ -48,6 +49,15 @@ struct LibraryInner {
     /// mutation. The Mutex serializes registry writes so
     /// `register_drive` calls from concurrent threads don't race.
     registry: Mutex<Registry>,
+    /// Caller-supplied directory-name blocklist for indexing walks.
+    /// Default is empty in chan-core; the chan binary populates it
+    /// from its config so noise dirs (`node_modules`, `target`, ...)
+    /// are pruned before the indexer descends into them. The Mutex
+    /// lets the consumer swap the filter at runtime (e.g. after the
+    /// user edits chan's config). Drives capture a snapshot at
+    /// `open_drive` time; a swap here affects subsequent opens and
+    /// the next reindex on already-open drives that re-read it.
+    walk_filter: Mutex<Arc<WalkFilter>>,
     /// In-process map of currently-open Drives, keyed by canonical
     /// path. Each entry is a `Weak<Drive>` so the map doesn't
     /// keep drives alive past the caller's last `Arc`. The
@@ -86,8 +96,27 @@ impl Library {
                 config_path,
                 registry: Mutex::new(registry),
                 live_drives: Mutex::new(HashMap::new()),
+                walk_filter: Mutex::new(Arc::new(WalkFilter::default())),
             }),
         })
+    }
+
+    /// Replace the directory-name blocklist applied to reindex
+    /// walks for drives opened against this Library. Empty filter
+    /// is the chan-core default (only `.git` / `.chan` are skipped,
+    /// hardcoded in `walk_drive`). The chan binary calls this once
+    /// at startup with its noise list (`node_modules`, `target`,
+    /// `__pycache__`, ...) so the indexer never wastes cycles on
+    /// dependency directories. Live drives that re-read the filter
+    /// on their next reindex pick up the change; in-flight reindexes
+    /// keep their snapshot (no mid-walk reconfiguration).
+    pub fn set_walk_filter(&self, filter: WalkFilter) {
+        *self.inner.walk_filter.lock().unwrap() = Arc::new(filter);
+    }
+
+    /// Snapshot of the current filter. Cheap clone (Arc).
+    pub fn walk_filter(&self) -> Arc<WalkFilter> {
+        Arc::clone(&self.inner.walk_filter.lock().unwrap())
     }
 
     /// Snapshot of all registered drives, most-recent first.
@@ -182,7 +211,8 @@ impl Library {
                 }
             }
         }
-        let drive = Drive::open(entry)?;
+        let filter = Arc::clone(&self.inner.walk_filter.lock().unwrap());
+        let drive = Drive::open(entry, filter)?;
         self.inner
             .live_drives
             .lock()
@@ -271,6 +301,7 @@ impl Library {
                 current: idx as u64,
                 total,
                 label: Some((*name).to_string()),
+                eta_secs: None,
             });
             removed += wipe_dir(dir)?;
         }
@@ -380,6 +411,50 @@ mod tests {
         assert_eq!(lib.default_drive_root(), Some(drive.path().to_path_buf()));
         lib.set_default_drive_root(None).unwrap();
         assert!(lib.default_drive_root().is_none());
+    }
+
+    #[test]
+    fn walk_filter_excludes_dir_from_reindex() {
+        // Library-set filter must reach the indexer: a `node_modules`
+        // directory under the drive should not show up in the search
+        // index even when it contains markdown. The editor's file
+        // tree still sees it (list_tree is unfiltered) so the user
+        // can open files there on demand.
+        use crate::SearchMode;
+        let (lib, _cfg, drive) = lib();
+        lib.set_walk_filter(WalkFilter::new(["node_modules"]));
+        lib.register_drive(drive.path(), None).unwrap();
+        std::fs::create_dir_all(drive.path().join("notes")).unwrap();
+        std::fs::write(
+            drive.path().join("notes/a.md"),
+            "# alpha\nfoo unique-keep-token bar\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(drive.path().join("node_modules/pkg")).unwrap();
+        std::fs::write(
+            drive.path().join("node_modules/pkg/README.md"),
+            "# junk\nbaz unique-skip-token qux\n",
+        )
+        .unwrap();
+        let d = lib.open_drive(drive.path()).unwrap();
+        d.reindex(None).unwrap();
+        let opts = crate::drive::SearchOpts {
+            mode: SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        let kept = d.search("unique-keep-token", &opts).unwrap();
+        assert_eq!(kept.hits.len(), 1, "kept file should be indexed");
+        let skipped = d.search("unique-skip-token", &opts).unwrap();
+        assert!(
+            skipped.hits.is_empty(),
+            "skipped file should not be indexed; got {:?}",
+            skipped.hits
+        );
+        // list_tree must still surface the noise dir so the editor's
+        // tree view doesn't lie about what's on disk.
+        let entries = d.list_tree().unwrap();
+        assert!(entries.iter().any(|e| e.path.starts_with("node_modules")));
     }
 
     #[test]

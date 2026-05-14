@@ -54,7 +54,7 @@ pub use drive::{
     BYTES_WRITE_LIMIT, TEXT_WRITE_LIMIT,
 };
 pub use error::{ChanError, Result};
-pub use fs_ops::{classify, FileClass};
+pub use fs_ops::{classify, FileClass, WalkFilter};
 pub use graph::{
     ContactNode, Edge, EdgeKind, GraphView, HeadingRow, LinkTarget, LinkTargetKind, NodeKind, Tag,
 };
@@ -63,7 +63,9 @@ pub use index::{
     SearchResult, DEFAULT_MODEL,
 };
 pub use library::{Library, ResetMode, ResetReport};
-pub use progress::{progress_fn, NoProgress, ProgressCallback, ProgressEvent, ProgressStage};
+pub use progress::{
+    eta_secs_from, progress_fn, NoProgress, ProgressCallback, ProgressEvent, ProgressStage,
+};
 pub use registry::{KnownDrive, Registry};
 pub use trash::{TrashEntry, TRASH_RETENTION_SECS};
 pub use vcs::{detect_parent_vcs, VcsKind, VcsParent};

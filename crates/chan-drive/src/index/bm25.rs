@@ -121,13 +121,23 @@ impl Bm25Index {
         content: &str,
         chunking: &Chunking,
     ) -> Result<usize, Bm25Error> {
-        self.delete_file(rel_path)?;
         let chunks = chunking::chunk(content, chunking);
+        self.index_chunks(rel_path, &chunks)
+    }
+
+    /// Same as `index_file` but takes pre-computed chunks. Used by
+    /// `Index::build_all`'s parallel walker so chunking can happen
+    /// off the writer thread, avoiding the per-file double parse
+    /// the previous `index_file`-only path was paying. Empty chunk
+    /// slice still drops any prior documents for `rel_path` so a
+    /// file that became empty is removed from the index.
+    pub fn index_chunks(&self, rel_path: &str, chunks: &[Chunk]) -> Result<usize, Bm25Error> {
+        self.delete_file(rel_path)?;
         if chunks.is_empty() {
             return Ok(0);
         }
         let writer = self.writer.lock().unwrap();
-        for c in &chunks {
+        for c in chunks {
             self.add_chunk(&writer, rel_path, c)?;
         }
         Ok(chunks.len())

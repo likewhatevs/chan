@@ -94,6 +94,51 @@ pub fn classify(rel: &str) -> FileClass {
     }
 }
 
+/// Caller-supplied list of directory names that the indexing /
+/// graph-rebuild walks should not descend into. Matched at any
+/// depth by exact basename (case-sensitive on Unix, case-folded
+/// on Windows via `eq_ignore_ascii_case`). Empty by default in
+/// chan-core; the chan binary populates it with a noise list
+/// (`node_modules`, `target`, `__pycache__`, ...) read from its
+/// config so a user pointing chan at a source tree doesn't burn
+/// CPU indexing dependencies.
+///
+/// What this is NOT:
+///   - Glob matching. A future variant can grow that. v1 is
+///     basename equality so the chan config stays simple and
+///     the walker stays cheap.
+///   - A trash / lock / sandbox gate. `.git` / `.chan` skip is
+///     hardcoded in `walk_drive`; those are invariants, not
+///     policy. The filter is purely additive on top.
+///   - A read/write/list gate. `Drive::list_tree` (the editor's
+///     file-tree view) stays unfiltered so the user can still
+///     open files inside a "noisy" dir on demand. Only the
+///     reindex paths consult the filter.
+#[derive(Debug, Clone, Default)]
+pub struct WalkFilter {
+    /// Directory basenames to skip at any depth.
+    pub excluded_dir_names: Vec<String>,
+}
+
+impl WalkFilter {
+    pub fn new<I, S>(names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            excluded_dir_names: names.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    /// True when `name` is an excluded directory basename.
+    pub fn is_excluded(&self, name: &str) -> bool {
+        self.excluded_dir_names
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(name))
+    }
+}
+
 /// Recursive walker rooted at `root` that:
 ///   - skips `.git/` and `.chan/` at any depth;
 ///   - never follows symlinks (`walkdir` default; we set it
@@ -105,14 +150,43 @@ pub fn classify(rel: &str) -> FileClass {
 ///
 /// Per-entry errors are logged and skipped.
 pub fn walk_drive(root: &Path) -> impl Iterator<Item = DirEntry> {
+    walk_drive_with(root, None)
+}
+
+/// Variant of `walk_drive` that additionally skips any directory
+/// whose basename is in `filter.excluded_dir_names`. Used by the
+/// reindex paths (graph rebuild + index facade). Pass `None` to
+/// get the same behavior as `walk_drive`.
+pub fn walk_drive_filtered<'a>(
+    root: &Path,
+    filter: &'a WalkFilter,
+) -> impl Iterator<Item = DirEntry> + 'a {
+    walk_drive_with(root, Some(filter))
+}
+
+fn walk_drive_with<'a>(
+    root: &Path,
+    filter: Option<&'a WalkFilter>,
+) -> impl Iterator<Item = DirEntry> + 'a {
     WalkDir::new(root)
         .min_depth(1)
         .follow_links(false)
         .same_file_system(true)
         .into_iter()
-        .filter_entry(|e| {
+        .filter_entry(move |e| {
+            if !e.file_type().is_dir() {
+                return true;
+            }
             let n = e.file_name().to_string_lossy();
-            !(e.file_type().is_dir() && (n == ".git" || n == ".chan"))
+            if n == ".git" || n == ".chan" {
+                return false;
+            }
+            if let Some(f) = filter {
+                if f.is_excluded(&n) {
+                    return false;
+                }
+            }
+            true
         })
         .filter_map(|res| match res {
             Ok(e) => Some(e),
@@ -809,8 +883,25 @@ pub const LIST_DIR_LIMIT: usize = 50_000;
 /// walker sees more than `LIST_TREE_LIMIT` entries, so a runaway
 /// or mis-pointed drive never OOMs the caller.
 pub fn list_tree(root: &Path) -> Result<Vec<TreeEntry>> {
+    list_tree_inner(root, None)
+}
+
+/// Variant of `list_tree` that also applies a caller-supplied
+/// directory-name blocklist. Used by the reindex paths so a
+/// `node_modules/` under the drive doesn't force the graph
+/// rebuild to walk a hundred thousand README.md files. The
+/// editor's tree view keeps using the unfiltered `list_tree`.
+pub fn list_tree_filtered(root: &Path, filter: &WalkFilter) -> Result<Vec<TreeEntry>> {
+    list_tree_inner(root, Some(filter))
+}
+
+fn list_tree_inner(root: &Path, filter: Option<&WalkFilter>) -> Result<Vec<TreeEntry>> {
     let mut out = Vec::new();
-    for entry in walk_drive(root) {
+    let iter: Box<dyn Iterator<Item = DirEntry>> = match filter {
+        Some(f) => Box::new(walk_drive_filtered(root, f)),
+        None => Box::new(walk_drive(root)),
+    };
+    for entry in iter {
         if out.len() >= LIST_TREE_LIMIT {
             return Err(ChanError::ListingTooLarge {
                 observed: out.len(),
@@ -1051,6 +1142,51 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir(tmp.path().join("notes")).unwrap();
         resolve_safe_strict(tmp.path(), "notes/x.md").unwrap();
+    }
+
+    #[test]
+    fn walk_drive_filtered_skips_named_dirs_at_any_depth() {
+        // node_modules at the root and again nested under web/ both
+        // get pruned: the indexing walker should never descend into
+        // them. .git stays hardcoded in the unfiltered walk, so we
+        // confirm the filter is additive, not replacing.
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("notes")).unwrap();
+        std::fs::write(tmp.path().join("notes/a.md"), b"a").unwrap();
+        std::fs::create_dir_all(tmp.path().join("node_modules/pkg")).unwrap();
+        std::fs::write(tmp.path().join("node_modules/pkg/README.md"), b"junk").unwrap();
+        std::fs::create_dir_all(tmp.path().join("web/node_modules/x")).unwrap();
+        std::fs::write(tmp.path().join("web/node_modules/x/README.md"), b"junk").unwrap();
+        std::fs::create_dir_all(tmp.path().join(".git")).unwrap();
+        std::fs::write(tmp.path().join(".git/HEAD"), b"junk").unwrap();
+        let filter = WalkFilter::new(["node_modules"]);
+        let names: Vec<_> = walk_drive_filtered(tmp.path(), &filter)
+            .map(|e| {
+                e.path()
+                    .strip_prefix(tmp.path())
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        assert!(names.iter().any(|n| n == "notes/a.md"));
+        assert!(!names.iter().any(|n| n.contains("node_modules")));
+        assert!(!names.iter().any(|n| n.contains(".git")));
+    }
+
+    #[test]
+    fn walk_filter_is_case_insensitive_on_dir_basename() {
+        // Same dir name with different casing matches the filter.
+        // Defensive: macOS' default volume is case-insensitive, so a
+        // user-visible "Node_Modules" should not slip through.
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("Node_Modules/pkg")).unwrap();
+        std::fs::write(tmp.path().join("Node_Modules/pkg/README.md"), b"junk").unwrap();
+        let filter = WalkFilter::new(["node_modules"]);
+        let count = walk_drive_filtered(tmp.path(), &filter)
+            .filter(|e| e.file_type().is_file())
+            .count();
+        assert_eq!(count, 0);
     }
 
     #[cfg(unix)]

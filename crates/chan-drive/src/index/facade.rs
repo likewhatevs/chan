@@ -8,7 +8,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(feature = "embeddings")]
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -25,7 +24,7 @@ use super::fusion;
 use super::vectors;
 use super::vectors::{VectorError, VectorStore};
 use crate::error::ChanError;
-use crate::fs_ops;
+use crate::fs_ops::{self, WalkFilter};
 
 #[derive(Debug, Error)]
 pub enum IndexError {
@@ -135,6 +134,12 @@ pub struct Index {
     /// populated, every subsequent call clones it cheaply.
     #[cfg(feature = "embeddings")]
     embedder: Mutex<Option<Arc<Embedder>>>,
+    /// Directory-name blocklist applied by `build_all`'s tree walk.
+    /// Updated via `set_walk_filter`. Default is empty; the chan
+    /// binary populates the noise list (`node_modules`, `target`,
+    /// ...) via `Library::set_walk_filter` which Drive forwards
+    /// here before each reindex.
+    walk_filter: Mutex<Arc<WalkFilter>>,
 }
 
 impl std::fmt::Debug for Index {
@@ -183,7 +188,17 @@ impl Index {
             vectors,
             #[cfg(feature = "embeddings")]
             embedder: Mutex::new(None),
+            walk_filter: Mutex::new(Arc::new(WalkFilter::default())),
         })
+    }
+
+    /// Replace the directory-name blocklist for the next `build_all`.
+    /// Subsequent walks consult the new filter; an in-flight build
+    /// keeps its snapshot (the filter is sampled once at the top of
+    /// `build_all`). Drive calls this from `reindex_with` before
+    /// kicking off the build.
+    pub fn set_walk_filter(&self, filter: Arc<WalkFilter>) {
+        *self.walk_filter.lock().unwrap() = filter;
     }
 
     /// Re-open after wiping `index_dir`. Intended for `--rebuild`.
@@ -249,7 +264,9 @@ impl Index {
         cancel: Option<&AtomicBool>,
     ) -> Result<BuildSummary, IndexError> {
         use crate::progress::{ProgressEvent, ProgressStage};
-        let files = list_indexable(&self.drive_root)?;
+        use std::sync::atomic::AtomicUsize;
+        let filter = Arc::clone(&self.walk_filter.lock().unwrap());
+        let files = list_indexable(&self.drive_root, &filter)?;
         let total = files.len();
         let mut indexed = 0usize;
         let mut chunks_total = 0usize;
@@ -272,66 +289,139 @@ impl Index {
         #[cfg(feature = "embeddings")]
         let mut pending_chunks: usize = 0;
 
-        for (i, rel) in files.iter().enumerate() {
-            if let Some(c) = cancel {
-                if c.load(Ordering::Relaxed) {
-                    return Err(IndexError::Cancelled);
-                }
-            }
-            progress.on_progress(ProgressEvent {
-                stage: ProgressStage::IndexFile,
-                current: i as u64,
-                total: total as u64,
-                label: Some(rel.clone()),
-            });
-            let abs = self.drive_root.join(rel);
-            let text = match std::fs::read_to_string(&abs) {
-                Ok(s) => s,
-                Err(e) => {
-                    errors.push((rel.clone(), e.into()));
-                    continue;
-                }
-            };
-            let chunks = chunking::chunk(&text, &self.config.chunking);
-            if let Err(e) = self.bm25.index_file(rel, &text, &self.config.chunking) {
-                errors.push((rel.clone(), e.into()));
-                continue;
-            }
-            indexed += 1;
-            chunks_total += chunks.len();
+        // Parallel read + chunk pipeline. Workers pull file indices
+        // from `next`, read the file off disk, parse it into chunks,
+        // and ship the result over `tx`. The main thread drains `rx`
+        // and is the only thing that touches the BM25 writer and the
+        // embed batcher, so writer-mutex contention and embed-batch
+        // ordering stay simple. Bounded channel (workers * 4) caps
+        // resident chunk memory: roughly that many parsed files in
+        // flight at once.
+        //
+        // Workers per call: `available_parallelism - 2`, clamped to
+        // [1, 6]. Two cores held back so the server's tokio runtime
+        // and the OS UI thread keep breathing during a reindex of a
+        // large drive. The cap of 6 is empirical: above it tantivy's
+        // internal indexing threads + the embed model's tokio runtime
+        // start contending and wall-clock stops improving.
+        let worker_count = effective_workers();
+        let next = AtomicUsize::new(0);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<WorkerOut>(worker_count * 4);
+        let chunking_cfg = self.config.chunking.clone();
+        let drive_root = &self.drive_root;
+        let files_ref = &files;
 
-            #[cfg(feature = "embeddings")]
-            if do_vectors {
-                if chunks.is_empty() {
-                    // Stale-vector cleanup for files that became
-                    // empty since the last build. `replace_file`
-                    // with an empty vec deletes the on-disk shard.
-                    if let Err(e) = self
-                        .vectors
-                        .replace_file(rel, &self.config.model, 0, vec![])
-                    {
-                        errors.push((rel.clone(), e.into()));
+        let started = std::time::Instant::now();
+        let drain_result: Result<(), IndexError> = std::thread::scope(|s| {
+            for _ in 0..worker_count {
+                let tx = tx.clone();
+                let next = &next;
+                let chunking_cfg = chunking_cfg.clone();
+                s.spawn(move || loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= files_ref.len() {
+                        break;
                     }
+                    if let Some(c) = cancel {
+                        if c.load(Ordering::Relaxed) {
+                            break;
+                        }
+                    }
+                    let rel = files_ref[i].clone();
+                    let abs = drive_root.join(&rel);
+                    let item = match std::fs::read_to_string(&abs) {
+                        Ok(text) => WorkerOut {
+                            rel,
+                            result: Ok(chunking::chunk(&text, &chunking_cfg)),
+                        },
+                        Err(e) => WorkerOut {
+                            rel,
+                            result: Err(e),
+                        },
+                    };
+                    if tx.send(item).is_err() {
+                        break;
+                    }
+                });
+            }
+            drop(tx);
+
+            // Drain results. Order is non-deterministic across files;
+            // `seen` is a monotonic count of completions so progress
+            // ticks march forward even when results land out of order.
+            for (seen, msg) in (0_u64..).zip(rx) {
+                if let Some(c) = cancel {
+                    if c.load(Ordering::Relaxed) {
+                        return Err(IndexError::Cancelled);
+                    }
+                }
+                progress.on_progress(ProgressEvent {
+                    stage: ProgressStage::IndexFile,
+                    current: seen,
+                    total: total as u64,
+                    label: Some(msg.rel.clone()),
+                    eta_secs: crate::progress::eta_secs_from(started, seen, total as u64),
+                });
+                let chunks = match msg.result {
+                    Ok(c) => c,
+                    Err(e) => {
+                        errors.push((msg.rel, e.into()));
+                        continue;
+                    }
+                };
+                if let Err(e) = self.bm25.index_chunks(&msg.rel, &chunks) {
+                    errors.push((msg.rel, e.into()));
                     continue;
                 }
-                pending_chunks += chunks.len();
-                pending.push((rel.clone(), chunks));
-                if pending_chunks >= EMBED_BATCH_CHUNKS {
-                    progress.on_progress(ProgressEvent {
-                        stage: ProgressStage::EmbedBatch,
-                        current: pending_chunks as u64,
-                        total: EMBED_BATCH_CHUNKS as u64,
-                        label: Some(format!("files={} last={rel}", pending.len())),
-                    });
-                    match self.flush_embed_batch(&mut pending, cancel) {
-                        Ok(errs) => errors.extend(errs),
-                        Err(IndexError::Cancelled) => return Err(IndexError::Cancelled),
-                        Err(e) => return Err(e),
+                indexed += 1;
+                chunks_total += chunks.len();
+
+                #[cfg(feature = "embeddings")]
+                if do_vectors {
+                    if chunks.is_empty() {
+                        // Stale-vector cleanup for files that became
+                        // empty since the last build. `replace_file`
+                        // with an empty vec deletes the on-disk shard.
+                        if let Err(e) =
+                            self.vectors
+                                .replace_file(&msg.rel, &self.config.model, 0, vec![])
+                        {
+                            errors.push((msg.rel, e.into()));
+                        }
+                        continue;
                     }
-                    pending_chunks = 0;
+                    pending_chunks += chunks.len();
+                    let rel_for_label = msg.rel.clone();
+                    pending.push((msg.rel, chunks));
+                    if pending_chunks >= EMBED_BATCH_CHUNKS {
+                        progress.on_progress(ProgressEvent {
+                            stage: ProgressStage::EmbedBatch,
+                            current: pending_chunks as u64,
+                            total: EMBED_BATCH_CHUNKS as u64,
+                            label: Some(format!("files={} last={rel_for_label}", pending.len())),
+                            // EmbedBatch fires once per buffer flush, not
+                            // per chunk, so a rate-based ETA across batches
+                            // would track GPU step time and not give the UI
+                            // anything actionable. Leave it to the
+                            // IndexFile ticks to drive the bar.
+                            eta_secs: None,
+                        });
+                        match self.flush_embed_batch(&mut pending, cancel) {
+                            Ok(errs) => errors.extend(errs),
+                            Err(IndexError::Cancelled) => return Err(IndexError::Cancelled),
+                            Err(e) => return Err(e),
+                        }
+                        pending_chunks = 0;
+                    }
+                }
+                #[cfg(not(feature = "embeddings"))]
+                {
+                    let _ = msg.rel;
                 }
             }
-        }
+            Ok(())
+        });
+        drain_result?;
 
         // Tail flush for the leftover < EMBED_BATCH_CHUNKS group.
         #[cfg(feature = "embeddings")]
@@ -347,6 +437,7 @@ impl Index {
                 current: pending_chunks as u64,
                 total: EMBED_BATCH_CHUNKS as u64,
                 label: Some(format!("tail files={} last={last}", pending.len())),
+                eta_secs: None,
             });
             match self.flush_embed_batch(&mut pending, cancel) {
                 Ok(errs) => errors.extend(errs),
@@ -655,6 +746,30 @@ impl Index {
 #[cfg(feature = "embeddings")]
 const EMBED_BATCH_CHUNKS: usize = 4096;
 
+/// One worker -> main message. The worker is responsible only for
+/// reading the file and parsing it into chunks; the writer side
+/// (BM25 add_document, embed batching, vector writes) is the main
+/// thread's job. Carrying the rel-path along lets the main thread
+/// attribute IO errors back to a specific file without a side
+/// channel.
+struct WorkerOut {
+    rel: String,
+    result: std::io::Result<Vec<chunking::Chunk>>,
+}
+
+/// How many read+chunk workers `build_all` runs in parallel.
+/// Reserves two cores for the rest of the process (the server's
+/// tokio runtime, the UI thread, tantivy's internal indexing pool,
+/// the OS) so reindex never starves foreground work. The upper
+/// cap of 6 keeps the embedding model and tantivy's writer threads
+/// from contending past the point where wall-clock improves.
+fn effective_workers() -> usize {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2);
+    cores.saturating_sub(2).clamp(1, 6)
+}
+
 /// Knobs for `Index::build_all`.
 #[derive(Debug, Clone, Copy)]
 pub struct BuildOptions {
@@ -712,9 +827,10 @@ fn wipe_index_dir(index_dir: &Path) -> Result<(), IndexError> {
 /// Walk the drive and return every indexable file (any
 /// `FileClass::EditableText`: `.md` + `.txt` today) relative to
 /// root, using forward-slash separators on all platforms (matches
-/// the API's shape).
-fn list_indexable(root: &Path) -> Result<Vec<String>, IndexError> {
-    let mut out: Vec<String> = fs_ops::walk_drive(root)
+/// the API's shape). Honors the caller-supplied `WalkFilter` so
+/// blocked dir names (`node_modules`, ...) are never descended.
+fn list_indexable(root: &Path, filter: &WalkFilter) -> Result<Vec<String>, IndexError> {
+    let mut out: Vec<String> = fs_ops::walk_drive_filtered(root, filter)
         .filter(|e| e.file_type().is_file())
         .filter_map(|e| {
             e.path()
@@ -762,6 +878,59 @@ mod tests {
         let r = idx.search("apples", Mode::Bm25, 10).unwrap();
         assert_eq!(r.hits.len(), 1);
         assert_eq!(r.hits[0].path, "a.md");
+    }
+
+    #[test]
+    fn parallel_build_indexes_every_file_and_emits_one_progress_per_file() {
+        // build_all distributes work across N reader threads, so we
+        // need to confirm two invariants the previous serial loop got
+        // for free: every file ends up in the index regardless of
+        // dispatch order, and the progress callback fires once per
+        // file (`seen` is monotonic even when results land out of
+        // order). 200 files is enough to make N>1 workers race.
+        use std::sync::Mutex;
+        let tmp = make_drive();
+        for i in 0..200 {
+            let path = tmp.path().join(format!("note-{i:03}.md"));
+            std::fs::write(&path, format!("# note {i}\nbody-token-{i:03}\n")).unwrap();
+        }
+        let idx = Index::open(tmp.path(), &idx_dir(&tmp)).unwrap();
+        let labels = Arc::new(Mutex::new(Vec::<String>::new()));
+        let cb = {
+            let labels = labels.clone();
+            crate::progress::progress_fn(move |e| {
+                if matches!(e.stage, crate::progress::ProgressStage::IndexFile) {
+                    if let Some(l) = e.label {
+                        labels.lock().unwrap().push(l);
+                    }
+                }
+            })
+        };
+        let summary = idx.build_all(no_vectors(), &*cb, None).unwrap();
+        assert_eq!(summary.files, 200);
+        assert_eq!(summary.indexed, 200);
+        assert!(
+            summary.errors.is_empty(),
+            "got errors: {:?}",
+            summary.errors
+        );
+        // One progress label per file, no dupes, no drops.
+        let seen = labels.lock().unwrap().clone();
+        let mut uniq = seen.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(
+            uniq.len(),
+            200,
+            "expected 200 distinct labels, got {seen:?}"
+        );
+        // Every file is independently searchable.
+        for i in 0..200 {
+            let q = format!("body-token-{i:03}");
+            let hits = idx.search(&q, Mode::Bm25, 5).unwrap().hits;
+            assert_eq!(hits.len(), 1, "missing hit for {q}");
+            assert_eq!(hits[0].path, format!("note-{i:03}.md"));
+        }
     }
 
     #[test]

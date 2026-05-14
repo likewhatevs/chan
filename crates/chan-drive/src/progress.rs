@@ -37,6 +37,30 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Instant;
+
+/// Linear-rate ETA helper used by producers that emit
+/// `current` / `total` ticks. Returns `None` until `current` is non-
+/// zero (no rate signal yet) and when `current >= total` (we're at
+/// the boundary; the next event would be the completion). Producers
+/// pass the `Instant` they captured at the start of the loop; the
+/// rate is averaged from start, not windowed, so a hot stretch
+/// shrinks the ETA gradually instead of zig-zagging.
+pub fn eta_secs_from(started: Instant, current: u64, total: u64) -> Option<u64> {
+    if current == 0 || current >= total {
+        return None;
+    }
+    let elapsed = started.elapsed().as_secs_f64();
+    if elapsed <= 0.0 {
+        return None;
+    }
+    let remaining = total - current;
+    let eta = elapsed * (remaining as f64) / (current as f64);
+    if !eta.is_finite() || eta < 0.0 {
+        return None;
+    }
+    Some(eta.round() as u64)
+}
 
 /// Which long-running operation the event belongs to. Kept narrow so
 /// a UI can switch on it to pick a label / icon without parsing the
@@ -91,6 +115,16 @@ pub struct ProgressEvent {
     /// Heartbeat. `None` when the producer has nothing useful to
     /// show; consumers should fall back to the stage name.
     pub label: Option<String>,
+    /// Coarse seconds-remaining estimate computed by the producer
+    /// from elapsed wall time and observed rate. `None` when the
+    /// producer can't make a useful guess yet (first few items, or
+    /// stages where rate is meaningless like `ModelLoad` /
+    /// `Heartbeat`). Consumers must treat this as a hint, not a
+    /// commitment: rate can drop when the embed batch flushes or
+    /// rise on a run of small files. Always denoted in seconds so
+    /// the UI doesn't have to guess units.
+    #[serde(default)]
+    pub eta_secs: Option<u64>,
 }
 
 /// Sink for `ProgressEvent`s. `Send + Sync` so producers running on
@@ -148,6 +182,7 @@ mod tests {
             current: 0,
             total: 0,
             label: None,
+            eta_secs: None,
         });
     }
 
@@ -165,12 +200,14 @@ mod tests {
             current: 1,
             total: 10,
             label: Some("a.md".into()),
+            eta_secs: None,
         });
         cb.on_progress(ProgressEvent {
             stage: ProgressStage::IndexFile,
             current: 2,
             total: 10,
             label: Some("b.md".into()),
+            eta_secs: None,
         });
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 2);
     }

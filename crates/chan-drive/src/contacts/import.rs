@@ -70,6 +70,7 @@ pub fn run(
             } else {
                 c.display_name.clone()
             }),
+            eta_secs: None,
         });
         let exists = drive.exists(&path);
 

@@ -276,6 +276,35 @@ and `BuildProgress`; both flavors return `BuildSummary`. This
 keeps the API uniffi-clean and avoids leaking an async runtime
 through the FFI boundary.
 
+`Index::build_all` runs the per-file read + markdown chunking on
+a bounded thread pool (`min(available_parallelism - 2, 6)` worker
+threads). Workers ship parsed chunks to the main thread over a
+bounded `sync_channel`; the main thread is the only writer into
+tantivy and the only producer of embed batches, so writer-mutex
+contention and embed ordering stay simple. Two cores are
+deliberately held back so the server's tokio runtime and the OS
+UI thread keep breathing during a reindex of a large drive.
+Progress ticks remain monotonic from the consumer's perspective
+even when worker completions land out of order.
+
+#### Walk filter
+
+`WalkFilter` (in `fs_ops`) is a caller-supplied list of directory
+basenames that the reindex walks should not descend into. Empty
+by default; consumers (the chan binary) populate it with a noise
+list (`node_modules`, `target`, `__pycache__`, ...) via
+`Library::set_walk_filter`, which propagates to every drive
+opened against that Library and forwards into `Index` for the
+search side. `.git` and `.chan` stay hardcoded in `walk_drive`:
+those are invariants of the on-disk layout, not policy.
+
+The filter is honored by the indexing pipeline only:
+`rebuild_graph` and `Index::build_all` use `list_tree_filtered`
+and `walk_drive_filtered`. The editor-visible APIs
+(`Drive::list_tree`, `Drive::list`, trash sweeps, restore) stay
+unfiltered so the user can still see and open files inside a
+blocked directory on demand.
+
 ### Graph
 
 `sqlite` (rusqlite, bundled) backs the per-drive graph at
@@ -524,6 +553,9 @@ Library::rename_drive(root: &Path, name: Option<String>) -> Result<bool>
 Library::open_drive(root: &Path) -> Result<Arc<Drive>>
 
 Library::reset_drive(root: &Path, mode: ResetMode) -> Result<ResetReport>
+
+Library::set_walk_filter(filter: WalkFilter)
+Library::walk_filter() -> Arc<WalkFilter>
 ```
 
 ### Drive: filesystem
@@ -634,8 +666,9 @@ trait ProgressCallback: Send + Sync {
 struct ProgressEvent {
     stage: ProgressStage,
     current: u64,
-    total: u64,        // 0 means "indeterminate"
+    total: u64,                // 0 means "indeterminate"
     label: Option<String>,
+    eta_secs: Option<u64>,     // seconds remaining, linear-rate estimate
 }
 
 enum ProgressStage {
@@ -657,7 +690,20 @@ Drive::needs_rebuild(&self) -> bool
 fn progress_fn<F: Fn(ProgressEvent) + Send + Sync + 'static>(f: F)
     -> Arc<dyn ProgressCallback>
 struct NoProgress;                       // discards every event
+
+// Coarse ETA helper used by producers that count items.
+fn eta_secs_from(started: Instant, current: u64, total: u64)
+    -> Option<u64>
 ```
+
+`eta_secs` is a hint from the producer. It is computed from
+`elapsed_since_start * (total - current) / current`, so it
+trends down smoothly with average rate rather than the
+instantaneous one (no zig-zag from a hot stretch of small files
+or a cold stretch hitting an embed batch). Producers leave it
+`None` until the first item completes and on stages where rate
+is meaningless (`ModelLoad`, `Heartbeat`). Consumers must treat
+the field as advisory.
 
 `ProgressEvent` and `ProgressStage` derive `Serialize` /
 `Deserialize`. The wire shape is the field names verbatim with
