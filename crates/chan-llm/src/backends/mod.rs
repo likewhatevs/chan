@@ -50,7 +50,7 @@ mod ndjson;
 pub mod ollama;
 mod retry;
 mod subprocess_env;
-pub(crate) use error_body::{read_capped_text, DEFAULT_BODY_CAP_BYTES};
+pub(crate) use error_body::{classify_http_error, read_capped_text, DEFAULT_BODY_CAP_BYTES};
 pub(crate) use ndjson::{read_line_capped, NDJSON_LINE_CAP_BYTES, PARSE_ERROR_EMIT_LIMIT};
 pub use retry::{send_with_retry, RetryPolicy};
 pub(crate) use subprocess_env::sanitize_env;

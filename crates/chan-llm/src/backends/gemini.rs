@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use crate::error::LlmError;
-use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall};
+use crate::session::{Delta, LlmEventError, Message, Role, SessionListener, StopReason, ToolCall};
 use crate::tools::ToolSchema;
 
 use super::retry::{send_with_retry, RetryError, RetryPolicy};
@@ -169,20 +169,27 @@ impl Backend for GeminiBackend {
             Ok(r) => r,
             Err(RetryError::Cancelled) => return Outcome::cancelled(String::new()),
             Err(RetryError::Network(msg)) => {
-                listener.on_error(format!("gemini request: {msg}"));
+                listener.on_error_kind(LlmEventError::BackendUnreachable {
+                    backend: "gemini".into(),
+                    message: msg,
+                });
                 return Outcome::error();
             }
         };
 
         if !resp.status().is_success() {
-            let status = resp.status();
+            let status = resp.status().as_u16();
+            let retry_after_secs = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.trim().parse::<u64>().ok());
             // See anthropic.rs: cap the body read so a runaway upstream
             // can't force a multi-GB allocation on the error path.
-            let (raw, truncated) =
+            let (raw, _truncated) =
                 super::read_capped_text(resp, super::DEFAULT_BODY_CAP_BYTES).await;
-            let snippet: String = raw.chars().take(800).collect();
-            let suffix = if truncated { " (body truncated)" } else { "" };
-            listener.on_error(format!("gemini {status}: {snippet}{suffix}"));
+            let kind = super::classify_http_error("gemini", status, &raw, retry_after_secs);
+            listener.on_error_kind(kind);
             return Outcome::error();
         }
 
@@ -294,7 +301,36 @@ impl Backend for GeminiBackend {
                 Some("STOP") | None => StopReason::EndOfTurn,
                 Some("MAX_TOKENS") => StopReason::MaxTokens,
                 Some("STOP_SEQUENCE") => StopReason::StopSequence,
-                _ => StopReason::EndOfTurn,
+                // Content-policy / safety blocks: the model stopped
+                // because the upstream refused to keep generating.
+                // Map to Error and surface the raw reason so the host
+                // can show an actionable state instead of pretending
+                // the turn ended naturally.
+                Some(
+                    other @ ("SAFETY" | "RECITATION" | "BLOCKLIST" | "PROHIBITED_CONTENT" | "SPII"
+                    | "IMAGE_SAFETY"),
+                ) => {
+                    listener.on_error_kind(LlmEventError::Other {
+                        backend: "gemini".into(),
+                        message: format!("model stopped early: {other}"),
+                    });
+                    StopReason::Error
+                }
+                // Forward-compat: any other unknown reason from
+                // upstream lands here. Surface as Error + warn so we
+                // notice the divergence rather than silently hiding it
+                // as EndOfTurn.
+                Some(other) => {
+                    tracing::warn!(
+                        finish_reason = %other,
+                        "gemini: unknown finishReason; mapping to Error",
+                    );
+                    listener.on_error_kind(LlmEventError::Other {
+                        backend: "gemini".into(),
+                        message: format!("unknown finishReason: {other}"),
+                    });
+                    StopReason::Error
+                }
             }
         };
 

@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use crate::error::LlmError;
-use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall};
+use crate::session::{Delta, LlmEventError, Message, Role, SessionListener, StopReason, ToolCall};
 use crate::tools::ToolSchema;
 
 use super::retry::{send_with_retry, RetryError, RetryPolicy};
@@ -227,24 +227,34 @@ impl Backend for AnthropicBackend {
             Ok(r) => r,
             Err(RetryError::Cancelled) => return Outcome::cancelled(String::new()),
             Err(RetryError::Network(msg)) => {
-                listener.on_error(format!("anthropic request: {msg}"));
+                listener.on_error_kind(LlmEventError::BackendUnreachable {
+                    backend: "anthropic".into(),
+                    message: msg,
+                });
                 return Outcome::error();
             }
         };
 
         if !resp.status().is_success() {
-            let status = resp.status();
+            let status = resp.status().as_u16();
+            // Pull the upstream Retry-After before we consume the
+            // response body; the classifier echoes it back to the
+            // host on 429 so the UI can display a countdown.
+            let retry_after_secs = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.trim().parse::<u64>().ok());
             // Drain a capped slice of the body rather than calling
             // `resp.text()` (which would allocate the full body even
             // if upstream returned megabytes of HTML). 16 KiB is more
             // than enough for Anthropic's JSON error envelopes; the
-            // truncation marker lets a reader notice when the upstream
-            // returned something unexpectedly large.
-            let (raw, truncated) =
+            // classifier extracts the vendor envelope's message field
+            // when present, or falls back to the truncated raw body.
+            let (raw, _truncated) =
                 super::read_capped_text(resp, super::DEFAULT_BODY_CAP_BYTES).await;
-            let snippet: String = raw.chars().take(800).collect();
-            let suffix = if truncated { " (body truncated)" } else { "" };
-            listener.on_error(format!("anthropic {status}: {snippet}{suffix}"));
+            let kind = super::classify_http_error("anthropic", status, &raw, retry_after_secs);
+            listener.on_error_kind(kind);
             return Outcome::error();
         }
 
@@ -367,6 +377,20 @@ impl Backend for AnthropicBackend {
                     SseEvent::MessageDelta { delta } => {
                         if let Some(reason) = delta.stop_reason {
                             stop = parse_stop_reason(&reason);
+                            // Surface a structured error when the
+                            // model stopped early for any reason
+                            // chan-llm doesn't treat as a natural
+                            // termination. `refusal` is the canonical
+                            // content-policy block today; any unknown
+                            // value also lands here so an upstream-
+                            // added reason doesn't silently look like
+                            // EndOfTurn.
+                            if matches!(stop, StopReason::Error) {
+                                listener.on_error_kind(LlmEventError::Other {
+                                    backend: "anthropic".into(),
+                                    message: format!("model stopped early: {reason}"),
+                                });
+                            }
                         }
                     }
                     SseEvent::MessageStart { .. }
@@ -374,10 +398,27 @@ impl Backend for AnthropicBackend {
                     | SseEvent::Ping
                     | SseEvent::Other => {}
                     SseEvent::Error { error } => {
-                        listener.on_error(format!(
-                            "anthropic error event: {} {}",
-                            error.kind, error.message
-                        ));
+                        // Mid-stream `error` event: Anthropic embeds
+                        // the upstream failure inside the SSE channel
+                        // rather than closing with a non-2xx. The
+                        // `kind` field carries values like
+                        // `overloaded_error` (treat as Backend), or
+                        // anything else (treat as Other so the host
+                        // sees a typed signal without us inventing
+                        // a status code).
+                        let typed = if error.kind == "overloaded_error" {
+                            LlmEventError::Backend {
+                                backend: "anthropic".into(),
+                                status: 529,
+                                message: error.message.clone(),
+                            }
+                        } else {
+                            LlmEventError::Other {
+                                backend: "anthropic".into(),
+                                message: format!("{}: {}", error.kind, error.message),
+                            }
+                        };
+                        listener.on_error_kind(typed);
                         return Outcome::error();
                     }
                 }
@@ -507,7 +548,23 @@ fn parse_stop_reason(s: &str) -> StopReason {
         "max_tokens" => StopReason::MaxTokens,
         "tool_use" => StopReason::ToolUse,
         "stop_sequence" => StopReason::StopSequence,
-        _ => StopReason::EndOfTurn,
+        // `refusal` is the canonical content-policy block reason
+        // Anthropic emits today. Map to Error so the host can show
+        // an actionable state instead of presenting an empty / cut-
+        // short turn as a natural EndOfTurn.
+        "refusal" => StopReason::Error,
+        // Forward-compat: an unknown reason almost certainly means
+        // upstream added a new terminal signal we don't recognise
+        // yet. Surfacing as Error + a warn lets us notice and add
+        // the mapping; defaulting to EndOfTurn would silently hide
+        // the divergence.
+        other => {
+            tracing::warn!(
+                stop_reason = %other,
+                "anthropic: unknown stop_reason; mapping to Error",
+            );
+            StopReason::Error
+        }
     }
 }
 
