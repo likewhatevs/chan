@@ -301,6 +301,165 @@ impl Default for CancelHandle {
     }
 }
 
+/// Typed companion to the free-form `on_error(String)` callback.
+/// Hosts that want to drive UX off the error category (retry button,
+/// settings link, auth prompt) override `on_error_kind` and branch
+/// on the variant; hosts that only want a human-readable string can
+/// keep using `on_error` and inherit the default bridge that calls
+/// `Display` on the variant.
+///
+/// Variants carry only primitive payloads (owned `String`, `u16`,
+/// `u64`) so the enum survives a uniffi boundary. `#[non_exhaustive]`
+/// keeps adding a new variant from being a breaking change.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LlmEventError {
+    /// Upstream rejected the credential (401 / 403). The user needs
+    /// to fix the API key.
+    Auth { backend: String, message: String },
+    /// Upstream rate-limited and the retry budget was exhausted.
+    /// `retry_after_secs` carries the upstream hint when one was
+    /// supplied, `None` otherwise; hosts can use it to schedule
+    /// the next attempt.
+    RateLimited {
+        backend: String,
+        retry_after_secs: Option<u64>,
+        message: String,
+    },
+    /// Could not reach the upstream service (DNS / connect / TLS).
+    /// Distinct from `Backend` because the host should show a
+    /// "check your network" affordance rather than blaming the
+    /// provider.
+    BackendUnreachable { backend: String, message: String },
+    /// Upstream returned a non-retryable 4xx other than 401/403/429
+    /// (typically 400: bad model name, malformed body).
+    BadRequest { backend: String, message: String },
+    /// Upstream returned a 5xx after the retry budget was exhausted,
+    /// or any other backend-level failure tied to a status code.
+    Backend {
+        backend: String,
+        status: u16,
+        message: String,
+    },
+    /// Subprocess failed to spawn (ENOENT / EPERM). Hosts can
+    /// surface a "install the CLI" affordance distinct from a
+    /// generic backend error.
+    SpawnFailed { backend: String, message: String },
+    /// Connection or pipe dropped mid-stream after some bytes were
+    /// already emitted. The transcript may be incomplete; retrying
+    /// is unsafe because the upstream may have already accounted for
+    /// the request.
+    StreamTruncated { backend: String, message: String },
+    /// Inactivity / read timeout. The upstream went silent for
+    /// longer than the configured budget; child or connection has
+    /// been torn down.
+    Timeout { backend: String, message: String },
+    /// Could not parse a streaming event payload. Counted against
+    /// `PARSE_ERROR_EMIT_LIMIT` per turn; the host shouldn't be
+    /// alarmed by a single occurrence.
+    ParseError { backend: String, message: String },
+    /// Cancel handle flipped. Distinct from a Cancelled stop reason
+    /// because `on_done(Cancelled)` still fires after this event;
+    /// `on_error_kind` may also fire when the cancel triggered a
+    /// cleanup error worth surfacing.
+    Cancelled { backend: String },
+    /// Catch-all for failures that don't fit a typed variant. Hosts
+    /// fall back to substring-matching the message string only when
+    /// this variant fires.
+    Other { backend: String, message: String },
+}
+
+impl LlmEventError {
+    /// Backend name the error is attributed to (`anthropic`, `gemini`,
+    /// `ollama`, `claude_cli`, `gemini_cli`, or any other identifier
+    /// a backend supplies). Useful for logs and per-backend UX.
+    pub fn backend(&self) -> &str {
+        match self {
+            LlmEventError::Auth { backend, .. }
+            | LlmEventError::RateLimited { backend, .. }
+            | LlmEventError::BackendUnreachable { backend, .. }
+            | LlmEventError::BadRequest { backend, .. }
+            | LlmEventError::Backend { backend, .. }
+            | LlmEventError::SpawnFailed { backend, .. }
+            | LlmEventError::StreamTruncated { backend, .. }
+            | LlmEventError::Timeout { backend, .. }
+            | LlmEventError::ParseError { backend, .. }
+            | LlmEventError::Cancelled { backend }
+            | LlmEventError::Other { backend, .. } => backend,
+        }
+    }
+
+    /// Short snake_case kind used for telemetry / WebSocket frame
+    /// `code` fields. Stable across versions; chan-server's frontend
+    /// branches on these strings to pick the retry / auth-prompt /
+    /// settings-link affordance.
+    pub fn code(&self) -> &'static str {
+        match self {
+            LlmEventError::Auth { .. } => "auth",
+            LlmEventError::RateLimited { .. } => "rate_limited",
+            LlmEventError::BackendUnreachable { .. } => "backend_unreachable",
+            LlmEventError::BadRequest { .. } => "bad_request",
+            LlmEventError::Backend { .. } => "backend",
+            LlmEventError::SpawnFailed { .. } => "spawn_failed",
+            LlmEventError::StreamTruncated { .. } => "stream_truncated",
+            LlmEventError::Timeout { .. } => "timeout",
+            LlmEventError::ParseError { .. } => "parse_error",
+            LlmEventError::Cancelled { .. } => "cancelled",
+            LlmEventError::Other { .. } => "other",
+        }
+    }
+}
+
+impl std::fmt::Display for LlmEventError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LlmEventError::Auth { backend, message } => {
+                write!(f, "{backend} auth: {message}")
+            }
+            LlmEventError::RateLimited {
+                backend,
+                retry_after_secs: Some(s),
+                message,
+            } => write!(f, "{backend} rate limited (retry after {s}s): {message}"),
+            LlmEventError::RateLimited {
+                backend,
+                retry_after_secs: None,
+                message,
+            } => write!(f, "{backend} rate limited: {message}"),
+            LlmEventError::BackendUnreachable { backend, message } => {
+                write!(f, "{backend} unreachable: {message}")
+            }
+            LlmEventError::BadRequest { backend, message } => {
+                write!(f, "{backend} bad request: {message}")
+            }
+            LlmEventError::Backend {
+                backend,
+                status,
+                message,
+            } => write!(f, "{backend} {status}: {message}"),
+            LlmEventError::SpawnFailed { backend, message } => {
+                write!(f, "{backend} spawn failed: {message}")
+            }
+            LlmEventError::StreamTruncated { backend, message } => {
+                write!(f, "{backend} stream truncated: {message}")
+            }
+            LlmEventError::Timeout { backend, message } => {
+                write!(f, "{backend} timeout: {message}")
+            }
+            LlmEventError::ParseError { backend, message } => {
+                write!(f, "{backend} parse error: {message}")
+            }
+            LlmEventError::Cancelled { backend } => {
+                write!(f, "{backend} cancelled")
+            }
+            LlmEventError::Other { backend, message } => {
+                write!(f, "{backend}: {message}")
+            }
+        }
+    }
+}
+
 /// What the consumer implements. `Send + Sync` because events
 /// arrive on the runtime's worker threads.
 pub trait SessionListener: Send + Sync {
@@ -309,6 +468,15 @@ pub trait SessionListener: Send + Sync {
     fn on_tool_result(&self, result: ToolResult);
     fn on_done(&self, reason: StopReason);
     fn on_error(&self, error: String);
+    /// Typed companion to `on_error`. Backends that classify failures
+    /// (HTTP status mapping, spawn errors, timeouts, parse errors)
+    /// call this; hosts that override it can branch on the variant
+    /// for richer UX. Default impl bridges to `on_error(String)` via
+    /// the variant's `Display` impl so existing listeners keep
+    /// compiling and still see every failure.
+    fn on_error_kind(&self, error: LlmEventError) {
+        self.on_error(error.to_string());
+    }
     /// Canonical post-turn transcript. Fires immediately before
     /// `on_done` for successful terminations only (EndOfTurn and
     /// ToolUse). Carries the full history chan-llm built during the
@@ -380,6 +548,14 @@ impl SessionListener for SafeListener {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || inner.on_error(error)))
         {
             tracing::error!(panic = %panic_message(&p), "listener.on_error panicked");
+        }
+    }
+    fn on_error_kind(&self, error: LlmEventError) {
+        let inner = self.inner.clone();
+        if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            inner.on_error_kind(error)
+        })) {
+            tracing::error!(panic = %panic_message(&p), "listener.on_error_kind panicked");
         }
     }
     fn on_messages_snapshot(&self, history: &[Message]) {
@@ -1392,6 +1568,9 @@ mod tests {
         fn on_error(&self, _: String) {
             panic!("on_error panicked");
         }
+        fn on_error_kind(&self, _: LlmEventError) {
+            panic!("on_error_kind panicked");
+        }
         fn on_messages_snapshot(&self, _: &[Message]) {
             panic!("on_messages_snapshot panicked");
         }
@@ -1414,9 +1593,73 @@ mod tests {
             output: serde_json::json!({}),
         });
         safe.on_error("boom".into());
+        safe.on_error_kind(LlmEventError::Auth {
+            backend: "anthropic".into(),
+            message: "bad key".into(),
+        });
         safe.on_messages_snapshot(&[Message::user("hi")]);
         safe.on_done(StopReason::EndOfTurn);
         // No panic propagated; reaching this line is the assertion.
+    }
+
+    #[test]
+    fn llm_event_error_code_and_backend_match_variant() {
+        let auth = LlmEventError::Auth {
+            backend: "anthropic".into(),
+            message: "bad key".into(),
+        };
+        assert_eq!(auth.code(), "auth");
+        assert_eq!(auth.backend(), "anthropic");
+
+        let rl = LlmEventError::RateLimited {
+            backend: "gemini".into(),
+            retry_after_secs: Some(30),
+            message: "quota exceeded".into(),
+        };
+        assert_eq!(rl.code(), "rate_limited");
+        assert!(rl.to_string().contains("retry after 30s"));
+
+        let backend = LlmEventError::Backend {
+            backend: "anthropic".into(),
+            status: 503,
+            message: "Service Unavailable".into(),
+        };
+        assert_eq!(backend.code(), "backend");
+        assert!(backend.to_string().contains("503"));
+
+        let truncated = LlmEventError::StreamTruncated {
+            backend: "anthropic".into(),
+            message: "connection reset".into(),
+        };
+        assert_eq!(truncated.code(), "stream_truncated");
+    }
+
+    #[test]
+    fn on_error_kind_default_impl_bridges_to_on_error() {
+        // A listener that only implements on_error must still receive
+        // typed errors via the default bridge as their Display string.
+        struct StringOnly(Mutex<Vec<String>>);
+        impl SessionListener for StringOnly {
+            fn on_delta(&self, _: Delta) {}
+            fn on_tool_call(&self, _: ToolCall) {}
+            fn on_tool_result(&self, _: ToolResult) {}
+            fn on_done(&self, _: StopReason) {}
+            fn on_error(&self, e: String) {
+                self.0.lock().unwrap().push(e);
+            }
+        }
+        let l = StringOnly(Mutex::new(Vec::new()));
+        l.on_error_kind(LlmEventError::Auth {
+            backend: "anthropic".into(),
+            message: "bad key".into(),
+        });
+        let errs = l.0.lock().unwrap();
+        assert_eq!(errs.len(), 1);
+        assert!(
+            errs[0].contains("anthropic") && errs[0].contains("bad key"),
+            "got: {}",
+            errs[0]
+        );
     }
 
     #[test]
