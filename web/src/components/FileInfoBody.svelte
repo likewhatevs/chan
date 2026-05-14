@@ -65,6 +65,8 @@
     onClose,
     showRefs = false,
     onNavigate,
+    onContactNavigate,
+    onSetAsScope,
   }: {
     path: string | null;
     onOpen?: () => void;
@@ -84,6 +86,19 @@
     /// pane and close themselves; absent = entries render as
     /// non-clickable.
     onNavigate?: (path: string) => void;
+    /// Click handler for a resolved contact pill. Receives the
+    /// contact file's path. Graph overlay binds this to "select
+    /// the contact's node on the canvas" so contacts behave like
+    /// documents in the inspector. Absent = fall back to
+    /// openGraphForFile (the original "contacts are graph anchors,
+    /// not destinations" behavior the file browser and search
+    /// overlays still want).
+    onContactNavigate?: (path: string) => void;
+    /// "Graph this" button for file selections. Graph overlay binds
+    /// this to scope the current graph to the selected file (and
+    /// re-pin it as the focal node). Other hosts leave it absent so
+    /// the button doesn't render outside the graph.
+    onSetAsScope?: () => void;
   } = $props();
 
   const entryByPath = $derived(
@@ -154,18 +169,22 @@
       seen.add(p.key);
       out.push(p);
     };
+    // Resolved contacts route through the host's `onContactNavigate`
+    // when present (graph overlay: select the contact's node on the
+    // canvas, matching how documents behave there). When absent, fall
+    // back to opening a graph scoped to the contact — the original
+    // "contacts are network anchors" behavior the file browser and
+    // search overlays still rely on.
+    const navigateContact = onContactNavigate
+      ? (p: string) => onContactNavigate(p)
+      : (p: string) => openGraphForFile(p);
     for (const m of refs.mentions) {
       if (m.kind === "file" && !m.missing) {
-        // Server-resolved mention: edge kind is still "mention" but
-        // the target landed on a real contact file node. Click
-        // scopes the graph to that contact's file rather than
-        // opening it in the editor — contacts are network anchors,
-        // not destinations.
         push({
           key: m.id,
           label: m.label,
           path: m.path,
-          onClick: () => openGraphForFile(m.path),
+          onClick: () => navigateContact(m.path),
         });
       } else {
         // Unresolved `@@name` — no matching contact on disk yet.
@@ -187,7 +206,7 @@
         key: l.id,
         label: l.label,
         path: l.path,
-        onClick: () => openGraphForFile(l.path),
+        onClick: () => navigateContact(l.path),
       });
     }
     return out;
@@ -508,6 +527,12 @@
           Not an editable text file. Only .md and .txt open in the editor.
         </p>
       {/if}
+    {/if}
+    {#if onSetAsScope}
+      <!-- "Graph this" re-scopes the current graph to this file (or
+           image) and re-pins it as the focal node. Only rendered
+           when the host wires it up (today: the graph overlay). -->
+      <button class="open" onclick={onSetAsScope}>Graph this</button>
     {/if}
     {#if showRefs}
       {#if !graphData.view && graphData.loading}

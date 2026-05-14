@@ -709,15 +709,22 @@
           }
           onReveal={revealSelectedFile}
           onNavigate={selectByPath}
+          onContactNavigate={selectByPath}
           onSetAsScope={
             selectedNode?.kind === "tag" ||
-            (selectedNode?.kind === "mention" && selectedContactPath)
+            (selectedNode?.kind === "mention" && selectedContactPath) ||
+            (selectedNode?.kind === "file" && !selectedNode.missing)
               ? () => {
-                  // "Set as Scope" inside the graph re-scopes the
+                  // "Graph this" inside the graph re-scopes the
                   // current graph. Tag: to the tag's neighbourhood.
                   // Mention: to the resolved contact's file so the
                   // user can use a contact as a graph anchor without
-                  // leaving the overlay.
+                  // leaving the overlay. File (incl. images): to
+                  // that file's own neighbourhood, with the file
+                  // pinned as the focal node. Depth resets to 1 so
+                  // a freshly-scoped graph always starts tight; the
+                  // user can widen it back via the slider.
+                  graphOverlay.depth = 1;
                   if (selectedNode?.kind === "tag") {
                     graphOverlay.scopeId = `tag:${selectedNode.id}`;
                     graphOverlay.pendingSelectId = selectedNode.id;
@@ -735,6 +742,13 @@
                       graphOverlay.pendingSelectId = fileNode.id;
                       selectedId = fileNode.id;
                     }
+                  } else if (
+                    selectedNode?.kind === "file" &&
+                    !selectedNode.missing
+                  ) {
+                    graphOverlay.scopeId = `file:${selectedNode.path}`;
+                    graphOverlay.pendingSelectId = selectedNode.id;
+                    selectedId = selectedNode.id;
                   }
                 }
               : undefined

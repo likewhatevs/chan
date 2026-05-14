@@ -106,7 +106,7 @@
       {/if}
       {#if onSetAsScope && (kind === "tag" || kind === "mention")}
         <button class="set-as-scope" onclick={onSetAsScope} type="button">
-          Set as Scope
+          Graph this
         </button>
       {/if}
     </div>

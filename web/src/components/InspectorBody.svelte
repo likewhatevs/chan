@@ -28,6 +28,7 @@
     onReveal,
     onClose,
     onNavigate,
+    onContactNavigate,
     onSetAsScope,
     showRefs = true,
     documentsOverride,
@@ -42,9 +43,17 @@
     onReveal?: () => void;
     onClose?: () => void;
     onNavigate?: (path: string) => void;
-    /// Forwarded to TagInfoBody as the "Set as Scope" handler.
-    /// GraphPanel uses it to re-scope the current graph; search
-    /// overlay closes itself and opens a tag-scoped graph.
+    /// Forwarded to FileInfoBody. Graph overlay binds this so a
+    /// contact pill clicked in the file inspector selects that
+    /// contact's node on the canvas instead of opening a new
+    /// graph scoped to the contact.
+    onContactNavigate?: (path: string) => void;
+    /// "Graph this" handler. Forwarded to FileInfoBody (files /
+    /// images) and TagInfoBody (tag / mention). GraphPanel uses it
+    /// to re-scope the current graph to the clicked entity; search
+    /// overlay closes itself and opens a tag-scoped graph (file
+    /// path doesn't make sense to scope from search, so the search
+    /// host leaves it unbound for file selections).
     onSetAsScope?: () => void;
     showRefs?: boolean;
     /// Forwarded to TagInfoBody. GraphPanel uses this to keep the
@@ -65,6 +74,8 @@
     {onReveal}
     {onClose}
     {onNavigate}
+    {onContactNavigate}
+    {onSetAsScope}
     {showRefs}
   />
 {:else}
