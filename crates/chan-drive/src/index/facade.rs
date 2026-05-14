@@ -123,7 +123,12 @@ pub struct SearchResult {
 pub struct Index {
     drive_root: PathBuf,
     index_dir: PathBuf,
-    config: IndexConfig,
+    /// Persisted index config. Behind a Mutex because `build_all`
+    /// (which only holds `&self` through Drive's `Arc<Index>`) needs
+    /// to stamp `vectors_model` / `vectors_dim` after a successful
+    /// embed pass. Reads in hot paths take a single lock per build,
+    /// not per chunk: each pass snapshots the config once at the top.
+    config: Mutex<IndexConfig>,
     bm25: Bm25Index,
     vectors: VectorStore,
     /// Lazily loaded: opening the embedder mmaps the safetensors
@@ -145,9 +150,14 @@ pub struct Index {
 impl std::fmt::Debug for Index {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut d = f.debug_struct("Index");
+        let model = self
+            .config
+            .lock()
+            .map(|c| c.model.clone())
+            .unwrap_or_default();
         d.field("drive_root", &self.drive_root)
             .field("index_dir", &self.index_dir)
-            .field("model", &self.config.model);
+            .field("model", &model);
         #[cfg(feature = "embeddings")]
         d.field(
             "embedder_loaded",
@@ -176,14 +186,36 @@ impl Index {
         if config.schema_version != config::SCHEMA_VERSION {
             wipe_index_dir(index_dir)?;
             config.schema_version = config::SCHEMA_VERSION;
+            config.vectors_model = None;
+            config.vectors_dim = None;
             config::save(index_dir, &config)?;
+        }
+        // Model drift: vectors on disk were produced by a different
+        // model than what's now configured. The two are not
+        // interchangeable (different semantic space, potentially
+        // different dim), and mixing them would silently degrade
+        // retrieval. Wipe `embeddings/` (BM25 is model-independent
+        // so it stays) and clear the tracking fields; the next
+        // reindex will repopulate against the new model.
+        if let Some(prior) = config.vectors_model.as_deref() {
+            if prior != config.model {
+                tracing::warn!(
+                    prior = %prior,
+                    target = %config.model,
+                    "index model changed since last embed; wiping embeddings/",
+                );
+                wipe_vectors_dir(index_dir)?;
+                config.vectors_model = None;
+                config.vectors_dim = None;
+                config::save(index_dir, &config)?;
+            }
         }
         let bm25 = Bm25Index::open(index_dir)?;
         let vectors = VectorStore::open(index_dir)?;
         Ok(Self {
             drive_root: drive_root.to_path_buf(),
             index_dir: index_dir.to_path_buf(),
-            config,
+            config: Mutex::new(config),
             bm25,
             vectors,
             #[cfg(feature = "embeddings")]
@@ -207,8 +239,10 @@ impl Index {
         Self::open(drive_root, index_dir)
     }
 
-    pub fn config(&self) -> &IndexConfig {
-        &self.config
+    /// Snapshot of the persisted config. Callers get a clone so the
+    /// lock isn't held across their use; the config is small.
+    pub fn config(&self) -> IndexConfig {
+        self.config.lock().unwrap().clone()
     }
 
     /// Persist a (possibly mutated) config. Used by the CLI when
@@ -216,11 +250,22 @@ impl Index {
     /// existing vectors (different dim / different semantics) so
     /// we wipe the vector dir; BM25 is unaffected.
     pub fn set_model(&mut self, model: String) -> Result<(), IndexError> {
-        if model == self.config.model {
-            return Ok(());
-        }
-        self.config.model = model;
-        config::save(&self.index_dir, &self.config)?;
+        let to_save = {
+            let mut cfg = self.config.lock().unwrap();
+            if model == cfg.model {
+                return Ok(());
+            }
+            cfg.model = model;
+            // The vectors_* stamp described what *was* on disk; the
+            // wipe below makes that stamp invalid. Clear it so the
+            // next Index::open's model-mismatch check (and any human
+            // reading the TOML) cannot conclude we trust the empty
+            // store.
+            cfg.vectors_model = None;
+            cfg.vectors_dim = None;
+            cfg.clone()
+        };
+        config::save(&self.index_dir, &to_save)?;
         #[cfg(feature = "embeddings")]
         {
             *self.embedder.lock().unwrap() = None;
@@ -247,7 +292,8 @@ impl Index {
             return Ok(Arc::clone(e));
         }
         let cache_dir = embeddings::global_models_dir();
-        let e = Arc::new(Embedder::open(&self.config.model, &cache_dir)?);
+        let model_id = self.config.lock().unwrap().model.clone();
+        let e = Arc::new(Embedder::open(&model_id, &cache_dir)?);
         *guard = Some(Arc::clone(&e));
         Ok(e)
     }
@@ -265,6 +311,12 @@ impl Index {
     ) -> Result<BuildSummary, IndexError> {
         use crate::progress::{ProgressEvent, ProgressStage};
         use std::sync::atomic::AtomicUsize;
+        // Snapshot the config once. The build can run for minutes;
+        // a concurrent `set_model` would otherwise see-saw what
+        // every chunk gets stamped with, and the post-build stamp
+        // would race against in-flight reads.
+        let cfg_at_start = self.config.lock().unwrap().clone();
+        let model_at_start = cfg_at_start.model.clone();
         let filter = Arc::clone(&self.walk_filter.lock().unwrap());
         let files = list_indexable(&self.drive_root, &filter)?;
         let total = files.len();
@@ -307,7 +359,7 @@ impl Index {
         let worker_count = effective_workers();
         let next = AtomicUsize::new(0);
         let (tx, rx) = std::sync::mpsc::sync_channel::<WorkerOut>(worker_count * 4);
-        let chunking_cfg = self.config.chunking.clone();
+        let chunking_cfg = cfg_at_start.chunking.clone();
         let drive_root = &self.drive_root;
         let files_ref = &files;
 
@@ -384,7 +436,7 @@ impl Index {
                         // with an empty vec deletes the on-disk shard.
                         if let Err(e) =
                             self.vectors
-                                .replace_file(&msg.rel, &self.config.model, 0, vec![])
+                                .replace_file(&msg.rel, &model_at_start, 0, vec![])
                         {
                             errors.push((msg.rel, e.into()));
                         }
@@ -406,7 +458,7 @@ impl Index {
                             // IndexFile ticks to drive the bar.
                             eta_secs: None,
                         });
-                        match self.flush_embed_batch(&mut pending, cancel) {
+                        match self.flush_embed_batch(&mut pending, cancel, &model_at_start) {
                             Ok(errs) => errors.extend(errs),
                             Err(IndexError::Cancelled) => return Err(IndexError::Cancelled),
                             Err(e) => return Err(e),
@@ -439,7 +491,7 @@ impl Index {
                 label: Some(format!("tail files={} last={last}", pending.len())),
                 eta_secs: None,
             });
-            match self.flush_embed_batch(&mut pending, cancel) {
+            match self.flush_embed_batch(&mut pending, cancel, &model_at_start) {
                 Ok(errs) => errors.extend(errs),
                 Err(IndexError::Cancelled) => return Err(IndexError::Cancelled),
                 Err(e) => return Err(e),
@@ -472,6 +524,38 @@ impl Index {
             }
         }
         self.bm25.commit()?;
+        // Stamp "what's on disk" so the next Index::open's model
+        // mismatch check has something to compare against. We only
+        // do this when vectors were configured for this build; a
+        // BM25-only build (no `embeddings` feature, or zero
+        // indexable files) leaves the tracking fields alone so a
+        // subsequent vector build sets them honestly.
+        //
+        // Dim is read from the embedder when at least one chunk was
+        // embedded this run; if nothing was embedded (empty drive,
+        // every file produced zero chunks) we leave vectors_dim
+        // unchanged and stamp vectors_model anyway, because an
+        // empty vector store is trivially consistent with the
+        // current model. The dim will be filled in on the next
+        // build that actually produces vectors.
+        #[cfg(feature = "embeddings")]
+        if do_vectors {
+            let to_save = {
+                let mut cfg = self.config.lock().unwrap();
+                cfg.vectors_model = Some(model_at_start.clone());
+                if let Some(e) = self.embedder.lock().unwrap().as_ref() {
+                    cfg.vectors_dim = Some(e.dim() as u32);
+                }
+                cfg.clone()
+            };
+            if let Err(e) = config::save(&self.index_dir, &to_save) {
+                // Non-fatal: BM25 + tantivy commits already
+                // succeeded. A missed stamp means the next open
+                // sees vectors_model=None (or the previous value)
+                // and may decide to wipe; the search still works.
+                tracing::warn!(?e, "failed to persist vectors_model stamp after build");
+            }
+        }
         Ok(BuildSummary {
             files: total,
             indexed,
@@ -491,6 +575,7 @@ impl Index {
         &self,
         pending: &mut Vec<(String, Vec<chunking::Chunk>)>,
         cancel: Option<&AtomicBool>,
+        model: &str,
     ) -> Result<Vec<(String, IndexError)>, IndexError> {
         let mut errors = Vec::new();
         if pending.is_empty() {
@@ -518,7 +603,7 @@ impl Index {
                 // Per-file fallback so a single bad file doesn't
                 // discard the rest of the batch's vectors.
                 for (rel, chunks) in pending.drain(..) {
-                    if let Err(e) = self.embed_one_file(&rel, &chunks, dim) {
+                    if let Err(e) = self.embed_one_file(&rel, &chunks, dim, model) {
                         errors.push((rel, e));
                     }
                 }
@@ -531,10 +616,7 @@ impl Index {
             let slice = raw[cursor..cursor + n].to_vec();
             cursor += n;
             let embedded = vectors::pair(&chunks, slice);
-            if let Err(e) = self
-                .vectors
-                .replace_file(&rel, &self.config.model, dim, embedded)
-            {
+            if let Err(e) = self.vectors.replace_file(&rel, model, dim, embedded) {
                 errors.push((rel, e.into()));
             }
         }
@@ -547,13 +629,13 @@ impl Index {
         rel: &str,
         chunks: &[chunking::Chunk],
         dim: usize,
+        model: &str,
     ) -> Result<(), IndexError> {
         let bodies: Vec<&str> = chunks.iter().map(|c| c.body.as_str()).collect();
         let embedder = self.embedder()?;
         let raw = embedder.embed_documents(&bodies)?;
         let embedded = vectors::pair(chunks, raw);
-        self.vectors
-            .replace_file(rel, &self.config.model, dim, embedded)?;
+        self.vectors.replace_file(rel, model, dim, embedded)?;
         Ok(())
     }
 
@@ -573,7 +655,15 @@ impl Index {
         text: &str,
         include_vectors: bool,
     ) -> Result<usize, IndexError> {
-        let chunks = chunking::chunk(text, &self.config.chunking);
+        // Snapshot the parts of config we need so a concurrent
+        // `set_model` cannot rewrite the model id mid-call (which
+        // would let us write a vector shard stamped with one
+        // model id but produced by the embedder of another).
+        let (model, chunking_cfg) = {
+            let cfg = self.config.lock().unwrap();
+            (cfg.model.clone(), cfg.chunking.clone())
+        };
+        let chunks = chunking::chunk(text, &chunking_cfg);
         // include_vectors is the caller's intent. When the binary
         // is built without `embeddings`, we never produce vectors
         // regardless. BM25-only is a working subset.
@@ -583,21 +673,20 @@ impl Index {
         {
             if include_vectors {
                 if chunks.is_empty() {
-                    self.vectors
-                        .replace_file(rel_path, &self.config.model, 0, vec![])?;
+                    self.vectors.replace_file(rel_path, &model, 0, vec![])?;
                 } else {
                     let embedder = self.embedder()?;
                     let dim = embedder.dim();
                     let bodies: Vec<&str> = chunks.iter().map(|c| c.body.as_str()).collect();
                     let vectors_raw = embedder.embed_documents(&bodies)?;
                     let embedded = vectors::pair(&chunks, vectors_raw);
-                    self.vectors
-                        .replace_file(rel_path, &self.config.model, dim, embedded)?;
+                    self.vectors.replace_file(rel_path, &model, dim, embedded)?;
                 }
             }
         }
-        self.bm25
-            .index_file(rel_path, text, &self.config.chunking)?;
+        #[cfg(not(feature = "embeddings"))]
+        let _ = model;
+        self.bm25.index_file(rel_path, text, &chunking_cfg)?;
         Ok(chunks.len())
     }
 
@@ -733,7 +822,7 @@ impl Index {
             ready: true,
             indexed_docs: self.bm25.doc_count(),
             indexed_vectors: self.vectors.chunk_count() as u64,
-            model: self.config.model.clone(),
+            model: self.config.lock().unwrap().model.clone(),
         }
     }
 }
@@ -820,6 +909,18 @@ fn wipe_index_dir(index_dir: &Path) -> Result<(), IndexError> {
     let cfg = index_dir.join("config.toml");
     if cfg.exists() {
         std::fs::remove_file(&cfg)?;
+    }
+    Ok(())
+}
+
+/// Wipe only the vector store (`embeddings/`), leaving BM25 and the
+/// config alone. Used by `Index::open` on a model-id mismatch: the
+/// BM25 segments are model-independent and have to survive so the
+/// user keeps lexical search while the embeddings rebuild.
+fn wipe_vectors_dir(index_dir: &Path) -> Result<(), IndexError> {
+    let p = index_dir.join("embeddings");
+    if p.exists() {
+        std::fs::remove_dir_all(&p)?;
     }
     Ok(())
 }
@@ -965,6 +1066,109 @@ mod tests {
         drop(idx);
         let idx = Index::rebuild(tmp.path(), &dir).unwrap();
         assert!(idx.search("first", Mode::Bm25, 10).unwrap().hits.is_empty());
+    }
+
+    #[test]
+    fn open_wipes_embeddings_when_configured_model_diverges_from_disk_stamp() {
+        // Simulate the upgrade-path: a previous build stamped a
+        // different model into the config. On open, the divergence
+        // must trigger an embeddings-only wipe; BM25 must survive.
+        let tmp = make_drive();
+        std::fs::write(tmp.path().join("a.md"), "alpha unique-token\n").unwrap();
+        let dir = idx_dir(&tmp);
+        let idx = Index::open(tmp.path(), &dir).unwrap();
+        idx.build_all(no_vectors(), &crate::progress::NoProgress, None)
+            .unwrap();
+        let bm25_before = idx.search("unique-token", Mode::Bm25, 10).unwrap();
+        assert_eq!(bm25_before.hits.len(), 1);
+
+        // Plant a fake vectors/ subdir to confirm the wipe targets it.
+        let vec_dir = dir.join("embeddings");
+        std::fs::create_dir_all(&vec_dir).unwrap();
+        std::fs::write(vec_dir.join("planted"), b"junk").unwrap();
+
+        // Stamp config as if a previous embed pass had used a
+        // different model. Then close + re-open so the open-time
+        // check fires.
+        let cfg_on_disk = config::IndexConfig {
+            schema_version: config::SCHEMA_VERSION,
+            model: "BAAI/bge-small-en-v1.5".to_owned(),
+            chunking: config::Chunking::default(),
+            vectors_model: Some("BAAI/bge-large-en-v1.5".to_owned()),
+            vectors_dim: Some(1024),
+        };
+        config::save(&dir, &cfg_on_disk).unwrap();
+        drop(idx);
+
+        let idx = Index::open(tmp.path(), &dir).unwrap();
+        // BM25 search still works (segments untouched).
+        let bm25_after = idx.search("unique-token", Mode::Bm25, 10).unwrap();
+        assert_eq!(bm25_after.hits.len(), 1);
+        // The planted embeddings dir was reclaimed.
+        assert!(
+            !vec_dir.join("planted").exists(),
+            "embeddings dir must be wiped on model-id mismatch"
+        );
+        // Config tracking fields cleared and persisted.
+        let cfg_after = config::load(&dir).unwrap();
+        assert_eq!(cfg_after.vectors_model, None);
+        assert_eq!(cfg_after.vectors_dim, None);
+        assert_eq!(cfg_after.model, "BAAI/bge-small-en-v1.5");
+    }
+
+    #[test]
+    fn open_leaves_everything_alone_when_disk_stamp_matches() {
+        // Symmetric case: the stamp matches the configured model.
+        // No wipe, no churn, no spurious config save.
+        let tmp = make_drive();
+        std::fs::write(tmp.path().join("a.md"), "alpha\n").unwrap();
+        let dir = idx_dir(&tmp);
+        let model = "BAAI/bge-small-en-v1.5".to_owned();
+        let cfg_on_disk = config::IndexConfig {
+            schema_version: config::SCHEMA_VERSION,
+            model: model.clone(),
+            chunking: config::Chunking::default(),
+            vectors_model: Some(model.clone()),
+            vectors_dim: Some(384),
+        };
+        std::fs::create_dir_all(&dir).unwrap();
+        config::save(&dir, &cfg_on_disk).unwrap();
+        // Plant a sentinel in embeddings/ that must survive the open.
+        let vec_dir = dir.join("embeddings");
+        std::fs::create_dir_all(&vec_dir).unwrap();
+        std::fs::write(vec_dir.join("sentinel"), b"keep").unwrap();
+
+        let _idx = Index::open(tmp.path(), &dir).unwrap();
+        assert!(
+            vec_dir.join("sentinel").exists(),
+            "matching stamp must not trigger a wipe",
+        );
+        let cfg_after = config::load(&dir).unwrap();
+        assert_eq!(cfg_after.vectors_model.as_deref(), Some(model.as_str()));
+        assert_eq!(cfg_after.vectors_dim, Some(384));
+    }
+
+    #[test]
+    fn schema_version_bump_clears_tracking_fields() {
+        // A schema bump wipes everything, including the tracking
+        // fields. Otherwise the post-wipe open would think the
+        // vectors are still valid for the old model.
+        let tmp = make_drive();
+        let dir = idx_dir(&tmp);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg_on_disk = config::IndexConfig {
+            schema_version: config::SCHEMA_VERSION.saturating_sub(1),
+            model: "BAAI/bge-small-en-v1.5".to_owned(),
+            chunking: config::Chunking::default(),
+            vectors_model: Some("BAAI/bge-small-en-v1.5".to_owned()),
+            vectors_dim: Some(384),
+        };
+        config::save(&dir, &cfg_on_disk).unwrap();
+        let _idx = Index::open(tmp.path(), &dir).unwrap();
+        let cfg_after = config::load(&dir).unwrap();
+        assert_eq!(cfg_after.schema_version, config::SCHEMA_VERSION);
+        assert_eq!(cfg_after.vectors_model, None);
+        assert_eq!(cfg_after.vectors_dim, None);
     }
 
     #[test]

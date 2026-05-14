@@ -297,6 +297,18 @@ What's NOT in v1 (deliberately):
 chunking strategy). Mismatched versions trigger a wipe and full
 rebuild on next open; user data is unaffected.
 
+Two additional config fields, `vectors_model` and `vectors_dim`,
+describe the model that produced the vectors currently on disk.
+They are stamped at the end of every successful embed pass. On
+`Index::open`, if `vectors_model` is set and differs from
+`model` (the user-configured target), the embeddings dir is wiped
+and the tracking fields cleared; BM25 segments are preserved
+because BM25 is model-independent. This closes the silent-
+corruption window where a hand-edited or upgraded `model` field
+would otherwise mix vectors from two different models in the same
+store. A schema-version bump still wipes everything and clears
+both tracking fields.
+
 With the `embeddings` feature on (default), the index also stores
 per-chunk dense vectors via candle + BGE-small. `SearchMode::Hybrid`
 runs BM25 and dense in parallel, then fuses with reciprocal-rank

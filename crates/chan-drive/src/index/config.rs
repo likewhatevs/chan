@@ -46,12 +46,39 @@ pub enum Chunking {
 }
 
 /// On-disk shape of `<index_dir>/config.toml`.
+///
+/// `model` is the user-configured target: the model the indexer
+/// should use for new embeddings. `vectors_model` and `vectors_dim`
+/// describe what produced the vectors *currently on disk*. The two
+/// can diverge when the user changes the target model (via
+/// `Index::set_model` or by hand-editing this file) but the vector
+/// store hasn't been rebuilt yet. `Index::open` detects that
+/// divergence and wipes `embeddings/` so the next reindex repopulates
+/// the store against the new model.
+///
+/// Keeping the "what's on disk" stamp separate from "what's
+/// configured" closes a silent-corruption window: just trusting
+/// `model` would let a config edit produce a vector store mixing
+/// outputs from two different models, or feeding query vectors of
+/// one dim against doc vectors of another.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexConfig {
     pub schema_version: u32,
     pub model: String,
     #[serde(default)]
     pub chunking: Chunking,
+    /// Model id that produced the vectors currently on disk. `None`
+    /// means the vector store is empty (post-wipe, fresh install,
+    /// or never-embedded). On `Index::open`, a mismatch against
+    /// `model` triggers an embedding-only wipe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vectors_model: Option<String>,
+    /// Dim of the vectors currently on disk. Stamped alongside
+    /// `vectors_model` at the end of every embed pass. Used by
+    /// `build_all` as a defensive cross-check against the live
+    /// embedder's `dim()` before writing more shards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vectors_dim: Option<u32>,
 }
 
 impl Default for IndexConfig {
@@ -60,6 +87,8 @@ impl Default for IndexConfig {
             schema_version: SCHEMA_VERSION,
             model: DEFAULT_MODEL.to_owned(),
             chunking: Chunking::default(),
+            vectors_model: None,
+            vectors_dim: None,
         }
     }
 }
