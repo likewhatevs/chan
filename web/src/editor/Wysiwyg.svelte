@@ -820,6 +820,16 @@
     line-height: 0;
     max-width: 100%;
   }
+  /* Selected ring: lit by clicking on the image (sets
+     data-selected on the wrap). Click-outside clears it. The ring
+     is a 2px outline so it sits on top of the image without
+     reflowing the surrounding layout, and uses --link to read as a
+     focus / selection state. */
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-selected="true"]) {
+    outline: 2px solid var(--link);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
   /* Broken-image placeholder. Renders when the image's URL 404s
      or resolution returned empty (relative path with no
      resolvable fromPath, missing attachment, etc.). The icon +

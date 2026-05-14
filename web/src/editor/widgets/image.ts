@@ -104,6 +104,7 @@ class ImageWidget extends WidgetType {
   }
 
   toDOM(view: EditorView): HTMLElement {
+    ensureDeselectListener(view);
     const wrap = document.createElement("span");
     wrap.className = "cm-md-image-wrap";
     if (this.standalone) wrap.dataset.standalone = "true";
@@ -151,15 +152,25 @@ class ImageWidget extends WidgetType {
       if (e.button !== 0) return;
       e.preventDefault();
       e.stopPropagation();
-      // Cmd/Ctrl-click -> trigger the host's onClick handler
-      // (which opens the image-zoom modal). Plain click drops the
-      // caret inside the URL so the image bubble auto-opens via the
-      // imageUrlAtCaret trigger.
+      // Cmd/Ctrl-click -> trigger the host's onClick handler (zoom).
+      // Plain click -> mark the wrap as selected (visual ring; no
+      // caret motion). Entering edit mode is explicit now: the
+      // Edit button next to the View button, or arrow-key navigation
+      // INTO the image's source markers. Earlier behaviour
+      // (clicking dropped the caret inside the URL and the bubble
+      // auto-opened) made every interaction with an image — picking
+      // it for zoom, taking a screenshot, just clicking past it —
+      // flip the widget into source-edit mode, which read as a bug.
       if ((e.metaKey || e.ctrlKey) && this.onClick) {
         this.onClick({ src: this.src, alt: this.alt, pos: this.nodePos });
         return;
       }
-      placeCaretInImageUrl(view, this.nodePos);
+      // Selection ring: a single `data-selected` attribute on the
+      // wrap. A document-level mousedown listener (installed once
+      // below; see clearImageSelection) drops the ring when the
+      // user clicks outside any image wrap.
+      clearImageSelection(view);
+      wrap.dataset.selected = "true";
     });
     wrap.appendChild(img);
 
@@ -215,6 +226,38 @@ class ImageWidget extends WidgetType {
   ignoreEvent(): boolean {
     return true;
   }
+}
+
+/// Drop the `data-selected` ring from any image wrap that has it.
+/// Called from the per-widget click handler before lighting up the
+/// new selection, and from a document-level mousedown listener
+/// (installed once on first widget mount) so a click anywhere
+/// outside an image clears the ring.
+function clearImageSelection(view: EditorView): void {
+  for (const el of view.dom.querySelectorAll(
+    ".cm-md-image-wrap[data-selected]",
+  )) {
+    (el as HTMLElement).removeAttribute("data-selected");
+  }
+}
+
+/// Per-view flag so the document-level "click-outside clears
+/// selection" listener installs exactly once even when many image
+/// widgets render. Stored on the EditorView's DOM so it gets
+/// torn down with the view.
+function ensureDeselectListener(view: EditorView): void {
+  const dom = view.dom as HTMLElement & { _chanImgDeselect?: boolean };
+  if (dom._chanImgDeselect) return;
+  dom._chanImgDeselect = true;
+  document.addEventListener("mousedown", (e) => {
+    const t = e.target as Node | null;
+    if (!t) return;
+    // Click inside an image wrap (or its hover overlay buttons)
+    // leaves selection alone — the widget's own mousedown will
+    // re-set the ring on the clicked wrap.
+    if ((t as Element).closest?.(".cm-md-image-wrap")) return;
+    clearImageSelection(view);
+  });
 }
 
 function placeCaretInImageUrl(view: EditorView, hintPos: number): void {
