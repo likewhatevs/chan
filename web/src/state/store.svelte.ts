@@ -2793,8 +2793,12 @@ export const paneWidths = $state<{
 /// Currently inspected entry in the File Browser tab. Module-level
 /// (shared across browser tabs); selection is ephemeral so the
 /// minor cross-tab leakage is acceptable and avoids per-tab plumbing.
-export const browserSelection = $state<{ path: string | null }>({
+export const browserSelection = $state<{
+  path: string | null;
+  showDrive: boolean;
+}>({
   path: null,
+  showDrive: false,
 });
 
 let widthsPersistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2961,6 +2965,7 @@ export function revealAndSelect(path: string): void {
   }
   treeExpanded.map[""] = true;
   browserSelection.path = path;
+  browserSelection.showDrive = false;
   // The expansion change counts as a user action — persist it so
   // the next launch keeps the new entry in view.
   persistTreeExpanded();

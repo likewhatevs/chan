@@ -24,7 +24,6 @@
   } from "../api/types";
   import { Maximize2, Minimize2 } from "lucide-svelte";
   import {
-    indexStatus,
     refreshDrive,
     settingsOverlay,
     setThemeChoice,
@@ -63,11 +62,6 @@
   /// dirty() can compare the form against the source of truth
   /// without re-fetching on every keystroke.
   let globalConfig = $state<GlobalConfig | null>(null);
-  /// Editable default-drive path. Empty string means "use the
-  /// platform convention" (resolver falls back to
-  /// `paths::default_drive_root()`). Persisted via
-  /// /api/config alongside prefs.
-  let editedDefaultRoot = $state<string>("");
   /// Auto-save status surfaced in the tab-bar. "saving…" while the
   /// PATCH is in flight; "saved" briefly after success; the error
   /// string sticks until the next change so a transient failure
@@ -118,12 +112,6 @@
   /// version + embeddings feature flag are static for the running
   /// binary so a single fetch is enough.
   let buildInfo = $state<BuildInfo | null>(null);
-
-  /// Search-index reset state. Destructive (rebuild from scratch).
-  /// The button's section carries an inline warning rather than a
-  /// modal confirm so the choice is visible without an extra prompt.
-  let indexResetting = $state(false);
-  let indexResetError = $state<string | null>(null);
 
   // Keychain integration. Available on any machine where the OS
   // keychain backend is reachable: macOS Keychain, Windows
@@ -409,18 +397,15 @@
   }
 
   function snapshot(): string {
-    return JSON.stringify({ editing, editedDefaultRoot });
+    return JSON.stringify({ editing });
   }
 
   /// True when the form differs from the last server payload. Drives
   /// the auto-save effect: identical-to-server means nothing to do.
   /// Compares against the global config (settings are always
-  /// per-device-global now). Default-drive-path diffs also count.
+  /// per-device-global now).
   function dirty(): boolean {
     if (!editing || !drive.info) return false;
-    if ((globalConfig?.default_drive_root ?? "") !== editedDefaultRoot) {
-      return true;
-    }
     if (!globalConfig) return false;
     if (JSON.stringify(editing) !== JSON.stringify(globalConfig.preferences)) {
       return true;
@@ -450,15 +435,15 @@
     }
     const sent = snapshot();
     try {
-      // Prefs + default-root (global config) -> PATCH /api/config.
-      // Drive name lives in the file-browser hamburger now, so this
-      // is the only write the settings overlay performs.
-      const trimmedDefault = editedDefaultRoot.trim();
-      const defaultRootBody: string | null =
-        trimmedDefault === "" ? null : trimmedDefault;
+      // Prefs (global config) -> PATCH /api/config. Drive name lives
+      // in the file-browser hamburger now and the default-root +
+      // recent-drives list moved to the drive inspector; this overlay
+      // only writes preferences. We round-trip the existing
+      // default_drive_root + drives values so we don't clobber
+      // anything the drive inspector wrote in parallel.
       const cfgBody: GlobalConfig = {
         preferences: editing,
-        default_drive_root: defaultRootBody,
+        default_drive_root: globalConfig?.default_drive_root ?? null,
         drives: globalConfig?.drives,
       };
       await api.updateConfig(cfgBody);
@@ -470,7 +455,6 @@
       globalConfig = cfg;
       if (snapshot() === sent) {
         editing = normalizePrefs(clone(info.preferences));
-        editedDefaultRoot = cfg.default_drive_root ?? "";
       }
       if (globalConfig) normalizePrefs(globalConfig.preferences);
       // Backend / model may have flipped; re-check readiness.
@@ -495,30 +479,8 @@
     try {
       globalConfig = await api.config();
       normalizePrefs(globalConfig.preferences);
-      // Sync the input only if the user hasn't started editing.
-      // Empty string AND no override means "show the placeholder";
-      // a populated override pre-fills the input.
-      if (editedDefaultRoot === "") {
-        editedDefaultRoot = globalConfig.default_drive_root ?? "";
-      }
     } catch {
       globalConfig = null;
-    }
-  }
-
-  /// Format an ISO timestamp like "2026-05-04 08:30 UTC" without
-  /// pulling in a date lib.
-  function formatLastOpened(iso: string): string {
-    try {
-      const d = new Date(iso);
-      const yyyy = d.getUTCFullYear();
-      const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-      const dd = String(d.getUTCDate()).padStart(2, "0");
-      const hh = String(d.getUTCHours()).padStart(2, "0");
-      const mi = String(d.getUTCMinutes()).padStart(2, "0");
-      return `${yyyy}-${mm}-${dd} ${hh}:${mi} UTC`;
-    } catch {
-      return iso;
     }
   }
 
@@ -537,7 +499,6 @@
     // Read-track every editable field.
     if (!editing) return;
     JSON.stringify(editing);
-    void editedDefaultRoot;
     if (!dirty()) return;
     scheduleSave();
   });
@@ -561,21 +522,6 @@
     } catch {
       // Non-fatal: footer falls back to "n/a".
       buildInfo = null;
-    }
-  }
-
-  async function resetIndex(): Promise<void> {
-    indexResetting = true;
-    indexResetError = null;
-    try {
-      await api.indexRebuild();
-    } catch (e) {
-      indexResetError = (e as Error).message;
-    } finally {
-      // The status moves through "building" automatically as the
-      // background indexer works; the Search section reflects that
-      // since it reads the same indexStatus store.
-      indexResetting = false;
     }
   }
 
@@ -1173,92 +1119,6 @@
       </label>
     </section>
 
-    <section>
-      <h3>Search index</h3>
-      <p class="hint">
-        chan keeps a per-drive search index outside your notes folder
-        so cross-file search and the assistant's drive context stay
-        fast. Rebuild from scratch if results look stale or wrong.
-      </p>
-      <div class="grid">
-        <span class="k">state</span>
-        <span class="v">{indexStatus.value?.state ?? "n/a"}</span>
-        {#if indexStatus.value?.state === "idle"}
-          <span class="k">chunks</span>
-          <span class="v">{indexStatus.value.indexed_docs}</span>
-          <span class="k">vectors</span>
-          <span class="v">{indexStatus.value.indexed_vectors}</span>
-          <span class="k">model</span>
-          <span class="v mono">{indexStatus.value.model}</span>
-        {:else if indexStatus.value?.state === "building"}
-          <span class="k">progress</span>
-          <span class="v">
-            {indexStatus.value.current} / {indexStatus.value.total}
-            <span class="muted">({indexStatus.value.file})</span>
-          </span>
-        {:else if indexStatus.value?.state === "reindexing"}
-          <span class="k">reindexing</span>
-          <span class="v mono">{indexStatus.value.file}</span>
-        {:else if indexStatus.value?.state === "error"}
-          <span class="k">error</span>
-          <span class="v err">{indexStatus.value.message}</span>
-        {/if}
-      </div>
-      <button
-        type="button"
-        onclick={() => void resetIndex()}
-        disabled={indexResetting}
-      >{indexResetting ? "rebuilding…" : "Rebuild index"}</button>
-      <p class="warn">
-        <span class="warn-icon" aria-hidden="true">⚠</span>
-        This wipes the search index and rebuilds from scratch. Can be slow
-        on large drives while embeddings re-run.
-      </p>
-      {#if indexResetError}
-        <div class="err-line">{indexResetError}</div>
-      {/if}
-    </section>
-
-    <section>
-      <h3>Notes folders</h3>
-      <p class="hint">
-        Your default notes folder is where chan opens when launched
-        without a specific one in mind. Leave empty to use the
-        platform default
-        (<code>~/Documents/Chan</code> on macOS,
-        <code>$XDG_DATA_HOME/chan/default</code> on Linux,
-        <code>%USERPROFILE%\Documents\Chan</code> on Windows).
-      </p>
-      <label>
-        <span>Default</span>
-        <input
-          bind:value={editedDefaultRoot}
-          placeholder="(platform default)"
-          spellcheck="false"
-          autocomplete="off"
-        />
-      </label>
-
-      {#if globalConfig?.drives && globalConfig.drives.length > 0}
-        <h4 class="recents-head">Recent</h4>
-        <ul class="recents">
-          {#each globalConfig.drives as u (u.path)}
-            <li>
-              <span class="recents-time">{formatLastOpened(u.last_opened)}</span>
-              {#if u.name}
-                <span class="recents-name">{u.name}</span>
-              {/if}
-              <span class="recents-path mono" title={u.path}>{u.path}</span>
-            </li>
-          {/each}
-        </ul>
-        <p class="hint">
-          Updated every time you open a folder. In-app open-from-list
-          lands in a follow-up; for now use the menu's Open Folder.
-        </p>
-      {/if}
-    </section>
-
     <section class="about">
       <h3>About</h3>
       <div class="grid">
@@ -1500,60 +1360,6 @@
     color: var(--warn-text);
     font-size: 13px;
     margin: 0.25rem 0;
-  }
-  /* Inline destructive-action warning. Lives next to the Rebuild
-     index button (and any future destructive-section button); leaves
-     the action visible while the caveat reads as a label rather than
-     a modal interruption. */
-  .warn {
-    display: flex;
-    align-items: flex-start;
-    gap: 6px;
-    margin: 0.4rem 0 0 0;
-    font-size: 13px;
-    color: var(--text-secondary);
-  }
-  .warn-icon {
-    color: var(--warn-text);
-    flex-shrink: 0;
-    line-height: 1.4;
-  }
-  /* Recent drives list under the Drives section. */
-  .recents-head {
-    margin: 0.5rem 0 0.25rem 0;
-    font-size: 13px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-secondary);
-  }
-  .recents {
-    list-style: none;
-    padding: 0;
-    margin: 0 0 0.4rem 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .recents li {
-    display: grid;
-    grid-template-columns: 12em auto 1fr;
-    gap: 0.6rem;
-    font-size: 14px;
-    color: var(--text);
-    align-items: baseline;
-  }
-  .recents-time {
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-  }
-  .recents-name {
-    color: var(--text);
-    font-weight: 500;
-  }
-  .recents-path {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
   /* Keychain row: status label, password input (or remove button),
      primary action button. Wraps on narrow widths so the row doesn't

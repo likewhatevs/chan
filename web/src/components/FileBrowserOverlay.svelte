@@ -25,6 +25,7 @@
   import FileTree from "./FileTree.svelte";
   import Inspector from "./Inspector.svelte";
   import FileInfoBody from "./FileInfoBody.svelte";
+  import DriveInfoBody from "./DriveInfoBody.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import ImportContactsModal from "./ImportContactsModal.svelte";
   import OverlayShell from "./OverlayShell.svelte";
@@ -100,12 +101,6 @@
   const POPOVER_HEIGHT = 360;
   const POPOVER_WIDTH = 240;
 
-  /// "Copied" flash state for the folder-path row. Reset after
-  /// COPIED_FLASH_MS so the indicator doesn't stick.
-  let copiedFlash = $state(false);
-  let copiedTimer: ReturnType<typeof setTimeout> | null = null;
-  const COPIED_FLASH_MS = 1200;
-
   /// Import-contacts wizard. Opens from the popover; closes back
   /// to the file browser. The wizard refreshes the tree on
   /// success so the new notes show up immediately.
@@ -172,24 +167,14 @@
     await fileOps.renameDrive();
   }
 
-  /// Copy the drive folder path to the system clipboard. Leaves
-  /// the menu open so the user sees the "copied" flash without
-  /// having to reopen it. Silently no-ops if the clipboard write
-  /// rejects (rare on localhost; we don't need to surface it).
-  async function copyFolder(): Promise<void> {
-    const root = drive.info?.root;
-    if (!root) return;
-    try {
-      await navigator.clipboard.writeText(root);
-      copiedFlash = true;
-      if (copiedTimer) clearTimeout(copiedTimer);
-      copiedTimer = setTimeout(() => {
-        copiedFlash = false;
-        copiedTimer = null;
-      }, COPIED_FLASH_MS);
-    } catch {
-      // ignore: localhost clipboard writes essentially never fail
-    }
+  /// Pop the drive-info inspector body. Clears the file selection
+  /// (file vs. drive view is exclusive) and force-opens the
+  /// inspector if it was hidden so the click doesn't no-op.
+  function showDriveInfo(): void {
+    menu?.close();
+    browserSelection.path = null;
+    browserSelection.showDrive = true;
+    browserOverlay.inspectorOpen = true;
   }
 
 </script>
@@ -220,16 +205,20 @@
           onResize={persistPaneWidths}
           onClose={() => (browserOverlay.inspectorOpen = false)}
         >
-          <FileInfoBody
-            path={browserSelection.path}
-            onOpen={openSelected}
-            onClose={clearSelection}
-            showRefs
-            onNavigate={(p) => {
-              void openInActivePane(p);
-              close();
-            }}
-          />
+          {#if browserSelection.showDrive && !browserSelection.path}
+            <DriveInfoBody />
+          {:else}
+            <FileInfoBody
+              path={browserSelection.path}
+              onOpen={openSelected}
+              onClose={clearSelection}
+              showRefs
+              onNavigate={(p) => {
+                void openInActivePane(p);
+                close();
+              }}
+            />
+          {/if}
         </Inspector>
       {/if}
     </div>
@@ -306,12 +295,12 @@
   </li>
   <li>
     <!-- Folder readout doubles as the disclosure ("where on disk
-         is this drive?") and the copy-to-clipboard action. We
-         keep the menu open after copy so the flash is visible. -->
+         is this drive?") and the entry point into the drive
+         inspector (search index status, notes folders config). -->
     <button
       role="menuitem"
       class="folder-row"
-      onclick={copyFolder}
+      onclick={showDriveInfo}
       title={drive.info?.root}
       disabled={!drive.info?.root}
     >
@@ -320,7 +309,6 @@
         <span class="folder-label">Folder</span>
         <span class="folder-path mono">{drive.info?.root ?? ""}</span>
       </span>
-      <span class="copied-hint" class:on={copiedFlash}>copied</span>
     </button>
   </li>
 {/snippet}
@@ -380,15 +368,6 @@
     text-align: left;
   }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .copied-hint {
-    font-size: 12px;
-    color: var(--text-secondary);
-    opacity: 0;
-    transition: opacity 120ms ease-out;
-    flex-shrink: 0;
-    align-self: center;
-  }
-  .copied-hint.on { opacity: 1; color: var(--ok, var(--text)); }
   .body {
     flex: 1;
     display: flex;
