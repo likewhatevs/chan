@@ -107,6 +107,11 @@ class ImageWidget extends WidgetType {
     ensureDeselectListener(view);
     const wrap = document.createElement("span");
     wrap.className = "cm-md-image-wrap";
+    // Stamp the source position on the wrap so the document-level
+    // keydown listener (Delete / Enter on a selected image) can
+    // round-trip back into the syntax tree without holding a
+    // reference to `this`.
+    wrap.dataset.imagePos = String(this.nodePos);
     // Wrap-level mousedown catches clicks that don't land on a
     // child with its own handler (img, handle, action buttons,
     // broken-image badge). For a normal image the img covers the
@@ -271,9 +276,9 @@ function clearImageSelection(view: EditorView): void {
 }
 
 /// Per-view flag so the document-level "click-outside clears
-/// selection" listener installs exactly once even when many image
-/// widgets render. Stored on the EditorView's DOM so it gets
-/// torn down with the view.
+/// selection" + keyboard listeners install exactly once even when
+/// many image widgets render. Stored on the EditorView's DOM so
+/// they get torn down with the view.
 function ensureDeselectListener(view: EditorView): void {
   const dom = view.dom as HTMLElement & { _chanImgDeselect?: boolean };
   if (dom._chanImgDeselect) return;
@@ -287,6 +292,54 @@ function ensureDeselectListener(view: EditorView): void {
     if ((t as Element).closest?.(".cm-md-image-wrap")) return;
     clearImageSelection(view);
   });
+  document.addEventListener("keydown", (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const selected = view.dom.querySelector(
+      ".cm-md-image-wrap[data-selected]",
+    ) as HTMLElement | null;
+    if (!selected) return;
+    const posAttr = selected.dataset.imagePos;
+    if (posAttr === undefined) return;
+    const hintPos = Number(posAttr);
+    if (!Number.isFinite(hintPos)) return;
+    if (e.key === "Backspace" || e.key === "Delete") {
+      e.preventDefault();
+      const range = imageNodeRange(view, hintPos);
+      if (!range) return;
+      // Delete the whole `![alt](src)` source. Caret lands where
+      // the image used to start so typing continues in place.
+      view.dispatch({
+        changes: { from: range.from, to: range.to, insert: "" },
+        selection: { anchor: range.from },
+      });
+      clearImageSelection(view);
+      view.focus();
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      placeCaretInImageUrl(view, hintPos);
+      clearImageSelection(view);
+      return;
+    }
+  });
+}
+
+/// Outer source range of the Image node anchored near `hintPos`,
+/// or null when the syntax tree has moved on (rare; transient
+/// during edits). Shared by Delete + Enter handlers.
+function imageNodeRange(
+  view: EditorView,
+  hintPos: number,
+): { from: number; to: number } | null {
+  const tree = syntaxTree(view.state);
+  let node: import("@lezer/common").SyntaxNode | null = tree.resolveInner(
+    hintPos,
+    1,
+  );
+  while (node && node.name !== "Image") node = node.parent ?? null;
+  if (!node || node.name !== "Image") return null;
+  return { from: node.from, to: node.to };
 }
 
 function placeCaretInImageUrl(view: EditorView, hintPos: number): void {
