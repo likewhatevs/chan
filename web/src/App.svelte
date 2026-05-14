@@ -567,19 +567,19 @@
        for the full cross-surface table. Backgrounds are alpha
        tints of the foreground so each pill reads as a badge
        rather than a button. */
-    --pill-wiki-fg: #ff8a3d;
+    --pill-wiki-fg: var(--text);
     --pill-wiki-bg: rgba(255, 138, 61, 0.18);
     --pill-wiki-bg-hover: rgba(255, 138, 61, 0.28);
-    --pill-image-fg: #b07dff;
+    --pill-image-fg: var(--text);
     --pill-image-bg: rgba(176, 125, 255, 0.20);
-    --pill-tag-fg: #6cd07a;
+    --pill-tag-fg: var(--text);
     --pill-tag-bg: rgba(108, 208, 122, 0.18);
     --pill-tag-bg-hover: rgba(108, 208, 122, 0.28);
-    --pill-contact-fg: #e3b341;
+    --pill-contact-fg: var(--text);
     --pill-contact-bg: rgba(227, 179, 65, 0.18);
-    --pill-date-fg: #98989d;
+    --pill-date-fg: var(--text);
     --pill-date-bg: rgba(152, 152, 157, 0.15);
-    --pill-broken-fg: #ff6961;
+    --pill-broken-fg: var(--text);
     --pill-broken-bg: rgba(255, 80, 75, 0.20);
   }
   :global([data-theme="light"]) {
