@@ -96,6 +96,29 @@ soon as the user needs to edit them.
 - Dates are never indexed. No graph edges, no FTS column, no
   per-date search. (See the chan-core task at the bottom.)
 
+### Lists `- item`, `1. item`, `- [ ] task`
+
+- WYSIWYG: source markers (`-`, `*`, `+`, `1.`, `1)`) stay visible on
+  every list line. Task items render the GFM checkbox via the
+  `Task` widget; the `[ ]` / `[x]` source is replaced by a clickable
+  box and reappears when the caret enters the line.
+- Enter at end of a list line: inserts a fresh marker on the next
+  line. Bullets reuse the line's marker char; ordered lists
+  increment the number and keep the original `.` / `)` separator;
+  task items always start as `- [ ] ` regardless of the source
+  line's checked state.
+- Enter on an empty list item (just the prefix, no content): strips
+  the prefix entirely. This is how the user exits the list.
+- Enter mid-line on a non-empty item: falls through to a literal
+  newline. Auto-continuing mid-sentence would split a paragraph
+  with a stray bullet.
+- Tab on a list line: indents the item by 2 spaces. Multi-line
+  selections indent every list line in range; non-list lines in the
+  range stay untouched.
+- Shift-Tab: outdents one level (strips up to 2 leading spaces)
+  when the line is already indented; no-op at the top level so the
+  default Shift-Tab behavior is preserved.
+
 ### Inline formatting `**bold**`, `*italic*`, `~~strike~~`
 
 - WYSIWYG: rendered with the appropriate style.

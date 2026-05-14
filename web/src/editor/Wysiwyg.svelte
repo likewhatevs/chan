@@ -59,6 +59,11 @@
   import * as fmt from "./commands/format";
   import type { BlockKind } from "./commands/format";
   import { expandDateMacro, openDateAtCaret } from "./commands/date_macros";
+  import {
+    continueListOnEnter,
+    indentListItem,
+    outdentListItem,
+  } from "./commands/list";
   import type { FindAdapter } from "./find";
   import { breathingRoom } from "./breathing_room";
 
@@ -355,6 +360,17 @@
               run: (view) => fmt.escapeFenceOnEnterAtCloser(view),
             },
             { key: "Enter", run: (view) => expandDateMacro(view) },
+            // List continuation: at end of a `- ` / `1. ` / `- [ ] `
+            // line, Enter inserts a fresh marker on the next line;
+            // on an empty bullet, Enter strips the prefix to exit
+            // the list. Returns false on non-list lines so the
+            // default Enter (newline) still fires.
+            { key: "Enter", run: (view) => continueListOnEnter(view) },
+            // Tab / Shift-Tab on a list line bump the item's indent
+            // by 2 spaces. Returns false for non-list lines so Tab
+            // keeps its default behaviour outside lists.
+            { key: "Tab", run: (view) => indentListItem(view) },
+            { key: "Shift-Tab", run: (view) => outdentListItem(view) },
           ]),
         ),
       ],
