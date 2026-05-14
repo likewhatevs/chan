@@ -937,12 +937,6 @@
             {/each}
           </select>
         </label>
-        <div class="muted err-line">
-          Auth + max-tokens for the claude CLI are managed by the CLI
-          itself (run <code class="mono">claude config</code>). The
-          model picker above maps to <code class="mono">--model</code>
-          on the CLI invocation; "(use CLI default)" passes no flag.
-        </div>
       {:else if editing.assistant.backend === "gemini_cli"}
         <!-- Same shape as claude_cli, against a hardcoded Gemini-CLI
              shortlist. -->
@@ -958,12 +952,6 @@
             {/each}
           </select>
         </label>
-        <div class="muted err-line">
-          Auth + max-tokens for the gemini CLI are managed by the CLI
-          itself (run <code class="mono">gemini config</code>). The
-          model picker above maps to <code class="mono">--model</code>;
-          "(use CLI default)" passes no flag.
-        </div>
       {/if}
 
       <!-- Auto-apply moved out of Settings: the toggle now lives in
@@ -1012,6 +1000,7 @@
       </div>
     </section>
 
+    <div class="section-row">
     <section>
       <h3>Editor theme</h3>
       <p class="hint">
@@ -1069,7 +1058,9 @@
         {/each}
       </div>
     </section>
+    </div>
 
+    <div class="section-row">
     <section>
       <h3>Layout</h3>
       <p class="hint">
@@ -1118,11 +1109,12 @@
         </select>
       </label>
     </section>
+    </div>
 
     <section class="about">
       <h3>About</h3>
       <div class="grid">
-        <span class="k">version</span>
+        <span class="k">chan version</span>
         <span class="v mono">{buildInfo?.version ?? "n/a"}</span>
         <span class="k">embeddings</span>
         <span class="v">
@@ -1216,6 +1208,22 @@
     border-bottom: 1px solid var(--border);
   }
   section:last-of-type { border-bottom: 0; }
+  /* Two-column section pairing (Editor theme + Appearance, Layout +
+     Date pills). Each child section keeps its own header + content
+     stack but loses its individual bottom border: the wrapper carries
+     the divider for the whole row. */
+  .section-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.2rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-row > section {
+    padding-bottom: 0;
+    border-bottom: 0;
+    min-width: 0;
+  }
   h3 {
     margin: 0;
     font-size: 15px;
