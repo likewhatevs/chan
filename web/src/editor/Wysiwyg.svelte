@@ -373,6 +373,11 @@
             // the list. Returns false on non-list lines so the
             // default Enter (newline) still fires.
             { key: "Enter", run: (view) => continueListOnEnter(view) },
+            // Tab inside a fenced code block inserts a literal tab.
+            // Without this the keymap falls through to the browser's
+            // default Tab (focus move), which makes it impossible to
+            // indent code samples inside the editor.
+            { key: "Tab", run: (view) => fmt.tabInFence(view) },
             // Tab / Shift-Tab on a list line bump the item's indent
             // by 2 spaces. Returns false for non-list lines so Tab
             // keeps its default behaviour outside lists.

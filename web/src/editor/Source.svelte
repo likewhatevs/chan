@@ -8,7 +8,12 @@
   import { onDestroy, onMount } from "svelte";
   import { EditorState } from "@codemirror/state";
   import { EditorView, keymap, lineNumbers } from "@codemirror/view";
-  import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+  import {
+    defaultKeymap,
+    history,
+    historyKeymap,
+    indentWithTab,
+  } from "@codemirror/commands";
   import { markdown } from "@codemirror/lang-markdown";
   import { drive, ui } from "../state/store.svelte";
   import {
@@ -76,7 +81,10 @@
       extensions: [
         lineNumbers(),
         history(),
-        keymap.of([...defaultKeymap, ...historyKeymap]),
+        // `indentWithTab` first so Tab inserts an indent everywhere
+        // in source mode (raw-text editing — no list / fence
+        // detection like the WYSIWYG side). Shift-Tab outdents.
+        keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
         markdown(),
         theme.extension,
         EditorView.lineWrapping,

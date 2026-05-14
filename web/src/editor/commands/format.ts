@@ -375,6 +375,20 @@ function enclosingFence(
   return null;
 }
 
+/// Tab inside a fenced code block: insert a literal `\t` at the
+/// caret (or replace the active selection). Returns false when the
+/// caret isn't inside a fence so the keymap falls through to the
+/// next Tab handler (list indent / browser focus).
+export function tabInFence(view: EditorView): boolean {
+  const sel = view.state.selection.main;
+  if (!enclosingFence(view.state, sel.head)) return false;
+  view.dispatch({
+    changes: { from: sel.from, to: sel.to, insert: "\t" },
+    selection: { anchor: sel.from + 1 },
+  });
+  return true;
+}
+
 /// `<` chord: strip one level of `> ` (or `>` alone) from every
 /// line in a multi-line full-line selection. Falls through if no
 /// line has a quote prefix (so an unrelated `<` stays a literal
