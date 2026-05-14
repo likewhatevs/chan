@@ -321,6 +321,77 @@ pub trait SessionListener: Send + Sync {
     fn on_messages_snapshot(&self, _history: &[Message]) {}
 }
 
+/// Internal wrapper that catches panics from a host-supplied
+/// `SessionListener` so a buggy implementation can't tear down the
+/// orchestrator task before `on_done` fires. Every callback runs
+/// inside `catch_unwind` with `AssertUnwindSafe`; on unwind we log
+/// via `tracing::error` and continue. The exact-once contract for
+/// `on_done` survives a panicking host.
+struct SafeListener {
+    inner: Arc<dyn SessionListener>,
+}
+
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic>".to_string()
+    }
+}
+
+impl SessionListener for SafeListener {
+    fn on_delta(&self, delta: Delta) {
+        let inner = self.inner.clone();
+        if let Err(p) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || inner.on_delta(delta)))
+        {
+            tracing::error!(panic = %panic_message(&p), "listener.on_delta panicked");
+        }
+    }
+    fn on_tool_call(&self, call: ToolCall) {
+        let inner = self.inner.clone();
+        if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            inner.on_tool_call(call)
+        })) {
+            tracing::error!(panic = %panic_message(&p), "listener.on_tool_call panicked");
+        }
+    }
+    fn on_tool_result(&self, result: ToolResult) {
+        let inner = self.inner.clone();
+        if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            inner.on_tool_result(result)
+        })) {
+            tracing::error!(panic = %panic_message(&p), "listener.on_tool_result panicked");
+        }
+    }
+    fn on_done(&self, reason: StopReason) {
+        let inner = self.inner.clone();
+        if let Err(p) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || inner.on_done(reason)))
+        {
+            tracing::error!(panic = %panic_message(&p), "listener.on_done panicked");
+        }
+    }
+    fn on_error(&self, error: String) {
+        let inner = self.inner.clone();
+        if let Err(p) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || inner.on_error(error)))
+        {
+            tracing::error!(panic = %panic_message(&p), "listener.on_error panicked");
+        }
+    }
+    fn on_messages_snapshot(&self, history: &[Message]) {
+        let inner = self.inner.clone();
+        if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            inner.on_messages_snapshot(history)
+        })) {
+            tracing::error!(panic = %panic_message(&p), "listener.on_messages_snapshot panicked");
+        }
+    }
+}
+
 pub struct LlmSession {
     drive: Arc<Drive>,
     config: LlmConfig,
@@ -413,6 +484,12 @@ impl LlmSession {
     /// resumes catches the mistake instead of silently corrupting
     /// the transcript.
     pub fn send(&self, messages: Vec<Message>, listener: Arc<dyn SessionListener>) -> CancelHandle {
+        // Wrap once at the entry point so every downstream call site
+        // (run_loop dispatches, backend on_delta emissions) inherits
+        // the panic guard for free. A host listener that panics in
+        // any callback can't tear down the orchestrator task before
+        // `on_done` fires.
+        let listener: Arc<dyn SessionListener> = Arc::new(SafeListener { inner: listener });
         let cancel = CancelHandle::new();
         let Some(kind) = self.config.backend else {
             // BackendNotConfigured rather than MissingApiKey: this is
@@ -1293,5 +1370,66 @@ mod tests {
             LlmError::Resume(msg) => assert!(msg.contains("c1"), "msg: {msg}"),
             other => panic!("expected Resume, got {other:?}"),
         }
+    }
+
+    /// A host `SessionListener` that panics in every callback. Used
+    /// to verify the orchestrator's panic guard keeps on_done's
+    /// exact-once contract even when the host listener is buggy.
+    struct PanickingListener;
+    impl SessionListener for PanickingListener {
+        fn on_delta(&self, _: Delta) {
+            panic!("on_delta panicked");
+        }
+        fn on_tool_call(&self, _: ToolCall) {
+            panic!("on_tool_call panicked");
+        }
+        fn on_tool_result(&self, _: ToolResult) {
+            panic!("on_tool_result panicked");
+        }
+        fn on_done(&self, _: StopReason) {
+            panic!("on_done panicked");
+        }
+        fn on_error(&self, _: String) {
+            panic!("on_error panicked");
+        }
+        fn on_messages_snapshot(&self, _: &[Message]) {
+            panic!("on_messages_snapshot panicked");
+        }
+    }
+
+    #[test]
+    fn safe_listener_catches_panics_in_every_callback() {
+        // Without the wrapper, each of these would unwind the
+        // caller. With it, the panic is caught and logged.
+        let inner: Arc<dyn SessionListener> = Arc::new(PanickingListener);
+        let safe = SafeListener { inner };
+        safe.on_delta(Delta { text: "x".into() });
+        safe.on_tool_call(ToolCall {
+            id: "c1".into(),
+            name: "f".into(),
+            args: serde_json::json!({}),
+        });
+        safe.on_tool_result(ToolResult {
+            id: "c1".into(),
+            output: serde_json::json!({}),
+        });
+        safe.on_error("boom".into());
+        safe.on_messages_snapshot(&[Message::user("hi")]);
+        safe.on_done(StopReason::EndOfTurn);
+        // No panic propagated; reaching this line is the assertion.
+    }
+
+    #[test]
+    fn send_with_panicking_listener_does_not_propagate() {
+        // The no-backend path emits on_error + on_done synchronously
+        // before returning. With the panic guard in place those
+        // callbacks panic and are caught; `send` must return
+        // normally instead of unwinding through the caller.
+        let (_cfg, _root, drive) = fixture();
+        let session = LlmSession::new(drive, LlmConfig::default());
+        let listener: Arc<dyn SessionListener> = Arc::new(PanickingListener);
+        let _cancel = session.send(vec![Message::user("hi")], listener);
+        // Reaching this line means the panicking on_error and on_done
+        // were caught by the SafeListener wrapper rather than unwinding.
     }
 }
