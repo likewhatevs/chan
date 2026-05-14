@@ -38,7 +38,11 @@ export function positionPopover(host: HTMLElement, popover: HTMLElement): void {
   const scrollX = window.scrollX;
   const scrollY = window.scrollY;
   const gap = 8;
-  const margin = 8;
+  // Horizontal inset from viewport edges. The vertical math uses
+  // `gap` against the caret line, but horizontally we want a larger
+  // breathing room so a bubble near the left/right edge sits well
+  // away from the window border rather than flush against it.
+  const margin = 24;
 
   // Vertical: prefer below the host, but if the popover would
   // overflow the viewport AND there's more room above, flip up.

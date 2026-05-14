@@ -359,15 +359,31 @@ function placeCaretInImageUrl(view: EditorView, hintPos: number): void {
   if (!node || node.name !== "Image") return;
   const cursor = node.cursor();
   if (!cursor.firstChild()) return;
+  let urlFrom = -1;
   let urlTo = -1;
   do {
     if (cursor.name === "URL") {
+      urlFrom = cursor.from;
       urlTo = cursor.to;
       break;
     }
   } while (cursor.nextSibling());
-  if (urlTo < 0) return;
-  view.dispatch({ selection: { anchor: urlTo } });
+  if (urlFrom < 0 || urlTo < 0) return;
+  // Bias the caret to a position strictly inside the URL slot when
+  // possible. Landing at urlTo (the boundary between URL and the
+  // closing `)` LinkMark) is ambiguous for `resolveInner(pos, 0)` in
+  // the bubble's urlSlotAtCaret trigger — it can resolve to either
+  // sibling node, and at least in the broken-image flow the
+  // ambiguity prevents the raw-mode trigger from firing. The bubble
+  // would either fall through to wrap-mode (inserting `![](new)`
+  // ADJACENT to the broken source) or open nothing at all. Landing
+  // at urlFrom + 1 (one char past the `(` LinkMark) sits cleanly
+  // inside the URL leaf so resolveInner reaches Image without
+  // boundary ambiguity. For an empty URL (`![alt]()`) there's no
+  // interior — urlFrom == urlTo — and the bubble's LinkMark-based
+  // fallback handles that case.
+  const anchor = urlFrom < urlTo ? urlFrom + 1 : urlFrom;
+  view.dispatch({ selection: { anchor } });
   view.focus();
 }
 
