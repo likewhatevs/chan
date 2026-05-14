@@ -16,7 +16,23 @@
     type LeafNode,
   } from "../state/tabs.svelte";
 
-  import { Bell, FileText, User } from "lucide-svelte";
+  import {
+    Bell,
+    ChevronDown,
+    ChevronUp,
+    FilePlus,
+    FileText,
+    Folder,
+    Network,
+    Save,
+    Search,
+    Settings,
+    Sparkles,
+    SquareSplitHorizontal,
+    SquareSplitVertical,
+    User,
+    X,
+  } from "lucide-svelte";
   import FileEditorTab from "./FileEditorTab.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import {
@@ -68,6 +84,24 @@
   const emptyPaneMenuItems = SHORTCUTS.filter(
     (s) => s.group !== "Tabs" && s.id !== "ui.overlay.dismiss" && s[platform],
   );
+
+  /// id → lucide icon for the empty-pane menu rows. Mirrors the
+  /// file-tab menu's "every action carries an icon" convention so
+  /// the two surfaces read as one set. Anything missing falls back
+  /// to FileText (the registry has no rows that need a placeholder
+  /// today; the fallback is for forward compat).
+  const SHORTCUT_ICON: Record<string, typeof Settings> = {
+    "app.settings.toggle": Settings,
+    "app.files.toggle": Folder,
+    "app.assistant.toggle": Sparkles,
+    "app.search.toggle": Search,
+    "app.graph.toggle": Network,
+    "app.save": Save,
+    "app.file.new": FilePlus,
+    "app.find.open": Search,
+    "app.find.next": ChevronDown,
+    "app.find.prev": ChevronUp,
+  };
 
   /// Right-click menu state. The HamburgerMenu component owns the
   /// bubble chrome and outside-click dismiss; we just hold the
@@ -156,13 +190,6 @@
     void Object.keys(layout.nodes).length;
     return canSplit();
   });
-  // Show "close pane" only on non-root panes. The root pane is the
-  // only one on screen; "close all tabs" used to live here as the
-  // root-pane variant but it's a destructive bulk action that doesn't
-  // belong in a right-click surface (tabs have their own × handle,
-  // and Cmd+W closes the active tab one at a time).
-  const showClosePane = $derived(layout.rootId !== pane.id);
-
   // Drag state: highlight the tab strip while another pane's tab is being
   // dragged over it. Keyed by pane id so we don't bleed state between
   // panes that share this Svelte 5 component instance.
@@ -592,26 +619,24 @@
         {#if splitsAllowed}
           <li>
             <button role="menuitem" onclick={onSplitRight}>
-              <span class="glyph" aria-hidden="true">⇢</span>
+              <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
               <span>Split right</span>
             </button>
           </li>
           <li>
             <button role="menuitem" onclick={onSplitDown}>
-              <span class="glyph" aria-hidden="true">⇣</span>
+              <SquareSplitVertical size={16} strokeWidth={1.75} aria-hidden="true" />
               <span>Split down</span>
             </button>
           </li>
           <li class="sep" role="separator"></li>
         {/if}
-        {#if showClosePane}
-          <li>
-            <button role="menuitem" onclick={onClosePane}>
-              <span class="glyph" aria-hidden="true">⊠</span>
-              <span>close pane</span>
-            </button>
-          </li>
-        {/if}
+        <li>
+          <button role="menuitem" onclick={onClosePane}>
+            <X size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span>Close pane</span>
+          </button>
+        </li>
       </HamburgerMenu>
     </div>
   </div>
@@ -650,7 +675,18 @@
           width={280}
           height={260}
         >
+          {#each emptyPaneMenuItems as s (s.id)}
+            {@const Icon = SHORTCUT_ICON[s.id] ?? FileText}
+            <li>
+              <button role="menuitem" onclick={() => dispatchCommand(s.id)}>
+                <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
+                <span class="empty-pane-menu-label">{s.label}</span>
+                <span class="empty-pane-menu-chord">{formatChord(s[platform]!, os)}</span>
+              </button>
+            </li>
+          {/each}
           {#if splitsAllowed}
+            <li class="sep" role="separator"></li>
             <li>
               <button
                 role="menuitem"
@@ -659,6 +695,7 @@
                   splitActive("row");
                 }}
               >
+                <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
                 <span class="empty-pane-menu-label">Split right</span>
                 <span class="empty-pane-menu-chord"></span>
               </button>
@@ -671,20 +708,12 @@
                   splitActive("column");
                 }}
               >
+                <SquareSplitVertical size={16} strokeWidth={1.75} aria-hidden="true" />
                 <span class="empty-pane-menu-label">Split down</span>
                 <span class="empty-pane-menu-chord"></span>
               </button>
             </li>
-            <li class="sep" role="separator"></li>
           {/if}
-          {#each emptyPaneMenuItems as s (s.id)}
-            <li>
-              <button role="menuitem" onclick={() => dispatchCommand(s.id)}>
-                <span class="empty-pane-menu-label">{s.label}</span>
-                <span class="empty-pane-menu-chord">{formatChord(s[platform]!, os)}</span>
-              </button>
-            </li>
-          {/each}
         </HamburgerMenu>
       </div>
     {/if}
