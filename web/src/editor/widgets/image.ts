@@ -107,6 +107,24 @@ class ImageWidget extends WidgetType {
     ensureDeselectListener(view);
     const wrap = document.createElement("span");
     wrap.className = "cm-md-image-wrap";
+    // Wrap-level mousedown catches clicks that don't land on a
+    // child with its own handler (img, handle, action buttons,
+    // broken-image badge). For a normal image the img covers the
+    // whole interior so this rarely fires; for a BROKEN image the
+    // padded badge sits inside a wider wrap and the surrounding
+    // gap used to fall through to CM6's default caret placement,
+    // landing the caret inside the image source and flipping the
+    // widget into edit mode just from clicking near it. Swallow
+    // here and treat it as a select. The badge's own handler
+    // wins for clicks on the badge itself (it's a descendant and
+    // stops propagation).
+    wrap.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      clearImageSelection(view);
+      wrap.dataset.selected = "true";
+    });
     if (this.standalone) wrap.dataset.standalone = "true";
     if (this.editing) wrap.dataset.editing = "true";
     const { width, align } = parseImageSrc(this.src);
@@ -140,6 +158,17 @@ class ImageWidget extends WidgetType {
         ? `${this.alt} (image not found: ${this.src})`
         : `image not found: ${this.src}`;
       badge.appendChild(label);
+      // Click on the broken badge -> reveal source so the user can
+      // fix the path. The whole point of clicking a broken image is
+      // "show me what reference is wrong"; landing in the URL
+      // achieves that without an Edit button (the hover actions row
+      // is hidden on broken via existing CSS).
+      badge.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        placeCaretInImageUrl(view, this.nodePos);
+      });
       wrap.insertBefore(badge, wrap.firstChild);
     };
     if (!resolved) {
