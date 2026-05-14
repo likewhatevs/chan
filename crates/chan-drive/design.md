@@ -682,6 +682,9 @@ Drive::num_indexed() -> Result<u64>
 Drive::index_stats() -> Result<IndexStats>
 Drive::needs_rebuild() -> bool
 Drive::is_reindexing() -> bool
+Drive::needs_replay_writes() -> bool
+Drive::pending_writes() -> Vec<(String, &'static str)>
+Drive::replay_pending_writes() -> Result<usize>
 Drive::link_targets(q: &str, limit: u32) -> Result<Vec<LinkTarget>>
 Drive::resolve_link(target: &str) -> Option<ResolvedLink>
 
@@ -785,6 +788,19 @@ Push vs. pull, and how the three signals relate:
     crashed reindex, cleared after the next successful `reindex_with`
     commits. Survives across process restarts, which the in-memory
     `is_reindexing()` cannot.
+  - `Drive::needs_replay_writes()` is the per-file companion: set
+    by `Drive::open` when it finds a non-empty `pending_writes.json`
+    journal under `graph_dir/`. Each entry is a `(rel, op)` pair
+    written by `index_file` / `forget_file` before either backend
+    is touched and removed after both commit. A crash between the
+    graph commit and the search-index commit leaves the entry
+    behind; `Drive::replay_pending_writes()` re-runs the journaled
+    ops against the current on-disk truth and clears the journal.
+    `Index` entries degrade to `forget` when the file no longer
+    exists; `forget` entries are idempotent against an already-
+    cleaned backend. All per-file mutation paths serialize through
+    an internal `write_serial` mutex so the journal never disagrees
+    with the in-flight backend state.
 
 Cardinality is per-file for `IndexFile` / `RenameRewrite` /
 `GraphRebuild` and per-batch for `EmbedBatch`; on a 10k-file drive

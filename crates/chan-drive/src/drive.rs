@@ -58,6 +58,35 @@ const REBUILD_MARKER: &str = "rebuild.inprogress";
 /// together with the in-memory map at the end of `reindex_with`.
 const RENAME_LOG_FILE: &str = "rename_log.json";
 
+/// Pending-writes journal: a JSON map of `{rel_path: PendingOp}`
+/// kept under `paths.graph_dir`. Every per-file mutation
+/// (`index_file`, `forget_file`) adds an entry before touching
+/// graph/index and removes it after both backends commit, all
+/// serialized via `Drive.write_serial`. The journal exists because
+/// the per-file op is not a single transaction: the graph commit
+/// runs first (sqlite), the index commit runs second (tantivy +
+/// vectors), and a crash between them leaves graph and index
+/// disagreeing about the file. On the next `Drive::open` any
+/// entries still in the journal flag `needs_replay_writes()`; the
+/// consumer calls `replay_pending_writes()` to drive both
+/// backends back to the on-disk truth.
+const PENDING_WRITES_FILE: &str = "pending_writes.json";
+
+/// What `replay_pending_writes` should do for a journaled entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum PendingOp {
+    /// The mutation in flight was an upsert. Replay re-runs the
+    /// indexer against the file at its current on-disk state. If
+    /// the file is gone (deleted between the crash and the replay)
+    /// the replay degrades to a forget, since "rel was being
+    /// indexed but no longer exists" is unambiguous.
+    Index,
+    /// The mutation in flight was a forget. Replay re-runs the
+    /// forget, idempotent against an already-cleaned backend.
+    Forget,
+}
+
 /// User-facing search knobs. The mode defaults to Hybrid (BM25 +
 /// dense, RRF-fused) when the binary is built with `embeddings`,
 /// otherwise the facade falls back to BM25 with `ready: false`.
@@ -180,6 +209,25 @@ pub struct Drive {
     /// `reindex` (which rebuilds the graph against the live tree,
     /// making every translation a no-op).
     rename_log: std::sync::Mutex<std::collections::HashMap<String, String>>,
+    /// Pending per-file write journal. See `PENDING_WRITES_FILE`.
+    /// Mutated under `write_serial` so the on-disk JSON always
+    /// agrees with the in-memory map: every add-or-remove + persist
+    /// pair runs while no other index_file/forget_file can interleave.
+    pending_writes: std::sync::Mutex<std::collections::HashMap<String, PendingOp>>,
+    /// Serialization point for `index_file` / `forget_file`. The
+    /// per-file mutation path is graph-commit then index-commit
+    /// then journal-clear; holding this lock across the trio
+    /// keeps the journal honest (no two writers racing on the same
+    /// rel could otherwise both add, then one removes while the
+    /// other's writes are still in flight). The lock is only held
+    /// for the duration of a single file's commit pair; bulk
+    /// reindex (`reindex_with`) does not pass through here, so the
+    /// serialization is bounded by the watcher's per-file rate.
+    write_serial: std::sync::Mutex<()>,
+    /// Set when `Drive::open` hydrated a non-empty pending-writes
+    /// journal. Surfaces via `needs_replay_writes()`; cleared by
+    /// `replay_pending_writes()` after the journal drains.
+    needs_replay_writes: std::sync::atomic::AtomicBool,
     /// Set when `Drive::open` observed a `rebuild.inprogress` marker
     /// in `paths.graph_dir`: the last reindex did not get to call
     /// `bm25.commit()` (process killed / power loss between graph
@@ -297,6 +345,21 @@ impl Drive {
         // back to an empty map (the next reindex would rebuild the
         // graph either way).
         let rename_log = load_rename_log(&paths.graph_dir);
+        // Rehydrate the pending-writes journal: any entries still
+        // present mean a previous index_file / forget_file crashed
+        // between the graph and index commits. The consumer reads
+        // `needs_replay_writes()` and calls `replay_pending_writes()`
+        // to converge both backends. Best-effort against malformed
+        // JSON, same rationale as the rename log.
+        let pending_writes = load_pending_writes(&paths.graph_dir);
+        let needs_replay_writes = !pending_writes.is_empty();
+        if needs_replay_writes {
+            tracing::warn!(
+                drive = %entry.path.display(),
+                count = pending_writes.len(),
+                "pending_writes journal non-empty at open; replay required",
+            );
+        }
         Ok(Arc::new(Self {
             entry,
             root_canon,
@@ -306,6 +369,9 @@ impl Drive {
             index: std::sync::OnceLock::new(),
             graph: std::sync::OnceLock::new(),
             rename_log: std::sync::Mutex::new(rename_log),
+            pending_writes: std::sync::Mutex::new(pending_writes),
+            write_serial: std::sync::Mutex::new(()),
+            needs_replay_writes: std::sync::atomic::AtomicBool::new(needs_replay_writes),
             needs_rebuild: std::sync::atomic::AtomicBool::new(needs_rebuild),
             reindexing: std::sync::atomic::AtomicBool::new(false),
             report: std::sync::OnceLock::new(),
@@ -1538,10 +1604,27 @@ impl Drive {
     /// Re-index a single file. Reads, parses, updates the search
     /// index and graph for just this path. Used by the watcher
     /// consumer when a file changes.
+    ///
+    /// Journal-bracketed: the call records a `PendingOp::Index`
+    /// entry for `rel` before touching either backend and removes
+    /// it after both commit. A crash mid-call leaves the entry on
+    /// disk; the next `Drive::open` surfaces it via
+    /// `needs_replay_writes()` so the consumer can call
+    /// `replay_pending_writes()` to converge.
     pub fn index_file(&self, rel: &str) -> Result<()> {
         if !fs_ops::is_editable_text(rel) {
             return Ok(());
         }
+        let _serial = self.write_serial.lock().unwrap();
+        self.journal_record(rel, PendingOp::Index)?;
+        let result = self.index_file_inner(rel);
+        if result.is_ok() {
+            self.journal_clear_one(rel)?;
+        }
+        result
+    }
+
+    fn index_file_inner(&self, rel: &str) -> Result<()> {
         let content = self.read_text(rel)?;
         let mtime = self.stat(rel).ok().and_then(|s| s.mtime);
         let (title, node_kind, headings, edges, emails) = parse_for_graph(rel, &content);
@@ -1555,6 +1638,8 @@ impl Drive {
         // user is less likely to notice and can recover via the
         // server's auto-rebuild trigger. The opposite ordering
         // (search-then-graph) made backlinks the silent victim.
+        // The journal entry covers either ordering: the replay
+        // path re-runs both so an asymmetric crash converges.
         self.graph()?.replace_file(
             rel,
             title.as_deref(),
@@ -1650,8 +1735,134 @@ impl Drive {
     /// leave backlinks pointing at a missing file, a silently broken
     /// state the editor cannot self-heal.
     pub fn forget_file(&self, rel: &str) -> Result<()> {
+        let _serial = self.write_serial.lock().unwrap();
+        self.journal_record(rel, PendingOp::Forget)?;
+        let result = self.forget_file_inner(rel);
+        if result.is_ok() {
+            self.journal_clear_one(rel)?;
+        }
+        result
+    }
+
+    fn forget_file_inner(&self, rel: &str) -> Result<()> {
         self.graph()?.forget_file(rel)?;
         self.index()?.forget(rel)?;
+        Ok(())
+    }
+
+    /// True when the pending-writes journal was non-empty at open.
+    /// The consumer should call `replay_pending_writes()` before
+    /// serving editor queries; until it does, graph and index may
+    /// disagree about the journaled files.
+    pub fn needs_replay_writes(&self) -> bool {
+        self.needs_replay_writes
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Snapshot of the currently-journaled `(rel, op)` pairs.
+    /// Exposed mostly for UI ("N pending writes") and tests; the
+    /// recovery itself runs through `replay_pending_writes`.
+    pub fn pending_writes(&self) -> Vec<(String, &'static str)> {
+        self.pending_writes
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(rel, op)| {
+                (
+                    rel.clone(),
+                    match op {
+                        PendingOp::Index => "index",
+                        PendingOp::Forget => "forget",
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Re-run every journaled per-file op so graph and index
+    /// converge to the on-disk truth, then clear the journal.
+    /// Idempotent: an empty journal is a no-op, and a partial
+    /// replay (errors on some entries) leaves the unprocessed
+    /// entries journaled for the next call.
+    ///
+    /// Per-entry policy:
+    ///   - `Index`: if the file still exists on disk, re-run
+    ///     `index_file` (re-reads and re-commits both backends).
+    ///     If it no longer exists, degrade to `forget_file`,
+    ///     since the original mutation's intent (index this rel)
+    ///     no longer makes sense against a missing file.
+    ///   - `Forget`: re-run `forget_file`. Idempotent against
+    ///     already-cleaned backends.
+    ///
+    /// Returns the number of entries successfully replayed.
+    pub fn replay_pending_writes(&self) -> Result<usize> {
+        let entries: Vec<(String, PendingOp)> = self
+            .pending_writes
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        let mut replayed = 0usize;
+        for (rel, op) in entries {
+            // Each replay runs through the journal-bracketed
+            // public API, so a crash mid-replay leaves the entry
+            // journaled again (in fact, never removed) and the
+            // next open will retry.
+            match op {
+                PendingOp::Index => {
+                    if self.exists(&rel) {
+                        self.index_file(&rel)?;
+                    } else {
+                        self.forget_file(&rel)?;
+                    }
+                }
+                PendingOp::Forget => {
+                    self.forget_file(&rel)?;
+                }
+            }
+            replayed += 1;
+        }
+        // After a clean drain, the journal should already be
+        // empty (each successful call to index_file/forget_file
+        // clears its own entry). Belt-and-braces clear the flag.
+        if self.pending_writes.lock().unwrap().is_empty() {
+            self.needs_replay_writes
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
+        Ok(replayed)
+    }
+
+    /// Add an entry to the pending-writes journal and persist it.
+    /// Must be called only while `write_serial` is held by the
+    /// caller, so the on-disk shape stays in lockstep with the
+    /// in-memory map.
+    fn journal_record(&self, rel: &str, op: PendingOp) -> Result<()> {
+        let snapshot = {
+            let mut map = self.pending_writes.lock().unwrap();
+            map.insert(rel.to_string(), op);
+            map.clone()
+        };
+        persist_pending_writes(&self.paths.graph_dir, &snapshot)?;
+        // The presence of any journaled entry implies "graph and
+        // index may disagree about this rel until replay." We
+        // do not set needs_replay_writes here: the flag is the
+        // "the previous PROCESS crashed mid-write" signal, not
+        // the "we are mid-write right now" one. A clean
+        // index_file completion removes its own entry before
+        // returning, so the flag stays false across normal use.
+        Ok(())
+    }
+
+    /// Remove a journaled entry and persist. Same locking
+    /// preconditions as `journal_record`.
+    fn journal_clear_one(&self, rel: &str) -> Result<()> {
+        let snapshot = {
+            let mut map = self.pending_writes.lock().unwrap();
+            map.remove(rel);
+            map.clone()
+        };
+        persist_pending_writes(&self.paths.graph_dir, &snapshot)?;
         Ok(())
     }
 
@@ -2058,6 +2269,64 @@ fn persist_rename_log(graph_dir: &std::path::Path, log: &HashMap<String, String>
     let body =
         serde_json::to_vec(log).map_err(|e| ChanError::Io(format!("rename_log encode: {e}")))?;
     fs_ops::atomic_write(&graph_dir.join(RENAME_LOG_FILE), &body)
+}
+
+/// Read the pending-writes journal from
+/// `graph_dir/pending_writes.json`. Same best-effort semantics as
+/// the rename log: missing file -> empty map; malformed -> warn +
+/// empty map. A dropped journal under malformed-JSON is worse than
+/// for the rename log (the consumer never replays the journaled
+/// op), but the cost of refusing to open the drive is higher; the
+/// next per-file write or full reindex still converges. The next
+/// per-file write or `reindex_with` repopulates a consistent
+/// state.
+fn load_pending_writes(graph_dir: &std::path::Path) -> HashMap<String, PendingOp> {
+    let path = graph_dir.join(PENDING_WRITES_FILE);
+    let raw = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return HashMap::new(),
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                ?e,
+                "failed to read pending_writes; starting empty",
+            );
+            return HashMap::new();
+        }
+    };
+    match serde_json::from_slice::<HashMap<String, PendingOp>>(&raw) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                ?e,
+                "pending_writes decode failed; starting empty (any drift will surface at next save or full reindex)",
+            );
+            HashMap::new()
+        }
+    }
+}
+
+/// Atomically persist the pending-writes journal. Removes the file
+/// entirely when the map is empty so the next `load_pending_writes`
+/// short-circuits without a parse, and so an external eye on the
+/// graph_dir sees "clean state" instead of "{}".
+fn persist_pending_writes(
+    graph_dir: &std::path::Path,
+    map: &HashMap<String, PendingOp>,
+) -> Result<()> {
+    let path = graph_dir.join(PENDING_WRITES_FILE);
+    if map.is_empty() {
+        match std::fs::remove_file(&path) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(ChanError::Io(format!("remove pending_writes: {e}"))),
+        }
+    }
+    std::fs::create_dir_all(graph_dir)?;
+    let body = serde_json::to_vec(map)
+        .map_err(|e| ChanError::Io(format!("pending_writes encode: {e}")))?;
+    fs_ops::atomic_write(&path, &body)
 }
 
 /// Parent directory of a drive-rooted POSIX path. Returns the empty
@@ -2758,6 +3027,172 @@ mod tests {
             !log_path.exists(),
             "rename_log must be cleared after a successful reindex",
         );
+    }
+
+    #[test]
+    fn pending_writes_journal_is_empty_on_a_clean_path() {
+        // A successful index_file must leave no trace in the
+        // journal: enter -> record -> graph -> index -> clear.
+        // Without this, every save would leak a journal entry and
+        // the next open would always flag needs_replay_writes.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        drive.write_text("a.md", "# a\nbody\n").unwrap();
+        drive.index_file("a.md").unwrap();
+        assert!(drive.pending_writes().is_empty());
+        assert!(!drive.needs_replay_writes());
+
+        // Persisted form: the JSON file should be gone (empty map
+        // is serialized as "no file" so the journal dir stays
+        // visually clean across normal use).
+        let paths = lib.drive_paths_for(drive_dir.path()).unwrap();
+        assert!(!paths.graph_dir.join(PENDING_WRITES_FILE).exists());
+    }
+
+    #[test]
+    fn pending_writes_journal_replay_converges_after_simulated_crash() {
+        // Simulate the crash window: a journal entry is left behind
+        // as if index_file had committed graph but died before the
+        // search index commit (or before journal_clear). Reopen,
+        // verify the flag, replay, verify convergence.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let probe = "pending-recovery-token";
+        {
+            let drive = lib.open_drive(drive_dir.path()).unwrap();
+            drive
+                .write_text("a.md", &format!("# a\n{probe} body\n"))
+                .unwrap();
+            // Stamp a journal entry as if index_file had crashed
+            // mid-call, BEFORE running any backend commits. The
+            // file's content is fresh on disk; neither graph nor
+            // index have seen it yet.
+            let mut map = HashMap::new();
+            map.insert("a.md".to_string(), PendingOp::Index);
+            persist_pending_writes(&drive.paths.graph_dir, &map).unwrap();
+        }
+
+        // Reopen: the flag must surface, the in-memory map must
+        // mirror the on-disk journal.
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        assert!(drive.needs_replay_writes());
+        let pending = drive.pending_writes();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].0, "a.md");
+        assert_eq!(pending[0].1, "index");
+
+        // Replay must drive both backends to the on-disk truth.
+        let replayed = drive.replay_pending_writes().unwrap();
+        assert_eq!(replayed, 1);
+        assert!(!drive.needs_replay_writes());
+        assert!(drive.pending_writes().is_empty());
+
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        let hits = drive.search(probe, &opts).unwrap();
+        assert_eq!(hits.hits.len(), 1);
+        assert_eq!(hits.hits[0].path, "a.md");
+        assert!(drive
+            .graph()
+            .unwrap()
+            .files()
+            .unwrap()
+            .iter()
+            .any(|f| f == "a.md"));
+    }
+
+    #[test]
+    fn pending_writes_replay_degrades_index_op_to_forget_when_file_is_gone() {
+        // index_file was journaled before the crash, but between
+        // the crash and the replay the user deleted the file from
+        // disk. Replay must degrade to forget so the journal entry
+        // does not perpetually fail trying to index a missing file.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        {
+            let drive = lib.open_drive(drive_dir.path()).unwrap();
+            drive.write_text("ghost.md", "# ghost\nbody\n").unwrap();
+            // Index the file so graph + BM25 see it...
+            drive.index_file("ghost.md").unwrap();
+            // ...then plant a journal entry as if a follow-up
+            // index_file had crashed, and remove the file from
+            // disk to simulate "user also deleted it before
+            // process restart."
+            std::fs::remove_file(drive_dir.path().join("ghost.md")).unwrap();
+            let mut map = HashMap::new();
+            map.insert("ghost.md".to_string(), PendingOp::Index);
+            persist_pending_writes(&drive.paths.graph_dir, &map).unwrap();
+        }
+
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        assert!(drive.needs_replay_writes());
+        drive.replay_pending_writes().unwrap();
+        assert!(!drive.needs_replay_writes());
+
+        // After replay the entry should be gone from both backends.
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert!(drive.search("ghost", &opts).unwrap().hits.is_empty());
+        assert!(!drive
+            .graph()
+            .unwrap()
+            .files()
+            .unwrap()
+            .iter()
+            .any(|f| f == "ghost.md"));
+    }
+
+    #[test]
+    fn pending_writes_journal_handles_forget_op() {
+        // Symmetric to the index_op replay test: a forget_file
+        // call that crashed mid-flight has its journal entry
+        // replayed and the backends converge to "no entry."
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        {
+            let drive = lib.open_drive(drive_dir.path()).unwrap();
+            drive.write_text("doomed.md", "# doomed\nbody\n").unwrap();
+            drive.index_file("doomed.md").unwrap();
+            // Simulate: forget_file was about to run but crashed
+            // after journaling. File is still on disk; journal
+            // says "forget."
+            let mut map = HashMap::new();
+            map.insert("doomed.md".to_string(), PendingOp::Forget);
+            persist_pending_writes(&drive.paths.graph_dir, &map).unwrap();
+        }
+
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        assert!(drive.needs_replay_writes());
+        drive.replay_pending_writes().unwrap();
+
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert!(drive.search("doomed", &opts).unwrap().hits.is_empty());
+        assert!(!drive
+            .graph()
+            .unwrap()
+            .files()
+            .unwrap()
+            .iter()
+            .any(|f| f == "doomed.md"));
     }
 
     #[test]
