@@ -632,34 +632,31 @@
           shape: "ellipse",
           width: sizeMap as unknown as number,
           height: sizeMap as unknown as number,
-          label: "data(label)",
+          // Labels are hidden by default; the `node:selected` and
+          // `node.adjacent` rules below opt-in the selected node
+          // and its first-degree neighbours so a click reveals
+          // names for the cluster the user just focused on.
+          label: "",
           color: c.text,
-          // Match the rest of the chrome (App.svelte body
-          // font-family) so graph labels read as part of the same
-          // UI rather than a separate widget.
           "font-family":
             '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
           "font-size": 7,
-          // Labels above the node, ellipsised at a fixed width.
-          // Right-of-node placement (the prior layout) bled long
-          // file names into neighbouring nodes once fcose packed
-          // anything close together.
           "text-halign": "center",
           "text-valign": "top",
           "text-margin-y": -3,
           "text-wrap": "ellipsis",
           "text-max-width": "110px",
           "text-outline-color": c.bg,
-          // Outline at 1px reads as a subtle halo for legibility
-          // over edges/nodes; 2px made labels look bolder than the
-          // surrounding UI text.
           "text-outline-width": 1,
+          "min-zoomed-font-size": 6,
+          // Thin ring around each disc — separates touching nodes
+          // and reads cleanly over edges. Page-bg colour means it
+          // looks like a halo against the canvas in either theme.
           "border-width": 1.5,
           "border-color": c.bg,
-          "min-zoomed-font-size": 6,
           // Icon glyph centered inside the circle. `background-fit:
           // none` is the only mode where width/height percentages
-          // are honoured literally; `contain` ignores them and sized
+          // are honoured literally; `contain` ignores them and sizes
           // off the SVG's intrinsic 24px box, which overshot the
           // node bounds and gave us file-shaped blobs instead of
           // circles. `inside` containment clips anything that would
@@ -729,6 +726,8 @@
       {
         selector: "node[?missing]",
         style: {
+          // Broken-link target: dashed ring + low-contrast fill so
+          // the eye doesn't read the node as a real, present file.
           "background-color": c.bgCard,
           "border-style": "dashed",
           "border-color": c.textSec,
@@ -757,6 +756,19 @@
           "overlay-color": c.doc,
           "overlay-opacity": 0.15,
           "overlay-padding": 2,
+          label: "data(label)",
+        },
+      },
+      {
+        // First-degree neighbours of the selected node. The tap
+        // handler stamps `.adjacent` on each one so they reveal
+        // their labels alongside the selection, giving the user
+        // an at-a-glance view of the cluster they just focused
+        // on. Cleared on background tap or when another node is
+        // selected.
+        selector: "node.adjacent",
+        style: {
+          label: "data(label)",
         },
       },
       {
@@ -1615,7 +1627,10 @@
   });
 
   // Mirror external selection back into cytoscape so the
-  // `:selected` style follows clicks made via the side panel.
+  // `:selected` style follows clicks made via the side panel,
+  // and stamp `.adjacent` on the selection's first-degree
+  // neighbours so they reveal their labels alongside it.
+  // Clearing the selection drops both classes everywhere.
   $effect(() => {
     if (!cy) return;
     const want = selectedId;
@@ -1623,9 +1638,19 @@
       cy!.$(":selected").forEach((n) => {
         if (n.id() !== want) n.unselect();
       });
+      cy!.nodes(".adjacent").removeClass("adjacent");
       if (want) {
         const ele = cy!.getElementById(want);
-        if (ele.nonempty() && !ele.selected()) ele.select();
+        if (ele.nonempty()) {
+          if (!ele.selected()) ele.select();
+          // `closedNeighborhood` includes the node itself plus
+          // every edge and node one hop away; filtering to nodes
+          // and excluding the seed leaves the neighbour set the
+          // `.adjacent` rule wants.
+          ele.neighborhood().nodes().forEach((n) => {
+            if (n.id() !== want) n.addClass("adjacent");
+          });
+        }
       }
     });
   });
