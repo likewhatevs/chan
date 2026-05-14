@@ -163,15 +163,43 @@ impl Library {
         Ok(entry)
     }
 
-    /// Drop a drive from the registry. Does not delete the
-    /// directory or per-drive state on disk.
+    /// Drop a drive from the registry AND wipe its per-drive
+    /// chan-managed state (search index, graph DB, session blobs,
+    /// assistant blobs, app tokens). Equivalent to
+    /// `reset_drive(root, ResetMode::Everything)` plus a `false`
+    /// return when the drive wasn't registered.
+    ///
+    /// The user's notes tree is never touched; chan-drive never
+    /// writes inside it. The trash is preserved (it holds
+    /// recoverable user data, semantically owned by the user even
+    /// after the drive is forgotten).
+    ///
+    /// Why state is wiped here: per-drive sidecars are keyed by
+    /// `sha256(canonical_path)[..16]`. Without this wipe, deleting
+    /// the drive directory and re-creating it at the same path
+    /// reuses the old sidecar and the new "fresh" drive surfaces
+    /// graph + index entries that belong to the deleted drive.
+    /// Wiping on unregister closes that window.
+    ///
+    /// Preconditions: same as `reset_drive`. The caller must drop
+    /// any open `Arc<Drive>` for `root` first; otherwise this
+    /// returns `ChanError::DriveAlreadyOpen`.
+    ///
+    /// Returns `Ok(false)` when no registry row matched `root` and
+    /// no wipe was attempted.
     pub fn unregister_drive(&self, root: &Path) -> Result<bool> {
-        let mut reg = self.inner.registry.lock().unwrap();
-        let removed = reg.remove(root);
-        if removed {
-            reg.save_to(&self.inner.config_path)?;
+        // Peek before delegating so we can preserve the previous
+        // bool semantic. reset_drive itself is idempotent on a
+        // never-opened drive (returns removed_entries = 0), but we
+        // don't want to wipe state for a path the user never
+        // registered with this Library, just in case it collides
+        // with an unrelated cached entry from an earlier install.
+        let registered = self.inner.registry.lock().unwrap().find(root).is_some();
+        if !registered {
+            return Ok(false);
         }
-        Ok(removed)
+        self.reset_drive(root, ResetMode::Everything)?;
+        Ok(true)
     }
 
     /// Set the display name on a registered drive.
@@ -605,6 +633,80 @@ mod tests {
 
         // Cleanup B so we don't leak state for the next run.
         let _ = lib.reset_drive(drive_b.path(), ResetMode::State);
+    }
+
+    /// Regression for the "delete-and-recreate at the same path
+    /// surfaces stale graph data" bug. Before PR1, `unregister_drive`
+    /// only dropped the registry row; the per-drive sidecars
+    /// (graph DB, tantivy segments) lived on, keyed by
+    /// `sha256(canonical_path)[..16]`. Re-registering the same path
+    /// reused the key, so the next graph view returned nodes for
+    /// files that no longer existed on disk.
+    #[test]
+    fn unregister_wipes_state_so_recreate_at_same_path_starts_fresh() {
+        let (lib, _cfg, drive) = lib();
+        lib.register_drive(drive.path(), Some("First".into()))
+            .unwrap();
+        populate_state(&lib, drive.path());
+
+        let p = paths_of(drive.path());
+        assert!(p.graph_db.exists(), "graph DB should exist after populate");
+        // Sanity: the graph actually has the file we wrote.
+        {
+            let d = lib.open_drive(drive.path()).unwrap();
+            let entries = d.list_tree().unwrap();
+            assert!(entries.iter().any(|e| e.path == "notes/keep.md"));
+        }
+
+        assert!(lib.unregister_drive(drive.path()).unwrap());
+
+        // Per-drive state is gone.
+        assert!(!p.index.exists());
+        assert!(!p.graph_db.parent().unwrap().exists());
+        assert!(!p.sessions.exists());
+        assert!(!p.assistant.exists());
+        assert!(!p.tokens.exists());
+        assert!(lib.list_drives().is_empty());
+
+        // Re-register at the same path. Sidecar dirs must be absent
+        // until the new drive lazily creates them, and the new
+        // drive's graph must not surface anything until the user
+        // reindexes (here: nothing on disk, so nothing to surface).
+        std::fs::remove_dir_all(drive.path().join("notes")).ok();
+        lib.register_drive(drive.path(), Some("Second".into()))
+            .unwrap();
+        let d = lib.open_drive(drive.path()).unwrap();
+        d.reindex(None).unwrap();
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        // The token used in populate_state's reindexed file was
+        // "kept across reset"; searching for it must return zero
+        // results, because the underlying file was removed before
+        // this reindex.
+        let hits = d.search("kept", &opts).unwrap();
+        assert!(
+            hits.hits.is_empty(),
+            "stale index entries leaked across unregister/re-register; got {:?}",
+            hits.hits
+        );
+    }
+
+    #[test]
+    fn unregister_returns_drive_already_open_when_handle_is_live() {
+        // unregister_drive now wipes state, which requires exclusive
+        // access. Holding an open handle must produce a clear error
+        // rather than silently leaving the registry row gone and
+        // sidecars half-wiped.
+        let (lib, _cfg, drive) = lib();
+        lib.register_drive(drive.path(), None).unwrap();
+        let _open = lib.open_drive(drive.path()).unwrap();
+        let err = lib.unregister_drive(drive.path()).unwrap_err();
+        assert!(matches!(err, ChanError::DriveAlreadyOpen));
+        // Registry row survives, because we bailed before touching it.
+        assert_eq!(lib.list_drives().len(), 1);
     }
 
     #[test]

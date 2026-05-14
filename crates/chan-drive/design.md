@@ -114,6 +114,20 @@ Registration is idempotent: re-registering an existing drive only
 updates `last_opened` and never clobbers a user-set name. Rename
 is the only path that overwrites the name.
 
+`unregister_drive` is `reset_drive(Everything)` plus a `false`
+return when the drive wasn't in the registry. It drops the
+registry row AND wipes per-drive state, for the same reason
+`reset_drive(Everything)` does: per-drive sidecars are keyed by
+`sha256(canonical_path)[..16]`. Without the wipe, deleting the
+drive directory and re-creating it at the same path would reuse
+the previous sidecar, and the new drive would surface graph and
+index rows from the old drive. Wiping on unregister closes that
+window structurally. The trash is preserved (recoverable user
+data, owned by the user even after the drive is forgotten).
+Preconditions match `reset_drive`: any open `Arc<Drive>` for the
+root must be dropped first, otherwise the call fails with
+`DriveAlreadyOpen`.
+
 ### Drive
 
 One registered directory. All `rel` arguments are POSIX-style
