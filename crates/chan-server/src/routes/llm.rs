@@ -469,6 +469,16 @@ struct CollectState {
     stop_reason: Option<chan_llm::StopReason>,
     error: Option<String>,
     finished: bool,
+    /// Canonical post-turn transcript captured via
+    /// `SessionListener::on_messages_snapshot`. Present only for
+    /// successful terminations (EndOfTurn / ToolUse); None on
+    /// cancel / error / max-iter. /api/llm/resume uses this for the
+    /// outbound `messages` field so direct backends' continuation
+    /// turns (new assistant text, tool_use, tool_result) land in
+    /// the client's history. Without it, a follow-up Apply on a
+    /// continuation-emitted edit fails with "tool call not found
+    /// on Assistant turn".
+    messages: Option<Vec<LlmMessage>>,
 }
 
 impl CollectListener {
@@ -481,6 +491,7 @@ impl CollectListener {
                 stop_reason: None,
                 error: None,
                 finished: false,
+                messages: None,
             }),
             done: tokio::sync::Notify::new(),
         }
@@ -524,6 +535,13 @@ impl SessionListener for CollectListener {
             }
         }
         self.forward.on_error(error);
+    }
+    fn on_messages_snapshot(&self, history: &[LlmMessage]) {
+        // chan-llm fires this before on_done for successful
+        // terminations. Stash the canonical transcript so the resume
+        // handler can echo it back to the client instead of the
+        // pre-continuation snapshot.
+        self.state.lock().expect("collect state poisoned").messages = Some(history.to_vec());
     }
 }
 
@@ -951,12 +969,35 @@ pub async fn api_llm_resume(
             input: c.args.clone(),
         })
         .collect();
+    // Prefer the post-continuation snapshot from chan-llm. It
+    // includes the continuation's assistant turn (text +
+    // tool_use) and any tool_result messages chan-llm appended,
+    // so a follow-up Apply on a continuation-emitted edit can
+    // find its assistant turn via ensure_pending_placeholder.
+    // Fall back to the pre-continuation history when the snapshot
+    // hook didn't fire (cancel / error / max-iter): the response
+    // still surfaces the placeholder swap that already happened.
+    //
+    // chan-llm prepends a System message on entry to `send`; the
+    // client never had one and round-tripping it would break the
+    // resume's strict-equality reuse, so strip it before
+    // serializing.
+    let messages_out = snapshot
+        .messages
+        .as_ref()
+        .map(|h| {
+            h.iter()
+                .filter(|m| m.role != LlmRole::System)
+                .map(message_to_out)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or(messages_for_response);
     Json(LlmResumeResponse {
         content: snapshot.text.clone(),
         tool_calls,
         stop_reason: stop_reason_tag(stop),
         model,
-        messages: messages_for_response,
+        messages: messages_out,
     })
     .into_response()
 }
