@@ -94,6 +94,11 @@ header.bar {
 }
 .brand b { font-weight: 700; font-size: 15px; letter-spacing: -.01em; }
 .brand .accent { color: var(--brand); font-weight: 400; margin-left: 2px; }
+.brand .brand-title {
+  color: var(--text);
+  letter-spacing: .08em;
+  font-size: 14px;
+}
 
 .actions { display: flex; gap: 6px; align-items: center; }
 
@@ -191,12 +196,18 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
   border-radius: 4px;
   width: 100%;
   min-width: 80px;
+  cursor: copy;
 }
 .url-input:hover { border-color: var(--border); color: var(--text); }
 .url-input:focus {
   outline: none;
   border-color: var(--brand);
   background: var(--bg-card);
+}
+.url-input.copied {
+  color: var(--brand);
+  border-color: var(--brand);
+  font-weight: 600;
 }
 
 .url-cell { display: flex; gap: 6px; align-items: center; }

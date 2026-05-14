@@ -200,7 +200,7 @@ fn drive_title(key: &str) -> String {
         .map(|s| s.to_string_lossy().into_owned())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| key.to_string());
-    format!("chan: {base}")
+    format!("chan drive: {base}")
 }
 
 /// Stable window-label prefix for a tunneled drive, namespaced
@@ -239,7 +239,7 @@ pub fn spawn_local_drive_window(app: &AppHandle, key: &str, url: &str) {
 /// semantics as the local variant; same no-op close handler.
 pub fn spawn_tunneled_drive_window(app: &AppHandle, tenant_label: &str, drive: &str, url: &str) {
     let label = new_tunnel_window_label(tenant_label, drive);
-    let title = format!("chan: {tenant_label} \u{00b7} {drive}");
+    let title = format!("chan drive: {tenant_label} \u{00b7} {drive}");
     build_drive_window(app, &label, &title, url);
 }
 

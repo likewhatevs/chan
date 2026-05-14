@@ -88,13 +88,23 @@ listen('auth-error', (e) => {
 
 let booted = false;
 let homeDir = '';
+// Last rendered drives payload as a JSON string. The backend fires
+// `serves-changed` / `registry-changed` whenever the chan registry
+// is touched, which a running serve does often (timestamps, etc.).
+// Re-running `main.innerHTML = ...` on every event causes the row
+// to flicker. Skip the render when the payload hasn't changed.
+let lastDrivesJson = '';
 
 async function refresh() {
   if (!homeDir) {
     try { homeDir = await invoke('home_dir'); } catch { homeDir = ''; }
   }
   const drives = await invoke('list_drives');
-  render(drives);
+  const json = JSON.stringify(drives);
+  if (json !== lastDrivesJson) {
+    lastDrivesJson = json;
+    render(drives);
+  }
   return drives;
 }
 
@@ -179,7 +189,6 @@ function render(drives) {
             <button class="btn" data-act="launch" ${hasUrl ? '' : 'disabled'}>Launch</button>
           </div>
         </td>
-        <td></td>
       </tr>`;
     }
     return `
@@ -198,11 +207,6 @@ function render(drives) {
           <button class="btn" data-act="launch" ${hasUrl ? '' : 'disabled'}>Launch</button>
         </div>
       </td>
-      <td>
-        <div class="row-actions">
-          <button class="btn danger" data-act="remove">Close</button>
-        </div>
-      </td>
     </tr>`;
   }).join('');
 
@@ -214,7 +218,6 @@ function render(drives) {
           <th>Path</th>
           <th style="width:200px">Name</th>
           <th style="width:280px">URL</th>
-          <th style="width:90px"></th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -271,15 +274,6 @@ function bindRowEvents() {
       }
     });
 
-    tr.querySelector('[data-act="remove"]').addEventListener('click', async () => {
-      try {
-        await invoke('remove_drive', { path });
-      } catch (err) {
-        showError(err);
-      }
-      await refresh();
-    });
-
     tr.querySelector('[data-act="reveal"]').addEventListener('click', async () => {
       try {
         await invoke('reveal_in_finder', { path });
@@ -288,6 +282,34 @@ function bindRowEvents() {
       }
     });
   });
+
+  // Click-to-copy on every URL field (regular + tunneled rows). The
+  // input is readonly so a normal click just selects; we copy on
+  // click and flash a "Copied" label in place of the URL for ~900ms.
+  // `bindRowEvents` runs after each `render(drives)`, so newly added
+  // rows get the handler too.
+  main.querySelectorAll('.url-input').forEach((inp) => {
+    inp.addEventListener('click', () => copyUrlField(inp));
+  });
+}
+
+async function copyUrlField(input) {
+  const url = input.value;
+  if (!url || url === 'Copied') return;
+  try {
+    await navigator.clipboard.writeText(url);
+  } catch {
+    return;
+  }
+  input.value = 'Copied';
+  input.classList.add('copied');
+  setTimeout(() => {
+    // Guard against the row being re-rendered while the timeout was
+    // pending — `input` may already be detached from the DOM.
+    if (!input.isConnected) return;
+    input.value = url;
+    input.classList.remove('copied');
+  }, 900);
 }
 
 function showError(e) {
@@ -366,7 +388,7 @@ async function renderTunnelPanel() {
   if (!slot) return;
   if (!tunnelPanelOpen) {
     slot.innerHTML = '';
-    tunnelBtn.textContent = 'Listen…';
+    tunnelBtn.textContent = 'Listen';
     return;
   }
   let status;
@@ -378,7 +400,7 @@ async function renderTunnelPanel() {
     tunnelPanelOpen = false;
     return;
   }
-  tunnelBtn.textContent = status.listening ? 'Hide' : 'Listen…';
+  tunnelBtn.textContent = status.listening ? 'Hide' : 'Listen';
   slot.innerHTML = renderTunnelPanelHtml(status);
   bindTunnelPanelEvents(status);
 }
