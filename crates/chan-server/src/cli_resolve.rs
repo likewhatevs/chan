@@ -93,6 +93,11 @@ fn claude_cli_fallback_dirs() -> Vec<PathBuf> {
                     .join("local")
                     .join("bin"),
             );
+            // XDG-style user-local bin: pipx, manual installs, and
+            // many users symlink claude here so it works without
+            // shell init. Ranks above Homebrew/system so an explicit
+            // user install wins over a stale system one.
+            dirs.push(PathBuf::from(&home).join(".local").join("bin"));
         }
         dirs.push(PathBuf::from("/opt/homebrew/bin"));
         dirs.push(PathBuf::from("/usr/local/bin"));
@@ -121,6 +126,9 @@ fn gemini_cli_fallback_dirs() -> Vec<PathBuf> {
         if let Some(home) = std::env::var_os("HOME") {
             // Common `npm config set prefix=~/.npm-global` layout.
             dirs.push(PathBuf::from(&home).join(".npm-global").join("bin"));
+            // XDG-style user-local bin: pipx, manual installs, and
+            // npm prefixes that point at ~/.local.
+            dirs.push(PathBuf::from(&home).join(".local").join("bin"));
             // nvm's per-version bin dir; not enumerated per-version
             // (we'd need to read .nvmrc). The bare default-version
             // symlink lives in the user's PATH on most setups, so a
@@ -282,6 +290,40 @@ mod tests {
         std::env::set_var("PATH", path_dir.path());
         std::env::set_var("HOME", home.path());
         let resolved = resolve_gemini_cli("gemini");
+        match prev_path {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+        match prev_home {
+            Some(p) => std::env::set_var("HOME", p),
+            None => std::env::remove_var("HOME"),
+        }
+        assert_eq!(resolved.as_deref(), Some(bin.as_path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_claude_cli_fallback_local_bin() {
+        // ~/.local/bin is the XDG-style user-local bin: a common
+        // location for manual installs and pipx-shaped wrappers.
+        // Verify the fallback walk picks it up when PATH misses.
+        use std::os::unix::fs::PermissionsExt;
+        let path_dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let local_bin = home.path().join(".local").join("bin");
+        std::fs::create_dir_all(&local_bin).unwrap();
+        let bin = local_bin.join("claude");
+        std::fs::write(&bin, b"#!/bin/sh\nexit 0\n").unwrap();
+        let mut perms = std::fs::metadata(&bin).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&bin, perms).unwrap();
+
+        let _g = env_lock();
+        let prev_path = std::env::var_os("PATH");
+        let prev_home = std::env::var_os("HOME");
+        std::env::set_var("PATH", path_dir.path());
+        std::env::set_var("HOME", home.path());
+        let resolved = resolve_claude_cli("claude");
         match prev_path {
             Some(p) => std::env::set_var("PATH", p),
             None => std::env::remove_var("PATH"),
