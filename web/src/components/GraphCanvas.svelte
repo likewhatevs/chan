@@ -169,6 +169,13 @@
   /// Rebuilt whenever the theme background colour changes (the icon
   /// stroke is baked in at build time).
   const iconImages: Partial<Record<DKind, HTMLImageElement>> = {};
+  /// Parallel set stroked in the muted text-secondary colour for
+  /// "ghost" rendering — broken-link targets and unresolved
+  /// mentions. The regular variant is stroked in the page bg so
+  /// it knocks out against the kind-coloured disc; the ghost
+  /// variant is stroked in textSec so it reads against the empty
+  /// bgCard fill the ghost ring sits over.
+  const ghostIconImages: Partial<Record<DKind, HTMLImageElement>> = {};
 
   const PATH_DOC =
     `<path d='M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z'/>` +
@@ -199,21 +206,40 @@
     return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
   }
 
-  function loadIcon(kind: DKind, dataUrl: string): void {
+  function loadIcon(
+    bucket: Partial<Record<DKind, HTMLImageElement>>,
+    kind: DKind,
+    dataUrl: string,
+  ): void {
     const img = new Image();
     img.src = dataUrl;
     // The decode resolves asynchronously; until it lands, paint
     // skips this kind's icon. The disc + ring still render.
     img.decode?.().catch(() => { /* fall through; .complete remains true once loaded */ });
-    iconImages[kind] = img;
+    bucket[kind] = img;
   }
 
-  function rebuildIcons(bg: string): void {
-    loadIcon("doc", svgStrokeIcon(PATH_DOC, bg));
-    loadIcon("img", svgStrokeIcon(PATH_IMG, bg));
-    loadIcon("contact", svgStrokeIcon(PATH_CONTACT, bg));
-    loadIcon("tag", svgTextIcon("#", bg));
-    loadIcon("mention", svgTextIcon("@", bg));
+  function rebuildIcons(bg: string, ghostStroke: string): void {
+    // Regular variants — stroked in the page-bg so the icon
+    // "knocks out" against the kind-coloured disc. mention reuses
+    // the contact silhouette because a fuzzy-resolved @@name IS
+    // a contact for every UX purpose; the only difference between
+    // contact and mention kinds is whether the on-disk file
+    // exists as a direct match versus a near match.
+    loadIcon(iconImages, "doc", svgStrokeIcon(PATH_DOC, bg));
+    loadIcon(iconImages, "img", svgStrokeIcon(PATH_IMG, bg));
+    loadIcon(iconImages, "contact", svgStrokeIcon(PATH_CONTACT, bg));
+    loadIcon(iconImages, "tag", svgTextIcon("#", bg));
+    loadIcon(iconImages, "mention", svgStrokeIcon(PATH_CONTACT, bg));
+    // Ghost variants — stroked in text-secondary so the icon
+    // reads against the empty bgCard fill the ghost ring sits
+    // over. Same paths as the regular set; only the stroke
+    // colour differs.
+    loadIcon(ghostIconImages, "doc", svgStrokeIcon(PATH_DOC, ghostStroke));
+    loadIcon(ghostIconImages, "img", svgStrokeIcon(PATH_IMG, ghostStroke));
+    loadIcon(ghostIconImages, "contact", svgStrokeIcon(PATH_CONTACT, ghostStroke));
+    loadIcon(ghostIconImages, "tag", svgTextIcon("#", ghostStroke));
+    loadIcon(ghostIconImages, "mention", svgStrokeIcon(PATH_CONTACT, ghostStroke));
   }
 
   // ---- theme ------------------------------------------------------------
@@ -258,7 +284,7 @@
     theme = next;
     strokeColor = next.bg;
     textColor = next.text;
-    rebuildIcons(next.bg);
+    rebuildIcons(next.bg, next.textSec);
   }
 
   // ---- node classification + data assembly -----------------------------
@@ -579,16 +605,22 @@
       const isSel = n.id === selectedId;
       const isAdj = adj?.has(n.id) === true;
       const isHover = n.id === hoverId;
-      // Fill colour follows the kind palette unless this is a
-      // broken-link ghost, which sinks to the muted card colour
-      // with a dashed ring.
-      const fill = n.missing
+      // Ghost styling fires only for broken-link targets — files
+      // that another doc points at but don't exist on disk. A
+      // `@@name` mention is free-form by design (the indexer
+      // emits a node per distinct token; no contact file is
+      // required), so unresolved mentions are not ghosts; they
+      // render as normal contact-coloured nodes. Whether a
+      // mention happens to fuzzy-match a contact file shows up
+      // in the inspector ("Open in this pane"), not the graph.
+      const isGhost = n.missing;
+      const fill = isGhost
         ? theme.bgCard
         : n.kind === "doc" ? theme.doc
         : n.kind === "img" ? theme.img
         : n.kind === "contact" ? theme.mention
-        : n.kind === "tag" ? theme.tag
-        : theme.mention;
+        : n.kind === "mention" ? theme.mention
+        : theme.tag;
       ctx.beginPath();
       ctx.arc(n.x, n.y, n.radius, 0, Math.PI * 2);
       ctx.fillStyle = fill;
@@ -596,16 +628,16 @@
       // Stroke ring. Selected / hover get the same thickness as
       // the rest so the disc size stays stable; the colour change
       // is what signals state.
-      ctx.lineWidth = n.missing
+      ctx.lineWidth = isGhost
         ? 1 / Math.max(0.5, transform.k)
         : isSel ? 2 / Math.max(0.5, transform.k)
         : 1.2 / Math.max(0.5, transform.k);
-      ctx.strokeStyle = n.missing
+      ctx.strokeStyle = isGhost
         ? theme.textSec
         : isSel ? theme.text
         : isHover ? theme.text
         : strokeColor;
-      if (n.missing) {
+      if (isGhost) {
         ctx.save();
         ctx.setLineDash([2 / Math.max(0.5, transform.k), 2 / Math.max(0.5, transform.k)]);
         ctx.stroke();
@@ -614,11 +646,15 @@
         ctx.stroke();
       }
       // Icon blit. Skips while the SVG is still decoding; the disc
-      // alone still reads as a kind via colour.
-      const icon = iconImages[n.kind];
+      // alone still reads as a kind via colour. Ghost variants
+      // (missing-file targets) reach for the textSec-stroked
+      // raster so the icon reads against the empty bgCard fill.
+      const icon = isGhost
+        ? (ghostIconImages[n.kind] ?? iconImages[n.kind])
+        : iconImages[n.kind];
       if (icon && icon.complete && icon.naturalWidth > 0) {
         const w = n.radius * 2 * ICON_FRACTION;
-        ctx.globalAlpha = n.missing ? 0.4 : 1;
+        ctx.globalAlpha = isGhost ? 0.75 : 1;
         ctx.drawImage(icon, n.x - w / 2, n.y - w / 2, w, w);
         ctx.globalAlpha = 1;
       }
