@@ -1051,7 +1051,15 @@
               name="theme"
               value={opt.value}
               checked={ui.themeChoice === opt.value}
-              onchange={() => setThemeChoice(opt.value as ThemeChoice)}
+              onchange={() => {
+                const v = opt.value as ThemeChoice;
+                setThemeChoice(v);
+                // Keep the autosave form in sync; otherwise the next
+                // PATCH (any dirty edit, or a pending autosave) ships
+                // `editing.theme` stale and reverts the choice.
+                if (editing) editing.theme = v;
+                if (globalConfig) globalConfig.preferences.theme = v;
+              }}
             />
             <span>{opt.label}</span>
           </label>
