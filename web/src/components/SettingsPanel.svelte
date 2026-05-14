@@ -37,7 +37,18 @@
     setOverlayMaximized,
   } from "../state/pageWidth.svelte";
   import { DATE_FORMATS } from "../editor/dateFormats";
+  import HamburgerMenu from "./HamburgerMenu.svelte";
   import OverlayShell from "./OverlayShell.svelte";
+
+  let menu: HamburgerMenu | undefined = $state();
+  let menuOpen = $state(false);
+  const POPOVER_WIDTH = 200;
+  const POPOVER_HEIGHT = 50;
+
+  function doToggleOverlayMaximized(): void {
+    setOverlayMaximized(!overlayMaximized.on);
+    menu?.close();
+  }
 
   const visible = $derived(settingsOverlay.open);
 
@@ -595,24 +606,14 @@
         <span class="err" title={saveStatus.error}>save failed</span>
       {/if}
     </span>
-    <!-- Settings has no hamburger menu (single-form surface), so the
-         maximize / restore toggle that other overlays expose in
-         their menus lives as an inline icon button. Shared
-         overlayMaximized state means flipping it here also resizes
-         every other open overlay. -->
-    <button
-      type="button"
-      class="maximize-btn"
-      onclick={() => setOverlayMaximized(!overlayMaximized.on)}
-      title={overlayMaximized.on ? "Restore size" : "Maximize"}
-      aria-label={overlayMaximized.on ? "Restore size" : "Maximize"}
+    <HamburgerMenu
+      bind:this={menu}
+      bind:open={menuOpen}
+      width={POPOVER_WIDTH}
+      height={POPOVER_HEIGHT}
     >
-      {#if overlayMaximized.on}
-        <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-      {:else}
-        <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-      {/if}
-    </button>
+      {@render settingsMenuItems()}
+    </HamburgerMenu>
   </div>
 
   <div class="body">
@@ -1269,6 +1270,20 @@
 </div>
 </OverlayShell>
 
+{#snippet settingsMenuItems()}
+  <li>
+    <button role="menuitem" onclick={doToggleOverlayMaximized}>
+      {#if overlayMaximized.on}
+        <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        <span>Restore size</span>
+      {:else}
+        <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        <span>Maximize</span>
+      {/if}
+    </button>
+  </li>
+{/snippet}
+
 <style>
   /* Outer container: vertical stack with the top bar above and the
      body row below. Same recipe as FileBrowserTab. */
@@ -1294,27 +1309,6 @@
     min-height: 28px;
   }
   .tab-bar .title { flex: 1; font-weight: 600; color: var(--text); }
-  /* Maximize toggle, same visual weight as the scope-history /
-     hamburger triggers on the other overlays. */
-  .tab-bar .maximize-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 22px;
-    padding: 0;
-    background: var(--bg);
-    color: var(--text-secondary);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    cursor: pointer;
-    transition: color 0.15s ease, border-color 0.15s ease;
-    flex-shrink: 0;
-  }
-  .tab-bar .maximize-btn:hover {
-    color: var(--text);
-    border-color: var(--btn-hover, var(--text-secondary));
-  }
   .body {
     flex: 1;
     display: flex;
