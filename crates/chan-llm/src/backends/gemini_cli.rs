@@ -338,23 +338,62 @@ impl Backend for GeminiCliBackend {
                 }
             };
             match event {
-                StreamEvent::Message { role, content, .. } => {
+                StreamEvent::Message {
+                    role,
+                    content,
+                    delta,
+                } => {
                     // The user echo arrives as role=user; ignore it,
                     // the chan-llm transcript already has it.
                     if role.as_deref() != Some("assistant") || content.is_empty() {
                         continue;
                     }
-                    listener.on_delta(Delta {
-                        text: content.clone(),
-                    });
-                    assistant_text.push_str(&content);
-                    if assistant_text.len() > super::ASSISTANT_TEXT_CAP_BYTES {
-                        listener.on_error(format!(
-                            "gemini_cli stream: assistant text exceeded {} bytes; aborting",
-                            super::ASSISTANT_TEXT_CAP_BYTES,
-                        ));
-                        let _ = child.kill().await;
-                        return Outcome::error();
+                    // gemini-cli's NDJSON tags streaming chunks with
+                    // `delta:true` and the final canonical assistant
+                    // message with `delta:false`. The canonical event
+                    // carries the FULL accumulated text, so emitting
+                    // it via on_delta on top of the streamed chunks
+                    // doubles every assistant turn. Reconcile: when
+                    // delta is explicitly false, treat content as
+                    // canonical and emit only the suffix beyond what
+                    // partials already streamed (drop on drift, same
+                    // defensive choice as claude_cli). Missing-delta
+                    // is treated as a streaming chunk so the legacy
+                    // fixture shape (no flag at all) keeps emitting.
+                    let is_canonical = matches!(delta, Some(false));
+                    let emit: Option<&str> = if is_canonical {
+                        if let Some(suffix) = content.strip_prefix(assistant_text.as_str()) {
+                            if suffix.is_empty() {
+                                None
+                            } else {
+                                Some(suffix)
+                            }
+                        } else {
+                            tracing::warn!(
+                                streamed_bytes = assistant_text.len(),
+                                canonical_bytes = content.len(),
+                                "gemini_cli: streamed/canonical drift; \
+                                 keeping streamed view, dropping canonical to avoid \
+                                 doubled assistant_text",
+                            );
+                            None
+                        }
+                    } else {
+                        Some(content.as_str())
+                    };
+                    if let Some(s) = emit {
+                        listener.on_delta(Delta {
+                            text: s.to_string(),
+                        });
+                        assistant_text.push_str(s);
+                        if assistant_text.len() > super::ASSISTANT_TEXT_CAP_BYTES {
+                            listener.on_error(format!(
+                                "gemini_cli stream: assistant text exceeded {} bytes; aborting",
+                                super::ASSISTANT_TEXT_CAP_BYTES,
+                            ));
+                            let _ = child.kill().await;
+                            return Outcome::error();
+                        }
                     }
                 }
                 StreamEvent::ToolUse {
@@ -674,8 +713,11 @@ enum StreamEvent {
         role: Option<String>,
         #[serde(default)]
         content: String,
+        /// `true` for streaming chunks, `false` for the final
+        /// canonical assistant message (which carries the full
+        /// accumulated text). Missing flag is treated as a streaming
+        /// chunk to keep the legacy fixture shape working.
         #[serde(default)]
-        #[allow(dead_code)]
         delta: Option<bool>,
     },
     ToolUse {
@@ -837,6 +879,70 @@ mod tests {
             })
             .collect();
         assert_eq!(tool_results, vec!["call_1"]);
+    }
+
+    #[tokio::test]
+    async fn canonical_assistant_message_after_delta_chunks_is_not_re_emitted() {
+        // Regression for the same shape of bug as claude_cli's
+        // partials/canonical doubling: gemini-cli's NDJSON message
+        // events carry a `delta:true|false` discriminator. When
+        // streaming, gemini emits `delta:true` chunks; the final
+        // canonical assistant message lands as `delta:false` (or
+        // absent) carrying the full accumulated text. The dispatch
+        // currently emits `on_delta` for every assistant message
+        // regardless of the flag, so the canonical event doubles
+        // the text seen by the listener.
+        //
+        // Expected behaviour: deltas are exactly the streamed
+        // chunks; the canonical message is reconciled (not re-
+        // emitted) so the listener's joined deltas equal the
+        // final assistant_text.
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"init","timestamp":"t","session_id":"s1","model":"gemini-2.5-pro"}
+{"type":"message","timestamp":"t","role":"assistant","content":"hello ","delta":true}
+{"type":"message","timestamp":"t","role":"assistant","content":"world","delta":true}
+{"type":"message","timestamp":"t","role":"assistant","content":"hello world","delta":false}
+{"type":"result","timestamp":"t","status":"success"}"#;
+        let script = fake_gemini(tmp.path(), body);
+        let backend = GeminiCliBackend::new(
+            vec![script.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            tmp.path().to_path_buf(),
+            None,
+            Duration::from_secs(60),
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                vec![Message::user("hi")],
+                Vec::new(),
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        let events = listener.0.lock().unwrap();
+        let deltas: Vec<String> = events
+            .iter()
+            .filter_map(|e| {
+                if let Event::Delta(t) = e {
+                    Some(t.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            deltas,
+            vec!["hello ".to_string(), "world".to_string()],
+            "canonical (delta:false) message must not re-fire on_delta on top of \
+             the streamed chunks; got {deltas:?}"
+        );
+        // Joined deltas must equal the final assistant_text. If we
+        // double-counted, this would be 2x.
+        let joined: String = deltas.concat();
+        assert_eq!(joined, outcome.assistant_text);
+        assert_eq!(outcome.stop_reason, StopReason::EndOfTurn);
     }
 
     #[tokio::test]
