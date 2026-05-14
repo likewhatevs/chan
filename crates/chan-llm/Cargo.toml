@@ -20,6 +20,7 @@ chan-drive = { path = "../chan-drive" }
 async-trait = { workspace = true }
 dirs = { workspace = true }
 futures-util = { workspace = true }
+httpdate = { workspace = true }
 keyring = { workspace = true }
 once_cell = { workspace = true }
 reqwest = { workspace = true }

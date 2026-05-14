@@ -66,6 +66,7 @@ futures = "0.3"
 futures-util = { version = "0.3", default-features = false }
 h2 = "0.4"
 http = "1"
+httpdate = "1"
 http-body = "1"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["http2", "client", "server"] }
