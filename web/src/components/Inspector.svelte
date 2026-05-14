@@ -1,76 +1,117 @@
 <script lang="ts">
-  // Chrome-only host for the right-side inspector pane. Renders the
-  // resize handle on the left edge, an aside container, and a title
-  // bar; the body is supplied by the caller via children. Used by:
-  //   - FileEditorTab (body: outline + collapsible file info)
-  //   - FileBrowserTab (body: file/folder metadata for the current
+  // Chrome-only host for an inspector pane. Renders the resize
+  // handle on the edge facing the workspace, an aside container,
+  // and a title bar; the body is supplied by the caller via
+  // children. Used by:
+  //   - FileEditorTab (right: file info; left: outline)
+  //   - FileBrowserTab (right: file/folder metadata for the current
   //     selection)
-  //   - future: settings tab info, graph node info
   //
   // Width is bound by the caller so each surface can persist into
-  // its own preference slot (file editor uses paneWidths.inspector;
-  // file browser uses paneWidths.browser; defaults differ).
+  // its own preference slot (file editor info uses
+  // paneWidths.inspector; outline uses paneWidths.outline; file
+  // browser uses paneWidths.browser; defaults differ).
+  //
+  // `side` controls which edge the pane sits on. The resize handle
+  // always lives on the workspace-facing side; the close glyph
+  // points outward (toward the screen edge the pane will slide off
+  // to when collapsed).
 
   import type { Snippet } from "svelte";
-  import { ArrowRight } from "lucide-svelte";
+  import { ArrowLeft, ArrowRight } from "lucide-svelte";
   import ResizeHandle from "./ResizeHandle.svelte";
 
   let {
     title,
     width = $bindable(220),
+    side = "right",
     onResize,
     onClose,
     children,
   }: {
     title: string;
     width?: number;
+    side?: "left" | "right";
     onResize?: () => void;
     onClose?: () => void;
     children?: Snippet;
   } = $props();
 </script>
 
-<ResizeHandle bind:width onChange={onResize} />
-<aside class="inspector" style="width: {width}px">
-  <div class="title">
-    <span class="title-text">{title}</span>
-    {#if onClose}
-      <button
-        class="close"
-        type="button"
-        title="Close"
-        aria-label="Close {title}"
-        onclick={onClose}
-      >
-        <!-- Right-pointing arrow matches the panel's collapse
-             direction (the inspector lives on the right edge and
-             slides off to the right when closed). Visual idiom
-             copied from Google Docs' left-panel close (which uses
-             a left-pointing arrow because that panel sits on the
-             left). -->
-        <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
-      </button>
-    {/if}
-  </div>
-  <div class="body">
-    {#if children}
-      {@render children()}
-    {/if}
-  </div>
-</aside>
+{#if side === "left"}
+  <aside class="inspector left" style="width: {width}px">
+    <div class="title">
+      <span class="title-text">{title}</span>
+      {#if onClose}
+        <button
+          class="close"
+          type="button"
+          title="Close"
+          aria-label="Close {title}"
+          onclick={onClose}
+        >
+          <!-- Left-pointing arrow matches the panel's collapse
+               direction (the pane lives on the left edge and slides
+               off to the left when closed). -->
+          <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
+        </button>
+      {/if}
+    </div>
+    <div class="body">
+      {#if children}
+        {@render children()}
+      {/if}
+    </div>
+  </aside>
+  <ResizeHandle bind:width onChange={onResize} side="left" />
+{:else}
+  <ResizeHandle bind:width onChange={onResize} />
+  <aside class="inspector right" style="width: {width}px">
+    <div class="title">
+      <span class="title-text">{title}</span>
+      {#if onClose}
+        <button
+          class="close"
+          type="button"
+          title="Close"
+          aria-label="Close {title}"
+          onclick={onClose}
+        >
+          <!-- Right-pointing arrow matches the panel's collapse
+               direction (the inspector lives on the right edge and
+               slides off to the right when closed). Visual idiom
+               copied from Google Docs' left-panel close (which uses
+               a left-pointing arrow because that panel sits on the
+               left). -->
+          <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
+        </button>
+      {/if}
+    </div>
+    <div class="body">
+      {#if children}
+        {@render children()}
+      {/if}
+    </div>
+  </aside>
+{/if}
 
 <style>
   .inspector {
     /* width is set inline by the parent so the resize handle's
        drag updates apply without a CSS rule rewrite. */
     flex-shrink: 0;
-    border-left: 1px solid var(--separator);
     background: var(--inspector-bg);
     color: var(--text);
     overflow-y: auto;
     display: flex;
     flex-direction: column;
     font-size: 15px;
+  }
+  .inspector.right {
+    border-left: 1px solid var(--separator);
+  }
+  .inspector.left {
+    border-right: 1px solid var(--separator);
   }
   .title {
     padding: 0.4rem 0.6rem;

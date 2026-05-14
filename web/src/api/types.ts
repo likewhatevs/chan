@@ -263,6 +263,10 @@ export type PaneWidths = {
   graph: number;
   browser: number;
   search: number;
+  /// Width of the left-side outline pane in the file editor tab.
+  /// Optional on the wire so older servers (no `outline` field in
+  /// PaneWidths) still parse cleanly; the client fills the default.
+  outline?: number;
 };
 
 /// Vertical density for paragraphs and lists in the editor.

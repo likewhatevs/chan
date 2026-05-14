@@ -153,6 +153,9 @@ export function applyServerPreferences(): void {
     // older preferences.toml without the field still arrives with a
     // valid number rather than `undefined`.
     paneWidths.search = prefs.pane_widths.search ?? DEFAULT_PANE_WIDTHS.search;
+    // Older servers don't ship `outline`; fall back to the default
+    // so the file-editor outline pane has a sane width on first use.
+    paneWidths.outline = prefs.pane_widths.outline ?? DEFAULT_PANE_WIDTHS.outline;
   }
 }
 
@@ -2035,6 +2038,25 @@ export function availableGraphScopes(): ScopeOption[] {
       });
     }
   }
+  // Same trick for file scopes entered via openGraphForFile or the
+  // inspector's "Graph this" button on a file/image/contact node.
+  // The file may not be open in any pane (so availableScopeOptions
+  // didn't include it), but the user just asked for it to be the
+  // scope — surfacing it in the dropdown lets them switch away and
+  // back without losing the selection, and prevents the snap-back
+  // effect in GraphPanel from clobbering scopeId on the next tick.
+  if (graphOverlay.scopeId.startsWith("file:")) {
+    const path = graphOverlay.scopeId.slice("file:".length);
+    if (path && !out.some((o) => o.id === graphOverlay.scopeId)) {
+      out.unshift({
+        id: graphOverlay.scopeId,
+        kind: "file",
+        label: path,
+        path,
+        readOnly: false,
+      });
+    }
+  }
   return out;
 }
 
@@ -2114,6 +2136,7 @@ export function openGraph(): void {
  *  the previously-saved scope. */
 export function openGraphAtNode(nodeId: string): void {
   graphOverlay.scopeId = "drive";
+  graphOverlay.depth = 1;
   graphOverlay.pendingSelectId = nodeId;
   graphOverlay.open = true;
   // Stack on top of whatever overlay invoked us (typically the
@@ -2132,6 +2155,7 @@ export function openGraphAtNode(nodeId: string): void {
  *  THIS file". */
 export function openGraphForFile(path: string): void {
   graphOverlay.scopeId = `file:${path}`;
+  graphOverlay.depth = 1;
   graphOverlay.pendingSelectId = path;
   graphOverlay.open = true;
   scheduleSessionSave();
@@ -2145,6 +2169,7 @@ export function openGraphForFile(path: string): void {
  *  hits, TagInfoBody's Open-in-Graph button. */
 export function openGraphForTag(nodeId: string, _label: string): void {
   graphOverlay.scopeId = `tag:${nodeId}`;
+  graphOverlay.depth = 1;
   graphOverlay.pendingSelectId = nodeId;
   graphOverlay.open = true;
   scheduleSessionSave();
@@ -2781,6 +2806,7 @@ const DEFAULT_PANE_WIDTHS = {
   graph: 260,
   browser: 240,
   search: 280,
+  outline: 220,
 };
 
 export const paneWidths = $state<{
@@ -2788,6 +2814,7 @@ export const paneWidths = $state<{
   graph: number;
   browser: number;
   search: number;
+  outline: number;
 }>({ ...DEFAULT_PANE_WIDTHS });
 
 /// Currently inspected entry in the File Browser tab. Module-level
@@ -2817,6 +2844,7 @@ export function persistPaneWidths(): void {
       graph: clamp(paneWidths.graph),
       browser: clamp(paneWidths.browser),
       search: clamp(paneWidths.search),
+      outline: clamp(paneWidths.outline),
     };
     widthsPersistInflight = widthsPersistInflight.catch(() => {}).then(async () => {
       const cfg = await api.config();
@@ -2826,7 +2854,8 @@ export function persistPaneWidths(): void {
         cur.inspector === snapshot.inspector &&
         cur.graph === snapshot.graph &&
         cur.browser === snapshot.browser &&
-        cur.search === snapshot.search
+        cur.search === snapshot.search &&
+        cur.outline === snapshot.outline
       ) {
         return;
       }

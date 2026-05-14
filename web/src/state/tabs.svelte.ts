@@ -76,10 +76,13 @@ export type FileTab = {
   mode: Mode;
   loading: boolean;
   error: string | null;
-  /// Whether the inspector panel (outline body + future file info)
-  /// is shown alongside the editor. Toggleable per tab; persisted
-  /// in the URL hash.
+  /// Whether the right-side inspector panel (file info: tags,
+  /// backlinks, refs) is shown alongside the editor. Toggleable
+  /// per tab; persisted in the URL hash.
   inspectorOpen: boolean;
+  /// Whether the left-side outline pane is shown alongside the
+  /// editor. Toggleable per tab; persisted in the URL hash.
+  outlineOpen: boolean;
   /// Enclosing git repo, relative to the drive root, for files that
   /// live inside one. Set on first load from FileResponse.repo_root;
   /// drives the per-file "git repo: <name>" scope option in the
@@ -288,6 +291,7 @@ export async function openInPane(paneId: string, path: string): Promise<void> {
     loading: true,
     error: null,
     inspectorOpen: false,
+    outlineOpen: false,
     repoRoot: null,
     readMode: false,
     fsWritable: true,
@@ -408,6 +412,7 @@ function cloneTab(src: Tab): Tab {
     loading: src.loading,
     error: src.error,
     inspectorOpen: src.inspectorOpen,
+    outlineOpen: src.outlineOpen,
     repoRoot: src.repoRoot,
     readMode: src.readMode,
     fsWritable: src.fsWritable,
@@ -539,6 +544,9 @@ export function setTabCaret(tab: FileTab, from: number, to: number): void {
 }
 export function setTabInspectorOpen(tab: FileTab, open: boolean): void {
   tab.inspectorOpen = open;
+}
+export function setTabOutlineOpen(tab: FileTab, open: boolean): void {
+  tab.outlineOpen = open;
 }
 export function setTabStyleToolbarOpen(tab: FileTab, open: boolean): void {
   tab.styleToolbarOpen = open;
@@ -715,6 +723,9 @@ type SerTab = {
   m?: Mode;
   a?: 1;
   o?: 1;
+  /// Outline pane (left-side) visibility. Default off, so we only
+  /// emit `ol: 1` when the user has opted the outline in.
+  ol?: 1;
   /// Style toolbar visibility. Default is "hidden" for new tabs;
   /// we only emit `s: 1` when the user explicitly enabled it so
   /// the common case keeps the hash short. Restores without the
@@ -756,6 +767,7 @@ function serializeNode(nodeId: string): SerNode | null {
         m: t.mode,
         ...active,
         ...(t.inspectorOpen ? { o: 1 as const } : {}),
+        ...(t.outlineOpen ? { ol: 1 as const } : {}),
         ...(t.styleToolbarOpen ? { s: 1 as const } : {}),
         ...(t.readMode ? { r: 1 as const } : {}),
         ...c,
@@ -824,6 +836,7 @@ export async function restoreLayout(s: SerNode): Promise<void> {
           loading: true,
           error: null,
           inspectorOpen: !!sertab.o,
+          outlineOpen: !!sertab.ol,
           // repoRoot is filled in by loadTabContent on first read;
           // restored sessions start with null and get the real value
           // once the file fetches.

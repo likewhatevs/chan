@@ -46,6 +46,7 @@
     setMode,
     setTabCaret,
     setTabInspectorOpen,
+    setTabOutlineOpen,
     setTabStyleToolbarOpen,
     type FileTab,
   } from "../state/tabs.svelte";
@@ -86,18 +87,6 @@
   // the toolbar can call into the Wysiwyg formatting API.
   let wysiwygRef: Wysiwyg | undefined = $state();
   let sourceRef: Source | undefined = $state();
-
-  /// "show info" disclosure inside the inspector. Per-tab session
-  /// state; intentionally not persisted (would grow the tab schema
-  /// for a small UI affordance and the disclosure starts collapsed
-  /// every tab restore is fine).
-  /// Active inspector tab. "outline" lists the file's headings (with
-  /// click-to-scroll); "info" shows the same FileInfoBody surface the
-  /// file browser inspector uses (tags, backlinks, refs). Per-tab
-  /// state lives on the FileTab so each open file remembers its own
-  /// choice across pane / tab focus changes.
-  type InspectorTab = "outline" | "info";
-  let inspectorTab = $state<InspectorTab>("outline");
 
   /// Read-only mode for this tab. The status bar's lamp toggle
   /// drives `tab.readMode` directly; an OS-level read-only file
@@ -279,6 +268,11 @@
   }
 
   function doToggleOutline(): void {
+    setTabOutlineOpen(tab, !tab.outlineOpen);
+    closeTabMenu();
+  }
+
+  function doToggleDetails(): void {
     setTabInspectorOpen(tab, !tab.inspectorOpen);
     closeTabMenu();
   }
@@ -379,7 +373,20 @@
           </span>
           <span class="mbtn-chord"></span>
         </button>
-        <button class="mbtn" onclick={doToggleOutline} class:on={tab.inspectorOpen}>
+        <button class="mbtn" onclick={doToggleOutline} class:on={tab.outlineOpen}>
+          <span class="mbtn-icon">
+            {#if tab.outlineOpen}
+              <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
+            {:else}
+              <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
+            {/if}
+          </span>
+          <span class="mbtn-label">
+            {tab.outlineOpen ? "Hide Outline" : "Show Outline"}
+          </span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <button class="mbtn" onclick={doToggleDetails} class:on={tab.inspectorOpen}>
           <span class="mbtn-icon">
             {#if tab.inspectorOpen}
               <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -501,6 +508,17 @@
     <div class="placeholder">loading…</div>
   {:else}
     <div class="editor-inspector-row">
+      {#if tab.outlineOpen}
+        <Inspector
+          title="Outline"
+          side="left"
+          bind:width={paneWidths.outline}
+          onResize={persistPaneWidths}
+          onClose={() => setTabOutlineOpen(tab, false)}
+        >
+          <OutlineBody content={tab.content} {caretLine} onSelect={jumpTo} />
+        </Inspector>
+      {/if}
       {#if tab.mode === "wysiwyg"}
         <!-- Wysiwyg + floating style toolbar share a positioned
              host so the toolbar can pin to the top-left of the
@@ -590,36 +608,11 @@
           onResize={persistPaneWidths}
           onClose={() => setTabInspectorOpen(tab, false)}
         >
-          <!-- Single toggle button instead of a tab strip. Reads as
-               "you're on Outline; click to swap to File info" (and
-               vice-versa). The swap glyph hints at the toggle action;
-               the label always names the *current* view so the user
-               sees what they're looking at, not what's behind it. -->
-          <button
-            class="inspector-toggle"
-            type="button"
-            aria-label={inspectorTab === "outline"
-              ? "Switch to file info"
-              : "Switch to outline"}
-            onclick={() =>
-              (inspectorTab = inspectorTab === "outline" ? "info" : "outline")}
-          >
-            <span class="inspector-toggle-label">
-              {inspectorTab === "outline" ? "Outline" : "File info"}
-            </span>
-            <span class="inspector-toggle-glyph" aria-hidden="true">⇄</span>
-          </button>
-          <div class="inspector-body">
-            {#if inspectorTab === "outline"}
-              <OutlineBody content={tab.content} {caretLine} onSelect={jumpTo} />
-            {:else}
-              <FileInfoBody
-                path={tab.path}
-                showRefs
-                onNavigate={(p) => void openInActivePane(p)}
-              />
-            {/if}
-          </div>
+          <FileInfoBody
+            path={tab.path}
+            showRefs
+            onNavigate={(p) => void openInActivePane(p)}
+          />
         </Inspector>
       {/if}
     </div>
@@ -819,42 +812,4 @@
      the floating toolbar pill (top: 8px, ~30px tall); when the
      toolbar is hidden we reclaim that space back to the 1rem
      baseline so the first line sits at the top of the doc. */
-  /* Single-button toggle across the top of the inspector body.
-     Names the *current* view ("Outline" or "File info") so the
-     user sees what they're looking at; the swap glyph hints that
-     clicking flips to the other view. */
-  .inspector-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-    width: 100%;
-    flex-shrink: 0;
-    background: none;
-    border: 0;
-    border-bottom: 1px solid var(--separator);
-    color: var(--text);
-    cursor: pointer;
-    font: inherit;
-    font-size: 13px;
-    padding: 0.45rem 0.6rem;
-    text-align: left;
-  }
-  .inspector-toggle:hover {
-    background: var(--hover-bg);
-  }
-  .inspector-toggle-label {
-    font-weight: 600;
-  }
-  .inspector-toggle-glyph {
-    color: var(--text-secondary);
-    font-size: 14px;
-  }
-  .inspector-body {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-  }
 </style>

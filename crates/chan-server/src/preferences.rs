@@ -94,6 +94,11 @@ pub struct PaneWidths {
     // search inspector got its own width slot) load cleanly.
     #[serde(default = "default_search_width")]
     pub search: u32,
+    // Per-field default so older preferences.toml (written before the
+    // outline pane was split out of the right-side inspector) load
+    // cleanly. Width of the left-side outline pane in the file editor.
+    #[serde(default = "default_outline_width")]
+    pub outline: u32,
 }
 
 impl Default for PaneWidths {
@@ -104,12 +109,17 @@ impl Default for PaneWidths {
             graph: 260,
             browser: 240,
             search: default_search_width(),
+            outline: default_outline_width(),
         }
     }
 }
 
 fn default_search_width() -> u32 {
     280
+}
+
+fn default_outline_width() -> u32 {
+    220
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,6 +208,7 @@ mod tests {
         assert_eq!(prefs.pane_widths.graph, 300);
         assert_eq!(prefs.pane_widths.browser, 250);
         assert_eq!(prefs.pane_widths.search, default_search_width());
+        assert_eq!(prefs.pane_widths.outline, default_outline_width());
     }
 
     #[test]

@@ -114,7 +114,7 @@
       <li class:active={h.index === activeIndex}>
         <button
           class="row"
-          style="padding-right: {(h.depth - 1) * 14 + 14}px"
+          style="padding-left: {(h.depth - 1) * 14 + 14}px"
           title={h.text}
           onclick={() => onSelect(h)}
         >{h.text}</button>
@@ -129,31 +129,30 @@
     color: var(--text-secondary);
     font-style: italic;
   }
-  /* Google-Docs-style outline, mirrored for chan's right-side
-     inspector: every heading hangs off a single vertical guide
-     line at the RIGHT (toward the editor edge), with items
-     extending leftward. The line is the same colour as the panel
-     border so it reads as structure, not decoration. Depth is
-     encoded purely in right-padding; the line itself does not
-     branch per level. The 10px gap between the line and the
-     panel edge gives the tree breathing room from the inspector
-     chrome. */
+  /* Google-Docs-style outline, sitting in chan's left-side outline
+     pane: every heading hangs off a single vertical guide line at
+     the LEFT (toward the workspace edge), with items extending
+     rightward. The line is the same colour as the panel border so
+     it reads as structure, not decoration. Depth is encoded purely
+     in left-padding; the line itself does not branch per level.
+     The 10px gap between the line and the panel edge gives the
+     tree breathing room from the pane chrome. */
   ul {
     list-style: none;
-    margin: 0 10px 0 0;
+    margin: 0 0 0 10px;
     padding: 0.35rem 0;
-    border-right: 1px solid var(--border);
+    border-left: 1px solid var(--border);
   }
   li { position: relative; }
   /* Active-heading marker. The 2px accent bar sits on top of the
-     ul's 1px guide line on the right edge (right: -1px overlaps by
+     ul's 1px guide line on the left edge (left: -1px overlaps by
      1px outward, the bar is 2px wide, so it fully covers the 1px
      guide and extends 1px further into the gutter). top/bottom =
      2px crop the bar to the row's vertical center. */
   li.active::before {
     content: "";
     position: absolute;
-    right: -1px;
+    left: -1px;
     top: 2px;
     bottom: 2px;
     width: 2px;
