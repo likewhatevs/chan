@@ -62,6 +62,15 @@
   const documents = $derived<GraphViewNode[]>(
     documentsOverride ?? documentsReferencing(nodeId),
   );
+  /// Split the referenced files into contacts vs plain docs so each
+  /// kind can render under its own section header, mirroring
+  /// FileInfoBody's Contacts / Links-to layout.
+  const contacts = $derived<GraphViewNode[]>(
+    documents.filter((d) => d.kind === "file" && d.node_kind === "contact"),
+  );
+  const docs = $derived<GraphViewNode[]>(
+    documents.filter((d) => !(d.kind === "file" && d.node_kind === "contact")),
+  );
 
   /// Background color for the kind chip. Mirrors the graph palette
   /// (--g-tag etc.) so search and graph chips are visually identical.
@@ -110,20 +119,41 @@
   {:else if documents.length === 0}
     <div class="muted">no documents reference this</div>
   {:else}
-    <section class="refs">
-      <h4>Documents</h4>
-      <ul>
-        {#each documents as d (d.id)}
-          <li>
-            {#if d.kind === "file" && !d.missing && onNavigate}
-              <button class="ref" onclick={() => navigate(d)}>{d.label}</button>
-            {:else}
-              <span class="ref" class:missing={d.kind === "file" && d.missing}>{d.label}</span>
-            {/if}
-          </li>
-        {/each}
-      </ul>
-    </section>
+    {#if contacts.length > 0}
+      <section class="refs">
+        <h4>Contacts</h4>
+        <ul>
+          {#each contacts as d (d.id)}
+            <li>
+              {#if !d.missing && onNavigate}
+                <button class="ref contact" onclick={() => navigate(d)}>{d.label}</button>
+              {:else}
+                <span class="ref contact" class:missing={d.missing}>{d.label}</span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
+    {#if docs.length > 0}
+      <section class="refs">
+        <h4>Documents</h4>
+        <ul>
+          {#each docs as d (d.id)}
+            <li>
+              {#if d.kind === "file" && !d.missing && onNavigate}
+                <button class="ref" onclick={() => navigate(d)}>{d.label}</button>
+              {:else}
+                <span
+                  class="ref"
+                  class:missing={d.kind === "file" && d.missing}
+                >{d.label}</span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
   {/if}
 </div>
 
@@ -232,6 +262,26 @@
   button.ref:hover {
     border-color: var(--btn-hover);
     background: var(--hover-bg);
+  }
+  /* Contact rows: same person silhouette + warn-text accent as
+     FileInfoBody's Contacts section. No left-border stripe (the
+     icon + colour already mark the row), matching the file inspector. */
+  .ref.contact {
+    color: var(--warn-text);
+    padding-left: 22px;
+    position: relative;
+  }
+  .ref.contact::before {
+    content: "";
+    position: absolute;
+    left: 6px;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    transform: translateY(-50%);
+    background: currentColor;
+    -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='5' r='3'/><path d='M2 14c0-3 3-5 6-5s6 2 6 5z'/></svg>") center / contain no-repeat;
+    mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='5' r='3'/><path d='M2 14c0-3 3-5 6-5s6 2 6 5z'/></svg>") center / contain no-repeat;
   }
   .ref.missing { color: var(--text-secondary); font-style: italic; }
 </style>
