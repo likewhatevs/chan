@@ -64,6 +64,7 @@
   import Source from "../editor/Source.svelte";
   import StyleToolbar from "./StyleToolbar.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
+  import { chordFor } from "../state/shortcuts";
   import { banner, displayAgentName } from "./agentBanner";
   import {
     assistantConversations,
@@ -2272,12 +2273,26 @@
 </OverlayShell>
 
 {#snippet menuItems()}
+  <!-- Maximize is the most-reached-for action here (a wider canvas
+       helps both reading the response and writing the prompt), so
+       it leads the menu above the prompt-width slider. -->
+  <li>
+    <button role="menuitem" onclick={doToggleOverlayMaximized}>
+      {#if overlayMaximized.on}
+        <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        <span class="menu-row-label">Restore size</span>
+      {:else}
+        <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        <span class="menu-row-label">Maximize</span>
+      {/if}
+      <span class="menu-row-chord"></span>
+    </button>
+  </li>
+  <li class="sep" role="separator"></li>
   <!-- Prompt-width slider. Caps the assistant prompt's column
        independently from the global page-width (which the file
        editors share); writing comfortably here often calls for a
-       different width than reading. Sits at the top of the popover
-       in its own visual band; the action list below carries the
-       toggles. -->
+       different width than reading. -->
   <li class="page-width-row" role="presentation">
     <span class="page-width-label">Prompt width</span>
     <input
@@ -2296,40 +2311,35 @@
   <li>
     <button role="menuitem" onclick={doToggleSourceMode}>
       <span class="glyph" aria-hidden="true">{promptMode === "wysiwyg" ? "</>" : "¶"}</span>
-      <span>{promptMode === "wysiwyg" ? "Show Source Code" : "Show Rendered"}</span>
+      <span class="menu-row-label">
+        {promptMode === "wysiwyg" ? "Show Source Code" : "Show Rendered"}
+      </span>
+      <span class="menu-row-chord"></span>
     </button>
   </li>
   <li>
     <button role="menuitem" onclick={doToggleStyleToolbar}>
       <span class="glyph" aria-hidden="true">Aa</span>
-      <span>
+      <span class="menu-row-label">
         {assistantOverlay.styleToolbarOpen ? "Hide Style Toolbar" : "Show Style Toolbar"}
       </span>
-    </button>
-  </li>
-  <li>
-    <button role="menuitem" onclick={doToggleOverlayMaximized}>
-      {#if overlayMaximized.on}
-        <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        <span>Restore size</span>
-      {:else}
-        <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        <span>Maximize</span>
-      {/if}
+      <span class="menu-row-chord"></span>
     </button>
   </li>
   <li class="sep" role="separator"></li>
   <li>
     <button role="menuitem" onclick={doShowInGraph} disabled={!currentContext}>
       <Network size={14} strokeWidth={1.75} aria-hidden="true" />
-      <span>Show in Graph</span>
+      <span class="menu-row-label">Show in Graph</span>
+      <span class="menu-row-chord">{chordFor("app.graph.toggle") ?? ""}</span>
     </button>
   </li>
   <li class="sep" role="separator"></li>
   <li>
     <button role="menuitem" onclick={doOpenSettings}>
       <Settings size={14} strokeWidth={1.75} aria-hidden="true" />
-      <span>Settings</span>
+      <span class="menu-row-label">Settings</span>
+      <span class="menu-row-chord">{chordFor("app.settings.toggle") ?? ""}</span>
     </button>
   </li>
 {/snippet}

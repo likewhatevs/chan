@@ -50,6 +50,7 @@
   import OverlayShell from "./OverlayShell.svelte";
   import InspectorBody, { type InspectorSelection } from "./InspectorBody.svelte";
   import GraphCanvas from "./GraphCanvas.svelte";
+  import { chordFor } from "../state/shortcuts";
 
   // Visibility of the details aside lives on `graphOverlay.inspectorOpen`
   // (module state) so it round-trips through the URL hash.
@@ -759,18 +760,22 @@
       {:else}
         <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
       {/if}
-      <span>{graphOverlay.inspectorOpen ? "Hide Details" : "Show Details"}</span>
+      <span class="menu-row-label">
+        {graphOverlay.inspectorOpen ? "Hide Details" : "Show Details"}
+      </span>
+      <span class="menu-row-chord"></span>
     </button>
   </li>
   <li>
     <button role="menuitem" onclick={doToggleOverlayMaximized}>
       {#if overlayMaximized.on}
         <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        <span>Restore size</span>
+        <span class="menu-row-label">Restore size</span>
       {:else}
         <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        <span>Maximize</span>
+        <span class="menu-row-label">Maximize</span>
       {/if}
+      <span class="menu-row-chord"></span>
     </button>
   </li>
   <li class="sep" role="separator"></li>
@@ -802,14 +807,16 @@
   <li>
     <button role="menuitem" onclick={reloadGraph}>
       <span class="glyph" aria-hidden="true">↻</span>
-      <span>Reload</span>
+      <span class="menu-row-label">Reload</span>
+      <span class="menu-row-chord"></span>
     </button>
   </li>
   <li class="sep" role="separator"></li>
   <li>
     <button role="menuitem" onclick={doOpenSettings}>
       <Settings size={14} strokeWidth={1.75} aria-hidden="true" />
-      <span>Settings</span>
+      <span class="menu-row-label">Settings</span>
+      <span class="menu-row-chord">{chordFor("app.settings.toggle") ?? ""}</span>
     </button>
   </li>
 {/snippet}

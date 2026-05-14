@@ -30,6 +30,7 @@
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import ImportContactsModal from "./ImportContactsModal.svelte";
   import OverlayShell from "./OverlayShell.svelte";
+  import { chordFor } from "../state/shortcuts";
   import { isEditableText } from "../state/fileTypes";
   import {
     browserOverlay,
@@ -247,57 +248,69 @@
       {:else}
         <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
       {/if}
-      <span>{browserOverlay.inspectorOpen ? "Hide Details" : "Show Details"}</span>
+      <span class="menu-row-label">
+        {browserOverlay.inspectorOpen ? "Hide Details" : "Show Details"}
+      </span>
+      <span class="menu-row-chord"></span>
     </button>
   </li>
   <li>
     <button role="menuitem" onclick={doToggleOverlayMaximized}>
       {#if overlayMaximized.on}
         <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        <span>Restore size</span>
+        <span class="menu-row-label">Restore size</span>
       {:else}
         <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        <span>Maximize</span>
+        <span class="menu-row-label">Maximize</span>
       {/if}
+      <span class="menu-row-chord"></span>
     </button>
   </li>
   <li class="sep" role="separator"></li>
   <li>
     <button role="menuitem" onclick={newFileHere}>
       <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span>New file</span>
+      <span class="menu-row-label">New file</span>
+      <span class="menu-row-chord">{chordFor("app.file.new") ?? ""}</span>
     </button>
   </li>
   <li>
     <button role="menuitem" onclick={newDirHere}>
       <FolderPlus size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span>New folder</span>
+      <span class="menu-row-label">New folder</span>
+      <span class="menu-row-chord"></span>
     </button>
   </li>
   <li>
     <button role="menuitem" onclick={openImportContacts}>
       <Users size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span>Import contacts…</span>
+      <span class="menu-row-label">Import contacts…</span>
+      <span class="menu-row-chord"></span>
     </button>
   </li>
   <li class="sep" role="separator"></li>
   <li>
     <button role="menuitem" onclick={toggleAll}>
       <span class="glyph" aria-hidden="true">⇅</span>
-      <span>{fullyExpanded ? "Collapse all folders" : "Expand all folders"}</span>
+      <span class="menu-row-label">
+        {fullyExpanded ? "Collapse all folders" : "Expand all folders"}
+      </span>
+      <span class="menu-row-chord"></span>
     </button>
   </li>
   <li>
     <button role="menuitem" onclick={reloadTree}>
       <span class="glyph" aria-hidden="true">↻</span>
-      <span>Reload</span>
+      <span class="menu-row-label">Reload</span>
+      <span class="menu-row-chord"></span>
     </button>
   </li>
   <li class="sep" role="separator"></li>
   <li>
     <button role="menuitem" onclick={renameDrive}>
       <Pencil size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span>Rename drive…</span>
+      <span class="menu-row-label">Rename drive…</span>
+      <span class="menu-row-chord"></span>
     </button>
   </li>
   <li>
@@ -322,7 +335,8 @@
   <li>
     <button role="menuitem" onclick={doOpenSettings}>
       <Settings size={14} strokeWidth={1.75} aria-hidden="true" />
-      <span>Settings</span>
+      <span class="menu-row-label">Settings</span>
+      <span class="menu-row-chord">{chordFor("app.settings.toggle") ?? ""}</span>
     </button>
   </li>
 {/snippet}

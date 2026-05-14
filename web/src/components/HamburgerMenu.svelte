@@ -260,4 +260,19 @@
     font-size: 14px;
     line-height: 1;
   }
+  /* Two-column row layout used inside HamburgerMenu rows: label
+     flush-left, chord (Cmd+P, …) flush-right. Defined globally so
+     every overlay menu (search, graph, files, assistant) and the
+     empty-pane menu share one set of class names. Rows without a
+     registered chord still render an empty `.menu-row-chord`
+     sibling so the right column stays vertically aligned. */
+  :global(.menu-row-label) {
+    flex: 1;
+  }
+  :global(.menu-row-chord) {
+    margin-left: 1.5rem;
+    color: var(--text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+  }
 </style>

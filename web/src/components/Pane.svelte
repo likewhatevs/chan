@@ -24,12 +24,12 @@
     Network,
     Search,
     Settings,
-    Sparkles,
     SquareSplitHorizontal,
     SquareSplitVertical,
     User,
     X,
   } from "lucide-svelte";
+  import EnsoIcon from "./EnsoIcon.svelte";
   import FileEditorTab from "./FileEditorTab.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import {
@@ -86,7 +86,11 @@
   /// column rather than disappearing.
   type EmptyMenuRow = {
     label: string;
-    icon: typeof Settings;
+    // Lucide icons (legacy Svelte component class) and EnsoIcon
+    // (Svelte 5 component) don't share a single TS type, but both
+    // accept `size` + `strokeWidth` at the call site below.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    icon: any;
     command: string;
     chordId?: string;
   };
@@ -100,7 +104,7 @@
   ];
   const emptyPaneNavigation: EmptyMenuRow[] = [
     {
-      label: "Show in File Browser",
+      label: "Files",
       icon: Folder,
       command: "app.files.toggle",
       chordId: "app.files.toggle",
@@ -112,14 +116,14 @@
       chordId: "app.search.toggle",
     },
     {
-      label: "Show in Graph",
+      label: "Graph",
       icon: Network,
       command: "app.graph.toggle",
       chordId: "app.graph.toggle",
     },
     {
       label: "Call Assistant",
-      icon: Sparkles,
+      icon: EnsoIcon,
       command: "app.assistant.toggle",
       chordId: "app.assistant.toggle",
     },
@@ -713,8 +717,8 @@
             <li>
               <button role="menuitem" onclick={() => dispatchCommand(row.command)}>
                 <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
-                <span class="empty-pane-menu-label">{row.label}</span>
-                <span class="empty-pane-menu-chord">{chordLabel(row.chordId)}</span>
+                <span class="menu-row-label">{row.label}</span>
+                <span class="menu-row-chord">{chordLabel(row.chordId)}</span>
               </button>
             </li>
           {/each}
@@ -724,8 +728,8 @@
             <li>
               <button role="menuitem" onclick={() => dispatchCommand(row.command)}>
                 <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
-                <span class="empty-pane-menu-label">{row.label}</span>
-                <span class="empty-pane-menu-chord">{chordLabel(row.chordId)}</span>
+                <span class="menu-row-label">{row.label}</span>
+                <span class="menu-row-chord">{chordLabel(row.chordId)}</span>
               </button>
             </li>
           {/each}
@@ -740,8 +744,8 @@
                 }}
               >
                 <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
-                <span class="empty-pane-menu-label">Split right</span>
-                <span class="empty-pane-menu-chord"></span>
+                <span class="menu-row-label">Split right</span>
+                <span class="menu-row-chord"></span>
               </button>
             </li>
             <li>
@@ -753,8 +757,8 @@
                 }}
               >
                 <SquareSplitVertical size={16} strokeWidth={1.75} aria-hidden="true" />
-                <span class="empty-pane-menu-label">Split down</span>
-                <span class="empty-pane-menu-chord"></span>
+                <span class="menu-row-label">Split down</span>
+                <span class="menu-row-chord"></span>
               </button>
             </li>
           {/if}
@@ -765,8 +769,8 @@
               onclick={() => dispatchCommand("app.settings.toggle")}
             >
               <Settings size={16} strokeWidth={1.75} aria-hidden="true" />
-              <span class="empty-pane-menu-label">Settings</span>
-              <span class="empty-pane-menu-chord">{chordLabel("app.settings.toggle")}</span>
+              <span class="menu-row-label">Settings</span>
+              <span class="menu-row-chord">{chordLabel("app.settings.toggle")}</span>
             </button>
           </li>
         </HamburgerMenu>
@@ -979,19 +983,6 @@
     font-size: 13px;
     line-height: 1.4;
     max-width: 360px;
-  }
-  /* Empty-pane right-click menu rows. Two columns: label flush left
-     and chord flush right. Reuses the shared bubble chrome from
-     HamburgerMenu (.hamburger-menu via :global) so spacing and
-     hover state match the overlay menus. */
-  :global(.empty-pane-menu-label) {
-    flex: 1;
-  }
-  :global(.empty-pane-menu-chord) {
-    margin-left: 1.5rem;
-    color: var(--text-secondary);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 11.5px;
   }
   @media (prefers-reduced-motion: reduce) {
     .tab,

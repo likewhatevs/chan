@@ -14,9 +14,27 @@
   import {
     ArrowLeft,
     ArrowRight,
+    Code2,
+    Copy,
+    FilePlus,
+    Folder,
+    Network,
+    Pencil,
+    Pilcrow,
+    RotateCw,
+    Search as SearchIcon,
+    Settings as SettingsIcon,
     SquareSplitHorizontal,
     SquareSplitVertical,
+    Type,
   } from "lucide-svelte";
+  import EnsoIcon from "./EnsoIcon.svelte";
+  import {
+    SHORTCUTS,
+    currentOS,
+    currentPlatform,
+    formatChord,
+  } from "../state/shortcuts";
   import FindBar from "./FindBar.svelte";
   import Inspector from "./Inspector.svelte";
   import OutlineBody, { type Heading } from "./OutlineBody.svelte";
@@ -289,6 +307,21 @@
     closeTabMenu();
     splitActive("column");
   }
+
+  /// Chord lookup mirrors the empty-pane menu in Pane.svelte: SHORTCUTS
+  /// is keyed by command id; render the platform-specific chord and
+  /// format it for the current OS. Rows without a registered chord
+  /// render an empty cell so the right column stays aligned.
+  const menuPlatform = currentPlatform();
+  const menuOs = currentOS();
+  function chordLabel(id: string | undefined): string {
+    if (!id) return "";
+    const s = SHORTCUTS.find((x) => x.id === id);
+    if (!s) return "";
+    const chord = s[menuPlatform];
+    if (!chord) return "";
+    return formatChord(chord, menuOs);
+  }
 </script>
 
 <svelte:window onkeydown={onMenuKeydown} onpointerdown={onDocPointerDown} />
@@ -334,10 +367,17 @@
            top border). -->
       <div class="action-list">
         <button class="mbtn" onclick={doToggleMode}>
-          <span class="mbtn-icon">{tab.mode === "wysiwyg" ? "</>" : "¶"}</span>
+          <span class="mbtn-icon">
+            {#if tab.mode === "wysiwyg"}
+              <Code2 size={16} strokeWidth={1.75} aria-hidden="true" />
+            {:else}
+              <Pilcrow size={16} strokeWidth={1.75} aria-hidden="true" />
+            {/if}
+          </span>
           <span class="mbtn-label">
             {tab.mode === "wysiwyg" ? "Show Source Code" : "Show Rendered"}
           </span>
+          <span class="mbtn-chord"></span>
         </button>
         <button class="mbtn" onclick={doToggleOutline} class:on={tab.inspectorOpen}>
           <span class="mbtn-icon">
@@ -350,50 +390,78 @@
           <span class="mbtn-label">
             {tab.inspectorOpen ? "Hide Details" : "Show Details"}
           </span>
+          <span class="mbtn-chord"></span>
         </button>
         <button
           class="mbtn"
           onclick={doToggleStyleToolbar}
           class:on={tab.styleToolbarOpen}
         >
-          <span class="mbtn-icon">Aa</span>
+          <span class="mbtn-icon">
+            <Type size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
           <span class="mbtn-label">
             {tab.styleToolbarOpen ? "Hide Style Toolbar" : "Show Style Toolbar"}
           </span>
+          <span class="mbtn-chord"></span>
         </button>
         <div class="msep" role="separator"></div>
         <button class="mbtn" onclick={doNewFile}>
-          <span class="mbtn-icon">＋</span>
+          <span class="mbtn-icon">
+            <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
           <span class="mbtn-label">New File</span>
+          <span class="mbtn-chord">{chordLabel("app.file.new")}</span>
         </button>
         <button class="mbtn" onclick={doDuplicate}>
-          <span class="mbtn-icon">⎘</span>
+          <span class="mbtn-icon">
+            <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
           <span class="mbtn-label">Duplicate File</span>
+          <span class="mbtn-chord"></span>
         </button>
         <button class="mbtn" onclick={doRename}>
-          <span class="mbtn-icon">✎</span>
+          <span class="mbtn-icon">
+            <Pencil size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
           <span class="mbtn-label">Rename File</span>
+          <span class="mbtn-chord"></span>
         </button>
         <button class="mbtn" onclick={doReload}>
-          <span class="mbtn-icon">↻</span>
+          <span class="mbtn-icon">
+            <RotateCw size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
           <span class="mbtn-label">Reload from Disk</span>
+          <span class="mbtn-chord"></span>
         </button>
         <div class="msep" role="separator"></div>
         <button class="mbtn" onclick={revealInBrowser}>
-          <span class="mbtn-icon">📄</span>
-          <span class="mbtn-label">Show in File Browser</span>
+          <span class="mbtn-icon">
+            <Folder size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Files</span>
+          <span class="mbtn-chord">{chordLabel("app.files.toggle")}</span>
         </button>
         <button class="mbtn" onclick={doOpenSearch}>
-          <span class="mbtn-icon">⌕</span>
+          <span class="mbtn-icon">
+            <SearchIcon size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
           <span class="mbtn-label">Search</span>
+          <span class="mbtn-chord">{chordLabel("app.search.toggle")}</span>
         </button>
         <button class="mbtn" onclick={doOpenGraph}>
-          <span class="mbtn-icon">⛬</span>
-          <span class="mbtn-label">Show in Graph</span>
+          <span class="mbtn-icon">
+            <Network size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Graph</span>
+          <span class="mbtn-chord">{chordLabel("app.graph.toggle")}</span>
         </button>
         <button class="mbtn" onclick={doOpenAssistant}>
-          <span class="mbtn-icon">✦</span>
+          <span class="mbtn-icon">
+            <EnsoIcon size={16} />
+          </span>
           <span class="mbtn-label">Call Assistant</span>
+          <span class="mbtn-chord">{chordLabel("app.assistant.toggle")}</span>
         </button>
         <div class="msep" role="separator"></div>
         {#if splitsAllowed}
@@ -402,18 +470,23 @@
               <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
             </span>
             <span class="mbtn-label">Split right</span>
+            <span class="mbtn-chord"></span>
           </button>
           <button class="mbtn" onclick={doSplitDown}>
             <span class="mbtn-icon">
               <SquareSplitVertical size={16} strokeWidth={1.75} aria-hidden="true" />
             </span>
             <span class="mbtn-label">Split down</span>
+            <span class="mbtn-chord"></span>
           </button>
           <div class="msep" role="separator"></div>
         {/if}
         <button class="mbtn" onclick={doOpenSettings}>
-          <span class="mbtn-icon">⚙</span>
+          <span class="mbtn-icon">
+            <SettingsIcon size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
           <span class="mbtn-label">Settings</span>
+          <span class="mbtn-chord">{chordLabel("app.settings.toggle")}</span>
         </button>
       </div>
     </div>
@@ -682,6 +755,17 @@
     justify-content: center;
   }
   .mbtn-label { flex: 1; }
+  /* Chord column on the right edge. Matches the empty-pane menu's
+     `.empty-pane-menu-chord` so the file-tab bubble and the
+     empty-pane right-click menu read as one family. Empty cells
+     still occupy the slot so the column stays aligned even on
+     rows that don't have a registered shortcut. */
+  .mbtn-chord {
+    margin-left: 1.5rem;
+    color: var(--text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+  }
   /* Group separator inside the action list. Same shape as the
      hamburger menu's `li.sep` so the overlay menus and the file
      tab menu read alike. */
