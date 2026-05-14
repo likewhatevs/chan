@@ -189,6 +189,7 @@ function render(drives) {
             <button class="btn" data-act="launch" ${hasUrl ? '' : 'disabled'}>Launch</button>
           </div>
         </td>
+        <td></td>
       </tr>`;
     }
     return `
@@ -207,6 +208,12 @@ function render(drives) {
           <button class="btn" data-act="launch" ${hasUrl ? '' : 'disabled'}>Launch</button>
         </div>
       </td>
+      <td>
+        <div class="row-actions">
+          <button class="btn" data-act="remove"
+                  title="Remove this drive from the list (does not delete files)">Forget</button>
+        </div>
+      </td>
     </tr>`;
   }).join('');
 
@@ -218,6 +225,7 @@ function render(drives) {
           <th>Path</th>
           <th style="width:200px">Name</th>
           <th style="width:280px">URL</th>
+          <th style="width:90px"></th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -280,6 +288,19 @@ function bindRowEvents() {
       } catch (err) {
         showError(err);
       }
+    });
+
+    // "Forget" removes the drive entry from the chan registry. Files
+    // on disk are untouched; the user can re-add the folder later
+    // via Open drive. Tunneled drives have no Forget — the remote
+    // `chan serve` owns that lifecycle.
+    tr.querySelector('[data-act="remove"]').addEventListener('click', async () => {
+      try {
+        await invoke('remove_drive', { path });
+      } catch (err) {
+        showError(err);
+      }
+      await refresh();
     });
   });
 
