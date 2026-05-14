@@ -12,7 +12,7 @@
   // only now.
 
   import { untrack } from "svelte";
-  import { ArrowLeft, ArrowRight, Maximize2, Minimize2 } from "lucide-svelte";
+  import { ArrowLeft, ArrowRight, Maximize2, Minimize2, Settings } from "lucide-svelte";
   import {
     overlayMaximized,
     setOverlayMaximized,
@@ -30,6 +30,7 @@
     browserOverlay,
     openBrowser,
     openGraphForTag,
+    openSettings,
     paneWidths,
     persistPaneWidths,
     revealAndSelect,
@@ -499,6 +500,11 @@
     menu?.close();
   }
 
+  function doOpenSettings(): void {
+    menu?.close();
+    openSettings();
+  }
+
   function onSearchContextMenu(e: MouseEvent): void {
     // Bail if the right-click landed on the input — let the browser
     // show its native context menu (paste, spell, etc.) there.
@@ -697,9 +703,9 @@
 </OverlayShell>
 
 {#snippet menuItems()}
-  <!-- Search is read-only by design — only the Details toggle goes
-       in the menu. Keeping the slot present (vs. a bare button) for
-       parity with the file browser / graph menus. -->
+  <!-- Section order matches the rest of the right-click menus:
+       view toggles, (no content/navigation actions here — search is
+       read-only), Settings footer. -->
   <li>
     <button role="menuitem" onclick={toggleInspector}>
       {#if searchPanel.inspectorOpen}
@@ -719,6 +725,13 @@
         <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
         <span>Maximize</span>
       {/if}
+    </button>
+  </li>
+  <li class="sep" role="separator"></li>
+  <li>
+    <button role="menuitem" onclick={doOpenSettings}>
+      <Settings size={14} strokeWidth={1.75} aria-hidden="true" />
+      <span>Settings</span>
     </button>
   </li>
 {/snippet}

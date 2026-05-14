@@ -18,13 +18,10 @@
 
   import {
     Bell,
-    ChevronDown,
-    ChevronUp,
     FilePlus,
     FileText,
     Folder,
     Network,
-    Save,
     Search,
     Settings,
     Sparkles,
@@ -78,30 +75,63 @@
   const os = currentOS();
   const shortcutTable = renderTable(platform, os);
 
-  /// Subset of the registry shown in the empty-pane right-click
-  /// menu. Tabs + Esc are excluded: there are no tabs in this pane
-  /// (it's empty) and Esc only matters when an overlay is up.
-  const emptyPaneMenuItems = SHORTCUTS.filter(
-    (s) => s.group !== "Tabs" && s.id !== "ui.overlay.dismiss" && s[platform],
-  );
-
-  /// id → lucide icon for the empty-pane menu rows. Mirrors the
-  /// file-tab menu's "every action carries an icon" convention so
-  /// the two surfaces read as one set. Anything missing falls back
-  /// to FileText (the registry has no rows that need a placeholder
-  /// today; the fallback is for forward compat).
-  const SHORTCUT_ICON: Record<string, typeof Settings> = {
-    "app.settings.toggle": Settings,
-    "app.files.toggle": Folder,
-    "app.assistant.toggle": Sparkles,
-    "app.search.toggle": Search,
-    "app.graph.toggle": Network,
-    "app.save": Save,
-    "app.file.new": FilePlus,
-    "app.find.open": Search,
-    "app.find.next": ChevronDown,
-    "app.find.prev": ChevronUp,
+  /// Empty-pane right-click menu, arranged into the canonical
+  /// sections shared by every chan menu: content actions, then
+  /// navigation, then pane controls, then Settings as the footer.
+  /// Each row carries an icon and (optionally) the keyboard chord
+  /// for the same action — the empty pane is also the discovery
+  /// surface for shortcuts, so we keep the chord hint visible.
+  /// `chordId` is a SHORTCUTS registry id; rows whose chord isn't
+  /// registered on the current platform render with a blank chord
+  /// column rather than disappearing.
+  type EmptyMenuRow = {
+    label: string;
+    icon: typeof Settings;
+    command: string;
+    chordId?: string;
   };
+  const emptyPaneContent: EmptyMenuRow[] = [
+    {
+      label: "New File",
+      icon: FilePlus,
+      command: "app.file.new",
+      chordId: "app.file.new",
+    },
+  ];
+  const emptyPaneNavigation: EmptyMenuRow[] = [
+    {
+      label: "Show in File Browser",
+      icon: Folder,
+      command: "app.files.toggle",
+      chordId: "app.files.toggle",
+    },
+    {
+      label: "Search",
+      icon: Search,
+      command: "app.search.toggle",
+      chordId: "app.search.toggle",
+    },
+    {
+      label: "Show in Graph",
+      icon: Network,
+      command: "app.graph.toggle",
+      chordId: "app.graph.toggle",
+    },
+    {
+      label: "Call Assistant",
+      icon: Sparkles,
+      command: "app.assistant.toggle",
+      chordId: "app.assistant.toggle",
+    },
+  ];
+  function chordLabel(id: string | undefined): string {
+    if (!id) return "";
+    const s = SHORTCUTS.find((x) => x.id === id);
+    if (!s) return "";
+    const chord = s[platform];
+    if (!chord) return "";
+    return formatChord(chord, os);
+  }
 
   /// Right-click menu state. The HamburgerMenu component owns the
   /// bubble chrome and outside-click dismiss; we just hold the
@@ -675,13 +705,27 @@
           width={280}
           height={260}
         >
-          {#each emptyPaneMenuItems as s (s.id)}
-            {@const Icon = SHORTCUT_ICON[s.id] ?? FileText}
+          <!-- Canonical section order shared with the file-tab and
+               overlay menus: content actions, navigation, pane
+               controls, Settings footer. -->
+          {#each emptyPaneContent as row (row.command)}
+            {@const Icon = row.icon}
             <li>
-              <button role="menuitem" onclick={() => dispatchCommand(s.id)}>
+              <button role="menuitem" onclick={() => dispatchCommand(row.command)}>
                 <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
-                <span class="empty-pane-menu-label">{s.label}</span>
-                <span class="empty-pane-menu-chord">{formatChord(s[platform]!, os)}</span>
+                <span class="empty-pane-menu-label">{row.label}</span>
+                <span class="empty-pane-menu-chord">{chordLabel(row.chordId)}</span>
+              </button>
+            </li>
+          {/each}
+          <li class="sep" role="separator"></li>
+          {#each emptyPaneNavigation as row (row.command)}
+            {@const Icon = row.icon}
+            <li>
+              <button role="menuitem" onclick={() => dispatchCommand(row.command)}>
+                <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
+                <span class="empty-pane-menu-label">{row.label}</span>
+                <span class="empty-pane-menu-chord">{chordLabel(row.chordId)}</span>
               </button>
             </li>
           {/each}
@@ -714,6 +758,17 @@
               </button>
             </li>
           {/if}
+          <li class="sep" role="separator"></li>
+          <li>
+            <button
+              role="menuitem"
+              onclick={() => dispatchCommand("app.settings.toggle")}
+            >
+              <Settings size={16} strokeWidth={1.75} aria-hidden="true" />
+              <span class="empty-pane-menu-label">Settings</span>
+              <span class="empty-pane-menu-chord">{chordLabel("app.settings.toggle")}</span>
+            </button>
+          </li>
         </HamburgerMenu>
       </div>
     {/if}

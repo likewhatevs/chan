@@ -16,6 +16,7 @@
     Maximize2,
     Minimize2,
     Pencil,
+    Settings,
     Users,
   } from "lucide-svelte";
   import {
@@ -37,6 +38,7 @@
     expandAllFolders,
     fileOps,
     isFullyExpanded,
+    openSettings,
     paneWidths,
     persistPaneWidths,
     refreshTree,
@@ -165,6 +167,11 @@
   async function renameDrive(): Promise<void> {
     menu?.close();
     await fileOps.renameDrive();
+  }
+
+  function doOpenSettings(): void {
+    menu?.close();
+    openSettings();
   }
 
   /// Pop the drive-info inspector body. Clears the file selection
@@ -309,6 +316,13 @@
         <span class="folder-label">Folder</span>
         <span class="folder-path mono">{drive.info?.root ?? ""}</span>
       </span>
+    </button>
+  </li>
+  <li class="sep" role="separator"></li>
+  <li>
+    <button role="menuitem" onclick={doOpenSettings}>
+      <Settings size={14} strokeWidth={1.75} aria-hidden="true" />
+      <span>Settings</span>
     </button>
   </li>
 {/snippet}

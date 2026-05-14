@@ -20,6 +20,7 @@
     Clock,
     Maximize2,
     Minimize2,
+    Settings,
   } from "lucide-svelte";
   import {
     overlayMaximized,
@@ -36,6 +37,7 @@
     graphOverlay,
     openBrowser,
     openScopeHistory,
+    openSettings,
     paneWidths,
     persistPaneWidths,
     revealAndSelect,
@@ -162,6 +164,11 @@
   async function reloadGraph(): Promise<void> {
     menu?.close();
     await load();
+  }
+
+  function doOpenSettings(): void {
+    menu?.close();
+    openSettings();
   }
 
   function onGraphContextMenu(e: MouseEvent): void {
@@ -796,6 +803,13 @@
     <button role="menuitem" onclick={reloadGraph}>
       <span class="glyph" aria-hidden="true">↻</span>
       <span>Reload</span>
+    </button>
+  </li>
+  <li class="sep" role="separator"></li>
+  <li>
+    <button role="menuitem" onclick={doOpenSettings}>
+      <Settings size={14} strokeWidth={1.75} aria-hidden="true" />
+      <span>Settings</span>
     </button>
   </li>
 {/snippet}

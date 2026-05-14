@@ -42,6 +42,7 @@
     Minimize2,
     Network,
     PenLine,
+    Settings,
     ShieldCheck,
     ShieldOff,
   } from "lucide-svelte";
@@ -86,6 +87,7 @@
     loadDriveConversation,
     loadGroupConversation,
     openScopeHistory,
+    openSettings,
     saveDriveConversation,
     scopeHistoryOverlay,
     openAssistant,
@@ -1692,6 +1694,11 @@
     // user is back in their conversation.
     menu?.close();
   }
+
+  function doOpenSettings(): void {
+    menu?.close();
+    openSettings();
+  }
 </script>
 
 <OverlayShell id="assistant" open={visible} onClose={close}>
@@ -2316,6 +2323,13 @@
     <button role="menuitem" onclick={doShowInGraph} disabled={!currentContext}>
       <Network size={14} strokeWidth={1.75} aria-hidden="true" />
       <span>Show in Graph</span>
+    </button>
+  </li>
+  <li class="sep" role="separator"></li>
+  <li>
+    <button role="menuitem" onclick={doOpenSettings}>
+      <Settings size={14} strokeWidth={1.75} aria-hidden="true" />
+      <span>Settings</span>
     </button>
   </li>
 {/snippet}

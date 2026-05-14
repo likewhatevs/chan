@@ -11,7 +11,12 @@
 
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import Source from "../editor/Source.svelte";
-  import { ArrowLeft, ArrowRight } from "lucide-svelte";
+  import {
+    ArrowLeft,
+    ArrowRight,
+    SquareSplitHorizontal,
+    SquareSplitVertical,
+  } from "lucide-svelte";
   import FindBar from "./FindBar.svelte";
   import Inspector from "./Inspector.svelte";
   import OutlineBody, { type Heading } from "./OutlineBody.svelte";
@@ -393,11 +398,15 @@
         <div class="msep" role="separator"></div>
         {#if splitsAllowed}
           <button class="mbtn" onclick={doSplitRight}>
-            <span class="mbtn-icon">⇢</span>
+            <span class="mbtn-icon">
+              <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
             <span class="mbtn-label">Split right</span>
           </button>
           <button class="mbtn" onclick={doSplitDown}>
-            <span class="mbtn-icon">⇣</span>
+            <span class="mbtn-icon">
+              <SquareSplitVertical size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
             <span class="mbtn-label">Split down</span>
           </button>
           <div class="msep" role="separator"></div>
