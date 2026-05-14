@@ -36,7 +36,6 @@ export function createCaretAnchor(
   const el = document.createElement("div");
   el.style.position = "absolute";
   el.style.width = "1px";
-  el.style.height = "1px";
   el.style.pointerEvents = "none";
   el.style.zIndex = "-1";
   document.body.appendChild(el);
@@ -55,9 +54,13 @@ export function createCaretAnchor(
 function reposition(view: EditorView, el: HTMLElement, pos: number): void {
   const coords = view.coordsAtPos(pos);
   if (!coords) return;
-  // Position at the caret's bottom-left: openBubbleShell + popover.ts
-  // anchors the bubble UNDER the host, so this lands the bubble just
-  // below the caret line.
+  // Anchor spans the full caret-line height so positionPopover's
+  // flip-above branch lands the popover above the line's TOP, not
+  // straddling the line. Previously the anchor was 1px tall at
+  // `coords.bottom` — the flip math then placed the popover so its
+  // bottom edge sat AT the line bottom, overlaying the text the
+  // user was typing.
   el.style.left = `${Math.round(coords.left + window.scrollX)}px`;
-  el.style.top = `${Math.round(coords.bottom + window.scrollY)}px`;
+  el.style.top = `${Math.round(coords.top + window.scrollY)}px`;
+  el.style.height = `${Math.max(1, Math.round(coords.bottom - coords.top))}px`;
 }

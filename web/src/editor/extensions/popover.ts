@@ -37,11 +37,14 @@ export function positionPopover(host: HTMLElement, popover: HTMLElement): void {
   const viewportW = window.innerWidth;
   const scrollX = window.scrollX;
   const scrollY = window.scrollY;
-  const gap = 4;
+  const gap = 8;
   const margin = 8;
 
   // Vertical: prefer below the host, but if the popover would
   // overflow the viewport AND there's more room above, flip up.
+  // `host` is the caret-line anchor (full line height), so
+  // hostRect.bottom == line bottom and hostRect.top == line top —
+  // the popover always sits cleanly outside the line being edited.
   const spaceBelow = viewportH - hostRect.bottom;
   const spaceAbove = hostRect.top;
   let top: number;
