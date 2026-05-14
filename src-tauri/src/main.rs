@@ -32,6 +32,38 @@ pub struct AppState {
     /// loopback listeners that proxy into registered remote
     /// `chan serve` instances.
     tunnel: Arc<TunnelState>,
+    /// Result of the boot-time check that the bundled `chan` binary
+    /// is present and the desktop is running from a real install
+    /// location. Frozen for the life of the process. When `!ok`, the
+    /// frontend disables every action that would try to spawn chan,
+    /// and the mutating IPC commands short-circuit with `reason`.
+    bin_status: BinStatus,
+}
+
+/// Frontend-visible verdict from the boot-time `chan` preflight.
+/// `kind` discriminates the error so the UI can choose copy:
+///   * `"ok"`          — binary found, environment is fine.
+///   * `"translocated"` — macOS App Translocation detected; the app
+///     is running from a randomized read-only path because it was
+///     launched from outside `/Applications`. `chan serve` would
+///     fail silently. User must move the bundle.
+///   * `"missing"`     — bundled sidecar not next to chan-desktop.
+///     Corrupt install; should never happen in a packaged build.
+#[derive(Debug, Clone, Serialize)]
+pub struct BinStatus {
+    pub ok: bool,
+    pub kind: &'static str,
+    pub reason: String,
+}
+
+impl BinStatus {
+    fn ok_status() -> Self {
+        Self {
+            ok: true,
+            kind: "ok",
+            reason: String::new(),
+        }
+    }
 }
 
 impl AppState {
@@ -171,6 +203,7 @@ fn add_drive(
     state: State<Arc<AppState>>,
     path: String,
 ) -> Result<(), String> {
+    require_bin(&state.bin_status)?;
     let path = canonical_key(Path::new(&path));
     let bin = chan_bin()?;
     let out = Command::new(&bin)
@@ -225,6 +258,7 @@ fn set_drive_on(
 ) -> Result<(), String> {
     let key = canonical_key(Path::new(&path));
     if on {
+        require_bin(&state.bin_status)?;
         serve::start(app, Arc::clone(&state), key, &chan_bin()?)?;
     } else {
         serve::stop(&state, &key);
@@ -359,6 +393,7 @@ async fn tunnel_start(
     label: String,
     drive: String,
 ) -> Result<u16, String> {
+    require_bin(&state.bin_status)?;
     let label = label.trim().to_string();
     let drive = drive.trim().to_string();
     if !chan_tunnel_proto::is_valid_username(&label) {
@@ -524,16 +559,82 @@ fn chan_bin() -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Detect macOS App Translocation. When Gatekeeper sees an unsigned
+/// or quarantined app launched from outside `/Applications` (e.g.
+/// double-clicked inside a mounted .dmg), it runs the bundle from a
+/// randomized read-only path under
+/// `/private/var/folders/.../AppTranslocation/<UUID>/d/...`. The
+/// bundled `chan` sidecar is found at that path, but the runtime
+/// environment is hostile enough that `chan serve` exits without
+/// printing its ready banner, producing the silent-toggle-flip bug.
+/// We treat this as "binary unusable" and refuse to spawn anything.
+#[cfg(target_os = "macos")]
+fn is_app_translocated() -> bool {
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().contains("/AppTranslocation/"))
+        .unwrap_or(false)
+}
+
+/// Boot-time preflight. Runs once before `AppState` is built and the
+/// result is stored verbatim. Order matters: translocation is
+/// checked before the bundle-path check because in the translocated
+/// case the file *is* present, but spawning it is futile.
+fn compute_bin_status() -> BinStatus {
+    #[cfg(target_os = "macos")]
+    {
+        if is_app_translocated() {
+            return BinStatus {
+                ok: false,
+                kind: "translocated",
+                reason: "Chan is running from a disk image. macOS App \
+                         Translocation puts the app in a randomized \
+                         read-only path that breaks the drive service. \
+                         Drag Chan.app to your Applications folder, then \
+                         reopen it from there."
+                    .to_string(),
+            };
+        }
+    }
+    match chan_bin() {
+        Ok(_) => BinStatus::ok_status(),
+        Err(e) => BinStatus {
+            ok: false,
+            kind: "missing",
+            reason: e,
+        },
+    }
+}
+
+#[tauri::command]
+fn chan_bin_status(state: State<Arc<AppState>>) -> BinStatus {
+    state.bin_status.clone()
+}
+
+/// Short-circuit guard for any IPC command that would spawn chan.
+/// Frontend disables the corresponding controls, but a determined
+/// caller (or a stale event handler) could still reach the command;
+/// returning the human-readable reason here keeps the UX consistent
+/// with the persistent banner shown by the renderer.
+fn require_bin(s: &BinStatus) -> Result<(), String> {
+    if s.ok {
+        Ok(())
+    } else {
+        Err(s.reason.clone())
+    }
+}
+
 fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
 fn main() {
     let store = ConfigStore::new().expect("failed to init config store");
+    let bin_status = compute_bin_status();
     let state = Arc::new(AppState {
         store: Mutex::new(store),
         serves: Mutex::new(HashMap::new()),
         tunnel: TunnelState::new(),
+        bin_status,
     });
     let state_for_exit = Arc::clone(&state);
     let state_for_setup = Arc::clone(&state);
@@ -616,6 +717,7 @@ fn main() {
             tunnel_stop,
             open_local_drive,
             open_tunneled_drive,
+            chan_bin_status,
             auth::auth_status,
             auth::open_signin,
             auth::signout,

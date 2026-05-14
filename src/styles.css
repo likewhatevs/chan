@@ -283,6 +283,23 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
   padding: 8px 14px;
   font-size: 13px;
 }
+/* Persistent variant for the boot-time chan-binary preflight.
+   Lives at the top of <body> (above the sticky header) so it does
+   not disappear with the next list re-render and is the first
+   thing the user sees on launch. */
+.error-banner.persistent {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  font-weight: 500;
+}
+/* Toggle switch disabled state — the regular `disabled` attribute
+   on the inner checkbox only stops events; the slider is rendered
+   from its sibling and needs explicit visual feedback. */
+.switch input[disabled] + .slider {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
 
 /* Toggle switch — keeps the visual language of chan-web's small
    in-line controls (assistant on/off, etc.). */

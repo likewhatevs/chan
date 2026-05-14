@@ -1,5 +1,5 @@
 const { invoke } = window.__TAURI__.core;
-const { open, ask } = window.__TAURI__.dialog;
+const { open, ask, message } = window.__TAURI__.dialog;
 const { listen } = window.__TAURI__.event;
 const { check: checkForUpdate } = window.__TAURI__.updater;
 const { relaunch } = window.__TAURI__.process;
@@ -88,6 +88,13 @@ listen('auth-error', (e) => {
 
 let booted = false;
 let homeDir = '';
+/// Boot-time preflight result from the Rust side. While `ok=false`,
+/// every action that would invoke chan (Open drive, the per-row On
+/// toggles, Forget, the tunnel Listen button) is disabled and a
+/// persistent banner explains why. `kind` is one of "ok" |
+/// "translocated" | "missing"; the renderer keys disabled state off
+/// `ok` alone and the banner copy off `reason`.
+let chanBinStatus = { ok: true, kind: 'ok', reason: '' };
 // Last rendered drives payload as a JSON string. The backend fires
 // `serves-changed` / `registry-changed` whenever the chan registry
 // is touched, which a running serve does often (timestamps, etc.).
@@ -125,13 +132,58 @@ function renderPath(full) {
 }
 
 async function boot() {
+  await checkChanBin();
   const drives = await refresh();
-  if (!booted && drives.length === 0) {
+  // When chan is unavailable, suppress the first-run "no drives →
+  // open picker" prompt. The picker would either fail outright
+  // (translocated / missing binary) or, worse, succeed and leave
+  // the user looking at an empty registry they can't use.
+  if (!booted && drives.length === 0 && chanBinStatus.ok) {
     booted = true;
     await pickAndAdd();
   } else {
     booted = true;
   }
+}
+
+/// Call the Rust preflight, store the result, mirror it onto the
+/// chrome (Open drive / Listen / banner). Called once on boot; if
+/// future work needs a re-check (e.g. user moved the app and we
+/// want to detect it without a restart) the same function is the
+/// hook.
+async function checkChanBin() {
+  try {
+    chanBinStatus = await invoke('chan_bin_status');
+  } catch (e) {
+    chanBinStatus = {
+      ok: false,
+      kind: 'missing',
+      reason: typeof e === 'string' ? e : 'Chan command-line tool is unavailable.',
+    };
+  }
+  applyChanBinStatus();
+}
+
+function applyChanBinStatus() {
+  const ok = chanBinStatus.ok;
+  openBtn.disabled = !ok;
+  tunnelBtn.disabled = !ok;
+  document.body.classList.toggle('chan-bin-unavailable', !ok);
+
+  let banner = document.getElementById('chan-bin-banner');
+  if (ok) {
+    if (banner) banner.remove();
+    return;
+  }
+  const msg = chanBinStatus.reason
+    || 'Chan command-line tool is unavailable. Drive management is disabled.';
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'chan-bin-banner';
+    banner.className = 'error-banner persistent';
+    document.body.insertBefore(banner, document.body.firstChild);
+  }
+  banner.textContent = msg;
 }
 
 async function pickAndAdd() {
@@ -151,13 +203,20 @@ async function pickAndAdd() {
 }
 
 function render(drives) {
+  // Single source of truth for the row-level disabled attribute.
+  // Every control that would spawn chan (toggle, Forget) is keyed
+  // off this. Launch and Reveal stay live because they don't
+  // depend on the binary — Launch needs a URL (which is gated by
+  // the running serve anyway) and Reveal just opens Finder.
+  const disabledAttr = chanBinStatus.ok ? '' : 'disabled';
+
   if (!drives.length) {
     main.innerHTML = `
       <div class="empty">
         <h2>No drives yet</h2>
         <p>A <em>drive</em> is a local folder with your markdown files.
            Pick one to get started.</p>
-        <button class="btn primary" id="empty-pick">Open drive</button>
+        <button class="btn primary" id="empty-pick" ${disabledAttr}>Open drive</button>
       </div>`;
     document.getElementById('empty-pick').onclick = pickAndAdd;
     return;
@@ -196,7 +255,7 @@ function render(drives) {
     <tr data-path="${escapeAttr(d.path)}">
       <td>
         <label class="switch">
-          <input type="checkbox" data-act="toggle-on" ${d.on ? 'checked' : ''}/>
+          <input type="checkbox" data-act="toggle-on" ${d.on ? 'checked' : ''} ${disabledAttr}/>
           <span class="slider"></span>
         </label>
       </td>
@@ -210,7 +269,7 @@ function render(drives) {
       </td>
       <td>
         <div class="row-actions">
-          <button class="btn" data-act="remove"
+          <button class="btn" data-act="remove" ${disabledAttr}
                   title="Remove this drive from the list (does not delete files)">Forget</button>
         </div>
       </td>
@@ -387,6 +446,43 @@ async function maybeOfferUpdate() {
 // TOML directly), or when a serve starts / discovers its URL / exits.
 listen('registry-changed', () => { refresh().catch(showError); });
 listen('serves-changed', () => { refresh().catch(showError); });
+
+// `chan serve` exited before printing the URL banner — the toggle
+// would have silently flipped back to off otherwise. Pop a modal
+// with the captured stderr so the user can see *why* instead of
+// guessing. Serialized so two near-simultaneous failures don't
+// stack two dialogs on top of each other.
+let serveFailedPending = Promise.resolve();
+listen('serve-failed', (e) => {
+  serveFailedPending = serveFailedPending.then(() => showServeFailed(e.payload || {}));
+});
+
+async function showServeFailed(p) {
+  const driveLabel = p.key ? p.key : 'this drive';
+  let exitDesc;
+  if (typeof p.exit_signal === 'number') {
+    exitDesc = `chan was killed by signal ${p.exit_signal}.`;
+  } else if (typeof p.exit_code === 'number') {
+    exitDesc = `chan exited with code ${p.exit_code}.`;
+  } else {
+    exitDesc = 'chan exited without reporting a status.';
+  }
+  // Keep the dialog body bounded: native message dialogs don't
+  // scroll on every platform, so trim to the last 20 lines.
+  const tailLines = Array.isArray(p.stderr_tail) ? p.stderr_tail.slice(-20) : [];
+  const tail = tailLines.length ? tailLines.join('\n') : '(no output captured)';
+  const body =
+    `Failed to start ${driveLabel}.\n\n` +
+    `${exitDesc}\n\n` +
+    `Last output:\n${tail}`;
+  try {
+    await message(body, { title: 'Drive failed to start', kind: 'error' });
+  } catch {
+    // Dialog plugin not available or denied: fall back to the
+    // inline banner so the user still sees something.
+    showError(body);
+  }
+}
 
 /// Tunnel panel. Hidden until the user clicks "Listen…", then
 /// rendered inline above the drives table. Two states:

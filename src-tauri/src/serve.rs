@@ -18,6 +18,7 @@
 //! port within seconds. Upgrading to SIGTERM with a grace period
 //! is a follow-up; see design.md section 3.4.
 
+use std::collections::VecDeque;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
@@ -26,6 +27,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
+
+use serde::Serialize;
 
 /// Per-process monotonic counter appended to every drive-window
 /// label so the user can open more than one window for the same
@@ -46,6 +49,33 @@ use crate::AppState;
 /// URL discovered, exited). The frontend reacts by re-fetching the
 /// drive list.
 pub const SERVES_CHANGED: &str = "serves-changed";
+
+/// Tauri event emitted when a `chan serve` exits before printing
+/// the URL banner, i.e. failed to start. Payload is
+/// `ServeFailedPayload`. The frontend uses this to pop a modal
+/// dialog with the captured stderr so the user can tell why instead
+/// of just seeing the On toggle flip back to off.
+pub const SERVE_FAILED: &str = "serve-failed";
+
+/// Cap on stderr lines retained for the serve-failed payload. Chan's
+/// startup output is short; 50 lines is enough to capture the
+/// failure context without unbounded memory growth if the child
+/// crashes mid-stream.
+const STDERR_TAIL_MAX: usize = 50;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ServeFailedPayload {
+    pub key: String,
+    /// Process exit code if the child terminated normally. `None` on
+    /// platforms or paths where we couldn't reap it.
+    pub exit_code: Option<i32>,
+    /// Unix signal number if the child was killed by a signal.
+    /// Always `None` on non-Unix.
+    pub exit_signal: Option<i32>,
+    /// Last `STDERR_TAIL_MAX` stderr lines, oldest first. Empty when
+    /// the child died before writing anything.
+    pub stderr_tail: Vec<String>,
+}
 
 /// Live state for one running serve. Held in `AppState.serves`
 /// keyed by canonical drive path.
@@ -108,14 +138,24 @@ pub fn start(
 
     // Reader thread. Owns the stderr pipe; on EOF the child has
     // exited (or has been killed), so we reap and clean up state.
+    // We also keep a rolling tail of stderr lines so a startup
+    // failure (EOF before the URL banner) can be surfaced to the
+    // user with context instead of just flipping the toggle off.
     let app2 = app.clone();
     let state2 = state.clone();
     let key2 = key.clone();
     thread::spawn(move || {
         let reader = BufReader::new(stderr);
         let mut saw_ready_banner = false;
+        let mut saw_url = false;
+        let mut tail: VecDeque<String> = VecDeque::with_capacity(STDERR_TAIL_MAX + 1);
         for line in reader.lines() {
             let Ok(line) = line else { break };
+
+            if tail.len() == STDERR_TAIL_MAX {
+                tail.pop_front();
+            }
+            tail.push_back(line.clone());
 
             // chan's banner: "chan is ready:" then a line with the
             // URL. The URL line is the first non-empty line after
@@ -126,6 +166,7 @@ pub fn start(
                     saw_ready_banner = true;
                 }
             } else if !line.trim().is_empty() && state2.set_serve_url(&key2, line.trim()) {
+                saw_url = true;
                 let _ = app2.emit(SERVES_CHANGED, ());
                 saw_ready_banner = false; // only capture the first URL
                 spawn_local_drive_window(&app2, &key2, line.trim());
@@ -136,12 +177,45 @@ pub fn start(
         // Reap and remove from the live map. `list_drives` derives
         // the row's On state from this map, so removal alone is
         // enough to bring the toggle back to off on the next render.
-        {
+        let exit_status = {
             let mut serves = state2.serves.lock().unwrap();
-            if let Some(mut h) = serves.remove(&key2) {
-                let _ = h.child.wait();
-            }
+            serves.remove(&key2).and_then(|mut h| h.child.wait().ok())
+        };
+
+        // Startup failure: EOF before we ever captured the URL. The
+        // toggle would silently revert to off otherwise; emit a
+        // structured event so the renderer can show the captured
+        // stderr in a modal. A mid-flight crash (saw_url already
+        // true) takes the quieter `serves-changed` path below — the
+        // drive was working, the user already saw it, and a
+        // post-mortem dialog after the fact would be more
+        // disruptive than useful.
+        if !saw_url {
+            let (exit_code, exit_signal) = match &exit_status {
+                Some(s) => {
+                    let code = s.code();
+                    #[cfg(unix)]
+                    let signal = {
+                        use std::os::unix::process::ExitStatusExt;
+                        s.signal()
+                    };
+                    #[cfg(not(unix))]
+                    let signal: Option<i32> = None;
+                    (code, signal)
+                }
+                None => (None, None),
+            };
+            let _ = app2.emit(
+                SERVE_FAILED,
+                ServeFailedPayload {
+                    key: key2.clone(),
+                    exit_code,
+                    exit_signal,
+                    stderr_tail: tail.into_iter().collect(),
+                },
+            );
         }
+
         // Tear down every drive window we opened for this key.
         // Window CloseRequested is a no-op now (multi-window means
         // closing one window must NOT stop the serve), so this is
