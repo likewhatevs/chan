@@ -148,6 +148,14 @@
   /// handlers; consumed once per paint pass.
   let transform = { x: 0, y: 0, k: 1 };
 
+  /// Auto-fit state. While `refitUntil` is in the future the rAF
+  /// loop recomputes `fitTarget` each frame from the current bbox
+  /// so the view tracks the cluster as it relaxes after a scope /
+  /// filter / depth change. `fitTarget` is the ease-in destination
+  /// for transform; null = no easing in flight.
+  let refitUntil = 0;
+  let fitTarget: { x: number; y: number; k: number } | null = null;
+
   /// Pointer interaction state. dragId: id of the node currently
   /// being pulled by the cursor (fixes its fx/fy); panStart: mouse
   /// origin + transform snapshot at the moment the user started a
@@ -677,6 +685,30 @@
   }
 
   function loop(): void {
+    const now = performance.now();
+    // While the refit window is open, retarget every frame so the
+    // view tracks the cluster as the sim spreads / contracts. Once
+    // the window expires we keep easing toward the last target until
+    // it converges, then drop it.
+    if (now < refitUntil) {
+      const t = computeFit(24);
+      if (t) fitTarget = t;
+    }
+    if (fitTarget) {
+      const a = 0.18;
+      const nx = transform.x + (fitTarget.x - transform.x) * a;
+      const ny = transform.y + (fitTarget.y - transform.y) * a;
+      const nk = transform.k + (fitTarget.k - transform.k) * a;
+      transform = { x: nx, y: ny, k: nk };
+      if (
+        now >= refitUntil
+        && Math.abs(fitTarget.x - transform.x) < 0.5
+        && Math.abs(fitTarget.y - transform.y) < 0.5
+        && Math.abs(fitTarget.k - transform.k) < 0.002
+      ) {
+        fitTarget = null;
+      }
+    }
     paint();
     rafId = requestAnimationFrame(loop);
   }
@@ -699,8 +731,10 @@
       n.fx = n.x;
       n.fy = n.y;
       sim?.alphaTarget(0.3).restart();
+      cancelRefit();
     } else {
       panStart = { x: e.clientX, y: e.clientY, tx: transform.x, ty: transform.y };
+      cancelRefit();
     }
   }
 
@@ -768,6 +802,7 @@
     const SENSITIVITY = 0.0015;
     const factor = Math.exp(-e.deltaY * SENSITIVITY);
     const k2 = Math.min(6, Math.max(0.15, transform.k * factor));
+    cancelRefit();
     // Zoom toward the cursor: the world point under the cursor
     // must stay anchored across the transform. Solve for the new
     // (tx, ty) that holds wx, wy invariant.
@@ -798,7 +833,88 @@
       transform = { x: canvas.clientWidth / 2, y: canvas.clientHeight / 2, k: 1 };
     }
     buildSim();
+    // Pre-tick so node positions settle before we measure the
+    // bounding box. d3-force's tick(n) advances the layout without
+    // firing the rAF loop, so the first painted frame already shows
+    // a fitted cluster instead of nodes flying out from the origin.
+    if (sim) sim.tick(300);
+    fitToContent(24);
     if (rafId === null) rafId = requestAnimationFrame(loop);
+  }
+
+  /// Compute the transform that fits the current node set into the
+  /// canvas with `pad` pixels of margin. When a focal node is
+  /// present its world position is pinned to the viewport center so
+  /// the user's anchor stays put across scope / filter / depth
+  /// changes; the zoom is then chosen so the farthest node still
+  /// fits inside the padded viewport. Falls back to bbox-center
+  /// framing for views without a focal pin (e.g. whole-drive).
+  function computeFit(pad: number): { x: number; y: number; k: number } | null {
+    if (!canvas || dNodes.length === 0) return null;
+    const cw = canvas.clientWidth;
+    const ch = canvas.clientHeight;
+    if (cw <= 0 || ch <= 0) return null;
+    let xmin = Infinity, xmax = -Infinity;
+    let ymin = Infinity, ymax = -Infinity;
+    let focal: { x: number; y: number } | null = null;
+    for (const n of dNodes) {
+      if (n.x == null || n.y == null) continue;
+      if (n.x - n.radius < xmin) xmin = n.x - n.radius;
+      if (n.x + n.radius > xmax) xmax = n.x + n.radius;
+      if (n.y - n.radius < ymin) ymin = n.y - n.radius;
+      if (n.y + n.radius > ymax) ymax = n.y + n.radius;
+      if (n.isFocal && !focal) focal = { x: n.x, y: n.y };
+    }
+    if (!isFinite(xmin)) return null;
+    let cx: number, cy: number, halfW: number, halfH: number;
+    if (focal) {
+      // Anchor on the focal node: the half-extent is the max distance
+      // from focal to any edge of the bbox so every visible node
+      // stays inside the padded viewport.
+      cx = focal.x;
+      cy = focal.y;
+      halfW = Math.max(focal.x - xmin, xmax - focal.x);
+      halfH = Math.max(focal.y - ymin, ymax - focal.y);
+    } else {
+      cx = (xmin + xmax) / 2;
+      cy = (ymin + ymax) / 2;
+      halfW = (xmax - xmin) / 2;
+      halfH = (ymax - ymin) / 2;
+    }
+    const availHalfW = Math.max(1, cw / 2 - pad);
+    const availHalfH = Math.max(1, ch / 2 - pad);
+    // Clamp to the wheel-zoom range, with the same upper cap so a
+    // tiny cluster (1-2 nodes) doesn't zoom in past a sensible level.
+    const k = Math.min(
+      6,
+      Math.max(
+        0.15,
+        Math.min(availHalfW / Math.max(1, halfW), availHalfH / Math.max(1, halfH)),
+      ),
+    );
+    return { x: cw / 2 - cx * k, y: ch / 2 - cy * k, k };
+  }
+
+  /// Snap the transform to fit the current node set. Used at first
+  /// open after the sim has pre-ticked into a settled layout.
+  function fitToContent(pad: number): void {
+    const t = computeFit(pad);
+    if (t) transform = t;
+  }
+
+  /// Open a refit window for `ms` so the rAF loop tracks the cluster
+  /// as the sim relaxes after a scope / filter / depth change. The
+  /// view eases toward the moving target without snapping, and stays
+  /// active until both the window expires and the easing converges.
+  function scheduleRefit(ms: number): void {
+    refitUntil = performance.now() + ms;
+  }
+
+  /// User pan / zoom / drag cancels any in-flight auto-fit so manual
+  /// interaction wins immediately.
+  function cancelRefit(): void {
+    refitUntil = 0;
+    fitTarget = null;
   }
 
   function stop(): void {
@@ -860,6 +976,9 @@
     rebuildAdjacency();
     rebuildWorkingSet();
     rewarmSim(1);
+    // Full data swap: track the cluster all the way through its
+    // longest relaxation so the view re-fits as it spreads.
+    scheduleRefit(1200);
   });
 
   /// Visibility change without a full data swap: scope / depth /
@@ -875,6 +994,12 @@
     const { added, removed } = rebuildWorkingSet();
     const alpha = added.length > 0 ? 0.35 : removed.length > 0 ? 0.2 : 0.1;
     rewarmSim(alpha);
+    // Scope / filter / depth change: re-fit so the focal node stays
+    // centered and the new visible set lands inside the viewport.
+    // Depth bumps that add nodes need the longest window; pure
+    // filter toggles settle fastest.
+    const ms = added.length > 0 ? 900 : removed.length > 0 ? 600 : 400;
+    scheduleRefit(ms);
   });
 
   /// Cursor: pointer over a node when nothing is being dragged.
