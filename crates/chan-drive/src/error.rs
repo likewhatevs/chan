@@ -30,6 +30,8 @@ pub enum ChanError {
     DriveLocked,
     #[error("drive is already open in this process; drop the existing handle first")]
     DriveAlreadyOpen,
+    #[error("drive is already registered at: {0}")]
+    DriveAlreadyRegistered(PathBuf),
     #[error("write conflict: file changed on disk (current mtime ns: {current_mtime_ns:?})")]
     WriteConflict { current_mtime_ns: Option<i64> },
     #[error("write too large: {size} bytes exceeds {limit} byte cap for {kind}")]

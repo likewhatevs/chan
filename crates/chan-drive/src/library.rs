@@ -37,6 +37,17 @@ pub struct ResetReport {
     pub removed_entries: usize,
 }
 
+/// What `Library::sweep_orphans` reclaimed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SweepReport {
+    /// Distinct uuids whose sidecars were reclaimed. Sorted and
+    /// deduplicated across subsystem parents.
+    pub removed_uuids: Vec<String>,
+    /// Total file + subdirectory entries removed across all wiped
+    /// sidecar dirs.
+    pub removed_entries: usize,
+}
+
 /// Per-machine handle to the chan-drive registry + paths.
 #[derive(Clone)]
 pub struct Library {
@@ -89,8 +100,18 @@ impl Library {
 
     /// Open a Library against an explicit config path. Used in
     /// tests and by callers that want a non-default location.
+    ///
+    /// Runs the pre-uuid registry migration once on load: any row
+    /// missing a `uuid` adopts the legacy `drive_key(path)` value
+    /// so its existing sidecar dirs (graph DB, search index, ...)
+    /// remain reachable under the new uuid-keyed layout. If any
+    /// row was migrated, the registry is persisted back so the
+    /// next process load reads the upgraded shape directly.
     pub fn open_at(config_path: PathBuf) -> Result<Self> {
-        let registry = Registry::load_from(&config_path)?;
+        let mut registry = Registry::load_from(&config_path)?;
+        if registry.migrate_uuids() {
+            registry.save_to(&config_path)?;
+        }
         Ok(Self {
             inner: Arc::new(LibraryInner {
                 config_path,
@@ -312,7 +333,25 @@ impl Library {
                 }
             }
         }
-        let drive_paths = paths::drive_paths(root);
+        // Sidecar identity comes from the registry's uuid, not the
+        // path. An unregistered root has no uuid in the registry,
+        // so there is nothing for this Library to wipe under the
+        // current scheme; surface that as an idempotent no-op
+        // rather than guessing at a path-derived key (which could
+        // belong to a different drive that does happen to be
+        // registered). Stale path-derived sidecars from a previous
+        // chan version land in the orphan-sweep path instead.
+        let Some(uuid) = self
+            .inner
+            .registry
+            .lock()
+            .unwrap()
+            .find(root)
+            .map(|e| e.uuid.clone())
+        else {
+            return Ok(ResetReport { removed_entries: 0 });
+        };
+        let drive_paths = paths::drive_paths_for_uuid(&uuid);
         let _lock = DriveLock::acquire(&drive_paths.lock)?;
         let mut removed = 0;
         let subsystems: [(&str, &Path); 5] = [
@@ -351,6 +390,172 @@ impl Library {
             removed_entries: removed,
         })
     }
+
+    /// Record an `mv` of a registered drive's directory. Preserves
+    /// the drive's `uuid` (and therefore all its sidecar state,
+    /// graph DB, search index, sessions, assistant, tokens, trash,
+    /// report), only rewriting the `path` field on the registry
+    /// row.
+    ///
+    /// Refuses if:
+    ///   - `old` is not registered (`Ok(false)`),
+    ///   - `new` does not exist on disk (`DriveRootMissing`),
+    ///   - `new` is already registered to a different uuid
+    ///     (`DriveAlreadyRegistered`), since collapsing two
+    ///     registry rows onto one path would orphan one drive's
+    ///     sidecars under a uuid the registry no longer references.
+    ///   - any `Arc<Drive>` for `old` is still alive
+    ///     (`DriveAlreadyOpen`), since the live drive is caching
+    ///     `entry.path` and would silently disagree with the
+    ///     registry after the move.
+    ///
+    /// The caller is responsible for actually moving the directory
+    /// on disk (`std::fs::rename(old, new)` or an `mv` from the
+    /// shell). This call only updates the registry.
+    pub fn move_drive(&self, old: &Path, new: &Path) -> Result<bool> {
+        if !new.exists() {
+            return Err(ChanError::DriveRootMissing(new.to_path_buf()));
+        }
+        let key = canonical_key(old);
+        {
+            let mut map = self.inner.live_drives.lock().unwrap();
+            gc_dead_entries(&mut map);
+            if let Some(weak) = map.get(&key) {
+                if weak.upgrade().is_some() {
+                    return Err(ChanError::DriveAlreadyOpen);
+                }
+            }
+        }
+        let mut reg = self.inner.registry.lock().unwrap();
+        let Some(old_entry) = reg.find(old) else {
+            return Ok(false);
+        };
+        let old_uuid = old_entry.uuid.clone();
+        if let Some(existing) = reg.find(new) {
+            if existing.uuid != old_uuid {
+                return Err(ChanError::DriveAlreadyRegistered(new.to_path_buf()));
+            }
+            // Same uuid means `new` is already a name for this
+            // drive (idempotent retry after a partial move). Drop
+            // through to set_path which will canonicalize and
+            // overwrite, then save.
+        }
+        let ok = reg.set_path(old, new);
+        if ok {
+            reg.save_to(&self.inner.config_path)?;
+        }
+        Ok(ok)
+    }
+
+    /// Per-drive paths for a registered root. `None` when the
+    /// drive isn't registered (no uuid, so no sidecar identity to
+    /// resolve). Use this rather than `paths::drive_paths_for_uuid`
+    /// directly so the registry stays the only source of truth for
+    /// "which uuid is this path."
+    pub fn drive_paths_for(&self, root: &Path) -> Option<paths::DrivePaths> {
+        let reg = self.inner.registry.lock().unwrap();
+        let entry = reg.find(root)?;
+        Some(paths::drive_paths_for_uuid(&entry.uuid))
+    }
+
+    /// Reclaim sidecar directories whose uuid no longer appears in
+    /// the registry. Walks every per-subsystem root from
+    /// `paths::drive_subsystem_dirs` and deletes any immediate
+    /// subdirectory whose name isn't a current uuid.
+    ///
+    /// Use cases:
+    ///   - A previous chan version `unregister`'d a drive without
+    ///     wiping the sidecar (the bug PR1 closes).
+    ///   - A `Library::move_drive` happened, the drive was later
+    ///     deleted at the new location, leaving an orphaned uuid
+    ///     dir under a previous registry row that has since been
+    ///     removed.
+    ///   - A registry was hand-edited and the matching uuid dirs
+    ///     stayed behind.
+    ///
+    /// Cross-process safety: this routine snapshots the registry
+    /// under the in-process mutex and walks each subsystem dir
+    /// independently. A concurrent `register_drive` on another
+    /// process can race: it mints a new uuid, creates its sidecar
+    /// dir, and saves the registry; our sweep, working from the
+    /// snapshot, then deletes the just-created dir. The window is
+    /// tight (uuid creation -> dir creation -> registry save) and
+    /// the worst case is "the next index access on the new drive
+    /// rebuilds from scratch", which is the same outcome as a
+    /// fresh open. We accept the race rather than introduce a
+    /// cross-process registry lock for what is fundamentally a
+    /// garbage-collection pass.
+    pub fn sweep_orphans(&self) -> Result<SweepReport> {
+        let known: std::collections::HashSet<String> = self
+            .inner
+            .registry
+            .lock()
+            .unwrap()
+            .drives
+            .iter()
+            .map(|d| d.uuid.clone())
+            .collect();
+        sweep_orphans_in(&paths::drive_subsystem_dirs(), &known)
+    }
+}
+
+/// Inner workhorse for `Library::sweep_orphans`: walk each parent
+/// in `parents` and remove any immediate subdirectory whose name
+/// is not in `known` AND looks like a uuid (16 lowercase hex). Pure
+/// in its arguments so tests can drive it against a TempDir tree
+/// without mutating the host's real XDG state/cache.
+///
+/// Tolerates concurrent removal: a sidecar deleted between
+/// `read_dir` and `wipe_dir` simply contributes zero entries to
+/// the report.
+fn sweep_orphans_in(
+    parents: &[PathBuf],
+    known: &std::collections::HashSet<String>,
+) -> Result<SweepReport> {
+    let mut removed_uuids: Vec<String> = Vec::new();
+    let mut removed_entries: usize = 0;
+    for parent in parents {
+        let read = match std::fs::read_dir(parent) {
+            Ok(r) => r,
+            // Not yet created on a fresh install; nothing to sweep.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(ChanError::Io(format!("read {parent:?}: {e}"))),
+        };
+        for entry in read.flatten() {
+            let name = entry.file_name();
+            let Some(name_str) = name.to_str() else {
+                continue;
+            };
+            if known.contains(name_str) {
+                continue;
+            }
+            // Defensive: if a future schema adds a non-uuid
+            // file/dir under a subsystem parent, don't delete it.
+            // Only sweep directories that look like uuids: 16
+            // lowercase hex chars. The legacy drive_key and
+            // mint_uuid both produce that shape.
+            if !looks_like_uuid(name_str) {
+                continue;
+            }
+            let path = entry.path();
+            let entry_count = wipe_dir(&path)?;
+            removed_entries += entry_count;
+            removed_uuids.push(name_str.to_string());
+        }
+    }
+    removed_uuids.sort();
+    removed_uuids.dedup();
+    Ok(SweepReport {
+        removed_uuids,
+        removed_entries,
+    })
+}
+
+/// Shape of `drive_key` / `mint_uuid` outputs: 16 lowercase hex.
+fn looks_like_uuid(s: &str) -> bool {
+    s.len() == 16
+        && s.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 /// Canonical-form key for the live-drives map. Falls back to the
@@ -371,7 +576,11 @@ fn gc_dead_entries(map: &mut HashMap<PathBuf, Weak<Drive>>) {
 
 /// Recursively delete `dir` and return the number of entries
 /// (files + subdirectories, not counting `dir` itself) that were
-/// inside it. Missing dir contributes 0.
+/// inside it. Missing dir contributes 0. Tolerates a race where
+/// the directory disappears between the walk and the remove (a
+/// second sweep, a concurrent drive teardown, an external tool)
+/// by treating NotFound on remove as zero-impact rather than an
+/// error.
 fn wipe_dir(dir: &Path) -> Result<usize> {
     if !dir.exists() {
         return Ok(0);
@@ -381,8 +590,11 @@ fn wipe_dir(dir: &Path) -> Result<usize> {
         .into_iter()
         .filter_map(|e| e.ok())
         .count();
-    std::fs::remove_dir_all(dir)?;
-    Ok(count)
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => Ok(count),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(e) => Err(e.into()),
+    }
 }
 
 #[cfg(test)]
@@ -510,8 +722,202 @@ mod tests {
         std::fs::write(p.tokens.join("server.token"), b"deadbeef").unwrap();
     }
 
-    fn paths_of(root: &Path) -> paths::DrivePaths {
-        paths::drive_paths(root)
+    fn paths_of(lib: &Library, root: &Path) -> paths::DrivePaths {
+        lib.drive_paths_for(root)
+            .expect("test helper expects a registered drive")
+    }
+
+    #[test]
+    fn open_at_migrates_legacy_registry_uuid_and_persists() {
+        // Write a config.toml the way a pre-uuid version would have:
+        // no uuid field on the entry. Then Library::open_at must
+        // fill it in with drive_key(path) and save the registry
+        // back. A subsequent open_at sees the uuid pre-filled and
+        // does not rewrite (idempotent).
+        let cfg = TempDir::new().unwrap();
+        let drive = TempDir::new().unwrap();
+        let cfg_path = cfg.path().join("config.toml");
+        let legacy = format!(
+            "[[drives]]\npath = {:?}\nname = \"Legacy\"\nlast_opened = \"2024-01-01T00:00:00Z\"\n",
+            drive.path(),
+        );
+        std::fs::write(&cfg_path, legacy).unwrap();
+
+        let lib = Library::open_at(cfg_path.clone()).unwrap();
+        let drives = lib.list_drives();
+        assert_eq!(drives.len(), 1);
+        let migrated_uuid = drives[0].uuid.clone();
+        assert!(
+            !migrated_uuid.is_empty(),
+            "uuid must be filled by migration"
+        );
+        assert_eq!(
+            migrated_uuid,
+            paths::drive_key(drive.path()),
+            "migration must adopt the legacy path-derived key so existing sidecars stay reachable",
+        );
+
+        // File on disk now has the uuid field.
+        let on_disk = std::fs::read_to_string(&cfg_path).unwrap();
+        assert!(
+            on_disk.contains("uuid"),
+            "migration should persist uuid back to disk; got: {on_disk}",
+        );
+
+        // Re-open: no further migration, uuid stays the same.
+        let lib2 = Library::open_at(cfg_path).unwrap();
+        assert_eq!(lib2.list_drives()[0].uuid, migrated_uuid);
+    }
+
+    #[test]
+    fn drive_paths_for_returns_none_for_unregistered_root() {
+        let (lib, _cfg, drive) = lib();
+        assert!(lib.drive_paths_for(drive.path()).is_none());
+        lib.register_drive(drive.path(), None).unwrap();
+        assert!(lib.drive_paths_for(drive.path()).is_some());
+    }
+
+    #[test]
+    fn move_drive_preserves_uuid_and_sidecars() {
+        let (lib, _cfg, drive_a) = lib();
+        let drive_b = TempDir::new().unwrap();
+        lib.register_drive(drive_a.path(), Some("Notes".into()))
+            .unwrap();
+        populate_state(&lib, drive_a.path());
+
+        let uuid_before = lib.list_drives()[0].uuid.clone();
+        let pa = paths_of(&lib, drive_a.path());
+        assert!(pa.graph_db.exists());
+
+        // Move the drive's registry entry. The user is responsible
+        // for the actual directory move; we simulate that by writing
+        // notes into drive_b after the registry update.
+        assert!(lib.move_drive(drive_a.path(), drive_b.path()).unwrap());
+
+        // Registry now points at drive_b with the same uuid; the
+        // sidecar dir on disk is untouched (still at the uuid path).
+        let after = lib.list_drives();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].uuid, uuid_before, "uuid must survive a move");
+        assert_eq!(after[0].path, drive_b.path().canonicalize().unwrap());
+
+        let pb = paths_of(&lib, drive_b.path());
+        assert_eq!(pb.graph_db, pa.graph_db, "sidecar paths follow the uuid");
+        assert!(pb.graph_db.exists(), "graph DB still present after move");
+    }
+
+    #[test]
+    fn move_drive_refuses_when_target_missing() {
+        let (lib, _cfg, drive_a) = lib();
+        lib.register_drive(drive_a.path(), None).unwrap();
+        let missing = std::path::PathBuf::from("/nonexistent/destination/12345");
+        let err = lib.move_drive(drive_a.path(), &missing).unwrap_err();
+        assert!(matches!(err, ChanError::DriveRootMissing(_)));
+    }
+
+    #[test]
+    fn move_drive_refuses_when_target_is_another_registered_drive() {
+        let (lib, _cfg, drive_a) = lib();
+        let drive_b = TempDir::new().unwrap();
+        lib.register_drive(drive_a.path(), None).unwrap();
+        lib.register_drive(drive_b.path(), None).unwrap();
+        let err = lib.move_drive(drive_a.path(), drive_b.path()).unwrap_err();
+        assert!(matches!(err, ChanError::DriveAlreadyRegistered(_)));
+        // Both registry rows survive untouched.
+        assert_eq!(lib.list_drives().len(), 2);
+    }
+
+    #[test]
+    fn move_drive_refuses_when_source_is_open() {
+        let (lib, _cfg, drive_a) = lib();
+        let drive_b = TempDir::new().unwrap();
+        lib.register_drive(drive_a.path(), None).unwrap();
+        let _open = lib.open_drive(drive_a.path()).unwrap();
+        let err = lib.move_drive(drive_a.path(), drive_b.path()).unwrap_err();
+        assert!(matches!(err, ChanError::DriveAlreadyOpen));
+    }
+
+    #[test]
+    fn move_drive_returns_false_when_source_unregistered() {
+        let (lib, _cfg, _drive_a) = lib();
+        let drive_b = TempDir::new().unwrap();
+        let missing = TempDir::new().unwrap();
+        // Source is never registered; destination exists but is irrelevant.
+        assert!(!lib.move_drive(missing.path(), drive_b.path()).unwrap());
+    }
+
+    /// Drives `sweep_orphans_in` against an isolated TempDir tree
+    /// so the test never touches the host's real XDG_STATE_HOME /
+    /// XDG_CACHE_HOME. The public `Library::sweep_orphans` is a
+    /// thin wrapper that supplies `paths::drive_subsystem_dirs()`
+    /// and the registry's uuid set; the structural behavior we
+    /// care about (reclaim unknown uuids, preserve known uuids,
+    /// preserve non-uuid-shaped names) lives in the inner fn.
+    #[test]
+    fn sweep_orphans_in_reclaims_unknown_uuids() {
+        use std::collections::HashSet;
+        let root = TempDir::new().unwrap();
+        let parents = vec![
+            root.path().join("graph"),
+            root.path().join("sessions"),
+            root.path().join("index"),
+        ];
+        let known_uuid = "feedfacecafebab0";
+        let orphan_uuid = "0123456789abcdef";
+        let mut known = HashSet::new();
+        known.insert(known_uuid.to_string());
+
+        for parent in &parents {
+            std::fs::create_dir_all(parent.join(known_uuid)).unwrap();
+            std::fs::write(parent.join(known_uuid).join("keep"), b"keep").unwrap();
+            std::fs::create_dir_all(parent.join(orphan_uuid)).unwrap();
+            std::fs::write(parent.join(orphan_uuid).join("junk"), b"junk").unwrap();
+        }
+        // Plant a non-uuid-shaped dir to confirm the shape filter.
+        let preserve = parents[0].join("not-a-uuid");
+        std::fs::create_dir_all(&preserve).unwrap();
+        std::fs::write(preserve.join("keep"), b"keep").unwrap();
+
+        let report = sweep_orphans_in(&parents, &known).unwrap();
+        assert_eq!(report.removed_uuids, vec![orphan_uuid.to_string()]);
+        assert!(report.removed_entries >= 3);
+
+        for parent in &parents {
+            assert!(parent.join(known_uuid).exists(), "known uuid must survive");
+            assert!(
+                !parent.join(orphan_uuid).exists(),
+                "orphan uuid must be gone"
+            );
+        }
+        assert!(preserve.exists(), "non-uuid-shaped dir must survive");
+    }
+
+    #[test]
+    fn sweep_orphans_in_handles_missing_parent_dirs() {
+        // Parents that don't exist (fresh install, no drives ever
+        // opened) must not error: the sweep simply skips them.
+        use std::collections::HashSet;
+        let root = TempDir::new().unwrap();
+        let parents = vec![
+            root.path().join("never-created"),
+            root.path().join("also-not-here"),
+        ];
+        let known = HashSet::new();
+        let report = sweep_orphans_in(&parents, &known).unwrap();
+        assert!(report.removed_uuids.is_empty());
+        assert_eq!(report.removed_entries, 0);
+    }
+
+    #[test]
+    fn looks_like_uuid_guards_sweep_shape_filter() {
+        assert!(looks_like_uuid("0123456789abcdef"));
+        assert!(looks_like_uuid("feedfacecafebab0"));
+        // Wrong length, wrong case, wrong charset, or has slashes.
+        assert!(!looks_like_uuid("0123456789abcde"));
+        assert!(!looks_like_uuid("0123456789abcdef0"));
+        assert!(!looks_like_uuid("0123456789ABCDEF"));
+        assert!(!looks_like_uuid("0123456789abcdez"));
+        assert!(!looks_like_uuid("not-a-uuid-here1"));
     }
 
     #[test]
@@ -521,7 +927,7 @@ mod tests {
             .unwrap();
         populate_state(&lib, drive.path());
 
-        let p = paths_of(drive.path());
+        let p = paths_of(&lib, drive.path());
         // Sanity: state dirs populated.
         assert!(p.index.exists());
         assert!(p.graph_db.exists());
@@ -619,8 +1025,8 @@ mod tests {
         populate_state(&lib, drive_a.path());
         populate_state(&lib, drive_b.path());
 
-        let pa = paths_of(drive_a.path());
-        let pb = paths_of(drive_b.path());
+        let pa = paths_of(&lib, drive_a.path());
+        let pb = paths_of(&lib, drive_b.path());
 
         lib.reset_drive(drive_a.path(), ResetMode::State).unwrap();
 
@@ -649,7 +1055,7 @@ mod tests {
             .unwrap();
         populate_state(&lib, drive.path());
 
-        let p = paths_of(drive.path());
+        let p = paths_of(&lib, drive.path());
         assert!(p.graph_db.exists(), "graph DB should exist after populate");
         // Sanity: the graph actually has the file we wrote.
         {
@@ -719,7 +1125,7 @@ mod tests {
             d.remove("doomed.md").unwrap();
             assert_eq!(d.trash_list().unwrap().len(), 1);
         }
-        let p = paths_of(drive.path());
+        let p = paths_of(&lib, drive.path());
         assert!(p.trash.exists());
 
         lib.reset_drive(drive.path(), ResetMode::State).unwrap();

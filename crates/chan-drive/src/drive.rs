@@ -16,7 +16,7 @@ use crate::graph::GraphView;
 use crate::index::{BuildOptions, BuildSummary, Index, Mode as SearchMode, SearchResult};
 use crate::lock::DriveLock;
 use crate::markdown;
-use crate::paths::{drive_paths, DrivePaths};
+use crate::paths::{drive_paths_for_uuid, DrivePaths};
 use crate::registry::KnownDrive;
 use crate::report::{ReportFanOut, ReportState};
 use crate::trash::{self, TrashEntry, TRASH_RETENTION_SECS};
@@ -257,7 +257,20 @@ impl Drive {
             .map_err(|e| ChanError::Io(format!("canonicalize drive root: {e}")))?;
         let dir = cap_std::fs::Dir::open_ambient_dir(&entry.path, cap_std::ambient_authority())
             .map_err(|e| ChanError::Io(format!("open drive root: {e}")))?;
-        let paths = drive_paths(&entry.path);
+        // Sidecar identity comes from the registry-assigned uuid,
+        // not the filesystem path. An empty uuid here means the
+        // KnownDrive was constructed bypassing Library::open_at
+        // (which runs the pre-uuid migration), which is a contract
+        // violation rather than a runtime condition: fail loudly so
+        // a future caller doesn't silently key state under the
+        // empty-string uuid and lose data on the next open.
+        if entry.uuid.is_empty() {
+            return Err(ChanError::Io(format!(
+                "registry entry for {:?} has empty uuid; open the drive via Library::open_drive so the registry migration runs first",
+                entry.path,
+            )));
+        }
+        let paths = drive_paths_for_uuid(&entry.uuid);
         let lock = DriveLock::acquire(&paths.lock)?;
         // Lazy GC: reclaim expired trash entries on every open. No
         // background thread, matches the codebase's sync-only rule.
@@ -2387,11 +2400,13 @@ mod tests {
         // still knows that A.md once mapped to B.md.
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
-        let paths = crate::paths::drive_paths(drive_dir.path());
 
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_drive(drive_dir.path(), Some("RnLog".into()))
             .unwrap();
+        // Resolve paths after register so the lookup uses the
+        // registry-assigned uuid rather than guessing from the path.
+        let paths = lib.drive_paths_for(drive_dir.path()).unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         drive.write_text("A.md", "# A\n").unwrap();
         drive.rename_with_link_rewrite("A.md", "B.md").unwrap();
@@ -2452,14 +2467,20 @@ mod tests {
         // so the consumer reindexes before serving queries.
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
-        let paths = crate::paths::drive_paths(drive_dir.path());
-        std::fs::create_dir_all(&paths.graph_dir).unwrap();
-        let marker = paths.graph_dir.join(REBUILD_MARKER);
-        std::fs::write(&marker, b"started_at = 1\n").unwrap();
 
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_drive(drive_dir.path(), Some("Reb".into()))
             .unwrap();
+        // Stamp the marker AFTER register so the uuid is known.
+        // Open then drop the drive once to let the lazy sidecar
+        // skeleton (graph_dir) come into existence before we plant
+        // the marker; otherwise create_dir_all does the same work
+        // but explicit-open is the production code path.
+        let paths = lib.drive_paths_for(drive_dir.path()).unwrap();
+        std::fs::create_dir_all(&paths.graph_dir).unwrap();
+        let marker = paths.graph_dir.join(REBUILD_MARKER);
+        std::fs::write(&marker, b"started_at = 1\n").unwrap();
+
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         assert!(
             drive.needs_rebuild(),

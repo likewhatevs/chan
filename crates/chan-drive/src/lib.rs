@@ -62,7 +62,7 @@ pub use index::{
     BuildOptions, BuildSummary, Chunking, Hit, IndexConfig, IndexStats, Mode as SearchMode,
     SearchResult, DEFAULT_MODEL,
 };
-pub use library::{Library, ResetMode, ResetReport};
+pub use library::{Library, ResetMode, ResetReport, SweepReport};
 pub use progress::{
     eta_secs_from, progress_fn, NoProgress, ProgressCallback, ProgressEvent, ProgressStage,
 };

@@ -14,8 +14,18 @@
 // State and cache stay XDG-shaped because they hold per-drive blobs
 // where OS conventions help (Time Machine semantics on macOS,
 // $XDG_RUNTIME_DIR cleanup on Linux). Per-drive subpaths are keyed
-// by `drive_key()` (sha256 of the canonical absolute path, hex-
-// truncated to 16). Renames invalidate the keys; rebuilds are cheap.
+// by the drive's `uuid` (16 hex chars), assigned at registration
+// time and stored in the registry row. The uuid is independent of
+// the drive's filesystem path: moving the drive directory (via
+// `Library::move_drive`) preserves the uuid and so preserves the
+// sidecar, and deleting then re-creating a drive at the same path
+// mints a new uuid so the new drive can never surface state from
+// the old one.
+//
+// `drive_key()` is the legacy path-derived hash kept for migrating
+// pre-uuid registries: on first `Library::open` after upgrade, any
+// row without a uuid adopts `drive_key(path)` as its uuid, so
+// existing sidecar directories on disk remain valid.
 
 use std::path::{Path, PathBuf};
 
@@ -74,7 +84,13 @@ pub fn global_config_path() -> PathBuf {
     config_dir().join("config.toml")
 }
 
-/// Stable per-drive key. sha256(canonical_path)[..16] as hex.
+/// Legacy per-drive key, sha256(canonical_path)[..16]. Used only
+/// for migrating pre-uuid registries: any registry row missing a
+/// uuid adopts this value on first `Library::open` after upgrade,
+/// so existing sidecar directories on disk remain valid. New
+/// drives are assigned uuids via `mint_uuid` instead and never
+/// touch this function.
+///
 /// `canonicalize` falls back to the input on error (typical for
 /// not-yet-existing paths) so the key is still computable.
 pub fn drive_key(drive_root: &Path) -> String {
@@ -83,6 +99,33 @@ pub fn drive_key(drive_root: &Path) -> String {
         .unwrap_or_else(|_| drive_root.to_path_buf());
     let mut h = Sha256::new();
     h.update(canonical.as_os_str().to_string_lossy().as_bytes());
+    let hex = format!("{:x}", h.finalize());
+    hex[..16].to_owned()
+}
+
+/// Mint a fresh per-drive uuid (16 hex chars). Derived from
+/// `sha256(canonical_path || nanos_since_epoch)[..16]` so the same
+/// path registered twice at different times produces different
+/// uuids. That property is the structural fix for "delete a drive
+/// and re-create it at the same path": the new drive gets a new
+/// uuid, so the new drive's sidecars cannot collide with the old
+/// drive's sidecars even when the FS path is identical.
+///
+/// 64 bits of identifier space is fine for this use: P(collision)
+/// is N^2/2^65, which at 10^9 distinct drives across a fleet works
+/// out to ~10^-12. The uuid is per-machine, not global, so the
+/// effective N is much smaller in practice.
+pub fn mint_uuid(drive_root: &Path) -> String {
+    let canonical = drive_root
+        .canonicalize()
+        .unwrap_or_else(|_| drive_root.to_path_buf());
+    let nanos = chrono::Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_micros() * 1_000);
+    let mut h = Sha256::new();
+    h.update(canonical.as_os_str().to_string_lossy().as_bytes());
+    h.update(b"\0");
+    h.update(nanos.to_le_bytes());
     let hex = format!("{:x}", h.finalize());
     hex[..16].to_owned()
 }
@@ -130,23 +173,46 @@ pub struct DrivePaths {
     pub report: PathBuf,
 }
 
-/// Resolve the per-drive global paths for `drive_root`.
-pub fn drive_paths(drive_root: &Path) -> DrivePaths {
-    let key = drive_key(drive_root);
+/// Resolve the per-drive global paths for a uuid. The uuid is the
+/// drive's `KnownDrive.uuid`, assigned at registration time and
+/// preserved across `Library::move_drive`. Callers that hold a
+/// `&Path` should look the uuid up through `Library::drive_paths_for`
+/// rather than recomputing it from the path, so the registry's
+/// authoritative identity is the only source of truth.
+pub fn drive_paths_for_uuid(uuid: &str) -> DrivePaths {
     let state = state_dir();
     let cache = cache_dir();
-    let graph_dir = state.join("graph").join(&key);
+    let graph_dir = state.join("graph").join(uuid);
     DrivePaths {
-        sessions: state.join("sessions").join(&key),
-        assistant: state.join("assistant").join(&key),
-        index: cache.join("index").join(&key),
+        sessions: state.join("sessions").join(uuid),
+        assistant: state.join("assistant").join(uuid),
+        index: cache.join("index").join(uuid),
         graph_db: graph_dir.join("graph.sqlite"),
         graph_dir,
-        lock: state.join("locks").join(&key),
-        tokens: state.join("tokens").join(&key),
-        trash: state.join("trash").join(&key),
-        report: state.join("report").join(&key).join("report.jsonl"),
+        lock: state.join("locks").join(uuid),
+        tokens: state.join("tokens").join(uuid),
+        trash: state.join("trash").join(uuid),
+        report: state.join("report").join(uuid).join("report.jsonl"),
     }
+}
+
+/// Per-subsystem state/cache parent directories. Used by the
+/// orphan-sweep path to walk every sidecar root and reconcile
+/// against the registry's uuid set. Returns absolute paths; some
+/// may not exist on a fresh install, callers must handle that.
+pub fn drive_subsystem_dirs() -> Vec<PathBuf> {
+    let state = state_dir();
+    let cache = cache_dir();
+    vec![
+        state.join("sessions"),
+        state.join("assistant"),
+        state.join("graph"),
+        state.join("locks"),
+        state.join("tokens"),
+        state.join("trash"),
+        state.join("report"),
+        cache.join("index"),
+    ]
 }
 
 /// One cloud-storage provider's root the first-launch picker can
@@ -291,10 +357,9 @@ mod tests {
     }
 
     #[test]
-    fn drive_paths_share_the_same_key() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let key = drive_key(tmp.path());
-        let p = drive_paths(tmp.path());
+    fn drive_paths_share_the_same_uuid() {
+        let uuid = "deadbeefcafebab0";
+        let p = drive_paths_for_uuid(uuid);
         for path in [
             &p.sessions,
             &p.assistant,
@@ -303,9 +368,65 @@ mod tests {
             &p.tokens,
             &p.trash,
         ] {
-            assert!(path.to_string_lossy().contains(&key));
+            assert!(path.to_string_lossy().contains(uuid));
         }
-        assert!(p.graph_db.to_string_lossy().contains(&key));
+        assert!(p.graph_db.to_string_lossy().contains(uuid));
+    }
+
+    #[test]
+    fn mint_uuid_is_unique_across_calls() {
+        // Two consecutive mints for the same path must differ.
+        // The clock-derived nonce is what makes "delete and
+        // re-create at the same path" produce a new identity.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let a = mint_uuid(tmp.path());
+        // Force at least one nanosecond of separation so the
+        // timestamps differ. On systems where the clock resolution
+        // is coarser than 1ns, the loop nudges us past the boundary.
+        let mut b = mint_uuid(tmp.path());
+        let mut tries = 0;
+        while b == a && tries < 1000 {
+            std::thread::sleep(std::time::Duration::from_nanos(1));
+            b = mint_uuid(tmp.path());
+            tries += 1;
+        }
+        assert_ne!(a, b, "two mints for the same path should differ");
+        assert_eq!(a.len(), 16);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn drive_subsystem_dirs_covers_each_sidecar_root() {
+        // Sanity check that the orphan-sweep cover set lists every
+        // per-uuid root that drive_paths_for_uuid produces. If a new
+        // subsystem is added to DrivePaths, the sweep must also know
+        // about it or orphaned state for the new subsystem will leak.
+        let uuid = "0123456789abcdef";
+        let p = drive_paths_for_uuid(uuid);
+        let dirs = drive_subsystem_dirs();
+        // Each of these parents-of-uuid-dir must appear in dirs.
+        let parents: Vec<PathBuf> = [
+            &p.sessions,
+            &p.assistant,
+            &p.graph_dir,
+            &p.lock,
+            &p.tokens,
+            &p.trash,
+            &p.index,
+        ]
+        .into_iter()
+        .map(|p| p.parent().unwrap().to_path_buf())
+        .collect();
+        // report.jsonl sits inside <state>/report/<uuid>/, so the
+        // uuid dir's parent (i.e. <state>/report) must be covered.
+        let report_parent = p.report.parent().unwrap().parent().unwrap().to_path_buf();
+        for parent in parents.iter().chain(std::iter::once(&report_parent)) {
+            assert!(
+                dirs.contains(parent),
+                "subsystem parent missing from sweep cover set: {:?}",
+                parent
+            );
+        }
     }
 
     #[test]

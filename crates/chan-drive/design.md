@@ -88,9 +88,33 @@ Out of scope:
 
 Per-machine singleton-in-practice. Owns the `Registry`
 (`Mutex<Registry>` intra-process), the config-file path, and the
-default drive root. `open_drive` resolves the canonical path,
-hashes it into a 16-hex `<key>`, and constructs a `Drive` that
-holds the cross-process writer lock for its lifetime.
+default drive root. `open_drive` looks up the registry row for the
+caller's path and constructs a `Drive` keyed by the row's `uuid`,
+holding the cross-process writer lock for its lifetime.
+
+Each registry row carries a stable `uuid` (16 hex chars) minted at
+first register via `paths::mint_uuid` and preserved across
+`Library::move_drive`. All per-drive sidecar paths (graph DB,
+search index, sessions, assistant, tokens, trash, report) live
+under this uuid. Consequences:
+
+  - Moving the drive directory (recorded via `move_drive`) is a
+    registry-only change, zero file motion on the sidecars.
+  - Deleting then re-creating a drive at the same path mints a
+    fresh uuid on the new registration; the new drive cannot
+    surface state from the old one even when the FS path matches.
+  - The legacy path-derived key (`paths::drive_key`) is kept only
+    for migration: on first `Library::open` after an upgrade from
+    a pre-uuid version, rows with empty `uuid` adopt
+    `drive_key(path)` as their uuid so existing on-disk sidecars
+    remain reachable. The migration is one-shot and persisted.
+
+`Library::sweep_orphans` reconciles the on-disk sidecar tree
+against the registry: any subdirectory under a per-subsystem root
+(`<state>/graph/`, `<cache>/index/`, ...) whose name is not in
+the current uuid set and looks like a uuid is reclaimed. Used to
+clean up after pre-PR1 unregisters that left state behind, or
+after a `move_drive`-then-deleted-at-new-location workflow.
 
 `reset_drive` wipes per-drive chan-managed state (search index,
 graph DB, session and assistant blobs, app tokens). It never
@@ -116,17 +140,19 @@ is the only path that overwrites the name.
 
 `unregister_drive` is `reset_drive(Everything)` plus a `false`
 return when the drive wasn't in the registry. It drops the
-registry row AND wipes per-drive state, for the same reason
-`reset_drive(Everything)` does: per-drive sidecars are keyed by
-`sha256(canonical_path)[..16]`. Without the wipe, deleting the
-drive directory and re-creating it at the same path would reuse
-the previous sidecar, and the new drive would surface graph and
-index rows from the old drive. Wiping on unregister closes that
-window structurally. The trash is preserved (recoverable user
-data, owned by the user even after the drive is forgotten).
+registry row AND wipes per-drive state in one call so a re-register
+at the same path starts from a clean sidecar even when the row's
+uuid is still around in cache. The trash is preserved (recoverable
+user data, owned by the user even after the drive is forgotten).
 Preconditions match `reset_drive`: any open `Arc<Drive>` for the
 root must be dropped first, otherwise the call fails with
 `DriveAlreadyOpen`.
+
+`move_drive(old, new)` records a moved drive directory: it rewrites
+the registry row's `path` while preserving the uuid, so every
+sidecar follows the move with zero file motion. Refuses when the
+source is unregistered, when `new` doesn't exist, when `new` is
+already a different drive, or when the source is open.
 
 ### Drive
 
@@ -563,10 +589,14 @@ Library::register_drive(root: &Path, name: Option<String>)
     -> Result<KnownDrive>
 Library::unregister_drive(root: &Path) -> Result<bool>
 Library::rename_drive(root: &Path, name: Option<String>) -> Result<bool>
+Library::move_drive(old: &Path, new: &Path) -> Result<bool>
 
 Library::open_drive(root: &Path) -> Result<Arc<Drive>>
 
 Library::reset_drive(root: &Path, mode: ResetMode) -> Result<ResetReport>
+Library::sweep_orphans() -> Result<SweepReport>
+
+Library::drive_paths_for(root: &Path) -> Option<DrivePaths>
 
 Library::set_walk_filter(filter: WalkFilter)
 Library::walk_filter() -> Arc<WalkFilter>
