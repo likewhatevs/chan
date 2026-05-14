@@ -23,9 +23,11 @@ import type { Extension } from "@codemirror/state";
 // Semantic HTML tags we treat as "this paste is actually rich" and
 // worth running through turndown. Without these, a paste of bold or
 // link-decorated plain text would skip conversion (current heuristic
-// favors aggressive conversion).
+// favors aggressive conversion). Includes definition lists, figures,
+// and inline phrasing tags (mark/kbd/samp) so pastes from docs that
+// rely on those don't fall back to raw HTML.
 const RICH_TAG_RE =
-  /<(?:a|b|blockquote|br|code|del|em|h[1-6]|hr|i|img|li|ol|p|pre|s|strike|strong|sub|sup|table|td|th|tr|u|ul)\b/i;
+  /<(?:a|b|blockquote|br|code|dd|del|dl|dt|em|figcaption|figure|h[1-6]|hr|i|img|kbd|li|mark|ol|p|pre|s|samp|strike|strong|sub|sup|table|td|th|tr|u|ul)\b/i;
 
 export function htmlPasteHandler(): Extension {
   return EditorView.domEventHandlers({

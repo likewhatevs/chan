@@ -13,9 +13,9 @@
 // with `[[target#anchor]]` where anchor is the slug returned by the
 // server (so the on-disk link survives a heading rename without
 // chasing the source text).
-//
-// Block mode (`^`) is v1.2 — needs the file body to parse `^id` block
-// markers.
+// Block mode: parses `^id` markers out of the target file body via
+// wikiBlocks.parseBlocks; commit either reuses an existing anchor or
+// CAS-writes a fresh one onto the picked paragraph.
 //
 // Errors render in the status footer; the list stays empty so nothing
 // commits. Stale fetches drop via reqSeq.
