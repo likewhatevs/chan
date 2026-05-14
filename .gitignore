@@ -6,3 +6,6 @@
 *.swn
 *~
 .DS_Store
+
+# Claude Code harness state (per-agent settings + runtime lock files)
+.claude/
