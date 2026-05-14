@@ -724,6 +724,28 @@ impl GraphView {
         Ok(out)
     }
 
+    /// All files known to the graph with their last-seen mtime (Unix
+    /// seconds, `None` when the indexer couldn't read the file's
+    /// mtime). Sorted by path. Used by `Drive::reconcile` to compare
+    /// the graph's snapshot against the live tree's stat values and
+    /// drive index_file / forget_file calls only for files that
+    /// actually changed.
+    pub fn files_with_mtime(&self) -> Result<Vec<(String, Option<i64>)>> {
+        tracing::debug!("graph::files_with_mtime");
+        let conn = self.reader()?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT rel_path, mtime FROM nodes WHERE kind IN ('file', 'contact') ORDER BY rel_path",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     /// Look up the node kind for a single rel path. Returns `None`
     /// when no row exists (file isn't indexed yet, was deleted, or
     /// the caller passed a path that isn't a markdown note). Used by

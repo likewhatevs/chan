@@ -685,6 +685,7 @@ Drive::is_reindexing() -> bool
 Drive::needs_replay_writes() -> bool
 Drive::pending_writes() -> Vec<(String, &'static str)>
 Drive::replay_pending_writes() -> Result<usize>
+Drive::reconcile() -> Result<ReconcileReport>
 Drive::link_targets(q: &str, limit: u32) -> Result<Vec<LinkTarget>>
 Drive::resolve_link(target: &str) -> Option<ResolvedLink>
 
@@ -788,6 +789,18 @@ Push vs. pull, and how the three signals relate:
     crashed reindex, cleared after the next successful `reindex_with`
     commits. Survives across process restarts, which the in-memory
     `is_reindexing()` cannot.
+  - `Drive::reconcile()` is the diff-based recovery path. Walks
+    the live tree, compares each editable-text file's mtime against
+    the graph row, and emits journal-bracketed `index_file` /
+    `forget_file` calls only for the deltas. Unchanged files are
+    skipped, so reconcile costs O(N) stat + the per-file embed
+    only for changed files. Use cases: cold open after offline
+    edits, watcher-overflow recovery (inotify `IN_Q_OVERFLOW` /
+    FSEvents coalesce-loss), post-`replay_pending_writes` sanity.
+    The diff is mtime-only today; a same-mtime-different-content
+    rewrite (rare) is not caught here but the next save or full
+    reindex covers it. Adding a `size` column to the graph would
+    tighten this; deferred.
   - `Drive::needs_replay_writes()` is the per-file companion: set
     by `Drive::open` when it finds a non-empty `pending_writes.json`
     journal under `graph_dir/`. Each entry is a `(rel, op)` pair

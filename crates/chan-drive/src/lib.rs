@@ -49,6 +49,7 @@ pub use contacts::{
     Contact, EmailAddress, ImportCounts, ImportOpts, ImportOutcome, ImportSummary, Organization,
     PhoneNumber, ProviderKind,
 };
+pub use drive::ReconcileReport;
 pub use drive::{
     DirEntry, Drive, FileStat, RenameOutcome, ResolvedLink, SearchOpts, TreeEntry,
     BYTES_WRITE_LIMIT, TEXT_WRITE_LIMIT,

@@ -169,6 +169,21 @@ pub struct RenameOutcome {
     pub conflicts: Vec<String>,
 }
 
+/// What `Drive::reconcile` did.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReconcileReport {
+    /// Files whose graph + index were refreshed because they were
+    /// new on disk or had a different mtime than the graph row.
+    /// Sorted by path.
+    pub upserted: Vec<String>,
+    /// Files dropped from graph + index because they no longer
+    /// exist on disk. Sorted by path.
+    pub forgotten: Vec<String>,
+    /// Files that matched the graph and were skipped. Cardinality
+    /// only; the path list would dwarf the diff on large drives.
+    pub unchanged: usize,
+}
+
 /// One open drive. Holds the writer lock for as long as it lives,
 /// so two processes can't both write the same drive's index/graph.
 /// Cheap reads are unlocked; writes go through the locked handle.
@@ -1833,6 +1848,116 @@ impl Drive {
         Ok(replayed)
     }
 
+    /// Diff the live filesystem against the graph and emit per-file
+    /// index_file / forget_file calls only for the files that
+    /// actually changed. Cheaper than a full `reindex` because
+    /// unchanged files are skipped entirely; matches a clean reindex
+    /// in end state when the diff is correct.
+    ///
+    /// Use cases:
+    ///   - Cold open after edits while the process was down: the
+    ///     watcher missed every event between the last shutdown and
+    ///     this open, so graph + index are stale. Reconcile catches
+    ///     up without paying for files that did not change.
+    ///   - Watcher overflow (inotify `IN_Q_OVERFLOW`, FSEvents
+    ///     coalesce-loss): the consumer cannot trust the event
+    ///     stream and falls back to reconcile to converge.
+    ///   - Post-recovery sanity pass: after `replay_pending_writes`
+    ///     drains the journal, a reconcile picks up any files
+    ///     touched outside the journaled set.
+    ///
+    /// Diff policy (mtime-only for now):
+    ///   - File on disk but not in graph -> `index_file`.
+    ///   - File on disk + in graph with different mtime -> `index_file`.
+    ///   - File on disk + in graph with same mtime -> skip.
+    ///   - File in graph but missing from disk -> `forget_file`.
+    ///
+    /// Each emitted op runs through the journal-bracketed public
+    /// API, so a crash during reconcile leaves a recoverable
+    /// pending-writes journal behind. Reconcile is not transactional
+    /// across the file set; partial progress is fine.
+    ///
+    /// Same-mtime false negatives: a tool that rewrites a file
+    /// without changing mtime (rare) will not be caught. The next
+    /// save or full reindex covers it. Adding a size column to the
+    /// graph schema would tighten this; deferred until we need it.
+    pub fn reconcile(&self) -> Result<ReconcileReport> {
+        // Snapshot the graph's view of the world. The graph stores
+        // mtime as Unix seconds; we compare against the same unit
+        // pulled from stat() below.
+        let graph_snapshot: std::collections::HashMap<String, Option<i64>> =
+            self.graph()?.files_with_mtime()?.into_iter().collect();
+
+        // Walk the drive applying the same filter the reindex uses
+        // (.git, .chan, plus the per-Library WalkFilter blocklist).
+        // Only editable-text files participate; binaries / images
+        // are not indexed by either backend and so do not need
+        // reconciliation.
+        let filter = Arc::clone(&self.walk_filter);
+        let mut disk_files: std::collections::HashMap<String, Option<i64>> =
+            std::collections::HashMap::new();
+        for entry in fs_ops::walk_drive_filtered(self.root(), &filter) {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let rel = match entry.path().strip_prefix(self.root()) {
+                Ok(p) => p.to_string_lossy().replace('\\', "/"),
+                Err(_) => continue,
+            };
+            if !fs_ops::is_editable_text(&rel) {
+                continue;
+            }
+            let mtime = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64);
+            disk_files.insert(rel, mtime);
+        }
+
+        let mut upserted: Vec<String> = Vec::new();
+        let mut forgotten: Vec<String> = Vec::new();
+        let mut unchanged = 0usize;
+
+        // Pass 1: every file currently on disk. New or modified
+        // entries trigger an index_file; the journal in PR5 covers
+        // crash recovery for each per-file commit pair.
+        for (rel, disk_mtime) in &disk_files {
+            let needs_index = match graph_snapshot.get(rel) {
+                None => true,
+                // mtime semantics: same value (including None == None)
+                // means "no change visible from stat", so skip. A
+                // None vs Some asymmetry is treated as a change so a
+                // legacy row without a stamped mtime gets refreshed.
+                Some(graph_mtime) => graph_mtime != disk_mtime,
+            };
+            if needs_index {
+                self.index_file(rel)?;
+                upserted.push(rel.clone());
+            } else {
+                unchanged += 1;
+            }
+        }
+
+        // Pass 2: every file in graph but not on disk. These are
+        // deletions the watcher missed (or a downtime deletion).
+        for rel in graph_snapshot.keys() {
+            if !disk_files.contains_key(rel) {
+                self.forget_file(rel)?;
+                forgotten.push(rel.clone());
+            }
+        }
+
+        upserted.sort();
+        forgotten.sort();
+        Ok(ReconcileReport {
+            upserted,
+            forgotten,
+            unchanged,
+        })
+    }
+
     /// Add an entry to the pending-writes journal and persist it.
     /// Must be called only while `write_serial` is held by the
     /// caller, so the on-disk shape stays in lockstep with the
@@ -3193,6 +3318,187 @@ mod tests {
             .unwrap()
             .iter()
             .any(|f| f == "doomed.md"));
+    }
+
+    #[test]
+    fn reconcile_is_noop_when_disk_matches_graph() {
+        // Steady state after a clean reindex: every file on disk
+        // has a graph row with matching mtime. Reconcile must
+        // touch nothing and report all-unchanged.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        drive.write_text("a.md", "# a\nalpha\n").unwrap();
+        drive.write_text("b.md", "# b\nbeta\n").unwrap();
+        drive.reindex(None).unwrap();
+
+        let report = drive.reconcile().unwrap();
+        assert!(report.upserted.is_empty());
+        assert!(report.forgotten.is_empty());
+        assert_eq!(report.unchanged, 2);
+    }
+
+    #[test]
+    fn reconcile_picks_up_files_added_offline() {
+        // Simulate "user added files while the watcher was down":
+        // the graph snapshot is missing entries that exist on disk.
+        // Reconcile must index them and end state must match a
+        // fresh reindex.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        drive.write_text("a.md", "# a\nalpha\n").unwrap();
+        drive.reindex(None).unwrap();
+        // Add a file directly through write_text (skip index_file
+        // to mimic "watcher missed it").
+        drive
+            .write_text("c.md", "# c\nreconcile-token gamma\n")
+            .unwrap();
+
+        let report = drive.reconcile().unwrap();
+        assert_eq!(report.upserted, vec!["c.md".to_string()]);
+        assert!(report.forgotten.is_empty());
+        assert_eq!(report.unchanged, 1);
+
+        // End state matches a clean reindex: search hits c.md.
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        let hits = drive.search("reconcile-token", &opts).unwrap();
+        assert_eq!(hits.hits.len(), 1);
+        assert_eq!(hits.hits[0].path, "c.md");
+    }
+
+    #[test]
+    fn reconcile_forgets_files_removed_offline() {
+        // Symmetric to the add case: a file in the graph is gone
+        // from disk. Reconcile drops it from both backends.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        drive
+            .write_text("doomed.md", "# doomed\nbye-token\n")
+            .unwrap();
+        drive.write_text("kept.md", "# kept\nkeep-token\n").unwrap();
+        drive.reindex(None).unwrap();
+
+        // Remove the file directly (mimic watcher miss / external rm).
+        std::fs::remove_file(drive_dir.path().join("doomed.md")).unwrap();
+
+        let report = drive.reconcile().unwrap();
+        assert!(report.upserted.is_empty());
+        assert_eq!(report.forgotten, vec!["doomed.md".to_string()]);
+        assert_eq!(report.unchanged, 1);
+
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert!(drive.search("bye-token", &opts).unwrap().hits.is_empty());
+        assert!(!drive
+            .graph()
+            .unwrap()
+            .files()
+            .unwrap()
+            .iter()
+            .any(|f| f == "doomed.md"));
+    }
+
+    #[test]
+    fn reconcile_picks_up_modified_files() {
+        // A file's mtime changed since the last index but the
+        // watcher missed the modify event. Reconcile detects the
+        // mtime diff and refreshes the indices. Content from the
+        // post-modify body must be searchable after.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        drive
+            .write_text("a.md", "# a\noriginal-content-token\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+
+        // Sleep past the 1-second mtime granularity floor of HFS+
+        // / older ext4 so the modify is observable via stat. APFS
+        // and modern ext4 are nanosecond, but the lowest common
+        // denominator drives the test sleep.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(
+            drive_dir.path().join("a.md"),
+            "# a\nreplaced-content-token\n",
+        )
+        .unwrap();
+
+        let report = drive.reconcile().unwrap();
+        assert_eq!(report.upserted, vec!["a.md".to_string()]);
+        assert!(report.forgotten.is_empty());
+
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert!(drive
+            .search("replaced-content-token", &opts)
+            .unwrap()
+            .hits
+            .iter()
+            .any(|h| h.path == "a.md"));
+        assert!(drive
+            .search("original-content-token", &opts)
+            .unwrap()
+            .hits
+            .is_empty());
+    }
+
+    #[test]
+    fn reconcile_on_empty_graph_indexes_everything_like_a_fresh_reindex() {
+        // Edge case: graph is empty (fresh drive, or after a
+        // reset_drive). Reconcile sees every disk file as "new"
+        // and indexes them all. End state must match what a
+        // direct reindex would produce.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        drive.write_text("a.md", "# a\nshared-token\n").unwrap();
+        drive.write_text("b.md", "# b\nshared-token\n").unwrap();
+        // Skip the initial reindex so the graph stays empty.
+
+        let report = drive.reconcile().unwrap();
+        assert_eq!(
+            report.upserted,
+            vec!["a.md".to_string(), "b.md".to_string()]
+        );
+        assert!(report.forgotten.is_empty());
+        assert_eq!(report.unchanged, 0);
+
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        let mut hit_paths: Vec<String> = drive
+            .search("shared-token", &opts)
+            .unwrap()
+            .hits
+            .into_iter()
+            .map(|h| h.path)
+            .collect();
+        hit_paths.sort();
+        assert_eq!(hit_paths, vec!["a.md".to_string(), "b.md".to_string()]);
     }
 
     #[test]
