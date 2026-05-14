@@ -94,7 +94,7 @@
 //!     orchestration loop treats `Outcome.tool_calls` as empty so
 //!     it exits after one backend turn.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -332,15 +332,19 @@ impl Backend for ClaudeCliBackend {
         let mut assistant_text = String::new();
         let mut stop = StopReason::EndOfTurn;
         let mut saw_result = false;
-        // Token-level partial text accumulated per content-block index
-        // for the current assistant message. Reset on every
-        // `message_start` partial event. Used to suppress the
-        // redundant text on the final `assistant` event without
-        // dropping text that wasn't streamed via partials (e.g. a
-        // second text block in the same message that claude buffered
-        // instead of streaming, or a whole subsequent message that
-        // skipped partials altogether).
-        let mut partial_text_by_index: HashMap<usize, String> = HashMap::new();
+        // FIFO of per-message partial-text trackers. Each entry is a
+        // `block_index -> already-streamed text` map for one assistant
+        // message. `message_start` partials push a fresh map at the
+        // BACK (the message currently being filled); the final
+        // `assistant` event pops from the FRONT (the oldest un-
+        // reconciled message). FIFO matters when claude-cli emits the
+        // SDK's `message_start` for message N+1 BEFORE it synthesizes
+        // the final `assistant` envelope for message N — the older
+        // queue model (a single index-keyed map cleared on
+        // message_start) would lose message N's partials at that
+        // moment and re-emit the whole text from the canonical
+        // block, doubling on_delta.
+        let mut partial_buffers: VecDeque<HashMap<usize, String>> = VecDeque::new();
         let mut parse_errors_emitted = 0usize;
         let mut parse_errors_silenced = 0usize;
 
@@ -416,11 +420,15 @@ impl Backend for ClaudeCliBackend {
             match event {
                 StreamEvent::Partial { event: partial } => match partial {
                     PartialEvent::MessageStart => {
-                        // Each assistant message has its own content
-                        // blocks indexed from 0. Reset the per-block
-                        // tracker so the next final `assistant` event
-                        // compares against the right partials.
-                        partial_text_by_index.clear();
+                        // A new assistant message begins. Push a
+                        // fresh tracker at the back; the previous
+                        // message's tracker stays in the queue
+                        // until its final `assistant` event consumes
+                        // it. This is what prevents a premature
+                        // `message_start` for message N+1 from
+                        // clearing message N's partials before its
+                        // final event arrives.
+                        partial_buffers.push_back(HashMap::new());
                     }
                     PartialEvent::ContentBlockDelta {
                         index,
@@ -429,10 +437,18 @@ impl Backend for ClaudeCliBackend {
                         if !text.is_empty() {
                             listener.on_delta(Delta { text: text.clone() });
                             assistant_text.push_str(&text);
-                            partial_text_by_index
-                                .entry(index)
-                                .or_default()
-                                .push_str(&text);
+                            // Write to the most recently started
+                            // message's tracker. If no MessageStart
+                            // has been seen yet (claude-cli stripped
+                            // it, or stream resumed mid-message),
+                            // implicitly start one so the next
+                            // Assistant event can still dedupe.
+                            if partial_buffers.is_empty() {
+                                partial_buffers.push_back(HashMap::new());
+                            }
+                            if let Some(buf) = partial_buffers.back_mut() {
+                                buf.entry(index).or_default().push_str(&text);
+                            }
                             if assistant_text.len() > super::ASSISTANT_TEXT_CAP_BYTES {
                                 listener.on_error(format!(
                                     "claude_cli stream: assistant text exceeded {} bytes; aborting",
@@ -446,10 +462,17 @@ impl Backend for ClaudeCliBackend {
                     PartialEvent::ContentBlockDelta { .. } | PartialEvent::Other => {}
                 },
                 StreamEvent::Assistant { message } => {
+                    // Consume the oldest un-reconciled per-message
+                    // tracker. Empty / None means claude-cli buffered
+                    // this message without emitting partials for it,
+                    // which the canonical-emit branch below handles
+                    // by falling back to the full block text.
+                    let partials = partial_buffers.pop_front().unwrap_or_default();
                     tracing::debug!(
                         block_count = message.content.len(),
-                        partials_indices = ?partial_text_by_index.keys().collect::<Vec<_>>(),
-                        partials_lens = ?partial_text_by_index
+                        queued_after_pop = partial_buffers.len(),
+                        partials_indices = ?partials.keys().collect::<Vec<_>>(),
+                        partials_lens = ?partials
                             .iter()
                             .map(|(k, v)| (*k, v.len()))
                             .collect::<Vec<_>>(),
@@ -469,10 +492,7 @@ impl Backend for ClaudeCliBackend {
                                 //      (unusual; happens if a network
                                 //      drop kills mid-block): emit
                                 //      the suffix.
-                                let already = partial_text_by_index
-                                    .get(&i)
-                                    .map(String::as_str)
-                                    .unwrap_or("");
+                                let already = partials.get(&i).map(String::as_str).unwrap_or("");
                                 // Decide what (if anything) to emit
                                 // from this canonical block:
                                 //
@@ -1174,6 +1194,74 @@ mod tests {
         );
         assert_eq!(outcome.assistant_text, "msg1 textfrom msg2");
         assert_eq!(outcome.stop_reason, StopReason::EndOfTurn);
+    }
+
+    #[tokio::test]
+    async fn message_start_for_next_message_before_assistant_for_current_does_not_double_emit() {
+        // Regression for the user-visible duplication on claude_cli:
+        // "I see the message, pause, same message again, rest of follow-
+        //  up buffers". Hypothesis: the partial-tracker is keyed only
+        // by content-block index and reset on any `message_start`, so
+        // if claude-cli flushes the SDK's message_start for message
+        // N+1 BEFORE it synthesizes the final `assistant` envelope for
+        // message N, the tracker for block 0 has already been cleared
+        // by the time message N's final event lands. The Assistant
+        // arm then sees `already=""`, treats canonical text as un-
+        // streamed, and re-emits the full block via on_delta.
+        //
+        // Fixture orders events so msg_start(m2) lands between the
+        // partials of m1 and the assistant event for m1. A correct
+        // implementation MUST still emit each message's text exactly
+        // once.
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"system","subtype":"init"}
+{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"msg1 text"}}}
+{"type":"stream_event","event":{"type":"message_start","message":{"id":"m2"}}}
+{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"msg1 text"}]}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"msg2 text"}}}
+{"type":"assistant","message":{"id":"m2","content":[{"type":"text","text":"msg2 text"}]}}
+{"type":"result","subtype":"success","result":"msg2 text","is_error":false}"#;
+        let script = fake_claude(tmp.path(), body);
+        let backend = ClaudeCliBackend::new(
+            vec![script.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            tmp.path().to_path_buf(),
+            None,
+            Duration::from_secs(60),
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                vec![Message::user("hi")],
+                Vec::new(),
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        let events = listener.0.lock().unwrap();
+        let deltas: Vec<String> = events
+            .iter()
+            .filter_map(|e| {
+                if let Event::Delta(t) = e {
+                    Some(t.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            deltas,
+            vec!["msg1 text".to_string(), "msg2 text".to_string()],
+            "msg1 text was emitted twice: once via partials, once via the \
+             final assistant event because msg2's message_start cleared \
+             the tracker before msg1's assistant arrived"
+        );
+        // Joined deltas must equal assistant_text exactly. If we
+        // double-counted, this would be 2x msg1 text.
+        let joined: String = deltas.concat();
+        assert_eq!(joined, outcome.assistant_text);
     }
 
     #[tokio::test]
