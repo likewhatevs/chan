@@ -12,7 +12,7 @@
   // only now.
 
   import { untrack } from "svelte";
-  import { ArrowLeft, ArrowRight, Maximize2, Minimize2, Settings } from "lucide-svelte";
+  import { ArrowLeft, ArrowRight, Maximize2, Minimize2, Settings, X } from "lucide-svelte";
   import {
     overlayMaximized,
     setOverlayMaximized,
@@ -519,6 +519,19 @@
   <div class="search" oncontextmenu={onSearchContextMenu} role="presentation">
     <div class="results">
       <header>
+        <button
+          type="button"
+          class="chrome-btn"
+          onclick={doToggleOverlayMaximized}
+          title={overlayMaximized.on ? "Restore size" : "Maximize"}
+          aria-label={overlayMaximized.on ? "Restore size" : "Maximize"}
+        >
+          {#if overlayMaximized.on}
+            <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+          {:else}
+            <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+          {/if}
+        </button>
         <span class="title">Scope</span>
         <select
           class="scope-select"
@@ -541,6 +554,15 @@
         >
           {@render menuItems()}
         </HamburgerMenu>
+        <button
+          type="button"
+          class="chrome-btn close"
+          onclick={close}
+          title="Close"
+          aria-label="Close"
+        >
+          <X size={14} strokeWidth={1.75} aria-hidden="true" />
+        </button>
       </header>
       <ul class="hits">
         {#each rows as r, i (r.key)}
@@ -719,18 +741,6 @@
       <span class="menu-row-chord"></span>
     </button>
   </li>
-  <li>
-    <button role="menuitem" onclick={doToggleOverlayMaximized}>
-      {#if overlayMaximized.on}
-        <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        <span class="menu-row-label">Restore size</span>
-      {:else}
-        <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        <span class="menu-row-label">Maximize</span>
-      {/if}
-      <span class="menu-row-chord"></span>
-    </button>
-  </li>
   <li class="sep" role="separator"></li>
   <li>
     <button role="menuitem" onclick={doOpenSettings}>
@@ -781,9 +791,32 @@
   }
   /* SCOPE label + select sit on the left; the hamburger gets
      margin-left: auto via the wrapping :global() rule below so it
-     pins to the right edge. */
+     pins to the right edge, just before the close-button chrome. */
   header { gap: 0.5rem; }
   header :global(.hamburger-trigger) { margin-left: auto; }
+  /* Window-manager chrome: maximize/restore lives at the far left
+     of the header, close at the far right. Matches the
+     scope-history button style so all overlay headers wear the
+     same skin. */
+  .chrome-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 24px;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+    flex-shrink: 0;
+  }
+  .chrome-btn:hover {
+    color: var(--text);
+    border-color: var(--btn-hover);
+  }
   /* Input row anchored at the bottom of the results column; status
      and results stack above it. Top border (was bottom) so the
      seam reads as "input separated from the content above it". */

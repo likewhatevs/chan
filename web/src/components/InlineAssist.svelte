@@ -45,6 +45,7 @@
     Settings,
     ShieldCheck,
     ShieldOff,
+    X,
   } from "lucide-svelte";
 
   import { api } from "../api/client";
@@ -1712,6 +1713,19 @@
     role="presentation"
   >
       <header>
+        <button
+          type="button"
+          class="chrome-btn"
+          onclick={doToggleOverlayMaximized}
+          title={overlayMaximized.on ? "Restore size" : "Maximize"}
+          aria-label={overlayMaximized.on ? "Restore size" : "Maximize"}
+        >
+          {#if overlayMaximized.on}
+            <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+          {:else}
+            <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+          {/if}
+        </button>
         <span class="title">Scope</span>
         <select
           class="context-select"
@@ -1746,6 +1760,15 @@
         >
           {@render menuItems()}
         </HamburgerMenu>
+        <button
+          type="button"
+          class="chrome-btn close"
+          onclick={close}
+          title="Close"
+          aria-label="Close"
+        >
+          <X size={14} strokeWidth={1.75} aria-hidden="true" />
+        </button>
       </header>
 
       <div class="scroll" bind:this={scrollEl}>
@@ -2273,22 +2296,6 @@
 </OverlayShell>
 
 {#snippet menuItems()}
-  <!-- Maximize is the most-reached-for action here (a wider canvas
-       helps both reading the response and writing the prompt), so
-       it leads the menu above the prompt-width slider. -->
-  <li>
-    <button role="menuitem" onclick={doToggleOverlayMaximized}>
-      {#if overlayMaximized.on}
-        <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        <span class="menu-row-label">Restore size</span>
-      {:else}
-        <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        <span class="menu-row-label">Maximize</span>
-      {/if}
-      <span class="menu-row-chord"></span>
-    </button>
-  </li>
-  <li class="sep" role="separator"></li>
   <!-- Prompt-width slider. Caps the assistant prompt's column
        independently from the global page-width (which the file
        editors share); writing comfortably here often calls for a
@@ -2445,6 +2452,29 @@
     flex-shrink: 0;
   }
   header .scope-history-btn:hover {
+    color: var(--text);
+    border-color: var(--btn-hover);
+  }
+  /* Window-manager chrome: maximize/restore lives at the far left
+     of the header, close at the far right. Matches the
+     scope-history-btn styling so all overlay headers wear the same
+     skin. */
+  header .chrome-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 24px;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+    flex-shrink: 0;
+  }
+  header .chrome-btn:hover {
     color: var(--text);
     border-color: var(--btn-hover);
   }

@@ -18,6 +18,7 @@
     Pencil,
     Settings,
     Users,
+    X,
   } from "lucide-svelte";
   import {
     overlayMaximized,
@@ -190,6 +191,19 @@
 <OverlayShell id="browser" open={visible} onClose={close}>
   <div class="browser" oncontextmenu={onBrowserContextMenu} role="presentation">
     <header>
+      <button
+        type="button"
+        class="chrome-btn"
+        onclick={doToggleOverlayMaximized}
+        title={overlayMaximized.on ? "Restore size" : "Maximize"}
+        aria-label={overlayMaximized.on ? "Restore size" : "Maximize"}
+      >
+        {#if overlayMaximized.on}
+          <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        {:else}
+          <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        {/if}
+      </button>
       <span class="name" title={drive.info?.root}>
         {drive.info?.name ?? "(unnamed)"}
       </span>
@@ -201,6 +215,15 @@
       >
         {@render menuItems()}
       </HamburgerMenu>
+      <button
+        type="button"
+        class="chrome-btn close"
+        onclick={close}
+        title="Close"
+        aria-label="Close"
+      >
+        <X size={14} strokeWidth={1.75} aria-hidden="true" />
+      </button>
     </header>
     <div class="body">
       <div class="tree-wrap">
@@ -251,18 +274,6 @@
       <span class="menu-row-label">
         {browserOverlay.inspectorOpen ? "Hide Details" : "Show Details"}
       </span>
-      <span class="menu-row-chord"></span>
-    </button>
-  </li>
-  <li>
-    <button role="menuitem" onclick={doToggleOverlayMaximized}>
-      {#if overlayMaximized.on}
-        <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        <span class="menu-row-label">Restore size</span>
-      {:else}
-        <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        <span class="menu-row-label">Maximize</span>
-      {/if}
       <span class="menu-row-chord"></span>
     </button>
   </li>
@@ -370,6 +381,29 @@
     flex-shrink: 0;
   }
   .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Window-manager chrome: maximize/restore on the left edge, close
+     on the right. Sized + styled to match the scope-history button
+     used in the search / graph / assistant headers so all overlay
+     headers wear the same skin. */
+  .chrome-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 24px;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+    flex-shrink: 0;
+  }
+  .chrome-btn:hover {
+    color: var(--text);
+    border-color: var(--btn-hover);
+  }
   /* Folder readout row: two-line inside the menu's standard <li>.
      The shared HamburgerMenu owns the rest of the popover chrome. */
   :global(.hamburger-menu .folder-row) { align-items: flex-start; }

@@ -22,7 +22,7 @@
     LlmStatus,
     Preferences,
   } from "../api/types";
-  import { Maximize2, Minimize2 } from "lucide-svelte";
+  import { Maximize2, Minimize2, X } from "lucide-svelte";
   import {
     refreshDrive,
     settingsOverlay,
@@ -36,17 +36,10 @@
     setOverlayMaximized,
   } from "../state/pageWidth.svelte";
   import { DATE_FORMATS } from "../editor/dateFormats";
-  import HamburgerMenu from "./HamburgerMenu.svelte";
   import OverlayShell from "./OverlayShell.svelte";
-
-  let menu: HamburgerMenu | undefined = $state();
-  let menuOpen = $state(false);
-  const POPOVER_WIDTH = 200;
-  const POPOVER_HEIGHT = 50;
 
   function doToggleOverlayMaximized(): void {
     setOverlayMaximized(!overlayMaximized.on);
-    menu?.close();
   }
 
   const visible = $derived(settingsOverlay.open);
@@ -557,6 +550,19 @@
 <OverlayShell id="settings" open={visible} onClose={close}>
 <div class="settings-tab">
   <div class="tab-bar">
+    <button
+      type="button"
+      class="chrome-btn"
+      onclick={doToggleOverlayMaximized}
+      title={overlayMaximized.on ? "Restore size" : "Maximize"}
+      aria-label={overlayMaximized.on ? "Restore size" : "Maximize"}
+    >
+      {#if overlayMaximized.on}
+        <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+      {:else}
+        <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+      {/if}
+    </button>
     <span class="title">Settings</span>
     <span class="save-status" aria-live="polite">
       {#if saveStatus === "saving"}
@@ -567,14 +573,15 @@
         <span class="err" title={saveStatus.error}>save failed</span>
       {/if}
     </span>
-    <HamburgerMenu
-      bind:this={menu}
-      bind:open={menuOpen}
-      width={POPOVER_WIDTH}
-      height={POPOVER_HEIGHT}
+    <button
+      type="button"
+      class="chrome-btn close"
+      onclick={close}
+      title="Close"
+      aria-label="Close"
     >
-      {@render settingsMenuItems()}
-    </HamburgerMenu>
+      <X size={14} strokeWidth={1.75} aria-hidden="true" />
+    </button>
   </div>
 
   <div class="body">
@@ -1145,20 +1152,6 @@
 </div>
 </OverlayShell>
 
-{#snippet settingsMenuItems()}
-  <li>
-    <button role="menuitem" onclick={doToggleOverlayMaximized}>
-      {#if overlayMaximized.on}
-        <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        <span>Restore size</span>
-      {:else}
-        <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        <span>Maximize</span>
-      {/if}
-    </button>
-  </li>
-{/snippet}
-
 <style>
   /* Outer container: vertical stack with the top bar above and the
      body row below. Same recipe as FileBrowserTab. */
@@ -1184,6 +1177,28 @@
     min-height: 28px;
   }
   .tab-bar .title { flex: 1; font-weight: 600; color: var(--text); }
+  /* Window-manager chrome: maximize/restore on the far left of the
+     tab-bar, close on the far right. Matches the affordance used
+     by every other overlay header. */
+  .chrome-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 24px;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+    flex-shrink: 0;
+  }
+  .chrome-btn:hover {
+    color: var(--text);
+    border-color: var(--btn-hover);
+  }
   .body {
     flex: 1;
     display: flex;

@@ -22,6 +22,7 @@
     Maximize2,
     Minimize2,
     Trash2,
+    X,
   } from "lucide-svelte";
   import {
     overlayMaximized,
@@ -275,6 +276,19 @@
 >
   <div class="scope-history">
     <header>
+      <button
+        type="button"
+        class="chrome-btn"
+        onclick={doToggleOverlayMaximized}
+        title={overlayMaximized.on ? "Restore size" : "Maximize"}
+        aria-label={overlayMaximized.on ? "Restore size" : "Maximize"}
+      >
+        {#if overlayMaximized.on}
+          <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        {:else}
+          <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        {/if}
+      </button>
       <span class="title">Scopes</span>
       <div class="filters">
         {#each ["file", "group", "drive"] as const as kind (kind)}
@@ -314,6 +328,15 @@
           {@render menuItems()}
         </HamburgerMenu>
       </span>
+      <button
+        type="button"
+        class="chrome-btn close"
+        onclick={closeScopeHistory}
+        title="Close"
+        aria-label="Close"
+      >
+        <X size={14} strokeWidth={1.75} aria-hidden="true" />
+      </button>
     </header>
 
     <ul class="rows">
@@ -453,17 +476,6 @@
 
 {#snippet menuItems()}
   <li>
-    <button role="menuitem" onclick={doToggleOverlayMaximized}>
-      {#if overlayMaximized.on}
-        <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        <span>Restore size</span>
-      {:else}
-        <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        <span>Maximize</span>
-      {/if}
-    </button>
-  </li>
-  <li>
     <button
       role="menuitem"
       disabled={scopeHistoryOverlay.entries.length === 0}
@@ -540,6 +552,28 @@
   .bar-menu {
     display: inline-flex;
     align-items: center;
+  }
+  /* Window-manager chrome: maximize/restore on the far left of the
+     header, close on the far right. Matches the affordance used by
+     every other overlay header. */
+  .chrome-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 24px;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+    flex-shrink: 0;
+  }
+  .chrome-btn:hover {
+    color: var(--text);
+    border-color: var(--btn-hover);
   }
 
   /* Chip styling mirrors the graph overlay so the two surfaces

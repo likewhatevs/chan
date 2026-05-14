@@ -30,6 +30,10 @@
   import type { Snippet } from "svelte";
   import { overlayDepth, type OverlayId } from "../state/store.svelte";
   import { overlayMaximized } from "../state/pageWidth.svelte";
+  // Each wrapped overlay renders its own maximize/restore + close
+  // chrome inside its header (left and right edges respectively),
+  // so this shell only provides the backdrop, the panel container,
+  // and the depth-based z-index.
 
   let {
     id,
@@ -70,21 +74,6 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="overlay" style="z-index: {zIndex};" onclick={onClose}>
-    <!-- Always-on close button anchored to the top-right of the
-         viewport, OUTSIDE the panel. Reachable even when the
-         panel itself extends fully or its internal close header
-         is covered. Sits below the iOS safe-area inset so it
-         clears the notch / status bar. stopPropagation so a tap
-         on the X does not also fire the scrim onClose (would be
-         a double dismiss; harmless but cleaner to avoid). -->
-    <button
-      class="overlay-close"
-      onclick={(e) => {
-        e.stopPropagation();
-        onClose();
-      }}
-      aria-label="Close"
-    >×</button>
     <div
       class="panel"
       style="width: {resolvedWidth};"
@@ -114,8 +103,9 @@
        cover), so the panel's top edge needs to clear both the
        safe-area inset AND a comfortable buffer before any tap
        target sits there. Sum, not max(): even with a non-notched
-       device the +44px floor keeps the always-on close button
-       visible and reachable. */
+       device the +44px floor keeps the in-panel chrome (close
+       button on the right, maximize on the left) visible and
+       reachable below the notch / status bar. */
     padding-top: calc(env(safe-area-inset-top, 0px) + 44px);
     padding-bottom: max(env(safe-area-inset-bottom, 0px), 24px);
     /* Side padding is set narrow on the .overlay; the panel's
@@ -133,34 +123,6 @@
        silently no-op and overlays look stuck. */
     cursor: pointer;
   }
-  /* Always-on close affordance, fixed at the top-right of the
-     viewport. Sits inside the .overlay's flex container but
-     positions itself absolutely so the flex layout (panel
-     centering / bottom alignment) is unaffected. */
-  .overlay-close {
-    position: absolute;
-    top: calc(env(safe-area-inset-top, 0px) + 4px);
-    right: 12px;
-    width: 36px;
-    height: 36px;
-    border-radius: 18px;
-    background: rgba(0, 0, 0, 0.65);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: #fff;
-    font-size: 22px;
-    line-height: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    z-index: 25002;
-    padding: 0;
-    /* Tap target stays comfortably above the status bar's bottom
-       edge. The 4px from the safe-area inset keeps it visually
-       inside the WebView area (not behind the iOS battery icon)
-       while still being thumb-reachable. */
-  }
-  .overlay-close:hover { background: rgba(0, 0, 0, 0.8); }
   .panel {
     background: var(--bg-elev);
     color: var(--text);
