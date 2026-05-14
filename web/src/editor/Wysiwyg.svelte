@@ -1024,7 +1024,9 @@
       background 0.12s;
   }
   :global(.md-wysiwyg-cm6 .cm-md-image-action:hover) {
-    background: var(--hover-bg, rgba(0, 0, 0, 0.06));
+    /* --bg-elev is opaque; --hover-bg is translucent and would let
+       the image behind bleed through, washing the label out. */
+    background: var(--bg-elev, #fff);
     transform: scale(1.05);
   }
   /* Icon-only Copy button. The 12px SVG would otherwise sit lower

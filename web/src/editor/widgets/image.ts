@@ -285,10 +285,11 @@ class ImageWidget extends WidgetType {
       });
       actions.appendChild(editBtn);
     }
-    // Copy lives between Edit and View, available in read-only too
-    // (assistant chat replies, fs-locked file). Icon-only so the row
-    // stays compact; the same Lucide Copy glyph the assistant-chat
-    // copy buttons use. Transient Check feedback on success.
+    // Copy sits last in the row (Edit · View · Copy), available in
+    // read-only too (assistant chat replies, fs-locked file). Icon-
+    // only so the row stays compact; the same Lucide Copy glyph the
+    // assistant-chat copy buttons use. Transient Check feedback on
+    // success.
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
     copyBtn.className = "cm-md-image-action cm-md-image-copy";
@@ -317,7 +318,6 @@ class ImageWidget extends WidgetType {
         },
       );
     });
-    actions.appendChild(copyBtn);
     const zoomBtn = document.createElement("button");
     zoomBtn.type = "button";
     zoomBtn.className = "cm-md-image-action";
@@ -330,6 +330,7 @@ class ImageWidget extends WidgetType {
       }
     });
     actions.appendChild(zoomBtn);
+    actions.appendChild(copyBtn);
     wrap.appendChild(actions);
 
     return wrap;
