@@ -18,6 +18,7 @@
     makeThemeCompartment,
   } from "./base";
   import type { FindAdapter } from "./find";
+  import { breathingRoom } from "./breathing_room";
 
   // Editor density follows the user's line_spacing pref. Same hook
   // the Wysiwyg side uses (see Wysiwyg.svelte:820), exposed here as
@@ -79,6 +80,7 @@
         markdown(),
         theme.extension,
         EditorView.lineWrapping,
+        breathingRoom(),
         findField,
         EditorView.updateListener.of((u) => {
           sync.onDocChanged(u, (s) => (value = s));
@@ -168,6 +170,19 @@
   }
   :global(.md-source .cm-content) {
     font-family: var(--chan-editor-code-family);
+    /* Always keep 60px below the last line. See the matching rule
+       in Wysiwyg.svelte for rationale. */
+    padding-bottom: 60px;
+  }
+  /* Programmatic `scrollIntoView` from CM gets smoothed by the
+     browser. Mouse-wheel / touchpad pans are not affected. */
+  :global(.md-source .cm-scroller) {
+    scroll-behavior: smooth;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(.md-source .cm-scroller) {
+      scroll-behavior: auto;
+    }
   }
   /* Force every CM internal that could paint a background to
      transparent so `.md-source`'s `var(--bg)` shows uniformly,

@@ -60,6 +60,7 @@
   import type { BlockKind } from "./commands/format";
   import { expandDateMacro, openDateAtCaret } from "./commands/date_macros";
   import type { FindAdapter } from "./find";
+  import { breathingRoom } from "./breathing_room";
 
   let {
     value = $bindable(""),
@@ -270,6 +271,7 @@
         headingFold(),
         theme.extension,
         EditorView.lineWrapping,
+        breathingRoom(),
         findField,
         chanDecorations(),
         tagDecorations({ onTagClick }),
@@ -515,7 +517,24 @@
        shift the document, matching what the assistant prompt
        already does. */
     padding-top: var(--editor-top-pad, 0.5rem) !important;
+    /* Always keep 60px below the last line. Combined with the 60px
+       bottom scrollMargin in breathing_room.ts, this is what gives
+       the Google Docs effect: the caret never sits flush with the
+       bottom edge — when it would, CM scrolls so it stays 60px
+       above, and this padding gives the scroll room to happen even
+       at the doc's last line. */
+    padding-bottom: 60px !important;
     transition: padding-top 180ms ease;
+  }
+  /* Programmatic `scrollIntoView` from CM gets smoothed by the
+     browser. Mouse-wheel / touchpad pans are not affected. */
+  :global(.md-wysiwyg-cm6 .cm-scroller) {
+    scroll-behavior: smooth;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(.md-wysiwyg-cm6 .cm-scroller) {
+      scroll-behavior: auto;
+    }
   }
   :global(.md-wysiwyg-cm6 .cm-editor),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-scroller),
@@ -1007,6 +1026,15 @@
   :global(.md-wysiwyg-cm6 .cm-md-image-action:hover) {
     background: var(--hover-bg, rgba(0, 0, 0, 0.06));
     transform: scale(1.05);
+  }
+  /* Icon-only Copy button. The 12px SVG would otherwise sit lower
+     than the text labels; flex centering + a tighter horizontal
+     padding keeps the row visually balanced. */
+  :global(.md-wysiwyg-cm6 .cm-md-image-action.cm-md-image-copy) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3px 7px;
   }
 
   /* ---- table widget ---- */

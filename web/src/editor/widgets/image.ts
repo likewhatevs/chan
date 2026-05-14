@@ -44,6 +44,51 @@ import { selectionInRange } from "../decorations/selection";
 
 const MIN_IMG_WIDTH = 40;
 
+/// Lucide Copy + Check icons inlined as SVG strings — the widget is
+/// raw DOM, not Svelte, so we can't reuse lucide-svelte components.
+/// Sizes / stroke widths match the assistant-chat copy button
+/// (size 12, strokeWidth 1.75 for Copy; strokeWidth 2 for Check).
+const COPY_ICON_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+const CHECK_ICON_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+
+/// Copy the image at `src` to the clipboard at its natural pixel
+/// dimensions. Fragment hints (`#w=`, `#h=`, `#left`, `#right`) are
+/// stripped before fetching so we always pull the original asset,
+/// not a resized variant. The blob is re-encoded to PNG via canvas
+/// because PNG is the only image MIME most browsers accept on the
+/// async Clipboard API, and the canvas pass naturally captures the
+/// image at its natural width/height.
+async function copyImageToClipboard(
+  src: string,
+  fromPath: string | null,
+): Promise<void> {
+  const cleanSrc = src.split("#")[0]!;
+  const url = resolveImageSrc(cleanSrc, fromPath);
+  if (!url) throw new Error("cannot resolve image url");
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`fetch ${resp.status}`);
+  const blob = await resp.blob();
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("no 2d context");
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close?.();
+  const pngBlob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
+      "image/png",
+    );
+  });
+  await navigator.clipboard.write([
+    new ClipboardItem({ "image/png": pngBlob }),
+  ]);
+}
+
 /// Line decoration applied to the line AFTER an inline-floated image.
 /// CSS clears the float there so only the SAME line as the image
 /// flows beside it; the next paragraph drops below the image. Reused
@@ -240,6 +285,39 @@ class ImageWidget extends WidgetType {
       });
       actions.appendChild(editBtn);
     }
+    // Copy lives between Edit and View, available in read-only too
+    // (assistant chat replies, fs-locked file). Icon-only so the row
+    // stays compact; the same Lucide Copy glyph the assistant-chat
+    // copy buttons use. Transient Check feedback on success.
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "cm-md-image-action cm-md-image-copy";
+    copyBtn.title = "copy image to clipboard";
+    copyBtn.setAttribute("aria-label", "copy image to clipboard");
+    copyBtn.innerHTML = COPY_ICON_SVG;
+    copyBtn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      void copyImageToClipboard(this.src, this.fromPath).then(
+        () => {
+          copyBtn.innerHTML = CHECK_ICON_SVG;
+          setTimeout(() => {
+            copyBtn.innerHTML = COPY_ICON_SVG;
+          }, 1200);
+        },
+        () => {
+          // Surface failure briefly via the title attr. No toast
+          // surface to land this in; the user will retry if they
+          // care.
+          const prev = copyBtn.title;
+          copyBtn.title = "copy failed";
+          setTimeout(() => {
+            copyBtn.title = prev;
+          }, 1200);
+        },
+      );
+    });
+    actions.appendChild(copyBtn);
     const zoomBtn = document.createElement("button");
     zoomBtn.type = "button";
     zoomBtn.className = "cm-md-image-action";
