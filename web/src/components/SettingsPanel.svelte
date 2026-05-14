@@ -22,6 +22,7 @@
     LlmStatus,
     Preferences,
   } from "../api/types";
+  import { Maximize2, Minimize2 } from "lucide-svelte";
   import {
     indexStatus,
     refreshDrive,
@@ -31,6 +32,10 @@
     ui,
     drive,
   } from "../state/store.svelte";
+  import {
+    overlayMaximized,
+    setOverlayMaximized,
+  } from "../state/pageWidth.svelte";
   import { DATE_FORMATS } from "../editor/dateFormats";
   import OverlayShell from "./OverlayShell.svelte";
 
@@ -590,6 +595,24 @@
         <span class="err" title={saveStatus.error}>save failed</span>
       {/if}
     </span>
+    <!-- Settings has no hamburger menu (single-form surface), so the
+         maximize / restore toggle that other overlays expose in
+         their menus lives as an inline icon button. Shared
+         overlayMaximized state means flipping it here also resizes
+         every other open overlay. -->
+    <button
+      type="button"
+      class="maximize-btn"
+      onclick={() => setOverlayMaximized(!overlayMaximized.on)}
+      title={overlayMaximized.on ? "Restore size" : "Maximize"}
+      aria-label={overlayMaximized.on ? "Restore size" : "Maximize"}
+    >
+      {#if overlayMaximized.on}
+        <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+      {:else}
+        <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+      {/if}
+    </button>
   </div>
 
   <div class="body">
@@ -1271,6 +1294,27 @@
     min-height: 28px;
   }
   .tab-bar .title { flex: 1; font-weight: 600; color: var(--text); }
+  /* Maximize toggle, same visual weight as the scope-history /
+     hamburger triggers on the other overlays. */
+  .tab-bar .maximize-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 22px;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+    flex-shrink: 0;
+  }
+  .tab-bar .maximize-btn:hover {
+    color: var(--text);
+    border-color: var(--btn-hover, var(--text-secondary));
+  }
   .body {
     flex: 1;
     display: flex;

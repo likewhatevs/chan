@@ -41,9 +41,18 @@ export const PAGE_WIDTH_STEP_PCT = 5;
 /// tiny window we don't want the cap to collapse to a sliver.
 const MIN_RESOLVED_PX = 240;
 
-export const pageWidth = $state<{ ratio: number }>({ ratio: 1 });
+/// Default ratio for first-time users (no localStorage value yet).
+/// 80% leaves a clear off-page band on each side, matching the
+/// document-style page look the rest of the editor was already
+/// hinting at via --page-shade. Stored ratios from prior sessions
+/// override this on hydrate.
+const DEFAULT_RATIO = 0.8;
 
-export const assistantPromptWidth = $state<{ ratio: number }>({ ratio: 1 });
+export const pageWidth = $state<{ ratio: number }>({ ratio: DEFAULT_RATIO });
+
+export const assistantPromptWidth = $state<{ ratio: number }>({
+  ratio: DEFAULT_RATIO,
+});
 
 /// Global overlay-maximize toggle. When on, every OverlayShell
 /// widens its panel from `min(1200px, calc(100vw - 48px))` to
@@ -55,7 +64,7 @@ const OVERLAY_MAX_KEY = "chan.overlayMaximized";
 export const overlayMaximized = $state<{ on: boolean }>({ on: false });
 
 function clampRatio(r: number): number {
-  if (!Number.isFinite(r)) return 1;
+  if (!Number.isFinite(r)) return DEFAULT_RATIO;
   const lo = PAGE_WIDTH_MIN_PCT / 100;
   const hi = PAGE_WIDTH_MAX_PCT / 100;
   return Math.max(lo, Math.min(hi, r));
@@ -64,12 +73,12 @@ function clampRatio(r: number): number {
 function readRatio(): number {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return 1;
+    if (!raw) return DEFAULT_RATIO;
     const n = Number(raw);
-    if (!Number.isFinite(n)) return 1;
+    if (!Number.isFinite(n)) return DEFAULT_RATIO;
     return clampRatio(n);
   } catch {
-    return 1;
+    return DEFAULT_RATIO;
   }
 }
 
@@ -106,12 +115,12 @@ export function applyInitialPageWidth(): void {
 function readAssistantRatio(): number {
   try {
     const raw = localStorage.getItem(ASSISTANT_STORAGE_KEY);
-    if (!raw) return 1;
+    if (!raw) return DEFAULT_RATIO;
     const n = Number(raw);
-    if (!Number.isFinite(n)) return 1;
+    if (!Number.isFinite(n)) return DEFAULT_RATIO;
     return clampRatio(n);
   } catch {
-    return 1;
+    return DEFAULT_RATIO;
   }
 }
 
