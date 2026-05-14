@@ -63,6 +63,7 @@
   import Source from "../editor/Source.svelte";
   import StyleToolbar from "./StyleToolbar.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
+  import { banner, displayAgentName } from "./agentBanner";
   import {
     assistantConversations,
     assistantOverlay,
@@ -1758,8 +1759,35 @@
           </div>
         {/if}
         {#if turns.length === 0}
+          {@const agentLabel = displayAgentName(llmStatus?.backend) || "CHAN"}
+          {@const agentArt = banner(agentLabel)}
+          {@const agentTint =
+            llmStatus?.backend === "anthropic" || llmStatus?.backend === "claude_cli"
+              ? "claude"
+              : llmStatus?.backend === "gemini" || llmStatus?.backend === "gemini_cli"
+                ? "gemini"
+                : llmStatus?.backend === "ollama"
+                  ? "ollama"
+                  : "generic"}
+          <!-- Empty-state hero. ASCII-art banner of the active
+               backend's friendly name with a per-agent gradient
+               sheen + glow, plus the model id below. The gradient
+               rides on `background-clip: text` so the glyph
+               silhouettes pick up the brand color cleanly in both
+               themes (the underlying --bg makes either light or
+               dark look right without a second rule). -->
           <div class="empty">
-            <div class="empty-title">No conversation yet</div>
+            <pre class="agent-banner {agentTint}" aria-hidden="true">{agentArt}</pre>
+            <div class="agent-label">{agentLabel}</div>
+            <div class="agent-model mono">
+              {#if llmStatus?.model}
+                model · {llmStatus.model}
+              {:else if llmStatus === null}
+                <span class="agent-model-loading">loading…</span>
+              {:else}
+                model · (default)
+              {/if}
+            </div>
           </div>
         {/if}
         {#if pendingEdits.length >= 2}
@@ -2443,9 +2471,104 @@
   .empty {
     color: var(--text-secondary);
     text-align: center;
-    padding-top: 1.5rem;
+    padding-top: 2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
   }
   .empty-title { color: var(--text); font-weight: 600; }
+  /* ASCII banner. Inline-block so the <pre> sizes to the glyph
+     block and stays centred by the parent's `align-items: center`;
+     otherwise a left-aligned text-align inside a flex column lets
+     the wide block escape its container on narrow widths. The
+     per-agent gradient rides on background-clip: text so the
+     ANSI-Shadow glyph silhouettes pick up the brand color cleanly
+     in both themes. clamp() scales the hero with the overlay width
+     (bigger on wide windows) while staying readable on tight ones. */
+  .agent-banner {
+    display: inline-block;
+    margin: 0;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: clamp(8px, 1.1vw, 14px);
+    line-height: 1.05;
+    white-space: pre;
+    text-align: left;
+    user-select: none;
+    /* Gradient fill via background-clip: text. The fallback color
+       (-webkit-text-fill-color: transparent) is what most browsers
+       honour today; the `color: transparent` second declaration
+       covers the spec-compliant path. */
+    background-image: linear-gradient(
+      135deg,
+      var(--banner-a, #58a6ff) 0%,
+      var(--banner-b, #a0c4ff) 50%,
+      var(--banner-a, #58a6ff) 100%
+    );
+    background-size: 200% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+    /* Soft drop-shadow tinted with the brand color so the block
+       glyphs glow against the panel; sits below the bubble chrome
+       so the user's eye lands on the banner without it dominating
+       the chat area. */
+    filter: drop-shadow(0 0 8px rgba(var(--banner-glow, 88, 166, 255), 0.28));
+    animation: agent-banner-shimmer 8s linear infinite;
+  }
+  /* Slow sheen so the gradient travels across the glyphs. Subtle
+     enough to read as a static hero on first glance; only the
+     long-stayed visitor notices the drift. */
+  @keyframes agent-banner-shimmer {
+    0%   { background-position:   0% 50%; }
+    100% { background-position: 200% 50%; }
+  }
+  /* Per-agent palette. Brand-orange Claude pulls --assistant-accent
+     (the same hue the launcher button uses), Gemini takes the
+     image-pill purple paired with link blue for a Google-AI lean,
+     and Ollama takes the tag-pill green paired with a lighter
+     mint. The generic fallback rides on --link. */
+  .agent-banner.claude {
+    --banner-a: #ff8a3d;
+    --banner-b: #ffd1a8;
+    --banner-glow: 255, 138, 61;
+  }
+  .agent-banner.gemini {
+    --banner-a: #b07dff;
+    --banner-b: #58a6ff;
+    --banner-glow: 176, 125, 255;
+  }
+  .agent-banner.ollama {
+    --banner-a: #6cd07a;
+    --banner-b: #aef0b3;
+    --banner-glow: 108, 208, 122;
+  }
+  .agent-banner.generic {
+    --banner-a: #58a6ff;
+    --banner-b: #a0c4ff;
+    --banner-glow: 88, 166, 255;
+  }
+  .agent-label {
+    color: var(--text);
+    font-weight: 600;
+    letter-spacing: 0.25em;
+    font-size: 13px;
+    /* Subtle uppercase tracking adds the "wordmark" feel under the
+       ASCII hero without competing for attention. */
+    text-transform: uppercase;
+  }
+  .agent-model {
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+  .agent-model-loading {
+    opacity: 0.6;
+    font-style: italic;
+  }
+  .mono {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
 
   /* Bulk-action bar. Sticky-pinned to the top of the scrollable
      chat area when 2+ proposals are pending. position: sticky
