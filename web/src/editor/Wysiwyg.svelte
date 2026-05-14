@@ -911,7 +911,14 @@
      it. The !important beats the inline `width: <N>px` the widget
      sets from the src fragment. */
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-editing="true"]) {
+    /* Block-level row of its own, but `fit-content` shrinks the
+       box to the thumbnail's dimensions so the selection ring + the
+       hover action overlay anchor to the image, not the full line
+       width. Without `fit-content` the wrap stretched the editor
+       column and a freshly-uploaded image's selection ring (or any
+       absolute child) painted across the whole canvas. */
     display: block;
+    width: fit-content;
     opacity: 0.55;
     margin: 0.25em 0;
   }
