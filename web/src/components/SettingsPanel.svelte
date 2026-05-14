@@ -364,7 +364,7 @@
     const info = drive.info;
     if (!info) return;
     if (!editing) {
-      editing = clone(info.preferences);
+      editing = normalizePrefs(clone(info.preferences));
       // Migrate dead format ids (e.g. the retired "short" no-year
       // variant) to the catalog's default so the <select> below
       // doesn't render a blank option. The settings auto-save will
@@ -376,6 +376,19 @@
       }
     }
   });
+
+  /// Fill in optional sub-views the server only learned about
+  /// recently. An older chan-server returns `assistant.claude_cli`
+  /// / `assistant.gemini_cli` as undefined; the model <select>
+  /// crashes on `.model` access. Applied to BOTH editing and
+  /// globalConfig so dirty() doesn't see a permanent diff and
+  /// trigger an autosave loop.
+  function normalizePrefs(p: Preferences): Preferences {
+    const a = p.assistant as { [k: string]: unknown };
+    if (a.claude_cli === undefined) a.claude_cli = { model: null };
+    if (a.gemini_cli === undefined) a.gemini_cli = { model: null };
+    return p;
+  }
 
   function clone(p: Preferences): Preferences {
     return JSON.parse(JSON.stringify(p));
@@ -456,9 +469,10 @@
       drive.info = info;
       globalConfig = cfg;
       if (snapshot() === sent) {
-        editing = clone(info.preferences);
+        editing = normalizePrefs(clone(info.preferences));
         editedDefaultRoot = cfg.default_drive_root ?? "";
       }
+      if (globalConfig) normalizePrefs(globalConfig.preferences);
       // Backend / model may have flipped; re-check readiness.
       void loadLlmStatus();
       saveStatus = "saved";
@@ -480,6 +494,7 @@
   async function loadGlobalConfig(): Promise<void> {
     try {
       globalConfig = await api.config();
+      normalizePrefs(globalConfig.preferences);
       // Sync the input only if the user hasn't started editing.
       // Empty string AND no override means "show the placeholder";
       // a populated override pre-fills the input.
