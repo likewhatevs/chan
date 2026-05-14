@@ -1,4 +1,4 @@
-// `!/today` and `!/date` macros.
+// `@today` and `@date` macros.
 //
 // Typed verbatim like markdown commands; firing them rewrites the
 // trigger source as a date in the user's default format (from
@@ -7,17 +7,21 @@
 // end state is "user typed a slash command, sees a date pill".
 //
 // Two flavors:
-//   - `!/today`: bake today's date and move on. No popover.
-//   - `!/date`: same insertion, plus open the calendar / format
+//   - `@today`: bake today's date and move on. No popover.
+//   - `@date`: same insertion, plus open the calendar / format
 //     popover anchored at the freshly-written date so the user can
 //     navigate to a different day or switch format without selecting
 //     anything first.
+//
+// The keywords `today` and `date` are also reserved by the contact
+// bubble's trigger detection (see triggers.ts), so typing `@today`
+// or `@date` does not steal Enter for a contact commit.
 //
 // Commit triggers: Space and Enter. The handler returns false when
 // the line doesn't end with one of the keywords, so the typed
 // character falls through to normal input. Returning true consumes
 // the key; the inserted space / newline does NOT make it into the
-// doc — keeps the flow "type !/today, hit space, see today's date,
+// doc — keeps the flow "type @today, hit space, see today's date,
 // keep typing".
 
 import type { EditorView } from "@codemirror/view";
@@ -45,13 +49,13 @@ function defaultFormatId(): DateFormatId {
 /// Recognised trigger keywords. Each entry tells us whether to open
 /// the calendar popover after committing.
 const TRIGGERS: { keyword: string; openPicker: boolean }[] = [
-  { keyword: "!/today", openPicker: false },
-  { keyword: "!/date", openPicker: true },
+  { keyword: "@today", openPicker: false },
+  { keyword: "@date", openPicker: true },
 ];
 
 /// Find a trigger that ends exactly at the caret position. Requires
-/// either start-of-line or a whitespace char before the `!` so
-/// fragments inside other tokens (e.g. URLs) don't match.
+/// either start-of-line or a whitespace char before the `@` so
+/// fragments inside other tokens (e.g. email addresses) don't match.
 function detectTrigger(view: EditorView): {
   from: number;
   keyword: string;
@@ -138,7 +142,7 @@ export function openDateAtCaret(view: EditorView): boolean {
       // Caret must always land OUTSIDE the date range so the pill
       // re-renders. If the next char is already a space, jump
       // past it; otherwise insert one so there's a valid landing
-      // spot at to+1. Matches the click-a-pill and !/date paths.
+      // spot at to+1. Matches the click-a-pill and @date paths.
       const after = view.state.doc.sliceString(hit.to, hit.to + 1);
       const needsSpace = after !== " ";
       const insert = replacement + (needsSpace ? " " : "");
@@ -166,9 +170,26 @@ export function expandDateMacro(view: EditorView): boolean {
   today.setHours(0, 0, 0, 0);
   const formatted = formatDate(today, formatId);
   const sel = view.state.selection.main;
+  // For the no-popover path (`@today`), land the caret OUTSIDE the
+  // inserted date so the pill renders on the same keystroke. Without
+  // this, the caret sits at the date's trailing boundary which the
+  // date widget treats as intersecting selection — the pill stays
+  // collapsed as source until the next character moves the caret
+  // past the boundary. Append a trailing space when the next char
+  // isn't already whitespace; advance the caret one past the date.
+  // The `@date` path leaves the caret at the date end because the
+  // popover takes focus immediately; the popover's onCommit /
+  // click-pill paths handle the trailing-space dance themselves.
+  let insert = formatted;
+  let anchor = hit.from + formatted.length;
+  if (!hit.openPicker) {
+    const after = view.state.doc.sliceString(sel.head, sel.head + 1);
+    if (after !== " ") insert = formatted + " ";
+    anchor = hit.from + formatted.length + 1;
+  }
   view.dispatch({
-    changes: { from: hit.from, to: sel.head, insert: formatted },
-    selection: { anchor: hit.from + formatted.length },
+    changes: { from: hit.from, to: sel.head, insert },
+    selection: { anchor },
   });
   if (hit.openPicker) {
     // Defer to the next animation frame so the pill widget mounts

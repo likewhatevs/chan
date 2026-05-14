@@ -337,7 +337,7 @@
             // user typing `>` mid-paragraph still gets a literal `>`.
             { key: ">", run: (view) => fmt.quoteLines(view) },
             { key: "<", run: (view) => fmt.unquoteLines(view) },
-            // `!/today` and `!/date` expand to a date when the user
+            // `@today` and `@date` expand to a date when the user
             // commits with Space or Enter. Returns false on no
             // match so the typed Space/Enter falls through to
             // normal input.

@@ -117,7 +117,7 @@ class DateWidget extends WidgetType {
             selection: { anchor: from + formatted.length + 1 },
           });
           // Picking a different format from the popover sticks as
-          // the new default so subsequent !/today / !/date macros
+          // the new default so subsequent @today / @date macros
           // honor the user's choice.
           if (formatId !== this.formatId) persistDateFormat(formatId);
           view.focus();

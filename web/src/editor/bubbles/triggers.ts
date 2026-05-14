@@ -108,6 +108,14 @@ export function computeBubbleSpec(state: EditorState): BubbleSpec | null {
   // include `@`, so we anchor manually.
   const contact = matchAtTrigger(before, "@");
   if (contact !== null) {
+    // Reserved date-macro keywords: `@today` / `@date` belong to the
+    // date macro (commands/date_macros.ts) which commits on Space /
+    // Enter. We only suppress the contact bubble when the typed query
+    // EXACTLY matches one of the reserved words — prefixes like `@t`
+    // or `@toda` still open the bubble so contact names that happen
+    // to share a prefix (e.g. "Toda", "Dat") remain searchable.
+    const q = contact.query.toLowerCase();
+    if (q === "today" || q === "date") return null;
     return {
       kind: "contact",
       triggerStart: line.from + contact.start,

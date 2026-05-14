@@ -2839,7 +2839,7 @@ function clamp(n: number): number {
   return Math.max(PANE_WIDTH_MIN, Math.min(PANE_WIDTH_MAX, Math.round(n)));
 }
 
-/// Persist the chosen date format so the next `!/today` / `!/date`
+/// Persist the chosen date format so the next `@today` / `@date`
 /// expansion uses it as the default. Called by the date popover's
 /// format-change callback (commit path). Idempotent — skips the PATCH
 /// when the server already has the same value.
