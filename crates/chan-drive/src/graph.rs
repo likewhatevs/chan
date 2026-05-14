@@ -424,18 +424,22 @@ impl GraphView {
         }
         if v < 3 {
             // v3: add `emails` to nodes for the @ picker's email-
-            // substring match. Same idempotency pattern as v2: check
-            // PRAGMA before ALTER so a crash mid-migration replays
-            // safely. No file-level backfill here (the migration runs
-            // inside graph.rs, with no Drive handle to walk the
-            // filesystem); contacts indexed before v3 keep emails =
-            // NULL, and `Drive::contacts_need_email_backfill` plus
-            // the chan-server indexer's initial-build trigger drive
-            // a one-shot full reindex on the next boot.
-            if !Self::column_exists(conn, "nodes", "emails")? {
-                conn.execute_batch("ALTER TABLE nodes ADD COLUMN emails TEXT;")?;
+            // substring match. ALTER + user_version bump live inside
+            // one transaction so a crash before the commit leaves
+            // user_version = 2 with the column already idempotently
+            // re-addable on the next open (the column_exists guard).
+            // No file-level backfill here (the migration runs inside
+            // graph.rs, with no Drive handle to walk the filesystem);
+            // contacts indexed before v3 keep emails = NULL, and
+            // `Drive::contacts_need_email_backfill` plus the chan-
+            // server indexer's initial-build trigger drive a one-
+            // shot full reindex on the next boot.
+            let tx = conn.unchecked_transaction()?;
+            if !Self::column_exists(&tx, "nodes", "emails")? {
+                tx.execute_batch("ALTER TABLE nodes ADD COLUMN emails TEXT;")?;
             }
-            conn.execute_batch("PRAGMA user_version = 3;")?;
+            tx.execute_batch("PRAGMA user_version = 3;")?;
+            tx.commit()?;
         }
         if v < 4 {
             // v4: staging tables for `Drive::reindex_with`. Each
@@ -452,7 +456,13 @@ impl GraphView {
             // Shape mirrors the live tables exactly; we avoid
             // computed columns or denormalization so the swap is
             // a straight INSERT INTO ... SELECT.
-            conn.execute_batch(
+            //
+            // All four CREATEs + the user_version bump commit
+            // together so a crash before the commit leaves
+            // user_version = 3 with idempotent re-creation on the
+            // next open.
+            let tx = conn.unchecked_transaction()?;
+            tx.execute_batch(
                 r#"
                 CREATE TABLE IF NOT EXISTS staging_nodes (
                     rel_path TEXT PRIMARY KEY,
@@ -481,28 +491,34 @@ impl GraphView {
                 PRAGMA user_version = 4;
                 "#,
             )?;
+            tx.commit()?;
         }
         if v < 5 {
-            // v5: persist file size on nodes / staging_nodes. The
-            // reconcile path (Drive::reconcile) previously compared
-            // only mtime; a tool that rewrites a file to the same
-            // length and somehow lands the same mtime (rare but
-            // possible on filesystems with 1s mtime granularity
-            // under back-to-back saves) slipped past. With size
-            // recorded too, the (mtime, size) tuple catches the
-            // same-mtime-different-content case.
+            // v5: persist file size on nodes / staging_nodes so
+            // `Drive::reconcile`'s diff compares the (mtime, size)
+            // tuple rather than mtime alone. Catches rewrites that
+            // happen to land on the same mtime (rapid back-to-back
+            // saves on coarse-mtime filesystems, or tools that
+            // explicitly preserve mtime across edits).
             //
             // NULL on legacy rows so the migration doesn't need to
             // walk the filesystem; reconcile treats `None` size as
             // "skip the size check" and a single subsequent
             // index_file call backfills the row.
-            if !Self::column_exists(conn, "nodes", "size")? {
-                conn.execute_batch("ALTER TABLE nodes ADD COLUMN size INTEGER;")?;
+            //
+            // Both ALTERs + user_version bump commit together, same
+            // pattern as v2 / v3 / v4: a crash before commit leaves
+            // user_version = 4 with the (idempotent) ALTERs safe to
+            // re-run on the next open.
+            let tx = conn.unchecked_transaction()?;
+            if !Self::column_exists(&tx, "nodes", "size")? {
+                tx.execute_batch("ALTER TABLE nodes ADD COLUMN size INTEGER;")?;
             }
-            if !Self::column_exists(conn, "staging_nodes", "size")? {
-                conn.execute_batch("ALTER TABLE staging_nodes ADD COLUMN size INTEGER;")?;
+            if !Self::column_exists(&tx, "staging_nodes", "size")? {
+                tx.execute_batch("ALTER TABLE staging_nodes ADD COLUMN size INTEGER;")?;
             }
-            conn.execute_batch("PRAGMA user_version = 5;")?;
+            tx.execute_batch("PRAGMA user_version = 5;")?;
+            tx.commit()?;
         }
         Ok(())
     }
