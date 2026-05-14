@@ -290,9 +290,7 @@ impl Backend for ClaudeCliBackend {
             Some(host) => format!("{}\n\n{}", crate::prompts::CLI_SESSION_DIRECTIVE, host),
             None => crate::prompts::CLI_SESSION_DIRECTIVE.to_string(),
         };
-        command
-            .arg("--append-system-prompt")
-            .arg(&combined_system);
+        command.arg("--append-system-prompt").arg(&combined_system);
         if let Some(model) = self.model.as_deref() {
             command.arg("--model").arg(model);
         }
@@ -519,7 +517,9 @@ impl Backend for ClaudeCliBackend {
                                     None
                                 };
                                 if let Some(s) = emit {
-                                    listener.on_delta(Delta { text: s.to_string() });
+                                    listener.on_delta(Delta {
+                                        text: s.to_string(),
+                                    });
                                     assistant_text.push_str(s);
                                     if assistant_text.len() > super::ASSISTANT_TEXT_CAP_BYTES {
                                         listener.on_error(format!(
@@ -1605,5 +1605,4 @@ mod tests {
             );
         }
     }
-
 }

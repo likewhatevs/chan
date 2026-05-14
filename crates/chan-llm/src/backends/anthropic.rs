@@ -601,10 +601,7 @@ enum AnthropicMessageContent<'a> {
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AnthropicImageSource<'a> {
-    Base64 {
-        media_type: &'a str,
-        data: &'a str,
-    },
+    Base64 { media_type: &'a str, data: &'a str },
 }
 
 #[derive(Serialize)]
