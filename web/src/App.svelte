@@ -202,9 +202,14 @@
     // initial load still flushes any in-flight session changes.
     installSessionFlushHook();
     await bootstrap();
-    // First-launch experience: the empty pane now carries the chan
-    // logo + ASCII shortcut table + scope hint + right-click menu,
-    // so we no longer auto-pop the file browser on a tabless drive.
+    // Boot-time: if no tabs were restored anywhere in the layout,
+    // pop the file browser so the user has a launch surface instead
+    // of staring at the empty-pane logo. Subsequent tab closes leave
+    // the empty pane intact (the logo + shortcut hints take over).
+    const hasAnyTab = Object.values(layout.nodes).some(
+      (n) => n.kind === "leaf" && n.tabs.length > 0,
+    );
+    if (!hasAnyTab) openBrowser();
     bootstrapped = true;
     // Visibility-change resume hook. Browsers throttle / suspend
     // backgrounded tabs and the WebSocket reconnect can stretch

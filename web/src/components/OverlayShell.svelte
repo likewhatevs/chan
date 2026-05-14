@@ -99,14 +99,14 @@
     display: flex;
     justify-content: center;
     align-items: stretch;
-    /* iOS draws the status bar OVER the WebView (viewport-fit=
-       cover), so the panel's top edge needs to clear both the
-       safe-area inset AND a comfortable buffer before any tap
-       target sits there. Sum, not max(): even with a non-notched
-       device the +44px floor keeps the in-panel chrome (close
-       button on the right, maximize on the left) visible and
-       reachable below the notch / status bar. */
-    padding-top: calc(env(safe-area-inset-top, 0px) + 44px);
+    /* Symmetric top/bottom gutter. iOS draws the status bar OVER
+       the WebView (viewport-fit=cover); the safe-area-inset-top
+       branch of max() clears the notch on those devices while the
+       24px floor matches the bottom gutter on desktop / non-notched
+       viewports. The in-panel chrome (maximize on the left, close
+       on the right of each overlay's own header) lives below this
+       padding so it's never under the status bar. */
+    padding-top: max(env(safe-area-inset-top, 0px), 24px);
     padding-bottom: max(env(safe-area-inset-bottom, 0px), 24px);
     /* Side padding is set narrow on the .overlay; the panel's
        width prop (capped at 1200px) handles wide-viewport
