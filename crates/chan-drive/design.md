@@ -1278,11 +1278,16 @@ Still ahead:
 
 Sketch only, not committed:
 
-  - `Drive::graph_indexer()`: returns a structured indexer that
-    accepts `WatchEvent`s and calls `replace_file` /
-    `forget_file` accordingly. Apps run it on a worker thread
-    pulling from the watcher channel. Removes the duplicated
-    indexer loop from chan / chan-server.
+  - (committed) `Drive::start_graph_indexer(debounce_ms)`: returns
+    a `GraphIndexer` handle. The indexer owns a watcher
+    subscription and a worker thread; per-path events are debounced
+    with a trailing-edge window, deletions and the source side of
+    renames are flushed immediately, and `ProviderError` or
+    path-less events drive a full `Drive::reconcile`. Removes the
+    duplicated indexer loop from chan / chan-server. Counters
+    (`pending_count`, `indexed_total`, `forgotten_total`,
+    `reconciles_total`) drive the status surface. Drop the handle
+    (or call `stop()`) to tear down synchronously.
   - Remote-backed `Drive` impl: a future trait split could let
     a thin client call `read` / `write` / `search` against an
     HTTP endpoint while the server runs the real chan-drive.

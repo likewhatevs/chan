@@ -2099,6 +2099,19 @@ impl Drive {
         WatchHandle::start(self.root(), fan)
     }
 
+    /// Start the built-in graph indexer on this drive. Returns a
+    /// handle; drop or `stop()` to tear down. The indexer attaches
+    /// its own watcher, debounces per-path with `debounce_ms`, and
+    /// drives `index_file` / `forget_file` / `reconcile` so the
+    /// consumer (CLI, chan-server, FFI shells) doesn't need to
+    /// write its own indexing loop.
+    pub fn start_graph_indexer(
+        self: &Arc<Self>,
+        debounce_ms: u64,
+    ) -> Result<crate::indexer::GraphIndexer> {
+        crate::indexer::GraphIndexer::start_on(Arc::clone(self), debounce_ms)
+    }
+
     // ---- report ----
 
     /// Snapshot of the drive's code/SLOC report covering every

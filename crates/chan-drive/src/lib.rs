@@ -28,6 +28,7 @@ pub mod error;
 pub mod fs_ops;
 pub mod graph;
 pub mod index;
+pub mod indexer;
 pub mod library;
 pub mod lock;
 pub mod markdown;
@@ -63,6 +64,7 @@ pub use index::{
     BuildOptions, BuildSummary, Chunking, Hit, IndexConfig, IndexStats, Mode as SearchMode,
     SearchResult, DEFAULT_MODEL,
 };
+pub use indexer::{GraphIndexer, DEFAULT_DEBOUNCE_MS};
 pub use library::{Library, ResetMode, ResetReport, SweepReport};
 pub use progress::{
     eta_secs_from, progress_fn, NoProgress, ProgressCallback, ProgressEvent, ProgressStage,
