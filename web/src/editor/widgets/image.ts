@@ -40,9 +40,36 @@ import {
   resolveImageSrc,
   setImageWidth,
 } from "../extensions/image";
-import { selectionInRange } from "../decorations/selection";
 
 const MIN_IMG_WIDTH = 40;
+
+/// Strict-interior selection test for image edit-mode entry.
+/// `selectionInRange` (the inline-mark helper) treats caret AT a
+/// boundary as "intersecting". That rule makes sense for bold /
+/// italic markers — touching the `*` reveals it — but for images
+/// the atomic widget replaces the entire source span, so the only
+/// position the caret can EVER hold via clicks is one of the two
+/// outer boundaries (atomicRanges snaps the click). Treating those
+/// as "editing" means any click on the image's source line flips
+/// the widget into edit mode, which is what the user sees as a
+/// stray click landing in the source. Arrow-key entry and the
+/// Edit button both land the caret STRICTLY inside (the URL slot's
+/// urlFrom / urlFrom+1), so a strict interior test still catches
+/// the intentional entry paths.
+function imageEditEntered(
+  sel: import("@codemirror/state").EditorSelection,
+  from: number,
+  to: number,
+): boolean {
+  for (const r of sel.ranges) {
+    if (r.empty) {
+      if (r.head > from && r.head < to) return true;
+    } else {
+      if (r.from < to && r.to > from) return true;
+    }
+  }
+  return false;
+}
 
 /// Lucide Copy + Check icons inlined as SVG strings — the widget is
 /// raw DOM, not Svelte, so we can't reuse lucide-svelte components.
@@ -104,6 +131,14 @@ export interface ImageClickArgs {
   /// the action overlay (step 8) to anchor itself or trigger an
   /// edit-bubble open at the right offset.
   pos: number;
+}
+
+interface ImageActionPayload {
+  src: string;
+  alt: string;
+  fromPath: string | null;
+  nodePos: number;
+  onClick: ((args: ImageClickArgs) => void) | undefined;
 }
 
 export interface ImageOptions {
@@ -333,6 +368,19 @@ class ImageWidget extends WidgetType {
     actions.appendChild(copyBtn);
     wrap.appendChild(actions);
 
+    // Per-image data the document-level keymap (ensureDeselectListener)
+    // needs to route Cmd+Enter (view) and Cmd+C (copy) without having
+    // to walk the syntax tree. The keymap finds the wrap via the
+    // `data-selected` ring, then reads this property to dispatch the
+    // same action the hover-overlay buttons would.
+    (wrap as HTMLElement & { _chanImg?: ImageActionPayload })._chanImg = {
+      src: this.src,
+      alt: this.alt,
+      fromPath: this.fromPath,
+      nodePos: this.nodePos,
+      onClick: this.onClick,
+    };
+
     return wrap;
   }
 
@@ -372,7 +420,6 @@ function ensureDeselectListener(view: EditorView): void {
     clearImageSelection(view);
   });
   document.addEventListener("keydown", (e) => {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
     const selected = view.dom.querySelector(
       ".cm-md-image-wrap[data-selected]",
     ) as HTMLElement | null;
@@ -381,6 +428,49 @@ function ensureDeselectListener(view: EditorView): void {
     if (posAttr === undefined) return;
     const hintPos = Number(posAttr);
     if (!Number.isFinite(hintPos)) return;
+    const payload = (selected as HTMLElement & {
+      _chanImg?: ImageActionPayload;
+    })._chanImg;
+    const hasMod = e.metaKey || e.ctrlKey;
+    // Cmd/Ctrl+Enter — same as clicking the View button (zoom modal).
+    if (hasMod && e.key === "Enter" && !e.altKey && !e.shiftKey) {
+      e.preventDefault();
+      if (payload?.onClick) {
+        payload.onClick({
+          src: payload.src,
+          alt: payload.alt,
+          pos: payload.nodePos,
+        });
+      }
+      clearImageSelection(view);
+      return;
+    }
+    // Cmd/Ctrl+C — same as clicking the Copy button. We only consume
+    // the key when no text range is selected, so a regular text copy
+    // (range selection that happens to span an image) keeps working.
+    if (
+      hasMod &&
+      (e.key === "c" || e.key === "C") &&
+      !e.altKey &&
+      !e.shiftKey &&
+      view.state.selection.main.empty
+    ) {
+      if (payload) {
+        e.preventDefault();
+        void copyImageToClipboard(payload.src, payload.fromPath);
+      }
+      return;
+    }
+    // Plain Enter — same as clicking the Edit button.
+    if (!hasMod && !e.altKey && !e.shiftKey && e.key === "Enter") {
+      e.preventDefault();
+      placeCaretInImageUrl(view, hintPos);
+      clearImageSelection(view);
+      return;
+    }
+    // Other modifier combos: leave alone so Cmd+A / Cmd+S / etc. keep
+    // working when the image happens to be selected.
+    if (hasMod || e.altKey) return;
     if (e.key === "Backspace" || e.key === "Delete") {
       e.preventDefault();
       const range = imageNodeRange(view, hintPos);
@@ -393,12 +483,6 @@ function ensureDeselectListener(view: EditorView): void {
       });
       clearImageSelection(view);
       view.focus();
-      return;
-    }
-    if (e.key === "Enter") {
-      e.preventDefault();
-      placeCaretInImageUrl(view, hintPos);
-      clearImageSelection(view);
       return;
     }
   });
@@ -536,50 +620,59 @@ function commitImageWidth(
   });
 }
 
-/// Redirect the caret into an Image's URL slot when the user's
-/// arrow key would have skipped over the atom. Without this, keyboard
-/// navigation past an image lands the caret at the Image's outer
-/// boundary — selection-intersect reveals source but the caret is
-/// in alt-text or just outside the URL, so the user has to keep
-/// arrowing to reach the URL portion where the bubble fires.
+/// Sync the `data-selected` ring on image wraps with the caret.
+/// Atomic ranges make arrow-key navigation jump from "before" to
+/// "after" an image in a single keystroke; we want that landing
+/// (caret at Image.from or Image.to) to visually SELECT the image
+/// — same ring the click handler lights up — so the user can then
+/// Cmd/Ctrl+Enter into edit mode or Backspace to delete. Stepping
+/// the caret off the boundary clears the ring on the next update.
 ///
-/// We catch the boundary landing (cur.head === Image.from || === to)
-/// when the previous selection was outside the Image, and dispatch
-/// a follow-up that lands the caret at URL.from (rightward motion)
-/// or URL.to (leftward). The bubble's imageUrlAtCaret trigger then
-/// fires on the next update tick and the user is editing.
+/// We deliberately do NOT redirect the caret inside the URL slot
+/// anymore. The old behaviour flipped the widget into edit mode on
+/// every keyboard or click landing near the image, which the user
+/// experienced as a stray click "landing in the source". Edit mode
+/// is now an explicit verb: the Edit button on the hover overlay,
+/// or Cmd/Ctrl+Enter while the image is selected (see the keydown
+/// handler in ensureDeselectListener).
 export function imageCaretRedirect(): Extension {
   return EditorView.updateListener.of((u) => {
-    if (!u.selectionSet || u.docChanged) return;
-    const prev = u.startState.selection.main;
+    if (!u.selectionSet && !u.docChanged && !u.viewportChanged) return;
     const cur = u.state.selection.main;
-    if (!cur.empty || !prev.empty) return;
-    if (prev.head === cur.head) return;
-    const tree = syntaxTree(u.state);
-    let node: import("@lezer/common").SyntaxNode | null = tree.resolveInner(
-      cur.head,
-      0,
-    );
-    while (node && node.name !== "Image") node = node.parent;
-    if (!node) return;
-    // Only redirect on the atomic-range jump landing (caret at
-    // Image.from or Image.to). Caret already inside the URL via
-    // mouse-click or earlier redirect is left alone.
-    if (cur.head !== node.from && cur.head !== node.to) return;
-    if (prev.head >= node.from && prev.head <= node.to) return;
-    const cursor = node.cursor();
-    if (!cursor.firstChild()) return;
-    const linkMarks: Array<{ from: number; to: number }> = [];
-    do {
-      if (cursor.name === "LinkMark") {
-        linkMarks.push({ from: cursor.from, to: cursor.to });
+    let selectedPos: number | null = null;
+    if (cur.empty) {
+      const tree = syntaxTree(u.state);
+      // Try both bias directions — caret AT a boundary may resolve
+      // to either the Image node or its sibling depending on which
+      // side of the boundary `resolveInner` lands on.
+      for (const bias of [-1, 1] as const) {
+        let node: import("@lezer/common").SyntaxNode | null =
+          tree.resolveInner(cur.head, bias);
+        while (node && node.name !== "Image") node = node.parent ?? null;
+        if (
+          node &&
+          node.name === "Image" &&
+          (cur.head === node.from || cur.head === node.to)
+        ) {
+          selectedPos = node.from;
+          break;
+        }
       }
-    } while (cursor.nextSibling());
-    if (linkMarks.length < 4) return;
-    const urlFrom = linkMarks[2]!.to;
-    const urlTo = linkMarks[3]!.from;
-    const target = prev.head < cur.head ? urlFrom : urlTo;
-    u.view.dispatch({ selection: { anchor: target } });
+    }
+    // Wipe stale rings (covers the "selection moved off image" path
+    // and the "doc edit shifted positions" path). Then re-set the
+    // ring on the wrap whose Image.from matches the captured pos.
+    for (const el of u.view.dom.querySelectorAll(
+      ".cm-md-image-wrap[data-selected]",
+    )) {
+      (el as HTMLElement).removeAttribute("data-selected");
+    }
+    if (selectedPos !== null) {
+      const wrap = u.view.dom.querySelector(
+        `.cm-md-image-wrap[data-image-pos="${selectedPos}"]`,
+      ) as HTMLElement | null;
+      if (wrap) wrap.dataset.selected = "true";
+    }
   });
 }
 
@@ -666,7 +759,7 @@ function scanImagesInline(view: EditorView, opts: ImageOptions): DecorationSet {
       const line = state.doc.lineAt(outerFrom);
       const standalone =
         line.text.trim() === state.doc.sliceString(outerFrom, outerTo).trim();
-      const editing = selectionInRange(sel, outerFrom, outerTo);
+      const editing = imageEditEntered(sel, outerFrom, outerTo);
       // Editing mode: skip the inline replace so the source `![alt](url)`
       // stays as editable text. The block-above preview comes from
       // scanImagesBlock (StateField). Float-clear line decoration is
@@ -730,7 +823,7 @@ function scanImagesBlock(
       if (node.name !== "Image") return;
       const outerFrom = node.from;
       const outerTo = node.to;
-      if (!selectionInRange(sel, outerFrom, outerTo)) return;
+      if (!imageEditEntered(sel, outerFrom, outerTo)) return;
       const cursor = node.node.cursor();
       if (!cursor.firstChild()) return;
       const linkMarks: Array<{ from: number; to: number }> = [];
