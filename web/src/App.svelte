@@ -91,6 +91,10 @@
         // Reading t.content here makes the effect rerun on every
         // keystroke, which then debounces the actual save.
         void t.content;
+        // Track caret so selection moves bump the URL hash too;
+        // without this, the persisted layout never picks up the
+        // updated offset and reloads land at doc start.
+        void t.caret;
         if (bootstrapped && !t.loading && t.content !== t.saved) {
           scheduleAutosave(node.id, t.id);
         }

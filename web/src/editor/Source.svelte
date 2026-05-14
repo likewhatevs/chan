@@ -47,6 +47,13 @@
   /// content update (autosave echo, sibling mirror) from snapping
   /// the caret back to the saved position.
   let caretRestored = false;
+  /// Snapshot of the prop captured at mount; see Wysiwyg.svelte for
+  /// why we cannot read `initialCaret` directly inside
+  /// `maybeRestoreCaret` (CM6 dispatches fire `onCaretChange(0, 0)`,
+  /// which overwrites `tab.caret` and the prop re-evaluates to the
+  /// doc-start fallback before we get to use it).
+  // svelte-ignore state_referenced_locally
+  let caretPending: { from: number; to: number } | null = initialCaret;
 
   let host: HTMLDivElement | undefined;
   let view: EditorView | undefined;
@@ -112,16 +119,17 @@
   /// Apply `initialCaret` once we have a doc to land it in. Idempotent;
   /// subsequent calls no-op via the `caretRestored` flag.
   function maybeRestoreCaret(): void {
-    if (caretRestored || !view || !initialCaret) return;
+    if (caretRestored || !view || !caretPending) return;
     const lim = view.state.doc.length;
     if (lim === 0) return;
-    const from = Math.min(Math.max(0, initialCaret.from), lim);
-    const to = Math.min(Math.max(0, initialCaret.to), lim);
+    const from = Math.min(Math.max(0, caretPending.from), lim);
+    const to = Math.min(Math.max(0, caretPending.to), lim);
     view.dispatch({
       selection: { anchor: from, head: to },
       effects: EditorView.scrollIntoView(from, { y: "center" }),
     });
     caretRestored = true;
+    caretPending = null;
   }
 
   onDestroy(() => view?.destroy());

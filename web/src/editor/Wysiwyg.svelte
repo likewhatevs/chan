@@ -95,6 +95,19 @@
     onMentionClick?: (args: MentionClickArgs) => void;
   } = $props();
 
+  /// One-shot snapshot of the persisted caret captured at mount time.
+  /// We cannot read `initialCaret` directly inside `maybeRestoreCaret`
+  /// because every CM6 dispatch we issue along the way (the initial
+  /// `selection: anchor 0` and the post-load `applyExternal`) fires a
+  /// `selectionSet` update that mirrors back through `onCaretChange`
+  /// → `setTabCaret` → `tab.caret = { from: 0, to: 0 }`. The parent's
+  /// `initialCaret={tab.caret ?? null}` expression re-evaluates as
+  /// soon as tab.caret changes, so by the time we'd read the prop the
+  /// saved offset has already been overwritten with the doc-start
+  /// fallback and the editor lands at the top.
+  // svelte-ignore state_referenced_locally
+  let caretPending: { from: number; to: number } | null = initialCaret;
+
   /// True once we've placed the caret at `initialCaret` after the
   /// first non-empty content apply. Same gate as Source.svelte.
   let caretRestored = false;
@@ -398,16 +411,17 @@
   /// echo, sibling mirror) from yanking the caret back to the saved
   /// offset.
   function maybeRestoreCaret(): void {
-    if (caretRestored || !view || !initialCaret) return;
+    if (caretRestored || !view || !caretPending) return;
     const lim = view.state.doc.length;
     if (lim === 0) return;
-    const from = Math.min(Math.max(0, initialCaret.from), lim);
-    const to = Math.min(Math.max(0, initialCaret.to), lim);
+    const from = Math.min(Math.max(0, caretPending.from), lim);
+    const to = Math.min(Math.max(0, caretPending.to), lim);
     view.dispatch({
       selection: { anchor: from, head: to },
       effects: EditorView.scrollIntoView(from, { y: "center" }),
     });
     caretRestored = true;
+    caretPending = null;
   }
 
   onDestroy(() => {
