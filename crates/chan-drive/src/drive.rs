@@ -1618,6 +1618,7 @@ impl Drive {
                 rel: e.path.as_str(),
                 title: title.as_deref(),
                 mtime: e.mtime,
+                size: Some(e.size as i64),
                 node_kind,
                 edges: &edges,
                 headings: &headings,
@@ -1674,7 +1675,9 @@ impl Drive {
 
     fn index_file_inner(&self, rel: &str) -> Result<()> {
         let content = self.read_text(rel)?;
-        let mtime = self.stat(rel).ok().and_then(|s| s.mtime);
+        let stat = self.stat(rel).ok();
+        let mtime = stat.as_ref().and_then(|s| s.mtime);
+        let size = stat.as_ref().map(|s| s.size as i64);
         let (title, node_kind, headings, edges, emails) = parse_for_graph(rel, &content);
         // Graph first, then search index. The graph is what the
         // editor consults for backlinks and link-autocomplete on
@@ -1692,6 +1695,7 @@ impl Drive {
             rel,
             title.as_deref(),
             mtime,
+            size,
             node_kind,
             &edges,
             &headings,
@@ -1915,11 +1919,16 @@ impl Drive {
     /// save or full reindex covers it. Adding a size column to the
     /// graph schema would tighten this; deferred until we need it.
     pub fn reconcile(&self) -> Result<ReconcileReport> {
-        // Snapshot the graph's view of the world. The graph stores
-        // mtime as Unix seconds; we compare against the same unit
-        // pulled from stat() below.
-        let graph_snapshot: std::collections::HashMap<String, Option<i64>> =
-            self.graph()?.files_with_mtime()?.into_iter().collect();
+        // Snapshot the graph's view of the world: per-file
+        // (mtime, size) tuples. Graph stores mtime as Unix
+        // seconds and size as bytes (None for either component
+        // on legacy rows predating the v5 migration).
+        let graph_snapshot: std::collections::HashMap<String, (Option<i64>, Option<i64>)> = self
+            .graph()?
+            .files_with_stat()?
+            .into_iter()
+            .map(|(rel, mtime, size)| (rel, (mtime, size)))
+            .collect();
 
         // Walk the drive applying the same filter the reindex uses
         // (.git, .chan, plus the per-Library WalkFilter blocklist).
@@ -1927,7 +1936,7 @@ impl Drive {
         // are not indexed by either backend and so do not need
         // reconciliation.
         let filter = Arc::clone(&self.walk_filter);
-        let mut disk_files: std::collections::HashMap<String, Option<i64>> =
+        let mut disk_files: std::collections::HashMap<String, (Option<i64>, Option<i64>)> =
             std::collections::HashMap::new();
         for entry in fs_ops::walk_drive_filtered(self.root(), &filter) {
             if !entry.file_type().is_file() {
@@ -1940,13 +1949,14 @@ impl Drive {
             if !fs_ops::is_editable_text(&rel) {
                 continue;
             }
-            let mtime = entry
-                .metadata()
-                .ok()
+            let meta = entry.metadata().ok();
+            let mtime = meta
+                .as_ref()
                 .and_then(|m| m.modified().ok())
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs() as i64);
-            disk_files.insert(rel, mtime);
+            let size = meta.as_ref().map(|m| m.len() as i64);
+            disk_files.insert(rel, (mtime, size));
         }
 
         let mut upserted: Vec<String> = Vec::new();
@@ -1956,14 +1966,19 @@ impl Drive {
         // Pass 1: every file currently on disk. New or modified
         // entries trigger an index_file; the journal in PR5 covers
         // crash recovery for each per-file commit pair.
-        for (rel, disk_mtime) in &disk_files {
+        for (rel, (disk_mtime, disk_size)) in &disk_files {
             let needs_index = match graph_snapshot.get(rel) {
                 None => true,
-                // mtime semantics: same value (including None == None)
-                // means "no change visible from stat", so skip. A
-                // None vs Some asymmetry is treated as a change so a
-                // legacy row without a stamped mtime gets refreshed.
-                Some(graph_mtime) => graph_mtime != disk_mtime,
+                Some((graph_mtime, graph_size)) => {
+                    // Tighter diff than mtime alone: a file rewritten
+                    // to the same length AND same mtime still slips
+                    // by, but a change in either component is caught.
+                    // Legacy rows (size = None) treat the size check
+                    // as a skip and rely on mtime; a single subsequent
+                    // index_file backfills the size column.
+                    graph_mtime != disk_mtime
+                        || (graph_size.is_some() && disk_size.is_some() && graph_size != disk_size)
+                }
             };
             if needs_index {
                 self.index_file(rel)?;
@@ -3509,6 +3524,64 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_catches_same_mtime_different_size_rewrite() {
+        // Regression for the same-mtime-different-content gap that
+        // PR9's size column closes. We forcibly stamp the graph's
+        // mtime back onto the file after editing so reconcile
+        // cannot rely on mtime to spot the change; the size delta
+        // is the only signal.
+        use std::fs;
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        drive
+            .write_text("twin.md", "# twin\noriginal-token short\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+
+        let file_path = drive_dir.path().join("twin.md");
+        let original_modified = fs::metadata(&file_path).unwrap().modified().unwrap();
+
+        // Rewrite with different length, then stamp the original
+        // mtime back. A pure-mtime reconcile would skip this file.
+        fs::write(
+            &file_path,
+            "# twin\nreplaced-token much much longer body to flip the size signal\n",
+        )
+        .unwrap();
+        let f = fs::OpenOptions::new().write(true).open(&file_path).unwrap();
+        f.set_modified(original_modified).unwrap();
+        drop(f);
+
+        // Confirm the mtime restore landed; if the OS refused it
+        // (uncommon) we skip the assertion. The mtime equality is
+        // load-bearing: without it, this test would pass even with
+        // a mtime-only reconcile.
+        let stamped = fs::metadata(&file_path).unwrap().modified().unwrap();
+        if stamped == original_modified {
+            let report = drive.reconcile().unwrap();
+            assert!(
+                report.upserted.iter().any(|p| p == "twin.md"),
+                "size check should detect content rewrite with restored mtime; got {:?}",
+                report,
+            );
+            let opts = crate::drive::SearchOpts {
+                mode: crate::SearchMode::Bm25,
+                limit: 10,
+                scope: None,
+            };
+            assert!(drive
+                .search("replaced-token", &opts)
+                .unwrap()
+                .hits
+                .iter()
+                .any(|h| h.path == "twin.md"));
+        }
+    }
+
+    #[test]
     fn reconcile_on_empty_graph_indexes_everything_like_a_fresh_reindex() {
         // Edge case: graph is empty (fresh drive, or after a
         // reset_drive). Reconcile sees every disk file as "new"
@@ -3571,6 +3644,7 @@ mod tests {
                 rel,
                 title: Some("staged-title-must-be-overwritten"),
                 mtime: Some(42),
+                size: None,
                 node_kind: crate::graph::NodeKind::File,
                 edges: &[],
                 headings: &[],
@@ -3607,6 +3681,7 @@ mod tests {
             rel: "ghost.md",
             title: None,
             mtime: Some(1),
+            size: None,
             node_kind: crate::graph::NodeKind::File,
             edges: &[],
             headings: &[],

@@ -797,10 +797,11 @@ Push vs. pull, and how the three signals relate:
     only for changed files. Use cases: cold open after offline
     edits, watcher-overflow recovery (inotify `IN_Q_OVERFLOW` /
     FSEvents coalesce-loss), post-`replay_pending_writes` sanity.
-    The diff is mtime-only today; a same-mtime-different-content
-    rewrite (rare) is not caught here but the next save or full
-    reindex covers it. Adding a `size` column to the graph would
-    tighten this; deferred.
+    The diff compares `(mtime, size)` tuples against the graph's
+    stamped row; a same-mtime-different-size rewrite is caught
+    via the size delta. Legacy rows predating v5 carry `size =
+    NULL`, in which case reconcile falls back to mtime-only for
+    that row and a subsequent `index_file` backfills size.
   - `Drive::needs_replay_writes()` is the per-file companion: set
     by `Drive::open` when it finds a non-empty `pending_writes.json`
     journal under `graph_dir/`. Each entry is a `(rel, op)` pair
@@ -1102,11 +1103,14 @@ Notable variants:
 
   - **Graph DB**: `PRAGMA user_version`. Migrations are
     idempotent and applied on every `GraphView::open`. Current
-    version: 4 (v2 added basename, v3 added emails, v4 added
-    staging tables for resumable reindex). The migration writes
-    the schema change and the `user_version` bump in a single
-    transaction so a crash mid-migration leaves the DB at the
-    previous version with intact data.
+    version: 5 (v2 added basename, v3 added emails, v4 added
+    staging tables for resumable reindex, v5 added a `size` column
+    on `nodes` + `staging_nodes` so `Drive::reconcile` can detect
+    same-mtime-different-content rewrites that a mtime-only diff
+    would miss). The migration writes the schema change and the
+    `user_version` bump in a single transaction so a crash
+    mid-migration leaves the DB at the previous version with
+    intact data.
 
   - **Reindex resumability** (v4): `rebuild_graph` parses each
     file straight into `staging_nodes` / `staging_edges` /

@@ -157,6 +157,13 @@ pub struct Edge {
     pub anchor: Option<String>,
 }
 
+/// One row from `GraphView::files_with_stat`: a rel-path plus the
+/// last-stamped `(mtime, size)` tuple, either component nullable
+/// (legacy rows from pre-v5 schemas, or files the indexer couldn't
+/// stat). Owned `String` so the value crosses thread boundaries
+/// without lifetimes.
+pub type FileStatRow = (String, Option<i64>, Option<i64>);
+
 /// Borrow-only payload describing one file's graph state, used by
 /// `GraphView::replace_all` for the atomic rebuild path. Internal
 /// (the borrow lifetime would not survive uniffi) and not re-exported
@@ -165,6 +172,13 @@ pub struct FileGraph<'a> {
     pub rel: &'a str,
     pub title: Option<&'a str>,
     pub mtime: Option<i64>,
+    /// File size in bytes from `std::fs::Metadata::len`. `None`
+    /// when the indexer couldn't stat the file. Stored alongside
+    /// `mtime` so `Drive::reconcile` can catch
+    /// same-mtime-different-content rewrites: comparing the
+    /// `(mtime, size)` tuple against disk is strictly tighter than
+    /// mtime alone, at the cost of one extra `INTEGER` column.
+    pub size: Option<i64>,
     pub node_kind: NodeKind,
     pub edges: &'a [Edge],
     pub headings: &'a [markdown::Heading],
@@ -455,6 +469,46 @@ impl GraphView {
                 "#,
             )?;
         }
+        if v < 5 {
+            // v5: persist file size on nodes / staging_nodes. The
+            // reconcile path (Drive::reconcile) previously compared
+            // only mtime; a tool that rewrites a file to the same
+            // length and somehow lands the same mtime (rare but
+            // possible on filesystems with 1s mtime granularity
+            // under back-to-back saves) slipped past. With size
+            // recorded too, the (mtime, size) tuple catches the
+            // same-mtime-different-content case.
+            //
+            // NULL on legacy rows so the migration doesn't need to
+            // walk the filesystem; reconcile treats `None` size as
+            // "skip the size check" and a single subsequent
+            // index_file call backfills the row.
+            let cols: Vec<String> = {
+                let mut stmt = conn.prepare("PRAGMA table_info(nodes)")?;
+                let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row?);
+                }
+                out
+            };
+            if !cols.iter().any(|c| c == "size") {
+                conn.execute_batch("ALTER TABLE nodes ADD COLUMN size INTEGER;")?;
+            }
+            let st_cols: Vec<String> = {
+                let mut stmt = conn.prepare("PRAGMA table_info(staging_nodes)")?;
+                let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row?);
+                }
+                out
+            };
+            if !st_cols.iter().any(|c| c == "size") {
+                conn.execute_batch("ALTER TABLE staging_nodes ADD COLUMN size INTEGER;")?;
+            }
+            conn.execute_batch("PRAGMA user_version = 5;")?;
+        }
         Ok(())
     }
 
@@ -564,14 +618,15 @@ impl GraphView {
     /// the pre-joined, space-separated lowercased address list for
     /// contact-kind files (`None` for File-kind, and `None` for
     /// contacts with no extractable address); see `FileGraph.emails`.
-    // Folding these into a struct would churn 14 call sites (incl.
-    // tests) for a style win; the function stays at 7 params.
+    // Folding these into a struct would churn ~20 call sites (incl.
+    // tests) for a style win; the function stays at 8 params.
     #[allow(clippy::too_many_arguments)]
     pub fn replace_file(
         &self,
         rel: &str,
         title: Option<&str>,
         mtime: Option<i64>,
+        size: Option<i64>,
         node_kind: NodeKind,
         outgoing: &[Edge],
         headings: &[markdown::Heading],
@@ -591,9 +646,17 @@ impl GraphView {
             .and_then(|s| s.to_str())
             .unwrap_or(rel);
         tx.execute(
-            "INSERT OR REPLACE INTO nodes(rel_path, kind, mtime, title, basename, emails) \
-             VALUES (?, ?, ?, ?, ?, ?)",
-            params![rel, node_kind.as_str(), mtime, title, basename, emails],
+            "INSERT OR REPLACE INTO nodes(rel_path, kind, mtime, title, basename, emails, size) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![
+                rel,
+                node_kind.as_str(),
+                mtime,
+                title,
+                basename,
+                emails,
+                size
+            ],
         )?;
         tx.execute("DELETE FROM edges WHERE src = ?", params![rel])?;
         tx.execute("DELETE FROM headings WHERE rel_path = ?", params![rel])?;
@@ -705,8 +768,8 @@ impl GraphView {
             .and_then(|s| s.to_str())
             .unwrap_or(fg.rel);
         tx.execute(
-            "INSERT OR REPLACE INTO staging_nodes(rel_path, kind, mtime, title, basename, emails) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO staging_nodes(rel_path, kind, mtime, title, basename, emails, size) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
             params![
                 fg.rel,
                 fg.node_kind.as_str(),
@@ -714,6 +777,7 @@ impl GraphView {
                 fg.title,
                 basename,
                 fg.emails,
+                fg.size,
             ],
         )?;
         // Re-stage clears previous edges + headings for this file
@@ -819,8 +883,8 @@ impl GraphView {
         tx.execute("DELETE FROM headings", [])?;
         tx.execute("DELETE FROM nodes", [])?;
         tx.execute(
-            "INSERT INTO nodes(rel_path, kind, mtime, title, basename, emails) \
-             SELECT rel_path, kind, mtime, title, basename, emails FROM staging_nodes",
+            "INSERT INTO nodes(rel_path, kind, mtime, title, basename, emails, size) \
+             SELECT rel_path, kind, mtime, title, basename, emails, size FROM staging_nodes",
             [],
         )?;
         tx.execute(
@@ -874,8 +938,8 @@ impl GraphView {
         tx.execute("DELETE FROM nodes", [])?;
         {
             let mut ins_node = tx.prepare_cached(
-                "INSERT OR REPLACE INTO nodes(rel_path, kind, mtime, title, basename, emails) \
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO nodes(rel_path, kind, mtime, title, basename, emails, size) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
             )?;
             let mut ins_edge = tx.prepare_cached(
                 "INSERT OR IGNORE INTO edges(src, dst, kind, anchor) VALUES (?, ?, ?, ?)",
@@ -895,6 +959,7 @@ impl GraphView {
                     fg.title,
                     basename,
                     fg.emails,
+                    fg.size,
                 ])?;
                 for e in fg.edges {
                     ins_edge.execute(params![fg.rel, e.dst, e.kind.as_str(), e.anchor])?;
@@ -935,10 +1000,9 @@ impl GraphView {
 
     /// All files known to the graph with their last-seen mtime (Unix
     /// seconds, `None` when the indexer couldn't read the file's
-    /// mtime). Sorted by path. Used by `Drive::reconcile` to compare
-    /// the graph's snapshot against the live tree's stat values and
-    /// drive index_file / forget_file calls only for files that
-    /// actually changed.
+    /// mtime). Sorted by path. Kept for callers that don't care
+    /// about size; `files_with_stat` is the tighter accessor used
+    /// by `Drive::reconcile`.
     pub fn files_with_mtime(&self) -> Result<Vec<(String, Option<i64>)>> {
         tracing::debug!("graph::files_with_mtime");
         let conn = self.reader()?;
@@ -947,6 +1011,34 @@ impl GraphView {
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// All files known to the graph with their last-seen
+    /// `(mtime, size)` tuple. Either component is `None` when the
+    /// indexer couldn't stat the file or the row predates the v5
+    /// migration (size column NULL). Sorted by path. Used by
+    /// `Drive::reconcile` to drive a strictly tighter diff than
+    /// mtime alone: a same-mtime-different-content rewrite no
+    /// longer slips past the reconcile.
+    pub fn files_with_stat(&self) -> Result<Vec<FileStatRow>> {
+        tracing::debug!("graph::files_with_stat");
+        let conn = self.reader()?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT rel_path, mtime, size FROM nodes \
+             WHERE kind IN ('file', 'contact') ORDER BY rel_path",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+            ))
         })?;
         let mut out = Vec::new();
         for row in rows {
@@ -1338,7 +1430,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let db = tmp.path().join("graph.sqlite");
         let g = GraphView::open(&db).unwrap();
-        assert_eq!(count(&g, "PRAGMA user_version"), 4);
+        assert_eq!(count(&g, "PRAGMA user_version"), 5);
     }
 
     #[test]
@@ -1379,6 +1471,7 @@ mod tests {
             "a.md",
             Some("Alpha"),
             Some(1),
+            None,
             NodeKind::File,
             &[],
             &[],
@@ -1414,6 +1507,7 @@ mod tests {
                         "a.md",
                         Some("Alpha"),
                         Some(i),
+                        None,
                         NodeKind::File,
                         &[],
                         &[],
@@ -1438,6 +1532,7 @@ mod tests {
             "old.md",
             Some("Old"),
             Some(1),
+            None,
             NodeKind::File,
             &[],
             &[],
@@ -1465,6 +1560,7 @@ mod tests {
                 rel: "a.md",
                 title: Some("Alpha"),
                 mtime: Some(10),
+                size: None,
                 node_kind: NodeKind::File,
                 edges: &edges,
                 headings: &headings,
@@ -1474,6 +1570,7 @@ mod tests {
                 rel: "b.md",
                 title: None,
                 mtime: Some(20),
+                size: None,
                 node_kind: NodeKind::File,
                 edges: &[],
                 headings: &[],
@@ -1500,6 +1597,7 @@ mod tests {
             "notes/a.md",
             Some("Hello"),
             Some(1000),
+            None,
             NodeKind::File,
             &[],
             &[],
@@ -1525,7 +1623,7 @@ mod tests {
 
     fn populate(g: &GraphView, files: &[(&str, Option<&str>, Option<i64>)]) {
         for (rel, title, mtime) in files {
-            g.replace_file(rel, *title, *mtime, NodeKind::File, &[], &[], None)
+            g.replace_file(rel, *title, *mtime, None, NodeKind::File, &[], &[], None)
                 .unwrap();
         }
     }
@@ -1538,6 +1636,7 @@ mod tests {
             "Contacts/Alice.md",
             Some("Alice Anderson"),
             Some(1),
+            None,
             NodeKind::Contact,
             &[],
             &[],
@@ -1548,6 +1647,7 @@ mod tests {
             "recipes/pasta.md",
             Some("Pasta"),
             Some(2),
+            None,
             NodeKind::File,
             &[],
             &[],
@@ -1588,6 +1688,7 @@ mod tests {
             "Contacts/Alice.md",
             Some("Alice Anderson"),
             Some(1),
+            None,
             NodeKind::Contact,
             &[],
             &[],
@@ -1598,6 +1699,7 @@ mod tests {
             "Contacts/Bob.md",
             Some("Bob Brown"),
             Some(2),
+            None,
             NodeKind::Contact,
             &[],
             &[],
@@ -1608,6 +1710,7 @@ mod tests {
             "Contacts/Charlie.md",
             Some("Charlie Cohen"),
             Some(3),
+            None,
             NodeKind::Contact,
             &[],
             &[],
@@ -1618,6 +1721,7 @@ mod tests {
             "notes/alice-mentioned.md",
             Some("Alice Mentioned"),
             Some(4),
+            None,
             NodeKind::File,
             &[],
             &[],
@@ -1675,6 +1779,7 @@ mod tests {
             "Contacts/100off.md",
             Some("100% Off"),
             Some(1),
+            None,
             NodeKind::Contact,
             &[],
             &[],
@@ -1685,6 +1790,7 @@ mod tests {
             "Contacts/Bob.md",
             Some("Bob"),
             Some(2),
+            None,
             NodeKind::Contact,
             &[],
             &[],
@@ -1764,6 +1870,7 @@ mod tests {
             "notes/2026-05-06.md",
             Some("Pasta night"),
             Some(1),
+            None,
             NodeKind::File,
             &[],
             &headings,
@@ -1821,6 +1928,7 @@ mod tests {
             "toc-heavy.md",
             None,
             Some(1),
+            None,
             NodeKind::File,
             &[],
             &hs,
@@ -1891,7 +1999,7 @@ mod tests {
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 4);
+        assert_eq!(v, 5);
     }
 
     #[test]
@@ -1956,7 +2064,7 @@ mod tests {
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 4);
+        assert_eq!(v, 5);
     }
 
     #[test]
@@ -2006,7 +2114,7 @@ mod tests {
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 4);
+        assert_eq!(v, 5);
         let cols: Vec<String> = {
             let mut stmt = conn.prepare("PRAGMA table_info(nodes)").unwrap();
             stmt.query_map([], |r| r.get::<_, String>(1))
@@ -2023,6 +2131,7 @@ mod tests {
             "Contacts/Legacy.md",
             Some("Legacy"),
             Some(2),
+            None,
             NodeKind::Contact,
             &[],
             &[],
@@ -2059,6 +2168,7 @@ mod tests {
                 rel,
                 title: None,
                 mtime: Some(1),
+                size: None,
                 node_kind: NodeKind::File,
                 edges,
                 headings: &[],
@@ -2090,6 +2200,7 @@ mod tests {
                 rel,
                 title: None,
                 mtime: Some(1),
+                size: None,
                 node_kind: NodeKind::File,
                 edges: &[],
                 headings: &[],
@@ -2121,6 +2232,7 @@ mod tests {
             "old.md",
             Some("Old"),
             Some(1),
+            None,
             NodeKind::File,
             &[],
             &[],
@@ -2133,6 +2245,7 @@ mod tests {
             rel: "new.md",
             title: None,
             mtime: Some(2),
+            size: None,
             node_kind: NodeKind::File,
             edges: &[],
             headings: &[],
