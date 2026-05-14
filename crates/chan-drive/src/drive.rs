@@ -805,7 +805,7 @@ impl Drive {
         is_dir: bool,
     ) -> Vec<String> {
         if !is_dir {
-            return if fs_ops::is_editable_text(rel) {
+            return if fs_ops::is_indexable_text(rel) {
                 vec![rel.to_string()]
             } else {
                 Vec::new()
@@ -820,7 +820,7 @@ impl Drive {
                 Ok(p) => p.to_string_lossy().replace('\\', "/"),
                 Err(_) => continue,
             };
-            if fs_ops::is_editable_text(&rel_path) {
+            if fs_ops::is_indexable_text(&rel_path) {
                 out.push(rel_path);
             }
         }
@@ -898,7 +898,7 @@ impl Drive {
         let abs = self.entry.path.join(&restored.rel_path);
         let is_dir = restored.is_dir;
         if !is_dir {
-            if !fs_ops::is_editable_text(&restored.rel_path) {
+            if !fs_ops::is_indexable_text(&restored.rel_path) {
                 return;
             }
             if let Err(e) = self.index_file(&restored.rel_path) {
@@ -914,7 +914,7 @@ impl Drive {
                 Ok(p) => p.to_string_lossy().replace('\\', "/"),
                 Err(_) => continue,
             };
-            if !fs_ops::is_editable_text(&rel_path) {
+            if !fs_ops::is_indexable_text(&rel_path) {
                 continue;
             }
             if let Err(e) = self.index_file(&rel_path) {
@@ -1214,9 +1214,10 @@ impl Drive {
         sources_sorted.sort();
         let total_sources = sources_sorted.len() as u64;
         for (idx, src_current) in sources_sorted.into_iter().enumerate() {
-            // Only rewrite editable-text files: images and binaries
-            // can be graph nodes but never markdown sources.
-            if !fs_ops::is_editable_text(&src_current) {
+            // Only rewrite markdown-class files (.md / .txt): images,
+            // binaries, and arbitrary-text source files can be graph
+            // nodes but never carry rewriteable markdown links.
+            if !fs_ops::is_indexable_text(&src_current) {
                 continue;
             }
             progress.on_progress(ProgressEvent {
@@ -1536,7 +1537,7 @@ impl Drive {
         let entries = fs_ops::list_tree_filtered(self.root(), &self.walk_filter)?;
         let total: u64 = entries
             .iter()
-            .filter(|e| !e.is_dir && fs_ops::is_editable_text(&e.path))
+            .filter(|e| !e.is_dir && fs_ops::is_indexable_text(&e.path))
             .count() as u64;
 
         // Resume-or-fresh decision. A non-empty cursor means a
@@ -1554,7 +1555,7 @@ impl Drive {
             );
             let live: std::collections::HashSet<String> = entries
                 .iter()
-                .filter(|e| !e.is_dir && fs_ops::is_editable_text(&e.path))
+                .filter(|e| !e.is_dir && fs_ops::is_indexable_text(&e.path))
                 .map(|e| e.path.clone())
                 .collect();
             let purged = graph.sanitize_staging(&live)?;
@@ -1589,7 +1590,7 @@ impl Drive {
                     return Err(ChanError::Cancelled);
                 }
             }
-            if e.is_dir || !fs_ops::is_editable_text(&e.path) {
+            if e.is_dir || !fs_ops::is_indexable_text(&e.path) {
                 continue;
             }
             // Resume skip: the walk is sorted, so a strictly-
@@ -1618,7 +1619,7 @@ impl Drive {
                 rel: e.path.as_str(),
                 title: title.as_deref(),
                 mtime: e.mtime,
-                size: Some(e.size as i64),
+                size: Some(size_to_i64(e.size)),
                 node_kind,
                 edges: &edges,
                 headings: &headings,
@@ -1661,7 +1662,7 @@ impl Drive {
     /// `needs_replay_writes()` so the consumer can call
     /// `replay_pending_writes()` to converge.
     pub fn index_file(&self, rel: &str) -> Result<()> {
-        if !fs_ops::is_editable_text(rel) {
+        if !fs_ops::is_indexable_text(rel) {
             return Ok(());
         }
         let _serial = self.write_serial.lock().unwrap();
@@ -1677,7 +1678,7 @@ impl Drive {
         let content = self.read_text(rel)?;
         let stat = self.stat(rel).ok();
         let mtime = stat.as_ref().and_then(|s| s.mtime);
-        let size = stat.as_ref().map(|s| s.size as i64);
+        let size = stat.as_ref().map(|s| size_to_i64(s.size));
         let (title, node_kind, headings, edges, emails) = parse_for_graph(rel, &content);
         // Graph first, then search index. The graph is what the
         // editor consults for backlinks and link-autocomplete on
@@ -1903,10 +1904,19 @@ impl Drive {
     ///     drains the journal, a reconcile picks up any files
     ///     touched outside the journaled set.
     ///
-    /// Diff policy (mtime-only for now):
+    /// Diff policy compares the `(mtime, size)` tuple stamped on the
+    /// graph row against the live `stat()` snapshot:
     ///   - File on disk but not in graph -> `index_file`.
-    ///   - File on disk + in graph with different mtime -> `index_file`.
-    ///   - File on disk + in graph with same mtime -> skip.
+    ///   - File on disk + graph row with different mtime -> `index_file`.
+    ///   - File on disk + graph row with same mtime but a different
+    ///     non-null size -> `index_file`. Catches same-mtime rewrites
+    ///     that mtime alone misses (rapid back-to-back saves on
+    ///     coarse-mtime filesystems, or tools that explicitly preserve
+    ///     mtime across content edits).
+    ///   - Legacy rows (size = NULL, predating the v5 migration) fall
+    ///     back to mtime-only; the first `index_file` after upgrade
+    ///     backfills the size column.
+    ///   - File on disk + matching `(mtime, size)` tuple -> skip.
     ///   - File in graph but missing from disk -> `forget_file`.
     ///
     /// Each emitted op runs through the journal-bracketed public
@@ -1914,10 +1924,11 @@ impl Drive {
     /// pending-writes journal behind. Reconcile is not transactional
     /// across the file set; partial progress is fine.
     ///
-    /// Same-mtime false negatives: a tool that rewrites a file
-    /// without changing mtime (rare) will not be caught. The next
-    /// save or full reindex covers it. Adding a size column to the
-    /// graph schema would tighten this; deferred until we need it.
+    /// Residual false-negative window: a rewrite that leaves both
+    /// mtime AND size unchanged still slips by. The next save or full
+    /// reindex covers it; closing this gap would require content
+    /// hashing, which is far more expensive than the (mtime, size)
+    /// stat check.
     pub fn reconcile(&self) -> Result<ReconcileReport> {
         // Snapshot the graph's view of the world: per-file
         // (mtime, size) tuples. Graph stores mtime as Unix
@@ -1946,7 +1957,7 @@ impl Drive {
                 Ok(p) => p.to_string_lossy().replace('\\', "/"),
                 Err(_) => continue,
             };
-            if !fs_ops::is_editable_text(&rel) {
+            if !fs_ops::is_indexable_text(&rel) {
                 continue;
             }
             let meta = entry.metadata().ok();
@@ -1955,7 +1966,7 @@ impl Drive {
                 .and_then(|m| m.modified().ok())
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs() as i64);
-            let size = meta.as_ref().map(|m| m.len() as i64);
+            let size = meta.as_ref().map(|m| size_to_i64(m.len()));
             disk_files.insert(rel, (mtime, size));
         }
 
@@ -2200,6 +2211,15 @@ fn check_size(kind: &'static str, size: usize, limit: u64, prev_size: Option<u64
         });
     }
     Ok(())
+}
+
+/// `u64` byte counts (from `Metadata::len()` / `TreeEntry.size`)
+/// projected into the `i64` column the graph uses for `size`.
+/// Saturates instead of wrapping; a real-world file will never come
+/// close to `i64::MAX` (9.22 EB), and a saturating value is still
+/// usable for the reconcile `(mtime, size)` equality check.
+fn size_to_i64(size: u64) -> i64 {
+    i64::try_from(size).unwrap_or(i64::MAX)
 }
 
 /// Map a `std::io::Error` returned by a cap-std op into our error
@@ -3555,30 +3575,34 @@ mod tests {
         f.set_modified(original_modified).unwrap();
         drop(f);
 
-        // Confirm the mtime restore landed; if the OS refused it
-        // (uncommon) we skip the assertion. The mtime equality is
-        // load-bearing: without it, this test would pass even with
-        // a mtime-only reconcile.
+        // The mtime restore is load-bearing: without it, this test
+        // would pass even with a mtime-only reconcile. Assert it
+        // landed (futimens on Unix / SetFileTime on Windows round-
+        // trip exactly on every filesystem we target) instead of
+        // silently no-opping if it didn't.
         let stamped = fs::metadata(&file_path).unwrap().modified().unwrap();
-        if stamped == original_modified {
-            let report = drive.reconcile().unwrap();
-            assert!(
-                report.upserted.iter().any(|p| p == "twin.md"),
-                "size check should detect content rewrite with restored mtime; got {:?}",
-                report,
-            );
-            let opts = crate::drive::SearchOpts {
-                mode: crate::SearchMode::Bm25,
-                limit: 10,
-                scope: None,
-            };
-            assert!(drive
-                .search("replaced-token", &opts)
-                .unwrap()
-                .hits
-                .iter()
-                .any(|h| h.path == "twin.md"));
-        }
+        assert_eq!(
+            stamped, original_modified,
+            "File::set_modified must round-trip exactly; without it the size \
+             column is unobservable via this test",
+        );
+        let report = drive.reconcile().unwrap();
+        assert!(
+            report.upserted.iter().any(|p| p == "twin.md"),
+            "size check should detect content rewrite with restored mtime; got {:?}",
+            report,
+        );
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert!(drive
+            .search("replaced-token", &opts)
+            .unwrap()
+            .hits
+            .iter()
+            .any(|h| h.path == "twin.md"));
     }
 
     #[test]

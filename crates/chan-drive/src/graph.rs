@@ -303,6 +303,28 @@ impl GraphView {
         Ok(())
     }
 
+    /// True iff `table` has a column named `column`. Used by the
+    /// idempotent guard in v3 / v5 migrations: a crash between
+    /// `ALTER TABLE ADD COLUMN` and the matching `PRAGMA
+    /// user_version` bump leaves user_version at the prior value
+    /// with the column already present; on re-open this returns
+    /// `true` and the ALTER is skipped.
+    fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+        // `PRAGMA table_info(<table>)` cannot take a bound parameter
+        // (PRAGMA syntax limitation); we format the table name in.
+        // Callers pass static strings only.
+        let sql = format!("PRAGMA table_info({table})");
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn migrate(conn: &Connection) -> Result<()> {
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if v == 0 {
@@ -410,16 +432,7 @@ impl GraphView {
             // NULL, and `Drive::contacts_need_email_backfill` plus
             // the chan-server indexer's initial-build trigger drive
             // a one-shot full reindex on the next boot.
-            let cols: Vec<String> = {
-                let mut stmt = conn.prepare("PRAGMA table_info(nodes)")?;
-                let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
-                let mut out = Vec::new();
-                for row in rows {
-                    out.push(row?);
-                }
-                out
-            };
-            if !cols.iter().any(|c| c == "emails") {
+            if !Self::column_exists(conn, "nodes", "emails")? {
                 conn.execute_batch("ALTER TABLE nodes ADD COLUMN emails TEXT;")?;
             }
             conn.execute_batch("PRAGMA user_version = 3;")?;
@@ -483,28 +496,10 @@ impl GraphView {
             // walk the filesystem; reconcile treats `None` size as
             // "skip the size check" and a single subsequent
             // index_file call backfills the row.
-            let cols: Vec<String> = {
-                let mut stmt = conn.prepare("PRAGMA table_info(nodes)")?;
-                let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
-                let mut out = Vec::new();
-                for row in rows {
-                    out.push(row?);
-                }
-                out
-            };
-            if !cols.iter().any(|c| c == "size") {
+            if !Self::column_exists(conn, "nodes", "size")? {
                 conn.execute_batch("ALTER TABLE nodes ADD COLUMN size INTEGER;")?;
             }
-            let st_cols: Vec<String> = {
-                let mut stmt = conn.prepare("PRAGMA table_info(staging_nodes)")?;
-                let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
-                let mut out = Vec::new();
-                for row in rows {
-                    out.push(row?);
-                }
-                out
-            };
-            if !st_cols.iter().any(|c| c == "size") {
+            if !Self::column_exists(conn, "staging_nodes", "size")? {
                 conn.execute_batch("ALTER TABLE staging_nodes ADD COLUMN size INTEGER;")?;
             }
             conn.execute_batch("PRAGMA user_version = 5;")?;
@@ -991,27 +986,6 @@ impl GraphView {
             "SELECT rel_path FROM nodes WHERE kind IN ('file', 'contact') ORDER BY rel_path",
         )?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
-        }
-        Ok(out)
-    }
-
-    /// All files known to the graph with their last-seen mtime (Unix
-    /// seconds, `None` when the indexer couldn't read the file's
-    /// mtime). Sorted by path. Kept for callers that don't care
-    /// about size; `files_with_stat` is the tighter accessor used
-    /// by `Drive::reconcile`.
-    pub fn files_with_mtime(&self) -> Result<Vec<(String, Option<i64>)>> {
-        tracing::debug!("graph::files_with_mtime");
-        let conn = self.reader()?;
-        let mut stmt = conn.prepare_cached(
-            "SELECT rel_path, mtime FROM nodes WHERE kind IN ('file', 'contact') ORDER BY rel_path",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
-        })?;
         let mut out = Vec::new();
         for row in rows {
             out.push(row?);
