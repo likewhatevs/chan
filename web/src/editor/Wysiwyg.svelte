@@ -904,14 +904,31 @@
   /* In-edit preview: image stays visible AS A BLOCK above the
      editable source line. Fade slightly so the user reads it as a
      preview, not a final commit. Pointer events stay enabled so the
-     hover Edit / View overlay still works on the preview. */
+     hover Edit / View overlay still works on the preview. Cap the
+     thumbnail to ~160px so a wide image (`#w=250` / `#w=346`)
+     doesn't dominate the canvas — the preview is a reference, not
+     the rendered version; the user is typing the URL right below
+     it. The !important beats the inline `width: <N>px` the widget
+     sets from the src fragment. */
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-editing="true"]) {
     display: block;
     opacity: 0.55;
     margin: 0.25em 0;
   }
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-editing="true"] img) {
-    max-width: 100%;
+    max-width: 160px !important;
+    max-height: 160px;
+    width: auto !important;
+    height: auto;
+    object-fit: contain;
+  }
+  /* Hide the resize handle on the edit-mode thumbnail — the
+     thumbnail isn't the rendered version, so committing a new
+     width by dragging here would set `#w=N` to the THUMBNAIL's
+     dimensions, not the user's intent. The handle reappears once
+     editing exits and the widget snaps back to the inline view. */
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-editing="true"] .cm-md-image-handle) {
+    display: none;
   }
   /* Line after a floated inline image: clear the float so following
      lines drop BELOW the image instead of continuing to wrap. */
