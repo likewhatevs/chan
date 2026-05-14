@@ -282,16 +282,18 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
     const pathArg = opts.currentPath
       ? relativizePath(path, opts.currentPath)
       : path;
-    // Wrap mode is a fresh `![](path)` insert: default to 250px
-    // wide via the `#w=N` fragment so a newly-dropped image
-    // isn't full-bleed (corner handle still allows resize). Raw
-    // mode is a URL-only edit of an existing image; leave the
-    // user's width fragment alone — they may have set it
-    // intentionally on a prior pass.
-    const insert =
-      opts.templateMode === "raw"
-        ? pathArg
-        : `![](${pathArg}#w=${DEFAULT_INSERT_WIDTH_PX})`;
+    // Default to 250px wide whenever the picked / uploaded path
+    // doesn't already carry a `#w=N` fragment of its own. Covers
+    // wrap mode (fresh `![](path)` insert from `![query`), raw
+    // mode (URL-slot replacement, including the broken-image
+    // "click badge → upload → replace" flow), and catalog picks.
+    // If the user re-uses a path they had previously written with
+    // a specific width, that width round-trips; otherwise the
+    // small default keeps new inserts from going full-bleed.
+    const sized = /#w=\d+/.test(pathArg)
+      ? pathArg
+      : `${pathArg}#w=${DEFAULT_INSERT_WIDTH_PX}`;
+    const insert = opts.templateMode === "raw" ? sized : `![](${sized})`;
     opts.view.dispatch({
       changes: { from: opts.triggerStart, to: triggerEnd, insert },
       selection: { anchor: opts.triggerStart + insert.length },
