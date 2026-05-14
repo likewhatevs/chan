@@ -2508,6 +2508,258 @@ mod tests {
         assert!(!drive2.needs_rebuild());
     }
 
+    /// Snapshot of the queryable end state of a drive. Two drives
+    /// (or two states of the same drive) are "converged" when these
+    /// fields match: same graph node set, same search results for a
+    /// known token. Used by the crash-recovery tests below as a
+    /// convergence oracle.
+    #[derive(Debug, PartialEq, Eq)]
+    struct RecoveryState {
+        graph_files: Vec<String>,
+        hit_paths: Vec<String>,
+    }
+
+    fn capture_recovery_state(drive: &Drive, probe_token: &str) -> RecoveryState {
+        let mut graph_files = drive.graph().unwrap().files().unwrap();
+        graph_files.sort();
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 100,
+            scope: None,
+        };
+        let mut hit_paths: Vec<String> = drive
+            .search(probe_token, &opts)
+            .unwrap()
+            .hits
+            .into_iter()
+            .map(|h| h.path)
+            .collect();
+        hit_paths.sort();
+        hit_paths.dedup();
+        RecoveryState {
+            graph_files,
+            hit_paths,
+        }
+    }
+
+    /// Stand up a drive with a fixed content set so the
+    /// crash-recovery tests can compare "what a clean reindex
+    /// produces" against "what a post-crash reindex produces."
+    fn populate_recoverable_drive(lib: &Library, root: &std::path::Path) -> &'static str {
+        let drive = lib.open_drive(root).unwrap();
+        drive
+            .write_text("alpha.md", "# alpha\n[[beta]] crash-probe-token in alpha\n")
+            .unwrap();
+        drive
+            .write_text("beta.md", "# beta\nback to [[alpha]]\n")
+            .unwrap();
+        drive
+            .write_text("notes/sub.md", "# sub\ncrash-probe-token here too\n")
+            .unwrap();
+        "crash-probe-token"
+    }
+
+    #[test]
+    fn reindex_converges_after_marker_only_crash() {
+        // Simulate the simplest crash shape: previous run finished
+        // building the index but died before clearing the marker.
+        // The recovery action ("reindex once more") must produce the
+        // same end state as the original clean build. If it does
+        // not, recovery is destructive (loses data) or non-idempotent
+        // (visible churn between two equivalent states).
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let probe = populate_recoverable_drive(&lib, drive_dir.path());
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        drive.reindex(None).unwrap();
+        let baseline = capture_recovery_state(&drive, probe);
+        drop(drive);
+
+        // Plant the marker as if the previous reindex had not
+        // managed to clear it. Don't touch any other state; we want
+        // to isolate the "marker present, store intact" recovery.
+        let paths = lib.drive_paths_for(drive_dir.path()).unwrap();
+        let marker = paths.graph_dir.join(REBUILD_MARKER);
+        std::fs::write(&marker, b"started_at = simulated\n").unwrap();
+
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        assert!(drive.needs_rebuild(), "marker must promote to flag");
+        drive.reindex(None).unwrap();
+        assert!(!drive.needs_rebuild(), "reindex must clear the flag");
+        let recovered = capture_recovery_state(&drive, probe);
+        assert_eq!(
+            recovered, baseline,
+            "post-crash reindex must converge to the clean-build state",
+        );
+    }
+
+    #[test]
+    fn reindex_converges_after_partial_index_corruption() {
+        // Harder crash shape: previous run died between the graph
+        // commit and the BM25 commit. We simulate by tearing down
+        // the on-disk BM25 segments and re-stamping the marker,
+        // leaving the graph DB intact. Reopening must surface the
+        // marker, and a follow-up reindex must rebuild BM25 to the
+        // same shape as a clean build.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let probe = populate_recoverable_drive(&lib, drive_dir.path());
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        drive.reindex(None).unwrap();
+        let baseline = capture_recovery_state(&drive, probe);
+        drop(drive);
+
+        // Simulate the crash: nuke the on-disk BM25 dir + plant
+        // the marker. The graph DB stays (graph rebuild ran first
+        // and committed), index config stays, vector store stays.
+        let paths = lib.drive_paths_for(drive_dir.path()).unwrap();
+        let bm25_dir = paths.index.join("bm25");
+        if bm25_dir.exists() {
+            std::fs::remove_dir_all(&bm25_dir).unwrap();
+        }
+        std::fs::create_dir_all(&paths.graph_dir).unwrap();
+        std::fs::write(
+            paths.graph_dir.join(REBUILD_MARKER),
+            b"started_at = simulated\n",
+        )
+        .unwrap();
+
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        assert!(drive.needs_rebuild());
+        // Before the recovery reindex, search should return zero
+        // hits (BM25 store is empty). Confirm that the test setup
+        // actually broke the index, otherwise the recovery
+        // assertion below would pass for the wrong reason.
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 100,
+            scope: None,
+        };
+        assert!(
+            drive.search(probe, &opts).unwrap().hits.is_empty(),
+            "test precondition: corrupted BM25 should produce zero hits",
+        );
+
+        drive.reindex(None).unwrap();
+        let recovered = capture_recovery_state(&drive, probe);
+        assert_eq!(
+            recovered, baseline,
+            "post-crash reindex must rebuild BM25 to the same shape",
+        );
+        assert!(!drive.needs_rebuild());
+    }
+
+    #[test]
+    fn reset_drive_completes_after_partial_wipe() {
+        // Simulate "reset_drive crashed after wiping some subsystem
+        // dirs but before getting to others." Calling reset_drive
+        // again must complete the wipe without erroring on the
+        // already-missing dirs. Resumability of destructive ops is
+        // load-bearing: a UI that retries on transient failure
+        // would otherwise refuse to ever cleanly reset.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        {
+            let drive = lib.open_drive(drive_dir.path()).unwrap();
+            drive.write_text("a.md", "alpha\n").unwrap();
+            drive.reindex(None).unwrap();
+            drive.put_session("win-1", b"layout").unwrap();
+        }
+
+        let paths = lib.drive_paths_for(drive_dir.path()).unwrap();
+        assert!(paths.index.exists());
+        assert!(paths.graph_db.parent().unwrap().exists());
+        assert!(paths.sessions.exists());
+
+        // Simulate the crash: index + sessions removed, graph still
+        // there. reset_drive(State) must mop up the rest without
+        // tripping over the missing dirs.
+        std::fs::remove_dir_all(&paths.index).unwrap();
+        std::fs::remove_dir_all(&paths.sessions).unwrap();
+        assert!(paths.graph_db.parent().unwrap().exists());
+
+        let report = lib
+            .reset_drive(drive_dir.path(), crate::ResetMode::State)
+            .unwrap();
+        // removed_entries reflects what THIS reset actually wiped;
+        // we don't pin a number, only that the operation completed
+        // and the post-condition is a clean state.
+        let _ = report;
+        assert!(!paths.index.exists());
+        assert!(!paths.graph_db.parent().unwrap().exists());
+        assert!(!paths.sessions.exists());
+
+        // Registry row survives a State-mode reset (Everything would
+        // drop it). The drive is reopenable and reindexes from
+        // scratch with no leaked state.
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        drive.reindex(None).unwrap();
+        assert!(!drive.needs_rebuild());
+    }
+
+    #[test]
+    fn reindex_consumes_pending_rename_log_after_reopen() {
+        // Cross-process rename chain: a rename produces a durable
+        // log entry; if the process dies before the next reindex,
+        // the next open hydrates that log and the next reindex must
+        // converge the graph to the post-rename tree. End state must
+        // match what a clean build of the renamed tree would produce.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let probe = "rename-recovery-token";
+        {
+            let drive = lib.open_drive(drive_dir.path()).unwrap();
+            drive
+                .write_text("orig.md", &format!("# orig\n{probe} body\n"))
+                .unwrap();
+            drive.reindex(None).unwrap();
+            drive
+                .rename_with_link_rewrite("orig.md", "renamed.md")
+                .unwrap();
+        }
+        // After drop, the rename_log sidecar must still be present.
+        let paths = lib.drive_paths_for(drive_dir.path()).unwrap();
+        let log_path = paths.graph_dir.join(RENAME_LOG_FILE);
+        assert!(
+            log_path.exists(),
+            "rename_log must persist across drop so the next process can replay it",
+        );
+
+        // Reopen + reindex; the recovered state must show the
+        // renamed file and only the renamed file, with no trace of
+        // the original.
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        drive.reindex(None).unwrap();
+        let recovered = capture_recovery_state(&drive, probe);
+        assert!(
+            recovered.graph_files.iter().any(|f| f == "renamed.md"),
+            "graph must reflect the renamed path: {:?}",
+            recovered.graph_files,
+        );
+        assert!(
+            !recovered.graph_files.iter().any(|f| f == "orig.md"),
+            "graph must not retain the pre-rename path: {:?}",
+            recovered.graph_files,
+        );
+        assert_eq!(
+            recovered.hit_paths,
+            vec!["renamed.md".to_string()],
+            "search must hit only the renamed file",
+        );
+        assert!(
+            !log_path.exists(),
+            "rename_log must be cleared after a successful reindex",
+        );
+    }
+
     #[test]
     fn write_text_rejects_non_text_extensions() {
         let (_cfg, _root, drive) = fixture();

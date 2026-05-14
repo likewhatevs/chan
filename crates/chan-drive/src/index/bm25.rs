@@ -251,6 +251,36 @@ impl Bm25Index {
         self.reader.searcher().num_docs()
     }
 
+    /// Snapshot of every distinct `path` value currently committed to
+    /// the index, sorted ascending. Walks each segment's term
+    /// dictionary on the path field; since `path` is a STRING field
+    /// (single-token, exact-match) each term is one full rel_path,
+    /// so the result is the set of files BM25 currently knows about
+    /// without scanning every document.
+    ///
+    /// Used by `Index::build_all` to compute the set of paths that
+    /// were indexed by a prior build but are no longer on disk, so
+    /// the stale docs can be deleted in the same commit as the new
+    /// build. Without this cleanup, renaming or deleting a file
+    /// between two reindex runs leaks the old `path` field into
+    /// BM25 forever, and the user sees ghost hits pointing at
+    /// files that no longer exist.
+    pub fn known_paths(&self) -> Result<Vec<String>, Bm25Error> {
+        use std::collections::BTreeSet;
+        let searcher = self.reader.searcher();
+        let mut paths: BTreeSet<String> = BTreeSet::new();
+        for segment in searcher.segment_readers() {
+            let inv = segment.inverted_index(self.fields.path)?;
+            let mut stream = inv.terms().stream()?;
+            while let Some((term_bytes, _)) = stream.next() {
+                if let Ok(s) = std::str::from_utf8(term_bytes) {
+                    paths.insert(s.to_string());
+                }
+            }
+        }
+        Ok(paths.into_iter().collect())
+    }
+
     /// If `q` is one or more bare whitespace-separated tokens (no
     /// tantivy operators), construct a prefix-match query that
     /// finds documents where every token appears as a prefix of

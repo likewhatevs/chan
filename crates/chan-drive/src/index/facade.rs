@@ -511,16 +511,41 @@ impl Index {
         // are non-fatal: an orphan shard wastes disk and may surface
         // in semantic search as a hit pointing at a missing file,
         // but the next reindex will retry the cleanup.
+        let visited: std::collections::HashSet<&str> = files.iter().map(String::as_str).collect();
         #[cfg(feature = "embeddings")]
         if do_vectors {
-            let visited: std::collections::HashSet<&str> =
-                files.iter().map(String::as_str).collect();
             for rel in self.vectors.known_paths() {
                 if !visited.contains(rel.as_str()) {
                     if let Err(e) = self.vectors.delete_file(&rel) {
                         tracing::warn!(rel = %rel, ?e, "vector shard cleanup failed");
                     }
                 }
+            }
+        }
+        // BM25 symmetric cleanup: any path the prior commit indexed
+        // that's not in the current `files` list (deleted, renamed,
+        // moved into a now-filtered subtree) leaks its document
+        // forever without this step. We batch the deletes here and
+        // let the single `commit()` below pack them with the new
+        // writes so the index never goes through an empty state.
+        match self.bm25.known_paths() {
+            Ok(prior) => {
+                for rel in prior {
+                    if !visited.contains(rel.as_str()) {
+                        if let Err(e) = self.bm25.delete_file(&rel) {
+                            tracing::warn!(rel = %rel, ?e, "bm25 stale-doc cleanup failed");
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                // Enumeration failure is non-fatal: the build still
+                // produces correct entries for live files, only the
+                // orphan cleanup is skipped this pass.
+                tracing::warn!(
+                    ?e,
+                    "bm25 known_paths enumeration failed; skipping stale cleanup"
+                );
             }
         }
         self.bm25.commit()?;
