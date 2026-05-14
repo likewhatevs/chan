@@ -518,9 +518,20 @@
     // could switch scopes mid-defer; the conv we want to clear is
     // the one they just opened).
     const ctxSnap = currentContext;
-    const convForUnread = conversationFor(ctxSnap);
+    // Read the bucket directly without going through `conversationFor`
+    // (which seeds an empty stub on miss). A premature seed would
+    // shadow `loadFileConversation`'s persisted-history fetch — it
+    // bails on `byFile[path]` being non-null — and the user would
+    // see an empty chat panel even though the JSON blob on disk
+    // carries a full thread.
+    const convForUnread: AssistantConversation | null =
+      ctxSnap.kind === "file"
+        ? (assistantConversations.byFile[ctxSnap.path] ?? null)
+        : ctxSnap.kind === "group"
+          ? (assistantConversations.byGroup[ctxSnap.key] ?? null)
+          : assistantConversations.drive;
     let needSave = false;
-    if (convForUnread.hasUnread) {
+    if (convForUnread?.hasUnread) {
       convForUnread.hasUnread = false;
       needSave = true;
     }
@@ -529,7 +540,7 @@
     // setTimeout(0) buys one render pass before we wipe the
     // bookmark. Without this defer, the effect runs synchronously
     // with the open and the divider never gets a chance to show.
-    if (convForUnread.lastSeenTurnIndex !== undefined) {
+    if (convForUnread && convForUnread.lastSeenTurnIndex !== undefined) {
       setTimeout(() => {
         convForUnread.lastSeenTurnIndex = undefined;
         scheduleSave(ctxSnap);
@@ -1210,7 +1221,7 @@
     // second claude-cli round-trip thinking nothing happened.
     resumingIds = new Set([...resumingIds, edit.toolCallId]);
     ui.status =
-      outcome.kind === "discard" ? "discarding edit…" : "applying edit…";
+      outcome.kind === "discard" ? "dismissing edit…" : "accepting edit…";
     try {
       const resp = await api.llmResume({
         call_id: edit.toolCallId,
@@ -1258,12 +1269,12 @@
         conv.turns.push({ kind: "edit", edit: nextEdit, created_at: Date.now() });
       }
       scheduleSave(ctx);
-      ui.status = outcome.kind === "discard" ? "edit discarded" : "edit applied";
+      ui.status = outcome.kind === "discard" ? "edit dismissed" : "edit accepted";
       // Brief acknowledgment that auto-clears.
       setTimeout(() => {
         if (
-          ui.status === "edit applied" ||
-          ui.status === "edit discarded"
+          ui.status === "edit accepted" ||
+          ui.status === "edit dismissed"
         ) {
           ui.status = null;
         }
@@ -1765,14 +1776,14 @@
             <button
               type="button"
               class="primary"
-              title="apply every pending proposal in order"
+              title="accept every pending proposal in order"
               onclick={() => void applyAll()}
-            >Apply all</button>
+            >Accept all</button>
             <button
               type="button"
               title="dismiss every pending proposal"
               onclick={discardAll}
-            >Discard all</button>
+            >Dismiss all</button>
           </div>
         {/if}
         {#each turns as turn, i (i)}
@@ -2017,15 +2028,15 @@
               </details>
               {#if turn.edit.status === "pending"}
                 {@const resuming = resumingIds.has(turn.edit.toolCallId)}
+                <!-- Order: Accept · Review · Copy · Save · Dismiss.
+                     Accept first (primary), Review (side-by-side
+                     diff vs. current content) next so the user can
+                     inspect before committing, then non-destructive
+                     verbs (Copy, Save) so the destructive Dismiss
+                     sits at the far end where mis-clicks cost least. -->
                 <div class="actions">
-                  <button type="button" class="primary" disabled={resuming} onclick={(e) => { e.stopPropagation(); void applyEdit(turn.edit); }}>{resuming ? "Applying…" : "Apply"}</button>
-                  <!-- Side-by-side diff against the file's current
-                       content (open-tab buffer or disk). Opens a
-                       fullscreen DiffOverlay that carries its own
-                       Apply / Discard / Save-as so the user can
-                       act from inside the diff. -->
-                  <button type="button" class="diff" disabled={resuming} title="show side-by-side diff against current content" onclick={(e) => { e.stopPropagation(); openDiffOverlay(turn.edit); }}>Diff</button>
-                  <button type="button" class="save-as" disabled={resuming} title="save proposal to a new file" onclick={(e) => { e.stopPropagation(); void saveEditAsNew(turn.edit); }}>Save as…</button>
+                  <button type="button" class="primary" disabled={resuming} onclick={(e) => { e.stopPropagation(); void applyEdit(turn.edit); }}>{resuming ? "Accepting…" : "Accept"}</button>
+                  <button type="button" class="diff" disabled={resuming} title="show side-by-side diff against current content" onclick={(e) => { e.stopPropagation(); openDiffOverlay(turn.edit); }}>Review</button>
                   <button
                     type="button"
                     class="copy"
@@ -2040,10 +2051,11 @@
                       <Copy size={12} strokeWidth={1.75} aria-hidden="true" /><span>Copy</span>
                     {/if}
                   </button>
-                  <button type="button" disabled={resuming} onclick={(e) => { e.stopPropagation(); dismissEdit(turn.edit, "manual"); }}>{resuming ? "…" : "Discard"}</button>
+                  <button type="button" class="save-as" disabled={resuming} title="save proposal to a new file" onclick={(e) => { e.stopPropagation(); void saveEditAsNew(turn.edit); }}>Save</button>
+                  <button type="button" disabled={resuming} onclick={(e) => { e.stopPropagation(); dismissEdit(turn.edit, "manual"); }}>{resuming ? "…" : "Dismiss"}</button>
                 </div>
               {:else if turn.edit.status === "applied"}
-                <div class="status-tag ok">applied</div>
+                <div class="status-tag ok">accepted</div>
               {:else}
                 <div class="status-tag muted">dismissed</div>
               {/if}
@@ -2904,15 +2916,16 @@
     border-color: var(--link);
   }
   /* Copy button keeps icon + label inline so the action row reads
-     left-to-right cleanly: Apply | Copy | Discard. The icon SVG
-     is rendered via {@html} so Svelte's scoped CSS can't reach it
-     directly; vertical alignment is fine via parent flex. */
+     left-to-right cleanly: Accept | Review | Copy | Save | Dismiss.
+     The icon SVG is rendered via {@html} so Svelte's scoped CSS
+     can't reach it directly; vertical alignment is fine via parent
+     flex. */
   .edit-card .actions button.copy {
     display: inline-flex;
     align-items: center;
     gap: 5px;
   }
-  /* "Save as…" reuses the neutral chrome of Discard; no extra
+  /* "Save" reuses the neutral chrome of Dismiss; no extra
      rule needed beyond the `.edit-card .actions button` base. */
 
   /* "New since you stepped away" divider: a thin line + tiny

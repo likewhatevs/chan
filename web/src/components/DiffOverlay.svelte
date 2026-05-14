@@ -179,7 +179,7 @@
       {:else if diffOverlay.edit}
         <footer class="actions status-only">
           <span class="status-tag" class:ok={diffOverlay.edit.status === "applied"}>
-            {diffOverlay.edit.status}
+            {diffOverlay.edit.status === "applied" ? "accepted" : diffOverlay.edit.status}
           </span>
         </footer>
       {/if}

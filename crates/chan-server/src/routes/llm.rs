@@ -825,10 +825,18 @@ pub async fn api_llm_resume(
     let session_id = body.session_id.clone().unwrap_or_else(random_session_id);
 
     // Mirror the MCP wiring /complete uses so the agentic CLIs stay
-    // sandboxed. The pause -> resume flow today is only meaningful
-    // for non-CLI backends (claude-cli / gemini-cli auto-execute
-    // write_file natively without ever returning a chan-llm Pending),
-    // but matching /complete's setup keeps the route uniform.
+    // sandboxed. The pause/resume contract differs by backend:
+    //
+    //   - Direct backends (Anthropic / Gemini / Ollama): chan-llm
+    //     paused with a Pending placeholder; apply_resume swaps it,
+    //     then session.send below continues the loop so the model
+    //     reacts to the resolved tool_result.
+    //   - CLI backends (ClaudeCli / GeminiCli, v2 MCP): the CLI has
+    //     already exited (it got the deferred error back from the
+    //     MCP server and emitted a closing assistant turn). There's
+    //     no in-process session to continue; Apply / Discard is a
+    //     pure host-side operation that mutates the placeholder.
+    //     We skip the continuation explicitly below.
     let socket = state.mcp_socket_path.as_deref();
     match active {
         BackendKind::ClaudeCli => {
@@ -892,12 +900,38 @@ pub async fn api_llm_resume(
         Err(e) => return err(StatusCode::BAD_REQUEST, e),
     };
 
+    let messages_for_response: Vec<ApiMessageOut> = resumed.iter().map(message_to_out).collect();
+
+    // CLI backends don't pause-and-resume: the agent already ran to
+    // completion in /complete (claude-cli / gemini-cli got the
+    // deferred tool error back from the MCP server, generated a
+    // closing assistant turn, and exited). The host-side Apply /
+    // Discard mutates the placeholder in-place; there's no
+    // chan-llm session to continue. Re-spawning the CLI here
+    // re-feeds it the original user prompt as labelled prose,
+    // which it dutifully re-answers — usually by proposing the
+    // exact same write again. Skip the continuation for these
+    // backends and return the swapped history as-is. Direct
+    // backends (Anthropic / Gemini / Ollama) still need the
+    // continuation: chan-llm orchestrates their tool loop and the
+    // model expects to react to the tool_result it just received.
+    let skip_continuation = matches!(active, BackendKind::ClaudeCli | BackendKind::GeminiCli);
+    if skip_continuation {
+        return Json(LlmResumeResponse {
+            content: String::new(),
+            tool_calls: Vec::new(),
+            stop_reason: stop_reason_tag(chan_llm::StopReason::EndOfTurn),
+            model,
+            messages: messages_for_response,
+        })
+        .into_response();
+    }
+
     let collect = Arc::new(CollectListener::new(LlmBroadcastListener {
         tx: state.events_tx.clone(),
         session_id,
     }));
     let listener: Arc<dyn SessionListener> = collect.clone();
-    let messages_for_response: Vec<ApiMessageOut> = resumed.iter().map(message_to_out).collect();
     session.send(resumed, listener);
     collect.done.notified().await;
 
