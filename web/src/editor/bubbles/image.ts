@@ -219,7 +219,15 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
       src = hits[selectedIndex] ?? null;
     }
     if (!src) return;
-    const url = resolveImageSrc(src, opts.currentPath);
+    // Raw mode passes the live doc URL through here — that text is
+    // authored source-relative, so resolve against currentPath.
+    // Catalog hits are already drive-rooted, so pass `null` to skip
+    // the sourceDir prepend that would turn "attachments/smile.png"
+    // for a file at "Contacts/Bob Smith.md" into
+    // "Contacts/attachments/smile.png" (404).
+    const resolveFrom =
+      opts.templateMode === "raw" ? opts.currentPath : null;
+    const url = resolveImageSrc(src, resolveFrom);
     if (!url) return;
     const img = document.createElement("img");
     img.src = url;
