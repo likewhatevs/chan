@@ -27,16 +27,17 @@ pub fn err(status: StatusCode, msg: String) -> Response {
 }
 
 /// Refusal returned by `tunnel_guard::settings_guard` when the
-/// server was started with `settings_disabled = true` (any tunnel
-/// run). 403 because the request is well-formed; the host policy
-/// just forbids the operation. Single source of truth for the
-/// error body so SPA error toasts stay consistent.
+/// server was started with `settings_disabled = true`
+/// (`--tunnel-public` runs, or any future caller that opts in).
+/// 403 because the request is well-formed; the host policy just
+/// forbids the operation. Single source of truth for the error
+/// body so SPA error toasts stay consistent.
 pub fn err_settings_locked() -> Response {
     err(
         StatusCode::FORBIDDEN,
-        "settings are disabled while this drive is shared via a \
-         tunnel; configuration changes are only allowed on a local \
-         (loopback) serve"
+        "settings are disabled while this drive is shared publicly; \
+         configuration changes are only allowed on a local (loopback) \
+         serve or an OAuth-gated tunnel"
             .into(),
     )
 }

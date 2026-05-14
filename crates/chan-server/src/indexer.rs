@@ -21,9 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chan_drive::{
-    Drive, ProgressCallback, ProgressEvent, ProgressStage, WatchEvent, WatchKind,
-};
+use chan_drive::{Drive, ProgressCallback, ProgressEvent, ProgressStage, WatchEvent, WatchKind};
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;

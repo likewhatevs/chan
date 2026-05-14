@@ -122,10 +122,11 @@ mod tests {
 
     #[tokio::test]
     async fn tunnel_public_guard_passes_on_hosted_tunnel() {
-        // `settings_disabled = true, tunnel_public = false` is the
-        // hosted-tunnel shape: gateway authenticates the owner, the
-        // Settings panel is locked, but the assistant is still
-        // theirs to use.
+        // `settings_disabled = true, tunnel_public = false` proves
+        // the two guards are independent: settings can be locked
+        // without the public-tunnel restrictions kicking in.
+        // (Real configs today bind these together via `public`, but
+        // the middleware must not assume that coupling.)
         let state = make_test_state(true, false);
         let app = build_router(state, tunnel_public_guard);
         assert_eq!(status_of(app).await, StatusCode::OK);

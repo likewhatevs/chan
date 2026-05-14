@@ -47,12 +47,12 @@ use routes::{
     api_headings, api_health, api_index_rebuild, api_index_status, api_link_targets, api_links,
     api_list_assistant, api_list_files, api_list_sessions, api_llm_anthropic_models,
     api_llm_clear_anthropic_key, api_llm_clear_gemini_key, api_llm_complete, api_llm_gemini_models,
-    api_llm_resume,
-    api_llm_ollama_models, api_llm_set_anthropic_key, api_llm_set_gemini_key, api_llm_status,
-    api_llm_tools, api_move, api_patch_config, api_patch_drive, api_patch_server_config,
-    api_post_answer, api_post_attachment, api_post_contacts_import, api_put_assistant,
-    api_put_session, api_read_file, api_report_file, api_report_prefix, api_resolve_link,
-    api_search_content, api_search_files, api_storage_reset, api_write_file, ws_upgrade,
+    api_llm_ollama_models, api_llm_resume, api_llm_set_anthropic_key, api_llm_set_gemini_key,
+    api_llm_status, api_llm_tools, api_move, api_patch_config, api_patch_drive,
+    api_patch_server_config, api_post_answer, api_post_attachment, api_post_contacts_import,
+    api_put_assistant, api_put_session, api_read_file, api_report_file, api_report_prefix,
+    api_resolve_link, api_search_content, api_search_files, api_storage_reset, api_write_file,
+    ws_upgrade,
 };
 use signal::{now_unix_secs, print_qr_if_tty, spawn_idle_watcher, spawn_signal_watcher};
 use state::{AppState, DriveCell};
@@ -112,9 +112,11 @@ pub struct ServeConfig {
     /// the frontend as `<meta name="chan-settings-disabled">`, and
     /// mirrored on `AppState::settings_disabled` so the
     /// `tunnel_guard::settings_guard` middleware can refuse the
-    /// matching write routes server-side. Hardcoded to true on every
-    /// `serve_via_tunnel` run; the local-serve path always leaves
-    /// it false.
+    /// matching write routes server-side. Set to true on
+    /// `--tunnel-public` runs (anonymous viewers must not mutate
+    /// owner config) and left false on OAuth-gated tunnel runs (the
+    /// gateway has proven the viewer is the drive owner). The
+    /// local-serve path always leaves it false.
     pub settings_disabled: bool,
     /// Treat every inbound request as anonymous: the server is
     /// publicly tunneled (`--tunnel-public`), the gateway is not
@@ -524,11 +526,10 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
 /// the tunneled drive. When true, drive-proxy skips the OAuth gate
 /// and anyone with the URL can read/write.
 ///
-/// Independently of `public`, tunnel mode always greys out the
-/// Settings panel in the SPA: the drive is reachable from at least
-/// one browser context the owner doesn't fully control, so the safe
-/// default is to keep configuration changes off the table until a
-/// dedicated owner-affordance is wired in.
+/// The Settings panel follows `public`: an OAuth-gated tunnel run
+/// leaves it live (the gateway proves the viewer is the drive owner,
+/// even on a different device), while `--tunnel-public` greys it out
+/// because anonymous visitors must not mutate owner config.
 pub async fn serve_via_tunnel(
     library: Library,
     drive: Arc<Drive>,
@@ -552,13 +553,11 @@ pub async fn serve_via_tunnel(
         // `open_browser` parameter on serve_via_tunnel. The local
         // serve() open path is never reached in tunnel mode.
         open_browser: false,
-        // Disable Settings on every tunnel run, not just the public
-        // one: even with the OAuth gate the drive is reachable from
-        // a browser the owner doesn't fully control (different
-        // device, shared workstation), so the conservative default
-        // is to keep the panel inert until a dedicated opt-back-in
-        // flag exists.
-        settings_disabled: true,
+        // Settings track `public`: OAuth-gated runs leave the panel
+        // live (the gateway has proven the viewer is the drive
+        // owner), `--tunnel-public` greys it out so anonymous
+        // visitors can't mutate owner config.
+        settings_disabled: public,
         // Forward the public-tunnel flag verbatim. The handlers /
         // middleware consume this for the harsher restrictions that
         // only apply when the gateway is not authenticating the

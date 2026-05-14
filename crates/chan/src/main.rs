@@ -786,8 +786,8 @@ fn print_vcs_parent_error(root: &Path, parent: &chan_drive::VcsParent) {
     // absolute, symlink-resolved forms. Fall back to the input
     // when canonicalize fails (root may not yet exist on disk).
     let root_abs = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    let repo_abs = std::fs::canonicalize(&parent.repo_root)
-        .unwrap_or_else(|_| parent.repo_root.clone());
+    let repo_abs =
+        std::fs::canonicalize(&parent.repo_root).unwrap_or_else(|_| parent.repo_root.clone());
     let kind_human = match parent.kind {
         chan_drive::VcsKind::Git => "Git",
         chan_drive::VcsKind::Mercurial => "Mercurial",
@@ -933,8 +933,8 @@ async fn cmd_serve(
         // and tunnel mode.
         open_browser: !no_browser,
         // Local serve trusts the operator by default; --no-settings
-        // opts into the same UI grey + server 403 that tunnel mode
-        // gets, for kiosk / shared-workstation deployments. The
+        // opts into the same UI grey + server 403 that --tunnel-public
+        // forces, for kiosk / shared-workstation deployments. The
         // public-tunnel redactions on GETs are kept tunnel-only:
         // a local operator on the same machine has nothing to hide
         // from themselves.

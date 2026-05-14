@@ -45,11 +45,12 @@ pub struct AppState {
     /// which is why the router stays mounted at root.
     pub prefix: Arc<RwLock<String>>,
     /// Snapshot of `ServeConfig::settings_disabled`. Immutable for
-    /// the server's lifetime: hardcoded to true on every tunnel run,
-    /// always false on local serve. `serve_static` reads it to
-    /// inject the `<meta name="chan-settings-disabled">` tag, and
-    /// the `tunnel_guard::settings_guard` middleware reads it to
-    /// refuse the settings-write routes server-side.
+    /// the server's lifetime: set to true on `--tunnel-public` runs
+    /// (anonymous visitors must not mutate owner config), false on
+    /// OAuth-gated tunnel runs and on local serve. `serve_static`
+    /// reads it to inject the `<meta name="chan-settings-disabled">`
+    /// tag, and the `tunnel_guard::settings_guard` middleware reads
+    /// it to refuse the settings-write routes server-side.
     pub settings_disabled: bool,
     /// Snapshot of `ServeConfig::tunnel_public`. Stricter than
     /// `settings_disabled`: only true on `--tunnel-public` runs

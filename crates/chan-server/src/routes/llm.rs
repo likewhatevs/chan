@@ -716,10 +716,7 @@ enum ResumeOutcomeBody {
     /// review surface. We bypass `approve_pending` (which uses
     /// the model's original args) and call `apply_resume` with
     /// the user's `path` / `content` instead.
-    ApplyAs {
-        path: String,
-        content: String,
-    },
+    ApplyAs { path: String, content: String },
     /// User rejected. Optional reason surfaces to the model so it
     /// can adapt its plan.
     Discard {
@@ -787,9 +784,9 @@ fn message_to_out(m: &LlmMessage) -> ApiMessageOut {
 /// `call_id`. Used to anchor a fresh PENDING_STATUS placeholder
 /// when the frontend's transcript doesn't already have one.
 fn assistant_with_call_index(history: &[LlmMessage], call_id: &str) -> Option<usize> {
-    history.iter().rposition(|m| {
-        m.role == LlmRole::Assistant && m.tool_calls.iter().any(|c| c.id == call_id)
-    })
+    history
+        .iter()
+        .rposition(|m| m.role == LlmRole::Assistant && m.tool_calls.iter().any(|c| c.id == call_id))
 }
 
 /// True when `history` already has the chan-llm placeholder Tool

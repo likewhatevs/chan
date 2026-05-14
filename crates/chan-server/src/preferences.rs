@@ -219,9 +219,6 @@ mod tests {
             ..Default::default()
         };
         let s = toml::to_string(&prefs).unwrap();
-        assert!(
-            s.contains("editor_theme = \"google_docs\""),
-            "got: {s}"
-        );
+        assert!(s.contains("editor_theme = \"google_docs\""), "got: {s}");
     }
 }

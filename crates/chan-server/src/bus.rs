@@ -88,9 +88,7 @@ fn event_is_self_echo(event: &WatchEvent, sw: &SelfWrites) -> bool {
 ///
 /// `Send + Sync` because `ProgressCallback` can fire from worker
 /// threads inside the embedder and graph rebuilders.
-pub fn make_progress_broadcast(
-    events_tx: &broadcast::Sender<String>,
-) -> Arc<dyn ProgressCallback> {
+pub fn make_progress_broadcast(events_tx: &broadcast::Sender<String>) -> Arc<dyn ProgressCallback> {
     Arc::new(ProgressBroadcast {
         tx: events_tx.clone(),
     })

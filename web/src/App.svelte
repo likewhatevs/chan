@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import AppStatusBar from "./components/AppStatusBar.svelte";
-  import BottomPill from "./components/BottomPill.svelte";
+  // import BottomPill from "./components/BottomPill.svelte";
   import ConfirmModal from "./components/ConfirmModal.svelte";
   import ConflictModal from "./components/ConflictModal.svelte";
   import DiffOverlay from "./components/DiffOverlay.svelte";
@@ -448,8 +448,10 @@
 </div>
 <!-- Floating navigation pill: every overlay (files / search /
      graph / settings / assistant) is reachable from anywhere in
-     the workspace. -->
-<BottomPill />
+     the workspace. Temporarily disabled while we rethink the
+     navigation surface; right-click menus + keyboard chords cover
+     the same actions in the meantime. -->
+<!-- <BottomPill /> -->
 <!-- Bottom-left ambient status bar: indexer state, import
      progress, transient ui.status messages. Window-level and
      lifted above every overlay so users keep visibility on

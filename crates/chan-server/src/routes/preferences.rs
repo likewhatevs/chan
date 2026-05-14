@@ -408,16 +408,8 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
         // CLI overrides: empty / None falls back to "let the CLI's
         // own config pick", which is what we want when the user
         // clears the field.
-        llm.models.claude_cli = view
-            .assistant
-            .claude_cli
-            .model
-            .filter(|s| !s.is_empty());
-        llm.models.gemini_cli = view
-            .assistant
-            .gemini_cli
-            .model
-            .filter(|s| !s.is_empty());
+        llm.models.claude_cli = view.assistant.claude_cli.model.filter(|s| !s.is_empty());
+        llm.models.gemini_cli = view.assistant.gemini_cli.model.filter(|s| !s.is_empty());
         // None clears the override so backends fall back to their
         // built-in defaults; see chan-llm `MaxTokens` resolution.
         llm.max_tokens.anthropic = view.assistant.claude.max_tokens;
