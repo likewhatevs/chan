@@ -217,6 +217,15 @@ impl Backend for GeminiCliBackend {
             .arg("stream-json")
             .arg("--approval-mode")
             .arg("yolo")
+            // chan owns the workspace and we redirect GEMINI_CLI_HOME
+            // to a temp dir; the user-level "trusted folders" file
+            // gemini-cli reads at startup therefore doesn't include
+            // the drive root and gemini exits status 55 with
+            // "not running in a trusted directory" unless we opt out
+            // here. --skip-trust sets GEMINI_CLI_TRUST_WORKSPACE=true
+            // internally; we pass it on argv so we don't have to
+            // thread another env var through sanitize_env_for_gemini.
+            .arg("--skip-trust")
             .current_dir(&self.cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -760,22 +769,27 @@ fn write_gemini_home_with_user(
         }
     }
 
-    // Deny gemini's native write/edit/shell tools so any mutation
-    // has to flow through the chan MCP server (whose dispatch runs
-    // chan-drive's gates). The names cover gemini-cli's built-in
-    // tool set as of writing; new natives that show up later just
-    // mean we update this list.
+    // Deny gemini's native edit/shell tools so any mutation has to
+    // flow through the chan MCP server (whose dispatch runs
+    // chan-drive's gates). `write_file` is deliberately NOT denied
+    // here: gemini's policy module looks up MCP tools by their
+    // stripped name (`mcp_chan_write_file` -> `write_file`), so a
+    // bare `toolName = "write_file"` deny over-matches and kicks
+    // chan's MCP write out of the registry too. The MCP path stays
+    // protected because chan-drive's path sandbox refuses anything
+    // outside the drive root and writes must land via our MCP
+    // server, which holds the `auto_apply_writes` gate. Gemini's
+    // built-in `write_file` (if the model ever reaches for it) is
+    // also constrained to the workspace by gemini-cli's own
+    // workspace-trust rules; with our `cwd` set to the drive root
+    // that confines built-in writes to the same tree the MCP path
+    // controls.
     let policy_body = "\
 # chan-llm v2 lockdown: writes flow through the MCP server only.
 # `deny` here removes the tool from gemini's tool list entirely.
 
 [[rule]]
 toolName = \"replace\"
-decision = \"deny\"
-priority = 900
-
-[[rule]]
-toolName = \"write_file\"
 decision = \"deny\"
 priority = 900
 
@@ -1900,16 +1914,25 @@ printf '%s\n' '{"type":"result","timestamp":"t","status":"success"}'
                 .join("chan.toml"),
         )
         .unwrap();
-        // The deny-policy must cover at minimum gemini's native
-        // edit + shell entry points, otherwise a tool call could
-        // route around the chan MCP server.
-        for needle in ["replace", "write_file", "edit", "run_shell_command"] {
+        // The deny-policy must cover gemini's native edit + shell
+        // entry points so a tool call can't route around the chan
+        // MCP server.
+        for needle in ["replace", "edit", "run_shell_command"] {
             assert!(
                 policy.contains(needle),
                 "deny policy missing {needle}: {policy}"
             );
         }
         assert!(policy.contains("decision = \"deny\""), "{policy}");
+        // write_file must NOT be denied: gemini's policy engine
+        // looks up MCP tools by their stripped name
+        // (`mcp_chan_write_file` -> `write_file`), so this rule
+        // overmatches and removes chan's MCP write entry from the
+        // registry, breaking the approval flow.
+        assert!(
+            !policy.contains("\"write_file\""),
+            "write_file must not be denied (over-matches MCP write): {policy}"
+        );
     }
 
     #[test]
