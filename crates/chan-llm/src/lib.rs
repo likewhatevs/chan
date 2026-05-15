@@ -65,6 +65,6 @@ pub use keys::KeyStatus;
 pub use session::{
     apply_resume, is_pending_placeholder, CancelHandle, Delta, ImageInput, LlmEventError,
     LlmSession, Message, ResumeOutcome, Role, SessionListener, StopReason, ToolCall, ToolResult,
-    FAILED_STATUS, PENDING_STATUS, REJECTED_STATUS,
+    DEFAULT_MAX_TOOL_ITERATIONS, FAILED_STATUS, PENDING_STATUS, REJECTED_STATUS,
 };
 pub use tools::{StandardTool, ToolContext};

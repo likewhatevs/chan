@@ -46,6 +46,8 @@ pub mod claude_cli;
 mod error_body;
 pub mod gemini;
 pub mod gemini_cli;
+#[cfg(any(test, feature = "bench"))]
+pub mod mock;
 mod ndjson;
 pub mod ollama;
 mod retry;

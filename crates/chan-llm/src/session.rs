@@ -669,11 +669,15 @@ impl LlmSession {
         // `on_done` fires.
         let listener: Arc<dyn SessionListener> = Arc::new(SafeListener { inner: listener });
         let cancel = CancelHandle::new();
-        let Some(kind) = self.config.backend else {
+        let Some(kind) = self.config.active_backend() else {
             // BackendNotConfigured rather than MissingApiKey: this is
-            // a "the user hasn't picked a backend" state, not a key
-            // problem, and hosts that branch on the error kind want
-            // to nudge the user into Settings, not into Keychain.
+            // a "the user hasn't picked a backend" or "the user has
+            // disabled the picked backend" state, not a key problem,
+            // and hosts that branch on the error kind want to nudge
+            // the user into Settings, not into Keychain. The check
+            // uses `active_backend` so a disabled provider can't
+            // sneak a request through even if `config.backend` is
+            // still set as the sticky default.
             listener.on_error(LlmError::BackendNotConfigured.to_string());
             listener.on_done(StopReason::Error);
             return cancel;
@@ -758,7 +762,37 @@ impl LlmSession {
 /// path, etc.). When the cap fires we emit `on_done(Error)` with
 /// a clear message; the host can offer the user a "try again"
 /// affordance. Overridable via `LlmConfig::max_tool_iterations`.
-pub(crate) const DEFAULT_MAX_TOOL_ITERATIONS: usize = 12;
+pub const DEFAULT_MAX_TOOL_ITERATIONS: usize = 12;
+
+/// Drive the assistant loop with a caller-provided backend and the
+/// other orchestrator inputs. Public entry point gated on the
+/// `bench` feature so the `end_to_end` bench (and any future
+/// integration test in a separate crate) can exercise the loop
+/// against a `MockBackend` without going through `backends::build`
+/// or paying real-API tokens. Hosts use `LlmSession::send`
+/// instead; this is harness-only.
+#[cfg(feature = "bench")]
+pub async fn run_session_for_bench(
+    backend: Arc<dyn backends::Backend>,
+    history: Vec<Message>,
+    tool_schemas: Vec<crate::tools::ToolSchema>,
+    tool_ctx: crate::tools::ToolContext,
+    listener: Arc<dyn SessionListener>,
+    cancel: Arc<AtomicBool>,
+    max_iterations: usize,
+) {
+    let listener: Arc<dyn SessionListener> = Arc::new(SafeListener { inner: listener });
+    run_loop(
+        backend,
+        history,
+        tool_schemas,
+        tool_ctx,
+        listener,
+        cancel,
+        max_iterations,
+    )
+    .await;
+}
 
 /// Drive the assistant loop. Backend produces text + tool calls;
 /// we run the auto-executable tools and append their results,
