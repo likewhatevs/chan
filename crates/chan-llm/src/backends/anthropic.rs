@@ -553,7 +553,7 @@ fn split_system(msgs: &[Message]) -> (Option<String>, Vec<AnthropicMessage<'_>>)
             Role::System => system_chunks.push(&m.content),
             Role::User => {
                 // Anthropic wants images listed BEFORE the text in
-                // a multimodal user message — the model reads the
+                // a multimodal user message; the model reads the
                 // visuals first then the instruction. We mirror
                 // that ordering so prompts like "what's in this
                 // image?" attach cleanly.

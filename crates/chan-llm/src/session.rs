@@ -63,13 +63,13 @@ pub struct Message {
     /// can reference them across the conversation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCall>,
-    /// Optional multimodal payload — base64-encoded images that
+    /// Optional multimodal payload: base64-encoded images that
     /// accompany this message. Today only `Role::User` messages
     /// carry them; backends that support multimodal input
     /// (Anthropic via `image` content blocks, Gemini via
     /// `inline_data` parts, Ollama via its top-level `images`
     /// array) serialize these alongside the text. Backends without
-    /// image support drop them silently — the text content is
+    /// image support drop them silently; the text content is
     /// still authoritative.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ImageInput>,
@@ -79,7 +79,7 @@ pub struct Message {
 /// is the standard MIME (`image/png`, `image/jpeg`, etc.); `data`
 /// is the raw base64 payload WITHOUT a `data:` URI prefix. Hosts
 /// (chan-server, native shells) are responsible for capping size
-/// before they construct one — chan-llm trusts the caller.
+/// before they construct one; chan-llm trusts the caller.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageInput {
     pub mime_type: String,
@@ -1243,7 +1243,7 @@ mod tests {
 
     /// Backend that ends the turn on the first call with text only.
     /// Used to verify the EndOfTurn snapshot includes the final
-    /// assistant message — previously run_loop returned without
+    /// assistant message; previously run_loop returned without
     /// pushing it into `history`, so any host trying to echo back
     /// canonical post-turn state lost the closing assistant turn.
     struct TextOnlyBackend {

@@ -13,11 +13,11 @@ tool call.
 
 ```toml
 [dependencies]
-chan-llm = "0.7"
+chan-llm = "0.9"
 
 # Optional: stdio MCP server module + the `chan-llm-mcp` binary.
 # Pulls rmcp + schemars; off by default.
-chan-llm = { version = "0.7", features = ["mcp"] }
+chan-llm = { version = "0.9", features = ["mcp"] }
 ```
 
 ## Backends

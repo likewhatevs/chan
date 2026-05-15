@@ -745,7 +745,7 @@ fn link_or_copy(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result
 /// so prior assistant turns become labelled prose. Same v1 lossy
 /// trade-off as `claude_cli::split_system_and_prompt`.
 ///
-/// Always leads with the chan CLI session directive — gemini-cli
+/// Always leads with the chan CLI session directive; gemini-cli
 /// doesn't expose `--system-prompt` / `--append-system-prompt` so
 /// we can't push a true system message, but seeding the prompt
 /// body with a `[system]` block at the top is the next-best

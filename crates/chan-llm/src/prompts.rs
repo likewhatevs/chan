@@ -10,10 +10,11 @@
 /// host does not supply its own. Sets role + tone + the
 /// edit-control rules + the expected tool-call patterns.
 ///
-/// The prompt assumes the four standard tools (`read_file`,
-/// `write_file`, `list_files`, `search_content`) are available;
-/// when the underlying backend doesn't support tool calls (some
-/// Ollama models), the host should swap in `SYSTEM_PROMPT_NO_TOOLS`.
+/// The prompt enumerates the standard tools inline (read /
+/// write / list / search plus repo_report and the graph_* tools,
+/// and read_image for MCP-backed sessions). When the underlying
+/// backend doesn't support tool calls (some Ollama models), the
+/// host should swap in `SYSTEM_PROMPT_NO_TOOLS`.
 pub const SYSTEM_PROMPT: &str = "\
 You are the chan writing assistant. The user has a markdown drive \
 open and you help them read, edit, search, and reason about it. \
@@ -89,19 +90,19 @@ has pasted into the messages. Be concise.";
 /// `gemini_cli`). These backends are full agents with their own
 /// tool-use heuristics, and they tend to default to a cautious
 /// \"show the user the proposal and wait for confirmation\" mode
-/// when run interactively — pasting the would-be file content as
+/// when run interactively; pasting the would-be file content as
 /// a chat fence instead of emitting the actual `write_file` MCP
 /// call. The directive overrides that for chan's host context:
 /// chan ALWAYS surfaces a confirmation diff card, so the model
 /// must emit the tool call directly and trust the host to gate
 /// the write. Same shape works for read-only tools too (don't
-/// pre-narrate a proposed read in chat — just call read_file).
+/// pre-narrate a proposed read in chat; just call read_file).
 pub const CLI_SESSION_DIRECTIVE: &str = "\
 You are running inside chan, a host application that wraps your \
 MCP tool calls in a confirmation diff card the user reviews \
 explicitly (Apply / Discard / Save-as). Because chan ALWAYS \
 shows your write_file call to the user before any bytes hit \
-disk, you must emit the MCP tool call directly — never paste \
+disk, you must emit the MCP tool call directly; never paste \
 the proposed file content into chat as a code fence and wait \
 for verbal approval. The diff card IS the review surface.\n\n\
 Operational rules for this session:\n\
@@ -118,13 +119,13 @@ content as text, or propose alternatives.\n\
 `mcp__chan__list_files`, `mcp__chan__search_content`, \
 `mcp__chan__graph_neighbors`, `mcp__chan__graph_tags`, \
 `mcp__chan__graph_files_with_tag`, `mcp__chan__repo_report`) over \
-your own Read / Glob / Grep when the target is in the user's drive — \
+your own Read / Glob / Grep when the target is in the user's drive; \
 they go through chan-drive's sandbox and graph index, which match the \
 user's visible scope exactly.\n\
   - Even when the user explicitly says \"let me review\", \
 \"don't auto-apply\", or \"show me the proposal first\", you \
 should still emit the tool call. Those phrasings describe the \
-host's diff-card UX — they are not a request to defer to a \
+host's diff-card UX; they are not a request to defer to a \
 verbal exchange.";
 
 /// Description of the read_file tool, surfaced in the tool schema

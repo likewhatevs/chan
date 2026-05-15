@@ -26,8 +26,9 @@ In scope:
 
 - Backends (HTTP and subprocess) with a uniform `Backend` trait.
 - Embedded system prompt + tool descriptions.
-- The four built-in tools (`read_file`, `write_file`,
-  `list_files`, `search_content`), all routed through
+- The built-in tools (`read_file`, `write_file`, `list_files`,
+  `search_content`, `repo_report`, `graph_neighbors`,
+  `graph_tags`, `graph_files_with_tag`), all routed through
   `chan_drive::Drive`.
 - API key resolution (env, keychain, file fallback).
 - `LlmSession` orchestration loop (assistant turn, tool round-
@@ -95,11 +96,13 @@ that loop call the CLI's native filesystem tools it would touch
 the user's notes directly, bypassing the path sandbox, the
 editable-text gate, atomic writes, and the `auto_apply_writes`
 confirmation contract. The MCP server re-projects chan-llm's
-tools (`read_file`, `write_file`, `list_files`,
-`search_content`) over JSON-RPC on stdio so the CLI's tool loop
-can be allowlisted onto chan-llm's tools and only chan-llm's
-tools, while still routing every operation through
-`tools::execute` and `chan_drive::Drive`. The flow:
+tools (`read_file`, `write_file`, `list_files`, `search_content`,
+`repo_report`, `graph_neighbors`, `graph_tags`,
+`graph_files_with_tag`, plus the MCP-only `read_image`) over
+JSON-RPC on stdio so the CLI's tool loop can be allowlisted onto
+chan-llm's tools and only chan-llm's tools, while still routing
+every operation through `tools::execute` and
+`chan_drive::Drive`. The flow:
 
 ```
    user message
@@ -203,13 +206,16 @@ MCP server (`mcp.rs`, `feature = "mcp"`)
 
 - rmcp-based stdio transport. `Server::new(drive,
   auto_apply_writes).with_max_image_bytes(n).serve_stdio().await`.
-- Five tools: `read_file`, `write_file`, `list_files`,
-  `search_content` (text, via `tools::execute`) and `read_image`
+- Nine tools: the eight `StandardTool` variants (`read_file`,
+  `write_file`, `list_files`, `search_content`, `repo_report`,
+  `graph_neighbors`, `graph_tags`, `graph_files_with_tag`; text /
+  JSON, via `tools::execute`) plus the MCP-only `read_image`
   (binary, via `Drive::read` + base64 + rmcp `Content::image`).
   chan-drive's path sandbox and regular-file gate apply to all
-  five; the editable-text gate fires for the text tools, the
-  image-extension allowlist (`is_supported_image`: png/jpg/jpeg/
-  webp/gif) fires for `read_image`.
+  nine; the editable-text gate fires for `read_file` /
+  `write_file`, the image-extension allowlist
+  (`is_supported_image`: png/jpg/jpeg/webp/gif) fires for
+  `read_image`.
 - `read_image` is capped per call. The cap defaults to
   `DEFAULT_MCP_IMAGE_MAX_BYTES` (10 MiB) and is overridable via
   `Server::with_max_image_bytes`. Embedded callers (chan-server,
@@ -255,7 +261,9 @@ keys::clear(kind)            -> Result<()>
 keys::keychain_lookup(kind)  -> Option<String>
 
 StandardTool         ReadFile | WriteFile | ListFiles
-                     | SearchContent
+                     | SearchContent | RepoReport
+                     | GraphNeighbors | GraphTags
+                     | GraphFilesWithTag
 ToolContext          { drive: Arc<Drive>, auto_apply_writes: bool }
 ToolOutcome          Ok(Json) | Pending { tool, args }
 tools::execute(name, args, &ctx) -> Result<ToolOutcome>
@@ -518,22 +526,34 @@ invariants:
 
 ## 7. Tool sandbox details
 
-Four built-in tools dispatched by name. Every tool routes through
-`chan_drive::Drive`, so the filesystem invariants apply
-automatically: path sandbox (no `..` escapes, no mid-path symlinks
-out of the drive), special-file refusal (no FIFOs, sockets,
-devices), atomic writes, the `.md` / `.txt` editable-text gate.
+Eight built-in tools dispatched by name. Every tool routes
+through `chan_drive::Drive`, so the filesystem invariants apply
+automatically: path sandbox (no `..` escapes, no mid-path
+symlinks out of the drive), special-file refusal (no FIFOs,
+sockets, devices), atomic writes. The `.md` / `.txt`
+editable-text gate fires on `read_file` and `write_file`; the
+other tools either return graph rows (which already filter to
+editable-text-class nodes) or aggregate stats and so do not need
+the per-call gate.
 
 ```text
-read_file(path)         -> { path, content, size, mtime_ns?,
-                             truncated?, note? }
-write_file(path,        -> { path, bytes_written }   (auto_apply on)
-           content,        Pending { tool, args }    (auto_apply off)
+read_file(path)            -> { path, content, size, mtime_ns?,
+                                truncated?, note? }
+write_file(path,           -> { path, bytes_written }   (auto_apply on)
+           content,           Pending { tool, args }    (auto_apply off)
            expected_mtime_ns?)
-list_files(prefix?)     -> { entries, count, total,
-                             truncated?, note? }
-search_content(query,   -> SearchResults
-              limit?)
+list_files(prefix?)        -> { entries, count, total,
+                                truncated?, note? }
+search_content(query,      -> SearchResults
+               limit?)
+repo_report(prefix?,       -> { by_language, totals, cocomo,
+            paths?,           files? (capped, truncated?) }
+            include_files?)
+graph_neighbors(path,      -> { path, out, in }
+                direction?,
+                kinds?)
+graph_tags()               -> { tags: [{ name, count }] }
+graph_files_with_tag(tag)  -> { tag, files }
 ```
 
 `expected_mtime_ns` is the optimistic-concurrency token. The

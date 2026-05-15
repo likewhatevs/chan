@@ -87,7 +87,7 @@ impl ToolContext {
     }
 }
 
-/// The four built-in tools. Backends see these as named tool
+/// The built-in tools. Backends see these as named tool
 /// schemas; the assistant proposes calls and we dispatch through
 /// `StandardTool::execute`. Adding a new built-in tool means a new
 /// variant here plus a handler arm.
@@ -516,7 +516,7 @@ pub struct ToolSchema {
     pub parameters: Json,
 }
 
-/// Return JSON-schema descriptors for the four built-in tools.
+/// Return JSON-schema descriptors for the built-in tools.
 /// Backends call this once per request to populate their
 /// vendor-specific `tools` field.
 pub fn standard_tool_schemas() -> Vec<ToolSchema> {

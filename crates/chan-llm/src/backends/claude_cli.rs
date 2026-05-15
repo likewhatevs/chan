@@ -278,7 +278,7 @@ impl Backend for ClaudeCliBackend {
 
         // Always inject the chan host's CLI session directive so
         // the agent doesn't fall back to its "paste proposal in
-        // chat and wait for verbal approval" default — chan wraps
+        // chat and wait for verbal approval" default; chan wraps
         // every write_file in a diff-card review UI, so the model
         // must emit the tool call directly. Order: chan directive
         // first, then the host's system message (which carries
@@ -357,7 +357,7 @@ impl Backend for ClaudeCliBackend {
         // `assistant` event pops from the FRONT (the oldest un-
         // reconciled message). FIFO matters when claude-cli emits the
         // SDK's `message_start` for message N+1 BEFORE it synthesizes
-        // the final `assistant` envelope for message N — the older
+        // the final `assistant` envelope for message N; the older
         // queue model (a single index-keyed map cleared on
         // message_start) would lose message N's partials at that
         // moment and re-emit the whole text from the canonical
