@@ -991,7 +991,7 @@ pub const LIST_DIR_LIMIT: usize = 50_000;
 /// walker sees more than `LIST_TREE_LIMIT` entries, so a runaway
 /// or mis-pointed drive never OOMs the caller.
 pub fn list_tree(root: &Path) -> Result<Vec<TreeEntry>> {
-    list_tree_inner(root, None)
+    list_tree_inner(root, root, 1, None)
 }
 
 /// Variant of `list_tree` that also applies a caller-supplied
@@ -1000,14 +1000,79 @@ pub fn list_tree(root: &Path) -> Result<Vec<TreeEntry>> {
 /// rebuild to walk a hundred thousand README.md files. The
 /// editor's tree view keeps using the unfiltered `list_tree`.
 pub fn list_tree_filtered(root: &Path, filter: &WalkFilter) -> Result<Vec<TreeEntry>> {
-    list_tree_inner(root, Some(filter))
+    list_tree_inner(root, root, 1, Some(filter))
 }
 
-fn list_tree_inner(root: &Path, filter: Option<&WalkFilter>) -> Result<Vec<TreeEntry>> {
+/// Variant of `list_tree` scoped to the subtree at `subtree_abs`,
+/// which must be `root` or a descendant. Walks only that subtree;
+/// returned `TreeEntry.path` values stay relative to `root` so
+/// callers see the same shape as `list_tree`.
+///
+/// When `subtree_abs` points at a regular file, the result is a
+/// single-entry vec for that file. When it points at a directory,
+/// the directory itself is included followed by its descendants
+/// (matching the previous client-side filter `e.path == p ||
+/// e.path.starts_with(format!("{p}/"))`). When the path doesn't
+/// exist on disk, returns `Ok(vec![])` rather than an error so the
+/// `list_files` tool can return an empty listing instead of a hard
+/// failure when a model probes a non-existent prefix.
+///
+/// `LIST_TREE_LIMIT` still applies, in case a misconfigured prefix
+/// covers the whole drive (e.g. the user pointed chan at `~`).
+pub fn list_tree_prefix(root: &Path, subtree_abs: &Path) -> Result<Vec<TreeEntry>> {
+    if !subtree_abs.exists() {
+        return Ok(Vec::new());
+    }
+    // min_depth=0 so the prefix entry itself is included; the
+    // legacy client-side filter in chan-llm did the same. Files
+    // come back as their single self-entry; directories come back
+    // with their own entry plus descendants.
+    list_tree_inner(root, subtree_abs, 0, None)
+}
+
+fn list_tree_inner(
+    root: &Path,
+    walk_from: &Path,
+    min_depth: usize,
+    filter: Option<&WalkFilter>,
+) -> Result<Vec<TreeEntry>> {
     let mut out = Vec::new();
-    let iter: Box<dyn Iterator<Item = DirEntry>> = match filter {
-        Some(f) => Box::new(walk_drive_filtered(root, f)),
-        None => Box::new(walk_drive(root)),
+    let iter: Box<dyn Iterator<Item = DirEntry>> = if walk_from == root {
+        // Same shape the public `walk_drive` / `walk_drive_filtered`
+        // helpers offer; reuse them so the .git / .chan and special-
+        // file filters live in one place.
+        match filter {
+            Some(f) => Box::new(walk_drive_filtered(root, f)),
+            None => Box::new(walk_drive(root)),
+        }
+    } else {
+        // Subtree walk. Inline the same filter chain `walk_drive`
+        // applies, with `min_depth` overridden so the prefix entry
+        // itself is included for callers that want to see it.
+        let walker = WalkDir::new(walk_from)
+            .min_depth(min_depth)
+            .follow_links(false)
+            .same_file_system(true)
+            .into_iter()
+            .filter_entry(|e| {
+                if !e.file_type().is_dir() {
+                    return true;
+                }
+                let n = e.file_name().to_string_lossy();
+                n != ".git" && n != ".chan"
+            })
+            .filter_map(|res| match res {
+                Ok(e) => Some(e),
+                Err(e) => {
+                    tracing::warn!("walkdir error: {e}");
+                    None
+                }
+            })
+            .filter(|e| {
+                let ft = e.file_type();
+                ft.is_dir() || ft.is_file()
+            });
+        Box::new(walker)
     };
     for entry in iter {
         if out.len() >= LIST_TREE_LIMIT {
@@ -1117,6 +1182,54 @@ mod tests {
         assert!(paths.contains(&"note.md"));
         assert!(!paths.iter().any(|p| p.starts_with(".chan")));
         assert!(!paths.iter().any(|p| p.starts_with(".git")));
+    }
+
+    #[test]
+    fn list_tree_prefix_walks_only_subtree() {
+        let tmp = TempDir::new().unwrap();
+        // Layout:
+        //   notes/
+        //     a.md
+        //     deep/b.md
+        //   other/c.md
+        //   top.md
+        std::fs::create_dir_all(tmp.path().join("notes/deep")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("other")).unwrap();
+        std::fs::write(tmp.path().join("notes/a.md"), b"a").unwrap();
+        std::fs::write(tmp.path().join("notes/deep/b.md"), b"b").unwrap();
+        std::fs::write(tmp.path().join("other/c.md"), b"c").unwrap();
+        std::fs::write(tmp.path().join("top.md"), b"t").unwrap();
+
+        let entries = list_tree_prefix(tmp.path(), &tmp.path().join("notes")).unwrap();
+        let paths: Vec<_> = entries.iter().map(|e| e.path.as_str()).collect();
+        // The prefix entry itself is included (matches the legacy
+        // client-side filter), plus everything under it.
+        assert!(paths.contains(&"notes"), "got {paths:?}");
+        assert!(paths.contains(&"notes/a.md"));
+        assert!(paths.contains(&"notes/deep"));
+        assert!(paths.contains(&"notes/deep/b.md"));
+        // Nothing outside the subtree leaks in.
+        assert!(!paths.iter().any(|p| p.starts_with("other")));
+        assert!(!paths.contains(&"top.md"));
+    }
+
+    #[test]
+    fn list_tree_prefix_returns_single_entry_for_file() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("note.md"), b"hi").unwrap();
+        let entries = list_tree_prefix(tmp.path(), &tmp.path().join("note.md")).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "note.md");
+        assert!(!entries[0].is_dir);
+    }
+
+    #[test]
+    fn list_tree_prefix_missing_path_returns_empty() {
+        let tmp = TempDir::new().unwrap();
+        // The model passes a nonexistent prefix (typo, stale path);
+        // we want an empty listing rather than a hard error.
+        let entries = list_tree_prefix(tmp.path(), &tmp.path().join("nope")).unwrap();
+        assert!(entries.is_empty());
     }
 
     #[test]

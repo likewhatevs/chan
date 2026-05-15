@@ -730,6 +730,28 @@ impl Drive {
         fs_ops::list_tree(self.root())
     }
 
+    /// Subtree variant of `list_tree`: walk only the descendants of
+    /// `prefix` instead of the entire drive. Returned `TreeEntry.path`
+    /// values stay relative to the drive root, so the caller sees the
+    /// same shape as `list_tree`. The prefix entry itself is included
+    /// (file: one entry; directory: that directory plus its descendants).
+    ///
+    /// Same gates as the rest of the Drive API: `resolve_safe_strict`
+    /// rejects `..` traversal and mid-path symlinks pointing outside
+    /// the drive. A non-existent prefix returns `Ok(vec![])` rather
+    /// than an error, so model-driven `list_files(prefix=...)` calls
+    /// gracefully report an empty listing for typos instead of
+    /// surfacing a hard failure.
+    ///
+    /// Performance: walks only the requested subtree, so on a drive
+    /// with hundreds of thousands of files a narrow prefix returns
+    /// promptly. Use `list_tree` when the caller actually wants the
+    /// whole drive.
+    pub fn list_tree_prefix(&self, prefix: &str) -> Result<Vec<TreeEntry>> {
+        let resolved = fs_ops::resolve_safe_strict(self.root(), prefix)?;
+        fs_ops::list_tree_prefix(self.root(), &resolved)
+    }
+
     pub fn create_dir(&self, rel: &str) -> Result<()> {
         let rel_path = self.rel(rel)?;
         self.dir
@@ -4219,6 +4241,65 @@ mod tests {
         assert!(paths.contains(&"note.md".to_string()));
         assert!(!paths.iter().any(|p| p == "alias.md"));
         assert!(!paths.iter().any(|p| p == "sock"));
+    }
+
+    #[test]
+    fn list_tree_prefix_scopes_walk_and_keeps_root_relative_paths() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("notes/a.md", "a").unwrap();
+        drive.write_text("notes/deep/b.md", "b").unwrap();
+        drive.write_text("other/c.md", "c").unwrap();
+        drive.write_text("top.md", "t").unwrap();
+
+        let entries = drive.list_tree_prefix("notes").unwrap();
+        let paths: Vec<_> = entries.iter().map(|e| e.path.as_str()).collect();
+        // Prefix entry plus everything under it; nothing outside.
+        assert!(paths.contains(&"notes"));
+        assert!(paths.contains(&"notes/a.md"));
+        assert!(paths.contains(&"notes/deep"));
+        assert!(paths.contains(&"notes/deep/b.md"));
+        assert!(!paths.contains(&"top.md"));
+        assert!(!paths.iter().any(|p| p.starts_with("other")));
+    }
+
+    #[test]
+    fn list_tree_prefix_with_trailing_slash_normalizes() {
+        // The list_files tool trims a trailing slash before calling
+        // us; verify the drive method itself accepts both shapes so
+        // host-direct callers don't trip on the slash.
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("notes/a.md", "a").unwrap();
+        let with_slash = drive.list_tree_prefix("notes/").unwrap();
+        let without = drive.list_tree_prefix("notes").unwrap();
+        assert_eq!(
+            with_slash.iter().map(|e| &e.path).collect::<Vec<_>>(),
+            without.iter().map(|e| &e.path).collect::<Vec<_>>(),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_tree_prefix_rejects_midpath_symlink_outside_drive() {
+        use std::os::unix::fs::symlink;
+        let (_cfg, root, drive) = fixture();
+        let outside = TempDir::new().unwrap();
+        std::fs::create_dir_all(outside.path().join("victim")).unwrap();
+        std::fs::write(outside.path().join("victim/leak.md"), "secret").unwrap();
+        // Create a symlink inside the drive that points outside it.
+        // resolve_safe_strict canonicalizes the deepest existing
+        // ancestor and rejects anything that lands above the drive
+        // root, so list_tree_prefix must error rather than walk into
+        // the foreign tree.
+        symlink(outside.path(), root.path().join("escape")).unwrap();
+        let err = drive.list_tree_prefix("escape/victim").unwrap_err();
+        assert!(matches!(err, ChanError::SymlinkEscape(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn list_tree_prefix_rejects_dotdot() {
+        let (_cfg, _root, drive) = fixture();
+        let err = drive.list_tree_prefix("../escape").unwrap_err();
+        assert!(matches!(err, ChanError::PathEscape), "got {err:?}");
     }
 
     #[cfg(unix)]

@@ -689,6 +689,7 @@ Drive::exists(rel: &str) -> bool
 Drive::stat(rel: &str) -> Result<FileStat>
 Drive::list(rel: &str) -> Result<Vec<DirEntry>>
 Drive::list_tree() -> Result<Vec<TreeEntry>>
+Drive::list_tree_prefix(prefix: &str) -> Result<Vec<TreeEntry>>
 Drive::create_dir(rel: &str) -> Result<()>
 Drive::remove(rel: &str) -> Result<()>                 // soft-delete to trash
 Drive::rename(from: &str, to: &str) -> Result<()>
