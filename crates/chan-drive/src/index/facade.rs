@@ -462,8 +462,7 @@ impl Index {
                     // the file unconditionally because BM25 has no
                     // partial-state preservation across runs.
                     let fresh_hash = vectors::body_hash_of_chunks(&chunks);
-                    if let Some((shard_model, shard_hash)) =
-                        self.vectors.shard_signature(&msg.rel)
+                    if let Some((shard_model, shard_hash)) = self.vectors.shard_signature(&msg.rel)
                     {
                         if shard_model == model_at_start && shard_hash == fresh_hash {
                             embeds_reused += 1;
@@ -1336,7 +1335,11 @@ mod tests {
             summary,
         );
         assert_eq!(summary.indexed, 1);
-        assert!(summary.errors.is_empty(), "got errors: {:?}", summary.errors);
+        assert!(
+            summary.errors.is_empty(),
+            "got errors: {:?}",
+            summary.errors
+        );
     }
 
     /// Content drift case: shard exists but its `body_hash` no

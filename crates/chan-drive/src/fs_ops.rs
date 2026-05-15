@@ -41,30 +41,66 @@ pub fn is_chan_internal(rel: &str) -> bool {
     rel == ".chan" || rel.starts_with(".chan/")
 }
 
-/// True for paths whose extension marks them as plain-text content
-/// the editor can safely round-trip through a UTF-8 buffer.
-/// Whitelisted by extension to prevent corrupting binary files.
+/// True for paths whose class is editable through the UTF-8 text
+/// gate (`Drive::read_text` / `Drive::write_text`). This is the
+/// **editor**'s gate: every kind of textual file users can round-
+/// trip through a UTF-8 buffer (markdown-class .md/.txt plus
+/// arbitrary source / config text files like .py, .json, .yaml,
+/// Makefile, Dockerfile, ...).
+///
+/// For the **indexer / graph** gate (markdown-class only, the
+/// subset chan parses for headings / links / tokens) use
+/// `is_indexable_text` instead. A `.py` file is `is_editable_text`
+/// but not `is_indexable_text`.
 pub fn is_editable_text(rel: &str) -> bool {
+    matches!(classify(rel), FileClass::EditableText | FileClass::Text)
+}
+
+/// True for paths whose class is markdown-style content the indexer
+/// and graph parse (`.md` / `.txt` today, i.e. `FileClass::EditableText`).
+/// Drives every per-file ingestion path: tantivy index entries,
+/// graph nodes, link / token / heading extraction, link-rewrite on
+/// rename, reindex-after-restore, etc.
+///
+/// Distinct from `is_editable_text`, which widens to any text file
+/// the editor can edit. Arbitrary source-class text (`FileClass::Text`)
+/// is editable but is **not** indexed today: false positives like
+/// `#include` looking like a `#tag` would pollute the graph. Phase
+/// 3 may revisit indexing source-class text as plain full-text;
+/// until then this predicate stays narrow.
+pub fn is_indexable_text(rel: &str) -> bool {
     matches!(classify(rel), FileClass::EditableText)
 }
 
-/// Coarse content class derived from a path's extension. Drives:
-///   - which files are read/written via the UTF-8 text gate
-///     (`read_text` / `write_text`);
-///   - which files the search index ingests (any
-///     `FileClass::EditableText`);
-///   - which files the editor previews as media (`Image`, `Pdf`);
+/// Coarse content class derived from a path's extension and (for
+/// well-known no-extension files) basename. Drives:
+///   - which files the editor reads/writes through the UTF-8 gate
+///     (`read_text` / `write_text`): any `EditableText` or `Text`.
+///   - which files the search index + graph ingest: `EditableText`
+///     only (markdown-class .md / .txt). See `is_indexable_text`.
+///   - which files the editor previews as media (`Image`, `Pdf`).
 ///   - everything else falls through to `Other`: still walkable,
 ///     readable as bytes, renameable / removeable, but opaque to
-///     the indexer.
+///     the editor and the indexer.
 ///
-/// Extension matching is ASCII case-insensitive. Files with no
-/// extension collapse to `Other`.
+/// Extension matching is ASCII case-insensitive. Files with an
+/// extension we don't recognize fall back to a basename check
+/// against well-known textual filenames (Makefile, Dockerfile,
+/// LICENSE, .gitignore, ...). No content sniffing in v1: phase
+/// 1.5 may add a "read first N bytes, treat as Text if valid
+/// UTF-8 and no NUL" fallback for genuinely unknown files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileClass {
     /// `.md`, `.txt`. Editable through `read_text` / `write_text`,
     /// indexed by tantivy, parsed for graph edges + headings.
     EditableText,
+    /// Source / config text the editor can edit but the indexer
+    /// does not parse. Covers programming-language extensions
+    /// (.py, .rs, .c, .go, ...), config formats (.toml, .yaml,
+    /// .json, .ini, ...), shell scripts, web sources, build files,
+    /// and well-known no-extension files (Makefile, Dockerfile,
+    /// LICENSE, .gitignore, ...).
+    Text,
     /// `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, `.avif`.
     /// Read-only via `read` / `write_bytes`; the editor's inspector
     /// pane previews these inline.
@@ -74,24 +110,96 @@ pub enum FileClass {
     /// (browser PDF.js / inspector preview) rather than as a generic
     /// download.
     Pdf,
-    /// Anything else (archives, audio, video, code, files with no
-    /// extension). Walkable, byte-readable, renameable. Not indexed.
+    /// Anything else (archives, audio, video, fonts, files with an
+    /// unknown extension and no known basename). Walkable, byte-
+    /// readable, renameable. Not indexed, not editable as text.
     Other,
 }
 
-/// Classify a relative path by extension. See `FileClass` for the
+/// Classify a relative path by extension first, then by basename
+/// (for well-known no-extension files). See `FileClass` for the
 /// downstream behaviour each class triggers.
 pub fn classify(rel: &str) -> FileClass {
-    let ext = match rel.rsplit_once('.') {
-        Some((_, e)) if !e.is_empty() => e,
-        _ => return FileClass::Other,
-    };
-    match ext.to_ascii_lowercase().as_str() {
+    // Extension path: rsplit_once('.') splits "Cargo.toml" into
+    // ("Cargo", "toml"); for ".gitignore" it splits into
+    // ("", "gitignore"). Both shapes feed `classify_ext` after
+    // ASCII-lowercasing.
+    if let Some((_, ext)) = rel.rsplit_once('.') {
+        if !ext.is_empty() {
+            let lower = ext.to_ascii_lowercase();
+            if let Some(c) = classify_ext(&lower) {
+                return c;
+            }
+            // Extension is present but not in the known set. Fall
+            // through to the basename check so a file like
+            // ".gitignore" still resolves via its full name.
+        }
+    }
+    let basename = rel.rsplit('/').next().unwrap_or(rel);
+    if let Some(c) = classify_basename(basename) {
+        return c;
+    }
+    FileClass::Other
+}
+
+/// Extension -> FileClass for known suffixes. `ext` must already
+/// be ASCII-lowercased. Returns `None` for anything not on the
+/// whitelist so `classify` can fall back to the basename check.
+fn classify_ext(ext: &str) -> Option<FileClass> {
+    let class = match ext {
+        // Markdown-class: indexed + graph-parsed.
         "md" | "txt" => FileClass::EditableText,
+
+        // Media + dedicated preview classes.
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "avif" => FileClass::Image,
         "pdf" => FileClass::Pdf,
-        _ => FileClass::Other,
-    }
+
+        // Source / config text. Editable, not indexed.
+        //
+        // The list errs on the side of inclusion for common
+        // programming languages and config formats; obscure or
+        // ambiguous extensions stay out and either resolve via
+        // basename ("Makefile") or fall to `Other` (we'd rather
+        // refuse a sketchy ext than risk opening a binary as
+        // text). Content-sniffing is a follow-up.
+        "rs" | "py" | "pyi" | "pyx" | "c" | "cc" | "cpp" | "cxx" | "h" | "hh" | "hpp" | "hxx"
+        | "m" | "mm" | "go" | "java" | "kt" | "kts" | "swift" | "js" | "jsx" | "ts" | "tsx"
+        | "mjs" | "cjs" | "rb" | "php" | "pl" | "pm" | "lua" | "r" | "scala" | "sc" | "clj"
+        | "cljs" | "cljc" | "ml" | "mli" | "hs" | "lhs" | "erl" | "hrl" | "ex" | "exs" | "dart"
+        | "nim" | "zig" | "vue" | "svelte" | "astro" | "elm" | "fs" | "fsi" | "fsx" | "tcl"
+        | "awk" | "asm" | "vb" | "sh" | "bash" | "zsh" | "fish" | "ksh" | "csh" | "tcsh"
+        | "ps1" | "psm1" | "psd1" | "toml" | "yaml" | "yml" | "json" | "json5" | "jsonl"
+        | "ndjson" | "ini" | "cfg" | "conf" | "properties" | "env" | "envrc" | "lock" | "html"
+        | "htm" | "css" | "scss" | "sass" | "less" | "xml" | "xhtml" | "xsl" | "xslt" | "rss"
+        | "atom" | "csv" | "tsv" | "sql" | "log" | "mk" | "mak" | "cmake" | "bzl" | "ninja"
+        | "gradle" | "patch" | "diff" | "rst" | "adoc" | "asciidoc" | "org" | "tex" | "latex"
+        | "ltx" | "bib" | "gitignore" | "gitattributes" | "editorconfig" | "npmrc" | "nvmrc"
+        | "babelrc" | "prettierrc" | "eslintrc" | "eslintignore" | "dockerignore" => {
+            FileClass::Text
+        }
+
+        _ => return None,
+    };
+    Some(class)
+}
+
+/// Basename -> FileClass for well-known no-extension or all-caps
+/// filenames. Used as the fallback when the extension is missing
+/// or unknown; returns `None` so `classify` can settle on
+/// `Other` when nothing matches.
+fn classify_basename(name: &str) -> Option<FileClass> {
+    let class = match name {
+        "Makefile" | "GNUmakefile" | "BSDmakefile" | "makefile" => FileClass::Text,
+        "Dockerfile" | "Containerfile" => FileClass::Text,
+        "Rakefile" | "Gemfile" | "Procfile" | "Justfile" | "Vagrantfile" | "Berksfile"
+        | "Brewfile" => FileClass::Text,
+        "LICENSE" | "LICENCE" | "COPYING" | "COPYRIGHT" | "NOTICE" | "AUTHORS" | "CONTRIBUTORS"
+        | "README" | "TODO" | "NEWS" | "CHANGELOG" | "HISTORY" | "INSTALL" | "MANIFEST" => {
+            FileClass::Text
+        }
+        _ => return None,
+    };
+    Some(class)
 }
 
 /// Caller-supplied list of directory names that the indexing /
@@ -1033,34 +1141,96 @@ mod tests {
     }
 
     #[test]
-    fn is_editable_text_whitelist() {
+    fn is_editable_text_covers_markdown_and_text() {
+        // Markdown-class.
         assert!(is_editable_text("note.md"));
         assert!(is_editable_text("a/b/c.txt"));
         assert!(is_editable_text("README.MD"));
+        // Text-class (source / config / shell / well-known
+        // basenames). All editable through the UTF-8 gate.
+        assert!(is_editable_text("src/main.py"));
+        assert!(is_editable_text("Cargo.toml"));
+        assert!(is_editable_text("config.yaml"));
+        assert!(is_editable_text("script.sh"));
+        assert!(is_editable_text(".gitignore"));
+        assert!(is_editable_text("Makefile"));
+        assert!(is_editable_text("Dockerfile"));
+        assert!(is_editable_text("LICENSE"));
+        // Non-textual.
         assert!(!is_editable_text("image.png"));
+        assert!(!is_editable_text("doc.pdf"));
+        assert!(!is_editable_text("archive.zip"));
+        assert!(!is_editable_text("song.mp3"));
         assert!(!is_editable_text(""));
-        assert!(!is_editable_text(".gitignore"));
+    }
+
+    #[test]
+    fn is_indexable_text_stays_markdown_only() {
+        // Markdown-class is indexable + graph-parsed.
+        assert!(is_indexable_text("note.md"));
+        assert!(is_indexable_text("a/b/c.txt"));
+        assert!(is_indexable_text("README.MD"));
+        // Text-class is editable but **not** indexed: avoids
+        // `#include` looking like a `#tag` and similar false
+        // positives.
+        assert!(!is_indexable_text("src/main.py"));
+        assert!(!is_indexable_text("Cargo.toml"));
+        assert!(!is_indexable_text("Makefile"));
+        // Everything else stays excluded.
+        assert!(!is_indexable_text("image.png"));
+        assert!(!is_indexable_text("doc.pdf"));
+        assert!(!is_indexable_text("song.mp3"));
+        assert!(!is_indexable_text(""));
     }
 
     #[test]
     fn classify_covers_each_class() {
+        // EditableText (markdown-class).
         assert_eq!(classify("note.md"), FileClass::EditableText);
         assert_eq!(classify("a/b/c.txt"), FileClass::EditableText);
         assert_eq!(classify("README.MD"), FileClass::EditableText);
+        // Image.
         assert_eq!(classify("img.png"), FileClass::Image);
         assert_eq!(classify("photo.JPG"), FileClass::Image);
         assert_eq!(classify("icon.svg"), FileClass::Image);
         assert_eq!(classify("anim.gif"), FileClass::Image);
         assert_eq!(classify("modern.webp"), FileClass::Image);
         assert_eq!(classify("new.avif"), FileClass::Image);
+        // Pdf.
         assert_eq!(classify("doc.pdf"), FileClass::Pdf);
         assert_eq!(classify("paper.PDF"), FileClass::Pdf);
+        // Text: source code.
+        assert_eq!(classify("script.sh"), FileClass::Text);
+        assert_eq!(classify("main.py"), FileClass::Text);
+        assert_eq!(classify("lib.rs"), FileClass::Text);
+        assert_eq!(classify("App.tsx"), FileClass::Text);
+        assert_eq!(classify("server.go"), FileClass::Text);
+        // Text: config + data.
+        assert_eq!(classify("Cargo.toml"), FileClass::Text);
+        assert_eq!(classify("config.yaml"), FileClass::Text);
+        assert_eq!(classify("package.json"), FileClass::Text);
+        assert_eq!(classify("data.csv"), FileClass::Text);
+        assert_eq!(classify("schema.sql"), FileClass::Text);
+        // Text: web / markup.
+        assert_eq!(classify("index.html"), FileClass::Text);
+        assert_eq!(classify("style.css"), FileClass::Text);
+        assert_eq!(classify("readme.rst"), FileClass::Text);
+        // Text: well-known basenames (no ext or all-caps).
+        assert_eq!(classify("Makefile"), FileClass::Text);
+        assert_eq!(classify("notes/Dockerfile"), FileClass::Text);
+        assert_eq!(classify("LICENSE"), FileClass::Text);
+        assert_eq!(classify("CHANGELOG"), FileClass::Text);
+        // Text: dotfiles.
+        assert_eq!(classify(".gitignore"), FileClass::Text);
+        assert_eq!(classify(".editorconfig"), FileClass::Text);
+        // Other: opaque binaries and unknowns.
         assert_eq!(classify("archive.zip"), FileClass::Other);
         assert_eq!(classify("song.mp3"), FileClass::Other);
-        assert_eq!(classify("script.sh"), FileClass::Other);
+        assert_eq!(classify("font.ttf"), FileClass::Other);
         assert_eq!(classify(""), FileClass::Other);
-        assert_eq!(classify(".gitignore"), FileClass::Other);
-        assert_eq!(classify("Makefile"), FileClass::Other);
+        // Case insensitivity for known textual extensions.
+        assert_eq!(classify("Main.PY"), FileClass::Text);
+        assert_eq!(classify("Build.YAML"), FileClass::Text);
     }
 
     #[test]
