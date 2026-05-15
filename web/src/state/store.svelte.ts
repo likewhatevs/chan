@@ -1,7 +1,18 @@
 // Global app state, written with Svelte 5 runes ($state).
 // One module-level singleton per concern; components import them directly.
 
-import type { IndexStatus, LlmMessage, TreeEntry, DriveInfo } from "../api/types";
+import type {
+  AgentActivity,
+  AgentStatus,
+  DriveInfo,
+  IndexStatus,
+  LlmActivityFrame,
+  LlmMessage,
+  LlmStatusFrame,
+  LlmUserRequestFrame,
+  TreeEntry,
+  UserRequest,
+} from "../api/types";
 import { ApiError, api, assistantHash16, authToken, openWatchSocket, type WsStatus } from "../api/client";
 import {
   closeTab,
@@ -192,7 +203,7 @@ const movingPaths = new Set<string>();
 
 /// Watcher event handler. Extracted so reconnectWatcher() can reuse
 /// the exact same callbacks as bootstrap().
-function onWatchEvent(e: unknown): void {
+export function onWatchEvent(e: unknown): void {
   ui.lastWatch = Date.now();
   // The /ws stream carries multiple frame types under different
   // `type` discriminators (see chan-server/src/bus.rs). Watch
@@ -215,7 +226,10 @@ function onWatchEvent(e: unknown): void {
     frameType === "llm.tool_call" ||
     frameType === "llm.tool_result" ||
     frameType === "llm.done" ||
-    frameType === "llm.error"
+    frameType === "llm.error" ||
+    frameType === "llm.status" ||
+    frameType === "llm.activity" ||
+    frameType === "llm.user_request"
   ) {
     const f = e as {
       session_id?: string;
@@ -229,6 +243,59 @@ function onWatchEvent(e: unknown): void {
     }
     if (frameType === "llm.delta") {
       assistantStream.text += f.text ?? "";
+    } else if (frameType === "llm.status") {
+      const frame = e as LlmStatusFrame;
+      assistantStream.status = frame.status;
+      if (frame.status.kind === "heartbeat") {
+        assistantStream.lastHeartbeatAt = Date.now();
+      }
+    } else if (frameType === "llm.activity") {
+      const frame = e as LlmActivityFrame;
+      const activity = frame.activity;
+      const conv = currentAssistantConversation();
+      if (conv && activity.kind === "tool_args_delta" && activity.id) {
+        const a = activity as Extract<AgentActivity, { kind: "tool_args_delta" }>;
+        const turn = ensureToolTurn(conv, a.id!, null);
+        turn.event.partial_args =
+          (turn.event.partial_args ?? "") + a.partial_json;
+      } else if (conv && activity.kind === "tool_started") {
+        const a = activity as Extract<AgentActivity, { kind: "tool_started" }>;
+        const bare = bareToolName(a.name);
+        if (bare !== "write_file") {
+          ensureToolTurn(conv, a.id, a.name);
+        }
+      } else if (conv && activity.kind === "tool_finished") {
+        const a = activity as Extract<AgentActivity, { kind: "tool_finished" }>;
+        const name = a.name ?? null;
+        if (name && bareToolName(name) === "write_file") {
+          removeToolTurn(conv, a.id);
+        } else {
+          const turn = ensureToolTurn(conv, a.id, name);
+          const err = a.is_error || isErrorOutput(a.output);
+          turn.event.status = err ? "error" : "ok";
+          turn.event.output = a.output;
+          turn.event.is_error = err;
+          turn.event.result_summary = summarizeToolResult(a.output);
+          turn.event.finished_at = Date.now();
+        }
+      } else if (conv && activity.kind === "tool_denied") {
+        const a = activity as Extract<AgentActivity, { kind: "tool_denied" }>;
+        const id = a.id ?? `denied:${Date.now()}`;
+        const turn = ensureToolTurn(conv, id, a.name, a.input);
+        turn.event.status = "error";
+        turn.event.output = a.reason ?? "tool denied";
+        turn.event.is_error = true;
+        turn.event.result_summary = a.reason ?? "denied";
+        turn.event.finished_at = Date.now();
+      } else {
+        assistantStream.activity.push(activity);
+        if (assistantStream.activity.length > 32) {
+          assistantStream.activity.shift();
+        }
+      }
+    } else if (frameType === "llm.user_request") {
+      const frame = e as LlmUserRequestFrame;
+      assistantStream.userRequest = frame.request;
     } else if (frameType === "llm.tool_call") {
       // Narrate the call inline in the chat by appending a `tool`
       // turn to the currently-active conversation. The user sees
@@ -244,20 +311,15 @@ function onWatchEvent(e: unknown): void {
         if (bare !== "write_file") {
           const conv = currentAssistantConversation();
           if (conv) {
-            const now = Date.now();
-            conv.turns.push({
-              kind: "tool",
-              event: {
-                tool_call_id: callId,
-                name: bare,
-                label: labelForToolCall(rawName, f.call?.args),
-                status: "running",
-                result_summary: null,
-                created_at: now,
-              },
-              created_at: now,
-            });
+            const turn = ensureToolTurn(conv, callId, rawName, f.call?.args);
+            turn.event.name = bare;
+            turn.event.label = labelForToolCall(rawName, f.call?.args);
+            turn.event.status = "running";
+            turn.event.args = f.call?.args;
           }
+        } else {
+          const conv = currentAssistantConversation();
+          if (conv) removeToolTurn(conv, callId);
         }
       }
     } else if (frameType === "llm.tool_result") {
@@ -276,15 +338,30 @@ function onWatchEvent(e: unknown): void {
         // permanent history.
         const conv = currentAssistantConversation();
         if (conv) {
+          let matched = false;
           for (let i = conv.turns.length - 1; i >= 0; i--) {
             const t = conv.turns[i];
             if (t && t.kind === "tool" && t.event.tool_call_id === id) {
               const out = f.result?.output;
               const err = isErrorOutput(out);
               t.event.status = err ? "error" : "ok";
+              t.event.output = out;
+              t.event.is_error = err;
               t.event.result_summary = summarizeToolResult(out);
+              t.event.finished_at = Date.now();
+              matched = true;
               break;
             }
+          }
+          if (!matched) {
+            const out = f.result?.output;
+            const err = isErrorOutput(out);
+            const turn = ensureToolTurn(conv, id, null);
+            turn.event.status = err ? "error" : "ok";
+            turn.event.output = out;
+            turn.event.is_error = err;
+            turn.event.result_summary = summarizeToolResult(out);
+            turn.event.finished_at = Date.now();
           }
         }
       }
@@ -297,6 +374,7 @@ function onWatchEvent(e: unknown): void {
     // committed to the conversation log.
     return;
   }
+  if (frameType?.startsWith("llm.")) return;
   const kind = (e as { kind?: string } | null)?.kind;
   if (kind === "config_changed") {
     // A sibling window flipped a setting (theme, fonts, drive name,
@@ -1009,11 +1087,25 @@ export type AssistantToolEvent = {
   /// in sync without recomputing.
   label: string;
   status: "running" | "ok" | "error";
+  /// Raw tool-call arguments once the full `llm.tool_call` frame
+  /// lands. Kept as JSON so the renderer can show real parameters
+  /// instead of only a preformatted label.
+  args?: unknown;
+  /// Incremental argument JSON from `tool_args_delta` activity
+  /// frames. Some CLI backends emit this before the full call.
+  partial_args?: string;
+  /// Full tool output from `llm.tool_result` or `tool_finished`.
+  /// The renderer owns preview/truncation; the conversation keeps
+  /// the raw value for diagnostics.
+  output?: unknown;
+  is_error?: boolean;
   /// Short tail like `12 hits`, `1.2 KB`, `67 entries`. Null while
   /// the call is still in flight; null when the result shape
   /// didn't yield an obvious summary (the chip still renders
   /// status alone).
   result_summary: string | null;
+  started_at?: number;
+  finished_at?: number;
   created_at: number;
 };
 
@@ -1742,6 +1834,10 @@ export const assistantStream = $state<{
   /// so the next round's request doesn't break Anthropic's strict
   /// tool_use/tool_result pairing.
   toolResults: Record<string, unknown>;
+  status: AgentStatus | null;
+  lastHeartbeatAt: number | null;
+  activity: AgentActivity[];
+  userRequest: UserRequest | null;
   /// Non-null when the backend emitted `llm.error` over the WS
   /// before (or instead of) the HTTP response landing. The HTTP
   /// path surfaces its own error via the catch block in
@@ -1752,6 +1848,10 @@ export const assistantStream = $state<{
   contextId: null,
   text: "",
   toolResults: {},
+  status: null,
+  lastHeartbeatAt: null,
+  activity: [],
+  userRequest: null,
   error: null,
 });
 
@@ -1767,6 +1867,10 @@ export function beginAssistantStream(
   // new buffer; Svelte 5 proxies the assignment into a fresh
   // reactive object.
   assistantStream.toolResults = {};
+  assistantStream.status = null;
+  assistantStream.lastHeartbeatAt = null;
+  assistantStream.activity = [];
+  assistantStream.userRequest = null;
   assistantStream.error = null;
 }
 
@@ -1781,6 +1885,10 @@ export function endAssistantStream(sessionId?: string): void {
   assistantStream.contextId = null;
   assistantStream.text = "";
   assistantStream.toolResults = {};
+  assistantStream.status = null;
+  assistantStream.lastHeartbeatAt = null;
+  assistantStream.activity = [];
+  assistantStream.userRequest = null;
   assistantStream.error = null;
 }
 
@@ -1896,6 +2004,59 @@ function currentAssistantConversation(): AssistantConversation | null {
     return assistantConversations.byGroup[id.slice("group:".length)] ?? null;
   }
   return null;
+}
+
+function findToolTurn(
+  conv: AssistantConversation,
+  id: string,
+): Extract<AssistantTurn, { kind: "tool" }> | null {
+  for (let i = conv.turns.length - 1; i >= 0; i--) {
+    const t = conv.turns[i];
+    if (t && t.kind === "tool" && t.event.tool_call_id === id) return t;
+  }
+  return null;
+}
+
+function ensureToolTurn(
+  conv: AssistantConversation,
+  id: string,
+  name: string | null,
+  args?: unknown,
+): Extract<AssistantTurn, { kind: "tool" }> {
+  const existing = findToolTurn(conv, id);
+  const now = Date.now();
+  if (existing) {
+    if (name) {
+      existing.event.name = bareToolName(name);
+      existing.event.label = labelForToolCall(name, args);
+    }
+    if (args !== undefined) existing.event.args = args;
+    return existing;
+  }
+  const rawName = name ?? "(starting...)";
+  const turn: Extract<AssistantTurn, { kind: "tool" }> = {
+    kind: "tool",
+    event: {
+      tool_call_id: id,
+      name: bareToolName(rawName),
+      label: name ? labelForToolCall(name, args) : "starting tool",
+      status: "running",
+      args,
+      result_summary: null,
+      started_at: now,
+      created_at: now,
+    },
+    created_at: now,
+  };
+  conv.turns.push(turn);
+  return turn;
+}
+
+function removeToolTurn(conv: AssistantConversation, id: string): void {
+  const idx = conv.turns.findIndex(
+    (t) => t.kind === "tool" && t.event.tool_call_id === id,
+  );
+  if (idx >= 0) conv.turns.splice(idx, 1);
 }
 
 /// Truthy when a tool result JSON shape signals failure. chan-llm

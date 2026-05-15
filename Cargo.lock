@@ -644,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "chan-drive"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "bincode",
  "candle-core",
@@ -679,17 +679,13 @@ dependencies = [
 
 [[package]]
 name = "chan-llm"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chan-drive",
  "dirs 5.0.1",
- "futures-util",
- "httpdate",
- "keyring",
  "once_cell",
- "reqwest",
  "rmcp",
  "schemars",
  "serde",
@@ -699,12 +695,11 @@ dependencies = [
  "tokio",
  "toml 0.8.23",
  "tracing",
- "zeroize",
 ]
 
 [[package]]
 name = "chan-report"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "chrono",
  "ignore",
@@ -745,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "chan-tunnel-client"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -776,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "chan-tunnel-proto"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "bytes",
  "h2",
@@ -2650,16 +2645,6 @@ dependencies = [
  "futures-util",
  "once_cell",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "keyring"
-version = "3.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eebcc3aff044e5944a8fbaf69eb277d11986064cba30c468730e8b9909fb551c"
-dependencies = [
- "log",
- "zeroize",
 ]
 
 [[package]]
@@ -6257,20 +6242,6 @@ name = "zeroize"
 version = "1.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b97154e67e32c85465826e8bcc1c59429aaaf107c1e4a9e53c8d8ccd5eff88d0"
-dependencies = [
- "zeroize_derive",
-]
-
-[[package]]
-name = "zeroize_derive"
-version = "1.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85a5b4158499876c763cb03bc4e49185d3cccbabb15b33c627f7884f43db852e"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
 
 [[package]]
 name = "zerotrie"

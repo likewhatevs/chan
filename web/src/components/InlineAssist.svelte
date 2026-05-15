@@ -53,12 +53,15 @@
   import { isEditableText } from "../state/fileTypes";
   import { appendDefaultMd } from "../state/pathValidate";
   import type {
+    AgentActivity,
+    AgentStatus,
     ContentHit,
     LlmCompletionResponse,
     LlmImageInput,
     LlmMessage,
     LlmStatus,
     LlmToolSpec,
+    UserRequest,
   } from "../api/types";
   import { resolveImageSrc } from "../editor/extensions/image";
   import Wysiwyg from "../editor/Wysiwyg.svelte";
@@ -264,6 +267,7 @@
   /// new dependencies. Stops + resets when loading flips off so
   /// the next request starts cleanly.
   let thinkingDots = $state(0);
+  let streamClock = $state(Date.now());
   $effect(() => {
     if (!loading) {
       thinkingDots = 0;
@@ -274,6 +278,221 @@
     }, 400);
     return () => clearInterval(id);
   });
+  $effect(() => {
+    if (!visible || assistantStream.sessionId === null) return;
+    const id = setInterval(() => {
+      streamClock = Date.now();
+    }, 1000);
+    return () => clearInterval(id);
+  });
+
+  type StreamStatusTone = "muted" | "warn" | "error";
+  type StreamStatusInfo = { label: string; tone: StreamStatusTone };
+  type AgentBannerTone = "claude" | "gemini" | "codex" | "ollama" | "generic";
+
+  function agentBannerTone(backend: string | null | undefined): AgentBannerTone {
+    if (backend === "anthropic" || backend === "claude" || backend === "claude_cli") {
+      return "claude";
+    }
+    if (backend === "gemini" || backend === "gemini_cli") return "gemini";
+    if (backend === "codex_cli") return "codex";
+    if (backend === "ollama") return "ollama";
+    return "generic";
+  }
+
+  function streamStatusInfo(status: AgentStatus | null): StreamStatusInfo | null {
+    if (!status) return { label: `thinking${".".repeat(thinkingDots)}`, tone: "muted" };
+    if (status.kind === "ready") return null;
+    if (status.kind === "heartbeat") {
+      const s = status as { idle_ms: number };
+      const stale =
+        assistantStream.lastHeartbeatAt !== null &&
+        streamClock - assistantStream.lastHeartbeatAt > 15_000;
+      const idle = Math.round(s.idle_ms / 1000);
+      return {
+        label: stale ? "thinking... (slow)" : `thinking... (idle ${idle}s)`,
+        tone: stale ? "warn" : "muted",
+      };
+    }
+    if (status.kind === "thinking") {
+      const s = status as { status?: unknown };
+      return {
+        label: typeof s.status === "string" ? s.status : `thinking${".".repeat(thinkingDots)}`,
+        tone: "muted",
+      };
+    }
+    if (status.kind === "spawned") return { label: "starting agent...", tone: "muted" };
+    if (status.kind === "turn_stopping") return { label: "wrapping up...", tone: "muted" };
+    if (status.kind === "rate_limit") {
+      return {
+        label: status.resets_at
+          ? `rate limited (resets at ${status.resets_at})`
+          : "rate limited",
+        tone: "warn",
+      };
+    }
+    if (status.kind === "unhealthy") {
+      const s = status as { reason?: unknown };
+      return {
+        label: typeof s.reason === "string" ? s.reason : "agent unhealthy",
+        tone: "error",
+      };
+    }
+    if (status.kind === "exited" && !status.success) {
+      const s = status as { code?: number | null };
+      return {
+        label: s.code === null || s.code === undefined ? "agent exited" : `agent exited (${s.code})`,
+        tone: "error",
+      };
+    }
+    if (status.kind === "cancelled") return { label: "cancelled", tone: "muted" };
+    if (status.kind === "exited") return null;
+    return { label: `agent status: ${status.kind}`, tone: "muted" };
+  }
+
+  type ActivityRenderItem = {
+    key: string;
+    kind: "chip" | "note";
+    label: string;
+    tone: "running" | "ok" | "err" | "muted";
+  };
+
+  function activityName(activity: AgentActivity): string | null {
+    if (
+      activity.kind === "tool_started" ||
+      activity.kind === "tool_finished" ||
+      activity.kind === "tool_denied"
+    ) {
+      return typeof activity.name === "string" && activity.name.length > 0
+        ? bareToolName(activity.name)
+        : null;
+    }
+    return null;
+  }
+
+  function hasStructuredToolTurn(activity: AgentActivity): boolean {
+    const name = activityName(activity);
+    const id =
+      "id" in activity && typeof activity.id === "string" ? activity.id : null;
+    if (!name && !id) return false;
+    return turns.some((turn) => {
+      if (turn.kind !== "tool") return false;
+      return (
+        (id !== null && turn.event.tool_call_id === id) ||
+        (name !== null && turn.event.name === name)
+      );
+    });
+  }
+
+  function activityItems(): ActivityRenderItem[] {
+    const out: ActivityRenderItem[] = [];
+    for (const [i, activity] of assistantStream.activity.entries()) {
+      if (activity.kind === "agent_note") {
+        const a = activity as { text?: unknown };
+        out.push({
+          key: `${i}:note`,
+          kind: "note",
+          label: typeof a.text === "string" ? a.text : "",
+          tone: "muted",
+        });
+      } else if (activity.kind === "thinking_delta") {
+        const a = activity as { text?: unknown };
+        const text = typeof a.text === "string" ? a.text.trim() : "";
+        if (!text) continue;
+        out.push({
+          key: `${i}:thinking`,
+          kind: "note",
+          label: text,
+          tone: "muted",
+        });
+      } else if (activity.kind === "tool_args_delta") {
+        const a = activity as { partial_json?: unknown };
+        if (typeof a.partial_json !== "string" || !a.partial_json.trim()) continue;
+        out.push({
+          key: `${i}:args`,
+          kind: "chip",
+          label: "typing tool args",
+          tone: "running",
+        });
+      } else if (activity.kind === "tool_started" && !hasStructuredToolTurn(activity)) {
+        out.push({
+          key: `${i}:tool-start:${activity.id}`,
+          kind: "chip",
+          label: `running ${bareToolName((activity as { name: string }).name)}`,
+          tone: "running",
+        });
+      } else if (activity.kind === "tool_finished" && !hasStructuredToolTurn(activity)) {
+        const a = activity as { name?: unknown; is_error?: unknown };
+        const name = typeof a.name === "string" ? bareToolName(a.name) : "tool";
+        out.push({
+          key: `${i}:tool-finish:${activity.id}`,
+          kind: "chip",
+          label: `${name} ${a.is_error === true ? "failed" : "done"}`,
+          tone: a.is_error === true ? "err" : "ok",
+        });
+      } else if (activity.kind === "tool_denied") {
+        const a = activity as { name?: unknown };
+        const name = typeof a.name === "string" ? bareToolName(a.name) : "tool";
+        out.push({
+          key: `${i}:tool-denied:${activity.id ?? "unknown"}`,
+          kind: "chip",
+          label: `${name} denied`,
+          tone: "err",
+        });
+      }
+    }
+    return out.slice(-8);
+  }
+
+  type SurveyQuestion = {
+    question: string;
+    header?: string | null;
+    multi_select: boolean;
+    options: Array<{ label: string; description?: string | null }>;
+  };
+
+  function surveyQuestions(request: UserRequest): SurveyQuestion[] {
+    if (request.kind !== "survey") return [];
+    const questions = (request as { questions?: unknown }).questions;
+    return Array.isArray(questions) ? (questions as SurveyQuestion[]) : [];
+  }
+
+  const TOOL_PAYLOAD_PREVIEW_LIMIT = 16 * 1024;
+
+  function formatToolPayload(value: unknown, limit = TOOL_PAYLOAD_PREVIEW_LIMIT): string {
+    let text: string;
+    if (typeof value === "string") {
+      text = value;
+    } else if (value === undefined) {
+      text = "";
+    } else {
+      try {
+        text = JSON.stringify(value, null, 2);
+      } catch {
+        text = String(value);
+      }
+    }
+    if (text.length <= limit) return text;
+    return `${text.slice(0, limit)}\n… truncated ${text.length - limit} chars`;
+  }
+
+  function compactToolArgs(value: unknown): string {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return formatToolPayload(value, 300);
+    }
+    const entries = Object.entries(value as Record<string, unknown>).slice(0, 4);
+    return entries
+      .map(([key, val]) => {
+        const rendered =
+          typeof val === "string" ? JSON.stringify(val) : formatToolPayload(val, 120);
+        return `${key}: ${rendered.length > 90 ? `${rendered.slice(0, 89)}…` : rendered}`;
+      })
+      .join("  ");
+  }
+
+  function toolPayloadNeedsExpand(value: unknown): boolean {
+    return formatToolPayload(value, 801).length > 800;
+  }
 
   /// `now` ticks every 30 s while the panel is open so relative
   /// timestamps next to each turn (e.g. "3m ago") refresh without
@@ -1878,14 +2097,7 @@
         {#if turns.length === 0}
           {@const agentLabel = displayAgentName(llmStatus?.backend) || "CHAN"}
           {@const agentArt = banner(agentLabel)}
-          {@const agentTint =
-            llmStatus?.backend === "anthropic" || llmStatus?.backend === "claude_cli"
-              ? "claude"
-              : llmStatus?.backend === "gemini" || llmStatus?.backend === "gemini_cli"
-                ? "gemini"
-                : llmStatus?.backend === "ollama"
-                  ? "ollama"
-                  : "generic"}
+          {@const agentTint = agentBannerTone(llmStatus?.backend)}
           <!-- Empty-state hero. ASCII-art banner of the active
                backend's friendly name with a per-agent gradient
                sheen + glow, plus the model id below. The gradient
@@ -2135,20 +2347,29 @@
               {/if}
             </div>
           {:else if turn.kind === "tool"}
-            <!-- Compact chip narrating one non-write tool call the
-                 model made during this turn. Status dot animates
-                 amber while running, lands on green (ok) or red
-                 (error) when the matching result arrives. Tail
-                 carries a short summary ("12 hits", "1.2 KB").
-                 Lives in conv.turns so it persists in the
-                 scrollback the next time the user opens the
-                 overlay on this scope. -->
-            <div class="tool-chip" class:running={turn.event.status === "running"} class:ok={turn.event.status === "ok"} class:err={turn.event.status === "error"}>
-              <span class="dot"></span>
-              <span class="label">{turn.event.label}</span>
-              {#if turn.event.result_summary}
-                <span class="sep">·</span>
-                <span class="summary">{turn.event.result_summary}</span>
+            <div class="tool-card" class:running={turn.event.status === "running"} class:ok={turn.event.status === "ok"} class:err={turn.event.status === "error"}>
+              <div class="tool-card-head">
+                <span class="dot"></span>
+                <span class="tool-name">{turn.event.name}</span>
+                <span class="tool-status">{turn.event.status}</span>
+              </div>
+              <div class="tool-label">{turn.event.label}</div>
+              {#if turn.event.args !== undefined}
+                <div class="tool-args mono">{compactToolArgs(turn.event.args)}</div>
+              {:else if turn.event.partial_args}
+                <div class="tool-args mono streaming">{turn.event.partial_args}</div>
+              {/if}
+              {#if turn.event.output !== undefined}
+                <div class="tool-output-label">
+                  output{turn.event.result_summary ? ` (${turn.event.result_summary})` : ""}
+                </div>
+                <pre class="tool-output-preview">{formatToolPayload(turn.event.output, 800)}</pre>
+                {#if toolPayloadNeedsExpand(turn.event.output)}
+                  <details class="tool-output">
+                    <summary>expand full output</summary>
+                    <pre>{formatToolPayload(turn.event.output)}</pre>
+                  </details>
+                {/if}
               {/if}
             </div>
           {:else}
@@ -2229,6 +2450,68 @@
               <span class="role">assistant</span>
               <span class="ts">{formatRelative(pendingTurnTime ?? undefined)}</span>
             </div>
+            {#if true}
+              {@const status = streamStatusInfo(assistantStream.status)}
+              {#if status}
+                <div class="stream-status" class:warn={status.tone === "warn"} class:err={status.tone === "error"}>
+                  <span class="dot"></span>
+                  <span>{status.label}</span>
+                </div>
+              {/if}
+            {/if}
+            {#if true}
+              {@const activity = activityItems()}
+              {#if activity.length > 0}
+                <div class="activity-strip" aria-label="assistant activity">
+                  {#each activity as item (item.key)}
+                    {#if item.kind === "note"}
+                      <div class="activity-note">{item.label}</div>
+                    {:else}
+                      <span class="activity-chip" class:running={item.tone === "running"} class:ok={item.tone === "ok"} class:err={item.tone === "err"}>
+                        <span class="dot"></span>
+                        <span>{item.label}</span>
+                      </span>
+                    {/if}
+                  {/each}
+                </div>
+              {/if}
+            {/if}
+            {#if assistantStream.userRequest}
+              <div class="user-request" class:unknown={assistantStream.userRequest.kind !== "survey"}>
+                {#if assistantStream.userRequest.kind === "survey"}
+                  {@const questions = surveyQuestions(assistantStream.userRequest)}
+                  {#each questions as question, qi (`${qi}:${question.question}`)}
+                    <div class="survey-question">
+                      <div class="survey-head">
+                        {#if question.header}
+                          <span class="survey-header">{question.header}</span>
+                        {/if}
+                        <strong>{question.question}</strong>
+                      </div>
+                      {#if question.options.length > 0}
+                        <ul class="survey-options">
+                          {#each question.options as option, oi (`${oi}:${option.label}`)}
+                            <li>
+                              <span class="survey-mark" aria-hidden="true">{question.multi_select ? "[ ]" : "( )"}</span>
+                              <span class="survey-label">{option.label}</span>
+                              {#if option.description}
+                                <span class="survey-desc">{option.description}</span>
+                              {/if}
+                            </li>
+                          {/each}
+                        </ul>
+                      {/if}
+                    </div>
+                  {/each}
+                  <div class="survey-note">answering surveys mid-turn is not yet supported; the agent is waiting for input it cannot receive through this UI yet.</div>
+                {:else}
+                  <div class="survey-head">
+                    <strong>agent requested input</strong>
+                    <span class="survey-header">{assistantStream.userRequest.kind}</span>
+                  </div>
+                {/if}
+              </div>
+            {/if}
             {#if assistantStream.text.length > 0}
               <div class="body md streaming">{@html renderMarkdown(assistantStream.text)}<span class="caret" aria-hidden="true"></span></div>
             {:else}
@@ -2687,6 +2970,11 @@
     --banner-b: #58a6ff;
     --banner-glow: 176, 125, 255;
   }
+  .agent-banner.codex {
+    --banner-a: #2ea043;
+    --banner-b: #58a6ff;
+    --banner-glow: 46, 160, 67;
+  }
   .agent-banner.ollama {
     --banner-a: #6cd07a;
     --banner-b: #aef0b3;
@@ -3010,45 +3298,228 @@
     color: var(--text-secondary);
   }
 
-  /* Compact in-line chip narrating one tool call. Sits at full
-     width but reads as a sub-action between conversation turns:
-     small font, muted color, status dot on the left, optional
-     result summary on the right. Running pulses amber; ok lands
-     on the accent green; error lands on the warn red. */
-  .tool-chip {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
+  .tool-card {
+    width: min(100%, 52ch);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-card);
+    padding: 7px 9px;
     color: var(--text-secondary);
-    padding: 2px 8px;
-    border-left: 2px solid var(--border);
-    margin-left: 4px;
+    font-size: 13px;
+    line-height: 1.35;
     font-variant-numeric: tabular-nums;
   }
-  .tool-chip .dot {
+  .tool-card-head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+  }
+  .tool-card .dot {
     width: 7px;
     height: 7px;
     border-radius: 50%;
     background: var(--muted);
     flex-shrink: 0;
   }
-  .tool-chip.running .dot {
+  .tool-card.running { border-left-color: #d29922; }
+  .tool-card.running .dot {
     background: #d29922;
     box-shadow: 0 0 4px rgba(210, 153, 34, 0.55);
     animation: chan-tool-pulse 1.1s ease-in-out infinite;
   }
-  .tool-chip.ok .dot { background: var(--accent, #2ea043); }
-  .tool-chip.err .dot { background: var(--warn-text, #d33); }
-  .tool-chip.err { color: var(--warn-text, #d33); }
-  .tool-chip .label { color: var(--text); }
-  .tool-chip .sep { color: var(--border); }
-  .tool-chip .summary {
-    color: var(--text-secondary);
+  .tool-card.ok { border-left-color: var(--accent, #2ea043); }
+  .tool-card.ok .dot { background: var(--accent, #2ea043); }
+  .tool-card.err { border-left-color: var(--warn-text, #d33); }
+  .tool-card.err .dot { background: var(--warn-text, #d33); }
+  .tool-name {
+    color: var(--text);
+    font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 28ch;
+  }
+  .tool-status {
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .tool-card.err .tool-status { color: var(--warn-text, #d33); }
+  .tool-label {
+    color: var(--text-secondary);
+    margin-top: 3px;
+  }
+  .tool-args {
+    margin-top: 5px;
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+  .tool-args.streaming { color: var(--text-secondary); }
+  .tool-output-label {
+    margin-top: 6px;
+    color: var(--text-secondary);
+  }
+  .tool-output-preview,
+  .tool-output pre {
+    margin: 4px 0 0 0;
+    max-height: 9rem;
+    overflow: auto;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 7px;
+    color: var(--text);
+    white-space: pre-wrap;
+  }
+  .tool-output { margin-top: 6px; }
+  .tool-output summary {
+    cursor: pointer;
+    color: var(--link);
+  }
+  .tool-output pre {
+    max-height: 18rem;
+  }
+  .stream-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .stream-status .dot,
+  .activity-chip .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #d29922;
+    box-shadow: 0 0 4px rgba(210, 153, 34, 0.45);
+    flex-shrink: 0;
+  }
+  .stream-status.warn {
+    color: #d29922;
+    border-color: rgba(210, 153, 34, 0.45);
+  }
+  .stream-status.err {
+    color: var(--warn-text, #d33);
+    border-color: rgba(211, 51, 51, 0.45);
+  }
+  .stream-status.err .dot,
+  .activity-chip.err .dot {
+    background: var(--warn-text, #d33);
+    box-shadow: none;
+  }
+  .activity-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 6px;
+    max-width: 100%;
+    margin: 1px 0;
+  }
+  .activity-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 100%;
+    padding: 2px 7px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-secondary);
+    background: var(--bg-card);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .activity-chip.ok .dot {
+    background: var(--accent, #2ea043);
+    box-shadow: none;
+  }
+  .activity-note {
+    flex-basis: 100%;
+    max-width: 46ch;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-style: italic;
+    line-height: 1.35;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .user-request {
+    width: min(100%, 48ch);
+    border: 1px solid var(--border);
+    border-left: 3px solid #d29922;
+    border-radius: 6px;
+    background: var(--bg-card);
+    padding: 8px 10px;
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  .user-request.unknown {
+    border-left-color: var(--text-secondary);
+  }
+  .survey-question + .survey-question {
+    margin-top: 8px;
+  }
+  .survey-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .survey-header {
+    display: inline-flex;
+    align-items: center;
+    max-width: 18ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 1px 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .survey-options {
+    list-style: none;
+    margin: 6px 0 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .survey-options li {
+    display: grid;
+    grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr);
+    gap: 6px;
+    align-items: baseline;
+  }
+  .survey-mark {
+    color: var(--text-secondary);
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+  }
+  .survey-label {
+    font-weight: 500;
+  }
+  .survey-desc {
+    color: var(--text-secondary);
+    min-width: 0;
+  }
+  .survey-note {
+    margin-top: 8px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-style: italic;
   }
   @keyframes chan-tool-pulse {
     0%, 100% { opacity: 1; }

@@ -100,6 +100,14 @@ const ALPHABET: Record<string, string[]> = {
     "╚██████╔╝ ",
     " ╚═════╝  ",
   ],
+  X: [
+    "██╗  ██╗ ",
+    "╚██╗██╔╝ ",
+    " ╚███╔╝  ",
+    " ██╔██╗  ",
+    "██╔╝ ██╗ ",
+    "╚═╝  ╚═╝ ",
+  ],
   " ": [
     "    ",
     "    ",
@@ -139,6 +147,8 @@ export function displayAgentName(backend: string | null | undefined): string {
       return "GEMINI";
     case "gemini_cli":
       return "GEMINI CLI";
+    case "codex_cli":
+      return "CODEX CLI";
     case "ollama":
       return "OLLAMA";
     default:

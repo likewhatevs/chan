@@ -45,64 +45,17 @@ export type KnownDrive = {
 export type EditorTheme = "github" | "google_docs" | "word";
 
 export type AssistantBackendKind =
-  | "claude"
-  | "ollama"
-  | "gemini"
   | "claude_cli"
-  | "gemini_cli";
+  | "gemini_cli"
+  | "codex_cli";
 
-export type ClaudePrefs = {
-  /// Whether this provider is enabled in the SPA's Settings CRUD.
-  /// The active assistant is `default_backend` only when the
-  /// matching provider's `enabled` is true.
-  enabled: boolean;
-  /// Optional model override; backend default applies when null.
-  /// Written from the assistant overlay's inspector, not from Settings.
-  model?: string | null;
-  /// Optional max output tokens. Null falls back to chan-llm's
-  /// per-backend default (Anthropic: 4096). Written from the
-  /// inspector.
-  max_tokens?: number | null;
-  /// Extended-thinking budget in tokens. Null = no thinking block
-  /// in the request (model runs in normal mode); a positive number
-  /// enables extended thinking with that token budget. Backend
-  /// strips the block on models that don't support thinking, so
-  /// the value is safe to keep across model switches.
-  thinking_budget?: number | null;
-};
-
-export type OllamaPrefs = {
-  enabled: boolean;
-  /// Server URL; standard local port applies when null.
-  url?: string | null;
-  /// Model name (must be installed on the Ollama server). Written
-  /// from the inspector.
-  model?: string | null;
-  /// Maps to Ollama's `options.num_predict`. Null = uncapped.
-  max_tokens?: number | null;
-};
-
-export type GeminiPrefs = {
-  enabled: boolean;
-  /// Optional model override; backend default (gemini-2.5-flash)
-  /// applies when null. Written from the inspector.
-  model?: string | null;
-  /// Optional max output tokens. Null falls back to chan-llm's
-  /// per-backend default (Gemini: 4096). Written from the inspector.
-  max_tokens?: number | null;
-  /// Reserved for a future Gemini-thinking backend. Round-trips on
-  /// the wire (the server emits the field) but no Gemini model
-  /// currently sets `supports_thinking: true`, so the inspector
-  /// never surfaces a control for it.
-  thinking_budget?: number | null;
-};
-
-/// Per-CLI override surface. The local `claude` / `gemini` CLIs own
+/// Per-CLI override surface. The local `claude` / `gemini` / `codex` CLIs own
 /// their own auth, so the only Settings-managed field is `enabled`;
 /// `model` is written from the assistant overlay's inspector.
 export type CliPrefs = {
   enabled: boolean;
   model?: string | null;
+  cmd_override?: string | null;
 };
 
 export type AssistantPrefs = {
@@ -117,15 +70,9 @@ export type AssistantPrefs = {
   default_backend: AssistantBackendKind | null;
   answers_dir: string;
   auto_apply_writes: boolean;
-  /// Per-provider configuration. Each carries its own `enabled` flag
-  /// + minimum config (token via the keychain flow, URL for ollama).
-  /// Model and max_tokens fields round-trip here but are written
-  /// from the assistant overlay's inspector, not from Settings.
-  claude: ClaudePrefs;
-  ollama: OllamaPrefs;
-  gemini: GeminiPrefs;
   claude_cli: CliPrefs;
   gemini_cli: CliPrefs;
+  codex_cli: CliPrefs;
 };
 
 export type LlmModelEntry = {
@@ -138,70 +85,26 @@ export type LlmModelEntry = {
   supports_thinking: boolean;
 };
 
-/// Wrapped response for `GET /api/llm/anthropic/models`.
-/// `source` carries provenance: "live" when fetched from
-/// Anthropic, "curated" when no key was set, "fallback" when the
-/// live fetch failed (in which case `error` carries the upstream
-/// reason). The frontend uses this to surface why a hand-rolled
-/// list is showing instead of the user's account catalog.
-export type AnthropicModelsResponse = {
-  models: LlmModelEntry[];
-  source: "live" | "curated" | "fallback";
-  error?: string | null;
-};
-
-/// Wrapped response for `GET /api/llm/gemini/models`. Same shape
-/// as the Anthropic catalog so both dropdowns share their render
-/// path; only the source URL differs.
-export type GeminiModelsResponse = {
-  models: LlmModelEntry[];
-  source: "live" | "curated" | "fallback";
-  error?: string | null;
-};
-
-export type LlmKeyStatus = {
-  set: boolean;
-  /// Where the active key is read from. "env" wins over the rest
-  /// (always treated as a per-shell override); "keychain" is
-  /// the recommended desktop / CLI path; "file" is the legacy
-  /// `~/.config/chan/api-keys.toml` fallback.
-  source: "env" | "keychain" | "file" | null;
-  path: string | null;
-  /// True when the OS keychain backend is reachable on this
-  /// machine. False on headless boxes (no Secret Service / DBus
-  /// session on Linux, locked keychain on macOS, etc.); the
-  /// Settings UI hides keychain controls when false.
-  keychain_available: boolean;
-};
-
-/// One row of `/api/llm/keys`. Hides the actual key value; just
-/// reports whether it's set and where chan-llm's resolver would
-/// pick it up. Settings' per-row keychain UI reads this to render
-/// a "stored / not stored" pill for each token-taking provider.
-export type LlmKeyStatusRow = {
-  set: boolean;
-  source: "env" | "keychain" | "file" | null;
-};
-
-/// Per-provider key statuses returned by GET /api/llm/keys. Covers
-/// only the providers that take a hosted API key (Anthropic,
-/// Gemini); Ollama is keyless and the CLI shells use the installed
-/// CLI's own auth.
-export type LlmKeysStatus = {
-  anthropic: LlmKeyStatusRow;
-  gemini: LlmKeyStatusRow;
-};
-
 export type LlmStatus = {
   backend: string;
   model: string | null;
-  key: LlmKeyStatus;
   ready: boolean;
   /// Human-readable explanation of why `ready = false`. Absent
   /// when the assistant is ready.
   reason?: string | null;
   enabled: boolean;
   supports_tools: boolean;
+};
+
+export type CliDetectionView = {
+  backend: AssistantBackendKind;
+  ready: boolean;
+  command: string[];
+  reason?: string | null;
+};
+
+export type CliDetectionResponse = {
+  detections: CliDetectionView[];
 };
 
 /// Mirror of chan-core's Message / ToolSpec / etc. Kept loose
@@ -263,6 +166,143 @@ export type LlmStopReason =
   | "stop_sequence"
   | "cancelled"
   | "other";
+
+export type UnknownAgentStatus = {
+  kind: string;
+  [key: string]: unknown;
+};
+
+/// Mirrors chan-llm's non-exhaustive `AgentStatus`; unknown kinds
+/// must be tolerated by reducers and UI.
+export type AgentStatus =
+  | { kind: "spawned"; backend: string; pid: number | null }
+  | {
+      kind: "ready";
+      backend: string;
+      session_id: string | null;
+      model: string | null;
+      version: string | null;
+    }
+  | { kind: "thinking"; backend: string; status: string | null }
+  | { kind: "heartbeat"; backend: string; idle_ms: number }
+  | { kind: "turn_stopping"; backend: string; reason: string | null }
+  | {
+      kind: "rate_limit";
+      backend: string;
+      status: string;
+      resets_at: string | null;
+      rate_limit_type: string | null;
+      in_overage: boolean;
+    }
+  | { kind: "exited"; backend: string; code: number | null; success: boolean }
+  | { kind: "unhealthy"; backend: string; reason: string; detail: string | null }
+  | { kind: "cancelled"; backend: string }
+  | UnknownAgentStatus;
+
+export type UnknownAgentActivity = {
+  kind: string;
+  [key: string]: unknown;
+};
+
+/// Mirrors chan-llm's non-exhaustive `AgentActivity`; JSON payloads
+/// owned by backend tools stay unknown until a caller narrows them.
+export type AgentActivity =
+  | { kind: "session_started"; backend: string; session_id: string | null }
+  | {
+      kind: "message_started";
+      backend: string;
+      message_id: string | null;
+      parent_id?: string | null;
+    }
+  | { kind: "thinking_started"; backend: string; parent_id?: string | null }
+  | {
+      kind: "thinking_delta";
+      backend: string;
+      text: string;
+      parent_id?: string | null;
+    }
+  | {
+      kind: "tool_started";
+      backend: string;
+      id: string;
+      name: string;
+      parent_id?: string | null;
+    }
+  | {
+      kind: "tool_args_delta";
+      backend: string;
+      id: string | null;
+      partial_json: string;
+      parent_id?: string | null;
+    }
+  | {
+      kind: "tool_finished";
+      backend: string;
+      id: string;
+      name: string | null;
+      output: unknown;
+      is_error: boolean;
+      parent_id?: string | null;
+    }
+  | {
+      kind: "tool_denied";
+      backend: string;
+      id: string | null;
+      name: string | null;
+      reason: string | null;
+      input: unknown;
+      parent_id?: string | null;
+    }
+  | { kind: "agent_note"; backend: string; text: string; parent_id?: string | null }
+  | { kind: "turn_usage"; backend: string; usage: unknown }
+  | UnknownAgentActivity;
+
+export type UserOption = {
+  label: string;
+  description?: string | null;
+};
+
+export type UserQuestion = {
+  question: string;
+  header?: string | null;
+  multi_select: boolean;
+  options: UserOption[];
+};
+
+export type UnknownUserRequest = {
+  kind: string;
+  [key: string]: unknown;
+};
+
+/// Display-only for now; answering requires a later bidirectional
+/// control path.
+export type UserRequest =
+  | {
+      kind: "survey";
+      backend: string;
+      id: string;
+      questions: UserQuestion[];
+      parent_id: string | null;
+    }
+  | UnknownUserRequest;
+
+export type LlmStatusFrame = {
+  type: "llm.status";
+  session_id: string;
+  status: AgentStatus;
+};
+
+export type LlmActivityFrame = {
+  type: "llm.activity";
+  session_id: string;
+  activity: AgentActivity;
+};
+
+export type LlmUserRequestFrame = {
+  type: "llm.user_request";
+  session_id: string;
+  request: UserRequest;
+};
 
 export type LlmCompletionResponse = {
   content: string;

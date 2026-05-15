@@ -44,9 +44,9 @@ pub struct PreferencesView {
 }
 
 /// Frontend's `AssistantPrefs` view. The Settings UI manages the
-/// per-provider enable flags + minimum config (token / URL); model
-/// and max_tokens fields round-trip here too but are written from
-/// the assistant overlay's inspector, not Settings.
+/// per-CLI enable flags and command overrides; model fields
+/// round-trip here too but are written from the assistant overlay's
+/// inspector, not Settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssistantPrefsView {
     /// Derived: true when `default_backend` is Some AND the matching
@@ -62,9 +62,6 @@ pub struct AssistantPrefsView {
     pub default_backend: Option<AssistantBackendKind>,
     pub answers_dir: String,
     pub auto_apply_writes: bool,
-    pub claude: ProviderPrefsView,
-    pub ollama: OllamaPrefsView,
-    pub gemini: ProviderPrefsView,
     /// Local `claude` CLI shell-executor backend. Carries no token /
     /// URL (auth runs through the user's installed CLI); only the
     /// enable flag and the optional model override.
@@ -73,6 +70,10 @@ pub struct AssistantPrefsView {
     /// Same shape as `claude_cli` for the `gemini` CLI.
     #[serde(default)]
     pub gemini_cli: CliPrefsView,
+    /// Local `codex exec` backend. Older frontends ignore this
+    /// field; newer ones can use the same CLI prefs shape.
+    #[serde(default)]
+    pub codex_cli: CliPrefsView,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -84,75 +85,37 @@ pub struct CliPrefsView {
     /// inspector, not from Settings.
     #[serde(default)]
     pub model: Option<String>,
+    /// Optional command override for this CLI backend. A bare
+    /// command is resolved on PATH; an absolute path must point to
+    /// an executable file. None lets chan-llm use its default.
+    #[serde(default)]
+    pub cmd_override: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ProviderPrefsView {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub model: Option<String>,
-    /// Per-backend max output tokens. None falls back to chan-llm's
-    /// per-backend default (Anthropic 4096, Gemini 4096). Written
-    /// from the assistant overlay's inspector, not from Settings.
-    #[serde(default)]
-    pub max_tokens: Option<u32>,
-    /// Per-backend extended-thinking budget. Today only Anthropic
-    /// surfaces this in the inspector; Gemini's slot stays None
-    /// until / unless we wire a thinking-capable Gemini backend.
-    /// None = no thinking block in the request (model runs in
-    /// normal mode).
-    #[serde(default)]
-    pub thinking_budget: Option<u32>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct OllamaPrefsView {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub url: Option<String>,
-    #[serde(default)]
-    pub model: Option<String>,
-    /// Maps to Ollama's `options.num_predict`. None = uncapped.
-    /// Written from the assistant overlay's inspector, not from
-    /// Settings.
-    #[serde(default)]
-    pub max_tokens: Option<u32>,
-}
-
-/// Frontend uses "claude" (display label) for what chan-llm types
-/// internally as `BackendKind::Anthropic`. The "claude_cli" /
-/// "gemini_cli" variants cover the shell-executor backends that
-/// wrap the local `claude` and `gemini` CLIs.
+/// Shell-executor backends supported by chan-llm 0.11.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::enum_variant_names)]
 #[serde(rename_all = "snake_case")]
 pub enum AssistantBackendKind {
-    Claude,
-    Ollama,
-    Gemini,
     ClaudeCli,
     GeminiCli,
+    CodexCli,
 }
 
 impl AssistantBackendKind {
     pub fn from_chan_llm(kind: BackendKind) -> Self {
         match kind {
-            BackendKind::Anthropic => AssistantBackendKind::Claude,
-            BackendKind::Ollama => AssistantBackendKind::Ollama,
-            BackendKind::Gemini => AssistantBackendKind::Gemini,
             BackendKind::ClaudeCli => AssistantBackendKind::ClaudeCli,
             BackendKind::GeminiCli => AssistantBackendKind::GeminiCli,
+            BackendKind::CodexCli => AssistantBackendKind::CodexCli,
         }
     }
 
     pub fn to_chan_llm(self) -> BackendKind {
         match self {
-            AssistantBackendKind::Claude => BackendKind::Anthropic,
-            AssistantBackendKind::Ollama => BackendKind::Ollama,
-            AssistantBackendKind::Gemini => BackendKind::Gemini,
             AssistantBackendKind::ClaudeCli => BackendKind::ClaudeCli,
             AssistantBackendKind::GeminiCli => BackendKind::GeminiCli,
+            AssistantBackendKind::CodexCli => BackendKind::CodexCli,
         }
     }
 }
@@ -162,11 +125,11 @@ impl AssistantBackendKind {
 ///
 /// On `--tunnel-public` runs the assistant subtree is neutralized:
 /// `effective_enabled` flips to false, the default backend clears,
-/// and every per-provider config field empties. The matching
+/// and every per-CLI config field empties. The matching
 /// write-side routes are 403'd by the settings guard already;
 /// redacting the read keeps the SPA in lock-step (so the assistant
 /// pill greys out via the existing master-switch logic), stops the
-/// configured backend / model / ollama URL from leaking to
+/// configured backend / model / command override from leaking to
 /// anonymous visitors, and removes any signal that could tell a
 /// visitor whether the assistant gate is worth probing.
 pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
@@ -179,11 +142,9 @@ pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
             default_backend: None,
             answers_dir: String::new(),
             auto_apply_writes: false,
-            claude: ProviderPrefsView::default(),
-            ollama: OllamaPrefsView::default(),
-            gemini: ProviderPrefsView::default(),
             claude_cli: CliPrefsView::default(),
             gemini_cli: CliPrefsView::default(),
+            codex_cli: CliPrefsView::default(),
         }
     } else {
         AssistantPrefsView {
@@ -191,31 +152,32 @@ pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
             default_backend: llm.backend.map(AssistantBackendKind::from_chan_llm),
             answers_dir: server.answers_dir.clone(),
             auto_apply_writes: llm.auto_apply_writes,
-            claude: ProviderPrefsView {
-                enabled: llm.enabled.anthropic,
-                model: llm.models.anthropic.clone(),
-                max_tokens: llm.max_tokens.anthropic,
-                thinking_budget: llm.thinking_budget.anthropic,
-            },
-            ollama: OllamaPrefsView {
-                enabled: llm.enabled.ollama,
-                url: llm.urls.ollama.clone(),
-                model: llm.models.ollama.clone(),
-                max_tokens: llm.max_tokens.ollama,
-            },
-            gemini: ProviderPrefsView {
-                enabled: llm.enabled.gemini,
-                model: llm.models.gemini.clone(),
-                max_tokens: llm.max_tokens.gemini,
-                thinking_budget: None,
-            },
             claude_cli: CliPrefsView {
                 enabled: llm.enabled.claude_cli,
                 model: llm.models.claude_cli.clone(),
+                cmd_override: llm
+                    .claude_cli
+                    .cmd
+                    .as_ref()
+                    .and_then(|cmd| cmd.first().cloned()),
             },
             gemini_cli: CliPrefsView {
                 enabled: llm.enabled.gemini_cli,
                 model: llm.models.gemini_cli.clone(),
+                cmd_override: llm
+                    .gemini_cli
+                    .cmd
+                    .as_ref()
+                    .and_then(|cmd| cmd.first().cloned()),
+            },
+            codex_cli: CliPrefsView {
+                enabled: llm.enabled.codex_cli,
+                model: llm.models.codex_cli.clone(),
+                cmd_override: llm
+                    .codex_cli
+                    .cmd
+                    .as_ref()
+                    .and_then(|cmd| cmd.first().cloned()),
             },
         }
     };
@@ -375,7 +337,11 @@ pub async fn api_patch_config(
     // at the router layer; no per-handler gate.
     if let Some(prefs) = body.preferences {
         if let Err(e) = apply_preferences(&state, prefs) {
-            return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+            let status = match e {
+                Error::BadRequest(_) => StatusCode::BAD_REQUEST,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            return err(status, e.to_string());
         }
     }
     if let Some(opt) = body.default_drive_root {
@@ -427,44 +393,78 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
         llm.backend = view.assistant.default_backend.map(|k| k.to_chan_llm());
         // Per-provider enable flags. The SPA's CRUD list toggles
         // these independently of the default-backend pointer above.
-        llm.enabled.anthropic = view.assistant.claude.enabled;
-        llm.enabled.gemini = view.assistant.gemini.enabled;
-        llm.enabled.ollama = view.assistant.ollama.enabled;
         llm.enabled.claude_cli = view.assistant.claude_cli.enabled;
         llm.enabled.gemini_cli = view.assistant.gemini_cli.enabled;
+        llm.enabled.codex_cli = view.assistant.codex_cli.enabled;
         llm.auto_apply_writes = view.assistant.auto_apply_writes;
-        llm.models.anthropic = view.assistant.claude.model;
-        llm.models.gemini = view.assistant.gemini.model;
-        llm.models.ollama = view.assistant.ollama.model;
         // CLI overrides: empty / None falls back to "let the CLI's
         // own config pick", which is what we want when the user
         // clears the field.
         llm.models.claude_cli = view.assistant.claude_cli.model.filter(|s| !s.is_empty());
         llm.models.gemini_cli = view.assistant.gemini_cli.model.filter(|s| !s.is_empty());
-        // None clears the override so backends fall back to their
-        // built-in defaults; see chan-llm `MaxTokens` resolution.
-        llm.max_tokens.anthropic = view.assistant.claude.max_tokens;
-        llm.max_tokens.gemini = view.assistant.gemini.max_tokens;
-        llm.max_tokens.ollama = view.assistant.ollama.max_tokens;
-        // Extended-thinking budget. None disables the thinking
-        // block entirely; the backend additionally strips it on
-        // models that don't support thinking, so a stored value is
-        // safe to keep across model switches.
-        llm.thinking_budget.anthropic = view.assistant.claude.thinking_budget;
-        // Empty string from the form clears the override (back to
-        // env or the hardcoded default). Trim before storing so a
-        // copy-pasted URL with whitespace doesn't break the http
-        // client.
-        llm.urls.ollama = view
-            .assistant
-            .ollama
-            .url
-            .map(|u| u.trim().to_string())
-            .filter(|u| !u.is_empty());
+        llm.models.codex_cli = view.assistant.codex_cli.model.filter(|s| !s.is_empty());
+        llm.claude_cli.cmd = validated_cmd_override(
+            BackendKind::ClaudeCli,
+            view.assistant.claude_cli.cmd_override,
+        )?;
+        llm.gemini_cli.cmd = validated_cmd_override(
+            BackendKind::GeminiCli,
+            view.assistant.gemini_cli.cmd_override,
+        )?;
+        llm.codex_cli.cmd =
+            validated_cmd_override(BackendKind::CodexCli, view.assistant.codex_cli.cmd_override)?;
         llm.save()
             .map_err(|e| Error::Config(format!("save llm config: {e}")))?;
     }
     Ok(())
+}
+
+fn validated_cmd_override(
+    kind: BackendKind,
+    value: Option<String>,
+) -> Result<Option<Vec<String>>, Error> {
+    let Some(raw) = value else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let mut cfg = chan_llm::LlmConfig::default();
+    set_backend_cmd(&mut cfg, kind, vec![trimmed.to_string()]);
+    let detection = chan_llm::detect_backend_cli(kind, &cfg);
+    if detection.present() {
+        Ok(Some(vec![trimmed.to_string()]))
+    } else {
+        Err(Error::BadRequest(cli_detection_reason(kind, &detection)))
+    }
+}
+
+fn set_backend_cmd(cfg: &mut chan_llm::LlmConfig, kind: BackendKind, cmd: Vec<String>) {
+    match kind {
+        BackendKind::ClaudeCli => cfg.claude_cli.cmd = Some(cmd),
+        BackendKind::GeminiCli => cfg.gemini_cli.cmd = Some(cmd),
+        BackendKind::CodexCli => cfg.codex_cli.cmd = Some(cmd),
+    }
+}
+
+pub(crate) fn cli_detection_reason(
+    kind: BackendKind,
+    detection: &chan_llm::CliDetection,
+) -> String {
+    let cmd0 = detection.command.first().map(String::as_str).unwrap_or("");
+    format!(
+        "`{cmd0}` not found or rejected. Install the {} CLI, or set its cmd in llm.toml.",
+        backend_tag(kind),
+    )
+}
+
+pub(crate) fn backend_tag(kind: BackendKind) -> &'static str {
+    match kind {
+        BackendKind::ClaudeCli => "claude_cli",
+        BackendKind::GeminiCli => "gemini_cli",
+        BackendKind::CodexCli => "codex_cli",
+    }
 }
 
 #[cfg(test)]
@@ -512,7 +512,7 @@ mod tests {
         // The assistant subtree is the cost-bearing surface. Even
         // though POST /api/llm/complete is refused by the public-
         // tunnel guard, leaking the configured backend / model /
-        // ollama URL would still hand a visitor useful probe data.
+        // command override would still hand a visitor useful probe data.
         // `effective_enabled: false` also greys the assistant pill
         // via the SPA's existing master-switch logic and
         // `default_backend: null` removes the only signal that says
@@ -532,28 +532,19 @@ mod tests {
             serde_json::json!(false)
         );
         assert_eq!(
-            json["assistant"]["claude"]["enabled"],
+            json["assistant"]["claude_cli"]["enabled"],
             serde_json::json!(false)
         );
         assert_eq!(
-            json["assistant"]["gemini"]["enabled"],
+            json["assistant"]["gemini_cli"]["enabled"],
             serde_json::json!(false)
         );
         assert_eq!(
-            json["assistant"]["ollama"]["enabled"],
+            json["assistant"]["codex_cli"]["enabled"],
             serde_json::json!(false)
         );
         assert_eq!(
-            json["assistant"]["ollama"]["url"],
-            serde_json::Value::Null,
-            "ollama URL would leak the owner's LAN host"
-        );
-        assert_eq!(
-            json["assistant"]["claude"]["model"],
-            serde_json::Value::Null
-        );
-        assert_eq!(
-            json["assistant"]["gemini"]["model"],
+            json["assistant"]["claude_cli"]["cmd_override"],
             serde_json::Value::Null
         );
     }
@@ -574,5 +565,36 @@ mod tests {
         // is an array, default_drive_root is the JSON null produced
         // by `Option::None`, NOT the forced None of the redact arm).
         assert!(json["drives"].is_array());
+    }
+
+    #[test]
+    fn cli_cmd_override_round_trips_through_preferences() {
+        let state = make_test_state(false, false);
+        let exe = std::env::current_exe()
+            .expect("current exe")
+            .to_string_lossy()
+            .into_owned();
+        let mut view = preferences_view(&state);
+        view.assistant.claude_cli.cmd_override = Some(exe.clone());
+
+        apply_preferences(&state, view).expect("apply prefs");
+
+        let updated = preferences_view(&state);
+        assert_eq!(updated.assistant.claude_cli.cmd_override, Some(exe));
+    }
+
+    #[test]
+    fn invalid_cli_cmd_override_is_rejected() {
+        let state = make_test_state(false, false);
+        let mut view = preferences_view(&state);
+        view.assistant.gemini_cli.cmd_override =
+            Some("/definitely/not/a/real/gemini-binary".to_string());
+
+        let err = apply_preferences(&state, view).expect_err("invalid override");
+        assert!(matches!(err, Error::BadRequest(_)));
+        assert!(
+            err.to_string().contains("not found or rejected"),
+            "unexpected error: {err}"
+        );
     }
 }

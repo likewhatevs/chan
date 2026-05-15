@@ -17,7 +17,6 @@
 
 mod auth;
 mod bus;
-mod cli_resolve;
 mod config;
 mod embed_seed;
 mod error;
@@ -45,14 +44,12 @@ use routes::{
     api_delete_assistant, api_delete_file, api_delete_session, api_get_assistant, api_get_config,
     api_get_contacts, api_get_drive, api_get_server_config, api_get_session, api_graph,
     api_headings, api_health, api_index_rebuild, api_index_status, api_link_targets, api_links,
-    api_list_assistant, api_list_files, api_list_sessions, api_llm_anthropic_models,
-    api_llm_clear_anthropic_key, api_llm_clear_gemini_key, api_llm_complete, api_llm_gemini_models,
-    api_llm_keys_status, api_llm_ollama_models, api_llm_resume, api_llm_set_anthropic_key,
-    api_llm_set_gemini_key, api_llm_status, api_llm_tools, api_move, api_patch_config,
-    api_patch_drive, api_patch_server_config, api_post_answer, api_post_attachment,
-    api_post_contacts_import, api_put_assistant, api_put_session, api_read_file, api_report_file,
-    api_report_prefix, api_resolve_link, api_search_content, api_search_files, api_storage_reset,
-    api_write_file, ws_upgrade,
+    api_list_assistant, api_list_files, api_list_sessions, api_llm_cli_detection, api_llm_complete,
+    api_llm_resume, api_llm_status, api_llm_tools, api_move, api_patch_config, api_patch_drive,
+    api_patch_server_config, api_post_answer, api_post_attachment, api_post_contacts_import,
+    api_put_assistant, api_put_session, api_read_file, api_report_file, api_report_prefix,
+    api_resolve_link, api_search_content, api_search_files, api_storage_reset, api_write_file,
+    ws_upgrade,
 };
 use signal::{now_unix_secs, print_qr_if_tty, spawn_idle_watcher, spawn_signal_watcher};
 use state::{AppState, DriveCell};
@@ -74,7 +71,7 @@ use std::time::Duration;
 
 use axum::extract::DefaultBodyLimit;
 use axum::middleware;
-use axum::routing::{get, patch, post, put};
+use axum::routing::{get, patch, post};
 use axum::Router;
 use chan_drive::{Drive, Library, WatchEvent};
 use chan_llm::LlmConfig;
@@ -722,14 +719,6 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/drive", patch(api_patch_drive))
         .route("/api/config", patch(api_patch_config))
         .route("/api/server/config", patch(api_patch_server_config))
-        .route(
-            "/api/llm/keys/anthropic",
-            put(api_llm_set_anthropic_key).delete(api_llm_clear_anthropic_key),
-        )
-        .route(
-            "/api/llm/keys/gemini",
-            put(api_llm_set_gemini_key).delete(api_llm_clear_gemini_key),
-        )
         .route("/api/storage/reset", post(api_storage_reset))
         .route("/api/index/rebuild", post(api_index_rebuild))
         .route_layer(middleware::from_fn_with_state(
@@ -792,11 +781,8 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/report/file", get(api_report_file))
         .route("/api/report/prefix", get(api_report_prefix))
         .route("/api/llm/status", get(api_llm_status))
-        .route("/api/llm/keys", get(api_llm_keys_status))
+        .route("/api/llm/cli_detection", get(api_llm_cli_detection))
         .route("/api/llm/tools", get(api_llm_tools))
-        .route("/api/llm/anthropic/models", get(api_llm_anthropic_models))
-        .route("/api/llm/gemini/models", get(api_llm_gemini_models))
-        .route("/api/llm/ollama/models", get(api_llm_ollama_models))
         .route("/api/server/config", get(api_get_server_config))
         .route("/api/config", get(api_get_config))
         .route("/api/build-info", get(api_build_info))

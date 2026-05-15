@@ -5,11 +5,10 @@
 // is one transport implementation, not a polymorphic seam.
 
 import type {
-  AnthropicModelsResponse,
   BuildInfo,
+  CliDetectionResponse,
   ContentSearchResponse,
   FileResponse,
-  GeminiModelsResponse,
   GlobalConfig,
   GraphEdge,
   GraphSnapshot,
@@ -18,8 +17,6 @@ import type {
   IndexStatus,
   LlmCompletionRequest,
   LlmCompletionResponse,
-  LlmKeysStatus,
-  LlmModelEntry,
   LlmResumeRequest,
   LlmResumeResponse,
   LlmStatus,
@@ -111,13 +108,9 @@ export const api = {
   /// by the Settings tab "Assistant" section to show ready / not
   /// ready and where the user should set their key.
   llmStatus: () => req<LlmStatus>("GET", "/api/llm/status"),
-  /// Per-provider key status. Drives Settings' per-row keychain UI
-  /// so each provider's row can render its own "stored / not stored"
-  /// pill without needing to be the currently-default backend.
-  /// Reports only the key-taking providers (Anthropic, Gemini);
-  /// Ollama is keyless and the CLI shells use the installed CLI's
-  /// own auth.
-  llmKeysStatus: () => req<LlmKeysStatus>("GET", "/api/llm/keys"),
+  /// Detect all local assistant CLIs using the current configured
+  /// command overrides.
+  llmCliDetection: () => req<CliDetectionResponse>("GET", "/api/llm/cli_detection"),
   /// One-shot assistant call. The whole conversation lives in
   /// `messages`; the server forwards to the configured backend.
   /// `signal` lets the caller abort a slow request (the Stop
@@ -142,32 +135,6 @@ export const api = {
     req<LlmResumeResponse>("POST", "/api/llm/resume", body, signal, 0),
   /** Tool catalog: the server's `default_tools()` list. */
   llmTools: () => req<LlmToolSpec[]>("GET", "/api/llm/tools"),
-  /** Persist the Anthropic API key to the OS keychain. Surfaces
-   *  through `llmStatus().key.source = "keychain"` once stored.
-   *  Server returns 503 when the keychain backend isn't reachable
-   *  (headless box, locked keychain); the Settings UI hides the
-   *  call site in that case. */
-  setAnthropicKey: (key: string) =>
-    req<void>("PUT", "/api/llm/keys/anthropic", { key }),
-  /** Drop the keychain entry. Idempotent. Leaves the env var and
-   *  `~/.config/chan/api-keys.toml` untouched. */
-  clearAnthropicKey: () => req<void>("DELETE", "/api/llm/keys/anthropic"),
-  /** Same shape as setAnthropicKey, for the Google Gemini key. */
-  setGeminiKey: (key: string) =>
-    req<void>("PUT", "/api/llm/keys/gemini", { key }),
-  clearGeminiKey: () => req<void>("DELETE", "/api/llm/keys/gemini"),
-  /** Anthropic / Gemini / Ollama model catalogs, same shape so the
-   *  Settings dropdown renders identically regardless of provider. */
-  anthropicModels: () =>
-    req<AnthropicModelsResponse>("GET", "/api/llm/anthropic/models"),
-  geminiModels: () =>
-    req<GeminiModelsResponse>("GET", "/api/llm/gemini/models"),
-  ollamaModels: (url?: string) => {
-    const path = url
-      ? `/api/llm/ollama/models?url=${encodeURIComponent(url)}`
-      : "/api/llm/ollama/models";
-    return req<LlmModelEntry[]>("GET", path);
-  },
   /// Per-file assistant conversation persistence. Each file's
   /// conversation is its own JSON under `.chan/assistant/`, keyed
   /// by `<sha256(path)[..16]>.json`. The hash hides the raw path

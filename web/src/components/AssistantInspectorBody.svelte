@@ -8,30 +8,27 @@
   //   1. Active assistant (dropdown of enabled providers from
   //      drive.info.preferences.assistant). Picking switches the
   //      default backend.
-  //   2. Model (dropdown sourced from the live catalog for the
-  //      picked provider; refresh button always re-queries).
-  //   3. Max output tokens (numeric input; empty falls back to the
-  //      backend default).
+  //   2. Model (per-CLI dropdown where we have a stable shortlist,
+  //      free-text for Codex so the CLI validates the final value).
   //
   // Writes round-trip through `api.updateConfig` so the value sticks
   // across reloads. The Settings panel reads from the same source,
   // so opening it later shows whatever the inspector last persisted.
 
-  import { onMount, untrack } from "svelte";
+  import { onMount } from "svelte";
   import { api } from "../api/client";
   import type {
-    AnthropicModelsResponse,
     AssistantBackendKind,
     AssistantPrefs,
-    GeminiModelsResponse,
     GlobalConfig,
-    LlmModelEntry,
     Preferences,
   } from "../api/types";
   import { drive } from "../state/store.svelte";
 
   /// Curated model shortlists for the local CLIs (`claude_cli` /
-  /// `gemini_cli`). Same list the old Settings UI used. Aliases
+  /// `gemini_cli`). Same list the old Settings UI used. Codex CLI
+  /// stays free-text here because chan-llm does not expose a stable
+  /// shortlist for it through this inspector surface yet. Aliases
   /// (`opus` / `sonnet` / `haiku`) sit at the top — they survive a
   /// model bump without a config edit. Pinned full names follow for
   /// users who want to lock to a generation.
@@ -52,23 +49,6 @@
   /// sync into `editing` whenever the snapshot differs.
   let editing = $state<Preferences | null>(null);
   let lastSnap = "";
-
-  /// Per-provider model catalogs. Loaded on demand: switching to a
-  /// provider that hasn't been queried yet refreshes its catalog
-  /// once. Stays in memory for the lifetime of the inspector mount.
-  let anthropicModels = $state<LlmModelEntry[]>([]);
-  let anthropicSource = $state<"live" | "curated" | "fallback" | null>(null);
-  let anthropicLoading = $state(false);
-  let anthropicError = $state<string | null>(null);
-
-  let geminiModels = $state<LlmModelEntry[]>([]);
-  let geminiSource = $state<"live" | "curated" | "fallback" | null>(null);
-  let geminiLoading = $state(false);
-  let geminiError = $state<string | null>(null);
-
-  let ollamaModels = $state<LlmModelEntry[]>([]);
-  let ollamaLoading = $state(false);
-  let ollamaError = $state<string | null>(null);
 
   /// Save status surfaced under the inspector header. Mirrors
   /// SettingsPanel's status shape so the user sees the same idiom.
@@ -122,11 +102,9 @@
   function firstEnabledProvider(): AssistantBackendKind | null {
     const a = editing?.assistant;
     if (!a) return null;
-    if (a.claude.enabled) return "claude";
-    if (a.gemini.enabled) return "gemini";
-    if (a.ollama.enabled) return "ollama";
     if (a.claude_cli.enabled) return "claude_cli";
     if (a.gemini_cli.enabled) return "gemini_cli";
+    if (a.codex_cli.enabled) return "codex_cli";
     return null;
   }
 
@@ -140,172 +118,14 @@
       ? []
       : (
           [
-            { kind: "claude", label: "Claude", on: editing.assistant.claude.enabled },
-            { kind: "gemini", label: "Gemini", on: editing.assistant.gemini.enabled },
-            { kind: "ollama", label: "Ollama", on: editing.assistant.ollama.enabled },
             { kind: "claude_cli", label: "Claude CLI", on: editing.assistant.claude_cli.enabled },
             { kind: "gemini_cli", label: "Gemini CLI", on: editing.assistant.gemini_cli.enabled },
+            { kind: "codex_cli", label: "Codex CLI", on: editing.assistant.codex_cli.enabled },
           ] as const
         )
           .filter((p) => p.on)
           .map((p) => ({ kind: p.kind as AssistantBackendKind, label: p.label })),
   );
-
-  /// Pull the Anthropic / Gemini / Ollama catalogs on demand. Each
-  /// refresh button hits the same endpoint the Settings UI used
-  /// before its model picker moved here; "fallback" sources stamp
-  /// an inline note so the user knows why a curated list is showing.
-  async function refreshAnthropicModels(): Promise<void> {
-    if (anthropicLoading) return;
-    anthropicLoading = true;
-    anthropicError = null;
-    try {
-      const resp: AnthropicModelsResponse = await api.anthropicModels();
-      anthropicModels = resp.models;
-      anthropicSource = resp.source;
-      if (resp.source === "fallback") {
-        anthropicError = resp.error ?? "live fetch failed";
-      }
-      autoPickModel("claude");
-    } catch (e) {
-      anthropicError = (e as Error).message;
-      anthropicModels = [];
-      anthropicSource = null;
-    } finally {
-      anthropicLoading = false;
-    }
-  }
-
-  async function refreshGeminiModels(): Promise<void> {
-    if (geminiLoading) return;
-    geminiLoading = true;
-    geminiError = null;
-    try {
-      const resp: GeminiModelsResponse = await api.geminiModels();
-      geminiModels = resp.models;
-      geminiSource = resp.source;
-      if (resp.source === "fallback") {
-        geminiError = resp.error ?? "live fetch failed";
-      }
-      autoPickModel("gemini");
-    } catch (e) {
-      geminiError = (e as Error).message;
-      geminiModels = [];
-      geminiSource = null;
-    } finally {
-      geminiLoading = false;
-    }
-  }
-
-  async function refreshOllamaModels(): Promise<void> {
-    if (!editing || ollamaLoading) return;
-    ollamaLoading = true;
-    ollamaError = null;
-    try {
-      ollamaModels = await api.ollamaModels(
-        editing.assistant.ollama.url || undefined,
-      );
-      autoPickModel("ollama");
-    } catch (e) {
-      ollamaError = (e as Error).message;
-      ollamaModels = [];
-    } finally {
-      ollamaLoading = false;
-    }
-  }
-
-  /// When a catalog refresh lands, fill the matching model field
-  /// with the first available entry if the user doesn't already
-  /// have a valid pick. Same footgun-avoidance the old Settings UI
-  /// had; keeps the dropdown from rendering blank when the saved
-  /// model isn't in the catalog the API returned this session.
-  function autoPickModel(provider: "claude" | "gemini" | "ollama"): void {
-    if (!editing) return;
-    if (provider === "claude") {
-      if (anthropicModels.length === 0) return;
-      const cur = editing.assistant.claude.model;
-      if (!cur || !anthropicModels.some((m) => m.name === cur)) {
-        editing.assistant.claude.model = anthropicModels[0].name;
-      }
-    } else if (provider === "gemini") {
-      if (geminiModels.length === 0) return;
-      const cur = editing.assistant.gemini.model;
-      if (!cur || !geminiModels.some((m) => m.name === cur)) {
-        editing.assistant.gemini.model = geminiModels[0].name;
-      }
-    } else {
-      if (ollamaModels.length === 0) return;
-      const cur = editing.assistant.ollama.model;
-      if (!cur || !ollamaModels.some((m) => m.name === cur)) {
-        editing.assistant.ollama.model = ollamaModels[0].name;
-      }
-    }
-  }
-
-  /// Lazy catalog load: when the active provider switches, fetch its
-  /// catalog if we haven't already. Untracked so the load doesn't
-  /// retrigger on every catalog field mutation.
-  $effect(() => {
-    const kind = activeProvider;
-    if (!kind) return;
-    untrack(() => {
-      if (kind === "claude" && anthropicModels.length === 0) {
-        void refreshAnthropicModels();
-      } else if (kind === "gemini" && geminiModels.length === 0) {
-        void refreshGeminiModels();
-      } else if (kind === "ollama" && ollamaModels.length === 0) {
-        void refreshOllamaModels();
-      }
-    });
-  });
-
-  /// Parse a max-output-tokens text input into Option<u32>. Empty
-  /// string / non-positive numbers clear the override.
-  function parseMaxTokens(raw: string): number | null {
-    const t = raw.trim();
-    if (t === "") return null;
-    const n = Number(t);
-    if (!Number.isFinite(n) || n <= 0) return null;
-    const i = Math.floor(n);
-    return i > 0xffff_ffff ? 0xffff_ffff : i;
-  }
-
-  /// 4-step thinking budget. Mirrors OpenAI's reasoning_effort idiom
-  /// without leaking Anthropic's raw token count to users who don't
-  /// care. Mapping picked to roughly track Anthropic's own
-  /// suggestions for the lift each tier provides.
-  type ThinkingEffort = "off" | "low" | "med" | "high";
-  const THINKING_BUDGET_BY_EFFORT: Record<
-    Exclude<ThinkingEffort, "off">,
-    number
-  > = {
-    low: 1024,
-    med: 8192,
-    high: 16384,
-  };
-
-  function effortFromBudget(budget: number | null | undefined): ThinkingEffort {
-    if (budget == null || budget <= 0) return "off";
-    if (budget <= 4096) return "low";
-    if (budget <= 12288) return "med";
-    return "high";
-  }
-
-  function budgetFromEffort(effort: ThinkingEffort): number | null {
-    if (effort === "off") return null;
-    return THINKING_BUDGET_BY_EFFORT[effort];
-  }
-
-  /// Whether the currently-selected Anthropic model accepts a
-  /// `thinking` block. Hides the effort knob on non-thinking models
-  /// (Haiku) so the user doesn't pick a budget that gets silently
-  /// stripped at request time.
-  const claudeModelSupportsThinking = $derived.by<boolean>(() => {
-    const m = editing?.assistant.claude.model;
-    if (!m) return false;
-    const entry = anthropicModels.find((e) => e.name === m);
-    return entry?.supports_thinking === true;
-  });
 
   function scheduleSave(): void {
     if (autosaveTimer) clearTimeout(autosaveTimer);
@@ -366,12 +186,6 @@
     if (!editing) return;
     const next = (e.currentTarget as HTMLSelectElement).value as AssistantBackendKind;
     editing.assistant.default_backend = next;
-    // Lazy-load catalog for the new provider so the model dropdown
-    // populates immediately instead of waiting for the next render
-    // cycle's $effect to catch up.
-    if (next === "claude" && anthropicModels.length === 0) void refreshAnthropicModels();
-    else if (next === "gemini" && geminiModels.length === 0) void refreshGeminiModels();
-    else if (next === "ollama" && ollamaModels.length === 0) void refreshOllamaModels();
   }
 
   onMount(() => {
@@ -387,11 +201,9 @@
 
   function modelOf(a: AssistantPrefs, kind: AssistantBackendKind | null): string | null {
     if (!kind) return null;
-    if (kind === "claude") return a.claude.model ?? null;
-    if (kind === "gemini") return a.gemini.model ?? null;
-    if (kind === "ollama") return a.ollama.model ?? null;
     if (kind === "claude_cli") return a.claude_cli.model ?? null;
     if (kind === "gemini_cli") return a.gemini_cli.model ?? null;
+    if (kind === "codex_cli") return a.codex_cli.model ?? null;
     return null;
   }
 
@@ -419,164 +231,7 @@
       </select>
     </label>
 
-    {#if activeProvider === "claude"}
-      <label class="field">
-        <span>Model</span>
-        <span class="model-row">
-          <select bind:value={editing.assistant.claude.model}>
-            {#if anthropicModels.length === 0}
-              <option value={null}>claude-haiku-4-5 (default)</option>
-            {/if}
-            {#each anthropicModels as m (m.name)}
-              <option value={m.name}>
-                {m.name}{m.supports_tools ? "" : "  (no tools)"}
-              </option>
-            {/each}
-          </select>
-          <button
-            type="button"
-            class="refresh"
-            onclick={() => void refreshAnthropicModels()}
-            disabled={anthropicLoading}
-            title="re-query Anthropic for the model list"
-          >{anthropicLoading ? "…" : "↻"}</button>
-        </span>
-      </label>
-      <label class="field">
-        <span>Max output tokens</span>
-        <input
-          type="number"
-          min="1"
-          step="1"
-          placeholder="4096 (default)"
-          value={editing.assistant.claude.max_tokens ?? ""}
-          oninput={(e) => {
-            if (!editing) return;
-            editing.assistant.claude.max_tokens = parseMaxTokens(
-              (e.currentTarget as HTMLInputElement).value,
-            );
-          }}
-        />
-      </label>
-      {#if claudeModelSupportsThinking}
-        {@const effort = effortFromBudget(
-          editing.assistant.claude.thinking_budget,
-        )}
-        <fieldset class="field effort-field">
-          <legend>Reasoning effort</legend>
-          <div class="effort-row">
-            {#each ["off", "low", "med", "high"] as opt (opt)}
-              <label class="effort-opt">
-                <input
-                  type="radio"
-                  name="claude-thinking-effort"
-                  value={opt}
-                  checked={effort === opt}
-                  onchange={() => {
-                    if (!editing) return;
-                    editing.assistant.claude.thinking_budget = budgetFromEffort(
-                      opt as ThinkingEffort,
-                    );
-                  }}
-                />
-                <span>{opt}</span>
-              </label>
-            {/each}
-          </div>
-        </fieldset>
-      {/if}
-      {#if anthropicSource === "fallback" && anthropicError}
-        <div class="muted small">
-          Anthropic: {anthropicError} (showing curated list)
-        </div>
-      {/if}
-    {:else if activeProvider === "gemini"}
-      <label class="field">
-        <span>Model</span>
-        <span class="model-row">
-          <select bind:value={editing.assistant.gemini.model}>
-            {#if geminiModels.length === 0}
-              <option value={null}>gemini-2.5-flash (default)</option>
-            {/if}
-            {#each geminiModels as m (m.name)}
-              <option value={m.name}>
-                {m.name}{m.supports_tools ? "" : "  (no tools)"}
-              </option>
-            {/each}
-          </select>
-          <button
-            type="button"
-            class="refresh"
-            onclick={() => void refreshGeminiModels()}
-            disabled={geminiLoading}
-            title="re-query Google for the model list"
-          >{geminiLoading ? "…" : "↻"}</button>
-        </span>
-      </label>
-      <label class="field">
-        <span>Max output tokens</span>
-        <input
-          type="number"
-          min="1"
-          step="1"
-          placeholder="4096 (default)"
-          value={editing.assistant.gemini.max_tokens ?? ""}
-          oninput={(e) => {
-            if (!editing) return;
-            editing.assistant.gemini.max_tokens = parseMaxTokens(
-              (e.currentTarget as HTMLInputElement).value,
-            );
-          }}
-        />
-      </label>
-      {#if geminiSource === "fallback" && geminiError}
-        <div class="muted small">
-          Gemini: {geminiError} (showing curated list)
-        </div>
-      {/if}
-    {:else if activeProvider === "ollama"}
-      <label class="field">
-        <span>Model</span>
-        <span class="model-row">
-          <select bind:value={editing.assistant.ollama.model} disabled={ollamaLoading}>
-            {#if ollamaModels.length === 0}
-              <option value={null}>(refresh to load)</option>
-            {/if}
-            {#each ollamaModels as m (m.name)}
-              <option value={m.name}>
-                {m.name}{m.supports_tools ? "" : "  (no tools)"}
-              </option>
-            {/each}
-          </select>
-          <button
-            type="button"
-            class="refresh"
-            onclick={() => void refreshOllamaModels()}
-            disabled={ollamaLoading}
-            title="re-query Ollama for installed models"
-          >{ollamaLoading ? "…" : "↻"}</button>
-        </span>
-      </label>
-      <label class="field">
-        <span>Max output tokens</span>
-        <input
-          type="number"
-          min="1"
-          step="1"
-          placeholder="uncapped (default)"
-          value={editing.assistant.ollama.max_tokens ?? ""}
-          oninput={(e) => {
-            if (!editing) return;
-            editing.assistant.ollama.max_tokens = parseMaxTokens(
-              (e.currentTarget as HTMLInputElement).value,
-            );
-          }}
-        />
-      </label>
-      {#if ollamaError}
-        <div class="muted small">Ollama: {ollamaError}</div>
-      {/if}
-    {:else if activeProvider === "claude_cli"}
+    {#if activeProvider === "claude_cli"}
       <label class="field">
         <span>Model</span>
         <select bind:value={editing.assistant.claude_cli.model}>
@@ -595,6 +250,21 @@
             <option value={name}>{name}</option>
           {/each}
         </select>
+      </label>
+    {:else if activeProvider === "codex_cli"}
+      <label class="field">
+        <span>Model</span>
+        <input
+          value={editing.assistant.codex_cli.model ?? ""}
+          placeholder="default"
+          spellcheck="false"
+          autocomplete="off"
+          oninput={(e) => {
+            if (!editing) return;
+            const value = (e.currentTarget as HTMLInputElement).value.trim();
+            editing.assistant.codex_cli.model = value === "" ? null : value;
+          }}
+        />
       </label>
     {/if}
 
@@ -646,47 +316,6 @@
   }
   .field select:focus,
   .field input:focus { border-color: var(--link); }
-  .model-row {
-    display: flex;
-    align-items: stretch;
-    gap: 4px;
-  }
-  .model-row select { flex: 1; }
-  .model-row .refresh {
-    background: var(--btn-bg);
-    color: var(--text);
-    border: 1px solid var(--btn-border);
-    border-radius: 3px;
-    padding: 0 8px;
-    font: inherit;
-    cursor: pointer;
-  }
-  .model-row .refresh:hover:not(:disabled) { border-color: var(--btn-hover); }
-  .model-row .refresh:disabled { opacity: 0.55; cursor: default; }
-  .small { font-size: 12px; }
-  .effort-field {
-    border: none;
-    padding: 0;
-    margin: 0;
-  }
-  .effort-field > legend {
-    color: var(--text-secondary);
-    font-size: 13px;
-    padding: 0 0 4px 0;
-  }
-  .effort-row {
-    display: flex;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-  }
-  .effort-opt {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    cursor: pointer;
-  }
-  .effort-opt input { margin: 0; }
-  .effort-opt span { color: var(--text); }
   .muted { color: var(--text-secondary); }
   .footer {
     display: flex;

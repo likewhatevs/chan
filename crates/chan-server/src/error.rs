@@ -9,7 +9,6 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_llm::LlmError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -19,6 +18,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("config: {0}")]
     Config(String),
+    #[error("{0}")]
+    BadRequest(String),
 }
 
 /// Wrap a status + message into the standard `{"error": "..."}` body.
@@ -46,7 +47,7 @@ pub fn err_settings_locked() -> Response {
 /// cost-bearing routes that must not be reachable from anonymous
 /// visitors when the server is running with `--tunnel-public`. The
 /// drive owner's LLM tokens, the indexer's CPU/IO budget, and the
-/// keychain backends are all attached to the owner's machine; an
+/// local CLI agent processes are all attached to the owner's machine; an
 /// unauthenticated visitor cannot be allowed to draw on them.
 pub fn err_tunnel_public_locked() -> Response {
     err(
@@ -56,21 +57,6 @@ pub fn err_tunnel_public_locked() -> Response {
          loopback serve or a private (non-public) tunnel."
             .into(),
     )
-}
-
-/// Map a chan-llm error to the right HTTP status. Backend HTTP errors
-/// surface their upstream status when it's a valid u16; everything else
-/// collapses to 500 / 400 / 501 by category.
-pub fn err_llm(e: &LlmError) -> Response {
-    let status = match e {
-        LlmError::MissingApiKey(_) => StatusCode::BAD_REQUEST,
-        LlmError::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
-        LlmError::BackendError { status, .. } => {
-            StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)
-        }
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    err(status, e.to_string())
 }
 
 /// Map chan-drive errors to HTTP statuses. The shape of the JSON

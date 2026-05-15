@@ -9,7 +9,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -21,28 +21,25 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use crate::bus::LlmBroadcastListener;
-use crate::cli_resolve::{api_keys_path_string, resolve_claude_cli, resolve_gemini_cli};
-use crate::error::{err, err_llm};
+use crate::error::err;
 use crate::state::AppState;
 
+use super::preferences::cli_detection_reason;
+
 /// `/api/llm/status` view shape. Frontend's `LlmStatus` type is a
-/// flat one-active-backend snapshot; the previous per-backend dict
-/// shape didn't match (and threw at render time when SettingsPanel
-/// reached for `key.set` on the missing field). One source of truth
-/// per request: the configured backend, its effective model, and
-/// the resolution status of its key.
+/// flat one-active-backend snapshot. One source of truth per
+/// request: the configured backend, its effective model, and whether
+/// its CLI binary is launchable.
 #[derive(Serialize)]
 struct LlmStatus {
     /// Frontend's display tag for the active backend.
-    /// "claude" | "ollama" | "gemini" | "claude_cli" | "gemini_cli".
+    /// "claude_cli" | "gemini_cli" | "codex_cli".
     backend: &'static str,
     /// Effective model for the active backend (config override or
     /// the chan-llm default).
     model: Option<String>,
-    /// Key resolution snapshot for the active backend.
-    key: LlmKeyView,
     /// Whether a request would succeed today (active backend
-    /// configured + key resolves, or Ollama which is keyless).
+    /// configured and CLI resolves).
     ready: bool,
     /// Human-readable explanation when `ready = false`. Absent on
     /// the happy path so the UI knows there's nothing to surface.
@@ -57,80 +54,28 @@ struct LlmStatus {
     supports_tools: bool,
 }
 
-#[derive(Serialize)]
-struct LlmKeyView {
-    /// True iff the key resolved through any of env / keychain /
-    /// file. Settings disables the "refresh models" buttons when
-    /// this is false.
-    set: bool,
-    /// Lowercase tag for where the key came from. None when not
-    /// set (the union with `set: false`).
-    source: Option<&'static str>,
-    /// Where the on-disk fallback would land. Constant per machine;
-    /// surfaced so the Settings tab can point the user at the file
-    /// to edit on a headless box.
-    path: Option<String>,
-    /// True when the OS keychain backend is reachable. Settings
-    /// hides keychain controls on headless boxes (no Secret
-    /// Service / DBus session, locked keychain, etc.).
-    keychain_available: bool,
-}
-
-/// Map the active chan-llm BackendKind to the frontend's display
-/// tag. Anthropic surfaces as "claude" because that's the brand the
-/// user picks from the dropdown.
 fn backend_tag(kind: BackendKind) -> &'static str {
     match kind {
-        BackendKind::Anthropic => "claude",
-        BackendKind::Ollama => "ollama",
-        BackendKind::Gemini => "gemini",
         BackendKind::ClaudeCli => "claude_cli",
         BackendKind::GeminiCli => "gemini_cli",
+        BackendKind::CodexCli => "codex_cli",
     }
-}
-
-fn key_status_tag(s: chan_llm::KeyStatus) -> Option<&'static str> {
-    match s {
-        chan_llm::KeyStatus::Env => Some("env"),
-        chan_llm::KeyStatus::Keychain => Some("keychain"),
-        chan_llm::KeyStatus::File => Some("file"),
-        chan_llm::KeyStatus::Missing => None,
-    }
-}
-
-/// Whether the OS keychain backend is reachable on this machine.
-/// chan-llm doesn't expose a probe today; we report `true`
-/// optimistically and let actual set / clear calls surface errors
-/// through `/api/llm/keys/<provider>` when the backend isn't
-/// usable. macOS Keychain, Windows Credential Manager, and
-/// gnome-keyring / KWallet on a desktop Linux session all work
-/// out of the box; the field is reserved as a future hook for
-/// detecting headless boxes.
-fn keychain_available() -> bool {
-    true
 }
 
 pub async fn api_llm_status(State(state): State<Arc<AppState>>) -> Response {
     // Public-tunnel runs return a sealed-off status: no backend, no
-    // model, no key paths, no readiness signal. The companion
+    // model or readiness signal. The companion
     // `tunnel_guard::tunnel_public_guard` refuses POST
     // /api/llm/complete anyway; this redaction stops a visitor from
-    // (a) discovering which provider the owner pays for, (b) seeing
-    // the absolute on-disk path of the keychain fallback file, and
-    // (c) probing for a misconfiguration that might let the gate
+    // (a) discovering which provider the owner uses, and (b)
+    // probing for a misconfiguration that might let the gate
     // through. The shape stays compatible: the SPA's existing
     // master-switch logic greys the assistant pill when `enabled`
     // is false, which is the same greying we want here.
     if state.tunnel_public {
         return Json(LlmStatus {
-            backend: backend_tag(BackendKind::Anthropic),
+            backend: backend_tag(BackendKind::ClaudeCli),
             model: None,
-            key: LlmKeyView {
-                set: false,
-                source: None,
-                path: None,
-                keychain_available: false,
-            },
             ready: false,
             reason: None,
             enabled: false,
@@ -139,113 +84,100 @@ pub async fn api_llm_status(State(state): State<Arc<AppState>>) -> Response {
         .into_response();
     }
     let cfg = state.llm_config.lock().unwrap().clone();
-    let active = cfg.backend.unwrap_or(BackendKind::Anthropic);
+    let active = cfg.backend.unwrap_or(BackendKind::ClaudeCli);
     let model = cfg
         .models
         .for_backend(active)
         .map(str::to_owned)
         .or_else(|| Some(active.default_model().to_string()));
-    let (active_key, status) = chan_llm::keys::resolve(active, &cfg);
-    let key_set = active_key.is_some();
     let enabled = cfg.active_backend().is_some();
-    // Resolve cmd[0] for the ClaudeCli backend so we can probe PATH.
-    // Mirrors backends::build's resolution: explicit cfg overrides
-    // win, otherwise chan-llm's `default_cmd()` (currently `claude`).
-    let claude_cli_cmd0 = cfg
-        .claude_cli
-        .cmd
-        .as_ref()
-        .and_then(|v| v.first().cloned())
-        .unwrap_or_else(|| {
-            chan_llm::backends::claude_cli::default_cmd()
-                .into_iter()
-                .next()
-                .unwrap_or_default()
-        });
-    let claude_cli_resolved = if active == BackendKind::ClaudeCli {
-        resolve_claude_cli(&claude_cli_cmd0)
-    } else {
-        None
-    };
-    // Same shape for the GeminiCli backend.
-    let gemini_cli_cmd0 = cfg
-        .gemini_cli
-        .cmd
-        .as_ref()
-        .and_then(|v| v.first().cloned())
-        .unwrap_or_else(|| {
-            chan_llm::backends::gemini_cli::default_cmd()
-                .into_iter()
-                .next()
-                .unwrap_or_default()
-        });
-    let gemini_cli_resolved = if active == BackendKind::GeminiCli {
-        resolve_gemini_cli(&gemini_cli_cmd0)
-    } else {
-        None
-    };
-    // Ollama is keyless (local); Anthropic and Gemini need a key.
-    // ClaudeCli/GeminiCli inherit auth from the installed CLI, but we
-    // still need to find the binary on PATH to consider them ready.
-    // GeminiCli additionally fails if v2 launches without a stored
-    // GEMINI_API_KEY (the redirected GEMINI_CLI_HOME blocks the
-    // user's `gemini login` auth); we don't gate `ready` on that
-    // here since v1 mode still works without a key.
-    let ready = enabled
-        && match active {
-            BackendKind::Ollama => true,
-            BackendKind::ClaudeCli => claude_cli_resolved.is_some(),
-            BackendKind::GeminiCli => gemini_cli_resolved.is_some(),
-            BackendKind::Anthropic | BackendKind::Gemini => key_set,
-        };
+    let detection = chan_llm::detect_backend_cli(active, &cfg);
+    let cli_ready = detection.present();
+    let cmd0 = detection.command.first().cloned().unwrap_or_default();
+    let ready = enabled && cli_ready;
     let reason = if !enabled {
         Some("no backend selected; pick one in Settings".to_string())
-    } else if !ready {
-        match active {
-            BackendKind::ClaudeCli => Some(format!(
-                "`{claude_cli_cmd0}` not found on PATH. Install the claude \
-                 CLI, or set claude_cli.cmd in llm.toml to an absolute path."
-            )),
-            BackendKind::GeminiCli => Some(format!(
-                "`{gemini_cli_cmd0}` not found on PATH. Install the gemini \
-                 CLI (`npm i -g @google/gemini-cli`), or set gemini_cli.cmd \
-                 in llm.toml to an absolute path."
-            )),
-            BackendKind::Ollama => {
-                // Reachable only if a future change adds an Ollama
-                // readiness gate; today the match arm above keeps
-                // Ollama always-ready when enabled.
-                Some("Ollama backend not ready.".to_string())
-            }
-            BackendKind::Anthropic | BackendKind::Gemini => {
-                let env = match active {
-                    BackendKind::Anthropic => "ANTHROPIC_API_KEY",
-                    BackendKind::Gemini => "GEMINI_API_KEY",
-                    _ => unreachable!(),
-                };
-                Some(format!(
-                    "{} key not configured. Set {env} in your shell, or save \
-                     the key from this Settings panel.",
-                    backend_tag(active),
-                ))
-            }
-        }
+    } else if !cli_ready {
+        Some(format!(
+            "`{cmd0}` not found or rejected. Install the {} CLI, or set its cmd in llm.toml.",
+            backend_tag(active),
+        ))
     } else {
         None
     };
     Json(LlmStatus {
         backend: backend_tag(active),
         model,
-        key: LlmKeyView {
-            set: key_set,
-            source: key_status_tag(status),
-            path: Some(api_keys_path_string()),
-            keychain_available: keychain_available(),
-        },
         ready,
         reason,
         enabled,
         supports_tools: true,
+    })
+    .into_response()
+}
+
+#[derive(Serialize)]
+struct CliDetectionResponse {
+    detections: Vec<CliDetectionView>,
+}
+
+#[derive(Serialize)]
+struct CliDetectionView {
+    backend: &'static str,
+    ready: bool,
+    command: Vec<String>,
+    reason: Option<String>,
+}
+
+fn cli_detection_view(detection: chan_llm::CliDetection) -> CliDetectionView {
+    let backend = detection.backend;
+    let ready = detection.present();
+    let reason = (!ready).then(|| cli_detection_reason(backend, &detection));
+    CliDetectionView {
+        backend: backend_tag(backend),
+        ready,
+        command: detection.command,
+        reason,
+    }
+}
+
+fn sealed_cli_detection(kind: BackendKind) -> CliDetectionView {
+    CliDetectionView {
+        backend: backend_tag(kind),
+        ready: false,
+        command: vec![default_cli_command(kind).to_string()],
+        reason: None,
+    }
+}
+
+fn default_cli_command(kind: BackendKind) -> &'static str {
+    match kind {
+        BackendKind::ClaudeCli => "claude",
+        BackendKind::GeminiCli => "gemini",
+        BackendKind::CodexCli => "codex",
+    }
+}
+
+pub async fn api_llm_cli_detection(State(state): State<Arc<AppState>>) -> Response {
+    if state.tunnel_public {
+        return Json(CliDetectionResponse {
+            detections: [
+                BackendKind::ClaudeCli,
+                BackendKind::GeminiCli,
+                BackendKind::CodexCli,
+            ]
+            .into_iter()
+            .map(sealed_cli_detection)
+            .collect(),
+        })
+        .into_response();
+    }
+    let cfg = state.llm_config.lock().unwrap().clone();
+    Json(CliDetectionResponse {
+        detections: chan_llm::detect_all(&cfg)
+            .into_iter()
+            .map(cli_detection_view)
+            .collect(),
     })
     .into_response()
 }
@@ -497,6 +429,15 @@ impl CollectListener {
 }
 
 impl SessionListener for CollectListener {
+    fn on_status(&self, status: chan_llm::AgentStatus) {
+        self.forward.on_status(status);
+    }
+    fn on_activity(&self, activity: chan_llm::AgentActivity) {
+        self.forward.on_activity(activity);
+    }
+    fn on_user_request(&self, request: chan_llm::UserRequest) {
+        self.forward.on_user_request(request);
+    }
     fn on_delta(&self, delta: chan_llm::Delta) {
         self.state
             .lock()
@@ -583,7 +524,7 @@ pub async fn api_llm_complete(
     // Active backend determines the model echoed back in the
     // response. Falls through the same way /api/llm/status does
     // (config override > backend default).
-    let active = config.backend.unwrap_or(BackendKind::Anthropic);
+    let active = config.backend.unwrap_or(BackendKind::ClaudeCli);
     let model = config
         .models
         .for_backend(active)
@@ -617,7 +558,11 @@ pub async fn api_llm_complete(
                 config.gemini_cli.mcp_command = Some(cmd);
             }
         }
-        _ => {}
+        BackendKind::CodexCli => {
+            if let Some(cmd) = mcp_subcommand_for(socket) {
+                config.codex_cli.mcp_command = Some(cmd);
+            }
+        }
     }
 
     let session = LlmSession::new(state.drive().clone(), config);
@@ -829,7 +774,7 @@ pub async fn api_llm_resume(
     Json(body): Json<ResumeBody>,
 ) -> Response {
     let mut config = state.llm_config.lock().unwrap().clone();
-    let active = config.backend.unwrap_or(BackendKind::Anthropic);
+    let active = config.backend.unwrap_or(BackendKind::ClaudeCli);
     let model = config
         .models
         .for_backend(active)
@@ -862,7 +807,11 @@ pub async fn api_llm_resume(
                 config.gemini_cli.mcp_command = Some(cmd);
             }
         }
-        _ => {}
+        BackendKind::CodexCli => {
+            if let Some(cmd) = mcp_subcommand_for(socket) {
+                config.codex_cli.mcp_command = Some(cmd);
+            }
+        }
     }
 
     let drive = state.drive().clone();
@@ -928,7 +877,10 @@ pub async fn api_llm_resume(
     // backends (Anthropic / Gemini / Ollama) still need the
     // continuation: chan-llm orchestrates their tool loop and the
     // model expects to react to the tool_result it just received.
-    let skip_continuation = matches!(active, BackendKind::ClaudeCli | BackendKind::GeminiCli);
+    let skip_continuation = matches!(
+        active,
+        BackendKind::ClaudeCli | BackendKind::GeminiCli | BackendKind::CodexCli
+    );
     if skip_continuation {
         return Json(LlmResumeResponse {
             content: String::new(),
@@ -1013,359 +965,166 @@ fn random_session_id() -> String {
         .collect()
 }
 
-#[derive(Deserialize)]
-pub struct SetKeyBody {
-    key: String,
-}
+#[cfg(test)]
+mod collect_listener_tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use serde_json::Value;
+    use tokio::sync::broadcast;
 
-/// Set a per-backend key with a verify + file-fallback flow:
-///
-///   1. Try keychain set. On Linux / Windows / signed-binary macOS
-///      this is the secure path and is what we want to land.
-///   2. Verify the keychain actually persisted: a known macOS issue
-///      with unsigned dev binaries is that Security.framework
-///      silently no-ops some operations (set_password returns Ok
-///      but get_password returns NoEntry afterward). We
-///      `keychain_lookup` to detect that case.
-///   3. When the keychain didn't stick, write to the on-disk file
-///      tier (`<config>/chan/llm.toml`'s [keys] section, mode 0600).
-///      That tier is keyed off LlmConfig.keys and walked by
-///      `keys::resolve` last; either way the key reaches the
-///      backend.
-///
-/// On a properly-signed install the file tier never gets touched;
-/// on dev binaries it's the working path until signing lands.
-async fn set_backend_key(state: &Arc<AppState>, kind: BackendKind, key: String) -> Response {
-    if let Err(e) = chan_llm::keys::set(kind, &key) {
-        return err_llm(&e);
+    fn listener() -> (CollectListener, broadcast::Receiver<String>) {
+        let (tx, rx) = broadcast::channel(8);
+        (
+            CollectListener::new(LlmBroadcastListener {
+                tx,
+                session_id: "collect-session".to_string(),
+            }),
+            rx,
+        )
     }
-    let kept = chan_llm::keys::keychain_lookup(kind).is_some();
-    if !kept {
-        let mut cfg = state.llm_config.lock().expect("llm config poisoned");
-        match kind {
-            BackendKind::Anthropic => cfg.keys.anthropic = Some(key),
-            BackendKind::Gemini => cfg.keys.gemini = Some(key),
-            // Ollama and ClaudeCli are keyless; the routes shouldn't
-            // call this path for them, but if they do we drop the
-            // value silently rather than poison the file.
-            BackendKind::Ollama | BackendKind::ClaudeCli | BackendKind::GeminiCli => {}
-        }
-        if let Err(e) = cfg.save() {
-            return err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("save llm config: {e}"),
-            );
-        }
-    }
-    StatusCode::NO_CONTENT.into_response()
-}
 
-/// Clear a per-backend key. Mirrors set_backend_key: drop the
-/// keychain entry AND zero the file fallback so the next
-/// resolve() walks back to env-or-missing.
-async fn clear_backend_key(state: &Arc<AppState>, kind: BackendKind) -> Response {
-    if let Err(e) = chan_llm::keys::clear(kind) {
-        return err_llm(&e);
+    fn recv_json(rx: &mut broadcast::Receiver<String>) -> Value {
+        let raw = rx.try_recv().expect("broadcast frame");
+        serde_json::from_str(&raw).expect("json frame")
     }
-    let mut cfg = state.llm_config.lock().expect("llm config poisoned");
-    match kind {
-        BackendKind::Anthropic => cfg.keys.anthropic = None,
-        BackendKind::Gemini => cfg.keys.gemini = None,
-        BackendKind::Ollama | BackendKind::ClaudeCli | BackendKind::GeminiCli => {}
-    }
-    if let Err(e) = cfg.save() {
-        return err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("save llm config: {e}"),
+
+    #[test]
+    fn forwards_status_activity_and_user_request() {
+        let (listener, mut rx) = listener();
+
+        let status = chan_llm::AgentStatus::Heartbeat {
+            backend: "claude_cli".into(),
+            idle_ms: 1500,
+        };
+        listener.on_status(status.clone());
+        let frame = recv_json(&mut rx);
+        assert_eq!(frame["type"], "llm.status");
+        assert_eq!(frame["session_id"], "collect-session");
+        assert_eq!(
+            frame["status"],
+            serde_json::to_value(status).expect("status value")
+        );
+
+        let activity = chan_llm::AgentActivity::AgentNote {
+            backend: "claude_cli".into(),
+            text: "working".into(),
+            parent_id: None,
+        };
+        listener.on_activity(activity.clone());
+        let frame = recv_json(&mut rx);
+        assert_eq!(frame["type"], "llm.activity");
+        assert_eq!(
+            frame["activity"],
+            serde_json::to_value(activity).expect("activity value")
+        );
+
+        let request = chan_llm::UserRequest::Survey {
+            backend: "claude_cli".into(),
+            id: "survey_1".into(),
+            questions: vec![chan_llm::UserQuestion {
+                question: "Choose one".into(),
+                header: None,
+                multi_select: false,
+                options: vec![chan_llm::UserOption {
+                    label: "Continue".into(),
+                    description: None,
+                }],
+            }],
+            parent_id: None,
+        };
+        listener.on_user_request(request.clone());
+        let frame = recv_json(&mut rx);
+        assert_eq!(frame["type"], "llm.user_request");
+        assert_eq!(
+            frame["request"],
+            serde_json::to_value(request).expect("request value")
         );
     }
-    StatusCode::NO_CONTENT.into_response()
-}
 
-// All four key handlers are gated by `tunnel_guard::settings_guard`
-// at the router layer; no per-handler check.
+    #[test]
+    fn delta_updates_text_and_forwards() {
+        let (listener, mut rx) = listener();
 
-/// One row of the per-provider key status table. Hides the actual
-/// key value (status only) so the SPA's multi-provider Settings
-/// list can render a "stored / not stored" pill per row without
-/// risking key disclosure on the wire.
-#[derive(Serialize)]
-struct KeyStatusRow {
-    /// True when chan-llm's three-tier resolver (env → keychain →
-    /// file) would produce a non-empty key for this provider.
-    set: bool,
-    /// Where the active key would come from. Mirrors the dispatch
-    /// in `LlmKeyView::source`; None when nothing's configured.
-    source: Option<&'static str>,
-}
+        listener.on_delta(chan_llm::Delta {
+            text: "hello".into(),
+        });
 
-/// Per-provider key statuses. Only the providers that take a hosted
-/// API key (Anthropic, Gemini) appear here; Ollama is keyless and
-/// the CLI shells use the installed CLI's own auth.
-#[derive(Serialize)]
-pub struct LlmKeysStatus {
-    anthropic: KeyStatusRow,
-    gemini: KeyStatusRow,
-}
-
-/// Snapshot the key status for every key-taking provider in one
-/// round-trip. Used by Settings' per-row keychain UI so each
-/// provider's row can render its own "stored / not stored" pill
-/// without needing to be the currently-default backend.
-///
-/// Public-tunnel runs return both rows as `{set: false, source:
-/// None}` so an anonymous visitor can't probe which providers the
-/// owner has tokens for.
-pub async fn api_llm_keys_status(State(state): State<Arc<AppState>>) -> Response {
-    if state.tunnel_public {
-        return Json(LlmKeysStatus {
-            anthropic: KeyStatusRow {
-                set: false,
-                source: None,
-            },
-            gemini: KeyStatusRow {
-                set: false,
-                source: None,
-            },
-        })
-        .into_response();
+        assert_eq!(
+            listener.state.lock().expect("collect state poisoned").text,
+            "hello"
+        );
+        let frame = recv_json(&mut rx);
+        assert_eq!(frame["type"], "llm.delta");
+        assert_eq!(frame["text"], "hello");
     }
-    let cfg = state.llm_config.lock().unwrap().clone();
-    let (a_key, a_status) = chan_llm::keys::resolve(BackendKind::Anthropic, &cfg);
-    let (g_key, g_status) = chan_llm::keys::resolve(BackendKind::Gemini, &cfg);
-    Json(LlmKeysStatus {
-        anthropic: KeyStatusRow {
-            set: a_key.is_some(),
-            source: key_status_tag(a_status),
-        },
-        gemini: KeyStatusRow {
-            set: g_key.is_some(),
-            source: key_status_tag(g_status),
-        },
-    })
-    .into_response()
-}
 
-pub async fn api_llm_set_anthropic_key(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<SetKeyBody>,
-) -> Response {
-    set_backend_key(&state, BackendKind::Anthropic, body.key).await
-}
+    #[test]
+    fn tool_call_collects_and_forwards() {
+        let (listener, mut rx) = listener();
+        let call = chan_llm::ToolCall {
+            id: "call_1".into(),
+            name: "read_file".into(),
+            args: serde_json::json!({"path": "a.md"}),
+        };
 
-pub async fn api_llm_clear_anthropic_key(State(state): State<Arc<AppState>>) -> Response {
-    clear_backend_key(&state, BackendKind::Anthropic).await
-}
+        listener.on_tool_call(call.clone());
 
-pub async fn api_llm_set_gemini_key(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<SetKeyBody>,
-) -> Response {
-    set_backend_key(&state, BackendKind::Gemini, body.key).await
-}
-
-pub async fn api_llm_clear_gemini_key(State(state): State<Arc<AppState>>) -> Response {
-    clear_backend_key(&state, BackendKind::Gemini).await
-}
-
-/// One model entry in a catalog response. `supports_tools` is
-/// hardcoded true for Anthropic and Gemini today (their entire
-/// chat catalog supports function calling); future non-tool
-/// variants would narrow this by name.
-#[derive(Serialize)]
-struct LlmModelEntry {
-    name: &'static str,
-    supports_tools: bool,
-    /// Whether the model accepts an extended-thinking `thinking`
-    /// block. Surfaced so the assistant inspector only shows the
-    /// effort knob on models that actually use it (sending thinking
-    /// against a non-supporting model 400s).
-    supports_thinking: bool,
-}
-
-#[derive(Serialize)]
-struct LlmModelEntryOwned {
-    name: String,
-    supports_tools: bool,
-    supports_thinking: bool,
-}
-
-#[derive(Serialize)]
-struct CatalogResponse {
-    models: Vec<LlmModelEntryOwned>,
-    /// Provenance tag for the Settings UI's "why is this list
-    /// short" copy. live = fetched from upstream, curated = no
-    /// key set so we returned a static shortlist, fallback = key
-    /// set but live fetch failed.
-    source: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-/// Curated Anthropic shortlist. Used when no key is configured
-/// (so the dropdown isn't empty) and as the fallback when the
-/// `/v1/models` call fails. Sorted newest-first; trim when older
-/// generations stop being recommended.
-const CURATED_ANTHROPIC: &[LlmModelEntry] = &[
-    LlmModelEntry {
-        name: "claude-opus-4-7",
-        supports_tools: true,
-        supports_thinking: true,
-    },
-    LlmModelEntry {
-        name: "claude-sonnet-4-6",
-        supports_tools: true,
-        supports_thinking: true,
-    },
-    LlmModelEntry {
-        name: "claude-haiku-4-5",
-        supports_tools: true,
-        supports_thinking: false,
-    },
-];
-
-/// Curated Gemini shortlist. Same purpose as the Anthropic one.
-const CURATED_GEMINI: &[LlmModelEntry] = &[
-    LlmModelEntry {
-        name: "gemini-2.5-pro",
-        supports_tools: true,
-        supports_thinking: false,
-    },
-    LlmModelEntry {
-        name: "gemini-2.5-flash",
-        supports_tools: true,
-        supports_thinking: false,
-    },
-];
-
-fn curated_to_owned(curated: &[LlmModelEntry]) -> Vec<LlmModelEntryOwned> {
-    curated
-        .iter()
-        .map(|e| LlmModelEntryOwned {
-            name: e.name.to_string(),
-            supports_tools: e.supports_tools,
-            supports_thinking: e.supports_thinking,
-        })
-        .collect()
-}
-
-pub async fn api_llm_anthropic_models(State(state): State<Arc<AppState>>) -> Response {
-    let cfg = state.llm_config.lock().unwrap().clone();
-    let (key, _) = chan_llm::keys::resolve(BackendKind::Anthropic, &cfg);
-    let Some(key) = key else {
-        return Json(CatalogResponse {
-            models: curated_to_owned(CURATED_ANTHROPIC),
-            source: "curated",
-            error: None,
-        })
-        .into_response();
-    };
-    match chan_llm::backends::anthropic::list_models(&key).await {
-        Ok(models) => Json(CatalogResponse {
-            models: models
-                .into_iter()
-                .map(|name| {
-                    let supports_thinking =
-                        chan_llm::backends::anthropic::model_supports_thinking(&name);
-                    LlmModelEntryOwned {
-                        name,
-                        supports_tools: true,
-                        supports_thinking,
-                    }
-                })
-                .collect(),
-            source: "live",
-            error: None,
-        })
-        .into_response(),
-        Err(e) => Json(CatalogResponse {
-            models: curated_to_owned(CURATED_ANTHROPIC),
-            source: "fallback",
-            error: Some(e.to_string()),
-        })
-        .into_response(),
+        assert_eq!(
+            listener
+                .state
+                .lock()
+                .expect("collect state poisoned")
+                .tool_calls
+                .len(),
+            1
+        );
+        let frame = recv_json(&mut rx);
+        assert_eq!(frame["type"], "llm.tool_call");
+        assert_eq!(
+            frame["call"],
+            serde_json::to_value(call).expect("call value")
+        );
     }
-}
 
-pub async fn api_llm_gemini_models(State(state): State<Arc<AppState>>) -> Response {
-    let cfg = state.llm_config.lock().unwrap().clone();
-    let (key, _) = chan_llm::keys::resolve(BackendKind::Gemini, &cfg);
-    let Some(key) = key else {
-        return Json(CatalogResponse {
-            models: curated_to_owned(CURATED_GEMINI),
-            source: "curated",
-            error: None,
-        })
-        .into_response();
-    };
-    match chan_llm::backends::gemini::list_models(&key).await {
-        Ok(models) => Json(CatalogResponse {
-            models: models
-                .into_iter()
-                .map(|name| LlmModelEntryOwned {
-                    name,
-                    supports_tools: true,
-                    supports_thinking: false,
-                })
-                .collect(),
-            source: "live",
-            error: None,
-        })
-        .into_response(),
-        Err(e) => Json(CatalogResponse {
-            models: curated_to_owned(CURATED_GEMINI),
-            source: "fallback",
-            error: Some(e.to_string()),
-        })
-        .into_response(),
+    #[tokio::test(flavor = "current_thread")]
+    async fn done_updates_state_notifies_and_forwards() {
+        let (listener, mut rx) = listener();
+        let notified = listener.done.notified();
+        tokio::pin!(notified);
+
+        listener.on_done(chan_llm::StopReason::ToolUse);
+
+        {
+            let state = listener.state.lock().expect("collect state poisoned");
+            assert!(state.finished);
+            assert_eq!(state.stop_reason, Some(chan_llm::StopReason::ToolUse));
+        }
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), notified)
+                .await
+                .is_ok()
+        );
+        let frame = recv_json(&mut rx);
+        assert_eq!(frame["type"], "llm.done");
+        assert_eq!(frame["reason"], "tool_use");
     }
-}
 
-/// Ollama URL probe query: the Settings UI passes the user's typed
-/// URL so the dropdown can refresh against a remote daemon without
-/// persisting the URL first. Empty / absent falls through to the
-/// same precedence chan-llm uses at request time
-/// (env OLLAMA_HOST > config > hardcoded default).
-#[derive(Deserialize)]
-pub struct OllamaModelsQuery {
-    #[serde(default)]
-    url: Option<String>,
-}
+    #[tokio::test(flavor = "current_thread")]
+    async fn cli_detection_public_tunnel_shape_has_three_backends() {
+        let state = crate::state::test_support::make_test_state(true, true);
 
-pub async fn api_llm_ollama_models(
-    State(state): State<Arc<AppState>>,
-    Query(q): Query<OllamaModelsQuery>,
-) -> Response {
-    let cfg = state.llm_config.lock().unwrap().clone();
-    // Resolution mirrors backends::build's Ollama branch:
-    //   1. ?url= query (the user's typed value in Settings)
-    //   2. OLLAMA_HOST env (per-shell override)
-    //   3. config.urls.ollama (Settings UI persistence)
-    //   4. hardcoded default
-    let url = q
-        .url
-        .as_ref()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .or_else(|| std::env::var("OLLAMA_HOST").ok().filter(|s| !s.is_empty()))
-        .or_else(|| cfg.urls.ollama.clone())
-        .unwrap_or_else(|| chan_llm::backends::ollama::DEFAULT_URL.to_string());
-    match chan_llm::backends::ollama::list_models(&url).await {
-        Ok(models) => Json(
-            models
-                .into_iter()
-                .map(|name| LlmModelEntryOwned {
-                    name,
-                    supports_tools: true,
-                    supports_thinking: false,
-                })
-                .collect::<Vec<_>>(),
-        )
-        .into_response(),
-        // The frontend types ollamaModels as `LlmModelEntry[]` (no
-        // wrapper) and treats request errors as "daemon unreachable".
-        // Surface a 503 so the Settings UI's catch arm fires the
-        // standard error toast with the upstream message.
-        Err(e) => err(StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
+        let response = api_llm_cli_detection(State(state)).await;
+        let (parts, body) = response.into_parts();
+        assert_eq!(parts.status, StatusCode::OK);
+        let bytes = to_bytes(body, 8192).await.expect("read body");
+        let json: Value = serde_json::from_slice(&bytes).expect("json body");
+
+        let detections = json["detections"].as_array().expect("detections array");
+        assert_eq!(detections.len(), 3);
+        assert_eq!(detections[0]["backend"], "claude_cli");
+        assert_eq!(detections[1]["backend"], "gemini_cli");
+        assert_eq!(detections[2]["backend"], "codex_cli");
+        assert!(detections.iter().all(|d| d["ready"] == false));
+        assert!(detections.iter().all(|d| d["reason"].is_null()));
     }
 }

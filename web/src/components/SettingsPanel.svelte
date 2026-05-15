@@ -1,26 +1,22 @@
 <script lang="ts">
   // Settings overlay. Per-device-global preferences form (editor
   // theme, assistant, attachments_dir, default-drive path) plus the
-  // keychain controls for the assistant API key.
+  // local CLI assistant backend picker.
   //
   // The drive display name is edited from the file-browser
   // hamburger, not here, so the settings overlay is purely
   // about device-wide preferences.
   //
-  // Auto-saves on change (500 ms debounce). Keychain writes are a
-  // separate flow with their own button because the keychain
-  // backend is OS-specific and the operation must surface its own
-  // pass/fail.
+  // Auto-saves on change (500 ms debounce).
 
   import { onMount } from "svelte";
   import { api } from "../api/client";
   import type {
     AssistantBackendKind,
     BuildInfo,
+    CliDetectionView,
     EditorTheme,
     GlobalConfig,
-    LlmKeysStatus,
-    LlmStatus,
     Preferences,
   } from "../api/types";
   import { Maximize2, Minimize2, X } from "lucide-svelte";
@@ -62,219 +58,78 @@
   /// stays visible.
   type SaveStatus = "idle" | "saving" | "saved" | { error: string };
   let saveStatus = $state<SaveStatus>("idle");
-  // LLM backend status (key set / not set, ready, etc.). Refreshed
-  // on mount + after every save so changing the default backend
-  // re-reads readiness. Reports for the currently-default backend;
-  // the keychain UI below targets that same backend.
-  let llmStatus = $state<LlmStatus | null>(null);
+  // Per-CLI readiness from /api/llm/cli_detection. Refreshed on
+  // mount, dropdown change, and after a successful override save.
+  let cliDetections = $state<CliDetectionView[]>([]);
+  let cliDetectionLoading = $state(false);
+  let assistantSaveError = $state<string | null>(null);
 
   /// Build identity for the About footer. Loaded on mount; the
   /// version + embeddings feature flag are static for the running
   /// binary so a single fetch is enough.
   let buildInfo = $state<BuildInfo | null>(null);
 
-  // Keychain integration. Available on any machine where the OS
-  // keychain backend is reachable: macOS Keychain, Windows
-  // Credential Manager, Linux with a running Secret Service
-  // daemon (gnome-keyring / KWallet). The /api/llm/status payload
-  // reports `keychain_available` so we hide the UI on headless
-  // boxes (a `chan serve` over SSH on a server with no GUI
-  // session) where the user still has env / file as fallbacks.
-  /// Per-row keychain UI state. Each provider has its own input,
-  /// busy flag, and error string so two rows can be edited in parallel
-  /// without crosstalk (e.g. typing into Claude's input shouldn't
-  /// clear or block Gemini's). `keysStatus` is the source of truth
-  /// for "is a key stored" rendered as a pill per row; it's a
-  /// separate fetch from `llmStatus` so non-default rows can show
-  /// status without needing to be the active backend.
-  type KeychainProvider = "anthropic" | "gemini";
-
-  let keychainInput = $state<Record<KeychainProvider, string>>({
-    anthropic: "",
-    gemini: "",
-  });
-  let keychainBusy = $state<Record<KeychainProvider, boolean>>({
-    anthropic: false,
-    gemini: false,
-  });
-  let keychainError = $state<Record<KeychainProvider, string | null>>({
-    anthropic: null,
-    gemini: null,
-  });
-  let keysStatus = $state<LlmKeysStatus | null>(null);
-  // `keychain_available` lives on the active-backend status payload
-  // because chan-llm doesn't (yet) probe the keychain backend
-  // separately. Headless boxes (no Secret Service / DBus session)
-  // surface that here so the row-level UI hides itself on the same
-  // signal the old single-block UI used.
-  const keychainAvailable = $derived(llmStatus?.key.keychain_available === true);
-
-  async function loadKeysStatus(): Promise<void> {
+  async function loadCliDetection(): Promise<void> {
+    if (cliDetectionLoading) return;
+    cliDetectionLoading = true;
     try {
-      keysStatus = await api.llmKeysStatus();
+      cliDetections = (await api.llmCliDetection()).detections;
     } catch {
-      keysStatus = null;
-    }
-  }
-
-  function keychainHasFor(p: KeychainProvider): boolean {
-    return keysStatus?.[p].source === "keychain";
-  }
-
-  function envOverrideFor(p: KeychainProvider): boolean {
-    return keysStatus?.[p].source === "env";
-  }
-
-  async function saveKeychain(provider: KeychainProvider): Promise<void> {
-    const v = keychainInput[provider].trim();
-    if (!v || keychainBusy[provider]) return;
-    keychainBusy[provider] = true;
-    keychainError[provider] = null;
-    try {
-      // Saving a key is an implicit "I want to use this provider":
-      // enable the matching row and (if no default is set yet) claim
-      // the default pointer too. We don't yank the default away from
-      // another provider though — the user already picked it.
-      if (editing) {
-        if (provider === "anthropic") {
-          editing.assistant.claude.enabled = true;
-        } else {
-          editing.assistant.gemini.enabled = true;
-        }
-        if (editing.assistant.default_backend === null) {
-          editing.assistant.default_backend = provider === "anthropic" ? "claude" : "gemini";
-        }
-      }
-      if (autosaveTimer) {
-        clearTimeout(autosaveTimer);
-        autosaveTimer = null;
-      }
-      // Flush the enable / default change before saving the key so a
-      // status refetch immediately after picks up the matching state.
-      await save();
-      // Server verifies the round trip (write then read-back) before
-      // returning 204; a read-back failure surfaces in the catch arm.
-      // The input only clears on a verified-good save so a stuck
-      // "saving…" never happens.
-      if (provider === "anthropic") {
-        await api.setAnthropicKey(v);
-      } else {
-        await api.setGeminiKey(v);
-      }
-      keychainInput[provider] = "";
-      await Promise.all([loadLlmStatus(), loadKeysStatus()]);
-    } catch (e) {
-      keychainError[provider] = (e as Error).message ?? String(e);
+      cliDetections = [];
     } finally {
-      keychainBusy[provider] = false;
+      cliDetectionLoading = false;
     }
   }
 
-  async function removeKeychain(provider: KeychainProvider): Promise<void> {
-    if (keychainBusy[provider]) return;
-    keychainBusy[provider] = true;
-    keychainError[provider] = null;
-    try {
-      if (provider === "anthropic") {
-        await api.clearAnthropicKey();
-      } else {
-        await api.clearGeminiKey();
-      }
-      await Promise.all([loadLlmStatus(), loadKeysStatus()]);
-    } catch (e) {
-      keychainError[provider] = (e as Error).message ?? String(e);
-    } finally {
-      keychainBusy[provider] = false;
-    }
-  }
-
-  async function loadLlmStatus(): Promise<void> {
-    try {
-      llmStatus = await api.llmStatus();
-    } catch {
-      llmStatus = null;
-    }
-  }
-
-  /// Provider enable-toggle handler. Toggling on a row claims the
-  /// default pointer when no default is currently set, so the
-  /// "enabled but no default" half-state can't occur from the UI.
-  /// Toggling off clears the default if this row was holding it,
-  /// nudging the user to pick another (or accept "off") instead of
-  /// leaving the assistant in an inert "default disabled" state.
-  /// Also wipes the keychain input so a key typed for one provider
-  /// can't accidentally land in another's slot on the next save.
-  function onProviderToggle(kind: AssistantBackendKind): void {
-    if (!editing) return;
-    keychainInput = { anthropic: "", gemini: "" };
-    keychainError = { anthropic: null, gemini: null };
-    const a = editing.assistant;
-    const row = providerEnabledField(a, kind);
-    if (row) {
-      if (a.default_backend === null) {
-        a.default_backend = kind;
-      }
-    } else if (a.default_backend === kind) {
-      a.default_backend = null;
-    }
-    void loadLlmStatus();
-  }
-
-  /// Default-radio handler. Auto-enables the row if the user picks a
-  /// disabled provider as default; otherwise the choice would be
-  /// inert (the resolver gates on `enabled[default]`).
-  function onDefaultChange(kind: AssistantBackendKind): void {
-    if (!editing) return;
-    keychainInput = { anthropic: "", gemini: "" };
-    keychainError = { anthropic: null, gemini: null };
-    const a = editing.assistant;
-    a.default_backend = kind;
-    setProviderEnabled(a, kind, true);
-    void loadLlmStatus();
-  }
-
-  /// Read the per-provider `enabled` flag without a five-way switch
-  /// at every call site.
-  function providerEnabledField(
-    a: Preferences["assistant"],
-    kind: AssistantBackendKind,
-  ): boolean {
-    switch (kind) {
-      case "claude":
-        return a.claude.enabled;
-      case "gemini":
-        return a.gemini.enabled;
-      case "ollama":
-        return a.ollama.enabled;
-      case "claude_cli":
-        return a.claude_cli.enabled;
-      case "gemini_cli":
-        return a.gemini_cli.enabled;
-    }
-  }
+  type CliBackendKind = Extract<
+    AssistantBackendKind,
+    "claude_cli" | "gemini_cli" | "codex_cli"
+  >;
 
   function setProviderEnabled(
     a: Preferences["assistant"],
-    kind: AssistantBackendKind,
+    kind: CliBackendKind,
     value: boolean,
   ): void {
     switch (kind) {
-      case "claude":
-        a.claude.enabled = value;
-        return;
-      case "gemini":
-        a.gemini.enabled = value;
-        return;
-      case "ollama":
-        a.ollama.enabled = value;
-        return;
       case "claude_cli":
         a.claude_cli.enabled = value;
         return;
       case "gemini_cli":
         a.gemini_cli.enabled = value;
         return;
+      case "codex_cli":
+        a.codex_cli.enabled = value;
+        return;
     }
+  }
+
+  function cliPrefs(
+    a: Preferences["assistant"],
+    kind: CliBackendKind,
+  ): Preferences["assistant"][CliBackendKind] {
+    return a[kind];
+  }
+
+  function activeCliKind(): CliBackendKind {
+    return editing?.assistant.default_backend ?? "claude_cli";
+  }
+
+  function activeDetection(): CliDetectionView | null {
+    const kind = activeCliKind();
+    return cliDetections.find((d) => d.backend === kind) ?? null;
+  }
+
+  function onActiveCliChange(e: Event): void {
+    if (!editing) return;
+    const kind = (e.currentTarget as HTMLSelectElement).value as CliBackendKind;
+    const a = editing.assistant;
+    a.default_backend = kind;
+    for (const row of PROVIDER_ROWS) {
+      setProviderEnabled(a, row.kind, row.kind === kind);
+    }
+    assistantSaveError = null;
+    void loadCliDetection();
   }
   // When the upstream drive info changes (initial load, external
   // edit, server restart), reset the form to the server state.
@@ -306,8 +161,9 @@
   /// trigger an autosave loop.
   function normalizePrefs(p: Preferences): Preferences {
     const a = p.assistant as { [k: string]: unknown };
-    if (a.claude_cli === undefined) a.claude_cli = { model: null };
-    if (a.gemini_cli === undefined) a.gemini_cli = { model: null };
+    if (a.claude_cli === undefined) a.claude_cli = { enabled: false, model: null };
+    if (a.gemini_cli === undefined) a.gemini_cli = { enabled: false, model: null };
+    if (a.codex_cli === undefined) a.codex_cli = { enabled: false, model: null };
     return p;
   }
 
@@ -343,11 +199,13 @@
   let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
   let savedFlashTimer: ReturnType<typeof setTimeout> | null = null;
   let inflight = false;
+  let failedSaveSnap: string | null = null;
 
   async function save(): Promise<void> {
     if (!editing || inflight) return;
     inflight = true;
     saveStatus = "saving";
+    assistantSaveError = null;
     if (savedFlashTimer) {
       clearTimeout(savedFlashTimer);
       savedFlashTimer = null;
@@ -376,22 +234,22 @@
         editing = normalizePrefs(clone(info.preferences));
       }
       if (globalConfig) normalizePrefs(globalConfig.preferences);
-      // Backend / model may have flipped; re-check readiness for the
-      // current default AND refresh the per-row key statuses so each
-      // row's pill matches the new server state.
-      void loadLlmStatus();
-      void loadKeysStatus();
+      failedSaveSnap = null;
+      void loadCliDetection();
       saveStatus = "saved";
       savedFlashTimer = setTimeout(() => {
         if (saveStatus === "saved") saveStatus = "idle";
         savedFlashTimer = null;
       }, SAVED_FLASH_MS);
     } catch (e) {
-      saveStatus = { error: (e as Error).message };
+      const message = (e as Error).message;
+      failedSaveSnap = sent;
+      assistantSaveError = message;
+      saveStatus = { error: message };
     } finally {
       inflight = false;
       // If the form went dirty again while saving, schedule another pass.
-      if (dirty()) scheduleSave();
+      if (dirty() && snapshot() !== failedSaveSnap) scheduleSave();
     }
   }
 
@@ -420,8 +278,9 @@
   $effect(() => {
     // Read-track every editable field.
     if (!editing) return;
-    JSON.stringify(editing);
+    const snap = snapshot();
     if (!dirty()) return;
+    if (snap === failedSaveSnap) return;
     scheduleSave();
   });
 
@@ -451,20 +310,17 @@
     // Make sure we have the latest server state when the tab opens.
     void refreshDrive();
     void loadGlobalConfig();
-    void loadLlmStatus();
-    void loadKeysStatus();
+    void loadCliDetection();
     void loadBuildInfo();
   });
 
   /// Friendly labels used in the provider list. Centralized so the
   /// dropdown ordering and the row ordering stay consistent across
   /// the markup below.
-  const PROVIDER_ROWS: { kind: AssistantBackendKind; label: string; hint: string }[] = [
-    { kind: "claude", label: "Claude", hint: "Anthropic API" },
-    { kind: "gemini", label: "Gemini", hint: "Google API" },
-    { kind: "ollama", label: "Ollama", hint: "local server" },
+  const PROVIDER_ROWS: { kind: CliBackendKind; label: string; hint: string }[] = [
     { kind: "claude_cli", label: "Claude CLI", hint: "local `claude` shell-executor" },
     { kind: "gemini_cli", label: "Gemini CLI", hint: "local `gemini` shell-executor" },
+    { kind: "codex_cli", label: "Codex CLI", hint: "local `codex` shell-executor" },
   ];
 </script>
 
@@ -513,188 +369,59 @@
     <section>
       <h3>Assistant</h3>
       <p class="hint">
-        Configure one or more assistants below. Toggle <strong>enabled</strong>
-        per row to keep credentials around while picking which providers
-        are usable; pick a <strong>default</strong> for new scopes. Model,
-        max tokens, and other per-turn knobs live in the assistant
-        overlay's inspector — open the assistant (Cmd+I) and click the
-        inspector toggle.
+        Pick the local CLI backend chan should use for new assistant
+        turns, and optionally override the binary lookup.
       </p>
 
-      {#if editing.assistant.default_backend === null}
-        <div class="muted gate-hint">
-          no default assistant picked yet: enable a row below and mark
-          it as default to surface the assistant button + Cmd+I.
-        </div>
-      {:else if !editing.assistant.effective_enabled}
-        <div class="muted gate-hint">
-          default assistant is currently disabled: enable its row or
-          pick a different default to make the assistant usable.
-        </div>
-      {/if}
+      <div class="assistant-config">
+        <div class="assistant-control">
+          <label class="assistant-field">
+            <span>Active CLI</span>
+            <select value={activeCliKind()} onchange={onActiveCliChange}>
+              {#each PROVIDER_ROWS as row (row.kind)}
+                <option value={row.kind}>{row.label}</option>
+              {/each}
+            </select>
+          </label>
 
-      <div class="assistant-list">
-        {#each PROVIDER_ROWS as row (row.kind)}
-          {@const enabledNow = providerEnabledField(editing.assistant, row.kind)}
-          {@const isDefault = editing.assistant.default_backend === row.kind}
-          {@const isKeyProvider = row.kind === "claude" || row.kind === "gemini"}
-          {@const keyProvider = (row.kind === "claude"
-            ? "anthropic"
-            : "gemini") as KeychainProvider}
-          <div class="assistant-row" class:on={enabledNow}>
-            <div class="row-head">
-              <label class="row-toggle">
-                <input
-                  type="checkbox"
-                  checked={enabledNow}
-                  onchange={(e) => {
-                    if (!editing) return;
-                    const next = (e.currentTarget as HTMLInputElement).checked;
-                    setProviderEnabled(editing.assistant, row.kind, next);
-                    onProviderToggle(row.kind);
-                  }}
-                />
-                <span class="provider-name">{row.label}</span>
-                <span class="provider-hint">{row.hint}</span>
-              </label>
-              {#if enabledNow}
-                <label class="default-radio">
-                  <input
-                    type="radio"
-                    name="default-backend"
-                    value={row.kind}
-                    checked={isDefault}
-                    onchange={() => onDefaultChange(row.kind)}
-                  />
-                  <span>default</span>
-                </label>
-              {/if}
-            </div>
-
-            {#if enabledNow}
-              <div class="row-body">
-                {#if row.kind === "ollama"}
-                  <label class="row-field">
-                    <span>URL</span>
-                    <input
-                      bind:value={editing.assistant.ollama.url}
-                      placeholder="http://localhost:11434"
-                    />
-                  </label>
-                {/if}
-
-                {#if isKeyProvider && keychainAvailable && !envOverrideFor(keyProvider)}
-                  <div class="keychain">
-                    <div class="keychain-label">
-                      {#if keychainHasFor(keyProvider)}
-                        <span class="ok">●</span> key stored in this
-                        machine's keychain
-                      {:else if keysStatus?.[keyProvider].source === "file"}
-                        <span class="ok">●</span> key stored in
-                        <code class="mono">~/.config/chan/api-keys.toml</code>
-                      {:else}
-                        <span class="muted">no key configured</span>
-                      {/if}
-                    </div>
-                    {#if keychainHasFor(keyProvider)}
-                      <button
-                        type="button"
-                        onclick={() => void removeKeychain(keyProvider)}
-                        disabled={keychainBusy[keyProvider]}
-                        title="remove the stored key"
-                      >{keychainBusy[keyProvider]
-                        ? "removing…"
-                        : "remove from keychain"}</button>
-                    {:else}
-                      <input
-                        type="password"
-                        placeholder={keyProvider === "anthropic"
-                          ? "sk-ant-..."
-                          : "AIza..."}
-                        bind:value={keychainInput[keyProvider]}
-                        onkeydown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            void saveKeychain(keyProvider);
-                          }
-                        }}
-                        spellcheck="false"
-                        autocomplete="off"
-                      />
-                      <button
-                        type="button"
-                        onclick={() => void saveKeychain(keyProvider)}
-                        disabled={keychainBusy[keyProvider] ||
-                          !keychainInput[keyProvider].trim()}
-                      >{keychainBusy[keyProvider]
-                        ? "saving…"
-                        : "save in keychain"}</button>
-                    {/if}
-                    {#if keychainError[keyProvider]}
-                      <span class="err keychain-err">
-                        {keychainError[keyProvider]}
-                      </span>
-                    {/if}
-                  </div>
-                {:else if isKeyProvider && envOverrideFor(keyProvider)}
-                  <div class="muted err-line">
-                    {keyProvider === "anthropic"
-                      ? "ANTHROPIC_API_KEY"
-                      : "GEMINI_API_KEY"} is set in env and always
-                    wins; unset it to manage the key via keychain
-                    instead.
-                  </div>
-                {:else if isKeyProvider && !keychainAvailable}
-                  <div class="muted err-line">
-                    export <code class="mono">
-                      {keyProvider === "anthropic"
-                        ? "ANTHROPIC_API_KEY"
-                        : "GEMINI_API_KEY"}
-                    </code> or write
-                    <code class="mono">{llmStatus?.key.path ?? "~/.config/chan/api-keys.toml"}</code>
-                    with <code class="mono">[{keyProvider}] api_key = "..."</code>
-                  </div>
-                {/if}
-              </div>
+          <div class="cli-readiness" aria-live="polite">
+            {#if cliDetectionLoading && !activeDetection()}
+              <span class="status-dot muted-dot"></span>
+              <span class="muted">checking…</span>
+            {:else if activeDetection()?.ready}
+              <span class="status-dot ok-dot"></span>
+              <span class="ok">ready</span>
+            {:else}
+              <span class="status-dot err-dot"></span>
+              <span class="err">{activeDetection()?.reason ?? "not ready"}</span>
             {/if}
           </div>
-        {/each}
-      </div>
+        </div>
 
-      <!-- Status block at the bottom: ready/not-ready pill for the
-           current default + tools capability. Mirrors the old
-           single-block status; sources from llmStatus (which
-           dispatches on the active default). -->
-      <div class="grid">
-        <span class="k">status</span>
-        <span class="v">
-          {#if !editing.assistant.default_backend}
-            <span class="muted">no default selected</span>
-          {:else if !editing.assistant.effective_enabled}
-            <span class="muted">default provider is disabled</span>
-          {:else if llmStatus?.ready}
-            <span class="ok">ready</span>
-          {:else}
-            <span class="err">
-              not ready{llmStatus?.reason ? `: ${llmStatus.reason}` : ""}
-            </span>
+        <div class="assistant-control">
+          <label class="assistant-field">
+            <span>Binary path override</span>
+            <input
+              value={cliPrefs(editing.assistant, activeCliKind()).cmd_override ?? ""}
+              placeholder="use PATH"
+              spellcheck="false"
+              autocomplete="off"
+              oninput={(e) => {
+                if (!editing) return;
+                const value = (e.currentTarget as HTMLInputElement).value.trim();
+                cliPrefs(editing.assistant, activeCliKind()).cmd_override =
+                  value === "" ? null : value;
+                assistantSaveError = null;
+              }}
+            />
+          </label>
+          <div class="hint-text">
+            leave blank to resolve {activeCliKind().replace("_cli", "")} from PATH
+          </div>
+          {#if assistantSaveError}
+            <div class="override-error">{assistantSaveError}</div>
           {/if}
-        </span>
-        <span class="k">tools</span>
-        <span class="v">
-          {#if !llmStatus?.ready || !editing.assistant.effective_enabled}
-            <span class="muted">—</span>
-          {:else if llmStatus?.supports_tools}
-            <span class="ok">supported</span>
-          {:else}
-            <span class="err">not supported</span>
-            <div class="hint-text">
-              the current model can chat but can't read other files,
-              search the drive, or propose file edits; pick a
-              tool-capable model from the assistant inspector
-            </div>
-          {/if}
-        </span>
+        </div>
       </div>
     </section>
 
@@ -1020,155 +747,77 @@
   }
   /* Inline status colors for the Assistant section's key state. */
   .v .ok { color: var(--accent); }
-  .v .err { color: var(--warn-text); }
-  /* Inline cue under the master switch when the assistant is off, so
-     the disabled provider/model rows below read as intentionally
-     gated rather than broken. */
-  .gate-hint {
-    margin: 0 0 0.25rem 1.95em;
-    font-size: 11.5px;
+  .cli-readiness .ok { color: var(--accent); }
+  .cli-readiness .err { color: var(--warn-text); }
+  .assistant-config {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.8rem;
+    margin-top: 0.2rem;
   }
-  .err-line {
-    color: var(--warn-text);
-    font-size: 13px;
-    margin: 0.25rem 0;
-  }
-  /* Assistant provider list. Each row is a card with a header (enable
-     toggle + provider name + default radio) and a body that surfaces
-     only when the row is enabled (URL field for Ollama, keychain UI
-     for Claude/Gemini). The card boundary makes it visually clear
-     that the per-row controls are scoped to that provider. */
-  .assistant-list {
+  .assistant-control {
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
-    margin: 0.4rem 0;
-  }
-  .assistant-row {
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 0.5rem 0.6rem;
-    background: var(--bg);
-  }
-  .assistant-row.on {
-    /* Faint accent border so enabled rows stand out from the disabled
-       (configured but off) ones without being noisy. */
-    border-color: var(--btn-border);
-  }
-  .row-head {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    justify-content: space-between;
-  }
-  .row-toggle {
-    display: flex;
-    align-items: baseline;
-    gap: 0.4rem;
-    flex: 1;
     min-width: 0;
-    cursor: pointer;
   }
-  .row-toggle .provider-name {
-    font-weight: 600;
-  }
-  .row-toggle .provider-hint {
-    color: var(--text-secondary);
-    font-size: 13px;
-  }
-  .default-radio {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    color: var(--text-secondary);
-    font-size: 13px;
-    cursor: pointer;
-  }
-  .default-radio input[type="radio"] {
-    margin: 0;
-  }
-  .row-body {
+  .assistant-field {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
-    margin-top: 0.5rem;
-  }
-  .row-field {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
+    align-items: stretch;
+    gap: 4px;
     font-size: 14px;
   }
-  .row-field > span {
-    min-width: 60px;
+  .assistant-field > span {
     color: var(--text-secondary);
+    font-size: 13px;
   }
-  .row-field input:not([type]) {
-    flex: 1;
-    background: var(--bg);
+  .assistant-field select,
+  .assistant-field input {
+    background: var(--bg-card);
     color: var(--text);
     border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 4px 6px;
-    font: inherit;
-    font-size: 14px;
-    outline: none;
-  }
-  .row-field input:focus { border-color: var(--link); }
-
-  /* Keychain row: status label, password input (or remove button),
-     primary action button. Wraps on narrow widths so the row doesn't
-     overflow the form. */
-  .keychain {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    margin: 0.4rem 0;
-    font-size: 14px;
-  }
-  .keychain-label { flex-basis: 100%; color: var(--text-secondary); }
-  .keychain-label .ok { color: var(--accent); }
-  .keychain input[type="password"] {
-    flex: 1;
-    min-width: 200px;
-    background: var(--bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 4px 6px;
-    font: inherit;
-    font-size: 14px;
-    outline: none;
-  }
-  .keychain input[type="password"]:focus { border-color: var(--link); }
-  .keychain button {
-    background: var(--btn-bg);
-    color: var(--text);
-    border: 1px solid var(--btn-border);
     border-radius: 4px;
-    padding: 4px 10px;
-    cursor: pointer;
+    padding: 4px 6px;
     font: inherit;
     font-size: 14px;
+    outline: none;
+    width: 100%;
   }
-  .keychain button:hover:not(:disabled) { border-color: var(--btn-hover); }
-  .keychain button:disabled { opacity: 0.55; cursor: default; }
-  .keychain-err { flex-basis: 100%; color: var(--warn-text); font-size: 13px; }
+  .assistant-field select:focus,
+  .assistant-field input:focus { border-color: var(--link); }
+  .cli-readiness {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: var(--text-secondary);
+    font-size: 13px;
+    min-height: 1.4rem;
+  }
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .ok-dot { background: var(--accent); }
+  .err-dot { background: var(--warn-text); }
+  .muted-dot { background: var(--text-secondary); }
+  .override-error {
+    color: var(--warn-text);
+    font-size: 12px;
+    line-height: 1.35;
+  }
   /* Tab-bar autosave indicator. Sits between the title and the
      actions strip. Empty when idle (no extra padding). */
   .save-status { font-size: 14px; min-width: 60px; text-align: right; }
   .save-status .ok { color: var(--accent); }
   .save-status .err { color: #d33; }
   .save-status .muted { color: var(--text-secondary); }
-  section button {
-    align-self: flex-start;
-    background: var(--btn-bg);
-    color: var(--text);
-    border: 1px solid var(--btn-border);
-    border-radius: 4px;
-    padding: 4px 12px;
-    cursor: pointer;
-    font: inherit;
+  @media (max-width: 760px) {
+    .section-row,
+    .assistant-config {
+      grid-template-columns: 1fr;
+    }
   }
 </style>
