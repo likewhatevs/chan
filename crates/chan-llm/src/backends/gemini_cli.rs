@@ -83,8 +83,8 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -94,7 +94,10 @@ use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall, ToolResult};
+use crate::session::{
+    AgentActivity, AgentStatus, Delta, Message, Role, SessionListener, StopReason, ToolCall,
+    ToolResult,
+};
 use crate::tools::ToolSchema;
 
 use super::{
@@ -256,6 +259,10 @@ impl Backend for GeminiCliBackend {
                 return Outcome::error();
             }
         };
+        listener.on_status(AgentStatus::Spawned {
+            backend: "gemini_cli".into(),
+            pid: child.id(),
+        });
 
         // Drainer captures stderr concurrently with the stdout loop
         // so the child can't wedge on a full stderr pipe while still
@@ -281,6 +288,11 @@ impl Backend for GeminiCliBackend {
         let mut saw_result = false;
         let mut parse_errors_emitted = 0usize;
         let mut parse_errors_silenced = 0usize;
+        let heartbeat = Heartbeat::spawn(
+            listener.clone(),
+            "gemini_cli",
+            heartbeat_interval(self.inactivity_timeout),
+        );
         // Per-message streamed-text accumulator. gemini-cli marks
         // streaming chunks with delta:true and the canonical assistant
         // message with delta:false; the canonical event carries the
@@ -301,6 +313,9 @@ impl Backend for GeminiCliBackend {
                 if let Some(d) = stderr_drainer.take() {
                     let _ = d.finish().await;
                 }
+                listener.on_status(AgentStatus::Cancelled {
+                    backend: "gemini_cli".into(),
+                });
                 return Outcome::cancelled(assistant_text);
             }
             let read = timeout(
@@ -309,7 +324,10 @@ impl Backend for GeminiCliBackend {
             )
             .await;
             let got_line = match read {
-                Ok(Ok(true)) => true,
+                Ok(Ok(true)) => {
+                    heartbeat.mark_stdout();
+                    true
+                }
                 Ok(Ok(false)) => break,
                 Ok(Err(e)) => {
                     let _ = child.kill().await;
@@ -324,6 +342,11 @@ impl Backend for GeminiCliBackend {
                         listener
                             .on_error(format!("gemini_cli stdout: {e}; stderr: {stderr_snippet}"));
                     }
+                    listener.on_status(AgentStatus::Unhealthy {
+                        backend: "gemini_cli".into(),
+                        reason: "stdout".into(),
+                        detail: Some(e.to_string()),
+                    });
                     return Outcome::error();
                 }
                 Err(_elapsed) => {
@@ -342,6 +365,15 @@ impl Backend for GeminiCliBackend {
                     } else {
                         listener.on_error(format!("{base}; stderr: {stderr_snippet}"));
                     }
+                    listener.on_status(AgentStatus::Unhealthy {
+                        backend: "gemini_cli".into(),
+                        reason: format!("no_output_for_{}s", self.inactivity_timeout.as_secs()),
+                        detail: if stderr_snippet.is_empty() {
+                            None
+                        } else {
+                            Some(stderr_snippet)
+                        },
+                    });
                     return Outcome::error();
                 }
             };
@@ -469,6 +501,12 @@ impl Backend for GeminiCliBackend {
                     tool_id,
                     parameters,
                 } => {
+                    listener.on_activity(AgentActivity::ToolStarted {
+                        backend: "gemini_cli".into(),
+                        id: tool_id.clone(),
+                        name: tool_name.clone(),
+                        parent_id: None,
+                    });
                     listener.on_tool_call(ToolCall {
                         id: tool_id,
                         name: tool_name,
@@ -481,7 +519,8 @@ impl Backend for GeminiCliBackend {
                     error,
                     status,
                 } => {
-                    let body = if status.as_deref() == Some("error") {
+                    let is_error = status.as_deref() == Some("error") || error.is_some();
+                    let body = if is_error {
                         // Gemini's error payload is structured
                         // ({type, message}); the chan-llm listener
                         // expects a JSON Value, so wrap it.
@@ -492,6 +531,14 @@ impl Backend for GeminiCliBackend {
                             None => Json::Null,
                         }
                     };
+                    listener.on_activity(AgentActivity::ToolFinished {
+                        backend: "gemini_cli".into(),
+                        id: tool_id.clone(),
+                        name: None,
+                        output: body.clone(),
+                        is_error,
+                        parent_id: None,
+                    });
                     listener.on_tool_result(ToolResult {
                         id: tool_id,
                         output: body,
@@ -500,7 +547,14 @@ impl Backend for GeminiCliBackend {
                 StreamEvent::Error { severity, message } => {
                     // Surface non-fatal warnings via on_error too;
                     // a real fatal arrives as `result: error`.
-                    let _ = severity;
+                    listener.on_activity(AgentActivity::AgentNote {
+                        backend: "gemini_cli".into(),
+                        text: match severity {
+                            Some(severity) => format!("{severity}: {message}"),
+                            None => message.clone(),
+                        },
+                        parent_id: None,
+                    });
                     listener.on_error(format!("gemini_cli: {message}"));
                 }
                 StreamEvent::Result { status, error, .. } => {
@@ -510,10 +564,27 @@ impl Backend for GeminiCliBackend {
                             .map(|e| e.message)
                             .unwrap_or_else(|| "gemini exited with error".to_string());
                         listener.on_error(format!("gemini_cli result: {msg}"));
+                        listener.on_status(AgentStatus::Unhealthy {
+                            backend: "gemini_cli".into(),
+                            reason: "result_error".into(),
+                            detail: Some(msg),
+                        });
                         stop = StopReason::Error;
                     }
                 }
-                StreamEvent::Init { .. } | StreamEvent::Other => {}
+                StreamEvent::Init { session_id, model } => {
+                    listener.on_status(AgentStatus::Ready {
+                        backend: "gemini_cli".into(),
+                        session_id: session_id.clone(),
+                        model,
+                        version: None,
+                    });
+                    listener.on_activity(AgentActivity::SessionStarted {
+                        backend: "gemini_cli".into(),
+                        session_id,
+                    });
+                }
+                StreamEvent::Other => {}
             }
         }
 
@@ -524,6 +595,11 @@ impl Backend for GeminiCliBackend {
                     let _ = d.finish().await;
                 }
                 listener.on_error(format!("gemini_cli wait: {e}"));
+                listener.on_status(AgentStatus::Unhealthy {
+                    backend: "gemini_cli".into(),
+                    reason: "wait".into(),
+                    detail: Some(e.to_string()),
+                });
                 return Outcome::error();
             }
         };
@@ -534,6 +610,15 @@ impl Backend for GeminiCliBackend {
             };
             let snippet = truncate(&stderr_text, 800);
             listener.on_error(format!("gemini_cli exit {status}: {snippet}"));
+            listener.on_status(AgentStatus::Unhealthy {
+                backend: "gemini_cli".into(),
+                reason: format!("exit:{status}"),
+                detail: if snippet.is_empty() {
+                    None
+                } else {
+                    Some(snippet)
+                },
+            });
             return Outcome::error();
         }
         drop(stderr_drainer);
@@ -547,8 +632,18 @@ impl Backend for GeminiCliBackend {
             // event. The transcript may be incomplete; treat as
             // an error so the host renders an actionable state.
             listener.on_error("gemini_cli: stream ended without a result event".into());
+            listener.on_status(AgentStatus::Unhealthy {
+                backend: "gemini_cli".into(),
+                reason: "no_result".into(),
+                detail: None,
+            });
             stop = StopReason::Error;
         }
+        listener.on_status(AgentStatus::Exited {
+            backend: "gemini_cli".into(),
+            code: status.code(),
+            success: stop != StopReason::Error,
+        });
 
         // Drop the home tmpdir now that gemini has exited.
         drop(mcp_home);
@@ -794,6 +889,66 @@ fn render_prompt(messages: &[Message]) -> String {
     body
 }
 
+fn heartbeat_interval(inactivity_timeout: Duration) -> Duration {
+    let five = Duration::from_secs(5);
+    let half = inactivity_timeout / 2;
+    if half.is_zero() {
+        Duration::from_secs(1)
+    } else {
+        five.min(half)
+    }
+}
+
+struct Heartbeat {
+    active: Arc<AtomicBool>,
+    last_stdout_at: Arc<Mutex<Instant>>,
+}
+
+impl Heartbeat {
+    fn spawn(
+        listener: Arc<dyn SessionListener>,
+        backend: &'static str,
+        interval: Duration,
+    ) -> Self {
+        let active = Arc::new(AtomicBool::new(true));
+        let last_stdout_at = Arc::new(Mutex::new(Instant::now()));
+        let task_active = active.clone();
+        let task_last_stdout_at = last_stdout_at.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                if !task_active.load(Ordering::Relaxed) {
+                    break;
+                }
+                let idle = task_last_stdout_at
+                    .lock()
+                    .map(|t| t.elapsed())
+                    .unwrap_or_default();
+                listener.on_status(AgentStatus::Heartbeat {
+                    backend: backend.into(),
+                    idle_ms: idle.as_millis().try_into().unwrap_or(u64::MAX),
+                });
+            }
+        });
+        Self {
+            active,
+            last_stdout_at,
+        }
+    }
+
+    fn mark_stdout(&self) {
+        if let Ok(mut last) = self.last_stdout_at.lock() {
+            *last = Instant::now();
+        }
+    }
+}
+
+impl Drop for Heartbeat {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::Relaxed);
+    }
+}
+
 fn truncate(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
@@ -880,7 +1035,7 @@ struct ResultError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{StopReason, ToolCall, ToolResult};
+    use crate::session::{StopReason, ToolCall, ToolResult, UserRequest};
     use std::path::PathBuf;
     use std::sync::Mutex;
     use tempfile::TempDir;
@@ -888,11 +1043,15 @@ mod tests {
     struct Collector(Mutex<Vec<Event>>);
 
     #[derive(Debug, Clone)]
+    #[allow(dead_code)]
     enum Event {
         Delta(String),
         ToolCall(String),
         ToolResult(String),
         Error(String),
+        Status(AgentStatus),
+        Activity(AgentActivity),
+        UserRequest,
     }
 
     impl SessionListener for Collector {
@@ -909,6 +1068,15 @@ mod tests {
         fn on_error(&self, e: String) {
             self.0.lock().unwrap().push(Event::Error(e));
         }
+        fn on_status(&self, status: AgentStatus) {
+            self.0.lock().unwrap().push(Event::Status(status));
+        }
+        fn on_activity(&self, activity: AgentActivity) {
+            self.0.lock().unwrap().push(Event::Activity(activity));
+        }
+        fn on_user_request(&self, _: UserRequest) {
+            self.0.lock().unwrap().push(Event::UserRequest);
+        }
     }
 
     fn fake_gemini(dir: &std::path::Path, body: &str) -> PathBuf {
@@ -923,6 +1091,34 @@ mod tests {
         path
     }
 
+    fn fake_gemini_script(dir: &std::path::Path, script: &str) -> PathBuf {
+        let path = dir.join("fake_gemini.sh");
+        std::fs::write(&path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        path
+    }
+
+    fn backend_for(
+        script: &std::path::Path,
+        cwd: &std::path::Path,
+        timeout: Duration,
+    ) -> GeminiCliBackend {
+        GeminiCliBackend::new(
+            vec![script.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            cwd.to_path_buf(),
+            None,
+            timeout,
+            false,
+            None,
+        )
+    }
+
     #[tokio::test]
     async fn streams_assistant_text_and_forwards_tool_events() {
         let tmp = TempDir::new().unwrap();
@@ -933,16 +1129,7 @@ mod tests {
 {"type":"tool_result","timestamp":"t","tool_id":"call_1","status":"success","output":"ok"}
 {"type":"result","timestamp":"t","status":"success"}"#;
         let script = fake_gemini(tmp.path(), body);
-        let backend = GeminiCliBackend::new(
-            vec![script.to_string_lossy().into_owned()],
-            Vec::new(),
-            None,
-            tmp.path().to_path_buf(),
-            None,
-            Duration::from_secs(60),
-            false,
-            None,
-        );
+        let backend = backend_for(&script, tmp.path(), Duration::from_secs(60));
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
             .run(
@@ -993,6 +1180,187 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn emits_spawned_ready_and_session_activity() {
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"init","timestamp":"t","session_id":"s1","model":"gemini-2.5-pro"}
+{"type":"result","timestamp":"t","status":"success"}"#;
+        let script = fake_gemini(tmp.path(), body);
+        let backend = backend_for(&script, tmp.path(), Duration::from_secs(60));
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                &[Message::user("hi")],
+                &[],
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.stop_reason, StopReason::EndOfTurn);
+
+        let events = listener.0.lock().unwrap();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Status(AgentStatus::Spawned {
+                backend,
+                pid: Some(_),
+            }) if backend == "gemini_cli"
+        )));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Status(AgentStatus::Ready {
+                backend,
+                session_id: Some(id),
+                model: Some(model),
+                version: None,
+            }) if backend == "gemini_cli" && id == "s1" && model == "gemini-2.5-pro"
+        )));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Activity(AgentActivity::SessionStarted {
+                backend,
+                session_id: Some(id),
+            }) if backend == "gemini_cli" && id == "s1"
+        )));
+    }
+
+    #[tokio::test]
+    async fn heartbeat_fires_while_child_is_alive_but_quiet() {
+        let tmp = TempDir::new().unwrap();
+        let script = fake_gemini_script(
+            tmp.path(),
+            r#"#!/bin/sh
+printf '%s\n' '{"type":"init","timestamp":"t","session_id":"s1","model":"m"}'
+sleep 2
+printf '%s\n' '{"type":"result","timestamp":"t","status":"success"}'
+"#,
+        );
+        let backend = backend_for(&script, tmp.path(), Duration::from_secs(3));
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                &[Message::user("hi")],
+                &[],
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.stop_reason, StopReason::EndOfTurn);
+
+        let events = listener.0.lock().unwrap();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Status(AgentStatus::Heartbeat { backend, idle_ms })
+                if backend == "gemini_cli" && *idle_ms > 0
+        )));
+    }
+
+    #[tokio::test]
+    async fn tool_activity_frames_preserve_compat_callbacks() {
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"tool_use","timestamp":"t","tool_name":"read_file","tool_id":"call_1","parameters":{"path":"a.md"}}
+{"type":"tool_result","timestamp":"t","tool_id":"call_1","status":"success","output":"ok"}
+{"type":"result","timestamp":"t","status":"success"}"#;
+        let script = fake_gemini(tmp.path(), body);
+        let backend = backend_for(&script, tmp.path(), Duration::from_secs(60));
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                &[Message::user("hi")],
+                &[],
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.stop_reason, StopReason::EndOfTurn);
+
+        let events = listener.0.lock().unwrap();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Activity(AgentActivity::ToolStarted { id, name, .. })
+                if id == "call_1" && name == "read_file"
+        )));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Activity(AgentActivity::ToolFinished {
+                id,
+                output,
+                is_error: false,
+                ..
+            }) if id == "call_1" && output == &Json::String("ok".into())
+        )));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Event::ToolCall(name) if name == "read_file")));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Event::ToolResult(id) if id == "call_1")));
+    }
+
+    #[tokio::test]
+    async fn tool_error_activity_sets_is_error() {
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"tool_result","timestamp":"t","tool_id":"call_1","status":"error","error":{"type":"permission","message":"denied"}}
+{"type":"result","timestamp":"t","status":"success"}"#;
+        let script = fake_gemini(tmp.path(), body);
+        let backend = backend_for(&script, tmp.path(), Duration::from_secs(60));
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                &[Message::user("hi")],
+                &[],
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.stop_reason, StopReason::EndOfTurn);
+
+        let events = listener.0.lock().unwrap();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Activity(AgentActivity::ToolFinished {
+                id,
+                output,
+                is_error: true,
+                ..
+            }) if id == "call_1"
+                && output.get("message").and_then(Json::as_str) == Some("denied")
+        )));
+    }
+
+    #[tokio::test]
+    async fn numbered_choice_text_remains_plain_delta() {
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"message","timestamp":"t","role":"assistant","content":"Pick one:\n1. Red\n2. Blue\n3. Green","delta":true}
+{"type":"result","timestamp":"t","status":"success"}"#;
+        let script = fake_gemini(tmp.path(), body);
+        let backend = backend_for(&script, tmp.path(), Duration::from_secs(60));
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                &[Message::user("hi")],
+                &[],
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(
+            outcome.assistant_text,
+            "Pick one:\n1. Red\n2. Blue\n3. Green"
+        );
+
+        let events = listener.0.lock().unwrap();
+        let deltas: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Delta(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(deltas, vec!["Pick one:\n1. Red\n2. Blue\n3. Green"]);
+        assert!(!events.iter().any(|e| matches!(e, Event::UserRequest)));
+    }
+
+    #[tokio::test]
     async fn canonical_assistant_message_after_delta_chunks_is_not_re_emitted() {
         // Regression for the same shape of bug as claude_cli's
         // partials/canonical doubling: gemini-cli's NDJSON message
@@ -1015,16 +1383,7 @@ mod tests {
 {"type":"message","timestamp":"t","role":"assistant","content":"hello world","delta":false}
 {"type":"result","timestamp":"t","status":"success"}"#;
         let script = fake_gemini(tmp.path(), body);
-        let backend = GeminiCliBackend::new(
-            vec![script.to_string_lossy().into_owned()],
-            Vec::new(),
-            None,
-            tmp.path().to_path_buf(),
-            None,
-            Duration::from_secs(60),
-            false,
-            None,
-        );
+        let backend = backend_for(&script, tmp.path(), Duration::from_secs(60));
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
             .run(
@@ -1099,6 +1458,13 @@ mod tests {
             errs.iter().any(|e| e.contains("stream ended without")),
             "expected stream-ended error: {errs:?}",
         );
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Status(AgentStatus::Unhealthy { reason, .. }) if reason == "no_result"
+        )));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Event::Status(AgentStatus::Exited { success: false, .. }))));
     }
 
     #[tokio::test]
@@ -1306,6 +1672,11 @@ mod tests {
             errs.iter().any(|e| e.contains("subprocess wedged")),
             "expected wedged-subprocess error: {errs:?}",
         );
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Status(AgentStatus::Unhealthy { reason, .. })
+                if reason.starts_with("no_output_for_")
+        )));
     }
 
     #[tokio::test]
@@ -1354,6 +1725,11 @@ mod tests {
                 .any(|e| e.contains("exit") && e.contains("boom")),
             "errs={errs:?}"
         );
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Status(AgentStatus::Unhealthy { reason, detail, .. })
+                if reason.contains("exit") && detail.as_deref().is_some_and(|d| d.contains("boom"))
+        )));
     }
 
     #[tokio::test]

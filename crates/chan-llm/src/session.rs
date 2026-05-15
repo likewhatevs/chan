@@ -145,6 +145,153 @@ pub struct ToolResult {
     pub output: Json,
 }
 
+/// Subprocess/agent lifecycle status. Additive companion to the
+/// existing text/tool callbacks: hosts can drive activity indicators,
+/// health checks, and recycle decisions without parsing backend-
+/// specific strings.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentStatus {
+    Spawned {
+        backend: String,
+        pid: Option<u32>,
+    },
+    Ready {
+        backend: String,
+        session_id: Option<String>,
+        model: Option<String>,
+        version: Option<String>,
+    },
+    Thinking {
+        backend: String,
+        status: Option<String>,
+    },
+    Heartbeat {
+        backend: String,
+        idle_ms: u64,
+    },
+    TurnStopping {
+        backend: String,
+        reason: Option<String>,
+    },
+    RateLimit {
+        backend: String,
+        status: String,
+        resets_at: Option<String>,
+        rate_limit_type: Option<String>,
+        in_overage: bool,
+    },
+    Exited {
+        backend: String,
+        code: Option<i32>,
+        success: bool,
+    },
+    Unhealthy {
+        backend: String,
+        reason: String,
+        detail: Option<String>,
+    },
+    Cancelled {
+        backend: String,
+    },
+}
+
+/// UI-facing activity emitted by agentic CLI backends. These events
+/// are observational; they do not change the transcript contract.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentActivity {
+    SessionStarted {
+        backend: String,
+        session_id: Option<String>,
+    },
+    MessageStarted {
+        backend: String,
+        message_id: Option<String>,
+        parent_id: Option<String>,
+    },
+    ThinkingStarted {
+        backend: String,
+        parent_id: Option<String>,
+    },
+    ThinkingDelta {
+        backend: String,
+        text: String,
+        parent_id: Option<String>,
+    },
+    ToolStarted {
+        backend: String,
+        id: String,
+        name: String,
+        parent_id: Option<String>,
+    },
+    ToolArgsDelta {
+        backend: String,
+        id: Option<String>,
+        partial_json: String,
+        parent_id: Option<String>,
+    },
+    ToolFinished {
+        backend: String,
+        id: String,
+        name: Option<String>,
+        output: Json,
+        is_error: bool,
+        parent_id: Option<String>,
+    },
+    ToolDenied {
+        backend: String,
+        id: Option<String>,
+        name: Option<String>,
+        reason: Option<String>,
+        input: Json,
+        parent_id: Option<String>,
+    },
+    AgentNote {
+        backend: String,
+        text: String,
+        parent_id: Option<String>,
+    },
+    TurnUsage {
+        backend: String,
+        usage: Json,
+    },
+}
+
+/// Structured request for user input from an agentic backend. A
+/// single-choice prompt is represented as a survey with one question.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum UserRequest {
+    Survey {
+        backend: String,
+        id: String,
+        questions: Vec<UserQuestion>,
+        parent_id: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserQuestion {
+    pub question: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    #[serde(default)]
+    pub multi_select: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<UserOption>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserOption {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 /// Status string the orchestrator writes into the placeholder Tool
 /// message when a `write_file` call pauses for user approval. Hosts
 /// match against this (or use `is_pending_placeholder`) to drive
@@ -483,6 +630,16 @@ pub trait SessionListener: Send + Sync {
     /// their pre-call transcript with a partial one. Default no-op
     /// so existing listeners keep compiling.
     fn on_messages_snapshot(&self, _history: &[Message]) {}
+    /// Agent lifecycle and health status. Default no-op so hosts can
+    /// adopt the richer event stream incrementally.
+    fn on_status(&self, _status: AgentStatus) {}
+    /// UI-facing tool/thinking/background activity. Existing
+    /// `on_tool_call` / `on_tool_result` remain the compatibility
+    /// contract; this method carries richer status for activity panes.
+    fn on_activity(&self, _activity: AgentActivity) {}
+    /// Structured prompt from the agent to the user, such as Claude's
+    /// `AskUserQuestion` survey. Plain numbered text remains `on_delta`.
+    fn on_user_request(&self, _request: UserRequest) {}
 }
 
 /// Internal wrapper that catches panics from a host-supplied
@@ -560,6 +717,30 @@ impl SessionListener for SafeListener {
             inner.on_messages_snapshot(history)
         })) {
             tracing::error!(panic = %panic_message(&p), "listener.on_messages_snapshot panicked");
+        }
+    }
+    fn on_status(&self, status: AgentStatus) {
+        let inner = self.inner.clone();
+        if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            inner.on_status(status)
+        })) {
+            tracing::error!(panic = %panic_message(&p), "listener.on_status panicked");
+        }
+    }
+    fn on_activity(&self, activity: AgentActivity) {
+        let inner = self.inner.clone();
+        if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            inner.on_activity(activity)
+        })) {
+            tracing::error!(panic = %panic_message(&p), "listener.on_activity panicked");
+        }
+    }
+    fn on_user_request(&self, request: UserRequest) {
+        let inner = self.inner.clone();
+        if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            inner.on_user_request(request)
+        })) {
+            tracing::error!(panic = %panic_message(&p), "listener.on_user_request panicked");
         }
     }
 }
@@ -1770,6 +1951,15 @@ mod tests {
         fn on_messages_snapshot(&self, _: &[Message]) {
             panic!("on_messages_snapshot panicked");
         }
+        fn on_status(&self, _: AgentStatus) {
+            panic!("on_status panicked");
+        }
+        fn on_activity(&self, _: AgentActivity) {
+            panic!("on_activity panicked");
+        }
+        fn on_user_request(&self, _: UserRequest) {
+            panic!("on_user_request panicked");
+        }
     }
 
     #[test]
@@ -1794,6 +1984,30 @@ mod tests {
             message: "auth failed".into(),
         });
         safe.on_messages_snapshot(&[Message::user("hi")]);
+        safe.on_status(AgentStatus::Heartbeat {
+            backend: "claude_cli".into(),
+            idle_ms: 5,
+        });
+        safe.on_activity(AgentActivity::ToolStarted {
+            backend: "claude_cli".into(),
+            id: "c1".into(),
+            name: "read_file".into(),
+            parent_id: None,
+        });
+        safe.on_user_request(UserRequest::Survey {
+            backend: "claude_cli".into(),
+            id: "q1".into(),
+            questions: vec![UserQuestion {
+                question: "Pick one".into(),
+                header: None,
+                multi_select: false,
+                options: vec![UserOption {
+                    label: "One".into(),
+                    description: None,
+                }],
+            }],
+            parent_id: None,
+        });
         safe.on_done(StopReason::EndOfTurn);
         // No panic propagated; reaching this line is the assertion.
     }

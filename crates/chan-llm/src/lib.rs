@@ -66,8 +66,9 @@ pub use cli::{
 pub use config::LlmConfig;
 pub use error::LlmError;
 pub use session::{
-    apply_resume, is_pending_placeholder, CancelHandle, Delta, ImageInput, LlmEventError,
-    LlmSession, Message, ResumeOutcome, Role, SessionListener, StopReason, ToolCall, ToolResult,
+    apply_resume, is_pending_placeholder, AgentActivity, AgentStatus, CancelHandle, Delta,
+    ImageInput, LlmEventError, LlmSession, Message, ResumeOutcome, Role, SessionListener,
+    StopReason, ToolCall, ToolResult, UserOption, UserQuestion, UserRequest,
     DEFAULT_MAX_TOOL_ITERATIONS, FAILED_STATUS, PENDING_STATUS, REJECTED_STATUS,
 };
 pub use tools::{StandardTool, ToolContext};

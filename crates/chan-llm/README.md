@@ -64,8 +64,16 @@ trait SessionListener: Send + Sync {
     fn on_tool_result(&self, ToolResult);
     fn on_done(&self, StopReason);
     fn on_error(&self, String);
+    fn on_status(&self, AgentStatus);       # default no-op
+    fn on_activity(&self, AgentActivity);   # default no-op
+    fn on_user_request(&self, UserRequest); # default no-op
 }
 ```
+
+`AgentStatus`, `AgentActivity`, and `UserRequest` are additive
+callbacks for agentic CLI UX. They expose subprocess lifecycle,
+heartbeat, tool/thinking activity, rate-limit status, and structured
+survey prompts while preserving the older text/tool callbacks.
 
 ## Contacts and the graph
 

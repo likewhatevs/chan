@@ -99,8 +99,8 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -110,7 +110,10 @@ use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall, ToolResult};
+use crate::session::{
+    AgentActivity, AgentStatus, Delta, Message, Role, SessionListener, StopReason, ToolCall,
+    ToolResult, UserOption, UserQuestion, UserRequest,
+};
 use crate::tools::ToolSchema;
 
 use super::{
@@ -327,6 +330,10 @@ impl Backend for ClaudeCliBackend {
                 return Outcome::error();
             }
         };
+        listener.on_status(AgentStatus::Spawned {
+            backend: "claude_cli".into(),
+            pid: child.id(),
+        });
 
         // Pipe the rendered transcript on stdin. Drop stdin so
         // claude sees EOF and processes the prompt. Take stderr
@@ -384,8 +391,20 @@ impl Backend for ClaudeCliBackend {
         // moment and re-emit the whole text from the canonical
         // block, doubling on_delta.
         let mut partial_buffers: VecDeque<HashMap<usize, String>> = VecDeque::new();
+        // Block-index -> tool_use id for the in-flight assistant
+        // message. Populated by `content_block_start { tool_use }` so
+        // a follow-up `content_block_delta { input_json_delta }` (whose
+        // envelope carries only the index) can be tagged with the tool
+        // id the partial JSON belongs to. Cleared at every
+        // `message_start` because indexes reset per message.
+        let mut tool_ids_by_index: HashMap<usize, String> = HashMap::new();
         let mut parse_errors_emitted = 0usize;
         let mut parse_errors_silenced = 0usize;
+        let heartbeat = Heartbeat::spawn(
+            listener.clone(),
+            "claude_cli",
+            heartbeat_interval(self.inactivity_timeout),
+        );
 
         loop {
             if cancel.load(Ordering::Relaxed) {
@@ -400,6 +419,9 @@ impl Backend for ClaudeCliBackend {
                 if let Some(d) = stderr_drainer.take() {
                     let _ = d.finish().await;
                 }
+                listener.on_status(AgentStatus::Cancelled {
+                    backend: "claude_cli".into(),
+                });
                 return Outcome::cancelled(assistant_text);
             }
             let read = timeout(
@@ -408,7 +430,10 @@ impl Backend for ClaudeCliBackend {
             )
             .await;
             let got_line = match read {
-                Ok(Ok(true)) => true,
+                Ok(Ok(true)) => {
+                    heartbeat.mark_stdout();
+                    true
+                }
                 Ok(Ok(false)) => break,
                 Ok(Err(e)) => {
                     // Either an I/O failure on the pipe or the per-line
@@ -425,6 +450,11 @@ impl Backend for ClaudeCliBackend {
                         listener
                             .on_error(format!("claude_cli stdout: {e}; stderr: {stderr_snippet}"));
                     }
+                    listener.on_status(AgentStatus::Unhealthy {
+                        backend: "claude_cli".into(),
+                        reason: "stdout".into(),
+                        detail: Some(e.to_string()),
+                    });
                     return Outcome::error();
                 }
                 Err(_elapsed) => {
@@ -443,6 +473,15 @@ impl Backend for ClaudeCliBackend {
                     } else {
                         listener.on_error(format!("{base}; stderr: {stderr_snippet}"));
                     }
+                    listener.on_status(AgentStatus::Unhealthy {
+                        backend: "claude_cli".into(),
+                        reason: format!("no_output_for_{}s", self.inactivity_timeout.as_secs()),
+                        detail: if stderr_snippet.is_empty() {
+                            None
+                        } else {
+                            Some(stderr_snippet)
+                        },
+                    });
                     return Outcome::error();
                 }
             };
@@ -483,8 +522,36 @@ impl Backend for ClaudeCliBackend {
                 }
             };
             match event {
-                StreamEvent::Partial { event: partial } => match partial {
-                    PartialEvent::MessageStart => {
+                StreamEvent::System {
+                    subtype,
+                    session_id,
+                    model,
+                    claude_code_version,
+                    status,
+                } => {
+                    if subtype == "init" {
+                        listener.on_status(AgentStatus::Ready {
+                            backend: "claude_cli".into(),
+                            session_id: session_id.clone(),
+                            model,
+                            version: claude_code_version,
+                        });
+                        listener.on_activity(AgentActivity::SessionStarted {
+                            backend: "claude_cli".into(),
+                            session_id,
+                        });
+                    } else if subtype == "status" {
+                        listener.on_status(AgentStatus::Thinking {
+                            backend: "claude_cli".into(),
+                            status,
+                        });
+                    }
+                }
+                StreamEvent::Partial {
+                    event: partial,
+                    parent_tool_use_id,
+                } => match partial {
+                    PartialEvent::MessageStart { message } => {
                         // A new assistant message begins. Push a
                         // fresh tracker at the back; the previous
                         // message's tracker stays in the queue
@@ -494,6 +561,37 @@ impl Backend for ClaudeCliBackend {
                         // clearing message N's partials before its
                         // final event arrives.
                         partial_buffers.push_back(HashMap::new());
+                        // Block indexes reset per message, so the
+                        // index-keyed tool_use lookup must reset too;
+                        // otherwise a tool at index 1 of message N+1
+                        // would collide with index 1 of message N.
+                        tool_ids_by_index.clear();
+                        listener.on_activity(AgentActivity::MessageStarted {
+                            backend: "claude_cli".into(),
+                            message_id: message.and_then(|m| m.id),
+                            parent_id: parent_tool_use_id,
+                        });
+                    }
+                    PartialEvent::ContentBlockStart {
+                        index,
+                        content_block: PartialContentBlock::ToolUse { id, name, .. },
+                    } => {
+                        tool_ids_by_index.insert(index, id.clone());
+                        listener.on_activity(AgentActivity::ToolStarted {
+                            backend: "claude_cli".into(),
+                            id,
+                            name,
+                            parent_id: parent_tool_use_id,
+                        });
+                    }
+                    PartialEvent::ContentBlockStart {
+                        content_block: PartialContentBlock::Thinking,
+                        ..
+                    } => {
+                        listener.on_activity(AgentActivity::ThinkingStarted {
+                            backend: "claude_cli".into(),
+                            parent_id: parent_tool_use_id,
+                        });
                     }
                     PartialEvent::ContentBlockDelta {
                         index,
@@ -524,9 +622,41 @@ impl Backend for ClaudeCliBackend {
                             }
                         }
                     }
-                    PartialEvent::ContentBlockDelta { .. } | PartialEvent::Other => {}
+                    PartialEvent::ContentBlockDelta {
+                        index,
+                        delta: PartialDelta::InputJsonDelta { partial_json },
+                    } => {
+                        listener.on_activity(AgentActivity::ToolArgsDelta {
+                            backend: "claude_cli".into(),
+                            id: tool_ids_by_index.get(&index).cloned(),
+                            partial_json,
+                            parent_id: parent_tool_use_id,
+                        });
+                    }
+                    PartialEvent::ContentBlockDelta {
+                        delta: PartialDelta::ThinkingDelta { thinking },
+                        ..
+                    } => {
+                        listener.on_activity(AgentActivity::ThinkingDelta {
+                            backend: "claude_cli".into(),
+                            text: thinking,
+                            parent_id: parent_tool_use_id,
+                        });
+                    }
+                    PartialEvent::MessageDelta { delta } => {
+                        listener.on_status(AgentStatus::TurnStopping {
+                            backend: "claude_cli".into(),
+                            reason: delta.stop_reason,
+                        });
+                    }
+                    PartialEvent::ContentBlockStart { .. }
+                    | PartialEvent::ContentBlockDelta { .. }
+                    | PartialEvent::Other => {}
                 },
-                StreamEvent::Assistant { message } => {
+                StreamEvent::Assistant {
+                    message,
+                    parent_tool_use_id,
+                } => {
                     // Consume the oldest un-reconciled per-message
                     // tracker. Empty / None means claude-cli buffered
                     // this message without emitting partials for it,
@@ -617,6 +747,32 @@ impl Backend for ClaudeCliBackend {
                                 }
                             }
                             ContentBlock::ToolUse { id, name, input } => {
+                                listener.on_activity(AgentActivity::ToolFinished {
+                                    backend: "claude_cli".into(),
+                                    id: id.clone(),
+                                    name: Some(name.clone()),
+                                    output: input.clone(),
+                                    is_error: false,
+                                    parent_id: parent_tool_use_id.clone(),
+                                });
+                                if name == "AskUserQuestion" {
+                                    if let Some(request) = ask_user_question_request(
+                                        &id,
+                                        &input,
+                                        parent_tool_use_id.clone(),
+                                    ) {
+                                        listener.on_user_request(request);
+                                    }
+                                } else if name == "SendUserMessage" {
+                                    if let Some(text) = input.get("message").and_then(Json::as_str)
+                                    {
+                                        listener.on_activity(AgentActivity::AgentNote {
+                                            backend: "claude_cli".into(),
+                                            text: text.to_string(),
+                                            parent_id: parent_tool_use_id.clone(),
+                                        });
+                                    }
+                                }
                                 listener.on_tool_call(ToolCall {
                                     id,
                                     name,
@@ -630,14 +786,26 @@ impl Backend for ClaudeCliBackend {
                         }
                     }
                 }
-                StreamEvent::User { message } => {
+                StreamEvent::User {
+                    message,
+                    parent_tool_use_id,
+                } => {
                     for block in message.content {
                         if let ContentBlock::ToolResult {
                             tool_use_id,
                             content,
+                            is_error,
                             ..
                         } = block
                         {
+                            listener.on_activity(AgentActivity::ToolFinished {
+                                backend: "claude_cli".into(),
+                                id: tool_use_id.clone(),
+                                name: None,
+                                output: content.clone(),
+                                is_error: is_error.unwrap_or(false),
+                                parent_id: parent_tool_use_id.clone(),
+                            });
                             listener.on_tool_result(ToolResult {
                                 id: tool_use_id,
                                 output: content,
@@ -645,17 +813,59 @@ impl Backend for ClaudeCliBackend {
                         }
                     }
                 }
+                StreamEvent::RateLimit { rate_limit_info } => {
+                    listener.on_status(AgentStatus::RateLimit {
+                        backend: "claude_cli".into(),
+                        status: rate_limit_info
+                            .get("status")
+                            .and_then(Json::as_str)
+                            .unwrap_or("unknown")
+                            .to_string(),
+                        resets_at: rate_limit_info
+                            .get("resetsAt")
+                            .and_then(Json::as_str)
+                            .map(str::to_owned),
+                        rate_limit_type: rate_limit_info
+                            .get("rateLimitType")
+                            .and_then(Json::as_str)
+                            .map(str::to_owned),
+                        in_overage: rate_limit_info
+                            .get("isUsingOverage")
+                            .and_then(Json::as_bool)
+                            .unwrap_or(false),
+                    });
+                }
                 StreamEvent::Result {
                     subtype,
                     result,
                     is_error,
+                    permission_denials,
                 } => {
+                    // Denials are independent of success/error; surface
+                    // them first so the frontend can attribute "we
+                    // tried X but it was blocked" before reading any
+                    // Unhealthy that follows.
+                    for denial in permission_denials {
+                        listener.on_activity(AgentActivity::ToolDenied {
+                            backend: "claude_cli".into(),
+                            id: denial.tool_use_id,
+                            name: denial.tool_name,
+                            reason: None,
+                            input: denial.tool_input,
+                            parent_id: None,
+                        });
+                    }
                     saw_result = true;
                     if is_error.unwrap_or(false) {
                         let msg = result
                             .clone()
                             .unwrap_or_else(|| format!("claude exit ({subtype})"));
                         listener.on_error(format!("claude_cli result: {msg}"));
+                        listener.on_status(AgentStatus::Unhealthy {
+                            backend: "claude_cli".into(),
+                            reason: subtype,
+                            detail: Some(msg),
+                        });
                         stop = StopReason::Error;
                     } else if assistant_text.is_empty() {
                         // claude's `result.result` carries the
@@ -691,6 +901,11 @@ impl Backend for ClaudeCliBackend {
                     let _ = d.finish().await;
                 }
                 listener.on_error(format!("claude_cli wait: {e}"));
+                listener.on_status(AgentStatus::Unhealthy {
+                    backend: "claude_cli".into(),
+                    reason: "wait".into(),
+                    detail: Some(e.to_string()),
+                });
                 return Outcome::error();
             }
         };
@@ -705,8 +920,22 @@ impl Backend for ClaudeCliBackend {
             };
             let snippet = truncate(&stderr_text, 800);
             listener.on_error(format!("claude_cli exit {status}: {snippet}"));
+            listener.on_status(AgentStatus::Unhealthy {
+                backend: "claude_cli".into(),
+                reason: format!("exit:{status}"),
+                detail: if snippet.is_empty() {
+                    None
+                } else {
+                    Some(snippet)
+                },
+            });
             return Outcome::error();
         }
+        listener.on_status(AgentStatus::Exited {
+            backend: "claude_cli".into(),
+            code: status.code(),
+            success: true,
+        });
         // Drainer is no longer needed on the success path; let it
         // wind down on its own as the pipe closes. Awaiting would
         // serialise the unrelated drainer task against the happy
@@ -729,6 +958,11 @@ impl Backend for ClaudeCliBackend {
             // instead of presenting a half-message as a complete
             // reply.
             listener.on_error("claude_cli: stream ended without a result event".into());
+            listener.on_status(AgentStatus::Unhealthy {
+                backend: "claude_cli".into(),
+                reason: "no_terminal".into(),
+                detail: None,
+            });
             stop = StopReason::Error;
         }
 
@@ -833,16 +1067,141 @@ fn truncate(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
 
+fn heartbeat_interval(inactivity_timeout: Duration) -> Duration {
+    let five = Duration::from_secs(5);
+    let half = inactivity_timeout / 2;
+    if half.is_zero() {
+        Duration::from_secs(1)
+    } else {
+        five.min(half)
+    }
+}
+
+struct Heartbeat {
+    active: Arc<AtomicBool>,
+    last_stdout_at: Arc<Mutex<Instant>>,
+}
+
+impl Heartbeat {
+    fn spawn(
+        listener: Arc<dyn SessionListener>,
+        backend: &'static str,
+        interval: Duration,
+    ) -> Self {
+        let active = Arc::new(AtomicBool::new(true));
+        let last_stdout_at = Arc::new(Mutex::new(Instant::now()));
+        let task_active = active.clone();
+        let task_last_stdout_at = last_stdout_at.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                if !task_active.load(Ordering::Relaxed) {
+                    break;
+                }
+                let idle = task_last_stdout_at
+                    .lock()
+                    .map(|t| t.elapsed())
+                    .unwrap_or_default();
+                listener.on_status(AgentStatus::Heartbeat {
+                    backend: backend.into(),
+                    idle_ms: idle.as_millis().try_into().unwrap_or(u64::MAX),
+                });
+            }
+        });
+        Self {
+            active,
+            last_stdout_at,
+        }
+    }
+
+    fn mark_stdout(&self) {
+        if let Ok(mut last) = self.last_stdout_at.lock() {
+            *last = Instant::now();
+        }
+    }
+}
+
+impl Drop for Heartbeat {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::Relaxed);
+    }
+}
+
+fn ask_user_question_request(
+    id: &str,
+    input: &Json,
+    parent_id: Option<String>,
+) -> Option<UserRequest> {
+    let raw_questions = input.get("questions")?.as_array()?;
+    let mut questions = Vec::with_capacity(raw_questions.len());
+    for raw in raw_questions {
+        let question = raw.get("question")?.as_str()?.to_string();
+        let options = raw
+            .get("options")
+            .and_then(Json::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| {
+                        Some(UserOption {
+                            label: value.get("label")?.as_str()?.to_string(),
+                            description: value
+                                .get("description")
+                                .and_then(Json::as_str)
+                                .map(str::to_owned),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        questions.push(UserQuestion {
+            question,
+            header: raw.get("header").and_then(Json::as_str).map(str::to_owned),
+            multi_select: raw
+                .get("multiSelect")
+                .or_else(|| raw.get("multi_select"))
+                .and_then(Json::as_bool)
+                .unwrap_or(false),
+            options,
+        });
+    }
+    Some(UserRequest::Survey {
+        backend: "claude_cli".into(),
+        id: id.to_string(),
+        questions,
+        parent_id,
+    })
+}
+
 // ---- stream-json wire types --------------------------------------------
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum StreamEvent {
+    System {
+        #[serde(default)]
+        subtype: String,
+        #[serde(default)]
+        session_id: Option<String>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        claude_code_version: Option<String>,
+        #[serde(default)]
+        status: Option<String>,
+    },
     Assistant {
         message: AssistantMessage,
+        /// Non-null when this assistant message came from a sub-agent
+        /// spawned by claude's Task tool. The frontend groups nested
+        /// agent activity under the parent tool_use id.
+        #[serde(default)]
+        parent_tool_use_id: Option<String>,
     },
     User {
         message: UserMessage,
+        #[serde(default)]
+        parent_tool_use_id: Option<String>,
     },
     /// Anthropic SDK partial event envelope, emitted when claude is
     /// launched with `--include-partial-messages`. We only decode
@@ -854,6 +1213,13 @@ enum StreamEvent {
     #[serde(rename = "stream_event")]
     Partial {
         event: PartialEvent,
+        #[serde(default)]
+        parent_tool_use_id: Option<String>,
+    },
+    #[serde(rename = "rate_limit_event")]
+    RateLimit {
+        #[serde(default)]
+        rate_limit_info: Json,
     },
     Result {
         #[serde(default)]
@@ -862,6 +1228,12 @@ enum StreamEvent {
         result: Option<String>,
         #[serde(default)]
         is_error: Option<bool>,
+        /// Tools claude refused or that the host cancelled before
+        /// answering. Each entry carries the original tool_input verbatim
+        /// so the frontend can render "we tried to call X with Y but it
+        /// was denied/cancelled" without re-querying claude.
+        #[serde(default)]
+        permission_denials: Vec<PermissionDenial>,
     },
     /// system / future event types pass through silently.
     #[serde(other)]
@@ -874,12 +1246,51 @@ enum PartialEvent {
     /// Boundary marker between assistant messages. The per-block
     /// partial-text tracker resets here so the next final
     /// `assistant` event compares against a fresh slate.
-    MessageStart,
+    MessageStart {
+        #[serde(default)]
+        message: Option<PartialMessage>,
+    },
+    ContentBlockStart {
+        #[serde(default)]
+        index: usize,
+        content_block: PartialContentBlock,
+    },
     /// Incremental delta for the content block at `index`. Indexes
     /// are positional within a single assistant message and reset
     /// at every `MessageStart`.
     ContentBlockDelta { index: usize, delta: PartialDelta },
+    MessageDelta {
+        #[serde(default)]
+        delta: PartialMessageDelta,
+    },
     #[serde(other)]
+    Other,
+}
+
+#[derive(Default, Deserialize)]
+struct PartialMessage {
+    #[serde(default)]
+    id: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct PartialMessageDelta {
+    #[serde(default)]
+    stop_reason: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum PartialContentBlock {
+    ToolUse {
+        id: String,
+        name: String,
+        #[serde(default, rename = "input")]
+        _input: Json,
+    },
+    Thinking,
+    #[serde(other)]
+    #[default]
     Other,
 }
 
@@ -888,6 +1299,14 @@ enum PartialEvent {
 enum PartialDelta {
     TextDelta {
         text: String,
+    },
+    InputJsonDelta {
+        #[serde(default)]
+        partial_json: String,
+    },
+    ThinkingDelta {
+        #[serde(default)]
+        thinking: String,
     },
     #[serde(other)]
     Other,
@@ -903,6 +1322,18 @@ struct AssistantMessage {
 struct UserMessage {
     #[serde(default)]
     content: Vec<ContentBlock>,
+}
+
+/// Subset of a `result.permission_denials[]` entry. Reason isn't
+/// surfaced by claude; the entry's mere presence is the signal.
+#[derive(Deserialize)]
+struct PermissionDenial {
+    #[serde(default)]
+    tool_use_id: Option<String>,
+    #[serde(default)]
+    tool_name: Option<String>,
+    #[serde(default)]
+    tool_input: Json,
 }
 
 #[derive(Deserialize)]
@@ -940,11 +1371,15 @@ mod tests {
     struct Collector(Mutex<Vec<Event>>);
 
     #[derive(Debug, Clone)]
+    #[allow(dead_code)]
     enum Event {
         Delta(String),
         ToolCall(String),
         ToolResult(String),
         Error(String),
+        Status(AgentStatus),
+        Activity(AgentActivity),
+        UserRequest(UserRequest),
     }
 
     impl SessionListener for Collector {
@@ -960,6 +1395,15 @@ mod tests {
         fn on_done(&self, _: StopReason) {}
         fn on_error(&self, e: String) {
             self.0.lock().unwrap().push(Event::Error(e));
+        }
+        fn on_status(&self, s: AgentStatus) {
+            self.0.lock().unwrap().push(Event::Status(s));
+        }
+        fn on_activity(&self, a: AgentActivity) {
+            self.0.lock().unwrap().push(Event::Activity(a));
+        }
+        fn on_user_request(&self, r: UserRequest) {
+            self.0.lock().unwrap().push(Event::UserRequest(r));
         }
     }
 
@@ -1759,6 +2203,409 @@ mod tests {
         assert_eq!(
             args.iter().map(|a| a.as_str().unwrap()).collect::<Vec<_>>(),
             vec!["__mcp-proxy", "/tmp/s"]
+        );
+    }
+
+    /// Generic shell-script writer: caller supplies the full
+    /// `#!/bin/sh ...` body, so tests that need `sleep` between
+    /// heredocs (heartbeat) or a non-zero `exit` (crash) can spell
+    /// the script directly. The simple all-at-once cases keep using
+    /// `fake_claude(...)` above.
+    fn fake_claude_raw(dir: &std::path::Path, script: &str) -> PathBuf {
+        let path = dir.join("fake_claude.sh");
+        std::fs::write(&path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        path
+    }
+
+    fn statuses(events: &[Event]) -> Vec<&AgentStatus> {
+        events
+            .iter()
+            .filter_map(|e| {
+                if let Event::Status(s) = e {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn activities(events: &[Event]) -> Vec<&AgentActivity> {
+        events
+            .iter()
+            .filter_map(|e| {
+                if let Event::Activity(a) = e {
+                    Some(a)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn user_requests(events: &[Event]) -> Vec<&UserRequest> {
+        events
+            .iter()
+            .filter_map(|e| {
+                if let Event::UserRequest(r) = e {
+                    Some(r)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    async fn run_fake(
+        script_path: PathBuf,
+        cwd: PathBuf,
+        inactivity: Duration,
+    ) -> (super::Outcome, Vec<Event>) {
+        let backend = ClaudeCliBackend::new(
+            vec![script_path.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            cwd,
+            None,
+            inactivity,
+            false,
+            None,
+        );
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                &[Message::user("hi")],
+                &[],
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        let events = listener.0.lock().unwrap().clone();
+        (outcome, events)
+    }
+
+    #[tokio::test]
+    async fn system_init_emits_ready_and_session_started() {
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"system","subtype":"init","session_id":"sid-1","model":"claude-opus-4-7","claude_code_version":"2.1.142"}
+{"type":"result","subtype":"success","result":"","is_error":false}"#;
+        let script = fake_claude(tmp.path(), body);
+        let (_outcome, events) =
+            run_fake(script, tmp.path().to_path_buf(), Duration::from_secs(60)).await;
+        let saw_ready = statuses(&events).iter().any(|s| {
+            matches!(
+                s,
+                AgentStatus::Ready { session_id, model, version, .. }
+                    if session_id.as_deref() == Some("sid-1")
+                        && model.as_deref() == Some("claude-opus-4-7")
+                        && version.as_deref() == Some("2.1.142")
+            )
+        });
+        assert!(saw_ready, "missing Ready from system/init: {events:#?}");
+        let saw_session_started = activities(&events).iter().any(|a| {
+            matches!(
+                a,
+                AgentActivity::SessionStarted { session_id, .. }
+                    if session_id.as_deref() == Some("sid-1")
+            )
+        });
+        assert!(saw_session_started, "missing SessionStarted: {events:#?}");
+    }
+
+    #[tokio::test]
+    async fn system_status_requesting_emits_thinking() {
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"system","subtype":"init"}
+{"type":"system","subtype":"status","status":"requesting"}
+{"type":"result","subtype":"success","result":"","is_error":false}"#;
+        let script = fake_claude(tmp.path(), body);
+        let (_outcome, events) =
+            run_fake(script, tmp.path().to_path_buf(), Duration::from_secs(60)).await;
+        let saw_thinking = statuses(&events).iter().any(|s| {
+            matches!(
+                s,
+                AgentStatus::Thinking { status, .. } if status.as_deref() == Some("requesting")
+            )
+        });
+        assert!(saw_thinking, "missing Thinking status: {events:#?}");
+    }
+
+    #[tokio::test]
+    async fn heartbeat_fires_while_child_is_quiet_but_alive() {
+        // 2s inactivity ceiling, so heartbeat_interval clamps to 1s.
+        // The fake child writes init, sleeps 1.5s while still alive,
+        // then writes the terminal result. At least one heartbeat
+        // must fire during the sleep.
+        let tmp = TempDir::new().unwrap();
+        let script = "#!/bin/sh
+cat <<'EOF1'
+{\"type\":\"system\",\"subtype\":\"init\"}
+EOF1
+sleep 1.5
+cat <<'EOF2'
+{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"\",\"is_error\":false}
+EOF2
+";
+        let path = fake_claude_raw(tmp.path(), script);
+        let (_outcome, events) =
+            run_fake(path, tmp.path().to_path_buf(), Duration::from_secs(2)).await;
+        let heartbeats = statuses(&events)
+            .into_iter()
+            .filter(|s| matches!(s, AgentStatus::Heartbeat { .. }))
+            .count();
+        assert!(
+            heartbeats >= 1,
+            "expected at least one heartbeat during 1.5s quiet window: {events:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_started_fires_before_canonical_tool_call() {
+        // content_block_start { tool_use } must produce
+        // AgentActivity::ToolStarted ahead of the final assistant
+        // envelope's on_tool_call so the frontend can light up an
+        // activity row before the tool args finish streaming.
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"system","subtype":"init"}
+{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}
+{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_1","name":"Read","input":{}}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"a"}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":".md\"}"}}}
+{"type":"stream_event","event":{"type":"content_block_stop","index":0}}
+{"type":"stream_event","event":{"type":"message_stop"}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call_1","name":"Read","input":{"path":"a.md"}}]}}
+{"type":"result","subtype":"success","result":"","is_error":false}"#;
+        let script = fake_claude(tmp.path(), body);
+        let (_outcome, events) =
+            run_fake(script, tmp.path().to_path_buf(), Duration::from_secs(60)).await;
+        let tool_started_pos = events.iter().position(|e| {
+            matches!(
+                e,
+                Event::Activity(AgentActivity::ToolStarted { id, name, .. })
+                    if id == "call_1" && name == "Read"
+            )
+        });
+        let tool_call_pos = events
+            .iter()
+            .position(|e| matches!(e, Event::ToolCall(n) if n == "Read"));
+        let (sp, cp) = (
+            tool_started_pos.expect("ToolStarted missing"),
+            tool_call_pos.expect("on_tool_call missing"),
+        );
+        assert!(
+            sp < cp,
+            "ToolStarted ({sp}) must precede on_tool_call ({cp}): {events:#?}"
+        );
+        // And the streamed args must carry the tool id we tracked
+        // from content_block_start.
+        let args_with_id = activities(&events)
+            .into_iter()
+            .filter(
+                |a| matches!(a, AgentActivity::ToolArgsDelta { id: Some(s), .. } if s == "call_1"),
+            )
+            .count();
+        assert_eq!(
+            args_with_id, 2,
+            "both InputJsonDelta frames should carry tool id: {events:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ask_user_question_emits_typed_survey() {
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"AskUserQuestion","input":{"questions":[{"question":"Which color?","header":"Color","multiSelect":false,"options":[{"label":"Red","description":"warm"},{"label":"Blue","description":"cool"}]}]}}]}}
+{"type":"result","subtype":"success","result":"","is_error":false}"#;
+        let script = fake_claude(tmp.path(), body);
+        let (_outcome, events) =
+            run_fake(script, tmp.path().to_path_buf(), Duration::from_secs(60)).await;
+        let surveys = user_requests(&events);
+        assert_eq!(surveys.len(), 1, "expected exactly one Survey: {events:#?}");
+        match surveys[0] {
+            UserRequest::Survey { id, questions, .. } => {
+                assert_eq!(id, "toolu_1");
+                assert_eq!(questions.len(), 1);
+                assert_eq!(questions[0].question, "Which color?");
+                assert_eq!(questions[0].header.as_deref(), Some("Color"));
+                assert!(!questions[0].multi_select);
+                assert_eq!(questions[0].options.len(), 2);
+                assert_eq!(questions[0].options[0].label, "Red");
+                assert_eq!(questions[0].options[0].description.as_deref(), Some("warm"));
+            }
+        }
+        // The existing on_tool_call compat path still fires.
+        let tool_calls: Vec<&str> = events
+            .iter()
+            .filter_map(|e| {
+                if let Event::ToolCall(n) = e {
+                    Some(n.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(tool_calls, vec!["AskUserQuestion"]);
+    }
+
+    #[tokio::test]
+    async fn numbered_choice_in_plain_text_stays_a_delta() {
+        // No AskUserQuestion. The model writes "Pick: 1. apples / 2.
+        // oranges / 3. pears" as plain text. chan-llm must not parse
+        // this into a typed UserRequest; the frontend keeps the
+        // "reply with 1/2/3" affordance as a heuristic only.
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Pick one: 1. apples 2. oranges 3. pears"}]}}
+{"type":"result","subtype":"success","result":"Pick one: 1. apples 2. oranges 3. pears","is_error":false}"#;
+        let script = fake_claude(tmp.path(), body);
+        let (outcome, events) =
+            run_fake(script, tmp.path().to_path_buf(), Duration::from_secs(60)).await;
+        assert!(
+            user_requests(&events).is_empty(),
+            "numbered text must not synthesize a UserRequest: {events:#?}"
+        );
+        assert!(
+            outcome.assistant_text.contains("1. apples"),
+            "transcript should preserve numbered text"
+        );
+    }
+
+    #[tokio::test]
+    async fn inactivity_timeout_emits_unhealthy_status() {
+        // 1s inactivity ceiling. Child writes one line and then
+        // sleeps far past the timeout. The runner kills the child and
+        // surfaces an AgentStatus::Unhealthy with the duration in
+        // the reason.
+        let tmp = TempDir::new().unwrap();
+        let script = "#!/bin/sh
+cat <<'EOF'
+{\"type\":\"system\",\"subtype\":\"init\"}
+EOF
+sleep 30
+";
+        let path = fake_claude_raw(tmp.path(), script);
+        let (outcome, events) =
+            run_fake(path, tmp.path().to_path_buf(), Duration::from_secs(1)).await;
+        assert_eq!(outcome.stop_reason, StopReason::Error);
+        let saw_unhealthy = statuses(&events).iter().any(|s| {
+            matches!(
+                s,
+                AgentStatus::Unhealthy { reason, .. } if reason.starts_with("no_output_for_")
+            )
+        });
+        assert!(
+            saw_unhealthy,
+            "missing inactivity-timeout Unhealthy: {events:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn nonzero_exit_emits_unhealthy_status() {
+        // Child writes init and then exits non-zero before the
+        // terminal result. The exit-status branch emits an Unhealthy
+        // whose reason carries the status string.
+        let tmp = TempDir::new().unwrap();
+        let script = "#!/bin/sh
+cat <<'EOF'
+{\"type\":\"system\",\"subtype\":\"init\"}
+EOF
+echo 'boom' 1>&2
+exit 2
+";
+        let path = fake_claude_raw(tmp.path(), script);
+        let (outcome, events) =
+            run_fake(path, tmp.path().to_path_buf(), Duration::from_secs(60)).await;
+        assert_eq!(outcome.stop_reason, StopReason::Error);
+        let saw_unhealthy = statuses(&events).iter().any(|s| {
+            matches!(
+                s,
+                AgentStatus::Unhealthy { reason, .. } if reason.starts_with("exit:")
+            )
+        });
+        assert!(saw_unhealthy, "missing nonzero-exit Unhealthy: {events:#?}");
+    }
+
+    #[tokio::test]
+    async fn missing_terminal_result_emits_unhealthy_status() {
+        // Child writes init plus an assistant message but no
+        // `result` envelope. The no-terminal branch must mark the
+        // run Unhealthy("no_terminal") so the host renders an
+        // actionable error rather than presenting a half reply.
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}"#;
+        let script = fake_claude(tmp.path(), body);
+        let (outcome, events) =
+            run_fake(script, tmp.path().to_path_buf(), Duration::from_secs(60)).await;
+        assert_eq!(outcome.stop_reason, StopReason::Error);
+        let saw_unhealthy = statuses(&events)
+            .iter()
+            .any(|s| matches!(s, AgentStatus::Unhealthy { reason, .. } if reason == "no_terminal"));
+        assert!(saw_unhealthy, "missing no-terminal Unhealthy: {events:#?}");
+    }
+
+    #[tokio::test]
+    async fn parent_tool_use_id_propagates_into_activity() {
+        // Sub-agent output: the outer Assistant frame carries
+        // parent_tool_use_id, and that id must appear on the
+        // ToolFinished frame so the frontend can nest the sub-agent
+        // activity under its parent Task tool call.
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"system","subtype":"init"}
+{"type":"assistant","parent_tool_use_id":"parent_task_1","message":{"content":[{"type":"tool_use","id":"call_1","name":"Read","input":{"path":"x.md"}}]}}
+{"type":"user","parent_tool_use_id":"parent_task_1","message":{"content":[{"type":"tool_result","tool_use_id":"call_1","content":"ok"}]}}
+{"type":"result","subtype":"success","result":"","is_error":false}"#;
+        let script = fake_claude(tmp.path(), body);
+        let (_outcome, events) =
+            run_fake(script, tmp.path().to_path_buf(), Duration::from_secs(60)).await;
+        let nested = activities(&events)
+            .into_iter()
+            .filter(|a| match a {
+                AgentActivity::ToolFinished { parent_id, .. } => {
+                    parent_id.as_deref() == Some("parent_task_1")
+                }
+                _ => false,
+            })
+            .count();
+        assert!(
+            nested >= 2,
+            "ToolFinished frames must inherit parent_tool_use_id: {events:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_denials_emit_tool_denied_activity() {
+        // The terminal `result.permission_denials[]` carries every
+        // tool call claude refused (or that the host cancelled before
+        // answering). Each entry maps to one AgentActivity::ToolDenied
+        // so the frontend can attribute the denial to the original
+        // tool_use.
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"system","subtype":"init"}
+{"type":"result","subtype":"success","result":"","is_error":false,"permission_denials":[{"tool_name":"Write","tool_use_id":"toolu_w","tool_input":{"path":"secret.txt","content":"x"}},{"tool_name":"Bash","tool_use_id":"toolu_b","tool_input":{"command":"rm -rf /"}}]}"#;
+        let script = fake_claude(tmp.path(), body);
+        let (_outcome, events) =
+            run_fake(script, tmp.path().to_path_buf(), Duration::from_secs(60)).await;
+        let denied: Vec<(&str, &str)> = activities(&events)
+            .into_iter()
+            .filter_map(|a| match a {
+                AgentActivity::ToolDenied {
+                    name: Some(n),
+                    id: Some(i),
+                    ..
+                } => Some((i.as_str(), n.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            denied,
+            vec![("toolu_w", "Write"), ("toolu_b", "Bash")],
+            "denials must be surfaced in order with their names/ids: {events:#?}"
         );
     }
 

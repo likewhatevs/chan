@@ -17,8 +17,8 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -27,7 +27,10 @@ use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall, ToolResult};
+use crate::session::{
+    AgentActivity, AgentStatus, Delta, Message, Role, SessionListener, StopReason, ToolCall,
+    ToolResult,
+};
 use crate::tools::ToolSchema;
 
 use super::{
@@ -163,6 +166,10 @@ impl Backend for CodexCliBackend {
                 return Outcome::error();
             }
         };
+        listener.on_status(AgentStatus::Spawned {
+            backend: "codex_cli".into(),
+            pid: child.id(),
+        });
 
         let mut stderr_drainer: Option<StderrDrainer> = spawn_stderr_drainer(child.stderr.take());
         if let Some(mut stdin) = child.stdin.take() {
@@ -203,6 +210,11 @@ impl Backend for CodexCliBackend {
         let mut saw_terminal = false;
         let mut parse_errors_emitted = 0usize;
         let mut parse_errors_silenced = 0usize;
+        let heartbeat = Heartbeat::spawn(
+            listener.clone(),
+            "codex_cli",
+            heartbeat_interval(self.inactivity_timeout),
+        );
 
         loop {
             if cancel.load(Ordering::Relaxed) {
@@ -211,6 +223,9 @@ impl Backend for CodexCliBackend {
                 if let Some(d) = stderr_drainer.take() {
                     let _ = d.finish().await;
                 }
+                listener.on_status(AgentStatus::Cancelled {
+                    backend: "codex_cli".into(),
+                });
                 return Outcome::cancelled(assistant_text);
             }
 
@@ -220,7 +235,10 @@ impl Backend for CodexCliBackend {
             )
             .await;
             let got_line = match read {
-                Ok(Ok(true)) => true,
+                Ok(Ok(true)) => {
+                    heartbeat.mark_stdout();
+                    true
+                }
                 Ok(Ok(false)) => break,
                 Ok(Err(e)) => {
                     let _ = child.kill().await;
@@ -235,6 +253,11 @@ impl Backend for CodexCliBackend {
                         listener
                             .on_error(format!("codex_cli stdout: {e}; stderr: {stderr_snippet}"));
                     }
+                    listener.on_status(AgentStatus::Unhealthy {
+                        backend: "codex_cli".into(),
+                        reason: "stdout".into(),
+                        detail: Some(e.to_string()),
+                    });
                     return Outcome::error();
                 }
                 Err(_elapsed) => {
@@ -253,6 +276,15 @@ impl Backend for CodexCliBackend {
                     } else {
                         listener.on_error(format!("{base}; stderr: {stderr_snippet}"));
                     }
+                    listener.on_status(AgentStatus::Unhealthy {
+                        backend: "codex_cli".into(),
+                        reason: format!("no_output_for_{}s", self.inactivity_timeout.as_secs()),
+                        detail: if stderr_snippet.is_empty() {
+                            None
+                        } else {
+                            Some(stderr_snippet)
+                        },
+                    });
                     return Outcome::error();
                 }
             };
@@ -294,6 +326,18 @@ impl Backend for CodexCliBackend {
 
             let normalized = normalize_event(&event);
             match normalized {
+                NormalizedEvent::ThreadStarted { thread_id } => {
+                    listener.on_activity(AgentActivity::SessionStarted {
+                        backend: "codex_cli".into(),
+                        session_id: thread_id,
+                    });
+                }
+                NormalizedEvent::TurnStarted => {
+                    listener.on_status(AgentStatus::Thinking {
+                        backend: "codex_cli".into(),
+                        status: Some("turn_started".into()),
+                    });
+                }
                 NormalizedEvent::AgentDelta { item_id, delta } => {
                     if !delta.is_empty() {
                         listener.on_delta(Delta {
@@ -340,18 +384,67 @@ impl Backend for CodexCliBackend {
                     }
                 }
                 NormalizedEvent::McpStarted { id, name, args } => {
+                    listener.on_activity(AgentActivity::ToolStarted {
+                        backend: "codex_cli".into(),
+                        id: id.clone(),
+                        name: name.clone(),
+                        parent_id: None,
+                    });
                     listener.on_tool_call(ToolCall { id, name, args });
                 }
                 NormalizedEvent::McpCompleted { id, output } => {
+                    listener.on_activity(AgentActivity::ToolFinished {
+                        backend: "codex_cli".into(),
+                        id: id.clone(),
+                        name: None,
+                        output: output.clone(),
+                        is_error: false,
+                        parent_id: None,
+                    });
                     listener.on_tool_result(ToolResult { id, output });
+                }
+                NormalizedEvent::CommandStarted { id, command } => {
+                    listener.on_activity(AgentActivity::ToolStarted {
+                        backend: "codex_cli".into(),
+                        id: id.clone(),
+                        name: "command_execution".into(),
+                        parent_id: None,
+                    });
+                    listener.on_activity(AgentActivity::ToolArgsDelta {
+                        backend: "codex_cli".into(),
+                        id: Some(id),
+                        partial_json: serde_json::json!({ "command": command }).to_string(),
+                        parent_id: None,
+                    });
+                }
+                NormalizedEvent::CommandCompleted { id, output } => {
+                    let is_error = command_output_is_error(&output);
+                    listener.on_activity(AgentActivity::ToolFinished {
+                        backend: "codex_cli".into(),
+                        id,
+                        name: Some("command_execution".into()),
+                        output,
+                        is_error,
+                        parent_id: None,
+                    });
                 }
                 NormalizedEvent::Error(message) => {
                     listener.on_error(format!("codex_cli: {message}"));
+                    listener.on_status(AgentStatus::Unhealthy {
+                        backend: "codex_cli".into(),
+                        reason: "error_event".into(),
+                        detail: Some(message),
+                    });
                     stop = StopReason::Error;
                 }
                 NormalizedEvent::Terminal { ok } => {
                     saw_terminal = true;
                     if !ok {
+                        listener.on_status(AgentStatus::Unhealthy {
+                            backend: "codex_cli".into(),
+                            reason: "turn_failed".into(),
+                            detail: None,
+                        });
                         stop = StopReason::Error;
                     }
                 }
@@ -366,6 +459,11 @@ impl Backend for CodexCliBackend {
                     let _ = d.finish().await;
                 }
                 listener.on_error(format!("codex_cli wait: {e}"));
+                listener.on_status(AgentStatus::Unhealthy {
+                    backend: "codex_cli".into(),
+                    reason: "wait".into(),
+                    detail: Some(e.to_string()),
+                });
                 return Outcome::error();
             }
         };
@@ -376,6 +474,15 @@ impl Backend for CodexCliBackend {
             };
             let snippet = truncate(&stderr_text, 800);
             listener.on_error(format!("codex_cli exit {status}: {snippet}"));
+            listener.on_status(AgentStatus::Unhealthy {
+                backend: "codex_cli".into(),
+                reason: format!("exit:{status}"),
+                detail: if snippet.is_empty() {
+                    None
+                } else {
+                    Some(snippet)
+                },
+            });
             return Outcome::error();
         }
         drop(stderr_drainer);
@@ -386,8 +493,18 @@ impl Backend for CodexCliBackend {
         }
         if !saw_terminal && stop != StopReason::Error {
             listener.on_error("codex_cli: stream ended without a terminal event".into());
+            listener.on_status(AgentStatus::Unhealthy {
+                backend: "codex_cli".into(),
+                reason: "no_terminal".into(),
+                detail: None,
+            });
             stop = StopReason::Error;
         }
+        listener.on_status(AgentStatus::Exited {
+            backend: "codex_cli".into(),
+            code: status.code(),
+            success: stop != StopReason::Error,
+        });
 
         Outcome {
             assistant_text,
@@ -466,6 +583,10 @@ fn render_prompt(messages: &[Message]) -> String {
 }
 
 enum NormalizedEvent {
+    ThreadStarted {
+        thread_id: Option<String>,
+    },
+    TurnStarted,
     AgentDelta {
         item_id: Option<String>,
         delta: String,
@@ -480,6 +601,14 @@ enum NormalizedEvent {
         args: Json,
     },
     McpCompleted {
+        id: String,
+        output: Json,
+    },
+    CommandStarted {
+        id: String,
+        command: Json,
+    },
+    CommandCompleted {
         id: String,
         output: Json,
     },
@@ -509,6 +638,13 @@ fn normalize_event(event: &Json) -> NormalizedEvent {
         return NormalizedEvent::Other;
     };
     match kind {
+        "thread.started" => NormalizedEvent::ThreadStarted {
+            thread_id: event
+                .get("thread_id")
+                .and_then(Json::as_str)
+                .map(str::to_owned),
+        },
+        "turn.started" => NormalizedEvent::TurnStarted,
         "item.completed" => normalize_completed_item(event.get("item").unwrap_or(&Json::Null)),
         "item.started" => normalize_started_item(event.get("item").unwrap_or(&Json::Null)),
         "turn.completed" => NormalizedEvent::Terminal { ok: true },
@@ -526,6 +662,15 @@ fn normalize_event(event: &Json) -> NormalizedEvent {
 }
 
 fn normalize_started_item(item: &Json) -> NormalizedEvent {
+    if item_type(item) == Some("command_execution") {
+        return NormalizedEvent::CommandStarted {
+            id: item_id(item),
+            command: item
+                .get("command")
+                .cloned()
+                .unwrap_or_else(|| Json::String("command_execution".into())),
+        };
+    }
     if item_type(item) != Some("mcp_tool_call") {
         return NormalizedEvent::Other;
     }
@@ -573,6 +718,10 @@ fn normalize_completed_item(item: &Json) -> NormalizedEvent {
                 output,
             }
         }
+        Some("command_execution") => NormalizedEvent::CommandCompleted {
+            id: item_id(item),
+            output: item.clone(),
+        },
         Some("error") => NormalizedEvent::Error(
             item.get("message")
                 .and_then(Json::as_str)
@@ -581,6 +730,78 @@ fn normalize_completed_item(item: &Json) -> NormalizedEvent {
         ),
         _ => NormalizedEvent::Other,
     }
+}
+
+fn heartbeat_interval(inactivity_timeout: Duration) -> Duration {
+    let five = Duration::from_secs(5);
+    let half = inactivity_timeout / 2;
+    if half.is_zero() {
+        Duration::from_secs(1)
+    } else {
+        five.min(half)
+    }
+}
+
+struct Heartbeat {
+    active: Arc<AtomicBool>,
+    last_stdout_at: Arc<Mutex<Instant>>,
+}
+
+impl Heartbeat {
+    fn spawn(
+        listener: Arc<dyn SessionListener>,
+        backend: &'static str,
+        interval: Duration,
+    ) -> Self {
+        let active = Arc::new(AtomicBool::new(true));
+        let last_stdout_at = Arc::new(Mutex::new(Instant::now()));
+        let task_active = active.clone();
+        let task_last_stdout_at = last_stdout_at.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                if !task_active.load(Ordering::Relaxed) {
+                    break;
+                }
+                let idle = task_last_stdout_at
+                    .lock()
+                    .map(|t| t.elapsed())
+                    .unwrap_or_default();
+                listener.on_status(AgentStatus::Heartbeat {
+                    backend: backend.into(),
+                    idle_ms: idle.as_millis().try_into().unwrap_or(u64::MAX),
+                });
+            }
+        });
+        Self {
+            active,
+            last_stdout_at,
+        }
+    }
+
+    fn mark_stdout(&self) {
+        if let Ok(mut last) = self.last_stdout_at.lock() {
+            *last = Instant::now();
+        }
+    }
+}
+
+impl Drop for Heartbeat {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::Relaxed);
+    }
+}
+
+fn command_output_is_error(output: &Json) -> bool {
+    let exit_failed = output
+        .get("exit_code")
+        .and_then(Json::as_i64)
+        .is_some_and(|code| code != 0);
+    let status_failed = output
+        .get("status")
+        .and_then(Json::as_str)
+        .is_some_and(|status| !matches!(status, "completed" | "success"));
+    exit_failed || status_failed
 }
 
 fn item_type(item: &Json) -> Option<&str> {
@@ -618,7 +839,7 @@ struct RpcParams {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{StopReason, ToolCall, ToolResult};
+    use crate::session::{StopReason, ToolCall, ToolResult, UserRequest};
     use std::path::PathBuf;
     use std::sync::Mutex;
     use tempfile::TempDir;
@@ -626,11 +847,15 @@ mod tests {
     struct Collector(Mutex<Vec<Event>>);
 
     #[derive(Debug, Clone)]
+    #[allow(dead_code)]
     enum Event {
         Delta(String),
         ToolCall(String),
         ToolResult(String),
         Error,
+        Status(AgentStatus),
+        Activity(AgentActivity),
+        UserRequest,
     }
 
     impl SessionListener for Collector {
@@ -644,9 +869,17 @@ mod tests {
             self.0.lock().unwrap().push(Event::ToolResult(r.id));
         }
         fn on_done(&self, _: StopReason) {}
-        fn on_error(&self, e: String) {
-            let _ = e;
+        fn on_error(&self, _: String) {
             self.0.lock().unwrap().push(Event::Error);
+        }
+        fn on_status(&self, status: AgentStatus) {
+            self.0.lock().unwrap().push(Event::Status(status));
+        }
+        fn on_activity(&self, activity: AgentActivity) {
+            self.0.lock().unwrap().push(Event::Activity(activity));
+        }
+        fn on_user_request(&self, _: UserRequest) {
+            self.0.lock().unwrap().push(Event::UserRequest);
         }
     }
 
@@ -662,6 +895,34 @@ mod tests {
         path
     }
 
+    fn fake_codex_script(dir: &std::path::Path, script: &str) -> PathBuf {
+        let path = dir.join("fake_codex.sh");
+        std::fs::write(&path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        path
+    }
+
+    fn backend_for(
+        script: &std::path::Path,
+        cwd: &std::path::Path,
+        timeout: Duration,
+    ) -> CodexCliBackend {
+        CodexCliBackend::new(
+            vec![script.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            cwd.to_path_buf(),
+            None,
+            timeout,
+            false,
+            None,
+        )
+    }
+
     #[tokio::test]
     async fn streams_rpc_agent_deltas_and_dedupes_completed_message() {
         let tmp = TempDir::new().unwrap();
@@ -670,16 +931,7 @@ mod tests {
 {"type":"item.completed","item":{"id":"msg_1","type":"agent_message","text":"hello world"}}
 {"type":"turn.completed","turn":{"status":"completed"}}"#;
         let script = fake_codex(tmp.path(), body);
-        let backend = CodexCliBackend::new(
-            vec![script.to_string_lossy().into_owned()],
-            Vec::new(),
-            None,
-            tmp.path().to_path_buf(),
-            None,
-            Duration::from_secs(60),
-            false,
-            None,
-        );
+        let backend = backend_for(&script, tmp.path(), Duration::from_secs(60));
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
             .run(
@@ -711,16 +963,7 @@ mod tests {
 {"type":"item.completed","item":{"id":"msg_1","type":"agent_message","text":"done"}}
 {"type":"turn.completed","turn":{"status":"completed"}}"#;
         let script = fake_codex(tmp.path(), body);
-        let backend = CodexCliBackend::new(
-            vec![script.to_string_lossy().into_owned()],
-            Vec::new(),
-            None,
-            tmp.path().to_path_buf(),
-            None,
-            Duration::from_secs(60),
-            false,
-            None,
-        );
+        let backend = backend_for(&script, tmp.path(), Duration::from_secs(60));
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
             .run(
@@ -749,6 +992,255 @@ mod tests {
             })
             .collect();
         assert_eq!(tool_results, vec!["call_1"]);
+    }
+
+    #[tokio::test]
+    async fn emits_spawned_status_and_session_activity() {
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"thread.started","thread_id":"thread_1"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"msg_1","type":"agent_message","text":"ok"}}
+{"type":"turn.completed","turn":{"status":"completed"}}"#;
+        let script = fake_codex(tmp.path(), body);
+        let backend = backend_for(&script, tmp.path(), Duration::from_secs(60));
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                &[Message::user("hi")],
+                &[],
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.stop_reason, StopReason::EndOfTurn);
+
+        let events = listener.0.lock().unwrap();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Status(AgentStatus::Spawned {
+                backend,
+                pid: Some(_),
+            }) if backend == "codex_cli"
+        )));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Activity(AgentActivity::SessionStarted {
+                backend,
+                session_id: Some(id),
+            }) if backend == "codex_cli" && id == "thread_1"
+        )));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Status(AgentStatus::Thinking {
+                backend,
+                status: Some(status),
+            }) if backend == "codex_cli" && status == "turn_started"
+        )));
+    }
+
+    #[tokio::test]
+    async fn heartbeat_fires_while_child_is_alive_but_quiet() {
+        let tmp = TempDir::new().unwrap();
+        let script = fake_codex_script(
+            tmp.path(),
+            r#"#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"type":"thread.started","thread_id":"thread_1"}'
+sleep 2
+printf '%s\n' '{"type":"item.completed","item":{"id":"msg_1","type":"agent_message","text":"ok"}}'
+printf '%s\n' '{"type":"turn.completed","turn":{"status":"completed"}}'
+"#,
+        );
+        let backend = backend_for(&script, tmp.path(), Duration::from_secs(3));
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                &[Message::user("hi")],
+                &[],
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.stop_reason, StopReason::EndOfTurn);
+
+        let events = listener.0.lock().unwrap();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Status(AgentStatus::Heartbeat { backend, idle_ms })
+                if backend == "codex_cli" && *idle_ms > 0
+        )));
+    }
+
+    #[tokio::test]
+    async fn mcp_tool_activity_frames_preserve_compat_callbacks() {
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"item.started","item":{"id":"call_1","type":"mcp_tool_call","server":"chan","tool":"read_file","arguments":{"path":"a.md"}}}
+{"type":"item.completed","item":{"id":"call_1","type":"mcp_tool_call","server":"chan","tool":"read_file","output":{"ok":true}}}
+{"type":"turn.completed","turn":{"status":"completed"}}"#;
+        let script = fake_codex(tmp.path(), body);
+        let backend = backend_for(&script, tmp.path(), Duration::from_secs(60));
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                &[Message::user("hi")],
+                &[],
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.stop_reason, StopReason::EndOfTurn);
+
+        let events = listener.0.lock().unwrap();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Activity(AgentActivity::ToolStarted { id, name, .. })
+                if id == "call_1" && name == "chan::read_file"
+        )));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Activity(AgentActivity::ToolFinished { id, output, is_error: false, .. })
+                if id == "call_1" && output == &serde_json::json!({ "ok": true })
+        )));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Event::ToolCall(name) if name == "chan::read_file")));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Event::ToolResult(id) if id == "call_1")));
+    }
+
+    #[tokio::test]
+    async fn command_execution_activity_frames_include_result_status() {
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"item.started","item":{"id":"cmd_1","type":"command_execution","command":"/bin/sh -c pwd","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"cmd_1","type":"command_execution","command":"/bin/sh -c pwd","aggregated_output":"/tmp\n","exit_code":0,"status":"completed"}}
+{"type":"turn.completed","turn":{"status":"completed"}}"#;
+        let script = fake_codex(tmp.path(), body);
+        let backend = backend_for(&script, tmp.path(), Duration::from_secs(60));
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                &[Message::user("hi")],
+                &[],
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.stop_reason, StopReason::EndOfTurn);
+
+        let events = listener.0.lock().unwrap();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Activity(AgentActivity::ToolStarted { id, name, .. })
+                if id == "cmd_1" && name == "command_execution"
+        )));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Activity(AgentActivity::ToolArgsDelta {
+                id: Some(id),
+                partial_json,
+                ..
+            }) if id == "cmd_1" && partial_json.contains("/bin/sh -c pwd")
+        )));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Activity(AgentActivity::ToolFinished {
+                id,
+                name: Some(name),
+                output,
+                is_error: false,
+                ..
+            }) if id == "cmd_1"
+                && name == "command_execution"
+                && output.get("exit_code").and_then(Json::as_i64) == Some(0)
+        )));
+    }
+
+    #[tokio::test]
+    async fn numbered_choice_text_remains_plain_delta() {
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"item.completed","item":{"id":"msg_1","type":"agent_message","text":"Pick one:\n1. Red\n2. Blue\n3. Green"}}
+{"type":"turn.completed","turn":{"status":"completed"}}"#;
+        let script = fake_codex(tmp.path(), body);
+        let backend = backend_for(&script, tmp.path(), Duration::from_secs(60));
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                &[Message::user("hi")],
+                &[],
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(
+            outcome.assistant_text,
+            "Pick one:\n1. Red\n2. Blue\n3. Green"
+        );
+
+        let events = listener.0.lock().unwrap();
+        let deltas: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Delta(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(deltas, vec!["Pick one:\n1. Red\n2. Blue\n3. Green"]);
+        assert!(!events.iter().any(|e| matches!(e, Event::UserRequest)));
+    }
+
+    #[tokio::test]
+    async fn clean_eof_without_terminal_is_unhealthy() {
+        let tmp = TempDir::new().unwrap();
+        let body = r#"{"type":"item.completed","item":{"id":"msg_1","type":"agent_message","text":"partial"}}"#;
+        let script = fake_codex(tmp.path(), body);
+        let backend = backend_for(&script, tmp.path(), Duration::from_secs(60));
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                &[Message::user("hi")],
+                &[],
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.stop_reason, StopReason::Error);
+
+        let events = listener.0.lock().unwrap();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Status(AgentStatus::Unhealthy { reason, .. }) if reason == "no_terminal"
+        )));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Event::Status(AgentStatus::Exited { success: false, .. }))));
+    }
+
+    #[tokio::test]
+    async fn nonzero_exit_is_unhealthy() {
+        let tmp = TempDir::new().unwrap();
+        let script = fake_codex_script(
+            tmp.path(),
+            "#!/bin/sh\ncat >/dev/null\necho boom 1>&2\nexit 7\n",
+        );
+        let backend = backend_for(&script, tmp.path(), Duration::from_secs(60));
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                &[Message::user("hi")],
+                &[],
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.stop_reason, StopReason::Error);
+
+        let events = listener.0.lock().unwrap();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Status(AgentStatus::Unhealthy { reason, detail, .. })
+                if reason.contains("exit") && detail.as_deref().is_some_and(|d| d.contains("boom"))
+        )));
     }
 
     #[test]

@@ -247,6 +247,12 @@ Session (`session.rs`)
   for a typed result.
 - Stop reasons: `EndOfTurn`, `MaxTokens`, `StopSequence`,
   `ToolUse`, `Error`, `Cancelled`.
+- `SessionListener` has three additive UX callbacks with default
+  no-op implementations: `on_status(AgentStatus)`,
+  `on_activity(AgentActivity)`, and
+  `on_user_request(UserRequest)`. They carry subprocess lifecycle,
+  heartbeat, thinking/tool activity, rate-limit state, and typed
+  survey prompts without changing the older text/tool callbacks.
 
 MCP server (`mcp.rs`, `feature = "mcp"`)
 
@@ -278,8 +284,10 @@ Backends (`backends/`)
 - `Backend` trait is async + `Send + Sync`. `run` translates one
   HTTP / subprocess exchange and returns an `Outcome` so the
   session-level loop can decide whether to dispatch tool calls.
-- Backends never emit `on_tool_call`, `on_tool_result`, or
-  `on_done` themselves; that's the orchestration loop's concern.
+- Agentic CLI backends may emit observational `on_tool_call`,
+  `on_tool_result`, `on_status`, `on_activity`, and
+  `on_user_request` callbacks while they translate the CLI's native
+  stream. `on_done` remains the orchestration loop's concern.
 
 ## 4. Public API surface
 
@@ -321,6 +329,17 @@ Message              { role, content, tool_call_id, tool_calls }
 Delta                { text }
 ToolCall             { id, name, args }
 ToolResult           { id, output }
+AgentStatus          Spawned | Ready | Thinking | Heartbeat
+                     | TurnStopping | RateLimit | Exited
+                     | Unhealthy | Cancelled
+AgentActivity        SessionStarted | MessageStarted
+                     | ThinkingStarted | ThinkingDelta
+                     | ToolStarted | ToolArgsDelta
+                     | ToolFinished | ToolDenied
+                     | AgentNote | TurnUsage
+UserRequest          Survey { backend, id, questions, parent_id }
+UserQuestion         { question, header, multi_select, options }
+UserOption           { label, description }
 ResumeOutcome        Applied(Json) | Rejected { reason }
                      | Failed { error }
 StopReason           EndOfTurn | MaxTokens | StopSequence
