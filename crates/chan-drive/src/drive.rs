@@ -1160,7 +1160,7 @@ impl Drive {
 
         // Wiki-link targets are stored in the graph extensionless
         // (`[[old]]` -> dst "old"), per chan's wiki convention. The
-        // markdown rewriter resolves them the same way — `normalize_href`
+        // markdown rewriter resolves them the same way; `normalize_href`
         // returns the bare stem. Augment the effective mapping with
         // extensionless pairs so both backlinks lookups and the rewrite
         // callback succeed for either form.
@@ -2465,7 +2465,7 @@ fn path_under(path: &str, prefix: &str) -> bool {
 
 /// Canonicalize a drive-relative POSIX path for use as a mapping key.
 /// Strips a leading `./` and a trailing `/`; leaves an empty string
-/// for the drive root. We intentionally do NOT collapse `..` here —
+/// for the drive root. We intentionally do NOT collapse `..` here;
 /// the rename API rejects those upstream via the cap-std sandbox.
 fn canonical_posix(p: &str) -> String {
     let s = p.strip_prefix("./").unwrap_or(p);
@@ -2660,7 +2660,7 @@ fn rewrite_href_for_move(
         .cloned()
         .unwrap_or_else(|| resolved_old.clone());
     // If the target didn't move AND the source didn't move, nothing
-    // to do — bail before allocating the replacement string.
+    // to do; bail before allocating the replacement string.
     if resolved_old == resolved_new && src_old_dir == src_new_dir {
         return None;
     }
@@ -4801,7 +4801,7 @@ mod tests {
     fn rename_with_link_rewrite_wiki_drive_rooted_from_subdir() {
         // Regression: a wiki link `[[friends/alice]]` from a source
         // file that LIVES in `friends/` must still resolve to the
-        // drive-rooted `friends/alice` — not to `friends/friends/alice`
+        // drive-rooted `friends/alice`, not to `friends/friends/alice`
         // as plain `normalize_href` would do for a bare relative path.
         // build_edges applies this rule on the index side; the rewrite
         // callback mirrors it. After resolution, we emit the new path
@@ -4890,7 +4890,7 @@ mod tests {
             .rename_with_link_rewrite("notes/beta.md", "archive/beta.md")
             .unwrap();
         // Original href was `../notes/beta.md` (up-relative, no `./`),
-        // so the rewritten bare-relative form is `beta.md` — the
+        // so the rewritten bare-relative form is `beta.md`; the
         // dot-explicit prefix is only added when the original used it.
         assert_eq!(
             drive.read_text("archive/alice-2.md").unwrap(),

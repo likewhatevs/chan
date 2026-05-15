@@ -200,11 +200,11 @@ pub struct Tag {
 
 /// Owns the sqlite handles and exposes the read + write API. Two
 /// channels into the same DB:
-///   * `writer` — single Connection behind a Mutex. Carries every
+///   * `writer`: single Connection behind a Mutex. Carries every
 ///     write transaction. SQLite's contract is one writer at a
 ///     time; the Mutex enforces it inside the process and the
 ///     per-drive flock enforces it cross-process.
-///   * `readers` — r2d2 pool of read-only connections (each opened
+///   * `readers`: r2d2 pool of read-only connections (each opened
 ///     with `query_only = ON` as belt-and-braces). Editor
 ///     typeahead, backlinks, and status reads draw from the pool
 ///     so they don't block on each other or on the writer.

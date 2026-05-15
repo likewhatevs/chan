@@ -163,10 +163,22 @@ drive prefixes) is rejected via `fs_ops::resolve_safe`, then
 the deepest existing ancestor stays under the canonical drive
 root (catches mid-path symlinks escaping the sandbox).
 
-The editable-text gate (`fs_ops::is_editable_text`, `.md` /
-`.txt`) applies to `read_text` / `read_text_with_stat` /
-`write_text` / `write_text_if_unchanged` only; binary I/O routes
-around it because attachments and future media browsing need it.
+Two gates guard the text-class APIs:
+
+  - **Editor gate** (`fs_ops::is_editable_text`): true for any
+    file the editor can round-trip through a UTF-8 buffer.
+    Covers markdown-class `.md` / `.txt` plus the wider
+    `FileClass::Text` set (source code, configs, shell scripts,
+    well-known no-extension files). Used by `read_text` /
+    `read_text_with_stat` / `write_text` / `write_text_if_unchanged`.
+  - **Indexer gate** (`fs_ops::is_indexable_text`): true only
+    for `FileClass::EditableText` (markdown-class). Used by the
+    indexer, graph rebuild, link-rewrite on rename, and reindex-
+    after-restore. A `.py` is editable but **not** indexable so
+    `#include` doesn't read as a `#tag`.
+
+Binary I/O (`read` / `write_bytes`) routes around both gates:
+attachments and the future media browser still need it.
 
 #### Supported file types
 
@@ -178,9 +190,14 @@ What changes by class is how each file is handled by the API.
 crate, chan-server, the editor) should switch on `FileClass`
 rather than re-deriving extension rules.
 
-  Class           Extensions
-  --------------  ---------------------------------------------
+  Class           Extensions / names
+  --------------  ----------------------------------------------
   EditableText    .md, .txt
+  Text            .py, .rs, .c, .cpp, .h, .go, .java, .js,
+                  .ts, .json, .yaml, .toml, .ini, .sh, .html,
+                  .css, .csv, .sql, .rst, ...; plus well-known
+                  basenames (Makefile, Dockerfile, LICENSE,
+                  .gitignore, ...)
   Image           .png, .jpg, .jpeg, .gif, .webp, .svg, .avif
   Pdf             .pdf
   Other           everything else
@@ -193,6 +210,15 @@ Behaviour by class:
     tags, mentions. The CAS pair `read_text_with_stat` +
     `write_text_if_unchanged` is available for editor-style
     optimistic concurrency.
+  - **Text**: full read / write through `read_text` and
+    `write_text` (same UTF-8 gate as EditableText). **Not**
+    indexed and **not** a graph node: the indexer parses
+    markdown semantics that source-class text doesn't carry,
+    and treating `#include` as a `#tag` would pollute the
+    graph. Phase 3 may revisit full-text indexing for Text-
+    class files as plain content (no token / heading
+    extraction); until then they're walkable + editable + byte-
+    readable but opaque to search.
   - **Image**: opaque bytes via `read` / `write_bytes`. Not
     indexed and not a graph node, but markdown embeds
     (`![alt](img.png)`) emit edges pointing at the image so
@@ -210,11 +236,16 @@ Behaviour by class:
 
 `rename` and `remove` operate on every class. Link rewriting in
 `rename_with_link_rewrite` only touches `EditableText` bodies
-(images and other binaries have no in-body links to rewrite); the
-graph edge `dst` gets updated regardless of target class.
+(Text-class files, images, and other binaries have no markdown
+links to rewrite); the graph edge `dst` gets updated regardless
+of target class.
 
-Extension matching is ASCII case-insensitive. Files with no
-extension collapse to `Other`.
+Extension matching is ASCII case-insensitive. Files whose
+extension is unknown fall back to a basename check against
+well-known textual filenames (Makefile, Dockerfile, LICENSE,
+...) before collapsing to `Other`. No content sniffing in v1:
+a follow-up may add a "read first N bytes, treat as Text if
+valid UTF-8 and no NUL" fallback for truly unknown files.
 
 `read_text_with_stat` and `write_text_if_unchanged` are the
 optimistic-concurrency pair the editor uses to detect external
@@ -936,10 +967,14 @@ across a WebSocket / FFI bridge without an intermediate copy type.
     `std::fs::symlink_metadata` so a symlink target can't mask
     the link. New ops touching user content must apply the same
     gate.
-  - `fs_ops::is_editable_text(rel)` is the single predicate for
-    "the editor can safely round-trip this file through a UTF-8
-    buffer." `read_text` / `write_text` enforce it; binary
-    callers use `read` / `write_bytes`.
+  - `fs_ops::is_editable_text(rel)` is the editor gate: true for
+    `FileClass::EditableText | Text`, i.e. anything the editor can
+    round-trip through a UTF-8 buffer. `read_text` / `write_text`
+    enforce it; binary callers use `read` / `write_bytes`. The
+    narrower `fs_ops::is_indexable_text(rel)` is the indexer
+    gate: true only for `FileClass::EditableText` (.md / .txt),
+    used by the search index, graph rebuild, and link-rewrite
+    on rename.
   - The crate also uses `cap-std` / `cap-tempfile` for sandboxed
     Dir-relative atomic writes on hot paths, closing the TOCTOU
     window between resolve and open by anchoring the open at a
@@ -1303,6 +1338,14 @@ Wired and tested:
     rebuild. WAL plus r2d2 reader pool; writer behind a Mutex.
   - **Watcher** (`src/watch.rs`): `Drive::watch` is wired and
     filters drive-internal noise (`.chan/`, `.git/`).
+  - **Built-in graph indexer** (`src/indexer.rs`):
+    `Drive::start_graph_indexer(debounce_ms)` returns a
+    `GraphIndexer` handle that owns a watcher subscription and a
+    worker thread; per-path events are debounced, deletions and
+    rename sources flush immediately, and watcher-error / path-
+    less events drive a `Drive::reconcile`. Replaces the
+    duplicated indexer loop each consumer (chan binary, chan-
+    server) previously maintained.
 
 Still ahead:
 
@@ -1315,10 +1358,6 @@ Still ahead:
     Fuzzier resolution (prefix-match, alias table) lives at the
     consumer layer for now. Could move into chan-drive if every
     consumer needs the same logic.
-  - **Built-in watcher consumer**: `Drive::watch` is wired but
-    no built-in consumer feeds events into `index_file` /
-    `forget_file`. Apps run their own loop. See
-    `graph_indexer` in section 11.
   - **TOCTOU hardening on cold paths**: hot writer paths use
     cap-std; cold paths rely on the strict resolve plus single-
     user threat model. Migrate the rest to cap-std or

@@ -20,7 +20,7 @@ fn remove_single_file_drops_graph_and_index() {
     // matches the path we'll later pass to `remove`. Wiki links
     // (`[[notes/x]]`) intentionally store an extensionless `dst`
     // (resolved through `Drive::resolve_link` at query time), so
-    // they wouldn't be cleaned up by a path-prefix delete — that's
+    // they wouldn't be cleaned up by a path-prefix delete; that's
     // a separate concern from this test.
     drive
         .write_text(

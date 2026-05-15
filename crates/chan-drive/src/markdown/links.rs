@@ -158,9 +158,9 @@ pub fn normalize_href(href: &str, source_dir: &str) -> Option<String> {
 /// hrefs (which can carry `./`, `../`, or a leading `/`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkRefKind {
-    /// `[[target]]` or `[[target|label]]` — the `target` portion.
+    /// `[[target]]` or `[[target|label]]`: the `target` portion.
     Wiki,
-    /// `[label](href)` or `![alt](src)` — the `href` portion. Title
+    /// `[label](href)` or `![alt](src)`: the `href` portion. Title
     /// component (`[label](href "title")`) is excluded from the
     /// callback view and preserved verbatim on rewrite.
     Markdown,
@@ -187,7 +187,7 @@ pub struct LinkRef<'a> {
 ///   - Wiki and standard syntax inside fenced / indented code
 ///     blocks, inline code, and raw HTML (matches `extract_links`).
 ///   - Reference-style links (`[label][ref]` + `[ref]: url`) and
-///     autolinks (`<https://...>`) — not in scope for v1 since the
+///     autolinks (`<https://...>`): not in scope for v1 since the
 ///     editor doesn't emit them.
 pub fn rewrite_link_targets<F>(markdown: &str, mut f: F) -> Option<String>
 where
