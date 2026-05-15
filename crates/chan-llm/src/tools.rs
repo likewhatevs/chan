@@ -401,7 +401,7 @@ fn exec_repo_report(args: &Json, ctx: &ToolContext) -> Result<Json> {
         .unwrap_or_default();
     let prefix = args.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
 
-    let report = if !paths.is_empty() {
+    let mut report = if !paths.is_empty() {
         ctx.drive.report_for_files(&paths)?
     } else if !prefix.is_empty() {
         ctx.drive.report_for_prefix(prefix)?
@@ -414,7 +414,13 @@ fn exec_repo_report(args: &Json, ctx: &ToolContext) -> Result<Json> {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let total_files = report.files.len();
+    // Take the per-file array out of the report so the serializer
+    // below never walks it on the include_files=false path. Holding
+    // it on the side also avoids the redundant `report.files.clone()`
+    // on the truncate branch the previous code had: we own `files`
+    // here and sort/truncate it in place.
+    let files = std::mem::take(&mut report.files);
+    let total_files = files.len();
     let mut value = serde_json::to_value(&report)
         .map_err(|e| LlmError::Tool(format!("serialize report: {e}")))?;
     let obj = value
@@ -422,14 +428,14 @@ fn exec_repo_report(args: &Json, ctx: &ToolContext) -> Result<Json> {
         .expect("Report serializes to a JSON object");
 
     if !include_files {
-        // Drop the per-file array entirely; the assistant asked
-        // for an overview. The other roll-up fields stay.
+        // Drop the (now-empty) per-file array entirely; the assistant
+        // asked for an overview. The other roll-up fields stay.
         obj.remove("files");
         obj.insert("files_omitted".into(), serde_json::json!(true));
     } else if total_files > REPO_REPORT_FILES_CAP {
+        let mut sorted = files;
         // Sort by path so the truncation is stable across calls
         // and the model can predict what it'll see next time.
-        let mut sorted = report.files.clone();
         sorted.sort_by(|a, b| a.path.cmp(&b.path));
         sorted.truncate(REPO_REPORT_FILES_CAP);
         obj.insert(
@@ -439,6 +445,15 @@ fn exec_repo_report(args: &Json, ctx: &ToolContext) -> Result<Json> {
         );
         obj.insert("truncated".into(), serde_json::json!(true));
         obj.insert("total_files".into(), serde_json::json!(total_files));
+    } else {
+        // include_files=true and under the cap: re-insert the full
+        // list verbatim. The serializer walks the files we already
+        // own; no allocation beyond the resulting JSON value.
+        obj.insert(
+            "files".into(),
+            serde_json::to_value(&files)
+                .map_err(|e| LlmError::Tool(format!("serialize files: {e}")))?,
+        );
     }
 
     Ok(value)

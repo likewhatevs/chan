@@ -229,9 +229,12 @@ impl Backend for GeminiBackend {
                 return Outcome::error();
             }
             while let Some(end) = buf.windows(2).position(|w| w == b"\n\n") {
-                let raw_event: Vec<u8> = buf.drain(..end).collect();
-                let _: Vec<u8> = buf.drain(..2.min(buf.len())).collect();
-                let payload = match extract_data(&raw_event) {
+                // See anthropic.rs: borrow the frame slice, drain
+                // the frame + blank-line terminator in one shot, no
+                // intermediate Vec alloc.
+                let payload = extract_data(&buf[..end]);
+                buf.drain(..end + 2);
+                let payload = match payload {
                     Some(p) => p,
                     None => continue,
                 };

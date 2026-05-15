@@ -317,12 +317,17 @@ impl Backend for AnthropicBackend {
 
             // SSE frames are separated by a blank line ("\n\n"). We
             // split on that boundary so partial frames stay in `buf`
-            // for the next chunk.
+            // for the next chunk. `find_event_end` returns an index
+            // strictly less than `buf.len() - 1`, so the +2 covers
+            // both newline bytes without bounds checking. Borrowing
+            // the slice instead of draining into a fresh Vec saves
+            // one heap allocation per SSE frame (frame rate ~50/s
+            // during streaming) and lets `extract_data` parse the
+            // payload from a stack-local view.
             while let Some(end) = find_event_end(&buf) {
-                let raw_event: Vec<u8> = buf.drain(..end).collect();
-                // Skip the blank-line terminator that follows.
-                let _ = buf.drain(..2.min(buf.len())).collect::<Vec<u8>>();
-                let payload = match extract_data(&raw_event) {
+                let payload = extract_data(&buf[..end]);
+                buf.drain(..end + 2);
+                let payload = match payload {
                     Some(p) => p,
                     None => continue,
                 };
