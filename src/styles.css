@@ -253,7 +253,7 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--card);
+  background: var(--bg-card);
   font-size: 13px;
   display: flex;
   flex-direction: column;
@@ -262,14 +262,15 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
 .tunnel-panel header {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
 }
-.tunnel-panel p.muted { margin: 0; color: var(--muted); }
+.tunnel-panel p.muted { margin: 0; color: var(--text-secondary); }
 .tunnel-panel .tunnel-row {
   display: flex; align-items: center; gap: 10px;
 }
 .tunnel-panel .tunnel-row label {
-  display: inline-flex; align-items: center; gap: 6px; color: var(--muted);
+  display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary);
 }
-.tunnel-panel .tunnel-row input[type="number"] {
+.tunnel-panel .tunnel-row input[type="number"],
+.tunnel-panel .tunnel-row input[type="text"] {
   width: 100px;
   padding: 4px 6px;
   background: var(--bg);
@@ -288,7 +289,7 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
 .tunnel-panel .seg-toggle .seg {
   appearance: none;
   background: transparent;
-  color: var(--muted);
+  color: var(--text-secondary);
   border: 0;
   padding: 4px 10px;
   cursor: pointer;
@@ -315,6 +316,19 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
   border-bottom: 1px solid var(--border);
   padding: 8px 14px;
   font-size: 13px;
+}
+.status-banner {
+  background: color-mix(in srgb, var(--brand) 18%, transparent);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  padding: 8px 14px;
+  font-size: 13px;
+}
+.status-banner.persistent {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  font-weight: 500;
 }
 /* Persistent variant for the boot-time chan-binary preflight.
    Lives at the top of <body> (above the sticky header) so it does

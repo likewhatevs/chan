@@ -64,6 +64,7 @@ pub const TUNNEL_STATE_CHANGED: &str = "tunnel-state-changed";
 /// Payload is `{ label, drive, url }`. Frontend uses this to auto-
 /// launch the editor for the freshly-registered drive.
 pub const TUNNELED_DRIVE_READY: &str = "tunneled-drive-ready";
+const SYSTEM_NOTICE: &str = "system-notice";
 
 /// Supervisor poll interval. The registry has no change-notify
 /// channel, so we diff `list_all()` on each tick. The set is tiny
@@ -118,7 +119,7 @@ impl TunnelState {
     }
 
     pub fn is_listening(&self) -> bool {
-        self.run.lock().unwrap().is_some()
+        self.bound_port.load(Ordering::Acquire) != 0
     }
 
     /// Snapshot every registered tunnel paired with the tenant
@@ -195,6 +196,7 @@ pub async fn start_listening(
     let validator: Arc<dyn Validator> = Arc::new(LocalValidator);
     let registry_for_listener = state.registry.clone();
     let cancel_listener = cancel.clone();
+    let app_for_listener = app.clone();
     tokio::spawn(async move {
         tokio::select! {
             _ = cancel_listener.cancelled() => {}
@@ -206,6 +208,13 @@ pub async fn start_listening(
             ) => {
                 if let Err(e) = res {
                     tracing::warn!(error = %e, "tunnel listener accept loop exited");
+                    let _ = app_for_listener.emit(
+                        SYSTEM_NOTICE,
+                        serde_json::json!({
+                            "level": "warning",
+                            "message": format!("Tunnel listener stopped unexpectedly: {e}"),
+                        }),
+                    );
                 }
             }
         }
@@ -308,6 +317,13 @@ async fn supervisor(app: AppHandle, state: Arc<TunnelState>, cancel: Cancellatio
                 }
                 Err(e) => {
                     tracing::warn!(label = %label, error = %e, "tenant listener bind failed");
+                    let _ = app.emit(
+                        SYSTEM_NOTICE,
+                        serde_json::json!({
+                            "level": "warning",
+                            "message": format!("Tunnel drive {label} could not bind a local listener: {e}"),
+                        }),
+                    );
                 }
             }
         }
@@ -362,7 +378,7 @@ async fn supervisor(app: AppHandle, state: Arc<TunnelState>, cancel: Cancellatio
                     // this first-registration open is just one of
                     // them. Closing a window never affects the
                     // remote chan-serve lifecycle.
-                    crate::serve::spawn_tunneled_drive_window(&app, &label, &drive, &url);
+                    let _ = crate::serve::spawn_tunneled_drive_window(&app, &label, &drive, &url);
                     // Still emit the event so the drive table /
                     // header chip can react (refresh, badge, etc.)
                     // without parsing logs.

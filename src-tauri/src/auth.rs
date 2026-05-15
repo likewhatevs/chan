@@ -100,14 +100,12 @@ fn clear() -> Result<(), String> {
     }
 }
 
-/// Best-effort hostname for the PAT label. `hostname(1)` exists on
-/// every supported target; fall back to a generic string so we never
-/// fail the sign-in for cosmetic reasons.
+/// Best-effort hostname for the PAT label. Fall back to a generic
+/// string so we never fail sign-in for cosmetic reasons.
 pub fn hostname() -> String {
-    std::process::Command::new("hostname")
-        .output()
+    gethostname::gethostname()
+        .into_string()
         .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "this machine".to_string())
@@ -125,21 +123,10 @@ fn pending_state() -> &'static Mutex<Option<String>> {
 
 /// 128 bits of randomness, hex-encoded. Used as the OAuth-style
 /// state nonce to bind the browser leg to the callback leg.
-fn new_state() -> String {
+fn new_state() -> Result<String, String> {
     let mut buf = [0u8; 16];
-    if getrandom::getrandom(&mut buf).is_err() {
-        // getrandom failure is essentially impossible on the platforms
-        // we ship to; if it does, fall back to time-based bytes so the
-        // sign-in still completes (we lose CSRF protection but the
-        // worst case is a stale chan:// callback being honored, which
-        // requires the attacker to know our state shape).
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        buf[..16].copy_from_slice(&now.to_le_bytes());
-    }
-    buf.iter().map(|b| format!("{b:02x}")).collect()
+    getrandom::getrandom(&mut buf).map_err(|e| format!("CSPRNG unavailable: {e}"))?;
+    Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 #[tauri::command]
@@ -169,20 +156,23 @@ pub fn open_signin(app: AppHandle) -> Result<(), String> {
     if load().ok().flatten().is_some() {
         return Ok(());
     }
-    let state = new_state();
+    let state = new_state()?;
     *pending_state().lock().unwrap() = Some(state.clone());
 
     let label = format!("chan-desktop @ {}", hostname());
-    let url = format!(
-        "{AUTHORIZE_URL}?redirect_uri={redirect}&state={state}&label={label}&scopes={scopes}&expires_in={expires}",
-        redirect = urlencode(REDIRECT_URI),
-        state = urlencode(&state),
-        label = urlencode(&label),
-        scopes = urlencode(SCOPES),
-        expires = EXPIRES_IN_SECONDS,
-    );
+    let url = url::Url::parse_with_params(
+        AUTHORIZE_URL,
+        &[
+            ("redirect_uri", REDIRECT_URI.to_string()),
+            ("state", state),
+            ("label", label),
+            ("scopes", SCOPES.to_string()),
+            ("expires_in", EXPIRES_IN_SECONDS.to_string()),
+        ],
+    )
+    .map_err(|e| format!("building authorize URL: {e}"))?;
     app.opener()
-        .open_url(url, None::<&str>)
+        .open_url(url.to_string(), None::<&str>)
         .map_err(|e| format!("opening browser: {e}"))?;
     Ok(())
 }
@@ -204,11 +194,10 @@ fn do_handle_callback(app: &AppHandle, raw: &str) -> Result<(), String> {
         return Err(format!("unexpected callback URL: {raw}"));
     }
     let fragment = url.fragment().unwrap_or("");
-    let mut params = std::collections::HashMap::<String, String>::new();
-    for pair in fragment.split('&').filter(|s| !s.is_empty()) {
-        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-        params.insert(urldecode(k).to_string(), urldecode(v).to_string());
-    }
+    let params: std::collections::HashMap<String, String> =
+        url::form_urlencoded::parse(fragment.as_bytes())
+            .into_owned()
+            .collect();
 
     // Pop the in-flight state regardless of outcome — a failed leg
     // shouldn't leave a stale nonce around for a later callback to
@@ -270,45 +259,4 @@ pub fn signout(app: AppHandle) -> Result<AuthStatus, String> {
     };
     let _ = app.emit(AUTH_CHANGED, &status);
     Ok(status)
-}
-
-/// Minimal RFC3986-ish percent encoder for the small set of chars we
-/// pass through the authorize URL (`@`, ` `, `:`, `/`). Avoids pulling
-/// the full `percent-encoding` crate.
-fn urlencode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for &b in s.as_bytes() {
-        let is_unreserved = matches!(b,
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~');
-        if is_unreserved {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{:02X}", b));
-        }
-    }
-    out
-}
-
-fn urldecode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hi = (bytes[i + 1] as char).to_digit(16);
-            let lo = (bytes[i + 2] as char).to_digit(16);
-            if let (Some(h), Some(l)) = (hi, lo) {
-                out.push((h * 16 + l) as u8);
-                i += 3;
-                continue;
-            }
-        }
-        if bytes[i] == b'+' {
-            out.push(b' ');
-        } else {
-            out.push(bytes[i]);
-        }
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }

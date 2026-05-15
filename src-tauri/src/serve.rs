@@ -23,10 +23,11 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -57,11 +58,20 @@ pub const SERVES_CHANGED: &str = "serves-changed";
 /// of just seeing the On toggle flip back to off.
 pub const SERVE_FAILED: &str = "serve-failed";
 
+/// Tauri event emitted when a `chan serve` exits abnormally after
+/// it had already printed a URL and was therefore visible to the
+/// user. Payload is `ServeFailedPayload`; the frontend shows it as
+/// a soft inline notice rather than a startup-failure modal.
+pub const SERVE_CRASHED: &str = "serve-crashed";
+
 /// Cap on stderr lines retained for the serve-failed payload. Chan's
 /// startup output is short; 50 lines is enough to capture the
 /// failure context without unbounded memory growth if the child
 /// crashes mid-stream.
 const STDERR_TAIL_MAX: usize = 50;
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
+const STOP_GRACE: Duration = Duration::from_secs(5);
+const MAX_WINDOWS_PER_DRIVE: usize = 10;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ServeFailedPayload {
@@ -99,7 +109,7 @@ pub fn start(
     let preferred = state.drive_port(&key);
     let port = pick_port_preferring(preferred).map_err(|e| format!("allocating port: {e}"))?;
     if let Err(e) = state.set_drive_port(&key, port) {
-        eprintln!("chan-desktop: persisting port for {key}: {e}");
+        tracing::warn!(key = %key, error = %e, "persisting serve port failed");
     }
 
     let mut cmd = Command::new(chan_bin);
@@ -144,6 +154,8 @@ pub fn start(
     let app2 = app.clone();
     let state2 = state.clone();
     let key2 = key.clone();
+    let startup_complete = Arc::new(AtomicBool::new(false));
+    let startup_complete_for_reader = startup_complete.clone();
     thread::spawn(move || {
         let reader = BufReader::new(stderr);
         let mut saw_ready_banner = false;
@@ -167,9 +179,10 @@ pub fn start(
                 }
             } else if !line.trim().is_empty() && state2.set_serve_url(&key2, line.trim()) {
                 saw_url = true;
+                startup_complete_for_reader.store(true, Ordering::Release);
                 let _ = app2.emit(SERVES_CHANGED, ());
                 saw_ready_banner = false; // only capture the first URL
-                spawn_local_drive_window(&app2, &key2, line.trim());
+                let _ = spawn_local_drive_window(&app2, &key2, line.trim());
             }
         }
 
@@ -177,36 +190,32 @@ pub fn start(
         // Reap and remove from the live map. `list_drives` derives
         // the row's On state from this map, so removal alone is
         // enough to bring the toggle back to off on the next render.
-        let exit_status = {
-            let mut serves = state2.serves.lock().unwrap();
-            serves.remove(&key2).and_then(|mut h| h.child.wait().ok())
-        };
+        let handle = state2.serves.lock().unwrap().remove(&key2);
+        let was_tracked = handle.is_some();
+        let exit_status = handle.and_then(|mut h| h.child.wait().ok());
 
         // Startup failure: EOF before we ever captured the URL. The
         // toggle would silently revert to off otherwise; emit a
         // structured event so the renderer can show the captured
-        // stderr in a modal. A mid-flight crash (saw_url already
-        // true) takes the quieter `serves-changed` path below — the
-        // drive was working, the user already saw it, and a
-        // post-mortem dialog after the fact would be more
-        // disruptive than useful.
-        if !saw_url {
-            let (exit_code, exit_signal) = match &exit_status {
-                Some(s) => {
-                    let code = s.code();
-                    #[cfg(unix)]
-                    let signal = {
-                        use std::os::unix::process::ExitStatusExt;
-                        s.signal()
-                    };
-                    #[cfg(not(unix))]
-                    let signal: Option<i32> = None;
-                    (code, signal)
-                }
-                None => (None, None),
-            };
+        // stderr in a modal. A mid-flight crash gets a softer inline
+        // event because the drive had been working previously.
+        let (exit_code, exit_signal) = exit_info(exit_status.as_ref());
+        if !was_tracked {
+            // `stop` / `stop_all` removes the handle before
+            // terminating the child, so this EOF is intentional.
+        } else if !saw_url {
             let _ = app2.emit(
                 SERVE_FAILED,
+                ServeFailedPayload {
+                    key: key2.clone(),
+                    exit_code,
+                    exit_signal,
+                    stderr_tail: tail.into_iter().collect(),
+                },
+            );
+        } else if !normal_termination(exit_code, exit_signal) {
+            let _ = app2.emit(
+                SERVE_CRASHED,
                 ServeFailedPayload {
                     key: key2.clone(),
                     exit_code,
@@ -224,25 +233,106 @@ pub fn start(
         let _ = app2.emit(SERVES_CHANGED, ());
     });
 
+    let state_for_watchdog = state.clone();
+    let key_for_watchdog = key;
+    thread::spawn(move || {
+        thread::sleep(STARTUP_TIMEOUT);
+        if startup_complete.load(Ordering::Acquire) {
+            return;
+        }
+        let mut serves = state_for_watchdog.serves.lock().unwrap();
+        if let Some(handle) = serves.get_mut(&key_for_watchdog) {
+            if handle.url.is_none() {
+                tracing::warn!(key = %key_for_watchdog, "chan serve startup timed out");
+                let _ = handle.child.kill();
+            }
+        }
+    });
+
     Ok(())
 }
 
-/// Stop a running serve. No-op if the drive isn't running. Returns
-/// when the kill signal has been delivered; the reader thread will
-/// finish state cleanup once stderr closes.
+/// Stop a running serve. No-op if the drive isn't running. Removes
+/// the live entry before waiting so an immediate stop -> start can
+/// spawn a fresh child instead of observing stale map state.
 pub fn stop(state: &AppState, key: &str) {
-    let mut serves = state.serves.lock().unwrap();
-    if let Some(h) = serves.get_mut(key) {
-        let _ = h.child.kill();
+    let handle = state.serves.lock().unwrap().remove(key);
+    if let Some(h) = handle {
+        stop_child(h.child, Instant::now() + STOP_GRACE);
     }
 }
 
 /// Stop every running serve. Called from the Tauri Exit hook so
 /// chan children don't outlive the desktop process.
 pub fn stop_all(state: &AppState) {
-    let mut serves = state.serves.lock().unwrap();
-    for (_, h) in serves.iter_mut() {
-        let _ = h.child.kill();
+    let handles: Vec<ServeHandle> = state
+        .serves
+        .lock()
+        .unwrap()
+        .drain()
+        .map(|(_, h)| h)
+        .collect();
+    let deadline = Instant::now() + STOP_GRACE;
+    for h in handles {
+        stop_child(h.child, deadline);
+    }
+}
+
+fn stop_child(mut child: Child, deadline: Instant) {
+    #[cfg(unix)]
+    {
+        let pid = nix::unistd::Pid::from_raw(child.id() as i32);
+        let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
+            Ok(None) => break,
+            Err(e) => {
+                tracing::warn!(pid = child.id(), error = %e, "waiting for chan serve failed");
+                break;
+            }
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn exit_info(status: Option<&ExitStatus>) -> (Option<i32>, Option<i32>) {
+    let Some(status) = status else {
+        return (None, None);
+    };
+    let code = status.code();
+    #[cfg(unix)]
+    let signal = {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal()
+    };
+    #[cfg(not(unix))]
+    let signal: Option<i32> = None;
+    (code, signal)
+}
+
+fn normal_termination(exit_code: Option<i32>, exit_signal: Option<i32>) -> bool {
+    if exit_code == Some(0) {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        matches!(
+            exit_signal,
+            Some(x) if x == nix::libc::SIGTERM || x == nix::libc::SIGINT
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        false
     }
 }
 
@@ -303,18 +393,25 @@ pub fn new_tunnel_window_label(tenant_label: &str, drive: &str) -> String {
 /// window does NOT stop the underlying `chan serve`. The On toggle
 /// (and `close_local_drive_windows` from the reader thread on EOF)
 /// is the single authority on drive lifecycle.
-pub fn spawn_local_drive_window(app: &AppHandle, key: &str, url: &str) {
+pub fn spawn_local_drive_window(app: &AppHandle, key: &str, url: &str) -> Result<(), String> {
+    ensure_window_capacity(app, &drive_window_prefix(key))?;
     let label = new_drive_window_label(key);
     let title = drive_title(key);
-    build_drive_window(app, &label, &title, url);
+    build_drive_window(app, &label, &title, url)
 }
 
 /// Spawn a new tunneled-drive webview window. Same multi-window
 /// semantics as the local variant; same no-op close handler.
-pub fn spawn_tunneled_drive_window(app: &AppHandle, tenant_label: &str, drive: &str, url: &str) {
+pub fn spawn_tunneled_drive_window(
+    app: &AppHandle,
+    tenant_label: &str,
+    drive: &str,
+    url: &str,
+) -> Result<(), String> {
+    ensure_window_capacity(app, &tunnel_window_prefix(tenant_label, drive))?;
     let label = new_tunnel_window_label(tenant_label, drive);
     let title = format!("chan drive: {tenant_label} \u{00b7} {drive}");
-    build_drive_window(app, &label, &title, url);
+    build_drive_window(app, &label, &title, url)
 }
 
 /// Build and show a chan-style drive webview window on the main
@@ -323,10 +420,14 @@ pub fn spawn_tunneled_drive_window(app: &AppHandle, tenant_label: &str, drive: &
 /// key-bridge JS, the size defaults, the zoom-hotkey polyfill, and
 /// the drag-drop handler off in one place means drive UX changes
 /// don't fork between the local and tunneled paths.
-fn build_drive_window(app: &AppHandle, window_label: &str, title: &str, url: &str) {
+fn build_drive_window(
+    app: &AppHandle,
+    window_label: &str,
+    title: &str,
+    url: &str,
+) -> Result<(), String> {
     let Ok(parsed) = url.parse::<tauri::Url>() else {
-        eprintln!("chan-desktop: bad chan URL for {window_label}: {url}");
-        return;
+        return Err(format!("bad chan URL for {window_label}: {url}"));
     };
     let app_owned = app.clone();
     let label_owned = window_label.to_string();
@@ -339,31 +440,45 @@ fn build_drive_window(app: &AppHandle, window_label: &str, title: &str, url: &st
         if let Some(old) = app_owned.get_webview_window(&label_owned) {
             let _ = old.destroy();
         }
-        if let Err(e) =
-            WebviewWindowBuilder::new(&app_owned, &label_owned, WebviewUrl::External(parsed))
-                .title(title_owned)
-                .inner_size(1200.0, 800.0)
-                .min_inner_size(640.0, 400.0)
-                .resizable(true)
-                .initialization_script(KEY_BRIDGE_JS)
-                // Tauri polyfill: Cmd/Ctrl + [+ = -] and mousewheel zoom,
-                // 20% per step, 20%-1000%. Requires the
-                // `core:webview:allow-set-webview-zoom` permission on
-                // drive-* / tunnel-* windows in capabilities/drive.json.
-                .zoom_hotkeys_enabled(true)
-                // Hand HTML5 drag-and-drop to the page. Tauri's OS-level
-                // drag handler swallows dragover events otherwise, so
-                // chan's pane-to-pane tab moves never see the highlight /
-                // drop the receiving pane expects.
-                .disable_drag_drop_handler()
-                .build()
+        match WebviewWindowBuilder::new(&app_owned, &label_owned, WebviewUrl::External(parsed))
+            .title(title_owned)
+            .inner_size(1200.0, 800.0)
+            .min_inner_size(640.0, 400.0)
+            .resizable(true)
+            .initialization_script(KEY_BRIDGE_JS)
+            // Tauri polyfill: Cmd/Ctrl + [+ = -] and mousewheel zoom,
+            // 20% per step, 20%-1000%. Requires the
+            // `core:webview:allow-set-webview-zoom` permission on
+            // drive-* / tunnel-* windows in capabilities/drive.json.
+            .zoom_hotkeys_enabled(true)
+            // Hand HTML5 drag-and-drop to the page. Tauri's OS-level
+            // drag handler swallows dragover events otherwise, so
+            // chan's pane-to-pane tab moves never see the highlight /
+            // drop the receiving pane expects.
+            .disable_drag_drop_handler()
+            .build()
         {
-            eprintln!("chan-desktop: opening drive window for {label_owned}: {e}");
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(label = %label_owned, error = %e, "opening drive window failed")
+            }
         }
     });
-    if let Err(e) = res {
-        eprintln!("chan-desktop: scheduling drive window for {window_label}: {e}");
+    res.map_err(|e| format!("scheduling drive window for {window_label}: {e}"))
+}
+
+fn ensure_window_capacity(app: &AppHandle, prefix: &str) -> Result<(), String> {
+    let count = app
+        .webview_windows()
+        .keys()
+        .filter(|label| label.starts_with(prefix))
+        .count();
+    if count >= MAX_WINDOWS_PER_DRIVE {
+        return Err(format!(
+            "Drive already has {MAX_WINDOWS_PER_DRIVE} open windows; close one before opening another."
+        ));
     }
+    Ok(())
 }
 
 /// Destroy every webview window opened for this local drive. Used
@@ -485,4 +600,36 @@ fn pick_port_preferring(preferred: Option<u16>) -> std::io::Result<u16> {
         }
     }
     pick_port()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normal_termination_accepts_zero_exit() {
+        assert!(normal_termination(Some(0), None));
+        assert!(!normal_termination(Some(70), None));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normal_termination_accepts_sigterm_and_sigint() {
+        assert!(normal_termination(None, Some(nix::libc::SIGTERM)));
+        assert!(normal_termination(None, Some(nix::libc::SIGINT)));
+        assert!(!normal_termination(None, Some(nix::libc::SIGKILL)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_child_reaps_process() {
+        let child = Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id() as i32;
+        stop_child(child, Instant::now() + Duration::from_secs(1));
+        let still_alive = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok();
+        assert!(!still_alive, "child process should be gone");
+    }
 }

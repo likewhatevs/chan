@@ -23,7 +23,7 @@ pub const REGISTRY_CHANGED: &str = "registry-changed";
 /// debouncer owns the background thread; drop it to stop watching.
 ///
 /// Errors from `notify` setup are returned. Errors observed during
-/// watching are logged (via `eprintln!`) and otherwise swallowed:
+/// watching are logged and otherwise swallowed:
 /// the user-visible failure mode is "the UI doesn't auto-refresh",
 /// not "the app crashes".
 pub fn spawn(app: AppHandle, registry_path: &Path) -> notify::Result<Debouncer<impl Watcher>> {
@@ -42,10 +42,10 @@ pub fn spawn(app: AppHandle, registry_path: &Path) -> notify::Result<Debouncer<i
         move |res: DebounceEventResult| match res {
             Ok(_) => {
                 if let Err(e) = app.emit(REGISTRY_CHANGED, ()) {
-                    eprintln!("chan-desktop: emit {REGISTRY_CHANGED} failed: {e}");
+                    tracing::warn!(event = REGISTRY_CHANGED, error = %e, "registry event emit failed");
                 }
             }
-            Err(e) => eprintln!("chan-desktop: registry watch error: {e:?}"),
+            Err(e) => tracing::warn!(error = ?e, "registry watch error"),
         },
     )?;
 

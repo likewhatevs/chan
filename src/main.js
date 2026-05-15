@@ -93,9 +93,10 @@ let homeDir = '';
 /// every action that would invoke chan (Open drive, the per-row On
 /// toggles, Forget, the tunnel Listen button) is disabled and a
 /// persistent banner explains why. `kind` is one of "ok" |
-/// "translocated" | "missing"; the renderer keys disabled state off
-/// `ok` alone and the banner copy off `reason`.
+/// "translocated" | "missing" | "version-mismatch"; the renderer
+/// keys disabled state off `ok` alone and the banner copy off `reason`.
 let chanBinStatus = { ok: true, kind: 'ok', reason: '' };
+let chanBusy = false;
 // Last rendered drives payload as a JSON string. The backend fires
 // `serves-changed` / `registry-changed` whenever the chan registry
 // is touched, which a running serve does often (timestamps, etc.).
@@ -167,8 +168,8 @@ async function checkChanBin() {
 
 function applyChanBinStatus() {
   const ok = chanBinStatus.ok;
-  openBtn.disabled = !ok;
-  tunnelBtn.disabled = !ok;
+  openBtn.disabled = !ok || chanBusy;
+  tunnelBtn.disabled = !ok || chanBusy;
   document.body.classList.toggle('chan-bin-unavailable', !ok);
 
   let banner = document.getElementById('chan-bin-banner');
@@ -185,6 +186,27 @@ function applyChanBinStatus() {
     document.body.insertBefore(banner, document.body.firstChild);
   }
   banner.textContent = msg;
+}
+
+function applyChanBusyState(payload) {
+  chanBusy = !!(payload && payload.busy);
+  openBtn.disabled = !chanBinStatus.ok || chanBusy;
+  tunnelBtn.disabled = !chanBinStatus.ok || chanBusy;
+  document.body.classList.toggle('chan-busy', chanBusy);
+
+  let banner = document.getElementById('chan-busy-banner');
+  if (!chanBusy) {
+    if (banner) banner.remove();
+    return;
+  }
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'chan-busy-banner';
+    banner.className = 'status-banner persistent';
+    document.body.insertBefore(banner, document.body.firstChild);
+  }
+  const op = payload && payload.op === 'remove' ? 'Removing drive' : 'Adding drive';
+  banner.textContent = `${op}...`;
 }
 
 async function pickAndAdd() {
@@ -209,7 +231,7 @@ function render(drives) {
   // off this. Launch and Reveal stay live because they don't
   // depend on the binary — Launch needs a URL (which is gated by
   // the running serve anyway) and Reveal just opens Finder.
-  const disabledAttr = chanBinStatus.ok ? '' : 'disabled';
+  const disabledAttr = chanBinStatus.ok && !chanBusy ? '' : 'disabled';
 
   if (!drives.length) {
     main.innerHTML = `
@@ -491,6 +513,15 @@ async function maybeOfferUpdate() {
 // TOML directly), or when a serve starts / discovers its URL / exits.
 listen('registry-changed', () => { refresh().catch(showError); });
 listen('serves-changed', () => { refresh().catch(showError); });
+listen('system-notice', (e) => {
+  const p = e.payload || {};
+  showError(typeof p.message === 'string' ? p.message : 'Chan Desktop notice');
+});
+listen('chan-busy', (e) => {
+  applyChanBusyState(e.payload || {});
+  lastDrivesJson = '';
+  refresh().catch(showError);
+});
 
 // `chan serve` exited before printing the URL banner — the toggle
 // would have silently flipped back to off otherwise. Pop a modal
@@ -500,6 +531,11 @@ listen('serves-changed', () => { refresh().catch(showError); });
 let serveFailedPending = Promise.resolve();
 listen('serve-failed', (e) => {
   serveFailedPending = serveFailedPending.then(() => showServeFailed(e.payload || {}));
+});
+
+listen('serve-crashed', (e) => {
+  showServeCrashed(e.payload || {});
+  refresh().catch(showError);
 });
 
 async function showServeFailed(p) {
@@ -527,6 +563,21 @@ async function showServeFailed(p) {
     // inline banner so the user still sees something.
     showError(body);
   }
+}
+
+function showServeCrashed(p) {
+  const driveLabel = p.key ? p.key : 'this drive';
+  let exitDesc;
+  if (typeof p.exit_signal === 'number') {
+    exitDesc = `chan was killed by signal ${p.exit_signal}`;
+  } else if (typeof p.exit_code === 'number') {
+    exitDesc = `chan exited with code ${p.exit_code}`;
+  } else {
+    exitDesc = 'chan exited without reporting a status';
+  }
+  const tailLines = Array.isArray(p.stderr_tail) ? p.stderr_tail.slice(-5) : [];
+  const tail = tailLines.length ? `\n${tailLines.join('\n')}` : '';
+  showError(`Drive stopped unexpectedly: ${driveLabel}. ${exitDesc}.${tail}`);
 }
 
 /// Tunnel panel. Hidden until the user clicks "Attach", then

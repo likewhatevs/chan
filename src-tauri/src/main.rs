@@ -9,16 +9,20 @@ mod watcher;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItemBuilder, MenuItemKind, PredefinedMenuItem, WINDOW_SUBMENU_ID};
-use tauri::{Manager, RunEvent, State, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
+use tokio::process::Command;
 
 use config::{Config, ConfigStore};
 use serve::ServeHandle;
 use tunnel::TunnelState;
+
+const MIN_CHAN_VERSION: &str = "0.8.1";
+const CHAN_BUSY_CHANGED: &str = "chan-busy";
+const SYSTEM_NOTICE: &str = "system-notice";
 
 /// Process-wide state. Shared via `Arc` because the serve supervisor
 /// hands clones to per-drive reader threads.
@@ -198,18 +202,23 @@ fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
 }
 
 #[tauri::command]
-fn add_drive(
+async fn add_drive(
     app: tauri::AppHandle,
-    state: State<Arc<AppState>>,
+    state: State<'_, Arc<AppState>>,
     path: String,
 ) -> Result<(), String> {
     require_bin(&state.bin_status)?;
     let path = canonical_key(Path::new(&path));
     let bin = chan_bin()?;
+    emit_chan_busy(&app, true, "add", &path);
     let out = Command::new(&bin)
         .args(["add", &path])
+        .kill_on_drop(true)
         .output()
-        .map_err(|e| format!("running `chan add`: {e}"))?;
+        .await
+        .map_err(|e| format!("running `chan add`: {e}"));
+    emit_chan_busy(&app, false, "add", &path);
+    let out = out?;
     if !out.status.success() {
         return Err(format!(
             "`chan add` failed: {}",
@@ -227,14 +236,24 @@ fn add_drive(
 }
 
 #[tauri::command]
-fn remove_drive(state: State<Arc<AppState>>, path: String) -> Result<(), String> {
+async fn remove_drive(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    path: String,
+) -> Result<(), String> {
+    require_bin(&state.bin_status)?;
     let key = canonical_key(Path::new(&path));
     serve::stop(&state, &key);
 
+    emit_chan_busy(&app, true, "remove", &key);
     let out = Command::new(chan_bin()?)
         .args(["remove", &key])
+        .kill_on_drop(true)
         .output()
-        .map_err(|e| format!("running `chan remove`: {e}"))?;
+        .await
+        .map_err(|e| format!("running `chan remove`: {e}"));
+    emit_chan_busy(&app, false, "remove", &key);
+    let out = out?;
     if !out.status.success() {
         return Err(format!(
             "`chan remove` failed: {}",
@@ -444,7 +463,7 @@ fn open_local_drive(
         .get(&key)
         .and_then(|h| h.url.clone())
         .ok_or_else(|| format!("drive {key} is not running"))?;
-    serve::spawn_local_drive_window(&app, &key, &url);
+    serve::spawn_local_drive_window(&app, &key, &url)?;
     Ok(())
 }
 
@@ -472,7 +491,7 @@ fn open_tunneled_drive(
             "tunneled drive {label}/{drive} has no URL yet; per-tenant listener still binding",
         ));
     }
-    serve::spawn_tunneled_drive_window(&app, &label, &drive, &url);
+    serve::spawn_tunneled_drive_window(&app, &label, &drive, &url)?;
     Ok(())
 }
 
@@ -502,10 +521,13 @@ fn reveal_in_finder(path: String) -> Result<(), String> {
     } else {
         "xdg-open"
     };
-    Command::new(opener)
+    let status = std::process::Command::new(opener)
         .arg(&path)
-        .spawn()
+        .status()
         .map_err(|e| format!("opening {path}: {e}"))?;
+    if !status.success() {
+        return Err(format!("opening {path}: {opener} exited with {status}"));
+    }
     Ok(())
 }
 
@@ -596,13 +618,52 @@ fn compute_bin_status() -> BinStatus {
         }
     }
     match chan_bin() {
-        Ok(_) => BinStatus::ok_status(),
+        Ok(bin) => match probe_chan_version(&bin) {
+            Ok(()) => BinStatus::ok_status(),
+            Err(e) => BinStatus {
+                ok: false,
+                kind: "version-mismatch",
+                reason: e,
+            },
+        },
         Err(e) => BinStatus {
             ok: false,
             kind: "missing",
             reason: e,
         },
     }
+}
+
+fn probe_chan_version(bin: &Path) -> Result<(), String> {
+    let out = std::process::Command::new(bin)
+        .arg("--version")
+        .output()
+        .map_err(|e| format!("probing bundled chan version: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "bundled chan at {} failed `--version`: {}",
+            bin.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let version = stdout
+        .split_whitespace()
+        .find_map(|part| semver::Version::parse(part.trim_start_matches('v')).ok())
+        .ok_or_else(|| {
+            format!(
+                "could not parse bundled chan version from {:?}",
+                stdout.trim()
+            )
+        })?;
+    let min = semver::Version::parse(MIN_CHAN_VERSION)
+        .map_err(|e| format!("invalid desktop minimum chan version: {e}"))?;
+    if version < min {
+        return Err(format!(
+            "Bundled chan is {version}, but Chan Desktop requires {MIN_CHAN_VERSION} or newer."
+        ));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -627,7 +688,32 @@ fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
+fn emit_chan_busy(app: &tauri::AppHandle, busy: bool, op: &str, path: &str) {
+    let _ = app.emit(
+        CHAN_BUSY_CHANGED,
+        serde_json::json!({ "busy": busy, "op": op, "path": path }),
+    );
+}
+
+fn emit_system_notice(app: &tauri::AppHandle, level: &str, message: impl Into<String>) {
+    let _ = app.emit(
+        SYSTEM_NOTICE,
+        serde_json::json!({ "level": level, "message": message.into() }),
+    );
+}
+
+fn init_tracing() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_env("CHAN_LOG")
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,chan_desktop=info")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+}
+
 fn main() {
+    init_tracing();
     let store = ConfigStore::new().expect("failed to init config store");
     let bin_status = compute_bin_status();
     let state = Arc::new(AppState {
@@ -693,7 +779,14 @@ fn main() {
                 Ok(d) => {
                     Box::leak(Box::new(d));
                 }
-                Err(e) => eprintln!("chan-desktop: registry watcher disabled: {e}"),
+                Err(e) => {
+                    tracing::warn!(error = %e, "registry watcher disabled");
+                    emit_system_notice(
+                        app.handle(),
+                        "warning",
+                        "Auto-refresh disabled; close and reopen the window after running chan add.",
+                    );
+                }
             }
 
             // Tunnel listener is OFF until the user explicitly
