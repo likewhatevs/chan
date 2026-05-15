@@ -8,6 +8,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
   assistantConversations,
   assistantStream,
+  bareToolName,
   beginAssistantStream,
   endAssistantStream,
   onWatchEvent,
@@ -316,5 +317,34 @@ describe("assistant lifecycle websocket frames", () => {
     onWatchEvent({ type: "llm.delta", session_id: "s1", text: "Two." });
 
     expect(assistantStream.text).toBe("One.\n\nTwo.");
+  });
+});
+
+describe("bareToolName", () => {
+  test("strips claude-cli mcp__chan__ prefix", () => {
+    expect(bareToolName("mcp__chan__write_file")).toBe("write_file");
+    expect(bareToolName("mcp__chan__read_file")).toBe("read_file");
+  });
+
+  test("strips gemini-cli mcp_chan_ prefix", () => {
+    expect(bareToolName("mcp_chan_write_file")).toBe("write_file");
+    expect(bareToolName("mcp_chan_list_files")).toBe("list_files");
+  });
+
+  test("strips codex-cli chan:: prefix", () => {
+    expect(bareToolName("chan::write_file")).toBe("write_file");
+    expect(bareToolName("chan::list_files")).toBe("list_files");
+  });
+
+  test("passes through already-bare names", () => {
+    expect(bareToolName("write_file")).toBe("write_file");
+    expect(bareToolName("read_file")).toBe("read_file");
+  });
+
+  test("passes through unrelated tools so non-chan callers stay legible", () => {
+    expect(bareToolName("list_directory")).toBe("list_directory");
+    expect(bareToolName("update_topic")).toBe("update_topic");
+    expect(bareToolName("mcp__other__do_thing")).toBe("mcp__other__do_thing");
+    expect(bareToolName("other::do_thing")).toBe("other::do_thing");
   });
 });

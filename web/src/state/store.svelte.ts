@@ -2147,17 +2147,24 @@ function formatBytes(n: number): string {
 
 /// Normalize a tool call name. Anthropic API and Ollama emit the
 /// bare tool name (e.g. `write_file`); the claude-cli and
-/// gemini-cli backends emit MCP-namespaced names (`mcp__chan__write_file`)
-/// because chan's tools are exposed to those agents via the chan-llm
-/// MCP bridge. Strip the `mcp__<server>__` prefix so downstream
+/// Each agentic CLI namespaces our MCP tools differently:
+///   - claude-cli: `mcp__chan__write_file` (double-underscore brackets)
+///   - codex-cli:  `chan::write_file`      (double-colon)
+///   - gemini-cli: `mcp_chan_write_file`   (single-underscore brackets)
+/// All three are MCP wiring artefacts. Strip them so downstream
 /// dispatch (status-bar label, edit-card filter, etc.) stays
-/// backend-agnostic.
+/// backend-agnostic. The server segment is hardcoded to `chan`
+/// because every backend's `McpWiring` registers under that name
+/// (`MCP_SERVER_KEY` in chan-llm's claude/gemini/codex backends).
+/// Tools coming from a different MCP server, or built-ins like
+/// gemini's `list_directory` / `update_topic`, pass through
+/// unchanged.
+const MCP_TOOL_PREFIXES = ["mcp__chan__", "mcp_chan_", "chan::"];
 export function bareToolName(name: string): string {
-  if (!name.startsWith("mcp__")) return name;
-  const rest = name.slice("mcp__".length);
-  const idx = rest.indexOf("__");
-  if (idx < 0) return name;
-  return rest.slice(idx + 2);
+  for (const p of MCP_TOOL_PREFIXES) {
+    if (name.startsWith(p)) return name.slice(p.length);
+  }
+  return name;
 }
 
 /// Short, human-readable label for a tool call. Truncates path /
