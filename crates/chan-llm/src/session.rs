@@ -1201,6 +1201,7 @@ mod tests {
                     Event::Done(r) => format!("done({r:?})"),
                     Event::Delta(_) => "delta".into(),
                     Event::Error(s) => format!("err({s})"),
+                    Event::ErrorKind(k) => format!("err_kind({})", k.code()),
                     Event::Snapshot(h) => format!("snap(len={})", h.len()),
                 })
                 .collect::<Vec<_>>()
@@ -1419,6 +1420,7 @@ mod tests {
                 Event::ToolResult(id) => write!(f, "ToolResult({id})"),
                 Event::Done(r) => write!(f, "Done({r:?})"),
                 Event::Error(e) => write!(f, "Error({e})"),
+                Event::ErrorKind(e) => write!(f, "ErrorKind({}={e})", e.code()),
                 Event::Snapshot(h) => write!(f, "Snapshot(len={})", h.len()),
             }
         }
@@ -1727,5 +1729,320 @@ mod tests {
         let _cancel = session.send(vec![Message::user("hi")], listener);
         // Reaching this line means the panicking on_error and on_done
         // were caught by the SafeListener wrapper rather than unwinding.
+    }
+
+    /// Backend that emits a typed error through the listener and
+    /// returns `Outcome::error()`. Lets the orchestrator-level
+    /// typed-error contract be exercised without standing up a real
+    /// CLI process. The backend itself decides which variant to
+    /// emit so each test can pick the variant that matches the UX
+    /// path it's covering (Auth -> "fix your key" affordance,
+    /// RateLimited -> "back off" affordance, etc).
+    struct TypedErrorBackend {
+        kind: LlmEventError,
+    }
+
+    #[async_trait::async_trait]
+    impl backends::Backend for TypedErrorBackend {
+        async fn run(
+            &self,
+            _messages: &[Message],
+            _tools: &[crate::tools::ToolSchema],
+            listener: Arc<dyn SessionListener>,
+            _cancel: Arc<AtomicBool>,
+        ) -> backends::Outcome {
+            listener.on_error_kind(self.kind.clone());
+            backends::Outcome::error()
+        }
+    }
+
+    /// The orchestrator must forward typed errors from the backend
+    /// to the listener verbatim (variant + payload), then close the
+    /// turn with `Done(Error)`. Without the on_error_kind override on
+    /// the listener, the typed variant would be flattened to a
+    /// string by the trait's default impl and chan-server's frontend
+    /// would lose the per-variant UX branch.
+    #[test]
+    fn forwards_typed_backend_error_to_listener_and_closes_with_error() {
+        let (_cfg, _root, drive) = fixture();
+        let backend = Arc::new(TypedErrorBackend {
+            kind: LlmEventError::Auth {
+                backend: "claude_cli".into(),
+                message: "401 unauthorized".into(),
+            },
+        });
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let tool_ctx = crate::tools::ToolContext::new(drive, false);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(super::run_loop(
+            backend,
+            vec![Message::user("hi")],
+            Vec::new(),
+            tool_ctx,
+            listener.clone() as Arc<dyn SessionListener>,
+            Arc::new(AtomicBool::new(false)),
+            DEFAULT_MAX_TOOL_ITERATIONS,
+        ));
+        let events = listener.0.lock().unwrap();
+        // Two events: typed error from the backend, then Done(Error)
+        // from the orchestrator. on_messages_snapshot must NOT fire
+        // (snapshot is success-path only; firing on Error would
+        // overwrite the host's pre-call transcript with a partial
+        // one).
+        assert_eq!(
+            events.len(),
+            2,
+            "exactly typed-error + done; got {events:?}",
+            events = events.iter().map(|e| format!("{e:?}")).collect::<Vec<_>>()
+        );
+        match &events[0] {
+            Event::ErrorKind(LlmEventError::Auth { backend, message }) => {
+                assert_eq!(backend, "claude_cli");
+                assert_eq!(message, "401 unauthorized");
+            }
+            other => panic!("expected ErrorKind(Auth); got {other:?}"),
+        }
+        assert!(matches!(events[1], Event::Done(StopReason::Error)));
+    }
+
+    /// Each typed error variant must round-trip through the
+    /// orchestrator's listener wiring with its payload preserved.
+    /// The default `on_error_kind` impl on `SessionListener` would
+    /// flatten everything to a string; chan-server's listener (and
+    /// the test `Collector`) override that to keep the variant.
+    /// This test catches a regression where the orchestrator (or
+    /// `SafeListener`) accidentally rebuilds the error from
+    /// `Display` instead of forwarding the original.
+    #[test]
+    fn each_typed_error_variant_round_trips_through_listener() {
+        let (_cfg, _root, drive) = fixture();
+        let variants = vec![
+            LlmEventError::Auth {
+                backend: "claude_cli".into(),
+                message: "x".into(),
+            },
+            LlmEventError::RateLimited {
+                backend: "gemini_cli".into(),
+                retry_after_secs: Some(7),
+                message: "x".into(),
+            },
+            LlmEventError::BackendUnreachable {
+                backend: "codex_cli".into(),
+                message: "x".into(),
+            },
+            LlmEventError::BadRequest {
+                backend: "claude_cli".into(),
+                message: "x".into(),
+            },
+            LlmEventError::Backend {
+                backend: "claude_cli".into(),
+                status: 500,
+                message: "x".into(),
+            },
+            LlmEventError::SpawnFailed {
+                backend: "gemini_cli".into(),
+                message: "ENOENT".into(),
+            },
+            LlmEventError::StreamTruncated {
+                backend: "codex_cli".into(),
+                message: "EOF".into(),
+            },
+            LlmEventError::Timeout {
+                backend: "claude_cli".into(),
+                message: "300s".into(),
+            },
+            LlmEventError::ParseError {
+                backend: "gemini_cli".into(),
+                message: "bad frame".into(),
+            },
+            LlmEventError::Cancelled {
+                backend: "codex_cli".into(),
+            },
+            LlmEventError::Other {
+                backend: "claude_cli".into(),
+                message: "x".into(),
+            },
+        ];
+        for kind in variants {
+            let backend = Arc::new(TypedErrorBackend { kind: kind.clone() });
+            let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+            let tool_ctx = crate::tools::ToolContext::new(drive.clone(), false);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(super::run_loop(
+                backend,
+                vec![Message::user("hi")],
+                Vec::new(),
+                tool_ctx,
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+                DEFAULT_MAX_TOOL_ITERATIONS,
+            ));
+            let events = listener.0.lock().unwrap();
+            // Find the ErrorKind event and check its `code()` matches
+            // the input variant. We don't pattern-match the entire
+            // payload (the loop has 11 variants and the assertion
+            // would balloon); the `code()` discriminator is the
+            // public contract chan-server's frontend branches on.
+            let got_code = events.iter().find_map(|e| match e {
+                Event::ErrorKind(k) => Some(k.code()),
+                _ => None,
+            });
+            assert_eq!(
+                got_code,
+                Some(kind.code()),
+                "variant {kind:?} did not round-trip; saw {events:?}",
+                events = events.iter().map(|e| format!("{e:?}")).collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    /// Backend that proposes two tool calls in one turn. Pairs with
+    /// `CancelOnFirstResultListener` so the second call's dispatch
+    /// is exercised against an already-flipped cancel flag, which
+    /// must short-circuit at the per-call cancel checkpoint at the
+    /// top of the loop in `run_loop` rather than running both tools
+    /// to completion.
+    struct TwoToolBackend;
+
+    #[async_trait::async_trait]
+    impl backends::Backend for TwoToolBackend {
+        async fn run(
+            &self,
+            _messages: &[Message],
+            _tools: &[crate::tools::ToolSchema],
+            _listener: Arc<dyn SessionListener>,
+            _cancel: Arc<AtomicBool>,
+        ) -> backends::Outcome {
+            backends::Outcome {
+                assistant_text: String::new(),
+                tool_calls: vec![
+                    ToolCall {
+                        id: "call-a".into(),
+                        name: "list_files".into(),
+                        args: serde_json::json!({}),
+                    },
+                    ToolCall {
+                        id: "call-b".into(),
+                        name: "list_files".into(),
+                        args: serde_json::json!({}),
+                    },
+                ],
+                stop_reason: StopReason::ToolUse,
+            }
+        }
+    }
+
+    /// Listener that flips the cancel flag the first time the
+    /// orchestrator emits `on_tool_result`. After this fires, the
+    /// orchestrator's per-call cancel check at the top of the
+    /// dispatch loop (`if cancel.load(...) { ... return; }`) must
+    /// observe the flag and emit Cancelled instead of running the
+    /// second tool. Inner Collector keeps the event log so tests
+    /// can assert on what fired.
+    struct CancelOnFirstResultListener {
+        inner: Arc<Collector>,
+        cancel: Arc<AtomicBool>,
+        tripped: Mutex<bool>,
+    }
+
+    impl SessionListener for CancelOnFirstResultListener {
+        fn on_delta(&self, d: Delta) {
+            self.inner.on_delta(d);
+        }
+        fn on_tool_call(&self, c: ToolCall) {
+            self.inner.on_tool_call(c);
+        }
+        fn on_tool_result(&self, r: ToolResult) {
+            self.inner.on_tool_result(r);
+            let mut tripped = self.tripped.lock().unwrap();
+            if !*tripped {
+                self.cancel.store(true, Ordering::Relaxed);
+                *tripped = true;
+            }
+        }
+        fn on_done(&self, r: StopReason) {
+            self.inner.on_done(r);
+        }
+        fn on_error(&self, e: String) {
+            self.inner.on_error(e);
+        }
+        fn on_error_kind(&self, e: LlmEventError) {
+            self.inner.on_error_kind(e);
+        }
+        fn on_messages_snapshot(&self, h: &[Message]) {
+            self.inner.on_messages_snapshot(h);
+        }
+    }
+
+    /// Cancel flipped after the first tool result must short-circuit
+    /// before the second tool dispatches. The orchestrator must:
+    ///   - emit on_tool_call(call-a) + on_tool_result(call-a)
+    ///   - observe cancel at the top of the per-call loop
+    ///   - emit on_done(Cancelled)
+    ///   - NOT emit on_tool_call(call-b)
+    ///   - NOT emit a snapshot (reserved for clean terminations)
+    #[test]
+    fn cancel_after_first_tool_short_circuits_remaining_tools() {
+        let (_cfg, _root, drive) = fixture();
+        let backend = Arc::new(TwoToolBackend);
+        let inner = Arc::new(Collector(Mutex::new(Vec::new())));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let listener = Arc::new(CancelOnFirstResultListener {
+            inner: inner.clone(),
+            cancel: cancel.clone(),
+            tripped: Mutex::new(false),
+        });
+        let tool_ctx = crate::tools::ToolContext::new(drive, false);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(super::run_loop(
+            backend,
+            vec![Message::user("list please")],
+            Vec::new(),
+            tool_ctx,
+            listener as Arc<dyn SessionListener>,
+            cancel,
+            DEFAULT_MAX_TOOL_ITERATIONS,
+        ));
+        let events = inner.0.lock().unwrap();
+        let tool_calls: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::ToolCall(n) => Some(n.as_str()),
+                _ => None,
+            })
+            .collect();
+        let tool_results: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::ToolResult(id) => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            tool_calls.len(),
+            1,
+            "only call-a should have dispatched; got {events:?}",
+            events = events.iter().map(|e| format!("{e:?}")).collect::<Vec<_>>(),
+        );
+        assert_eq!(tool_results, vec!["call-a"], "only call-a result fires");
+        let last = events.last().expect("at least one event");
+        assert!(
+            matches!(last, Event::Done(StopReason::Cancelled)),
+            "last event must be Done(Cancelled); got {last:?}",
+        );
+        // Snapshot must NOT have fired: it's success-path only.
+        assert!(
+            !events.iter().any(|e| matches!(e, Event::Snapshot(_))),
+            "snapshot must not fire on Cancelled",
+        );
     }
 }
