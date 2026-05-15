@@ -12,7 +12,7 @@ TLS in front.
 
 ```toml
 [dependencies]
-chan-tunnel-server = "0.9"
+chan-tunnel-server = "0.11"
 ```
 
 ## Public surface

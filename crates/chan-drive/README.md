@@ -10,7 +10,7 @@ sit alongside the file tree without writing anything inside it.
 
 ```toml
 [dependencies]
-chan-drive = "0.9"
+chan-drive = "0.11"
 ```
 
 Hybrid (BM25 + dense) search is on by default via the `embeddings`

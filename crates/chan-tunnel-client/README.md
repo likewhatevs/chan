@@ -11,7 +11,7 @@ long-lived h2 connection.
 
 ```toml
 [dependencies]
-chan-tunnel-client = "0.9"
+chan-tunnel-client = "0.11"
 ```
 
 ## Public surface
