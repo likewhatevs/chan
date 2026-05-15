@@ -43,6 +43,9 @@ pub struct ReportOptions {
 }
 
 impl ReportOptions {
+    /// Construct with defaults: don't follow symlinks, skip
+    /// hidden files, respect `.gitignore`, no extra exclude
+    /// globs, organic-COCOMO cost model.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
@@ -174,10 +177,12 @@ impl Index {
         self.files.get(rel)
     }
 
+    /// Number of tracked files.
     pub fn len(&self) -> usize {
         self.files.len()
     }
 
+    /// True when no files are tracked.
     pub fn is_empty(&self) -> bool {
         self.files.is_empty()
     }

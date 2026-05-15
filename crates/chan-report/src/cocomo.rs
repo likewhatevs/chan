@@ -20,6 +20,9 @@ impl CocomoModel {
         }
     }
 
+    /// Stable string label written to the JSONL `cocomo.model`
+    /// field. Consumers parse this back into a variant via
+    /// matching on the literal.
     pub fn label(self) -> &'static str {
         match self {
             CocomoModel::Organic => "basic-organic",
