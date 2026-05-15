@@ -101,12 +101,13 @@ has pasted into the messages. Be concise.";
 /// pre-narrate a proposed read in chat; just call read_file).
 pub const CLI_SESSION_DIRECTIVE: &str = "\
 You are running inside chan, a host application that wraps your \
-MCP tool calls in a confirmation diff card the user reviews \
-explicitly (Apply / Discard / Save-as). Because chan ALWAYS \
-shows your write_file call to the user before any bytes hit \
-disk, you must emit the MCP tool call directly; never paste \
-the proposed file content into chat as a code fence and wait \
-for verbal approval. The diff card IS the review surface.\n\n\
+MCP write_file calls in its own write policy: the host may apply \
+the write immediately, or it may defer it into a confirmation diff \
+card the user reviews explicitly (Apply / Discard / Save-as). \
+Because chan owns that approval surface, you must emit the MCP tool \
+call directly; never paste the proposed file content into chat as \
+a code fence and wait for verbal approval. If review is required, \
+the diff card is the review surface.\n\n\
 Operational rules for this session:\n\
   - When the user asks for a file change, call \
 `mcp__chan__write_file` with the full revised content. Do not \

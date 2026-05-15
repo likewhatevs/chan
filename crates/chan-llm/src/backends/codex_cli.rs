@@ -125,6 +125,8 @@ impl Backend for CodexCliBackend {
         command.kill_on_drop(true);
         command
             .args(leading)
+            .arg("--ask-for-approval")
+            .arg("never")
             .arg("exec")
             .arg("--json")
             .arg("--ephemeral")
@@ -532,7 +534,11 @@ fn append_mcp_overrides(command: &mut Command, wiring: &McpWiring) -> std::io::R
         .arg("-c")
         .arg(format!("mcp_servers.{MCP_SERVER_KEY}.enabled=true"))
         .arg("-c")
-        .arg(format!("mcp_servers.{MCP_SERVER_KEY}.required=true"));
+        .arg(format!("mcp_servers.{MCP_SERVER_KEY}.required=true"))
+        .arg("-c")
+        .arg(format!(
+            "mcp_servers.{MCP_SERVER_KEY}.default_tools_approval_mode=\"approve\""
+        ));
     Ok(())
 }
 
@@ -923,6 +929,25 @@ mod tests {
         )
     }
 
+    fn backend_for_mcp(
+        script: &std::path::Path,
+        cwd: &std::path::Path,
+        timeout: Duration,
+    ) -> CodexCliBackend {
+        CodexCliBackend::new(
+            vec![script.to_string_lossy().into_owned()],
+            Vec::new(),
+            None,
+            cwd.to_path_buf(),
+            Some(McpWiring {
+                command: vec!["chan".into(), "__mcp-proxy".into(), "/tmp/chan.sock".into()],
+            }),
+            timeout,
+            false,
+            None,
+        )
+    }
+
     #[tokio::test]
     async fn streams_rpc_agent_deltas_and_dedupes_completed_message() {
         let tmp = TempDir::new().unwrap();
@@ -1241,6 +1266,77 @@ printf '%s\n' '{"type":"turn.completed","turn":{"status":"completed"}}'
             Event::Status(AgentStatus::Unhealthy { reason, detail, .. })
                 if reason.contains("exit") && detail.as_deref().is_some_and(|d| d.contains("boom"))
         )));
+    }
+
+    #[tokio::test]
+    async fn approval_never_precedes_exec_subcommand() {
+        let tmp = TempDir::new().unwrap();
+        let argv_path = tmp.path().join("argv.txt");
+        let script = fake_codex_script(
+            tmp.path(),
+            &format!(
+                "#!/bin/sh\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\"; done > '{}'\ncat >/dev/null\nprintf '%s\\n' '{{\"type\":\"turn.completed\",\"turn\":{{\"status\":\"completed\"}}}}'\n",
+                argv_path.display()
+            ),
+        );
+        let backend = backend_for(&script, tmp.path(), Duration::from_secs(60));
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                &[Message::user("hi")],
+                &[],
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.stop_reason, StopReason::EndOfTurn);
+
+        let argv = std::fs::read_to_string(argv_path).unwrap();
+        let args: Vec<&str> = argv.lines().collect();
+        let approval = args
+            .iter()
+            .position(|arg| *arg == "--ask-for-approval")
+            .expect("missing --ask-for-approval");
+        let exec = args
+            .iter()
+            .position(|arg| *arg == "exec")
+            .expect("missing exec subcommand");
+        assert_eq!(args.get(approval + 1), Some(&"never"));
+        assert!(
+            approval < exec,
+            "Codex accepts --ask-for-approval only before exec; argv was {args:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_tools_are_approved_for_noninteractive_exec() {
+        let tmp = TempDir::new().unwrap();
+        let argv_path = tmp.path().join("argv.txt");
+        let script = fake_codex_script(
+            tmp.path(),
+            &format!(
+                "#!/bin/sh\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\"; done > '{}'\ncat >/dev/null\nprintf '%s\\n' '{{\"type\":\"turn.completed\",\"turn\":{{\"status\":\"completed\"}}}}'\n",
+                argv_path.display()
+            ),
+        );
+        let backend = backend_for_mcp(&script, tmp.path(), Duration::from_secs(60));
+        let listener = Arc::new(Collector(Mutex::new(Vec::new())));
+        let outcome = backend
+            .run(
+                &[Message::user("hi")],
+                &[],
+                listener.clone() as Arc<dyn SessionListener>,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await;
+        assert_eq!(outcome.stop_reason, StopReason::EndOfTurn);
+
+        let argv = std::fs::read_to_string(argv_path).unwrap();
+        assert!(
+            argv.lines()
+                .any(|arg| { arg == "mcp_servers.chan.default_tools_approval_mode=\"approve\"" }),
+            "MCP server tools must be approved in noninteractive exec; argv was {argv:?}"
+        );
     }
 
     #[test]
