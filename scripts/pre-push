@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
 # Pre-push gate: fmt + clippy + test + no-default-features build.
-# Mirrors CI (including RUSTFLAGS=-D warnings) so a passing local
-# push will not fail in the cloud. Install with ./scripts/install-hooks.
+# Mirrors CI warning gates and runs the drive-heavy test suite serially
+# to avoid macOS per-process descriptor pressure. Install with
+# ./scripts/install-hooks.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-export RUSTFLAGS="-D warnings"
-
 echo "==> cargo fmt --check"
 cargo fmt --check
 
+echo "==> cargo test --all-targets -- --test-threads=1"
+cargo test --all-targets -- --test-threads=1
+
 echo "==> cargo clippy --all-targets -- -D warnings"
 cargo clippy --all-targets -- -D warnings
-
-echo "==> cargo test --all-targets"
-cargo test --all-targets
 
 # The mcp feature pulls rmcp + schemars; the default cargo invocation
 # above doesn't enable it, which is how the v0.7.0 mcp.rs regression
@@ -26,5 +25,5 @@ cargo clippy -p chan-llm --all-targets --features mcp -- -D warnings
 echo "==> cargo test -p chan-llm --all-targets --features mcp"
 cargo test -p chan-llm --all-targets --features mcp
 
-echo "==> cargo build -p chan-drive --no-default-features"
-cargo build -p chan-drive --no-default-features
+echo "==> RUSTFLAGS='-D warnings' cargo build -p chan-drive --no-default-features"
+RUSTFLAGS="-D warnings" cargo build -p chan-drive --no-default-features
