@@ -1614,7 +1614,8 @@ impl Drive {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            let (title, node_kind, headings, edges, emails) = parse_for_graph(&e.path, &content);
+            let (title, node_kind, headings, edges, emails, aliases) =
+                parse_for_graph(&e.path, &content);
             let fg = crate::graph::FileGraph {
                 rel: e.path.as_str(),
                 title: title.as_deref(),
@@ -1624,6 +1625,7 @@ impl Drive {
                 edges: &edges,
                 headings: &headings,
                 emails: emails.as_deref(),
+                aliases: aliases.as_deref(),
             };
             graph.stage_file(&fg)?;
         }
@@ -1689,7 +1691,7 @@ impl Drive {
         #[cfg(test)]
         index_file_between_stat_and_read_hook();
         let content = self.read_text(rel)?;
-        let (title, node_kind, headings, edges, emails) = parse_for_graph(rel, &content);
+        let (title, node_kind, headings, edges, emails, aliases) = parse_for_graph(rel, &content);
         // Graph first, then search index. The graph is what the
         // editor consults for backlinks and link-autocomplete on
         // every keystroke; a stale graph is the more user-visible
@@ -1711,6 +1713,7 @@ impl Drive {
             &edges,
             &headings,
             emails.as_deref(),
+            aliases.as_deref(),
         )?;
         // Hand the already-read content to the index so the read
         // goes through the Drive sandbox exactly once.
@@ -2370,9 +2373,15 @@ fn ensure_writable_in(
 /// Parse a file's content into the graph-side structures: the
 /// title (for the graph node), the heading list (for graph
 /// headings), the outgoing edges (links + tokens), and, for
-/// contact-kind files, the joined email list (space-separated,
-/// lowercased). The search-side chunking is done separately by the
-/// index facade.
+/// contact-kind files, the joined email list and alias list
+/// (both space-separated, lowercased). The search-side chunking is
+/// done separately by the index facade.
+//
+// clippy's `type_complexity` lint fires because the return tuple is
+// 6-wide. Folding into a struct would churn every call site in
+// `rebuild_graph` + `index_file` for a style win; we keep the
+// shape and silence the lint locally.
+#[allow(clippy::type_complexity)]
 fn parse_for_graph(
     rel: &str,
     raw: &str,
@@ -2381,6 +2390,7 @@ fn parse_for_graph(
     crate::graph::NodeKind,
     Vec<markdown::Heading>,
     Vec<crate::graph::Edge>,
+    Option<String>,
     Option<String>,
 ) {
     let fm = markdown::parse_frontmatter(raw);
@@ -2427,7 +2437,35 @@ fn parse_for_graph(
     } else {
         None
     };
-    (title, node_kind, headings, edges, emails)
+    // Alias extraction (phase 5): the `aliases:` top-level
+    // frontmatter array names alternate strings that `@@<alias>`
+    // mentions should resolve to this contact. Skip for File-kind
+    // nodes (regular notes have no resolver semantics tied to the
+    // word "aliases"); for contacts, lowercase + space-join so the
+    // picker / mention resolver can run a single LIKE against the
+    // column, mirroring the `emails` pattern.
+    let aliases = if matches!(node_kind, crate::graph::NodeKind::Contact) {
+        let list = fm
+            .data
+            .get("aliases")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.trim().to_ascii_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if list.is_empty() {
+            None
+        } else {
+            Some(list.join(" "))
+        }
+    } else {
+        None
+    };
+    (title, node_kind, headings, edges, emails, aliases)
 }
 
 /// Whether `path` lies under the `prefix` directory. POSIX
@@ -3788,6 +3826,7 @@ mod tests {
                 edges: &[],
                 headings: &[],
                 emails: None,
+                aliases: None,
             };
             graph.stage_file(&fg).unwrap();
         }
@@ -3825,6 +3864,7 @@ mod tests {
             edges: &[],
             headings: &[],
             emails: None,
+            aliases: None,
         };
         drive.graph().unwrap().stage_file(&fg).unwrap();
         assert_eq!(

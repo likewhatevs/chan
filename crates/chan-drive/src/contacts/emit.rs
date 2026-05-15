@@ -3,11 +3,12 @@
 // On-disk shape (slim version, post 2026-05-10):
 //
 //   ---
+//   aliases: [jq, jdoe]
 //   chan:
 //     kind: contact
 //     provider: google
 //     imported_at: 2026-05-10T12:34:56Z
-//     frontmatter_version: 1
+//     frontmatter_version: 2
 //   ---
 //
 //   # Jane Q. Doe
@@ -19,11 +20,14 @@
 //
 //   Notes from the CSV go here.
 //
-// Frontmatter holds only the chan-internal classifier (so the graph
+// Frontmatter holds the chan-internal classifier (so the graph
 // builder + editor `@` picker can spot a contact note without
-// re-parsing the body); the contact's actual data lives as bullet
-// items in the body so a chan editor with no frontmatter renderer
-// shows a friendly note rather than 12 lines of YAML.
+// re-parsing the body) plus an optional top-level `aliases:` array
+// (Obsidian-compatible) that names extra strings `@@<alias>`
+// mentions should resolve to this contact. The contact's actual
+// data lives as bullet items in the body so a chan editor with no
+// frontmatter renderer shows a friendly note rather than 12 lines
+// of YAML.
 //
 // We hand-format the YAML rather than pulling a serializer dep.
 // The chan block is small and fixed; adding `serde_yaml` would
@@ -41,11 +45,12 @@ pub struct EmitContext {
     pub imported_at: DateTime<Utc>,
 }
 
-const FRONTMATTER_VERSION: u32 = 1;
+const FRONTMATTER_VERSION: u32 = 2;
 
 pub fn render_markdown(c: &Contact, ctx: &EmitContext) -> String {
     let mut s = String::with_capacity(512);
     s.push_str("---\n");
+    write_aliases_top(&mut s, c);
     write_chan_block(&mut s, c, ctx);
     s.push_str("---\n\n");
     s.push_str("# ");
@@ -87,6 +92,25 @@ fn write_notes(s: &mut String, notes: &str) {
         s.push_str(body);
         s.push('\n');
     }
+}
+
+/// Write the Obsidian-style top-level `aliases:` array. Each entry
+/// is rendered through `yaml_string` so an alias that happens to
+/// contain a comma / quote / colon round-trips without breaking the
+/// flow-list shape. Empty lists are skipped so untouched (non-
+/// aliased) contacts keep their pre-phase-5 frontmatter shape.
+fn write_aliases_top(s: &mut String, c: &Contact) {
+    if c.aliases.is_empty() {
+        return;
+    }
+    s.push_str("aliases: [");
+    for (i, alias) in c.aliases.iter().enumerate() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(&yaml_string(alias));
+    }
+    s.push_str("]\n");
 }
 
 fn write_chan_block(s: &mut String, c: &Contact, ctx: &EmitContext) {
@@ -264,6 +288,7 @@ mod tests {
             }],
             notes: Some("Met at FOSDEM 2026.".into()),
             labels: vec!["Friends".into(), "Work".into()],
+            aliases: vec![],
         };
         let md = render_markdown(&c, &ctx());
 
@@ -292,12 +317,57 @@ mod tests {
         );
         assert_eq!(
             chan.get("frontmatter_version").and_then(|v| v.as_u64()),
-            Some(1)
+            Some(2)
         );
         assert_eq!(
             chan.get("remote_id").and_then(|v| v.as_str()),
             Some("people/c1")
         );
+        // No aliases provided -> the top-level aliases array is
+        // omitted so non-aliased contacts keep the pre-phase-5
+        // frontmatter shape on disk.
+        assert!(fm.data.get("aliases").is_none());
+    }
+
+    #[test]
+    fn aliases_emit_as_top_level_yaml_array_and_parse_back() {
+        let c = Contact {
+            display_name: "Alice Smith".into(),
+            aliases: vec!["ali".into(), "alice".into(), "a".into()],
+            ..Default::default()
+        };
+        let md = render_markdown(&c, &ctx());
+        // Top-level aliases line lives above the chan: block so it
+        // round-trips with the Obsidian convention (other tools
+        // expect this shape at the root of frontmatter, not nested
+        // under a custom namespace).
+        assert!(md.contains("aliases: ["));
+        let fm = crate::markdown::parse_frontmatter(&md);
+        let aliases = fm.data.get("aliases").expect("aliases array");
+        let arr = aliases.as_array().expect("array shape");
+        let names: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
+        assert_eq!(names, vec!["ali", "alice", "a"]);
+    }
+
+    #[test]
+    fn aliases_with_special_chars_are_yaml_quoted() {
+        let c = Contact {
+            display_name: "Bob".into(),
+            // A comma in the alias would otherwise split the flow
+            // array; yaml_string wraps the value so the parser sees
+            // a single element.
+            aliases: vec!["bob, jr".into()],
+            ..Default::default()
+        };
+        let md = render_markdown(&c, &ctx());
+        let fm = crate::markdown::parse_frontmatter(&md);
+        let arr = fm
+            .data
+            .get("aliases")
+            .and_then(|v| v.as_array())
+            .expect("array");
+        let names: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
+        assert_eq!(names, vec!["bob, jr"]);
     }
 
     #[test]

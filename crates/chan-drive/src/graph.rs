@@ -114,6 +114,14 @@ pub struct ContactNode {
     /// match on the result.
     #[serde(default)]
     pub emails: Vec<String>,
+    /// Alternate names declared in the contact note's top-level
+    /// `aliases:` frontmatter array. Resolves `@@<alias>` mentions
+    /// to this contact at graph query time (see
+    /// chan-server's mention_to_contact map). Empty for contacts
+    /// without an aliases declaration and for contacts indexed
+    /// before the v6 schema bump until the next index pass.
+    #[serde(default)]
+    pub aliases: Vec<String>,
 }
 
 /// Edge kind. Mirrors the wiki-link / mention / tag distinction
@@ -190,6 +198,15 @@ pub struct FileGraph<'a> {
     /// of joining a side table on every keystroke. Email shape is
     /// narrow enough (no spaces) that the join is unambiguous.
     pub emails: Option<&'a str>,
+    /// Pre-joined, space-separated lowercased alias list (top-level
+    /// frontmatter `aliases:` array). Same storage shape as
+    /// `emails`: a single column, space-separated, so the
+    /// mention-resolution path can run a substring scan without a
+    /// join. `None` for File-kind nodes and for contacts without an
+    /// aliases declaration. Aliases without spaces are required for
+    /// the join to be unambiguous; the indexer normalizes input by
+    /// trimming + lowercasing.
+    pub aliases: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -520,6 +537,27 @@ impl GraphView {
             tx.execute_batch("PRAGMA user_version = 5;")?;
             tx.commit()?;
         }
+        if v < 6 {
+            // v6: persist top-level `aliases:` frontmatter on nodes
+            // / staging_nodes so chan-server's mention resolver can
+            // map `@@<alias>` to a contact file without re-parsing
+            // every contact's frontmatter on each graph query. NULL
+            // on legacy rows; reconcile / index_file backfill them
+            // by re-parsing the file on the next ingest pass.
+            //
+            // Same idempotent-ALTER pattern as v3 / v5: crash before
+            // commit leaves user_version = 5 with the ALTERs safe
+            // to re-run on the next open.
+            let tx = conn.unchecked_transaction()?;
+            if !Self::column_exists(&tx, "nodes", "aliases")? {
+                tx.execute_batch("ALTER TABLE nodes ADD COLUMN aliases TEXT;")?;
+            }
+            if !Self::column_exists(&tx, "staging_nodes", "aliases")? {
+                tx.execute_batch("ALTER TABLE staging_nodes ADD COLUMN aliases TEXT;")?;
+            }
+            tx.execute_batch("PRAGMA user_version = 6;")?;
+            tx.commit()?;
+        }
         Ok(())
     }
 
@@ -629,8 +667,10 @@ impl GraphView {
     /// the pre-joined, space-separated lowercased address list for
     /// contact-kind files (`None` for File-kind, and `None` for
     /// contacts with no extractable address); see `FileGraph.emails`.
+    /// `aliases` follows the same shape for the top-level
+    /// `aliases:` frontmatter array (phase 5 mention resolution).
     // Folding these into a struct would churn ~20 call sites (incl.
-    // tests) for a style win; the function stays at 8 params.
+    // tests) for a style win; the function stays at 9 params.
     #[allow(clippy::too_many_arguments)]
     pub fn replace_file(
         &self,
@@ -642,6 +682,7 @@ impl GraphView {
         outgoing: &[Edge],
         headings: &[markdown::Heading],
         emails: Option<&str>,
+        aliases: Option<&str>,
     ) -> Result<()> {
         tracing::debug!(
             rel,
@@ -657,8 +698,8 @@ impl GraphView {
             .and_then(|s| s.to_str())
             .unwrap_or(rel);
         tx.execute(
-            "INSERT OR REPLACE INTO nodes(rel_path, kind, mtime, title, basename, emails, size) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO nodes(rel_path, kind, mtime, title, basename, emails, size, aliases) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 rel,
                 node_kind.as_str(),
@@ -666,7 +707,8 @@ impl GraphView {
                 title,
                 basename,
                 emails,
-                size
+                size,
+                aliases,
             ],
         )?;
         tx.execute("DELETE FROM edges WHERE src = ?", params![rel])?;
@@ -779,8 +821,8 @@ impl GraphView {
             .and_then(|s| s.to_str())
             .unwrap_or(fg.rel);
         tx.execute(
-            "INSERT OR REPLACE INTO staging_nodes(rel_path, kind, mtime, title, basename, emails, size) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO staging_nodes(rel_path, kind, mtime, title, basename, emails, size, aliases) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 fg.rel,
                 fg.node_kind.as_str(),
@@ -789,6 +831,7 @@ impl GraphView {
                 basename,
                 fg.emails,
                 fg.size,
+                fg.aliases,
             ],
         )?;
         // Re-stage clears previous edges + headings for this file
@@ -894,8 +937,8 @@ impl GraphView {
         tx.execute("DELETE FROM headings", [])?;
         tx.execute("DELETE FROM nodes", [])?;
         tx.execute(
-            "INSERT INTO nodes(rel_path, kind, mtime, title, basename, emails, size) \
-             SELECT rel_path, kind, mtime, title, basename, emails, size FROM staging_nodes",
+            "INSERT INTO nodes(rel_path, kind, mtime, title, basename, emails, size, aliases) \
+             SELECT rel_path, kind, mtime, title, basename, emails, size, aliases FROM staging_nodes",
             [],
         )?;
         tx.execute(
@@ -1101,11 +1144,12 @@ impl GraphView {
             // `example.com`) without a side-table join.
             let pattern = format!("%{}%", like_escape(q));
             let mut stmt = conn.prepare_cached(
-                "SELECT rel_path, basename, title, emails FROM nodes \
+                "SELECT rel_path, basename, title, emails, aliases FROM nodes \
                  WHERE kind = 'contact' \
                    AND (title LIKE ?1 ESCAPE '\\' COLLATE NOCASE \
                         OR basename LIKE ?1 ESCAPE '\\' COLLATE NOCASE \
-                        OR emails LIKE ?1 ESCAPE '\\' COLLATE NOCASE) \
+                        OR emails LIKE ?1 ESCAPE '\\' COLLATE NOCASE \
+                        OR aliases LIKE ?1 ESCAPE '\\' COLLATE NOCASE) \
                  ORDER BY COALESCE(title, basename, rel_path) COLLATE NOCASE \
                  LIMIT ?2",
             )?;
@@ -1117,7 +1161,7 @@ impl GraphView {
             Ok(out)
         } else {
             let mut stmt = conn.prepare_cached(
-                "SELECT rel_path, basename, title, emails FROM nodes \
+                "SELECT rel_path, basename, title, emails, aliases FROM nodes \
                  WHERE kind = 'contact' \
                  ORDER BY COALESCE(title, basename, rel_path) COLLATE NOCASE \
                  LIMIT ?1",
@@ -1368,6 +1412,7 @@ fn row_to_contact(row: &rusqlite::Row<'_>) -> rusqlite::Result<ContactNode> {
     let basename: Option<String> = row.get(1)?;
     let title: Option<String> = row.get(2)?;
     let emails_raw: Option<String> = row.get(3)?;
+    let aliases_raw: Option<String> = row.get(4)?;
     let basename = basename.unwrap_or_else(|| {
         std::path::Path::new(&rel_path)
             .file_name()
@@ -1375,20 +1420,27 @@ fn row_to_contact(row: &rusqlite::Row<'_>) -> rusqlite::Result<ContactNode> {
             .unwrap_or(&rel_path)
             .to_string()
     });
-    let emails = emails_raw
-        .map(|s| {
-            s.split_whitespace()
-                .filter(|t| !t.is_empty())
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
+    let emails = split_space_joined(emails_raw.as_deref());
+    let aliases = split_space_joined(aliases_raw.as_deref());
     Ok(ContactNode {
         rel_path,
         basename,
         title,
         emails,
+        aliases,
     })
+}
+
+/// Split a "space-joined" column (emails / aliases) back into a
+/// Vec<String>. Empty / NULL returns an empty vec.
+fn split_space_joined(raw: Option<&str>) -> Vec<String> {
+    raw.map(|s| {
+        s.split_whitespace()
+            .filter(|t| !t.is_empty())
+            .map(str::to_owned)
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 /// Escape SQL LIKE wildcards (`%`, `_`) and the escape character
@@ -1420,7 +1472,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let db = tmp.path().join("graph.sqlite");
         let g = GraphView::open(&db).unwrap();
-        assert_eq!(count(&g, "PRAGMA user_version"), 5);
+        assert_eq!(count(&g, "PRAGMA user_version"), 6);
     }
 
     #[test]
@@ -1466,6 +1518,7 @@ mod tests {
             &[],
             &[],
             None,
+            None,
         )
         .unwrap();
 
@@ -1502,6 +1555,7 @@ mod tests {
                         &[],
                         &[],
                         None,
+                        None,
                     )
                     .expect("write");
                 }
@@ -1526,6 +1580,7 @@ mod tests {
             NodeKind::File,
             &[],
             &[],
+            None,
             None,
         )
         .unwrap();
@@ -1555,6 +1610,7 @@ mod tests {
                 edges: &edges,
                 headings: &headings,
                 emails: None,
+                aliases: None,
             },
             FileGraph {
                 rel: "b.md",
@@ -1565,6 +1621,7 @@ mod tests {
                 edges: &[],
                 headings: &[],
                 emails: None,
+                aliases: None,
             },
         ];
         g.replace_all(&entries).unwrap();
@@ -1592,6 +1649,7 @@ mod tests {
             &[],
             &[],
             None,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1613,8 +1671,18 @@ mod tests {
 
     fn populate(g: &GraphView, files: &[(&str, Option<&str>, Option<i64>)]) {
         for (rel, title, mtime) in files {
-            g.replace_file(rel, *title, *mtime, None, NodeKind::File, &[], &[], None)
-                .unwrap();
+            g.replace_file(
+                rel,
+                *title,
+                *mtime,
+                None,
+                NodeKind::File,
+                &[],
+                &[],
+                None,
+                None,
+            )
+            .unwrap();
         }
     }
 
@@ -1631,6 +1699,7 @@ mod tests {
             &[],
             &[],
             Some("alice@example.com"),
+            None,
         )
         .unwrap();
         g.replace_file(
@@ -1641,6 +1710,7 @@ mod tests {
             NodeKind::File,
             &[],
             &[],
+            None,
             None,
         )
         .unwrap();
@@ -1683,6 +1753,7 @@ mod tests {
             &[],
             &[],
             Some("alice@example.com alice.work@example.com"),
+            None,
         )
         .unwrap();
         g.replace_file(
@@ -1694,6 +1765,7 @@ mod tests {
             &[],
             &[],
             Some("bob@example.org"),
+            None,
         )
         .unwrap();
         g.replace_file(
@@ -1705,6 +1777,7 @@ mod tests {
             &[],
             &[],
             None,
+            None,
         )
         .unwrap();
         g.replace_file(
@@ -1715,6 +1788,7 @@ mod tests {
             NodeKind::File,
             &[],
             &[],
+            None,
             None,
         )
         .unwrap();
@@ -1774,6 +1848,7 @@ mod tests {
             &[],
             &[],
             None,
+            None,
         )
         .unwrap();
         g.replace_file(
@@ -1784,6 +1859,7 @@ mod tests {
             NodeKind::Contact,
             &[],
             &[],
+            None,
             None,
         )
         .unwrap();
@@ -1865,6 +1941,7 @@ mod tests {
             &[],
             &headings,
             None,
+            None,
         )
         .unwrap();
         let hits = g.link_targets("variant", 10).unwrap();
@@ -1922,6 +1999,7 @@ mod tests {
             NodeKind::File,
             &[],
             &hs,
+            None,
             None,
         )
         .unwrap();
@@ -1989,7 +2067,7 @@ mod tests {
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, 6);
     }
 
     #[test]
@@ -2054,7 +2132,7 @@ mod tests {
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, 6);
     }
 
     #[test]
@@ -2104,7 +2182,7 @@ mod tests {
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, 6);
         let cols: Vec<String> = {
             let mut stmt = conn.prepare("PRAGMA table_info(nodes)").unwrap();
             stmt.query_map([], |r| r.get::<_, String>(1))
@@ -2126,6 +2204,7 @@ mod tests {
             &[],
             &[],
             Some("legacy@example.com"),
+            None,
         )
         .unwrap();
         assert!(!g.contacts_need_email_backfill().unwrap());
@@ -2163,6 +2242,7 @@ mod tests {
                 edges,
                 headings: &[],
                 emails: None,
+                aliases: None,
             };
             g.stage_file(&fg).unwrap();
         }
@@ -2195,6 +2275,7 @@ mod tests {
                 edges: &[],
                 headings: &[],
                 emails: None,
+                aliases: None,
             };
             g.stage_file(&fg).unwrap();
         }
@@ -2227,6 +2308,7 @@ mod tests {
             &[],
             &[],
             None,
+            None,
         )
         .unwrap();
         // Stage a different file. While we haven't swapped yet,
@@ -2240,6 +2322,7 @@ mod tests {
             edges: &[],
             headings: &[],
             emails: None,
+            aliases: None,
         };
         g.stage_file(&fg).unwrap();
         assert_eq!(g.files().unwrap(), vec!["old.md".to_string()]);

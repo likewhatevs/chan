@@ -52,6 +52,15 @@ pub struct Contact {
     pub notes: Option<String>,
     /// "Group Membership" in Google CSV; arbitrary strings.
     pub labels: Vec<String>,
+    /// Alternate names that should resolve `@@<alias>` mentions to
+    /// this contact. Lands in the contact note's frontmatter as a
+    /// top-level `aliases:` array (Obsidian convention) so cross-tool
+    /// interop stays cheap, and the indexer mirrors them into the
+    /// graph node row alongside `emails` for the picker + the
+    /// chan-server mention resolver. Empty list = "only the filename
+    /// stem resolves to this contact" (the pre-phase-5 default).
+    #[serde(default)]
+    pub aliases: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

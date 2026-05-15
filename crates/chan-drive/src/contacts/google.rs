@@ -142,6 +142,9 @@ pub fn parse_google_csv<R: Read>(rdr: R) -> Result<Vec<Contact>> {
             organizations,
             notes,
             labels,
+            // Google's CSV export does not carry alternate names;
+            // users add aliases by editing the imported note.
+            aliases: vec![],
         });
     }
 
