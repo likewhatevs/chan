@@ -474,7 +474,7 @@ Server-specific notes:
   `PublicConfig::rate_limit_per_second` (`0` disables) plus
   `rate_limit_burst` (default 32) wire a `tower_governor` layer
   keyed on `PeerIpKeyExtractor` (raw `ConnectInfo`, NOT
-  X-Forwarded-For — see the header-trust notes above). Above the
+  X-Forwarded-For; see the header-trust notes above). Above the
   burst, requests return 429 Too Many Requests. When the public
   listener sits behind nginx and the visible peer is always the
   proxy, the rate-limit applies to one tenant (nginx itself), so
