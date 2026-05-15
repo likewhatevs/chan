@@ -531,6 +531,7 @@ fn mcp_safe_message(err: &LlmError) -> String {
         LlmError::Io(_) => "i/o error".to_string(),
         LlmError::Tool(msg) => format!("tool error: {msg}"),
         LlmError::BackendError { status, .. } => format!("backend error: {status}"),
+        LlmError::CliNotFound { .. } => "agent CLI not found".to_string(),
         LlmError::ConfigDecode(_) => "config decode error".to_string(),
         LlmError::ConfigEncode(_) => "config encode error".to_string(),
         LlmError::Mcp(_) => "mcp error".to_string(),

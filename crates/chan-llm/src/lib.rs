@@ -49,6 +49,7 @@
 #![forbid(unsafe_code)]
 
 pub mod backends;
+pub mod cli;
 pub mod config;
 pub mod error;
 #[cfg(feature = "mcp")]
@@ -58,6 +59,10 @@ pub mod session;
 pub mod tools;
 
 pub use backends::BackendKind;
+pub use cli::{
+    detect_all, detect_backend_cli, CliDetection, CliRejectReason, CliStatus, CliWarning,
+    CliWarningReason,
+};
 pub use config::LlmConfig;
 pub use error::LlmError;
 pub use session::{

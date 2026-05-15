@@ -95,6 +95,7 @@
 //!     it exits after one backend turn.
 
 use std::collections::{HashMap, VecDeque};
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -183,9 +184,14 @@ pub struct ClaudeCliBackend {
     /// `CLAUDE_` prefix match. Resolved from
     /// `LlmConfig.hardened_subprocess_env`.
     hardened_env: bool,
+    path_env: Option<OsString>,
 }
 
 impl ClaudeCliBackend {
+    // Each parameter maps to a distinct LlmConfig field; collapsing
+    // them into a struct would just shuffle the names around without
+    // making the call sites clearer.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         cmd: Vec<String>,
         extra_args: Vec<String>,
@@ -194,6 +200,7 @@ impl ClaudeCliBackend {
         mcp: Option<McpWiring>,
         inactivity_timeout: Duration,
         hardened_env: bool,
+        path_env: Option<OsString>,
     ) -> Self {
         Self {
             cmd,
@@ -203,6 +210,7 @@ impl ClaudeCliBackend {
             mcp,
             inactivity_timeout,
             hardened_env,
+            path_env,
         }
     }
 }
@@ -233,6 +241,9 @@ impl Backend for ClaudeCliBackend {
         // `ANTHROPIC_BEDROCK_BASE_URL` / `ANTHROPIC_CUSTOM_HEADERS`
         // could come from a tainted parent env.
         sanitize_env_for_claude_cli(&mut command, self.hardened_env);
+        if let Some(path) = self.path_env.as_ref() {
+            command.env("PATH", path);
+        }
         // Kill the spawned claude on Drop. Every normal exit path
         // already calls `child.kill().await` explicitly, but a panic
         // inside this async fn would otherwise leave the subprocess
@@ -983,6 +994,7 @@ mod tests {
             None,
             Duration::from_secs(60),
             false,
+            None,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1061,6 +1073,7 @@ mod tests {
             None,
             Duration::from_secs(60),
             false,
+            None,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1130,6 +1143,7 @@ mod tests {
             None,
             Duration::from_secs(60),
             false,
+            None,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1230,6 +1244,7 @@ mod tests {
             None,
             Duration::from_secs(60),
             false,
+            None,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1294,6 +1309,7 @@ mod tests {
             None,
             Duration::from_secs(60),
             false,
+            None,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1351,6 +1367,7 @@ mod tests {
             None,
             Duration::from_secs(60),
             false,
+            None,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1409,6 +1426,7 @@ mod tests {
             None,
             Duration::from_secs(60),
             false,
+            None,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1453,6 +1471,7 @@ mod tests {
             None,
             Duration::from_secs(60),
             false,
+            None,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1504,6 +1523,7 @@ mod tests {
             None,
             Duration::from_secs(60),
             false,
+            None,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let _ = backend
@@ -1564,6 +1584,7 @@ mod tests {
             None,
             Duration::from_secs(60),
             false,
+            None,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1614,6 +1635,7 @@ mod tests {
             None,
             Duration::from_millis(200),
             false,
+            None,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let start = std::time::Instant::now();
@@ -1666,6 +1688,7 @@ mod tests {
             None,
             Duration::from_secs(60),
             false,
+            None,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend

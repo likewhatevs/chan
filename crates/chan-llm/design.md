@@ -152,12 +152,43 @@ same dispatch.
   that mirrors `chan_drive::fs_ops::atomic_write` (tempfile in
   the same dir, fsync, rename, fsync parent).
 - Fields: `backend`, `models`, `auto_apply_writes`,
-  `mcp_image_max_bytes`,
+  `mcp_image_max_bytes`, `cli_path`,
   `claude_cli`, `gemini_cli`, `codex_cli`,
   `stream_inactivity_timeout_secs`, `max_tool_iterations`,
   `hardened_subprocess_env`. Empty sub-tables and `None` /
   default-false scalars are skipped on serialization so a fresh
   install doesn't grow noise.
+- `cli_path` is an optional host-provided PATH vector. When unset,
+  chan-llm probes the process `PATH`; either way it appends
+  conventional CLI install locations for Linux, macOS, and Windows
+  before resolving a backend command.
+- `cli_allow_risky_mounts` is the lower-layer force switch for
+  remote/FUSE mount refusal. The default is false. When true,
+  discovery may accept a risky mount but returns a warning so hosts
+  can tell the user exactly what was forced.
+
+CLI discovery (`cli.rs`)
+
+- `detect_backend_cli(kind, &config)` and `detect_all(&config)` let
+  hosts preflight agent availability for settings UIs and startup
+  diagnostics.
+- Discovery resolves only argv[0], preserving configured wrapper
+  arguments like `["nix", "shell", "-c", "claude"]`.
+- Relative PATH entries are ignored. Candidate executables are
+  canonicalized before spawn, must be regular executable files, and
+  are rejected on Unix when the file is group/world-writable or the
+  containing directory is world-writable.
+- Detection returns `CliStatus`: present, not found, or rejected with
+  a `CliRejectReason` and message. A matching executable earlier in
+  PATH that fails validation is rejected rather than skipped in favor
+  of a later candidate, preserving PATH semantics and giving the host
+  a concrete refusal to surface.
+- On Linux, mount filtering parses `/proc/self/mountinfo` and
+  rejects risky filesystem types (`fuse.*`, `nfs*`, `cifs`/`smb*`,
+  `sshfs`) unless `cli_allow_risky_mounts` is set.
+- `backends::build` uses the same resolver and returns
+  `LlmError::CliNotFound` instead of attempting a spawn when the CLI
+  is absent.
 
 Subprocess env sanitization (`backends/subprocess_env.rs`)
 

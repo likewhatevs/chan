@@ -10,6 +10,7 @@
 //   - which model per backend
 //   - the auto_apply_writes flag (whether the assistant's write
 //     proposals hit disk without a per-call confirmation)
+//   - optional PATH override used to find subprocess CLIs
 //   - subprocess backend launch settings
 //
 // Editor preferences (font, theme, keyboard shortcuts) are NOT here.
@@ -45,6 +46,21 @@ pub struct LlmConfig {
     /// default model when unset.
     #[serde(default, skip_serializing_if = "Models::is_empty")]
     pub models: Models,
+    /// Optional PATH entries used to find agent CLI binaries. When
+    /// unset, chan-llm searches the process `PATH`; in both cases it
+    /// then appends conventional install directories for Linux,
+    /// macOS, and Windows. Hosts like `chan` can populate this from
+    /// their own settings instead of mutating the process env.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cli_path: Option<Vec<PathBuf>>,
+    /// Allow CLI discovery to use executables located on risky
+    /// remote/FUSE mount types. Default false: such candidates are
+    /// rejected with a structured reason so hosts can tell the user
+    /// exactly what happened. Upper layers may expose a `--force`
+    /// or equivalent by setting this to true; discovery still returns
+    /// a warning on the detection result.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cli_allow_risky_mounts: bool,
     /// When true, the assistant's `write_file` tool calls go to disk
     /// without a per-call confirmation. When false, the consumer
     /// (web frontend, native shell) must surface a confirmation UI
@@ -407,6 +423,8 @@ mod tests {
                 claude_cli: true,
                 ..Default::default()
             },
+            cli_path: None,
+            cli_allow_risky_mounts: false,
             models: Models {
                 claude_cli: Some("opus".into()),
                 ..Default::default()
@@ -496,6 +514,43 @@ mod tests {
         LlmConfig::default().save_to(&p).unwrap();
         let raw = std::fs::read_to_string(&p).unwrap();
         assert!(!raw.contains("max_tool_iterations"), "got: {raw}");
+    }
+
+    #[test]
+    fn cli_path_round_trips() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("llm.toml");
+        let cfg = LlmConfig {
+            cli_path: Some(vec![PathBuf::from("/opt/chan/bin"), PathBuf::from("/x")]),
+            ..Default::default()
+        };
+        cfg.save_to(&p).unwrap();
+        let loaded = LlmConfig::load_from(&p).unwrap();
+        assert_eq!(loaded.cli_path, cfg.cli_path);
+    }
+
+    #[test]
+    fn unset_cli_path_skipped_in_serialized_output() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("llm.toml");
+        LlmConfig::default().save_to(&p).unwrap();
+        let raw = std::fs::read_to_string(&p).unwrap();
+        assert!(!raw.contains("cli_path"), "got: {raw}");
+    }
+
+    #[test]
+    fn cli_allow_risky_mounts_round_trips_when_set() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("llm.toml");
+        let cfg = LlmConfig {
+            cli_allow_risky_mounts: true,
+            ..Default::default()
+        };
+        cfg.save_to(&p).unwrap();
+        let raw = std::fs::read_to_string(&p).unwrap();
+        assert!(raw.contains("cli_allow_risky_mounts"), "got: {raw}");
+        let loaded = LlmConfig::load_from(&p).unwrap();
+        assert!(loaded.cli_allow_risky_mounts);
     }
 
     #[test]

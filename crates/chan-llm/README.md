@@ -37,9 +37,17 @@ CodexCli    ready    drives local `codex exec --json`; v2 injects
 
 ```text
 LlmConfig            backend, models, auto_apply_writes,
-                     mcp_image_max_bytes,
+                     mcp_image_max_bytes, cli_path,
                      claude_cli, gemini_cli, codex_cli.
                      load() / save() at chan-drive's config dir.
+
+detect_backend_cli   Probe one backend's CLI command.
+detect_all           Probe every supported CLI backend.
+CliDetection         { backend, command, path, status,
+                       warnings, searched }.
+                     Resolved commands are canonicalized before
+                     spawn and unsafe relative/writable paths are
+                     rejected.
 
 StandardTool         ReadFile | WriteFile | ListFiles | SearchContent.
 ToolContext          { drive: Arc<Drive>, auto_apply_writes: bool }

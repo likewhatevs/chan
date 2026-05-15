@@ -13,6 +13,7 @@
 //! preserves the user's existing Codex auth store.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -60,9 +61,14 @@ pub struct CodexCliBackend {
     /// instead of the loose `CODEX_` / `OPENAI_` prefix match.
     /// Resolved from `LlmConfig.hardened_subprocess_env`.
     hardened_env: bool,
+    path_env: Option<OsString>,
 }
 
 impl CodexCliBackend {
+    // Each parameter maps to a distinct LlmConfig field; collapsing
+    // them into a struct would just shuffle the names around without
+    // making the call sites clearer.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         cmd: Vec<String>,
         extra_args: Vec<String>,
@@ -71,6 +77,7 @@ impl CodexCliBackend {
         mcp: Option<McpWiring>,
         inactivity_timeout: Duration,
         hardened_env: bool,
+        path_env: Option<OsString>,
     ) -> Self {
         Self {
             cmd,
@@ -80,6 +87,7 @@ impl CodexCliBackend {
             mcp,
             inactivity_timeout,
             hardened_env,
+            path_env,
         }
     }
 }
@@ -108,6 +116,9 @@ impl Backend for CodexCliBackend {
         // mode drops OPENAI_BASE_URL and similar redirect-style vars
         // that an untrusted parent env could weaponize.
         sanitize_env_for_codex_cli(&mut command, self.hardened_env);
+        if let Some(path) = self.path_env.as_ref() {
+            command.env("PATH", path);
+        }
         command.kill_on_drop(true);
         command
             .args(leading)
@@ -667,6 +678,7 @@ mod tests {
             None,
             Duration::from_secs(60),
             false,
+            None,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -707,6 +719,7 @@ mod tests {
             None,
             Duration::from_secs(60),
             false,
+            None,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend

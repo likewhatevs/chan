@@ -676,7 +676,19 @@ impl LlmSession {
         let backend = match backends::build(kind, &self.config, self.drive.root()) {
             Ok(b) => b,
             Err(e) => {
-                listener.on_error(e.to_string());
+                match e {
+                    LlmError::CliNotFound {
+                        backend,
+                        command,
+                        reason,
+                    } => {
+                        listener.on_error_kind(LlmEventError::SpawnFailed {
+                            backend,
+                            message: format!("CLI unavailable: {command}: {reason}"),
+                        });
+                    }
+                    other => listener.on_error(other.to_string()),
+                }
                 listener.on_done(StopReason::Error);
                 return cancel;
             }
@@ -1044,6 +1056,7 @@ mod tests {
 
     struct Collector(Mutex<Vec<Event>>);
 
+    #[derive(Clone)]
     #[allow(dead_code)]
     enum Event {
         Delta(String),
@@ -1098,6 +1111,57 @@ mod tests {
         (cfg, drive_dir, drive)
     }
 
+    fn fake_agent_cli(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        let path = dir.join(if cfg!(windows) {
+            format!("{name}.cmd")
+        } else {
+            name.to_string()
+        });
+        let script = if cfg!(windows) {
+            format!("@echo off\r\n{body}\r\n")
+        } else {
+            let lines = body
+                .lines()
+                .map(|line| format!("printf '%s\\n' '{line}'\n"))
+                .collect::<String>();
+            format!("#!/bin/sh\n{lines}")
+        };
+        std::fs::write(&path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        path
+    }
+
+    fn cli_config(kind: backends::BackendKind, cli_path: std::path::PathBuf) -> LlmConfig {
+        let mut config = LlmConfig {
+            backend: Some(kind),
+            cli_path: Some(vec![cli_path]),
+            ..Default::default()
+        };
+        config.enabled.set_for_backend(kind, true);
+        config
+    }
+
+    fn wait_for_done(collector: &Collector) -> Vec<Event> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            {
+                let events = collector.0.lock().unwrap();
+                if events.iter().any(|e| matches!(e, Event::Done(_))) {
+                    return events.clone();
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for on_done"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     #[test]
     fn send_with_no_backend_emits_error_and_done() {
         let (_cfg, _root, drive) = fixture();
@@ -1107,6 +1171,83 @@ mod tests {
         let events = collector.0.lock().unwrap();
         assert_eq!(events.len(), 2);
         assert!(matches!(events[0], Event::Error(_)));
+        assert!(matches!(events[1], Event::Done(StopReason::Error)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn e2e_cli_path_spawn_succeeds_for_all_cli_backends() {
+        for (kind, bin, body, expected_delta) in [
+            (
+                backends::BackendKind::ClaudeCli,
+                "claude",
+                r#"{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"claude ok"}]}}
+{"type":"result","subtype":"success","result":"claude ok","is_error":false}"#,
+                "claude ok",
+            ),
+            (
+                backends::BackendKind::GeminiCli,
+                "gemini",
+                r#"{"type":"init","timestamp":"t","session_id":"s","model":"m"}
+{"type":"message","timestamp":"t","role":"assistant","content":"gemini ok","delta":true}
+{"type":"result","timestamp":"t","status":"success"}"#,
+                "gemini ok",
+            ),
+            (
+                backends::BackendKind::CodexCli,
+                "codex",
+                r#"{"method":"item/agentMessage/delta","params":{"itemId":"msg_1","delta":"codex ok"}}
+{"type":"turn.completed","turn":{"status":"completed"}}"#,
+                "codex ok",
+            ),
+        ] {
+            let (_cfg, _root, drive) = fixture();
+            let bin_dir = TempDir::new().unwrap();
+            fake_agent_cli(bin_dir.path(), bin, body);
+            let session = LlmSession::new(drive, cli_config(kind, bin_dir.path().to_path_buf()));
+            let collector = Arc::new(Collector(Mutex::new(Vec::new())));
+            session.send(vec![Message::user("hi")], collector.clone());
+            let events = wait_for_done(&collector);
+            assert!(
+                events
+                    .iter()
+                    .any(|e| matches!(e, Event::Delta(text) if text == expected_delta)),
+                "{kind:?} did not emit expected delta; events={events:?}"
+            );
+            assert!(
+                events
+                    .iter()
+                    .any(|e| matches!(e, Event::Done(StopReason::EndOfTurn))),
+                "{kind:?} did not finish successfully; events={events:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn send_with_missing_cli_emits_typed_spawn_failed() {
+        let (_cfg, _root, drive) = fixture();
+        let config = LlmConfig {
+            backend: Some(backends::BackendKind::ClaudeCli),
+            enabled: crate::config::EnabledProviders {
+                claude_cli: true,
+                ..Default::default()
+            },
+            claude_cli: crate::config::ClaudeCli {
+                cmd: Some(vec!["definitely-not-a-chan-agent-cli".into()]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let session = LlmSession::new(drive, config);
+        let collector = Arc::new(Collector(Mutex::new(Vec::new())));
+        session.send(vec![Message::user("hi")], collector.clone());
+        let events = collector.0.lock().unwrap();
+        assert!(matches!(
+            &events[0],
+            Event::ErrorKind(LlmEventError::SpawnFailed { backend, message })
+                if backend == "claude_cli" && message.contains("definitely-not-a-chan-agent-cli")
+        ));
         assert!(matches!(events[1], Event::Done(StopReason::Error)));
     }
 

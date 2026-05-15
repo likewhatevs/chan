@@ -12,6 +12,12 @@ pub enum LlmError {
     NotImplemented(String),
     #[error("no backend configured; set one in chan settings before sending")]
     BackendNotConfigured,
+    #[error("{backend} CLI unavailable: {command}: {reason}")]
+    CliNotFound {
+        backend: String,
+        command: String,
+        reason: String,
+    },
     #[error("config decode error: {0}")]
     ConfigDecode(String),
     #[error("config encode error: {0}")]

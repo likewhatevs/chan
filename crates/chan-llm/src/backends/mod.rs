@@ -62,8 +62,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use crate::cli::{command_path_env, resolve_backend_command};
 use crate::config::LlmConfig;
-use crate::error::Result;
+use crate::error::{LlmError, Result};
 use crate::session::{Message, SessionListener};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +178,26 @@ pub fn build(kind: BackendKind, config: &LlmConfig, drive_root: &Path) -> Result
         .for_backend(kind)
         .map(str::to_owned)
         .unwrap_or_else(|| kind.default_model().to_string());
+    let detected = resolve_backend_command(kind, config);
+    let command = if detected.present() {
+        detected.command
+    } else {
+        let command = detected
+            .command
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "<empty>".to_string());
+        return Err(LlmError::CliNotFound {
+            backend: kind.name().into(),
+            command,
+            reason: match detected.status {
+                crate::cli::CliStatus::NotFound => "not found in CLI search path".to_string(),
+                crate::cli::CliStatus::Rejected { message, .. } => message,
+                crate::cli::CliStatus::Present => "not found in CLI search path".to_string(),
+            },
+        });
+    };
+    let path_env = command_path_env(config);
     match kind {
         BackendKind::ClaudeCli => {
             let cli = config.claude_cli.clone();
@@ -194,13 +215,14 @@ pub fn build(kind: BackendKind, config: &LlmConfig, drive_root: &Path) -> Result
             let inactivity =
                 ndjson::resolve_inactivity_timeout(config.stream_inactivity_timeout_secs);
             Ok(Arc::new(claude_cli::ClaudeCliBackend::new(
-                cli.cmd.unwrap_or_else(claude_cli::default_cmd),
+                command,
                 cli.extra_args,
                 model,
                 drive_root.to_path_buf(),
                 mcp,
                 inactivity,
                 config.hardened_subprocess_env,
+                path_env,
             )))
         }
         BackendKind::GeminiCli => {
@@ -218,13 +240,14 @@ pub fn build(kind: BackendKind, config: &LlmConfig, drive_root: &Path) -> Result
             let inactivity =
                 ndjson::resolve_inactivity_timeout(config.stream_inactivity_timeout_secs);
             Ok(Arc::new(gemini_cli::GeminiCliBackend::new(
-                cli.cmd.unwrap_or_else(gemini_cli::default_cmd),
+                command,
                 cli.extra_args,
                 model,
                 drive_root.to_path_buf(),
                 mcp,
                 inactivity,
                 config.hardened_subprocess_env,
+                path_env,
             )))
         }
         BackendKind::CodexCli => {
@@ -236,13 +259,14 @@ pub fn build(kind: BackendKind, config: &LlmConfig, drive_root: &Path) -> Result
             let inactivity =
                 ndjson::resolve_inactivity_timeout(config.stream_inactivity_timeout_secs);
             Ok(Arc::new(codex_cli::CodexCliBackend::new(
-                cli.cmd.unwrap_or_else(codex_cli::default_cmd),
+                command,
                 cli.extra_args,
                 model,
                 drive_root.to_path_buf(),
                 mcp,
                 inactivity,
                 config.hardened_subprocess_env,
+                path_env,
             )))
         }
     }
