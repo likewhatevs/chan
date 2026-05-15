@@ -339,6 +339,28 @@ UI thread keep breathing during a reindex of a large drive.
 Progress ticks remain monotonic from the consumer's perspective
 even when worker completions land out of order.
 
+#### Embed-phase checkpointing
+
+Embedding dominates the wall-clock cost of a full rebuild on real
+drives (BM25 is a tantivy commit per chunk, cheap; embedding scales
+linearly with chunk count and waits on the model). To avoid throwing
+that work away on a crash, the per-file vector shard carries a
+`body_hash` field (sha256 over the canonical `(chunk_id, body)`
+sequence) stamped at write time. On the next `build_all`, the
+per-file path re-chunks from disk, computes a fresh `body_hash`, and
+asks the on-disk shard for its `(model, body_hash)` pair; on match
+the file skips the embed queue (the vectors are still valid because
+identical chunks under the same model deterministically produce
+identical embeddings). The count of files that took the skip path
+surfaces as `BuildSummary.embeds_reused`, so the CLI and tests can
+observe partial-rebuild resumption rather than infer it.
+
+Shard format version bumped 1 -> 2 to carry `body_hash`; v1 shards
+fail the version check in `load_all` and are dropped, so the next
+build re-embeds them (one-time upgrade cost). The `--no-default-
+features` build excludes the entire embed path including the skip
+check; the field stays in `BuildSummary` and reads zero.
+
 #### Walk filter
 
 `WalkFilter` (in `fs_ops`) is a caller-supplied list of directory
@@ -922,6 +944,17 @@ across a WebSocket / FFI bridge without an intermediate copy type.
     Dir-relative atomic writes on hot paths, closing the TOCTOU
     window between resolve and open by anchoring the open at a
     pre-validated `Dir` handle.
+  - **Stat before read in `index_file`**: `Drive::index_file_inner`
+    stats the file (capturing `(mtime, size)`) BEFORE reading its
+    content. A concurrent writer that lands in the window between
+    the two then leaves the graph holding the older stat tuple with
+    the newer content; `Drive::reconcile`'s next pass sees
+    `graph.stat != disk.stat` and re-runs the file. Read-then-stat
+    would do the opposite, stamping the post-write tuple onto the
+    pre-write content; reconcile's diff would match and the drift
+    would persist until a full reindex. The stamped tuple is thus a
+    strictly conservative lower bound on the freshness of the
+    indexed state.
 
 ### Symlink and special-file policy
 
@@ -1107,10 +1140,14 @@ Notable variants:
     staging tables for resumable reindex, v5 added a `size` column
     on `nodes` + `staging_nodes` so `Drive::reconcile` can detect
     same-mtime-different-content rewrites that a mtime-only diff
-    would miss). The migration writes the schema change and the
-    `user_version` bump in a single transaction so a crash
-    mid-migration leaves the DB at the previous version with
-    intact data.
+    would miss). Each `v < N` block wraps its schema change and the
+    `PRAGMA user_version = N` bump in a single
+    `unchecked_transaction` so a crash mid-migration leaves the DB
+    at the previous version with intact data. A `column_exists`
+    helper guards the `ALTER TABLE ADD COLUMN` calls (v3, v5) so a
+    crash before commit, which leaves the column physically added
+    but `user_version` at the prior value, is safely re-run on the
+    next open without `duplicate column name` errors.
 
   - **Reindex resumability** (v4): `rebuild_graph` parses each
     file straight into `staging_nodes` / `staging_edges` /
@@ -1134,6 +1171,16 @@ Notable variants:
     Mismatched versions wipe `bm25/` + `embeddings/` and
     rebuild on next open. Model swaps force a rebuild because
     embedding dimensions and numerical drift differ.
+
+  - **Vector shards**: each per-file file under `embeddings/`
+    carries its own `FORMAT_VERSION` (currently 2; v2 added the
+    `body_hash` checkpoint field for embed-phase skip on partial
+    rebuilds). The version is checked per shard in `load_all`; a
+    mismatch drops the shard silently and the next `build_all`
+    re-embeds the file. This is intentionally independent of the
+    schema-version wipe path: a shard-format bump should NOT
+    invalidate BM25 segments or other shards, only the shards that
+    actually need re-encoding.
 
 A schema bump in either store is user-data-safe: only chan-
 managed cache is destroyed; the user's notes are untouched.
