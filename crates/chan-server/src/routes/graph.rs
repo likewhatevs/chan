@@ -327,15 +327,32 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
     let contact_rows = drive.contacts().unwrap_or_default();
     let contact_paths: std::collections::HashSet<String> =
         contact_rows.iter().map(|c| c.rel_path.clone()).collect();
-    let mention_to_contact: std::collections::HashMap<String, String> = contact_rows
-        .iter()
-        .filter_map(|c| {
-            std::path::Path::new(&c.rel_path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .map(|stem| (stem.to_lowercase(), c.rel_path.clone()))
-        })
-        .collect();
+    // Maps the lowercased mention name (the bit after `@@`) to the
+    // resolved contact file. The basename-stem entry is the legacy
+    // resolver (pre-phase-5: `@@alice` resolves to `Contacts/alice.md`
+    // by filename match). Phase 5 layers each contact's declared
+    // aliases on top: a contact with `aliases: [ali, smith]` adds
+    // `(ali, path)` and `(smith, path)` entries so `@@ali` resolves
+    // the same way `@@alice` does. When two contacts claim the same
+    // alias the last writer wins; the picker UI surfaces aliases so
+    // users can disambiguate by editing the offending contact's
+    // frontmatter.
+    let mut mention_to_contact: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for c in &contact_rows {
+        if let Some(stem) = std::path::Path::new(&c.rel_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+        {
+            mention_to_contact.insert(stem.to_lowercase(), c.rel_path.clone());
+        }
+        for alias in &c.aliases {
+            let key = alias.trim().to_lowercase();
+            if !key.is_empty() {
+                mention_to_contact.insert(key, c.rel_path.clone());
+            }
+        }
+    }
 
     let mut file_set: std::collections::BTreeSet<&str> = files.iter().map(String::as_str).collect();
     for img in &image_files {

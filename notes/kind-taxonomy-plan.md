@@ -34,7 +34,7 @@ phase  what                                                     state
        issue #27 PDF viewer overlay + media promotion            code  
        issue #28 JSON renderer (pretty/source toggle)            code  
        issue #29 CSV/TSV table renderer (click-to-edit cells)    code  
-5      alias resolution (contact frontmatter aliases: + @@       open  
+5      alias resolution (contact frontmatter aliases: + @@       code  
        typeahead)                                                     
 ```
 
@@ -113,14 +113,50 @@ introduced it.
 
 ---
 
-## Phase 5: alias resolution (the open piece)
+## Phase 5: alias resolution (landed)
 
-Today `@@alice` resolves to `Contacts/alice.md` only by **filename
-stem match** (`crates/chan-server/src/routes/graph.rs:330` builds
-`mention_to_contact: HashMap<stem, path>`). No way to declare
-that `@@ali` should also resolve to Alice.
+Implemented per the decisions chosen below: storage option A
+(`aliases TEXT` column on `nodes` / `staging_nodes`, schema v6),
+scope option "all of 5" (backend + server + frontend picker +
+`@@` trigger).
 
-Decisions still pending (user input needed):
+What shipped:
+
+- `chan_drive::Contact` gains `aliases: Vec<String>`. The
+  contact emitter writes a top-level `aliases: [...]` array
+  above the `chan:` block when non-empty (Obsidian-compatible).
+  `FRONTMATTER_VERSION` bumps to `2`.
+- Indexer (`drive.rs::parse_for_graph`) reads
+  `fm.data.get("aliases")` for contact-kind files and
+  space-joins the lowercased list into a new `aliases` column
+  on `nodes` / `staging_nodes` (schema v6 migration).
+- `ContactNode` gains `aliases: Vec<String>`; `contacts_filtered`
+  SELECTs the new column and adds it to the `LIKE` substring
+  matcher so the picker surfaces an alias-typed query.
+- `chan-server`'s `mention_to_contact` map (`routes/graph.rs`)
+  now folds each contact's aliases into the lookup table
+  alongside the basename stem. `@@ali` resolves to
+  `Contacts/alice.md` when Alice declares `ali` in her aliases.
+- `/api/contacts` response includes `aliases: string[]`.
+- Web contact picker (`bubbles/contact.ts`) shows aliases as a
+  dim tertiary line. New `mode: "mention"` writes
+  `@@<alias-or-stem>` instead of the wikilink form.
+- New `@@` trigger (`bubbles/triggers.ts`) opens the same
+  picker; commit goes through the mention mode. Checked
+  before the legacy `@` trigger so `@@alice` doesn't
+  double-fire.
+
+Open follow-ups (not blockers):
+
+- Picker fuzzy ranking (currently substring + alphabetical).
+- Multi-word aliases would need the mention extractor to
+  consume past the space; phase 5 keeps single-word aliases
+  as the contract.
+- Resolved vs unresolved mention pill: today both render the
+  same; widget could dim unresolved (the
+  `mention_to_contact` miss case).
+
+Decisions logged when the scope was settled:
 
 ### Decision 1: scope split
 
@@ -208,13 +244,13 @@ Those are the user's parallel track and stay outside this plan.
 
 ## Resuming after this snapshot
 
-1. Run the browser parking-lot (~41 checks). File one GH issue per
-   real regression found. Close #27-#30 if their acceptance bullets
-   pass.
-2. Settle the two phase 5 decisions above (scope split + storage).
-3. Implement 5a, then 5b (if going option B), or both together
-   (option A).
-4. Phase 5 wraps the kind-taxonomy work. After that the deferred
-   followups are: PDF per-page renderer for printing/OCR (still in
-   #27's tail), JSON5 parser for `.json5` files (#28 tail), CSV
-   sort/filter/multi-cell edit (#29 tail).
+1. Run the browser parking-lot (now ~50 checks across phases 3-5).
+   File one GH issue per real regression found. Close #27-#30 if
+   their acceptance bullets pass.
+2. Address any phase 5 follow-ups (resolved-vs-unresolved mention
+   pill dimming, fuzzy ranking) only if the browser pass surfaces
+   need.
+3. Deferred backlog (separate from the kind taxonomy work): PDF
+   per-page renderer for printing/OCR (#27 tail), JSON5 parser
+   for `.json5` files (#28 tail), CSV sort/filter/multi-cell edit
+   (#29 tail).

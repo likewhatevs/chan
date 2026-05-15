@@ -215,6 +215,20 @@
         onDismiss,
       });
       activeKind = "contact";
+    } else if (spec.kind === "mention") {
+      // Same picker UI as @-contact, different commit shape: the
+      // mention bubble writes `@@<alias-or-stem>` so the graph
+      // resolver maps the sigil back to the contact file via the
+      // contact's frontmatter aliases.
+      activeBubble = openContactBubble({
+        view,
+        triggerStart: spec.triggerStart,
+        triggerEnd: spec.triggerEnd,
+        initialQuery: spec.query,
+        mode: "mention",
+        onDismiss,
+      });
+      activeKind = "mention";
     } else if (spec.kind === "image") {
       activeBubble = openImageBubble({
         view,

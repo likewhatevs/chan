@@ -323,10 +323,19 @@ export const api = {
     const qs = new URLSearchParams();
     if (q) qs.set("q", q);
     qs.set("limit", String(limit));
-    return req<Array<{ path: string; label: string; emails?: string[] }>>(
-      "GET",
-      `/api/contacts?${qs.toString()}`,
-    );
+    return req<
+      Array<{
+        path: string;
+        label: string;
+        emails?: string[];
+        /// `aliases:` array from the contact note's frontmatter
+        /// (top-level, Obsidian convention). Empty when the contact
+        /// has no alternate names. The mention `@@` trigger uses
+        /// this to commit `@@<alias>` and the resolver maps any
+        /// alias back to the contact file.
+        aliases?: string[];
+      }>
+    >("GET", `/api/contacts?${qs.toString()}`);
   },
   list: () => req<TreeEntry[]>("GET", "/api/files"),
   read: (path: string) => req<FileResponse>("GET", `/api/files/${encPath(path)}`),
@@ -441,7 +450,50 @@ export const api = {
   links: () => req<GraphSnapshot>("GET", "/api/links"),
   /// Typed graph payload powering the graph view tab.
   graph: () => req<GraphView>("GET", "/api/graph"),
+  /// Keepalive variant of putConversation. Fires the PUT with
+  /// `keepalive: true` so the request survives a page unload (the
+  /// pagehide flush registered by `installSessionFlushHook` calls this
+  /// on any pending assistant save). Synchronous (no await on response)
+  /// because the page is going away; the catch swallows errors that
+  /// arrive after teardown.
+  putConversationKeepalive: async (
+    path: string,
+    body: unknown,
+  ): Promise<void> => {
+    const key = await blobKeyForPath(path);
+    sendKeepalive(
+      `/api/assistant/conversation?path=${encodeURIComponent(key)}`,
+      body,
+    );
+  },
+  /// Same shape as putConversationKeepalive for the generic blob
+  /// endpoint (group / drive conversations).
+  putAssistantBlobKeepalive: (key: string, body: unknown): void => {
+    sendKeepalive(
+      `/api/assistant/conversation?path=${encodeURIComponent(key)}`,
+      body,
+    );
+  },
 };
+
+/// Fire a JSON PUT with `keepalive: true` so the request is allowed
+/// to outlive the document. Mirrors `flushSessionSaveOnExit`'s shape;
+/// no response handling because the page is unloading.
+function sendKeepalive(path: string, body: unknown): void {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  const tok = transportAuthToken();
+  if (tok) headers.authorization = `Bearer ${tok}`;
+  try {
+    fetch(apiPath(path), {
+      method: "PUT",
+      headers,
+      body: JSON.stringify(body),
+      keepalive: true,
+    }).catch(() => {});
+  } catch {
+    /* page is going away; nothing useful we can do */
+  }
+}
 
 /// Encode a path as a sequence of percent-encoded segments. We keep `/`
 /// raw so axum's `*path` capture works.

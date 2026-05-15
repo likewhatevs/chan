@@ -3,7 +3,7 @@
 // Keep separate from the heavier modules so the trigger / keymap
 // modules can import without dragging in DOM-heavy bubble UI code.
 
-export type BubbleKind = "wiki" | "image" | "tag" | "contact";
+export type BubbleKind = "wiki" | "image" | "tag" | "contact" | "mention";
 
 /// Snapshot of the current bubble trigger as derived from the doc
 /// state. The controller updateListener computes one of these on each

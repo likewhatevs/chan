@@ -104,6 +104,21 @@ export function computeBubbleSpec(state: EditorState): BubbleSpec | null {
       templateMode: "wrap",
     };
   }
+  // Mention: `@@word` at start-of-word. Phase 5 surface; commits
+  // `@@<alias-or-stem>` so chan-server's mention_to_contact map can
+  // resolve back to the contact file via the contact's
+  // frontmatter `aliases:` array. Checked BEFORE the single-`@`
+  // trigger so a typed `@@alice` doesn't double-fire as `@alice`
+  // (the contact wikilink form).
+  const mention = matchAtTrigger(before, "@@");
+  if (mention !== null) {
+    return {
+      kind: "mention",
+      triggerStart: line.from + mention.start,
+      triggerEnd: pos,
+      query: mention.query,
+    };
+  }
   // Contact: `@word` at start-of-word. `\b@` -- but JS \b doesn't
   // include `@`, so we anchor manually.
   const contact = matchAtTrigger(before, "@");

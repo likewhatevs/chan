@@ -1,9 +1,16 @@
-// Contact picker bubble for the `@word` trigger.
+// Contact picker bubble.
+//
+// Two trigger shapes, one bubble:
+//   - `@word`   (mode "wiki", legacy): commits `[[<path>|<label>]]`
+//     so the picked contact lands as a wiki-link pill in the source.
+//   - `@@word`  (mode "mention", phase 5): commits `@@<alias-or-stem>`
+//     so the picked contact lands as a mention pill that
+//     chan-server's mention_to_contact map resolves back to the
+//     contact file via aliases + basename stem.
 //
 // Source: api.contacts(query, limit) — debounced 60ms per keystroke.
 // req-seq pattern drops stale fetches if a newer query starts before
-// the older response arrives. On commit, replaces `@query` with
-// `[[<contact-path>]]` (a wikilink to the contact note).
+// the older response arrives.
 
 import type { EditorView } from "@codemirror/view";
 import { openBubbleShell } from "../bubble";
@@ -11,12 +18,18 @@ import { createCaretAnchor } from "./anchor";
 import type { BubbleHandle } from "./types";
 import { api } from "../../api/client";
 
+export type ContactBubbleMode = "wiki" | "mention";
+
 export interface ContactBubbleOpts {
   view: EditorView;
   triggerStart: number;
   triggerEnd: number;
   initialQuery: string;
   onDismiss: () => void;
+  /// Insertion mode. "wiki" is the legacy `@` trigger; "mention" is
+  /// the new `@@` trigger that writes `@@<alias-or-stem>` so the
+  /// graph keeps the mention sigil in the source.
+  mode?: ContactBubbleMode;
 }
 
 const PAGE_LIMIT = 8;
@@ -26,6 +39,7 @@ interface Contact {
   path: string;
   label: string;
   emails?: string[];
+  aliases?: string[];
 }
 
 interface ContactBubbleHandle extends BubbleHandle {
@@ -98,6 +112,16 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle 
         sub.textContent = c.emails[0]!;
         row.appendChild(sub);
       }
+      // Aliases ride as a tertiary line so power users see at a
+      // glance which @@<alias> shortcuts resolve to this contact.
+      // Suppressed when empty so the common (no-alias) case keeps
+      // the row compact.
+      if (c.aliases && c.aliases.length > 0) {
+        const aliasLine = document.createElement("div");
+        aliasLine.className = "md-bubble-row-sub md-bubble-row-aliases";
+        aliasLine.textContent = c.aliases.map((a) => `@@${a}`).join(" · ");
+        row.appendChild(aliasLine);
+      }
       row.addEventListener("mousedown", (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -109,14 +133,47 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle 
   }
 
   function commit(c: Contact): void {
-    // Insert a wikilink to the contact note. The wikilink atom widget
-    // (step 6c) renders this as a pill on the next decoration tick.
-    const insert = `[[${c.path}|${c.label}]]`;
+    // Two insertion shapes (see module docstring):
+    //   - wiki mode (the legacy `@` trigger): `[[<path>|<label>]]`.
+    //     The wikilink atom widget renders the pill on the next
+    //     decoration tick.
+    //   - mention mode (the `@@` trigger): `@@<alias-or-stem>`. The
+    //     mention extractor + mention_to_contact map resolve this
+    //     back to the contact file at graph query time.
+    //
+    // For mention mode we prefer the user's typed query when it
+    // exactly matches one of the contact's aliases (or the basename
+    // stem); otherwise fall back to the basename stem. That keeps
+    // the user's intent ("they typed `@@ali`") visible in the
+    // source rather than blindly rewriting to a canonical form.
+    const mode: ContactBubbleMode = opts.mode ?? "wiki";
+    const insert = mode === "mention"
+      ? `@@${pickMentionName(c, query)}`
+      : `[[${c.path}|${c.label}]]`;
     opts.view.dispatch({
       changes: { from: opts.triggerStart, to: triggerEnd, insert },
       selection: { anchor: opts.triggerStart + insert.length },
     });
     dismiss();
+  }
+
+  function pickMentionName(c: Contact, typed: string): string {
+    const lower = typed.toLowerCase();
+    const stem = basenameStem(c.path);
+    if (lower === stem) return stem;
+    if (c.aliases) {
+      for (const a of c.aliases) {
+        if (a.toLowerCase() === lower) return a;
+      }
+    }
+    return stem;
+  }
+
+  function basenameStem(path: string): string {
+    const slash = path.lastIndexOf("/");
+    const base = slash < 0 ? path : path.slice(slash + 1);
+    const dot = base.lastIndexOf(".");
+    return (dot <= 0 ? base : base.slice(0, dot)).toLowerCase();
   }
 
   function dismiss(): void {
