@@ -11,10 +11,13 @@
 //!
 //! 1. `PublicConfig::response_body_cap` truncates an oversized
 //!    upstream response.
-//! 2. `PublicConfig::rate_limit_per_second` returns 429 above the
+//! 2. Slow preview-style responses do not block a small edit-style
+//!    request over the same tunnel.
+//! 3. `PublicConfig::rate_limit_per_second` returns 429 above the
 //!    configured burst on a per-IP basis.
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,6 +32,7 @@ use chan_tunnel_server::{
     public_router_with, serve_tunnel_listener, PublicConfig, Registry, ServerError, Validated,
     Validator, TUNNEL_SCOPE,
 };
+use futures::StreamExt;
 use tokio::net::TcpListener;
 use url::Url;
 use uuid::Uuid;
@@ -98,6 +102,7 @@ async fn spawn(cfg: PublicConfig, upstream: Router) -> PublicHarness {
         dial_timeout: Duration::from_secs(5),
         events: None,
         proxy: None,
+        max_concurrent_substreams: chan_tunnel_client::DEFAULT_MAX_CONCURRENT_SUBSTREAMS,
     };
     let (_reg, yconn) = dial(&client_cfg).await.expect("dial");
     tokio::spawn(async move {
@@ -229,6 +234,69 @@ async fn response_body_cap_aborts_oversized_streamed_payload() {
             // remaining KiBs did not.
         }
     }
+}
+
+#[tokio::test]
+async fn small_request_completes_while_image_preview_stream_is_active() {
+    let image_done = Arc::new(AtomicBool::new(false));
+    let image_done_for_route = image_done.clone();
+    let upstream = Router::new()
+        .route(
+            "/image",
+            get(move || {
+                let image_done = image_done_for_route.clone();
+                async move {
+                    let stream = futures::stream::unfold(0usize, move |idx| {
+                        let image_done = image_done.clone();
+                        async move {
+                            if idx >= 64 {
+                                image_done.store(true, Ordering::SeqCst);
+                                return None;
+                            }
+                            tokio::time::sleep(Duration::from_millis(25)).await;
+                            Some((
+                                Ok::<_, std::io::Error>(bytes::Bytes::from(vec![b'i'; 1024])),
+                                idx + 1,
+                            ))
+                        }
+                    });
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "image/png")
+                        .body(Body::from_stream(stream))
+                        .unwrap()
+                }
+            }),
+        )
+        .route("/edit", get(|| async { "edit-ok" }));
+    let h = spawn(PublicConfig::default(), upstream).await;
+    let cli = client();
+
+    let image_url = format!("http://{}/alice/notes/image", h.public_addr);
+    let image_resp = cli.get(&image_url).send().await.expect("image send");
+    assert_eq!(image_resp.status(), StatusCode::OK);
+    let mut image_body = image_resp.bytes_stream();
+    let first = tokio::time::timeout(Duration::from_secs(1), image_body.next())
+        .await
+        .expect("image stream produced first chunk")
+        .expect("image stream ended early")
+        .expect("image stream chunk");
+    assert!(!first.is_empty());
+    assert!(
+        !image_done.load(Ordering::SeqCst),
+        "image stream should still be active"
+    );
+
+    let edit_url = format!("http://{}/alice/notes/edit", h.public_addr);
+    let edit_resp = tokio::time::timeout(Duration::from_secs(1), cli.get(&edit_url).send())
+        .await
+        .expect("small request should not wait behind active image stream")
+        .expect("edit send");
+    assert_eq!(edit_resp.status(), StatusCode::OK);
+    let body = edit_resp.text().await.expect("edit body");
+    assert_eq!(body, "edit-ok");
+
+    drop(image_body);
 }
 
 #[tokio::test]

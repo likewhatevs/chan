@@ -133,6 +133,14 @@ Each substream is one logical HTTP request from the public side.
 Stacking h2 here would be mux-on-mux; h1 over yamux is the right
 shape.
 
+`serve_substreams` caps concurrent handler tasks at
+`DEFAULT_MAX_CONCURRENT_SUBSTREAMS` (128). `run` uses
+`ClientConfig::max_concurrent_substreams`, and direct callers can
+use `serve_substreams_with_limit`. When the cap is full, the client
+stops polling new inbound yamux substreams until a handler exits,
+so floods backpressure at the mux instead of spawning unbounded h1
+tasks.
+
 ### Reconnect loop and backoff
 
 Exponential, doubled per attempt, capped at `max_backoff`. Reset
@@ -163,6 +171,8 @@ pub struct ClientConfig {
     pub max_backoff: Duration,
     pub dial_timeout: Duration,
     pub events: Option<mpsc::Sender<TunnelEvent>>,
+    pub proxy: Option<Url>,
+    pub max_concurrent_substreams: usize,
 }
 impl Default for ClientConfig { /* drive.chan.app/v1/tunnel */ }
 
@@ -205,6 +215,14 @@ pub async fn handshake<S>(cfg: &ClientConfig, socket: S)
 pub async fn serve_substreams<S>(
     conn: YamuxConnection<S>,
     router: axum::Router,
+) -> Result<(), ClientError>
+    where S: futures::AsyncRead + futures::AsyncWrite
+           + Unpin + Send + 'static;
+
+pub async fn serve_substreams_with_limit<S>(
+    conn: YamuxConnection<S>,
+    router: axum::Router,
+    max_concurrent_substreams: usize,
 ) -> Result<(), ClientError>
     where S: futures::AsyncRead + futures::AsyncWrite
            + Unpin + Send + 'static;

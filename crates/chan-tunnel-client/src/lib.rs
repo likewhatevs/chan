@@ -16,6 +16,7 @@ mod dial;
 pub use dial::{build_tls_config, dial, dial_with_tls};
 
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use chan_tunnel_proto::{read_frame, write_frame, Hello, HelloAck, ProtocolVersion};
@@ -25,7 +26,7 @@ use hyper_util::rt::TokioIo;
 use hyper_util::service::TowerToHyperService;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use url::Url;
 use yamux::{Config as YamuxConfig, Connection as YamuxConnection, Mode};
@@ -56,6 +57,12 @@ pub enum ClientError {
     #[error("transport closed")]
     TransportClosed,
 }
+
+/// Default concurrent yamux substreams served by one client.
+/// This bounds spawned h1 handler tasks when the public side floods
+/// a tunnel. Excess streams remain backpressured in yamux until an
+/// active handler exits.
+pub const DEFAULT_MAX_CONCURRENT_SUBSTREAMS: usize = 128;
 
 impl From<chan_tunnel_proto::FrameError> for ClientError {
     fn from(e: chan_tunnel_proto::FrameError) -> Self {
@@ -120,6 +127,9 @@ pub struct ClientConfig {
     /// honoured automatically: the embedded callers (Swift /
     /// Kotlin / CLI) get a deterministic surface this way.
     pub proxy: Option<Url>,
+    /// Max concurrent inbound yamux substreams served by this
+    /// client. Values below 1 are clamped to 1. Default 128.
+    pub max_concurrent_substreams: usize,
 }
 
 impl Default for ClientConfig {
@@ -136,6 +146,7 @@ impl Default for ClientConfig {
             dial_timeout: Duration::from_secs(30),
             events: None,
             proxy: None,
+            max_concurrent_substreams: DEFAULT_MAX_CONCURRENT_SUBSTREAMS,
         }
     }
 }
@@ -233,18 +244,38 @@ where
 /// a WebSocket 101 response; the bytes ride the existing yamux
 /// substream until either end closes.
 pub async fn serve_substreams<S>(
-    mut conn: YamuxConnection<S>,
+    conn: YamuxConnection<S>,
     router: axum::Router,
 ) -> Result<(), ClientError>
 where
     S: FutAsyncRead + FutAsyncWrite + Unpin + Send + 'static,
 {
+    serve_substreams_with_limit(conn, router, DEFAULT_MAX_CONCURRENT_SUBSTREAMS).await
+}
+
+/// Same as [`serve_substreams`], with an explicit concurrency cap.
+pub async fn serve_substreams_with_limit<S>(
+    mut conn: YamuxConnection<S>,
+    router: axum::Router,
+    max_concurrent_substreams: usize,
+) -> Result<(), ClientError>
+where
+    S: FutAsyncRead + FutAsyncWrite + Unpin + Send + 'static,
+{
+    let limit = max_concurrent_substreams.max(1);
+    let permits = Arc::new(Semaphore::new(limit));
     loop {
+        let permit = permits
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("substream semaphore is never closed");
         let next = futures::future::poll_fn(|cx| Pin::new(&mut conn).poll_next_inbound(cx)).await;
         match next {
             Some(Ok(stream)) => {
                 let router = router.clone();
                 tokio::spawn(async move {
+                    let _permit = permit;
                     serve_one_substream(stream, router).await;
                 });
             }
@@ -336,7 +367,13 @@ pub async fn run(cfg: ClientConfig, router: axum::Router) -> Result<(), ClientEr
                 );
                 emit(&cfg.events, TunnelEvent::Connected(registration.clone()));
                 backoff = cfg.initial_backoff;
-                if let Err(e) = serve_substreams(yconn, router.clone()).await {
+                if let Err(e) = serve_substreams_with_limit(
+                    yconn,
+                    router.clone(),
+                    cfg.max_concurrent_substreams,
+                )
+                .await
+                {
                     tracing::warn!(error = %e, "tunnel substream loop ended");
                 } else {
                     tracing::info!("tunnel disconnected");

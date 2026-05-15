@@ -18,7 +18,8 @@ chan-tunnel-client = "0.11"
 
 ```
 ClientConfig                  url, token, drive, public flag,
-                              backoff, dial timeout, events tx
+                              backoff, dial timeout, events tx,
+                              substream concurrency cap
 Registration                  HelloAck contents (prefix/user/drive)
 TunnelEvent                   Connected / Disconnected / DialFailed
 ClientError                   uniffi-friendly error variants
@@ -32,6 +33,7 @@ handshake(cfg, socket)        free function: Hello/HelloAck over any
 serve_substreams(yconn,
                  router)      run the axum router on every inbound
                               yamux substream (h1 + upgrades)
+serve_substreams_with_limit   same, with explicit concurrency cap
 
 run(cfg, router)              long-lived: dial, register, serve,
                               reconnect with exponential backoff

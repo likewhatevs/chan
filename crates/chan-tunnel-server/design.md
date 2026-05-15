@@ -454,8 +454,8 @@ Server-specific notes:
   as a defence-in-depth wall if the public listener is ever
   exposed directly.
 - **Upstream request timeout**: the public router caps the time
-  spent on the h1 handshake plus the wait for response headers
-  against the registered chan-serve via
+  spent opening a yamux substream, running the h1 handshake, and
+  waiting for response headers against the registered chan-serve via
   `PublicConfig::upstream_request_timeout` (default 30s); a 504
   Gateway Timeout is returned on miss. Body streaming after
   headers is intentionally uncapped so long downloads / uploads

@@ -58,6 +58,9 @@ impl AsyncRead for H2Duplex {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
+        if buf.remaining() == 0 {
+            return Poll::Ready(Ok(()));
+        }
         if self.pending.is_empty() {
             if self.eof {
                 return Poll::Ready(Ok(()));
@@ -161,7 +164,15 @@ mod tests {
     use super::*;
 
     use http::{Method, Request, Response};
+    use std::sync::Arc;
+    use std::task::Wake;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    struct NoopWake;
+
+    impl Wake for NoopWake {
+        fn wake(self: Arc<Self>) {}
+    }
 
     /// Drive an h2 connection to completion in a background task.
     /// h2 connections are passive: nothing happens until somebody
@@ -223,6 +234,22 @@ mod tests {
         let mut buf = [0u8; 4];
         client_dup.read_exact(&mut buf).await.expect("client read");
         assert_eq!(&buf, b"pong");
+    }
+
+    #[tokio::test]
+    async fn zero_capacity_read_completes_without_data() {
+        let (mut server_dup, _client_dup) = run_h2_pair().await;
+
+        let mut empty = [];
+        let mut buf = ReadBuf::new(&mut empty);
+        let waker = std::task::Waker::from(Arc::new(NoopWake));
+        let mut cx = Context::from_waker(&waker);
+
+        match Pin::new(&mut server_dup).poll_read(&mut cx, &mut buf) {
+            Poll::Ready(Ok(())) => assert_eq!(buf.filled().len(), 0),
+            Poll::Ready(Err(e)) => panic!("zero-capacity read failed: {e}"),
+            Poll::Pending => panic!("zero-capacity read returned Pending"),
+        }
     }
 
     #[tokio::test]

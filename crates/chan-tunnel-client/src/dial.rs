@@ -189,7 +189,7 @@ async fn open_tcp(host: &str, port: u16, proxy: Option<&Url>) -> Result<TcpStrea
         .ok_or_else(|| ClientError::InvalidUrl("proxy URL missing host".into()))?;
     let proxy_port = proxy
         .port_or_known_default()
-        .ok_or_else(|| ClientError::InvalidUrl(format!("cannot infer proxy port from {proxy}")))?;
+        .ok_or_else(|| ClientError::InvalidUrl("cannot infer proxy port".into()))?;
 
     let mut tcp = TcpStream::connect((proxy_host, proxy_port)).await?;
     let target = format!("{host}:{port}");
@@ -244,11 +244,11 @@ async fn open_tcp(host: &str, port: u16, proxy: Option<&Url>) -> Result<TcpStrea
     let mut parts = status_line.splitn(3, ' ');
     let _version = parts.next();
     let code = parts.next().ok_or_else(|| {
-        ClientError::Handshake(format!("proxy status line malformed: {status_line:?}"))
+        ClientError::Handshake("proxy CONNECT response status line malformed".into())
     })?;
     let code: u16 = code
         .parse()
-        .map_err(|_| ClientError::Handshake(format!("proxy status code malformed: {code:?}")))?;
+        .map_err(|_| ClientError::Handshake("proxy CONNECT status code malformed".into()))?;
     if !(200..300).contains(&code) {
         // 407 in particular: auth required. Surface distinctly so
         // the caller can show "wrong proxy credentials" rather than
@@ -414,7 +414,7 @@ mod tests {
     async fn connect_non_2xx_status_is_an_error() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let proxy_addr = listener.local_addr().unwrap();
-        let proxy_url = Url::parse(&format!("http://{proxy_addr}")).unwrap();
+        let proxy_url = Url::parse(&format!("http://alice:s3cret@{proxy_addr}")).unwrap();
 
         let _server = tokio::spawn(run_proxy(
             listener,
@@ -427,6 +427,39 @@ mod tests {
         match err {
             ClientError::Handshake(msg) => {
                 assert!(msg.contains("407"), "unexpected message: {msg}");
+                assert!(
+                    !msg.contains("s3cret") && !msg.contains("alice"),
+                    "proxy credentials leaked in message: {msg}",
+                );
+            }
+            other => panic!("expected Handshake error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn connect_malformed_status_does_not_echo_proxy_text() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = listener.local_addr().unwrap();
+        let proxy_url = Url::parse(&format!("http://alice:s3cret@{proxy_addr}")).unwrap();
+
+        let _server = tokio::spawn(run_proxy(
+            listener,
+            b"HTTP/1.1 s3cret echoed-by-proxy\r\n\r\n",
+        ));
+
+        let err = open_tcp("upstream.example", 443, Some(&proxy_url))
+            .await
+            .expect_err("malformed proxy status should error");
+        match err {
+            ClientError::Handshake(msg) => {
+                assert!(
+                    !msg.contains("s3cret"),
+                    "proxy text leaked in message: {msg}"
+                );
+                assert!(
+                    !msg.contains("echoed-by-proxy"),
+                    "proxy text leaked in message: {msg}",
+                );
             }
             other => panic!("expected Handshake error, got {other:?}"),
         }

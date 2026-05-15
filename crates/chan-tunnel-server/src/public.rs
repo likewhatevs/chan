@@ -271,19 +271,26 @@ async fn proxy(
         None => return error(StatusCode::BAD_GATEWAY, "tunnel not connected"),
     };
 
-    let substream = match handle.open().await {
-        Ok(s) => s,
-        Err(_) => return error(StatusCode::BAD_GATEWAY, "tunnel disconnected"),
+    // Shared deadline across substream open, h1 handshake, and
+    // send_request. The body stream after response headers is
+    // intentionally not bound here: long downloads / uploads ride
+    // the substream as long as both ends are still moving bytes.
+    let deadline = tokio::time::Instant::now() + state.upstream_request_timeout;
+
+    let substream = match tokio::time::timeout_at(deadline, handle.open()).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(_)) => return error(StatusCode::BAD_GATEWAY, "tunnel disconnected"),
+        Err(_) => {
+            tracing::warn!(
+                timeout = ?state.upstream_request_timeout,
+                "tunnel substream open timed out",
+            );
+            return error(StatusCode::GATEWAY_TIMEOUT, "upstream open timed out");
+        }
     };
 
     // futures-io -> tokio AsyncRead/Write -> hyper rt::Read/Write.
     let io = TokioIo::new(substream.compat());
-
-    // Shared deadline across the h1 handshake and send_request. The
-    // body stream after response headers is intentionally not bound
-    // here: long downloads / uploads ride the substream as long as
-    // both ends are still moving bytes.
-    let deadline = tokio::time::Instant::now() + state.upstream_request_timeout;
 
     // `with_upgrades()` keeps the connection task alive past a 101
     // so the upgraded byte stream stays attached to the substream.
@@ -430,6 +437,11 @@ async fn proxy(
 /// - `Proxy-Authorization`, `Proxy-Authenticate` are stripped (they
 ///   are hop-by-hop credentials that have no business reaching
 ///   chan-serve).
+/// - `Authorization`, `Cookie`, and `Set-Cookie` request headers
+///   are stripped. Public-router authentication, when present, is
+///   handled by the fronting drive-proxy layer; public visitors must
+///   not be able to inject bearer tokens or cookie state into the
+///   local chan-serve process.
 /// - `X-Forwarded-For`: if `trust_forwarded_for` is `false`
 ///   (default), the incoming value is discarded and the resulting
 ///   value is just the `ConnectInfo` peer IP. If `true`, the
@@ -478,6 +490,9 @@ fn build_forwarded(
         "x-real-ip",
         "proxy-authorization",
         "proxy-authenticate",
+        "authorization",
+        "cookie",
+        "set-cookie",
     ] {
         parts.headers.remove(name);
     }
@@ -669,6 +684,22 @@ mod tests {
     }
 
     #[test]
+    fn public_credentials_are_stripped() {
+        let req = req_with(
+            &[
+                ("authorization", "Bearer public-supplied"),
+                ("cookie", "sid=attacker"),
+                ("set-cookie", "sid=attacker"),
+            ],
+            Some("alice.drive.chan.app"),
+        );
+        let out = build_forwarded("foo".into(), req, Some("10.0.0.1"), false).unwrap();
+        assert!(out.headers().get("authorization").is_none());
+        assert!(out.headers().get("cookie").is_none());
+        assert!(out.headers().get("set-cookie").is_none());
+    }
+
+    #[test]
     fn forwarded_proto_is_always_https() {
         let req = req_with(
             &[("x-forwarded-proto", "http")],
@@ -725,5 +756,41 @@ mod tests {
         let req = req_with(&[], Some("alice.drive.chan.app"));
         let out = build_forwarded(String::new(), req, Some("10.0.0.1"), false).unwrap();
         assert_eq!(out.uri().path(), "/");
+    }
+
+    #[tokio::test]
+    async fn proxy_times_out_when_substream_open_waits_forever() {
+        let registry = Registry::new();
+        let (_handle, _open_rx, _shutdown_rx) = registry
+            .register_with_cap(Arc::from("alice"), Arc::from("notes"), false, None, 0)
+            .unwrap();
+        let state = PublicState {
+            registry,
+            trust_forwarded_for: false,
+            allowed_host_suffixes: Vec::new().into(),
+            upstream_request_timeout: Duration::from_millis(25),
+            response_body_cap: DEFAULT_RESPONSE_BODY_CAP as u64,
+        };
+        let request = Request::builder()
+            .method("GET")
+            .uri("/alice/notes/stalled")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = tokio::time::timeout(
+            Duration::from_secs(1),
+            proxy(
+                state,
+                "alice".into(),
+                "notes".into(),
+                "stalled".into(),
+                None,
+                request,
+            ),
+        )
+        .await
+        .expect("proxy should return on upstream_request_timeout");
+
+        assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
     }
 }
