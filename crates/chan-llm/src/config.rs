@@ -28,11 +28,22 @@ use crate::error::{LlmError, Result};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LlmConfig {
-    /// Which backend the assistant uses by default. None = no
-    /// assistant configured yet (the UI should show a "pick a
-    /// backend" prompt).
+    /// Which backend the assistant uses by default. May be set even
+    /// when the matching provider's `enabled` flag is false (the
+    /// default is sticky across enable/disable toggles so user intent
+    /// survives a "disable then re-enable" round-trip). Hosts should
+    /// treat the assistant as configured and active only when
+    /// `active_backend()` returns `Some`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<BackendKind>,
+    /// Per-provider enable flags. A provider's row in the SPA Settings
+    /// UI toggles the matching field here; the resolver only honors
+    /// `backend` when the corresponding flag is set. Decoupling this
+    /// from `backend` lets the user keep tokens / URLs configured for
+    /// multiple providers concurrently and switch the default without
+    /// re-entering credentials.
+    #[serde(default, skip_serializing_if = "EnabledProviders::is_empty")]
+    pub enabled: EnabledProviders,
     /// Per-backend model override. Falls back to the backend's
     /// default model when unset.
     #[serde(default, skip_serializing_if = "Models::is_empty")]
@@ -99,6 +110,52 @@ pub struct LlmConfig {
     /// misconfigured value can't deadlock the orchestrator.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tool_iterations: Option<u32>,
+}
+
+/// Per-provider enable flags. Default-false on every field so a fresh
+/// install starts with zero providers active; the SPA's Settings UI
+/// is the only place that flips them on.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnabledProviders {
+    #[serde(default)]
+    pub anthropic: bool,
+    #[serde(default)]
+    pub gemini: bool,
+    #[serde(default)]
+    pub ollama: bool,
+    #[serde(default)]
+    pub claude_cli: bool,
+    #[serde(default)]
+    pub gemini_cli: bool,
+}
+
+impl EnabledProviders {
+    fn is_empty(&self) -> bool {
+        !(self.anthropic || self.gemini || self.ollama || self.claude_cli || self.gemini_cli)
+    }
+
+    /// Whether the given backend is enabled. The resolver gates on
+    /// this in addition to `LlmConfig::backend` being set so that a
+    /// disabled provider never gets a request attempted against it.
+    pub fn for_backend(&self, kind: BackendKind) -> bool {
+        match kind {
+            BackendKind::Anthropic => self.anthropic,
+            BackendKind::Gemini => self.gemini,
+            BackendKind::Ollama => self.ollama,
+            BackendKind::ClaudeCli => self.claude_cli,
+            BackendKind::GeminiCli => self.gemini_cli,
+        }
+    }
+
+    pub fn set_for_backend(&mut self, kind: BackendKind, value: bool) {
+        match kind {
+            BackendKind::Anthropic => self.anthropic = value,
+            BackendKind::Gemini => self.gemini = value,
+            BackendKind::Ollama => self.ollama = value,
+            BackendKind::ClaudeCli => self.claude_cli = value,
+            BackendKind::GeminiCli => self.gemini_cli = value,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,7 +351,9 @@ impl LlmConfig {
             return Ok(Self::default());
         }
         let raw = std::fs::read_to_string(path)?;
-        Ok(toml::from_str(&raw)?)
+        let mut cfg: Self = toml::from_str(&raw)?;
+        cfg.migrate_legacy_enabled();
+        Ok(cfg)
     }
 
     pub fn save(&self) -> Result<()> {
@@ -308,6 +367,31 @@ impl LlmConfig {
         let body = toml::to_string_pretty(self)?;
         atomic_write_strict(path, body.as_bytes())?;
         Ok(())
+    }
+
+    /// The backend the resolver should use right now: `backend` only
+    /// when the matching provider's enable flag is true. Returns None
+    /// when no default is selected or the selected default has been
+    /// disabled in the SPA. Every chan-llm caller that previously
+    /// branched on `backend.is_some()` should branch on this instead.
+    pub fn active_backend(&self) -> Option<BackendKind> {
+        let kind = self.backend?;
+        self.enabled.for_backend(kind).then_some(kind)
+    }
+
+    /// Bridge from pre-`enabled` config files. The 1.0 schema treats
+    /// `backend` as the user's sticky default pick and gates the
+    /// active backend on a separate `enabled` table. Configs written
+    /// before this split assumed the configured backend was implicitly
+    /// active; on load we detect that shape (no `enabled` flags set
+    /// and `backend` populated) and flip on the matching provider so
+    /// upgraded users don't have to revisit Settings to keep working.
+    fn migrate_legacy_enabled(&mut self) {
+        if self.enabled.is_empty() {
+            if let Some(kind) = self.backend {
+                self.enabled.set_for_backend(kind, true);
+            }
+        }
     }
 }
 
@@ -382,6 +466,10 @@ mod tests {
         let p = tmp.path().join("llm.toml");
         let cfg = LlmConfig {
             backend: Some(BackendKind::Anthropic),
+            enabled: EnabledProviders {
+                anthropic: true,
+                ..Default::default()
+            },
             models: Models {
                 anthropic: Some("claude-opus-4-7".into()),
                 ..Default::default()
@@ -402,6 +490,57 @@ mod tests {
         cfg.save_to(&p).unwrap();
         let loaded = LlmConfig::load_from(&p).unwrap();
         assert_eq!(cfg, loaded);
+    }
+
+    #[test]
+    fn active_backend_gates_on_enabled() {
+        // Sticky default with no enable flag is "configured but
+        // disabled": the resolver must refuse to launch the backend.
+        let mut cfg = LlmConfig {
+            backend: Some(BackendKind::Anthropic),
+            ..Default::default()
+        };
+        assert_eq!(cfg.active_backend(), None);
+        cfg.enabled.anthropic = true;
+        assert_eq!(cfg.active_backend(), Some(BackendKind::Anthropic));
+        // Disable again: the default stays sticky, but active flips
+        // back to None.
+        cfg.enabled.anthropic = false;
+        assert_eq!(cfg.active_backend(), None);
+        assert_eq!(cfg.backend, Some(BackendKind::Anthropic));
+    }
+
+    #[test]
+    fn legacy_config_migrates_enabled_from_backend() {
+        // Configs written before the per-provider `enabled` table
+        // existed assumed the configured backend was implicitly
+        // active. load_from must detect that shape and flip on the
+        // matching flag so upgraded installs keep working without a
+        // forced trip through Settings.
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("llm.toml");
+        std::fs::write(
+            &p,
+            "backend = \"anthropic\"\n[models]\nanthropic = \"claude-haiku-4-5\"\n",
+        )
+        .unwrap();
+        let loaded = LlmConfig::load_from(&p).unwrap();
+        assert_eq!(loaded.backend, Some(BackendKind::Anthropic));
+        assert!(loaded.enabled.anthropic);
+        assert_eq!(loaded.active_backend(), Some(BackendKind::Anthropic));
+    }
+
+    #[test]
+    fn legacy_migration_skips_when_no_backend() {
+        // A fresh config (no backend set) must NOT auto-enable
+        // anything: migration only fires when there's a sticky pick
+        // to honor.
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("llm.toml");
+        std::fs::write(&p, "").unwrap();
+        let loaded = LlmConfig::load_from(&p).unwrap();
+        assert!(loaded.enabled.is_empty());
+        assert_eq!(loaded.active_backend(), None);
     }
 
     #[test]
@@ -465,6 +604,10 @@ mod tests {
         let p = tmp.path().join("llm.toml");
         let cfg = LlmConfig {
             backend: Some(BackendKind::ClaudeCli),
+            enabled: EnabledProviders {
+                claude_cli: true,
+                ..Default::default()
+            },
             models: Models {
                 claude_cli: Some("claude-sonnet-4-6".into()),
                 ..Default::default()
