@@ -185,7 +185,7 @@ reasons:
    contract in the body is invariant under proxy churn.
 2. The reverse direction (`HelloAck`) needs to carry structured data
    back to the client (`prefix`, `user`, `drive`). HTTP responses
-   could use headers, but then the schemas asymmetric and adding a
+   could use headers, but then the schemas are asymmetric and adding a
    field on the response side is a header-name fight rather than a
    serde additive change.
 3. JSON in the body is symmetric, evolvable (`#[serde(default)]`),

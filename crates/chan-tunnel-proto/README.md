@@ -10,7 +10,7 @@ done here, not in the I/O crates.
 
 ```toml
 [dependencies]
-chan-tunnel-proto = "0.7"
+chan-tunnel-proto = "0.9"
 ```
 
 ## Public surface
