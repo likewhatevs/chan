@@ -90,6 +90,15 @@ pub struct LlmConfig {
     /// per-request timeouts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_inactivity_timeout_secs: Option<u32>,
+    /// Hard cap on the number of tool-call rounds within a single
+    /// `LlmSession::send`. `None` means "use the chan-llm default"
+    /// (12 today). Raise this when the model legitimately needs
+    /// more steps before answering (long agentic workflows over
+    /// large drives); lower it to fail fast on runaway loops in a
+    /// development environment. Zero is treated as one so a
+    /// misconfigured value can't deadlock the orchestrator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_iterations: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -388,10 +397,33 @@ mod tests {
             max_tokens: MaxTokens::default(),
             mcp_image_max_bytes: None,
             stream_inactivity_timeout_secs: None,
+            max_tool_iterations: None,
         };
         cfg.save_to(&p).unwrap();
         let loaded = LlmConfig::load_from(&p).unwrap();
         assert_eq!(cfg, loaded);
+    }
+
+    #[test]
+    fn max_tool_iterations_round_trips() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("llm.toml");
+        let cfg = LlmConfig {
+            max_tool_iterations: Some(24),
+            ..Default::default()
+        };
+        cfg.save_to(&p).unwrap();
+        let loaded = LlmConfig::load_from(&p).unwrap();
+        assert_eq!(loaded.max_tool_iterations, Some(24));
+    }
+
+    #[test]
+    fn unset_max_tool_iterations_skipped_in_serialized_output() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("llm.toml");
+        LlmConfig::default().save_to(&p).unwrap();
+        let raw = std::fs::read_to_string(&p).unwrap();
+        assert!(!raw.contains("max_tool_iterations"), "got: {raw}");
     }
 
     #[test]

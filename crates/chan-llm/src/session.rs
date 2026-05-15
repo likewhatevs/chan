@@ -630,8 +630,10 @@ impl LlmSession {
     /// reads / search; pauses on un-confirmed writes when
     /// auto_apply_writes is off), appends results to the
     /// transcript, and runs the backend again. Loops until the
-    /// assistant returns text only or hits MAX_TOOL_ITERATIONS
-    /// (defense against runaway loops).
+    /// assistant returns text only or hits the configured
+    /// `max_tool_iterations` cap (defaults to
+    /// `DEFAULT_MAX_TOOL_ITERATIONS`, defense against runaway
+    /// loops). Override the cap via `LlmConfig::max_tool_iterations`.
     ///
     /// Resume contract for paused writes: when `auto_apply_writes`
     /// is off and the assistant proposes `write_file`, the loop
@@ -725,6 +727,14 @@ impl LlmSession {
             _ => crate::tools::standard_tool_schemas(),
         };
 
+        // Resolve the per-call tool-iteration cap. Clamps zero to one
+        // so a misconfigured value can't deadlock the orchestrator.
+        let max_iter = self
+            .config
+            .max_tool_iterations
+            .map(|n| n.max(1) as usize)
+            .unwrap_or(DEFAULT_MAX_TOOL_ITERATIONS);
+
         let cancel_inner = cancel.flag();
         spawn(async move {
             run_loop(
@@ -734,6 +744,7 @@ impl LlmSession {
                 tool_ctx,
                 listener,
                 cancel_inner,
+                max_iter,
             )
             .await;
         });
@@ -741,13 +752,13 @@ impl LlmSession {
     }
 }
 
-/// Maximum tool-call rounds in a single `send`. Defense against
+/// Default tool-call rounds in a single `send`. Defense against
 /// the assistant looping on a buggy tool call (e.g. read_file on
 /// a non-existent path, then read_file on a similar non-existent
 /// path, etc.). When the cap fires we emit `on_done(Error)` with
 /// a clear message; the host can offer the user a "try again"
-/// affordance.
-const MAX_TOOL_ITERATIONS: usize = 12;
+/// affordance. Overridable via `LlmConfig::max_tool_iterations`.
+pub(crate) const DEFAULT_MAX_TOOL_ITERATIONS: usize = 12;
 
 /// Drive the assistant loop. Backend produces text + tool calls;
 /// we run the auto-executable tools and append their results,
@@ -762,13 +773,14 @@ async fn run_loop(
     tool_ctx: crate::tools::ToolContext,
     listener: Arc<dyn SessionListener>,
     cancel: Arc<AtomicBool>,
+    max_iterations: usize,
 ) {
-    for _ in 0..MAX_TOOL_ITERATIONS {
+    for _ in 0..max_iterations {
         if cancel.load(Ordering::Relaxed) {
             listener.on_done(StopReason::Cancelled);
             return;
         }
-        let outcome = backend
+        let mut outcome = backend
             .run(
                 history.clone(),
                 tool_schemas.clone(),
@@ -799,7 +811,7 @@ async fn run_loop(
             if !outcome.assistant_text.is_empty() {
                 history.push(Message {
                     role: Role::Assistant,
-                    content: outcome.assistant_text.clone(),
+                    content: std::mem::take(&mut outcome.assistant_text),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
                     images: Vec::new(),
@@ -814,25 +826,29 @@ async fn run_loop(
         // turn (with tool_calls) to history so the next backend
         // call sees the conversation including the proposed
         // calls; then run each tool, appending its result as a
-        // Tool message.
+        // Tool message. `mem::take` moves the outcome's strings
+        // and vec into the new Message instead of cloning them;
+        // outcome is dropped immediately after this loop iteration
+        // so the empty placeholders left behind don't matter.
+        let tool_calls = std::mem::take(&mut outcome.tool_calls);
         history.push(Message {
             role: Role::Assistant,
-            content: outcome.assistant_text.clone(),
+            content: std::mem::take(&mut outcome.assistant_text),
             tool_call_id: None,
-            tool_calls: outcome.tool_calls.clone(),
+            tool_calls: tool_calls.clone(),
             images: Vec::new(),
         });
 
-        // Track every tool call from this turn that we still owe a
-        // result for. Anthropic and Gemini reject the next user turn
-        // if any tool_use block from the assistant turn is missing
-        // its matching tool_result. We push a placeholder result for
-        // any tool call we couldn't immediately resolve (the host
-        // overrides the placeholder when it resumes). Without this,
-        // a `Pending` write would leave a dangling tool_use forever.
-        let total_calls = outcome.tool_calls.len();
-        let mut paused_call: Option<ToolCall> = None;
-        for (idx, call) in outcome.tool_calls.into_iter().enumerate() {
+        // Did any tool call return `Pending` (write_file with
+        // auto_apply off)? Track via a plain bool because the call
+        // detail was unused. Anthropic and Gemini reject the next
+        // user turn if any tool_use block from the assistant turn
+        // is missing its matching tool_result; we push a placeholder
+        // result for any tool that returned Pending so the
+        // transcript stays well-formed for them, then pause so the
+        // host can run its confirmation UI.
+        let mut paused = false;
+        for call in tool_calls.into_iter() {
             if cancel.load(Ordering::Relaxed) {
                 listener.on_done(StopReason::Cancelled);
                 return;
@@ -849,7 +865,7 @@ async fn run_loop(
             let exec_name = call.name.clone();
             let exec_args = call.args.clone();
             let panic_tool_name = call.name.clone();
-            let exec_result = tokio::task::spawn_blocking(move || {
+            let exec_handle = tokio::task::spawn_blocking(move || {
                 // catch_unwind keeps the panic payload (which can
                 // contain user paths or other PII) out of the
                 // model-visible tool result. The full payload and
@@ -858,8 +874,22 @@ async fn run_loop(
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     crate::tools::execute(&exec_name, &exec_args, &exec_ctx)
                 }))
-            })
-            .await;
+            });
+            // Race the blocking task against the cancel flag. A long-
+            // running tool (search over a large drive) shouldn't pin
+            // the orchestrator past the user's cancel; the blocking
+            // task continues to completion in the pool (tokio
+            // doesn't kill spawn_blocking work on JoinHandle drop),
+            // but the orchestrator stops observing it and emits
+            // Cancelled within the cancel-poll interval.
+            let exec_result = tokio::select! {
+                biased;
+                _ = wait_for_cancel(&cancel) => {
+                    listener.on_done(StopReason::Cancelled);
+                    return;
+                }
+                r = exec_handle => r,
+            };
             let exec_result = match exec_result {
                 Ok(Ok(r)) => r,
                 Ok(Err(_panic_payload)) => {
@@ -893,13 +923,13 @@ async fn run_loop(
                     // auto_apply_writes is off and the tool was
                     // write_file. Pause; the host's UI confirms
                     // and resumes by re-sending with the tool
-                    // result appended.
-                    paused_call = Some(call.clone());
-                    // Push a placeholder so the transcript stays
-                    // well-formed for Anthropic / Gemini. The host
-                    // is expected to *replace* this entry with the
-                    // real result on resume (matching by id), or
-                    // leave it as-is if the user denies the write.
+                    // result appended. Multiple Pending in one
+                    // turn is supported: each lands here, pushes
+                    // its placeholder, and the pause fires after
+                    // the loop completes so every tool_use block
+                    // has a matching tool_result (Anthropic rejects
+                    // a partial pairing).
+                    paused = true;
                     let placeholder = serde_json::json!({
                         "status": PENDING_STATUS,
                         "tool": call.name,
@@ -912,20 +942,6 @@ async fn run_loop(
                         call.id.clone(),
                         serde_json::to_string(&placeholder).unwrap_or_default(),
                     ));
-                    // Any later calls in this same assistant turn
-                    // also need placeholders so the assistant turn
-                    // is fully matched. Anthropic in particular
-                    // rejects a partial pairing.
-                    if idx + 1 < total_calls {
-                        // Filled in below by the same placeholder
-                        // path; the loop simply continues with the
-                        // remaining calls and pushes placeholders
-                        // for each via this branch (since they all
-                        // route through the same `Pending` handler
-                        // for write_file). For non-write tools we
-                        // never see Pending here, so this branch is
-                        // only entered once per turn in practice.
-                    }
                 }
                 Err(e) => {
                     let err_text = e.to_string();
@@ -942,7 +958,7 @@ async fn run_loop(
             }
         }
 
-        if paused_call.is_some() {
+        if paused {
             listener.on_messages_snapshot(&history);
             listener.on_done(StopReason::ToolUse);
             return;
@@ -952,9 +968,20 @@ async fn run_loop(
     }
 
     listener.on_error(format!(
-        "max tool iterations ({MAX_TOOL_ITERATIONS}) reached without a final answer"
+        "max tool iterations ({max_iterations}) reached without a final answer"
     ));
     listener.on_done(StopReason::Error);
+}
+
+/// Async helper that resolves the moment the cancel flag flips.
+/// Polled at 50ms granularity so a user hitting "stop" while a slow
+/// tool runs returns control to the orchestrator within that budget.
+/// We don't pay for a tokio::sync::Notify here because the cancel
+/// path is rare; the periodic load is cheap.
+async fn wait_for_cancel(cancel: &Arc<AtomicBool>) {
+    while !cancel.load(Ordering::Relaxed) {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 }
 
 /// Spawn a future onto whichever runtime is appropriate. When
@@ -1126,6 +1153,7 @@ mod tests {
             tool_ctx,
             listener.clone(),
             Arc::new(AtomicBool::new(false)),
+            DEFAULT_MAX_TOOL_ITERATIONS,
         ));
         // Expect: on_tool_call(write_file), on_tool_result(call-1)
         // with the placeholder, on_done(ToolUse).
@@ -1229,6 +1257,7 @@ mod tests {
             tool_ctx,
             listener.clone(),
             Arc::new(AtomicBool::new(false)),
+            DEFAULT_MAX_TOOL_ITERATIONS,
         ));
         let events = listener.0.lock().unwrap();
         // Snapshot must precede on_done so the host can capture
@@ -1273,6 +1302,7 @@ mod tests {
             tool_ctx,
             listener.clone(),
             Arc::new(AtomicBool::new(false)),
+            DEFAULT_MAX_TOOL_ITERATIONS,
         ));
         let events = listener.0.lock().unwrap();
         let Event::Snapshot(history) = events
@@ -1345,6 +1375,7 @@ mod tests {
                 tool_ctx,
                 listener_inner,
                 cancel,
+                DEFAULT_MAX_TOOL_ITERATIONS,
             )
             .await;
             let _ = join.await;
