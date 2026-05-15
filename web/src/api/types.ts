@@ -53,59 +53,68 @@ export type AssistantBackendKind =
   | "embedded";
 
 export type ClaudePrefs = {
+  /// Whether this provider is enabled in the SPA's Settings CRUD.
+  /// The active assistant is `default_backend` only when the
+  /// matching provider's `enabled` is true.
+  enabled: boolean;
   /// Optional model override; backend default applies when null.
+  /// Written from the assistant overlay's inspector, not from Settings.
   model?: string | null;
   /// Optional max output tokens. Null falls back to chan-llm's
-  /// per-backend default (Anthropic: 4096).
+  /// per-backend default (Anthropic: 4096). Written from the
+  /// inspector.
   max_tokens?: number | null;
 };
 
 export type OllamaPrefs = {
+  enabled: boolean;
   /// Server URL; standard local port applies when null.
   url?: string | null;
-  /// Model name (must be installed on the Ollama server).
+  /// Model name (must be installed on the Ollama server). Written
+  /// from the inspector.
   model?: string | null;
   /// Maps to Ollama's `options.num_predict`. Null = uncapped.
   max_tokens?: number | null;
 };
 
 export type GeminiPrefs = {
+  enabled: boolean;
   /// Optional model override; backend default (gemini-2.5-flash)
-  /// applies when null.
+  /// applies when null. Written from the inspector.
   model?: string | null;
   /// Optional max output tokens. Null falls back to chan-llm's
-  /// per-backend default (Gemini: 4096).
+  /// per-backend default (Gemini: 4096). Written from the inspector.
   max_tokens?: number | null;
 };
 
-/// Per-CLI override surface. Only carries `model` today (the local
-/// `claude` / `gemini` CLIs own auth and most other knobs via their
-/// own configs). Maps to `chan_llm::LlmConfig.models.{claude,gemini}_cli`
-/// — when null / empty, chan-llm passes no `--model` flag and the
-/// CLI uses whichever default its own config selects.
+/// Per-CLI override surface. The local `claude` / `gemini` CLIs own
+/// their own auth, so the only Settings-managed field is `enabled`;
+/// `model` is written from the assistant overlay's inspector.
 export type CliPrefs = {
+  enabled: boolean;
   model?: string | null;
 };
 
 export type AssistantPrefs = {
-  /// Master switch. When false, the inline-assist overlay and the
-  /// search palette's "ask" mode are hidden. Defaults to true on
-  /// the server side for drives that predate this field.
-  enabled: boolean;
-  backend: AssistantBackendKind;
+  /// Derived server-side: true when a default backend is set AND the
+  /// matching provider's enable flag is on. Read-only on PATCH (the
+  /// server recomputes it from the per-provider flags). Drives the
+  /// assistant button / Cmd+I gate.
+  effective_enabled: boolean;
+  /// Which provider is the default assistant. Sticky across enable/
+  /// disable toggles so user intent survives a "disable then re-
+  /// enable" round-trip; null means no default picked.
+  default_backend: AssistantBackendKind | null;
   answers_dir: string;
   auto_apply_writes: boolean;
-  /// Per-provider configuration. The server normalizes legacy
-  /// flat-shape TOML (`model`, `ollama_url`, `ollama_model` at the
-  /// top level) into these subtables on read; the next save
-  /// rewrites the TOML in the new shape.
+  /// Per-provider configuration. Each carries its own `enabled` flag
+  /// + minimum config (token via the keychain flow, URL for ollama).
+  /// Model and max_tokens fields round-trip here but are written
+  /// from the assistant overlay's inspector, not from Settings.
   claude: ClaudePrefs;
   ollama: OllamaPrefs;
   gemini: GeminiPrefs;
-  /// Optional model override for the `claude` CLI (`claude_cli`
-  /// backend). Null lets the CLI's own config win.
   claude_cli: CliPrefs;
-  /// Same shape for the `gemini` CLI (`gemini_cli` backend).
   gemini_cli: CliPrefs;
 };
 
@@ -148,6 +157,24 @@ export type LlmKeyStatus = {
   /// session on Linux, locked keychain on macOS, etc.); the
   /// Settings UI hides keychain controls when false.
   keychain_available: boolean;
+};
+
+/// One row of `/api/llm/keys`. Hides the actual key value; just
+/// reports whether it's set and where chan-llm's resolver would
+/// pick it up. Settings' per-row keychain UI reads this to render
+/// a "stored / not stored" pill for each token-taking provider.
+export type LlmKeyStatusRow = {
+  set: boolean;
+  source: "env" | "keychain" | "file" | null;
+};
+
+/// Per-provider key statuses returned by GET /api/llm/keys. Covers
+/// only the providers that take a hosted API key (Anthropic,
+/// Gemini); Ollama is keyless and the CLI shells use the installed
+/// CLI's own auth.
+export type LlmKeysStatus = {
+  anthropic: LlmKeyStatusRow;
+  gemini: LlmKeyStatusRow;
 };
 
 export type LlmStatus = {

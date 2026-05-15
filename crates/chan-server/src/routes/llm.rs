@@ -1087,6 +1087,67 @@ async fn clear_backend_key(state: &Arc<AppState>, kind: BackendKind) -> Response
 // All four key handlers are gated by `tunnel_guard::settings_guard`
 // at the router layer; no per-handler check.
 
+/// One row of the per-provider key status table. Hides the actual
+/// key value (status only) so the SPA's multi-provider Settings
+/// list can render a "stored / not stored" pill per row without
+/// risking key disclosure on the wire.
+#[derive(Serialize)]
+struct KeyStatusRow {
+    /// True when chan-llm's three-tier resolver (env → keychain →
+    /// file) would produce a non-empty key for this provider.
+    set: bool,
+    /// Where the active key would come from. Mirrors the dispatch
+    /// in `LlmKeyView::source`; None when nothing's configured.
+    source: Option<&'static str>,
+}
+
+/// Per-provider key statuses. Only the providers that take a hosted
+/// API key (Anthropic, Gemini) appear here; Ollama is keyless and
+/// the CLI shells use the installed CLI's own auth.
+#[derive(Serialize)]
+pub struct LlmKeysStatus {
+    anthropic: KeyStatusRow,
+    gemini: KeyStatusRow,
+}
+
+/// Snapshot the key status for every key-taking provider in one
+/// round-trip. Used by Settings' per-row keychain UI so each
+/// provider's row can render its own "stored / not stored" pill
+/// without needing to be the currently-default backend.
+///
+/// Public-tunnel runs return both rows as `{set: false, source:
+/// None}` so an anonymous visitor can't probe which providers the
+/// owner has tokens for.
+pub async fn api_llm_keys_status(State(state): State<Arc<AppState>>) -> Response {
+    if state.tunnel_public {
+        return Json(LlmKeysStatus {
+            anthropic: KeyStatusRow {
+                set: false,
+                source: None,
+            },
+            gemini: KeyStatusRow {
+                set: false,
+                source: None,
+            },
+        })
+        .into_response();
+    }
+    let cfg = state.llm_config.lock().unwrap().clone();
+    let (a_key, a_status) = chan_llm::keys::resolve(BackendKind::Anthropic, &cfg);
+    let (g_key, g_status) = chan_llm::keys::resolve(BackendKind::Gemini, &cfg);
+    Json(LlmKeysStatus {
+        anthropic: KeyStatusRow {
+            set: a_key.is_some(),
+            source: key_status_tag(a_status),
+        },
+        gemini: KeyStatusRow {
+            set: g_key.is_some(),
+            source: key_status_tag(g_status),
+        },
+    })
+    .into_response()
+}
+
 pub async fn api_llm_set_anthropic_key(
     State(state): State<Arc<AppState>>,
     Json(body): Json<SetKeyBody>,

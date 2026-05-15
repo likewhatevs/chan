@@ -16,6 +16,7 @@ import { ApiError } from "../api/errors";
 import type { FindRange } from "../editor/find";
 import { isEditableText } from "./fileTypes";
 import { notify } from "./notify.svelte";
+import { cancelAssistantStreamForContext } from "./store.svelte";
 
 let nextId = 1;
 function id(prefix: string): string {
@@ -343,6 +344,17 @@ export function closeTab(paneId: string, tabId: string): void {
   const p = pane(paneId);
   const idx = p.tabs.findIndex((t) => t.id === tabId);
   if (idx < 0) return;
+  const tab = p.tabs[idx];
+  // If the assistant is mid-request on the file we're closing, tear
+  // the request down. The user is clearly walking away from this
+  // scope; leaving the stream running would (a) finish a turn against
+  // a context the UI no longer surfaces and (b) keep the
+  // "thinking…" indicator alive on a tab that no longer exists.
+  // The conversation history stays in memory (and on disk) so
+  // reopening the file later restores the bubbles up to the abort.
+  if (tab && tab.kind === "file") {
+    cancelAssistantStreamForContext(`file:${tab.path}`);
+  }
   p.tabs.splice(idx, 1);
   if (p.activeTabId === tabId) {
     p.activeTabId = p.tabs[Math.max(0, idx - 1)]?.id ?? null;
@@ -357,9 +369,17 @@ export function closeTab(paneId: string, tabId: string): void {
 /// flow so the editor doesn't keep showing a now-deleted file
 /// after the user wipes the drive. Pane structure is left
 /// alone (the workspace's split tree survives), only the tabs go.
+/// Cancels any in-flight assistant request whose context lives in
+/// one of the panes being cleared — same reasoning as `closeTab`,
+/// just bulk.
 export function closeAllTabs(): void {
   for (const node of Object.values(layout.nodes)) {
     if (node.kind !== "leaf") continue;
+    for (const t of node.tabs) {
+      if (t.kind === "file") {
+        cancelAssistantStreamForContext(`file:${t.path}`);
+      }
+    }
     node.tabs.length = 0;
     node.activeTabId = null;
   }
@@ -370,8 +390,15 @@ export function closeAllTabs(): void {
 ///     the parent split's place).
 ///   - root pane: there must always be at least one pane on screen, so
 ///     just clear the tabs (returns to the empty "no file open" state).
+/// Cancels any in-flight assistant request whose context lives in
+/// the pane being closed.
 export function closePane(paneId: string): void {
   const p = pane(paneId);
+  for (const t of p.tabs) {
+    if (t.kind === "file") {
+      cancelAssistantStreamForContext(`file:${t.path}`);
+    }
+  }
   p.tabs.length = 0;
   p.activeTabId = null;
   if (paneId !== layout.rootId) {

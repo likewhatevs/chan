@@ -125,6 +125,7 @@
     void assistantOverlay.open;
     void assistantOverlay.contextId;
     void assistantOverlay.prompt;
+    void assistantOverlay.inspectorOpen;
     void browserOverlay.open;
     void browserOverlay.inspectorOpen;
     void browserSelection.path;
@@ -292,7 +293,7 @@
       // Assistant master switch: when disabled in Settings, the
       // chord falls through and the user gets no visible response,
       // matching the hidden bottom-pill button.
-      if (!(drive.info?.preferences.assistant.enabled ?? true)) return;
+      if (!(drive.info?.preferences.assistant.effective_enabled ?? false)) return;
       e.preventDefault();
       if (assistantOverlay.open) {
         assistantOverlay.open = false;
@@ -373,7 +374,7 @@
         else openBrowser();
         return;
       case "app.assistant.toggle":
-        if (!(drive.info?.preferences.assistant.enabled ?? true)) return;
+        if (!(drive.info?.preferences.assistant.effective_enabled ?? false)) return;
         if (assistantOverlay.open) closeOverlay("assistant");
         else openAssistant();
         return;

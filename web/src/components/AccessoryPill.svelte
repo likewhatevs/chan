@@ -50,7 +50,7 @@
   /// button made the missing affordance unexplainable, especially
   /// for users who hit Cmd/Ctrl+P and saw nothing happen.
   const assistantEnabled = $derived(
-    drive.info?.preferences.assistant.enabled ?? true,
+    drive.info?.preferences.assistant.effective_enabled ?? false,
   );
 
   /// Server-controlled lockdown of the Settings panel (tunnel mode

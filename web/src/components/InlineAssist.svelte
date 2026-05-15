@@ -65,6 +65,8 @@
   import Source from "../editor/Source.svelte";
   import StyleToolbar from "./StyleToolbar.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
+  import Inspector from "./Inspector.svelte";
+  import AssistantInspectorBody from "./AssistantInspectorBody.svelte";
   import { chordFor } from "../state/shortcuts";
   import { banner, displayAgentName } from "./agentBanner";
   import {
@@ -90,6 +92,9 @@
     loadGroupConversation,
     openScopeHistory,
     openSettings,
+    markAssistantScopeSeen,
+    setAssistantInflight,
+    cancelAssistantStream,
     saveDriveConversation,
     scopeHistoryOverlay,
     openAssistant,
@@ -694,17 +699,68 @@
   });
 
   function close(): void {
-    // If a proposal is dangling unanswered, treat the close as a
-    // dismiss so the next round has a valid tool_result.
-    if (currentContext) {
-      const conv = conversationFor(currentContext);
-      const last = conv.turns[conv.turns.length - 1];
-      if (last && last.kind === "edit" && last.edit.status === "pending") {
-        dismissEdit(last.edit, "user closed the dialog");
-      }
-    }
+    // Cleanup (dismissing pending edits, lastSeen bookkeeping) lives
+    // in the $effect below so it fires for every close path: X
+    // button (here), scrim click, Esc via App.svelte's stack
+    // handler, and any programmatic flip of the open flag.
     assistantOverlay.open = false;
   }
+
+  function toggleInspector(): void {
+    assistantOverlay.inspectorOpen = !assistantOverlay.inspectorOpen;
+    menu?.close();
+  }
+
+  /// First-visit nudge: when the assistant opens on a scope the
+  /// user has never assisted before, auto-pop the inspector so the
+  /// model / max-tokens picker is in view. Subsequent visits leave
+  /// the inspector in whatever state the user last set it to. The
+  /// "seen" set lives in localStorage (per-browser); see
+  /// markAssistantScopeSeen in store.svelte.ts.
+  $effect(() => {
+    if (!assistantOverlay.open) return;
+    const ctx = currentContext;
+    if (!ctx) return;
+    const wasSeen = markAssistantScopeSeen(ctx.id);
+    if (!wasSeen) {
+      assistantOverlay.inspectorOpen = true;
+    }
+  });
+
+  /// Close-time cleanup. Watches the overlay's open flag and fires
+  /// on the open->closed transition so every path that closes the
+  /// dialog gets the same handling. Two concerns rolled into one:
+  ///
+  /// - Dangling proposal: if the last turn is a pending edit, treat
+  ///   the close as a discard so the next round has a valid
+  ///   tool_result (Anthropic / Gemini both 400 on a dangling
+  ///   tool_use without a matching tool_result in the next user
+  ///   turn).
+  ///
+  /// - Close-while-streaming: when a request is still in flight,
+  ///   mark where the user stepped away so any turns that land
+  ///   while they're gone get a one-time "new since you left"
+  ///   divider on return. The HTTP request is NOT cancelled — Esc
+  ///   never stops the assistant, only closes the dialog; the
+  ///   explicit Stop button is the cancellation path.
+  let wasAssistantOpen = false;
+  $effect(() => {
+    const isOpen = assistantOverlay.open;
+    if (wasAssistantOpen && !isOpen) {
+      if (currentContext) {
+        const conv = conversationFor(currentContext);
+        const last = conv.turns[conv.turns.length - 1];
+        if (last && last.kind === "edit" && last.edit.status === "pending") {
+          dismissEdit(last.edit, "user closed the dialog");
+        }
+        if (loading) {
+          conv.lastSeenTurnIndex = conv.turns.length;
+          scheduleSave(currentContext);
+        }
+      }
+    }
+    wasAssistantOpen = isOpen;
+  });
 
   function clearCurrent(): void {
     const ctx = currentContext;
@@ -799,28 +855,30 @@
   /// placeholder via the turns array).
   let pendingTurnTime = $state<number | null>(null);
 
-  /// AbortController for the in-flight llmComplete request, if
-  /// any. Cleared in the `finally` block so a stale controller
-  /// doesn't haunt the next request. The Stop button calls
-  /// `cancel()` which aborts the fetch; the caught AbortError
-  /// flows through the existing error path with a friendlier
-  /// message.
-  let inflight: AbortController | null = null;
+  /// The AbortController for the in-flight `llmComplete` request,
+  /// if any, lives in the store (see `setAssistantInflight`) so it
+  /// can be cancelled from outside this component — closing a tab
+  /// the assistant is working on, deleting the file, or unloading
+  /// the page all need to tear down a running request without
+  /// going through the Stop button. `cancel()` here is just the
+  /// local shorthand bound to the in-overlay Stop button; it ends
+  /// up at the same `inflightCtl.abort()` the store helpers call.
 
   function cancel(): void {
-    inflight?.abort();
+    cancelAssistantStream();
   }
 
   async function submit(): Promise<void> {
     const ctx = currentContext;
     if (!ctx || loading) return;
     // Also refuse when a background request is still in flight on
-    // this same context (the user picked "close, keep running"
+    // this same context (the user closed the overlay mid-stream
     // and reopened on the same scope). Letting them pile on a
     // second query would push two assistant turns onto the same
-    // conv for one question. Esc -> Stop is the documented path.
+    // conv for one question. The Stop button is the explicit
+    // cancellation path; Esc only closes the dialog.
     if (assistantStream.sessionId !== null && assistantStream.contextId === ctx.id) {
-      error = "a previous request is still running on this scope — press Esc to stop";
+      error = "a previous request is still running on this scope — press Stop to cancel it";
       return;
     }
     const trimmed = assistantOverlay.prompt.trim();
@@ -845,13 +903,13 @@
     loading = true;
     error = null;
     pendingTurnTime = Date.now();
-    notifyAssistantStatus("assistant started");
+    notifyAssistantStatus("assistant started", true);
     // For drive context we retrieve excerpts before composing
     // the user message; for file/group the context IS the file
     // contents, no retrieval needed.
     let excerpts: ContentHit[] | null = null;
     const ctl = new AbortController();
-    inflight = ctl;
+    setAssistantInflight(ctl);
     // Mint a per-request correlation id and arm the streaming buffer
     // BEFORE the HTTP request leaves so the first `llm.delta` frame
     // (which can arrive while the POST is still hanging) lands in the
@@ -943,7 +1001,7 @@
       // in `conv.messages`; the next submit just appends another.
     } finally {
       loading = false;
-      inflight = null;
+      setAssistantInflight(null);
       pendingTurnTime = null;
       // End the stream AFTER the response has been folded into
       // `conv.turns` so the live bubble's contents don't blink to
@@ -957,12 +1015,11 @@
   }
 
   /// Set the bottom-left status-bar message for one assistant
-  /// lifecycle event. `autoClear=true` schedules a clear after a
-  /// short TTL so the bar goes quiet on its own; "started" passes
-  /// false so the message persists until the teardown event
-  /// overwrites it. We only clear if the value we wrote is still
-  /// there — if some other producer (rename, move) has stamped a
-  /// different message in the meantime, we leave theirs alone.
+  /// lifecycle event. Every call passes `autoClear=true` so the
+  /// notification is transient (~2.5s) and the bar goes quiet on
+  /// its own. We only clear if the value we wrote is still there:
+  /// if some other producer (rename, move) has stamped a different
+  /// message in the meantime, we leave theirs alone.
   let assistantStatusClearTimer: ReturnType<typeof setTimeout> | null = null;
   function notifyAssistantStatus(msg: string, autoClear = false): void {
     if (assistantStatusClearTimer) {
@@ -1376,12 +1433,20 @@
   }
 
   function onWindowKey(e: KeyboardEvent): void {
-    // Defer to any fullscreen overlay that owns its own keys:
-    //   - confirm modal (Esc cancels, Enter confirms)
-    //   - diff overlay (Esc closes WITHOUT dismissing the pending
-    //     edit; this guard is the safety net for cases where the
-    //     diff panel didn't have focus and Esc bubbled straight to
-    //     `document` before the diff's onkeydown could intercept)
+    // Cmd/Ctrl+Enter is the only chord this listener handles.
+    // Escape is owned by App.svelte's overlay-stack handler so a
+    // press pops one layer at a time across all overlays (history
+    // / graph / search above the assistant unwind first, then the
+    // assistant itself). Esc never cancels an in-flight request:
+    // the Stop button is the explicit cancellation path, and
+    // closing the dialog mid-stream lets the request finish in the
+    // background (lastSeen bookkeeping happens in the close-time
+    // $effect above).
+    //
+    // Two fullscreen surfaces still need to opt out of Cmd+Enter
+    // because they own their own Enter semantics:
+    //   - confirm modal (Enter confirms)
+    //   - diff overlay (Enter applies / dismisses)
     if (confirmState.open) return;
     if (diffOverlay.open) return;
     if (visible && (e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -1392,103 +1457,9 @@
       // wouldn't fire in source mode.
       e.preventDefault();
       if (!loading && currentContext) void submit();
-    } else if (e.key === "Escape" && visible) {
-      // Defer to App.svelte's overlay-stack Esc when scope history
-      // is the topmost overlay (it lives in its own panel above the
-      // assistant). The stack handler pops it one layer at a time:
-      // first press closes scope history, second press closes the
-      // assistant. We only handle Esc here when the assistant is
-      // genuinely the topmost surface.
-      if (scopeHistoryOverlay.open) return;
-      // Wysiwyg / ProseMirror doesn't intercept Escape, so a
-      // window-level handler reaches it cleanly even with the
-      // editor focused.
-      e.preventDefault();
-      if (loading) {
-        // Ask before yanking the user out: someone hitting Esc to
-        // stop a runaway tool loop usually wants to refine their
-        // prompt (stop only); someone hitting Esc to get back to
-        // editing wants to close (stop + close). Pre-fix this was
-        // hard-wired to cancel-only; now the choice is explicit.
-        void promptStopOrClose();
-      } else {
-        close();
-      }
     }
   }
 
-  /// State for the three-way Esc-while-running modal. Local to
-  /// InlineAssist (the global `uiConfirm` is binary; this case
-  /// needs three real choices).
-  type StopChoice = "stop_close" | "close_keep" | "stop_only" | null;
-  let stopPrompt = $state<{
-    open: boolean;
-    resolve: ((v: StopChoice) => void) | null;
-  }>({ open: false, resolve: null });
-
-  function askStopChoice(): Promise<StopChoice> {
-    return new Promise((resolve) => {
-      stopPrompt.resolve?.(null);
-      stopPrompt.resolve = resolve;
-      stopPrompt.open = true;
-    });
-  }
-
-  function resolveStop(v: StopChoice): void {
-    const r = stopPrompt.resolve;
-    stopPrompt.resolve = null;
-    stopPrompt.open = false;
-    r?.(v);
-  }
-
-  /// Focus the stop-prompt modal once it opens so its onkeydown
-  /// (Esc / Enter) fires without the user clicking first.
-  let stopModalEl: HTMLDivElement | null = $state(null);
-  $effect(() => {
-    if (stopPrompt.open) {
-      queueMicrotask(() => stopModalEl?.focus());
-    }
-  });
-
-  /// Map a three-way Esc choice onto cancel / close calls. Backdrop
-  /// dismissal (`null`) leaves everything alone so the user can
-  /// keep waiting if they Esc'd by accident.
-  async function promptStopOrClose(): Promise<void> {
-    const choice = await askStopChoice();
-    if (choice === "stop_close") {
-      cancel();
-      close();
-    } else if (choice === "close_keep") {
-      // Close the overlay but let the in-flight HTTP request finish
-      // in the background. The assistant turn will land in
-      // conv.turns the next time the user opens this scope, so the
-      // conversation log stays honest. We deliberately do NOT call
-      // cancel(); the request keeps running.
-      //
-      // Remember where the user left off so any turns that land
-      // while they're away get a one-time divider when they come
-      // back. This is THE signal for "stuff arrived after I closed
-      // the dialog"; the tab bell is the cross-scope counterpart.
-      if (currentContext) {
-        const conv = conversationFor(currentContext);
-        conv.lastSeenTurnIndex = conv.turns.length;
-        scheduleSave(currentContext);
-      }
-      close();
-    } else if (choice === "stop_only") {
-      cancel();
-    }
-  }
-
-  function onStopKey(e: KeyboardEvent): void {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      resolveStop("stop_only");
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      resolveStop("stop_close");
-    }
-  }
   /// Resolve a pending edit by tool_call_id across every
   /// conversation bucket. The DiffOverlay dispatches actions by
   /// id so it stays decoupled from which scope owns the edit;
@@ -1701,9 +1672,17 @@
     menu?.close();
     openSettings();
   }
+
+  /// Inspector width. Local to InlineAssist for now: chan-server's
+  /// PaneWidths struct doesn't have an `assistant` slot yet, so we
+  /// keep the value in-memory and re-default it on mount. A later
+  /// pass can lift this into `paneWidths.assistant` so the width
+  /// survives across sessions like the other panels'.
+  let inspectorWidth = $state(280);
 </script>
 
 <OverlayShell id="assistant" open={visible} onClose={close}>
+<div class="assistant-layout">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="assistant-body"
@@ -2293,6 +2272,16 @@
         {/if}
       </div>
   </div>
+  {#if assistantOverlay.inspectorOpen}
+    <Inspector
+      title="Assistant"
+      bind:width={inspectorWidth}
+      onClose={() => (assistantOverlay.inspectorOpen = false)}
+    >
+      <AssistantInspectorBody />
+    </Inspector>
+  {/if}
+</div>
 </OverlayShell>
 
 {#snippet menuItems()}
@@ -2335,6 +2324,19 @@
   </li>
   <li class="sep" role="separator"></li>
   <li>
+    <button role="menuitem" onclick={toggleInspector}>
+      {#if assistantOverlay.inspectorOpen}
+        <ArrowRight size={14} strokeWidth={1.75} aria-hidden="true" />
+      {:else}
+        <ArrowLeft size={14} strokeWidth={1.75} aria-hidden="true" />
+      {/if}
+      <span class="menu-row-label">
+        {assistantOverlay.inspectorOpen ? "Hide Details" : "Show Details"}
+      </span>
+      <span class="menu-row-chord"></span>
+    </button>
+  </li>
+  <li>
     <button role="menuitem" onclick={doShowInGraph} disabled={!currentContext}>
       <Network size={14} strokeWidth={1.75} aria-hidden="true" />
       <span class="menu-row-label">Show in Graph</span>
@@ -2357,37 +2359,21 @@
      while the assistant overlay is reachable. -->
 <DiffOverlay />
 
-{#if stopPrompt.open}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="stop-overlay" onclick={() => resolveStop(null)}>
-    <div
-      class="stop-modal"
-      bind:this={stopModalEl}
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={onStopKey}
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-    >
-      <div class="title">Assistant is working</div>
-      <div class="message">
-        A request is in flight. Pick what should happen next.
-      </div>
-      <div class="actions">
-        <button type="button" onclick={() => resolveStop("stop_only")}>Stop only</button>
-        <button type="button" onclick={() => resolveStop("close_keep")}>Close, keep running</button>
-        <button type="button" class="primary" onclick={() => resolveStop("stop_close")}>Stop &amp; close</button>
-      </div>
-    </div>
-  </div>
-{/if}
-
 <style>
-  /* Single flex column that fills the OverlayShell panel. The
-     context-menu wrapper used to live on the panel itself; pulling
-     it onto an inner div lets us hang `oncontextmenu` here without
-     re-styling the shared OverlayShell. */
+  /* Row container so the conversation body and the optional inspector
+     sit side-by-side, mirroring SearchPanel / GraphPanel. The wrap
+     itself takes up the whole OverlayShell panel; the body keeps the
+     `oncontextmenu` hook for the right-click menu so the inspector
+     doesn't intercept it. */
+  .assistant-layout {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+  }
+  /* Conversation column. Same flex-column body the overlay used to
+     mount directly; only difference is it now claims the left flex
+     slot of `.assistant-layout`. */
   .assistant-body {
     display: flex;
     flex-direction: column;
@@ -3132,61 +3118,6 @@
     color: var(--link);
   }
 
-  /* Three-way Esc-while-running prompt. Self-contained modal
-     (the global uiConfirm is binary; this case has three real
-     choices). Sits above the OverlayShell scrim via a higher
-     z-index. Same neutral chrome as ConfirmModal so it reads as
-     part of the system, not the conversation. */
-  .stop-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.4);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 26500;
-  }
-  .stop-modal {
-    background: var(--bg-elev);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
-    padding: 1rem;
-    min-width: 360px;
-    max-width: 480px;
-  }
-  .stop-modal .title {
-    font-weight: 600;
-    margin-bottom: 4px;
-  }
-  .stop-modal .message {
-    font-size: 14px;
-    color: var(--text-secondary);
-    margin-bottom: 12px;
-  }
-  .stop-modal .actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    justify-content: flex-end;
-  }
-  .stop-modal .actions button {
-    background: var(--btn-bg);
-    color: var(--text);
-    border: 1px solid var(--btn-border);
-    border-radius: 4px;
-    padding: 5px 12px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 14px;
-  }
-  .stop-modal .actions button:hover { border-color: var(--btn-hover); }
-  .stop-modal .actions button.primary {
-    background: var(--link);
-    color: #fff;
-    border-color: var(--link);
-  }
   .edit-card .status-tag {
     font-size: 13px;
     text-transform: uppercase;

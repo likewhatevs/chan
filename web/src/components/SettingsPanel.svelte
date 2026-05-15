@@ -15,10 +15,11 @@
   import { onMount } from "svelte";
   import { api } from "../api/client";
   import type {
+    AssistantBackendKind,
     BuildInfo,
     EditorTheme,
     GlobalConfig,
-    LlmModelEntry,
+    LlmKeysStatus,
     LlmStatus,
     Preferences,
   } from "../api/types";
@@ -62,44 +63,10 @@
   type SaveStatus = "idle" | "saving" | "saved" | { error: string };
   let saveStatus = $state<SaveStatus>("idle");
   // LLM backend status (key set / not set, ready, etc.). Refreshed
-  // on mount + after every save so changing the backend in the
-  // form re-reads readiness.
+  // on mount + after every save so changing the default backend
+  // re-reads readiness. Reports for the currently-default backend;
+  // the keychain UI below targets that same backend.
   let llmStatus = $state<LlmStatus | null>(null);
-  /// Curated model shortlists for the local CLIs (`claude_cli` /
-  /// `gemini_cli`). Neither CLI exposes `--list-models`; both
-  /// accept the API-namespace model names verbatim, and `claude`
-  /// additionally accepts the short aliases `opus` / `sonnet` /
-  /// `haiku` that always resolve to the current latest of each
-  /// tier (per `claude --help`). The aliases are the recommended
-  /// default — they survive a model bump without a config edit —
-  /// so they sit at the top of the list; the pinned full names
-  /// follow for users who want to lock to a specific generation.
-  const CLAUDE_CLI_MODELS = [
-    "opus",
-    "sonnet",
-    "haiku",
-    "claude-opus-4-7",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5",
-  ];
-  const GEMINI_CLI_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash"];
-
-  // Per-provider model catalogs for the dropdowns. Each provider
-  // tracks loading state so the refresh button can show a spinner
-  // and an error string so a failed live fetch surfaces inline
-  // (mostly for Ollama, but Anthropic now also reports when the
-  // live `/v1/models` call falls back to the curated list).
-  let anthropicModels = $state<LlmModelEntry[]>([]);
-  let anthropicSource = $state<"live" | "curated" | "fallback" | null>(null);
-  let anthropicError = $state<string | null>(null);
-  let anthropicLoading = $state(false);
-  let geminiModels = $state<LlmModelEntry[]>([]);
-  let geminiSource = $state<"live" | "curated" | "fallback" | null>(null);
-  let geminiError = $state<string | null>(null);
-  let geminiLoading = $state(false);
-  let ollamaModels = $state<LlmModelEntry[]>([]);
-  let ollamaLoading = $state(false);
-  let ollamaError = $state<string | null>(null);
 
   /// Build identity for the About footer. Loaded on mount; the
   /// version + embeddings feature flag are static for the running
@@ -113,101 +80,111 @@
   // reports `keychain_available` so we hide the UI on headless
   // boxes (a `chan serve` over SSH on a server with no GUI
   // session) where the user still has env / file as fallbacks.
-  let keychainInput = $state("");
-  let keychainBusy = $state(false);
-  let keychainError = $state<string | null>(null);
-  // Whether the active key currently comes from the keychain;
-  // derived from `llmStatus.key.source`, so we don't need a
-  // separate probe.
-  const keychainHas = $derived(llmStatus?.key.source === "keychain");
-  const keychainAvailable = $derived(llmStatus?.key.keychain_available === true);
-  // Hide the keychain UI when an env-var override is in effect:
-  // env always wins, so storing in the keychain wouldn't change
-  // anything until the env is cleared; rather than show a
-  // confusingly-inert button we just point the user at the env
-  // override that's currently winning.
-  const envOverride = $derived(llmStatus?.key.source === "env");
-
-  /// Which provider's keychain entry the keychain UI block is
-  /// targeting. Derived from the active backend; `null` for
-  /// backends that don't use a hosted-API key (Ollama, Embedded).
-  /// The save/remove functions dispatch on this so the same UI
-  /// block serves both Claude and Gemini.
+  /// Per-row keychain UI state. Each provider has its own input,
+  /// busy flag, and error string so two rows can be edited in parallel
+  /// without crosstalk (e.g. typing into Claude's input shouldn't
+  /// clear or block Gemini's). `keysStatus` is the source of truth
+  /// for "is a key stored" rendered as a pill per row; it's a
+  /// separate fetch from `llmStatus` so non-default rows can show
+  /// status without needing to be the active backend.
   type KeychainProvider = "anthropic" | "gemini";
 
-  function keychainProviderForBackend(): KeychainProvider | null {
-    if (!editing) return null;
-    if (editing.assistant.backend === "claude") return "anthropic";
-    if (editing.assistant.backend === "gemini") return "gemini";
-    return null;
+  let keychainInput = $state<Record<KeychainProvider, string>>({
+    anthropic: "",
+    gemini: "",
+  });
+  let keychainBusy = $state<Record<KeychainProvider, boolean>>({
+    anthropic: false,
+    gemini: false,
+  });
+  let keychainError = $state<Record<KeychainProvider, string | null>>({
+    anthropic: null,
+    gemini: null,
+  });
+  let keysStatus = $state<LlmKeysStatus | null>(null);
+  // `keychain_available` lives on the active-backend status payload
+  // because chan-llm doesn't (yet) probe the keychain backend
+  // separately. Headless boxes (no Secret Service / DBus session)
+  // surface that here so the row-level UI hides itself on the same
+  // signal the old single-block UI used.
+  const keychainAvailable = $derived(llmStatus?.key.keychain_available === true);
+
+  async function loadKeysStatus(): Promise<void> {
+    try {
+      keysStatus = await api.llmKeysStatus();
+    } catch {
+      keysStatus = null;
+    }
   }
 
-  async function saveKeychain(): Promise<void> {
-    const v = keychainInput.trim();
-    if (!v || keychainBusy) return;
-    const provider = keychainProviderForBackend();
-    if (!provider) return;
-    keychainBusy = true;
-    keychainError = null;
+  function keychainHasFor(p: KeychainProvider): boolean {
+    return keysStatus?.[p].source === "keychain";
+  }
+
+  function envOverrideFor(p: KeychainProvider): boolean {
+    return keysStatus?.[p].source === "env";
+  }
+
+  async function saveKeychain(provider: KeychainProvider): Promise<void> {
+    const v = keychainInput[provider].trim();
+    if (!v || keychainBusy[provider]) return;
+    keychainBusy[provider] = true;
+    keychainError[provider] = null;
     try {
-      // Saving a key is an implicit "I want to use this backend".
-      // Commit that intent BEFORE we hit the keychain so /api/llm/
-      // status reports ready=true on the immediate refetch. The
-      // previous version only flushed pending autosaves, which
-      // didn't help when the form was clean (e.g. fresh Settings
-      // open: backend dropdown shows "Claude" but cfg.backend on
-      // the server is still None until the user touches anything).
+      // Saving a key is an implicit "I want to use this provider":
+      // enable the matching row and (if no default is set yet) claim
+      // the default pointer too. We don't yank the default away from
+      // another provider though — the user already picked it.
       if (editing) {
-        editing.assistant.enabled = true;
-        editing.assistant.backend = provider === "anthropic" ? "claude" : "gemini";
+        if (provider === "anthropic") {
+          editing.assistant.claude.enabled = true;
+        } else {
+          editing.assistant.gemini.enabled = true;
+        }
+        if (editing.assistant.default_backend === null) {
+          editing.assistant.default_backend = provider === "anthropic" ? "claude" : "gemini";
+        }
       }
       if (autosaveTimer) {
         clearTimeout(autosaveTimer);
         autosaveTimer = null;
       }
-      // Always save: the implicit edits above may not register as
-      // dirty if the user previously saw the same backend selected
-      // in editing (e.g. they're refreshing the key on an already-
-      // configured backend). save() short-circuits cleanly when
-      // there's nothing to send.
+      // Flush the enable / default change before saving the key so a
+      // status refetch immediately after picks up the matching state.
       await save();
       // Server verifies the round trip (write then read-back) before
-      // returning 204; on a read-back failure it surfaces a precise
-      // error here in the catch arm. So the input only clears on a
-      // verified-good save, and a stuck "saving…" never happens.
+      // returning 204; a read-back failure surfaces in the catch arm.
+      // The input only clears on a verified-good save so a stuck
+      // "saving…" never happens.
       if (provider === "anthropic") {
         await api.setAnthropicKey(v);
       } else {
         await api.setGeminiKey(v);
       }
-      keychainInput = "";
-      // Re-pull status so the source flips to "keychain" and the
-      // readiness pill picks up the new key.
-      await loadLlmStatus();
+      keychainInput[provider] = "";
+      await Promise.all([loadLlmStatus(), loadKeysStatus()]);
     } catch (e) {
-      keychainError = (e as Error).message ?? String(e);
+      keychainError[provider] = (e as Error).message ?? String(e);
     } finally {
-      keychainBusy = false;
+      keychainBusy[provider] = false;
     }
   }
 
-  async function removeKeychain(): Promise<void> {
-    if (keychainBusy) return;
-    const provider = keychainProviderForBackend();
-    if (!provider) return;
-    keychainBusy = true;
-    keychainError = null;
+  async function removeKeychain(provider: KeychainProvider): Promise<void> {
+    if (keychainBusy[provider]) return;
+    keychainBusy[provider] = true;
+    keychainError[provider] = null;
     try {
       if (provider === "anthropic") {
         await api.clearAnthropicKey();
       } else {
         await api.clearGeminiKey();
       }
-      await loadLlmStatus();
+      await Promise.all([loadLlmStatus(), loadKeysStatus()]);
     } catch (e) {
-      keychainError = (e as Error).message ?? String(e);
+      keychainError[provider] = (e as Error).message ?? String(e);
     } finally {
-      keychainBusy = false;
+      keychainBusy[provider] = false;
     }
   }
 
@@ -219,122 +196,89 @@
     }
   }
 
-  /// Pull the Anthropic model list. Server returns the live
-  /// `/v1/models` catalog when an API key is configured and the
-  /// curated fallback when it isn't (or when the live fetch
-  /// fails). Refresh button always reloads.
-  async function refreshAnthropicModels(): Promise<void> {
-    anthropicLoading = true;
-    anthropicError = null;
-    try {
-      const resp = await api.anthropicModels();
-      anthropicModels = resp.models;
-      anthropicSource = resp.source;
-      if (resp.source === "fallback") {
-        anthropicError = resp.error ?? "live fetch failed";
-      }
-      autoPickModel("claude");
-    } catch (e) {
-      anthropicError = (e as Error).message;
-      anthropicModels = [];
-      anthropicSource = null;
-    } finally {
-      anthropicLoading = false;
-    }
-  }
-
-  /// Pull the Gemini model list. Mirrors refreshAnthropicModels:
-  /// live `/v1beta/models` when a key is configured, curated
-  /// fallback otherwise; the refresh button always reloads.
-  async function refreshGeminiModels(): Promise<void> {
-    geminiLoading = true;
-    geminiError = null;
-    try {
-      const resp = await api.geminiModels();
-      geminiModels = resp.models;
-      geminiSource = resp.source;
-      if (resp.source === "fallback") {
-        geminiError = resp.error ?? "live fetch failed";
-      }
-      autoPickModel("gemini");
-    } catch (e) {
-      geminiError = (e as Error).message;
-      geminiModels = [];
-      geminiSource = null;
-    } finally {
-      geminiLoading = false;
-    }
-  }
-
-  /// Pull the Ollama model list. Used both on first switch to the
-  /// ollama backend AND from the refresh button so the user can
-  /// re-query after `ollama pull`-ing a new model.
-  async function refreshOllamaModels(): Promise<void> {
+  /// Provider enable-toggle handler. Toggling on a row claims the
+  /// default pointer when no default is currently set, so the
+  /// "enabled but no default" half-state can't occur from the UI.
+  /// Toggling off clears the default if this row was holding it,
+  /// nudging the user to pick another (or accept "off") instead of
+  /// leaving the assistant in an inert "default disabled" state.
+  /// Also wipes the keychain input so a key typed for one provider
+  /// can't accidentally land in another's slot on the next save.
+  function onProviderToggle(kind: AssistantBackendKind): void {
     if (!editing) return;
-    ollamaLoading = true;
-    ollamaError = null;
-    try {
-      ollamaModels = await api.ollamaModels(
-        editing.assistant.ollama.url || undefined,
-      );
-      autoPickModel("ollama");
-    } catch (e) {
-      ollamaError = (e as Error).message;
-      ollamaModels = [];
-    } finally {
-      ollamaLoading = false;
-    }
-  }
-
-  /// When the model catalog refreshes, pick the first available model
-  /// for the user if they don't already have a valid choice. Avoids
-  /// the "dropdown shows blank because the saved model isn't in the
-  /// returned catalog" footgun and gives first-launch users something
-  /// usable to pick from. Triggers an autosave so the choice persists.
-  function autoPickModel(provider: "claude" | "gemini" | "ollama"): void {
-    if (!editing) return;
-    if (provider === "claude") {
-      if (anthropicModels.length === 0) return;
-      const cur = editing.assistant.claude.model;
-      if (!cur || !anthropicModels.some((m) => m.name === cur)) {
-        editing.assistant.claude.model = anthropicModels[0].name;
+    keychainInput = { anthropic: "", gemini: "" };
+    keychainError = { anthropic: null, gemini: null };
+    const a = editing.assistant;
+    const row = providerEnabledField(a, kind);
+    if (row === null) return;
+    if (row) {
+      if (a.default_backend === null) {
+        a.default_backend = kind;
       }
-    } else if (provider === "gemini") {
-      if (geminiModels.length === 0) return;
-      const cur = editing.assistant.gemini.model;
-      if (!cur || !geminiModels.some((m) => m.name === cur)) {
-        editing.assistant.gemini.model = geminiModels[0].name;
-      }
-    } else {
-      if (ollamaModels.length === 0) return;
-      const cur = editing.assistant.ollama.model;
-      if (!cur || !ollamaModels.some((m) => m.name === cur)) {
-        editing.assistant.ollama.model = ollamaModels[0].name;
-      }
+    } else if (a.default_backend === kind) {
+      a.default_backend = null;
     }
-  }
-
-  /// Backend-dropdown change handler. Lazy-loads the right model
-  /// catalog so we don't hit Ollama until the user actually picks
-  /// it (the call would fail with no Ollama running otherwise).
-  /// Also wipes the keychain input so a key the user typed for
-  /// Anthropic doesn't accidentally land in the Gemini slot (or
-  /// vice versa) on a subsequent save.
-  async function onBackendChange(): Promise<void> {
-    if (!editing) return;
-    keychainInput = "";
-    keychainError = null;
-    if (editing.assistant.backend === "claude") {
-      if (anthropicModels.length === 0) await refreshAnthropicModels();
-    } else if (editing.assistant.backend === "gemini") {
-      if (geminiModels.length === 0) await refreshGeminiModels();
-    } else if (editing.assistant.backend === "ollama") {
-      if (ollamaModels.length === 0) await refreshOllamaModels();
-    }
-    // Server's /api/llm/status dispatches its `key` payload on the
-    // active backend, so re-pull so the readiness/key pill matches
-    // the new selection without waiting for the autosave round-trip.
     void loadLlmStatus();
+  }
+
+  /// Default-radio handler. Auto-enables the row if the user picks a
+  /// disabled provider as default; otherwise the choice would be
+  /// inert (the resolver gates on `enabled[default]`).
+  function onDefaultChange(kind: AssistantBackendKind): void {
+    if (!editing) return;
+    keychainInput = { anthropic: "", gemini: "" };
+    keychainError = { anthropic: null, gemini: null };
+    const a = editing.assistant;
+    a.default_backend = kind;
+    setProviderEnabled(a, kind, true);
+    void loadLlmStatus();
+  }
+
+  /// Read the per-provider `enabled` flag without a five-way switch
+  /// at every call site. Returns null for unknown / placeholder
+  /// kinds ("embedded") so toggles on those are a no-op.
+  function providerEnabledField(
+    a: Preferences["assistant"],
+    kind: AssistantBackendKind,
+  ): boolean | null {
+    switch (kind) {
+      case "claude":
+        return a.claude.enabled;
+      case "gemini":
+        return a.gemini.enabled;
+      case "ollama":
+        return a.ollama.enabled;
+      case "claude_cli":
+        return a.claude_cli.enabled;
+      case "gemini_cli":
+        return a.gemini_cli.enabled;
+      default:
+        return null;
+    }
+  }
+
+  function setProviderEnabled(
+    a: Preferences["assistant"],
+    kind: AssistantBackendKind,
+    value: boolean,
+  ): void {
+    switch (kind) {
+      case "claude":
+        a.claude.enabled = value;
+        return;
+      case "gemini":
+        a.gemini.enabled = value;
+        return;
+      case "ollama":
+        a.ollama.enabled = value;
+        return;
+      case "claude_cli":
+        a.claude_cli.enabled = value;
+        return;
+      case "gemini_cli":
+        a.gemini_cli.enabled = value;
+        return;
+    }
   }
   // When the upstream drive info changes (initial load, external
   // edit, server restart), reset the form to the server state.
@@ -373,20 +317,6 @@
 
   function clone(p: Preferences): Preferences {
     return JSON.parse(JSON.stringify(p));
-  }
-
-  /// Parse a max-output-tokens text input into Option<u32>. Empty
-  /// string or non-positive numbers clear the override (chan-llm
-  /// then falls back to its per-backend default). Caps the value at
-  /// u32::MAX so the autosave can't ship a number the server can't
-  /// deserialize.
-  function parseMaxTokens(raw: string): number | null {
-    const t = raw.trim();
-    if (t === "") return null;
-    const n = Number(t);
-    if (!Number.isFinite(n) || n <= 0) return null;
-    const i = Math.floor(n);
-    return i > 0xffff_ffff ? 0xffff_ffff : i;
   }
 
   function snapshot(): string {
@@ -450,8 +380,11 @@
         editing = normalizePrefs(clone(info.preferences));
       }
       if (globalConfig) normalizePrefs(globalConfig.preferences);
-      // Backend / model may have flipped; re-check readiness.
+      // Backend / model may have flipped; re-check readiness for the
+      // current default AND refresh the per-row key statuses so each
+      // row's pill matches the new server state.
       void loadLlmStatus();
+      void loadKeysStatus();
       saveStatus = "saved";
       savedFlashTimer = setTimeout(() => {
         if (saveStatus === "saved") saveStatus = "idle";
@@ -523,28 +456,20 @@
     void refreshDrive();
     void loadGlobalConfig();
     void loadLlmStatus();
+    void loadKeysStatus();
     void loadBuildInfo();
-    // Catalog warmup happens via the effect below, gated on both
-    // `editing` and the scope-source being loaded so that
-    // autoPickModel's mutation reliably appears as dirty and the
-    // autosave round-trip persists it.
   });
 
-  // Pre-populate the model catalog matching the currently-selected
-  // backend, but wait until both `editing` AND the source-of-truth
-  // for the active scope are available. Without that gate, autoPick
-  // racing ahead of loadGlobalConfig leaves dirty() returning false
-  // (scopeSource is undefined; see dirty() above) and the autosave
-  // never fires, so the dropdown briefly flashes a model and then
-  // appears unset again on the next mount because it was never
-  // persisted.
-  let catalogWarmedUp = false;
-  $effect(() => {
-    if (catalogWarmedUp) return;
-    if (!editing || !globalConfig) return;
-    catalogWarmedUp = true;
-    void onBackendChange();
-  });
+  /// Friendly labels used in the provider list. Centralized so the
+  /// dropdown ordering and the row ordering stay consistent across
+  /// the markup below.
+  const PROVIDER_ROWS: { kind: AssistantBackendKind; label: string; hint: string }[] = [
+    { kind: "claude", label: "Claude", hint: "Anthropic API" },
+    { kind: "gemini", label: "Gemini", hint: "Google API" },
+    { kind: "ollama", label: "Ollama", hint: "local server" },
+    { kind: "claude_cli", label: "Claude CLI", hint: "local `claude` shell-executor" },
+    { kind: "gemini_cli", label: "Gemini CLI", hint: "local `gemini` shell-executor" },
+  ];
 </script>
 
 <OverlayShell id="settings" open={visible} onClose={close}>
@@ -591,392 +516,167 @@
   <div class="settings">
     <section>
       <h3>Assistant</h3>
+      <p class="hint">
+        Configure one or more assistants below. Toggle <strong>enabled</strong>
+        per row to keep credentials around while picking which providers
+        are usable; pick a <strong>default</strong> for new scopes. Model,
+        max tokens, and other per-turn knobs live in the assistant
+        overlay's inspector — open the assistant (Cmd+I) and click the
+        inspector toggle.
+      </p>
 
-      <!-- 1. Master switch + tooltip. -->
-      <label class="toggle-row">
-        <input type="checkbox" bind:checked={editing.assistant.enabled} />
-        <span>Enable assistant</span>
-        <span class="hint-text">
-          turn off to hide Cmd+P, the assistant button in the editor
-          toolbar, and the search palette's "ask" tab
-        </span>
-      </label>
-
-      {#if !editing.assistant.enabled}
-        <!-- Visible cue that the disabled dropdowns below aren't a bug.
-             Surfaces only when the master switch is off; otherwise the
-             gate is invisible and reads as broken UI. -->
-        <div class="muted gate-hint">enable above to configure provider, model, and key</div>
+      {#if editing.assistant.default_backend === null}
+        <div class="muted gate-hint">
+          no default assistant picked yet: enable a row below and mark
+          it as default to surface the assistant button + Cmd+I.
+        </div>
+      {:else if !editing.assistant.effective_enabled}
+        <div class="muted gate-hint">
+          default assistant is currently disabled: enable its row or
+          pick a different default to make the assistant usable.
+        </div>
       {/if}
 
-      <!-- 2. Provider. -->
-      <label class:dim={!editing.assistant.enabled}>
-        <span>Provider</span>
-        <select
-          bind:value={editing.assistant.backend}
-          onchange={() => void onBackendChange()}
-          disabled={!editing.assistant.enabled}
-        >
-          <option value="claude_cli">claude CLI (shell-executor)</option>
-          <option value="gemini_cli">gemini CLI (shell-executor)</option>
-          <option value="claude">claude (Anthropic API)</option>
-          <option value="gemini">gemini (Google API)</option>
-          <option value="embedded" disabled>local: coming soon (embedded model)</option>
-          <option value="ollama">ollama (local)</option>
-        </select>
-      </label>
-
-      <!-- For Ollama, surface the URL above the model picker
-           because the URL drives which catalog the picker reads. -->
-      {#if editing.assistant.backend === "ollama"}
-        <label class:dim={!editing.assistant.enabled}>
-          <span>URL</span>
-          <input
-            bind:value={editing.assistant.ollama.url}
-            placeholder="http://localhost:11434"
-            disabled={!editing.assistant.enabled}
-          />
-        </label>
-      {/if}
-
-      <!-- 3. Model + always-visible reload. The reload button
-           greys out when it can't do anything useful (refreshing
-           a curated list when no key is set, or while a previous
-           refresh is in flight). Same .model-row shape for both
-           providers so the layout doesn't shift on backend
-           change. -->
-      {#if editing.assistant.backend === "claude"}
-        <label class:dim={!editing.assistant.enabled}>
-          <span>Model</span>
-          <span class="model-row">
-            <select
-              bind:value={editing.assistant.claude.model}
-              disabled={!editing.assistant.enabled}
-            >
-              <!-- The null-valued "default" placeholder only renders
-                   while the catalog is empty (initial mount, refresh
-                   failed). Once the catalog has loaded, autoPickModel
-                   has selected a real entry, and keeping the
-                   placeholder around with the same display text as a
-                   real catalog entry causes the select to render
-                   blank when the user picks it (Svelte's bind:value
-                   resolution between null and a colliding string
-                   value gets confused). Dropping it post-load also
-                   simplifies the menu to just real models. -->
-              {#if anthropicModels.length === 0}
-                <option value={null}>claude-haiku-4-5 (default)</option>
-              {/if}
-              {#each anthropicModels as m (m.name)}
-                <option value={m.name}>
-                  {m.name}{m.supports_tools ? "" : "  (no tools)"}
-                </option>
-              {/each}
-            </select>
-            <button
-              type="button"
-              class="refresh"
-              onclick={() => void refreshAnthropicModels()}
-              disabled={anthropicLoading || !editing.assistant.enabled || !llmStatus?.key.set}
-              title={!llmStatus?.key.set
-                ? "set ANTHROPIC_API_KEY to fetch the live model list"
-                : "re-query Anthropic for the model list"}
-            >{anthropicLoading ? "…" : "↻"}</button>
-          </span>
-        </label>
-        <label class:dim={!editing.assistant.enabled}>
-          <span>Max output tokens</span>
-          <input
-            type="number"
-            min="1"
-            step="1"
-            placeholder="4096 (default)"
-            value={editing.assistant.claude.max_tokens ?? ""}
-            oninput={(e) => {
-              if (!editing) return;
-              editing.assistant.claude.max_tokens = parseMaxTokens(
-                (e.currentTarget as HTMLInputElement).value,
-              );
-            }}
-            disabled={!editing.assistant.enabled}
-          />
-        </label>
-        {#if anthropicSource === "fallback" && anthropicError}
-          <div class="muted err-line">Anthropic: {anthropicError} (showing curated list)</div>
-        {/if}
-        {#if !llmStatus?.key.set}
-          <div class="muted err-line">
-            {#if keychainAvailable}
-              Save your Anthropic API key in the OS keychain below, or
-              export <code class="mono">ANTHROPIC_API_KEY</code> before
-              launching chan.
-            {:else}
-              export <code class="mono">ANTHROPIC_API_KEY</code> or write
-              <code class="mono">{llmStatus?.key.path ?? "~/.config/chan/api-keys.toml"}</code>
-              with <code class="mono">[anthropic] api_key = "..."</code>
-            {/if}
-          </div>
-        {/if}
-        {#if keychainAvailable && !envOverride}
-          <!-- Store the key in the OS keychain (macOS Keychain,
-               Windows Credential Manager, Linux Secret Service).
-               Hidden when ANTHROPIC_API_KEY is set in env: an env
-               override always wins, so the keychain controls
-               would be silently inert. Hidden also on headless
-               boxes where the keychain backend isn't reachable
-               (typical for `chan serve` over SSH). -->
-          <div class="keychain">
-            <div class="keychain-label">
-              {#if keychainHas}
-                <span class="ok">●</span> stored in this machine's keychain
-              {:else}
-                <span class="muted">no key in this machine's keychain</span>
+      <div class="assistant-list">
+        {#each PROVIDER_ROWS as row (row.kind)}
+          {@const enabledNow = providerEnabledField(editing.assistant, row.kind) === true}
+          {@const isDefault = editing.assistant.default_backend === row.kind}
+          {@const isKeyProvider = row.kind === "claude" || row.kind === "gemini"}
+          {@const keyProvider = (row.kind === "claude"
+            ? "anthropic"
+            : "gemini") as KeychainProvider}
+          <div class="assistant-row" class:on={enabledNow}>
+            <div class="row-head">
+              <label class="row-toggle">
+                <input
+                  type="checkbox"
+                  checked={enabledNow}
+                  onchange={(e) => {
+                    if (!editing) return;
+                    const next = (e.currentTarget as HTMLInputElement).checked;
+                    setProviderEnabled(editing.assistant, row.kind, next);
+                    onProviderToggle(row.kind);
+                  }}
+                />
+                <span class="provider-name">{row.label}</span>
+                <span class="provider-hint">{row.hint}</span>
+              </label>
+              {#if enabledNow}
+                <label class="default-radio">
+                  <input
+                    type="radio"
+                    name="default-backend"
+                    value={row.kind}
+                    checked={isDefault}
+                    onchange={() => onDefaultChange(row.kind)}
+                  />
+                  <span>default</span>
+                </label>
               {/if}
             </div>
-            {#if keychainHas}
-              <button
-                type="button"
-                onclick={() => void removeKeychain()}
-                disabled={keychainBusy}
-                title="remove the stored key"
-              >{keychainBusy ? "removing…" : "remove from keychain"}</button>
-            {:else}
-              <input
-                type="password"
-                placeholder="sk-ant-..."
-                bind:value={keychainInput}
-                onkeydown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void saveKeychain();
-                  }
-                }}
-                spellcheck="false"
-                autocomplete="off"
-              />
-              <button
-                type="button"
-                onclick={() => void saveKeychain()}
-                disabled={keychainBusy || !keychainInput.trim()}
-              >{keychainBusy ? "saving…" : "save in keychain"}</button>
-            {/if}
-            {#if keychainError}
-              <span class="err keychain-err">{keychainError}</span>
-            {/if}
-          </div>
-        {:else if envOverride}
-          <div class="muted err-line">
-            ANTHROPIC_API_KEY is set in env and always wins; unset it to
-            manage the key via keychain instead.
-          </div>
-        {/if}
-      {:else if editing.assistant.backend === "gemini"}
-        <label class:dim={!editing.assistant.enabled}>
-          <span>Model</span>
-          <span class="model-row">
-            <select
-              bind:value={editing.assistant.gemini.model}
-              disabled={!editing.assistant.enabled}
-            >
-              {#if geminiModels.length === 0}
-                <option value={null}>gemini-2.5-flash (default)</option>
-              {/if}
-              {#each geminiModels as m (m.name)}
-                <option value={m.name}>
-                  {m.name}{m.supports_tools ? "" : "  (no tools)"}
-                </option>
-              {/each}
-            </select>
-            <button
-              type="button"
-              class="refresh"
-              onclick={() => void refreshGeminiModels()}
-              disabled={geminiLoading || !editing.assistant.enabled || !llmStatus?.key.set}
-              title={!llmStatus?.key.set
-                ? "set GEMINI_API_KEY to fetch the live model list"
-                : "re-query Google for the model list"}
-            >{geminiLoading ? "…" : "↻"}</button>
-          </span>
-        </label>
-        <label class:dim={!editing.assistant.enabled}>
-          <span>Max output tokens</span>
-          <input
-            type="number"
-            min="1"
-            step="1"
-            placeholder="4096 (default)"
-            value={editing.assistant.gemini.max_tokens ?? ""}
-            oninput={(e) => {
-              if (!editing) return;
-              editing.assistant.gemini.max_tokens = parseMaxTokens(
-                (e.currentTarget as HTMLInputElement).value,
-              );
-            }}
-            disabled={!editing.assistant.enabled}
-          />
-        </label>
-        {#if geminiSource === "fallback" && geminiError}
-          <div class="muted err-line">Gemini: {geminiError} (showing curated list)</div>
-        {/if}
-        {#if !llmStatus?.key.set}
-          <div class="muted err-line">
-            {#if keychainAvailable}
-              Save your Google AI Studio API key in the OS keychain
-              below, or export
-              <code class="mono">GEMINI_API_KEY</code> before launching
-              chan.
-            {:else}
-              export <code class="mono">GEMINI_API_KEY</code> or write
-              <code class="mono">{llmStatus?.key.path ?? "~/.config/chan/api-keys.toml"}</code>
-              with <code class="mono">[gemini] api_key = "..."</code>
-            {/if}
-          </div>
-        {/if}
-        {#if keychainAvailable && !envOverride}
-          <div class="keychain">
-            <div class="keychain-label">
-              {#if keychainHas}
-                <span class="ok">●</span> stored in this machine's keychain
-              {:else}
-                <span class="muted">no key in this machine's keychain</span>
-              {/if}
-            </div>
-            {#if keychainHas}
-              <button
-                type="button"
-                onclick={() => void removeKeychain()}
-                disabled={keychainBusy}
-                title="remove the stored key"
-              >{keychainBusy ? "removing…" : "remove from keychain"}</button>
-            {:else}
-              <input
-                type="password"
-                placeholder="AIza..."
-                bind:value={keychainInput}
-                onkeydown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void saveKeychain();
-                  }
-                }}
-                spellcheck="false"
-                autocomplete="off"
-              />
-              <button
-                type="button"
-                onclick={() => void saveKeychain()}
-                disabled={keychainBusy || !keychainInput.trim()}
-              >{keychainBusy ? "saving…" : "save in keychain"}</button>
-            {/if}
-            {#if keychainError}
-              <span class="err keychain-err">{keychainError}</span>
-            {/if}
-          </div>
-        {:else if envOverride}
-          <div class="muted err-line">
-            GEMINI_API_KEY is set in env and always wins; unset it to
-            manage the key via keychain instead.
-          </div>
-        {/if}
-      {:else if editing.assistant.backend === "ollama"}
-        <label class:dim={!editing.assistant.enabled}>
-          <span>Model</span>
-          <span class="model-row">
-            <select
-              bind:value={editing.assistant.ollama.model}
-              disabled={ollamaLoading || !editing.assistant.enabled}
-            >
-              {#if ollamaModels.length === 0}
-                <option value={null}>(refresh to load)</option>
-              {/if}
-              {#each ollamaModels as m (m.name)}
-                <option value={m.name}>
-                  {m.name}{m.supports_tools ? "" : "  (no tools)"}
-                </option>
-              {/each}
-            </select>
-            <button
-              type="button"
-              class="refresh"
-              onclick={() => void refreshOllamaModels()}
-              disabled={ollamaLoading || !editing.assistant.enabled}
-              title="re-query Ollama for installed models"
-            >{ollamaLoading ? "…" : "↻"}</button>
-          </span>
-        </label>
-        <label class:dim={!editing.assistant.enabled}>
-          <span>Max output tokens</span>
-          <input
-            type="number"
-            min="1"
-            step="1"
-            placeholder="uncapped (default)"
-            value={editing.assistant.ollama.max_tokens ?? ""}
-            oninput={(e) => {
-              if (!editing) return;
-              editing.assistant.ollama.max_tokens = parseMaxTokens(
-                (e.currentTarget as HTMLInputElement).value,
-              );
-            }}
-            disabled={!editing.assistant.enabled}
-          />
-        </label>
-        {#if ollamaError}
-          <div class="muted err-line">Ollama: {ollamaError}</div>
-        {/if}
-      {:else if editing.assistant.backend === "claude_cli"}
-        <!-- The local `claude` CLI doesn't expose a programmatic
-             catalog and its accepted `--model` aliases are a stable,
-             short set. Use a hardcoded curated list rather than the
-             Anthropic API catalog: the live API list includes
-             versioned aliases (e.g. claude-opus-3-5-20240620) that
-             aren't always valid CLI inputs, and refreshing the API
-             catalog shouldn't change CLI options. "(use CLI default)"
-             clears the override so `claude config`'s pick wins. -->
-        <label class:dim={!editing.assistant.enabled}>
-          <span>Model</span>
-          <select
-            bind:value={editing.assistant.claude_cli.model}
-            disabled={!editing.assistant.enabled}
-          >
-            <option value={null}>(use CLI default)</option>
-            {#each CLAUDE_CLI_MODELS as name (name)}
-              <option value={name}>{name}</option>
-            {/each}
-          </select>
-        </label>
-      {:else if editing.assistant.backend === "gemini_cli"}
-        <!-- Same shape as claude_cli, against a hardcoded Gemini-CLI
-             shortlist. -->
-        <label class:dim={!editing.assistant.enabled}>
-          <span>Model</span>
-          <select
-            bind:value={editing.assistant.gemini_cli.model}
-            disabled={!editing.assistant.enabled}
-          >
-            <option value={null}>(use CLI default)</option>
-            {#each GEMINI_CLI_MODELS as name (name)}
-              <option value={name}>{name}</option>
-            {/each}
-          </select>
-        </label>
-      {/if}
 
-      <!-- Auto-apply moved out of Settings: the toggle now lives in
-           the chat composer (next to Send), so it can be flipped
-           per turn without leaving the conversation. The persisted
-           pref still rides on the backend's editor TOML as the
-           default the toggle initializes from. -->
+            {#if enabledNow}
+              <div class="row-body">
+                {#if row.kind === "ollama"}
+                  <label class="row-field">
+                    <span>URL</span>
+                    <input
+                      bind:value={editing.assistant.ollama.url}
+                      placeholder="http://localhost:11434"
+                    />
+                  </label>
+                {/if}
 
-      <!-- 5 + 6. Status block at the bottom: ready/not-ready
-           pill, then the tools row with a longer explanation when
-           the current model can't use them. Sitting at the bottom
-           keeps it close to the controls that affect it (toggling
-           the master switch, picking a provider/model) so the user
-           sees the immediate consequence. -->
+                {#if isKeyProvider && keychainAvailable && !envOverrideFor(keyProvider)}
+                  <div class="keychain">
+                    <div class="keychain-label">
+                      {#if keychainHasFor(keyProvider)}
+                        <span class="ok">●</span> key stored in this
+                        machine's keychain
+                      {:else if keysStatus?.[keyProvider].source === "file"}
+                        <span class="ok">●</span> key stored in
+                        <code class="mono">~/.config/chan/api-keys.toml</code>
+                      {:else}
+                        <span class="muted">no key configured</span>
+                      {/if}
+                    </div>
+                    {#if keychainHasFor(keyProvider)}
+                      <button
+                        type="button"
+                        onclick={() => void removeKeychain(keyProvider)}
+                        disabled={keychainBusy[keyProvider]}
+                        title="remove the stored key"
+                      >{keychainBusy[keyProvider]
+                        ? "removing…"
+                        : "remove from keychain"}</button>
+                    {:else}
+                      <input
+                        type="password"
+                        placeholder={keyProvider === "anthropic"
+                          ? "sk-ant-..."
+                          : "AIza..."}
+                        bind:value={keychainInput[keyProvider]}
+                        onkeydown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            void saveKeychain(keyProvider);
+                          }
+                        }}
+                        spellcheck="false"
+                        autocomplete="off"
+                      />
+                      <button
+                        type="button"
+                        onclick={() => void saveKeychain(keyProvider)}
+                        disabled={keychainBusy[keyProvider] ||
+                          !keychainInput[keyProvider].trim()}
+                      >{keychainBusy[keyProvider]
+                        ? "saving…"
+                        : "save in keychain"}</button>
+                    {/if}
+                    {#if keychainError[keyProvider]}
+                      <span class="err keychain-err">
+                        {keychainError[keyProvider]}
+                      </span>
+                    {/if}
+                  </div>
+                {:else if isKeyProvider && envOverrideFor(keyProvider)}
+                  <div class="muted err-line">
+                    {keyProvider === "anthropic"
+                      ? "ANTHROPIC_API_KEY"
+                      : "GEMINI_API_KEY"} is set in env and always
+                    wins; unset it to manage the key via keychain
+                    instead.
+                  </div>
+                {:else if isKeyProvider && !keychainAvailable}
+                  <div class="muted err-line">
+                    export <code class="mono">
+                      {keyProvider === "anthropic"
+                        ? "ANTHROPIC_API_KEY"
+                        : "GEMINI_API_KEY"}
+                    </code> or write
+                    <code class="mono">{llmStatus?.key.path ?? "~/.config/chan/api-keys.toml"}</code>
+                    with <code class="mono">[{keyProvider}] api_key = "..."</code>
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/each}
+      </div>
+
+      <!-- Status block at the bottom: ready/not-ready pill for the
+           current default + tools capability. Mirrors the old
+           single-block status; sources from llmStatus (which
+           dispatches on the active default). -->
       <div class="grid">
         <span class="k">status</span>
         <span class="v">
-          {#if llmStatus?.ready}
+          {#if !editing.assistant.default_backend}
+            <span class="muted">no default selected</span>
+          {:else if !editing.assistant.effective_enabled}
+            <span class="muted">default provider is disabled</span>
+          {:else if llmStatus?.ready}
             <span class="ok">ready</span>
           {:else}
             <span class="err">
@@ -986,12 +686,7 @@
         </span>
         <span class="k">tools</span>
         <span class="v">
-          {#if !llmStatus?.ready}
-            <!-- The status row above already names the readiness
-                 problem. Don't restate the tool capability here:
-                 it's a per-model property the user can't act on
-                 until the assistant is ready. The em dash signals
-                 "n/a" without taking the green/red color. -->
+          {#if !llmStatus?.ready || !editing.assistant.effective_enabled}
             <span class="muted">—</span>
           {:else if llmStatus?.supports_tools}
             <span class="ok">supported</span>
@@ -1000,7 +695,7 @@
             <div class="hint-text">
               the current model can chat but can't read other files,
               search the drive, or propose file edits; pick a
-              tool-capable model to enable those
+              tool-capable model from the assistant inspector
             </div>
           {/if}
         </span>
@@ -1392,6 +1087,90 @@
     font-size: 13px;
     margin: 0.25rem 0;
   }
+  /* Assistant provider list. Each row is a card with a header (enable
+     toggle + provider name + default radio) and a body that surfaces
+     only when the row is enabled (URL field for Ollama, keychain UI
+     for Claude/Gemini). The card boundary makes it visually clear
+     that the per-row controls are scoped to that provider. */
+  .assistant-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin: 0.4rem 0;
+  }
+  .assistant-row {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.5rem 0.6rem;
+    background: var(--bg);
+  }
+  .assistant-row.on {
+    /* Faint accent border so enabled rows stand out from the disabled
+       (configured but off) ones without being noisy. */
+    border-color: var(--btn-border);
+  }
+  .row-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    justify-content: space-between;
+  }
+  .row-toggle {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    flex: 1;
+    min-width: 0;
+    cursor: pointer;
+  }
+  .row-toggle .provider-name {
+    font-weight: 600;
+  }
+  .row-toggle .provider-hint {
+    color: var(--text-secondary);
+    font-size: 13px;
+  }
+  .default-radio {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: var(--text-secondary);
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .default-radio input[type="radio"] {
+    margin: 0;
+  }
+  .row-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+  }
+  .row-field {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 14px;
+  }
+  .row-field > span {
+    min-width: 60px;
+    color: var(--text-secondary);
+  }
+  .row-field input[type="text"],
+  .row-field input:not([type]) {
+    flex: 1;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 4px 6px;
+    font: inherit;
+    font-size: 14px;
+    outline: none;
+  }
+  .row-field input:focus { border-color: var(--link); }
+
   /* Keychain row: status label, password input (or remove button),
      primary action button. Wraps on narrow widths so the row doesn't
      overflow the form. */

@@ -43,21 +43,31 @@ pub struct PreferencesView {
     pub date_format: String,
 }
 
-/// Frontend's `AssistantPrefs` view. The subtables (claude / ollama /
-/// gemini) carry only model overrides today; per-backend ollama URL
-/// is stubbed out (Some(None)) since chan-llm doesn't persist it.
+/// Frontend's `AssistantPrefs` view. The Settings UI manages the
+/// per-provider enable flags + minimum config (token / URL); model
+/// and max_tokens fields round-trip here too but are written from
+/// the assistant overlay's inspector, not Settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssistantPrefsView {
-    pub enabled: bool,
-    pub backend: AssistantBackendKind,
+    /// Derived: true when `default_backend` is Some AND the matching
+    /// provider's `enabled` flag is set. Read-only on PATCH; the
+    /// server recomputes it from the per-provider flags below. The
+    /// SPA reads this for the master gate (assistant button +
+    /// Cmd+I).
+    pub effective_enabled: bool,
+    /// Which provider is the default assistant. Sticky across enable/
+    /// disable toggles so user intent survives a "disable then
+    /// re-enable" round-trip; `null` means no default picked.
+    #[serde(default)]
+    pub default_backend: Option<AssistantBackendKind>,
     pub answers_dir: String,
     pub auto_apply_writes: bool,
     pub claude: ProviderPrefsView,
     pub ollama: OllamaPrefsView,
     pub gemini: ProviderPrefsView,
-    /// Optional `--model` override passed to the local `claude` CLI
-    /// when the backend is `claude_cli`. None lets the CLI's own
-    /// default win. Mirrors `chan_llm::LlmConfig.models.claude_cli`.
+    /// Local `claude` CLI shell-executor backend. Carries no token /
+    /// URL (auth runs through the user's installed CLI); only the
+    /// enable flag and the optional model override.
     #[serde(default)]
     pub claude_cli: CliPrefsView,
     /// Same shape as `claude_cli` for the `gemini` CLI.
@@ -68,16 +78,23 @@ pub struct AssistantPrefsView {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CliPrefsView {
     #[serde(default)]
+    pub enabled: bool,
+    /// Optional `--model` override passed to the CLI. None lets the
+    /// CLI's own default win. Written from the assistant overlay's
+    /// inspector, not from Settings.
+    #[serde(default)]
     pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderPrefsView {
     #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
     pub model: Option<String>,
     /// Per-backend max output tokens. None falls back to chan-llm's
-    /// per-backend default (Anthropic 4096, Gemini 4096). claude_cli
-    /// has no counterpart in chan-llm and ignores this field.
+    /// per-backend default (Anthropic 4096, Gemini 4096). Written
+    /// from the assistant overlay's inspector, not from Settings.
     #[serde(default)]
     pub max_tokens: Option<u32>,
 }
@@ -85,10 +102,14 @@ pub struct ProviderPrefsView {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OllamaPrefsView {
     #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
     pub url: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     /// Maps to Ollama's `options.num_predict`. None = uncapped.
+    /// Written from the assistant overlay's inspector, not from
+    /// Settings.
     #[serde(default)]
     pub max_tokens: Option<u32>,
 }
@@ -138,21 +159,22 @@ impl AssistantBackendKind {
 /// each backing store under its own lock.
 ///
 /// On `--tunnel-public` runs the assistant subtree is neutralized:
-/// `enabled` flips to false and every backend-config field empties.
-/// The matching write-side routes are 403'd by the settings guard
-/// already; redacting the read keeps the SPA in lock-step (so the
-/// assistant pill greys out via the existing master-switch logic),
-/// stops the configured backend / model / ollama URL from leaking
-/// to anonymous visitors, and removes any signal that could tell
-/// a visitor whether the assistant gate is worth probing.
+/// `effective_enabled` flips to false, the default backend clears,
+/// and every per-provider config field empties. The matching
+/// write-side routes are 403'd by the settings guard already;
+/// redacting the read keeps the SPA in lock-step (so the assistant
+/// pill greys out via the existing master-switch logic), stops the
+/// configured backend / model / ollama URL from leaking to
+/// anonymous visitors, and removes any signal that could tell a
+/// visitor whether the assistant gate is worth probing.
 pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
     let editor = state.editor_prefs.lock().expect("editor prefs poisoned");
     let server = state.server_config.lock().expect("server config poisoned");
     let llm = state.llm_config.lock().expect("llm config poisoned");
     let assistant = if state.tunnel_public {
         AssistantPrefsView {
-            enabled: false,
-            backend: AssistantBackendKind::Claude,
+            effective_enabled: false,
+            default_backend: None,
             answers_dir: String::new(),
             auto_apply_writes: false,
             claude: ProviderPrefsView::default(),
@@ -162,29 +184,33 @@ pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
             gemini_cli: CliPrefsView::default(),
         }
     } else {
-        let backend_kind = llm.backend.unwrap_or(BackendKind::ClaudeCli);
         AssistantPrefsView {
-            enabled: llm.backend.is_some(),
-            backend: AssistantBackendKind::from_chan_llm(backend_kind),
+            effective_enabled: llm.active_backend().is_some(),
+            default_backend: llm.backend.map(AssistantBackendKind::from_chan_llm),
             answers_dir: server.answers_dir.clone(),
             auto_apply_writes: llm.auto_apply_writes,
             claude: ProviderPrefsView {
+                enabled: llm.enabled.anthropic,
                 model: llm.models.anthropic.clone(),
                 max_tokens: llm.max_tokens.anthropic,
             },
             ollama: OllamaPrefsView {
+                enabled: llm.enabled.ollama,
                 url: llm.urls.ollama.clone(),
                 model: llm.models.ollama.clone(),
                 max_tokens: llm.max_tokens.ollama,
             },
             gemini: ProviderPrefsView {
+                enabled: llm.enabled.gemini,
                 model: llm.models.gemini.clone(),
                 max_tokens: llm.max_tokens.gemini,
             },
             claude_cli: CliPrefsView {
+                enabled: llm.enabled.claude_cli,
                 model: llm.models.claude_cli.clone(),
             },
             gemini_cli: CliPrefsView {
+                enabled: llm.enabled.gemini_cli,
                 model: llm.models.gemini_cli.clone(),
             },
         }
@@ -389,18 +415,27 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
     }
     {
         let mut llm = state.llm_config.lock().expect("llm config poisoned");
-        // The "embedded" backend has no chan-llm counterpart yet; a
-        // PATCH carrying it is a no-op (the field round-trips as
-        // the previous backend on the next read).
-        if let Some(kind) = view.assistant.backend.to_chan_llm() {
-            llm.backend = if view.assistant.enabled {
-                Some(kind)
-            } else {
-                None
-            };
-        } else if !view.assistant.enabled {
+        // Default backend is sticky: persist whatever the SPA sent
+        // verbatim, even when the matching provider is disabled. The
+        // resolver gates on `enabled[backend]` so a disabled default
+        // won't actually launch a request; leaving the pointer set
+        // preserves user intent across enable/disable toggles. The
+        // "embedded" backend has no chan-llm counterpart yet so a
+        // PATCH carrying it round-trips as the previous default.
+        if let Some(kind) = view.assistant.default_backend {
+            if let Some(chan_llm_kind) = kind.to_chan_llm() {
+                llm.backend = Some(chan_llm_kind);
+            }
+        } else {
             llm.backend = None;
         }
+        // Per-provider enable flags. The SPA's CRUD list toggles
+        // these independently of the default-backend pointer above.
+        llm.enabled.anthropic = view.assistant.claude.enabled;
+        llm.enabled.gemini = view.assistant.gemini.enabled;
+        llm.enabled.ollama = view.assistant.ollama.enabled;
+        llm.enabled.claude_cli = view.assistant.claude_cli.enabled;
+        llm.enabled.gemini_cli = view.assistant.gemini_cli.enabled;
         llm.auto_apply_writes = view.assistant.auto_apply_writes;
         llm.models.anthropic = view.assistant.claude.model;
         llm.models.gemini = view.assistant.gemini.model;
@@ -477,14 +512,34 @@ mod tests {
         // though POST /api/llm/complete is refused by the public-
         // tunnel guard, leaking the configured backend / model /
         // ollama URL would still hand a visitor useful probe data.
-        // `enabled: false` also greys the assistant pill via the
-        // SPA's existing master-switch logic — one bug to fix if
+        // `effective_enabled: false` also greys the assistant pill
+        // via the SPA's existing master-switch logic and
+        // `default_backend: null` removes the only signal that says
+        // "an assistant is configured here" — one bug to fix if
         // either side regresses.
-        assert_eq!(json["assistant"]["enabled"], serde_json::json!(false));
-        assert_eq!(json["assistant"]["backend"], serde_json::json!("claude"));
+        assert_eq!(
+            json["assistant"]["effective_enabled"],
+            serde_json::json!(false)
+        );
+        assert_eq!(
+            json["assistant"]["default_backend"],
+            serde_json::Value::Null
+        );
         assert_eq!(json["assistant"]["answers_dir"], serde_json::json!(""));
         assert_eq!(
             json["assistant"]["auto_apply_writes"],
+            serde_json::json!(false)
+        );
+        assert_eq!(
+            json["assistant"]["claude"]["enabled"],
+            serde_json::json!(false)
+        );
+        assert_eq!(
+            json["assistant"]["gemini"]["enabled"],
+            serde_json::json!(false)
+        );
+        assert_eq!(
+            json["assistant"]["ollama"]["enabled"],
             serde_json::json!(false)
         );
         assert_eq!(

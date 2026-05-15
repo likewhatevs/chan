@@ -592,17 +592,21 @@ function applyOverlaysFromHash(): void {
     graphOverlay.open = true;
   }
   if (params.has(HASH_ASSIST)) {
-    // Encoding: `<contextId>|<prompt>`. The prompt is everything
+    // Encoding: `<inspectorBit>:<contextId>|<prompt>`. The inspector
+    // bit + colon is optional (legacy hashes without it parse as
+    // contextId starting at offset 0); the prompt is everything
     // after the first `|` (so it may itself contain `|`).
     const raw = params.get(HASH_ASSIST) ?? "";
-    const sep = raw.indexOf("|");
+    const [ins, body] = splitInspectorBit(raw);
+    if (ins !== null) assistantOverlay.inspectorOpen = ins;
+    const sep = body.indexOf("|");
     if (sep === -1) {
-      if (raw) assistantOverlay.contextId = raw;
+      if (body) assistantOverlay.contextId = body;
       assistantOverlay.prompt = "";
     } else {
-      const ctx = raw.slice(0, sep);
+      const ctx = body.slice(0, sep);
       if (ctx) assistantOverlay.contextId = ctx;
-      assistantOverlay.prompt = raw.slice(sep + 1);
+      assistantOverlay.prompt = body.slice(sep + 1);
     }
     assistantOverlay.open = true;
   }
@@ -661,9 +665,10 @@ export function persistStateToHash(): void {
     params.delete(HASH_GRAPH);
   }
   if (assistantOverlay.open) {
-    let val = assistantOverlay.contextId;
-    if (assistantOverlay.prompt) val = `${val}|${assistantOverlay.prompt}`;
-    params.set(HASH_ASSIST, val);
+    const ins = assistantOverlay.inspectorOpen ? "1" : "0";
+    let body = assistantOverlay.contextId;
+    if (assistantOverlay.prompt) body = `${body}|${assistantOverlay.prompt}`;
+    params.set(HASH_ASSIST, `${ins}:${body}`);
   } else {
     params.delete(HASH_ASSIST);
   }
@@ -847,12 +852,19 @@ function flushSessionSaveOnExit(): void {
 }
 
 /// Register the pagehide flush once. Idempotent so HMR re-evaluations
-/// don't stack listeners.
+/// don't stack listeners. Also tears down any in-flight assistant
+/// request on the way out: leaving the AbortController alive across
+/// page unload doesn't accomplish anything (the fetch is doomed
+/// either way), and emitting the abort before the WebSocket closes
+/// gives the server a chance to clean up the chan-llm subprocess on
+/// the matching side (claude / gemini CLIs would otherwise linger
+/// until their stream timeout fires).
 let pagehideHooked = false;
 export function installSessionFlushHook(): void {
   if (pagehideHooked || typeof window === "undefined") return;
   pagehideHooked = true;
   window.addEventListener("pagehide", flushSessionSaveOnExit);
+  window.addEventListener("pagehide", cancelAssistantStream);
 }
 
 export function teardown(): void {
@@ -1529,12 +1541,68 @@ export const assistantOverlay = $state<{
   /// and the prompt's top padding grows to keep the first line
   /// clear of the floating pill.
   styleToolbarOpen: boolean;
+  /// Inspector pane visibility. Matches the FileBrowser / Graph /
+  /// Search inspectors: a right-side aside with provider / model /
+  /// max-tokens controls scoped to the active assistant. Auto-opens
+  /// on the first visit to a new scope (see `assistantScopesSeen`);
+  /// after that the user toggles it via the header menu.
+  inspectorOpen: boolean;
 }>({
   open: false,
   contextId: "drive",
   prompt: "",
   styleToolbarOpen: false,
+  inspectorOpen: false,
 });
+
+/// Set of scope ids the assistant has been opened against. Used by
+/// InlineAssist to auto-open the inspector on the first visit to a
+/// new scope so the user is prompted to pick a model right away.
+/// Persisted to localStorage (per-machine, per-browser) because
+/// this is purely a UX nudge — losing it on a fresh browser just
+/// re-pops the inspector once.
+const ASSISTANT_SCOPES_SEEN_KEY = "chan.assistantScopesSeen";
+
+function loadScopesSeen(): Set<string> {
+  try {
+    const raw = localStorage.getItem(ASSISTANT_SCOPES_SEEN_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw) as unknown;
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr.filter((s): s is string => typeof s === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveScopesSeen(set: Set<string>): void {
+  try {
+    localStorage.setItem(ASSISTANT_SCOPES_SEEN_KEY, JSON.stringify([...set]));
+  } catch {
+    // localStorage can be full / blocked (private mode); the inspector
+    // will just re-pop next visit, which is the worst outcome.
+  }
+}
+
+export const assistantScopesSeen = $state<{ ids: Set<string> }>({
+  ids: loadScopesSeen(),
+});
+
+/// Mark a scope id as seen and persist. Idempotent. InlineAssist
+/// calls this once on every overlay open: if the id was already in
+/// the set the inspector stays in whatever state the user left it,
+/// otherwise the caller flips `inspectorOpen = true` for first-time
+/// onboarding.
+export function markAssistantScopeSeen(id: string): boolean {
+  if (assistantScopesSeen.ids.has(id)) return true;
+  assistantScopesSeen.ids.add(id);
+  // Trigger Svelte's reactivity by reassigning the wrapper. The Set
+  // itself is mutated in place; the wrapper swap forces consumers
+  // that read `assistantScopesSeen.ids` to re-evaluate.
+  assistantScopesSeen.ids = new Set(assistantScopesSeen.ids);
+  saveScopesSeen(assistantScopesSeen.ids);
+  return false;
+}
 
 /// Fullscreen side-by-side diff view for a pending assistant edit.
 /// Opened from the edit card's "Diff" button; reads the file's
@@ -1695,6 +1763,41 @@ export function endAssistantStream(sessionId?: string): void {
   assistantStream.text = "";
   assistantStream.toolResults = {};
   assistantStream.error = null;
+}
+
+/// AbortController for the in-flight `/api/llm/complete` request.
+/// Module-level (non-reactive) because AbortController carries
+/// internal mutable state Svelte's proxy would mangle. InlineAssist
+/// sets this at request-start and clears it in its finally block;
+/// external callers (tab close, file delete, page unload) use the
+/// helpers below to tear down a stream that targets a scope the
+/// user has just walked away from.
+let assistantInflightCtl: AbortController | null = null;
+
+/// Called from InlineAssist.submit() to publish the AbortController
+/// so it can be cancelled from outside the component.
+export function setAssistantInflight(ctl: AbortController | null): void {
+  assistantInflightCtl = ctl;
+}
+
+/// Cancel the in-flight assistant stream, whatever its scope. The
+/// abort wakes InlineAssist.submit()'s catch arm; the existing
+/// AbortError path emits "assistant stopped" and clears the stream.
+export function cancelAssistantStream(): void {
+  assistantInflightCtl?.abort();
+}
+
+/// Cancel the in-flight stream only when it targets the given
+/// context id. Returns true when a cancellation actually fired so
+/// callers can decide whether to surface a status message. Used by
+/// the tab-close / file-delete paths: closing the tab the assistant
+/// is currently working on means the user has walked away from
+/// that scope and the request should not keep running.
+export function cancelAssistantStreamForContext(contextId: string): boolean {
+  if (!assistantInflightCtl) return false;
+  if (assistantStream.contextId !== contextId) return false;
+  assistantInflightCtl.abort();
+  return true;
 }
 
 /// True when an assistant response landed on a conversation
@@ -3499,6 +3602,16 @@ export const fileOps = {
         closeTab(paneId, tabId);
       }
       for (const p of deletedFilePaths) {
+        // Cancel any in-flight assistant request bound to this file's
+        // scope BEFORE we drop the conversation. The user just told
+        // us this file is going away; finishing the turn would either
+        // (a) save a result against a now-orphaned conversation or
+        // (b) try to `write_file` the deleted path. closeTab above
+        // already cancels for the standard close-tab path; this is
+        // the belt-and-braces case for files closed elsewhere or for
+        // group / drive scopes that depend on the file but don't have
+        // a `file:<path>` form on their context id.
+        cancelAssistantStreamForContext(`file:${p}`);
         clearFileConversation(p);
         // 404 is a harmless no-op (deleteConversation is idempotent),
         // so we don't special-case never-persisted paths.

@@ -18,6 +18,7 @@ import type {
   IndexStatus,
   LlmCompletionRequest,
   LlmCompletionResponse,
+  LlmKeysStatus,
   LlmModelEntry,
   LlmResumeRequest,
   LlmResumeResponse,
@@ -110,6 +111,13 @@ export const api = {
   /// by the Settings tab "Assistant" section to show ready / not
   /// ready and where the user should set their key.
   llmStatus: () => req<LlmStatus>("GET", "/api/llm/status"),
+  /// Per-provider key status. Drives Settings' per-row keychain UI
+  /// so each provider's row can render its own "stored / not stored"
+  /// pill without needing to be the currently-default backend.
+  /// Reports only the key-taking providers (Anthropic, Gemini);
+  /// Ollama is keyless and the CLI shells use the installed CLI's
+  /// own auth.
+  llmKeysStatus: () => req<LlmKeysStatus>("GET", "/api/llm/keys"),
   /// One-shot assistant call. The whole conversation lives in
   /// `messages`; the server forwards to the configured backend.
   /// `signal` lets the caller abort a slow request (the Stop

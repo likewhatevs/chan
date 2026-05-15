@@ -47,12 +47,12 @@ use routes::{
     api_headings, api_health, api_index_rebuild, api_index_status, api_link_targets, api_links,
     api_list_assistant, api_list_files, api_list_sessions, api_llm_anthropic_models,
     api_llm_clear_anthropic_key, api_llm_clear_gemini_key, api_llm_complete, api_llm_gemini_models,
-    api_llm_ollama_models, api_llm_resume, api_llm_set_anthropic_key, api_llm_set_gemini_key,
-    api_llm_status, api_llm_tools, api_move, api_patch_config, api_patch_drive,
-    api_patch_server_config, api_post_answer, api_post_attachment, api_post_contacts_import,
-    api_put_assistant, api_put_session, api_read_file, api_report_file, api_report_prefix,
-    api_resolve_link, api_search_content, api_search_files, api_storage_reset, api_write_file,
-    ws_upgrade,
+    api_llm_keys_status, api_llm_ollama_models, api_llm_resume, api_llm_set_anthropic_key,
+    api_llm_set_gemini_key, api_llm_status, api_llm_tools, api_move, api_patch_config,
+    api_patch_drive, api_patch_server_config, api_post_answer, api_post_attachment,
+    api_post_contacts_import, api_put_assistant, api_put_session, api_read_file, api_report_file,
+    api_report_prefix, api_resolve_link, api_search_content, api_search_files, api_storage_reset,
+    api_write_file, ws_upgrade,
 };
 use signal::{now_unix_secs, print_qr_if_tty, spawn_idle_watcher, spawn_signal_watcher};
 use state::{AppState, DriveCell};
@@ -792,6 +792,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/report/file", get(api_report_file))
         .route("/api/report/prefix", get(api_report_prefix))
         .route("/api/llm/status", get(api_llm_status))
+        .route("/api/llm/keys", get(api_llm_keys_status))
         .route("/api/llm/tools", get(api_llm_tools))
         .route("/api/llm/anthropic/models", get(api_llm_anthropic_models))
         .route("/api/llm/gemini/models", get(api_llm_gemini_models))
