@@ -781,12 +781,7 @@ async fn run_loop(
             return;
         }
         let mut outcome = backend
-            .run(
-                history.clone(),
-                tool_schemas.clone(),
-                listener.clone(),
-                cancel.clone(),
-            )
+            .run(&history, &tool_schemas, listener.clone(), cancel.clone())
             .await;
 
         if outcome.stop_reason == StopReason::Error {
@@ -1100,8 +1095,8 @@ mod tests {
     impl backends::Backend for ToolUseBackend {
         async fn run(
             &self,
-            _messages: Vec<Message>,
-            _tools: Vec<crate::tools::ToolSchema>,
+            _messages: &[Message],
+            _tools: &[crate::tools::ToolSchema],
             _listener: Arc<dyn SessionListener>,
             _cancel: Arc<AtomicBool>,
         ) -> backends::Outcome {
@@ -1225,8 +1220,8 @@ mod tests {
     impl backends::Backend for TextOnlyBackend {
         async fn run(
             &self,
-            _messages: Vec<Message>,
-            _tools: Vec<crate::tools::ToolSchema>,
+            _messages: &[Message],
+            _tools: &[crate::tools::ToolSchema],
             _listener: Arc<dyn SessionListener>,
             _cancel: Arc<AtomicBool>,
         ) -> backends::Outcome {
@@ -1328,8 +1323,8 @@ mod tests {
     impl backends::Backend for SlowBackend {
         async fn run(
             &self,
-            _messages: Vec<Message>,
-            _tools: Vec<crate::tools::ToolSchema>,
+            _messages: &[Message],
+            _tools: &[crate::tools::ToolSchema],
             _listener: Arc<dyn SessionListener>,
             cancel: Arc<AtomicBool>,
         ) -> backends::Outcome {

@@ -141,8 +141,8 @@ impl OllamaBackend {
 impl Backend for OllamaBackend {
     async fn run(
         &self,
-        messages: Vec<Message>,
-        tools: Vec<ToolSchema>,
+        messages: &[Message],
+        tools: &[ToolSchema],
         listener: Arc<dyn SessionListener>,
         cancel: Arc<AtomicBool>,
     ) -> Outcome {

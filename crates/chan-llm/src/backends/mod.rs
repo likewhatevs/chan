@@ -131,10 +131,17 @@ pub trait Backend: Send + Sync {
     /// also checks `cancel` between iterations, so a backend that
     /// only checks it once per chunk is acceptable - just less
     /// responsive to the user hitting "stop".
+    ///
+    /// `messages` and `tools` are read-only slices owned by the
+    /// orchestrator; backends must not store them past the call
+    /// (they're tied to the future's lifetime via async_trait).
+    /// Taking slices instead of `Vec<_>` saves a per-iteration clone
+    /// of the full transcript across the orchestrator's tool-call
+    /// loop.
     async fn run(
         &self,
-        messages: Vec<Message>,
-        tools: Vec<crate::tools::ToolSchema>,
+        messages: &[Message],
+        tools: &[crate::tools::ToolSchema],
         listener: Arc<dyn SessionListener>,
         cancel: Arc<AtomicBool>,
     ) -> Outcome;

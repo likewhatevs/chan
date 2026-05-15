@@ -204,12 +204,12 @@ impl ClaudeCliBackend {
 impl Backend for ClaudeCliBackend {
     async fn run(
         &self,
-        messages: Vec<Message>,
-        _tools: Vec<ToolSchema>,
+        messages: &[Message],
+        _tools: &[ToolSchema],
         listener: Arc<dyn SessionListener>,
         cancel: Arc<AtomicBool>,
     ) -> Outcome {
-        let (system, prompt) = split_system_and_prompt(&messages);
+        let (system, prompt) = split_system_and_prompt(messages);
 
         let Some((bin, leading)) = self.cmd.split_first() else {
             listener.on_error("claude_cli: empty cmd".into());
@@ -976,8 +976,8 @@ mod tests {
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
             .run(
-                vec![Message::user("hi")],
-                Vec::new(),
+                &[Message::user("hi")],
+                &[],
                 listener.clone() as Arc<dyn SessionListener>,
                 Arc::new(AtomicBool::new(false)),
             )
@@ -1053,8 +1053,8 @@ mod tests {
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
             .run(
-                vec![Message::user("hi")],
-                Vec::new(),
+                &[Message::user("hi")],
+                &[],
                 listener.clone() as Arc<dyn SessionListener>,
                 Arc::new(AtomicBool::new(false)),
             )
@@ -1121,10 +1121,10 @@ mod tests {
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
             .run(
-                vec![Message::user(
+                &[Message::user(
                     "Reply with exactly the single word: streaming",
                 )],
-                Vec::new(),
+                &[],
                 listener.clone() as Arc<dyn SessionListener>,
                 Arc::new(AtomicBool::new(false)),
             )
@@ -1220,8 +1220,8 @@ mod tests {
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
             .run(
-                vec![Message::user("hi")],
-                Vec::new(),
+                &[Message::user("hi")],
+                &[],
                 listener.clone() as Arc<dyn SessionListener>,
                 Arc::new(AtomicBool::new(false)),
             )
@@ -1283,8 +1283,8 @@ mod tests {
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
             .run(
-                vec![Message::user("hi")],
-                Vec::new(),
+                &[Message::user("hi")],
+                &[],
                 listener.clone() as Arc<dyn SessionListener>,
                 Arc::new(AtomicBool::new(false)),
             )
@@ -1339,8 +1339,8 @@ mod tests {
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
             .run(
-                vec![Message::user("hi")],
-                Vec::new(),
+                &[Message::user("hi")],
+                &[],
                 listener.clone() as Arc<dyn SessionListener>,
                 Arc::new(AtomicBool::new(false)),
             )
@@ -1396,8 +1396,8 @@ mod tests {
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
             .run(
-                vec![Message::user("hi")],
-                Vec::new(),
+                &[Message::user("hi")],
+                &[],
                 listener.clone() as Arc<dyn SessionListener>,
                 Arc::new(AtomicBool::new(false)),
             )
@@ -1439,8 +1439,8 @@ mod tests {
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
             .run(
-                vec![Message::user("hi")],
-                Vec::new(),
+                &[Message::user("hi")],
+                &[],
                 listener.clone() as Arc<dyn SessionListener>,
                 Arc::new(AtomicBool::new(false)),
             )
@@ -1489,8 +1489,8 @@ mod tests {
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let _ = backend
             .run(
-                vec![Message::user("hi")],
-                Vec::new(),
+                &[Message::user("hi")],
+                &[],
                 listener.clone() as Arc<dyn SessionListener>,
                 Arc::new(AtomicBool::new(false)),
             )
@@ -1548,8 +1548,8 @@ mod tests {
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
             .run(
-                vec![Message::user("hi")],
-                Vec::new(),
+                &[Message::user("hi")],
+                &[],
                 listener.clone() as Arc<dyn SessionListener>,
                 Arc::new(AtomicBool::new(false)),
             )
@@ -1598,8 +1598,8 @@ mod tests {
         let start = std::time::Instant::now();
         let outcome = backend
             .run(
-                vec![Message::user("hi")],
-                Vec::new(),
+                &[Message::user("hi")],
+                &[],
                 listener.clone() as Arc<dyn SessionListener>,
                 Arc::new(AtomicBool::new(false)),
             )
@@ -1648,8 +1648,8 @@ mod tests {
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
             .run(
-                vec![Message::user("hi")],
-                Vec::new(),
+                &[Message::user("hi")],
+                &[],
                 listener.clone() as Arc<dyn SessionListener>,
                 Arc::new(AtomicBool::new(false)),
             )

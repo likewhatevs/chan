@@ -177,12 +177,12 @@ impl AnthropicBackend {
 impl Backend for AnthropicBackend {
     async fn run(
         &self,
-        messages: Vec<Message>,
-        tools: Vec<ToolSchema>,
+        messages: &[Message],
+        tools: &[ToolSchema],
         listener: Arc<dyn SessionListener>,
         cancel: Arc<AtomicBool>,
     ) -> Outcome {
-        let (system, wire_messages) = split_system(&messages);
+        let (system, wire_messages) = split_system(messages);
         let body = AnthropicRequest {
             model: &self.model,
             max_tokens: self.max_tokens,

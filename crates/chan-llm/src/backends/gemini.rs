@@ -102,8 +102,8 @@ impl GeminiBackend {
 impl Backend for GeminiBackend {
     async fn run(
         &self,
-        messages: Vec<Message>,
-        tools: Vec<ToolSchema>,
+        messages: &[Message],
+        tools: &[ToolSchema],
         listener: Arc<dyn SessionListener>,
         cancel: Arc<AtomicBool>,
     ) -> Outcome {
@@ -115,7 +115,7 @@ impl Backend for GeminiBackend {
             .iter()
             .filter(|m| matches!(m.role, Role::Assistant))
             .count();
-        let (system_instruction, contents) = build_contents(&messages);
+        let (system_instruction, contents) = build_contents(messages);
         let tools_wire = if tools.is_empty() {
             Vec::new()
         } else {
