@@ -1021,33 +1021,6 @@
   /* Inline status colors for the Assistant section's key state. */
   .v .ok { color: var(--accent); }
   .v .err { color: var(--warn-text); }
-  /* Toggle row: checkbox + short label on one line, dimmed hint
-     on the line below indented under the label. Replaces the old
-     "auto-apply" layout where the helper text floated in the
-     wide right column and read as misaligned. */
-  .toggle-row {
-    display: grid;
-    grid-template-columns: 1.5em 1fr;
-    grid-template-rows: auto auto;
-    align-items: baseline;
-    gap: 2px 0.5rem;
-    margin: 0.25rem 0;
-  }
-  .toggle-row > input[type="checkbox"] {
-    grid-row: 1;
-    grid-column: 1;
-  }
-  .toggle-row > span:first-of-type {
-    grid-row: 1;
-    grid-column: 2;
-    color: var(--text);
-  }
-  .toggle-row .hint-text {
-    grid-row: 2;
-    grid-column: 2;
-    color: var(--text-secondary);
-    font-size: 11.5px;
-  }
   /* Inline cue under the master switch when the assistant is off, so
      the disabled provider/model rows below read as intentionally
      gated rather than broken. */
@@ -1055,29 +1028,6 @@
     margin: 0 0 0.25rem 1.95em;
     font-size: 11.5px;
   }
-  /* Dim a whole label row when the master switch gates it. The
-     <select>/<input> inside is already `disabled`; without this the
-     label text stays full-strength and the row reads as live. */
-  label.dim > span { color: var(--text-secondary); opacity: 0.55; }
-  label.dim input,
-  label.dim select { opacity: 0.6; }
-  /* Model dropdown + refresh button on one row. The button is
-     inline-square with a rotation glyph; same look as the file
-     browser's small action buttons. */
-  .model-row { display: flex; gap: 4px; align-items: center; }
-  .model-row select { flex: 1; }
-  .model-row .refresh {
-    background: var(--btn-bg);
-    color: var(--text);
-    border: 1px solid var(--btn-border);
-    border-radius: 4px;
-    width: 28px;
-    height: 28px;
-    cursor: pointer;
-    font-size: 15px;
-  }
-  .model-row .refresh:hover:not(:disabled) { border-color: var(--btn-hover); }
-  .model-row .refresh:disabled { opacity: 0.55; cursor: default; }
   .err-line {
     color: var(--warn-text);
     font-size: 13px;
@@ -1153,7 +1103,6 @@
     min-width: 60px;
     color: var(--text-secondary);
   }
-  .row-field input[type="text"],
   .row-field input:not([type]) {
     flex: 1;
     background: var(--bg);
