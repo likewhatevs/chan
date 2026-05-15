@@ -3,7 +3,7 @@
 //! The bearer token presented by the remote `chan serve` is opaque
 //! to the protocol; this validator returns it verbatim as
 //! `Validated.username`. In local-tunnel use that string IS the
-//! tenant label shown in Drive Manager and used as the first URL
+//! tenant label shown in the Drives window and used as the first URL
 //! segment routed by the tunnel server's public router. There is
 //! no shared secret and no mapping table: auth is the SSH tunnel
 //! plus the loopback bind of the tunnel listener, not the token.

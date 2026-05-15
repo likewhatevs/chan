@@ -1,6 +1,6 @@
 //! Embedded chan-tunnel-server for chan-desktop.
 //!
-//! Lifecycle: explicit. The user clicks "Listen" in Drive Manager,
+//! Lifecycle: explicit. The user clicks "Attach" in the Drives window,
 //! optionally specifies a port, and the backend binds the tunnel
 //! listener at that point. Stays bound until the user clicks Stop
 //! or the desktop exits. There is no auto-start at boot — the user
@@ -55,7 +55,7 @@ use validator::LocalValidator;
 
 /// Tauri event emitted when the tunnel listener starts or stops.
 /// Payload is `{ listening: bool, port: Option<u16> }`. Frontend
-/// listens to keep the "Listen" panel in sync with backend state
+/// listens to keep the "Attach" panel in sync with backend state
 /// (cheap to over-emit; the frontend re-fetches anyway).
 pub const TUNNEL_STATE_CHANGED: &str = "tunnel-state-changed";
 
@@ -333,7 +333,7 @@ async fn supervisor(app: AppHandle, state: Arc<TunnelState>, cancel: Cancellatio
 
         if live_pairs != last_pairs {
             // Auto-launch every drive that wasn't present last
-            // tick: the user already opted in by clicking Listen,
+            // tick: the user already opted in by clicking Attach,
             // and the supervisor doesn't see the registration until
             // the per-tenant listener has bound a port (so the URL
             // we open is immediately reachable).

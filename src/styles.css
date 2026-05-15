@@ -1,4 +1,4 @@
-/* Drive Manager styling. Tokens mirror chan-web's :root in
+/* Drives window styling. Tokens mirror chan-web's :root in
    App.svelte so the native chrome reads as the same product as the
    in-drive UI. Dark by default; light kicks in when the OS theme
    is light (no manual toggle). */
@@ -186,32 +186,65 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
 
 .name-cell { color: var(--text); }
 
-.url-input {
+/* Split button: primary "Open" + caret that toggles a small menu
+   anchored to the row. The menu is absolutely positioned to the
+   right edge of the split so it doesn't widen the actions column. */
+.split-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+.split-btn > .btn {
+  padding: 6px 10px;
+}
+.split-btn > .btn:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.split-btn > .btn.split-caret {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 1px solid rgba(0, 0, 0, 0.2);
+  padding: 6px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.split-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  min-width: 160px;
+  z-index: 20;
+}
+.split-menu li { margin: 0; }
+.split-menu .menu-item {
+  appearance: none;
   background: transparent;
-  border: 1px solid transparent;
-  color: var(--text-secondary);
-  font-family: inherit;
+  border: 0;
+  color: var(--text);
+  font: inherit;
   font-size: 13px;
-  padding: 4px 6px;
+  padding: 6px 10px;
   border-radius: 4px;
   width: 100%;
-  min-width: 80px;
-  cursor: copy;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
 }
-.url-input:hover { border-color: var(--border); color: var(--text); }
-.url-input:focus {
-  outline: none;
-  border-color: var(--brand);
-  background: var(--bg-card);
+.split-menu .menu-item:hover { background: var(--hover-bg); }
+.split-menu .menu-item[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
 }
-.url-input.copied {
-  color: var(--brand);
-  border-color: var(--brand);
-  font-weight: 600;
-}
-
-.url-cell { display: flex; gap: 6px; align-items: center; }
-.url-cell .url-input { flex: 1; }
 
 /* Tunnel panel — inline above the drives table while the user is
    configuring or actively running the loopback tunnel listener. */

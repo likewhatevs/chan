@@ -3,6 +3,7 @@ const { open, ask, message } = window.__TAURI__.dialog;
 const { listen } = window.__TAURI__.event;
 const { check: checkForUpdate } = window.__TAURI__.updater;
 const { relaunch } = window.__TAURI__.process;
+const { openUrl } = window.__TAURI__.opener;
 
 const main = document.getElementById('main');
 const openBtn = document.getElementById('open-drive');
@@ -224,9 +225,10 @@ function render(drives) {
 
   const rows = drives.map((d) => {
     const hasUrl = !!d.url;
+    const urlAttr = escapeAttr(d.url || '');
     if (d.kind === 'tunneled') {
       // Tunneled row: no On toggle (the remote owns the lifecycle),
-      // no Path (it's a remote folder), no Close (the remote drops
+      // no Path (it's a remote folder), no Forget (the remote drops
       // the registration by shutting `chan serve` down). The label
       // is the bearer token the remote chose; we show it verbatim
       // and trust the user's naming convention.
@@ -238,21 +240,20 @@ function render(drives) {
       return `
       <tr data-kind="tunneled"
           data-tunnel-label="${escapeAttr(d.label || '')}"
-          data-tunnel-drive="${escapeAttr(d.drive || '')}">
+          data-tunnel-drive="${escapeAttr(d.drive || '')}"
+          data-url="${urlAttr}">
         <td><span class="tag tag-tunnel" title="${escapeAttr(tip)}">tunnel</span></td>
         <td class="path-cell muted">${escapeHtml(d.label || '')}</td>
         <td class="name-cell">${escapeHtml(d.drive || d.name)}</td>
         <td>
-          <div class="url-cell">
-            <input class="url-input" value="${escapeAttr(d.url)}" placeholder="—" readonly />
-            <button class="btn" data-act="launch" ${hasUrl ? '' : 'disabled'}>Launch</button>
+          <div class="row-actions">
+            ${renderOpenSplit({ hasUrl, includeForget: false, disabledAttr })}
           </div>
         </td>
-        <td></td>
       </tr>`;
     }
     return `
-    <tr data-path="${escapeAttr(d.path)}">
+    <tr data-path="${escapeAttr(d.path)}" data-url="${urlAttr}">
       <td>
         <label class="switch">
           <input type="checkbox" data-act="toggle-on" ${d.on ? 'checked' : ''} ${disabledAttr}/>
@@ -262,15 +263,8 @@ function render(drives) {
       <td class="path-cell" data-act="reveal" title="${escapeAttr(d.path)} — click to open in Finder">${renderPath(d.path)}</td>
       <td class="name-cell" title="set via &#96;chan rename&#96;">${escapeHtml(d.name)}</td>
       <td>
-        <div class="url-cell">
-          <input class="url-input" value="${escapeAttr(d.url)}" placeholder="—" readonly />
-          <button class="btn" data-act="launch" ${hasUrl ? '' : 'disabled'}>Launch</button>
-        </div>
-      </td>
-      <td>
         <div class="row-actions">
-          <button class="btn" data-act="remove" ${disabledAttr}
-                  title="Remove this drive from the list (does not delete files)">Forget</button>
+          ${renderOpenSplit({ hasUrl, includeForget: true, disabledAttr })}
         </div>
       </td>
     </tr>`;
@@ -283,8 +277,7 @@ function render(drives) {
           <th style="width:60px">On</th>
           <th>Path</th>
           <th style="width:200px">Name</th>
-          <th style="width:280px">URL</th>
-          <th style="width:90px"></th>
+          <th style="width:150px"></th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -293,19 +286,42 @@ function render(drives) {
   bindRowEvents();
 }
 
+/// Per-row "Open" split button: primary action opens the drive in
+/// an in-app webview; caret reveals a menu with "Open in Browser"
+/// and (for local drives only) "Forget Drive". The primary + caret
+/// are both gated by `hasUrl` so a drive that isn't running can't
+/// be opened; Forget stays enabled regardless of URL state since
+/// it just removes the registry entry.
+function renderOpenSplit({ hasUrl, includeForget, disabledAttr }) {
+  const openDisabled = hasUrl ? '' : 'disabled';
+  const forgetItem = includeForget
+    ? `<li><button class="menu-item" data-act="remove" role="menuitem" ${disabledAttr}>Forget Drive</button></li>`
+    : '';
+  return `
+    <div class="split-btn">
+      <button class="btn primary" data-act="launch" ${openDisabled}>Open</button>
+      <button class="btn primary split-caret" data-act="menu-toggle"
+              aria-haspopup="true" aria-expanded="false" aria-label="More actions">
+        <svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4l4 4 4-4"/></svg>
+      </button>
+      <ul class="split-menu" hidden role="menu">
+        <li><button class="menu-item" data-act="open-browser" role="menuitem" ${openDisabled}>Open in Browser</button></li>
+        ${forgetItem}
+      </ul>
+    </div>`;
+}
+
 function bindRowEvents() {
-  // Tunneled rows: only the Launch button is interactive. No
-  // toggle / reveal / remove handlers because there is no
-  // desktop-side lifecycle to control — the remote `chan serve`
-  // owns it.
+  // Tunneled rows: Open + Open in Browser only. No toggle / reveal
+  // / Forget handlers because there is no desktop-side lifecycle
+  // to control — the remote `chan serve` owns it.
   main.querySelectorAll('tr[data-kind="tunneled"]').forEach((tr) => {
     const launch = tr.querySelector('[data-act="launch"]');
     if (launch) {
       launch.addEventListener('click', async () => {
-        // Launch reuses the same in-app Tauri webview the
-        // supervisor opens on first registration. Going to the
-        // system browser would split the editor experience across
-        // two surfaces and break the key-bridge shortcuts.
+        // Open reuses the same in-app Tauri webview the supervisor
+        // opens on first registration. Going to the system browser
+        // is reachable through the dropdown's "Open in Browser".
         const label = tr.dataset.tunnelLabel || '';
         const drive = tr.dataset.tunnelDrive || '';
         if (!label || !drive) return;
@@ -316,6 +332,7 @@ function bindRowEvents() {
         }
       });
     }
+    bindSplitMenu(tr);
   });
 
   main.querySelectorAll('tr[data-path]').forEach((tr) => {
@@ -332,8 +349,7 @@ function bindRowEvents() {
 
     tr.querySelector('[data-act="launch"]').addEventListener('click', async () => {
       // In-app Tauri webview; each click adds another window so
-      // multi-window per drive is the default. The URL stays in
-      // the row's input for users who want to copy it elsewhere.
+      // multi-window per drive is the default.
       try {
         await invoke('open_local_drive', { path });
       } catch (e) {
@@ -349,48 +365,77 @@ function bindRowEvents() {
       }
     });
 
-    // "Forget" removes the drive entry from the chan registry. Files
-    // on disk are untouched; the user can re-add the folder later
-    // via Open drive. Tunneled drives have no Forget — the remote
-    // `chan serve` owns that lifecycle.
-    tr.querySelector('[data-act="remove"]').addEventListener('click', async () => {
-      try {
-        await invoke('remove_drive', { path });
-      } catch (err) {
-        showError(err);
+    const forget = tr.querySelector('[data-act="remove"]');
+    if (forget) {
+      // "Forget Drive" removes the drive entry from the chan
+      // registry. Files on disk are untouched; the user can re-add
+      // the folder later via Open drive. Tunneled drives have no
+      // Forget — the remote `chan serve` owns that lifecycle.
+      forget.addEventListener('click', async () => {
+        closeAllSplitMenus();
+        try {
+          await invoke('remove_drive', { path });
+        } catch (err) {
+          showError(err);
+        }
+        await refresh();
+      });
+    }
+
+    bindSplitMenu(tr);
+  });
+}
+
+/// Wire the split-button caret + dropdown items shared between
+/// local and tunneled rows. The "Open in Browser" item delegates
+/// to tauri-plugin-opener with the URL stored on the row's
+/// `data-url` attribute (populated by `render`).
+function bindSplitMenu(tr) {
+  const caret = tr.querySelector('[data-act="menu-toggle"]');
+  const menu = tr.querySelector('.split-menu');
+  if (caret && menu) {
+    caret.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const willOpen = menu.hasAttribute('hidden');
+      closeAllSplitMenus();
+      if (willOpen) {
+        menu.removeAttribute('hidden');
+        caret.setAttribute('aria-expanded', 'true');
       }
-      await refresh();
     });
-  });
-
-  // Click-to-copy on every URL field (regular + tunneled rows). The
-  // input is readonly so a normal click just selects; we copy on
-  // click and flash a "Copied" label in place of the URL for ~900ms.
-  // `bindRowEvents` runs after each `render(drives)`, so newly added
-  // rows get the handler too.
-  main.querySelectorAll('.url-input').forEach((inp) => {
-    inp.addEventListener('click', () => copyUrlField(inp));
-  });
-}
-
-async function copyUrlField(input) {
-  const url = input.value;
-  if (!url || url === 'Copied') return;
-  try {
-    await navigator.clipboard.writeText(url);
-  } catch {
-    return;
   }
-  input.value = 'Copied';
-  input.classList.add('copied');
-  setTimeout(() => {
-    // Guard against the row being re-rendered while the timeout was
-    // pending — `input` may already be detached from the DOM.
-    if (!input.isConnected) return;
-    input.value = url;
-    input.classList.remove('copied');
-  }, 900);
+  const openInBrowser = tr.querySelector('[data-act="open-browser"]');
+  if (openInBrowser) {
+    openInBrowser.addEventListener('click', async () => {
+      closeAllSplitMenus();
+      const url = tr.dataset.url || '';
+      if (!url) return;
+      try {
+        await openUrl(url);
+      } catch (e) {
+        showError(e);
+      }
+    });
+  }
 }
+
+function closeAllSplitMenus() {
+  document.querySelectorAll('.split-menu:not([hidden])').forEach((m) => {
+    m.setAttribute('hidden', '');
+  });
+  document.querySelectorAll('[data-act="menu-toggle"][aria-expanded="true"]').forEach((b) => {
+    b.setAttribute('aria-expanded', 'false');
+  });
+}
+
+// Click anywhere outside an open split menu closes it. Caret
+// clicks call stopPropagation so they don't trigger this.
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.split-menu')) closeAllSplitMenus();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeAllSplitMenus();
+});
 
 function showError(e) {
   const msg = typeof e === 'string' ? e : (e && e.message) || String(e);
@@ -484,7 +529,7 @@ async function showServeFailed(p) {
   }
 }
 
-/// Tunnel panel. Hidden until the user clicks "Listen…", then
+/// Tunnel panel. Hidden until the user clicks "Attach", then
 /// rendered inline above the drives table. Two states:
 ///
 ///   1. Setup: port input (placeholder "auto") + Start button.
@@ -505,7 +550,7 @@ async function renderTunnelPanel() {
   if (!slot) return;
   if (!tunnelPanelOpen) {
     slot.innerHTML = '';
-    tunnelBtn.textContent = 'Listen';
+    tunnelBtn.textContent = 'Attach';
     return;
   }
   let status;
@@ -517,7 +562,7 @@ async function renderTunnelPanel() {
     tunnelPanelOpen = false;
     return;
   }
-  tunnelBtn.textContent = status.listening ? 'Hide' : 'Listen';
+  tunnelBtn.textContent = status.listening ? 'Hide' : 'Attach';
   slot.innerHTML = renderTunnelPanelHtml(status);
   bindTunnelPanelEvents(status);
 }

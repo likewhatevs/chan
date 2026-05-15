@@ -476,7 +476,7 @@ fn open_tunneled_drive(
     Ok(())
 }
 
-/// User's home directory as a plain string, for the Drive Manager
+/// User's home directory as a plain string, for the Drives window
 /// to abbreviate paths to `~/...`. Returns an empty string when the
 /// platform can't resolve it.
 #[tauri::command]
@@ -488,7 +488,7 @@ fn home_dir() -> String {
 
 /// Open the given folder in the OS file manager. macOS: Finder,
 /// Linux: default file manager, Windows: Explorer. Used by the
-/// Drive Manager's path cell so users can jump to the drive folder
+/// Drives window's path cell so users can jump to the drive folder
 /// from the row. Trusts the caller to pass a path the user just saw
 /// in the list — paths come from `list_drives`, which sources from
 /// the chan registry; no shell interpolation, args are passed as
@@ -670,10 +670,10 @@ fn main() {
             // Closing the main window via the red traffic light or
             // Cmd+W should hide it, not destroy it: hidden serve
             // children can still keep the process alive, and
-            // reopening via Dock click or the Window > Drive Manager
-            // menu item should be instant. Without this, a closed
-            // main window cannot be brought back without quitting
-            // and relaunching.
+            // reopening via Dock click or the Window > Drives menu
+            // item should be instant. Without this, a closed main
+            // window cannot be brought back without quitting and
+            // relaunching.
             if let Some(main) = app.get_webview_window("main") {
                 let main_for_event = main.clone();
                 main.on_window_event(move |event| {
@@ -697,9 +697,9 @@ fn main() {
             }
 
             // Tunnel listener is OFF until the user explicitly
-            // clicks "Listen" in Drive Manager. We just construct
-            // the empty TunnelState during boot; binding 127.0.0.1
-            // happens on the IPC `tunnel_start` call.
+            // clicks "Attach" in the Drives window. We just
+            // construct the empty TunnelState during boot; binding
+            // 127.0.0.1 happens on the IPC `tunnel_start` call.
             let _ = state_for_setup.tunnel.clone();
 
             Ok(())
@@ -758,23 +758,23 @@ fn main() {
 /// Tauri's `Menu::default` produces the standard macOS menubar
 /// (app / File / Edit / View / Window / Help) but its Window
 /// submenu only has Minimize / Zoom / Close — a closed main
-/// window has no menu path back. We prepend Drive Manager,
-/// Settings, and Logs items to that submenu so each app window
-/// is reachable by name.
+/// window has no menu path back. We prepend Drives, Settings,
+/// and Logs items to that submenu so each app window is
+/// reachable by name.
 ///
 /// Settings has Cmd+, but no chan-desktop-owned UI behind it:
 /// chan owns the Settings concept per-drive. The handler dispatches
 /// `app.settings.toggle` into the focused drive webview, where
 /// chan's `runCommand` opens its settings overlay. Cmd+, with the
-/// Drive Manager focused is a no-op.
+/// Drives window focused is a no-op.
 fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     let menu = Menu::default(app)?;
 
-    // Drive Manager keeps no accelerator: Cmd+1..9 is reserved for
+    // Drives keeps no accelerator: Cmd+1..9 is reserved for
     // jump-to-tab in drive windows (handled by the per-drive key
     // bridge script in serve.rs). The menu entry still surfaces the
     // window by name.
-    let drive_manager = MenuItemBuilder::with_id("win-main", "Drive Manager").build(app)?;
+    let drive_manager = MenuItemBuilder::with_id("win-main", "Drives").build(app)?;
     let settings = MenuItemBuilder::with_id("chan-settings", "Settings…")
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
