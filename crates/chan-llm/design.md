@@ -153,9 +153,10 @@ same dispatch.
   that mirrors `chan_drive::fs_ops::atomic_write` (tempfile in
   the same dir, fsync, rename, fsync parent).
 - Fields: `backend`, `models`, `urls`, `max_tokens`,
-  `auto_apply_writes`, `mcp_image_max_bytes`, `keys`, `claude_cli`,
-  `gemini_cli`. Empty sub-tables and `None` scalars are skipped on
-  serialization so a fresh install doesn't grow noise.
+  `auto_apply_writes`, `mcp_image_max_bytes`, `keys`,
+  `claude_cli`, `gemini_cli`, `stream_inactivity_timeout_secs`,
+  `max_tool_iterations`. Empty sub-tables and `None` scalars are
+  skipped on serialization so a fresh install doesn't grow noise.
 
 Key resolver (`keys.rs`)
 
@@ -242,7 +243,9 @@ The crate's headline types, all sync, all FFI-shaped:
 ```text
 LlmConfig            { backend, models, urls, max_tokens,
                        auto_apply_writes, mcp_image_max_bytes,
-                       keys, claude_cli, gemini_cli }
+                       keys, claude_cli, gemini_cli,
+                       stream_inactivity_timeout_secs,
+                       max_tool_iterations }
                      load() / save()
                      load_from(&Path) / save_to(&Path)
 
