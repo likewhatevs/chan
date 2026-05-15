@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: chan-desktop
+
+      - uses: actions/checkout@v4
+        with:
+          repository: chan-writer/chan-core
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          path: chan-core
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
+
+      - uses: actions/rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+
+      - name: Create sidecar placeholder
+        run: |
+          mkdir -p chan-desktop/src-tauri/binaries
+          touch chan-desktop/src-tauri/binaries/chan-x86_64-unknown-linux-gnu
+
+      - name: Format check
+        working-directory: chan-desktop
+        run: make fmt-check
+
+      - name: Clippy
+        working-directory: chan-desktop
+        run: make lint
+
+      - name: Test
+        working-directory: chan-desktop
+        run: make test
