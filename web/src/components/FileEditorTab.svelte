@@ -11,13 +11,17 @@
 
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import Source from "../editor/Source.svelte";
+  import JsonPretty from "../editor/JsonPretty.svelte";
+  import CsvTable from "../editor/CsvTable.svelte";
   import {
     ArrowLeft,
     ArrowRight,
+    Braces,
     Code2,
     Copy,
     FilePlus,
     Folder,
+    Highlighter,
     Network,
     Pencil,
     Pilcrow,
@@ -26,6 +30,7 @@
     Settings as SettingsIcon,
     SquareSplitHorizontal,
     SquareSplitVertical,
+    Table2,
     Type,
   } from "lucide-svelte";
   import EnsoIcon from "./EnsoIcon.svelte";
@@ -48,6 +53,7 @@
     setTabInspectorOpen,
     setTabOutlineOpen,
     setTabStyleToolbarOpen,
+    setTabSyntaxHighlight,
     type FileTab,
   } from "../state/tabs.svelte";
   import WikiStatusBar from "./WikiStatusBar.svelte";
@@ -66,6 +72,7 @@
     revealAndSelect,
   } from "../state/store.svelte";
   import { canSplit, openInActivePane, splitActive } from "../state/tabs.svelte";
+  import { csvDelimiter, isCsv, isJson } from "../state/fileTypes";
   import { api } from "../api/client";
   import {
     PAGE_WIDTH_MAX_PCT,
@@ -204,8 +211,29 @@
     void fileOps.rename(tab.path, false);
   }
 
+  /// True for tabs that have a structured render mode alongside
+  /// source mode. Markdown (wysiwyg), JSON (pretty), CSV/TSV (table).
+  /// Arbitrary text tabs do not (source is the only sensible
+  /// surface for a .py / .toml / Makefile).
+  const hasRenderedMode = $derived(
+    tab.fileKind !== "text" || isJson(tab.path) || isCsv(tab.path),
+  );
+
+  /// Which render mode this tab pairs with source mode. Drives the
+  /// toggle button copy + the icon picker below.
+  const renderedModeForTab = $derived<"wysiwyg" | "pretty" | "table">(
+    isJson(tab.path) ? "pretty" : isCsv(tab.path) ? "table" : "wysiwyg",
+  );
+
   function doToggleMode(): void {
-    setMode(tab, tab.mode === "wysiwyg" ? "source" : "wysiwyg");
+    if (!hasRenderedMode) return;
+    const rendered = renderedModeForTab;
+    setMode(tab, tab.mode === "source" ? rendered : "source");
+    closeTabMenu();
+  }
+
+  function doToggleSyntaxHighlight(): void {
+    setTabSyntaxHighlight(tab, !tab.syntaxHighlight);
     closeTabMenu();
   }
 
@@ -360,19 +388,57 @@
            own visual layer (already separated by the action-list
            top border). -->
       <div class="action-list">
-        <button class="mbtn" onclick={doToggleMode}>
-          <span class="mbtn-icon">
-            {#if tab.mode === "wysiwyg"}
-              <Code2 size={16} strokeWidth={1.75} aria-hidden="true" />
-            {:else}
-              <Pilcrow size={16} strokeWidth={1.75} aria-hidden="true" />
-            {/if}
-          </span>
-          <span class="mbtn-label">
-            {tab.mode === "wysiwyg" ? "Show Source Code" : "Show Rendered"}
-          </span>
-          <span class="mbtn-chord"></span>
-        </button>
+        <!-- Rendered / source toggle. Hidden for plain text tabs
+             (.py / .toml / ...) which have no structured renderer.
+             For markdown the pair is wysiwyg <-> source; for JSON
+             it is pretty <-> source. CSV will plug into the same
+             toggle once its renderer lands. -->
+        {#if hasRenderedMode}
+          {@const inSource = tab.mode === "source"}
+          {@const renderedLabel =
+            renderedModeForTab === "pretty"
+              ? "Show Pretty Tree"
+              : renderedModeForTab === "table"
+                ? "Show Table"
+                : "Show Rendered"}
+          <button class="mbtn" onclick={doToggleMode}>
+            <span class="mbtn-icon">
+              {#if inSource && renderedModeForTab === "pretty"}
+                <Braces size={16} strokeWidth={1.75} aria-hidden="true" />
+              {:else if inSource && renderedModeForTab === "table"}
+                <Table2 size={16} strokeWidth={1.75} aria-hidden="true" />
+              {:else if inSource}
+                <Pilcrow size={16} strokeWidth={1.75} aria-hidden="true" />
+              {:else}
+                <Code2 size={16} strokeWidth={1.75} aria-hidden="true" />
+              {/if}
+            </span>
+            <span class="mbtn-label">
+              {inSource ? renderedLabel : "Show Source Code"}
+            </span>
+            <span class="mbtn-chord"></span>
+          </button>
+        {/if}
+        <!-- Per-tab syntax-highlight toggle. Only meaningful in
+             source mode (wysiwyg paints its own decoration set); we
+             show it whenever the tab is source-side so the user can
+             flip plain-text mode on or off for the file in front of
+             them. Hidden in wysiwyg to keep the menu lean. -->
+        {#if tab.mode === "source"}
+          <button
+            class="mbtn"
+            onclick={doToggleSyntaxHighlight}
+            class:on={tab.syntaxHighlight}
+          >
+            <span class="mbtn-icon">
+              <Highlighter size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">
+              {tab.syntaxHighlight ? "Disable Syntax Highlight" : "Enable Syntax Highlight"}
+            </span>
+            <span class="mbtn-chord"></span>
+          </button>
+        {/if}
         <button class="mbtn" onclick={doToggleOutline} class:on={tab.outlineOpen}>
           <span class="mbtn-icon">
             {#if tab.outlineOpen}
@@ -576,6 +642,32 @@
             />
           {/if}
         </div>
+      {:else if tab.mode === "pretty"}
+        <!-- Pretty / structured renderer (JSON tree today). The
+             buffer stays authoritative; we don't mount FindBar
+             here because the renderer is read-only -- edits happen
+             in source mode. -->
+        <div
+          class="editor-host"
+          oncontextmenu={onEditorContext}
+          role="presentation"
+        >
+          <JsonPretty value={tab.content} />
+        </div>
+      {:else if tab.mode === "table"}
+        <!-- Tabular renderer (CSV / TSV). Cell commits flow back
+             through the bound value prop; the autosave debouncer
+             picks them up like any other text edit. -->
+        <div
+          class="editor-host"
+          oncontextmenu={onEditorContext}
+          role="presentation"
+        >
+          <CsvTable
+            bind:value={tab.content}
+            delimiter={csvDelimiter(tab.path)}
+          />
+        </div>
       {:else}
         <!-- Source mode gets its own positioned host so FindBar
              can pin to the same top-right spot it occupies in the
@@ -588,6 +680,8 @@
           <Source
             bind:this={sourceRef}
             bind:value={tab.content}
+            path={tab.path}
+            syntaxHighlight={tab.syntaxHighlight}
             initialCaret={tab.caret ?? null}
             onCaretChange={(from, to) => setTabCaret(tab, from, to)}
           />

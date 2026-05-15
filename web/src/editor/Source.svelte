@@ -1,12 +1,15 @@
 <script lang="ts">
   // CodeMirror 6 source mode. Same backing buffer as the WYSIWYG view; the
-  // user toggles per-tab. Markdown grammar gives basic highlighting.
+  // user toggles per-tab. Syntax highlighting follows the file's
+  // extension (markdown for .md/.txt; lazy-loaded language packs for
+  // .py / .rs / .json / ... via `editor/markdown/code_languages.ts`).
   //
-  // The CM theme follows the app theme via a `Compartment` so we can
-  // reconfigure on toggle without rebuilding the editor.
+  // Two compartments keep us from rebuilding the editor across toggles:
+  //   - theme: app theme flips (light <-> dark).
+  //   - language: syntax-highlight toggle + per-tab path change.
 
   import { onDestroy, onMount } from "svelte";
-  import { EditorState } from "@codemirror/state";
+  import { Compartment, EditorState, type Extension } from "@codemirror/state";
   import { EditorView, keymap, lineNumbers } from "@codemirror/view";
   import {
     defaultKeymap,
@@ -24,6 +27,7 @@
   } from "./base";
   import type { FindAdapter } from "./find";
   import { breathingRoom } from "./breathing_room";
+  import { codeLanguages } from "./markdown/code_languages";
 
   // Editor density follows the user's line_spacing pref. Same hook
   // the Wysiwyg side uses (see Wysiwyg.svelte:820), exposed here as
@@ -34,10 +38,19 @@
 
   let {
     value = $bindable(""),
+    path = "",
+    syntaxHighlight = true,
     initialCaret = null,
     onCaretChange,
   }: {
     value: string;
+    /// Drive-relative file path. Drives the language pack picked for
+    /// syntax highlighting. Empty / pathless callers get plain text.
+    path?: string;
+    /// User-toggled syntax highlighting. When false the language
+    /// compartment reconfigures to an empty extension array so CM
+    /// renders plain text. Default true.
+    syntaxHighlight?: boolean;
     initialCaret?: { from: number; to: number } | null;
     onCaretChange?: (from: number, to: number) => void;
   } = $props();
@@ -59,6 +72,16 @@
   let view: EditorView | undefined;
   const sync = createValueSync();
   const theme = makeThemeCompartment(ui.theme);
+  // Language compartment lets the syntax-highlight toggle + per-tab
+  // path change re-pick the active language pack without rebuilding
+  // the editor. Initial extension covers the synchronous cases
+  // (markdown + "no highlight"); text-class language packs land via
+  // an async reconfigure after mount.
+  const language = new Compartment();
+  // Track the language we last asked for; used to dedupe redundant
+  // reconfigures when reactive deps re-fire without an actual change
+  // (Svelte runs $effect on any prop touch).
+  let lastLanguageKey: string | null = null;
 
   /// Find-on-page adapter. FileEditorTab passes whichever editor is
   /// currently visible to FindBar; the bar drives matches + decorations
@@ -83,6 +106,12 @@
 
   onMount(() => {
     if (!host) return;
+    // Seed the language compartment with whatever we can resolve
+    // synchronously (markdown for .md/.txt; empty for everything
+    // else, including text-class langs that load async below). The
+    // async pass kicks in immediately after mount via applyLanguage.
+    const { extension: initialLang, key: initialKey } = pickInitialLanguage();
+    lastLanguageKey = initialKey;
     const state = EditorState.create({
       doc: value,
       extensions: [
@@ -92,7 +121,7 @@
         // in source mode (raw-text editing — no list / fence
         // detection like the WYSIWYG side). Shift-Tab outdents.
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
-        markdown(),
+        language.of(initialLang),
         theme.extension,
         EditorView.lineWrapping,
         breathingRoom(),
@@ -114,7 +143,62 @@
     view.dispatch({ selection: { anchor: 0 } });
     view.focus();
     maybeRestoreCaret();
+    // Kick off the async resolve for text-class langs. No-op for
+    // markdown (already seeded) and for "no extension" / unknown
+    // extensions (the initial empty stays).
+    void applyLanguage();
   });
+
+  /// Pick the synchronous language extension for the current path +
+  /// syntaxHighlight prop. Returns `key` alongside so $effect can
+  /// dedupe when nothing meaningful changed.
+  function pickInitialLanguage(): { extension: Extension; key: string } {
+    if (!syntaxHighlight) return { extension: [], key: "off" };
+    const ext = extOf(path);
+    if (ext === "md" || ext === "txt") {
+      return { extension: markdown(), key: "markdown" };
+    }
+    return { extension: [], key: ext ? `pending:${ext}` : "plain" };
+  }
+
+  function extOf(p: string): string | null {
+    const dot = p.lastIndexOf(".");
+    if (dot < 0 || dot === p.length - 1) return null;
+    return p.slice(dot + 1).toLowerCase();
+  }
+
+  /// Resolve the language for the current props and reconfigure the
+  /// compartment. Markdown is synchronous (statically imported);
+  /// every other language pack lives in `codeLanguages` and loads
+  /// via dynamic import on first use. The function is idempotent:
+  /// `lastLanguageKey` dedupes a redundant call when Svelte re-runs
+  /// the $effect without an actual prop change.
+  async function applyLanguage(): Promise<void> {
+    if (!view) return;
+    const target = await resolveLanguage();
+    if (!view) return;
+    if (target.key === lastLanguageKey) return;
+    lastLanguageKey = target.key;
+    view.dispatch({ effects: language.reconfigure(target.extension) });
+  }
+
+  async function resolveLanguage(): Promise<{ extension: Extension; key: string }> {
+    if (!syntaxHighlight) return { extension: [], key: "off" };
+    const ext = extOf(path);
+    if (!ext) return { extension: [], key: "plain" };
+    if (ext === "md" || ext === "txt") {
+      return { extension: markdown(), key: "markdown" };
+    }
+    const desc = codeLanguages.find((l) => l.extensions?.includes(ext));
+    if (!desc) return { extension: [], key: `unknown:${ext}` };
+    try {
+      const support = await desc.load();
+      return { extension: support, key: `lang:${desc.name}` };
+    } catch (err) {
+      console.error("[chan] language pack failed to load", ext, err);
+      return { extension: [], key: `failed:${ext}` };
+    }
+  }
 
   /// Apply `initialCaret` once we have a doc to land it in. Idempotent;
   /// subsequent calls no-op via the `caretRestored` flag.
@@ -146,6 +230,17 @@
   $effect(() => {
     if (!view) return;
     theme.reconfigure(view, ui.theme);
+  });
+
+  // Re-pick the language pack when either the file path (different
+  // extension => different language) or the user-toggled
+  // syntaxHighlight switch changes. `applyLanguage` dedupes via
+  // `lastLanguageKey` so a repeated re-run with no real change is
+  // a no-op rather than a CM6 dispatch.
+  $effect(() => {
+    void path;
+    void syntaxHighlight;
+    void applyLanguage();
   });
 </script>
 

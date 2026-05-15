@@ -43,6 +43,7 @@
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import Inspector from "./Inspector.svelte";
   import InspectorBody, { type InspectorSelection } from "./InspectorBody.svelte";
+  import KindChip from "./KindChip.svelte";
   import OverlayShell from "./OverlayShell.svelte";
 
   /// Unified row type. Chunk hits come from the server (BM25 +
@@ -579,7 +580,7 @@
             <Bubble active={i === active}>
               {#if r.kind === "chunk"}
                 <div class="row1">
-                  <span class="kind-pill doc">doc</span>
+                  <KindChip kind="document" compact />
                   <span class="path">{r.hit.path}</span>
                   {#if r.hit.heading}<span class="heading">· {r.hit.heading}</span>{/if}
                 </div>
@@ -594,7 +595,7 @@
                      in the row without making the bubble taller
                      than the neighbouring kinds. -->
                 <div class="row1 image-row">
-                  <span class="kind-pill img">image</span>
+                  <KindChip kind="media" compact />
                   <span class="path">{r.path}</span>
                   <span class="image-thumb">
                     <img
@@ -611,7 +612,7 @@
                      shape as image / file so the bubbles read alike
                      once preview content fills the body. -->
                 <div class="row1">
-                  <span class="kind-pill contact">contact</span>
+                  <KindChip kind="contact" compact />
                   <span class="path">{contactDisplayName(r.path)}</span>
                 </div>
                 <div class="preview muted mono">{r.path}</div>
@@ -621,17 +622,20 @@
                      line carries the basename so the user can scan
                      filenames quickly when the path is long; the
                      full path stays in row1 for disambiguation. No
-                     trailing metadata — the doc score below is a
+                     trailing metadata: the doc score below is a
                      relevance signal worth showing; bytes / mtime
-                     aren't, and would just clutter the row. -->
+                     aren't, and would just clutter the row. `dim`
+                     marks this as the same kind as a content hit
+                     but with less emphasis (filename match, not
+                     content match). -->
                 <div class="row1">
-                  <span class="kind-pill file">file</span>
+                  <KindChip kind="document" compact dim />
                   <span class="path">{r.path}</span>
                 </div>
                 <div class="preview muted">{basename(r.path)}</div>
               {:else}
                 <div class="row1">
-                  <span class="kind-pill tag">tag</span>
+                  <KindChip kind="tag" compact />
                   <span class="path">{r.label}</span>
                   <span class="score">{r.documents} doc{r.documents === 1 ? "" : "s"}</span>
                 </div>
@@ -895,35 +899,6 @@
     color: var(--text-secondary);
     font-family: ui-monospace, monospace;
     font-size: 13px;
-  }
-  /* Per-kind chip. Width fixed so doc / image / tag align in a
-     vertical column even though their text width differs. Mirrors
-     the graph palette so search and graph speak the same visual
-     language. */
-  .kind-pill {
-    display: inline-block;
-    width: 44px;
-    text-align: center;
-    color: #fff;
-    text-transform: uppercase;
-    font-size: 10.5px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    padding: 1px 0;
-    border-radius: 3px;
-    flex-shrink: 0;
-  }
-  .kind-pill.doc { background: var(--g-doc); }
-  .kind-pill.img { background: var(--g-img); }
-  .kind-pill.tag { background: var(--g-tag); }
-  /* Filename-match rows share the doc hue (both end on a markdown
-     file) but tone it down so the chip reads as "same family, less
-     emphasis" than a content chunk. Contact uses the amber warn
-     palette that the rest of chan uses for contact pills. */
-  .kind-pill.file { background: var(--g-doc); opacity: 0.65; }
-  .kind-pill.contact {
-    background: var(--pill-contact-bg, var(--smart-bg));
-    color: var(--pill-contact-fg, var(--text));
   }
   .snippet {
     margin-top: 2px;

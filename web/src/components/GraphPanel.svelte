@@ -31,7 +31,6 @@
   import { api } from "../api/client";
   import type { GraphView, GraphViewEdge, GraphViewNode } from "../api/types";
   import { openInActivePane } from "../state/tabs.svelte";
-  import { isImage } from "../state/fileTypes";
   import {
     availableGraphScopes,
     browserOverlay,
@@ -51,6 +50,8 @@
   import OverlayShell from "./OverlayShell.svelte";
   import InspectorBody, { type InspectorSelection } from "./InspectorBody.svelte";
   import GraphCanvas from "./GraphCanvas.svelte";
+  import KindChip from "./KindChip.svelte";
+  import { classifyFile as classifyFileKind, type FileKind } from "../state/kinds";
   import { chordFor } from "../state/shortcuts";
 
   // Visibility of the details aside lives on `graphOverlay.inspectorOpen`
@@ -697,17 +698,16 @@
              tree listing (stale search index, common after a bulk
              drive change). FileInfoBody can't render either; surface
              inline inside the shared Inspector header. -->
-        {@const ghostKind = isImage(selectedNode.path)
-          ? "image"
-          : selectedNode.node_kind === "contact"
-            ? "contact"
-            : "doc"}
+        {@const ghostKind = classifyFileKind(
+          selectedNode.path,
+          selectedNode.node_kind,
+        ) as FileKind}
         {@const hint = selectedNode.missing
           ? "file does not exist (broken-link target)"
           : "not in the current file listing (try Reload / chan index)"}
         <div class="ghost-body">
           <header class="head">
-            <span class="kind-chip ghost {ghostKind}">{ghostKind}</span>
+            <KindChip kind={ghostKind} block ghost />
           </header>
           <h3 class="title" title={selectedNode.path}>{selectedNode.label}</h3>
           <div class="path mono">{selectedNode.path}</div>
@@ -1063,20 +1063,6 @@
     gap: 0.4rem;
     margin-bottom: 0.4rem;
   }
-  .ghost-body .kind-chip {
-    color: #fff;
-    text-transform: uppercase;
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    padding: 1px 6px;
-    border-radius: 3px;
-    flex: 1;
-    text-align: center;
-  }
-  .ghost-body .kind-chip.ghost { background: var(--g-doc); opacity: 0.55; }
-  .ghost-body .kind-chip.ghost.image { background: var(--g-img); }
-  .ghost-body .kind-chip.ghost.contact { background: var(--warn-text); }
   .ghost-body .title {
     margin: 0 0 0.15rem 0;
     font-size: 16px;

@@ -26,7 +26,7 @@
     ReportFileStats,
     ReportPrefix,
   } from "../api/types";
-  import { isEditableText, isImage } from "../state/fileTypes";
+  import { isEditableText, isImage, isPdf } from "../state/fileTypes";
   import { basename, formatMtime, formatSize } from "../state/format";
   import {
     ensureGraphLoaded,
@@ -34,12 +34,15 @@
     selectionEdgesFor,
   } from "../state/graphData.svelte";
   import { openImageZoom } from "../state/imageZoom";
+  import { openPdfViewer } from "../state/pdfViewer";
   import {
     openGraphAtNode,
     openGraphForFile,
     openGraphForTag,
     tree,
   } from "../state/store.svelte";
+  import { classifyEntry } from "../state/kinds";
+  import KindChip from "./KindChip.svelte";
 
   /// Visual / behavioural kind for a file reference. Images route to
   /// the fullscreen zoom overlay (editor's "Zoom" button shares the
@@ -365,7 +368,7 @@
 {:else if entry.is_dir}
   <div class="info">
     <header class="head">
-      <span class="kind-chip dir">folder</span>
+      <KindChip kind="folder" block />
     </header>
     <h3 class="title" title={entry.path || "/"}>{basename(entry.path) || "(root)"}</h3>
     {#if dirStats}
@@ -440,17 +443,11 @@
 {:else}
   {@const editable = isEditableText(entry.path)}
   {@const image = isImage(entry.path)}
-  {@const contact = !entry.is_dir && entry.kind === "contact"}
+  {@const pdf = isPdf(entry.path)}
+  {@const fileKind = classifyEntry(entry)}
   <div class="info">
     <header class="head">
-      <span
-        class="kind-chip file"
-        class:image
-        class:contact
-        class:view-only={!editable && !image}
-      >
-        {contact ? "contact" : image ? "image" : editable ? "file" : "view-only"}
-      </span>
+      <KindChip kind={fileKind} block />
     </header>
     <h3 class="title" title={entry.path}>{basename(entry.path)}</h3>
     {#if image}
@@ -480,7 +477,7 @@
       <span class="v">{formatSize(entry.size)}</span>
       <span class="k">modified</span>
       <span class="v">{formatMtime(entry.mtime)}</span>
-      {#if showRefs && !image}
+      {#if showRefs && !image && !pdf}
         <span class="k">tags</span>
         <span class="v">{refs ? refs.tags.length : "…"}</span>
         <span class="k">contacts</span>
@@ -491,7 +488,11 @@
         <span class="v">{refs ? nonContactLinks.length : "…"}</span>
         <span class="k">backlinks</span>
         <span class="v">{backlinksLoading ? "…" : backlinks.length}</span>
-      {:else if showRefs && image}
+      {:else if showRefs && (image || pdf)}
+        <!-- Media files (images and PDFs) can be link targets but
+             carry no outgoing references of their own. Show just
+             the "linked from" count; tags / contacts / dates would
+             always be zero. -->
         <span class="k">linked from</span>
         <span class="v">{backlinksLoading ? "…" : backlinks.length}</span>
       {/if}
@@ -519,12 +520,23 @@
       {#if onReveal}
         <button class="open" onclick={onReveal}>Show in file browser</button>
       {/if}
+    {:else if pdf}
+      <!-- PDFs ride the same `media` kind on the wire as images but
+           render via `<embed type="application/pdf">` (browser's
+           built-in viewer) instead of `<img>`. The fullscreen
+           overlay is the equivalent of openImageZoom for PDFs. -->
+      <button class="open" onclick={() => openPdfViewer(entry.path)}>
+        View PDF
+      </button>
+      {#if onReveal}
+        <button class="open" onclick={onReveal}>Show in file browser</button>
+      {/if}
     {:else if onOpen}
       {#if editable}
         <button class="open" onclick={onOpen}>Open in this pane</button>
       {:else}
         <p class="view-only-hint">
-          Not an editable text file. Only .md and .txt open in the editor.
+          Not an editable file.
         </p>
       {/if}
     {/if}
@@ -681,25 +693,6 @@
     gap: 0.4rem;
     margin-bottom: 0.4rem;
   }
-  .kind-chip {
-    color: #fff;
-    text-transform: uppercase;
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    padding: 1px 6px;
-    border-radius: 3px;
-    flex: 1;
-    text-align: center;
-  }
-  .kind-chip.file { background: var(--link); }
-  .kind-chip.file.view-only { background: var(--text-secondary); }
-  .kind-chip.file.image { background: var(--g-img); }
-  /* Contact-kind chip pulls --warn-text to line up with the contact
-     accent everywhere else (wiki pill, file tree, ref border, graph
-     mention nodes). One palette tone for contacts across all surfaces. */
-  .kind-chip.file.contact { background: var(--warn-text); }
-  .kind-chip.dir { background: var(--accent); }
   /* Image preview frame: fixed max height, checkered fallback bg
      (visible while bytes are loading or for images with alpha so
      the panel doesn't show empty space). object-fit contain keeps

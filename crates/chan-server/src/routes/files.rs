@@ -13,11 +13,25 @@ use crate::error::{err, err_from};
 use crate::state::AppState;
 use crate::static_assets::content_type_for;
 
-/// Tree entry shape on the wire. Adds an optional `kind` discriminator
-/// on top of chan-drive's `TreeEntry` so the file browser can render
-/// `chan.kind: contact` notes distinctly without a per-file resolve
-/// round-trip. Plain markdown / text / other regular files leave `kind`
-/// absent (which the frontend treats as "regular file").
+/// Tree entry shape on the wire. Adds a `kind` discriminator on top
+/// of chan-drive's `TreeEntry` so the file browser, search overlay,
+/// and graph inspector can render the right glyph + chip without a
+/// per-file resolve round-trip. Five kinds (`document`, `contact`,
+/// `text`, `media`, `binary`) for regular files; absent on directory
+/// entries (the frontend keys off `is_dir` for those).
+///
+/// Mapping (see `project_kind` below):
+///   - `FileClass::EditableText` + contact frontmatter -> `contact`
+///   - `FileClass::EditableText`                       -> `document`
+///   - `FileClass::Text`                               -> `text`
+///   - `FileClass::Image` / `FileClass::Pdf`           -> `media`
+///   - `FileClass::Other`                              -> `binary`
+///
+/// PDFs are media: the frontend's fullscreen viewer (state/pdfViewer.ts)
+/// handles them via `<embed type="application/pdf">`. chan-drive keeps
+/// `FileClass::Pdf` as a distinct variant so a future iteration that
+/// renders PDFs differently from images (per-page extract, OCR, ...)
+/// can re-distinguish without revisiting the wire shape.
 #[derive(Serialize)]
 struct TreeEntryView {
     path: String,
@@ -26,6 +40,24 @@ struct TreeEntryView {
     size: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     kind: Option<&'static str>,
+}
+
+/// Map a regular-file path (and its contact flag) to the wire kind
+/// string. Returns `None` for directories so the existing serializer
+/// drops the field on dir entries.
+fn project_kind(path: &str, is_dir: bool, is_contact: bool) -> Option<&'static str> {
+    if is_dir {
+        return None;
+    }
+    if is_contact {
+        return Some("contact");
+    }
+    Some(match chan_drive::fs_ops::classify(path) {
+        chan_drive::FileClass::EditableText => "document",
+        chan_drive::FileClass::Text => "text",
+        chan_drive::FileClass::Image | chan_drive::FileClass::Pdf => "media",
+        chan_drive::FileClass::Other => "binary",
+    })
 }
 
 pub async fn api_list_files(State(state): State<Arc<AppState>>) -> Response {
@@ -43,11 +75,7 @@ pub async fn api_list_files(State(state): State<Arc<AppState>>) -> Response {
     let out: Vec<TreeEntryView> = tree
         .into_iter()
         .map(|e| TreeEntryView {
-            kind: if !e.is_dir && contact_paths.contains(&e.path) {
-                Some("contact")
-            } else {
-                None
-            },
+            kind: project_kind(&e.path, e.is_dir, contact_paths.contains(&e.path)),
             path: e.path,
             is_dir: e.is_dir,
             mtime: e.mtime,

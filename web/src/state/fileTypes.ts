@@ -1,28 +1,298 @@
-// Editor file-type whitelist. Mirrors `fs_ops::is_editable_text` in
-// `crates/chan-core/src/fs_ops.rs`; keep the two in sync when extending.
+// Path-based file-class predicates. Mirrors chan-drive's
+// `fs_ops::classify_ext` + basename fallback so the editor's "can I
+// open this as text?" gate matches the server's `Drive::read_text`
+// gate. Keep the lists in lockstep with `chan-drive/src/fs_ops.rs`;
+// each phase that widens chan-drive should also widen these sets so
+// the editor and the drive agree on what counts as text.
 //
-// Restricting the editor to plain-text content prevents round-tripping
-// binary files (images, archives, PDFs) through a UTF-8 buffer, which
-// would silently corrupt them on save. The backend rejects non-editable
-// writes with 415; the helper here lets the UI short-circuit before the
-// round trip and surface the limit in tooltips and disabled controls.
+// Most surfaces in the app should rely on the server-provided wire
+// `kind` (via `classifyEntry` in `./kinds.ts`); these path helpers
+// only fire when we hold a bare path without a tree entry (graph
+// ghost rows, link targets pointing at deleted files, drag-drop
+// previews before the watcher has indexed the new path).
+//
+// Three sets:
+//   - MARKDOWN_EXTENSIONS: .md / .txt. Markdown-class. Indexed by
+//     chan-drive, parsed for graph edges + tokens. Maps to
+//     `FileClass::EditableText`.
+//   - TEXT_EXTENSIONS: source code, configs, shell, markup, data.
+//     Maps to `FileClass::Text`. Editable through the UTF-8 gate
+//     but not indexed (false positives like `#include` looking
+//     like a `#tag` would pollute the graph).
+//   - IMAGE_EXTENSIONS: raster + svg. Maps to `FileClass::Image`.
+//
+// Well-known no-extension files (Makefile, Dockerfile, LICENSE, ...)
+// resolve via TEXT_BASENAMES after the extension check misses.
 
-const EDITABLE_EXTENSIONS = new Set(["md", "txt"]);
+const MARKDOWN_EXTENSIONS = new Set(["md", "txt"]);
 
 const IMAGE_EXTENSIONS = new Set([
-  "png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp",
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "svg",
+  "avif",
+  // bmp is treated as image by the inspector but chan-drive folds it
+  // into Other; harmless drift since image preview is frontend-only.
+  "bmp",
 ]);
 
-export function isEditableText(path: string): boolean {
+// Mirrors chan-drive `fs_ops::classify_ext`'s `FileClass::Text` arm.
+// Add to both files together when widening.
+const TEXT_EXTENSIONS = new Set([
+  // Source code.
+  "rs",
+  "py",
+  "pyi",
+  "pyx",
+  "c",
+  "cc",
+  "cpp",
+  "cxx",
+  "h",
+  "hh",
+  "hpp",
+  "hxx",
+  "m",
+  "mm",
+  "go",
+  "java",
+  "kt",
+  "kts",
+  "swift",
+  "js",
+  "jsx",
+  "ts",
+  "tsx",
+  "mjs",
+  "cjs",
+  "rb",
+  "php",
+  "pl",
+  "pm",
+  "lua",
+  "r",
+  "scala",
+  "sc",
+  "clj",
+  "cljs",
+  "cljc",
+  "ml",
+  "mli",
+  "hs",
+  "lhs",
+  "erl",
+  "hrl",
+  "ex",
+  "exs",
+  "dart",
+  "nim",
+  "zig",
+  "vue",
+  "svelte",
+  "astro",
+  "elm",
+  "fs",
+  "fsi",
+  "fsx",
+  "tcl",
+  "awk",
+  "asm",
+  "vb",
+  // Shell.
+  "sh",
+  "bash",
+  "zsh",
+  "fish",
+  "ksh",
+  "csh",
+  "tcsh",
+  "ps1",
+  "psm1",
+  "psd1",
+  // Config + data formats.
+  "toml",
+  "yaml",
+  "yml",
+  "json",
+  "json5",
+  "jsonl",
+  "ndjson",
+  "ini",
+  "cfg",
+  "conf",
+  "properties",
+  "env",
+  "envrc",
+  "lock",
+  // Web.
+  "html",
+  "htm",
+  "css",
+  "scss",
+  "sass",
+  "less",
+  "xml",
+  "xhtml",
+  "xsl",
+  "xslt",
+  "rss",
+  "atom",
+  // Data.
+  "csv",
+  "tsv",
+  "sql",
+  "log",
+  // Build.
+  "mk",
+  "mak",
+  "cmake",
+  "bzl",
+  "ninja",
+  "gradle",
+  // Patches.
+  "patch",
+  "diff",
+  // Markup.
+  "rst",
+  "adoc",
+  "asciidoc",
+  "org",
+  "tex",
+  "latex",
+  "ltx",
+  "bib",
+  // Dotfiles (suffix after the leading dot).
+  "gitignore",
+  "gitattributes",
+  "editorconfig",
+  "npmrc",
+  "nvmrc",
+  "babelrc",
+  "prettierrc",
+  "eslintrc",
+  "eslintignore",
+  "dockerignore",
+]);
+
+// Well-known no-extension or all-caps filenames the editor should
+// treat as text. Mirrors chan-drive's `classify_basename`.
+const TEXT_BASENAMES = new Set([
+  "Makefile",
+  "GNUmakefile",
+  "BSDmakefile",
+  "makefile",
+  "Dockerfile",
+  "Containerfile",
+  "Rakefile",
+  "Gemfile",
+  "Procfile",
+  "Justfile",
+  "Vagrantfile",
+  "Berksfile",
+  "Brewfile",
+  "LICENSE",
+  "LICENCE",
+  "COPYING",
+  "COPYRIGHT",
+  "NOTICE",
+  "AUTHORS",
+  "CONTRIBUTORS",
+  "README",
+  "TODO",
+  "NEWS",
+  "CHANGELOG",
+  "HISTORY",
+  "INSTALL",
+  "MANIFEST",
+]);
+
+function extOf(path: string): string | null {
   const dot = path.lastIndexOf(".");
-  if (dot < 0 || dot === path.length - 1) return false;
-  return EDITABLE_EXTENSIONS.has(path.slice(dot + 1).toLowerCase());
+  if (dot < 0 || dot === path.length - 1) return null;
+  return path.slice(dot + 1).toLowerCase();
+}
+
+function basenameOf(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash < 0 ? path : path.slice(slash + 1);
+}
+
+/// Path-only kind classifier. Returns the editor-facing kind a path
+/// would receive in the absence of a server-side `TreeEntry.kind`.
+/// Used by `classifyFile` in `./kinds.ts` as the fallback branch.
+/// PDFs fold into `media` here to match the server's
+/// `project_kind` mapping (PDFs share the media chip + viewer
+/// surface even though they ride a different DOM tag than images).
+export function classifyPath(
+  path: string,
+): "document" | "text" | "media" | "binary" {
+  const ext = extOf(path);
+  if (ext !== null) {
+    if (IMAGE_EXTENSIONS.has(ext) || ext === "pdf") return "media";
+    if (MARKDOWN_EXTENSIONS.has(ext)) return "document";
+    if (TEXT_EXTENSIONS.has(ext)) return "text";
+  }
+  if (TEXT_BASENAMES.has(basenameOf(path))) return "text";
+  return "binary";
+}
+
+/// True for any path the editor can round-trip through a UTF-8
+/// buffer. Mirrors `chan_drive::fs_ops::is_editable_text` after the
+/// phase 1 widening: markdown-class + source / config / shell text +
+/// well-known basenames. Returns false for images, PDFs, archives,
+/// audio, video, and unknown extensions.
+export function isEditableText(path: string): boolean {
+  const kind = classifyPath(path);
+  return kind === "document" || kind === "text";
 }
 
 /// True for raster + svg images. Matches the set the editor's image
-/// picker accepts (image.ts) and the graph's file-vs-image classifier.
+/// picker accepts and the graph's file-vs-image classifier. Note
+/// the server projects both images and PDFs as `media` kind on the
+/// wire; this helper stays image-only because the image-inspector
+/// preview / zoom path is image-shaped (uses `<img>`, not `<embed>`).
 export function isImage(path: string): boolean {
-  const dot = path.lastIndexOf(".");
-  if (dot < 0 || dot === path.length - 1) return false;
-  return IMAGE_EXTENSIONS.has(path.slice(dot + 1).toLowerCase());
+  if (classifyPath(path) !== "media") return false;
+  // classifyPath returns "media" for both images and PDFs (server
+  // groups them). Discriminate by extension here so PDFs don't end
+  // up in image-only call sites.
+  return !isPdf(path);
+}
+
+/// True for PDF files. Separate from `isImage` so PDF callers route
+/// to the PDF viewer overlay instead of the image zoom overlay,
+/// even though both share `media` kind on the wire.
+export function isPdf(path: string): boolean {
+  return extOf(path) === "pdf";
+}
+
+/// True for JSON-class files. The editor tab opens these in
+/// "pretty" mode by default (collapsible tree); source mode is the
+/// fallback for edits. Same wire kind as any other text file
+/// (`text`); the discriminator is per-path because we don't want a
+/// separate `FileKind` for every renderable format.
+export function isJson(path: string): boolean {
+  const ext = extOf(path);
+  return ext === "json" || ext === "json5";
+}
+
+/// True for tabular CSV / TSV files. The editor tab opens these in
+/// "table" mode by default; source mode preserves the raw bytes
+/// for users who want to wrangle the file by hand. Same wire kind
+/// as any other text file (`text`).
+export function isCsv(path: string): boolean {
+  const ext = extOf(path);
+  return ext === "csv" || ext === "tsv";
+}
+
+/// Field delimiter for a tabular file. Drives both the parser and
+/// the on-save serializer so a round-trip preserves the source
+/// shape. `.tsv` uses tab; `.csv` defaults to comma. Per-tab
+/// override for files with a non-standard delimiter is tracked as
+/// a follow-up (GH issue #29 "Out of scope").
+export function csvDelimiter(path: string): string {
+  return extOf(path) === "tsv" ? "\t" : ",";
 }

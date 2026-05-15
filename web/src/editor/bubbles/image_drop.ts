@@ -11,6 +11,8 @@
 import { EditorView } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 import { api } from "../../api/client";
+import { notify } from "../../state/notify.svelte";
+import { convertHeicForUpload, isHeicFile } from "./heic";
 import { invalidateImageCatalog } from "./image";
 import { relativizePath } from "../links";
 
@@ -33,7 +35,12 @@ export function imageDropHandlers(opts: ImageDropOptions): Extension {
     drop(event, view) {
       const files = event.dataTransfer?.files;
       if (!files || files.length === 0) return false;
-      const images = Array.from(files).filter((f) => f.type.startsWith("image/"));
+      // HEIC drops from Chrome / Firefox on non-Apple OSes often
+      // arrive with empty `File.type`. `isHeicFile` peeks at the
+      // extension so those files don't slip through the MIME check.
+      const images = Array.from(files).filter(
+        (f) => f.type.startsWith("image/") || isHeicFile(f),
+      );
       if (images.length === 0) return false;
       event.preventDefault();
       const pos = posFromEvent(view, event);
@@ -51,10 +58,17 @@ export function imageDropHandlers(opts: ImageDropOptions): Extension {
       if (!items) return false;
       const images: File[] = [];
       for (const item of Array.from(items)) {
-        if (item.kind === "file" && item.type.startsWith("image/")) {
+        if (item.kind !== "file") continue;
+        if (item.type.startsWith("image/")) {
           const f = item.getAsFile();
           if (f) images.push(f);
+          continue;
         }
+        // HEIC pastes from a screenshot tool / Files.app may come
+        // through with an empty MIME; the extension check rescues
+        // those before they get dropped on the floor.
+        const f = item.getAsFile();
+        if (f && isHeicFile(f)) images.push(f);
       }
       if (images.length === 0) return false;
       event.preventDefault();
@@ -90,8 +104,22 @@ function uploadAndInsertAll(
   // through view.state.tr.changes' resolution after each).
   let cursor = pos;
   void (async () => {
-    for (const file of files) {
-      if (file.size > MAX_UPLOAD_BYTES) continue;
+    for (const original of files) {
+      if (original.size > MAX_UPLOAD_BYTES) continue;
+      // HEIC -> WebP conversion happens here so a mixed batch
+      // (some PNG, some HEIC) converts only the ones that need it
+      // without blocking the others; non-HEIC inputs return from
+      // `convertHeicForUpload` untouched and synchronously.
+      let file: File;
+      try {
+        file = await convertHeicForUpload(original, (msg) => {
+          if (msg) notify(msg);
+        });
+      } catch (err) {
+        console.error("[chan] HEIC conversion failed", err);
+        notify(`HEIC conversion failed for ${original.name}; skipped`);
+        continue;
+      }
       try {
         const res = await api.uploadAttachment(file, uploadDir);
         invalidateImageCatalog();

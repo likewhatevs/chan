@@ -101,6 +101,58 @@ Token              Dark         Light       Concept
 Pill background variables (`--pill-*-bg`, `--pill-*-bg-hover`) are
 alpha tints of the foreground hue at ~0.18 dark / ~0.12 light.
 
+## Kind taxonomy
+
+`web/src/state/kinds.ts` defines the unified taxonomy used by every
+chip, tree icon, and (eventually) inspector header glyph. Three
+families:
+
+- **FileKind**: things that exist as files in the drive.
+  `document` | `contact` | `text` | `media` | `binary`.
+- **EntityKind**: graph-only entities (tokens extracted from markdown
+  bodies, no file backing). `tag` | `mention` | `date`.
+- **ContainerKind**: `folder` (directory rows in the file tree).
+
+`classifyEntry(entry)` / `classifyFile(path, serverKind?)` is the
+single classifier. It applies the server-provided `kind`
+discriminator first (today only `"contact"`), then falls back to
+extension-based image / editable-text detection. `text` is reserved
+here for the phase 2 widening that lets any non-binary file open in
+the source-only editor; today's classifier returns `document` for
+.md / .txt and `binary` for everything else.
+
+`web/src/components/KindChip.svelte` is the single chip component.
+Inspector headers pass `block` (flex:1 fill); the search results
+list passes `compact` (smaller font + fixed-width column). `ghost`
+and `dim` modify opacity for graph ghost rows and search filename-
+match rows respectively.
+
+### Per-kind mapping
+
+```
+kind        label       palette token       lucide icon
+----------  ----------  ------------------  -----------
+document    document    --g-doc             FileText
+contact     contact     --warn-text         User
+text*       text        --g-doc (alias)     FileCode
+media       media       --g-img             Image
+binary      binary      --text-secondary    File
+tag         tag         --g-tag             Hash
+mention     mention     --warn-text         User
+date        date        --text-secondary    Calendar
+folder      folder      --accent            Folder
+```
+
+*Reserved. `classifyFile` does not emit `text` until chan-drive
+exposes the wider editable-text class (phase 2 of the editor
+widening). Until then a non-markdown text file falls into `binary`.
+
+A `mention` shares the contact palette by design: a resolved mention
+points at a contact file, an unresolved mention is the same concept
+without a backing file. Distinguishing the two is the role of the
+inspector ("Contacts" section, dimmed pill state for unresolved),
+not the chip.
+
 ## Functional and chrome variables
 
 Color-scheme axis (`App.svelte`):

@@ -14,6 +14,7 @@
     graphData,
     type GraphViewNode,
   } from "../state/graphData.svelte";
+  import KindChip from "./KindChip.svelte";
 
   let {
     nodeId,
@@ -72,16 +73,6 @@
     documents.filter((d) => !(d.kind === "file" && d.node_kind === "contact")),
   );
 
-  /// Background color for the kind chip. Mirrors the graph palette
-  /// (--g-tag etc.) so search and graph chips are visually identical.
-  const chipColor = $derived(
-    kind === "tag"
-      ? "var(--g-tag)"
-      : kind === "mention"
-        ? "var(--warn-text)"
-        : "var(--info-text)",
-  );
-
   function navigate(node: GraphViewNode): void {
     if (node.kind !== "file" || !onNavigate) return;
     onNavigate(node.path);
@@ -90,7 +81,7 @@
 
 <div class="info">
   <header class="head">
-    <span class="kind-chip" style="background: {chipColor}">{kind === "mention" ? "contact" : kind}</span>
+    <KindChip {kind} block />
   </header>
   <h3 class="title">{kind === "mention" ? label.replace(/^@@/, "") : label}</h3>
   <div class="meta-grid">
@@ -167,17 +158,6 @@
     align-items: center;
     gap: 0.4rem;
     margin-bottom: 0.4rem;
-  }
-  .kind-chip {
-    color: #fff;
-    text-transform: uppercase;
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    padding: 1px 6px;
-    border-radius: 3px;
-    flex: 1;
-    text-align: center;
   }
   .title {
     margin: 0 0 0.5rem 0;

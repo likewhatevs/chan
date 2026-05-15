@@ -28,6 +28,7 @@ import {
   setImageAlign,
   type ImageAlign,
 } from "../extensions/image";
+import { convertHeicForUpload } from "./heic";
 import { relativizePath } from "../links";
 
 export interface ImageBubbleOpts {
@@ -312,26 +313,46 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
   function triggerUpload(): void {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = "image/*";
+    // `image/*` covers the standard formats; the explicit
+    // `.heic,.heif` is a fallback for browsers (Chrome on Windows)
+    // that don't surface HEIC under the MIME filter. We convert
+    // post-pick before upload either way.
+    input.accept = "image/*,.heic,.heif";
     input.addEventListener("change", () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      if (file.size > MAX_UPLOAD_BYTES) {
+      const picked = input.files?.[0];
+      if (!picked) return;
+      if (picked.size > MAX_UPLOAD_BYTES) {
         status.textContent = `File too large (max ${Math.floor(MAX_UPLOAD_BYTES / 1024 / 1024)}MB)`;
         return;
       }
-      status.textContent = "Uploading...";
-      api
-        .uploadAttachment(file, opts.uploadDir)
-        .then((res) => {
+      void (async () => {
+        let file: File;
+        try {
+          file = await convertHeicForUpload(picked, (msg) => {
+            if (!alive) return;
+            // Surface "Converting <name>..." in the bubble's status
+            // pill; convertHeicForUpload clears it (msg === null)
+            // once the encode completes. For non-HEIC inputs the
+            // callback never fires.
+            if (msg) status.textContent = msg;
+          });
+        } catch (err) {
+          if (!alive) return;
+          status.textContent = `HEIC conversion failed: ${(err as Error).message ?? err}`;
+          return;
+        }
+        if (!alive) return;
+        status.textContent = "Uploading...";
+        try {
+          const res = await api.uploadAttachment(file, opts.uploadDir);
           if (!alive) return;
           invalidateImageCatalog();
           commitPath(res.path);
-        })
-        .catch((err) => {
+        } catch (err) {
           if (!alive) return;
-          status.textContent = `Upload failed: ${err.message ?? err}`;
-        });
+          status.textContent = `Upload failed: ${(err as Error).message ?? err}`;
+        }
+      })();
     });
     input.click();
   }

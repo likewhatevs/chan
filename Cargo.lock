@@ -686,6 +686,7 @@ dependencies = [
  "chan-drive",
  "dirs 5.0.1",
  "futures-util",
+ "httpdate",
  "keyring",
  "once_cell",
  "reqwest",

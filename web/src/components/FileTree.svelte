@@ -9,6 +9,7 @@
   import { clampMenu } from "./menuClamp";
   import type { TreeEntry } from "../api/types";
   import { isEditableText } from "../state/fileTypes";
+  import { classifyFile, iconFor } from "../state/kinds";
   import { dirtyPaths, openInActivePane } from "../state/tabs.svelte";
   import {
     browserOverlay,
@@ -584,6 +585,8 @@
     {:else}
       {@const editable = isEditableText(node.path)}
       {@const contact = contactPaths.has(node.path)}
+      {@const kind = classifyFile(node.path, contact ? "contact" : undefined)}
+      {@const Icon = iconFor(kind)}
       <div
         class="row file"
         class:selected={browserSelection.path === node.path}
@@ -600,6 +603,15 @@
         title={contact ? "contact" : editable ? undefined : "view-only (not an editable text file)"}
         use:trackRow={node.path}
       >
+        <!-- Per-kind glyph leading the row. Same icon set used by
+             the editor tab strip and (in time) by the inspector
+             headers, so a file reads with the same icon wherever it
+             surfaces. Contact rows still tint the filename via
+             .row.contact > .name; the icon adds redundancy + a
+             scannable column at the row's left edge. -->
+        <span class="row-icon" aria-hidden="true">
+          <Icon size={14} strokeWidth={1.75} />
+        </span>
         <!-- Single click selects (mirrors graph tab semantics);
              double click opens. Both stop propagation so the row's
              implicit focus / drag handlers don't double-fire.
@@ -688,6 +700,17 @@
     padding: 0;
     color: var(--text-secondary);
   }
+  /* Per-kind glyph at the row's left edge. Mirrors the tab-strip
+     icon (FileText / User / Image / etc.) so the file reads with the
+     same glyph in both surfaces. Sits one step below the label hue
+     so it doesn't compete with the filename for attention. */
+  .row-icon {
+    display: inline-flex;
+    align-items: center;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+  .row.contact .row-icon { color: var(--warn-text); }
   .name {
     background: none;
     border: 0;

@@ -328,11 +328,20 @@ export type TreeEntry = {
   is_dir: boolean;
   mtime: number | null;
   size: number;
-  /// Discriminator for special-kind files. Present when the file has
-  /// `chan.kind: contact` frontmatter; absent for regular files (the
-  /// frontend treats absent as "plain file"). Server-side projection
-  /// joins chan-drive's node-kind index onto the tree listing.
-  kind?: "contact";
+  /// File-kind discriminator from the server. Present for every
+  /// regular file; absent on directory entries (frontends key off
+  /// `is_dir` for those). Values mirror the unified taxonomy in
+  /// `web/src/state/kinds.ts`:
+  ///   - `document`: markdown-class (.md / .txt) without contact
+  ///     frontmatter.
+  ///   - `contact`: markdown-class with `chan.kind: contact`
+  ///     frontmatter.
+  ///   - `text`: any other text file (.py, .json, Makefile, ...)
+  ///     the editor can round-trip through a UTF-8 buffer.
+  ///   - `media`: images.
+  ///   - `binary`: PDFs, archives, audio/video, and everything else
+  ///     opaque to the editor.
+  kind?: "document" | "contact" | "text" | "media" | "binary";
 };
 
 /// Response from POST /api/move. The rename itself always succeeds

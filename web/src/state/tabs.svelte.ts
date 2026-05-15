@@ -14,7 +14,8 @@
 import { api } from "../api/client";
 import { ApiError } from "../api/errors";
 import type { FindRange } from "../editor/find";
-import { isEditableText } from "./fileTypes";
+import { classifyPath, isCsv, isEditableText, isJson } from "./fileTypes";
+import type { FileKind } from "./kinds";
 import { notify } from "./notify.svelte";
 import { cancelAssistantStreamForContext } from "./store.svelte";
 
@@ -23,7 +24,51 @@ function id(prefix: string): string {
   return `${prefix}-${nextId++}`;
 }
 
-export type Mode = "wysiwyg" | "source";
+/// Render mode for a file tab.
+///   - `wysiwyg`: markdown-class only. Live rendering of markdown
+///     via the custom CodeMirror Wysiwyg extension.
+///   - `source`: raw source text in a CodeMirror editor. Available
+///     on every tab as the lowest-common-denominator surface.
+///   - `pretty`: collapsible-tree renderer. JSON only today.
+///   - `table`: tabular renderer with click-to-edit cells. CSV /
+///     TSV only today.
+export type Mode = "wysiwyg" | "source" | "pretty" | "table";
+
+/// Default mode for a freshly opened file. JSON tabs land in
+/// "pretty"; CSV/TSV tabs land in "table"; markdown-class tabs
+/// stay on "wysiwyg"; everything else (other text formats) opens
+/// in source mode because that's the only mode they have.
+function defaultModeForPath(path: string, fileKind: FileKind): Mode {
+  if (isJson(path)) return "pretty";
+  if (isCsv(path)) return "table";
+  return fileKind === "text" ? "source" : "wysiwyg";
+}
+
+/// Whether `mode` is a valid pair for the given path + file kind.
+/// Drives the session-restore guard: a stale URL hash that pairs an
+/// incompatible (path, mode) falls back to the default for that path.
+function isModeValidForPath(
+  mode: Mode,
+  path: string,
+  fileKind: FileKind,
+): boolean {
+  if (mode === "pretty") return isJson(path);
+  if (mode === "table") return isCsv(path);
+  if (mode === "wysiwyg") return fileKind !== "text";
+  // source is valid on every tab.
+  return mode === "source";
+}
+
+function validateRestoredMode(
+  persisted: Mode | undefined,
+  path: string,
+  fileKind: FileKind,
+): Mode {
+  if (persisted && isModeValidForPath(persisted, path, fileKind)) {
+    return persisted;
+  }
+  return defaultModeForPath(path, fileKind);
+}
 
 /// Per-tab find-on-page state. Lives only while the bar is open
 /// (cleared on close); intentionally not serialized through
@@ -55,12 +100,29 @@ export function makeFindState(): FindState {
   };
 }
 
-/// File-content tab: holds the editable buffer for a markdown file.
-/// File tabs are the only tab kind today; every other surface
-/// (file browser, search, graph, assistant, settings) is a
-/// window-level overlay built on `OverlayShell.svelte`.
+/// File-content tab: holds the editable buffer for any text-class
+/// file (markdown documents, contact notes, and post-phase-3 also
+/// arbitrary source / config text like .py, .json, .yaml). File
+/// tabs are the only tab kind today; every other surface (file
+/// browser, search, graph, assistant, settings) is a window-level
+/// overlay built on `OverlayShell.svelte`.
 export type FileTab = {
   kind: "file";
+  /// File-kind discriminator inside the tab. Mirrors the wire kind
+  /// in `TreeEntry.kind` and the unified taxonomy in `./kinds.ts`:
+  ///   - `document`: markdown-class, wysiwyg + source available.
+  ///   - `contact`: same as document with contact frontmatter; the
+  ///     tab UX is identical, but downstream surfaces (inspector,
+  ///     graph) treat it as a contact.
+  ///   - `text`: any other editable text file. Source-mode only;
+  ///     the wysiwyg toggle is hidden in the tab menu.
+  /// Initialized from `classifyPath` on open (path-based; we don't
+  /// have the wire kind in tabs.svelte without a circular import
+  /// on store). Contact files therefore start out tagged as
+  /// `document` and stay that way for the tab's lifetime; the
+  /// inspector and tree continue to read the live wire kind so the
+  /// "contact" identity surfaces everywhere it matters.
+  fileKind: FileKind;
   id: string;
   path: string;
   /// In-memory buffer; flushed on save.
@@ -115,6 +177,14 @@ export type FileTab = {
   /// Wysiwyg <-> Source mode toggle (same backing text); cleared
   /// on tab close along with the tab itself.
   find?: FindState;
+  /// User-toggled syntax highlighting in source mode. Default true.
+  /// Only meaningful when the tab is in source mode (markdown's
+  /// wysiwyg surface does its own syntax painting). For text-kind
+  /// tabs whose extension has no registered CodeMirror language
+  /// pack the toggle is still surfaced but is effectively a no-op.
+  /// Per-tab so a "reading" tab can read code with plain text and
+  /// an adjacent "editing" tab can keep syntax on.
+  syntaxHighlight: boolean;
   /// Last known caret position (doc offsets), persisted across the
   /// Wysiwyg <-> Source mode toggle and across page reloads via
   /// the URL-hash session. The active editor pushes updates here
@@ -271,7 +341,7 @@ async function loadTabContent(
 /// Open a file in a specific pane. If already open there, just focus.
 export async function openInPane(paneId: string, path: string): Promise<void> {
   if (!isEditableText(path)) {
-    notify(`'${path}' is not an editable text file (only .md and .txt)`);
+    notify(`'${path}' is not an editable text file`);
     return;
   }
   const p = pane(paneId);
@@ -281,14 +351,23 @@ export async function openInPane(paneId: string, path: string): Promise<void> {
     layout.activePaneId = paneId;
     return;
   }
+  // Path-based classification picks the initial mode: markdown-class
+  // files start in wysiwyg (the wisp of formatting they carry is
+  // worth rendering); arbitrary source / config text starts in source
+  // mode (wysiwyg would just render the raw bytes with no visible
+  // benefit, plus the menu hides the toggle for text-kind tabs).
+  const pathKind = classifyPath(path);
+  const fileKind: FileKind =
+    pathKind === "document" || pathKind === "text" ? pathKind : "document";
   const newTab: FileTab = {
     kind: "file",
+    fileKind,
     id: id("tab"),
     path,
     content: "",
     saved: "",
     savedMtime: null,
-    mode: "wysiwyg",
+    mode: defaultModeForPath(path, fileKind),
     loading: true,
     error: null,
     inspectorOpen: false,
@@ -297,6 +376,7 @@ export async function openInPane(paneId: string, path: string): Promise<void> {
     readMode: false,
     fsWritable: true,
     styleToolbarOpen: false,
+    syntaxHighlight: true,
   };
   p.tabs.push(newTab);
   p.activeTabId = newTab.id;
@@ -430,6 +510,7 @@ export function reorderTab(paneId: string, tabId: string, toIndex: number): void
 function cloneTab(src: Tab): Tab {
   return {
     kind: "file",
+    fileKind: src.fileKind,
     id: src.id,
     path: src.path,
     content: src.content,
@@ -444,6 +525,7 @@ function cloneTab(src: Tab): Tab {
     readMode: src.readMode,
     fsWritable: src.fsWritable,
     styleToolbarOpen: src.styleToolbarOpen,
+    syntaxHighlight: src.syntaxHighlight,
     // Find state is per-tab UI state; drop it when the tab moves
     // panes so the destination opens fresh without a half-mounted
     // bar pointing at a now-defunct adapter.
@@ -578,6 +660,9 @@ export function setTabOutlineOpen(tab: FileTab, open: boolean): void {
 export function setTabStyleToolbarOpen(tab: FileTab, open: boolean): void {
   tab.styleToolbarOpen = open;
 }
+export function setTabSyntaxHighlight(tab: FileTab, on: boolean): void {
+  tab.syntaxHighlight = on;
+}
 
 /// Whether a tab represents an unsaved buffer.
 export function isDirty(t: Tab): boolean {
@@ -657,7 +742,21 @@ export async function overwriteConflictedTab(): Promise<void> {
 /// server". Both autosave and explicit saveTab funnel through here.
 /// On 409, opens the conflict dialog and returns; the dialog's
 /// Reload / Overwrite buttons drive the recovery.
+///
+/// Format-specific pre-checks live here so the gate is uniform
+/// across autosave and Cmd+S. Today only JSON is validated:
+/// writing invalid JSON onto disk would surface as a parse error
+/// the next time a tool / our own pretty viewer reads the file,
+/// which is too late to recover the user's typo. Refusing the
+/// write at the editor boundary keeps the file system honest.
 async function performSave(t: FileTab): Promise<void> {
+  if (isJson(t.path)) {
+    const reason = validateJsonBuffer(t.content);
+    if (reason !== null) {
+      t.error = `JSON parse error: ${reason}`;
+      return;
+    }
+  }
   try {
     const r = await api.write(t.path, t.content, t.savedMtime);
     t.saved = t.content;
@@ -674,6 +773,20 @@ async function performSave(t: FileTab): Promise<void> {
       return;
     }
     throw e;
+  }
+}
+
+/// Return null when `src` parses as JSON, otherwise the
+/// JSON.parse error message. An empty / whitespace-only buffer is
+/// accepted: a fresh `.json` file the user has not yet typed into
+/// is allowed to round-trip empty.
+function validateJsonBuffer(src: string): string | null {
+  if (src.trim() === "") return null;
+  try {
+    JSON.parse(src);
+    return null;
+  } catch (e) {
+    return (e as Error).message;
   }
 }
 
@@ -768,6 +881,10 @@ type SerTab = {
   /// fresh tabs keep the hash short. The active editor mirrors
   /// `tab.caret` here on every selection change.
   c?: [number, number];
+  /// Syntax-highlight toggle. Default is "on" so we only emit
+  /// `h: 0` when the user has explicitly disabled highlighting
+  /// for this tab. Restores without the field land on default-on.
+  h?: 0;
 };
 type SerLeaf = { k: "l"; t: SerTab[]; f?: 1 };
 type SerSplit = { k: "s"; d: "r" | "c"; a: SerNode; b: SerNode; r?: number };
@@ -797,6 +914,7 @@ function serializeNode(nodeId: string): SerNode | null {
         ...(t.outlineOpen ? { ol: 1 as const } : {}),
         ...(t.styleToolbarOpen ? { s: 1 as const } : {}),
         ...(t.readMode ? { r: 1 as const } : {}),
+        ...(t.syntaxHighlight ? {} : { h: 0 as const }),
         ...c,
       };
     });
@@ -852,14 +970,30 @@ export async function restoreLayout(s: SerNode): Promise<void> {
         // saved entries from older session.json files instead of
         // leaving the user with unrecoverable orphans.
         if (kind !== "f") continue;
+        // Recompute fileKind from the path. Cheaper than persisting
+        // it (the hash already carries the path) and keeps a session
+        // restored after a chan upgrade aligned with the current
+        // classifier instead of a stale snapshot.
+        const restoredPath = sertab.p ?? "";
+        const restoredPathKind = classifyPath(restoredPath);
+        const restoredFileKind: FileKind =
+          restoredPathKind === "document" || restoredPathKind === "text"
+            ? restoredPathKind
+            : "document";
         const tab: FileTab = {
           kind: "file",
+          fileKind: restoredFileKind,
           id: id("tab"),
-          path: sertab.p ?? "",
+          path: restoredPath,
           content: "",
           saved: "",
           savedMtime: null,
-          mode: sertab.m ?? "wysiwyg",
+          // Trust the persisted mode when it is a valid pair for
+          // this tab's path; otherwise fall back to the default.
+          // Guards: a markdown-only "wysiwyg" mode persisted for a
+          // .py file restores to source; a "pretty" persisted for a
+          // non-JSON text file restores to source.
+          mode: validateRestoredMode(sertab.m, restoredPath, restoredFileKind),
           loading: true,
           error: null,
           inspectorOpen: !!sertab.o,
@@ -878,6 +1012,10 @@ export async function restoreLayout(s: SerNode): Promise<void> {
           // Absent `s` field = default-off; `s: 1` = user previously
           // enabled the floating style toolbar.
           styleToolbarOpen: sertab.s === 1,
+          // Default-on. `h: 0` in the hash means user disabled
+          // highlight on this tab; any other value (absent / 1)
+          // restores to default-on.
+          syntaxHighlight: sertab.h !== 0,
           // Restored caret rides through to the editor via tab.caret;
           // the editor lands it once content finishes loading.
           caret:
