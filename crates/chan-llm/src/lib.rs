@@ -22,10 +22,10 @@
 //!
 //! ```text
 //!   LlmConfig          load/save TOML; backend, model, auto_apply,
-//!                      key resolution policy.
+//!                      CLI launch settings.
 //!
-//!   LlmSession         Arc-able handle. Owns the HTTP client and
-//!                      an internal tokio runtime. Constructor:
+//!   LlmSession         Arc-able handle. Owns an internal tokio
+//!                      runtime. Constructor:
 //!                      `LlmSession::new(drive, config)`.
 //!
 //!   SessionListener    Send + Sync trait the consumer implements.
@@ -51,7 +51,6 @@
 pub mod backends;
 pub mod config;
 pub mod error;
-pub mod keys;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 pub mod prompts;
@@ -59,9 +58,8 @@ pub mod session;
 pub mod tools;
 
 pub use backends::BackendKind;
-pub use config::{LlmConfig, MaxTokens};
+pub use config::LlmConfig;
 pub use error::LlmError;
-pub use keys::KeyStatus;
 pub use session::{
     apply_resume, is_pending_placeholder, CancelHandle, Delta, ImageInput, LlmEventError,
     LlmSession, Message, ResumeOutcome, Role, SessionListener, StopReason, ToolCall, ToolResult,

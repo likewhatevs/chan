@@ -24,13 +24,12 @@ to reimplement the assistant logic in Swift or Kotlin.
 
 In scope:
 
-- Backends (HTTP and subprocess) with a uniform `Backend` trait.
+- CLI-agent backends with a uniform `Backend` trait.
 - Embedded system prompt + tool descriptions.
 - The built-in tools (`read_file`, `write_file`, `list_files`,
   `search_content`, `repo_report`, `graph_neighbors`,
   `graph_tags`, `graph_files_with_tag`), all routed through
   `chan_drive::Drive`.
-- API key resolution (env, keychain, file fallback).
 - `LlmSession` orchestration loop (assistant turn, tool round-
   trip, pending-write resume, cancel).
 - Optional stdio MCP server (`feature = "mcp"`) for external MCP
@@ -62,9 +61,8 @@ visible consumer today) is the point.
                                    v
                         +---------------------+      +----------+
                         |  Backend trait impl | ---> | upstream |
-                        |  Anthropic / Gemini |      |  HTTP /  |
-                        |  Ollama / ClaudeCli |      | subproc  |
-                        |  / GeminiCli /      |      +----------+
+                        |  ClaudeCli /        |      | subproc  |
+                        |  GeminiCli /        |      +----------+
                         |  CodexCli           |
                         +----------+----------+
                                    | tool_call events
@@ -153,26 +151,41 @@ same dispatch.
 - File mode 0600 on Unix, written via an atomic-rename helper
   that mirrors `chan_drive::fs_ops::atomic_write` (tempfile in
   the same dir, fsync, rename, fsync parent).
-- Fields: `backend`, `models`, `urls`, `max_tokens`,
-  `auto_apply_writes`, `mcp_image_max_bytes`, `keys`,
-  `claude_cli`, `gemini_cli`, `stream_inactivity_timeout_secs`,
-  `max_tool_iterations`. Empty sub-tables and `None` scalars are
-  skipped on serialization so a fresh install doesn't grow noise.
+- Fields: `backend`, `models`, `auto_apply_writes`,
+  `mcp_image_max_bytes`,
+  `claude_cli`, `gemini_cli`, `codex_cli`,
+  `stream_inactivity_timeout_secs`, `max_tool_iterations`,
+  `hardened_subprocess_env`. Empty sub-tables and `None` /
+  default-false scalars are skipped on serialization so a fresh
+  install doesn't grow noise.
 
-Key resolver (`keys.rs`)
+Subprocess env sanitization (`backends/subprocess_env.rs`)
 
-- Three tiers: env -> keychain -> file fallback.
-- Service name `chan` in the OS keychain (macOS Keychain,
-  Windows Credential Manager, Linux Secret Service / kwallet).
-- `resolve(kind, &config) -> (Option<String>, KeyStatus)`.
-- `keychain_lookup(kind)` is a public probe for hosts that need
-  to verify a write actually landed (macOS Security.framework
-  silently no-ops on unsigned dev binaries).
+- Each subprocess backend (`claude_cli`, `gemini_cli`, `codex_cli`)
+  drops the inherited env and forwards a small, explicit allowlist
+  before spawning. Two modes:
+  - Loose (default): `BASE_ALLOWLIST` (POSIX shell / locale /
+    tmpdir vars) plus any name matching one of the per-vendor
+    prefixes (`ANTHROPIC_` / `CLAUDE_`, `GOOGLE_` / `GEMINI_`,
+    `CODEX_` / `OPENAI_`). Convenient when the user owns the
+    parent env (their interactive shell).
+  - Strict (set via `LlmConfig.hardened_subprocess_env = true`):
+    `BASE_ALLOWLIST` plus an explicit per-vendor name allowlist
+    (`ANTHROPIC_API_KEY` + tokens, `GEMINI_API_KEY` + `GOOGLE_API_KEY`,
+    `OPENAI_API_KEY` + `CODEX_API_KEY`). Drops redirect-style vars
+    a tainted parent env could weaponize:
+    `ANTHROPIC_BEDROCK_BASE_URL`, `GOOGLE_APPLICATION_CREDENTIALS`,
+    `OPENAI_BASE_URL`, etc. Use this when chan-llm runs under a
+    long-lived service host (chan-server, future remote runner).
+- Both modes apply on top of vendor-specific values the backend
+  sets explicitly via `command.env(...)` AFTER sanitization (e.g.
+  the gemini_cli backend's `GEMINI_CLI_HOME` redirect; those
+  always win regardless of inheritance mode).
 
 Prompts (`prompts.rs`)
 
 - `SYSTEM_PROMPT` and `SYSTEM_PROMPT_NO_TOOLS` (the latter for
-  Ollama models that don't support tool calling).
+  CLI runs where chan's standard tool schemas are not advertised).
 - Per-tool descriptions (`READ_FILE_DESC`, `WRITE_FILE_DESC`,
   `LIST_FILES_DESC`, `SEARCH_CONTENT_DESC`, `READ_IMAGE_DESC`)
   referenced from the tool schema and re-exposed verbatim in the
@@ -242,27 +255,20 @@ Backends (`backends/`)
 The crate's headline types, all sync, all FFI-shaped:
 
 ```text
-LlmConfig            { backend, models, urls, max_tokens,
+LlmConfig            { backend, models,
                        auto_apply_writes, mcp_image_max_bytes,
-                       keys, claude_cli, gemini_cli, codex_cli,
+                       claude_cli, gemini_cli, codex_cli,
                        stream_inactivity_timeout_secs,
-                       max_tool_iterations }
+                       max_tool_iterations,
+                       hardened_subprocess_env }
                      load() / save()
                      load_from(&Path) / save_to(&Path)
 
-MaxTokens, Models, Urls, Keys, ClaudeCli, GeminiCli, CodexCli
+Models, ClaudeCli, GeminiCli, CodexCli
                      each ::is_empty() and ::for_backend(kind)
                      where applicable.
 
-BackendKind          Anthropic | Gemini | Ollama
-                     | ClaudeCli | GeminiCli | CodexCli
-
-KeyStatus            Env | Keychain | File | Missing
-keys::resolve(kind, &config) -> (Option<String>, KeyStatus)
-keys::status(kind, &config)  -> KeyStatus
-keys::set(kind, key)         -> Result<()>
-keys::clear(kind)            -> Result<()>
-keys::keychain_lookup(kind)  -> Option<String>
+BackendKind          ClaudeCli | GeminiCli | CodexCli
 
 StandardTool         ReadFile | WriteFile | ListFiles
                      | SearchContent | RepoReport
@@ -296,9 +302,9 @@ LlmError             single tagged enum, primitive payloads.
                      ListingTooLarge { observed, limit },
                      PathRefused(String). Plus
                      NotImplemented, BackendNotConfigured,
-                     MissingApiKey, ConfigDecode/Encode, Http,
+                     ConfigDecode/Encode,
                      BackendError { status, message }, Tool, Core,
-                     Io, Keychain, Mcp, Resume.
+                     Io, Mcp, Resume.
 
 PENDING_STATUS, REJECTED_STATUS, FAILED_STATUS
 is_pending_placeholder(&Message) -> bool
@@ -355,10 +361,10 @@ that change subprocess behavior:
   override settings the way it can override a CLI flag, but it
   can still pass other gemini flags that alter behavior.
   Redirecting `GEMINI_CLI_HOME` blocks gemini from reading the
-  user's real `~/.gemini` auth, so v2 forwards the chan-llm-
-  resolved Gemini API key via `GEMINI_API_KEY` on the subprocess
-  env. v2 launches with no chan-llm-stored key surface an auth
-  error from gemini.
+  user's real `~/.gemini` auth directly, so v2 symlinks/copies the
+  real credential files into the synthetic home. Shell-provided
+  `GEMINI_API_KEY` / `GOOGLE_API_KEY` also survive env
+  sanitization.
 - `[codex_cli] cmd` / `extra_args`: same trust story. Codex v2
   injects chan's MCP server with per-invocation `-c
   mcp_servers.chan.*` overrides, so chan does not edit the user's
@@ -588,14 +594,6 @@ Adding a new built-in tool:
 ```
 Backend     Notes
 ----------  ----------------------------------------------------
-Anthropic   SSE streaming, tool round-trips. Default model
-            `claude-opus-4-7`, default max_tokens 4096.
-Gemini      Function-calling format, server-side tool exec.
-            Default model `gemini-2.5-pro`.
-Ollama      Local server, no key, custom function-calling shape
-            (no native tool-use; uses SYSTEM_PROMPT_NO_TOOLS for
-            models without tool support). URL precedence:
-            `OLLAMA_HOST` env > `urls.ollama` > localhost:11434.
 ClaudeCli   Drives a local `claude` CLI subprocess. v1 runs
             claude as a black-box agent against the drive root.
             v2 (host-injected `mcp_command`) writes a temp
@@ -605,7 +603,7 @@ ClaudeCli   Drives a local `claude` CLI subprocess. v1 runs
             so writes still stage through `auto_apply_writes`.
             Spawned with `--include-partial-messages` so the
             listener sees token-level `on_delta` updates (one
-            per Anthropic SDK `content_block_delta` text_delta);
+            per Claude stream `content_block_delta` text_delta);
             the final `assistant` event's text is suppressed
             when partials already streamed it to avoid double-
             counting.
@@ -616,15 +614,12 @@ GeminiCli   Drives a local `gemini` CLI subprocess. Same v1/v2
             (`settings.json` advertising chan-llm's MCP server,
             `policies/chan.toml` deny-policy for native edit /
             shell tools), and passes
-            `--allowed-mcp-server-names chan`. Forwards the
-            chan-llm-resolved Gemini key via `GEMINI_API_KEY`
-            since redirecting the home dir blocks gemini from
-            reading the user's real `~/.gemini` auth.
+            `--allowed-mcp-server-names chan`. The synthetic home
+            bridges the user's real gemini auth files.
             Streaming granularity is one `on_delta` per assistant
             message (gemini-cli's stream-json output emits whole
             assistant messages, no upstream flag for token-level
-            partials). UI consumers wanting typewriter-style
-            updates should prefer the HTTP `Gemini` backend.
+            partials).
 CodexCli    Drives local `codex exec --json`. v2 injects chan's
             MCP server through `-c mcp_servers.chan.*` overrides
             and runs Codex's native shell/file sandbox as read-only
@@ -639,26 +634,17 @@ CodexCli    Drives local `codex exec --json`. v2 injects chan's
 
 Each backend:
 
-- Builds wire-format requests (system prompt + history + tools +
-  user message).
+- Builds CLI input (system prompt + history + user message).
 - Drives the streaming response, translating chunks into
   chan-llm's `Delta` events plus the in-progress assistant
   text buffer.
 - Maps vendor stop reasons into `StopReason::{EndOfTurn,
   MaxTokens, StopSequence, ToolUse, Error, Cancelled}`.
-- Does NOT touch the filesystem. Tool execution is the
-  orchestration loop's job; tool results come back as
-  `on_tool_result` callbacks on the listener.
-
-The agentic CLI backends are the deliberate exception: the CLI's
-own tool loop runs against the drive directly (v1) or against
-chan-llm's MCP server (v2). The session-level loop sees empty
-`tool_calls` from these backends since the CLI has already
-executed them.
-
-Per-call `max_tokens` resolves user override > backend default
-(`config.max_tokens.for_backend(kind)`). ClaudeCli, GeminiCli, and CodexCli
-omit this knob: the CLIs pick their own ceilings.
+- Lets the CLI's own tool loop run against the drive directly (v1)
+  or against chan-llm's MCP server (v2). The session-level loop
+  sees empty `tool_calls` from these backends since the CLI has
+  already executed them.
+- Omits a per-call max-token knob: the CLIs pick their own ceilings.
 
 ## 9. On-disk layout
 
@@ -693,11 +679,6 @@ Today:
   `Delta` / `ToolCall` / `ToolResult` / `StopReason` events as
   WebSocket frames to the web frontend, owns the conversation
   transcript, and surfaces the auto-apply confirmation UI.
-  `chan-server` also calls `keys::resolve`, `keys::set`,
-  `keys::clear`, and `keys::keychain_lookup` to back the
-  settings-page key flows, and uses
-  `backends::anthropic::list_models` / `gemini::list_models`
-  for the model picker.
 - `chan` (the CLI in `chan-writer/chan`) depends on `chan-llm`
   with the `mcp` feature so its hidden `__mcp` subcommand can
   spin up `chan_llm::mcp::Server` in-process. That is the

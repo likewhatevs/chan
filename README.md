@@ -55,8 +55,8 @@ chan-tunnel-server    Server-side of the tunnel. Library that
                       terminates tunnels dialed by `chan serve`
                       and exposes the drive-side substreams to a
                       public-facing router.
-chan-llm              LLM backends (Anthropic, Gemini, Ollama,
-                      Claude CLI, Gemini CLI), embedded prompts,
+chan-llm              CLI-agent backends (Claude CLI, Gemini CLI,
+                      Codex CLI), embedded prompts,
                       and the tool sandbox routed through
                       chan-drive. Optional `mcp` feature ships a
                       stdio MCP server and the `chan-llm-mcp`

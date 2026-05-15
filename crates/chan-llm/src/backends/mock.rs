@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::session::{Delta, Message, SessionListener, StopReason, ToolCall};
+use crate::session::{Delta, LlmEventError, Message, SessionListener, StopReason, ToolCall};
 use crate::tools::ToolSchema;
 
 use super::{Backend, Outcome};
@@ -29,11 +29,21 @@ use super::{Backend, Outcome};
 /// backend: deltas accumulate into `assistant_text`, tool calls
 /// arrive on `Outcome.tool_calls` and trigger the post-turn tool
 /// dispatch, and the terminal `Done` carries the stop reason.
+///
+/// `TypedError` and `Error` mirror the two error chokepoints real
+/// backends use (`on_error_kind` for the structured variants the
+/// chan-server frontend branches on, `on_error` for free-form
+/// strings). Tests of the typed-error UX paths drive these to
+/// observe what the orchestrator forwards to the listener and
+/// whether it short-circuits the turn (it does, via
+/// `Outcome::error()`, when followed by no terminal `Done`).
 #[derive(Debug, Clone)]
 pub enum MockEvent {
     Delta(String),
     ToolCall(ToolCall),
     Done(StopReason),
+    TypedError(LlmEventError),
+    Error(String),
 }
 
 /// A `Backend` that replays a fixed `Vec<MockEvent>` script. One
@@ -71,6 +81,8 @@ impl Backend for MockBackend {
                 }
                 MockEvent::ToolCall(c) => tool_calls.push(c.clone()),
                 MockEvent::Done(r) => stop = *r,
+                MockEvent::TypedError(e) => listener.on_error_kind(e.clone()),
+                MockEvent::Error(e) => listener.on_error(e.clone()),
             }
         }
         Outcome {

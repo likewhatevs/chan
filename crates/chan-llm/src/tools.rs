@@ -330,31 +330,25 @@ fn exec_read_file(args: &Json, ctx: &ToolContext) -> Result<Json> {
 
 fn exec_list_files(args: &Json, ctx: &ToolContext) -> Result<Json> {
     let prefix = args.get("prefix").and_then(|v| v.as_str());
-    let tree = ctx.drive.list_tree()?;
-    // Filter on prefix client-side: chan-drive's list_tree doesn't
-    // take one yet, so we filter here. On a 500k drive this still
-    // walks the full tree; once a prefix-aware drive op exists, this
-    // reduces to a thin wrapper.
-    let mut filtered: Vec<_> = match prefix {
-        Some(p) if !p.is_empty() => {
-            let p = p.trim_end_matches('/');
-            let p_with_slash = format!("{p}/");
-            tree.into_iter()
-                .filter(|e| e.path == p || e.path.starts_with(&p_with_slash))
-                .collect()
-        }
-        _ => tree,
+    // Push prefix scoping into chan-drive so a narrow `prefix` on a
+    // 500k-file drive walks only the relevant subtree instead of the
+    // full root. An empty / missing prefix still walks the whole
+    // drive, same as before.
+    let mut entries: Vec<_> = match prefix {
+        Some(p) if !p.is_empty() => ctx.drive.list_tree_prefix(p.trim_end_matches('/'))?,
+        _ => ctx.drive.list_tree()?,
     };
-    let total = filtered.len();
+    let total = entries.len();
     let truncated = total > LIST_FILES_CAP_ENTRIES;
     if truncated {
-        filtered.truncate(LIST_FILES_CAP_ENTRIES);
+        entries.truncate(LIST_FILES_CAP_ENTRIES);
     }
-    let entries = serde_json::to_value(&filtered)
+    let count = entries.len();
+    let entries = serde_json::to_value(&entries)
         .map_err(|e| LlmError::Tool(format!("serialize tree: {e}")))?;
     let mut out = serde_json::json!({
         "entries": entries,
-        "count": filtered.len(),
+        "count": count,
         "total": total,
     });
     if truncated {
@@ -504,11 +498,9 @@ fn exec_write_file(args: &Json, ctx: &ToolContext) -> Result<ToolOutcome> {
     })))
 }
 
-/// JSON-schema descriptor for one tool, in the OpenAI-shaped
-/// `{name, description, parameters}` form most backends accept
-/// directly (Anthropic / Ollama use it verbatim; Gemini wraps it
-/// in its own `functionDeclarations` object). Backends translate
-/// from this to their wire format.
+/// JSON-schema descriptor for one tool, in the common
+/// `{name, description, parameters}` form. MCP and future backends
+/// translate from this to their wire format.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ToolSchema {
     pub name: &'static str,

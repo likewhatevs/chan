@@ -33,7 +33,7 @@ use crate::config::LlmConfig;
 use crate::error::LlmError;
 use crate::tools::ToolContext;
 
-/// Conversation roles. The taxonomy mirrors OpenAI / Anthropic
+/// Conversation roles. The taxonomy mirrors common LLM chat
 /// conventions so backends don't have to invent their own; each
 /// translates these to its wire format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,12 +65,8 @@ pub struct Message {
     pub tool_calls: Vec<ToolCall>,
     /// Optional multimodal payload: base64-encoded images that
     /// accompany this message. Today only `Role::User` messages
-    /// carry them; backends that support multimodal input
-    /// (Anthropic via `image` content blocks, Gemini via
-    /// `inline_data` parts, Ollama via its top-level `images`
-    /// array) serialize these alongside the text. Backends without
-    /// image support drop them silently; the text content is
-    /// still authoritative.
+    /// carry them. Backends without image support drop them
+    /// silently; the text content is still authoritative.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ImageInput>,
 }
@@ -315,8 +311,8 @@ impl Default for CancelHandle {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LlmEventError {
-    /// Upstream rejected the credential (401 / 403). The user needs
-    /// to fix the API key.
+    /// Upstream or CLI rejected the credential. The user needs to
+    /// fix the CLI/provider auth.
     Auth { backend: String, message: String },
     /// Upstream rate-limited and the retry budget was exhausted.
     /// `retry_after_secs` carries the upstream hint when one was
@@ -371,9 +367,9 @@ pub enum LlmEventError {
 }
 
 impl LlmEventError {
-    /// Backend name the error is attributed to (`anthropic`, `gemini`,
-    /// `ollama`, `claude_cli`, `gemini_cli`, or any other identifier
-    /// a backend supplies). Useful for logs and per-backend UX.
+    /// Backend name the error is attributed to (`claude_cli`,
+    /// `gemini_cli`, `codex_cli`, or any other identifier a backend
+    /// supplies). Useful for logs and per-backend UX.
     pub fn backend(&self) -> &str {
         match self {
             LlmEventError::Auth { backend, .. }
@@ -655,12 +651,9 @@ impl LlmSession {
     ///      step 3 for the unmodified-Apply case.
     ///   4. Calls `send` again with the updated transcript.
     ///
-    /// Without those placeholders, Anthropic and Gemini reject the
-    /// next turn because the tool_use block has no matching
-    /// tool_result. `apply_resume` validates that the target
-    /// message is actually a placeholder, so a host that double-
-    /// resumes catches the mistake instead of silently corrupting
-    /// the transcript.
+    /// `apply_resume` validates that the target message is actually
+    /// a placeholder, so a host that double-resumes catches the
+    /// mistake instead of silently corrupting the transcript.
     pub fn send(&self, messages: Vec<Message>, listener: Arc<dyn SessionListener>) -> CancelHandle {
         // Wrap once at the entry point so every downstream call site
         // (run_loop dispatches, backend on_delta emissions) inherits
@@ -670,11 +663,8 @@ impl LlmSession {
         let listener: Arc<dyn SessionListener> = Arc::new(SafeListener { inner: listener });
         let cancel = CancelHandle::new();
         let Some(kind) = self.config.active_backend() else {
-            // BackendNotConfigured rather than MissingApiKey: this is
-            // a "the user hasn't picked a backend" or "the user has
-            // disabled the picked backend" state, not a key problem,
-            // and hosts that branch on the error kind want to nudge
-            // the user into Settings, not into Keychain. The check
+            // This is a "the user hasn't picked a backend" or "the
+            // user has disabled the picked backend" state. The check
             // uses `active_backend` so a disabled provider can't
             // sneak a request through even if `config.backend` is
             // still set as the sticky default.
@@ -720,17 +710,13 @@ impl LlmSession {
             BackendKind::ClaudeCli => self.config.claude_cli.mcp_command.is_none(),
             BackendKind::GeminiCli => self.config.gemini_cli.mcp_command.is_none(),
             BackendKind::CodexCli => self.config.codex_cli.mcp_command.is_none(),
-            _ => false,
         };
         let tool_ctx = if agentic_cli_v1 {
             crate::tools::ToolContext::new(self.drive.clone(), true)
         } else {
             self.tool_context()
         };
-        let tool_schemas = match kind {
-            BackendKind::ClaudeCli | BackendKind::GeminiCli | BackendKind::CodexCli => Vec::new(),
-            _ => crate::tools::standard_tool_schemas(),
-        };
+        let tool_schemas = Vec::new();
 
         // Resolve the per-call tool-iteration cap. Clamps zero to one
         // so a misconfigured value can't deadlock the orchestrator.
@@ -871,12 +857,10 @@ async fn run_loop(
 
         // Did any tool call return `Pending` (write_file with
         // auto_apply off)? Track via a plain bool because the call
-        // detail was unused. Anthropic and Gemini reject the next
-        // user turn if any tool_use block from the assistant turn
-        // is missing its matching tool_result; we push a placeholder
-        // result for any tool that returned Pending so the
-        // transcript stays well-formed for them, then pause so the
-        // host can run its confirmation UI.
+        // detail was unused. We push a placeholder result for any
+        // tool that returned Pending so the transcript stays
+        // well-formed, then pause so the host can run its
+        // confirmation UI.
         let mut paused = false;
         for call in tool_calls.into_iter() {
             if cancel.load(Ordering::Relaxed) {
@@ -957,8 +941,7 @@ async fn run_loop(
                     // turn is supported: each lands here, pushes
                     // its placeholder, and the pause fires after
                     // the loop completes so every tool_use block
-                    // has a matching tool_result (Anthropic rejects
-                    // a partial pairing).
+                    // has a matching tool_result.
                     paused = true;
                     let placeholder = serde_json::json!({
                         "status": PENDING_STATUS,
@@ -1068,6 +1051,7 @@ mod tests {
         ToolResult(String),
         Done(StopReason),
         Error(String),
+        ErrorKind(LlmEventError),
         Snapshot(Vec<Message>),
     }
 
@@ -1086,6 +1070,15 @@ mod tests {
         }
         fn on_error(&self, e: String) {
             self.0.lock().unwrap().push(Event::Error(e));
+        }
+        // Override the default on_error_kind so the typed variant is
+        // observable in tests rather than being flattened to a string
+        // by the trait's default impl. Production hosts (chan-server's
+        // LlmBroadcastListener) override on_error_kind for the same
+        // reason: they want the variant's `code()`, not just its
+        // `Display` text.
+        fn on_error_kind(&self, e: LlmEventError) {
+            self.0.lock().unwrap().push(Event::ErrorKind(e));
         }
         fn on_messages_snapshot(&self, history: &[Message]) {
             self.0
@@ -1120,7 +1113,7 @@ mod tests {
     /// Stub backend: returns a single tool_use Outcome on the first
     /// run, then an empty Outcome on subsequent runs (so the loop
     /// continues if the orchestrator decides to). Lets us exercise
-    /// run_loop end-to-end without an HTTP backend.
+    /// run_loop end-to-end without a real CLI backend.
     struct ToolUseBackend {
         calls: Mutex<usize>,
         proposed: Vec<ToolCall>,
@@ -1156,8 +1149,7 @@ mod tests {
     /// When auto_apply_writes is off and the assistant proposes
     /// write_file, the orchestrator must push a placeholder Tool
     /// message with the same call id so the transcript is
-    /// well-formed. Otherwise Anthropic / Gemini reject the next
-    /// turn for an unmatched tool_use block.
+    /// well-formed for resume.
     #[test]
     fn pending_write_pushes_placeholder_tool_result() {
         let (_cfg, _root, drive) = fixture();
@@ -1312,7 +1304,7 @@ mod tests {
     /// EndOfTurn with empty assistant_text must not push a stub
     /// message into the snapshot. Some backends emit an empty
     /// closing turn after tools have run; a stub Assistant{""}
-    /// is wire-invalid for Anthropic and round-trips badly.
+    /// round-trips badly.
     #[test]
     fn end_of_turn_snapshot_skips_empty_assistant_text() {
         let (_cfg, _root, drive) = fixture();
@@ -1655,8 +1647,8 @@ mod tests {
         });
         safe.on_error("boom".into());
         safe.on_error_kind(LlmEventError::Auth {
-            backend: "anthropic".into(),
-            message: "bad key".into(),
+            backend: "claude_cli".into(),
+            message: "auth failed".into(),
         });
         safe.on_messages_snapshot(&[Message::user("hi")]);
         safe.on_done(StopReason::EndOfTurn);
@@ -1666,14 +1658,14 @@ mod tests {
     #[test]
     fn llm_event_error_code_and_backend_match_variant() {
         let auth = LlmEventError::Auth {
-            backend: "anthropic".into(),
-            message: "bad key".into(),
+            backend: "claude_cli".into(),
+            message: "auth failed".into(),
         };
         assert_eq!(auth.code(), "auth");
-        assert_eq!(auth.backend(), "anthropic");
+        assert_eq!(auth.backend(), "claude_cli");
 
         let rl = LlmEventError::RateLimited {
-            backend: "gemini".into(),
+            backend: "gemini_cli".into(),
             retry_after_secs: Some(30),
             message: "quota exceeded".into(),
         };
@@ -1681,7 +1673,7 @@ mod tests {
         assert!(rl.to_string().contains("retry after 30s"));
 
         let backend = LlmEventError::Backend {
-            backend: "anthropic".into(),
+            backend: "claude_cli".into(),
             status: 503,
             message: "Service Unavailable".into(),
         };
@@ -1689,7 +1681,7 @@ mod tests {
         assert!(backend.to_string().contains("503"));
 
         let truncated = LlmEventError::StreamTruncated {
-            backend: "anthropic".into(),
+            backend: "claude_cli".into(),
             message: "connection reset".into(),
         };
         assert_eq!(truncated.code(), "stream_truncated");
@@ -1711,13 +1703,13 @@ mod tests {
         }
         let l = StringOnly(Mutex::new(Vec::new()));
         l.on_error_kind(LlmEventError::Auth {
-            backend: "anthropic".into(),
-            message: "bad key".into(),
+            backend: "claude_cli".into(),
+            message: "auth failed".into(),
         });
         let errs = l.0.lock().unwrap();
         assert_eq!(errs.len(), 1);
         assert!(
-            errs[0].contains("anthropic") && errs[0].contains("bad key"),
+            errs[0].contains("claude_cli") && errs[0].contains("auth failed"),
             "got: {}",
             errs[0]
         );

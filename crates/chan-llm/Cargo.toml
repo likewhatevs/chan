@@ -25,11 +25,7 @@ chan-drive = { path = "../chan-drive" }
 
 async-trait = { workspace = true }
 dirs = { workspace = true }
-futures-util = { workspace = true }
-httpdate = { workspace = true }
-keyring = { workspace = true }
 once_cell = { workspace = true }
-reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
@@ -37,7 +33,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
-zeroize = { workspace = true }
 
 # `mcp` feature deps. rmcp's defaults already pull macros + server +
 # transport-async-rw + schemars, which is everything we need for a

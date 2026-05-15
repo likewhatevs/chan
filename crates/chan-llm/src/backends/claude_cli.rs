@@ -113,8 +113,8 @@ use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall
 use crate::tools::ToolSchema;
 
 use super::{
-    read_line_capped, sanitize_env, spawn_stderr_drainer, Backend, Outcome, StderrDrainer,
-    NDJSON_LINE_CAP_BYTES, PARSE_ERROR_EMIT_LIMIT,
+    read_line_capped, sanitize_env_for_claude_cli, spawn_stderr_drainer, Backend, Outcome,
+    StderrDrainer, NDJSON_LINE_CAP_BYTES, PARSE_ERROR_EMIT_LIMIT,
 };
 
 /// Default command to launch claude. Plain `claude` so PATH wins;
@@ -178,6 +178,11 @@ pub struct ClaudeCliBackend {
     /// subprocess is treated as wedged. Resolved upstream by
     /// `backends::build` from `LlmConfig.stream_inactivity_timeout_secs`.
     inactivity_timeout: Duration,
+    /// When true, env sanitization uses an explicit-name allowlist
+    /// (`sanitize_env_strict`) instead of the loose `ANTHROPIC_` /
+    /// `CLAUDE_` prefix match. Resolved from
+    /// `LlmConfig.hardened_subprocess_env`.
+    hardened_env: bool,
 }
 
 impl ClaudeCliBackend {
@@ -188,6 +193,7 @@ impl ClaudeCliBackend {
         cwd: PathBuf,
         mcp: Option<McpWiring>,
         inactivity_timeout: Duration,
+        hardened_env: bool,
     ) -> Self {
         Self {
             cmd,
@@ -196,6 +202,7 @@ impl ClaudeCliBackend {
             cwd,
             mcp,
             inactivity_timeout,
+            hardened_env,
         }
     }
 }
@@ -219,10 +226,13 @@ impl Backend for ClaudeCliBackend {
         let mut command = Command::new(bin);
         // Drop the parent env so unrelated secrets (OPENAI_API_KEY,
         // GH_TOKEN, AWS_*) don't leak into a spawned child's
-        // /proc/<pid>/environ. ANTHROPIC_* is forwarded so claude can
-        // pick up its own auth knobs (API key, base URL, Bedrock
-        // toggles) when the user configured them in the shell.
-        sanitize_env(&mut command, &["ANTHROPIC_", "CLAUDE_"]);
+        // /proc/<pid>/environ. The wrapper picks the loose
+        // (prefix-based) or strict (explicit-name) variant based on
+        // `hardened_env`; loose is the interactive-shell default,
+        // strict tightens for service-host deployments where
+        // `ANTHROPIC_BEDROCK_BASE_URL` / `ANTHROPIC_CUSTOM_HEADERS`
+        // could come from a tainted parent env.
+        sanitize_env_for_claude_cli(&mut command, self.hardened_env);
         // Kill the spawned claude on Drop. Every normal exit path
         // already calls `child.kill().await` explicitly, but a panic
         // inside this async fn would otherwise leave the subprocess
@@ -972,6 +982,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1049,6 +1060,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1117,6 +1129,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1216,6 +1229,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1279,6 +1293,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1335,6 +1350,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1392,6 +1408,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1435,6 +1452,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1485,6 +1503,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let _ = backend
@@ -1544,6 +1563,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1593,6 +1613,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_millis(200),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let start = std::time::Instant::now();
@@ -1644,6 +1665,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend

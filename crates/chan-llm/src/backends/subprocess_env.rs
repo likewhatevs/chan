@@ -102,7 +102,10 @@ pub(crate) fn sanitize_env(command: &mut Command, forwarded_prefixes: &[&str]) {
 /// Callers still set vendor-specific values explicitly via
 /// `command.env(...)` after this runs; the allowlist controls only
 /// what survives the inheritance.
-#[allow(dead_code)] // wired by hardened-mode callers in a follow-up
+///
+/// Wired by the per-backend `sanitize_env_for_*` helpers below; the
+/// `hardened_subprocess_env` flag on `LlmConfig` controls which
+/// variant runs.
 pub(crate) fn sanitize_env_strict(command: &mut Command, allowed_names: &[&str]) {
     command.env_clear();
     for (key, value) in std::env::vars_os() {
@@ -113,6 +116,61 @@ pub(crate) fn sanitize_env_strict(command: &mut Command, allowed_names: &[&str])
         if keep {
             command.env(&key, &value);
         }
+    }
+}
+
+/// Strict allowlist for the `claude_cli` backend. Just the primary
+/// credential vars; `ANTHROPIC_BEDROCK_BASE_URL`,
+/// `ANTHROPIC_CUSTOM_HEADERS`, etc are dropped because they can
+/// redirect requests to a hostile endpoint or inject headers an
+/// untrusted parent env could weaponize. Users running under
+/// hardened mode who need Bedrock / Vertex routing must set those
+/// values via the chan-llm config or extend the allowlist here.
+const CLAUDE_CLI_STRICT_ALLOWLIST: &[&str] = &[
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+];
+
+/// Strict allowlist for the `gemini_cli` backend. Just the primary
+/// API-key vars; `GOOGLE_APPLICATION_CREDENTIALS` (a path to a
+/// service-account JSON) is dropped under hardened mode so a
+/// tainted parent env can't redirect gemini-cli at an attacker-
+/// controlled credential file.
+const GEMINI_CLI_STRICT_ALLOWLIST: &[&str] = &["GEMINI_API_KEY", "GOOGLE_API_KEY"];
+
+/// Strict allowlist for the `codex_cli` backend. Just the primary
+/// credential vars Codex consumes. Anything matching the broader
+/// `OPENAI_` / `CODEX_` prefixes (org IDs, project IDs, alternate
+/// base URLs) is dropped under hardened mode; users who need them
+/// configure them via the chan-llm config.
+const CODEX_CLI_STRICT_ALLOWLIST: &[&str] = &["OPENAI_API_KEY", "CODEX_API_KEY"];
+
+/// Per-backend wrapper: pick the loose or strict variant based on
+/// `hardened`. Centralized so each backend doesn't have to repeat
+/// the if/else; also makes the strict allowlist for each vendor
+/// the single source of truth (instead of scattered string literals).
+pub(crate) fn sanitize_env_for_claude_cli(command: &mut Command, hardened: bool) {
+    if hardened {
+        sanitize_env_strict(command, CLAUDE_CLI_STRICT_ALLOWLIST);
+    } else {
+        sanitize_env(command, &["ANTHROPIC_", "CLAUDE_"]);
+    }
+}
+
+pub(crate) fn sanitize_env_for_gemini_cli(command: &mut Command, hardened: bool) {
+    if hardened {
+        sanitize_env_strict(command, GEMINI_CLI_STRICT_ALLOWLIST);
+    } else {
+        sanitize_env(command, &["GOOGLE_", "GEMINI_"]);
+    }
+}
+
+pub(crate) fn sanitize_env_for_codex_cli(command: &mut Command, hardened: bool) {
+    if hardened {
+        sanitize_env_strict(command, CODEX_CLI_STRICT_ALLOWLIST);
+    } else {
+        sanitize_env(command, &["CODEX_", "OPENAI_"]);
     }
 }
 
@@ -273,5 +331,48 @@ mod tests {
         // POSIX base allowlist still forwards.
         assert!(keeps_strict("PATH", &["ANTHROPIC_API_KEY"]));
         assert!(keeps_strict("HOME", &[]));
+    }
+
+    // The per-vendor strict allowlists are the single source of truth
+    // for what each `sanitize_env_for_*` wrapper forwards under
+    // hardened mode. Locking them down via tests catches accidental
+    // widening (someone adding `ANTHROPIC_BEDROCK_*` "to be helpful"
+    // re-introduces the redirect-style attack surface the strict
+    // allowlist exists to prevent).
+
+    #[test]
+    fn claude_cli_strict_allowlist_pinned() {
+        let allow = CLAUDE_CLI_STRICT_ALLOWLIST;
+        // What a hardened-mode caller MUST get through:
+        assert!(allow.contains(&"ANTHROPIC_API_KEY"));
+        assert!(allow.contains(&"ANTHROPIC_AUTH_TOKEN"));
+        assert!(allow.contains(&"CLAUDE_CODE_OAUTH_TOKEN"));
+        // What it MUST NOT get through (these would be loose-mode-only):
+        assert!(!allow.contains(&"ANTHROPIC_BEDROCK_BASE_URL"));
+        assert!(!allow.contains(&"ANTHROPIC_CUSTOM_HEADERS"));
+        assert!(!allow.contains(&"CLAUDE_CODE_USE_VERTEX"));
+    }
+
+    #[test]
+    fn gemini_cli_strict_allowlist_pinned() {
+        let allow = GEMINI_CLI_STRICT_ALLOWLIST;
+        assert!(allow.contains(&"GEMINI_API_KEY"));
+        assert!(allow.contains(&"GOOGLE_API_KEY"));
+        // Path-pointing var: if a tainted parent env sets this to
+        // an attacker-controlled JSON, gemini-cli would try to use
+        // those credentials. Strict mode drops it.
+        assert!(!allow.contains(&"GOOGLE_APPLICATION_CREDENTIALS"));
+    }
+
+    #[test]
+    fn codex_cli_strict_allowlist_pinned() {
+        let allow = CODEX_CLI_STRICT_ALLOWLIST;
+        assert!(allow.contains(&"OPENAI_API_KEY"));
+        assert!(allow.contains(&"CODEX_API_KEY"));
+        // Same reasoning as the others: dropping OPENAI_BASE_URL
+        // prevents a tainted parent from redirecting Codex to a
+        // hostile endpoint that captures the key.
+        assert!(!allow.contains(&"OPENAI_BASE_URL"));
+        assert!(!allow.contains(&"OPENAI_ORG_ID"));
     }
 }

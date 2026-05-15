@@ -530,13 +530,10 @@ fn mcp_safe_message(err: &LlmError) -> String {
         }
         LlmError::Io(_) => "i/o error".to_string(),
         LlmError::Tool(msg) => format!("tool error: {msg}"),
-        LlmError::Http(_) => "http error".to_string(),
         LlmError::BackendError { status, .. } => format!("backend error: {status}"),
-        LlmError::Keychain(_) => "keychain error".to_string(),
         LlmError::ConfigDecode(_) => "config decode error".to_string(),
         LlmError::ConfigEncode(_) => "config encode error".to_string(),
         LlmError::Mcp(_) => "mcp error".to_string(),
-        LlmError::MissingApiKey(_) => "api key missing".to_string(),
         LlmError::BackendNotConfigured => "no backend configured".to_string(),
         LlmError::NotImplemented(_) => "not implemented".to_string(),
         LlmError::Resume(_) => "resume failed".to_string(),

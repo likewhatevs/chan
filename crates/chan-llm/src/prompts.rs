@@ -12,9 +12,10 @@
 ///
 /// The prompt enumerates the standard tools inline (read /
 /// write / list / search plus repo_report and the graph_* tools,
-/// and read_image for MCP-backed sessions). When the underlying
-/// backend doesn't support tool calls (some Ollama models), the
-/// host should swap in `SYSTEM_PROMPT_NO_TOOLS`.
+/// and read_image for MCP-backed sessions). CLI-agent backends run
+/// their own tool loops, so hosts can swap in
+/// `SYSTEM_PROMPT_NO_TOOLS` when chan's standard tool schemas are
+/// not advertised directly.
 pub const SYSTEM_PROMPT: &str = "\
 You are the chan writing assistant. The user has a markdown drive \
 open and you help them read, edit, search, and reason about it. \

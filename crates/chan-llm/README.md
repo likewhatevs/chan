@@ -25,13 +25,10 @@ chan-llm = { version = "0.9", features = ["mcp"] }
 ```
 Backend     Status   Notes
 ----------  -------  -----------------------------------------------
-Anthropic   ready    SSE streaming, tool round-trips
-Gemini      ready    function-calling, server-side tool exec
-Ollama      ready    local server, custom function-calling shape
 ClaudeCli   ready    drives a local `claude` subprocess; v2 routes
                      writes through chan-llm's MCP server
 GeminiCli   ready    drives a local `gemini` subprocess; v2 rewrites
-                     `GEMINI_CLI_HOME` and forwards `GEMINI_API_KEY`
+                     `GEMINI_CLI_HOME` and bridges real auth files
 CodexCli    ready    drives local `codex exec --json`; v2 injects
                      chan MCP config with per-run `-c` overrides
 ```
@@ -39,15 +36,10 @@ CodexCli    ready    drives local `codex exec --json`; v2 injects
 ## Public API
 
 ```text
-LlmConfig            backend, models, urls, max_tokens,
-                     auto_apply_writes, mcp_image_max_bytes, keys,
+LlmConfig            backend, models, auto_apply_writes,
+                     mcp_image_max_bytes,
                      claude_cli, gemini_cli, codex_cli.
                      load() / save() at chan-drive's config dir.
-
-KeyStatus            Env | Keychain | File | Missing.
-keys::resolve(kind, &config) -> (Option<String>, KeyStatus)
-keys::set(kind, key)        -> writes to OS keychain only
-keys::clear(kind)           -> drops from keychain only
 
 StandardTool         ReadFile | WriteFile | ListFiles | SearchContent.
 ToolContext          { drive: Arc<Drive>, auto_apply_writes: bool }

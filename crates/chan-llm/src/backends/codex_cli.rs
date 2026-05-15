@@ -30,8 +30,8 @@ use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall
 use crate::tools::ToolSchema;
 
 use super::{
-    read_line_capped, sanitize_env, spawn_stderr_drainer, Backend, Outcome, StderrDrainer,
-    NDJSON_LINE_CAP_BYTES, PARSE_ERROR_EMIT_LIMIT,
+    read_line_capped, sanitize_env_for_codex_cli, spawn_stderr_drainer, Backend, Outcome,
+    StderrDrainer, NDJSON_LINE_CAP_BYTES, PARSE_ERROR_EMIT_LIMIT,
 };
 
 /// Default command to launch Codex. Plain `codex` so PATH wins.
@@ -56,6 +56,10 @@ pub struct CodexCliBackend {
     cwd: PathBuf,
     mcp: Option<McpWiring>,
     inactivity_timeout: Duration,
+    /// When true, env sanitization uses an explicit-name allowlist
+    /// instead of the loose `CODEX_` / `OPENAI_` prefix match.
+    /// Resolved from `LlmConfig.hardened_subprocess_env`.
+    hardened_env: bool,
 }
 
 impl CodexCliBackend {
@@ -66,6 +70,7 @@ impl CodexCliBackend {
         cwd: PathBuf,
         mcp: Option<McpWiring>,
         inactivity_timeout: Duration,
+        hardened_env: bool,
     ) -> Self {
         Self {
             cmd,
@@ -74,6 +79,7 @@ impl CodexCliBackend {
             cwd,
             mcp,
             inactivity_timeout,
+            hardened_env,
         }
     }
 }
@@ -96,9 +102,12 @@ impl Backend for CodexCliBackend {
 
         let mut command = Command::new(bin);
         // Codex may authenticate from OPENAI_API_KEY or from its own
-        // CODEX_HOME/auth store. HOME is part of the base allowlist,
-        // and CODEX_/OPENAI_ are the only vendor prefixes forwarded.
-        sanitize_env(&mut command, &["CODEX_", "OPENAI_"]);
+        // CODEX_HOME/auth store. HOME is part of the base allowlist;
+        // the wrapper picks the loose (prefix-based) or strict
+        // (explicit-name) variant based on `hardened_env`. Strict
+        // mode drops OPENAI_BASE_URL and similar redirect-style vars
+        // that an untrusted parent env could weaponize.
+        sanitize_env_for_codex_cli(&mut command, self.hardened_env);
         command.kill_on_drop(true);
         command
             .args(leading)
@@ -657,6 +666,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -696,6 +706,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend

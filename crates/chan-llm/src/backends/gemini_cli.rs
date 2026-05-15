@@ -4,8 +4,7 @@
 //! hardening plan are documented in `crates/chan-llm/design.md`
 //! sections 6.1 through 6.3 and section 13. Note that gemini-cli's
 //! NDJSON output has no upstream flag for token-level partials, so
-//! `on_delta` granularity here is per-message; consumers wanting
-//! typewriter updates use the HTTP `Gemini` backend.
+//! `on_delta` granularity here is per-message.
 //!
 //! Two modes, selected at construction time, mirroring `claude_cli`:
 //!
@@ -47,10 +46,10 @@
 //!     servers in the real `~/.gemini` out of the picture.
 //!
 //! Redirecting `GEMINI_CLI_HOME` blocks gemini from reading the
-//! user's real `~/.gemini` auth, so we forward the chan-llm-stored
-//! Gemini API key (via `GEMINI_API_KEY`) when it's available; v2
-//! launches without a key on disk surface an auth error from
-//! gemini itself.
+//! user's real `~/.gemini` auth directly, so the synthetic home
+//! symlinks/copies the real credential files. Shell-provided
+//! `GEMINI_API_KEY` / `GOOGLE_API_KEY` also survive env
+//! sanitization.
 //!
 //! The auto-apply gate is owned by the MCP server side; when it's
 //! off, `write_file` returns a deferred error to gemini (same
@@ -98,8 +97,8 @@ use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall
 use crate::tools::ToolSchema;
 
 use super::{
-    read_line_capped, sanitize_env, spawn_stderr_drainer, Backend, Outcome, StderrDrainer,
-    NDJSON_LINE_CAP_BYTES, PARSE_ERROR_EMIT_LIMIT,
+    read_line_capped, sanitize_env_for_gemini_cli, spawn_stderr_drainer, Backend, Outcome,
+    StderrDrainer, NDJSON_LINE_CAP_BYTES, PARSE_ERROR_EMIT_LIMIT,
 };
 
 /// Default command to launch gemini. Plain `gemini` so PATH wins;
@@ -115,13 +114,9 @@ pub fn default_cmd() -> Vec<String> {
 /// and a socket path or drive root). The auto-apply gate is owned
 /// by the MCP server itself (in chan-server it lives on the bridge
 /// and is read per-connection), so it's not threaded through here.
-/// `api_key` is the chan-llm-resolved Gemini API key forwarded to
-/// the subprocess via `GEMINI_API_KEY` so the rewritten
-/// `GEMINI_CLI_HOME` doesn't break auth.
 #[derive(Debug, Clone)]
 pub struct McpWiring {
     pub command: Vec<String>,
-    pub api_key: Option<String>,
 }
 
 /// MCP server name as it appears under `mcpServers` in the generated
@@ -140,6 +135,10 @@ pub struct GeminiCliBackend {
     /// subprocess is treated as wedged. Resolved upstream by
     /// `backends::build` from `LlmConfig.stream_inactivity_timeout_secs`.
     inactivity_timeout: Duration,
+    /// When true, env sanitization uses an explicit-name allowlist
+    /// instead of the loose `GOOGLE_` / `GEMINI_` prefix match.
+    /// Resolved from `LlmConfig.hardened_subprocess_env`.
+    hardened_env: bool,
 }
 
 impl GeminiCliBackend {
@@ -150,6 +149,7 @@ impl GeminiCliBackend {
         cwd: PathBuf,
         mcp: Option<McpWiring>,
         inactivity_timeout: Duration,
+        hardened_env: bool,
     ) -> Self {
         Self {
             cmd,
@@ -158,6 +158,7 @@ impl GeminiCliBackend {
             cwd,
             mcp,
             inactivity_timeout,
+            hardened_env,
         }
     }
 }
@@ -181,12 +182,15 @@ impl Backend for GeminiCliBackend {
         let mut command = Command::new(bin);
         // Drop the parent env so unrelated secrets (OPENAI_API_KEY,
         // GH_TOKEN, AWS_*) don't leak into a spawned child's
-        // /proc/<pid>/environ. GOOGLE_/GEMINI_ are forwarded so
-        // gemini can pick up its own auth knobs from the shell when
-        // the user configured them. The explicit `.env(...)` calls
-        // below for GEMINI_CLI_HOME / GEMINI_API_KEY run after this
-        // and override anything the shell forwarded.
-        sanitize_env(&mut command, &["GOOGLE_", "GEMINI_"]);
+        // /proc/<pid>/environ. The wrapper picks the loose
+        // (prefix-based) or strict (explicit-name) variant based on
+        // `hardened_env`. Strict mode drops
+        // `GOOGLE_APPLICATION_CREDENTIALS` so a tainted parent env
+        // can't redirect gemini-cli at an attacker-controlled
+        // service-account JSON. The explicit `.env(...)` calls below
+        // for `GEMINI_CLI_HOME` / `GEMINI_API_KEY` run after this and
+        // override anything the parent env forwarded.
+        sanitize_env_for_gemini_cli(&mut command, self.hardened_env);
         // Kill the spawned gemini on Drop. Normal exit paths call
         // `child.kill().await` explicitly; this guards against a
         // panic anywhere below leaving the subprocess running.
@@ -206,9 +210,9 @@ impl Backend for GeminiCliBackend {
 
         // v2 wiring: redirect GEMINI_CLI_HOME at a tmpdir we own,
         // populate <home>/.gemini/{settings.json, policies/chan.toml},
-        // restrict MCP servers to ours, and forward the chan-llm-
-        // stored Gemini API key via GEMINI_API_KEY (gemini-cli reads
-        // it from env when no oauth token is on disk).
+        // restrict MCP servers to ours. Auth comes from the user's
+        // real ~/.gemini files symlinked/copied into the temp home,
+        // or from shell-provided GEMINI_/GOOGLE_ env.
         let mcp_home = match self.mcp.as_ref() {
             None => None,
             Some(wiring) => {
@@ -223,9 +227,6 @@ impl Backend for GeminiCliBackend {
                     .env("GEMINI_CLI_HOME", home.path())
                     .arg("--allowed-mcp-server-names")
                     .arg(MCP_SERVER_KEY);
-                if let Some(key) = wiring.api_key.as_deref() {
-                    command.env("GEMINI_API_KEY", key);
-                }
                 Some(home)
             }
         };
@@ -928,6 +929,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1008,6 +1010,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1055,6 +1058,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1099,6 +1103,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let _ = backend
@@ -1149,6 +1154,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let _ = backend
@@ -1203,6 +1209,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1248,6 +1255,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_millis(200),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let start = std::time::Instant::now();
@@ -1299,6 +1307,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1341,6 +1350,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1391,6 +1401,7 @@ mod tests {
             tmp.path().to_path_buf(),
             None,
             Duration::from_secs(60),
+            false,
         );
         let listener = Arc::new(Collector(Mutex::new(Vec::new())));
         let outcome = backend
@@ -1435,7 +1446,6 @@ mod tests {
         let home = write_gemini_home_with_user(
             &McpWiring {
                 command: vec!["chan".into(), "__mcp-proxy".into(), "/tmp/s".into()],
-                api_key: None,
             },
             None,
         )
@@ -1462,7 +1472,6 @@ mod tests {
         let home = write_gemini_home_with_user(
             &McpWiring {
                 command: vec!["chan".into()],
-                api_key: None,
             },
             None,
         )
@@ -1483,7 +1492,6 @@ mod tests {
         let home = write_gemini_home_with_user(
             &McpWiring {
                 command: vec!["chan".into()],
-                api_key: None,
             },
             None,
         )
@@ -1528,7 +1536,6 @@ mod tests {
         let home = write_gemini_home_with_user(
             &McpWiring {
                 command: vec!["chan".into(), "__mcp".into(), "/d".into()],
-                api_key: None,
             },
             Some(user_dot.clone()),
         )
@@ -1559,7 +1566,6 @@ mod tests {
         let home = write_gemini_home_with_user(
             &McpWiring {
                 command: vec!["chan".into()],
-                api_key: None,
             },
             Some(user_dot.clone()),
         )
@@ -1586,7 +1592,6 @@ mod tests {
         let home = write_gemini_home_with_user(
             &McpWiring {
                 command: vec!["chan".into()],
-                api_key: None,
             },
             Some(absent),
         )

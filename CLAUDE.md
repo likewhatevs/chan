@@ -136,16 +136,12 @@ the full design rationale, read the crate's `design.md`.
 
 ### chan-llm
 
-- **Backends never touch chan-drive directly**: a backend builds
-  wire-format requests and parses streaming responses. Anything
-  filesystem goes through the tool sandbox.
+- **CLI backends own their tool loop**: in v1 they operate directly
+  under the drive root; in v2 writes route through chan-llm's MCP
+  server so chan-drive gates apply.
 - **`auto_apply_writes` is the user's contract**: when false,
   `write_file` returns `Pending`. Never silently flip it to true
   and never write to disk in the false branch.
-- **Keys: env -> keychain -> file**: writes go to the OS keychain
-  only. The file fallback (`LlmConfig.keys`) is read-only from
-  chan-llm's perspective; a user-managed TOML stays user-managed.
-
 ### chan-tunnel-{proto,client,server}
 
 - **Proto stays pure**: `chan-tunnel-proto` has no I/O, no async,
