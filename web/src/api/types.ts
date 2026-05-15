@@ -49,8 +49,7 @@ export type AssistantBackendKind =
   | "ollama"
   | "gemini"
   | "claude_cli"
-  | "gemini_cli"
-  | "embedded";
+  | "gemini_cli";
 
 export type ClaudePrefs = {
   /// Whether this provider is enabled in the SPA's Settings CRUD.
@@ -64,6 +63,12 @@ export type ClaudePrefs = {
   /// per-backend default (Anthropic: 4096). Written from the
   /// inspector.
   max_tokens?: number | null;
+  /// Extended-thinking budget in tokens. Null = no thinking block
+  /// in the request (model runs in normal mode); a positive number
+  /// enables extended thinking with that token budget. Backend
+  /// strips the block on models that don't support thinking, so
+  /// the value is safe to keep across model switches.
+  thinking_budget?: number | null;
 };
 
 export type OllamaPrefs = {
@@ -85,6 +90,11 @@ export type GeminiPrefs = {
   /// Optional max output tokens. Null falls back to chan-llm's
   /// per-backend default (Gemini: 4096). Written from the inspector.
   max_tokens?: number | null;
+  /// Reserved for a future Gemini-thinking backend. Round-trips on
+  /// the wire (the server emits the field) but no Gemini model
+  /// currently sets `supports_thinking: true`, so the inspector
+  /// never surfaces a control for it.
+  thinking_budget?: number | null;
 };
 
 /// Per-CLI override surface. The local `claude` / `gemini` CLIs own
@@ -121,6 +131,11 @@ export type AssistantPrefs = {
 export type LlmModelEntry = {
   name: string;
   supports_tools: boolean;
+  /// Whether the model accepts an extended-thinking `thinking`
+  /// block on the wire. Today only Anthropic Opus / Sonnet 4.x
+  /// return true here; the inspector hides the effort knob when
+  /// false.
+  supports_thinking: boolean;
 };
 
 /// Wrapped response for `GET /api/llm/anthropic/models`.
@@ -294,6 +309,10 @@ export type PaneWidths = {
   /// Optional on the wire so older servers (no `outline` field in
   /// PaneWidths) still parse cleanly; the client fills the default.
   outline?: number;
+  /// Width of the assistant overlay's right-side inspector pane.
+  /// Optional on the wire so older servers (no `assistant` field in
+  /// PaneWidths) still parse cleanly; the client fills the default.
+  assistant?: number;
 };
 
 /// Vertical density for paragraphs and lists in the editor.

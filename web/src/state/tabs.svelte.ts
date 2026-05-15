@@ -17,7 +17,7 @@ import type { FindRange } from "../editor/find";
 import { classifyPath, isCsv, isEditableText, isJson } from "./fileTypes";
 import type { FileKind } from "./kinds";
 import { notify } from "./notify.svelte";
-import { cancelAssistantStreamForContext } from "./store.svelte";
+import { cancelAssistantStreamForPath } from "./store.svelte";
 
 let nextId = 1;
 function id(prefix: string): string {
@@ -433,7 +433,7 @@ export function closeTab(paneId: string, tabId: string): void {
   // The conversation history stays in memory (and on disk) so
   // reopening the file later restores the bubbles up to the abort.
   if (tab && tab.kind === "file") {
-    cancelAssistantStreamForContext(`file:${tab.path}`);
+    cancelAssistantStreamForPath(tab.path);
   }
   p.tabs.splice(idx, 1);
   if (p.activeTabId === tabId) {
@@ -457,7 +457,7 @@ export function closeAllTabs(): void {
     if (node.kind !== "leaf") continue;
     for (const t of node.tabs) {
       if (t.kind === "file") {
-        cancelAssistantStreamForContext(`file:${t.path}`);
+        cancelAssistantStreamForPath(t.path);
       }
     }
     node.tabs.length = 0;
@@ -476,7 +476,7 @@ export function closePane(paneId: string): void {
   const p = pane(paneId);
   for (const t of p.tabs) {
     if (t.kind === "file") {
-      cancelAssistantStreamForContext(`file:${t.path}`);
+      cancelAssistantStreamForPath(t.path);
     }
   }
   p.tabs.length = 0;

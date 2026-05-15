@@ -97,6 +97,13 @@ pub struct ProviderPrefsView {
     /// from the assistant overlay's inspector, not from Settings.
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// Per-backend extended-thinking budget. Today only Anthropic
+    /// surfaces this in the inspector; Gemini's slot stays None
+    /// until / unless we wire a thinking-capable Gemini backend.
+    /// None = no thinking block in the request (model runs in
+    /// normal mode).
+    #[serde(default)]
+    pub thinking_budget: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -117,10 +124,7 @@ pub struct OllamaPrefsView {
 /// Frontend uses "claude" (display label) for what chan-llm types
 /// internally as `BackendKind::Anthropic`. The "claude_cli" /
 /// "gemini_cli" variants cover the shell-executor backends that
-/// wrap the local `claude` and `gemini` CLIs. The "embedded" variant
-/// is reserved for a future on-device backend (qwen2.5 via candle);
-/// it has no chan-llm counterpart yet, so PATCHing it is treated as
-/// a no-op when read back the value falls through to the default.
+/// wrap the local `claude` and `gemini` CLIs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssistantBackendKind {
@@ -129,7 +133,6 @@ pub enum AssistantBackendKind {
     Gemini,
     ClaudeCli,
     GeminiCli,
-    Embedded,
 }
 
 impl AssistantBackendKind {
@@ -143,14 +146,13 @@ impl AssistantBackendKind {
         }
     }
 
-    pub fn to_chan_llm(self) -> Option<BackendKind> {
+    pub fn to_chan_llm(self) -> BackendKind {
         match self {
-            AssistantBackendKind::Claude => Some(BackendKind::Anthropic),
-            AssistantBackendKind::Ollama => Some(BackendKind::Ollama),
-            AssistantBackendKind::Gemini => Some(BackendKind::Gemini),
-            AssistantBackendKind::ClaudeCli => Some(BackendKind::ClaudeCli),
-            AssistantBackendKind::GeminiCli => Some(BackendKind::GeminiCli),
-            AssistantBackendKind::Embedded => None,
+            AssistantBackendKind::Claude => BackendKind::Anthropic,
+            AssistantBackendKind::Ollama => BackendKind::Ollama,
+            AssistantBackendKind::Gemini => BackendKind::Gemini,
+            AssistantBackendKind::ClaudeCli => BackendKind::ClaudeCli,
+            AssistantBackendKind::GeminiCli => BackendKind::GeminiCli,
         }
     }
 }
@@ -193,6 +195,7 @@ pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
                 enabled: llm.enabled.anthropic,
                 model: llm.models.anthropic.clone(),
                 max_tokens: llm.max_tokens.anthropic,
+                thinking_budget: llm.thinking_budget.anthropic,
             },
             ollama: OllamaPrefsView {
                 enabled: llm.enabled.ollama,
@@ -204,6 +207,7 @@ pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
                 enabled: llm.enabled.gemini,
                 model: llm.models.gemini.clone(),
                 max_tokens: llm.max_tokens.gemini,
+                thinking_budget: None,
             },
             claude_cli: CliPrefsView {
                 enabled: llm.enabled.claude_cli,
@@ -419,16 +423,8 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
         // verbatim, even when the matching provider is disabled. The
         // resolver gates on `enabled[backend]` so a disabled default
         // won't actually launch a request; leaving the pointer set
-        // preserves user intent across enable/disable toggles. The
-        // "embedded" backend has no chan-llm counterpart yet so a
-        // PATCH carrying it round-trips as the previous default.
-        if let Some(kind) = view.assistant.default_backend {
-            if let Some(chan_llm_kind) = kind.to_chan_llm() {
-                llm.backend = Some(chan_llm_kind);
-            }
-        } else {
-            llm.backend = None;
-        }
+        // preserves user intent across enable/disable toggles.
+        llm.backend = view.assistant.default_backend.map(|k| k.to_chan_llm());
         // Per-provider enable flags. The SPA's CRUD list toggles
         // these independently of the default-backend pointer above.
         llm.enabled.anthropic = view.assistant.claude.enabled;
@@ -450,6 +446,11 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
         llm.max_tokens.anthropic = view.assistant.claude.max_tokens;
         llm.max_tokens.gemini = view.assistant.gemini.max_tokens;
         llm.max_tokens.ollama = view.assistant.ollama.max_tokens;
+        // Extended-thinking budget. None disables the thinking
+        // block entirely; the backend additionally strips it on
+        // models that don't support thinking, so a stored value is
+        // safe to keep across model switches.
+        llm.thinking_budget.anthropic = view.assistant.claude.thinking_budget;
         // Empty string from the form clears the override (back to
         // env or the hardcoded default). Trim before storing so a
         // copy-pasted URL with whitespace doesn't break the http

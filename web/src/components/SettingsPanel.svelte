@@ -210,7 +210,6 @@
     keychainError = { anthropic: null, gemini: null };
     const a = editing.assistant;
     const row = providerEnabledField(a, kind);
-    if (row === null) return;
     if (row) {
       if (a.default_backend === null) {
         a.default_backend = kind;
@@ -235,12 +234,11 @@
   }
 
   /// Read the per-provider `enabled` flag without a five-way switch
-  /// at every call site. Returns null for unknown / placeholder
-  /// kinds ("embedded") so toggles on those are a no-op.
+  /// at every call site.
   function providerEnabledField(
     a: Preferences["assistant"],
     kind: AssistantBackendKind,
-  ): boolean | null {
+  ): boolean {
     switch (kind) {
       case "claude":
         return a.claude.enabled;
@@ -252,8 +250,6 @@
         return a.claude_cli.enabled;
       case "gemini_cli":
         return a.gemini_cli.enabled;
-      default:
-        return null;
     }
   }
 
@@ -539,7 +535,7 @@
 
       <div class="assistant-list">
         {#each PROVIDER_ROWS as row (row.kind)}
-          {@const enabledNow = providerEnabledField(editing.assistant, row.kind) === true}
+          {@const enabledNow = providerEnabledField(editing.assistant, row.kind)}
           {@const isDefault = editing.assistant.default_backend === row.kind}
           {@const isKeyProvider = row.kind === "claude" || row.kind === "gemini"}
           {@const keyProvider = (row.kind === "claude"

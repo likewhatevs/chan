@@ -60,17 +60,19 @@
     void ensureGraphLoaded();
   });
 
+  type FileGraphNode = Extract<GraphViewNode, { kind: "file" }>;
+  const isContactNode = (d: GraphViewNode): d is FileGraphNode =>
+    d.kind === "file" && d.node_kind === "contact";
+
   const documents = $derived<GraphViewNode[]>(
     documentsOverride ?? documentsReferencing(nodeId),
   );
   /// Split the referenced files into contacts vs plain docs so each
   /// kind can render under its own section header, mirroring
   /// FileInfoBody's Contacts / Links-to layout.
-  const contacts = $derived<GraphViewNode[]>(
-    documents.filter((d) => d.kind === "file" && d.node_kind === "contact"),
-  );
+  const contacts = $derived<FileGraphNode[]>(documents.filter(isContactNode));
   const docs = $derived<GraphViewNode[]>(
-    documents.filter((d) => !(d.kind === "file" && d.node_kind === "contact")),
+    documents.filter((d) => !isContactNode(d)),
   );
 
   function navigate(node: GraphViewNode): void {

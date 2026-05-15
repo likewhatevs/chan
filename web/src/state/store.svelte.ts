@@ -156,6 +156,10 @@ export function applyServerPreferences(): void {
     // Older servers don't ship `outline`; fall back to the default
     // so the file-editor outline pane has a sane width on first use.
     paneWidths.outline = prefs.pane_widths.outline ?? DEFAULT_PANE_WIDTHS.outline;
+    // Older servers don't ship `assistant`; fall back to the default
+    // so the assistant overlay's inspector has a sane width.
+    paneWidths.assistant =
+      prefs.pane_widths.assistant ?? DEFAULT_PANE_WIDTHS.assistant;
   }
 }
 
@@ -851,6 +855,20 @@ function flushSessionSaveOnExit(): void {
   }
 }
 
+/// InlineAssist registers a pending-save flush callback here so the
+/// pagehide hook can reach it without importing the component.
+/// Mirrors the session-flush shape: the callback uses keepalive fetch
+/// so the PUT survives the page unload. Without this, a user who
+/// types + sends + closes the window inside the 400 ms scheduleSave
+/// debounce loses the most recent edit.
+let assistantSaveFlush: (() => void) | null = null;
+export function setAssistantSaveFlush(cb: (() => void) | null): void {
+  assistantSaveFlush = cb;
+}
+function flushAssistantSavesOnExit(): void {
+  assistantSaveFlush?.();
+}
+
 /// Register the pagehide flush once. Idempotent so HMR re-evaluations
 /// don't stack listeners. Also tears down any in-flight assistant
 /// request on the way out: leaving the AbortController alive across
@@ -864,6 +882,7 @@ export function installSessionFlushHook(): void {
   if (pagehideHooked || typeof window === "undefined") return;
   pagehideHooked = true;
   window.addEventListener("pagehide", flushSessionSaveOnExit);
+  window.addEventListener("pagehide", flushAssistantSavesOnExit);
   window.addEventListener("pagehide", cancelAssistantStream);
 }
 
@@ -1288,7 +1307,7 @@ type GroupIndex = {
   entries: GroupIndexEntry[];
 };
 
-function blobKeyForGroupHash(hash: string): string {
+export function blobKeyForGroupHash(hash: string): string {
   return `g_${hash}.json`;
 }
 
@@ -1430,7 +1449,7 @@ export async function saveGroupConversation(
 // without a manifest. `loadDriveConversation` is idempotent and
 // safe to call any time the drive scope is about to be opened.
 
-const DRIVE_BLOB_KEY = "drive.json";
+export const DRIVE_BLOB_KEY = "drive.json";
 
 export async function loadDriveConversation(): Promise<void> {
   if (assistantConversations.drive) return; // already in memory
@@ -1796,6 +1815,21 @@ export function cancelAssistantStream(): void {
 export function cancelAssistantStreamForContext(contextId: string): boolean {
   if (!assistantInflightCtl) return false;
   if (assistantStream.contextId !== contextId) return false;
+  assistantInflightCtl.abort();
+  return true;
+}
+
+/// Cancel the in-flight stream when it targets the file scope OR a
+/// group scope that includes this path. Group keys have the form
+/// `group:<path1>|<path2>|...`; closing one member tab tears down
+/// the whole group conversation (per the InlineAssist v3 contract),
+/// so the matching in-flight request must die with it.
+export function cancelAssistantStreamForPath(path: string): boolean {
+  if (cancelAssistantStreamForContext(`file:${path}`)) return true;
+  const ctx = assistantStream.contextId;
+  if (!assistantInflightCtl || !ctx || !ctx.startsWith("group:")) return false;
+  const members = ctx.slice("group:".length).split("|");
+  if (!members.includes(path)) return false;
   assistantInflightCtl.abort();
   return true;
 }
@@ -2910,6 +2944,7 @@ const DEFAULT_PANE_WIDTHS = {
   browser: 240,
   search: 280,
   outline: 220,
+  assistant: 280,
 };
 
 export const paneWidths = $state<{
@@ -2918,6 +2953,7 @@ export const paneWidths = $state<{
   browser: number;
   search: number;
   outline: number;
+  assistant: number;
 }>({ ...DEFAULT_PANE_WIDTHS });
 
 /// Currently inspected entry in the File Browser tab. Module-level
@@ -2948,6 +2984,7 @@ export function persistPaneWidths(): void {
       browser: clamp(paneWidths.browser),
       search: clamp(paneWidths.search),
       outline: clamp(paneWidths.outline),
+      assistant: clamp(paneWidths.assistant),
     };
     widthsPersistInflight = widthsPersistInflight.catch(() => {}).then(async () => {
       const cfg = await api.config();
@@ -2958,7 +2995,8 @@ export function persistPaneWidths(): void {
         cur.graph === snapshot.graph &&
         cur.browser === snapshot.browser &&
         cur.search === snapshot.search &&
-        cur.outline === snapshot.outline
+        cur.outline === snapshot.outline &&
+        cur.assistant === snapshot.assistant
       ) {
         return;
       }
@@ -3609,9 +3647,9 @@ export const fileOps = {
         // (b) try to `write_file` the deleted path. closeTab above
         // already cancels for the standard close-tab path; this is
         // the belt-and-braces case for files closed elsewhere or for
-        // group / drive scopes that depend on the file but don't have
-        // a `file:<path>` form on their context id.
-        cancelAssistantStreamForContext(`file:${p}`);
+        // group conversations whose context id keys on the membership
+        // set rather than `file:<path>`.
+        cancelAssistantStreamForPath(p);
         clearFileConversation(p);
         // 404 is a harmless no-op (deleteConversation is idempotent),
         // so we don't special-case never-persisted paths.

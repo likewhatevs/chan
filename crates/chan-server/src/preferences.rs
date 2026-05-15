@@ -99,6 +99,10 @@ pub struct PaneWidths {
     // cleanly. Width of the left-side outline pane in the file editor.
     #[serde(default = "default_outline_width")]
     pub outline: u32,
+    // Per-field default so older preferences.toml (written before the
+    // assistant inspector was persisted) load cleanly.
+    #[serde(default = "default_assistant_width")]
+    pub assistant: u32,
 }
 
 impl Default for PaneWidths {
@@ -110,6 +114,7 @@ impl Default for PaneWidths {
             browser: 240,
             search: default_search_width(),
             outline: default_outline_width(),
+            assistant: default_assistant_width(),
         }
     }
 }
@@ -120,6 +125,10 @@ fn default_search_width() -> u32 {
 
 fn default_outline_width() -> u32 {
     220
+}
+
+fn default_assistant_width() -> u32 {
+    280
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,6 +218,7 @@ mod tests {
         assert_eq!(prefs.pane_widths.browser, 250);
         assert_eq!(prefs.pane_widths.search, default_search_width());
         assert_eq!(prefs.pane_widths.outline, default_outline_width());
+        assert_eq!(prefs.pane_widths.assistant, default_assistant_width());
     }
 
     #[test]

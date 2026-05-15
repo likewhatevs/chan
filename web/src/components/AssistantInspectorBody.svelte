@@ -270,6 +270,43 @@
     return i > 0xffff_ffff ? 0xffff_ffff : i;
   }
 
+  /// 4-step thinking budget. Mirrors OpenAI's reasoning_effort idiom
+  /// without leaking Anthropic's raw token count to users who don't
+  /// care. Mapping picked to roughly track Anthropic's own
+  /// suggestions for the lift each tier provides.
+  type ThinkingEffort = "off" | "low" | "med" | "high";
+  const THINKING_BUDGET_BY_EFFORT: Record<
+    Exclude<ThinkingEffort, "off">,
+    number
+  > = {
+    low: 1024,
+    med: 8192,
+    high: 16384,
+  };
+
+  function effortFromBudget(budget: number | null | undefined): ThinkingEffort {
+    if (budget == null || budget <= 0) return "off";
+    if (budget <= 4096) return "low";
+    if (budget <= 12288) return "med";
+    return "high";
+  }
+
+  function budgetFromEffort(effort: ThinkingEffort): number | null {
+    if (effort === "off") return null;
+    return THINKING_BUDGET_BY_EFFORT[effort];
+  }
+
+  /// Whether the currently-selected Anthropic model accepts a
+  /// `thinking` block. Hides the effort knob on non-thinking models
+  /// (Haiku) so the user doesn't pick a budget that gets silently
+  /// stripped at request time.
+  const claudeModelSupportsThinking = $derived.by<boolean>(() => {
+    const m = editing?.assistant.claude.model;
+    if (!m) return false;
+    const entry = anthropicModels.find((e) => e.name === m);
+    return entry?.supports_thinking === true;
+  });
+
   function scheduleSave(): void {
     if (autosaveTimer) clearTimeout(autosaveTimer);
     autosaveTimer = setTimeout(() => {
@@ -421,6 +458,33 @@
           }}
         />
       </label>
+      {#if claudeModelSupportsThinking}
+        {@const effort = effortFromBudget(
+          editing.assistant.claude.thinking_budget,
+        )}
+        <fieldset class="field effort-field">
+          <legend>Reasoning effort</legend>
+          <div class="effort-row">
+            {#each ["off", "low", "med", "high"] as opt (opt)}
+              <label class="effort-opt">
+                <input
+                  type="radio"
+                  name="claude-thinking-effort"
+                  value={opt}
+                  checked={effort === opt}
+                  onchange={() => {
+                    if (!editing) return;
+                    editing.assistant.claude.thinking_budget = budgetFromEffort(
+                      opt as ThinkingEffort,
+                    );
+                  }}
+                />
+                <span>{opt}</span>
+              </label>
+            {/each}
+          </div>
+        </fieldset>
+      {/if}
       {#if anthropicSource === "fallback" && anthropicError}
         <div class="muted small">
           Anthropic: {anthropicError} (showing curated list)
@@ -600,6 +664,29 @@
   .model-row .refresh:hover:not(:disabled) { border-color: var(--btn-hover); }
   .model-row .refresh:disabled { opacity: 0.55; cursor: default; }
   .small { font-size: 12px; }
+  .effort-field {
+    border: none;
+    padding: 0;
+    margin: 0;
+  }
+  .effort-field > legend {
+    color: var(--text-secondary);
+    font-size: 13px;
+    padding: 0 0 4px 0;
+  }
+  .effort-row {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  .effort-opt {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+  }
+  .effort-opt input { margin: 0; }
+  .effort-opt span { color: var(--text); }
   .muted { color: var(--text-secondary); }
   .footer {
     display: flex;

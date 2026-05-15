@@ -34,9 +34,7 @@ use crate::state::AppState;
 #[derive(Serialize)]
 struct LlmStatus {
     /// Frontend's display tag for the active backend.
-    /// "claude" | "ollama" | "gemini". The "embedded" variant in
-    /// the typescript type is reserved for a future on-device
-    /// backend; not surfaced here yet.
+    /// "claude" | "ollama" | "gemini" | "claude_cli" | "gemini_cli".
     backend: &'static str,
     /// Effective model for the active backend (config override or
     /// the chan-llm default).
@@ -149,7 +147,7 @@ pub async fn api_llm_status(State(state): State<Arc<AppState>>) -> Response {
         .or_else(|| Some(active.default_model().to_string()));
     let (active_key, status) = chan_llm::keys::resolve(active, &cfg);
     let key_set = active_key.is_some();
-    let enabled = cfg.backend.is_some();
+    let enabled = cfg.active_backend().is_some();
     // Resolve cmd[0] for the ClaudeCli backend so we can probe PATH.
     // Mirrors backends::build's resolution: explicit cfg overrides
     // win, otherwise chan-llm's `default_cmd()` (currently `claude`).
@@ -1178,12 +1176,18 @@ pub async fn api_llm_clear_gemini_key(State(state): State<Arc<AppState>>) -> Res
 struct LlmModelEntry {
     name: &'static str,
     supports_tools: bool,
+    /// Whether the model accepts an extended-thinking `thinking`
+    /// block. Surfaced so the assistant inspector only shows the
+    /// effort knob on models that actually use it (sending thinking
+    /// against a non-supporting model 400s).
+    supports_thinking: bool,
 }
 
 #[derive(Serialize)]
 struct LlmModelEntryOwned {
     name: String,
     supports_tools: bool,
+    supports_thinking: bool,
 }
 
 #[derive(Serialize)]
@@ -1206,14 +1210,17 @@ const CURATED_ANTHROPIC: &[LlmModelEntry] = &[
     LlmModelEntry {
         name: "claude-opus-4-7",
         supports_tools: true,
+        supports_thinking: true,
     },
     LlmModelEntry {
         name: "claude-sonnet-4-6",
         supports_tools: true,
+        supports_thinking: true,
     },
     LlmModelEntry {
         name: "claude-haiku-4-5",
         supports_tools: true,
+        supports_thinking: false,
     },
 ];
 
@@ -1222,10 +1229,12 @@ const CURATED_GEMINI: &[LlmModelEntry] = &[
     LlmModelEntry {
         name: "gemini-2.5-pro",
         supports_tools: true,
+        supports_thinking: false,
     },
     LlmModelEntry {
         name: "gemini-2.5-flash",
         supports_tools: true,
+        supports_thinking: false,
     },
 ];
 
@@ -1235,6 +1244,7 @@ fn curated_to_owned(curated: &[LlmModelEntry]) -> Vec<LlmModelEntryOwned> {
         .map(|e| LlmModelEntryOwned {
             name: e.name.to_string(),
             supports_tools: e.supports_tools,
+            supports_thinking: e.supports_thinking,
         })
         .collect()
 }
@@ -1254,9 +1264,14 @@ pub async fn api_llm_anthropic_models(State(state): State<Arc<AppState>>) -> Res
         Ok(models) => Json(CatalogResponse {
             models: models
                 .into_iter()
-                .map(|name| LlmModelEntryOwned {
-                    name,
-                    supports_tools: true,
+                .map(|name| {
+                    let supports_thinking =
+                        chan_llm::backends::anthropic::model_supports_thinking(&name);
+                    LlmModelEntryOwned {
+                        name,
+                        supports_tools: true,
+                        supports_thinking,
+                    }
                 })
                 .collect(),
             source: "live",
@@ -1290,6 +1305,7 @@ pub async fn api_llm_gemini_models(State(state): State<Arc<AppState>>) -> Respon
                 .map(|name| LlmModelEntryOwned {
                     name,
                     supports_tools: true,
+                    supports_thinking: false,
                 })
                 .collect(),
             source: "live",
@@ -1341,6 +1357,7 @@ pub async fn api_llm_ollama_models(
                 .map(|name| LlmModelEntryOwned {
                     name,
                     supports_tools: true,
+                    supports_thinking: false,
                 })
                 .collect::<Vec<_>>(),
         )

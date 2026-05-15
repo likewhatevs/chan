@@ -48,7 +48,7 @@
     X,
   } from "lucide-svelte";
 
-  import { api } from "../api/client";
+  import { api, assistantHash16 } from "../api/client";
   import { renderMarkdown } from "../api/markdown";
   import { isEditableText } from "../state/fileTypes";
   import { appendDefaultMd } from "../state/pathValidate";
@@ -111,6 +111,11 @@
     ui,
     uiConfirm,
     uiPathPrompt,
+    paneWidths,
+    persistPaneWidths,
+    blobKeyForGroupHash,
+    DRIVE_BLOB_KEY,
+    setAssistantSaveFlush,
   } from "../state/store.svelte";
   import { defaultScopeId, type ScopeOption } from "../state/scope.svelte";
   import {
@@ -628,22 +633,49 @@
   /// around; older ones drop off both disk and memory. Drive Q&A
   /// stays in-memory only (its retrieval-driven excerpts make
   /// long-term replay less useful).
+  ///
+  /// Only one save can be pending at a time (the timer is shared
+  /// across contexts: switching scopes overwrites the prior pending
+  /// save). The pendingSave handle captures everything needed to
+  /// flush it synchronously on pagehide via keepalive fetch.
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
-  function scheduleSave(ctx: ScopeOption): void {
+  type PendingSave = {
+    /// Normal debounced save. Calls the same persistence helpers the
+    /// pre-keepalive code used (so the group LRU manifest still
+    /// updates, drive thread still goes through saveDriveConversation).
+    runDebounced: () => void;
+    /// Pre-resolved blob key for the keepalive flush. Sha256 is async,
+    /// so the flush would otherwise race the page unload — precompute
+    /// here while we still have time.
+    blobKey: string;
+    /// Builds the wire payload from current state at fire time.
+    /// Returns null when the conversation is gone (file deleted /
+    /// scope cleared between schedule and fire).
+    buildPayload: () => unknown | null;
+  };
+  let pendingSave: PendingSave | null = null;
+  /// Monotonic generation counter so out-of-order hash resolutions
+  /// can't overwrite a newer pendingSave. Each scheduleSave call
+  /// claims a generation up front; the post-await commit only lands
+  /// if it's still the latest.
+  let scheduleGen = 0;
+
+  async function scheduleSave(ctx: ScopeOption): Promise<void> {
+    const gen = ++scheduleGen;
     if (ctx.kind === "file") {
       const path = ctx.path;
-      if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => {
-        saveTimer = null;
+      const blobKey = `${await assistantHash16(path)}.json`;
+      if (gen !== scheduleGen) return;
+      const buildPayload = (): unknown | null => {
         const conv = assistantConversations.byFile[path];
-        if (!conv) return;
+        if (!conv) return null;
         const now = Date.now();
         if (conv.created_at === undefined) {
           conv.created_at = earliestTurnCreatedAt(conv.turns) ?? now;
         }
         conv.last_touched = now;
         conv.url = currentLayoutUrl();
-        void api.putConversation(path, {
+        return {
           schema_version: 1,
           kind: "file",
           path,
@@ -652,27 +684,106 @@
           created_at: conv.created_at,
           last_touched: now,
           url: conv.url,
-        });
-      }, 400);
+        };
+      };
+      const runDebounced = (): void => {
+        const payload = buildPayload();
+        if (payload === null) return;
+        void api.putConversation(path, payload);
+      };
+      armSaveTimer({ runDebounced, blobKey, buildPayload });
     } else if (ctx.kind === "group") {
       const key = ctx.key;
       const paths = ctx.paths;
-      if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => {
-        saveTimer = null;
+      const blobKey = blobKeyForGroupHash(await assistantHash16(key));
+      if (gen !== scheduleGen) return;
+      const buildPayload = (): unknown | null => {
+        const conv = assistantConversations.byGroup[key];
+        if (!conv) return null;
+        const now = Date.now();
+        if (conv.created_at === undefined) {
+          conv.created_at = earliestTurnCreatedAt(conv.turns) ?? now;
+        }
+        conv.last_touched = now;
+        conv.url = currentLayoutUrl();
+        return {
+          schema_version: 1,
+          kind: "group",
+          key,
+          paths,
+          messages: conv.messages,
+          turns: conv.turns,
+          created_at: conv.created_at,
+          last_touched: now,
+          url: conv.url,
+        };
+      };
+      const runDebounced = (): void => {
         const conv = assistantConversations.byGroup[key];
         if (!conv) return;
+        // Routes through saveGroupConversation so the LRU manifest
+        // ticks on every save. The keepalive flush skips that update
+        // (one fetch budget on pagehide); next normal save reconciles.
         void saveGroupConversation(key, paths, conv);
-      }, 400);
+      };
+      armSaveTimer({ runDebounced, blobKey, buildPayload });
     } else if (ctx.kind === "drive") {
-      if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => {
-        saveTimer = null;
+      const buildPayload = (): unknown | null => {
+        const conv = assistantConversations.drive;
+        if (!conv) return null;
+        const now = Date.now();
+        if (conv.created_at === undefined) {
+          conv.created_at = earliestTurnCreatedAt(conv.turns) ?? now;
+        }
+        conv.last_touched = now;
+        conv.url = currentLayoutUrl();
+        return {
+          schema_version: 1,
+          kind: "drive",
+          messages: conv.messages,
+          turns: conv.turns,
+          created_at: conv.created_at,
+          last_touched: now,
+          url: conv.url,
+        };
+      };
+      const runDebounced = (): void => {
         const conv = assistantConversations.drive;
         if (!conv) return;
         void saveDriveConversation(conv);
-      }, 400);
+      };
+      armSaveTimer({ runDebounced, blobKey: DRIVE_BLOB_KEY, buildPayload });
     }
+  }
+
+  function armSaveTimer(p: PendingSave): void {
+    if (saveTimer) clearTimeout(saveTimer);
+    pendingSave = p;
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      const ps = pendingSave;
+      pendingSave = null;
+      if (!ps) return;
+      ps.runDebounced();
+    }, 400);
+  }
+
+  /// Synchronous flush for the pagehide hook. Cancels the timer and
+  /// fires the pending save via keepalive fetch so the request
+  /// outlives the page unload. Sync from start to finish (the
+  /// blobKey was pre-resolved when scheduleSave ran) so the fetch
+  /// lands before the document is torn down.
+  function flushPendingAssistantSave(): void {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    const ps = pendingSave;
+    pendingSave = null;
+    if (!ps) return;
+    const payload = ps.buildPayload();
+    if (payload === null) return;
+    api.putAssistantBlobKeepalive(ps.blobKey, payload);
   }
 
   function scrollToBottom(): void {
@@ -1497,10 +1608,12 @@
   onMount(() => {
     document.addEventListener("keydown", onWindowKey);
     window.addEventListener("chan:assistant-edit-action", onDiffEditAction);
+    setAssistantSaveFlush(flushPendingAssistantSave);
   });
   onDestroy(() => {
     document.removeEventListener("keydown", onWindowKey);
     window.removeEventListener("chan:assistant-edit-action", onDiffEditAction);
+    setAssistantSaveFlush(null);
   });
 
   // Reactive accessor for the currently-rendered scrollback.
@@ -1673,12 +1786,6 @@
     openSettings();
   }
 
-  /// Inspector width. Local to InlineAssist for now: chan-server's
-  /// PaneWidths struct doesn't have an `assistant` slot yet, so we
-  /// keep the value in-memory and re-default it on mount. A later
-  /// pass can lift this into `paneWidths.assistant` so the width
-  /// survives across sessions like the other panels'.
-  let inspectorWidth = $state(280);
 </script>
 
 <OverlayShell id="assistant" open={visible} onClose={close}>
@@ -2275,7 +2382,8 @@
   {#if assistantOverlay.inspectorOpen}
     <Inspector
       title="Assistant"
-      bind:width={inspectorWidth}
+      bind:width={paneWidths.assistant}
+      onResize={persistPaneWidths}
       onClose={() => (assistantOverlay.inspectorOpen = false)}
     >
       <AssistantInspectorBody />
