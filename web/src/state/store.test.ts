@@ -308,4 +308,13 @@ describe("assistant lifecycle websocket frames", () => {
 
     expect(assistantStream.text).toBe("hello world");
   });
+
+  test("delta frames normalize glued sentence boundaries into paragraphs", () => {
+    beginAssistantStream("s1", "drive");
+
+    onWatchEvent({ type: "llm.delta", session_id: "s1", text: "One." });
+    onWatchEvent({ type: "llm.delta", session_id: "s1", text: "Two." });
+
+    expect(assistantStream.text).toBe("One.\n\nTwo.");
+  });
 });

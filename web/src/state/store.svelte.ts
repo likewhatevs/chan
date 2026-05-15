@@ -4,6 +4,7 @@
 import type {
   AgentActivity,
   AgentStatus,
+  AssistantBackendKind,
   DriveInfo,
   IndexStatus,
   LlmActivityFrame,
@@ -242,7 +243,9 @@ export function onWatchEvent(e: unknown): void {
       return;
     }
     if (frameType === "llm.delta") {
-      assistantStream.text += f.text ?? "";
+      assistantStream.text = normalizeAssistantText(
+        assistantStream.text + (f.text ?? ""),
+      );
     } else if (frameType === "llm.status") {
       const frame = e as LlmStatusFrame;
       assistantStream.status = frame.status;
@@ -948,20 +951,16 @@ function flushAssistantSavesOnExit(): void {
 }
 
 /// Register the pagehide flush once. Idempotent so HMR re-evaluations
-/// don't stack listeners. Also tears down any in-flight assistant
-/// request on the way out: leaving the AbortController alive across
-/// page unload doesn't accomplish anything (the fetch is doomed
-/// either way), and emitting the abort before the WebSocket closes
-/// gives the server a chance to clean up the chan-llm subprocess on
-/// the matching side (claude / gemini CLIs would otherwise linger
-/// until their stream timeout fires).
+/// don't stack listeners. Do not abort in-flight assistant requests
+/// here: reload / bfcache pagehide is not an explicit Stop action,
+/// and aborting the request makes the restored assistant overlay look
+/// idle even though the user expected the turn to keep running.
 let pagehideHooked = false;
 export function installSessionFlushHook(): void {
   if (pagehideHooked || typeof window === "undefined") return;
   pagehideHooked = true;
   window.addEventListener("pagehide", flushSessionSaveOnExit);
   window.addEventListener("pagehide", flushAssistantSavesOnExit);
-  window.addEventListener("pagehide", cancelAssistantStream);
 }
 
 export function teardown(): void {
@@ -1237,6 +1236,12 @@ export function watchAutoApplyWrites(): () => void {
 export type AssistantTurn =
   | { kind: "user"; content: string; created_at?: number }
   | {
+      kind: "assistant_switch";
+      backend: AssistantBackendKind;
+      model?: string | null;
+      created_at?: number;
+    }
+  | {
       kind: "assistant";
       content: string;
       created_at?: number;
@@ -1318,6 +1323,11 @@ export const assistantConversations = $state<{
   byGroup: Record<string, AssistantConversation>;
   drive: AssistantConversation | null;
 }>({ byFile: {}, byGroup: {}, drive: null });
+
+export const assistantSelection = $state<{
+  backend: AssistantBackendKind | null;
+  model: string | null;
+}>({ backend: null, model: null });
 
 /** Drop the in-memory entry for a single-file context. */
 export function clearFileConversation(path: string): void {
@@ -2004,6 +2014,30 @@ function currentAssistantConversation(): AssistantConversation | null {
     return assistantConversations.byGroup[id.slice("group:".length)] ?? null;
   }
   return null;
+}
+
+export function recordAssistantSwitch(
+  backend: AssistantBackendKind,
+  model: string | null,
+): void {
+  assistantSelection.backend = backend;
+  assistantSelection.model = model;
+  const conv = currentAssistantConversation();
+  if (!conv || conv.turns.length === 0) return;
+  const last = conv.turns.at(-1);
+  if (
+    last?.kind === "assistant_switch" &&
+    last.backend === backend &&
+    last.model === model
+  ) {
+    return;
+  }
+  conv.turns.push({
+    kind: "assistant_switch",
+    backend,
+    model,
+    created_at: Date.now(),
+  });
 }
 
 function findToolTurn(
@@ -2901,15 +2935,31 @@ export async function resumeScopeHistoryEntry(
 }
 
 /// Open a saved scope in a new window via the snapshotted URL.
-/// The URL is origin-relative (no auth token), so the new window
-/// inherits whatever token the launcher injects. Returns false
-/// when no URL is captured (old blobs predate slice 2); the
-/// overlay hides the button in that case.
+/// The persisted URL is origin-relative and intentionally has no
+/// auth query, so reattach the current session token at click time.
+/// Returns false when no URL is captured (old blobs predate slice
+/// 2); the overlay hides the button in that case.
 export function openScopeHistoryInNewWindow(entry: ScopeHistoryEntry): boolean {
   if (!entry.url) return false;
   if (typeof window === "undefined") return false;
-  window.open(entry.url, "_blank", "noopener");
+  window.open(scopeHistoryWindowUrl(entry.url), "_blank", "noopener");
   return true;
+}
+
+export function scopeHistoryWindowUrl(entryUrl: string, token = authToken()): string {
+  const u = new URL(entryUrl, window.location.origin);
+  if (token) u.searchParams.set("t", token);
+  return u.toString();
+}
+
+/// CLI backends sometimes stream or return adjacent text fragments
+/// without the boundary whitespace that made sense in their native
+/// terminal UI (`...done.Next step...`). In chan's compact chat
+/// surface that reads as dense text, so promote likely sentence
+/// joins to paragraph breaks. Keep the rule narrow: punctuation
+/// immediately followed by a capital letter.
+export function normalizeAssistantText(text: string): string {
+  return text.replace(/([.!?])(?=[A-Z])/g, "$1\n\n");
 }
 
 /// Render the saved conversation as a markdown document and save
@@ -3065,6 +3115,11 @@ export function renderScopeHistoryMarkdown(
       lines.push("## Assistant");
       lines.push("");
       lines.push(t.content);
+      lines.push("");
+    } else if (t.kind === "assistant_switch") {
+      lines.push(
+        `_assistant changed to ${t.backend}${t.model ? ` · ${t.model}` : " · default"}_`,
+      );
       lines.push("");
     } else if (t.kind === "edit") {
       lines.push(`## Edit proposal — ${t.edit.path}`);

@@ -13,7 +13,9 @@
 import { describe, expect, test } from "vitest";
 import {
   earliestTurnCreatedAt,
+  normalizeAssistantText,
   renderScopeHistoryMarkdown,
+  scopeHistoryWindowUrl,
   scopeHistoryExportName,
   type AssistantTurn,
   type ScopeHistoryEntry,
@@ -117,6 +119,40 @@ describe("scopeHistoryExportName", () => {
       turn_count: 0,
     };
     expect(scopeHistoryExportName(entry)).toBe("assistant-drive");
+  });
+});
+
+describe("scopeHistoryWindowUrl", () => {
+  test("reattaches the auth token before the layout hash", () => {
+    expect(scopeHistoryWindowUrl("/notes#pane=abc", "tok 123")).toBe(
+      "http://localhost:3000/notes?t=tok+123#pane=abc",
+    );
+  });
+
+  test("preserves existing search params while replacing t", () => {
+    expect(scopeHistoryWindowUrl("/notes?fresh=1&t=old#pane=abc", "new")).toBe(
+      "http://localhost:3000/notes?fresh=1&t=new#pane=abc",
+    );
+  });
+
+  test("leaves no-token servers tokenless", () => {
+    expect(scopeHistoryWindowUrl("/notes#pane=abc", null)).toBe(
+      "http://localhost:3000/notes#pane=abc",
+    );
+  });
+});
+
+describe("normalizeAssistantText", () => {
+  test("turns glued sentence starts into paragraph breaks", () => {
+    expect(normalizeAssistantText("First sentence.Second sentence")).toBe(
+      "First sentence.\n\nSecond sentence",
+    );
+  });
+
+  test("leaves already-spaced sentences alone", () => {
+    expect(normalizeAssistantText("First sentence. Second sentence")).toBe(
+      "First sentence. Second sentence",
+    );
   });
 });
 

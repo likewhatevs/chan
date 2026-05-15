@@ -10,7 +10,7 @@
   // Auto-saves on change (500 ms debounce).
 
   import { onMount } from "svelte";
-  import { api } from "../api/client";
+  import { ApiError, api } from "../api/client";
   import type {
     AssistantBackendKind,
     BuildInfo,
@@ -62,7 +62,9 @@
   // mount, dropdown change, and after a successful override save.
   let cliDetections = $state<CliDetectionView[]>([]);
   let cliDetectionLoading = $state(false);
+  let cliDetectionError = $state<string | null>(null);
   let assistantSaveError = $state<string | null>(null);
+  let selectedCli = $state<CliBackendKind>("claude_cli");
 
   /// Build identity for the About footer. Loaded on mount; the
   /// version + embeddings feature flag are static for the running
@@ -72,10 +74,12 @@
   async function loadCliDetection(): Promise<void> {
     if (cliDetectionLoading) return;
     cliDetectionLoading = true;
+    cliDetectionError = null;
     try {
       cliDetections = (await api.llmCliDetection()).detections;
-    } catch {
+    } catch (e) {
       cliDetections = [];
+      cliDetectionError = cliDetectionErrorMessage(e);
     } finally {
       cliDetectionLoading = false;
     }
@@ -86,24 +90,6 @@
     "claude_cli" | "gemini_cli" | "codex_cli"
   >;
 
-  function setProviderEnabled(
-    a: Preferences["assistant"],
-    kind: CliBackendKind,
-    value: boolean,
-  ): void {
-    switch (kind) {
-      case "claude_cli":
-        a.claude_cli.enabled = value;
-        return;
-      case "gemini_cli":
-        a.gemini_cli.enabled = value;
-        return;
-      case "codex_cli":
-        a.codex_cli.enabled = value;
-        return;
-    }
-  }
-
   function cliPrefs(
     a: Preferences["assistant"],
     kind: CliBackendKind,
@@ -112,7 +98,7 @@
   }
 
   function activeCliKind(): CliBackendKind {
-    return editing?.assistant.default_backend ?? "claude_cli";
+    return selectedCli;
   }
 
   function activeDetection(): CliDetectionView | null {
@@ -120,14 +106,33 @@
     return cliDetections.find((d) => d.backend === kind) ?? null;
   }
 
-  function onActiveCliChange(e: Event): void {
-    if (!editing) return;
-    const kind = (e.currentTarget as HTMLSelectElement).value as CliBackendKind;
-    const a = editing.assistant;
-    a.default_backend = kind;
-    for (const row of PROVIDER_ROWS) {
-      setProviderEnabled(a, row.kind, row.kind === kind);
+  function cliDetectionErrorMessage(e: unknown): string {
+    if (e instanceof ApiError) {
+      if (e.status === 404) {
+        return "CLI detection endpoint is unavailable; restart the chan backend so it serves the latest API.";
+      }
+      return `CLI detection failed (${e.status}): ${e.message}`;
     }
+    return `CLI detection failed: ${(e as Error).message}`;
+  }
+
+  function activeDetectionReason(): string {
+    const detection = activeDetection();
+    if (detection?.reason) return detection.reason;
+    if (cliDetectionError) return cliDetectionError;
+    if (cliDetections.length > 0) {
+      return `no detection record returned for ${activeCliKind()}`;
+    }
+    return "not ready";
+  }
+
+  function commandLabel(detection: CliDetectionView | null): string | null {
+    if (!detection || detection.command.length === 0) return null;
+    return detection.command.join(" ");
+  }
+
+  function onActiveCliChange(e: Event): void {
+    selectedCli = (e.currentTarget as HTMLSelectElement).value as CliBackendKind;
     assistantSaveError = null;
     void loadCliDetection();
   }
@@ -369,14 +374,14 @@
     <section>
       <h3>Assistant</h3>
       <p class="hint">
-        Pick the local CLI backend chan should use for new assistant
-        turns, and optionally override the binary lookup.
+        Configure each local assistant CLI and optionally override
+        its binary lookup.
       </p>
 
       <div class="assistant-config">
         <div class="assistant-control">
           <label class="assistant-field">
-            <span>Active CLI</span>
+            <span>Assistant CLI</span>
             <select value={activeCliKind()} onchange={onActiveCliChange}>
               {#each PROVIDER_ROWS as row (row.kind)}
                 <option value={row.kind}>{row.label}</option>
@@ -393,7 +398,7 @@
               <span class="ok">ready</span>
             {:else}
               <span class="status-dot err-dot"></span>
-              <span class="err">{activeDetection()?.reason ?? "not ready"}</span>
+              <span class="err">{activeDetectionReason()}</span>
             {/if}
           </div>
         </div>
@@ -403,7 +408,7 @@
             <span>Binary path override</span>
             <input
               value={cliPrefs(editing.assistant, activeCliKind()).cmd_override ?? ""}
-              placeholder="use PATH"
+              placeholder={commandLabel(activeDetection()) ?? "use PATH"}
               spellcheck="false"
               autocomplete="off"
               oninput={(e) => {
@@ -430,8 +435,7 @@
       <h3>Editor theme</h3>
       <p class="hint">
         Style of the markdown editor only — typography, headings,
-        code blocks, links, tables. Light and dark variants are
-        picked from the appearance setting below.
+        code blocks, links, tables.
       </p>
       <div class="theme-row" role="radiogroup" aria-label="Editor theme">
         {#each [

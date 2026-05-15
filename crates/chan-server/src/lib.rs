@@ -682,6 +682,10 @@ pub async fn serve_via_tunnel(
         // We don't surface it through chan's CLI yet; default to
         // direct dial.
         proxy: None,
+        // Keep the substream concurrency cap aligned with
+        // chan-tunnel-client's default.
+        max_concurrent_substreams: chan_tunnel_client::ClientConfig::default()
+            .max_concurrent_substreams,
         events: Some(events_tx),
     };
     // Race the tunnel run loop against the shutdown signal. The

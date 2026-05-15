@@ -20,10 +20,11 @@
   import type {
     AssistantBackendKind,
     AssistantPrefs,
+    CliDetectionView,
     GlobalConfig,
     Preferences,
   } from "../api/types";
-  import { drive } from "../state/store.svelte";
+  import { drive, recordAssistantSwitch } from "../state/store.svelte";
 
   /// Curated model shortlists for the local CLIs (`claude_cli` /
   /// `gemini_cli`). Same list the old Settings UI used. Codex CLI
@@ -41,6 +42,7 @@
     "claude-haiku-4-5",
   ];
   const GEMINI_CLI_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash"];
+  const CODEX_CLI_MODELS = ["gpt-5.2-codex", "gpt-5.2", "gpt-5.1-codex"];
 
   /// Local editable mirror of `drive.info.preferences`. Mutations to
   /// the assistant subtree trigger a debounced PATCH (see save()
@@ -49,6 +51,9 @@
   /// sync into `editing` whenever the snapshot differs.
   let editing = $state<Preferences | null>(null);
   let lastSnap = "";
+  let cliDetections = $state<CliDetectionView[]>([]);
+  let cliDetectionLoading = $state(false);
+  let cliDetectionError = $state<string | null>(null);
 
   /// Save status surfaced under the inspector header. Mirrors
   /// SettingsPanel's status shape so the user sees the same idiom.
@@ -92,39 +97,49 @@
     syncFromServer();
   });
 
-  /// Active provider derived from the persisted default. Falls back
-  /// to the first enabled provider so a fresh scope (no default yet)
-  /// still has the dropdown land on something usable.
-  const activeProvider = $derived<AssistantBackendKind | null>(
-    editing?.assistant.default_backend ?? firstEnabledProvider(),
-  );
-
-  function firstEnabledProvider(): AssistantBackendKind | null {
-    const a = editing?.assistant;
-    if (!a) return null;
-    if (a.claude_cli.enabled) return "claude_cli";
-    if (a.gemini_cli.enabled) return "gemini_cli";
-    if (a.codex_cli.enabled) return "codex_cli";
-    return null;
+  async function loadCliDetection(): Promise<void> {
+    if (cliDetectionLoading) return;
+    cliDetectionLoading = true;
+    cliDetectionError = null;
+    try {
+      cliDetections = (await api.llmCliDetection()).detections;
+    } catch (e) {
+      cliDetections = [];
+      cliDetectionError = (e as Error).message;
+    } finally {
+      cliDetectionLoading = false;
+    }
   }
 
-  /// Enumerate enabled providers for the dropdown. Disabled
-  /// providers stay out of the picker entirely (the row in Settings
-  /// is the place to enable them); listing them here with a
-  /// disabled attribute would surface a confusing "I can't pick this"
-  /// option.
-  const enabledList = $derived<{ kind: AssistantBackendKind; label: string }[]>(
-    !editing
+  /// Enumerate ready providers for the dropdown. Settings configures
+  /// every CLI; the overlay chooses which ready assistant to use for
+  /// the next turn.
+  const readyList = $derived<{ kind: AssistantBackendKind; label: string }[]>(
+    !editing || cliDetections.length === 0
       ? []
       : (
           [
-            { kind: "claude_cli", label: "Claude CLI", on: editing.assistant.claude_cli.enabled },
-            { kind: "gemini_cli", label: "Gemini CLI", on: editing.assistant.gemini_cli.enabled },
-            { kind: "codex_cli", label: "Codex CLI", on: editing.assistant.codex_cli.enabled },
+            { kind: "claude_cli", label: "Claude CLI" },
+            { kind: "gemini_cli", label: "Gemini CLI" },
+            { kind: "codex_cli", label: "Codex CLI" },
           ] as const
         )
-          .filter((p) => p.on)
-          .map((p) => ({ kind: p.kind as AssistantBackendKind, label: p.label })),
+          .filter((p) => cliDetections.some((d) => d.backend === p.kind && d.ready))
+          .map((p) => ({
+            kind: p.kind as AssistantBackendKind,
+            label: modelOf(editing!.assistant, p.kind)
+              ? `${p.label} · ${modelOf(editing!.assistant, p.kind)}`
+              : p.label,
+          })),
+  );
+
+  /// Active provider derived from the persisted default, but only if
+  /// that backend is currently ready. Otherwise fall back to the first
+  /// ready CLI so the overlay can switch to a usable assistant.
+  const activeProvider = $derived<AssistantBackendKind | null>(
+    readyList.some((p) => p.kind === editing?.assistant.default_backend)
+      ? editing?.assistant.default_backend ?? null
+      : readyList[0]?.kind ?? null,
   );
 
   function scheduleSave(): void {
@@ -184,12 +199,18 @@
 
   function onActiveProviderChange(e: Event): void {
     if (!editing) return;
+    const prev = editing.assistant.default_backend;
     const next = (e.currentTarget as HTMLSelectElement).value as AssistantBackendKind;
     editing.assistant.default_backend = next;
+    editing.assistant[next].enabled = true;
+    if (prev !== next) {
+      recordAssistantSwitch(next, modelOf(editing.assistant, next));
+    }
   }
 
   onMount(() => {
     syncFromServer();
+    void loadCliDetection();
   });
 
   /// Helper: read the current model field for the active provider.
@@ -216,16 +237,22 @@
 <div class="assist-inspector">
   {#if !editing || !drive.info}
     <div class="placeholder">loading…</div>
-  {:else if enabledList.length === 0}
+  {:else if readyList.length === 0}
     <div class="placeholder muted">
-      No assistants enabled yet. Open Settings (Cmd/Ctrl+,) and enable a
-      provider to use the assistant on this scope.
+      {#if cliDetectionLoading}
+        checking assistant CLIs…
+      {:else if cliDetectionError}
+        assistant readiness failed: {cliDetectionError}
+      {:else}
+        No ready assistant CLIs. Open Settings (Cmd/Ctrl+,) to inspect
+        each CLI's readiness and binary override.
+      {/if}
     </div>
   {:else}
     <label class="field">
       <span>Active assistant</span>
       <select value={activeProvider ?? ""} onchange={onActiveProviderChange}>
-        {#each enabledList as p (p.kind)}
+        {#each readyList as p (p.kind)}
           <option value={p.kind}>{p.label}</option>
         {/each}
       </select>
@@ -254,17 +281,12 @@
     {:else if activeProvider === "codex_cli"}
       <label class="field">
         <span>Model</span>
-        <input
-          value={editing.assistant.codex_cli.model ?? ""}
-          placeholder="default"
-          spellcheck="false"
-          autocomplete="off"
-          oninput={(e) => {
-            if (!editing) return;
-            const value = (e.currentTarget as HTMLInputElement).value.trim();
-            editing.assistant.codex_cli.model = value === "" ? null : value;
-          }}
-        />
+        <select bind:value={editing.assistant.codex_cli.model}>
+          <option value={null}>(use CLI default)</option>
+          {#each CODEX_CLI_MODELS as name (name)}
+            <option value={name}>{name}</option>
+          {/each}
+        </select>
       </label>
     {/if}
 
@@ -303,8 +325,7 @@
     color: var(--text-secondary);
     font-size: 13px;
   }
-  .field select,
-  .field input {
+  .field select {
     background: var(--bg);
     color: var(--text);
     border: 1px solid var(--border);
@@ -314,8 +335,7 @@
     font-size: 14px;
     outline: none;
   }
-  .field select:focus,
-  .field input:focus { border-color: var(--link); }
+  .field select:focus { border-color: var(--link); }
   .muted { color: var(--text-secondary); }
   .footer {
     display: flex;

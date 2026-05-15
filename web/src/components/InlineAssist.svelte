@@ -75,6 +75,7 @@
   import {
     assistantConversations,
     assistantOverlay,
+    assistantSelection,
     assistantStream,
     autoApplyWrites,
     availableAssistantContexts,
@@ -108,6 +109,7 @@
     drive,
     openDiffOverlay,
     openGraphForTag,
+    normalizeAssistantText,
     type AssistantConversation,
     type AssistantPendingEdit,
     type AssistantTurn,
@@ -455,6 +457,26 @@
     if (request.kind !== "survey") return [];
     const questions = (request as { questions?: unknown }).questions;
     return Array.isArray(questions) ? (questions as SurveyQuestion[]) : [];
+  }
+
+  function configuredAssistantBackend(): string | null | undefined {
+    return (
+      assistantSelection.backend ??
+      drive.info?.preferences.assistant.default_backend ??
+      llmStatus?.backend
+    );
+  }
+
+  function configuredAssistantModel(): string | null | undefined {
+    const backend = configuredAssistantBackend();
+    if (assistantSelection.backend === backend && assistantSelection.model !== null) {
+      return assistantSelection.model;
+    }
+    const assistant = drive.info?.preferences.assistant;
+    if (backend === "claude_cli") return assistant?.claude_cli.model ?? llmStatus?.model;
+    if (backend === "gemini_cli") return assistant?.gemini_cli.model ?? llmStatus?.model;
+    if (backend === "codex_cli") return assistant?.codex_cli.model ?? llmStatus?.model;
+    return llmStatus?.model;
   }
 
   const TOOL_PAYLOAD_PREVIEW_LIMIT = 16 * 1024;
@@ -1039,6 +1061,7 @@
   function toggleInspector(): void {
     assistantOverlay.inspectorOpen = !assistantOverlay.inspectorOpen;
     menu?.close();
+    promptMenu?.close();
   }
 
   /// First-visit nudge: when the assistant opens on a scope the
@@ -1458,15 +1481,16 @@
     resp: LlmCompletionResponse,
     excerpts: ContentHit[] | null,
   ): void {
+    const content = normalizeAssistantText(resp.content);
     conv.messages.push({
       role: "assistant",
-      content: resp.content,
+      content,
       tool_calls: resp.tool_calls,
     });
-    if (resp.content.trim()) {
+    if (content.trim()) {
       conv.turns.push({
         kind: "assistant",
-        content: resp.content,
+        content,
         created_at: Date.now(),
         ...(excerpts && excerpts.length > 0 ? { citations: excerpts } : {}),
       });
@@ -1637,10 +1661,11 @@
           }
         }
       }
-      if (resp.content.trim()) {
+      const content = normalizeAssistantText(resp.content);
+      if (content.trim()) {
         conv.turns.push({
           kind: "assistant",
-          content: resp.content,
+          content,
           created_at: Date.now(),
         });
       }
@@ -1931,12 +1956,13 @@
     if (queue.length > 0) ui.status = `discarded ${queue.length} edits`;
   }
 
-  /// Right-click context menu. Mirrors the file-browser / search /
-  /// graph overlays: a `⋮` trigger in the header and a right-click
-  /// handler on the body share the same item list. Native browser
-  /// menus stay reachable inside the prompt input + CM6 editor body.
+  /// Right-click context menu. The header/global surface carries
+  /// assistant overlay commands, while the prompt owns editor-specific
+  /// commands such as prompt width, source mode, and style toolbar.
   let menu: HamburgerMenu | undefined = $state();
+  let promptMenu: HamburgerMenu | undefined = $state();
   let menuOpen = $state(false);
+  let promptMenuOpen = $state(false);
   const POPOVER_WIDTH = 260;
   const POPOVER_HEIGHT = 220;
 
@@ -1953,19 +1979,28 @@
     menu?.openAtCursor(e.clientX, e.clientY);
   }
 
+  function onPromptContextMenu(e: MouseEvent): void {
+    e.preventDefault();
+    e.stopPropagation();
+    promptMenu?.openAtCursor(e.clientX, e.clientY);
+  }
+
   function doToggleStyleToolbar(): void {
     assistantOverlay.styleToolbarOpen = !assistantOverlay.styleToolbarOpen;
     menu?.close();
+    promptMenu?.close();
   }
 
   function doToggleOverlayMaximized(): void {
     setOverlayMaximized(!overlayMaximized.on);
     menu?.close();
+    promptMenu?.close();
   }
 
   function doToggleSourceMode(): void {
     promptMode = promptMode === "wysiwyg" ? "source" : "wysiwyg";
     menu?.close();
+    promptMenu?.close();
   }
 
   function onPromptWidthSlider(e: Event): void {
@@ -1998,26 +2033,21 @@
     // Stack on top of the assistant — Esc pops the graph and the
     // user is back in their conversation.
     menu?.close();
+    promptMenu?.close();
   }
 
   function doOpenSettings(): void {
     menu?.close();
+    promptMenu?.close();
     openSettings();
   }
 
 </script>
 
 <OverlayShell id="assistant" open={visible} onClose={close}>
-<div class="assistant-layout">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    class="assistant-body"
-    class:capped={assistantPromptWidth.ratio < 1}
-    class:prompt-filled={promptFilled}
-    oncontextmenu={onAssistantContextMenu}
-    role="presentation"
-  >
-      <header>
+<div class="assistant-shell" oncontextmenu={onAssistantContextMenu} role="presentation">
+  <header>
         <button
           type="button"
           class="chrome-btn"
@@ -2074,7 +2104,25 @@
         >
           <X size={14} strokeWidth={1.75} aria-hidden="true" />
         </button>
-      </header>
+  </header>
+
+  <HamburgerMenu
+    bind:this={promptMenu}
+    bind:open={promptMenuOpen}
+    width={POPOVER_WIDTH}
+    height={POPOVER_HEIGHT}
+    showTrigger={false}
+  >
+    {@render promptMenuItems()}
+  </HamburgerMenu>
+
+  <div class="assistant-layout">
+    <div
+      class="assistant-body"
+      class:capped={assistantPromptWidth.ratio < 1}
+      class:empty-chat={turns.length === 0}
+      class:prompt-filled={promptFilled}
+    >
 
       <div class="scroll" bind:this={scrollEl}>
         {#if llmStatus && !llmStatus.supports_tools}
@@ -2095,9 +2143,11 @@
           </div>
         {/if}
         {#if turns.length === 0}
-          {@const agentLabel = displayAgentName(llmStatus?.backend) || "CHAN"}
+          {@const bannerBackend = configuredAssistantBackend()}
+          {@const bannerModel = configuredAssistantModel()}
+          {@const agentLabel = displayAgentName(bannerBackend) || "CHAN"}
           {@const agentArt = banner(agentLabel)}
-          {@const agentTint = agentBannerTone(llmStatus?.backend)}
+          {@const agentTint = agentBannerTone(bannerBackend)}
           <!-- Empty-state hero. ASCII-art banner of the active
                backend's friendly name with a per-agent gradient
                sheen + glow, plus the model id below. The gradient
@@ -2109,8 +2159,8 @@
             <pre class="agent-banner {agentTint}" aria-hidden="true">{agentArt}</pre>
             <div class="agent-label">{agentLabel}</div>
             <div class="agent-model mono">
-              {#if llmStatus?.model}
-                model · {llmStatus.model}
+              {#if bannerModel}
+                model · {bannerModel}
               {:else if llmStatus === null}
                 <span class="agent-model-loading">loading…</span>
               {:else}
@@ -2235,6 +2285,15 @@
                   <pre class="body source">{turn.content}</pre>
                 {/if}
               </div>
+            </div>
+          {:else if turn.kind === "assistant_switch"}
+            <div class="assistant-switch-note">
+              <span class="line"></span>
+              <span class="label">
+                assistant changed to {displayAgentName(turn.backend)}
+                {turn.model ? ` · ${turn.model}` : " · default"}
+              </span>
+              <span class="line"></span>
             </div>
           {:else if turn.kind === "assistant"}
             <div class="bubble assistant">
@@ -2530,7 +2589,8 @@
            prompt-wrap's top padding tracks the toggle so the
            first line of the prompt clears the toolbar pill when
            it's enabled and reclaims the space when it's off. -->
-      <div class="prompt-area">
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="prompt-area" oncontextmenu={onPromptContextMenu} role="presentation">
         <!-- Drag-resize divider. The handle stays the full overlay
              width regardless of the prompt-width cap below it
              (matches the wider chrome treatment) and the toggle
@@ -2661,21 +2721,26 @@
           >→</button>
         {/if}
       </div>
+    </div>
+    {#if assistantOverlay.inspectorOpen}
+      <Inspector
+        title="Assistant"
+        bind:width={paneWidths.assistant}
+        onResize={persistPaneWidths}
+        onClose={() => (assistantOverlay.inspectorOpen = false)}
+      >
+        <AssistantInspectorBody />
+      </Inspector>
+    {/if}
   </div>
-  {#if assistantOverlay.inspectorOpen}
-    <Inspector
-      title="Assistant"
-      bind:width={paneWidths.assistant}
-      onResize={persistPaneWidths}
-      onClose={() => (assistantOverlay.inspectorOpen = false)}
-    >
-      <AssistantInspectorBody />
-    </Inspector>
-  {/if}
 </div>
 </OverlayShell>
 
 {#snippet menuItems()}
+  {@render commonMenuItems()}
+{/snippet}
+
+{#snippet promptMenuItems()}
   <!-- Prompt-width slider. Caps the assistant prompt's column
        independently from the global page-width (which the file
        editors share); writing comfortably here often calls for a
@@ -2714,6 +2779,10 @@
     </button>
   </li>
   <li class="sep" role="separator"></li>
+  {@render commonMenuItems()}
+{/snippet}
+
+{#snippet commonMenuItems()}
   <li>
     <button role="menuitem" onclick={toggleInspector}>
       {#if assistantOverlay.inspectorOpen}
@@ -2751,11 +2820,18 @@
 <DiffOverlay />
 
 <style>
+  /* Full assistant overlay content. The header spans both the chat
+     body and the optional inspector so the inspector no longer reads
+     as a separate panel outside the overlay chrome. */
+  .assistant-shell {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+  }
   /* Row container so the conversation body and the optional inspector
-     sit side-by-side, mirroring SearchPanel / GraphPanel. The wrap
-     itself takes up the whole OverlayShell panel; the body keeps the
-     `oncontextmenu` hook for the right-click menu so the inspector
-     doesn't intercept it. */
+     sit side-by-side beneath the shared overlay header. */
   .assistant-layout {
     display: flex;
     flex: 1;
@@ -2805,6 +2881,24 @@
     min-height: 0;
   }
   .assistant-body.prompt-filled .prompt-wrap {
+    flex: 1;
+    height: auto !important;
+    min-height: 0;
+  }
+  /* Empty conversations should read as banner + composer, not as
+     banner, blank scrollback, then composer at the floor. Let the
+     scroll region shrink to the banner and give the prompt the
+     remaining vertical room immediately underneath it. */
+  .assistant-body.empty-chat .scroll {
+    flex: 0 0 auto;
+    overflow: visible;
+    padding-bottom: 6px;
+  }
+  .assistant-body.empty-chat .prompt-area {
+    flex: 1;
+    min-height: 0;
+  }
+  .assistant-body.empty-chat .prompt-wrap {
     flex: 1;
     height: auto !important;
     min-height: 0;
@@ -3695,6 +3789,25 @@
   .unread-divider .label {
     font-variant-numeric: tabular-nums;
     color: var(--link);
+  }
+  .assistant-switch-note {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 5px 2px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+  }
+  .assistant-switch-note .line {
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+  .assistant-switch-note .label {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
   }
 
   .edit-card .status-tag {
