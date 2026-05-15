@@ -34,7 +34,7 @@ In scope:
 - `LlmSession` orchestration loop (assistant turn, tool round-
   trip, pending-write resume, cancel).
 - Optional stdio MCP server (`feature = "mcp"`) for external MCP
-  clients and for v2 ClaudeCli / GeminiCli wiring.
+  clients and for v2 ClaudeCli / GeminiCli / CodexCli wiring.
 
 Out of scope:
 
@@ -64,7 +64,8 @@ visible consumer today) is the point.
                         |  Backend trait impl | ---> | upstream |
                         |  Anthropic / Gemini |      |  HTTP /  |
                         |  Ollama / ClaudeCli |      | subproc  |
-                        |  / GeminiCli        |      +----------+
+                        |  / GeminiCli /      |      +----------+
+                        |  CodexCli           |
                         +----------+----------+
                                    | tool_call events
                                    v
@@ -243,18 +244,18 @@ The crate's headline types, all sync, all FFI-shaped:
 ```text
 LlmConfig            { backend, models, urls, max_tokens,
                        auto_apply_writes, mcp_image_max_bytes,
-                       keys, claude_cli, gemini_cli,
+                       keys, claude_cli, gemini_cli, codex_cli,
                        stream_inactivity_timeout_secs,
                        max_tool_iterations }
                      load() / save()
                      load_from(&Path) / save_to(&Path)
 
-MaxTokens, Models, Urls, Keys, ClaudeCli, GeminiCli
+MaxTokens, Models, Urls, Keys, ClaudeCli, GeminiCli, CodexCli
                      each ::is_empty() and ::for_backend(kind)
                      where applicable.
 
 BackendKind          Anthropic | Gemini | Ollama
-                     | ClaudeCli | GeminiCli
+                     | ClaudeCli | GeminiCli | CodexCli
 
 KeyStatus            Env | Keychain | File | Missing
 keys::resolve(kind, &config) -> (Option<String>, KeyStatus)
@@ -358,10 +359,15 @@ that change subprocess behavior:
   resolved Gemini API key via `GEMINI_API_KEY` on the subprocess
   env. v2 launches with no chan-llm-stored key surface an auth
   error from gemini.
-- `mcp_command` is `serde(skip)` on both `[claude_cli]` and
-  `[gemini_cli]`: a malicious TOML cannot set them. Hosts inject
-  programmatically, so they are part of the host binary's trust
-  profile, not the config file's.
+- `[codex_cli] cmd` / `extra_args`: same trust story. Codex v2
+  injects chan's MCP server with per-invocation `-c
+  mcp_servers.chan.*` overrides, so chan does not edit the user's
+  `~/.codex/config.toml` and does not redirect `CODEX_HOME`
+  away from the user's auth store.
+- `mcp_command` is `serde(skip)` on `[claude_cli]`,
+  `[gemini_cli]`, and `[codex_cli]`: a malicious TOML cannot set
+  them. Hosts inject programmatically, so they are part of the
+  host binary's trust profile, not the config file's.
 
 ## 6. Streaming model
 
@@ -619,6 +625,16 @@ GeminiCli   Drives a local `gemini` CLI subprocess. Same v1/v2
             assistant messages, no upstream flag for token-level
             partials). UI consumers wanting typewriter-style
             updates should prefer the HTTP `Gemini` backend.
+CodexCli    Drives local `codex exec --json`. v2 injects chan's
+            MCP server through `-c mcp_servers.chan.*` overrides
+            and runs Codex's native shell/file sandbox as read-only
+            so mutations are expected to flow through chan's
+            `write_file` MCP tool. This preserves the user's
+            normal Codex auth/config while avoiding global config
+            mutation. Codex JSONL can provide token-ish
+            `item/agentMessage/delta` events on newer versions;
+            final `agent_message` items are reconciled to avoid
+            double-emitting text.
 ```
 
 Each backend:
@@ -641,7 +657,7 @@ chan-llm's MCP server (v2). The session-level loop sees empty
 executed them.
 
 Per-call `max_tokens` resolves user override > backend default
-(`config.max_tokens.for_backend(kind)`). ClaudeCli and GeminiCli
+(`config.max_tokens.for_backend(kind)`). ClaudeCli, GeminiCli, and CodexCli
 omit this knob: the CLIs pick their own ceilings.
 
 ## 9. On-disk layout
@@ -650,7 +666,8 @@ omit this knob: the CLIs pick their own ceilings.
 ~/.chan/llm.toml      mode 0600 on Unix. Backend selection,
                       model overrides, URL overrides,
                       auto_apply_writes flag, on-disk key
-                      fallback, [claude_cli] / [gemini_cli]
+                      fallback, [claude_cli] / [gemini_cli] /
+                      [codex_cli]
                       subprocess settings.
 ```
 
@@ -684,7 +701,7 @@ Today:
 - `chan` (the CLI in `chan-writer/chan`) depends on `chan-llm`
   with the `mcp` feature so its hidden `__mcp` subcommand can
   spin up `chan_llm::mcp::Server` in-process. That is the
-  binary chan-llm's v2 ClaudeCli / GeminiCli wiring spawns as a
+  binary chan-llm's v2 ClaudeCli / GeminiCli / CodexCli wiring spawns as a
   subprocess via `mcp_command`, so the chan binary is both the
   user-facing CLI and the MCP bridge an external agentic CLI
   talks to. Pulling it in directly (instead of relying on a

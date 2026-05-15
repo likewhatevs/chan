@@ -87,8 +87,9 @@ has pasted into the messages. Be concise.";
 
 /// Per-session directive prepended to whatever system prompt the
 /// host passes to the agentic CLI backends (`claude_cli`,
-/// `gemini_cli`). These backends are full agents with their own
-/// tool-use heuristics, and they tend to default to a cautious
+/// `gemini_cli`, `codex_cli`). These backends are full agents
+/// with their own tool-use heuristics, and they tend to default
+/// to a cautious
 /// \"show the user the proposal and wait for confirmation\" mode
 /// when run interactively; pasting the would-be file content as
 /// a chat fence instead of emitting the actual `write_file` MCP

@@ -44,9 +44,10 @@ pub fn resolve(kind: BackendKind, config: &LlmConfig) -> (Option<String>, KeySta
         // from their own installs (claude via ~/.claude, gemini via
         // ~/.gemini or GEMINI_API_KEY in the user's shell), so
         // chan-llm's resolver has nothing to do.
-        BackendKind::Ollama | BackendKind::ClaudeCli | BackendKind::GeminiCli => {
-            return (None, KeyStatus::Missing)
-        }
+        BackendKind::Ollama
+        | BackendKind::ClaudeCli
+        | BackendKind::GeminiCli
+        | BackendKind::CodexCli => return (None, KeyStatus::Missing),
     };
     if let Ok(v) = std::env::var(env_var) {
         if !v.is_empty() {
@@ -121,6 +122,7 @@ fn account(kind: BackendKind) -> &'static str {
         BackendKind::Ollama => "ollama",
         BackendKind::ClaudeCli => "claude_cli",
         BackendKind::GeminiCli => "gemini_cli",
+        BackendKind::CodexCli => "codex_cli",
     }
 }
 

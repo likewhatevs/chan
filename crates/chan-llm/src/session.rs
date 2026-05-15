@@ -702,7 +702,7 @@ impl LlmSession {
         }
         history.extend(messages);
 
-        // The agentic CLIs (ClaudeCli, GeminiCli) run as full agents
+        // The agentic CLIs (ClaudeCli, GeminiCli, CodexCli) run as full agents
         // in both modes. The chan-llm orchestration loop never
         // executes tool calls for them (the CLI does its own), so
         // we always pass empty schemas. The auto-apply story
@@ -719,6 +719,7 @@ impl LlmSession {
         let agentic_cli_v1 = match kind {
             BackendKind::ClaudeCli => self.config.claude_cli.mcp_command.is_none(),
             BackendKind::GeminiCli => self.config.gemini_cli.mcp_command.is_none(),
+            BackendKind::CodexCli => self.config.codex_cli.mcp_command.is_none(),
             _ => false,
         };
         let tool_ctx = if agentic_cli_v1 {
@@ -727,7 +728,7 @@ impl LlmSession {
             self.tool_context()
         };
         let tool_schemas = match kind {
-            BackendKind::ClaudeCli | BackendKind::GeminiCli => Vec::new(),
+            BackendKind::ClaudeCli | BackendKind::GeminiCli | BackendKind::CodexCli => Vec::new(),
             _ => crate::tools::standard_tool_schemas(),
         };
 

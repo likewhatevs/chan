@@ -102,6 +102,10 @@ pub struct LlmConfig {
     /// extra args). Empty for any other backend.
     #[serde(default, skip_serializing_if = "GeminiCli::is_empty")]
     pub gemini_cli: GeminiCli,
+    /// Settings for the CodexCli backend (subprocess command,
+    /// extra args). Empty for any other backend.
+    #[serde(default, skip_serializing_if = "CodexCli::is_empty")]
+    pub codex_cli: CodexCli,
     /// Inactivity timeout (in seconds) between consecutive lines of
     /// streaming output from a subprocess backend (ClaudeCli,
     /// GeminiCli). `None` means "use the chan-llm default" (300
@@ -137,11 +141,18 @@ pub struct EnabledProviders {
     pub claude_cli: bool,
     #[serde(default)]
     pub gemini_cli: bool,
+    #[serde(default)]
+    pub codex_cli: bool,
 }
 
 impl EnabledProviders {
     fn is_empty(&self) -> bool {
-        !(self.anthropic || self.gemini || self.ollama || self.claude_cli || self.gemini_cli)
+        !(self.anthropic
+            || self.gemini
+            || self.ollama
+            || self.claude_cli
+            || self.gemini_cli
+            || self.codex_cli)
     }
 
     /// Whether the given backend is enabled. The resolver gates on
@@ -154,6 +165,7 @@ impl EnabledProviders {
             BackendKind::Ollama => self.ollama,
             BackendKind::ClaudeCli => self.claude_cli,
             BackendKind::GeminiCli => self.gemini_cli,
+            BackendKind::CodexCli => self.codex_cli,
         }
     }
 
@@ -164,6 +176,7 @@ impl EnabledProviders {
             BackendKind::Ollama => self.ollama = value,
             BackendKind::ClaudeCli => self.claude_cli = value,
             BackendKind::GeminiCli => self.gemini_cli = value,
+            BackendKind::CodexCli => self.codex_cli = value,
         }
     }
 }
@@ -215,7 +228,7 @@ impl MaxTokens {
             BackendKind::Gemini => self.gemini,
             BackendKind::Ollama => self.ollama,
             // The agentic CLIs pick their own ceiling.
-            BackendKind::ClaudeCli | BackendKind::GeminiCli => None,
+            BackendKind::ClaudeCli | BackendKind::GeminiCli | BackendKind::CodexCli => None,
         }
     }
 }
@@ -240,7 +253,8 @@ impl ThinkingBudget {
             BackendKind::Gemini
             | BackendKind::Ollama
             | BackendKind::ClaudeCli
-            | BackendKind::GeminiCli => None,
+            | BackendKind::GeminiCli
+            | BackendKind::CodexCli => None,
         }
     }
 }
@@ -262,6 +276,10 @@ pub struct Models {
     /// Same "let the CLI pick" semantics as claude_cli.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gemini_cli: Option<String>,
+    /// Override for the `--model` flag passed to `codex exec`.
+    /// When unset, codex picks whichever model its own config selects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_cli: Option<String>,
 }
 
 impl Models {
@@ -271,6 +289,7 @@ impl Models {
             && self.ollama.is_none()
             && self.claude_cli.is_none()
             && self.gemini_cli.is_none()
+            && self.codex_cli.is_none()
     }
 
     pub fn for_backend(&self, kind: BackendKind) -> Option<&str> {
@@ -280,6 +299,7 @@ impl Models {
             BackendKind::Ollama => self.ollama.as_deref(),
             BackendKind::ClaudeCli => self.claude_cli.as_deref(),
             BackendKind::GeminiCli => self.gemini_cli.as_deref(),
+            BackendKind::CodexCli => self.codex_cli.as_deref(),
         }
     }
 }
@@ -351,6 +371,33 @@ impl GeminiCli {
     }
 }
 
+/// Subprocess settings for the CodexCli backend. The default `cmd`
+/// is `["codex"]` resolved on PATH. MCP wiring is injected with
+/// per-run `-c mcp_servers.chan.*` overrides so chan never mutates
+/// the user's `~/.codex/config.toml`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexCli {
+    /// Command + leading args used to launch codex. None falls back
+    /// to `["codex"]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cmd: Option<Vec<String>>,
+    /// Extra args appended after chan-llm's own flags.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_args: Vec<String>,
+    /// Host-injected MCP server command. When `Some`, the backend
+    /// runs `codex exec` with the chan MCP server configured for
+    /// this invocation only. Skipped from TOML so hosts inject the
+    /// correct binary path on every launch.
+    #[serde(skip)]
+    pub mcp_command: Option<Vec<String>>,
+}
+
+impl CodexCli {
+    fn is_empty(&self) -> bool {
+        self.cmd.is_none() && self.extra_args.is_empty() && self.mcp_command.is_none()
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Keys {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -371,7 +418,10 @@ impl Keys {
             // Ollama is keyless (local server). The agentic CLIs
             // pull their own auth from the user's installed CLI
             // (claude via ~/.claude, gemini via ~/.gemini or env).
-            BackendKind::Ollama | BackendKind::ClaudeCli | BackendKind::GeminiCli => None,
+            BackendKind::Ollama
+            | BackendKind::ClaudeCli
+            | BackendKind::GeminiCli
+            | BackendKind::CodexCli => None,
         }
     }
 }
@@ -517,6 +567,7 @@ mod tests {
             },
             claude_cli: ClaudeCli::default(),
             gemini_cli: GeminiCli::default(),
+            codex_cli: CodexCli::default(),
             max_tokens: MaxTokens::default(),
             thinking_budget: ThinkingBudget::default(),
             mcp_image_max_bytes: None,
@@ -667,6 +718,32 @@ mod tests {
         LlmConfig::default().save_to(&p).unwrap();
         let raw = std::fs::read_to_string(&p).unwrap();
         assert!(!raw.contains("[claude_cli]"), "got: {raw}");
+    }
+
+    #[test]
+    fn codex_cli_round_trips() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("llm.toml");
+        let cfg = LlmConfig {
+            backend: Some(BackendKind::CodexCli),
+            enabled: EnabledProviders {
+                codex_cli: true,
+                ..Default::default()
+            },
+            models: Models {
+                codex_cli: Some("gpt-5.2-codex".into()),
+                ..Default::default()
+            },
+            codex_cli: CodexCli {
+                cmd: Some(vec!["/usr/local/bin/codex".into()]),
+                extra_args: vec!["--ignore-rules".into()],
+                mcp_command: None,
+            },
+            ..Default::default()
+        };
+        cfg.save_to(&p).unwrap();
+        let loaded = LlmConfig::load_from(&p).unwrap();
+        assert_eq!(cfg, loaded);
     }
 
     #[test]

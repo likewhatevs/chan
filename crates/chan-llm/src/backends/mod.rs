@@ -19,6 +19,11 @@
 //                                 invocation --mcp-config flag) and
 //                                 deny-policies the native edit/
 //                                 shell tools. See gemini_cli.rs.
+//   - CodexCli                  - shell-executor wrapper around
+//                                 `codex exec --json`. v2 injects
+//                                 chan's MCP server via per-run
+//                                 config overrides so the user's
+//                                 ~/.codex auth/config stays intact.
 //
 // Each provides a `Backend` impl that owns its transport config
 // (auth header style, base URL, model defaults, or subprocess args)
@@ -43,6 +48,7 @@
 
 pub mod anthropic;
 pub mod claude_cli;
+pub mod codex_cli;
 mod error_body;
 pub mod gemini;
 pub mod gemini_cli;
@@ -87,6 +93,7 @@ pub enum BackendKind {
     Ollama,
     ClaudeCli,
     GeminiCli,
+    CodexCli,
 }
 
 impl BackendKind {
@@ -97,6 +104,7 @@ impl BackendKind {
             BackendKind::Ollama => "ollama",
             BackendKind::ClaudeCli => "claude_cli",
             BackendKind::GeminiCli => "gemini_cli",
+            BackendKind::CodexCli => "codex_cli",
         }
     }
 
@@ -107,8 +115,8 @@ impl BackendKind {
             BackendKind::Ollama => "llama3.1",
             // Empty default: the CLI picks its own configured model
             // when --model is omitted. We only override when the
-            // user explicitly sets Models::claude_cli / gemini_cli.
-            BackendKind::ClaudeCli | BackendKind::GeminiCli => "",
+            // user explicitly sets Models::claude_cli / gemini_cli / codex_cli.
+            BackendKind::ClaudeCli | BackendKind::GeminiCli | BackendKind::CodexCli => "",
         }
     }
 }
@@ -294,6 +302,23 @@ pub fn build(kind: BackendKind, config: &LlmConfig, drive_root: &Path) -> Result
                 ndjson::resolve_inactivity_timeout(config.stream_inactivity_timeout_secs);
             Ok(Arc::new(gemini_cli::GeminiCliBackend::new(
                 cli.cmd.unwrap_or_else(gemini_cli::default_cmd),
+                cli.extra_args,
+                model,
+                drive_root.to_path_buf(),
+                mcp,
+                inactivity,
+            )))
+        }
+        BackendKind::CodexCli => {
+            let cli = config.codex_cli.clone();
+            let model = if model.is_empty() { None } else { Some(model) };
+            let mcp = cli
+                .mcp_command
+                .map(|command| codex_cli::McpWiring { command });
+            let inactivity =
+                ndjson::resolve_inactivity_timeout(config.stream_inactivity_timeout_secs);
+            Ok(Arc::new(codex_cli::CodexCliBackend::new(
+                cli.cmd.unwrap_or_else(codex_cli::default_cmd),
                 cli.extra_args,
                 model,
                 drive_root.to_path_buf(),

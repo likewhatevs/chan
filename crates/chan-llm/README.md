@@ -32,6 +32,8 @@ ClaudeCli   ready    drives a local `claude` subprocess; v2 routes
                      writes through chan-llm's MCP server
 GeminiCli   ready    drives a local `gemini` subprocess; v2 rewrites
                      `GEMINI_CLI_HOME` and forwards `GEMINI_API_KEY`
+CodexCli    ready    drives local `codex exec --json`; v2 injects
+                     chan MCP config with per-run `-c` overrides
 ```
 
 ## Public API
@@ -39,7 +41,7 @@ GeminiCli   ready    drives a local `gemini` subprocess; v2 rewrites
 ```text
 LlmConfig            backend, models, urls, max_tokens,
                      auto_apply_writes, mcp_image_max_bytes, keys,
-                     claude_cli, gemini_cli.
+                     claude_cli, gemini_cli, codex_cli.
                      load() / save() at chan-drive's config dir.
 
 KeyStatus            Env | Keychain | File | Missing.
