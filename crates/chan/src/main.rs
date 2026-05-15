@@ -1007,6 +1007,15 @@ fn cmd_index(path: PathBuf) -> Result<()> {
         summary.chunks,
         summary.errors.len(),
     );
+    // Surface embed-phase resumption when it fired. Skipped on full
+    // first-time builds (count is 0) so the success path stays terse.
+    if summary.embeds_reused > 0 {
+        println!(
+            "reused {} embedding shard{} from prior run",
+            summary.embeds_reused,
+            if summary.embeds_reused == 1 { "" } else { "s" },
+        );
+    }
     for (path, e) in &summary.errors {
         eprintln!("  error: {path}: {e}");
     }
