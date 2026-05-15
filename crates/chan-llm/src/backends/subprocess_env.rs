@@ -1,4 +1,5 @@
-//! Subprocess env sanitization for the CLI-shaped backends.
+//! Subprocess env sanitization + stderr drainer for the CLI-shaped
+//! backends.
 //!
 //! The agentic CLI backends (`claude` / `gemini`) spawn external
 //! binaries. Inheriting the full parent environment hands the
@@ -17,8 +18,22 @@
 //! still set vendor-specific values (`GEMINI_API_KEY`,
 //! `GEMINI_CLI_HOME`, etc.) explicitly via `command.env(...)`
 //! after this runs.
+//!
+//! `spawn_stderr_drainer` runs the child's stderr into a capped
+//! shared buffer concurrently with the stdout loop. Without it,
+//! a child that writes more than the OS pipe buffer to stderr
+//! (~64 KiB on Linux, ~16 KiB on macOS) blocks on `write`, which
+//! stalls stdout, which triggers our inactivity timeout. The
+//! user sees "subprocess wedged" instead of the actual stderr
+//! content. The drainer keeps stderr flowing; on non-zero exit
+//! the backend reads up to `STDERR_CAP_BYTES` from the buffer to
+//! surface in `on_error`.
 
+use std::sync::{Arc, Mutex};
+
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
+use tokio::task::JoinHandle;
 
 /// POSIX shell / locale / tmpdir vars every CLI we shell out to
 /// expects to be present. Anything outside this list is dropped.
@@ -65,6 +80,77 @@ pub(crate) fn sanitize_env(command: &mut Command, forwarded_prefixes: &[&str]) {
             command.env(&key, &value);
         }
     }
+}
+
+/// Hard cap on stderr we hold in memory per child. 8 KiB covers any
+/// reasonable single error message (claude / gemini both emit
+/// kilobyte-class diagnostics at worst). The drainer keeps reading
+/// past the cap to keep the pipe flowing; bytes past the cap are
+/// dropped on the floor. This is the budget we're willing to spend
+/// to surface a wedged-child's last words.
+pub(crate) const STDERR_CAP_BYTES: usize = 8 * 1024;
+
+/// Shared buffer the drainer fills and the backend reads from on
+/// error paths. Wrapped in `Arc<Mutex<_>>` because both the drainer
+/// task and the backend read after `child.wait()`.
+pub(crate) type SharedStderrBuf = Arc<Mutex<Vec<u8>>>;
+
+/// Drainer handle returned by `spawn_stderr_drainer`. The backend
+/// keeps it for the lifetime of the child; on early-exit paths it
+/// awaits the join handle so the drainer flushes its in-flight read
+/// before the backend reads the buffer.
+pub(crate) struct StderrDrainer {
+    pub(crate) buf: SharedStderrBuf,
+    pub(crate) handle: JoinHandle<()>,
+}
+
+impl StderrDrainer {
+    /// Drain whatever's left in the read loop, then return a
+    /// human-readable string from the captured buffer. Safe to call
+    /// multiple times; the inner `Vec<u8>` stays intact.
+    pub(crate) async fn finish(self) -> String {
+        // The drainer naturally exits when the child's stderr pipe
+        // closes (on child exit). Awaiting the handle ensures the
+        // last read is buffered before we read it back.
+        let _ = self.handle.await;
+        let b = self.buf.lock().expect("stderr buf poisoned");
+        String::from_utf8_lossy(&b).into_owned()
+    }
+}
+
+/// Spawn a tokio task that drains `stderr` into a capped buffer
+/// concurrently with the main stdout loop. Returns `None` if the
+/// caller passed `None` (no stderr piped) so call sites can keep a
+/// uniform shape.
+pub(crate) fn spawn_stderr_drainer(
+    stderr: Option<tokio::process::ChildStderr>,
+) -> Option<StderrDrainer> {
+    let stderr = stderr?;
+    let buf: SharedStderrBuf = Arc::new(Mutex::new(Vec::with_capacity(1024)));
+    let buf_drain = buf.clone();
+    let handle = tokio::spawn(async move {
+        let mut reader = stderr;
+        let mut chunk = vec![0u8; 4096];
+        loop {
+            match reader.read(&mut chunk).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    let mut held = buf_drain.lock().expect("stderr buf poisoned");
+                    let room = STDERR_CAP_BYTES.saturating_sub(held.len());
+                    let take = n.min(room);
+                    if take > 0 {
+                        held.extend_from_slice(&chunk[..take]);
+                    }
+                    // Bytes past the cap are dropped on the floor so
+                    // the pipe never blocks; the cap exists because we
+                    // surface a snippet on error and don't want
+                    // unbounded growth from a misbehaving child.
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    Some(StderrDrainer { buf, handle })
 }
 
 #[cfg(test)]

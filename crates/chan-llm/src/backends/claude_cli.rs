@@ -113,7 +113,8 @@ use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall
 use crate::tools::ToolSchema;
 
 use super::{
-    read_line_capped, sanitize_env, Backend, Outcome, NDJSON_LINE_CAP_BYTES, PARSE_ERROR_EMIT_LIMIT,
+    read_line_capped, sanitize_env, spawn_stderr_drainer, Backend, Outcome, StderrDrainer,
+    NDJSON_LINE_CAP_BYTES, PARSE_ERROR_EMIT_LIMIT,
 };
 
 /// Default command to launch claude. Plain `claude` so PATH wins;
@@ -307,11 +308,25 @@ impl Backend for ClaudeCliBackend {
         };
 
         // Pipe the rendered transcript on stdin. Drop stdin so
-        // claude sees EOF and processes the prompt.
+        // claude sees EOF and processes the prompt. Take stderr
+        // BEFORE writing stdin so the drainer is already running if
+        // the write fails (the failure surface is "claude died on
+        // startup", and we want its stderr to come through).
+        let stderr_drainer = spawn_stderr_drainer(child.stderr.take());
         if let Some(mut stdin) = child.stdin.take() {
             if let Err(e) = stdin.write_all(prompt.as_bytes()).await {
-                listener.on_error(format!("claude_cli stdin: {e}"));
+                let stderr_snippet = match stderr_drainer {
+                    Some(d) => d.finish().await,
+                    None => String::new(),
+                };
+                let snippet = truncate(&stderr_snippet, 800);
                 let _ = child.kill().await;
+                let _ = child.wait().await;
+                if snippet.is_empty() {
+                    listener.on_error(format!("claude_cli stdin: {e}"));
+                } else {
+                    listener.on_error(format!("claude_cli stdin: {e}; stderr: {snippet}"));
+                }
                 return Outcome::error();
             }
             drop(stdin);
@@ -320,12 +335,15 @@ impl Backend for ClaudeCliBackend {
         let stdout = match child.stdout.take() {
             Some(s) => s,
             None => {
+                if let Some(d) = stderr_drainer {
+                    let _ = d.finish().await;
+                }
                 listener.on_error("claude_cli: stdout not piped".into());
                 let _ = child.kill().await;
                 return Outcome::error();
             }
         };
-        let stderr = child.stderr.take();
+        let mut stderr_drainer: Option<StderrDrainer> = stderr_drainer;
 
         let mut reader = BufReader::new(stdout);
         let mut line_buf: Vec<u8> = Vec::new();
@@ -352,9 +370,15 @@ impl Backend for ClaudeCliBackend {
             if cancel.load(Ordering::Relaxed) {
                 // Kill the subprocess and return what we have. The
                 // assistant_text we collected so far stays on the
-                // outcome so the host can keep partial UI state.
+                // outcome so the host can keep partial UI state. The
+                // drainer flushes on the natural pipe close that
+                // follows the kill; we don't await it on the cancel
+                // path because the user is already gone.
                 let _ = child.kill().await;
                 let _ = child.wait().await;
+                if let Some(d) = stderr_drainer.take() {
+                    let _ = d.finish().await;
+                }
                 return Outcome::cancelled(assistant_text);
             }
             let read = timeout(
@@ -368,16 +392,36 @@ impl Backend for ClaudeCliBackend {
                 Ok(Err(e)) => {
                     // Either an I/O failure on the pipe or the per-line
                     // cap fired. Both are unrecoverable for this turn.
-                    listener.on_error(format!("claude_cli stdout: {e}"));
                     let _ = child.kill().await;
+                    let _ = child.wait().await;
+                    let stderr_snippet = match stderr_drainer.take() {
+                        Some(d) => truncate(&d.finish().await, 800),
+                        None => String::new(),
+                    };
+                    if stderr_snippet.is_empty() {
+                        listener.on_error(format!("claude_cli stdout: {e}"));
+                    } else {
+                        listener
+                            .on_error(format!("claude_cli stdout: {e}; stderr: {stderr_snippet}"));
+                    }
                     return Outcome::error();
                 }
                 Err(_elapsed) => {
-                    listener.on_error(format!(
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                    let stderr_snippet = match stderr_drainer.take() {
+                        Some(d) => truncate(&d.finish().await, 800),
+                        None => String::new(),
+                    };
+                    let base = format!(
                         "claude_cli: no output for {}s; subprocess wedged",
                         self.inactivity_timeout.as_secs(),
-                    ));
-                    let _ = child.kill().await;
+                    );
+                    if stderr_snippet.is_empty() {
+                        listener.on_error(base);
+                    } else {
+                        listener.on_error(format!("{base}; stderr: {stderr_snippet}"));
+                    }
                     return Outcome::error();
                 }
             };
@@ -622,19 +666,31 @@ impl Backend for ClaudeCliBackend {
         let status = match child.wait().await {
             Ok(s) => s,
             Err(e) => {
+                if let Some(d) = stderr_drainer.take() {
+                    let _ = d.finish().await;
+                }
                 listener.on_error(format!("claude_cli wait: {e}"));
                 return Outcome::error();
             }
         };
         if !status.success() {
-            let stderr_text = match stderr {
-                Some(s) => read_to_string_async(s).await.unwrap_or_default(),
+            // Wait for the drainer to flush whatever's still in the
+            // pipe before reading the captured buffer. The drainer
+            // exits naturally when the child's stderr closes, which
+            // happened on the child exit above.
+            let stderr_text = match stderr_drainer.take() {
+                Some(d) => d.finish().await,
                 None => String::new(),
             };
             let snippet = truncate(&stderr_text, 800);
             listener.on_error(format!("claude_cli exit {status}: {snippet}"));
             return Outcome::error();
         }
+        // Drainer is no longer needed on the success path; let it
+        // wind down on its own as the pipe closes. Awaiting would
+        // serialise the unrelated drainer task against the happy
+        // path, so we just drop it.
+        drop(stderr_drainer);
         if parse_errors_silenced > 0 {
             // The first PARSE_ERROR_EMIT_LIMIT failures arrived as
             // their own on_error events with the raw-line preview;
@@ -754,13 +810,6 @@ fn split_system_and_prompt(messages: &[Message]) -> (Option<String>, String) {
 
 fn truncate(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
-}
-
-async fn read_to_string_async(mut s: tokio::process::ChildStderr) -> std::io::Result<String> {
-    use tokio::io::AsyncReadExt;
-    let mut out = String::new();
-    s.read_to_string(&mut out).await?;
-    Ok(out)
 }
 
 // ---- stream-json wire types --------------------------------------------

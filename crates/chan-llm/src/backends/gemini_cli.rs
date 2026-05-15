@@ -98,7 +98,8 @@ use crate::session::{Delta, Message, Role, SessionListener, StopReason, ToolCall
 use crate::tools::ToolSchema;
 
 use super::{
-    read_line_capped, sanitize_env, Backend, Outcome, NDJSON_LINE_CAP_BYTES, PARSE_ERROR_EMIT_LIMIT,
+    read_line_capped, sanitize_env, spawn_stderr_drainer, Backend, Outcome, StderrDrainer,
+    NDJSON_LINE_CAP_BYTES, PARSE_ERROR_EMIT_LIMIT,
 };
 
 /// Default command to launch gemini. Plain `gemini` so PATH wins;
@@ -244,15 +245,22 @@ impl Backend for GeminiCliBackend {
             }
         };
 
+        // Drainer captures stderr concurrently with the stdout loop
+        // so the child can't wedge on a full stderr pipe while still
+        // streaming events. On non-zero exit we read up to
+        // STDERR_CAP_BYTES from the buffer for the on_error snippet.
+        let mut stderr_drainer: Option<StderrDrainer> = spawn_stderr_drainer(child.stderr.take());
         let stdout = match child.stdout.take() {
             Some(s) => s,
             None => {
+                if let Some(d) = stderr_drainer.take() {
+                    let _ = d.finish().await;
+                }
                 listener.on_error("gemini_cli: stdout not piped".into());
                 let _ = child.kill().await;
                 return Outcome::error();
             }
         };
-        let stderr = child.stderr.take();
 
         let mut reader = BufReader::new(stdout);
         let mut line_buf: Vec<u8> = Vec::new();
@@ -261,11 +269,26 @@ impl Backend for GeminiCliBackend {
         let mut saw_result = false;
         let mut parse_errors_emitted = 0usize;
         let mut parse_errors_silenced = 0usize;
+        // Per-message streamed-text accumulator. gemini-cli marks
+        // streaming chunks with delta:true and the canonical assistant
+        // message with delta:false; the canonical event carries the
+        // FULL accumulated text for its message. Comparing canonical
+        // against the global `assistant_text` works for the single-
+        // message turns gemini-cli emits today, but breaks the moment
+        // it ever emits two messages in one turn (the second canonical
+        // wouldn't prefix-match the global, the drift branch would
+        // fire, and half the text would vanish). Track this-message
+        // streamed text and reset on canonical so multi-message turns
+        // stay correct.
+        let mut current_message_streamed = String::new();
 
         loop {
             if cancel.load(Ordering::Relaxed) {
                 let _ = child.kill().await;
                 let _ = child.wait().await;
+                if let Some(d) = stderr_drainer.take() {
+                    let _ = d.finish().await;
+                }
                 return Outcome::cancelled(assistant_text);
             }
             let read = timeout(
@@ -277,16 +300,36 @@ impl Backend for GeminiCliBackend {
                 Ok(Ok(true)) => true,
                 Ok(Ok(false)) => break,
                 Ok(Err(e)) => {
-                    listener.on_error(format!("gemini_cli stdout: {e}"));
                     let _ = child.kill().await;
+                    let _ = child.wait().await;
+                    let stderr_snippet = match stderr_drainer.take() {
+                        Some(d) => truncate(&d.finish().await, 800),
+                        None => String::new(),
+                    };
+                    if stderr_snippet.is_empty() {
+                        listener.on_error(format!("gemini_cli stdout: {e}"));
+                    } else {
+                        listener
+                            .on_error(format!("gemini_cli stdout: {e}; stderr: {stderr_snippet}"));
+                    }
                     return Outcome::error();
                 }
                 Err(_elapsed) => {
-                    listener.on_error(format!(
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                    let stderr_snippet = match stderr_drainer.take() {
+                        Some(d) => truncate(&d.finish().await, 800),
+                        None => String::new(),
+                    };
+                    let base = format!(
                         "gemini_cli: no output for {}s; subprocess wedged",
                         self.inactivity_timeout.as_secs(),
-                    ));
-                    let _ = child.kill().await;
+                    );
+                    if stderr_snippet.is_empty() {
+                        listener.on_error(base);
+                    } else {
+                        listener.on_error(format!("{base}; stderr: {stderr_snippet}"));
+                    }
                     return Outcome::error();
                 }
             };
@@ -362,23 +405,36 @@ impl Backend for GeminiCliBackend {
                     // fixture shape (no flag at all) keeps emitting.
                     let is_canonical = matches!(delta, Some(false));
                     let emit: Option<&str> = if is_canonical {
-                        if let Some(suffix) = content.strip_prefix(assistant_text.as_str()) {
-                            if suffix.is_empty() {
+                        // Compare against THIS message's streamed
+                        // prefix, not the global `assistant_text`. The
+                        // distinction matters when gemini-cli ever
+                        // emits more than one assistant message in a
+                        // turn (today it doesn't, but the wire format
+                        // permits it). After we emit the canonical
+                        // suffix, reset the per-message accumulator so
+                        // the next message starts fresh.
+                        let suffix = if let Some(s) =
+                            content.strip_prefix(current_message_streamed.as_str())
+                        {
+                            if s.is_empty() {
                                 None
                             } else {
-                                Some(suffix)
+                                Some(s)
                             }
                         } else {
                             tracing::warn!(
-                                streamed_bytes = assistant_text.len(),
+                                streamed_bytes = current_message_streamed.len(),
                                 canonical_bytes = content.len(),
                                 "gemini_cli: streamed/canonical drift; \
                                  keeping streamed view, dropping canonical to avoid \
                                  doubled assistant_text",
                             );
                             None
-                        }
+                        };
+                        current_message_streamed.clear();
+                        suffix
                     } else {
+                        current_message_streamed.push_str(content.as_str());
                         Some(content.as_str())
                     };
                     if let Some(s) = emit {
@@ -452,19 +508,23 @@ impl Backend for GeminiCliBackend {
         let status = match child.wait().await {
             Ok(s) => s,
             Err(e) => {
+                if let Some(d) = stderr_drainer.take() {
+                    let _ = d.finish().await;
+                }
                 listener.on_error(format!("gemini_cli wait: {e}"));
                 return Outcome::error();
             }
         };
         if !status.success() {
-            let stderr_text = match stderr {
-                Some(s) => read_to_string_async(s).await.unwrap_or_default(),
+            let stderr_text = match stderr_drainer.take() {
+                Some(d) => d.finish().await,
                 None => String::new(),
             };
             let snippet = truncate(&stderr_text, 800);
             listener.on_error(format!("gemini_cli exit {status}: {snippet}"));
             return Outcome::error();
         }
+        drop(stderr_drainer);
         if parse_errors_silenced > 0 {
             listener.on_error(format!(
                 "gemini_cli parse: {parse_errors_silenced} additional parse errors suppressed",
@@ -680,13 +740,6 @@ fn render_prompt(messages: &[Message]) -> String {
 
 fn truncate(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
-}
-
-async fn read_to_string_async(mut s: tokio::process::ChildStderr) -> std::io::Result<String> {
-    use tokio::io::AsyncReadExt;
-    let mut out = String::new();
-    s.read_to_string(&mut out).await?;
-    Ok(out)
 }
 
 // ---- stream-json wire types -------------------------------------------

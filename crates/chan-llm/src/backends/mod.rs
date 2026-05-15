@@ -53,7 +53,7 @@ mod subprocess_env;
 pub(crate) use error_body::{classify_http_error, read_capped_text, DEFAULT_BODY_CAP_BYTES};
 pub(crate) use ndjson::{read_line_capped, NDJSON_LINE_CAP_BYTES, PARSE_ERROR_EMIT_LIMIT};
 pub use retry::{send_with_retry, RetryPolicy};
-pub(crate) use subprocess_env::sanitize_env;
+pub(crate) use subprocess_env::{sanitize_env, spawn_stderr_drainer, StderrDrainer};
 
 /// Hard cap on a single turn's accumulated assistant text. The
 /// listener (`on_delta`) is fire-and-forget; if it blocks or if the
