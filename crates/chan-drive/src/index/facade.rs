@@ -316,6 +316,10 @@ impl Index {
         // every chunk gets stamped with, and the post-build stamp
         // would race against in-flight reads.
         let cfg_at_start = self.config.lock().unwrap().clone();
+        // Gated: in `--no-default-features` builds (no embeddings),
+        // `model_at_start` has no consumer and the unconditional
+        // declaration trips `unused_variables` under `-D warnings`.
+        #[cfg(feature = "embeddings")]
         let model_at_start = cfg_at_start.model.clone();
         let filter = Arc::clone(&self.walk_filter.lock().unwrap());
         let files = list_indexable(&self.drive_root, &filter)?;
@@ -323,6 +327,12 @@ impl Index {
         let mut indexed = 0usize;
         let mut chunks_total = 0usize;
         let mut errors: Vec<(String, IndexError)> = Vec::new();
+        // Files whose embed phase was skipped because the on-disk
+        // shard's `(model, body_hash)` already matched a fresh
+        // re-chunk. Surfaced in `BuildSummary.embeds_reused` so the
+        // CLI and tests can observe partial-rebuild resumption.
+        #[cfg(feature = "embeddings")]
+        let mut embeds_reused = 0usize;
 
         // Embedding throughput is dominated by per-call dispatch
         // and kernel-launch overhead on the GPU side. Per-file
@@ -441,6 +451,24 @@ impl Index {
                             errors.push((msg.rel, e.into()));
                         }
                         continue;
+                    }
+                    // Checkpoint skip: if the on-disk shard already
+                    // carries the same (model, body_hash) tuple a
+                    // fresh embedding would stamp, the vectors are
+                    // still current. Don't queue the file for embed.
+                    // Saves the dominant cost (forward pass through
+                    // the embedder) on a partial-rebuild resume. The
+                    // shard stays put; BM25 below still re-indexes
+                    // the file unconditionally because BM25 has no
+                    // partial-state preservation across runs.
+                    let fresh_hash = vectors::body_hash_of_chunks(&chunks);
+                    if let Some((shard_model, shard_hash)) =
+                        self.vectors.shard_signature(&msg.rel)
+                    {
+                        if shard_model == model_at_start && shard_hash == fresh_hash {
+                            embeds_reused += 1;
+                            continue;
+                        }
                     }
                     pending_chunks += chunks.len();
                     let rel_for_label = msg.rel.clone();
@@ -581,10 +609,15 @@ impl Index {
                 tracing::warn!(?e, "failed to persist vectors_model stamp after build");
             }
         }
+        #[cfg(feature = "embeddings")]
+        let embeds_reused_out = embeds_reused;
+        #[cfg(not(feature = "embeddings"))]
+        let embeds_reused_out = 0usize;
         Ok(BuildSummary {
             files: total,
             indexed,
             chunks: chunks_total,
+            embeds_reused: embeds_reused_out,
             errors,
         })
     }
@@ -905,6 +938,14 @@ pub struct BuildSummary {
     pub files: usize,
     pub indexed: usize,
     pub chunks: usize,
+    /// Files that skipped the embed phase because a current shard
+    /// (matching model + chunk-body hash) was already on disk from a
+    /// prior run. Always `0` when `BuildOptions::include_vectors` is
+    /// false. The savings are the dominant cost on a partial-rebuild
+    /// resume: BM25 is fast (`chunks` worth of inserts plus a single
+    /// commit), embedding scales with chunk count and dominates wall
+    /// clock on real drives.
+    pub embeds_reused: usize,
     pub errors: Vec<(String, IndexError)>,
 }
 
@@ -950,11 +991,15 @@ fn wipe_vectors_dir(index_dir: &Path) -> Result<(), IndexError> {
     Ok(())
 }
 
-/// Walk the drive and return every indexable file (any
-/// `FileClass::EditableText`: `.md` + `.txt` today) relative to
-/// root, using forward-slash separators on all platforms (matches
-/// the API's shape). Honors the caller-supplied `WalkFilter` so
-/// blocked dir names (`node_modules`, ...) are never descended.
+/// Walk the drive and return every indexable file (`FileClass::EditableText`:
+/// `.md` + `.txt` today) relative to root, using forward-slash separators
+/// on all platforms (matches the API's shape). Honors the caller-supplied
+/// `WalkFilter` so blocked dir names (`node_modules`, ...) are never
+/// descended.
+///
+/// Calls `is_indexable_text`, not `is_editable_text`: the wider
+/// editor gate (which also covers `.py`, `.json`, Makefile, ...)
+/// must not pull arbitrary source/config text into the index.
 fn list_indexable(root: &Path, filter: &WalkFilter) -> Result<Vec<String>, IndexError> {
     let mut out: Vec<String> = fs_ops::walk_drive_filtered(root, filter)
         .filter(|e| e.file_type().is_file())
@@ -964,7 +1009,7 @@ fn list_indexable(root: &Path, filter: &WalkFilter) -> Result<Vec<String>, Index
                 .ok()
                 .map(|rel| rel.to_string_lossy().replace('\\', "/"))
         })
-        .filter(|rel| fs_ops::is_editable_text(rel))
+        .filter(|rel| fs_ops::is_indexable_text(rel))
         .collect();
     out.sort();
     Ok(out)
@@ -1212,5 +1257,165 @@ mod tests {
         // No commit happened; the index stays empty so an auto-rebuild
         // trigger (`indexed_docs == 0`) would re-fire on next boot.
         assert_eq!(idx.stats().indexed_docs, 0);
+    }
+
+    /// Pre-write a v2 vector shard whose `(model, body_hash)`
+    /// matches what a fresh re-chunk of `source` would produce, then
+    /// call `Index::build_all` with vectors enabled. The build's
+    /// checkpoint should skip the embed phase (no model is loaded in
+    /// tests; an attempted embed would fail outright) and report the
+    /// reuse in the summary.
+    ///
+    /// This is the partial-rebuild resume case in miniature: a prior
+    /// run crashed after writing the shard for `a.md`; on restart,
+    /// `build_all` walks the drive, finds the shard still current,
+    /// and avoids paying the embed cost a second time.
+    #[cfg(feature = "embeddings")]
+    #[test]
+    fn build_all_skips_embed_when_shard_signature_matches() {
+        use super::super::vectors::{self, EmbeddedChunk, VectorStore};
+        let tmp = make_drive();
+        let source = "# alpha\nbody-token-skipme line\n";
+        std::fs::write(tmp.path().join("a.md"), source).unwrap();
+        let dir = idx_dir(&tmp);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Stamp config so `Index::open` doesn't trip the model-mismatch
+        // wipe path. The default model id is what `build_all` will
+        // compare shards against.
+        let cfg = config::IndexConfig::default();
+        config::save(&dir, &cfg).unwrap();
+        let chunks = chunking::chunk(source, &cfg.chunking);
+        assert!(
+            !chunks.is_empty(),
+            "test setup: source must produce at least one chunk",
+        );
+        let dim = 4usize;
+        // Synthetic unit vectors of the chosen dim. The actual values
+        // don't matter for the skip check; only `(model, body_hash)`
+        // is consulted.
+        let embedded: Vec<EmbeddedChunk> = chunks
+            .iter()
+            .map(|c| EmbeddedChunk {
+                chunk_id: c.id.clone(),
+                heading: c.heading.clone(),
+                body: c.body.clone(),
+                start_line: c.start_line as u64,
+                end_line: c.end_line as u64,
+                depth: c.depth,
+                vector: (0..dim).map(|i| if i == 0 { 1.0 } else { 0.0 }).collect(),
+            })
+            .collect();
+        // Write the shard via a standalone VectorStore handle.
+        // `Index::open` below will load it through its own handle.
+        {
+            let store = VectorStore::open(&dir).unwrap();
+            store
+                .replace_file("a.md", &cfg.model, dim, embedded)
+                .unwrap();
+        }
+        // Sanity: signature is reachable through a fresh load.
+        let probe = VectorStore::open(&dir).unwrap();
+        let (sig_model, sig_hash) = probe.shard_signature("a.md").unwrap();
+        assert_eq!(sig_model, cfg.model);
+        assert_eq!(sig_hash, vectors::body_hash_of_chunks(&chunks));
+        drop(probe);
+
+        let idx = Index::open(tmp.path(), &dir).unwrap();
+        let summary = idx
+            .build_all(
+                BuildOptions {
+                    include_vectors: true,
+                },
+                &crate::progress::NoProgress,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            summary.embeds_reused, 1,
+            "skip check must fire when (model, body_hash) match; got {:?}",
+            summary,
+        );
+        assert_eq!(summary.indexed, 1);
+        assert!(summary.errors.is_empty(), "got errors: {:?}", summary.errors);
+    }
+
+    /// Content drift case: shard exists but its `body_hash` no
+    /// longer matches a fresh re-chunk (someone edited the file
+    /// between runs). The skip MUST NOT fire; the file is treated
+    /// as needing a fresh embed.
+    ///
+    /// The test arranges the file in a state where build_all would
+    /// have to embed, but the embedder is not loaded in tests, so
+    /// we observe the no-skip path via `embeds_reused == 0` and
+    /// expect the embed attempt to surface as an error (model
+    /// download / candle init fails fast in a unit-test sandbox).
+    /// The contract: a stale shard does not falsely reuse.
+    #[cfg(feature = "embeddings")]
+    #[test]
+    fn build_all_does_not_skip_when_shard_body_hash_is_stale() {
+        use super::super::vectors::{EmbeddedChunk, VectorStore};
+        let tmp = make_drive();
+        let original = "# alpha\nold body line\n";
+        std::fs::write(tmp.path().join("a.md"), original).unwrap();
+        let dir = idx_dir(&tmp);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = config::IndexConfig::default();
+        config::save(&dir, &cfg).unwrap();
+        // Shard from the original body.
+        let chunks_orig = chunking::chunk(original, &cfg.chunking);
+        let embedded: Vec<EmbeddedChunk> = chunks_orig
+            .iter()
+            .map(|c| EmbeddedChunk {
+                chunk_id: c.id.clone(),
+                heading: c.heading.clone(),
+                body: c.body.clone(),
+                start_line: c.start_line as u64,
+                end_line: c.end_line as u64,
+                depth: c.depth,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+            })
+            .collect();
+        {
+            let store = VectorStore::open(&dir).unwrap();
+            store.replace_file("a.md", &cfg.model, 4, embedded).unwrap();
+        }
+        // Drift: rewrite the file so a fresh re-chunk's body_hash
+        // diverges from the shard's stamped hash.
+        std::fs::write(
+            tmp.path().join("a.md"),
+            "# alpha\ncompletely different body line that hashes elsewhere\n",
+        )
+        .unwrap();
+
+        let idx = Index::open(tmp.path(), &dir).unwrap();
+        // We don't strictly assert on the embedder behavior here;
+        // the load-bearing fact is that the skip did NOT fire.
+        // Whether the embed attempt then succeeds or errors depends
+        // on whether a model is available, which is irrelevant to
+        // the contract under test.
+        let summary = idx.build_all(
+            BuildOptions {
+                include_vectors: true,
+            },
+            &crate::progress::NoProgress,
+            None,
+        );
+        // If a model was reachable, the build succeeded with
+        // embeds_reused = 0. If not (typical CI sandbox), the embed
+        // surfaced as a per-file error in the summary or as a
+        // top-level error. Either way, no reuse was recorded.
+        match summary {
+            Ok(s) => {
+                assert_eq!(
+                    s.embeds_reused, 0,
+                    "stale shard must not be reused; got {s:?}",
+                );
+            }
+            Err(_) => {
+                // Top-level embed errors propagate from
+                // flush_embed_batch; the skip path would have
+                // returned Ok with embeds_reused == 1.
+            }
+        }
     }
 }

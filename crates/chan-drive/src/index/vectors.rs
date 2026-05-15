@@ -22,9 +22,12 @@ use thiserror::Error;
 
 use super::chunking::Chunk;
 
-/// Storage-format version inside the per-file bin. Bumping this
-/// triggers a rebuild on the next load.
-const FORMAT_VERSION: u32 = 1;
+/// Storage-format version inside the per-file bin. v2 added
+/// `body_hash` so `Index::build_all` can skip re-embedding files
+/// whose chunks already match the shard on disk. v1 shards lack
+/// the hash; `load_all` discards them so the next build re-embeds
+/// (one-time cost on upgrade).
+const FORMAT_VERSION: u32 = 2;
 
 /// One embedded chunk in storage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +48,23 @@ struct FileEmbeddings {
     rel_path: String,
     model: String,
     dim: usize,
+    /// sha256 of the canonical (chunk_id, body) sequence; the
+    /// "embed signature" `Index::build_all` consults to decide
+    /// whether the on-disk shard is still current for this file's
+    /// chunks. Stable across runs: identical chunks (which is what
+    /// the chunker produces for identical source text under the
+    /// same `Chunking` strategy) hash to the same value.
+    body_hash: [u8; 32],
+    chunks: Vec<EmbeddedChunk>,
+}
+
+/// In-memory shard metadata. We keep more than just `chunks` so
+/// `shard_signature` can answer "is this file already embedded
+/// for the current model?" without re-reading disk.
+#[derive(Debug, Clone)]
+struct ShardMeta {
+    model: String,
+    body_hash: [u8; 32],
     chunks: Vec<EmbeddedChunk>,
 }
 
@@ -83,11 +103,12 @@ pub enum VectorError {
 /// In-memory + on-disk vector store, keyed by source path.
 pub struct VectorStore {
     embeddings_dir: PathBuf,
-    /// rel_path -> chunks for that file. Mutated incrementally on
-    /// every replace_file / delete_file so search has the same view
-    /// as disk without re-reading every shard. BTreeMap (over Hash)
-    /// keeps search-result ordering deterministic when scores tie.
-    entries: std::sync::RwLock<BTreeMap<String, Vec<EmbeddedChunk>>>,
+    /// rel_path -> shard metadata. Mutated incrementally on every
+    /// `replace_file` / `delete_file` so search and the build-all
+    /// skip check see the same view as disk without re-reading every
+    /// shard. BTreeMap (over HashMap) keeps search-result ordering
+    /// deterministic when scores tie.
+    entries: std::sync::RwLock<BTreeMap<String, ShardMeta>>,
 }
 
 impl std::fmt::Debug for VectorStore {
@@ -112,6 +133,11 @@ impl VectorStore {
     /// Replace the stored chunks for `rel_path` with `embedded`.
     /// Persists, then mutates the in-memory snapshot in place. Pass
     /// an empty slice to delete the file from the store entirely.
+    ///
+    /// `body_hash` is derived from the chunk bodies and stamped on
+    /// the shard so the build-all skip check can compare against the
+    /// hash of a fresh re-chunk and re-use the existing embeddings
+    /// when they match.
     pub fn replace_file(
         &self,
         rel_path: &str,
@@ -141,11 +167,13 @@ impl VectorStore {
                 });
             }
         }
+        let body_hash = body_hash_of_embedded(&embedded);
         let payload = FileEmbeddings {
             version: FORMAT_VERSION,
             rel_path: rel_path.to_owned(),
             model: model.to_owned(),
             dim,
+            body_hash,
             chunks: embedded,
         };
         let bytes = bincode::serde::encode_to_vec(&payload, bincode::config::standard())
@@ -153,11 +181,29 @@ impl VectorStore {
         crate::fs_ops::atomic_write(&path, &bytes)
             .map_err(|e| VectorError::Io(std::io::Error::other(e.to_string())))?;
         // On-disk write succeeded; mirror it in memory.
-        self.entries
-            .write()
-            .unwrap()
-            .insert(rel_path.to_owned(), payload.chunks);
+        self.entries.write().unwrap().insert(
+            rel_path.to_owned(),
+            ShardMeta {
+                model: payload.model,
+                body_hash: payload.body_hash,
+                chunks: payload.chunks,
+            },
+        );
         Ok(())
+    }
+
+    /// `(model, body_hash)` for the file's on-disk shard, or `None`
+    /// when no shard is loaded. `Index::build_all` calls this before
+    /// queuing a file for embedding: if the tuple matches what a
+    /// fresh re-chunk would stamp, the existing vectors are still
+    /// current and the file can skip the embed phase entirely. The
+    /// shard's vectors stay on disk; the next BM25 commit still runs.
+    pub fn shard_signature(&self, rel_path: &str) -> Option<(String, [u8; 32])> {
+        self.entries
+            .read()
+            .unwrap()
+            .get(rel_path)
+            .map(|m| (m.model.clone(), m.body_hash))
     }
 
     pub fn delete_file(&self, rel_path: &str) -> Result<(), VectorError> {
@@ -188,8 +234,8 @@ impl VectorStore {
         let entries = self.entries.read().unwrap();
         let mut scored: Vec<(f32, &str, &EmbeddedChunk)> = entries
             .iter()
-            .flat_map(|(rel, chunks)| {
-                chunks
+            .flat_map(|(rel, meta)| {
+                meta.chunks
                     .iter()
                     .filter(|c| c.vector.len() == query_vec.len())
                     .map(move |c| (dot(query_vec, &c.vector), rel.as_str(), c))
@@ -212,8 +258,45 @@ impl VectorStore {
 
     /// Total stored chunks. For the API status endpoint.
     pub fn chunk_count(&self) -> usize {
-        self.entries.read().unwrap().values().map(Vec::len).sum()
+        self.entries
+            .read()
+            .unwrap()
+            .values()
+            .map(|m| m.chunks.len())
+            .sum()
     }
+}
+
+/// Body-hash for a `Chunk` sequence as it would be embedded. The
+/// shard's `body_hash` is the same function applied to the
+/// `EmbeddedChunk`s (which share the `(chunk_id, body)` projection).
+/// `Index::build_all` re-chunks the source and calls this to decide
+/// whether the existing shard is still current.
+///
+/// Hash domain is `chunk_id || 0x00 || body || 0x00` per chunk,
+/// concatenated in order. The trailing 0x00 separator stops a
+/// "longer body with empty next chunk" forging the same digest as
+/// "shorter body + non-empty next chunk".
+pub fn body_hash_of_chunks(chunks: &[Chunk]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    for c in chunks {
+        hasher.update(c.id.as_bytes());
+        hasher.update([0u8]);
+        hasher.update(c.body.as_bytes());
+        hasher.update([0u8]);
+    }
+    hasher.finalize().into()
+}
+
+fn body_hash_of_embedded(chunks: &[EmbeddedChunk]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    for c in chunks {
+        hasher.update(c.chunk_id.as_bytes());
+        hasher.update([0u8]);
+        hasher.update(c.body.as_bytes());
+        hasher.update([0u8]);
+    }
+    hasher.finalize().into()
 }
 
 /// Build an `EmbeddedChunk` list from a `Chunk` list + a parallel
@@ -247,8 +330,8 @@ fn file_for(dir: &Path, rel_path: &str) -> PathBuf {
     dir.join(format!("{hex}.bin"))
 }
 
-fn load_all(dir: &Path) -> Result<BTreeMap<String, Vec<EmbeddedChunk>>, VectorError> {
-    let mut out: BTreeMap<String, Vec<EmbeddedChunk>> = BTreeMap::new();
+fn load_all(dir: &Path) -> Result<BTreeMap<String, ShardMeta>, VectorError> {
+    let mut out: BTreeMap<String, ShardMeta> = BTreeMap::new();
     let read_dir = match std::fs::read_dir(dir) {
         Ok(d) => d,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
@@ -276,6 +359,10 @@ fn load_all(dir: &Path) -> Result<BTreeMap<String, Vec<EmbeddedChunk>>, VectorEr
                 Err(source) => return Err(VectorError::Decode { path, source }),
             };
         if decoded.version != FORMAT_VERSION {
+            // v1 shards predate `body_hash` so there's no way to
+            // verify them against current chunks; skip and let
+            // build_all re-embed. On-disk file remains until the
+            // next replace_file for that rel_path overwrites it.
             tracing::warn!(
                 ?path,
                 got = decoded.version,
@@ -288,7 +375,14 @@ fn load_all(dir: &Path) -> Result<BTreeMap<String, Vec<EmbeddedChunk>>, VectorEr
         // collision in `file_for` (sha256[..16]). Keep the last
         // wins; on-disk, replace_file overwrites by hash so this
         // is purely defensive.
-        out.insert(decoded.rel_path, decoded.chunks);
+        out.insert(
+            decoded.rel_path,
+            ShardMeta {
+                model: decoded.model,
+                body_hash: decoded.body_hash,
+                chunks: decoded.chunks,
+            },
+        );
     }
     Ok(out)
 }
