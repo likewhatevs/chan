@@ -150,12 +150,10 @@ pub async fn dial_with_tls(
     handshake(cfg, duplex).await
 }
 
-/// Open a TCP stream to `(host, port)` either directly or through
-/// an HTTP CONNECT proxy. The proxy URL's userinfo, if present, is
 /// Return `url` with its path replaced by
 /// `chan_tunnel_proto::TUNNEL_PATH` when the caller provided no
 /// path (just `http://host:port`) or only `/`. Any non-trivial path
-/// the caller chose explicitly is preserved verbatim — a typo like
+/// the caller chose explicitly is preserved verbatim; a typo like
 /// `/v2/tunnel` still 404s at the server, where the operator can
 /// see and fix it.
 ///
