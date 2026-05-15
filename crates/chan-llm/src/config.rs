@@ -62,6 +62,16 @@ pub struct LlmConfig {
     /// claude_cli is omitted: claude picks its own ceiling.
     #[serde(default, skip_serializing_if = "MaxTokens::is_empty")]
     pub max_tokens: MaxTokens,
+    /// Per-backend reasoning budget for extended-thinking models.
+    /// Today only Anthropic surfaces this (Opus / Sonnet 4 series);
+    /// the per-backend shape leaves room for future Gemini-thinking
+    /// or DeepSeek-R1-style backends to plug in. `None` means "no
+    /// thinking block in the request" (the model runs in normal
+    /// mode); a positive value enables extended thinking with that
+    /// token budget. Backends ignore the value when the active model
+    /// doesn't support thinking.
+    #[serde(default, skip_serializing_if = "ThinkingBudget::is_empty")]
+    pub thinking_budget: ThinkingBudget,
     /// When true, the assistant's `write_file` tool calls go to disk
     /// without a per-call confirmation. When false, the consumer
     /// (web frontend, native shell) must surface a confirmation UI
@@ -206,6 +216,31 @@ impl MaxTokens {
             BackendKind::Ollama => self.ollama,
             // The agentic CLIs pick their own ceiling.
             BackendKind::ClaudeCli | BackendKind::GeminiCli => None,
+        }
+    }
+}
+
+/// Per-backend extended-thinking budgets. Mirrors `MaxTokens`. Only
+/// the `anthropic` slot is wired through today; other slots round-
+/// trip in config but no backend reads them yet.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThinkingBudget {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anthropic: Option<u32>,
+}
+
+impl ThinkingBudget {
+    fn is_empty(&self) -> bool {
+        self.anthropic.is_none()
+    }
+
+    pub fn for_backend(&self, kind: BackendKind) -> Option<u32> {
+        match kind {
+            BackendKind::Anthropic => self.anthropic,
+            BackendKind::Gemini
+            | BackendKind::Ollama
+            | BackendKind::ClaudeCli
+            | BackendKind::GeminiCli => None,
         }
     }
 }
@@ -483,6 +518,7 @@ mod tests {
             claude_cli: ClaudeCli::default(),
             gemini_cli: GeminiCli::default(),
             max_tokens: MaxTokens::default(),
+            thinking_budget: ThinkingBudget::default(),
             mcp_image_max_bytes: None,
             stream_inactivity_timeout_secs: None,
             max_tool_iterations: None,
@@ -660,12 +696,36 @@ mod tests {
     }
 
     #[test]
+    fn thinking_budget_round_trips() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("llm.toml");
+        let cfg = LlmConfig {
+            backend: Some(BackendKind::Anthropic),
+            thinking_budget: ThinkingBudget {
+                anthropic: Some(8192),
+            },
+            ..Default::default()
+        };
+        cfg.save_to(&p).unwrap();
+        let loaded = LlmConfig::load_from(&p).unwrap();
+        assert_eq!(
+            loaded.thinking_budget.for_backend(BackendKind::Anthropic),
+            Some(8192)
+        );
+        assert_eq!(
+            loaded.thinking_budget.for_backend(BackendKind::Gemini),
+            None
+        );
+    }
+
+    #[test]
     fn empty_max_tokens_skipped_in_serialized_output() {
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("llm.toml");
         LlmConfig::default().save_to(&p).unwrap();
         let raw = std::fs::read_to_string(&p).unwrap();
         assert!(!raw.contains("[max_tokens]"), "got: {raw}");
+        assert!(!raw.contains("[thinking_budget]"), "got: {raw}");
     }
 
     #[test]

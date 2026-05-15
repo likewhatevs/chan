@@ -230,8 +230,17 @@ pub fn build(kind: BackendKind, config: &LlmConfig, drive_root: &Path) -> Result
                 .ok_or_else(|| LlmError::MissingApiKey("anthropic".into()))?;
             let _ = drive_root;
             let max_tokens = max_tokens_override.unwrap_or(anthropic::DEFAULT_MAX_TOKENS);
+            // Per-backend extended-thinking budget. The backend
+            // strips the block when the active model doesn't
+            // support thinking, so passing it unconditionally is
+            // safe; the user keeps the budget pinned across model
+            // switches.
+            let thinking_budget = config.thinking_budget.for_backend(kind);
             Ok(Arc::new(anthropic::AnthropicBackend::new(
-                key, model, max_tokens,
+                key,
+                model,
+                max_tokens,
+                thinking_budget,
             )))
         }
         BackendKind::Gemini => {

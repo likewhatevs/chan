@@ -133,6 +133,12 @@ pub struct AnthropicBackend {
     api_key: Zeroizing<String>,
     model: String,
     max_tokens: u32,
+    /// Extended-thinking budget. `None` keeps the request in
+    /// non-thinking mode. `Some(n)` adds a `thinking` block to the
+    /// wire request when the model supports it (gated upstream by
+    /// `model_supports_thinking`); models without thinking support
+    /// silently fall back to non-thinking mode rather than 400.
+    thinking_budget: Option<u32>,
     client: reqwest::Client,
 }
 
@@ -145,12 +151,18 @@ impl std::fmt::Debug for AnthropicBackend {
             .field("api_key", &"<redacted>")
             .field("model", &self.model)
             .field("max_tokens", &self.max_tokens)
+            .field("thinking_budget", &self.thinking_budget)
             .finish_non_exhaustive()
     }
 }
 
 impl AnthropicBackend {
-    pub fn new(api_key: String, model: String, max_tokens: u32) -> Self {
+    pub fn new(
+        api_key: String,
+        model: String,
+        max_tokens: u32,
+        thinking_budget: Option<u32>,
+    ) -> Self {
         // 5 minute timeout: tool-use loops can take a while when the
         // assistant is iterating through reads / searches before
         // composing a reply. Per-event latency is what matters for
@@ -168,9 +180,21 @@ impl AnthropicBackend {
             api_key: Zeroizing::new(api_key),
             model,
             max_tokens,
+            thinking_budget,
             client,
         }
     }
+}
+
+/// Whether the model name self-identifies as one of the
+/// extended-thinking-capable Claude models. Used to decide whether
+/// the wire request should carry a `thinking` block; sending
+/// thinking against an unsupported model returns a 400 from the
+/// API. Conservative match: only the known-thinking lines (Opus and
+/// Sonnet from the 4.x generation onward) are recognized here.
+pub fn model_supports_thinking(model: &str) -> bool {
+    let m = model.to_ascii_lowercase();
+    m.starts_with("claude-opus-4") || m.starts_with("claude-sonnet-4")
 }
 
 #[async_trait]
@@ -183,12 +207,24 @@ impl Backend for AnthropicBackend {
         cancel: Arc<AtomicBool>,
     ) -> Outcome {
         let (system, wire_messages) = split_system(messages);
+        // Strip the thinking block on models that don't accept it.
+        // The API 400s with "thinking is not supported by this
+        // model" otherwise; gating here keeps the user's persisted
+        // budget intact while a non-thinking model is selected.
+        let thinking = self
+            .thinking_budget
+            .filter(|_| model_supports_thinking(&self.model))
+            .map(|budget_tokens| AnthropicThinking {
+                kind: "enabled",
+                budget_tokens,
+            });
         let body = AnthropicRequest {
             model: &self.model,
             max_tokens: self.max_tokens,
             stream: true,
             system: system.as_deref(),
             messages: &wire_messages,
+            thinking,
             tools: &tools
                 .iter()
                 .map(|t| AnthropicTool {
@@ -689,8 +725,23 @@ struct AnthropicRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     system: Option<&'a str>,
     messages: &'a [AnthropicMessage<'a>],
+    /// Extended-thinking config. Omitted entirely when None so non-
+    /// thinking requests stay byte-identical to the pre-feature wire
+    /// format (and so models without thinking support don't 400).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<AnthropicThinking>,
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     tools: &'a [AnthropicTool<'a>],
+}
+
+#[derive(Serialize)]
+struct AnthropicThinking {
+    /// Always "enabled" today; Anthropic reserves the field for
+    /// future modes (e.g. "auto"). Stored as &'static str so the
+    /// request struct stays Copy-cheap.
+    #[serde(rename = "type")]
+    kind: &'static str,
+    budget_tokens: u32,
 }
 
 #[derive(Serialize)]
