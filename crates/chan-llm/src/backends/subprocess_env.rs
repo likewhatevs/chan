@@ -138,16 +138,36 @@ pub(crate) struct StderrDrainer {
     pub(crate) handle: JoinHandle<()>,
 }
 
+/// Soft grace window we give the drainer to finish naturally after
+/// the child has been killed / waited. In practice the drainer
+/// returns within a few milliseconds (stderr EOFs on child exit),
+/// but on macOS with current_thread tokio runtimes we've observed
+/// reads that wait past the child reap before the kqueue event
+/// propagates. Past this window we abort the task and return what
+/// the buffer captured so far; the snippet is already
+/// surface-bounded so a slightly-truncated read is fine.
+const DRAINER_FINISH_GRACE: std::time::Duration = std::time::Duration::from_millis(200);
+
 impl StderrDrainer {
     /// Drain whatever's left in the read loop, then return a
-    /// human-readable string from the captured buffer. Safe to call
-    /// multiple times; the inner `Vec<u8>` stays intact.
+    /// human-readable string from the captured buffer.
+    ///
+    /// Race the natural completion of the drainer task against a
+    /// short grace window. If the task completes first (the common
+    /// case: child died, stderr pipe EOF'd, read returned Ok(0)),
+    /// we get a full flush. If the window elapses first (observed
+    /// on macOS during the oversize-line test), we abort the task
+    /// and read whatever was captured. Either way the caller gets
+    /// a bounded snippet without risking a deadlock against the
+    /// reactor.
     pub(crate) async fn finish(self) -> String {
-        // The drainer naturally exits when the child's stderr pipe
-        // closes (on child exit). Awaiting the handle ensures the
-        // last read is buffered before we read it back.
-        let _ = self.handle.await;
-        let b = self.buf.lock().expect("stderr buf poisoned");
+        let StderrDrainer { buf, handle } = self;
+        let abort = handle.abort_handle();
+        let _ = tokio::time::timeout(DRAINER_FINISH_GRACE, handle).await;
+        // Abort is a no-op if the task already completed. After
+        // this returns the task is no longer mutating `buf`.
+        abort.abort();
+        let b = buf.lock().expect("stderr buf poisoned");
         String::from_utf8_lossy(&b).into_owned()
     }
 }
