@@ -65,6 +65,15 @@ const BASE_ALLOWLIST: &[&str] = &[
 /// `&["GOOGLE_", "GEMINI_"]` for the gemini CLI. An empty
 /// `forwarded_prefixes` is fine when the caller plans to set
 /// every vendor var explicitly itself.
+///
+/// Prefix matching is convenient when the user owns the parent
+/// environment (their shell), but widens the attack surface when
+/// chan-llm runs under a service account that imports tainted env:
+/// `GOOGLE_APPLICATION_CREDENTIALS` (path to a service-account JSON),
+/// `ANTHROPIC_BEDROCK_BASE_URL` (could redirect to a hostile
+/// endpoint), and similar non-API-key vars survive the filter. Use
+/// `sanitize_env_strict` instead when the caller is a long-lived
+/// service rather than the user's interactive shell.
 pub(crate) fn sanitize_env(command: &mut Command, forwarded_prefixes: &[&str]) {
     command.env_clear();
     for (key, value) in std::env::vars_os() {
@@ -76,6 +85,31 @@ pub(crate) fn sanitize_env(command: &mut Command, forwarded_prefixes: &[&str]) {
         };
         let keep = BASE_ALLOWLIST.contains(&name)
             || forwarded_prefixes.iter().any(|p| name.starts_with(p));
+        if keep {
+            command.env(&key, &value);
+        }
+    }
+}
+
+/// Replace the spawned command's env with the POSIX basics plus an
+/// explicit set of var names. Tighter than `sanitize_env`: each var
+/// the child receives must appear in the allowlist verbatim. Use
+/// this when the parent environment is not under the user's direct
+/// control (a long-lived service host, a future remote runner) so
+/// vendor-prefix matches don't accidentally forward things like
+/// `GOOGLE_APPLICATION_CREDENTIALS`.
+///
+/// Callers still set vendor-specific values explicitly via
+/// `command.env(...)` after this runs; the allowlist controls only
+/// what survives the inheritance.
+#[allow(dead_code)] // wired by hardened-mode callers in a follow-up
+pub(crate) fn sanitize_env_strict(command: &mut Command, allowed_names: &[&str]) {
+    command.env_clear();
+    for (key, value) in std::env::vars_os() {
+        let Some(name) = key.to_str() else {
+            continue;
+        };
+        let keep = BASE_ALLOWLIST.contains(&name) || allowed_names.contains(&name);
         if keep {
             command.env(&key, &value);
         }
@@ -192,5 +226,32 @@ mod tests {
         // GOOGLE_ vars, and vice versa.
         assert!(!keeps("GOOGLE_API_KEY", &["ANTHROPIC_"]));
         assert!(!keeps("ANTHROPIC_API_KEY", &["GEMINI_", "GOOGLE_"]));
+    }
+
+    // Mirror the strict-mode filter for direct testing. Same shape
+    // as `keeps` but uses verbatim name matching instead of prefix
+    // matching.
+    fn keeps_strict(name: &str, allowed: &[&str]) -> bool {
+        BASE_ALLOWLIST.contains(&name) || allowed.contains(&name)
+    }
+
+    #[test]
+    fn strict_allowlist_forwards_exact_names_only() {
+        assert!(keeps_strict("ANTHROPIC_API_KEY", &["ANTHROPIC_API_KEY"]));
+        assert!(keeps_strict("GEMINI_API_KEY", &["GEMINI_API_KEY"]));
+        // Strict mode rejects vendor-prefix matches: GOOGLE_APPLICATION_CREDENTIALS
+        // and ANTHROPIC_BEDROCK_BASE_URL no longer leak when the
+        // caller intended "just the API key, nothing else".
+        assert!(!keeps_strict(
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            &["GEMINI_API_KEY"]
+        ));
+        assert!(!keeps_strict(
+            "ANTHROPIC_BEDROCK_BASE_URL",
+            &["ANTHROPIC_API_KEY"]
+        ));
+        // POSIX base allowlist still forwards.
+        assert!(keeps_strict("PATH", &["ANTHROPIC_API_KEY"]));
+        assert!(keeps_strict("HOME", &[]));
     }
 }

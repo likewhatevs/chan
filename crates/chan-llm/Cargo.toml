@@ -53,8 +53,11 @@ crate-type = ["lib"]
 # Standalone MCP server binary. Any MCP client (Claude Desktop,
 # Claude Code, Cursor, ...) can spawn this process to get
 # chan-drive-sandboxed read/write/list/search access to a chan
-# drive. `auto_apply_writes` is forced to true here: confirmation
-# UI is the MCP client's responsibility, not ours.
+# drive. `auto_apply_writes` defaults to false here; the MCP client
+# is expected to surface a confirmation UI before flipping the
+# `--auto-apply` flag on. Safer default than forcing it on, since a
+# hostile or buggy client otherwise gets through-without-prompt
+# write access the first time the user spawns the binary.
 [[bin]]
 name = "chan-llm-mcp"
 path = "src/bin/chan-llm-mcp.rs"

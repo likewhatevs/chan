@@ -592,6 +592,13 @@ fn write_gemini_home_with_user(
     let dot_gemini = home.path().join(".gemini");
     let policies_dir = dot_gemini.join("policies");
     std::fs::create_dir_all(&policies_dir)?;
+    // tempfile::TempDir creates `home` with mode 0700 on Unix via
+    // mkdtemp(3), so the parent dir already blocks other-user
+    // traversal. We tighten the inner subdirs and files anyway for
+    // defense in depth: a `cp -r` / `tar` of this directory tree
+    // would otherwise lose the perimeter on the destination.
+    set_user_only(&dot_gemini)?;
+    set_user_only(&policies_dir)?;
 
     // Start from the user's real settings.json (when present) so
     // auth selection and other preferences carry into the sandbox,
@@ -622,9 +629,11 @@ fn write_gemini_home_with_user(
             );
         }
     }
-    let mut sf = std::fs::File::create(dot_gemini.join("settings.json"))?;
+    let settings_path = dot_gemini.join("settings.json");
+    let mut sf = std::fs::File::create(&settings_path)?;
     sf.write_all(serde_json::to_string_pretty(&settings)?.as_bytes())?;
     sf.flush()?;
+    set_user_only_file(&settings_path)?;
 
     // Bridge auth state. Best-effort: a missing or unreadable user
     // file just means gemini-cli will surface its own auth error.
@@ -673,11 +682,46 @@ toolName = \"run_shell_command\"
 decision = \"deny\"
 priority = 900
 ";
-    let mut pf = std::fs::File::create(policies_dir.join("chan.toml"))?;
+    let policy_path = policies_dir.join("chan.toml");
+    let mut pf = std::fs::File::create(&policy_path)?;
     pf.write_all(policy_body.as_bytes())?;
     pf.flush()?;
+    set_user_only_file(&policy_path)?;
 
     Ok(home)
+}
+
+/// Set mode 0700 on `path` (Unix only). No-op on other platforms
+/// where the umask / inheritance story is different. Errors are
+/// returned so the caller can decide whether to fail the launch;
+/// today we propagate, since a chmod failure on a directory we just
+/// created suggests something structural is wrong.
+fn set_user_only(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
+/// Set mode 0600 on `path` (Unix only). Same shape as `set_user_only`
+/// for files.
+fn set_user_only_file(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
 }
 
 /// Bring a credential file from the user's real `~/.gemini` into
@@ -1409,6 +1453,29 @@ mod tests {
             .map(|a| a.as_str().unwrap())
             .collect();
         assert_eq!(args, vec!["__mcp-proxy", "/tmp/s"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_home_subdirs_and_files_are_user_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = write_gemini_home_with_user(
+            &McpWiring {
+                command: vec!["chan".into()],
+                api_key: None,
+            },
+            None,
+        )
+        .unwrap();
+        let dot = home.path().join(".gemini");
+        let pol = dot.join("policies");
+        let settings = dot.join("settings.json");
+        let chan_toml = pol.join("chan.toml");
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dot), 0o700, ".gemini dir");
+        assert_eq!(mode(&pol), 0o700, "policies dir");
+        assert_eq!(mode(&settings), 0o600, "settings.json");
+        assert_eq!(mode(&chan_toml), 0o600, "chan.toml");
     }
 
     #[test]
