@@ -220,3 +220,19 @@ shipped commits.
   `Source/chan-workspace-copy`). Phase 3 should include a
   multi-drive smoke fixture so the language graph and depth
   cap derivations are exercised against varied corpora.
+- The chan-core pre-push hook caught a real prompt-const drift
+  during the phase commit pass: three earlier chan-llm commits
+  (`6aa004a`, `0627b1f`, `e4523de`) had rewritten
+  `prompts::WRITE_FILE_DESC` for the new write_file approval
+  flow without updating the duplicate copy embedded in the
+  `#[tool(description = "...")]` proc-macro attribute on
+  `Server::write_file`. The `mcp_descriptions_match_prompts`
+  test is the existing safety net for this exact drift (rmcp-
+  macros 1.6 will not accept const paths in attributes, so the
+  strings are necessarily duplicated). Resolved as a focused
+  follow-up commit (`f957f02`). Carry-forward: any phase that
+  touches the chan-llm prompt surface should pre-flight a diff
+  between the `prompts::*_DESC` consts and the matching macro-
+  embedded literals in `mcp.rs`. The current test catches it on
+  push; a syseng-lane gate would catch it before the commit
+  even lands.
