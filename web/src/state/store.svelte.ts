@@ -2335,15 +2335,55 @@ export function availableGraphScopes(): ScopeOption[] {
   return out;
 }
 
-/** Build the dropdown options for the search overlay. Today the
- *  list is just the whole drive: /api/search/content has no scope
- *  param yet, so narrow scopes can't be honored honestly and we'd
- *  rather not show options that don't work. The selector UI stays
- *  live for visual parity with Graph + Assistant; when the backend
- *  grows a scope param, switch this body to the same
- *  availableScopeOptions(...) call those other surfaces use. */
+/** Build the dropdown options for the search overlay. Server-side
+ *  content search is still drive-wide, so SearchPanel applies these
+ *  scopes as a client-side result filter. File Browser "Search this"
+ *  can inject direct file/folder scopes even when the item is not
+ *  open in a pane. */
 export function availableSearchScopes(): ScopeOption[] {
-  return [{ id: "drive", kind: "drive", label: "Whole drive" }];
+  const out = availableScopeOptions({
+    driveLabel: "Whole drive",
+    global: { label: "All drives (cross-drive, coming soon)", enabled: false },
+  });
+
+  function addDirScope(path: string, labelPrefix = "folder"): void {
+    if (!path || out.some((o) => o.id === `dir:${path}`)) return;
+    const slash = path.lastIndexOf("/");
+    const name = slash >= 0 ? path.slice(slash + 1) : path;
+    out.unshift({
+      id: `dir:${path}`,
+      kind: "dir",
+      label: `${labelPrefix}: ${name}/`,
+      path,
+    });
+  }
+
+  if (searchPanel.scopeId.startsWith("file:")) {
+    const path = searchPanel.scopeId.slice("file:".length);
+    if (path && !out.some((o) => o.id === searchPanel.scopeId)) {
+      out.unshift({
+        id: searchPanel.scopeId,
+        kind: "file",
+        label: path,
+        path,
+        readOnly: false,
+      });
+    }
+  }
+  if (searchPanel.scopeId.startsWith("dir:")) {
+    addDirScope(searchPanel.scopeId.slice("dir:".length));
+  }
+  return out;
+}
+
+export function openSearchForFile(path: string): void {
+  searchPanel.scopeId = `file:${path}`;
+  searchPanel.open = true;
+}
+
+export function openSearchForDirectory(path: string): void {
+  searchPanel.scopeId = `dir:${path}`;
+  searchPanel.open = true;
 }
 
 /** Edge-kind / node-kind chip toggles on the graph. `link`, `tag`,

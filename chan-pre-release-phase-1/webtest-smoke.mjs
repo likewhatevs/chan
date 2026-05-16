@@ -261,7 +261,12 @@ async function smokeGraphThis(page, width, height) {
     }));
     return true;
   })(${JSON.stringify(selector)})`);
-  await page.waitFor("!!document.querySelector('.ctx') && document.querySelector('.ctx').innerText.includes('Graph this')", 10000);
+  await page.waitFor(`(() => {
+    const menu = document.querySelector('.ctx');
+    return !!menu &&
+      menu.innerText.includes('Graph this') &&
+      menu.innerText.includes('Search this');
+  })()`, 10000);
   await page.eval(`(() => {
     const btn = [...document.querySelectorAll('.ctx button')].find((b) => b.innerText.includes('Graph this'));
     if (!btn) throw new Error('Graph this menu item missing');

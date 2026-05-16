@@ -15,7 +15,9 @@
     FolderPlus,
     Maximize2,
     Minimize2,
+    Network,
     Pencil,
+    Search,
     Settings,
     Users,
     X,
@@ -39,11 +41,13 @@
     collapseAllFolders,
     expandAllFolders,
     fileOps,
+    graphOverlay,
     isFullyExpanded,
     openSettings,
     paneWidths,
     persistPaneWidths,
     refreshTree,
+    searchPanel,
     tree,
     drive,
   } from "../state/store.svelte";
@@ -164,6 +168,21 @@
   async function newDirHere(): Promise<void> {
     menu?.close();
     await fileOps.createDir("");
+  }
+
+  function graphDrive(): void {
+    menu?.close();
+    graphOverlay.mode = "semantic";
+    graphOverlay.scopeId = "drive";
+    graphOverlay.depth = 1;
+    graphOverlay.pendingSelectId = null;
+    graphOverlay.open = true;
+  }
+
+  function searchDrive(): void {
+    menu?.close();
+    searchPanel.scopeId = "drive";
+    searchPanel.open = true;
   }
 
   async function renameDrive(): Promise<void> {
@@ -296,6 +315,20 @@
     <button role="menuitem" onclick={openImportContacts}>
       <Users size={16} strokeWidth={1.75} aria-hidden="true" />
       <span class="menu-row-label">Import contacts…</span>
+      <span class="menu-row-chord"></span>
+    </button>
+  </li>
+  <li>
+    <button role="menuitem" onclick={graphDrive}>
+      <Network size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span class="menu-row-label">Graph this</span>
+      <span class="menu-row-chord"></span>
+    </button>
+  </li>
+  <li>
+    <button role="menuitem" onclick={searchDrive}>
+      <Search size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span class="menu-row-label">Search this</span>
       <span class="menu-row-chord"></span>
     </button>
   </li>

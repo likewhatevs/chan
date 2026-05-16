@@ -5,7 +5,7 @@
   // then renders rows with expand/collapse, click-to-open, and a context
   // menu for create/rename/delete.
 
-  import { FilePlus, FolderPlus, Network, Pencil, Trash2 } from "lucide-svelte";
+  import { FilePlus, FolderPlus, Network, Pencil, Search, Trash2 } from "lucide-svelte";
   import { clampMenu } from "./menuClamp";
   import type { TreeEntry } from "../api/types";
   import { isEditableText } from "../state/fileTypes";
@@ -18,6 +18,8 @@
     loadTreeDir,
     openFsGraphForDirectory,
     openFsGraphForFile,
+    openSearchForDirectory,
+    openSearchForFile,
     persistTreeExpanded,
     tree,
     treeExpanded,
@@ -337,6 +339,12 @@
     menu = null;
     if (isDir) openFsGraphForDirectory(path);
     else openFsGraphForFile(path);
+  }
+
+  function searchThis(path: string, isDir: boolean): void {
+    menu = null;
+    if (isDir) openSearchForDirectory(path);
+    else openSearchForFile(path);
   }
 
   /// Move the selection by one row in the visible list. Wraps
@@ -689,6 +697,10 @@
     <button onclick={() => graphThis(menu!.path, menu!.isDir)}>
       <Network size={16} strokeWidth={1.75} aria-hidden="true" />
       <span>Graph this</span>
+    </button>
+    <button onclick={() => searchThis(menu!.path, menu!.isDir)}>
+      <Search size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span>Search this</span>
     </button>
     <button onclick={() => rename(menu!.path, menu!.isDir)}>
       <Pencil size={16} strokeWidth={1.75} aria-hidden="true" />

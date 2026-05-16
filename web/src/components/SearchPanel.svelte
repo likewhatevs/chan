@@ -92,6 +92,7 @@
   let queryToken = 0;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let hitsResizeObs: ResizeObserver | null = null;
+  let lastSearchedScopeId = "";
   const reportCache = new Map<string, ReportFileStats | null>();
 
   // Reset transient state when the panel reopens so a stale set
@@ -176,44 +177,64 @@
     scopeOptions.find((o) => o.id === searchPanel.scopeId) ?? null,
   );
 
-  /// Pinned to "drive" for now: the selector UI is live (it'll be
-  /// wired to actual scoped queries once /api/search/content takes
-  /// a scope param), but every open snaps back to the whole drive
-  /// so the result set stays predictable in the meantime.
+  /// If a saved/direct scope no longer resolves, snap back to the
+  /// whole drive. Direct file/folder scopes opened from the File
+  /// Browser are injected by `availableSearchScopes()` so they remain
+  /// valid even when the item is not open in a pane.
   $effect(() => {
     if (!searchPanel.open) return;
+    if (currentScope) return;
     untrack(() => {
       searchPanel.scopeId = "drive";
     });
   });
 
-  /// Predicate: does `path` belong to the active scope? Currently
-  /// short-circuits to true while the search overlay is pinned to
-  /// the whole drive (the selector UI is live but the filter is
-  /// disabled until /api/search/content takes a scope param). The
-  /// previous narrow-scope branches are kept below the early
-  /// return for the moment so reactivating per-kind filtering is a
-  /// one-line revert.
-  function pathInScope(_path: string): boolean {
-    return true;
-    /*
+  /// Changing the scope changes both the client-side row filter and
+  /// the server query limit. Re-run the async search path when the
+  /// panel is already open so direct File Browser "Search this"
+  /// actions do not inherit stale whole-drive results.
+  $effect(() => {
+    const scopeId = searchPanel.scopeId;
+    const open = searchPanel.open;
+    const scope = currentScope;
+    if (!open) {
+      lastSearchedScopeId = scopeId;
+      return;
+    }
+    if (!scope || scopeId === lastSearchedScopeId) return;
+    lastSearchedScopeId = scopeId;
+    untrack(() => {
+      if (searchPanel.query.trim()) {
+        scheduleSearch();
+      } else {
+        chunkHits = [];
+        languageHits = [];
+        active = 0;
+      }
+    });
+  });
+
+  /// Predicate: does `path` belong to the active scope? Content
+  /// search still asks the server drive-wide and filters returned
+  /// rows here; filename/report/tag rows are filtered locally from
+  /// the same predicate.
+  function pathInScope(path: string): boolean {
     const s = currentScope;
     if (!s) return true;
     if (s.kind === "drive" || s.kind === "global") return true;
-    if (s.kind === "file") return _path === s.path;
+    if (s.kind === "file") return path === s.path;
     if (s.kind === "dir") {
       if (!s.path) return true;
-      return _path === s.path || _path.startsWith(`${s.path}/`);
+      return path === s.path || path.startsWith(`${s.path}/`);
     }
     if (s.kind === "git_repo") {
       if (!s.root) return true;
-      return _path === s.root || _path.startsWith(`${s.root}/`);
+      return path === s.root || path.startsWith(`${s.root}/`);
     }
     if (s.kind === "group") {
-      return s.paths.includes(_path);
+      return s.paths.includes(path);
     }
     return true;
-    */
   }
 
   function scheduleSearch(): void {
@@ -225,9 +246,8 @@
       loading = false;
       return;
     }
-    // Search is pinned to the whole drive for now; the snappy
-    // 25-row cap is the right size for drive-wide queries.
-    const limit = 25;
+    const scoped = currentScope?.kind !== "drive" && currentScope?.kind !== "global";
+    const limit = scoped ? 100 : 25;
     queryToken += 1;
     const myToken = queryToken;
     loading = true;
@@ -492,6 +512,26 @@
     return out;
   });
 
+  const rowCounts = $derived.by(() => {
+    const counts = {
+      chunk: 0,
+      image: 0,
+      tag: 0,
+      contact: 0,
+      file: 0,
+      language: 0,
+    };
+    for (const row of rows) {
+      if (row.kind === "chunk") counts.chunk += 1;
+      else if (row.kind === "image") counts.image += 1;
+      else if (row.kind === "tag") counts.tag += 1;
+      else if (row.kind === "contact") counts.contact += 1;
+      else if (row.kind === "file") counts.file += 1;
+      else if (row.kind === "language_file") counts.language += 1;
+    }
+    return counts;
+  });
+
   /// Selection driving the inspector. Recomputed from the active
   /// row index so arrow keys keep the inspector in sync without an
   /// explicit click.
@@ -665,8 +705,9 @@
         <select
           class="scope-select"
           value={searchPanel.scopeId}
-          onchange={(e) =>
-            (searchPanel.scopeId = (e.currentTarget as HTMLSelectElement).value)}
+          onchange={(e) => {
+            searchPanel.scopeId = (e.currentTarget as HTMLSelectElement).value;
+          }}
           title="search scope"
         >
           {#each scopeOptions as opt (opt.id)}
@@ -816,11 +857,11 @@
         {:else if rows.length > 0}
           <span>
             {rows.length} hit{rows.length === 1 ? "" : "s"}
-            {#if tagRows.length + imageRows.length + contactRows.length + markdownFileRows.length + languageHits.length > 0}
-              ({chunkHits.length} doc · {imageRows.length} image · {tagRows.length} tag
-              {#if contactRows.length > 0} · {contactRows.length} contact{/if}
-              {#if markdownFileRows.length > 0} · {markdownFileRows.length} file{/if}
-              {#if languageHits.length > 0} · {languageHits.length} language{/if})
+            {#if rowCounts.tag + rowCounts.image + rowCounts.contact + rowCounts.file + rowCounts.language > 0}
+              ({rowCounts.chunk} doc · {rowCounts.image} image · {rowCounts.tag} tag
+              {#if rowCounts.contact > 0} · {rowCounts.contact} contact{/if}
+              {#if rowCounts.file > 0} · {rowCounts.file} file{/if}
+              {#if rowCounts.language > 0} · {rowCounts.language} language{/if})
             {/if}
           </span>
         {:else}
