@@ -1,0 +1,70 @@
+[package]
+name = "chan-llm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "LLM backends, prompts, and tool sandbox for chan-writer drives"
+
+[features]
+default = []
+# Enables the MCP server module and the `chan-llm-mcp` binary. Off
+# by default so library consumers (chan-server, native shells) don't
+# pull rmcp + its transitive deps unless they want the binary.
+mcp = ["dep:rmcp", "dep:schemars", "dep:base64"]
+# Exposes the `mock` backend module and a public benchmark entry
+# point for driving `LlmSession`'s orchestrator without a real
+# backend. Off by default so production consumers don't pull the
+# extra surface; the `end_to_end` bench enables it implicitly via
+# `required-features`.
+bench = []
+
+[dependencies]
+chan-drive = { path = "../chan-drive" }
+
+async-trait = { workspace = true }
+dirs = { workspace = true }
+once_cell = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+
+# `mcp` feature deps. rmcp's defaults already pull macros + server +
+# transport-async-rw + schemars, which is everything we need for a
+# stdio tool server. We also depend on schemars directly because the
+# `JsonSchema` derive lives in user code (the params structs).
+# base64 is used by `read_image` to encode binary image bytes for the
+# MCP `image` content type.
+base64 = { workspace = true, optional = true }
+rmcp = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lib]
+name = "chan_llm"
+crate-type = ["lib"]
+
+[[bench]]
+name = "end_to_end"
+harness = false
+required-features = ["bench"]
+
+# Standalone MCP server binary. Any MCP client (Claude Desktop,
+# Claude Code, Cursor, ...) can spawn this process to get
+# chan-drive-sandboxed read/write/list/search access to a chan
+# drive. `auto_apply_writes` defaults to false here; the MCP client
+# is expected to surface a confirmation UI before flipping the
+# `--auto-apply` flag on. Safer default than forcing it on, since a
+# hostile or buggy client otherwise gets through-without-prompt
+# write access the first time the user spawns the binary.
+[[bin]]
+name = "chan-llm-mcp"
+path = "src/bin/chan-llm-mcp.rs"
+required-features = ["mcp"]

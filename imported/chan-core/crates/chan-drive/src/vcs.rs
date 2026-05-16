@@ -1,0 +1,362 @@
+// VCS-parent detection: is the drive path inside a Git / Mercurial /
+// Subversion working tree?
+//
+// Used by `chan serve` to nudge users toward serving the repo root
+// instead of an arbitrary subdir. If the drive's notes live inside
+// `~/code/myproject/docs/notes`, the user almost always wants
+// `~/code/myproject` as the drive root so cross-file links, graph,
+// and search cover the whole project.
+//
+// Detection is a pure stat-walk; we never invoke `git`/`hg`/`svn`
+// binaries and never read repository contents. Stops at mount
+// boundaries, at `$HOME` (which is never inspected), and at the
+// filesystem root.
+
+use std::path::{Path, PathBuf};
+
+/// Which VCS produced the match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VcsKind {
+    Git,
+    Mercurial,
+    Subversion,
+}
+
+impl VcsKind {
+    /// Stable lowercase identifier for CLI error markers and
+    /// structured logs. Wire-format; do not translate or rename.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            VcsKind::Git => "git",
+            VcsKind::Mercurial => "hg",
+            VcsKind::Subversion => "svn",
+        }
+    }
+}
+
+/// A VCS working tree that contains the queried path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VcsParent {
+    pub kind: VcsKind,
+    /// Canonical path to the working-tree root (the directory that
+    /// holds `.git` / `.hg` / `.svn`).
+    pub repo_root: PathBuf,
+}
+
+/// Find the nearest VCS working tree strictly *above* `path`.
+///
+/// Returns `None` when no VCS marker is found, when the walk crosses
+/// a filesystem mount boundary, when it reaches `$HOME`, or when it
+/// reaches the filesystem root. The input path itself is NOT checked:
+/// if the user picks the repo root as the drive root, the function
+/// returns `None` so the caller can proceed silently.
+///
+/// Detection looks for, at each strict ancestor:
+///
+///   - `.git` (file OR directory; the file form covers worktrees and
+///     submodules whose `.git` is a pointer to a gitdir elsewhere),
+///   - `.hg/` directory (Mercurial),
+///   - `.svn/` directory (Subversion 1.7+ keeps it at the repo root).
+///
+/// `$HOME` is deliberately excluded so a dotfiles-managed-as-git
+/// home directory does not block every drive the user has.
+///
+/// Pure stat calls; never spawns external processes.
+pub fn detect_parent_vcs(path: &Path) -> Option<VcsParent> {
+    detect_parent_vcs_with_home(path, dirs::home_dir())
+}
+
+/// Test seam: the same algorithm as [`detect_parent_vcs`], but with
+/// an explicit `home` override so tests can drive the `$HOME` stop
+/// without touching the developer's real home directory.
+pub(crate) fn detect_parent_vcs_with_home(path: &Path, home: Option<PathBuf>) -> Option<VcsParent> {
+    let start = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let home_canon = home.and_then(|h| std::fs::canonicalize(&h).ok());
+    let start_dev = dev_of(&start);
+
+    // Skip the leaf: only inspect strict ancestors. If the leaf is
+    // itself a repo root, we want to return None so `chan serve`
+    // proceeds without prompting the user.
+    let mut iter = start.ancestors();
+    let _leaf = iter.next();
+
+    for dir in iter {
+        // Mount-boundary stop. If we have a `start_dev` and the
+        // ancestor lives on a different filesystem, don't cross it:
+        // a `.git` on the host won't be reachable from a drive
+        // sitting on a separate mount and suggesting it would just
+        // confuse the user.
+        if let (Some(a), Some(b)) = (start_dev, dev_of(dir)) {
+            if a != b {
+                return None;
+            }
+        }
+        // `$HOME` stop. Don't inspect home itself; a dotfiles-as-git
+        // setup is unrelated to drive-root selection.
+        if let Some(h) = &home_canon {
+            if dir == h {
+                return None;
+            }
+        }
+        if let Some(kind) = vcs_kind_at(dir) {
+            return Some(VcsParent {
+                kind,
+                repo_root: dir.to_path_buf(),
+            });
+        }
+    }
+    None
+}
+
+fn vcs_kind_at(dir: &Path) -> Option<VcsKind> {
+    if is_git_marker(&dir.join(".git")) {
+        return Some(VcsKind::Git);
+    }
+    if is_real_dir(&dir.join(".hg")) {
+        return Some(VcsKind::Mercurial);
+    }
+    if is_real_dir(&dir.join(".svn")) {
+        return Some(VcsKind::Subversion);
+    }
+    None
+}
+
+/// `.git` is a marker only when it is a real directory (regular
+/// repo) or a real regular file (worktree / submodule pointer
+/// whose contents are `gitdir: ...`). Symlinks, FIFOs, sockets,
+/// and devices are rejected: real Git never produces those at
+/// this path, and trusting them lets a tampered tree fool the
+/// suggestion. Matches the crate-wide "lstat, never stat, on user
+/// paths" invariant from CLAUDE.md.
+fn is_git_marker(p: &Path) -> bool {
+    match std::fs::symlink_metadata(p) {
+        Ok(md) => {
+            let ft = md.file_type();
+            ft.is_dir() || ft.is_file()
+        }
+        Err(_) => false,
+    }
+}
+
+/// `.hg` and `.svn` are markers only when they are real
+/// directories: anything else (symlink, special file) is treated
+/// as absent.
+fn is_real_dir(p: &Path) -> bool {
+    std::fs::symlink_metadata(p)
+        .map(|md| md.file_type().is_dir())
+        .unwrap_or(false)
+}
+
+#[cfg(unix)]
+fn dev_of(path: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    // lstat (`symlink_metadata`), not stat: if `canonicalize`
+    // failed at the top of `detect_parent_vcs_with_home`, we're
+    // walking the raw input, and an ancestor that is itself a
+    // symlink would otherwise return the target's `st_dev`,
+    // hiding a real mount-boundary crossing. After canonicalize
+    // succeeds the path has no in-path symlinks; lstat == stat
+    // for those, so this is also free in the common case.
+    std::fs::symlink_metadata(path).ok().map(|m| m.dev())
+}
+
+#[cfg(not(unix))]
+fn dev_of(_path: &Path) -> Option<u64> {
+    // No portable `st_dev` equivalent on Windows in stable std.
+    // Skip the mount-boundary check there; the home + FS-root
+    // stops still apply.
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn mkdir(p: &Path) {
+        std::fs::create_dir_all(p).unwrap();
+    }
+
+    fn canon(p: &Path) -> PathBuf {
+        std::fs::canonicalize(p).unwrap()
+    }
+
+    #[test]
+    fn none_when_no_vcs() {
+        let tmp = TempDir::new().unwrap();
+        let drive = tmp.path().join("notes");
+        mkdir(&drive);
+        assert!(detect_parent_vcs_with_home(&drive, None).is_none());
+    }
+
+    #[test]
+    fn detects_git_dir_at_ancestor() {
+        let tmp = TempDir::new().unwrap();
+        mkdir(&tmp.path().join(".git"));
+        let drive = tmp.path().join("docs/notes");
+        mkdir(&drive);
+        let got = detect_parent_vcs_with_home(&drive, None).unwrap();
+        assert_eq!(got.kind, VcsKind::Git);
+        assert_eq!(canon(&got.repo_root), canon(tmp.path()));
+    }
+
+    #[test]
+    fn detects_git_file_at_ancestor() {
+        // Submodule / worktree shape: `.git` is a regular file
+        // containing `gitdir: ...`, not a directory.
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join(".git"), b"gitdir: /elsewhere\n").unwrap();
+        let drive = tmp.path().join("docs");
+        mkdir(&drive);
+        let got = detect_parent_vcs_with_home(&drive, None).unwrap();
+        assert_eq!(got.kind, VcsKind::Git);
+    }
+
+    #[test]
+    fn detects_hg() {
+        let tmp = TempDir::new().unwrap();
+        mkdir(&tmp.path().join(".hg"));
+        let drive = tmp.path().join("docs");
+        mkdir(&drive);
+        let got = detect_parent_vcs_with_home(&drive, None).unwrap();
+        assert_eq!(got.kind, VcsKind::Mercurial);
+    }
+
+    #[test]
+    fn detects_svn() {
+        let tmp = TempDir::new().unwrap();
+        mkdir(&tmp.path().join(".svn"));
+        let drive = tmp.path().join("docs");
+        mkdir(&drive);
+        let got = detect_parent_vcs_with_home(&drive, None).unwrap();
+        assert_eq!(got.kind, VcsKind::Subversion);
+    }
+
+    #[test]
+    fn skips_leaf_when_path_is_repo_root() {
+        // When the drive root is the repo root itself, the function
+        // must return None: the caller is meant to proceed silently
+        // because there's no better parent to suggest.
+        let tmp = TempDir::new().unwrap();
+        mkdir(&tmp.path().join(".git"));
+        assert!(detect_parent_vcs_with_home(tmp.path(), None).is_none());
+    }
+
+    #[test]
+    fn home_stop_filters_dotfiles_as_git() {
+        // `.git` at a synthetic "home" must NOT be reported when the
+        // drive is a child of that home: dotfiles-managed-as-git in
+        // the user's home directory is common and unrelated to
+        // drive-root selection.
+        let tmp = TempDir::new().unwrap();
+        let fake_home = tmp.path().join("home");
+        mkdir(&fake_home);
+        mkdir(&fake_home.join(".git"));
+        let drive = fake_home.join("notes");
+        mkdir(&drive);
+        let got = detect_parent_vcs_with_home(&drive, Some(fake_home));
+        assert!(got.is_none(), "expected None, got {got:?}");
+    }
+
+    #[test]
+    fn finds_repo_below_home() {
+        // Standard case: clone under home, drive is a subdir of the
+        // clone. We want the clone reported as the repo root.
+        let tmp = TempDir::new().unwrap();
+        let fake_home = tmp.path().join("home");
+        let clone = fake_home.join("code/myproject");
+        mkdir(&clone.join(".git"));
+        let drive = clone.join("docs/notes");
+        mkdir(&drive);
+        let got = detect_parent_vcs_with_home(&drive, Some(fake_home)).unwrap();
+        assert_eq!(got.kind, VcsKind::Git);
+        assert_eq!(canon(&got.repo_root), canon(&clone));
+    }
+
+    #[test]
+    fn handles_nonexistent_leaf() {
+        // `chan serve` may pass a path that doesn't exist yet
+        // (auto-creation happens later in cmd_serve). Detection
+        // should still walk the existing ancestors.
+        let tmp = TempDir::new().unwrap();
+        mkdir(&tmp.path().join(".git"));
+        let nonexistent = tmp.path().join("not-yet/sub");
+        let got = detect_parent_vcs_with_home(&nonexistent, None).unwrap();
+        assert_eq!(got.kind, VcsKind::Git);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_git_as_symlink_to_dir() {
+        // A symlinked `.git` is not a marker we trust: real Git
+        // never produces this, and following it would let a planted
+        // symlink (to a real repo elsewhere) misroute the
+        // suggestion. Consistent with fs_ops's symlink policy.
+        use std::os::unix::fs::symlink;
+        let tmp = TempDir::new().unwrap();
+        let real_git = tmp.path().join("real-git");
+        mkdir(&real_git);
+        let parent = tmp.path().join("parent");
+        mkdir(&parent);
+        symlink(&real_git, parent.join(".git")).unwrap();
+        let drive = parent.join("docs");
+        mkdir(&drive);
+        let got = detect_parent_vcs_with_home(&drive, None);
+        assert!(got.is_none(), "expected None, got {got:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_hg_as_symlink_to_dir() {
+        use std::os::unix::fs::symlink;
+        let tmp = TempDir::new().unwrap();
+        let real_hg = tmp.path().join("real-hg");
+        mkdir(&real_hg);
+        let parent = tmp.path().join("parent");
+        mkdir(&parent);
+        symlink(&real_hg, parent.join(".hg")).unwrap();
+        let drive = parent.join("docs");
+        mkdir(&drive);
+        let got = detect_parent_vcs_with_home(&drive, None);
+        assert!(got.is_none(), "expected None, got {got:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_git_as_fifo() {
+        // A FIFO at `.git` would make plain `exists()` say "yes" and
+        // misroute the suggestion. The lstat + filetype gate keeps
+        // detection limited to real dirs / real regular files.
+        use std::ffi::CString;
+        let tmp = TempDir::new().unwrap();
+        let parent = tmp.path().join("parent");
+        mkdir(&parent);
+        let fifo = parent.join(".git");
+        let cpath = CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        // mkfifo(3): create a named pipe at `cpath` mode 0600.
+        // SAFETY: cpath is a valid NUL-terminated path; no aliasing.
+        let rc = unsafe { libc_mkfifo(cpath.as_ptr(), 0o600) };
+        assert_eq!(rc, 0, "mkfifo failed: errno may apply");
+        let drive = parent.join("docs");
+        mkdir(&drive);
+        let got = detect_parent_vcs_with_home(&drive, None);
+        assert!(got.is_none(), "expected None, got {got:?}");
+    }
+
+    #[cfg(unix)]
+    extern "C" {
+        // Avoid pulling the `libc` crate just for one syscall in
+        // tests; declare the prototype locally.
+        #[link_name = "mkfifo"]
+        fn libc_mkfifo(path: *const std::ffi::c_char, mode: u32) -> i32;
+    }
+
+    #[test]
+    fn vcs_kind_str_is_stable() {
+        // The CLI error marker format pins these strings as wire
+        // format; renaming the enum must not change them.
+        assert_eq!(VcsKind::Git.as_str(), "git");
+        assert_eq!(VcsKind::Mercurial.as_str(), "hg");
+        assert_eq!(VcsKind::Subversion.as_str(), "svn");
+    }
+}

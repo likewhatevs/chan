@@ -1,0 +1,19 @@
+[package]
+name = "chan-report"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Per-file language/SLOC/COCOMO report with incremental updates."
+
+[dependencies]
+chrono = { workspace = true }
+ignore = "0.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokei = { version = "12", default-features = false }
+
+[dev-dependencies]
+tempfile = { workspace = true }

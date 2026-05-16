@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Install the repo's git hooks via symlink so updates land
+# automatically. Re-runnable; `ln -sf` overwrites a stale link.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+mkdir -p .git/hooks
+ln -sf ../../scripts/pre-push .git/hooks/pre-push
+chmod +x scripts/pre-push scripts/install-hooks
+
+echo "Installed .git/hooks/pre-push -> scripts/pre-push"
