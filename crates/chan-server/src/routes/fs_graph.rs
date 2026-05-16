@@ -90,7 +90,7 @@ impl FsGraphScope {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct FsGraphResponse {
     /// Drive root absolute path, identical to what `/api/drive`
     /// reports. Included so the frontend can render breadcrumbs
@@ -703,9 +703,11 @@ impl FsGraphWalker {
 
         match (&self.root_canon, canon_target) {
             (Some(root_canon), Some(t)) => t.starts_with(root_canon),
-            // Fall back to a lexical prefix check; better to misclassify
-            // a cloud-mounted drive than to refuse all symlinks.
-            _ => target_abs.starts_with(&self.root),
+            // Fall back to a conservative lexical check. This keeps
+            // missing in-drive targets visible as ghosts when the root
+            // cannot be canonicalized, while refusing paths that only
+            // appear under the root because they contain `..`.
+            _ => lexical_path_inside_root(target_abs, &self.root),
         }
     }
 
@@ -719,6 +721,15 @@ impl FsGraphWalker {
         }
         target_abs.strip_prefix(&self.root).ok().map(posix_rel)
     }
+}
+
+fn lexical_path_inside_root(path: &Path, root: &Path) -> bool {
+    let Ok(stripped) = path.strip_prefix(root) else {
+        return false;
+    };
+    stripped
+        .components()
+        .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
 }
 
 fn posix_rel(stripped: &Path) -> String {
@@ -792,6 +803,20 @@ mod tests {
         resp.edges
             .iter()
             .any(|e| e.source == src && e.target == dst && e.kind == kind)
+    }
+
+    #[test]
+    fn lexical_fallback_rejects_parent_escape() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("missing-root");
+        assert!(lexical_path_inside_root(
+            &root.join("notes/missing.md"),
+            &root
+        ));
+        assert!(!lexical_path_inside_root(
+            &root.join("../outside.md"),
+            &root
+        ));
     }
 
     #[test]
@@ -978,5 +1003,79 @@ mod tests {
         assert_eq!(normalize_rel("."), "");
         assert_eq!(normalize_rel("/notes/a.md"), "notes/a.md");
         assert_eq!(normalize_rel("notes/./a.md"), "notes/a.md");
+    }
+
+    /// Drive-bootstrapped tests for the public `build_fs_graph` entry
+    /// point — the CLI's `chan graph --scope file|folder` now calls
+    /// this directly, so its rejection contract needs explicit
+    /// coverage in addition to the walker-only tests above.
+    fn open_drive() -> (TempDir, TempDir, std::sync::Arc<chan_drive::Drive>) {
+        let cfg = TempDir::new().unwrap();
+        let drive_root = TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_root.path(), Some("fs-graph-test".into()))
+            .unwrap();
+        let drive = lib.open_drive(drive_root.path()).unwrap();
+        drive.write_text("notes/a.md", "# a\n").unwrap();
+        (cfg, drive_root, drive)
+    }
+
+    #[test]
+    fn build_fs_graph_rejects_escape_path() {
+        let (_cfg, _root, drive) = open_drive();
+        let err = build_fs_graph(&drive, FsGraphScope::Folder, "../etc", 1).unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(
+            err.message.contains("escape"),
+            "expected escape rejection, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn build_fs_graph_rejects_missing_path() {
+        let (_cfg, _root, drive) = open_drive();
+        let err =
+            build_fs_graph(&drive, FsGraphScope::File, "notes/no-such-file.md", 1).unwrap_err();
+        assert_eq!(err.status, StatusCode::NOT_FOUND);
+        assert!(
+            err.message.contains("no such path"),
+            "expected missing-path rejection, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn build_fs_graph_rejects_folder_scope_on_file() {
+        let (_cfg, _root, drive) = open_drive();
+        let err = build_fs_graph(&drive, FsGraphScope::Folder, "notes/a.md", 1).unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(
+            err.message.contains("requires a directory"),
+            "expected directory-required rejection, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn build_fs_graph_root_scope_returns_drive_root() {
+        let (_cfg, _root, drive) = open_drive();
+        let resp = build_fs_graph(&drive, FsGraphScope::Folder, "", 1).unwrap();
+        assert_eq!(resp.scope, "folder");
+        assert_eq!(resp.path, "");
+        // Drive root is keyed by the empty string; depth 1 lists the
+        // top-level `notes/` directory.
+        assert!(
+            resp.nodes
+                .iter()
+                .any(|n| n.id.is_empty() && n.kind == "folder"),
+            "drive root node missing from response"
+        );
+        assert!(
+            resp.nodes
+                .iter()
+                .any(|n| n.id == "notes" && n.kind == "folder"),
+            "notes/ should be a direct child at depth 1"
+        );
     }
 }

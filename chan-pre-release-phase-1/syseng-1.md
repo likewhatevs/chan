@@ -452,7 +452,7 @@ touch the host registry.
 | `chan config set editor.doesnotexist=foo` (unknown key) | PASS — exit 1, stderr names the bad key + points at `chan config get`. |
 | `chan graph /tmp/chan-syseng-fixture --scope file --target notes/no-such-file.md` (missing target) | FIXED — now exits 1 with a stat error instead of emitting a synthetic node. |
 | `chan graph /tmp/chan-syseng-fixture --scope file --target ../etc/hosts` (escape attempt) | FIXED — now exits 1 through the drive path-safety check instead of silently accepting the target. |
-| `chan graph /tmp/chan-syseng-fixture --scope folder --target notes --depth 1 --json` | INFO — returns empty `nodes`/`edges`. `chan graph` queries the **content graph**, not the new `/api/fs-graph` route. Matches backend-1's note: "Current CLI graph is over the existing content/link graph index." The roadmap's "graph queries by scope" wrt the filesystem graph is **not wired into the CLI yet**. |
+| `chan graph /tmp/chan-syseng-fixture --scope folder --target notes --depth 1 --json` | SUPERSEDED — this initially returned an empty content graph; later backend reconciliation switched `--scope file|folder` to the filesystem graph builder. |
 
 ### Runtime dependency audit
 
@@ -539,11 +539,9 @@ Result:
 
 ### Residual risks (non-blocking)
 
-1. `target_is_inside_drive` falls back to a lexical prefix check
-   when `canonicalize` fails (rare, e.g. cloud-mounted submounts);
-   may misclassify outside as inside in that edge case. Already
-   in rustacean-2's residual risks; not reproducible on APFS or
-   tmpfs in normal use.
+None remaining from this pass. The previous `target_is_inside_drive`
+fallback risk was tightened with a conservative lexical helper that
+rejects `..` escape components when canonicalization is unavailable.
 
 CLI graph residuals from the live pass were fixed in the current tree:
 
@@ -564,8 +562,8 @@ bar.
 
 ```
 cargo build -p chan                       # ok
-cargo test -p chan-server                 # 85 passed
-cargo test -p chan                        # 43 passed
+cargo test -p chan-server                 # 89 passed
+cargo test -p chan                        # 46 passed
 cargo clippy --all-targets -- -D warnings # clean
 cargo fmt --all -- --check                # clean
 ```

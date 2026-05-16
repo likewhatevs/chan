@@ -44,6 +44,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chan_drive::{EdgeKind, Library, SearchOpts, WalkFilter};
+use chan_llm::{BackendKind, LlmConfig};
 use chan_server::{
     build_fs_graph, EditorPrefs, EditorTheme, FsGraphResponse, FsGraphScope as ServerFsGraphScope,
     LineSpacing, ServeConfig, ServerConfig, ThemeChoice,
@@ -287,8 +288,7 @@ enum Command {
     },
     /// Read or write settings persisted outside the drive. Keys use
     /// the same namespaces as the web Settings overlay where possible
-    /// (`editor.*`, `server.*`). Assistant settings are not wired into
-    /// this command yet.
+    /// (`editor.*`, `server.*`, `assistant.*`).
     Config {
         #[command(subcommand)]
         action: ConfigAction,
@@ -1271,6 +1271,7 @@ struct StatusLanguage {
 struct ConfigOutput {
     editor: EditorPrefs,
     server: ServerConfig,
+    assistant: LlmConfig,
 }
 
 fn cmd_graph(
@@ -1570,9 +1571,14 @@ fn cmd_config(action: ConfigAction) -> Result<()> {
         ConfigAction::Get { key, json } => {
             let editor = EditorPrefs::load().context("loading editor preferences")?;
             let server = ServerConfig::load().context("loading server config")?;
+            let assistant = LlmConfig::load().context("loading assistant config")?;
             match key.as_deref() {
                 None | Some("") => {
-                    let output = ConfigOutput { editor, server };
+                    let output = ConfigOutput {
+                        editor,
+                        server,
+                        assistant,
+                    };
                     if json {
                         println!("{}", serde_json::to_string_pretty(&output)?);
                     } else {
@@ -1580,7 +1586,7 @@ fn cmd_config(action: ConfigAction) -> Result<()> {
                     }
                 }
                 Some(k) => {
-                    let value = read_config_key(&editor, &server, k)?;
+                    let value = read_config_key(&editor, &server, &assistant, k)?;
                     if json {
                         println!("{}", serde_json::to_string(&value)?);
                     } else {
@@ -1596,6 +1602,14 @@ fn cmd_config(action: ConfigAction) -> Result<()> {
                 let mut cfg = ServerConfig::load().context("loading server config")?;
                 write_server_config_key(&mut cfg, &key, &raw_value)?;
                 cfg.save().context("saving server config")?;
+            } else if key == "assistant.answers_dir" {
+                let mut cfg = ServerConfig::load().context("loading server config")?;
+                write_server_config_key(&mut cfg, "server.answers_dir", &raw_value)?;
+                cfg.save().context("saving server config")?;
+            } else if key.starts_with("assistant.") {
+                let mut cfg = LlmConfig::load().context("loading assistant config")?;
+                write_assistant_config_key(&mut cfg, &key, &raw_value)?;
+                cfg.save().context("saving assistant config")?;
             } else {
                 let mut prefs = EditorPrefs::load().context("loading editor preferences")?;
                 write_pref_key(&mut prefs, &key, &raw_value)?;
@@ -1634,6 +1648,7 @@ fn split_assignment(key: &str, value: Option<&str>) -> Result<(String, String)> 
 fn read_config_key(
     editor: &EditorPrefs,
     server: &ServerConfig,
+    assistant: &LlmConfig,
     key: &str,
 ) -> Result<serde_json::Value> {
     match key {
@@ -1649,6 +1664,34 @@ fn read_config_key(
         "editor.pane_widths.assistant" => Ok(serde_json::json!(editor.pane_widths.assistant)),
         "server.attachments_dir" => Ok(serde_json::json!(server.attachments_dir.clone())),
         "server.answers_dir" => Ok(serde_json::json!(server.answers_dir.clone())),
+        "assistant.effective_enabled" => {
+            Ok(serde_json::json!(assistant.active_backend().is_some()))
+        }
+        "assistant.default_backend" => {
+            Ok(serde_json::json!(assistant.backend.map(backend_kind_label)))
+        }
+        "assistant.answers_dir" => Ok(serde_json::json!(server.answers_dir.clone())),
+        "assistant.claude_cli.enabled" => Ok(serde_json::json!(assistant.enabled.claude_cli)),
+        "assistant.gemini_cli.enabled" => Ok(serde_json::json!(assistant.enabled.gemini_cli)),
+        "assistant.codex_cli.enabled" => Ok(serde_json::json!(assistant.enabled.codex_cli)),
+        "assistant.claude_cli.model" => Ok(serde_json::json!(assistant.models.claude_cli.clone())),
+        "assistant.gemini_cli.model" => Ok(serde_json::json!(assistant.models.gemini_cli.clone())),
+        "assistant.codex_cli.model" => Ok(serde_json::json!(assistant.models.codex_cli.clone())),
+        "assistant.claude_cli.cmd_override" => Ok(serde_json::json!(assistant
+            .claude_cli
+            .cmd
+            .as_ref()
+            .and_then(|cmd| cmd.first().cloned()))),
+        "assistant.gemini_cli.cmd_override" => Ok(serde_json::json!(assistant
+            .gemini_cli
+            .cmd
+            .as_ref()
+            .and_then(|cmd| cmd.first().cloned()))),
+        "assistant.codex_cli.cmd_override" => Ok(serde_json::json!(assistant
+            .codex_cli
+            .cmd
+            .as_ref()
+            .and_then(|cmd| cmd.first().cloned()))),
         _ => Err(anyhow::anyhow!(
             "unknown key `{key}`; try `chan config get` to list current values"
         )),
@@ -1710,6 +1753,90 @@ fn write_server_config_key(cfg: &mut ServerConfig, key: &str, value: &str) -> Re
         }
     }
     Ok(())
+}
+
+fn write_assistant_config_key(cfg: &mut LlmConfig, key: &str, value: &str) -> Result<()> {
+    match key {
+        "assistant.default_backend" => {
+            cfg.backend = parse_optional_backend(value)?;
+        }
+        "assistant.claude_cli.enabled" => {
+            cfg.enabled.claude_cli = parse_bool(key, value)?;
+        }
+        "assistant.gemini_cli.enabled" => {
+            cfg.enabled.gemini_cli = parse_bool(key, value)?;
+        }
+        "assistant.codex_cli.enabled" => {
+            cfg.enabled.codex_cli = parse_bool(key, value)?;
+        }
+        "assistant.claude_cli.model" => {
+            cfg.models.claude_cli = parse_optional_string(value);
+        }
+        "assistant.gemini_cli.model" => {
+            cfg.models.gemini_cli = parse_optional_string(value);
+        }
+        "assistant.codex_cli.model" => {
+            cfg.models.codex_cli = parse_optional_string(value);
+        }
+        "assistant.claude_cli.cmd_override" => {
+            cfg.claude_cli.cmd = parse_optional_cmd(value);
+        }
+        "assistant.gemini_cli.cmd_override" => {
+            cfg.gemini_cli.cmd = parse_optional_cmd(value);
+        }
+        "assistant.codex_cli.cmd_override" => {
+            cfg.codex_cli.cmd = parse_optional_cmd(value);
+        }
+        "assistant.effective_enabled" => {
+            anyhow::bail!(
+                "`assistant.effective_enabled` is read-only; set assistant.default_backend and assistant.<backend>.enabled"
+            );
+        }
+        "assistant.answers_dir" => {
+            anyhow::bail!("assistant.answers_dir is stored as server.answers_dir");
+        }
+        _ => {
+            anyhow::bail!("unknown key `{key}`; try `chan config get` to list current values");
+        }
+    }
+    Ok(())
+}
+
+fn parse_optional_backend(value: &str) -> Result<Option<BackendKind>> {
+    match value {
+        "none" | "null" | "off" => Ok(None),
+        "claude_cli" => Ok(Some(BackendKind::ClaudeCli)),
+        "gemini_cli" => Ok(Some(BackendKind::GeminiCli)),
+        "codex_cli" => Ok(Some(BackendKind::CodexCli)),
+        _ => anyhow::bail!("expected claude_cli|gemini_cli|codex_cli|none, got `{value}`"),
+    }
+}
+
+fn backend_kind_label(kind: BackendKind) -> &'static str {
+    match kind {
+        BackendKind::ClaudeCli => "claude_cli",
+        BackendKind::GeminiCli => "gemini_cli",
+        BackendKind::CodexCli => "codex_cli",
+    }
+}
+
+fn parse_bool(key: &str, value: &str) -> Result<bool> {
+    match value {
+        "true" | "1" | "yes" | "on" => Ok(true),
+        "false" | "0" | "no" | "off" => Ok(false),
+        _ => anyhow::bail!("expected boolean for {key}, got `{value}`"),
+    }
+}
+
+fn parse_optional_string(value: &str) -> Option<String> {
+    match value {
+        "none" | "null" | "default" => None,
+        _ => Some(value.to_owned()),
+    }
+}
+
+fn parse_optional_cmd(value: &str) -> Option<Vec<String>> {
+    parse_optional_string(value).map(|cmd| vec![cmd])
 }
 
 fn parse_theme_choice(value: &str) -> Result<ThemeChoice> {
@@ -2082,7 +2209,8 @@ mod tests {
         write_pref_key(&mut prefs, "editor.theme", "dark").unwrap();
         assert_eq!(prefs.theme, ThemeChoice::Dark);
         let server = ServerConfig::default();
-        let v = read_config_key(&prefs, &server, "editor.theme").unwrap();
+        let assistant = LlmConfig::default();
+        let v = read_config_key(&prefs, &server, &assistant, "editor.theme").unwrap();
         assert_eq!(v, serde_json::json!("dark"));
     }
 
@@ -2092,7 +2220,8 @@ mod tests {
         write_pref_key(&mut prefs, "editor.pane_widths.search", "320").unwrap();
         assert_eq!(prefs.pane_widths.search, 320);
         let server = ServerConfig::default();
-        let v = read_config_key(&prefs, &server, "editor.pane_widths.search").unwrap();
+        let assistant = LlmConfig::default();
+        let v = read_config_key(&prefs, &server, &assistant, "editor.pane_widths.search").unwrap();
         assert_eq!(v, serde_json::json!(320));
     }
 
@@ -2104,14 +2233,93 @@ mod tests {
         write_server_config_key(&mut server, "server.answers_dir", "qa").unwrap();
         assert_eq!(server.attachments_dir, "media/2026");
         assert_eq!(server.answers_dir, "qa");
+        let assistant = LlmConfig::default();
         assert_eq!(
-            read_config_key(&editor, &server, "server.attachments_dir").unwrap(),
+            read_config_key(&editor, &server, &assistant, "server.attachments_dir").unwrap(),
             serde_json::json!("media/2026")
         );
         assert_eq!(
-            read_config_key(&editor, &server, "server.answers_dir").unwrap(),
+            read_config_key(&editor, &server, &assistant, "server.answers_dir").unwrap(),
             serde_json::json!("qa")
         );
+    }
+
+    #[test]
+    fn config_assistant_keys_round_trip() {
+        let editor = EditorPrefs::default();
+        let server = ServerConfig {
+            answers_dir: "qa".into(),
+            ..Default::default()
+        };
+        let mut assistant = LlmConfig::default();
+        write_assistant_config_key(&mut assistant, "assistant.default_backend", "claude_cli")
+            .unwrap();
+        write_assistant_config_key(&mut assistant, "assistant.claude_cli.enabled", "on").unwrap();
+        write_assistant_config_key(&mut assistant, "assistant.claude_cli.model", "opus").unwrap();
+        write_assistant_config_key(
+            &mut assistant,
+            "assistant.claude_cli.cmd_override",
+            "/opt/bin/claude",
+        )
+        .unwrap();
+
+        assert_eq!(assistant.backend, Some(BackendKind::ClaudeCli));
+        assert_eq!(assistant.active_backend(), Some(BackendKind::ClaudeCli));
+        assert_eq!(assistant.models.claude_cli.as_deref(), Some("opus"));
+        assert_eq!(
+            assistant.claude_cli.cmd.as_deref(),
+            Some([String::from("/opt/bin/claude")].as_slice())
+        );
+        assert_eq!(
+            read_config_key(&editor, &server, &assistant, "assistant.default_backend").unwrap(),
+            serde_json::json!("claude_cli")
+        );
+        assert_eq!(
+            read_config_key(&editor, &server, &assistant, "assistant.effective_enabled").unwrap(),
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            read_config_key(&editor, &server, &assistant, "assistant.answers_dir").unwrap(),
+            serde_json::json!("qa")
+        );
+    }
+
+    #[test]
+    fn config_assistant_keys_clear_optional_values() {
+        let mut assistant = LlmConfig::default();
+        write_assistant_config_key(&mut assistant, "assistant.default_backend", "codex_cli")
+            .unwrap();
+        write_assistant_config_key(&mut assistant, "assistant.codex_cli.model", "gpt-x").unwrap();
+        write_assistant_config_key(&mut assistant, "assistant.codex_cli.cmd_override", "codex")
+            .unwrap();
+
+        write_assistant_config_key(&mut assistant, "assistant.default_backend", "none").unwrap();
+        write_assistant_config_key(&mut assistant, "assistant.codex_cli.model", "default").unwrap();
+        write_assistant_config_key(&mut assistant, "assistant.codex_cli.cmd_override", "none")
+            .unwrap();
+
+        assert_eq!(assistant.backend, None);
+        assert_eq!(assistant.models.codex_cli, None);
+        assert_eq!(assistant.codex_cli.cmd, None);
+    }
+
+    #[test]
+    fn config_assistant_rejects_read_only_and_bad_values() {
+        let mut assistant = LlmConfig::default();
+        let err = write_assistant_config_key(&mut assistant, "assistant.effective_enabled", "true")
+            .unwrap_err();
+        assert!(err.to_string().contains("read-only"));
+
+        let err = write_assistant_config_key(&mut assistant, "assistant.default_backend", "ollama")
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("claude_cli|gemini_cli|codex_cli|none"));
+
+        let err =
+            write_assistant_config_key(&mut assistant, "assistant.codex_cli.enabled", "maybe")
+                .unwrap_err();
+        assert!(err.to_string().contains("expected boolean"));
     }
 
     #[test]
@@ -2143,7 +2351,8 @@ mod tests {
     fn config_unknown_key_is_rejected() {
         let prefs = EditorPrefs::default();
         let server = ServerConfig::default();
-        let err = read_config_key(&prefs, &server, "editor.nope").unwrap_err();
+        let assistant = LlmConfig::default();
+        let err = read_config_key(&prefs, &server, &assistant, "editor.nope").unwrap_err();
         assert!(err.to_string().contains("unknown key"));
 
         let mut prefs = EditorPrefs::default();
@@ -2152,6 +2361,10 @@ mod tests {
 
         let mut server = ServerConfig::default();
         let err = write_server_config_key(&mut server, "server.nope", "x").unwrap_err();
+        assert!(err.to_string().contains("unknown key"));
+
+        let mut assistant = LlmConfig::default();
+        let err = write_assistant_config_key(&mut assistant, "assistant.nope", "x").unwrap_err();
         assert!(err.to_string().contains("unknown key"));
     }
 

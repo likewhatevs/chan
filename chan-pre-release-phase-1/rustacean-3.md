@@ -79,11 +79,12 @@ One status cleanup was also applied:
 
 ### New: `chan config get|set`
 
-`chan config` reads and writes the editor preferences at
-`<config>/chan/preferences.toml`. Writes route through
-`chan_server::EditorPrefs::save` so the atomic-write + fsync-parent
-contract from `crate::store::save_toml` applies (no manual tempfile
-+ rename in the CLI). Keys covered today:
+`chan config` reads and writes editor preferences, server path settings,
+and assistant backend settings. Editor writes route through
+`chan_server::EditorPrefs::save`; server writes through
+`chan_server::ServerConfig::save`; assistant writes through
+`chan_llm::LlmConfig::save`, keeping each namespace on its existing
+atomic-write path. Keys covered today:
 
 ```
 editor.theme               system|light|dark
@@ -96,12 +97,17 @@ editor.pane_widths.browser     u32
 editor.pane_widths.search      u32
 editor.pane_widths.outline     u32
 editor.pane_widths.assistant   u32
+server.attachments_dir         string
+server.answers_dir             string
+assistant.effective_enabled    bool (read-only)
+assistant.default_backend      claude_cli|gemini_cli|codex_cli|none
+assistant.answers_dir          alias of server.answers_dir
+assistant.{claude_cli|gemini_cli|codex_cli}.enabled       bool
+assistant.{claude_cli|gemini_cli|codex_cli}.model         string|default
+assistant.{claude_cli|gemini_cli|codex_cli}.cmd_override  string|none
 ```
 
-The `assistant` and `server` namespaces are deliberately not in this
-slice. `backend-1.md` flagged them as needing a separate compat pass
-because the keys span chan-llm's `LlmConfig`, chan-server's
-`ServerConfig`, and the chan-drive registry; see follow-ups below.
+Registry-backed drive settings are deliberately not in this slice.
 
 ### Syntax
 
@@ -123,10 +129,12 @@ Refusals (non-zero exit, stderr message, NO partial config write):
 - unknown key: `chan config get editor.bogus` -> `unknown key ...`
 - bad value: `chan config set editor.theme=neon` -> `expected system|light|dark, got neon`
 - bad number: `chan config set editor.pane_widths.search=-1` -> `expected non-negative integer`
+- read-only assistant state: `chan config set assistant.effective_enabled=true`
+  -> `read-only`
 
 ### Files changed
 
-- `crates/chan/src/main.rs` (cleanups + Config enum + cmd_config + helpers + 9 tests)
+- `crates/chan/src/main.rs` (cleanups + Config enum + cmd_config + helpers + 12 tests)
 - `crates/chan/Cargo.toml` (add `toml` dep for the TOML dump path)
 - `crates/chan-server/src/indexer.rs` (rustacean-1: removed
   contacts_need_email_backfill consumer; was already in main.rs's
@@ -138,8 +146,8 @@ Refusals (non-zero exit, stderr message, NO partial config write):
 cargo fmt --all -- --check                # clean
 cargo build -p chan                       # ok
 cargo clippy --all-targets -- -D warnings # clean
-cargo test -p chan                        # 43 passed
-cargo test -p chan-server                 # 85 passed (covers fs-graph
+cargo test -p chan                        # 46 passed
+cargo test -p chan-server                 # 89 passed (covers fs-graph
                                             and EditorPrefs paths)
 target/debug/chan config get              # dumps TOML preferences
 target/debug/chan config get editor.theme # prints `system`
@@ -162,10 +170,9 @@ and pass without warnings.
 
 ### Residual risks / follow-ups
 
-- Assistant settings and the broader server settings namespace are not
-  fully covered. File as follow-up after Phase 1 ships; needs a unified
-  key schema that matches the Settings overlay's full set without
-  duplicating logic across three TOML files.
+- Registry-backed settings are not exposed through `chan config` yet.
+  File as follow-up if the Settings overlay grows a stable key schema
+  for drive registry values.
 - syseng-1's hardening probe for `chan config set editor.theme=`
   expects non-zero exit + no partial write. Verified manually in
   this session; syseng can rerun against the fixture.

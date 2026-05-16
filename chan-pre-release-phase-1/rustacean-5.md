@@ -70,9 +70,6 @@ cargo test -p chan                        # 43 passed (39 prior + 4 new)
 
 ## Residual / out of scope
 
-- syseng residual 3 (`chan graph` does not query the new
-  `/api/fs-graph` route for filesystem-graph queries) is a feature
-  add, not a bug, and stays open as a follow-up to webdev-1's
-  decision on whether to consume `/api/fs-graph` at all. If the
-  decision is yes, the CLI can mirror with a `--fs-graph` flag in
-  a future phase.
+- None for the CLI graph validation lock-in. The later backend
+  reconciliation switched `chan graph --scope file|folder` to the
+  filesystem graph builder, so syseng residual 3 is closed too.

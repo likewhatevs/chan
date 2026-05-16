@@ -136,6 +136,11 @@
     contextOptions.find((o) => o.id === assistantOverlay.contextId) ?? null,
   );
   const visible = $derived(assistantOverlay.open);
+  const currentStreamActive = $derived(
+    assistantStream.sessionId !== null &&
+      currentContext !== null &&
+      assistantStream.contextId === currentContext.id,
+  );
 
   /// Snap to a sensible context when the overlay opens with an
   /// invalid contextId (saved file path closed, group key no
@@ -1916,7 +1921,7 @@
     <div
       class="assistant-body"
       class:capped={assistantPromptWidth.ratio < 1}
-      class:empty-chat={turns.length === 0}
+      class:empty-chat={turns.length === 0 && !currentStreamActive}
       class:prompt-filled={promptFilled}
     >
 
@@ -2205,7 +2210,7 @@
             </div>
           {/if}
         {/each}
-        {#if assistantStream.sessionId !== null && currentContext && assistantStream.contextId === currentContext.id}
+        {#if currentStreamActive}
           <!-- In-flight assistant turn. Render gate keyed off the
                GLOBAL stream (not the local `loading` flag) so a
                user who closed the overlay mid-request via the

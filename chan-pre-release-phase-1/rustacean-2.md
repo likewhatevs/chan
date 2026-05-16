@@ -243,10 +243,11 @@ cargo test -p chan-server                 # 78 passed (67 prior + 11 new)
   the walker into chan-core, keep the lstat-only contract and the
   visited-`(dev, ino)` set.
 - Outside-drive symlink classification depends on `canonicalize`
-  matching the canonical drive root. On filesystems where the
-  canonical root cannot be computed (rare), the helper falls back
-  to a lexical prefix check that may misclassify a cloud-mounted
-  sub-mount as in-drive. Documented in `target_is_inside_drive`.
+  matching the canonical drive root when available. The fallback is
+  now conservative: it only accepts clean lexical descendants of the
+  drive root and rejects `..` escape components, so missing in-drive
+  targets still show as ghosts without treating `root/../outside` as
+  in-drive.
 - The `MAX_NODES=10_000` cap is per-response. If a user expects a
   dashboard view of a large vault, they need to narrow the scope
   (folder + path filter) rather than expecting the whole tree.

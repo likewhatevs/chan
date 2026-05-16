@@ -45,14 +45,6 @@ Manual `target/debug/chan config {get|set}` probes documented in
 
 ## What still needs the architect
 
-- Decide whether to expand `chan config` to cover the assistant /
-  server namespaces in Phase 1 or punt to a follow-up phase.
-  rustacean's recommendation: punt; the keys span three TOML files
-  and a unified schema needs its own design pass. NB the architect
-  already extended my work to cover `server.*` keys during the
-  verification pass (see `server.attachments_dir` /
-  `server.answers_dir` in `main.rs` and the 39-test count); the
-  assistant namespace is still open.
 - Decide whether to commit the rustacean tasks individually or
   bundle them. The four changes are independent at the file level
   but rustacean-3 depends on rustacean-1's status-field removal,

@@ -16,8 +16,8 @@ Those were the rustacean-3 totals. With rustacean-4 and
 rustacean-5 landed (still REVIEW, uncommitted):
 
 ```
-cargo test -p chan-server                 # 85 passed
-cargo test -p chan                        # 43 passed
+cargo test -p chan-server                 # 89 passed
+cargo test -p chan                        # 46 passed
 cargo clippy --all-targets -- -D warnings # clean
 cargo fmt --all -- --check                # clean
 cargo build --no-default-features         # ok
@@ -48,8 +48,9 @@ four cases. Item 1 can drop off the residual list before
   `rustacean-2.md`'s residual risks. Defer.
 - 5: assistant active-turn live smoke — needs an enabled assistant
   fixture, not rustacean's lane.
-- 6: `chan config` assistant namespace — explicit punt, see
-  `architect-rustacean-1.md`.
+- The `chan config` assistant namespace was closed by later backend
+  reconciliation: the CLI now covers the Settings-overlay assistant
+  keys without exposing every low-level chan-llm tuning field.
 The prior CLI fs-graph parity, `truncated: true` UI surfacing, and
 `webdev-4` dispatch-table residuals were closed by later backend /
 webdev / architect reconciliation.

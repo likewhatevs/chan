@@ -51,50 +51,38 @@ with an enabled assistant backend.
 
 | Roadmap item                              | Deliverable                                                                                                              | Status                                  |
 |-------------------------------------------|--------------------------------------------------------------------------------------------------------------------------|-----------------------------------------|
-| `chan config {get|set}` editor settings   | `rustacean-3` `chan config` for editor namespace via `EditorPrefs::save`. Server-namespace get/set extended by architect. | DONE                                    |
-| `chan graph` queries by scope             | `backend-1` (off-band) + `rustacean-3` integration. `chan graph` queries the content graph; fs-graph CLI parity deferred.| DONE for content graph; FS-graph deferred.|
+| `chan config {get|set}` settings   | `rustacean-3` `chan config` for editor namespace via `EditorPrefs::save`. Server + assistant namespaces extended by architect. | DONE                                    |
+| `chan graph` queries by scope             | `backend-1` (off-band) + `rustacean-3` integration. `--scope all` uses the content graph; `--scope file|folder` uses the filesystem graph builder. | DONE |
 | `chan status` overall drive/index/graph/report | `backend-1` `chan status` returns drive root, index stats, graph counts, chan-report SLOC/language/COCOMO summary, with optional `--json`. | DONE                                    |
 
 ## Final verification gate (clean tree, syseng run 2026-05-16 12:36)
 
 ```
 cargo build --release -p chan -p chan-server  # ok
-cargo test --workspace                        # chan-server 85, chan 43
+cargo test --workspace                        # chan-server 89, chan 46
 cargo clippy --all-targets -- -D warnings     # clean
 cargo fmt --all -- --check                    # clean
 otool -L target/release/chan                  # macOS system frameworks only
 target/release/chan size: 92.7 MB             # +200 KB vs pre-fix
 ```
 
-Workspace test totals reflect the +7 indexer tests landed under
-`architect-syseng-2` (regression coverage for the symlink/FIFO
-classification fix).
+Workspace test totals reflect the fs-graph, indexer, CLI graph, and
+CLI config coverage landed during the phase.
 
 ## Residuals at seal
 
 These are non-blocking and documented across task files; surfacing
 here so summary.md can list them in one place.
 
-1. **Outside-drive classification fallback** (from `rustacean-2.md`,
-   `syseng-1.md` residual 5). `target_is_inside_drive` falls back
-   to a lexical prefix check when `canonicalize` fails. Edge case
-   on cloud-mounted submounts only; not reproducible on APFS or
-   tmpfs.
-
-2. **Assistant active-turn live smoke** (from `webtest-1.md`).
+1. **Assistant active-turn live smoke** (from `webtest-1.md`).
    Static/DOM checks green; needs a drive with assistant backend
    enabled to verify the blinking dot, scroll-pin, and bubble
    width behaviors under a real transcript.
 
-3. **`chan config` assistant namespace** (from
-   `architect-rustacean-1.md`). Editor + server keys covered;
-   assistant TOML schema deserves its own design pass and was
-   explicitly punted.
-
 ## Recommendation
 
-Phase 1 is sealable. The three residuals above are either tiny
-follow-ups or known platform edges; none blocks "first canonical
+Phase 1 is sealable. The residual above is a browser-smoke gap, not
+a backend correctness blocker; it does not block "first canonical
 public version" semantics.
 
 Suggested commit ordering follows `architect-rustacean-1.md`:

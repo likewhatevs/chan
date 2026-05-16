@@ -95,7 +95,8 @@ webdev-3 ───────────────────────�
   date_format, pane_widths.*). Writes go through
   `chan_server::EditorPrefs::save` so the existing atomic-write
   contract applies; the `chan` crate picked up `toml` for the dump
-  path. Assistant + server config namespaces deferred per backend-1.
+  path. Assistant + server config namespaces deferred at this point;
+  later architect/backend reconciliation covered both.
   9 new tests; chan crate at 37 passing. `chan graph` and `chan
   status` from backend-1 verified end-to-end with the contacts-
   backfill field removed.
@@ -180,8 +181,20 @@ webdev-3 ───────────────────────�
   `chan graph --scope file|folder` now reuses the same builder as
   `/api/fs-graph`; `--scope all` remains the semantic markdown graph.
   Focused fs-graph/server tests, graph-scope CLI tests, `cargo build -p
-  chan`, isolated CLI smoke, `cargo test -p chan` (43 passed),
-  `cargo test -p chan-server` (85 passed), fmt, and clippy are green.
+  chan`, isolated CLI smoke, `cargo test -p chan` (46 passed),
+  `cargo test -p chan-server` (89 passed), fmt, and clippy are green.
+- 2026-05-16 architect: extended `chan config get|set` to assistant
+  backend settings (`assistant.default_backend`, per-backend enabled/model/
+  command override keys, read-only effective state, and answers-dir alias).
+  Added focused config tests and tightened `webtest-smoke.mjs` so an
+  assistant-enabled fixture verifies pending badge, bottom pin, and wide
+  response bubble during an active turn.
+- 2026-05-16 backend/syseng: closed the `/api/fs-graph` outside-drive
+  classification residual. When canonicalization is unavailable, the
+  fallback now accepts only clean lexical descendants of the drive root
+  and rejects `..` escape components. Added
+  `lexical_fallback_rejects_parent_escape`; `cargo test -p chan-server
+  fs_graph` passed.
 
 ## Highlights
 
@@ -210,12 +223,13 @@ webdev-3 ───────────────────────�
   Architect to choose between committing chan-core first and bumping
   the path-dep version, or bundling the two repos' commits together
   given they're locally co-checked out.
-- `summary.md` exists as a release-review artifact. Do not mark the phase
-  sealed until commit ordering and assistant-enabled browser smoke are
-  explicitly handled or deferred by Alex.
-- Assistant active-turn browser smoke needs a drive with an enabled
-  assistant backend before final release sign-off; `/tmp/chan-dev`
-  intentionally reports assistant disabled.
+- `summary.md` exists as a release-review artifact. Commit ordering is
+  handled: sibling `chan-core` cleanup is committed separately from the
+  main `chan` phase commits.
+- Assistant active-turn browser smoke is instrumented with a fake Codex
+  fixture but still needs a clean full-run sign-off. The isolated
+  assistant-enabled retry reached the browser smoke runner, but the shared
+  Search Status step timed out before the assistant assertion.
 - 2026-05-16 rustacean: rustacean-4 REVIEW. Resolved
   `architect-syseng-2.md` release blocker. Replaced the unconditional
   `index_file` / `forget_file` dispatch in the chan-server watch
@@ -227,7 +241,8 @@ webdev-3 ───────────────────────�
   missing / symlink / broken-symlink / FIFO / replaced-by-symlink.
   Live repro
   (`touch -h alias.md` against a fresh drive) confirmed `idle`
-  instead of `error` after the fix. chan-server 85 passed; chan 43.
+  instead of `error` after the fix. Current backend gate is
+  chan-server 89 passed; chan 46.
 - 2026-05-16 rustacean: rustacean-5 REVIEW. The architect
   verification pass had already tightened `chan graph` to reject
   `..`-escapes and missing targets through `Drive::stat`. Locked

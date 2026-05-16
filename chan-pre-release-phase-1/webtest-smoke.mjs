@@ -166,6 +166,7 @@ async function createPage(browserWs) {
 
 function urlWithHash(hash) {
   const u = new URL(BASE);
+  u.searchParams.set("webtest", `${Date.now()}-${Math.random().toString(16).slice(2)}`);
   u.hash = hash;
   return u.toString();
 }
@@ -268,7 +269,7 @@ async function smokeAssistant(page, width, height) {
     pass(`Assistant overlay layout ${width}x${height}`, "skipped: assistant disabled in test drive preferences");
     return;
   }
-  await page.navigate(urlWithHash("assist=1:drive"), width, height);
+  await page.navigate(urlWithHash("assist=1:drive|webtest%20assistant%20smoke"), width, height);
   await page.waitFor("!!document.querySelector('.assistant-shell')", 10000);
   const layout = await page.eval(`(() => {
     const shell = document.querySelector('.assistant-shell');
@@ -296,7 +297,47 @@ async function smokeAssistant(page, width, height) {
   }
   if (layout.overflow > 2) throw new Error(`document horizontal overflow ${layout.overflow}px`);
   if (layout.hasLegacyThinking) throw new Error("legacy thinking text appeared without stream status dot");
-  pass(`Assistant overlay layout ${width}x${height}`, "chat, scroll area, prompt, and status line present");
+  await page.eval(`(() => {
+    const btn = document.querySelector('.assistant-body .action-btn.send');
+    if (!btn || btn.disabled) throw new Error('assistant send button unavailable');
+    btn.click();
+    return true;
+  })()`);
+  await page.waitFor("!!document.querySelector('.assistant-body .bubble.assistant.pending .stream-status .dot')", 10000);
+  const pending = await page.eval(`(() => {
+    const status = document.querySelector('.assistant-body .bubble.assistant.pending .stream-status');
+    const dot = status?.querySelector('.dot');
+    return {
+      status: !!status,
+      dot: !!dot,
+      legacyThinking: document.body.innerText.includes('thinking...') && !dot,
+      nearBottom: (() => {
+        const s = document.querySelector('.assistant-body .scroll');
+        if (!s) return false;
+        return s.scrollTop + s.clientHeight >= s.scrollHeight - 24;
+      })(),
+    };
+  })()`);
+  if (!pending.status || !pending.dot) throw new Error("assistant pending status badge missing");
+  if (pending.legacyThinking) throw new Error("assistant showed legacy thinking text without badge dot");
+  if (!pending.nearBottom) throw new Error("assistant chat was not pinned near the bottom while pending");
+  await page.waitFor("document.body.innerText.includes('assistant smoke ok')", 15000);
+  const completed = await page.eval(`(() => {
+    const scroll = document.querySelector('.assistant-body .scroll');
+    const bodies = [...document.querySelectorAll('.assistant-body .bubble.assistant .body')];
+    const body = bodies[bodies.length - 1];
+    const sr = scroll?.getBoundingClientRect();
+    const br = body?.getBoundingClientRect();
+    return {
+      nearBottom: scroll ? scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 24 : false,
+      bodyRatio: sr && br ? br.width / sr.width : 0,
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
+    };
+  })()`);
+  if (!completed.nearBottom) throw new Error("assistant chat was not pinned near the bottom after completion");
+  if (completed.bodyRatio < 0.6) throw new Error(`assistant bubble did not stretch enough: ratio ${completed.bodyRatio}`);
+  if (completed.overflow > 2) throw new Error(`document horizontal overflow ${completed.overflow}px`);
+  pass(`Assistant active turn ${width}x${height}`, "pending badge, bottom pin, and wide bubble verified");
 }
 
 async function main() {

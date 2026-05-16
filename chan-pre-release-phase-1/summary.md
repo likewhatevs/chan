@@ -10,7 +10,8 @@ has been made from this coordination pass.
 - Added `/api/fs-graph` for filesystem graph queries with folder/file scope,
   bounded depth, symlink/hardlink/ghost handling, and escape checks.
 - Added CLI parity for `chan status`, `chan graph` content and filesystem
-  scopes, and `chan config get|set` over supported editor/server settings.
+  scopes, and `chan config get|set` over supported editor/server/assistant
+  settings.
 - Added File Browser `Graph this`, filesystem graph rendering, persisted graph
   mode state, and graph metadata/status display.
 - Added Search Status overlay and moved drive-wide index/report status out of
@@ -24,8 +25,8 @@ has been made from this coordination pass.
 
 ## Verification
 
-- `cargo test -p chan`: 43 passed.
-- `cargo test -p chan-server`: 85 passed.
+- `cargo test -p chan`: 46 passed.
+- `cargo test -p chan-server`: 89 passed.
 - `cargo clippy --all-targets -- -D warnings`: clean.
 - `cargo fmt --all -- --check`: clean.
 - `cd web && npm run check`: clean.
@@ -39,13 +40,10 @@ has been made from this coordination pass.
 
 ## Open Release Risks
 
-- Assistant active-turn browser smoke is still deferred because the available
-  `/tmp/chan-dev` drive reports `preferences.assistant.effective_enabled:false`.
-  The implementation is in place, but streaming scroll, real transcript bubble
-  width, and live thinking badge behavior still need an assistant-enabled
-  fixture before public release sign-off.
-- `chan-core` has related uncommitted changes in the sibling checkout. Commit
-  ordering should be explicit so this repo and `chan-core` stay coherent.
+- Assistant active-turn browser smoke is instrumented with a fake Codex
+  fixture, but still needs a clean full-run sign-off. The assistant-enabled
+  retry reached the CDP runner; a shared Search Status step timed out before
+  the assistant assertion.
 - `.claude/` is untracked and was left untouched.
 
 ## Agent Quality
