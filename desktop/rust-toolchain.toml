@@ -1,0 +1,9 @@
+# Pinned Rust toolchain. Single source of truth; CI's
+# actions-rust-lang/setup-rust-toolchain reads this file. Bumping
+# Rust = edit `channel` and fix any new clippy findings in the same
+# commit. Avoid drifting between local and CI by waiting for CI
+# green before merging.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

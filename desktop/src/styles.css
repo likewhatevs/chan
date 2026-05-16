@@ -1,0 +1,398 @@
+/* Drives window styling. Tokens mirror chan-web's :root in
+   App.svelte so the native chrome reads as the same product as the
+   in-drive UI. Dark by default; light kicks in when the OS theme
+   is light (no manual toggle). */
+
+:root {
+  --bg: #1c1c1e;
+  --bg-card: #232325;
+  --bg-elev: #2a2a2c;
+  --border: #3a3a3c;
+  --text: #f5f5f7;
+  --text-secondary: #98989d;
+  --link: #58a6ff;
+  --btn-bg: #2a2a2c;
+  --btn-border: #3a3a3c;
+  --btn-hover: #98989d;
+  --accent: #3fb950;
+  --hover-bg: rgba(255, 255, 255, 0.06);
+  --zebra-bg: rgba(255, 255, 255, 0.025);
+  --brand: #e58c4d;
+  --danger: #f85149;
+}
+
+/* Light tokens: applied either when the OS prefers light AND the
+   user hasn't picked an explicit theme, OR when the user picks
+   light via the toolbar toggle. Explicit `[data-theme="dark"]`
+   overrides the media query to keep dark even on a light-mode OS. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #ffffff;
+    --bg-card: #f5f5f7;
+    --bg-elev: #ffffff;
+    --border: #d1d1d6;
+    --text: #1c1c1e;
+    --text-secondary: #6c6c70;
+    --link: #0969da;
+    --btn-bg: #f2f2f4;
+    --btn-border: #d1d1d6;
+    --btn-hover: #6c6c70;
+    --accent: #1a7f37;
+    --hover-bg: rgba(0, 0, 0, 0.05);
+    --zebra-bg: rgba(0, 0, 0, 0.025);
+    --brand: #c46a2a;
+    --danger: #cf222e;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --bg-card: #f5f5f7;
+  --bg-elev: #ffffff;
+  --border: #d1d1d6;
+  --text: #1c1c1e;
+  --text-secondary: #6c6c70;
+  --link: #0969da;
+  --btn-bg: #f2f2f4;
+  --btn-border: #d1d1d6;
+  --btn-hover: #6c6c70;
+  --accent: #1a7f37;
+  --hover-bg: rgba(0, 0, 0, 0.05);
+  --zebra-bg: rgba(0, 0, 0, 0.025);
+  --brand: #c46a2a;
+  --danger: #cf222e;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: var(--brand); color: var(--bg); }
+
+header.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 10;
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand .enso {
+  width: 22px; height: 22px;
+  background-color: var(--brand);
+  -webkit-mask: url('chan-mark.png') center / contain no-repeat;
+          mask: url('chan-mark.png') center / contain no-repeat;
+}
+.brand b { font-weight: 700; font-size: 15px; letter-spacing: -.01em; }
+.brand .accent { color: var(--brand); font-weight: 400; margin-left: 2px; }
+.brand .brand-title {
+  color: var(--text);
+  letter-spacing: .08em;
+  font-size: 14px;
+}
+
+.actions { display: flex; gap: 6px; align-items: center; }
+
+button.btn {
+  appearance: none;
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+button.btn:hover { border-color: var(--btn-hover); }
+button.btn.primary {
+  background: var(--brand);
+  color: #fff;
+  border-color: var(--brand);
+}
+button.btn.primary:hover { filter: brightness(1.05); }
+button.btn.danger:hover { color: var(--danger); border-color: var(--danger); }
+button.btn[disabled] { opacity: .4; cursor: not-allowed; pointer-events: none; }
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 24px;
+  text-align: center;
+  gap: 16px;
+  color: var(--text-secondary);
+}
+.empty h2 { margin: 0; font-size: 17px; color: var(--text); font-weight: 700; }
+.empty p { margin: 0; max-width: 46ch; }
+
+main { padding: 0; }
+
+table.drives {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+table.drives th, table.drives td {
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+table.drives th {
+  font-weight: 500;
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  background: var(--bg);
+  position: sticky;
+  top: 53px;
+}
+table.drives tbody tr:nth-child(even) { background: var(--zebra-bg); }
+table.drives tbody tr:hover { background: var(--hover-bg); }
+
+.path-cell {
+  color: var(--text-secondary);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.path-cell:hover { color: var(--brand); }
+.path-cell .ic-home {
+  vertical-align: -2px;
+  margin-right: 2px;
+}
+.path-cell .path-sep {
+  color: var(--text-secondary);
+  margin: 0 4px 0 2px;
+  opacity: 0.6;
+}
+.path-cell:hover .path-sep { color: var(--brand); }
+
+.name-cell { color: var(--text); }
+
+/* Split button: primary "Open" + caret that toggles a small menu
+   anchored to the row. The menu is absolutely positioned to the
+   right edge of the split so it doesn't widen the actions column. */
+.split-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+.split-btn > .btn {
+  padding: 6px 10px;
+}
+.split-btn > .btn:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.split-btn > .btn.split-caret {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 1px solid rgba(0, 0, 0, 0.2);
+  padding: 6px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.split-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  min-width: 160px;
+  z-index: 20;
+}
+.split-menu li { margin: 0; }
+.split-menu .menu-item {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.split-menu .menu-item:hover { background: var(--hover-bg); }
+.split-menu .menu-item[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Tunnel panel — inline above the drives table while the user is
+   configuring or actively running the loopback tunnel listener. */
+.tunnel-panel {
+  margin: 14px 14px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tunnel-panel header {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.tunnel-panel p.muted { margin: 0; color: var(--text-secondary); }
+.tunnel-panel .tunnel-row {
+  display: flex; align-items: center; gap: 10px;
+}
+.tunnel-panel .tunnel-row label {
+  display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary);
+}
+.tunnel-panel .tunnel-row input[type="number"],
+.tunnel-panel .tunnel-row input[type="text"] {
+  width: 100px;
+  padding: 4px 6px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+}
+.tunnel-panel .seg-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 12px;
+}
+.tunnel-panel .seg-toggle .seg {
+  appearance: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 0;
+  padding: 4px 10px;
+  cursor: pointer;
+  font: inherit;
+}
+.tunnel-panel .seg-toggle .seg + .seg { border-left: 1px solid var(--border); }
+.tunnel-panel .seg-toggle .seg.on { background: var(--accent); color: var(--bg); }
+.tunnel-panel .snippet {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  cursor: copy;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.error-banner {
+  background: rgba(248, 81, 73, 0.12);
+  color: var(--danger);
+  border-bottom: 1px solid var(--border);
+  padding: 8px 14px;
+  font-size: 13px;
+}
+.status-banner {
+  background: color-mix(in srgb, var(--brand) 18%, transparent);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  padding: 8px 14px;
+  font-size: 13px;
+}
+.status-banner.persistent {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  font-weight: 500;
+}
+/* Persistent variant for the boot-time chan-binary preflight.
+   Lives at the top of <body> (above the sticky header) so it does
+   not disappear with the next list re-render and is the first
+   thing the user sees on launch. */
+.error-banner.persistent {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  font-weight: 500;
+}
+/* Toggle switch disabled state — the regular `disabled` attribute
+   on the inner checkbox only stops events; the slider is rendered
+   from its sibling and needs explicit visual feedback. */
+.switch input[disabled] + .slider {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Toggle switch — keeps the visual language of chan-web's small
+   in-line controls (assistant on/off, etc.). */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 18px;
+}
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch .slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: var(--border);
+  border-radius: 18px;
+  transition: .15s;
+}
+.switch .slider::before {
+  content: "";
+  position: absolute;
+  height: 14px;
+  width: 14px;
+  left: 2px;
+  top: 2px;
+  background: var(--bg);
+  border-radius: 50%;
+  transition: .15s;
+}
+.switch input:checked + .slider { background: var(--brand); }
+.switch input:checked + .slider::before { transform: translateX(16px); }
+
+.row-actions { display: flex; gap: 4px; justify-content: flex-end; }
+
+button.btn.icon {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Theme toggle: show the icon for the OTHER mode, so the icon
+   signals what clicking will switch to. Dark current → sun visible;
+   light current → moon visible. */
+#theme-toggle .ic-sun,
+#theme-toggle .ic-moon { display: none; }
+.is-dark #theme-toggle .ic-sun { display: inline-block; }
+.is-light #theme-toggle .ic-moon { display: inline-block; }
