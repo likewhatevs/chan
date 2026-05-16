@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -60,11 +60,36 @@ fn project_kind(path: &str, is_dir: bool, is_contact: bool) -> Option<&'static s
     })
 }
 
-pub async fn api_list_files(State(state): State<Arc<AppState>>) -> Response {
+#[derive(Deserialize)]
+pub struct ListFilesQuery {
+    /// Optional directory to list non-recursively. Missing preserves
+    /// the legacy recursive listing for callers that still need a
+    /// whole-drive snapshot.
+    #[serde(default)]
+    dir: Option<String>,
+}
+
+pub async fn api_list_files(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ListFilesQuery>,
+) -> Response {
     let drive = state.drive();
-    let tree = match drive.list_tree() {
-        Ok(t) => t,
-        Err(e) => return err_from(&e),
+    let tree = if let Some(dir) = query.dir.as_deref() {
+        match list_dir_entries(&drive, dir) {
+            Ok(t) => t,
+            Err(e) => return err_from(&e),
+        }
+    } else {
+        // The browser still reflects live disk, but it should not
+        // recursively enumerate build/dependency trees that the drive's
+        // own indexing policy already treats as noise (`target/`,
+        // `node_modules/`, ...). Repo roots can otherwise spend startup
+        // walking hundreds of thousands of uninteresting files before the
+        // user sees anything.
+        match chan_drive::fs_ops::list_tree_filtered(drive.root(), drive.walk_filter()) {
+            Ok(t) => t,
+            Err(e) => return err_from(&e),
+        }
     };
     // Pull the contact-kind set in one shot; a single SQL scan beats N
     // per-path node_kind lookups on big drives.
@@ -83,6 +108,52 @@ pub async fn api_list_files(State(state): State<Arc<AppState>>) -> Response {
         })
         .collect();
     Json(out).into_response()
+}
+
+fn list_dir_entries(
+    drive: &chan_drive::Drive,
+    dir: &str,
+) -> chan_drive::Result<Vec<chan_drive::TreeEntry>> {
+    let rel = normalize_dir_query(dir)?;
+    let children = drive.list(&rel)?;
+    let mut out = Vec::with_capacity(children.len());
+    for child in children {
+        if child.is_dir && drive.walk_filter().is_excluded(&child.name) {
+            continue;
+        }
+        let path = join_rel(&rel, &child.name);
+        let stat = match drive.stat(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(%path, ?e, "list_dir_entries: stat failed; skipping");
+                continue;
+            }
+        };
+        out.push(chan_drive::TreeEntry {
+            path,
+            is_dir: stat.is_dir,
+            mtime: stat.mtime,
+            size: if stat.is_dir { 0 } else { stat.size },
+        });
+    }
+    Ok(out)
+}
+
+fn normalize_dir_query(dir: &str) -> chan_drive::Result<String> {
+    let trimmed = dir.trim_matches('/');
+    if trimmed.is_empty() || trimmed == "." {
+        return Ok(String::new());
+    }
+    chan_drive::fs_ops::validate_rel(trimmed)?;
+    Ok(trimmed.to_string())
+}
+
+fn join_rel(parent: &str, name: &str) -> String {
+    if parent.is_empty() {
+        name.to_string()
+    } else {
+        format!("{parent}/{name}")
+    }
 }
 
 #[derive(Serialize)]

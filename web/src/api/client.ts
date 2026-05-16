@@ -293,7 +293,12 @@ export const api = {
       }>
     >("GET", `/api/contacts?${qs.toString()}`);
   },
-  list: () => req<TreeEntry[]>("GET", "/api/files"),
+  list: (dir?: string | null) => {
+    const qs = new URLSearchParams();
+    if (dir !== undefined && dir !== null) qs.set("dir", dir);
+    const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
+    return req<TreeEntry[]>("GET", `/api/files${suffix}`);
+  },
   read: (path: string) => req<FileResponse>("GET", `/api/files/${encPath(path)}`),
   /// Persist `content` at `path`. When `expectedMtime` is provided,
   /// the server CAS-writes via Drive::write_text_if_unchanged and

@@ -15,6 +15,7 @@
     browserOverlay,
     browserSelection,
     fileOps,
+    loadTreeDir,
     persistTreeExpanded,
     tree,
     treeExpanded,
@@ -197,6 +198,21 @@
     return m;
   });
 
+  $effect(() => {
+    const pending: string[] = [];
+    function collect(nodes: Node[]): void {
+      for (const n of nodes) {
+        if (n.kind !== "dir" || !expanded[n.path]) continue;
+        if (!tree.loadedDirs[n.path] && !tree.loadingDirs[n.path]) {
+          pending.push(n.path);
+        }
+        collect(n.children);
+      }
+    }
+    collect(root.children);
+    for (const path of pending) void loadTreeDir(path);
+  });
+
   function buildTree(entries: TreeEntry[]): Folder {
     const root: Folder = { kind: "dir", name: "", path: "", children: [] };
     const dirs = new Map<string, Folder>([["", root]]);
@@ -257,8 +273,13 @@
   }
 
   function toggle(path: string): void {
-    expanded[path] = !expanded[path];
+    setExpanded(path, !expanded[path]);
+  }
+
+  function setExpanded(path: string, value: boolean): void {
+    expanded[path] = value;
     persistTreeExpanded();
+    if (value) void loadTreeDir(path);
   }
 
   async function onOpen(path: string): Promise<void> {
@@ -411,8 +432,7 @@
         if (curRow.isDir) {
           e.preventDefault();
           if (!expanded[curRow.path]) {
-            expanded[curRow.path] = true;
-            persistTreeExpanded();
+            setExpanded(curRow.path, true);
           } else {
             const child = findFirstChildOf(curRow.path);
             if (child) {
@@ -431,8 +451,7 @@
         }
         if (curRow.isDir && expanded[curRow.path]) {
           e.preventDefault();
-          expanded[curRow.path] = false;
-          persistTreeExpanded();
+          setExpanded(curRow.path, false);
         } else {
           e.preventDefault();
           const parent = parentOf(curRow.path);
@@ -447,8 +466,7 @@
         if (!curRow) break;
         e.preventDefault();
         if (curRow.isDir) {
-          expanded[curRow.path] = !expanded[curRow.path];
-          persistTreeExpanded();
+          toggle(curRow.path);
         } else if (isEditableText(curRow.path)) {
           // Same flow as a double-click on the row: open in the
           // active pane and close the browser overlay so the user
@@ -527,7 +545,16 @@
   {#each root.children as node (node.path)}
     {@render renderNode(node, 0)}
   {/each}
-  {#if root.children.length === 0}
+  {#if root.children.length === 0 && tree.loading}
+    <li class="empty">
+      <div class="empty-title">Loading files...</div>
+    </li>
+  {:else if root.children.length === 0 && tree.error}
+    <li class="empty">
+      <div class="empty-title">File listing failed</div>
+      <div class="empty-detail">{tree.error}</div>
+    </li>
+  {:else if root.children.length === 0}
     <li class="empty">
       <div class="empty-title">No files</div>
       <div class="empty-actions">
@@ -580,6 +607,15 @@
           {#each node.children as child (child.path)}
             {@render renderNode(child, depth + 1)}
           {/each}
+          {#if node.children.length === 0 && tree.loadingDirs[node.path]}
+            <li class="empty child-empty" style="padding-left: {(depth + 1) * 12}px">
+              Loading...
+            </li>
+          {:else if node.children.length === 0 && tree.dirErrors[node.path]}
+            <li class="empty child-empty" style="padding-left: {(depth + 1) * 12}px">
+              {tree.dirErrors[node.path]}
+            </li>
+          {/if}
         </ul>
       {/if}
     {:else}
@@ -758,6 +794,15 @@
     font-weight: 600;
     margin-bottom: .35rem;
     font-size: 15px;
+  }
+  .empty-detail {
+    color: var(--text-secondary);
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+  .child-empty {
+    font-size: 12px;
+    text-align: left;
   }
   .empty-actions {
     display: flex;

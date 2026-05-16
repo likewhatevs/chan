@@ -40,9 +40,20 @@ import { graphData, invalidateGraph, ensureGraphLoaded } from "./graphData.svelt
 import { SETTINGS_DISABLED, withTokenQuery } from "../api/transport";
 export const drive = $state<{ info: DriveInfo | null }>({ info: null });
 
-export const tree = $state<{ entries: TreeEntry[]; loading: boolean }>({
+export const tree = $state<{
+  entries: TreeEntry[];
+  loading: boolean;
+  error: string | null;
+  loadedDirs: Record<string, true>;
+  loadingDirs: Record<string, true>;
+  dirErrors: Record<string, string>;
+}>({
   entries: [],
-  loading: false,
+  loading: true,
+  error: null,
+  loadedDirs: {},
+  loadingDirs: {},
+  dirErrors: {},
 });
 
 /**
@@ -503,18 +514,62 @@ export async function bootstrap(): Promise<void> {
 
 export async function refreshTree(): Promise<void> {
   tree.loading = true;
+  tree.error = null;
   try {
-    const entries = await api.list();
-    entries.sort((a, b) => {
-      // Directories first, then alphabetical.
-      if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
-      return a.path.localeCompare(b.path);
-    });
-    tree.entries = entries;
+    const entries = await api.list("");
+    tree.entries = sortTreeEntries(entries);
+    tree.loadedDirs = { "": true };
+    tree.loadingDirs = {};
+    tree.dirErrors = {};
     seedTreeExpansionIfFresh();
+  } catch (e) {
+    tree.error = (e as Error).message;
+    throw e;
   } finally {
     tree.loading = false;
   }
+}
+
+export async function loadTreeDir(dir: string): Promise<void> {
+  if (tree.loadedDirs[dir] || tree.loadingDirs[dir]) return;
+  tree.loadingDirs = { ...tree.loadingDirs, [dir]: true };
+  const { [dir]: _oldError, ...restErrors } = tree.dirErrors;
+  tree.dirErrors = restErrors;
+  try {
+    const entries = await api.list(dir);
+    tree.entries = sortTreeEntries(mergeDirEntries(tree.entries, dir, entries));
+    tree.loadedDirs = { ...tree.loadedDirs, [dir]: true };
+  } catch (e) {
+    tree.dirErrors = { ...tree.dirErrors, [dir]: (e as Error).message };
+    throw e;
+  } finally {
+    const { [dir]: _done, ...rest } = tree.loadingDirs;
+    tree.loadingDirs = rest;
+  }
+}
+
+function sortTreeEntries(entries: TreeEntry[]): TreeEntry[] {
+  return [...entries].sort((a, b) => {
+    if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+    return a.path.localeCompare(b.path);
+  });
+}
+
+function mergeDirEntries(
+  current: TreeEntry[],
+  dir: string,
+  entries: TreeEntry[],
+): TreeEntry[] {
+  const prefix = dir ? `${dir}/` : "";
+  const next = current.filter((e) => {
+    if (dir && e.path === dir) return true;
+    if (!e.path.startsWith(prefix)) return true;
+    const rest = e.path.slice(prefix.length);
+    return rest.includes("/");
+  });
+  const byPath = new Map(next.map((e) => [e.path, e]));
+  for (const e of entries) byPath.set(e.path, e);
+  return [...byPath.values()];
 }
 
 export async function refreshDrive(): Promise<void> {
