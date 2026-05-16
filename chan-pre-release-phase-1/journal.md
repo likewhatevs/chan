@@ -31,6 +31,8 @@ SME hardening pass before commit.
 | rustacean-4 | rustacean | REVIEW | architect-syseng-2 |
 | rustacean-5 | rustacean | REVIEW | syseng-1 residuals 1+2 |
 | rustacean-6 | rustacean | REVIEW | rustacean-2 (mid-path symlink escape) |
+| architect-syseng-4 | architect | REVIEW | post-seal self-upgrade audit |
+| rustacean-7 | rustacean | REVIEW | architect-syseng-4 |
 
 Statuses: TODO, IN_PROGRESS, BLOCKED, REVIEW, DONE.
 
@@ -207,6 +209,14 @@ webdev-3 ───────────────────────�
 - 2026-05-16 architect: ran `scripts/pre-push` after the final smoke-gap
   commit. Gate passed: fmt, clippy, `cargo test --all-targets`, and
   `cargo build --no-default-features`.
+- 2026-05-16 syseng/rustacean: architect-syseng-4 REVIEW found a
+  Windows self-upgrade release blocker and an archive-download HTTPS
+  defense-in-depth gap. rustacean-7 REVIEW split replacement install by
+  platform, added stale `.chan.upgrade-old.*` cleanup, routed archive
+  downloads through the shared HTTPS guard, and added focused tests.
+  Verification: `cargo test -p chan update::` 12 passed,
+  `cargo test -p chan` 50 passed, fmt clean, clippy clean,
+  `cargo build --no-default-features` ok.
 
 ## Highlights
 
@@ -241,6 +251,9 @@ webdev-3 ───────────────────────�
 - Assistant active-turn browser smoke has a clean full-run sign-off through
   the isolated fake-Codex fixture on port 8793. Normal 8788 smoke continues
   to verify the disabled-assistant fixture path.
+- architect-syseng-4 / rustacean-7 closed the self-upgrade Windows install
+  blocker and HTTPS guard gap. Rollback-after-launch and signed checksums stay
+  post-release follow-ups.
 - 2026-05-16 rustacean: rustacean-4 REVIEW. Resolved
   `architect-syseng-2.md` release blocker. Replaced the unconditional
   `index_file` / `forget_file` dispatch in the chan-server watch

@@ -16,7 +16,9 @@
 //      SHA-256 against `chan.app/dl/v{version}/SHA256SUMS`,
 //      extracts the `chan` binary out of the archive into a second
 //      temp file, and atomically renames it over the running
-//      executable.
+//      executable. Windows parks the running binary at a sibling
+//      `.chan.upgrade-old.*` path first because the active `.exe`
+//      cannot be replaced in place.
 //
 // URLs are hardcoded to `https://chan.app/dl/...`. Self-hosted /
 // mirrored deployments are not supported. Offline / proxy hosts:
@@ -132,6 +134,13 @@ fn checksums_url(version: &str) -> String {
     format!("{DL_BASE}/v{version}/SHA256SUMS")
 }
 
+fn ensure_https_url(url: &str) -> Result<()> {
+    if !url.starts_with("https://") {
+        bail!("refusing non-https URL: {url}");
+    }
+    Ok(())
+}
+
 fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
     let s = s.trim().trim_start_matches('v');
     let mut parts = s.split('.');
@@ -195,9 +204,7 @@ fn http_client(connect: Duration, total: Duration) -> Result<reqwest::Client> {
 }
 
 async fn fetch_text(client: &reqwest::Client, url: &str) -> Result<String> {
-    if !url.starts_with("https://") {
-        bail!("refusing non-https URL: {url}");
-    }
+    ensure_https_url(url)?;
     let resp = client
         .get(url)
         .send()
@@ -412,6 +419,7 @@ pub async fn run_upgrade(opts: UpgradeOptions) -> Result<()> {
         .parent()
         .context("current executable has no parent directory")?
         .to_path_buf();
+    cleanup_upgrade_backups(&binary_dir, exe_path.file_name().and_then(|s| s.to_str()));
 
     let archive_name = format!("chan-{target}.{ext}");
     let archive_url = archive_url(&target_version, target, ext);
@@ -455,6 +463,7 @@ pub async fn run_upgrade(opts: UpgradeOptions) -> Result<()> {
 
     // Stream archive into a temp file alongside the running binary
     // and SHA-256 it on the fly.
+    ensure_https_url(&archive_url)?;
     let archive_path = binary_dir.join(format!(".chan.upgrade-archive.{}", std::process::id()));
     let archive_guard = TempGuard::new(archive_path.clone());
 
@@ -510,13 +519,7 @@ pub async fn run_upgrade(opts: UpgradeOptions) -> Result<()> {
 
     set_executable_mode(&bin_temp)?;
 
-    fs::rename(&bin_temp, &exe_path).with_context(|| {
-        format!(
-            "replacing {} with {}",
-            exe_path.display(),
-            bin_temp.display()
-        )
-    })?;
+    install_replacement(&bin_temp, &exe_path)?;
     bin_guard.disarm();
     drop(archive_guard);
 
@@ -540,6 +543,96 @@ fn extract_binary(
         "tar.gz" => extract_tar_gz(archive, out, bin_name),
         "zip" => extract_zip(archive, out, bin_name),
         other => bail!("unsupported archive extension: {other}"),
+    }
+}
+
+const UPGRADE_BACKUP_PREFIX: &str = ".chan.upgrade-old.";
+
+#[cfg(any(test, target_os = "windows"))]
+fn upgrade_backup_file_name(exe_file_name: &str) -> String {
+    format!(
+        "{UPGRADE_BACKUP_PREFIX}{exe_file_name}.{}",
+        std::process::id()
+    )
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn upgrade_backup_path(exe_path: &Path) -> PathBuf {
+    let exe_file_name = exe_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("chan");
+    exe_path.with_file_name(upgrade_backup_file_name(exe_file_name))
+}
+
+fn cleanup_upgrade_backups(binary_dir: &Path, exe_file_name: Option<&str>) {
+    let Some(exe_file_name) = exe_file_name else {
+        return;
+    };
+    let prefix = format!("{UPGRADE_BACKUP_PREFIX}{exe_file_name}.");
+    let Ok(entries) = fs::read_dir(binary_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if name.starts_with(&prefix) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn install_replacement(new_bin: &Path, exe_path: &Path) -> Result<()> {
+    fs::rename(new_bin, exe_path).with_context(|| {
+        format!(
+            "replacing {} with {}",
+            exe_path.display(),
+            new_bin.display()
+        )
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn install_replacement(new_bin: &Path, exe_path: &Path) -> Result<()> {
+    let backup_path = upgrade_backup_path(exe_path);
+    fs::rename(exe_path, &backup_path).with_context(|| {
+        format!(
+            "parking current binary {} at {}",
+            exe_path.display(),
+            backup_path.display()
+        )
+    })?;
+
+    match fs::rename(new_bin, exe_path) {
+        Ok(()) => {
+            let _ = fs::remove_file(&backup_path);
+            Ok(())
+        }
+        Err(install_err) => {
+            match fs::rename(&backup_path, exe_path) {
+                Ok(()) => {}
+                Err(restore_err) => {
+                    bail!(
+                        "replacing {} with {} failed: {}; restoring {} from {} failed: {}",
+                        exe_path.display(),
+                        new_bin.display(),
+                        install_err,
+                        exe_path.display(),
+                        backup_path.display(),
+                        restore_err
+                    );
+                }
+            }
+            Err(install_err).with_context(|| {
+                format!(
+                    "replacing {} with {}",
+                    exe_path.display(),
+                    new_bin.display()
+                )
+            })
+        }
     }
 }
 
@@ -690,6 +783,68 @@ feedface00feedface00feedface00feedface00feedface00feedface00feed  unrelated.deb
             checksums_url("0.7.0"),
             "https://chan.app/dl/v0.7.0/SHA256SUMS"
         );
+    }
+
+    #[test]
+    fn test_ensure_https_url_rejects_plain_http() {
+        assert!(ensure_https_url("https://chan.app/dl/latest/VERSION").is_ok());
+        assert!(ensure_https_url("http://chan.app/dl/latest/VERSION").is_err());
+    }
+
+    #[test]
+    fn test_upgrade_backup_path_shape() {
+        let exe = Path::new("/tmp/chan.exe");
+        let backup = upgrade_backup_path(exe);
+        assert_eq!(backup.parent(), Some(Path::new("/tmp")));
+        let name = backup.file_name().and_then(|s| s.to_str()).unwrap();
+        assert!(name.starts_with(".chan.upgrade-old.chan.exe."));
+    }
+
+    #[test]
+    fn test_cleanup_upgrade_backups_only_removes_matching_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let matching = dir.path().join(".chan.upgrade-old.chan.exe.123");
+        let other_binary = dir.path().join(".chan.upgrade-old.other.exe.123");
+        let unrelated = dir.path().join("notes.md");
+        fs::write(&matching, b"old").unwrap();
+        fs::write(&other_binary, b"other").unwrap();
+        fs::write(&unrelated, b"keep").unwrap();
+
+        cleanup_upgrade_backups(dir.path(), Some("chan.exe"));
+
+        assert!(!matching.exists());
+        assert!(other_binary.exists());
+        assert!(unrelated.exists());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn test_install_replacement_renames_on_non_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("chan");
+        let new_bin = dir.path().join(".chan.upgrade-bin.test");
+        fs::write(&exe, b"old").unwrap();
+        fs::write(&new_bin, b"new").unwrap();
+
+        install_replacement(&new_bin, &exe).unwrap();
+
+        assert_eq!(fs::read(&exe).unwrap(), b"new");
+        assert!(!new_bin.exists());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_install_replacement_parks_old_binary_on_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("chan.exe");
+        let new_bin = dir.path().join(".chan.upgrade-bin.test");
+        fs::write(&exe, b"old").unwrap();
+        fs::write(&new_bin, b"new").unwrap();
+
+        install_replacement(&new_bin, &exe).unwrap();
+
+        assert_eq!(fs::read(&exe).unwrap(), b"new");
+        assert!(!new_bin.exists());
     }
 
     #[test]

@@ -23,13 +23,17 @@ the sibling `chan-core` checkout.
   bubble / thinking-badge behavior in the frontend.
 - Hardened watcher handling so symlink, missing, deleted, FIFO, and other
   special-path events do not pin `/api/index/status` to Error.
+- Hardened `chan upgrade` so archive downloads share the explicit HTTPS guard
+  and Windows installs park the running `.exe` before replacing it.
 
 ## Verification
 
-- `cargo test -p chan`: 46 passed.
+- `cargo test -p chan`: 50 passed.
+- `cargo test -p chan update::`: 12 passed.
 - `cargo test -p chan-server`: 92 passed.
 - `cargo clippy --all-targets -- -D warnings`: clean.
 - `cargo fmt --all -- --check`: clean.
+- `cargo build --no-default-features`: ok after self-upgrade hardening.
 - `scripts/pre-push`: passed, including `cargo test --all-targets` and
   `cargo build --no-default-features`.
 - `cd web && npm run check`: clean.
@@ -45,6 +49,8 @@ the sibling `chan-core` checkout.
 ## Open Release Risks
 
 - `.claude/` is untracked and was left untouched.
+- Signed release checksums and rollback-after-launch are still post-release
+  hardening items for the self-upgrade path.
 
 ## Agent Quality
 
