@@ -449,9 +449,25 @@ export type GraphViewNode =
     }
   | { kind: "tag"; id: string; label: string }
   | { kind: "mention"; id: string; label: string }
+  | {
+      kind: "language";
+      id: string;
+      label: string;
+      language: string;
+      files: number;
+      code: number;
+    }
+  | {
+      kind: "folder";
+      id: string;
+      label: string;
+      path: string;
+      files: number;
+      code: number;
+    }
   | { kind: "date"; id: string; label: string };
 
-export type GraphViewEdgeKind = "link" | "tag" | "mention" | "date";
+export type GraphViewEdgeKind = "link" | "tag" | "mention" | "language" | "date";
 
 export type GraphViewEdge = {
   source: string;
@@ -464,6 +480,19 @@ export type GraphViewEdge = {
 export type GraphView = {
   nodes: GraphViewNode[];
   edges: GraphViewEdge[];
+};
+
+export type LanguageGraphEdge = GraphViewEdge & {
+  kind: "language";
+  rank: number;
+  files: number;
+  code: number;
+};
+
+export type LanguageGraphResponse = {
+  max_depth: number;
+  nodes: Array<Extract<GraphViewNode, { kind: "language" | "folder" }>>;
+  edges: LanguageGraphEdge[];
 };
 
 export type FsGraphScope = "file" | "folder";

@@ -35,11 +35,13 @@
     GraphView,
     GraphViewEdge,
     GraphViewNode,
+    LanguageGraphResponse,
   } from "../api/types";
   import { openInActivePane } from "../state/tabs.svelte";
   import {
     availableGraphScopes,
     browserOverlay,
+    graphReloadSignal,
     graphOverlay,
     openBrowser,
     openScopeHistory,
@@ -49,6 +51,7 @@
     revealAndSelect,
     tree,
   } from "../state/store.svelte";
+  import { onDestroy } from "svelte";
   import { type ScopeOption, defaultScopeId } from "../state/scope.svelte";
   import ResizeHandle from "./ResizeHandle.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
@@ -59,6 +62,7 @@
   import KindChip from "./KindChip.svelte";
   import { classifyFile as classifyFileKind, type FileKind } from "../state/kinds";
   import { chordFor } from "../state/shortcuts";
+  import { FS_GRAPH_DEPTH_MAX, graphDepthCap } from "../graph/depth";
 
   // Visibility of the details aside lives on `graphOverlay.inspectorOpen`
   // (module state) so it round-trips through the URL hash.
@@ -97,18 +101,21 @@
   /// synthetic hub node (id `SCOPE_HUB_ID`, kind `scope`) to every
   /// file in a multi-file scope (`currentScope.kind === "group"`) so
   /// the canvas shows which files the user has pinned together.
-  type RenderedEdgeKind = "link" | "tag" | "mention" | "group";
+  type RenderedEdgeKind = "link" | "tag" | "mention" | "language" | "group";
   /// Stable id for the synthetic scope hub node. Prefixed with `__`
   /// so it can't collide with a real file path.
   const SCOPE_HUB_ID = "__scope_hub__";
   type RenderedEdge = GraphViewEdge & { kind: RenderedEdgeKind };
-  type RenderedNode = Extract<GraphViewNode, { kind: "file" | "tag" | "mention" }>;
+  type RenderedNode = Extract<
+    GraphViewNode,
+    { kind: "file" | "tag" | "mention" | "language" | "folder" }
+  >;
   /// Chip toggles. `link`, `tag`, `mention` are edge-kind filters
   /// (the visual element they govern is the edge plus any node only
   /// reachable through edges of that kind). `img` is a node filter:
   /// flipping it off hides every file node whose path classifies as
   /// an image, along with any edge touching one.
-  type FilterKind = "link" | "tag" | "mention" | "img";
+  type FilterKind = "link" | "tag" | "mention" | "language" | "img";
 
   // ---- state -------------------------------------------------------------
 
@@ -116,8 +123,13 @@
   let edges: RenderedEdge[] = $state([]);
   let fsNodes: FsGraphNode[] = $state([]);
   let fsTruncated = $state(false);
+  let driveDepthProbe: FsGraphResponse | null = $state(null);
+  let driveDepthProbeLoading = $state(false);
+  let languageMaxDepth = $state(0);
   let loading = $state(true);
   let error: string | null = $state(null);
+  let watchReloadTimer: ReturnType<typeof setTimeout> | null = null;
+  let seenGraphReloadNonce = graphReloadSignal.nonce;
 
   /// Chip toggles live on `graphOverlay.filters` (module state) so
   /// they round-trip through the URL hash. Local proxy aliases keep
@@ -127,6 +139,24 @@
     graphOverlay.mode === "filesystem" &&
       (currentScope?.kind === "file" || currentScope?.kind === "dir"),
   );
+  const languageMode = $derived(graphOverlay.mode === "language");
+  const depthCap = $derived.by(() => {
+    if (languageMode) return Math.max(1, languageMaxDepth);
+    if (loading && currentScope?.kind === "dir" && nodes.length === 0) {
+      return DEPTH_MAX;
+    }
+    return graphDepthCap({
+      scope: currentScope,
+      nodes,
+      fsGraph: filesystemMode
+        ? { nodes: fsNodes, truncated: fsTruncated }
+        : currentScope?.kind === "drive" || currentScope?.kind === "global"
+          ? driveDepthProbe
+          : null,
+      hardMax: DEPTH_MAX,
+      fsMax: FS_GRAPH_DEPTH_MAX,
+    });
+  });
 
   // Currently inspected node, surfaced in the side details panel.
   // Tap a node to set this; tap empty space to clear it. Nodes never
@@ -178,7 +208,27 @@
 
   async function reloadGraph(): Promise<void> {
     menu?.close();
+    if (currentScope?.kind === "drive" || currentScope?.kind === "global") {
+      driveDepthProbe = null;
+      await loadDriveDepthProbe();
+    }
     await load();
+  }
+
+  async function loadDriveDepthProbe(): Promise<void> {
+    if (driveDepthProbeLoading) return;
+    driveDepthProbeLoading = true;
+    try {
+      driveDepthProbe = await api.fsGraph({
+        scope: "folder",
+        path: "",
+        depth: FS_GRAPH_DEPTH_MAX,
+      });
+    } catch {
+      driveDepthProbe = null;
+    } finally {
+      driveDepthProbeLoading = false;
+    }
   }
 
   function doOpenSettings(): void {
@@ -348,7 +398,13 @@
   /// adds the contact-file count on top of mention edges so the
   /// number reflects everything the toggle hides.
   const counts = $derived.by(() => {
-    const c: Record<FilterKind, number> = { link: 0, tag: 0, mention: 0, img: 0 };
+    const c: Record<FilterKind, number> = {
+      link: 0,
+      tag: 0,
+      mention: 0,
+      language: 0,
+      img: 0,
+    };
     for (const e of edges) c[e.kind]++;
     for (const n of nodes) {
       if (n.kind !== "file") continue;
@@ -485,11 +541,13 @@
         ? isFileGhost
           ? null
           : { kind: "file", path: selectedNode.path }
-        : {
-            kind: selectedNode.kind,
-            nodeId: selectedNode.id,
-            label: selectedNode.label,
-          },
+        : selectedNode.kind === "tag" || selectedNode.kind === "mention"
+          ? {
+              kind: selectedNode.kind,
+              nodeId: selectedNode.id,
+              label: selectedNode.label,
+            }
+          : null,
   );
 
   // ---- presentation ------------------------------------------------------
@@ -500,6 +558,7 @@
     link: "var(--text-secondary)",
     tag: "var(--g-tag)",
     mention: "var(--warn-text)",
+    language: "var(--accent)",
     // Group-scope edges read as the accent so they pop against the
     // document edges without looking like another link kind.
     group: "var(--accent)",
@@ -511,6 +570,7 @@
     link: EDGE_COLORS.link,
     tag: EDGE_COLORS.tag,
     mention: EDGE_COLORS.mention,
+    language: EDGE_COLORS.language,
     img: "var(--g-img)",
   };
 
@@ -568,6 +628,7 @@
     error = null;
     try {
       if (filesystemMode && currentScope) {
+        languageMaxDepth = 0;
         const fsScope = currentScope.kind === "dir" ? "folder" : "file";
         const fsPath =
           currentScope.kind === "dir" || currentScope.kind === "file"
@@ -594,6 +655,20 @@
       }
       fsNodes = [];
       fsTruncated = false;
+      if (languageMode) {
+        const g: LanguageGraphResponse = await api.languageGraph({
+          depth: graphOverlay.depth,
+        });
+        languageMaxDepth = g.max_depth;
+        nodes = g.nodes;
+        edges = g.edges;
+        selectedId = selectedId && g.nodes.some((n) => n.id === selectedId)
+          ? selectedId
+          : null;
+        graphOverlay.pendingSelectId = null;
+        return;
+      }
+      languageMaxDepth = 0;
       const g: GraphView = await api.graph();
       const renderedNodes: RenderedNode[] = g.nodes.filter(
         (n): n is RenderedNode =>
@@ -640,13 +715,20 @@
           missing: true,
         };
       }
+      if (n.kind === "folder") {
+        return {
+          kind: "folder",
+          id: n.id,
+          label: `${n.name || "drive"}/`,
+          path: n.path,
+          files: 0,
+          code: 0,
+        };
+      }
       return {
-        kind: n.kind === "folder" ? "tag" : "mention",
+        kind: "mention",
         id: n.id,
-        label:
-          n.kind === "folder"
-            ? `${n.name || "drive"}/`
-            : `${n.name}${n.broken ? " (broken)" : ""}`,
+        label: `${n.name}${n.broken ? " (broken)" : ""}`,
       };
     });
   }
@@ -672,6 +754,52 @@
   /// Idle overlays don't pay for an /api/graph round-trip.
   $effect(() => {
     if (visible) void load();
+  });
+
+  $effect(() => {
+    if (!visible) driveDepthProbe = null;
+  });
+
+  $effect(() => {
+    if (!visible) return;
+    if (currentScope?.kind !== "drive" && currentScope?.kind !== "global") return;
+    if (driveDepthProbe || driveDepthProbeLoading) return;
+    void loadDriveDepthProbe();
+  });
+
+  $effect(() => {
+    if (languageMode) return;
+    const max = depthCap;
+    if (graphOverlay.depth < 1) {
+      graphOverlay.depth = 1;
+    } else if (graphOverlay.depth > max) {
+      graphOverlay.depth = max;
+    }
+  });
+
+  $effect(() => {
+    const nonce = graphReloadSignal.nonce;
+    if (!visible) {
+      seenGraphReloadNonce = nonce;
+      return;
+    }
+    if (nonce === seenGraphReloadNonce) return;
+    seenGraphReloadNonce = nonce;
+    if (watchReloadTimer) clearTimeout(watchReloadTimer);
+    watchReloadTimer = setTimeout(() => {
+      watchReloadTimer = null;
+      if (visible) {
+        if (currentScope?.kind === "drive" || currentScope?.kind === "global") {
+          driveDepthProbe = null;
+          void loadDriveDepthProbe();
+        }
+        void load();
+      }
+    }, 250);
+  });
+
+  onDestroy(() => {
+    if (watchReloadTimer) clearTimeout(watchReloadTimer);
   });
 
   /// Selection callback handed to GraphCanvas. Tapping a node
@@ -721,8 +849,8 @@
       <Clock size={14} strokeWidth={1.75} aria-hidden="true" />
     </button>
     <div class="filters">
-      {#each ["link", "tag", "mention", "img"] as const as kind (kind)}
-        {#if !filesystemMode || kind !== "img"}
+      {#each ["link", "tag", "mention", "language", "img"] as const as kind (kind)}
+        {#if (!filesystemMode || kind !== "img") && (languageMode ? kind === "language" : kind !== "language")}
           <label class="chip" class:on={show[kind]}>
             <input type="checkbox" bind:checked={show[kind]} />
             <span class="dot" style="background:{FILTER_COLORS[kind]}"></span>
@@ -765,7 +893,7 @@
       <div class="placeholder error">{error}</div>
     {:else if nodes.length === 0}
       <div class="placeholder">
-        {filesystemMode ? "no filesystem graph nodes for this scope" : "no markdown files in this drive yet"}
+        {filesystemMode ? "no filesystem graph nodes for this scope" : languageMode ? "no language graph nodes for this drive yet" : "no markdown files in this drive yet"}
       </div>
     {/if}
     <div class="cy" class:dim={loading || !!error}>
@@ -913,7 +1041,7 @@
       {#if filesystemMode && fsTruncated} · truncated{/if}
     </span>
     <span class="hint">
-      {filesystemMode ? "filesystem graph" : "semantic graph"} · drag to pan · scroll to zoom · click to inspect
+      {filesystemMode ? "filesystem graph" : languageMode ? "language graph" : "semantic graph"} · drag to pan · scroll to zoom · click to inspect
     </span>
   </div>
   </div>
@@ -939,23 +1067,24 @@
        drive / global scopes (those always render everything
        regardless of hop count) so the affordance stays visible. -->
   {@const depthDisabled =
-    !currentScope ||
-    currentScope.kind === "drive" ||
-    currentScope.kind === "global"}
+    !languageMode &&
+    (!currentScope ||
+      currentScope.kind === "drive" ||
+      currentScope.kind === "global")}
   <li>
     <div class="menu-slider-row" class:disabled={depthDisabled}>
       <span class="menu-slider-label">Depth</span>
       <input
         type="range"
-        min="1"
-        max={DEPTH_MAX}
+        min={languageMode ? "0" : "1"}
+        max={depthCap}
         step="1"
         bind:value={graphOverlay.depth}
         disabled={depthDisabled}
         onmousedown={(e) => e.stopPropagation()}
         aria-label="depth"
       />
-      <span class="menu-slider-value">{graphOverlay.depth}</span>
+      <span class="menu-slider-value">{languageMode && graphOverlay.depth === 0 ? "max" : graphOverlay.depth}</span>
     </div>
   </li>
   <li class="sep" role="separator"></li>

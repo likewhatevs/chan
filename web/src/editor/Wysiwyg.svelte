@@ -826,11 +826,61 @@
     color: var(--text-secondary, #888);
     font-weight: 700;
   }
-  /* Left indent on every line of every list (bullet, ordered, task).
-     Three-class chain matches the fence-row pattern so the rule
-     beats CM6's `.cm-line` default cascade. */
+  /* Left indent and guides on every line of every list (bullet,
+     ordered, task). Three-class chain matches the fence-row pattern
+     so the rule beats CM6's `.cm-line` default cascade. */
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-line) {
-    padding-left: 20px !important;
+    --cm-md-list-guide: color-mix(in srgb, var(--text-secondary, #888) 32%, transparent);
+    padding-left: 32px !important;
+    position: relative;
+  }
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-line::before) {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 10px;
+    width: 1px;
+    background: var(--cm-md-list-guide);
+    pointer-events: none;
+  }
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-1::before) {
+    box-shadow: 2ch 0 0 var(--cm-md-list-guide);
+  }
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-2::before) {
+    box-shadow:
+      2ch 0 0 var(--cm-md-list-guide),
+      4ch 0 0 var(--cm-md-list-guide);
+  }
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-3::before) {
+    box-shadow:
+      2ch 0 0 var(--cm-md-list-guide),
+      4ch 0 0 var(--cm-md-list-guide),
+      6ch 0 0 var(--cm-md-list-guide);
+  }
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-4::before) {
+    box-shadow:
+      2ch 0 0 var(--cm-md-list-guide),
+      4ch 0 0 var(--cm-md-list-guide),
+      6ch 0 0 var(--cm-md-list-guide),
+      8ch 0 0 var(--cm-md-list-guide);
+  }
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-5::before) {
+    box-shadow:
+      2ch 0 0 var(--cm-md-list-guide),
+      4ch 0 0 var(--cm-md-list-guide),
+      6ch 0 0 var(--cm-md-list-guide),
+      8ch 0 0 var(--cm-md-list-guide),
+      10ch 0 0 var(--cm-md-list-guide);
+  }
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-6::before) {
+    box-shadow:
+      2ch 0 0 var(--cm-md-list-guide),
+      4ch 0 0 var(--cm-md-list-guide),
+      6ch 0 0 var(--cm-md-list-guide),
+      8ch 0 0 var(--cm-md-list-guide),
+      10ch 0 0 var(--cm-md-list-guide),
+      12ch 0 0 var(--cm-md-list-guide);
   }
   :global(.md-wysiwyg-cm6 .cm-md-frontmatter) {
     color: var(--text-secondary, #888);

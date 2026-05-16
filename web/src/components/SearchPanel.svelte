@@ -20,6 +20,7 @@
   } from "../state/pageWidth.svelte";
   import { ApiError, api, withTokenQuery } from "../api/client";
   import type { ContentHit, ReportFileStats } from "../api/types";
+  import { collapseContentHitsByFile } from "../search/results";
   import { isEditableText, isImage } from "../state/fileTypes";
   import {
     ensureGraphLoaded,
@@ -265,7 +266,7 @@
         }
         const res = await api.searchContent(q, { limit });
         if (myToken !== queryToken) return; // stale
-        chunkHits = res.hits;
+        chunkHits = collapseContentHitsByFile(res.hits);
         languageHits = [];
         active = 0;
         error = null;
@@ -686,63 +687,64 @@
 
 <OverlayShell id="search" open={searchPanel.open} onClose={close}>
   <div class="search" oncontextmenu={onSearchContextMenu} role="presentation">
-    <div class="results">
-      <header>
-        <button
-          type="button"
-          class="chrome-btn"
-          onclick={doToggleOverlayMaximized}
-          title={overlayMaximized.on ? "Restore size" : "Maximize"}
-          aria-label={overlayMaximized.on ? "Restore size" : "Maximize"}
-        >
-          {#if overlayMaximized.on}
-            <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-          {:else}
-            <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-          {/if}
-        </button>
-        <span class="title">Scope</span>
-        <select
-          class="scope-select"
-          value={searchPanel.scopeId}
-          onchange={(e) => {
-            searchPanel.scopeId = (e.currentTarget as HTMLSelectElement).value;
-          }}
-          title="search scope"
-        >
-          {#each scopeOptions as opt (opt.id)}
-            <option value={opt.id} disabled={opt.enabled === false}>
-              {opt.label}
-            </option>
-          {/each}
-        </select>
-        <button
-          type="button"
-          class="chrome-btn"
-          onclick={openSearchStatus}
-          title="Show search index status"
-          aria-label="Show search index status"
-        >
-          <Database size={14} strokeWidth={1.75} aria-hidden="true" />
-        </button>
-        <HamburgerMenu
-          bind:this={menu}
-          bind:open={menuOpen}
-          width={POPOVER_WIDTH}
-          height={POPOVER_HEIGHT}
-        >
-          {@render menuItems()}
-        </HamburgerMenu>
-        <button
-          type="button"
-          class="chrome-btn close"
-          onclick={close}
-          title="Close"
-          aria-label="Close"
-        >
-          <X size={14} strokeWidth={1.75} aria-hidden="true" />
-        </button>
-      </header>
+    <header>
+      <button
+        type="button"
+        class="chrome-btn"
+        onclick={doToggleOverlayMaximized}
+        title={overlayMaximized.on ? "Restore size" : "Maximize"}
+        aria-label={overlayMaximized.on ? "Restore size" : "Maximize"}
+      >
+        {#if overlayMaximized.on}
+          <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        {:else}
+          <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        {/if}
+      </button>
+      <span class="title">Scope</span>
+      <select
+        class="scope-select"
+        value={searchPanel.scopeId}
+        onchange={(e) => {
+          searchPanel.scopeId = (e.currentTarget as HTMLSelectElement).value;
+        }}
+        title="search scope"
+      >
+        {#each scopeOptions as opt (opt.id)}
+          <option value={opt.id} disabled={opt.enabled === false}>
+            {opt.label}
+          </option>
+        {/each}
+      </select>
+      <button
+        type="button"
+        class="chrome-btn"
+        onclick={openSearchStatus}
+        title="Show search index status"
+        aria-label="Show search index status"
+      >
+        <Database size={14} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+      <HamburgerMenu
+        bind:this={menu}
+        bind:open={menuOpen}
+        width={POPOVER_WIDTH}
+        height={POPOVER_HEIGHT}
+      >
+        {@render menuItems()}
+      </HamburgerMenu>
+      <button
+        type="button"
+        class="chrome-btn close"
+        onclick={close}
+        title="Close"
+        aria-label="Close"
+      >
+        <X size={14} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+    </header>
+    <div class="search-body">
+      <div class="results">
       <ul class="hits" bind:this={hitsEl}>
         {#each rows as r, i (r.key)}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -868,50 +870,51 @@
           <span class="muted">type to search · ↵ open · ↑↓ select</span>
         {/if}
       </div>
-    </div>
-    {#if searchPanel.inspectorOpen}
-      <Inspector
-        title="Details"
-        bind:width={paneWidths.search}
-        onResize={persistPaneWidths}
-        onClose={() => (searchPanel.inspectorOpen = false)}
-      >
-        <InspectorBody
-          selection={selection}
+      </div>
+      {#if searchPanel.inspectorOpen}
+        <Inspector
+          title="Details"
+          bind:width={paneWidths.search}
+          onResize={persistPaneWidths}
           onClose={() => (searchPanel.inspectorOpen = false)}
-          onNavigate={(p) => {
-            close();
-            void openInActivePane(p);
-          }}
-          onOpen={() => {
-            const sel = selection;
-            if (sel?.kind === "file") {
+        >
+          <InspectorBody
+            selection={selection}
+            onClose={() => (searchPanel.inspectorOpen = false)}
+            onNavigate={(p) => {
               close();
-              void openInActivePane(sel.path);
-            }
-          }}
-          onReveal={() => {
-            const sel = selection;
-            if (sel?.kind === "file") {
-              revealAndSelect(sel.path);
-              openBrowser();
-              browserOverlay.inspectorOpen = true;
-              close();
-            }
-          }}
-          onSetAsScope={() => {
-            const sel = selection;
-            if (sel?.kind === "tag") {
-              close();
-              openGraphForTag(sel.nodeId, sel.label);
-            }
-            // Mention "Set as Scope" stays unwired here — the
-            // search panel doesn't surface mention rows yet, so
-            // resolving a contact label would never fire.
-          }}
-        />
-      </Inspector>
-    {/if}
+              void openInActivePane(p);
+            }}
+            onOpen={() => {
+              const sel = selection;
+              if (sel?.kind === "file") {
+                close();
+                void openInActivePane(sel.path);
+              }
+            }}
+            onReveal={() => {
+              const sel = selection;
+              if (sel?.kind === "file") {
+                revealAndSelect(sel.path);
+                openBrowser();
+                browserOverlay.inspectorOpen = true;
+                close();
+              }
+            }}
+            onSetAsScope={() => {
+              const sel = selection;
+              if (sel?.kind === "tag") {
+                close();
+                openGraphForTag(sel.nodeId, sel.label);
+              }
+              // Mention "Set as Scope" stays unwired here — the
+              // search panel doesn't surface mention rows yet, so
+              // resolving a contact label would never fire.
+            }}
+          />
+        </Inspector>
+      {/if}
+    </div>
   </div>
 </OverlayShell>
 
@@ -944,6 +947,13 @@
 
 <style>
   .search {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+  }
+  .search-body {
     display: flex;
     flex: 1;
     min-height: 0;

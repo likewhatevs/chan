@@ -4,7 +4,7 @@
 // tests drive the same frame handler used by the real /ws watcher,
 // without mounting Svelte components or starting chan-server.
 
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   __testApplyOverlaysFromHash,
   assistantConversations,
@@ -13,6 +13,7 @@ import {
   beginAssistantStream,
   endAssistantStream,
   graphOverlay,
+  graphReloadSignal,
   onWatchEvent,
   persistStateToHash,
 } from "./store.svelte";
@@ -44,6 +45,7 @@ afterEach(() => {
   graphOverlay.filters.img = true;
   graphOverlay.inspectorOpen = false;
   graphOverlay.pendingSelectId = null;
+  graphReloadSignal.nonce = 0;
   window.history.replaceState(null, "", "/");
 });
 
@@ -334,6 +336,38 @@ describe("assistant lifecycle websocket frames", () => {
     onWatchEvent({ type: "llm.delta", session_id: "s1", text: "Two." });
 
     expect(assistantStream.text).toBe("One.\n\nTwo.");
+  });
+});
+
+describe("graph watcher reload signal", () => {
+  test("increments only while the graph overlay is open", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const body = url.includes("/api/graph")
+        ? { nodes: [], edges: [] }
+        : url.includes("/api/drive")
+          ? { name: "test", root: "/tmp/test", preferences: {} }
+          : [];
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    graphOverlay.open = false;
+
+    onWatchEvent({ kind: "modified", event: { path: "notes/a.md" } });
+    await Promise.resolve();
+    expect(graphReloadSignal.nonce).toBe(0);
+
+    graphOverlay.open = true;
+    onWatchEvent({ kind: "modified", event: { path: "notes/a.md" } });
+    await Promise.resolve();
+    expect(graphReloadSignal.nonce).toBe(1);
+
+    vi.clearAllTimers();
+    fetchSpy.mockRestore();
+    vi.useRealTimers();
   });
 });
 

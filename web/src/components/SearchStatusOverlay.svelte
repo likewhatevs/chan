@@ -5,11 +5,12 @@
   // explicit rebuild action.
 
   import { untrack } from "svelte";
-  import { Maximize2, Minimize2, RefreshCw, X } from "lucide-svelte";
+  import { Maximize2, Minimize2, Network, RefreshCw, X } from "lucide-svelte";
   import { api } from "../api/client";
   import type { ReportPrefix } from "../api/types";
   import {
     indexStatus,
+    openLanguageGraphForDrive,
     searchStatusOverlay,
   } from "../state/store.svelte";
   import {
@@ -44,6 +45,11 @@
 
   function doToggleOverlayMaximized(): void {
     setOverlayMaximized(!overlayMaximized.on);
+  }
+
+  function graphCodeReport(): void {
+    close();
+    openLanguageGraphForDrive();
   }
 
   async function loadReport(): Promise<void> {
@@ -172,7 +178,21 @@
       </section>
 
       <section>
-        <h3>Code Report</h3>
+        <div class="section-title">
+          <h3>Code Report</h3>
+          {#if report}
+            <button
+              type="button"
+              class="inline-action"
+              onclick={graphCodeReport}
+              title="Graph this code report"
+              aria-label="Graph this code report"
+            >
+              <Network size={14} strokeWidth={1.75} aria-hidden="true" />
+              <span>Graph this</span>
+            </button>
+          {/if}
+        </div>
         {#if reportLoading}
           <div class="placeholder">loading report...</div>
         {:else if reportError}
@@ -270,6 +290,32 @@
     letter-spacing: 0.05em;
     color: var(--text-secondary);
   }
+  .section-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .section-title h3 {
+    margin: 0;
+    flex: 1;
+    min-width: 0;
+  }
+  .inline-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 8px;
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    background: var(--btn-bg);
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  .inline-action:hover { border-color: var(--btn-hover); }
   .grid {
     display: grid;
     grid-template-columns: 8em minmax(0, 1fr);

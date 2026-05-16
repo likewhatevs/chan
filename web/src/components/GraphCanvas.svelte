@@ -40,11 +40,11 @@
   } from "d3-force";
   import type { GraphViewEdge, GraphViewNode } from "../api/types";
 
-  type RenderedEdgeKind = "link" | "tag" | "mention" | "group";
+  type RenderedEdgeKind = "link" | "tag" | "mention" | "language" | "group";
   type RenderedEdge = GraphViewEdge & { kind: RenderedEdgeKind };
   type RenderedNode = Extract<
     GraphViewNode,
-    { kind: "file" | "tag" | "mention" }
+    { kind: "file" | "tag" | "mention" | "language" | "folder" }
   >;
 
   // ---- props ------------------------------------------------------------
@@ -74,7 +74,7 @@
 
   // ---- types: d3-shaped working copies ---------------------------------
 
-  type DKind = "doc" | "img" | "contact" | "tag" | "mention";
+  type DKind = "doc" | "img" | "contact" | "tag" | "mention" | "language" | "folder";
   type DNode = {
     id: string;
     label: string;
@@ -195,6 +195,8 @@
     `<rect x='3.5' y='4' width='17' height='16' rx='2'/>` +
     `<circle cx='9' cy='10' r='1.6'/>` +
     `<polyline points='20 16 15 11 5 19'/>`;
+  const PATH_FOLDER =
+    `<path d='M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/>`;
 
   function svgStrokeIcon(inner: string, stroke: string): string {
     const svg =
@@ -239,6 +241,8 @@
     loadIcon(iconImages, "contact", svgStrokeIcon(PATH_CONTACT, bg));
     loadIcon(iconImages, "tag", svgTextIcon("#", bg));
     loadIcon(iconImages, "mention", svgStrokeIcon(PATH_CONTACT, bg));
+    loadIcon(iconImages, "language", svgTextIcon("{ }", bg));
+    loadIcon(iconImages, "folder", svgStrokeIcon(PATH_FOLDER, bg));
     // Ghost variants — stroked in text-secondary so the icon
     // reads against the empty bgCard fill the ghost ring sits
     // over. Same paths as the regular set; only the stroke
@@ -248,6 +252,8 @@
     loadIcon(ghostIconImages, "contact", svgStrokeIcon(PATH_CONTACT, ghostStroke));
     loadIcon(ghostIconImages, "tag", svgTextIcon("#", ghostStroke));
     loadIcon(ghostIconImages, "mention", svgStrokeIcon(PATH_CONTACT, ghostStroke));
+    loadIcon(ghostIconImages, "language", svgTextIcon("{ }", ghostStroke));
+    loadIcon(ghostIconImages, "folder", svgStrokeIcon(PATH_FOLDER, ghostStroke));
   }
 
   // ---- theme ------------------------------------------------------------
@@ -353,7 +359,9 @@
       if (!visibleNodeIds.has(n.id)) continue;
       const kind: DKind = n.kind === "file"
         ? classifyFile(n.path, n.node_kind)
-        : n.kind === "tag" ? "tag" : "mention";
+        : n.kind === "tag" ? "tag"
+          : n.kind === "mention" ? "mention"
+            : n.kind;
       const existing = nodeById.get(n.id);
       const missing = n.kind === "file" && Boolean(n.missing);
       const isFocal = focalSet.has(n.id);
@@ -404,14 +412,28 @@
         a.y = (Math.random() - 0.5) * 600;
       }
     }
-    // Pin focal nodes at origin so the cluster anchors there
-    // (matches the previous cytoscape behaviour). Non-focal nodes
-    // keep whatever fx/fy state they had (typically null).
+    // Pin focal nodes. Single-focus scopes stay centered at origin;
+    // multi-file/folder scopes fan their seeds around a small ring so
+    // they repel from distinct starting points instead of stacking.
+    const focalPositions = new Map<string, { x: number; y: number }>();
+    if (focalIds.length === 1) {
+      focalPositions.set(focalIds[0], { x: 0, y: 0 });
+    } else if (focalIds.length > 1) {
+      const radius = Math.max(70, Math.min(220, focalIds.length * 10));
+      focalIds.forEach((id, i) => {
+        const angle = (Math.PI * 2 * i) / focalIds.length - Math.PI / 2;
+        focalPositions.set(id, {
+          x: Math.cos(angle) * radius,
+          y: Math.sin(angle) * radius,
+        });
+      });
+    }
     for (const n of newById.values()) {
-      if (n.isFocal) {
-        n.fx = 0;
-        n.fy = 0;
-      } else if (n.fx === 0 && n.fy === 0) {
+      const pos = focalPositions.get(n.id);
+      if (pos) {
+        n.fx = pos.x;
+        n.fy = pos.y;
+      } else if (n.fx != null || n.fy != null) {
         // Was a focal; the new prop set demotes it. Release.
         n.fx = null;
         n.fy = null;
@@ -565,10 +587,10 @@
     // change strokeStyle once per kind.
     ctx.lineWidth = 1 / Math.max(0.5, transform.k);
     const edgesByKind: Record<RenderedEdgeKind, DEdge[]> = {
-      link: [], tag: [], mention: [], group: [],
+      link: [], tag: [], mention: [], language: [], group: [],
     };
     for (const e of visibleEdgeRefs) edgesByKind[e.kind].push(e);
-    for (const kind of ["link", "tag", "mention", "group"] as const) {
+    for (const kind of ["link", "tag", "mention", "language", "group"] as const) {
       const list = edgesByKind[kind];
       if (list.length === 0) continue;
       ctx.globalAlpha = 0.18;
@@ -576,6 +598,7 @@
         kind === "link" ? theme.text
         : kind === "tag" ? theme.tag
         : kind === "mention" ? theme.mention
+        : kind === "language" ? theme.accent
         : theme.accent;
       ctx.beginPath();
       for (const e of list) {
@@ -628,6 +651,8 @@
         : n.kind === "img" ? theme.img
         : n.kind === "contact" ? theme.mention
         : n.kind === "mention" ? theme.mention
+        : n.kind === "language" ? theme.accent
+        : n.kind === "folder" ? theme.tag
         : theme.tag;
       ctx.beginPath();
       ctx.arc(n.x, n.y, n.radius, 0, Math.PI * 2);

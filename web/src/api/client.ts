@@ -16,6 +16,7 @@ import type {
   GraphView,
   HeadingRow,
   IndexStatus,
+  LanguageGraphResponse,
   LlmCompletionRequest,
   LlmCompletionResponse,
   LlmStatus,
@@ -412,6 +413,14 @@ export const api = {
   links: () => req<GraphSnapshot>("GET", "/api/links"),
   /// Typed graph payload powering the graph view tab.
   graph: () => req<GraphView>("GET", "/api/graph"),
+  /// Language graph payload: language nodes connected to folder nodes.
+  languageGraph: (opts: { depth?: number; language?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.depth !== undefined) params.set("depth", String(opts.depth));
+    if (opts.language) params.set("language", opts.language);
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return req<LanguageGraphResponse>("GET", `/api/graph/languages${suffix}`);
+  },
   /// Filesystem graph payload: folders, files, symlinks, hardlinks,
   /// and ghost nodes. Distinct from the semantic markdown graph.
   fsGraph: (opts: { scope: "file" | "folder"; path: string; depth?: number }) =>

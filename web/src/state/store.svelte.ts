@@ -408,6 +408,9 @@ export function onWatchEvent(e: unknown): void {
   if (browserOverlay.open || graphOverlay.open) {
     void ensureGraphLoaded();
   }
+  if (graphOverlay.open) {
+    graphReloadSignal.nonce += 1;
+  }
   const inner = (e as { event?: { path?: string; to?: string } } | null)?.event;
   const paths = [inner?.path, inner?.to].filter(
     (p): p is string => typeof p === "string" && p.length > 0,
@@ -644,16 +647,16 @@ function readLayoutHash(): ReturnType<typeof serializeLayout> {
 /// order: link, tag, mention, img. All-on (the default) returns
 /// the empty string so a fresh graph open doesn't bloat the URL.
 function encodeGraphFilters(f: GraphFilters): string {
-  if (f.link && f.tag && f.mention && f.img) return "";
+  if (f.link && f.tag && f.mention && f.language && f.img) return "";
   const bit = (v: boolean) => (v ? "1" : "0");
-  return `${bit(f.link)}${bit(f.tag)}${bit(f.mention)}${bit(f.img)}`;
+  return `${bit(f.link)}${bit(f.tag)}${bit(f.mention)}${bit(f.language)}${bit(f.img)}`;
 }
 
 function decodeGraphFilters(s: string): GraphFilters {
   // Empty / missing string = defaults (all on).
   if (!s) return { ...DEFAULT_GRAPH_FILTERS };
   const ch = (i: number) => (s[i] === "0" ? false : true);
-  return { link: ch(0), tag: ch(1), mention: ch(2), img: ch(3) };
+  return { link: ch(0), tag: ch(1), mention: ch(2), language: ch(3), img: ch(4) };
 }
 
 /// Split `<flag>:<rest>` where flag is a single `0`/`1` for an
@@ -712,9 +715,11 @@ function applyOverlaysFromHash(): void {
     graphOverlay.filters.link = f.link;
     graphOverlay.filters.tag = f.tag;
     graphOverlay.filters.mention = f.mention;
+    graphOverlay.filters.language = f.language;
     graphOverlay.filters.img = f.img;
     if (ins === "0" || ins === "1") graphOverlay.inspectorOpen = ins === "1";
-    graphOverlay.mode = mode === "fs" ? "filesystem" : "semantic";
+    graphOverlay.mode =
+      mode === "fs" ? "filesystem" : mode === "lang" ? "language" : "semantic";
     graphOverlay.open = true;
   }
   if (params.has(HASH_ASSIST)) {
@@ -782,7 +787,12 @@ export function persistStateToHash(): void {
     // URLs stay readable (`graph=drive` instead of `graph=drive|1|`).
     const depth = String(graphOverlay.depth);
     const ins = graphOverlay.inspectorOpen ? "1" : "0";
-    const modeTail = graphOverlay.mode === "filesystem" ? "|fs" : "";
+    const modeTail =
+      graphOverlay.mode === "filesystem"
+        ? "|fs"
+        : graphOverlay.mode === "language"
+          ? "|lang"
+          : "";
     const insTail = graphOverlay.inspectorOpen || modeTail ? `|${ins}${modeTail}` : "";
     let val = graphOverlay.scopeId;
     if (chips || insTail) val = `${val}|${depth}|${chips}${insTail}`;
@@ -855,7 +865,7 @@ type SessionPayload = {
       open?: boolean;
       scopeId?: string;
       depth?: number;
-      mode?: "semantic" | "filesystem";
+      mode?: "semantic" | "filesystem" | "language";
     };
     /// Legacy fields from older session.json shapes; left here
     /// so a fresh schema doesn't reject them at read time.
@@ -930,7 +940,11 @@ function applySessionSidecars(p: SessionPayload): void {
   if (ov.graph && typeof ov.graph.depth === "number") {
     graphOverlay.depth = ov.graph.depth;
   }
-  if (ov.graph?.mode === "filesystem" || ov.graph?.mode === "semantic") {
+  if (
+    ov.graph?.mode === "filesystem" ||
+    ov.graph?.mode === "semantic" ||
+    ov.graph?.mode === "language"
+  ) {
     graphOverlay.mode = ov.graph.mode;
   }
 }
@@ -2396,6 +2410,7 @@ export type GraphFilters = {
   link: boolean;
   tag: boolean;
   mention: boolean;
+  language: boolean;
   img: boolean;
 };
 
@@ -2403,12 +2418,13 @@ export const DEFAULT_GRAPH_FILTERS: GraphFilters = {
   link: true,
   tag: true,
   mention: true,
+  language: true,
   img: true,
 };
 
 export const graphOverlay = $state<{
   open: boolean;
-  mode: "semantic" | "filesystem";
+  mode: "semantic" | "filesystem" | "language";
   /** Same id encoding as assistantOverlay.contextId
    *  (`file:<path>` | `group:<key>` | `drive`). */
   scopeId: string;
@@ -2436,12 +2452,38 @@ export const graphOverlay = $state<{
   pendingSelectId: null,
 });
 
+/// Incremented by watcher events while the graph overlay is open.
+/// GraphPanel consumes this as a lightweight reload signal and
+/// debounces the actual `/api/graph` request locally.
+export const graphReloadSignal = $state<{ nonce: number }>({ nonce: 0 });
+
 /** Open the graph overlay, snapping the scope to the active file
  *  when applicable. Idempotent, mirrors openAssistant. */
 export function openGraph(): void {
   graphOverlay.mode = "semantic";
   graphOverlay.scopeId = defaultScopeId();
   graphOverlay.pendingSelectId = null;
+  graphOverlay.open = true;
+  scheduleSessionSave();
+}
+
+/** Open the semantic graph for the whole drive. Drive scope renders
+ *  the full graph, so the depth knob is reset to its neutral value. */
+export function openGraphForDrive(): void {
+  graphOverlay.mode = "semantic";
+  graphOverlay.scopeId = "drive";
+  graphOverlay.depth = 1;
+  graphOverlay.pendingSelectId = null;
+  graphOverlay.open = true;
+  scheduleSessionSave();
+}
+
+export function openLanguageGraphForDrive(): void {
+  graphOverlay.mode = "language";
+  graphOverlay.scopeId = "drive";
+  graphOverlay.depth = 0;
+  graphOverlay.pendingSelectId = null;
+  graphOverlay.filters.language = true;
   graphOverlay.open = true;
   scheduleSessionSave();
 }

@@ -151,10 +151,27 @@ const MARK_FENCE_INFO = Decoration.mark({
 const LINE_FRONTMATTER = Decoration.line({
   attributes: { class: "cm-md-frontmatter" },
 });
-const LINE_LIST = Decoration.line({
-  attributes: { class: "cm-md-list-line" },
-});
 const HIDE = Decoration.replace({});
+
+const LIST_LINE_DECO = new Map<number, ReturnType<typeof Decoration.line>>();
+
+export function listDepthClass(text: string): string {
+  const leading = text.match(/^[ \t]*/)?.[0] ?? "";
+  let columns = 0;
+  for (const ch of leading) columns += ch === "\t" ? 2 : 1;
+  return `cm-md-list-depth-${Math.min(6, Math.floor(columns / 2))}`;
+}
+
+function listLineDecoration(text: string): ReturnType<typeof Decoration.line> {
+  const depth = Number(listDepthClass(text).slice("cm-md-list-depth-".length));
+  const cached = LIST_LINE_DECO.get(depth);
+  if (cached) return cached;
+  const deco = Decoration.line({
+    attributes: { class: `cm-md-list-line cm-md-list-depth-${depth}` },
+  });
+  LIST_LINE_DECO.set(depth, deco);
+  return deco;
+}
 
 const handleBlockquote: TokenHandler = (ctx) => {
   // Walk every line within the blockquote's range and emit the line
@@ -360,7 +377,7 @@ const handleTask: TokenHandler = (ctx) => {
   // TaskList emits a Task block-level node with a TaskMarker child
   // covering exactly `[ ]` / `[x]` / `[X]` — 3 chars).
   const line = ctx.state.doc.lineAt(ctx.node.from);
-  ctx.push(LINE_LIST, line.from, line.from);
+  ctx.push(listLineDecoration(line.text), line.from, line.from);
   const cursor = ctx.node.node.cursor();
   if (!cursor.firstChild()) return;
   do {
@@ -424,7 +441,7 @@ const handleBulletList: TokenHandler = (ctx) => {
   ).number;
   for (let n = startLine; n <= endLine; n++) {
     const line = ctx.state.doc.line(n);
-    ctx.push(LINE_LIST, line.from, line.from);
+    ctx.push(listLineDecoration(line.text), line.from, line.from);
   }
   // Replace `*` markers with a • glyph so the asterisk reads as a
   // proper bullet; leave `-` and `+` literal so the rendered text
@@ -465,7 +482,7 @@ const handleOrderedList: TokenHandler = (ctx) => {
   ).number;
   for (let n = startLine; n <= endLine; n++) {
     const line = ctx.state.doc.line(n);
-    ctx.push(LINE_LIST, line.from, line.from);
+    ctx.push(listLineDecoration(line.text), line.from, line.from);
   }
 };
 

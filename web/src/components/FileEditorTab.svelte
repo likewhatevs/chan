@@ -241,7 +241,7 @@
   // Re-uses the existing tab menu bubble (the same one that opens
   // from the tab dot). The bubble carries Duplicate / Rename /
   // mode-toggle / outline / style-toolbar plus our three new
-  // actions (Reload / Call assistant / Show in graph). Anchored at
+  // actions (Reload / Call assistant / Graph this). Anchored at
   // the click coords by synthesizing a zero-size rect.
 
   function onEditorContext(e: MouseEvent): void {
@@ -289,7 +289,7 @@
 
   function doOpenGraph(): void {
     closeTabMenu();
-    // "Show in Graph" from a file's menu scopes the graph to that
+    // "Graph this" from a file's menu scopes the graph to that
     // file (file:<path>), not the whole drive. Hashtags etc. still
     // route through openGraphAtNode at drive scope.
     openGraphForFile(tab.path);
@@ -512,7 +512,7 @@
           <span class="mbtn-icon">
             <Folder size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
-          <span class="mbtn-label">Files</span>
+          <span class="mbtn-label">Show File</span>
           <span class="mbtn-chord">{chordLabel("app.files.toggle")}</span>
         </button>
         <button class="mbtn" onclick={doOpenSearch}>
@@ -526,7 +526,7 @@
           <span class="mbtn-icon">
             <Network size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
-          <span class="mbtn-label">Graph</span>
+          <span class="mbtn-label">Graph this</span>
           <span class="mbtn-chord">{chordLabel("app.graph.toggle")}</span>
         </button>
         <button class="mbtn" onclick={doOpenAssistant}>
