@@ -30,7 +30,8 @@ pub use files::{
 };
 pub use fs_graph::{api_fs_graph, build_fs_graph, FsGraphResponse, FsGraphScope};
 pub use graph::{
-    api_backlinks, api_graph, api_headings, api_link_targets, api_links, api_resolve_link,
+    api_backlinks, api_graph, api_headings, api_language_graph, api_link_targets, api_links,
+    api_resolve_link,
 };
 pub use health::api_health;
 pub use llm::{api_llm_cli_detection, api_llm_complete, api_llm_status, api_llm_tools};

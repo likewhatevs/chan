@@ -17,7 +17,7 @@ use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_drive::EdgeKind;
+use chan_drive::{EdgeKind, ReportFileStats};
 use serde::{Deserialize, Serialize};
 
 use crate::error::err_from;
@@ -171,6 +171,56 @@ struct GraphEdgeView {
     broken: Option<bool>,
 }
 
+#[derive(Deserialize)]
+pub struct LanguageGraphParams {
+    #[serde(default)]
+    depth: u32,
+    #[serde(default)]
+    language: Option<String>,
+}
+
+#[derive(Serialize)]
+struct LanguageGraphResponse {
+    max_depth: u32,
+    nodes: Vec<LanguageGraphNode>,
+    edges: Vec<LanguageGraphEdge>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum LanguageGraphNode {
+    Language {
+        id: String,
+        label: String,
+        language: String,
+        files: u64,
+        code: u64,
+    },
+    Folder {
+        id: String,
+        label: String,
+        path: String,
+        files: u64,
+        code: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct LanguageGraphEdge {
+    source: String,
+    target: String,
+    kind: &'static str,
+    rank: u32,
+    files: u64,
+    code: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+struct LanguageFolderStats {
+    files: u64,
+    code: u64,
+}
+
 fn edge_kind_tag(k: EdgeKind) -> &'static str {
     match k {
         EdgeKind::Link => "link",
@@ -283,6 +333,163 @@ fn drive_image_files(drive: &chan_drive::Drive) -> std::collections::BTreeSet<St
     }
 }
 
+/// True only for regular files under the drive root.
+///
+/// In-drive symlinks, even healthy ones, are treated as missing so
+/// the graph's display truth matches what `chan-drive` would re-index
+/// on the next pass under its lstat semantics.
+fn indexed_file_exists(root: &std::path::Path, rel: &str) -> bool {
+    std::fs::symlink_metadata(root.join(rel))
+        .map(|m| m.file_type().is_file())
+        .unwrap_or(false)
+}
+
+fn language_node_id(language: &str) -> String {
+    format!("language:{language}")
+}
+
+fn folder_node_id(path: &str) -> String {
+    format!("folder:{path}")
+}
+
+fn folder_label(path: &str) -> String {
+    if path.is_empty() {
+        "/".to_string()
+    } else {
+        std::path::Path::new(path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(path)
+            .to_string()
+    }
+}
+
+fn parent_folder(path: &str) -> String {
+    std::path::Path::new(path)
+        .parent()
+        .and_then(|p| p.to_str())
+        .filter(|p| !p.is_empty())
+        .unwrap_or("")
+        .replace('\\', "/")
+}
+
+fn build_language_graph(
+    files: &[ReportFileStats],
+    depth: u32,
+    language_filter: Option<&str>,
+) -> LanguageGraphResponse {
+    let filter = language_filter.map(str::to_lowercase);
+    let mut by_language: std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, LanguageFolderStats>,
+    > = std::collections::BTreeMap::new();
+
+    for file in files {
+        if file.language.trim().is_empty() {
+            continue;
+        }
+        if let Some(filter) = &filter {
+            if file.language.to_lowercase() != *filter {
+                continue;
+            }
+        }
+        let folder = parent_folder(&file.path);
+        let stats = by_language
+            .entry(file.language.clone())
+            .or_default()
+            .entry(folder)
+            .or_default();
+        stats.files += 1;
+        stats.code += file.code;
+    }
+
+    let max_depth = by_language
+        .values()
+        .map(|folders| u32::try_from(folders.len()).unwrap_or(u32::MAX))
+        .max()
+        .unwrap_or(0);
+    let effective_depth = if depth == 0 {
+        max_depth
+    } else {
+        depth.min(max_depth)
+    };
+
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut folder_totals: std::collections::BTreeMap<String, LanguageFolderStats> =
+        std::collections::BTreeMap::new();
+
+    for (language, folders) in &by_language {
+        let mut ranked: Vec<(&String, &LanguageFolderStats)> = folders.iter().collect();
+        ranked.sort_by(|(a_path, a), (b_path, b)| {
+            b.files
+                .cmp(&a.files)
+                .then_with(|| b.code.cmp(&a.code))
+                .then_with(|| a_path.cmp(b_path))
+        });
+
+        let language_files = folders.values().map(|s| s.files).sum();
+        let language_code = folders.values().map(|s| s.code).sum();
+        nodes.push(LanguageGraphNode::Language {
+            id: language_node_id(language),
+            label: language.clone(),
+            language: language.clone(),
+            files: language_files,
+            code: language_code,
+        });
+
+        for (idx, (folder, stats)) in ranked.into_iter().enumerate() {
+            let rank = u32::try_from(idx + 1).unwrap_or(u32::MAX);
+            if effective_depth != 0 && rank > effective_depth {
+                continue;
+            }
+            let totals = folder_totals.entry(folder.clone()).or_default();
+            totals.files += stats.files;
+            totals.code += stats.code;
+            edges.push(LanguageGraphEdge {
+                source: language_node_id(language),
+                target: folder_node_id(folder),
+                kind: "language",
+                rank,
+                files: stats.files,
+                code: stats.code,
+            });
+        }
+    }
+
+    for (folder, stats) in folder_totals {
+        nodes.push(LanguageGraphNode::Folder {
+            id: folder_node_id(&folder),
+            label: folder_label(&folder),
+            path: folder,
+            files: stats.files,
+            code: stats.code,
+        });
+    }
+
+    LanguageGraphResponse {
+        max_depth,
+        nodes,
+        edges,
+    }
+}
+
+pub async fn api_language_graph(
+    State(state): State<Arc<AppState>>,
+    Query(p): Query<LanguageGraphParams>,
+) -> Response {
+    let report = match state.drive().report() {
+        Ok(r) => r,
+        Err(e) => return err_from(&e),
+    };
+    Json(build_language_graph(
+        &report.files,
+        p.depth,
+        p.language.as_deref(),
+    ))
+    .into_response()
+}
+
 pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
     let drive = state.drive();
     let graph = match drive.graph() {
@@ -311,6 +518,11 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
     // existing image lands on a real file node (the frontend then
     // styles file-kind nodes by extension via classifyFile).
     let image_files = drive_image_files(&drive);
+    let present_files: std::collections::BTreeSet<&str> = files
+        .iter()
+        .filter(|path| indexed_file_exists(drive.root(), path))
+        .map(String::as_str)
+        .collect();
 
     // Contact-kind file set, used to stamp `node_kind: "contact"` on
     // file nodes so the visualizer can render `chan.kind: contact`
@@ -357,6 +569,10 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
     let mut file_set: std::collections::BTreeSet<&str> = files.iter().map(String::as_str).collect();
     for img in &image_files {
         file_set.insert(img.as_str());
+    }
+    let mut present_file_set = present_files.clone();
+    for img in &image_files {
+        present_file_set.insert(img.as_str());
     }
 
     // Rewrite link-edge targets so URL-encoded / source-relative
@@ -416,7 +632,7 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
             } else {
                 None
             },
-            missing: false,
+            missing: !present_files.contains(path.as_str()),
         });
     }
     for img in &referenced_images {
@@ -501,7 +717,7 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
             target: e.dst.clone(),
             kind: edge_kind_tag(e.kind),
             broken: match e.kind {
-                EdgeKind::Link => Some(!file_set.contains(e.dst.as_str())),
+                EdgeKind::Link => Some(!present_file_set.contains(e.dst.as_str())),
                 _ => None,
             },
         })
@@ -584,6 +800,19 @@ pub async fn api_backlinks(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn report_file(path: &str, language: &str, code: u64) -> ReportFileStats {
+        ReportFileStats {
+            path: path.to_string(),
+            language: language.to_string(),
+            code,
+            comments: 0,
+            blanks: 0,
+            complexity: 0,
+            bytes: 0,
+            mtime: None,
+        }
+    }
 
     #[test]
     fn resolve_link_dst_decodes_percent_encoded_to_real_file() {
@@ -689,5 +918,173 @@ mod tests {
             resolve_link_dst("intro.md", "../../escape.md", &files),
             "../../escape.md",
         );
+    }
+
+    #[test]
+    fn indexed_file_exists_requires_regular_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("notes")).unwrap();
+        std::fs::write(tmp.path().join("notes/live.md"), "# live\n").unwrap();
+        std::fs::create_dir(tmp.path().join("notes/dir.md")).unwrap();
+
+        assert!(indexed_file_exists(tmp.path(), "notes/live.md"));
+        assert!(!indexed_file_exists(tmp.path(), "notes/missing.md"));
+        assert!(!indexed_file_exists(tmp.path(), "notes/dir.md"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn indexed_file_exists_treats_symlink_as_missing() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("target.md"), "# target\n").unwrap();
+        symlink("target.md", tmp.path().join("alias.md")).unwrap();
+
+        assert!(!indexed_file_exists(tmp.path(), "alias.md"));
+    }
+
+    #[test]
+    fn language_graph_ranks_folders_per_language() {
+        let graph = build_language_graph(
+            &[
+                report_file("crates/a/src/lib.rs", "Rust", 100),
+                report_file("crates/a/src/main.rs", "Rust", 40),
+                report_file("crates/b/lib.rs", "Rust", 400),
+                report_file("web/src/App.svelte", "Svelte", 80),
+            ],
+            0,
+            None,
+        );
+
+        assert_eq!(graph.max_depth, 2);
+        assert!(graph.nodes.contains(&LanguageGraphNode::Language {
+            id: "language:Rust".to_string(),
+            label: "Rust".to_string(),
+            language: "Rust".to_string(),
+            files: 3,
+            code: 540,
+        }));
+        assert!(graph.nodes.contains(&LanguageGraphNode::Folder {
+            id: "folder:crates/a/src".to_string(),
+            label: "src".to_string(),
+            path: "crates/a/src".to_string(),
+            files: 2,
+            code: 140,
+        }));
+        assert!(graph.edges.contains(&LanguageGraphEdge {
+            source: "language:Rust".to_string(),
+            target: "folder:crates/a/src".to_string(),
+            kind: "language",
+            rank: 1,
+            files: 2,
+            code: 140,
+        }));
+        assert!(graph.edges.contains(&LanguageGraphEdge {
+            source: "language:Rust".to_string(),
+            target: "folder:crates/b".to_string(),
+            kind: "language",
+            rank: 2,
+            files: 1,
+            code: 400,
+        }));
+    }
+
+    #[test]
+    fn language_graph_depth_and_language_filter_trim_edges() {
+        let graph = build_language_graph(
+            &[
+                report_file("a/one.rs", "Rust", 10),
+                report_file("b/two.rs", "Rust", 20),
+                report_file("web/App.svelte", "Svelte", 30),
+            ],
+            1,
+            Some("rust"),
+        );
+
+        assert_eq!(graph.max_depth, 2);
+        assert_eq!(graph.edges.len(), 1);
+        assert_eq!(graph.edges[0].source, "language:Rust");
+        assert_eq!(graph.edges[0].rank, 1);
+        assert!(graph.nodes.iter().any(
+            |n| matches!(n, LanguageGraphNode::Language { language, .. } if language == "Rust")
+        ));
+        assert!(!graph.nodes.iter().any(
+            |n| matches!(n, LanguageGraphNode::Language { language, .. } if language == "Svelte")
+        ));
+    }
+
+    #[test]
+    fn language_graph_breaks_ties_by_code_then_path() {
+        let graph = build_language_graph(
+            &[
+                report_file("z/lib.rs", "Rust", 10),
+                report_file("b/lib.rs", "Rust", 30),
+                report_file("a/lib.rs", "Rust", 30),
+            ],
+            0,
+            Some("Rust"),
+        );
+
+        let targets: Vec<&str> = graph
+            .edges
+            .iter()
+            .map(|edge| edge.target.as_str())
+            .collect();
+        assert_eq!(targets, ["folder:a", "folder:b", "folder:z"]);
+        assert_eq!(
+            graph.edges.iter().map(|edge| edge.rank).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn language_graph_renders_root_folder_with_slash_label() {
+        let graph = build_language_graph(&[report_file("lib.rs", "Rust", 12)], 0, None);
+
+        assert!(graph.nodes.contains(&LanguageGraphNode::Folder {
+            id: "folder:".to_string(),
+            label: "/".to_string(),
+            path: "".to_string(),
+            files: 1,
+            code: 12,
+        }));
+        assert!(graph.edges.contains(&LanguageGraphEdge {
+            source: "language:Rust".to_string(),
+            target: "folder:".to_string(),
+            kind: "language",
+            rank: 1,
+            files: 1,
+            code: 12,
+        }));
+    }
+
+    #[test]
+    fn language_graph_clamps_depth_to_max_depth() {
+        let graph = build_language_graph(
+            &[
+                report_file("a/lib.rs", "Rust", 10),
+                report_file("b/lib.rs", "Rust", 20),
+                report_file("c/lib.rs", "Rust", 30),
+            ],
+            99,
+            Some("Rust"),
+        );
+
+        assert_eq!(graph.max_depth, 3);
+        assert_eq!(graph.edges.len(), 3);
+        assert_eq!(
+            graph.edges.iter().map(|edge| edge.rank).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn language_graph_empty_drive_returns_empty_payload() {
+        let graph = build_language_graph(&[], 0, None);
+
+        assert_eq!(graph.max_depth, 0);
+        assert!(graph.nodes.is_empty());
+        assert!(graph.edges.is_empty());
     }
 }

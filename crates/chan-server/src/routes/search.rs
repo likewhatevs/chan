@@ -115,12 +115,9 @@ fn default_content_limit() -> u32 {
     20
 }
 
-/// `/api/search/content` view. Frontend's `ContentSearchResponse`
-/// is a flat hit list; chan-drive's `SearchResults` wraps per-file
-/// hits with a sub-array of snippets. We expand each snippet to its
-/// own ContentHit so the result palette can show one row per
-/// matching section. start_line isn't surfaced by chan-drive today;
-/// synthesized as 0 (the frontend sorts by score, not line).
+/// `/api/search/content` view. The search index can return multiple
+/// matching chunks/headings per file; the UI wants one row per file,
+/// carrying the best-ranked heading/snippet for that path.
 #[derive(Serialize)]
 struct ContentSearchResponse {
     /// True when the index is ready to serve queries. chan-drive
@@ -135,7 +132,7 @@ struct ContentSearchResponse {
     hits: Vec<ContentHit>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 struct ContentHit {
     path: String,
     chunk_id: String,
@@ -157,8 +154,9 @@ pub async fn api_search_content(
         })
         .into_response();
     }
+    let response_limit = normalized_content_limit(p.limit);
     let opts = SearchOpts {
-        limit: p.limit,
+        limit: expanded_content_candidate_limit(response_limit),
         scope: p.scope.clone(),
         // Mode defaults to Hybrid via SearchOpts::default; the
         // facade's BM25 fallback kicks in when the binary is built
@@ -169,24 +167,61 @@ pub async fn api_search_content(
         Ok(r) => r,
         Err(e) => return err_from(&e),
     };
-    let hits = results
-        .hits
-        .into_iter()
-        .map(|h| ContentHit {
-            path: h.path,
-            chunk_id: h.chunk_id,
-            heading: h.heading,
-            start_line: u32::try_from(h.start_line).unwrap_or(u32::MAX),
-            snippet: h.snippet,
-            score: h.score,
-        })
-        .collect();
+    let hits = collapse_hits_by_file(
+        results.hits.into_iter().map(ContentHit::from),
+        response_limit,
+    );
     Json(ContentSearchResponse {
         ready: results.ready,
         mode: results.mode,
         hits,
     })
     .into_response()
+}
+
+impl From<chan_drive::Hit> for ContentHit {
+    fn from(h: chan_drive::Hit) -> Self {
+        Self {
+            path: h.path,
+            chunk_id: h.chunk_id,
+            heading: h.heading,
+            start_line: u32::try_from(h.start_line).unwrap_or(u32::MAX),
+            snippet: h.snippet,
+            score: h.score,
+        }
+    }
+}
+
+fn normalized_content_limit(limit: u32) -> u32 {
+    if limit == 0 {
+        default_content_limit()
+    } else {
+        limit
+    }
+}
+
+fn expanded_content_candidate_limit(limit: u32) -> u32 {
+    let widened = limit.saturating_mul(8);
+    let cap = limit.max(200);
+    widened.min(cap)
+}
+
+/// Collapse score-descending search hits to the best hit per file.
+fn collapse_hits_by_file<I>(hits: I, limit: u32) -> Vec<ContentHit>
+where
+    I: IntoIterator<Item = ContentHit>,
+{
+    let mut out: Vec<ContentHit> = Vec::new();
+    for hit in hits {
+        if out.iter().any(|existing| existing.path == hit.path) {
+            continue;
+        }
+        out.push(hit);
+        if out.len() >= limit as usize {
+            break;
+        }
+    }
+    out
 }
 
 /// Index status snapshot. Reads the live `IndexStatus` from the
@@ -212,4 +247,59 @@ pub async fn api_index_rebuild(State(state): State<Arc<AppState>>) -> Response {
         Json(serde_json::json!({"queued": true})),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hit(path: &str, heading: &str, score: f32) -> ContentHit {
+        ContentHit {
+            path: path.to_string(),
+            chunk_id: format!("{path}:{heading}"),
+            heading: heading.to_string(),
+            start_line: 1,
+            snippet: heading.to_string(),
+            score,
+        }
+    }
+
+    #[test]
+    fn collapse_hits_by_file_keeps_first_ranked_heading() {
+        let hits = collapse_hits_by_file(
+            vec![
+                hit("a.md", "best", 10.0),
+                hit("b.md", "only", 8.0),
+                hit("a.md", "lower", 2.0),
+            ],
+            20,
+        );
+
+        assert_eq!(
+            hits,
+            vec![hit("a.md", "best", 10.0), hit("b.md", "only", 8.0)]
+        );
+    }
+
+    #[test]
+    fn collapse_hits_by_file_honors_limit_after_dedup() {
+        let hits = collapse_hits_by_file(
+            vec![
+                hit("a.md", "best", 10.0),
+                hit("a.md", "lower", 2.0),
+                hit("b.md", "next", 1.0),
+            ],
+            1,
+        );
+
+        assert_eq!(hits, vec![hit("a.md", "best", 10.0)]);
+    }
+
+    #[test]
+    fn expanded_content_candidate_limit_broadens_small_queries() {
+        assert_eq!(normalized_content_limit(0), default_content_limit());
+        assert_eq!(expanded_content_candidate_limit(20), 160);
+        assert_eq!(expanded_content_candidate_limit(50), 200);
+        assert_eq!(expanded_content_candidate_limit(500), 500);
+    }
 }
