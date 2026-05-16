@@ -72,6 +72,16 @@ pub fn is_indexable_text(rel: &str) -> bool {
     matches!(classify(rel), FileClass::EditableText)
 }
 
+/// True for files that should be parsed for Markdown-only semantic tokens.
+///
+/// `.txt` remains indexable text for full-text search, headings, and links, but
+/// it is not Markdown for tag extraction. Without this narrower gate a plain
+/// text note can create `#tag` graph nodes from incidental prose.
+pub fn is_markdown_file(rel: &str) -> bool {
+    rel.rsplit_once('.')
+        .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("md"))
+}
+
 /// Coarse content class derived from a path's extension and (for
 /// well-known no-extension files) basename. Drives:
 ///   - which files the editor reads/writes through the UTF-8 gate
@@ -1294,6 +1304,17 @@ mod tests {
         assert!(!is_indexable_text("doc.pdf"));
         assert!(!is_indexable_text("song.mp3"));
         assert!(!is_indexable_text(""));
+    }
+
+    #[test]
+    fn is_markdown_file_excludes_plain_text() {
+        assert!(is_markdown_file("note.md"));
+        assert!(is_markdown_file("README.MD"));
+        assert!(!is_markdown_file("notes/notes.txt"));
+        assert!(!is_markdown_file("src/main.py"));
+        assert!(!is_markdown_file("Cargo.toml"));
+        assert!(!is_markdown_file("Makefile"));
+        assert!(!is_markdown_file(""));
     }
 
     #[test]

@@ -2,7 +2,7 @@
 // are editable text, which are media (Image, Pdf), and how each
 // class flows through walk / index / graph.
 
-use chan_drive::{classify, ChanError, FileClass, Library, SearchOpts};
+use chan_drive::{classify, ChanError, EdgeKind, FileClass, Library, SearchOpts};
 use tempfile::TempDir;
 
 #[test]
@@ -20,13 +20,13 @@ fn file_type_policy_end_to_end() {
         .write_text(
             "notes/intro.md",
             "# Intro\n\nSee ![diagram](../media/diagram.png) and \
-             [whitepaper](../docs/spec.pdf).\n\nMore in notes/notes.txt.\n",
+             [whitepaper](../docs/spec.pdf).\n\nMore in notes/notes.txt.\n\n#phase2\n",
         )
         .unwrap();
     drive
         .write_text(
             "notes/notes.txt",
-            "shopping list: bread, milk, walnuts, sourdough\n",
+            "shopping list: bread, milk, walnuts, sourdough #plain-text\n",
         )
         .unwrap();
 
@@ -37,7 +37,10 @@ fn file_type_policy_end_to_end() {
     // grep-shaped to look for without colliding with markdown
     // chunk content.
     drive
-        .write_text("src/main.py", "def main():\n    return 'xyzzysentinel'\n")
+        .write_text(
+            "src/main.py",
+            "#include <stdio.h>\ndef main():\n    return 'xyzzysentinel'\n",
+        )
         .unwrap();
     drive
         .write_text("Cargo.toml", "[package]\nname = \"x\"\n")
@@ -178,6 +181,26 @@ fn file_type_policy_end_to_end() {
     assert!(
         dsts.contains(&"docs/spec.pdf"),
         "pdf link edge missing; dsts = {dsts:?}",
+    );
+    assert!(
+        neighbors
+            .iter()
+            .any(|e| e.kind == EdgeKind::Tag && e.dst == "#phase2"),
+        "Markdown #tag edge missing; neighbors = {neighbors:?}",
+    );
+
+    let tags = g.tags().unwrap();
+    assert!(
+        tags.iter().any(|tag| tag.name == "phase2"),
+        "Markdown tag missing from graph tags: {tags:?}",
+    );
+    assert!(
+        !tags.iter().any(|tag| tag.name == "plain-text"),
+        ".txt #tag should not be indexed as a graph tag: {tags:?}",
+    );
+    assert!(
+        !tags.iter().any(|tag| tag.name == "include"),
+        "source-looking #include should not be indexed as a graph tag: {tags:?}",
     );
 
     // Backlinks from the image perspective surface the embedding file.

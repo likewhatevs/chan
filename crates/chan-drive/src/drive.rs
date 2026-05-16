@@ -2430,7 +2430,10 @@ fn parse_for_graph(
         .map(|_| crate::graph::NodeKind::Contact)
         .unwrap_or(crate::graph::NodeKind::File);
     let links = markdown::extract_links(body_src);
-    let tokens = markdown::extract_tokens(body_src);
+    let mut tokens = markdown::extract_tokens(body_src);
+    if !fs_ops::is_markdown_file(rel) {
+        tokens.retain(|token| !matches!(token, markdown::Token::Tag { .. }));
+    }
     let edges = build_edges(rel, &links, &tokens);
     // Email extraction runs only for contact-kind files: a regular
     // note that mentions an email in passing should not get its
