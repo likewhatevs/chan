@@ -39,11 +39,29 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chan_drive::{Library, SearchOpts};
+use chan_drive::{Library, SearchOpts, WalkFilter};
 use chan_server::ServeConfig;
 use clap::{Parser, Subcommand};
 
 mod update;
+
+const DEFAULT_INDEX_EXCLUDED_DIRS: &[&str] = &[
+    ".git",
+    ".hg",
+    ".svn",
+    "node_modules",
+    "target",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".tox",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".cache",
+    "dist",
+    "build",
+];
 
 /// Extended description for `chan serve`. The keybindings list is
 /// generated from `web/src/state/shortcuts.ts` (the single source of
@@ -455,7 +473,13 @@ fn init_tracing(verbosity: u8) {
 }
 
 fn library() -> Result<Library> {
-    Library::open().context("opening chan registry")
+    let lib = Library::open().context("opening chan registry")?;
+    lib.set_walk_filter(default_index_walk_filter());
+    Ok(lib)
+}
+
+fn default_index_walk_filter() -> WalkFilter {
+    WalkFilter::new(DEFAULT_INDEX_EXCLUDED_DIRS.iter().copied())
 }
 
 /// Resolve the display name to register for `root`. Behavior:
@@ -1284,6 +1308,16 @@ mod tests {
         assert!(parse_idle_timeout("-5s").is_err()); // negative
         assert!(parse_idle_timeout("five s").is_err());
         assert!(parse_idle_timeout("1.5m").is_err()); // no fractional
+    }
+
+    #[test]
+    fn default_index_walk_filter_skips_common_noise_dirs() {
+        let filter = default_index_walk_filter();
+        for name in [".git", "node_modules", "target", "__pycache__", ".venv"] {
+            assert!(filter.is_excluded(name), "{name} should be excluded");
+        }
+        assert!(filter.is_excluded("NODE_MODULES"));
+        assert!(!filter.is_excluded("notes"));
     }
 
     #[test]
