@@ -6,12 +6,15 @@
 
 import { afterEach, describe, expect, test } from "vitest";
 import {
+  __testApplyOverlaysFromHash,
   assistantConversations,
   assistantStream,
   bareToolName,
   beginAssistantStream,
   endAssistantStream,
+  graphOverlay,
   onWatchEvent,
+  persistStateToHash,
 } from "./store.svelte";
 
 function resetStream(): void {
@@ -31,6 +34,17 @@ afterEach(() => {
   assistantConversations.drive = null;
   assistantConversations.byFile = {};
   assistantConversations.byGroup = {};
+  graphOverlay.open = false;
+  graphOverlay.mode = "semantic";
+  graphOverlay.scopeId = "drive";
+  graphOverlay.depth = 1;
+  graphOverlay.filters.link = true;
+  graphOverlay.filters.tag = true;
+  graphOverlay.filters.mention = true;
+  graphOverlay.filters.img = true;
+  graphOverlay.inspectorOpen = false;
+  graphOverlay.pendingSelectId = null;
+  window.history.replaceState(null, "", "/");
 });
 
 describe("assistant lifecycle websocket frames", () => {
@@ -349,5 +363,45 @@ describe("bareToolName", () => {
     expect(bareToolName("update_topic")).toBe("update_topic");
     expect(bareToolName("mcp__other__do_thing")).toBe("mcp__other__do_thing");
     expect(bareToolName("other::do_thing")).toBe("other::do_thing");
+  });
+});
+
+describe("graph overlay hash persistence", () => {
+  test("filesystem graph mode is encoded only when needed", () => {
+    window.history.replaceState(null, "", "/");
+    graphOverlay.open = true;
+    graphOverlay.mode = "filesystem";
+    graphOverlay.scopeId = "dir:src";
+    graphOverlay.depth = 1;
+
+    persistStateToHash();
+
+    expect(decodeURIComponent(window.location.hash)).toBe("#graph=dir:src|1||0|fs");
+  });
+
+  test("filesystem graph mode restores from the optional hash token", () => {
+    window.history.replaceState(null, "", "/#graph=file:src/app.ts|2||0|fs");
+    graphOverlay.mode = "semantic";
+    graphOverlay.scopeId = "drive";
+    graphOverlay.depth = 1;
+
+    __testApplyOverlaysFromHash();
+
+    expect(graphOverlay.open).toBe(true);
+    expect(graphOverlay.mode).toBe("filesystem");
+    expect(graphOverlay.scopeId).toBe("file:src/app.ts");
+    expect(graphOverlay.depth).toBe(2);
+    expect(graphOverlay.inspectorOpen).toBe(false);
+  });
+
+  test("legacy graph hashes default back to semantic mode", () => {
+    window.history.replaceState(null, "", "/#graph=file:README.md|3");
+    graphOverlay.mode = "filesystem";
+
+    __testApplyOverlaysFromHash();
+
+    expect(graphOverlay.mode).toBe("semantic");
+    expect(graphOverlay.scopeId).toBe("file:README.md");
+    expect(graphOverlay.depth).toBe(3);
   });
 });

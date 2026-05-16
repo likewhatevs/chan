@@ -23,6 +23,7 @@ frontend graph surface.
   - Added graph overlay mode: `semantic` or `filesystem`.
   - Added filesystem-specific file and directory open helpers.
   - Persisted graph mode in URL hash and session sidecars.
+  - Added a narrow test seam for URL-hash overlay restore.
 
 - `web/src/components/GraphPanel.svelte`
   - Loads `/api/fs-graph` when graph mode is filesystem and the current
@@ -35,6 +36,10 @@ frontend graph surface.
 - `web/src/App.svelte`
   - Includes graph mode in hash persistence reactivity.
 
+- `web/src/state/store.test.ts`
+  - Added regression coverage for filesystem graph mode hash
+    encode/restore and legacy semantic hash fallback.
+
 - `chan-pre-release-phase-1/webtest-smoke.mjs`
   - Tightened the File Browser `Graph this` smoke to require the
     filesystem graph status/filters, not just any graph overlay.
@@ -44,7 +49,7 @@ frontend graph surface.
 - `cd web && npm run check`
   - Passes with 0 errors and 0 warnings.
 - `cd web && npm test -- --run`
-  - Passes: 6 files / 94 tests.
+  - Passes: 6 files / 97 tests.
 - `node --check chan-pre-release-phase-1/webtest-smoke.mjs`
   - Passes.
 - Current-build browser smoke:
