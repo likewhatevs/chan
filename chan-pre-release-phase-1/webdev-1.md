@@ -22,12 +22,27 @@ Started on the frontend-only pre-release items from `request.md`:
   - Let chat bubbles grow to `max-width: 100%`.
   - Added blinking animation to the stream status orange dot.
 
+## 2026-05-16 active-turn follow-up
+
+Assistant-enabled CDP smoke later found one narrow-viewport layout miss:
+completed assistant bubbles were still content-width at 390px. Updated
+`InlineAssist.svelte` so assistant bubbles stretch across the chat column
+and their body fills the available width.
+
+The same smoke verifies active-turn pending badge, bottom pinning, and
+wide assistant bubble behavior through the isolated fake-Codex fixture.
+
 ## Verification
 
 - `cd web && npm run check`
   - Passes with 0 errors and 0 warnings.
+- `cd web && npm test -- --run`
+  - Passes: 6 files / 97 tests.
+- `CHAN_WEB_URL=http://127.0.0.1:8793/ CHAN_WEBTEST_ONLY=assistant node chan-pre-release-phase-1/webtest-smoke.mjs`
+  - Passes desktop and narrow active-turn assistant checks when run
+    against the isolated fake-Codex fixture.
 
 ## Notes
 
 - No backend/API changes.
-- No tests added; this is DOM layout behavior covered by Svelte type checking plus manual/browser verification.
+- The active-turn DOM behavior is covered by the CDP browser smoke.

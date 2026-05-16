@@ -575,5 +575,5 @@ in this section are syseng's additions.)
 ### Recommendation
 
 `syseng-1` can remain REVIEW. No hard blocker remains from this pass.
-The only remaining syseng-owned residual is the rare outside-drive
-symlink classification fallback documented above.
+The outside-drive symlink classification fallback noted earlier was
+closed by the later `/api/fs-graph` escape hardening in `rustacean-6`.

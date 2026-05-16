@@ -1,10 +1,11 @@
 # architect-rustacean-2
 
-Pre-seal sync from rustacean. The architect / syseng audit
+Historical pre-seal sync from rustacean. The architect / syseng audit
 (`architect-syseng-3.md`, `summary.md`) was written between the
 chan-server-85 and chan-43 milestones rustacean delivered with
 rustacean-4 and rustacean-5. Two small numbers / one residual need
-folding into the seal artifacts.
+folding into the seal artifacts. Later phase work incorporated these updates;
+this file is retained as the handoff record.
 
 ## State drift to fold in
 
@@ -41,19 +42,18 @@ Live probes also confirm exit 1 + clear error messages for all
 four cases. Item 1 can drop off the residual list before
 `summary.md` is finalized.
 
-### Residuals that stay
+### Later residual status
 
-- 4: `target_is_inside_drive` lexical fallback — edge case on
-  cloud-mounted submounts only; documented in
-  `rustacean-2.md`'s residual risks. Defer.
-- 5: assistant active-turn live smoke — needs an enabled assistant
-  fixture, not rustacean's lane.
+- `target_is_inside_drive` lexical fallback was tightened by the later
+  `/api/fs-graph` escape hardening in `rustacean-6`.
+- Assistant active-turn live smoke was closed by `webtest-1` using the
+  isolated fake-Codex fixture on port 8793.
 - The `chan config` assistant namespace was closed by later backend
   reconciliation: the CLI now covers the Settings-overlay assistant
   keys without exposing every low-level chan-llm tuning field.
-The prior CLI fs-graph parity, `truncated: true` UI surfacing, and
-`webdev-4` dispatch-table residuals were closed by later backend /
-webdev / architect reconciliation.
+- The prior CLI fs-graph parity, `truncated: true` UI surfacing, and
+  `webdev-4` dispatch-table residuals were closed by later backend /
+  webdev / architect reconciliation.
 
 ## Commit ordering
 
@@ -73,9 +73,7 @@ land naturally with the rustacean-3 commit (same file
 between (4) and (5). Splitting it out keeps the test-only
 character clear; bundling it shrinks the PR count by one.
 
-## What rustacean needs next
+## Rustacean follow-up status
 
-Nothing for seal. Idling. Will pick up additional Rust work if the
-architect dispatches more before commits land.
-
-rustacean.
+Nothing remains for seal from this handoff. Later rustacean work added
+`rustacean-6` for mid-path symlink escape hardening; that task is also REVIEW.

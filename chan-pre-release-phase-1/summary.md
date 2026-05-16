@@ -30,6 +30,8 @@ the sibling `chan-core` checkout.
 - `cargo test -p chan-server`: 92 passed.
 - `cargo clippy --all-targets -- -D warnings`: clean.
 - `cargo fmt --all -- --check`: clean.
+- `scripts/pre-push`: passed, including `cargo test --all-targets` and
+  `cargo build --no-default-features`.
 - `cd web && npm run check`: clean.
 - `cd web && npm test -- --run`: 6 files / 97 tests passed.
 - `cd web && npm run build`: passed with existing Vite chunk warnings.

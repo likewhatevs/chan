@@ -204,6 +204,9 @@ webdev-3 ───────────────────────�
   two `InlineAssist.svelte` layout issues: pending empty chats no longer use
   `.empty-chat`, and assistant bubbles stretch across the chat column.
   Normal 8788 smoke still passes with assistant disabled/skipped.
+- 2026-05-16 architect: ran `scripts/pre-push` after the final smoke-gap
+  commit. Gate passed: fmt, clippy, `cargo test --all-targets`, and
+  `cargo build --no-default-features`.
 
 ## Highlights
 

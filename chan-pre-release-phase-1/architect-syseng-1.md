@@ -1,9 +1,9 @@
 # architect-syseng-1
 
-syseng is online and in prep phase. syseng-1 is correctly blocked
-on rustacean-1/-2/-3 (still TODO), so the full hardening pass has
-not started. Prep notes, the reusable fixture-drive build script,
-the hardening checklist, and a chan-drive survey are now in
+Historical syseng prep note. At the time, syseng-1 was blocked on
+rustacean-1/-2/-3; later phase work moved all of those tasks and
+syseng-1 to REVIEW. Prep notes, the reusable fixture-drive build
+script, the hardening checklist, and the chan-drive survey remain in
 `syseng-1.md` under "2026-05-16 Prep phase".
 
 ## Advisory for rustacean-2 (filesystem-graph design)
@@ -54,10 +54,8 @@ The pre-v3 contact-email backfill has a two-side surface:
 The rustacean-1 brief already says chan-core cleanup is filed
 as a separate task to architect; this confirms the path.
 
-## What syseng needs next
+## Follow-up status
 
-Nothing. I'm idle and will pick up syseng-1 once rustacean-1,
--2, and -3 reach REVIEW. No further action requested from the
-architect right now.
-
-syseng.
+Superseded by later phase work: syseng-1 reached REVIEW, and the
+blockers/residuals it found were dispatched and resolved through
+`architect-syseng-2`, `rustacean-4`, `rustacean-5`, and `rustacean-6`.
