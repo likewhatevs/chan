@@ -99,9 +99,7 @@ The model parses YAML frontmatter from `read_file` output without
 needing a typed surface. Adding `list_contacts`, `backlinks`, or
 `neighbors` MCP tools would buy efficiency (avoid the
 list+read+search loop on large drives) but not new capability;
-that's tracked as
-[chan-writer/chan-core#3](https://github.com/chan-writer/chan-core/issues/3),
-not a v1 omission.
+that's tracked as a follow-up, not a v1 omission.
 
 The frontend reading the same files renders chips and the @ picker
 straight from chan-drive's `GraphView::contacts_filtered`, but

@@ -16,18 +16,20 @@ tunnel mode publishes the same drive at
 ```
 crates/
   chan           binary. CLI + dispatch.
+  chan-drive     filesystem, search, and graph primitives.
+  chan-llm       LLM backends, prompts, and tool sandbox.
+  chan-report    language/SLOC/COCOMO report support.
   chan-server    HTTP + WebSocket surface; embeds the web bundle.
+  chan-tunnel-*  tunnel protocol, client, and server libraries.
   fetch-models   build helper for the embedding-model bundle.
+
+desktop/         Tauri desktop shell. `desktop/src-tauri` is a
+                 workspace member; the app root stays at `desktop/`
+                 so Tauri's frontend paths remain conventional.
 
 web/             Svelte frontend, embedded into the binary at build
                  time via rust-embed.
 ```
-
-`chan` and `chan-server` depend on three crates from the sibling
-`chan-writer/chan-core` repo: `chan-drive` (filesystem, search,
-graph), `chan-llm` (LLM backends, prompts, tool sandbox, keys), and
-`chan-tunnel-client` (tunnel transport). The workspace assumes a
-sibling-checkout layout at `~/dev/github.com/chan-writer/{chan,chan-core}`.
 
 See [`design.md`](design.md) for the architecture and how the
 frontend embeds into the binary.
@@ -35,8 +37,6 @@ frontend embeds into the binary.
 ## Build
 
 ```bash
-git clone git@github.com:chan-writer/chan-core ../chan-core
-
 make                # frontend bundle + debug binary
 make build-release  # frontend + embedded model bundle + release binary
 make install        # copy target/release/chan to PREFIX/bin
@@ -141,20 +141,3 @@ The hook runs `cargo fmt --check`, `cargo clippy --all-targets --
 --no-default-features` with `RUSTFLAGS=-D warnings` before every
 push, mirroring CI. A passing local push therefore will not fail in
 GitHub Actions.
-
-### CI cross-repo auth
-
-CI needs to clone the chan-core sibling repo (private) to resolve
-the `chan-drive`, `chan-llm`, and `chan-tunnel-client` path deps.
-
-One-time setup:
-
-1. Create a fine-grained GitHub Personal Access Token at
-   https://github.com/settings/personal-access-tokens with
-   `Contents: Read` access on `chan-writer/chan-core`.
-2. On `chan-writer/chan`'s `Settings -> Secrets and variables ->
-   Actions`, add a secret named `chan_ci` with the PAT as its
-   value.
-
-Until the secret is set, CI's sibling-checkout step fails. The
-`fmt` job runs without it (no cross-repo dep needed for rustfmt).

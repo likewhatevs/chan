@@ -1,8 +1,8 @@
 .PHONY: run build check fmt fmt-check lint test clean chan-bin \
         app-signed app-notarized sign-prereqs notarize-prereqs
 
-# Sibling chan repo. Override via CHAN_REPO=/path on CI.
-CHAN_REPO ?= ../chan
+# Monorepo root. Override via CHAN_REPO=/path on CI.
+CHAN_REPO ?= ..
 TARGET_TRIPLE := $(shell rustc -vV | sed -n 's/host: //p')
 CHAN_BIN := src-tauri/binaries/chan-$(TARGET_TRIPLE)
 

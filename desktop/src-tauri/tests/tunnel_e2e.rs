@@ -68,6 +68,7 @@ async fn rewritten_path_reaches_registry_looked_up_tunnel() {
         dial_timeout: Duration::from_secs(5),
         events: None,
         proxy: None,
+        max_concurrent_substreams: ClientConfig::default().max_concurrent_substreams,
     };
     let (_reg, yconn) = dial(&cfg).await.expect("dial");
 

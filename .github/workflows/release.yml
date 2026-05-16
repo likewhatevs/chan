@@ -19,8 +19,6 @@ name: Release
 # .pkg until you sign + notarize it with a Developer ID; same
 # for Windows authenticode. Signing is a separate post-build
 # step gated on having the certificates loaded as repo secrets.
-#
-# Cross-repo auth: same chan_ci PAT pattern as ci.yml.
 
 on:
   push:
@@ -47,11 +45,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: chan
-      - uses: actions/checkout@v4
-        with:
-          repository: chan-writer/chan-core
-          path: chan-core
-          token: ${{ secrets.chan_ci }}
       - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
@@ -72,11 +65,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: chan
-      - uses: actions/checkout@v4
-        with:
-          repository: chan-writer/chan-core
-          path: chan-core
-          token: ${{ secrets.chan_ci }}
       - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
@@ -129,11 +117,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: chan
-      - uses: actions/checkout@v4
-        with:
-          repository: chan-writer/chan-core
-          path: chan-core
-          token: ${{ secrets.chan_ci }}
 
       - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@v1
