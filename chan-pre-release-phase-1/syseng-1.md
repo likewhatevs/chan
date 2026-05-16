@@ -43,8 +43,8 @@ and mark `syseng-1` REVIEW in `journal.md`.
 
 ## 2026-05-16 Prep phase
 
-Status: TODO (deps rustacean-1/-2/-3 are still TODO; the full
-hardening pass executes once they reach REVIEW). This section
+Historical status at prep time: waiting on rustacean-1/-2/-3 before the full
+hardening pass could execute. Later sections record the REVIEW result. This section
 captures durable prep work that is independent of the rustacean
 output: a reproducible fixture drive, the hardening checklist
 mapped to each scope bullet, and a survey of the chan-drive
@@ -562,7 +562,7 @@ bar.
 
 ```
 cargo build -p chan                       # ok
-cargo test -p chan-server                 # 89 passed
+cargo test -p chan-server                 # 92 passed
 cargo test -p chan                        # 46 passed
 cargo clippy --all-targets -- -D warnings # clean
 cargo fmt --all -- --check                # clean

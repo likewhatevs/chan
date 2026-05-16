@@ -16,7 +16,7 @@ Those were the rustacean-3 totals. With rustacean-4 and
 rustacean-5 landed (still REVIEW, uncommitted):
 
 ```
-cargo test -p chan-server                 # 89 passed
+cargo test -p chan-server                 # 92 passed
 cargo test -p chan                        # 46 passed
 cargo clippy --all-targets -- -D warnings # clean
 cargo fmt --all -- --check                # clean

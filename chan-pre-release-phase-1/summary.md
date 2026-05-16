@@ -1,7 +1,8 @@
 # Chan Pre-Release Phase 1 Summary
 
-Status: implementation and verification tasks are in REVIEW. No final commit
-has been made from this coordination pass.
+Status: implementation and verification tasks are in REVIEW with all known
+release smoke gaps closed. Phase changes are committed in the main repo and
+the sibling `chan-core` checkout.
 
 ## What Landed
 
@@ -26,24 +27,21 @@ has been made from this coordination pass.
 ## Verification
 
 - `cargo test -p chan`: 46 passed.
-- `cargo test -p chan-server`: 89 passed.
+- `cargo test -p chan-server`: 92 passed.
 - `cargo clippy --all-targets -- -D warnings`: clean.
 - `cargo fmt --all -- --check`: clean.
 - `cd web && npm run check`: clean.
-- `cd web && npm test -- --run`: 6 files / 94 tests passed.
+- `cd web && npm test -- --run`: 6 files / 97 tests passed.
 - `cd web && npm run build`: passed with existing Vite chunk warnings.
 - CDP browser smoke passed at desktop and narrow viewport for Search Status,
-  `language:TypeScript`, active-result scrolling, and File Browser
-  `Graph this`.
+  `language:TypeScript`, active-result scrolling, File Browser
+  `Graph this`, and assistant active-turn behavior via the isolated fake-Codex
+  fixture.
 - Syseng live fixture confirmed symlink watcher events return index status to
   Idle.
 
 ## Open Release Risks
 
-- Assistant active-turn browser smoke is instrumented with a fake Codex
-  fixture, but still needs a clean full-run sign-off. The assistant-enabled
-  retry reached the CDP runner; a shared Search Status step timed out before
-  the assistant assertion.
 - `.claude/` is untracked and was left untouched.
 
 ## Agent Quality

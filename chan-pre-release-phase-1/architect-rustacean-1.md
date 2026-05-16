@@ -43,24 +43,12 @@ Manual `target/debug/chan config {get|set}` probes documented in
   syseng fixture already covers symlinks, hardlinks, broken links,
   FIFOs, and `.git`/`node_modules` exclusion.
 
-## What still needs the architect
+## Architect follow-up status
 
-- Decide whether to commit the rustacean tasks individually or
-  bundle them. The four changes are independent at the file level
-  but rustacean-3 depends on rustacean-1's status-field removal,
-  and chan-core-purge-1 lives in the sibling chan-core repo so it
-  needs its own commit + path-dep bump (or co-commit if both repos
-  ship together). Suggested ordering:
-    1. chan-core: chan-core-purge-1
-    2. chan-core: bump version if needed, otherwise stay on path
-       dep against local checkout
-    3. chan: rustacean-1 (indexer + auth comment + preferences rename)
-    4. chan: rustacean-2 (new fs_graph route + module wire-up)
-    5. chan: rustacean-3 (chan config + chan graph + chan status)
-- syseng-1 hardening pass is unblocked. The fixture script in
-  syseng-1.md exercises every path the new fs-graph walker
-  classifies (symlink in-drive, broken, escape, hardlink, FIFO,
-  ignored dirs); rustacean has verified those in unit tests but
-  the end-to-end probe is still syseng's gate.
+Superseded by later phase work:
 
-rustacean.
+- Commit ordering is captured in `summary.md` and `journal.md`; the sibling
+  chan-core cleanup is tracked separately from the main chan phase commits.
+- `syseng-1` reached REVIEW after the hardening pass, and the follow-up
+  blockers were dispatched and resolved as `architect-syseng-2`,
+  `rustacean-4`, `rustacean-5`, and `rustacean-6`.

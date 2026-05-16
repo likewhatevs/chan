@@ -213,6 +213,19 @@ pub fn build_fs_graph(
         }
     };
 
+    // Mid-path symlink escape guard. `resolve_safe` is LEXICAL only:
+    // if the request path traverses through an in-drive symlink that
+    // points outside the drive (`escape-link -> /etc`), the join
+    // gives `<drive>/escape-link/hosts`, which `symlink_metadata`
+    // happily resolves to `/etc/hosts` because intermediate components
+    // are followed during path resolution (lstat only spares the
+    // leaf). Canonicalize the parent and verify it stays under the
+    // drive's canonical root. The leaf itself can still be a symlink;
+    // the walker classifies symlink leaves via readlink without
+    // following them, so an in-drive symlink to an outside file
+    // surfaces correctly as a ghost node.
+    ensure_parent_inside_drive(&root, &abs, &rel)?;
+
     let meta = match std::fs::symlink_metadata(&abs) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -260,6 +273,59 @@ pub fn build_fs_graph(
         edges,
         truncated,
     })
+}
+
+/// Verify that the parent of the joined request path resolves
+/// inside the drive root. Catches `path=alias-to-outside/x.md`
+/// where `alias-to-outside` is an in-drive symlink whose target
+/// escapes the drive — `resolve_safe` is lexical and lets that
+/// through, but the kernel will follow the intermediate symlink on
+/// `symlink_metadata` / `read_dir`. Drive root requests skip the
+/// check (the request resolves to the drive root itself; no parent
+/// to verify).
+fn ensure_parent_inside_drive(root: &Path, abs: &Path, rel: &str) -> Result<(), FsGraphError> {
+    if rel.is_empty() {
+        return Ok(());
+    }
+    let parent = match abs.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => return Ok(()),
+    };
+    // Canonicalize the drive root once per request. Cheap on local
+    // filesystems; pricier on cloud-synced mounts (iCloud / Dropbox)
+    // but still bounded by a single FS-provider round trip.
+    let root_canon = match root.canonicalize() {
+        Ok(c) => c,
+        // The drive root must canonicalize. If it doesn't (deleted
+        // out from under us, broken mount) we cannot serve the
+        // request safely — surface as 500 rather than silently
+        // allowing the lexical check.
+        Err(e) => {
+            return Err(FsGraphError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("canonicalize drive root: {e}"),
+            ));
+        }
+    };
+    // Parent equal to drive root is the common case (top-level file
+    // request); skip the canonicalize round trip.
+    if parent == root || parent == root_canon {
+        return Ok(());
+    }
+    let parent_canon = match parent.canonicalize() {
+        Ok(c) => c,
+        // Parent dir does not exist. Fall through to the caller's
+        // `symlink_metadata` call, which will surface the standard
+        // NOT_FOUND error for the leaf.
+        Err(_) => return Ok(()),
+    };
+    if !parent_canon.starts_with(&root_canon) {
+        return Err(FsGraphError::new(
+            StatusCode::BAD_REQUEST,
+            format!("path escapes drive root via mid-path symlink: {rel}"),
+        ));
+    }
+    Ok(())
 }
 
 /// Trim a leading slash and collapse `.` segments. Pure-`..` requests
@@ -1054,6 +1120,75 @@ mod tests {
             err.message.contains("requires a directory"),
             "expected directory-required rejection, got: {}",
             err.message
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_fs_graph_rejects_mid_path_symlink_escape() {
+        // syseng's design-snapshot flagged this: an in-drive symlink
+        // pointing OUTSIDE the drive root used to be silently
+        // followed when it appeared as a mid-path component, because
+        // `resolve_safe` is lexical only. A request like
+        // `path=alias/inside.md` (alias -> /etc) leaked /etc/inside.md
+        // metadata under a drive-relative id. ensure_parent_inside_drive
+        // closes that.
+        let (_cfg, root, drive) = open_drive();
+        // Build a symlink whose target is OUTSIDE the drive root,
+        // pointing at a directory that definitely exists on every
+        // posix system.
+        symlink("/etc", root.path().join("escape-link")).unwrap();
+
+        // Folder scope through the escape link: hostnames dir on
+        // macOS, hosts dir on Linux. Pick a path that's almost
+        // certainly present.
+        let err = build_fs_graph(&drive, FsGraphScope::Folder, "escape-link/ssl", 1).unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(
+            err.message.contains("escapes drive root"),
+            "expected mid-path escape rejection, got: {}",
+            err.message
+        );
+
+        // File scope through the escape link: any single file under
+        // /etc. `hosts` is the canonical pick.
+        let err = build_fs_graph(&drive, FsGraphScope::File, "escape-link/hosts", 1).unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(
+            err.message.contains("escapes drive root"),
+            "expected mid-path escape rejection, got: {}",
+            err.message
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_fs_graph_allows_in_drive_symlink_leaf_to_outside() {
+        // The mid-path guard must NOT reject when the LEAF itself is
+        // an in-drive symlink pointing outside the drive. The walker
+        // classifies that leaf via readlink and emits an outside-
+        // ghost node — that's the documented behavior, and it's the
+        // whole point of having a graph route over filesystems with
+        // symlinks.
+        let (_cfg, root, drive) = open_drive();
+        symlink("/etc/hosts", root.path().join("alias-outside.md")).unwrap();
+
+        let resp = build_fs_graph(&drive, FsGraphScope::File, "alias-outside.md", 0)
+            .expect("in-drive symlink leaf must be accepted");
+        // Expect the symlink node + an outside ghost target.
+        assert!(
+            resp.nodes
+                .iter()
+                .any(|n| n.id == "alias-outside.md" && n.kind == "symlink"),
+            "missing symlink node: {:?}",
+            resp.nodes.iter().map(|n| &n.id).collect::<Vec<_>>()
+        );
+        assert!(
+            resp.nodes
+                .iter()
+                .any(|n| n.id == "outside:alias-outside.md" && n.outside),
+            "missing outside-drive ghost node: {:?}",
+            resp.nodes.iter().map(|n| &n.id).collect::<Vec<_>>()
         );
     }
 

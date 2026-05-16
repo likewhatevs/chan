@@ -147,7 +147,7 @@ cargo fmt --all -- --check                # clean
 cargo build -p chan                       # ok
 cargo clippy --all-targets -- -D warnings # clean
 cargo test -p chan                        # 46 passed
-cargo test -p chan-server                 # 89 passed (covers fs-graph
+cargo test -p chan-server                 # 92 passed (covers fs-graph
                                             and EditorPrefs paths)
 target/debug/chan config get              # dumps TOML preferences
 target/debug/chan config get editor.theme # prints `system`

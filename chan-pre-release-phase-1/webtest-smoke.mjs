@@ -8,6 +8,18 @@ const BASE = process.env.CHAN_WEB_URL ?? "http://127.0.0.1:8788/";
 const CHROME =
   process.env.CHROME_BIN ??
   "/Users/fiorix/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const ONLY = new Set(
+  (process.env.CHAN_WEBTEST_ONLY ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+);
+const KNOWN_CHECKS = new Set(["search", "search-status", "graph", "assistant"]);
+for (const name of ONLY) {
+  if (!KNOWN_CHECKS.has(name)) {
+    throw new Error(`unknown CHAN_WEBTEST_ONLY check "${name}"`);
+  }
+}
 
 const checks = [];
 function pass(name, details = "") {
@@ -17,6 +29,9 @@ function pass(name, details = "") {
 function fail(name, err) {
   checks.push({ name, ok: false, details: String(err?.message ?? err) });
   console.error(`FAIL ${name} - ${String(err?.message ?? err)}`);
+}
+function shouldRun(name) {
+  return ONLY.size === 0 || ONLY.has(name);
 }
 
 async function launchChrome() {
@@ -304,6 +319,10 @@ async function smokeAssistant(page, width, height) {
     return true;
   })()`);
   await page.waitFor("!!document.querySelector('.assistant-body .bubble.assistant.pending .stream-status .dot')", 10000);
+  await page.waitFor(`(() => {
+    const s = document.querySelector('.assistant-body .scroll');
+    return !!s && s.scrollTop + s.clientHeight >= s.scrollHeight - 24;
+  })()`, 5000);
   const pending = await page.eval(`(() => {
     const status = document.querySelector('.assistant-body .bubble.assistant.pending .stream-status');
     const dot = status?.querySelector('.dot');
@@ -328,14 +347,24 @@ async function smokeAssistant(page, width, height) {
     const body = bodies[bodies.length - 1];
     const sr = scroll?.getBoundingClientRect();
     const br = body?.getBoundingClientRect();
+    const ss = scroll ? getComputedStyle(scroll) : null;
+    const contentWidth = sr && ss
+      ? sr.width - Number.parseFloat(ss.paddingLeft) - Number.parseFloat(ss.paddingRight)
+      : 0;
     return {
       nearBottom: scroll ? scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 24 : false,
-      bodyRatio: sr && br ? br.width / sr.width : 0,
+      bodyRatio: contentWidth && br ? br.width / contentWidth : 0,
+      scrollWidth: sr?.width ?? 0,
+      contentWidth,
+      bodyWidth: br?.width ?? 0,
+      bubbleWidth: body ? body.closest('.bubble')?.getBoundingClientRect().width ?? 0 : 0,
+      bodyWrapWidth: body ? body.closest('.body-wrap')?.getBoundingClientRect().width ?? 0 : 0,
+      alignSelf: body ? getComputedStyle(body.closest('.bubble')).alignSelf : '',
       overflow: document.documentElement.scrollWidth - window.innerWidth,
     };
   })()`);
   if (!completed.nearBottom) throw new Error("assistant chat was not pinned near the bottom after completion");
-  if (completed.bodyRatio < 0.6) throw new Error(`assistant bubble did not stretch enough: ratio ${completed.bodyRatio}`);
+  if (completed.bodyRatio < 0.6) throw new Error(`assistant bubble did not stretch enough: ${JSON.stringify(completed)}`);
   if (completed.overflow > 2) throw new Error(`document horizontal overflow ${completed.overflow}px`);
   pass(`Assistant active turn ${width}x${height}`, "pending badge, bottom pin, and wide bubble verified");
 }
@@ -344,15 +373,15 @@ async function main() {
   const chrome = await launchChrome();
   try {
     const desktop = await createPage(chrome.wsUrl);
-    await smokeSearch(desktop, 1440, 1000);
-    await smokeSearchStatus(desktop);
-    await smokeGraphThis(desktop, 1440, 1000);
-    await smokeAssistant(desktop, 1440, 1000);
+    if (shouldRun("search")) await smokeSearch(desktop, 1440, 1000);
+    if (shouldRun("search-status")) await smokeSearchStatus(desktop);
+    if (shouldRun("graph")) await smokeGraphThis(desktop, 1440, 1000);
+    if (shouldRun("assistant")) await smokeAssistant(desktop, 1440, 1000);
 
     const narrow = await createPage(chrome.wsUrl);
-    await smokeSearch(narrow, 390, 844);
-    await smokeGraphThis(narrow, 390, 844);
-    await smokeAssistant(narrow, 390, 844);
+    if (shouldRun("search")) await smokeSearch(narrow, 390, 844);
+    if (shouldRun("graph")) await smokeGraphThis(narrow, 390, 844);
+    if (shouldRun("assistant")) await smokeAssistant(narrow, 390, 844);
   } finally {
     await chrome.close();
   }

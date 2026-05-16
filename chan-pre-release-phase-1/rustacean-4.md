@@ -83,7 +83,7 @@ Same probe pre-fix returned `{"state":"error", ...}`.
 cargo fmt --all -- --check                # clean
 cargo build -p chan-server                # ok
 cargo clippy --all-targets -- -D warnings # clean (incl. items-after-test-module)
-cargo test -p chan-server                 # 89 passed
+cargo test -p chan-server                 # 92 passed
 cargo test -p chan                        # 46 passed
 ```
 

@@ -36,16 +36,14 @@ as direct input for `summary.md`.
 
 | Roadmap item                                                                                              | Deliverable                                                                                                                                                                  | Status                                                                              |
 |-----------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|
-| Chat scroll-keep with bottom margin + resize recalibration                                                | `webdev-1` double-rAF bottom pinning, 28px margin, `ResizeObserver` on chat container.                                                                                       | DONE on type-check + DOM behavior. Live transcript smoke gap recorded in webtest-1. |
-| Chat bubble width stretches to chat-area max                                                              | `webdev-1` `max-width: 100%` on chat bubbles.                                                                                                                                | DONE                                                                                |
+| Chat scroll-keep with bottom margin + resize recalibration                                                | `webdev-1` double-rAF bottom pinning, 28px margin, `ResizeObserver` on chat container. `webtest-1` later verified active-turn desktop and narrow smoke through the fake-Codex fixture. | DONE                                                                                |
+| Chat bubble width stretches to chat-area max                                                              | `webdev-1` `max-width: 100%` on chat bubbles; active-turn smoke tightened the assistant body to fill the chat column on narrow screens.                                      | DONE                                                                                |
 | Single orange-dot `thinking` badge (drop `thinking...` cycling)                                           | `webdev-1` removed the duplicate `thinking...` placeholder body when the status badge is visible.                                                                            | DONE                                                                                |
 | Orange dot blinks during thinking — parity with file editor tab                                           | `webdev-1` added blinking animation to the stream status orange dot.                                                                                                         | DONE                                                                                |
 
-Webtest residual: live assistant active-turn smoke deferred
-because the fixture drive has
-`preferences.assistant.effective_enabled:false`. Static / DOM
-behavior is type-checked; full visual confirmation needs a drive
-with an enabled assistant backend.
+Webtest follow-up: the original `/tmp/chan-dev` fixture keeps
+`preferences.assistant.effective_enabled:false`, so assistant-active smoke
+uses the isolated fake-Codex fixture recorded in `webtest-1.md`.
 
 ### Command line
 
@@ -59,7 +57,7 @@ with an enabled assistant backend.
 
 ```
 cargo build --release -p chan -p chan-server  # ok
-cargo test --workspace                        # chan-server 89, chan 46
+cargo test --workspace                        # chan-server 92, chan 46
 cargo clippy --all-targets -- -D warnings     # clean
 cargo fmt --all -- --check                    # clean
 otool -L target/release/chan                  # macOS system frameworks only
@@ -71,19 +69,12 @@ CLI config coverage landed during the phase.
 
 ## Residuals at seal
 
-These are non-blocking and documented across task files; surfacing
-here so summary.md can list them in one place.
-
-1. **Assistant active-turn live smoke** (from `webtest-1.md`).
-   Static/DOM checks green; needs a drive with assistant backend
-   enabled to verify the blinking dot, scroll-pin, and bubble
-   width behaviors under a real transcript.
+None from the syseng/front-end verification matrix. Assistant active-turn
+browser smoke is closed via `webtest-1.md`'s isolated fake-Codex fixture.
 
 ## Recommendation
 
-Phase 1 is sealable. The residual above is a browser-smoke gap, not
-a backend correctness blocker; it does not block "first canonical
-public version" semantics.
+Phase 1 is sealable from this verification matrix.
 
 Suggested commit ordering follows `architect-rustacean-1.md`:
 
@@ -91,14 +82,15 @@ Suggested commit ordering follows `architect-rustacean-1.md`:
 2. chan: `rustacean-1` (consumer-side backfill removed + comment /
    test rewording).
 3. chan: `rustacean-2` (`/api/fs-graph` route).
-4. chan: `rustacean-3` (CLI parity for config / graph / status).
-5. chan: `architect-syseng-2` fix (`apply_watch_change` helper +
+4. chan: `rustacean-6` (`/api/fs-graph` mid-path symlink escape fix).
+5. chan: `rustacean-3` (CLI parity for config / graph / status).
+6. chan: `architect-syseng-2` fix (`apply_watch_change` helper +
    7 indexer tests). Could fold into rustacean-2 or its own
    commit; recommend its own commit so the regression is
    discoverable in `git log`.
-6. chan: webdev-1, -2, -3, -4, -5 (frontend changes; can bundle
+7. chan: webdev-1, -2, -3, -4, -5 (frontend changes; can bundle
    given they all live under `web/`).
-7. chan: `syseng-1.md` + `architect-syseng-{1,2,3}.md` + the
+8. chan: `syseng-1.md` + `architect-syseng-{1,2,3}.md` + the
    `webtest-smoke.mjs` runner + the phase journal can land as a
    single phase-record commit so the engineering artifacts stay
    together.

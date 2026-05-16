@@ -2845,7 +2845,7 @@
     gap: 2px;
   }
   .bubble.user { align-self: flex-end; align-items: flex-end; }
-  .bubble.assistant { align-self: flex-start; align-items: flex-start; }
+  .bubble.assistant { align-self: stretch; align-items: flex-start; }
   /* The in-flight placeholder reads as a real bubble (same role
      line, same column) but with a slightly muted body so the
      user doesn't mistake the dots for actual assistant output. */
@@ -2932,6 +2932,11 @@
     position: relative;
     width: 100%;
   }
+  .bubble.assistant > .body,
+  .bubble.assistant .body-wrap > .body {
+    width: 100%;
+    box-sizing: border-box;
+  }
   /* Three-way render-mode toggle. Floats at the top-right corner
      of the reply body. Hidden until the bubble is hovered so the
      reading view stays uncluttered. Solid backdrop so it occludes
@@ -3015,6 +3020,7 @@
     background: var(--assistant-bubble-bg);
     padding: 6px 10px;
     border-radius: 8px;
+    max-width: 100%;
     font-size: 15px;
     line-height: 1.5;
     white-space: pre-wrap;

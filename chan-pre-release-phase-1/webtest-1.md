@@ -77,11 +77,9 @@ Additional work performed:
   `web/src/components/SearchPanel.svelte`.
 - Marked `webdev-2` REVIEW in `journal.md`.
 
-Remaining:
-
-- Full browser/viewport smoke for graph context menu, Search Status overlay,
-  assistant scrolling, and `language:<name>` search still needs an interactive
-  browser pass. This file stays out of REVIEW until that pass is recorded.
+Superseded by the browser-smoke entries below: graph context menu, Search
+Status, assistant active turns, and `language:<name>` search all now have CDP
+browser coverage.
 
 ## 2026-05-16 12:31 Europe/London: browser smoke
 
@@ -113,10 +111,9 @@ Browser smoke results:
 - Narrow 390x844: `language:TypeScript` search returns 25 report-backed file
   rows and keeps the active row visible after repeated ArrowDown.
 - Narrow 390x844: File Browser `Graph this` opens the Graph overlay.
-- Assistant overlay active-turn smoke is skipped in this fixture because
-  `/api/drive` reports `preferences.assistant.effective_enabled:false`.
-  Scrolling, bubble width under real transcript content, and live thinking
-  badge behavior still need a drive with an enabled assistant backend.
+- Assistant overlay active-turn smoke is skipped on the normal 8788 fixture
+  because `/api/drive` reports `preferences.assistant.effective_enabled:false`.
+  It is covered later by the isolated fake-Codex fixture.
 
 Issue found and fixed during smoke:
 
@@ -124,7 +121,7 @@ Issue found and fixed during smoke:
   `SearchPanel.svelte` now hydrates lazy folder listings before scanning
   per-file report rows.
 
-Status: REVIEW, with the assistant active-turn gap recorded above.
+Status: REVIEW.
 
 ## 2026-05-16 12:31 Europe/London: static/HTTP smoke refresh
 
@@ -150,8 +147,8 @@ HTTP smoke against the running webtest server:
 - `GET /api/search/files?q=&limit=5`: 200 OK, file rows returned.
 
 This is a non-interactive refresh of the already recorded CDP browser smoke
-above. `webtest-1` remains REVIEW. The only browser gap left is assistant
-active-turn behavior under a drive with an enabled assistant backend.
+above. `webtest-1` remains REVIEW; assistant active-turn behavior is covered
+later by the isolated fake-Codex fixture.
 
 ## 2026-05-16 12:41 Europe/London: filesystem graph smoke refresh
 
@@ -181,3 +178,50 @@ CDP browser results:
   `preferences.assistant.effective_enabled:false`.
 
 Status: REVIEW.
+
+## 2026-05-16 13:10 Europe/London: assistant-enabled smoke
+
+Closed the assistant active-turn browser gap using an isolated temporary
+server/config so the normal 8788 webtest service and user config stayed
+unchanged.
+
+Setup:
+
+- Normal webtest remains live at http://127.0.0.1:8788/ with
+  `/tmp/chan-dev`.
+- Isolated assistant smoke server ran at http://127.0.0.1:8793/ with
+  `/tmp/chan-assistant-only-drive`.
+- The isolated server used temp HOME/XDG dirs under
+  `/tmp/chan-assistant-only-home`.
+- Added `chan-pre-release-phase-1/fake-codex-smoke.sh`, a local fake Codex
+  executable that emits a delayed Codex JSON stream for deterministic browser
+  smoke.
+
+Issues found and fixed:
+
+- Assistant pending turns with zero persisted chat turns still used the
+  `.empty-chat` layout, so the narrow viewport did not stay pinned to the
+  pending bubble. `InlineAssist.svelte` now disables empty-chat layout while
+  the current stream is active.
+- Completed assistant bubbles were still content-width on narrow screens.
+  Assistant bubbles now stretch across the chat column so the body below the
+  role line can use the available width.
+- The smoke runner now forces a real navigation with a cache-busting query for
+  each hash-opened overlay; otherwise same-page hash navigations could skip
+  bootstrap-time overlay restoration.
+
+Verification:
+
+- `cd web && npm run check`: pass, 0 errors / 0 warnings.
+- `cd web && npm test -- --run`: pass, 6 files / 97 tests.
+- `node --check chan-pre-release-phase-1/webtest-smoke.mjs`: pass.
+- `cd web && npm run build`: pass; same existing Vite large-chunk /
+  ineffective dynamic import warnings.
+- `cargo build --release -p chan`: pass.
+- `CHAN_WEB_URL=http://127.0.0.1:8793/ CHAN_WEBTEST_ONLY=assistant node chan-pre-release-phase-1/webtest-smoke.mjs`:
+  pass, including assistant active turn at 1440x1000 and 390x844.
+- `node chan-pre-release-phase-1/webtest-smoke.mjs`: pass against the normal
+  8788 service, with assistant correctly skipped because `/tmp/chan-dev`
+  keeps assistants disabled.
+
+Status: REVIEW. No browser smoke gaps remain for webtest.
