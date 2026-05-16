@@ -74,4 +74,4 @@ Verification:
 - `cargo build --release -p chan`: pass.
 - `node chan-pre-release-phase-1/webtest-smoke.mjs`: pass.
 
-Status: REVIEW.
+Status: DONE.

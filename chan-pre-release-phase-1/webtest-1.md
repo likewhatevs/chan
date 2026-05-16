@@ -121,7 +121,7 @@ Issue found and fixed during smoke:
   `SearchPanel.svelte` now hydrates lazy folder listings before scanning
   per-file report rows.
 
-Status: REVIEW.
+Status: DONE.
 
 ## 2026-05-16 12:31 Europe/London: static/HTTP smoke refresh
 
@@ -177,7 +177,7 @@ CDP browser results:
 - Assistant overlay remains skipped because `/tmp/chan-dev` has
   `preferences.assistant.effective_enabled:false`.
 
-Status: REVIEW.
+Status: DONE.
 
 ## 2026-05-16 13:10 Europe/London: assistant-enabled smoke
 
@@ -224,4 +224,4 @@ Verification:
   8788 service, with assistant correctly skipped because `/tmp/chan-dev`
   keeps assistants disabled.
 
-Status: REVIEW. No browser smoke gaps remain for webtest.
+Status: DONE. No browser smoke gaps remain for webtest.

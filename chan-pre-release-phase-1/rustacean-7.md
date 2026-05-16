@@ -2,7 +2,7 @@
 
 Owner: rustacean. Surfaced by `architect-syseng-4.md`.
 
-Status: REVIEW.
+Status: DONE.
 
 ## Findings closed
 

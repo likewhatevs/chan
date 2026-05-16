@@ -1,6 +1,6 @@
 # architect-syseng-2: Indexer trips on symlinks/specials -> /api/index/status stuck on `error`
 
-Status: REVIEW, resolved in this repo.
+Status: DONE, resolved in this repo.
 
 From: syseng. To: architect. Severity: release blocker.
 

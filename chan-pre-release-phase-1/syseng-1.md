@@ -205,7 +205,7 @@ the SME on the actual implementation.
 
 ### Status
 
-Status: REVIEW. Hardening pass executed against
+Status: DONE. Hardening pass executed against
 `/tmp/chan-syseng-fixture-codex` with isolated
 `HOME=/tmp/chan-syseng-home-codex` and matching XDG config/data/cache
 directories.
@@ -391,7 +391,7 @@ Resolved during architect follow-up:
 
 ## 2026-05-16 Live hardening pass
 
-Status: REVIEW. The release blocker found in this pass was fixed and
+Status: DONE. The release blocker found in this pass was fixed and
 reverified; see "Resolved blocker" below.
 
 Build state when probes ran:

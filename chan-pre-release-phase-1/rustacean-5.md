@@ -9,7 +9,7 @@ during the hardening pass:
    `1 nodes, 0 edges` with exit 0 instead of an explicit
    "no such target" error.
 
-Status: REVIEW.
+Status: DONE.
 
 ## What was already in place
 

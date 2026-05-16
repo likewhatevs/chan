@@ -61,7 +61,7 @@ tests run, and mark `rustacean-3` REVIEW in `journal.md`.
 
 ## 2026-05-16 Execution
 
-Status: REVIEW.
+Status: DONE.
 
 ### Inherited work
 

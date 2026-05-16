@@ -1,6 +1,6 @@
 # architect-syseng-3: Phase 1 release-readiness audit
 
-From: syseng. To: architect. Status: REVIEW.
+From: syseng. To: architect. Status: DONE.
 
 Pre-seal audit pairing each `request.md` checkbox with its
 deliverable plus one final clean-tree verification gate. Intended

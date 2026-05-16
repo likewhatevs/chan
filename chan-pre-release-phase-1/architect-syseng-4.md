@@ -1,6 +1,6 @@
 # architect-syseng-4: Self-upgrade audit (crates/chan/src/update.rs)
 
-From: syseng. To: architect. Status: REVIEW. Severity: 1 finding
+From: syseng. To: architect. Status: DONE. Severity: 1 finding
 that affects Windows users in the first canonical release, plus 3
 non-blocking observations.
 

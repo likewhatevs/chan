@@ -15,24 +15,24 @@ SME hardening pass before commit.
 
 | Task        | Owner     | Status | Depends on |
 |-------------|-----------|--------|------------|
-| architect-1 | architect | REVIEW | -          |
-| rustacean-1 | rustacean | REVIEW | -          |
-| rustacean-2 | rustacean | REVIEW | -          |
-| webdev-1    | webdev    | REVIEW | rustacean-2 API shape (FROZEN, see rustacean-2.md) |
-| webdev-2    | webdev    | REVIEW | rustacean-2 API shape (FROZEN, see rustacean-2.md) |
-| webdev-3    | webdev    | REVIEW | -          |
-| rustacean-3 | rustacean | REVIEW | rustacean-1, rustacean-2 |
-| syseng-1    | syseng    | REVIEW | rustacean-1, rustacean-2, rustacean-3 (ALL REVIEW) |
-| webtest-1   | webtest   | REVIEW | webdev-1, webdev-2, webdev-3 |
-| chan-core-purge-1 | rustacean | REVIEW | rustacean-1 |
-| architect-syseng-2 | architect | REVIEW | - (release blocker filed by syseng) |
-| webdev-4 | webdev | REVIEW | webdev-2 |
-| webdev-5 | webdev | REVIEW | rustacean-2 |
-| rustacean-4 | rustacean | REVIEW | architect-syseng-2 |
-| rustacean-5 | rustacean | REVIEW | syseng-1 residuals 1+2 |
-| rustacean-6 | rustacean | REVIEW | rustacean-2 (mid-path symlink escape) |
-| architect-syseng-4 | architect | REVIEW | post-seal self-upgrade audit |
-| rustacean-7 | rustacean | REVIEW | architect-syseng-4 |
+| architect-1 | architect | DONE | -          |
+| rustacean-1 | rustacean | DONE | -          |
+| rustacean-2 | rustacean | DONE | -          |
+| webdev-1    | webdev    | DONE | rustacean-2 API shape (FROZEN, see rustacean-2.md) |
+| webdev-2    | webdev    | DONE | rustacean-2 API shape (FROZEN, see rustacean-2.md) |
+| webdev-3    | webdev    | DONE | -          |
+| rustacean-3 | rustacean | DONE | rustacean-1, rustacean-2 |
+| syseng-1    | syseng    | DONE | rustacean-1, rustacean-2, rustacean-3 (ALL DONE) |
+| webtest-1   | webtest   | DONE | webdev-1, webdev-2, webdev-3 |
+| chan-core-purge-1 | rustacean | DONE | rustacean-1 |
+| architect-syseng-2 | architect | DONE | - (release blocker filed by syseng) |
+| webdev-4 | webdev | DONE | webdev-2 |
+| webdev-5 | webdev | DONE | rustacean-2 |
+| rustacean-4 | rustacean | DONE | architect-syseng-2 |
+| rustacean-5 | rustacean | DONE | syseng-1 residuals 1+2 |
+| rustacean-6 | rustacean | DONE | rustacean-2 (mid-path symlink escape) |
+| architect-syseng-4 | architect | DONE | post-seal self-upgrade audit |
+| rustacean-7 | rustacean | DONE | architect-syseng-4 |
 
 Statuses: TODO, IN_PROGRESS, BLOCKED, REVIEW, DONE.
 

@@ -63,7 +63,7 @@ tests run, and mark `rustacean-2` REVIEW in `journal.md`.
 
 ## 2026-05-16 Execution
 
-Status: REVIEW.
+Status: DONE.
 
 ### Decision: route lives in chan-server
 

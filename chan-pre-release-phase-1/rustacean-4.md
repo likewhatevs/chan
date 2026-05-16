@@ -4,7 +4,7 @@ Owner: rustacean. Picked up after syseng filed
 `architect-syseng-2.md` as a release blocker during the
 hardening pass.
 
-Status: REVIEW.
+Status: DONE.
 
 ## Goal
 

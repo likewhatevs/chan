@@ -56,7 +56,7 @@ and `cargo build -p chan-server` in this repo still passes.
 
 ## 2026-05-16 Execution
 
-Status: REVIEW. Picked up by rustacean since this is Rust work and
+Status: DONE. Picked up by rustacean since this is Rust work and
 the context from rustacean-1 is hot. Architect can still review
 before sealing Phase 1.
 

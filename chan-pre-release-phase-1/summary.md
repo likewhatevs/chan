@@ -1,6 +1,6 @@
 # Chan Pre-Release Phase 1 Summary
 
-Status: implementation and verification tasks are in REVIEW with all known
+Status: implementation and verification tasks are DONE with all known
 release smoke gaps closed. Phase changes are committed in the main repo and
 the sibling `chan-core` checkout.
 

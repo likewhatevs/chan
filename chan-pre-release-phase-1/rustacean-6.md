@@ -3,7 +3,7 @@
 Owner: rustacean. Surfaced by rustacean's own pre-seal audit
 after architect-syseng-3 closed its formal review.
 
-Status: REVIEW.
+Status: DONE.
 
 ## What was broken
 

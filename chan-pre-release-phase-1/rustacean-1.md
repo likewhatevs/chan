@@ -56,7 +56,7 @@ run, residual risks, and mark `rustacean-1` REVIEW in `journal.md`.
 
 ## 2026-05-16 Execution
 
-Status: REVIEW.
+Status: DONE.
 
 ### Audit
 

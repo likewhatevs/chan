@@ -67,4 +67,4 @@ Findings:
 Update this file with findings, mark status REVIEW in `journal.md`, and
 create follow-up tasks only for concrete implementation work.
 
-Status: REVIEW.
+Status: DONE.
