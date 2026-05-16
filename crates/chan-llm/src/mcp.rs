@@ -281,10 +281,10 @@ the drive root and must end in .md or .txt. New files are capped \
 at 2 MiB; existing files can be edited up to their current size. \
 Pass `expected_mtime_ns` (from your earlier read_file response) \
 to make the write a compare-and-swap; on conflict the call \
-errors and you can re-read before retrying. The host may surface \
-a confirmation UI before the write hits disk; if it does, you \
-will receive a tool result indicating whether the user accepted \
-or rejected the proposed write.")]
+errors and you can re-read before retrying. Writes apply \
+immediately. When a request touches multiple files or feels \
+destructive, call AskUserQuestion first with a numbered plan and \
+wait for the user's answer before any write_file call.")]
     fn write_file(
         &self,
         Parameters(p): Parameters<WriteFileParams>,
