@@ -1,0 +1,118 @@
+# architect-syseng-3: Phase 1 release-readiness audit
+
+From: syseng. To: architect. Status: REVIEW.
+
+Pre-seal audit pairing each `request.md` checkbox with its
+deliverable plus one final clean-tree verification gate. Intended
+as direct input for `summary.md`.
+
+## Roadmap delivery map
+
+### Fresh new to the world
+
+| Roadmap item                                                | Deliverable                                                                                          | Status |
+|-------------------------------------------------------------|------------------------------------------------------------------------------------------------------|--------|
+| Clear migration code from internal iterative versions       | `rustacean-1` removed pre-v3 contact email backfill from `indexer.rs` + `cmd_status`. `chan-core-purge-1` removed the producer helper + tests in chan-drive.                                                | DONE   |
+| First canonical version: no pre-Chan migration paths        | `rustacean-1` audit + architect-1 audit classified the residual `legacy`/`schema_version`/`v[0-9]+` hits as external contract names or in-progress editor compat. No internal-version migration code remains. | DONE   |
+| Crystal clear comments + current-decision design doc        | `architect-1` wrote `design-snapshot.md` as a current-state contract. `rustacean-1` reworded `auth.rs` pre-release comment and renamed `pane_widths_legacy_file_*` test to snapshot tone.                  | DONE   |
+
+### Search and graph
+
+| Roadmap item                                                                | Deliverable                                                                                                                                                              | Status |
+|-----------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------|
+| Graph-like index for directories/files with symlinks, hardlinks, broken links | `rustacean-2` `GET /api/fs-graph` route; nodes `folder|file|symlink|ghost`, edges `contains|symlink|hardlink`. 11 unit tests + syseng-1 live probes (broken/escape/loop). | DONE   |
+| File Browser right-click `Graph this`                                       | `webdev-2` row context menu + `webdev-5` wired through to `/api/fs-graph`. webtest-1 smoke confirmed on desktop and narrow viewports.                                    | DONE   |
+| Graph overlay SCOPE: Folder with Parent Folder convenience                  | `webdev-2` `availableGraphScopes()` extension + folder/parent shortcuts.                                                                                                 | DONE   |
+| File-scope graph includes its Folder in the dropdown                        | `webdev-2` folder shortcut for direct file scopes.                                                                                                                       | DONE   |
+| Folder scope: graph files + subdirs from depth 1                            | `rustacean-2` default depth 1, `MAX_DEPTH=6`. Verified in syseng-1 probe (`folder_scope_depth_one_lists_direct_children`).                                                | DONE   |
+| Search index dashboard overlay (sibling-button pattern from Assistant)      | `webdev-3` new `SearchStatusOverlay.svelte`, button beside Search scope.                                                                                                 | DONE   |
+| Move DRIVE index info out of File Browser Inspector                         | `webdev-3` removed search-index section from `DriveInfoBody.svelte`.                                                                                                     | DONE   |
+| Dashboard: reset index button + visible rebuild progress                    | `webdev-3` `Rebuild index` button, polls `/api/index/status` while open.                                                                                                 | DONE   |
+| Dashboard: chan-report progress + SLOC-by-language                          | `webdev-3` loads `api.reportPrefix("")`, renders totals + per-language rollup.                                                                                           | DONE   |
+| `language:<name>` search using chan-report data                             | `webdev-2` + `webdev-4` parsing + scan via `api.reportFile(path)`. `webtest-1` fixed lazy-tree hydration bug during smoke (root-only scan).                              | DONE   |
+| Search arrow nav scrolls page, recalibrates on resize                       | `webdev-1` `ResizeObserver` on SearchPanel hits list + active-result scroll tracking. webtest-1 smoke confirmed.                                                         | DONE   |
+
+### Assistant
+
+| Roadmap item                                                                                              | Deliverable                                                                                                                                                                  | Status                                                                              |
+|-----------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|
+| Chat scroll-keep with bottom margin + resize recalibration                                                | `webdev-1` double-rAF bottom pinning, 28px margin, `ResizeObserver` on chat container.                                                                                       | DONE on type-check + DOM behavior. Live transcript smoke gap recorded in webtest-1. |
+| Chat bubble width stretches to chat-area max                                                              | `webdev-1` `max-width: 100%` on chat bubbles.                                                                                                                                | DONE                                                                                |
+| Single orange-dot `thinking` badge (drop `thinking...` cycling)                                           | `webdev-1` removed the duplicate `thinking...` placeholder body when the status badge is visible.                                                                            | DONE                                                                                |
+| Orange dot blinks during thinking — parity with file editor tab                                           | `webdev-1` added blinking animation to the stream status orange dot.                                                                                                         | DONE                                                                                |
+
+Webtest residual: live assistant active-turn smoke deferred
+because the fixture drive has
+`preferences.assistant.effective_enabled:false`. Static / DOM
+behavior is type-checked; full visual confirmation needs a drive
+with an enabled assistant backend.
+
+### Command line
+
+| Roadmap item                              | Deliverable                                                                                                              | Status                                  |
+|-------------------------------------------|--------------------------------------------------------------------------------------------------------------------------|-----------------------------------------|
+| `chan config {get|set}` editor settings   | `rustacean-3` `chan config` for editor namespace via `EditorPrefs::save`. Server-namespace get/set extended by architect. | DONE                                    |
+| `chan graph` queries by scope             | `backend-1` (off-band) + `rustacean-3` integration. `chan graph` queries the content graph; fs-graph CLI parity deferred.| DONE for content graph; FS-graph deferred.|
+| `chan status` overall drive/index/graph/report | `backend-1` `chan status` returns drive root, index stats, graph counts, chan-report SLOC/language/COCOMO summary, with optional `--json`. | DONE                                    |
+
+## Final verification gate (clean tree, syseng run 2026-05-16 12:36)
+
+```
+cargo build --release -p chan -p chan-server  # ok
+cargo test --workspace                        # chan-server 85, chan 43
+cargo clippy --all-targets -- -D warnings     # clean
+cargo fmt --all -- --check                    # clean
+otool -L target/release/chan                  # macOS system frameworks only
+target/release/chan size: 92.7 MB             # +200 KB vs pre-fix
+```
+
+Workspace test totals reflect the +7 indexer tests landed under
+`architect-syseng-2` (regression coverage for the symlink/FIFO
+classification fix).
+
+## Residuals at seal
+
+These are non-blocking and documented across task files; surfacing
+here so summary.md can list them in one place.
+
+1. **Outside-drive classification fallback** (from `rustacean-2.md`,
+   `syseng-1.md` residual 5). `target_is_inside_drive` falls back
+   to a lexical prefix check when `canonicalize` fails. Edge case
+   on cloud-mounted submounts only; not reproducible on APFS or
+   tmpfs.
+
+2. **Assistant active-turn live smoke** (from `webtest-1.md`).
+   Static/DOM checks green; needs a drive with assistant backend
+   enabled to verify the blinking dot, scroll-pin, and bubble
+   width behaviors under a real transcript.
+
+3. **`chan config` assistant namespace** (from
+   `architect-rustacean-1.md`). Editor + server keys covered;
+   assistant TOML schema deserves its own design pass and was
+   explicitly punted.
+
+## Recommendation
+
+Phase 1 is sealable. The three residuals above are either tiny
+follow-ups or known platform edges; none blocks "first canonical
+public version" semantics.
+
+Suggested commit ordering follows `architect-rustacean-1.md`:
+
+1. chan-core: `chan-core-purge-1` (producer-side backfill removed).
+2. chan: `rustacean-1` (consumer-side backfill removed + comment /
+   test rewording).
+3. chan: `rustacean-2` (`/api/fs-graph` route).
+4. chan: `rustacean-3` (CLI parity for config / graph / status).
+5. chan: `architect-syseng-2` fix (`apply_watch_change` helper +
+   7 indexer tests). Could fold into rustacean-2 or its own
+   commit; recommend its own commit so the regression is
+   discoverable in `git log`.
+6. chan: webdev-1, -2, -3, -4, -5 (frontend changes; can bundle
+   given they all live under `web/`).
+7. chan: `syseng-1.md` + `architect-syseng-{1,2,3}.md` + the
+   `webtest-smoke.mjs` runner + the phase journal can land as a
+   single phase-record commit so the engineering artifacts stay
+   together.
+
+syseng. Nothing else from me before seal.

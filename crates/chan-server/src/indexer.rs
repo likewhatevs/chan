@@ -133,22 +133,7 @@ impl Indexer {
                 tracing::warn!("indexer: initial graph check failed: {e}");
                 false
             });
-        // Pre-v3 contacts have NULL `emails` in the graph and won't
-        // match an email-substring `@` picker query until they're
-        // re-indexed. The graph migration cannot walk the disk on
-        // its own (no Drive handle), so we drive a one-shot full
-        // rebuild here on the first boot after upgrade. The flag
-        // clears as soon as every contact row has been re-parsed.
-        let emails_need_backfill = drive.contacts_need_email_backfill().unwrap_or_else(|e| {
-            tracing::warn!("indexer: contacts email-backfill check failed: {e}");
-            false
-        });
-        if initial_build && (stats.indexed_docs == 0 || graph_empty || emails_need_backfill) {
-            if emails_need_backfill {
-                tracing::info!(
-                    "indexer: pre-v3 contact rows detected; queueing one-shot rebuild to populate searchable emails"
-                );
-            }
+        if initial_build && (stats.indexed_docs == 0 || graph_empty) {
             // Best-effort: if the channel is full we already
             // queued a rebuild and the redundant request is fine
             // to drop.
@@ -292,14 +277,30 @@ fn spawn_watcher_loop(
                     };
                     let drive2 = drive_w.clone();
                     let p = change.path.clone();
-                    let result = if change.deleted {
-                        tokio::task::spawn_blocking(move || drive2.forget_file(&p)).await
-                    } else {
-                        tokio::task::spawn_blocking(move || drive2.index_file(&p)).await
-                    };
+                    let deleted = change.deleted;
+                    let result = tokio::task::spawn_blocking(move || {
+                        apply_watch_change(&drive2, &p, deleted)
+                    })
+                    .await;
                     match result {
-                        Ok(Ok(())) => set_idle(&drive_w, &status_w),
+                        Ok(Ok(ApplyOutcome::Indexed)) => set_idle(&drive_w, &status_w),
+                        Ok(Ok(ApplyOutcome::Forgotten)) => set_idle(&drive_w, &status_w),
+                        Ok(Ok(ApplyOutcome::SkippedSpecial))
+                        | Ok(Ok(ApplyOutcome::SkippedMissing)) => {
+                            // Symlinks/FIFOs/sockets/devices and "the
+                            // file was gone by the time we looked"
+                            // are not index health signals. Drop
+                            // back to Idle so the dashboard does
+                            // not flash "search is broken" on a
+                            // legitimate watcher event.
+                            set_idle(&drive_w, &status_w);
+                        }
                         Ok(Err(e)) => {
+                            tracing::warn!(
+                                path = %change.path,
+                                error = %e,
+                                "indexer: per-file apply failed"
+                            );
                             *status_w.lock().unwrap() = IndexStatus::Error {
                                 message: format!("{}: {e}", change.path),
                             };
@@ -381,6 +382,73 @@ struct PendingChange {
     path: String,
     deleted: bool,
     last_seen: Instant,
+}
+
+/// Result of applying one debounced watcher change. Distinguishes
+/// real index updates from "the path was never indexable to begin
+/// with" cases so the status reporter can stay calm. A user dropping
+/// a symlink into their drive must not park the indexer in `Error`
+/// forever (see syseng-1 hardening pass).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApplyOutcome {
+    /// `Drive::index_file` succeeded.
+    Indexed,
+    /// `Drive::forget_file` succeeded (delete event, or cleanup for
+    /// a vanished / replaced-by-symlink path).
+    Forgotten,
+    /// Path exists but is not a regular file (symlink, FIFO, socket,
+    /// device, directory). The chan-drive walker already drops these
+    /// from cold-boot indexing; the watch path mirrors that here.
+    /// Any prior index entry for the path is best-effort cleared via
+    /// `forget_file` in case a regular file was just replaced by a
+    /// symlink.
+    SkippedSpecial,
+    /// Path no longer exists by the time we looked (typical for a
+    /// quick create-then-delete burst). Same semantics as a Removed
+    /// event: forget any prior index entry.
+    SkippedMissing,
+}
+
+/// Per-file watch apply. Performs an explicit `std::fs::symlink_metadata`
+/// check on the drive-relative path and dispatches accordingly.
+///
+/// Symmetric with `chan_drive::fs_ops::walk_drive_with` — the cold-
+/// boot walker drops symlinks/specials, and this helper does the
+/// same for the watch path. Without this gate a single user-created
+/// symlink would surface `Drive::index_file`'s `SpecialFile` error
+/// and stick `IndexStatus::Error` until something else indexed
+/// successfully.
+fn apply_watch_change(
+    drive: &Drive,
+    path: &str,
+    deleted: bool,
+) -> chan_drive::Result<ApplyOutcome> {
+    if deleted {
+        drive.forget_file(path)?;
+        return Ok(ApplyOutcome::Forgotten);
+    }
+    let abs = match chan_drive::fs_ops::resolve_safe(drive.root(), path) {
+        Ok(abs) => abs,
+        Err(_) => return Ok(ApplyOutcome::SkippedMissing),
+    };
+    match std::fs::symlink_metadata(&abs) {
+        Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => {
+            drive.index_file(path)?;
+            Ok(ApplyOutcome::Indexed)
+        }
+        Ok(_) => {
+            // Path exists but is not indexable. Drop any stale row
+            // in case the path used to be a regular markdown file.
+            // forget_file is tolerant of "no such row".
+            let _ = drive.forget_file(path);
+            Ok(ApplyOutcome::SkippedSpecial)
+        }
+        Err(_) => {
+            // Vanished between the watcher event and our wake-up.
+            let _ = drive.forget_file(path);
+            Ok(ApplyOutcome::SkippedMissing)
+        }
+    }
 }
 
 /// Translate a `WatchEvent` into a markdown-only "rebuild this
@@ -498,5 +566,112 @@ fn set_idle(drive: &Drive, status: &Mutex<IndexStatus>) {
                 message: format!("stats: {e}"),
             };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chan_drive::Library;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn setup_drive() -> (TempDir, TempDir, Arc<Drive>) {
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        (cfg, drive_dir, drive)
+    }
+
+    #[test]
+    fn apply_watch_change_indexes_regular_file() {
+        let (_cfg, dir, drive) = setup_drive();
+        fs::write(dir.path().join("a.md"), "# A\n\nbody\n").unwrap();
+        let outcome = apply_watch_change(&drive, "a.md", false).unwrap();
+        assert_eq!(outcome, ApplyOutcome::Indexed);
+    }
+
+    #[test]
+    fn apply_watch_change_forgets_on_delete_flag() {
+        let (_cfg, _dir, drive) = setup_drive();
+        let outcome = apply_watch_change(&drive, "gone.md", true).unwrap();
+        assert_eq!(outcome, ApplyOutcome::Forgotten);
+    }
+
+    #[test]
+    fn apply_watch_change_skips_missing_path() {
+        let (_cfg, _dir, drive) = setup_drive();
+        let outcome = apply_watch_change(&drive, "never-existed.md", false).unwrap();
+        assert_eq!(outcome, ApplyOutcome::SkippedMissing);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_watch_change_skips_symlink_to_existing_target() {
+        let (_cfg, dir, drive) = setup_drive();
+        fs::write(dir.path().join("real.md"), "# Real\n").unwrap();
+        std::os::unix::fs::symlink("real.md", dir.path().join("alias.md")).unwrap();
+        let outcome = apply_watch_change(&drive, "alias.md", false).unwrap();
+        assert_eq!(outcome, ApplyOutcome::SkippedSpecial);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_watch_change_skips_broken_symlink() {
+        let (_cfg, dir, drive) = setup_drive();
+        std::os::unix::fs::symlink("does-not-exist.md", dir.path().join("broken.md")).unwrap();
+        let outcome = apply_watch_change(&drive, "broken.md", false).unwrap();
+        assert_eq!(outcome, ApplyOutcome::SkippedSpecial);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_watch_change_skips_fifo() {
+        // syseng-1 fixture had `attach/named.pipe`; the pre-fix
+        // watch path called `index_file` on a FIFO and stuck
+        // `IndexStatus::Error`. Probe with `mkfifo`; skip the
+        // assertion if the binary is unavailable so test runs on
+        // minimal containers stay green.
+        let (_cfg, dir, drive) = setup_drive();
+        let fifo_path = dir.path().join("attach.fifo");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo_path)
+            .status();
+        match status {
+            Ok(s) if s.success() => {}
+            _ => return,
+        }
+        let outcome = apply_watch_change(&drive, "attach.fifo", false).unwrap();
+        assert_eq!(outcome, ApplyOutcome::SkippedSpecial);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_watch_change_special_clears_prior_index_entry() {
+        // Regression: if a user replaces a regular .md with a symlink
+        // of the same name, the apply path should clean out the old
+        // index row instead of leaving it stale.
+        let (_cfg, dir, drive) = setup_drive();
+        fs::write(dir.path().join("a.md"), "# A\n").unwrap();
+        assert_eq!(
+            apply_watch_change(&drive, "a.md", false).unwrap(),
+            ApplyOutcome::Indexed
+        );
+        let before = drive.index_stats().unwrap().indexed_docs;
+        fs::remove_file(dir.path().join("a.md")).unwrap();
+        fs::write(dir.path().join("real.md"), "# Real\n").unwrap();
+        std::os::unix::fs::symlink("real.md", dir.path().join("a.md")).unwrap();
+        assert_eq!(
+            apply_watch_change(&drive, "a.md", false).unwrap(),
+            ApplyOutcome::SkippedSpecial
+        );
+        // Best-effort cleanup ran: the prior `a.md` row is gone.
+        let after = drive.index_stats().unwrap().indexed_docs;
+        assert!(
+            after < before,
+            "expected indexed_docs to drop after symlink replacement; before={before} after={after}"
+        );
     }
 }

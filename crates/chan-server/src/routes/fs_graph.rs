@@ -1,0 +1,982 @@
+//! Filesystem graph: directories, files, symlinks, hardlinks, and
+//! ghost nodes (broken or outside-drive symlink targets, plus
+//! special files like FIFOs and sockets that the content index
+//! deliberately drops).
+//!
+//! Distinct from `/api/graph`, which describes the *semantic* graph
+//! built from markdown content (file/tag/mention nodes, link/tag/
+//! mention edges). This route walks the actual filesystem under the
+//! drive root and reports its shape. Same drive sandbox invariants
+//! apply: requests are lexically resolved through
+//! `chan_drive::fs_ops::resolve_safe` so `..` traversal is rejected
+//! before any I/O.
+//!
+//! The walker uses `symlink_metadata` everywhere (lstat semantics) so
+//! a symlink is never confused with the file it points at. Symlink
+//! targets are classified but never traversed: their existence and
+//! whether they land inside the drive root drives the node kind, and
+//! traversal only follows `contains` edges (parent -> child) under
+//! real directories.
+//!
+//! Hardlinks are deduped by `(st_dev, st_ino)`. Two paths sharing the
+//! same inode are surfaced as two `file` nodes joined by a
+//! `hardlink` edge in addition to their parent `contains` edges.
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs::Metadata;
+use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use serde::{Deserialize, Serialize};
+
+use crate::error::err;
+use crate::state::AppState;
+
+/// Hard cap on `depth` for scope=folder. Six is enough for a project-
+/// style drive (a few levels of grouping) without letting a single
+/// request walk a deep dependency tree disguised as a notes drive.
+const MAX_DEPTH: usize = 6;
+
+/// Hard cap on emitted nodes. Past this the response is truncated and
+/// `truncated: true` flags it on the wire so the frontend can warn
+/// the user that they're looking at a partial graph.
+const MAX_NODES: usize = 10_000;
+
+#[derive(Deserialize)]
+pub struct FsGraphParams {
+    /// `file` or `folder`. Default `folder` so a bare
+    /// `/api/fs-graph?path=...` is the common case (drive overview /
+    /// directory snapshot).
+    #[serde(default = "default_scope")]
+    scope: FsGraphScope,
+    /// Drive-relative target. Empty / missing / `/` means the drive
+    /// root. Path is lexical: leading slash is trimmed,
+    /// `..`-traversal is rejected before any I/O.
+    #[serde(default)]
+    path: String,
+    /// For scope=folder: how many levels of children to walk.
+    /// Depth 1 means direct children only. Capped at `MAX_DEPTH`.
+    /// Ignored for scope=file (always returns the file and its
+    /// parent / symlink target).
+    #[serde(default = "default_depth")]
+    depth: usize,
+}
+
+fn default_scope() -> FsGraphScope {
+    FsGraphScope::Folder
+}
+
+fn default_depth() -> usize {
+    1
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FsGraphScope {
+    File,
+    Folder,
+}
+
+impl FsGraphScope {
+    fn label(self) -> &'static str {
+        match self {
+            FsGraphScope::File => "file",
+            FsGraphScope::Folder => "folder",
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct FsGraphResponse {
+    /// Drive root absolute path, identical to what `/api/drive`
+    /// reports. Included so the frontend can render breadcrumbs
+    /// without a follow-up call.
+    pub root: String,
+    pub scope: &'static str,
+    /// The request's `path` after lexical normalization (empty means
+    /// drive root).
+    pub path: String,
+    /// The effective folder depth used. For scope=file this is always
+    /// 0 (the file plus its parent / target are the response).
+    pub depth: usize,
+    pub nodes: Vec<NodeView>,
+    pub edges: Vec<EdgeView>,
+    /// True when the walker hit `MAX_NODES` and stopped early. Callers
+    /// should narrow the scope or reduce depth.
+    pub truncated: bool,
+}
+
+/// Node identifier shape:
+///
+///   - In-drive entries: drive-relative POSIX path. Drive root is
+///     the empty string.
+///   - Outside-drive symlink targets: `outside:<symlink-src>` where
+///     `<symlink-src>` is the drive-relative source path. Stable
+///     within a response so the frontend can hang labels off it; not
+///     suitable as a long-term identifier across responses since the
+///     symlink's target may change.
+///   - In-drive missing targets: drive-relative POSIX path of the
+///     would-be file. Marked `broken: true`.
+#[derive(Debug, Clone, Serialize)]
+pub struct NodeView {
+    pub id: String,
+    pub kind: &'static str,
+    /// Basename for the file / directory. For ghost-outside nodes
+    /// this is the literal `readlink` target so the frontend can
+    /// show something meaningful.
+    pub name: String,
+    /// Drive-relative path (POSIX). Same as `id` for in-drive nodes;
+    /// empty for outside-drive ghosts.
+    pub path: String,
+    /// File size in bytes (regular files only; 0 for everything
+    /// else).
+    pub size: u64,
+    /// Last-modified time in unix seconds, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mtime: Option<i64>,
+    /// Raw `readlink` target for symlink nodes. None for other kinds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// True for symlink targets that point outside the drive root.
+    /// Never traversed.
+    #[serde(skip_serializing_if = "is_false")]
+    pub outside: bool,
+    /// True for ghost nodes that represent missing in-drive targets
+    /// (broken `readlink`) or unreadable entries.
+    #[serde(skip_serializing_if = "is_false")]
+    pub broken: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EdgeView {
+    pub source: String,
+    pub target: String,
+    pub kind: &'static str,
+}
+
+#[derive(Debug)]
+pub struct FsGraphError {
+    status: StatusCode,
+    message: String,
+}
+
+impl FsGraphError {
+    fn new(status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for FsGraphError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for FsGraphError {}
+
+pub async fn api_fs_graph(
+    State(state): State<Arc<AppState>>,
+    Query(p): Query<FsGraphParams>,
+) -> Response {
+    let drive = state.drive();
+    match build_fs_graph(&drive, p.scope, &p.path, p.depth) {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => err(e.status, e.message),
+    }
+}
+
+pub fn build_fs_graph(
+    drive: &chan_drive::Drive,
+    scope: FsGraphScope,
+    path: &str,
+    requested_depth: usize,
+) -> Result<FsGraphResponse, FsGraphError> {
+    let root: PathBuf = drive.root().to_path_buf();
+    let rel = normalize_rel(path);
+    let abs = if rel.is_empty() {
+        root.clone()
+    } else {
+        match chan_drive::fs_ops::resolve_safe(&root, &rel) {
+            Ok(a) => a,
+            Err(e) => return Err(FsGraphError::new(StatusCode::BAD_REQUEST, e.to_string())),
+        }
+    };
+
+    let meta = match std::fs::symlink_metadata(&abs) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(FsGraphError::new(
+                StatusCode::NOT_FOUND,
+                format!("no such path: {rel}"),
+            ));
+        }
+        Err(e) => {
+            return Err(FsGraphError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("stat: {e}"),
+            ));
+        }
+    };
+
+    let depth = requested_depth.clamp(1, MAX_DEPTH);
+
+    // Reject scope=folder against a non-directory up front so the
+    // walker stays infallible; the wire error shape matches the
+    // 400 we use elsewhere.
+    if scope == FsGraphScope::Folder && !meta.is_dir() {
+        return Err(FsGraphError::new(
+            StatusCode::BAD_REQUEST,
+            format!("scope=folder requires a directory; {rel} is not"),
+        ));
+    }
+
+    let mut walker = FsGraphWalker::new(root.clone());
+    match scope {
+        FsGraphScope::File => walker.walk_file(&rel, &abs, &meta),
+        FsGraphScope::Folder => walker.walk_folder(&rel, &abs, &meta, depth),
+    }
+
+    let (nodes, edges, truncated) = walker.finish();
+    Ok(FsGraphResponse {
+        root: root.display().to_string(),
+        scope: scope.label(),
+        path: rel,
+        depth: match scope {
+            FsGraphScope::File => 0,
+            FsGraphScope::Folder => depth,
+        },
+        nodes,
+        edges,
+        truncated,
+    })
+}
+
+/// Trim a leading slash and collapse `.` segments. Pure-`..` requests
+/// pass through unchanged; `resolve_safe` will reject them with the
+/// standard error wire shape so this helper does not have to.
+fn normalize_rel(requested: &str) -> String {
+    let trimmed = requested.trim_start_matches('/');
+    if trimmed.is_empty() || trimmed == "." {
+        return String::new();
+    }
+    let mut out = PathBuf::new();
+    for c in Path::new(trimmed).components() {
+        match c {
+            Component::Normal(s) => out.push(s),
+            Component::CurDir => {}
+            _ => return trimmed.to_owned(),
+        }
+    }
+    out.to_string_lossy().replace('\\', "/")
+}
+
+#[cfg(unix)]
+fn inode_key(meta: &Metadata) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    Some((meta.dev(), meta.ino()))
+}
+
+#[cfg(not(unix))]
+fn inode_key(_meta: &Metadata) -> Option<(u64, u64)> {
+    None
+}
+
+#[cfg(unix)]
+fn nlink_of(meta: &Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink()
+}
+
+#[cfg(not(unix))]
+fn nlink_of(_meta: &Metadata) -> u64 {
+    1
+}
+
+fn mtime_of(meta: &Metadata) -> Option<i64> {
+    meta.modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs() as i64)
+}
+
+fn basename_of(rel: &str, abs: &Path) -> String {
+    if rel.is_empty() {
+        abs.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "/".into())
+    } else {
+        rel.rsplit('/').next().unwrap_or(rel).to_owned()
+    }
+}
+
+/// Internal accumulator. Holds the nodes/edges plus dedup tables so
+/// each path emits a single node and each pair of hardlinks emits a
+/// single `hardlink` edge.
+struct FsGraphWalker {
+    root: PathBuf,
+    root_canon: Option<PathBuf>,
+    nodes: BTreeMap<String, NodeView>,
+    edges: Vec<EdgeView>,
+    edge_set: HashSet<(String, String, &'static str)>,
+    /// Paths grouped by `(dev, ino)`. Filled as we visit files; used
+    /// to emit a single `hardlink` edge between any two paths sharing
+    /// the same inode.
+    inode_paths: HashMap<(u64, u64), Vec<String>>,
+    truncated: bool,
+}
+
+impl FsGraphWalker {
+    fn new(root: PathBuf) -> Self {
+        let root_canon = root.canonicalize().ok();
+        Self {
+            root,
+            root_canon,
+            nodes: BTreeMap::new(),
+            edges: Vec::new(),
+            edge_set: HashSet::new(),
+            inode_paths: HashMap::new(),
+            truncated: false,
+        }
+    }
+
+    fn finish(mut self) -> (Vec<NodeView>, Vec<EdgeView>, bool) {
+        // Emit one `hardlink` edge per pair of paths sharing an inode.
+        // Sort the group so the wire output is stable; `source <
+        // target` lexicographically.
+        let inode_paths = std::mem::take(&mut self.inode_paths);
+        let groups: Vec<Vec<String>> = inode_paths.into_values().filter(|v| v.len() >= 2).collect();
+        for mut group in groups {
+            group.sort();
+            for i in 0..group.len() {
+                for j in (i + 1)..group.len() {
+                    self.push_edge(group[i].clone(), group[j].clone(), "hardlink");
+                }
+            }
+        }
+        let nodes: Vec<NodeView> = self.nodes.into_values().collect();
+        (nodes, self.edges, self.truncated)
+    }
+
+    fn push_edge(&mut self, source: String, target: String, kind: &'static str) {
+        let key = (source.clone(), target.clone(), kind);
+        if self.edge_set.insert(key) {
+            self.edges.push(EdgeView {
+                source,
+                target,
+                kind,
+            });
+        }
+    }
+
+    fn insert_node(&mut self, node: NodeView) {
+        if self.nodes.len() >= MAX_NODES && !self.nodes.contains_key(&node.id) {
+            self.truncated = true;
+            return;
+        }
+        self.nodes.entry(node.id.clone()).or_insert(node);
+    }
+
+    /// File-scope walk: emit the requested path, its parent folder
+    /// (when not at drive root), and, if the path is a symlink,
+    /// classify its target. Folder targets are NOT walked here; we
+    /// stay shallow so `scope=file` is cheap.
+    fn walk_file(&mut self, rel: &str, abs: &Path, meta: &Metadata) {
+        self.visit_entry(rel, abs, meta);
+        if !rel.is_empty() {
+            let parent_rel = parent_rel(rel);
+            let parent_abs = abs
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| self.root.clone());
+            if let Ok(parent_meta) = std::fs::symlink_metadata(&parent_abs) {
+                self.visit_entry(&parent_rel, &parent_abs, &parent_meta);
+                self.push_edge(parent_rel, rel.to_owned(), "contains");
+            }
+        }
+    }
+
+    /// Folder-scope walk: emit the folder node, then walk its
+    /// children up to `depth` levels. Depth 1 = direct children
+    /// only. Caller MUST have verified that `meta.is_dir()`; the
+    /// route enforces this before invoking the walker.
+    fn walk_folder(&mut self, rel: &str, abs: &Path, meta: &Metadata, depth: usize) {
+        debug_assert!(meta.is_dir(), "walk_folder called on non-directory");
+        self.visit_entry(rel, abs, meta);
+        let mut visited_dirs: HashSet<(u64, u64)> = HashSet::new();
+        if let Some(key) = inode_key(meta) {
+            visited_dirs.insert(key);
+        }
+        self.walk_dir(rel, abs, depth, &mut visited_dirs);
+    }
+
+    fn walk_dir(
+        &mut self,
+        parent_rel: &str,
+        parent_abs: &Path,
+        depth_remaining: usize,
+        visited_dirs: &mut HashSet<(u64, u64)>,
+    ) {
+        if depth_remaining == 0 || self.nodes.len() >= MAX_NODES {
+            if depth_remaining > 0 {
+                self.truncated = true;
+            }
+            return;
+        }
+        let read = match std::fs::read_dir(parent_abs) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        // Collect + sort by basename so the wire output is stable
+        // (read_dir order is platform-defined).
+        let mut entries: Vec<(std::ffi::OsString, PathBuf)> = read
+            .filter_map(|r| r.ok())
+            .map(|e| (e.file_name(), e.path()))
+            .collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (name, child_abs) in entries {
+            let name_str = name.to_string_lossy();
+            // Skip drive-internal state. Mirrors chan-drive's walker
+            // exclusions so the graph view doesn't surface `.chan/`
+            // / `.git/` machinery.
+            if parent_rel.is_empty() && (name_str == ".chan" || name_str == ".git") {
+                continue;
+            }
+            let child_rel = if parent_rel.is_empty() {
+                name_str.to_string()
+            } else {
+                format!("{parent_rel}/{name_str}")
+            };
+            let child_meta = match std::fs::symlink_metadata(&child_abs) {
+                Ok(m) => m,
+                Err(_) => {
+                    let ghost = NodeView {
+                        id: child_rel.clone(),
+                        kind: "ghost",
+                        name: name_str.to_string(),
+                        path: child_rel.clone(),
+                        size: 0,
+                        mtime: None,
+                        target: None,
+                        outside: false,
+                        broken: true,
+                    };
+                    self.insert_node(ghost);
+                    self.push_edge(parent_rel.to_owned(), child_rel, "contains");
+                    continue;
+                }
+            };
+            self.visit_entry(&child_rel, &child_abs, &child_meta);
+            self.push_edge(parent_rel.to_owned(), child_rel.clone(), "contains");
+
+            if child_meta.is_dir() && !child_meta.file_type().is_symlink() {
+                if let Some(key) = inode_key(&child_meta) {
+                    if !visited_dirs.insert(key) {
+                        // Already walked this inode; skip to avoid
+                        // double-counting on platforms that allow
+                        // hardlinked dirs.
+                        continue;
+                    }
+                }
+                self.walk_dir(&child_rel, &child_abs, depth_remaining - 1, visited_dirs);
+            }
+        }
+    }
+
+    /// Emit a node for the path at `rel` with metadata `meta`. Records
+    /// hardlink candidates so `finish()` can emit dedup edges.
+    fn visit_entry(&mut self, rel: &str, abs: &Path, meta: &Metadata) {
+        let ft = meta.file_type();
+        let kind = if ft.is_symlink() {
+            "symlink"
+        } else if ft.is_dir() {
+            "folder"
+        } else if ft.is_file() {
+            "file"
+        } else {
+            // FIFOs, sockets, char/block devices. The content index
+            // drops these; the graph surfaces them as `ghost` so the
+            // user can still see they exist.
+            "ghost"
+        };
+
+        let mut node = NodeView {
+            id: rel.to_owned(),
+            kind,
+            name: basename_of(rel, abs),
+            path: rel.to_owned(),
+            size: if ft.is_file() { meta.len() } else { 0 },
+            mtime: mtime_of(meta),
+            target: None,
+            outside: false,
+            broken: false,
+        };
+
+        if ft.is_symlink() {
+            match std::fs::read_link(abs) {
+                Ok(target) => {
+                    node.target = Some(target.to_string_lossy().into_owned());
+                    self.insert_node(node);
+                    self.emit_symlink_target(rel, abs, &target);
+                    return;
+                }
+                Err(_) => {
+                    node.broken = true;
+                    self.insert_node(node);
+                    return;
+                }
+            }
+        }
+
+        if ft.is_file() {
+            if let Some(key) = inode_key(meta) {
+                if nlink_of(meta) > 1 {
+                    self.inode_paths
+                        .entry(key)
+                        .or_default()
+                        .push(rel.to_owned());
+                }
+            }
+        }
+
+        self.insert_node(node);
+    }
+
+    /// Classify a symlink target and emit the corresponding node +
+    /// `symlink` edge. Targets are NEVER traversed; we only stat them
+    /// to decide whether they exist, and emit one classification node.
+    fn emit_symlink_target(&mut self, src_rel: &str, src_abs: &Path, target: &Path) {
+        let target_abs: PathBuf = if target.is_absolute() {
+            target.to_path_buf()
+        } else {
+            let parent = src_abs.parent().unwrap_or(&self.root);
+            parent.join(target)
+        };
+
+        if !self.target_is_inside_drive(&target_abs) {
+            let ghost_id = format!("outside:{src_rel}");
+            let ghost = NodeView {
+                id: ghost_id.clone(),
+                kind: "ghost",
+                name: target.to_string_lossy().into_owned(),
+                path: String::new(),
+                size: 0,
+                mtime: None,
+                target: Some(target.to_string_lossy().into_owned()),
+                outside: true,
+                broken: false,
+            };
+            self.insert_node(ghost);
+            self.push_edge(src_rel.to_owned(), ghost_id, "symlink");
+            return;
+        }
+
+        let target_rel = match self.drive_relative_target(&target_abs) {
+            Some(s) => s,
+            None => {
+                // Could not pin the relative form. Treat as broken
+                // rather than outside-drive: the lexical check above
+                // already ruled out escape, so the most useful signal
+                // is "we can't find it".
+                let ghost_id = format!("broken:{src_rel}");
+                let ghost = NodeView {
+                    id: ghost_id.clone(),
+                    kind: "ghost",
+                    name: target.to_string_lossy().into_owned(),
+                    path: String::new(),
+                    size: 0,
+                    mtime: None,
+                    target: Some(target.to_string_lossy().into_owned()),
+                    outside: false,
+                    broken: true,
+                };
+                self.insert_node(ghost);
+                self.push_edge(src_rel.to_owned(), ghost_id, "symlink");
+                return;
+            }
+        };
+
+        let target_abs_in_root = self.root.join(&target_rel);
+        match std::fs::symlink_metadata(&target_abs_in_root) {
+            Ok(target_meta) => {
+                // Emit a node for the target. We deliberately do NOT
+                // recurse into `visit_entry` here: a chain
+                // `a -> b -> a` would otherwise re-enter
+                // `emit_symlink_target` for `b` and loop. The walker
+                // will reach the actual target through its own
+                // parent-`contains` descent and classify it fully
+                // there; from a symlink's perspective we only need
+                // the immediate target node + the edge.
+                self.insert_target_node(&target_rel, &target_abs_in_root, &target_meta);
+                self.push_edge(src_rel.to_owned(), target_rel, "symlink");
+            }
+            Err(_) => {
+                let ghost = NodeView {
+                    id: target_rel.clone(),
+                    kind: "ghost",
+                    name: target_rel
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(&target_rel)
+                        .to_owned(),
+                    path: target_rel.clone(),
+                    size: 0,
+                    mtime: None,
+                    target: Some(target.to_string_lossy().into_owned()),
+                    outside: false,
+                    broken: true,
+                };
+                self.insert_node(ghost);
+                self.push_edge(src_rel.to_owned(), target_rel, "symlink");
+            }
+        }
+    }
+
+    /// Insert a node for a symlink's resolved target without
+    /// recursing through its symlink chain. Mirrors the node shape
+    /// `visit_entry` produces but stops at the target itself; if the
+    /// target is also a symlink, we leave full classification to
+    /// whatever later visit reaches it as a parent-`contains` child
+    /// (or to a direct file-scope query against that path).
+    fn insert_target_node(&mut self, rel: &str, abs: &Path, meta: &Metadata) {
+        if self.nodes.contains_key(rel) {
+            return;
+        }
+        let ft = meta.file_type();
+        let kind = if ft.is_symlink() {
+            "symlink"
+        } else if ft.is_dir() {
+            "folder"
+        } else if ft.is_file() {
+            "file"
+        } else {
+            "ghost"
+        };
+        let target_readlink = if ft.is_symlink() {
+            std::fs::read_link(abs)
+                .ok()
+                .map(|t| t.to_string_lossy().into_owned())
+        } else {
+            None
+        };
+        let node = NodeView {
+            id: rel.to_owned(),
+            kind,
+            name: basename_of(rel, abs),
+            path: rel.to_owned(),
+            size: if ft.is_file() { meta.len() } else { 0 },
+            mtime: mtime_of(meta),
+            target: target_readlink,
+            outside: false,
+            broken: false,
+        };
+        self.insert_node(node);
+    }
+
+    fn target_is_inside_drive(&self, target_abs: &Path) -> bool {
+        // Canonicalize the deepest existing ancestor of `target_abs`
+        // (`canonicalize` fails on missing leaves; we mirror what the
+        // kernel will do on `open`). Compare against the canonical
+        // root when available.
+        let mut probe: &Path = target_abs;
+        let canon_target = loop {
+            match probe.canonicalize() {
+                Ok(c) => break Some(c),
+                Err(_) => match probe.parent() {
+                    Some(p) => probe = p,
+                    None => break None,
+                },
+            }
+        };
+
+        match (&self.root_canon, canon_target) {
+            (Some(root_canon), Some(t)) => t.starts_with(root_canon),
+            // Fall back to a lexical prefix check; better to misclassify
+            // a cloud-mounted drive than to refuse all symlinks.
+            _ => target_abs.starts_with(&self.root),
+        }
+    }
+
+    fn drive_relative_target(&self, target_abs: &Path) -> Option<String> {
+        if let Some(root_canon) = &self.root_canon {
+            if let Ok(canon_target) = target_abs.canonicalize() {
+                if let Ok(stripped) = canon_target.strip_prefix(root_canon) {
+                    return Some(posix_rel(stripped));
+                }
+            }
+        }
+        target_abs.strip_prefix(&self.root).ok().map(posix_rel)
+    }
+}
+
+fn posix_rel(stripped: &Path) -> String {
+    let mut out = String::new();
+    for (i, c) in stripped.components().enumerate() {
+        if let Component::Normal(s) = c {
+            if i > 0 {
+                out.push('/');
+            }
+            out.push_str(&s.to_string_lossy());
+        }
+    }
+    out
+}
+
+fn parent_rel(rel: &str) -> String {
+    match rel.rsplit_once('/') {
+        Some((parent, _)) => parent.to_owned(),
+        None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+
+    use tempfile::TempDir;
+
+    fn write(p: &Path, body: &str) {
+        if let Some(parent) = p.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(p, body).unwrap();
+    }
+
+    fn walk(root: &Path, scope: FsGraphScope, rel: &str, depth: usize) -> FsGraphResponse {
+        let mut walker = FsGraphWalker::new(root.to_path_buf());
+        let abs = if rel.is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(rel)
+        };
+        let meta = std::fs::symlink_metadata(&abs).expect("stat scope");
+        match scope {
+            FsGraphScope::Folder => walker.walk_folder(rel, &abs, &meta, depth),
+            FsGraphScope::File => walker.walk_file(rel, &abs, &meta),
+        }
+        let (nodes, edges, truncated) = walker.finish();
+        FsGraphResponse {
+            root: root.display().to_string(),
+            scope: scope.label(),
+            path: rel.to_owned(),
+            depth: match scope {
+                FsGraphScope::File => 0,
+                FsGraphScope::Folder => depth,
+            },
+            nodes,
+            edges,
+            truncated,
+        }
+    }
+
+    fn node_kind<'a>(resp: &'a FsGraphResponse, id: &str) -> Option<&'a str> {
+        resp.nodes.iter().find(|n| n.id == id).map(|n| n.kind)
+    }
+
+    fn has_edge(resp: &FsGraphResponse, src: &str, dst: &str, kind: &str) -> bool {
+        resp.edges
+            .iter()
+            .any(|e| e.source == src && e.target == dst && e.kind == kind)
+    }
+
+    #[test]
+    fn folder_scope_depth_one_lists_direct_children() {
+        let tmp = TempDir::new().unwrap();
+        write(&tmp.path().join("top.md"), "# top");
+        write(&tmp.path().join("sub/nested.md"), "# n");
+        write(&tmp.path().join("sub/deep/deep.md"), "# d");
+
+        let resp = walk(tmp.path(), FsGraphScope::Folder, "", 1);
+        assert_eq!(node_kind(&resp, "top.md"), Some("file"));
+        assert_eq!(node_kind(&resp, "sub"), Some("folder"));
+        // Depth=1 must NOT enumerate sub's contents.
+        assert!(
+            node_kind(&resp, "sub/nested.md").is_none(),
+            "depth=1 leaked grandchildren: {:?}",
+            resp.nodes.iter().map(|n| &n.id).collect::<Vec<_>>()
+        );
+        assert!(has_edge(&resp, "", "top.md", "contains"));
+        assert!(has_edge(&resp, "", "sub", "contains"));
+    }
+
+    #[test]
+    fn folder_scope_deeper_includes_grandchildren() {
+        let tmp = TempDir::new().unwrap();
+        write(&tmp.path().join("sub/nested.md"), "# n");
+        write(&tmp.path().join("sub/deep/deep.md"), "# d");
+
+        let resp = walk(tmp.path(), FsGraphScope::Folder, "sub", 2);
+        assert_eq!(node_kind(&resp, "sub/nested.md"), Some("file"));
+        assert_eq!(node_kind(&resp, "sub/deep"), Some("folder"));
+        assert_eq!(node_kind(&resp, "sub/deep/deep.md"), Some("file"));
+    }
+
+    #[test]
+    fn drive_internal_dirs_are_hidden() {
+        let tmp = TempDir::new().unwrap();
+        write(&tmp.path().join("top.md"), "# t");
+        write(&tmp.path().join(".chan/lock"), "x");
+        write(&tmp.path().join(".git/HEAD"), "x");
+
+        let resp = walk(tmp.path(), FsGraphScope::Folder, "", 2);
+        assert!(node_kind(&resp, ".chan").is_none(), "saw .chan node");
+        assert!(node_kind(&resp, ".git").is_none(), "saw .git node");
+        assert_eq!(node_kind(&resp, "top.md"), Some("file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_in_drive_target_existing() {
+        let tmp = TempDir::new().unwrap();
+        write(&tmp.path().join("top.md"), "# t");
+        symlink("top.md", tmp.path().join("alias.md")).unwrap();
+
+        let resp = walk(tmp.path(), FsGraphScope::Folder, "", 1);
+        assert_eq!(node_kind(&resp, "alias.md"), Some("symlink"));
+        assert_eq!(node_kind(&resp, "top.md"), Some("file"));
+        assert!(
+            has_edge(&resp, "alias.md", "top.md", "symlink"),
+            "missing in-drive symlink edge: {:?}",
+            resp.edges
+                .iter()
+                .map(|e| (&e.source, &e.target, e.kind))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_broken_emits_ghost() {
+        let tmp = TempDir::new().unwrap();
+        symlink("does-not-exist.md", tmp.path().join("broken.md")).unwrap();
+
+        let resp = walk(tmp.path(), FsGraphScope::Folder, "", 1);
+        assert_eq!(node_kind(&resp, "broken.md"), Some("symlink"));
+        let ghost = resp
+            .nodes
+            .iter()
+            .find(|n| n.id == "does-not-exist.md")
+            .expect("missing ghost node");
+        assert_eq!(ghost.kind, "ghost");
+        assert!(ghost.broken);
+        assert!(has_edge(&resp, "broken.md", "does-not-exist.md", "symlink"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_outside_drive_emits_outside_ghost() {
+        let tmp = TempDir::new().unwrap();
+        symlink("/etc/hosts", tmp.path().join("escape.md")).unwrap();
+
+        let resp = walk(tmp.path(), FsGraphScope::Folder, "", 1);
+        assert_eq!(node_kind(&resp, "escape.md"), Some("symlink"));
+        let ghost = resp
+            .nodes
+            .iter()
+            .find(|n| n.id == "outside:escape.md")
+            .expect("missing outside ghost");
+        assert_eq!(ghost.kind, "ghost");
+        assert!(ghost.outside);
+        assert!(!ghost.broken);
+        assert!(has_edge(&resp, "escape.md", "outside:escape.md", "symlink"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fifo_surfaces_as_ghost() {
+        let tmp = TempDir::new().unwrap();
+        let fifo_path = tmp.path().join("pipe.fifo");
+        // Shell out to `mkfifo` rather than pulling in libc just for
+        // this test. On every platform the build supports the binary
+        // is in PATH; if it's missing we skip the assertion so test
+        // runs on minimal containers stay green.
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo_path)
+            .status();
+        match status {
+            Ok(s) if s.success() => {}
+            _ => return,
+        }
+        let resp = walk(tmp.path(), FsGraphScope::Folder, "", 1);
+        assert_eq!(
+            node_kind(&resp, "pipe.fifo"),
+            Some("ghost"),
+            "FIFO must surface as a ghost, not be silently dropped"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hardlink_emits_hardlink_edge() {
+        use std::fs::hard_link;
+        let tmp = TempDir::new().unwrap();
+        write(&tmp.path().join("top.md"), "# t");
+        hard_link(tmp.path().join("top.md"), tmp.path().join("twin.md")).unwrap();
+
+        let resp = walk(tmp.path(), FsGraphScope::Folder, "", 1);
+        assert_eq!(node_kind(&resp, "top.md"), Some("file"));
+        assert_eq!(node_kind(&resp, "twin.md"), Some("file"));
+        // Sorted lexicographically: "top.md" < "twin.md".
+        assert!(
+            has_edge(&resp, "top.md", "twin.md", "hardlink"),
+            "missing hardlink edge: {:?}",
+            resp.edges
+                .iter()
+                .map(|e| (&e.source, &e.target, e.kind))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_loop_terminates() {
+        // a -> b -> a. The walker must terminate (we never traverse
+        // symlinks during the directory walk; we only classify their
+        // targets) and emit both as symlink nodes pointing at each
+        // other.
+        let tmp = TempDir::new().unwrap();
+        symlink("b.md", tmp.path().join("a.md")).unwrap();
+        symlink("a.md", tmp.path().join("b.md")).unwrap();
+
+        let resp = walk(tmp.path(), FsGraphScope::Folder, "", 1);
+        assert_eq!(node_kind(&resp, "a.md"), Some("symlink"));
+        assert_eq!(node_kind(&resp, "b.md"), Some("symlink"));
+        assert!(has_edge(&resp, "a.md", "b.md", "symlink"));
+        assert!(has_edge(&resp, "b.md", "a.md", "symlink"));
+    }
+
+    #[test]
+    fn file_scope_emits_parent_contains_edge() {
+        let tmp = TempDir::new().unwrap();
+        write(&tmp.path().join("sub/nested.md"), "# n");
+
+        let resp = walk(tmp.path(), FsGraphScope::File, "sub/nested.md", 0);
+        assert_eq!(node_kind(&resp, "sub/nested.md"), Some("file"));
+        assert_eq!(node_kind(&resp, "sub"), Some("folder"));
+        assert!(has_edge(&resp, "sub", "sub/nested.md", "contains"));
+    }
+
+    #[test]
+    fn normalize_rel_strips_leading_slash_and_dot() {
+        assert_eq!(normalize_rel(""), "");
+        assert_eq!(normalize_rel("/"), "");
+        assert_eq!(normalize_rel("."), "");
+        assert_eq!(normalize_rel("/notes/a.md"), "notes/a.md");
+        assert_eq!(normalize_rel("notes/./a.md"), "notes/a.md");
+    }
+}

@@ -36,16 +36,17 @@ mod util;
 pub use config::ServerConfig;
 pub use error::Error;
 pub use preferences::{EditorPrefs, EditorTheme, LineSpacing, PaneWidths, ThemeChoice};
+pub use routes::{build_fs_graph, FsGraphResponse, FsGraphScope};
 
 use auth::{auth_middleware, load_or_create_token};
 use bus::{make_progress_broadcast, make_watch_bridge};
 use routes::{
     api_backlinks, api_build_info, api_clear_assistant, api_cloud_drives, api_create_file,
-    api_delete_assistant, api_delete_file, api_delete_session, api_get_assistant, api_get_config,
-    api_get_contacts, api_get_drive, api_get_server_config, api_get_session, api_graph,
-    api_headings, api_health, api_index_rebuild, api_index_status, api_link_targets, api_links,
-    api_list_assistant, api_list_files, api_list_sessions, api_llm_cli_detection, api_llm_complete,
-    api_llm_status, api_llm_tools, api_move, api_patch_config, api_patch_drive,
+    api_delete_assistant, api_delete_file, api_delete_session, api_fs_graph, api_get_assistant,
+    api_get_config, api_get_contacts, api_get_drive, api_get_server_config, api_get_session,
+    api_graph, api_headings, api_health, api_index_rebuild, api_index_status, api_link_targets,
+    api_links, api_list_assistant, api_list_files, api_list_sessions, api_llm_cli_detection,
+    api_llm_complete, api_llm_status, api_llm_tools, api_move, api_patch_config, api_patch_drive,
     api_patch_server_config, api_post_answer, api_post_attachment, api_post_contacts_import,
     api_put_assistant, api_put_session, api_read_file, api_report_file, api_report_prefix,
     api_resolve_link, api_search_content, api_search_files, api_storage_reset, api_write_file,
@@ -767,6 +768,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/headings/*path", get(api_headings))
         .route("/api/links", get(api_links))
         .route("/api/graph", get(api_graph))
+        .route("/api/fs-graph", get(api_fs_graph))
         .route("/api/backlinks/*path", get(api_backlinks))
         .route("/api/report/file", get(api_report_file))
         .route("/api/report/prefix", get(api_report_prefix))

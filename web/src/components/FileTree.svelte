@@ -5,7 +5,7 @@
   // then renders rows with expand/collapse, click-to-open, and a context
   // menu for create/rename/delete.
 
-  import { FilePlus, FolderPlus, Pencil, Trash2 } from "lucide-svelte";
+  import { FilePlus, FolderPlus, Network, Pencil, Trash2 } from "lucide-svelte";
   import { clampMenu } from "./menuClamp";
   import type { TreeEntry } from "../api/types";
   import { isEditableText } from "../state/fileTypes";
@@ -16,6 +16,8 @@
     browserSelection,
     fileOps,
     loadTreeDir,
+    openFsGraphForDirectory,
+    openFsGraphForFile,
     persistTreeExpanded,
     tree,
     treeExpanded,
@@ -329,6 +331,12 @@
   async function remove(path: string, isDir: boolean): Promise<void> {
     await fileOps.remove(path, isDir);
     menu = null;
+  }
+
+  function graphThis(path: string, isDir: boolean): void {
+    menu = null;
+    if (isDir) openFsGraphForDirectory(path);
+    else openFsGraphForFile(path);
   }
 
   /// Move the selection by one row in the visible list. Wraps
@@ -678,6 +686,10 @@
         <span>New folder</span>
       </button>
     {/if}
+    <button onclick={() => graphThis(menu!.path, menu!.isDir)}>
+      <Network size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span>Graph this</span>
+    </button>
     <button onclick={() => rename(menu!.path, menu!.isDir)}>
       <Pencil size={16} strokeWidth={1.75} aria-hidden="true" />
       <span>Rename / Move</span>

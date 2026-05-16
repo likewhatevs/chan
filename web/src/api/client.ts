@@ -9,6 +9,7 @@ import type {
   CliDetectionResponse,
   ContentSearchResponse,
   FileResponse,
+  FsGraphResponse,
   GlobalConfig,
   GraphEdge,
   GraphSnapshot,
@@ -411,6 +412,13 @@ export const api = {
   links: () => req<GraphSnapshot>("GET", "/api/links"),
   /// Typed graph payload powering the graph view tab.
   graph: () => req<GraphView>("GET", "/api/graph"),
+  /// Filesystem graph payload: folders, files, symlinks, hardlinks,
+  /// and ghost nodes. Distinct from the semantic markdown graph.
+  fsGraph: (opts: { scope: "file" | "folder"; path: string; depth?: number }) =>
+    req<FsGraphResponse>(
+      "GET",
+      `/api/fs-graph?scope=${encodeURIComponent(opts.scope)}&path=${encodeURIComponent(opts.path)}&depth=${encodeURIComponent(String(opts.depth ?? 1))}`,
+    ),
   /// Keepalive variant of putConversation. Fires the PUT with
   /// `keepalive: true` so the request survives a page unload (the
   /// pagehide flush registered by `installSessionFlushHook` calls this

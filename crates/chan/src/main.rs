@@ -19,6 +19,10 @@
 //   chan index <path>               rebuild the search index +
 //                                   graph for the drive
 //   chan search <path> <query>      query the BM25 index
+//   chan graph <path>               inspect semantic or filesystem graph edges
+//   chan status [path]              report drive/index/graph health
+//   chan config get [KEY]           print a preference value
+//   chan config set KEY=VALUE       update a preference
 //   chan contacts import csv FILE --into DIR
 //                                   import a Google Contacts CSV
 //                                   as one markdown note per
@@ -39,9 +43,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chan_drive::{Library, SearchOpts, WalkFilter};
-use chan_server::ServeConfig;
-use clap::{Parser, Subcommand};
+use chan_drive::{EdgeKind, Library, SearchOpts, WalkFilter};
+use chan_server::{
+    build_fs_graph, EditorPrefs, EditorTheme, FsGraphResponse, FsGraphScope as ServerFsGraphScope,
+    LineSpacing, ServeConfig, ServerConfig, ThemeChoice,
+};
+use clap::{Parser, Subcommand, ValueEnum};
+use serde::Serialize;
 
 mod update;
 
@@ -247,6 +255,44 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         limit: u32,
     },
+    /// Query graph/index data for a drive.
+    ///
+    /// --scope all reads the semantic markdown graph. --scope file/folder reads
+    /// the filesystem graph used by the File Browser's "Graph this" action.
+    Graph {
+        path: PathBuf,
+        /// Scope the graph query to the whole drive, one file, or a folder subtree.
+        #[arg(long, value_enum, default_value_t = GraphScope::All)]
+        scope: GraphScope,
+        /// Drive-relative file or folder path for --scope file/folder.
+        #[arg(long)]
+        target: Option<String>,
+        /// Folder depth for --scope folder. 1 means direct children only.
+        #[arg(long, default_value_t = 1)]
+        depth: usize,
+        /// Maximum number of edges printed in text mode.
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report drive, index, graph, and code-report status.
+    Status {
+        /// Drive root. Defaults to the registered default drive.
+        path: Option<PathBuf>,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read or write settings persisted outside the drive. Keys use
+    /// the same namespaces as the web Settings overlay where possible
+    /// (`editor.*`, `server.*`). Assistant settings are not wired into
+    /// this command yet.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
     /// Self-upgrade: download the latest release from chan.app/dl,
     /// verify SHA256, and atomically replace the running binary.
     /// URLs are hardcoded; the only knobs are `-y` (skip prompt),
@@ -345,6 +391,34 @@ enum ImportSource {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum GraphScope {
+    All,
+    File,
+    Folder,
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigAction {
+    /// Print one setting value, or all supported settings when no
+    /// key is given.
+    Get {
+        /// Dotted key, e.g. `editor.theme` or
+        /// `server.attachments_dir`. Empty prints the full TOML.
+        key: Option<String>,
+        /// Emit JSON instead of a scalar / TOML body.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Update a setting. Accepts `key=value` or `key value`.
+    Set {
+        /// Dotted key, with or without `=value` appended.
+        key: String,
+        /// Value to assign. Omit when `key` already contains `=value`.
+        value: Option<String>,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
@@ -405,6 +479,16 @@ fn main() -> Result<()> {
         }
         Command::Index { path } => cmd_index(path),
         Command::Search { path, query, limit } => cmd_search(path, query, limit),
+        Command::Graph {
+            path,
+            scope,
+            target,
+            depth,
+            limit,
+            json,
+        } => cmd_graph(path, scope, target, depth, limit, json),
+        Command::Status { path, json } => cmd_status(path, json),
+        Command::Config { action } => cmd_config(action),
         Command::Upgrade {
             yes,
             check,
@@ -1123,6 +1207,578 @@ fn cmd_search(path: PathBuf, query: String, limit: u32) -> Result<()> {
     Ok(())
 }
 
+#[derive(Serialize)]
+struct GraphQueryOutput {
+    root: String,
+    scope: &'static str,
+    target: Option<String>,
+    nodes: Vec<String>,
+    edges: Vec<GraphEdgeOutput>,
+}
+
+#[derive(Serialize)]
+struct GraphEdgeOutput {
+    source: String,
+    target: String,
+    kind: &'static str,
+    anchor: Option<String>,
+}
+
+#[derive(Serialize)]
+struct StatusOutput {
+    root: String,
+    registered_name: Option<String>,
+    index: StatusIndex,
+    graph: StatusGraph,
+    report: StatusReport,
+}
+
+#[derive(Serialize)]
+struct StatusIndex {
+    ready: bool,
+    indexed_docs: u64,
+    indexed_vectors: u64,
+    model: String,
+}
+
+#[derive(Serialize)]
+struct StatusGraph {
+    files: usize,
+    edges: usize,
+    tags: usize,
+}
+
+#[derive(Serialize)]
+struct StatusReport {
+    files: u64,
+    code: u64,
+    comments: u64,
+    blanks: u64,
+    complexity: u64,
+    by_language: Vec<StatusLanguage>,
+    cocomo_model: String,
+    estimated_cost_usd: f64,
+}
+
+#[derive(Serialize)]
+struct StatusLanguage {
+    name: String,
+    files: u64,
+    code: u64,
+}
+
+#[derive(Serialize)]
+struct ConfigOutput {
+    editor: EditorPrefs,
+    server: ServerConfig,
+}
+
+fn cmd_graph(
+    path: PathBuf,
+    scope: GraphScope,
+    target: Option<String>,
+    depth: usize,
+    limit: usize,
+    json: bool,
+) -> Result<()> {
+    let lib = library()?;
+    ensure_drive_named(&lib, &path, None)?;
+    let drive = lib.open_drive(&path)?;
+    if scope != GraphScope::All {
+        return cmd_filesystem_graph(&drive, scope, target, depth, limit, json);
+    }
+    let graph = drive.graph().context("opening graph")?;
+    let nodes = graph_scope_nodes(&drive, graph, scope, target.as_deref(), depth)?;
+    let node_set: std::collections::BTreeSet<&str> = nodes.iter().map(String::as_str).collect();
+    let mut edges = Vec::new();
+    for src in &nodes {
+        for edge in graph
+            .neighbors(src)
+            .with_context(|| format!("querying graph neighbors for {src}"))?
+        {
+            if scope == GraphScope::All || node_set.contains(edge.dst.as_str()) {
+                edges.push(GraphEdgeOutput {
+                    source: edge.src,
+                    target: edge.dst,
+                    kind: edge_kind_label(edge.kind),
+                    anchor: edge.anchor,
+                });
+            }
+        }
+    }
+    let out = GraphQueryOutput {
+        root: drive.root().display().to_string(),
+        scope: graph_scope_label(scope),
+        target,
+        nodes,
+        edges,
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+    println!(
+        "{} graph: {} nodes, {} edges",
+        out.root,
+        out.nodes.len(),
+        out.edges.len()
+    );
+    for edge in out.edges.iter().take(limit) {
+        let anchor = edge
+            .anchor
+            .as_deref()
+            .map(|a| format!("#{a}"))
+            .unwrap_or_default();
+        println!(
+            "{:<8} {} -> {}{}",
+            edge.kind, edge.source, edge.target, anchor
+        );
+    }
+    if out.edges.len() > limit {
+        println!("... {} more edges", out.edges.len() - limit);
+    }
+    Ok(())
+}
+
+fn cmd_filesystem_graph(
+    drive: &chan_drive::Drive,
+    scope: GraphScope,
+    target: Option<String>,
+    depth: usize,
+    limit: usize,
+    json: bool,
+) -> Result<()> {
+    let fs_scope = match scope {
+        GraphScope::All => unreachable!("all scope is handled by cmd_graph"),
+        GraphScope::File => ServerFsGraphScope::File,
+        GraphScope::Folder => ServerFsGraphScope::Folder,
+    };
+    if scope == GraphScope::File && target.as_deref().unwrap_or("").is_empty() {
+        anyhow::bail!("--target is required for --scope file");
+    }
+    let path = target.as_deref().unwrap_or("");
+    let out = build_fs_graph(drive, fs_scope, path, depth).context("building filesystem graph")?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+    print_filesystem_graph(&out, limit);
+    Ok(())
+}
+
+fn print_filesystem_graph(out: &FsGraphResponse, limit: usize) {
+    println!(
+        "{} filesystem graph: {} nodes, {} edges, scope={}, depth={}, truncated={}",
+        out.root,
+        out.nodes.len(),
+        out.edges.len(),
+        out.scope,
+        out.depth,
+        out.truncated
+    );
+    for edge in out.edges.iter().take(limit) {
+        println!("{:<8} {} -> {}", edge.kind, edge.source, edge.target);
+    }
+    if out.edges.len() > limit {
+        println!("... {} more edges", out.edges.len() - limit);
+    }
+}
+
+fn cmd_status(path: Option<PathBuf>, json: bool) -> Result<()> {
+    let lib = library()?;
+    let root = path
+        .or_else(|| lib.default_drive_root())
+        .unwrap_or_else(|| lib.effective_default_drive_root());
+    ensure_drive_named(&lib, &root, None)?;
+    let drive = lib.open_drive(&root)?;
+    let known = lib
+        .list_drives()
+        .into_iter()
+        .find(|d| same_path(&d.path, drive.root()));
+    let index = drive.index_stats().context("reading index stats")?;
+    let graph = drive.graph().context("opening graph")?;
+    let graph_files = graph.files().context("reading graph files")?;
+    let mut graph_edges = 0usize;
+    for file in &graph_files {
+        graph_edges += graph
+            .neighbors(file)
+            .with_context(|| format!("querying graph neighbors for {file}"))?
+            .len();
+    }
+    let tags = graph.tags().context("reading graph tags")?.len();
+    let report = drive.report().context("reading code report")?;
+    let by_language = report
+        .by_language
+        .into_iter()
+        .take(12)
+        .map(|l| StatusLanguage {
+            name: l.name,
+            files: l.files,
+            code: l.code,
+        })
+        .collect();
+    let out = StatusOutput {
+        root: drive.root().display().to_string(),
+        registered_name: known.and_then(|d| d.name),
+        index: StatusIndex {
+            ready: index.ready,
+            indexed_docs: index.indexed_docs,
+            indexed_vectors: index.indexed_vectors,
+            model: index.model,
+        },
+        graph: StatusGraph {
+            files: graph_files.len(),
+            edges: graph_edges,
+            tags,
+        },
+        report: StatusReport {
+            files: report.totals.files,
+            code: report.totals.code,
+            comments: report.totals.comments,
+            blanks: report.totals.blanks,
+            complexity: report.totals.complexity,
+            by_language,
+            cocomo_model: report.cocomo.model,
+            estimated_cost_usd: report.cocomo.estimated_cost_usd,
+        },
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+    println!("drive: {}", out.root);
+    if let Some(name) = &out.registered_name {
+        println!("name: {name}");
+    }
+    println!(
+        "index: ready={} docs={} vectors={} model={}",
+        out.index.ready, out.index.indexed_docs, out.index.indexed_vectors, out.index.model
+    );
+    println!(
+        "graph: files={} edges={} tags={}",
+        out.graph.files, out.graph.edges, out.graph.tags
+    );
+    println!(
+        "report: files={} code={} comments={} blanks={} complexity={} cocomo={} cost=${:.2}",
+        out.report.files,
+        out.report.code,
+        out.report.comments,
+        out.report.blanks,
+        out.report.complexity,
+        out.report.cocomo_model,
+        out.report.estimated_cost_usd
+    );
+    if !out.report.by_language.is_empty() {
+        println!("languages:");
+        for lang in &out.report.by_language {
+            println!(
+                "  {:<18} files={:<5} code={}",
+                lang.name, lang.files, lang.code
+            );
+        }
+    }
+    Ok(())
+}
+
+fn graph_scope_nodes(
+    drive: &chan_drive::Drive,
+    graph: &chan_drive::GraphView,
+    scope: GraphScope,
+    target: Option<&str>,
+    depth: usize,
+) -> Result<Vec<String>> {
+    match scope {
+        GraphScope::All => graph.files().context("reading graph files"),
+        GraphScope::File => {
+            let target = target.context("--target is required for --scope file")?;
+            let target = target.trim_matches('/').to_string();
+            let stat = drive
+                .stat(&target)
+                .with_context(|| format!("stat graph file target `{target}`"))?;
+            if stat.is_dir {
+                anyhow::bail!("--scope file requires a file; `{target}` is a directory");
+            }
+            Ok(vec![target])
+        }
+        GraphScope::Folder => {
+            let target = target.unwrap_or("").trim_matches('/');
+            if !target.is_empty() {
+                let stat = drive
+                    .stat(target)
+                    .with_context(|| format!("stat graph folder target `{target}`"))?;
+                if !stat.is_dir {
+                    anyhow::bail!("--scope folder requires a directory; `{target}` is not");
+                }
+            }
+            let entries = if target.is_empty() {
+                drive.list_tree().context("listing drive tree")?
+            } else {
+                drive
+                    .list_tree_prefix(target)
+                    .context("listing folder tree")?
+            };
+            let files: std::collections::BTreeSet<String> = graph
+                .files()
+                .context("reading graph files")?
+                .into_iter()
+                .collect();
+            Ok(entries
+                .into_iter()
+                .filter(|e| !e.is_dir)
+                .filter(|e| folder_depth_in_scope(&e.path, target, depth))
+                .map(|e| e.path)
+                .filter(|p| files.contains(p))
+                .collect())
+        }
+    }
+}
+
+fn folder_depth_in_scope(path: &str, folder: &str, depth: usize) -> bool {
+    if depth == 0 {
+        return false;
+    }
+    let rel = if folder.is_empty() {
+        path
+    } else if path == folder {
+        ""
+    } else if let Some(rest) = path.strip_prefix(folder).and_then(|s| s.strip_prefix('/')) {
+        rest
+    } else {
+        return false;
+    };
+    !rel.is_empty() && rel.split('/').count() <= depth
+}
+
+fn graph_scope_label(scope: GraphScope) -> &'static str {
+    match scope {
+        GraphScope::All => "all",
+        GraphScope::File => "file",
+        GraphScope::Folder => "folder",
+    }
+}
+
+fn edge_kind_label(kind: EdgeKind) -> &'static str {
+    match kind {
+        EdgeKind::Link => "link",
+        EdgeKind::Mention => "mention",
+        EdgeKind::Tag => "tag",
+    }
+}
+
+fn cmd_config(action: ConfigAction) -> Result<()> {
+    match action {
+        ConfigAction::Get { key, json } => {
+            let editor = EditorPrefs::load().context("loading editor preferences")?;
+            let server = ServerConfig::load().context("loading server config")?;
+            match key.as_deref() {
+                None | Some("") => {
+                    let output = ConfigOutput { editor, server };
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&output)?);
+                    } else {
+                        print!("{}", toml::to_string_pretty(&output)?);
+                    }
+                }
+                Some(k) => {
+                    let value = read_config_key(&editor, &server, k)?;
+                    if json {
+                        println!("{}", serde_json::to_string(&value)?);
+                    } else {
+                        println!("{}", scalar_to_string(&value));
+                    }
+                }
+            }
+            Ok(())
+        }
+        ConfigAction::Set { key, value } => {
+            let (key, raw_value) = split_assignment(&key, value.as_deref())?;
+            if key.starts_with("server.") {
+                let mut cfg = ServerConfig::load().context("loading server config")?;
+                write_server_config_key(&mut cfg, &key, &raw_value)?;
+                cfg.save().context("saving server config")?;
+            } else {
+                let mut prefs = EditorPrefs::load().context("loading editor preferences")?;
+                write_pref_key(&mut prefs, &key, &raw_value)?;
+                prefs.save().context("saving editor preferences")?;
+            }
+            println!("{key} = {raw_value}");
+            Ok(())
+        }
+    }
+}
+
+/// Accept both `chan config set k=v` and `chan config set k v`.
+/// Returns `(key, value)`. Bails with a clear message on empty values
+/// so a typo doesn't silently wipe a preference.
+fn split_assignment(key: &str, value: Option<&str>) -> Result<(String, String)> {
+    if let Some(v) = value {
+        if v.is_empty() {
+            anyhow::bail!("value must not be empty (got `{key}=`)");
+        }
+        return Ok((key.to_owned(), v.to_owned()));
+    }
+    if let Some((k, v)) = key.split_once('=') {
+        let k = k.trim();
+        let v = v.trim();
+        if k.is_empty() {
+            anyhow::bail!("key must not be empty");
+        }
+        if v.is_empty() {
+            anyhow::bail!("value must not be empty (got `{key}`)");
+        }
+        return Ok((k.to_owned(), v.to_owned()));
+    }
+    anyhow::bail!("missing value: use `{key}=VALUE` or `{key} VALUE`")
+}
+
+fn read_config_key(
+    editor: &EditorPrefs,
+    server: &ServerConfig,
+    key: &str,
+) -> Result<serde_json::Value> {
+    match key {
+        "editor.theme" => Ok(serde_json::json!(theme_choice_label(editor.theme))),
+        "editor.editor_theme" => Ok(serde_json::json!(editor_theme_label(editor.editor_theme))),
+        "editor.line_spacing" => Ok(serde_json::json!(line_spacing_label(editor.line_spacing))),
+        "editor.date_format" => Ok(serde_json::json!(editor.date_format.clone())),
+        "editor.pane_widths.inspector" => Ok(serde_json::json!(editor.pane_widths.inspector)),
+        "editor.pane_widths.graph" => Ok(serde_json::json!(editor.pane_widths.graph)),
+        "editor.pane_widths.browser" => Ok(serde_json::json!(editor.pane_widths.browser)),
+        "editor.pane_widths.search" => Ok(serde_json::json!(editor.pane_widths.search)),
+        "editor.pane_widths.outline" => Ok(serde_json::json!(editor.pane_widths.outline)),
+        "editor.pane_widths.assistant" => Ok(serde_json::json!(editor.pane_widths.assistant)),
+        "server.attachments_dir" => Ok(serde_json::json!(server.attachments_dir.clone())),
+        "server.answers_dir" => Ok(serde_json::json!(server.answers_dir.clone())),
+        _ => Err(anyhow::anyhow!(
+            "unknown key `{key}`; try `chan config get` to list current values"
+        )),
+    }
+}
+
+fn write_pref_key(prefs: &mut EditorPrefs, key: &str, value: &str) -> Result<()> {
+    match key {
+        "editor.theme" => {
+            prefs.theme = parse_theme_choice(value)?;
+        }
+        "editor.editor_theme" => {
+            prefs.editor_theme = parse_editor_theme(value)?;
+        }
+        "editor.line_spacing" => {
+            prefs.line_spacing = parse_line_spacing(value)?;
+        }
+        "editor.date_format" => {
+            prefs.date_format = value.to_owned();
+        }
+        "editor.pane_widths.inspector" => {
+            prefs.pane_widths.inspector = parse_u32(key, value)?;
+        }
+        "editor.pane_widths.graph" => {
+            prefs.pane_widths.graph = parse_u32(key, value)?;
+        }
+        "editor.pane_widths.browser" => {
+            prefs.pane_widths.browser = parse_u32(key, value)?;
+        }
+        "editor.pane_widths.search" => {
+            prefs.pane_widths.search = parse_u32(key, value)?;
+        }
+        "editor.pane_widths.outline" => {
+            prefs.pane_widths.outline = parse_u32(key, value)?;
+        }
+        "editor.pane_widths.assistant" => {
+            prefs.pane_widths.assistant = parse_u32(key, value)?;
+        }
+        _ => {
+            anyhow::bail!("unknown key `{key}`; try `chan config get` to list current values");
+        }
+    }
+    Ok(())
+}
+
+fn write_server_config_key(cfg: &mut ServerConfig, key: &str, value: &str) -> Result<()> {
+    if value.is_empty() {
+        anyhow::bail!("{key} must be non-empty");
+    }
+    match key {
+        "server.attachments_dir" => {
+            cfg.attachments_dir = value.to_owned();
+        }
+        "server.answers_dir" => {
+            cfg.answers_dir = value.to_owned();
+        }
+        _ => {
+            anyhow::bail!("unknown key `{key}`; try `chan config get` to list current values");
+        }
+    }
+    Ok(())
+}
+
+fn parse_theme_choice(value: &str) -> Result<ThemeChoice> {
+    match value {
+        "system" => Ok(ThemeChoice::System),
+        "light" => Ok(ThemeChoice::Light),
+        "dark" => Ok(ThemeChoice::Dark),
+        _ => anyhow::bail!("expected system|light|dark, got `{value}`"),
+    }
+}
+
+fn parse_editor_theme(value: &str) -> Result<EditorTheme> {
+    match value {
+        "github" => Ok(EditorTheme::Github),
+        "google_docs" => Ok(EditorTheme::GoogleDocs),
+        "word" => Ok(EditorTheme::Word),
+        _ => anyhow::bail!("expected github|google_docs|word, got `{value}`"),
+    }
+}
+
+fn parse_line_spacing(value: &str) -> Result<LineSpacing> {
+    match value {
+        "tight" => Ok(LineSpacing::Tight),
+        "standard" => Ok(LineSpacing::Standard),
+        _ => anyhow::bail!("expected tight|standard, got `{value}`"),
+    }
+}
+
+fn parse_u32(key: &str, value: &str) -> Result<u32> {
+    value
+        .parse::<u32>()
+        .with_context(|| format!("{key}: expected non-negative integer, got `{value}`"))
+}
+
+fn theme_choice_label(t: ThemeChoice) -> &'static str {
+    match t {
+        ThemeChoice::System => "system",
+        ThemeChoice::Light => "light",
+        ThemeChoice::Dark => "dark",
+    }
+}
+
+fn editor_theme_label(t: EditorTheme) -> &'static str {
+    match t {
+        EditorTheme::Github => "github",
+        EditorTheme::GoogleDocs => "google_docs",
+        EditorTheme::Word => "word",
+    }
+}
+
+fn line_spacing_label(s: LineSpacing) -> &'static str {
+    match s {
+        LineSpacing::Tight => "tight",
+        LineSpacing::Standard => "standard",
+    }
+}
+
+/// Render a single-value response without the JSON quotes / braces.
+/// Strings unquote, numbers stringify, everything else falls back to
+/// the JSON shape.
+fn scalar_to_string(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        other => other.to_string(),
+    }
+}
+
 fn cmd_contacts_import_csv(
     file: PathBuf,
     into: String,
@@ -1321,6 +1977,22 @@ mod tests {
     }
 
     #[test]
+    fn folder_graph_scope_depth_matches_direct_children() {
+        assert!(folder_depth_in_scope("notes/a.md", "notes", 1));
+        assert!(!folder_depth_in_scope("notes/archive/a.md", "notes", 1));
+        assert!(folder_depth_in_scope("notes/archive/a.md", "notes", 2));
+        assert!(!folder_depth_in_scope("other/a.md", "notes", 2));
+    }
+
+    #[test]
+    fn root_graph_scope_depth_matches_top_level_files() {
+        assert!(folder_depth_in_scope("a.md", "", 1));
+        assert!(!folder_depth_in_scope("notes/a.md", "", 1));
+        assert!(folder_depth_in_scope("notes/a.md", "", 2));
+        assert!(!folder_depth_in_scope("a.md", "", 0));
+    }
+
+    #[test]
     fn tunnel_drive_flag_passes_through_when_valid() {
         let root = PathBuf::from("/tmp/whatever");
         let out = resolve_tunnel_drive_name(Some("notes".into()), Some("My Notes"), &root).unwrap();
@@ -1370,5 +2042,202 @@ mod tests {
         let root = PathBuf::from("/tmp/---");
         let err = resolve_tunnel_drive_name(None, None, &root).unwrap_err();
         assert!(err.to_string().contains("cannot derive"));
+    }
+
+    #[test]
+    fn config_split_assignment_accepts_equals_form() {
+        let (k, v) = split_assignment("editor.theme=dark", None).unwrap();
+        assert_eq!(k, "editor.theme");
+        assert_eq!(v, "dark");
+    }
+
+    #[test]
+    fn config_split_assignment_accepts_two_args() {
+        let (k, v) = split_assignment("editor.theme", Some("dark")).unwrap();
+        assert_eq!(k, "editor.theme");
+        assert_eq!(v, "dark");
+    }
+
+    #[test]
+    fn config_split_assignment_rejects_empty_value() {
+        // `chan config set editor.theme=` is the typo-with-trailing-`=`
+        // form. We must refuse it so a bad invocation never wipes a
+        // preference to "".
+        let err = split_assignment("editor.theme=", None).unwrap_err();
+        assert!(err.to_string().contains("must not be empty"));
+
+        let err = split_assignment("editor.theme", Some("")).unwrap_err();
+        assert!(err.to_string().contains("must not be empty"));
+    }
+
+    #[test]
+    fn config_split_assignment_demands_a_value() {
+        let err = split_assignment("editor.theme", None).unwrap_err();
+        assert!(err.to_string().contains("missing value"));
+    }
+
+    #[test]
+    fn config_read_then_write_round_trips_theme() {
+        let mut prefs = EditorPrefs::default();
+        write_pref_key(&mut prefs, "editor.theme", "dark").unwrap();
+        assert_eq!(prefs.theme, ThemeChoice::Dark);
+        let server = ServerConfig::default();
+        let v = read_config_key(&prefs, &server, "editor.theme").unwrap();
+        assert_eq!(v, serde_json::json!("dark"));
+    }
+
+    #[test]
+    fn config_pane_width_round_trips_u32() {
+        let mut prefs = EditorPrefs::default();
+        write_pref_key(&mut prefs, "editor.pane_widths.search", "320").unwrap();
+        assert_eq!(prefs.pane_widths.search, 320);
+        let server = ServerConfig::default();
+        let v = read_config_key(&prefs, &server, "editor.pane_widths.search").unwrap();
+        assert_eq!(v, serde_json::json!(320));
+    }
+
+    #[test]
+    fn config_server_paths_round_trip() {
+        let editor = EditorPrefs::default();
+        let mut server = ServerConfig::default();
+        write_server_config_key(&mut server, "server.attachments_dir", "media/2026").unwrap();
+        write_server_config_key(&mut server, "server.answers_dir", "qa").unwrap();
+        assert_eq!(server.attachments_dir, "media/2026");
+        assert_eq!(server.answers_dir, "qa");
+        assert_eq!(
+            read_config_key(&editor, &server, "server.attachments_dir").unwrap(),
+            serde_json::json!("media/2026")
+        );
+        assert_eq!(
+            read_config_key(&editor, &server, "server.answers_dir").unwrap(),
+            serde_json::json!("qa")
+        );
+    }
+
+    #[test]
+    fn config_server_paths_reject_empty_values() {
+        let mut server = ServerConfig::default();
+        let err = write_server_config_key(&mut server, "server.attachments_dir", "").unwrap_err();
+        assert!(err.to_string().contains("non-empty"));
+    }
+
+    #[test]
+    fn config_write_rejects_bad_theme_value() {
+        let mut prefs = EditorPrefs::default();
+        let err = write_pref_key(&mut prefs, "editor.theme", "neon").unwrap_err();
+        assert!(err.to_string().contains("system|light|dark"));
+    }
+
+    #[test]
+    fn config_write_rejects_bad_pane_width_value() {
+        let mut prefs = EditorPrefs::default();
+        let err = write_pref_key(&mut prefs, "editor.pane_widths.search", "-1").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("non-negative integer"),
+            "expected validation error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn config_unknown_key_is_rejected() {
+        let prefs = EditorPrefs::default();
+        let server = ServerConfig::default();
+        let err = read_config_key(&prefs, &server, "editor.nope").unwrap_err();
+        assert!(err.to_string().contains("unknown key"));
+
+        let mut prefs = EditorPrefs::default();
+        let err = write_pref_key(&mut prefs, "editor.nope", "x").unwrap_err();
+        assert!(err.to_string().contains("unknown key"));
+
+        let mut server = ServerConfig::default();
+        let err = write_server_config_key(&mut server, "server.nope", "x").unwrap_err();
+        assert!(err.to_string().contains("unknown key"));
+    }
+
+    // --- graph_scope_nodes rejection coverage (syseng-1 residuals 1+2) ---
+    //
+    // syseng's hardening pass observed `chan graph --target ../etc/hosts`
+    // and `chan graph --target notes/no-such-file.md` returning
+    // `1 nodes, 0 edges` with exit 0 instead of a clear rejection.
+    // `graph_scope_nodes` now stats the target through chan-drive and
+    // bails on escape / missing / wrong-type; these tests pin that.
+
+    fn open_graph_test_drive() -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        std::sync::Arc<chan_drive::Drive>,
+    ) {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let drive_root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_root.path(), Some("graph-test".into()))
+            .unwrap();
+        let drive = lib.open_drive(drive_root.path()).unwrap();
+        // Lay down a couple of files so the graph view has something
+        // to read.
+        drive.write_text("notes/a.md", "# A\n").unwrap();
+        drive.write_text("notes/sub/b.md", "# B\n").unwrap();
+        drive.reindex(None).unwrap();
+        (cfg, drive_root, drive)
+    }
+
+    #[test]
+    fn graph_scope_file_rejects_escape_target() {
+        let (_cfg, _root, drive) = open_graph_test_drive();
+        let graph = drive.graph().unwrap();
+        let err = graph_scope_nodes(&drive, graph, GraphScope::File, Some("../etc/hosts"), 1)
+            .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("escapes drive root") || msg.contains("PathEscape"),
+            "expected escape rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn graph_scope_file_rejects_missing_target() {
+        let (_cfg, _root, drive) = open_graph_test_drive();
+        let graph = drive.graph().unwrap();
+        let err = graph_scope_nodes(
+            &drive,
+            graph,
+            GraphScope::File,
+            Some("notes/no-such-file.md"),
+            1,
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("No such file") || msg.contains("not found"),
+            "expected missing-file rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn graph_scope_file_rejects_directory_target() {
+        // --scope file with a directory must surface a clear error,
+        // not silently succeed with an empty graph.
+        let (_cfg, _root, drive) = open_graph_test_drive();
+        let graph = drive.graph().unwrap();
+        let err = graph_scope_nodes(&drive, graph, GraphScope::File, Some("notes"), 1).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("requires a file"),
+            "expected directory rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn graph_scope_folder_rejects_escape_target() {
+        let (_cfg, _root, drive) = open_graph_test_drive();
+        let graph = drive.graph().unwrap();
+        let err =
+            graph_scope_nodes(&drive, graph, GraphScope::Folder, Some("../etc"), 1).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("escapes drive root") || msg.contains("PathEscape"),
+            "expected escape rejection, got: {msg}"
+        );
     }
 }

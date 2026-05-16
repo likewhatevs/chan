@@ -29,7 +29,13 @@
   } from "../state/pageWidth.svelte";
 
   import { api } from "../api/client";
-  import type { GraphView, GraphViewEdge, GraphViewNode } from "../api/types";
+  import type {
+    FsGraphNode,
+    FsGraphResponse,
+    GraphView,
+    GraphViewEdge,
+    GraphViewNode,
+  } from "../api/types";
   import { openInActivePane } from "../state/tabs.svelte";
   import {
     availableGraphScopes,
@@ -108,6 +114,8 @@
 
   let nodes: RenderedNode[] = $state([]);
   let edges: RenderedEdge[] = $state([]);
+  let fsNodes: FsGraphNode[] = $state([]);
+  let fsTruncated = $state(false);
   let loading = $state(true);
   let error: string | null = $state(null);
 
@@ -115,6 +123,10 @@
   /// they round-trip through the URL hash. Local proxy aliases keep
   /// the existing read sites compact.
   const show = graphOverlay.filters;
+  const filesystemMode = $derived(
+    graphOverlay.mode === "filesystem" &&
+      (currentScope?.kind === "file" || currentScope?.kind === "dir"),
+  );
 
   // Currently inspected node, surfaced in the side details panel.
   // Tap a node to set this; tap empty space to clear it. Nodes never
@@ -354,6 +366,10 @@
   const selectedNode = $derived<RenderedNode | null>(
     selectedId ? (nodeById.get(selectedId) ?? null) : null,
   );
+  const fsNodeById = $derived(new Map(fsNodes.map((n) => [n.id, n])));
+  const selectedFsNode = $derived<FsGraphNode | null>(
+    filesystemMode && selectedId ? (fsNodeById.get(selectedId) ?? null) : null,
+  );
 
   /// True when the graph claims the node is a real file but the
   /// current tree listing doesn't have its path. This happens when
@@ -551,6 +567,33 @@
     loading = true;
     error = null;
     try {
+      if (filesystemMode && currentScope) {
+        const fsScope = currentScope.kind === "dir" ? "folder" : "file";
+        const fsPath =
+          currentScope.kind === "dir" || currentScope.kind === "file"
+            ? currentScope.path
+            : "";
+        const fs = await api.fsGraph({
+          scope: fsScope,
+          path: fsPath,
+          depth: graphOverlay.depth,
+        });
+        fsNodes = fs.nodes;
+        fsTruncated = fs.truncated;
+        nodes = mapFsNodes(fs);
+        edges = mapFsEdges(fs);
+        const pending = graphOverlay.pendingSelectId;
+        if (pending && fs.nodes.some((n) => n.id === pending)) {
+          selectedId = pending;
+          graphOverlay.inspectorOpen = true;
+        } else if (!selectedId || !fs.nodes.some((n) => n.id === selectedId)) {
+          selectedId = fs.path;
+        }
+        graphOverlay.pendingSelectId = null;
+        return;
+      }
+      fsNodes = [];
+      fsTruncated = false;
       const g: GraphView = await api.graph();
       const renderedNodes: RenderedNode[] = g.nodes.filter(
         (n): n is RenderedNode =>
@@ -575,6 +618,53 @@
     } finally {
       loading = false;
     }
+  }
+
+  function mapFsNodes(fs: FsGraphResponse): RenderedNode[] {
+    return fs.nodes.map((n): RenderedNode => {
+      if (n.kind === "file") {
+        return {
+          kind: "file",
+          id: n.id,
+          label: n.name || n.path || "(drive)",
+          path: n.path,
+          missing: Boolean(n.broken),
+        };
+      }
+      if (n.kind === "ghost") {
+        return {
+          kind: "file",
+          id: n.id,
+          label: n.name || n.target || n.id,
+          path: n.path || n.id,
+          missing: true,
+        };
+      }
+      return {
+        kind: n.kind === "folder" ? "tag" : "mention",
+        id: n.id,
+        label:
+          n.kind === "folder"
+            ? `${n.name || "drive"}/`
+            : `${n.name}${n.broken ? " (broken)" : ""}`,
+      };
+    });
+  }
+
+  function mapFsEdges(fs: FsGraphResponse): RenderedEdge[] {
+    return fs.edges.map((e): RenderedEdge => ({
+      source: e.source,
+      target: e.target,
+      kind:
+        e.kind === "contains"
+          ? "link"
+          : e.kind === "symlink"
+            ? "tag"
+            : "mention",
+      broken:
+        e.kind === "symlink" &&
+        Boolean(fs.nodes.find((n) => n.id === e.target)?.broken),
+    }));
   }
 
   /// Refetch the graph whenever the overlay opens, plus once on
@@ -632,12 +722,18 @@
     </button>
     <div class="filters">
       {#each ["link", "tag", "mention", "img"] as const as kind (kind)}
-        <label class="chip" class:on={show[kind]}>
-          <input type="checkbox" bind:checked={show[kind]} />
-          <span class="dot" style="background:{FILTER_COLORS[kind]}"></span>
-          {kind === "mention" ? "contact" : kind === "img" ? "media" : kind}
-          <span class="count">{counts[kind]}</span>
-        </label>
+        {#if !filesystemMode || kind !== "img"}
+          <label class="chip" class:on={show[kind]}>
+            <input type="checkbox" bind:checked={show[kind]} />
+            <span class="dot" style="background:{FILTER_COLORS[kind]}"></span>
+            {#if filesystemMode}
+              {kind === "link" ? "contains" : kind === "tag" ? "symlink" : "hardlink"}
+            {:else}
+              {kind === "mention" ? "contact" : kind === "img" ? "media" : kind}
+            {/if}
+            <span class="count">{counts[kind]}</span>
+          </label>
+        {/if}
       {/each}
     </div>
     <span class="bar-menu">
@@ -668,7 +764,9 @@
     {:else if error}
       <div class="placeholder error">{error}</div>
     {:else if nodes.length === 0}
-      <div class="placeholder">no markdown files in this drive yet</div>
+      <div class="placeholder">
+        {filesystemMode ? "no filesystem graph nodes for this scope" : "no markdown files in this drive yet"}
+      </div>
     {/if}
     <div class="cy" class:dim={loading || !!error}>
       <GraphCanvas
@@ -692,7 +790,34 @@
       onResize={persistPaneWidths}
       onClose={() => (graphOverlay.inspectorOpen = false)}
     >
-      {#if selectedNode && selectedNode.kind === "file" && isFileGhost}
+      {#if selectedFsNode}
+        <div class="ghost-body">
+          <header class="head">
+            <KindChip
+              kind={selectedFsNode.kind === "folder" ? "folder" : selectedFsNode.kind === "file" ? "document" : "binary"}
+              block
+              ghost={selectedFsNode.kind === "ghost" || selectedFsNode.broken === true}
+            />
+          </header>
+          <h3 class="title" title={selectedFsNode.path || selectedFsNode.target || selectedFsNode.id}>
+            {selectedFsNode.name || selectedFsNode.path || selectedFsNode.id || "(drive)"}
+          </h3>
+          <div class="path mono">{selectedFsNode.path || selectedFsNode.target || selectedFsNode.id}</div>
+          {#if selectedFsNode.target}
+            <div class="missing">target: {selectedFsNode.target}</div>
+          {/if}
+          {#if selectedFsNode.outside}
+            <div class="missing">target is outside this drive</div>
+          {:else if selectedFsNode.broken}
+            <div class="missing">missing or unreadable target</div>
+          {/if}
+          {#if selectedFsNode.kind === "file" && selectedFsNode.path}
+            <button class="open-fs" onclick={() => { void openInActivePane(selectedFsNode!.path); close(); }}>
+              Open in this pane
+            </button>
+          {/if}
+        </div>
+      {:else if selectedNode && selectedNode.kind === "file" && isFileGhost}
         <!-- Ghost: either an explicit broken-link target, or the
              graph claims the file exists but it's not in the current
              tree listing (stale search index, common after a bulk
@@ -783,8 +908,13 @@
   {/if}
   </div>
   <div class="statusbar">
-    <span class="stat">{visibleNodeIds.size}/{nodes.length} nodes · {visibleEdges.length}/{edges.length} edges</span>
-    <span class="hint">drag to pan · scroll to zoom · drag a node to move · click to inspect</span>
+    <span class="stat">
+      {visibleNodeIds.size}/{nodes.length} nodes · {visibleEdges.length}/{edges.length} edges
+      {#if filesystemMode && fsTruncated} · truncated{/if}
+    </span>
+    <span class="hint">
+      {filesystemMode ? "filesystem graph" : "semantic graph"} · drag to pan · scroll to zoom · click to inspect
+    </span>
   </div>
   </div>
 </OverlayShell>

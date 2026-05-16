@@ -1,20 +1,17 @@
 <script lang="ts">
   // Drive inspector body. Shown in the file browser's Inspector pane
   // when the user clicks the FOLDER row in the hamburger menu. Houses
-  // the per-drive Search Index status (+ rebuild) and the global
-  // Notes Folders config (default root + recent drives list); both
-  // used to live in SettingsPanel.
+  // the global Notes Folders config (default root + recent drives list).
+  // Search index status lives in the Search Status overlay.
 
   import { onMount } from "svelte";
   import { api } from "../api/client";
   import type { GlobalConfig } from "../api/types";
-  import { drive, indexStatus } from "../state/store.svelte";
+  import { drive } from "../state/store.svelte";
 
   let globalConfig = $state<GlobalConfig | null>(null);
   let editedDefaultRoot = $state<string>("");
   let initialDefaultRoot = $state<string>("");
-  let indexResetting = $state(false);
-  let indexResetError = $state<string | null>(null);
   let saveError = $state<string | null>(null);
 
   const AUTOSAVE_DELAY_MS = 500;
@@ -81,18 +78,6 @@
     scheduleSave();
   });
 
-  async function resetIndex(): Promise<void> {
-    indexResetting = true;
-    indexResetError = null;
-    try {
-      await api.indexRebuild();
-    } catch (e) {
-      indexResetError = (e as Error).message;
-    } finally {
-      indexResetting = false;
-    }
-  }
-
   function formatLastOpened(iso: string): string {
     try {
       const d = new Date(iso);
@@ -123,53 +108,6 @@
     <span class="k">folder</span>
     <span class="v mono path" title={drive.info?.root}>{drive.info?.root ?? ""}</span>
   </div>
-
-  <section class="refs">
-    <h4>Search index</h4>
-    <p class="hint">
-      chan keeps a per-drive search index outside your notes folder so
-      cross-file search and the assistant's drive context stay fast.
-      Rebuild from scratch if results look stale or wrong.
-    </p>
-    <div class="meta-grid">
-      <span class="k">state</span>
-      <span class="v">{indexStatus.value?.state ?? "n/a"}</span>
-      {#if indexStatus.value?.state === "idle"}
-        <span class="k">chunks</span>
-        <span class="v">{indexStatus.value.indexed_docs}</span>
-        <span class="k">vectors</span>
-        <span class="v">{indexStatus.value.indexed_vectors}</span>
-        <span class="k">model</span>
-        <span class="v mono">{indexStatus.value.model}</span>
-      {:else if indexStatus.value?.state === "building"}
-        <span class="k">progress</span>
-        <span class="v">
-          {indexStatus.value.current} / {indexStatus.value.total}
-          <span class="muted">({indexStatus.value.file})</span>
-        </span>
-      {:else if indexStatus.value?.state === "reindexing"}
-        <span class="k">reindexing</span>
-        <span class="v mono">{indexStatus.value.file}</span>
-      {:else if indexStatus.value?.state === "error"}
-        <span class="k">error</span>
-        <span class="v err">{indexStatus.value.message}</span>
-      {/if}
-    </div>
-    <button
-      type="button"
-      class="action"
-      onclick={() => void resetIndex()}
-      disabled={indexResetting}
-    >{indexResetting ? "rebuilding…" : "Rebuild index"}</button>
-    <p class="warn">
-      <span class="warn-icon" aria-hidden="true">⚠</span>
-      This wipes the search index and rebuilds from scratch. Can be slow
-      on large drives while embeddings re-run.
-    </p>
-    {#if indexResetError}
-      <div class="err-line">{indexResetError}</div>
-    {/if}
-  </section>
 
   <section class="refs">
     <h4>Notes folders</h4>
@@ -269,9 +207,7 @@
     direction: rtl;
     text-align: left;
   }
-  .meta-grid .v.err { color: var(--warn-text); }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .muted { color: var(--text-secondary); font-style: italic; }
   .refs { margin: 0.8rem 0 0 0; }
   .refs h4 {
     font-size: 12px;
@@ -313,33 +249,6 @@
     width: 100%;
   }
   .field input:focus { border-color: var(--link); }
-  .action {
-    align-self: flex-start;
-    background: var(--btn-bg);
-    color: var(--text);
-    border: 1px solid var(--btn-border);
-    border-radius: 4px;
-    padding: 4px 12px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 14px;
-    margin: 0.25rem 0;
-  }
-  .action:hover:not(:disabled) { border-color: var(--btn-hover); }
-  .action:disabled { opacity: 0.55; cursor: default; }
-  .warn {
-    display: flex;
-    align-items: flex-start;
-    gap: 6px;
-    margin: 0.4rem 0 0 0;
-    font-size: 13px;
-    color: var(--text-secondary);
-  }
-  .warn-icon {
-    color: var(--warn-text);
-    flex-shrink: 0;
-    line-height: 1.4;
-  }
   .err-line {
     color: var(--warn-text);
     font-size: 13px;

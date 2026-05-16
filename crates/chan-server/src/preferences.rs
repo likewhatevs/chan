@@ -201,9 +201,11 @@ mod tests {
     }
 
     #[test]
-    fn pane_widths_legacy_file_fills_search_default() {
-        // Regression: preferences.toml written before the search
-        // inspector got its own width slot must still load.
+    fn pane_widths_partial_fills_missing_defaults() {
+        // A preferences.toml that omits some pane-width slots must
+        // still load, with the missing slots resolved to their
+        // current defaults. Guards against the partial-config
+        // resilience contract for `[pane_widths]`.
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("preferences.toml");
         std::fs::write(

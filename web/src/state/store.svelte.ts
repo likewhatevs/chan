@@ -696,11 +696,11 @@ function applyOverlaysFromHash(): void {
     searchPanel.open = true;
   }
   if (params.has(HASH_GRAPH)) {
-    // Encoding: `<scopeId>|<depth>|<chips>|<inspectorBit>`. All
+    // Encoding: `<scopeId>|<depth>|<chips>|<inspectorBit>|<mode>`. All
     // trailing fields optional; an empty value falls back to
-    // defaults.
+    // defaults. `mode` is only emitted for filesystem graphs.
     const raw = params.get(HASH_GRAPH) ?? "";
-    const [scope, depthStr, chips, ins] = raw.split("|");
+    const [scope, depthStr, chips, ins, mode] = raw.split("|");
     if (scope) graphOverlay.scopeId = scope;
     const depth = Number(depthStr);
     if (Number.isFinite(depth) && depth >= 1) graphOverlay.depth = depth;
@@ -714,6 +714,7 @@ function applyOverlaysFromHash(): void {
     graphOverlay.filters.mention = f.mention;
     graphOverlay.filters.img = f.img;
     if (ins === "0" || ins === "1") graphOverlay.inspectorOpen = ins === "1";
+    graphOverlay.mode = mode === "fs" ? "filesystem" : "semantic";
     graphOverlay.open = true;
   }
   if (params.has(HASH_ASSIST)) {
@@ -781,7 +782,8 @@ export function persistStateToHash(): void {
     // URLs stay readable (`graph=drive` instead of `graph=drive|1|`).
     const depth = String(graphOverlay.depth);
     const ins = graphOverlay.inspectorOpen ? "1" : "0";
-    const insTail = graphOverlay.inspectorOpen ? `|${ins}` : "";
+    const modeTail = graphOverlay.mode === "filesystem" ? "|fs" : "";
+    const insTail = graphOverlay.inspectorOpen || modeTail ? `|${ins}${modeTail}` : "";
     let val = graphOverlay.scopeId;
     if (chips || insTail) val = `${val}|${depth}|${chips}${insTail}`;
     else if (depth !== "1") val = `${val}|${depth}`;
@@ -843,7 +845,12 @@ type SessionPayload = {
   /// ignored on read.
   overlays?: {
     assistant?: { open?: boolean; contextId?: string };
-    graph?: { open?: boolean; scopeId?: string; depth?: number };
+    graph?: {
+      open?: boolean;
+      scopeId?: string;
+      depth?: number;
+      mode?: "semantic" | "filesystem";
+    };
     /// Legacy fields from older session.json shapes; left here
     /// so a fresh schema doesn't reject them at read time.
     settings?: { open?: boolean };
@@ -871,6 +878,7 @@ function serializeSession(): SessionPayload | null {
     graph: {
       scopeId: graphOverlay.scopeId,
       depth: graphOverlay.depth,
+      mode: graphOverlay.mode,
     },
   };
   // Skip when there's literally nothing worth persisting.
@@ -915,6 +923,9 @@ function applySessionSidecars(p: SessionPayload): void {
   if (ov.graph?.scopeId) graphOverlay.scopeId = ov.graph.scopeId;
   if (ov.graph && typeof ov.graph.depth === "number") {
     graphOverlay.depth = ov.graph.depth;
+  }
+  if (ov.graph?.mode === "filesystem" || ov.graph?.mode === "semantic") {
+    graphOverlay.mode = ov.graph.mode;
   }
 }
 
@@ -2247,6 +2258,24 @@ export function availableGraphScopes(): ScopeOption[] {
       enabled: false,
     },
   });
+
+  function addDirScope(path: string, labelPrefix = "directory"): void {
+    if (!path || out.some((o) => o.id === `dir:${path}`)) return;
+    const slash = path.lastIndexOf("/");
+    const name = slash >= 0 ? path.slice(slash + 1) : path;
+    out.unshift({
+      id: `dir:${path}`,
+      kind: "dir",
+      label: `${labelPrefix}: ${name}/`,
+      path,
+    });
+  }
+
+  function parentDir(path: string): string | null {
+    const slash = path.lastIndexOf("/");
+    return slash > 0 ? path.slice(0, slash) : null;
+  }
+
   // Inject the currently-active tag scope as an option so the
   // dropdown can both display the selection and let the user pick
   // back to it after switching away. Tag scopes are entered via
@@ -2284,6 +2313,18 @@ export function availableGraphScopes(): ScopeOption[] {
         readOnly: false,
       });
     }
+    const parent = parentDir(path);
+    if (parent) addDirScope(parent, "folder");
+  }
+  // Folder scopes can be entered directly from the file browser
+  // context menu, so preserve the exact `dir:<path>` selection even
+  // when the browser overlay is closed. Also offer the parent folder
+  // as a one-hop broadening shortcut for deep directories.
+  if (graphOverlay.scopeId.startsWith("dir:")) {
+    const path = graphOverlay.scopeId.slice("dir:".length);
+    addDirScope(path, "folder");
+    const parent = parentDir(path);
+    if (parent) addDirScope(parent, "parent folder");
   }
   return out;
 }
@@ -2321,6 +2362,7 @@ export const DEFAULT_GRAPH_FILTERS: GraphFilters = {
 
 export const graphOverlay = $state<{
   open: boolean;
+  mode: "semantic" | "filesystem";
   /** Same id encoding as assistantOverlay.contextId
    *  (`file:<path>` | `group:<key>` | `drive`). */
   scopeId: string;
@@ -2340,6 +2382,7 @@ export const graphOverlay = $state<{
   pendingSelectId: string | null;
 }>({
   open: false,
+  mode: "semantic",
   scopeId: "drive",
   depth: 1,
   filters: { ...DEFAULT_GRAPH_FILTERS },
@@ -2350,6 +2393,7 @@ export const graphOverlay = $state<{
 /** Open the graph overlay, snapping the scope to the active file
  *  when applicable. Idempotent, mirrors openAssistant. */
 export function openGraph(): void {
+  graphOverlay.mode = "semantic";
   graphOverlay.scopeId = defaultScopeId();
   graphOverlay.pendingSelectId = null;
   graphOverlay.open = true;
@@ -2363,6 +2407,7 @@ export function openGraph(): void {
  *  scope guarantees the node is in the rendered set regardless of
  *  the previously-saved scope. */
 export function openGraphAtNode(nodeId: string): void {
+  graphOverlay.mode = "semantic";
   graphOverlay.scopeId = "drive";
   graphOverlay.depth = 1;
   graphOverlay.pendingSelectId = nodeId;
@@ -2382,7 +2427,39 @@ export function openGraphAtNode(nodeId: string): void {
  *  invoking the graph FROM a file means "show me what's around
  *  THIS file". */
 export function openGraphForFile(path: string): void {
+  graphOverlay.mode = "semantic";
   graphOverlay.scopeId = `file:${path}`;
+  graphOverlay.depth = 1;
+  graphOverlay.pendingSelectId = path;
+  graphOverlay.open = true;
+  scheduleSessionSave();
+}
+
+export function openFsGraphForFile(path: string): void {
+  graphOverlay.mode = "filesystem";
+  graphOverlay.scopeId = `file:${path}`;
+  graphOverlay.depth = 1;
+  graphOverlay.pendingSelectId = path;
+  graphOverlay.open = true;
+  scheduleSessionSave();
+}
+
+/** Open the graph overlay scoped to a directory. Depth starts at 1:
+ *  all files under the folder plus their immediate graph neighbours.
+ *  The dropdown keeps this folder, and its parent when available, as
+ *  explicit options through availableGraphScopes(). */
+export function openGraphForDirectory(path: string): void {
+  graphOverlay.mode = "semantic";
+  graphOverlay.scopeId = `dir:${path}`;
+  graphOverlay.depth = 1;
+  graphOverlay.pendingSelectId = null;
+  graphOverlay.open = true;
+  scheduleSessionSave();
+}
+
+export function openFsGraphForDirectory(path: string): void {
+  graphOverlay.mode = "filesystem";
+  graphOverlay.scopeId = `dir:${path}`;
   graphOverlay.depth = 1;
   graphOverlay.pendingSelectId = path;
   graphOverlay.open = true;
@@ -2396,6 +2473,7 @@ export function openGraphForFile(path: string): void {
  *  editor tag pills, FileInfoBody's tag list, search overlay tag
  *  hits, TagInfoBody's Open-in-Graph button. */
 export function openGraphForTag(nodeId: string, _label: string): void {
+  graphOverlay.mode = "semantic";
   graphOverlay.scopeId = `tag:${nodeId}`;
   graphOverlay.depth = 1;
   graphOverlay.pendingSelectId = nodeId;
@@ -2409,6 +2487,7 @@ export function openGraphForTag(nodeId: string, _label: string): void {
 // everywhere), so this is a one-bit overlay state.
 
 export const settingsOverlay = $state<{ open: boolean }>({ open: false });
+export const searchStatusOverlay = $state<{ open: boolean }>({ open: false });
 
 /// True when the server forbids opening Settings (today: tunnel
 /// mode with --tunnel-public). Sourced from the SPA shell meta tag
@@ -2473,6 +2552,7 @@ export function openBrowser(): void {
 export type OverlayId =
   | "browser"
   | "search"
+  | "search-status"
   | "graph"
   | "assistant"
   | "settings"
@@ -2505,6 +2585,9 @@ export function closeOverlay(id: OverlayId): void {
     case "search":
       searchPanel.open = false;
       return;
+    case "search-status":
+      searchStatusOverlay.open = false;
+      return;
     case "graph":
       graphOverlay.open = false;
       return;
@@ -2530,6 +2613,7 @@ export function syncOverlayStack(): void {
   const open = new Set<OverlayId>();
   if (browserOverlay.open) open.add("browser");
   if (searchPanel.open) open.add("search");
+  if (searchStatusOverlay.open) open.add("search-status");
   if (graphOverlay.open) open.add("graph");
   if (assistantOverlay.open) open.add("assistant");
   if (settingsOverlay.open) open.add("settings");

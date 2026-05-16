@@ -252,6 +252,8 @@
   // keeps the binding sites compact.
   let loading = $state(false);
   let error = $state<string | null>(null);
+  let scrollResizeObs: ResizeObserver | null = null;
+  let scrollRaf: number | null = null;
 
   /// Animated "thinking" indicator: dots cycle 0..3 every 400ms
   /// while a request is in flight. Bare timeline animation, no
@@ -610,7 +612,7 @@
       setAssistantInflight(null);
       pendingTurnTime = null;
       endAssistantStream(sessionId);
-      queueMicrotask(scrollToBottom);
+      scheduleScrollToBottom();
     }
   }
 
@@ -981,7 +983,7 @@
       // scope-history overlay can resurface previous threads.
       void loadDriveConversation();
     }
-    queueMicrotask(scrollToBottom);
+    scheduleScrollToBottom();
   });
 
   /// Read the persisted file conversation back from
@@ -1015,7 +1017,7 @@
         last_touched: parsed.last_touched,
         url: parsed.url,
       };
-      queueMicrotask(scrollToBottom);
+      scheduleScrollToBottom();
     } catch {
       // Server unreachable / invalid JSON: leave the bucket empty
       // so the next submit creates a fresh conversation.
@@ -1182,27 +1184,59 @@
     api.putAssistantBlobKeepalive(ps.blobKey, payload);
   }
 
+  const CHAT_BOTTOM_MARGIN = 28;
+
   function scrollToBottom(): void {
-    if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
+    if (!scrollEl) return;
+    scrollEl.scrollTop = scrollEl.scrollHeight - scrollEl.clientHeight + CHAT_BOTTOM_MARGIN;
   }
 
-  /// Auto-scroll the chat to the bottom whenever the loading
-  /// flag flips on (the in-flight placeholder bubble just
-  /// appeared) so the user doesn't have to scroll manually after
-  /// hitting Send. Reading `loading` here ties the effect to it.
+  function scheduleScrollToBottom(): void {
+    if (scrollRaf !== null) cancelAnimationFrame(scrollRaf);
+    scrollRaf = requestAnimationFrame(() => {
+      scrollToBottom();
+      scrollRaf = requestAnimationFrame(() => {
+        scrollRaf = null;
+        scrollToBottom();
+      });
+    });
+  }
+
+  /// Auto-scroll the chat to the bottom whenever the loading flag
+  /// flips on or the scrollback changes. The double rAF lets nested
+  /// rendered markdown / CM6 read-only bubbles settle before the
+  /// final measurement, and the ResizeObserver covers pane/window
+  /// resizes without a separate global listener.
   $effect(() => {
-    if (loading) queueMicrotask(scrollToBottom);
+    if (loading) scheduleScrollToBottom();
+  });
+
+  $effect(() => {
+    if (!visible) return;
+    void turns.length;
+    void unreadDividerAt;
+    scheduleScrollToBottom();
   });
 
   /// Keep the chat pinned to the bottom while deltas stream in:
   /// reading `assistantStream.text` ties this effect to every
-  /// fragment, and queueMicrotask defers the scroll past the DOM
-  /// update so the new content is laid out before we measure.
+  /// fragment.
   $effect(() => {
     if (!loading) return;
     const _ = assistantStream.text.length;
     void _;
-    queueMicrotask(scrollToBottom);
+    scheduleScrollToBottom();
+  });
+
+  $effect(() => {
+    if (!scrollEl) return;
+    scrollResizeObs?.disconnect();
+    scrollResizeObs = new ResizeObserver(scheduleScrollToBottom);
+    scrollResizeObs.observe(scrollEl);
+    return () => {
+      scrollResizeObs?.disconnect();
+      scrollResizeObs = null;
+    };
   });
 
   function close(): void {
@@ -1418,7 +1452,7 @@
     conv.turns.push({ kind: "user", content: trimmed, created_at: Date.now() });
     assistantOverlay.prompt = "";
     scheduleSave(ctx);
-    queueMicrotask(scrollToBottom);
+    scheduleScrollToBottom();
     try {
       // Tool list is gated on the backend's current capability.
       // Sending a `tools` array to a non-tool-capable model causes
@@ -1474,7 +1508,7 @@
       // background request can't clobber a fresh stream the user
       // already started.
       endAssistantStream(sessionId);
-      queueMicrotask(scrollToBottom);
+      scheduleScrollToBottom();
     }
   }
 
@@ -1670,6 +1704,8 @@
   onDestroy(() => {
     document.removeEventListener("keydown", onWindowKey);
     setAssistantSaveFlush(null);
+    scrollResizeObs?.disconnect();
+    if (scrollRaf !== null) cancelAnimationFrame(scrollRaf);
   });
 
   // Reactive accessor for the currently-rendered scrollback.
@@ -2219,8 +2255,6 @@
             {/if}
             {#if assistantStream.text.length > 0}
               <div class="body md streaming">{@html renderMarkdown(assistantStream.text)}<span class="caret" aria-hidden="true"></span></div>
-            {:else}
-              <div class="body">thinking{".".repeat(thinkingDots)}</div>
             {/if}
           </div>
         {/if}
@@ -2398,7 +2432,7 @@
       <div class="status-line">
         <span class="status-msg">
           {#if loading}
-            <span class="muted">press Esc to interrupt the assistant</span>
+            <span class="muted">press Stop to interrupt the assistant</span>
           {:else if error}
             <span class="err">{error}</span>
           {:else}
@@ -2409,7 +2443,7 @@
           <button
             class="action-btn stop"
             onclick={cancel}
-            title="stop the in-flight request (Esc also cancels)"
+            title="stop the in-flight request"
             aria-label="stop"
           >×</button>
         {:else}
@@ -2796,10 +2830,11 @@
   }
 
   /* Chat bubbles. User aligns right with a tinted background; the
-     assistant aligns left and uses the bg color. Both grow as
-     wide as needed but cap at ~85% so the column stays readable. */
+     assistant aligns left and uses the bg color. Let long turns use
+     the full chat column so the body below YOU / ASSISTANT stretches
+     when the text needs the space. */
   .bubble {
-    max-width: 85%;
+    max-width: 100%;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -3151,6 +3186,10 @@
     box-shadow: 0 0 4px rgba(210, 153, 34, 0.45);
     flex-shrink: 0;
   }
+  .stream-status .dot,
+  .activity-chip.running .dot {
+    animation: chan-tool-pulse 1.1s ease-in-out infinite;
+  }
   .stream-status.warn {
     color: #d29922;
     border-color: rgba(210, 153, 34, 0.45);
@@ -3163,6 +3202,7 @@
   .activity-chip.err .dot {
     background: var(--warn-text, #d33);
     box-shadow: none;
+    animation: none;
   }
   .activity-strip {
     display: flex;
@@ -3188,6 +3228,7 @@
   .activity-chip.ok .dot {
     background: var(--accent, #2ea043);
     box-shadow: none;
+    animation: none;
   }
   .activity-note {
     flex-basis: 100%;

@@ -13,6 +13,7 @@
   import PromptModal from "./components/PromptModal.svelte";
   import ScopeHistoryOverlay from "./components/ScopeHistoryOverlay.svelte";
   import SearchPanel from "./components/SearchPanel.svelte";
+  import SearchStatusOverlay from "./components/SearchStatusOverlay.svelte";
   import SettingsPanel from "./components/SettingsPanel.svelte";
   import Workspace from "./components/Workspace.svelte";
   import {
@@ -36,6 +37,7 @@
     refreshTree,
     scheduleSessionSave,
     scopeHistoryOverlay,
+    searchStatusOverlay,
     searchPanel,
     settingsOverlay,
     syncOverlayStack,
@@ -129,6 +131,7 @@
     void browserSelection.path;
     void graphOverlay.open;
     void graphOverlay.scopeId;
+    void graphOverlay.mode;
     void graphOverlay.depth;
     void graphOverlay.filters.link;
     void graphOverlay.filters.tag;
@@ -174,6 +177,7 @@
     void assistantOverlay.open;
     void settingsOverlay.open;
     void scopeHistoryOverlay.open;
+    void searchStatusOverlay.open;
     syncOverlayStack();
   });
 
@@ -468,6 +472,7 @@
 <PathPromptModal />
 <ConfirmModal />
 <SearchPanel />
+<SearchStatusOverlay />
 <InlineAssist />
 <GraphPanel />
 <SettingsPanel />

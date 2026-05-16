@@ -10,6 +10,7 @@ mod build_info;
 mod contacts;
 mod drive;
 mod files;
+mod fs_graph;
 mod graph;
 mod health;
 mod llm;
@@ -27,6 +28,7 @@ pub use drive::{api_cloud_drives, api_get_drive, api_patch_drive};
 pub use files::{
     api_create_file, api_delete_file, api_list_files, api_move, api_read_file, api_write_file,
 };
+pub use fs_graph::{api_fs_graph, build_fs_graph, FsGraphResponse, FsGraphScope};
 pub use graph::{
     api_backlinks, api_graph, api_headings, api_link_targets, api_links, api_resolve_link,
 };

@@ -48,6 +48,11 @@ tracing-subscriber = { workspace = true }
 # *_PROXY env-var handling install.sh expects.
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Pulled in for `chan config get`: dumps the editor preferences as
+# TOML so the output round-trips with `<config>/chan/preferences.toml`.
+# Writes go through chan-server's existing store helpers (see
+# `EditorPrefs::save`); we never roll our own tempfile + rename here.
+toml = { workspace = true }
 reqwest = { workspace = true, features = ["stream"] }
 sha2 = "0.10"
 
@@ -57,6 +62,9 @@ sha2 = "0.10"
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 tar = { workspace = true }
 flate2 = "1"
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 zip = { version = "2", default-features = false, features = ["deflate"] }

@@ -55,12 +55,12 @@ pub fn load_or_create_token(paths: &DrivePaths) -> std::io::Result<String> {
 }
 
 /// Make sure `<state>/tokens/<drive-key>/` is a directory we can write
-/// inside. Self-heals one specific corruption seen in the wild: a
-/// regular file sitting at that path (left behind by some pre-release
-/// build / manual fiddling) used to make `create_dir_all` fail with
-/// `AlreadyExists` and abort the whole serve. We remove the stray
-/// file and retry. Anything else (symlink, dir we cannot create
-/// because of a real permission problem) is propagated unchanged.
+/// inside. Self-heals one specific corruption case: a regular file
+/// sitting at that path (typically left by manual fiddling) makes
+/// `create_dir_all` fail with `AlreadyExists` and would otherwise
+/// abort the whole serve. We remove the stray file and retry. Any
+/// other condition (symlink, real permission problem on the dir) is
+/// propagated unchanged.
 fn ensure_tokens_dir(dir: &Path) -> std::io::Result<()> {
     match std::fs::create_dir_all(dir) {
         Ok(()) => Ok(()),

@@ -11,14 +11,15 @@
   // share one panel and one context picker. This file is search-
   // only now.
 
+  import { onDestroy } from "svelte";
   import { untrack } from "svelte";
-  import { ArrowLeft, ArrowRight, Maximize2, Minimize2, Settings, X } from "lucide-svelte";
+  import { ArrowLeft, ArrowRight, Database, Maximize2, Minimize2, Settings, X } from "lucide-svelte";
   import {
     overlayMaximized,
     setOverlayMaximized,
   } from "../state/pageWidth.svelte";
-  import { api, withTokenQuery } from "../api/client";
-  import type { ContentHit } from "../api/types";
+  import { ApiError, api, withTokenQuery } from "../api/client";
+  import type { ContentHit, ReportFileStats } from "../api/types";
   import { isEditableText, isImage } from "../state/fileTypes";
   import {
     ensureGraphLoaded,
@@ -28,6 +29,7 @@
   import {
     availableSearchScopes,
     browserOverlay,
+    loadTreeDir,
     openBrowser,
     openGraphForTag,
     openSettings,
@@ -35,6 +37,7 @@
     persistPaneWidths,
     revealAndSelect,
     searchPanel,
+    searchStatusOverlay,
     tree,
   } from "../state/store.svelte";
   import { type ScopeOption, defaultScopeId } from "../state/scope.svelte";
@@ -57,6 +60,13 @@
     | { kind: "chunk"; hit: ContentHit; key: string }
     | { kind: "image"; path: string; key: string }
     | { kind: "file"; path: string; key: string }
+    | {
+        kind: "language_file";
+        path: string;
+        language: string;
+        code: number;
+        key: string;
+      }
     | { kind: "contact"; path: string; key: string }
     | {
         kind: "tag";
@@ -67,10 +77,12 @@
       };
 
   let inputEl: HTMLInputElement | undefined = $state();
+  let hitsEl: HTMLUListElement | undefined = $state();
   /// Query is module-level (lives on `searchPanel.query`) so the
   /// URL hash can round-trip it: a copy-pasted chan URL with
   /// `search=foo` reopens the panel preloaded with that term.
   let chunkHits = $state<ContentHit[]>([]);
+  let languageHits = $state<SearchRow[]>([]);
   let loading = $state(false);
   let active = $state(0);
   let error = $state<string | null>(null);
@@ -79,6 +91,8 @@
   /// promise that resolves with a stale token discards its result.
   let queryToken = 0;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let hitsResizeObs: ResizeObserver | null = null;
+  const reportCache = new Map<string, ReportFileStats | null>();
 
   // Reset transient state when the panel reopens so a stale set
   // of hits from the previous session doesn't flash before the
@@ -110,6 +124,7 @@
       const seed = restored ? null : extractSearchSeed();
       if (seed) searchPanel.query = seed;
       chunkHits = [];
+      languageHits = [];
       active = 0;
       error = null;
       // Make sure the graph is loaded so tag hits work on the
@@ -206,6 +221,7 @@
     const q = searchPanel.query.trim();
     if (!q) {
       chunkHits = [];
+      languageHits = [];
       loading = false;
       return;
     }
@@ -217,19 +233,95 @@
     loading = true;
     debounceTimer = setTimeout(async () => {
       try {
+        const language = parseLanguageQuery(q);
+        if (language) {
+          chunkHits = [];
+          const hits = await searchLanguage(language);
+          if (myToken !== queryToken) return; // stale
+          languageHits = hits;
+          active = 0;
+          error = null;
+          return;
+        }
         const res = await api.searchContent(q, { limit });
         if (myToken !== queryToken) return; // stale
         chunkHits = res.hits;
+        languageHits = [];
         active = 0;
         error = null;
       } catch (e) {
         if (myToken !== queryToken) return;
         error = (e as Error).message;
         chunkHits = [];
+        languageHits = [];
       } finally {
         if (myToken === queryToken) loading = false;
       }
     }, 200);
+  }
+
+  const LANGUAGE_LIMIT = 25;
+
+  function parseLanguageQuery(q: string): string | null {
+    const m = q.match(/^language\s*:\s*(.+)$/i);
+    const value = m?.[1]?.trim();
+    return value ? value.toLowerCase() : null;
+  }
+
+  async function reportForPath(path: string): Promise<ReportFileStats | null> {
+    if (reportCache.has(path)) return reportCache.get(path) ?? null;
+    try {
+      const stats = await api.reportFile(path);
+      reportCache.set(path, stats);
+      return stats;
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        reportCache.set(path, null);
+        return null;
+      }
+      throw e;
+    }
+  }
+
+  async function searchLanguage(language: string): Promise<SearchRow[]> {
+    await loadSearchTree();
+    const files = tree.entries.filter((e) => !e.is_dir && pathInScope(e.path));
+    const out: SearchRow[] = [];
+    let next = 0;
+    const workers = Array.from({ length: Math.min(8, files.length) }, async () => {
+      while (next < files.length && out.length < LANGUAGE_LIMIT) {
+        const entry = files[next++];
+        if (!entry) continue;
+        const stats = await reportForPath(entry.path);
+        if (!stats || stats.language.toLowerCase() !== language) continue;
+        out.push({
+          kind: "language_file",
+          path: entry.path,
+          language: stats.language,
+          code: stats.code,
+          key: `language:${stats.language}:${entry.path}`,
+        });
+      }
+    });
+    await Promise.all(workers);
+    out.sort((a, b) => {
+      if (a.kind !== "language_file" || b.kind !== "language_file") return 0;
+      return a.path.localeCompare(b.path);
+    });
+    return out.slice(0, LANGUAGE_LIMIT);
+  }
+
+  async function loadSearchTree(): Promise<void> {
+    // The file tree is normally loaded on demand as folders open.
+    // `language:<name>` is a drive-wide query, so hydrate folder
+    // listings before scanning per-file report rows.
+    for (let i = 0; i < 1000; i += 1) {
+      const pending = tree.entries
+        .filter((e) => e.is_dir && !tree.loadedDirs[e.path] && !tree.loadingDirs[e.path])
+        .map((e) => e.path);
+      if (pending.length === 0) return;
+      await Promise.allSettled(pending.map((path) => loadTreeDir(path)));
+    }
   }
 
 
@@ -378,6 +470,7 @@
     const chunkPaths = new Set<string>();
     for (const h of chunkHits) chunkPaths.add(h.path);
     out.push(...tagRows);
+    out.push(...languageHits);
     for (const r of contactRows) {
       if (r.kind === "contact" && !pathInScope(r.path)) continue;
       out.push(r);
@@ -408,8 +501,39 @@
     if (r.kind === "chunk") return { kind: "file", path: r.hit.path };
     if (r.kind === "image") return { kind: "file", path: r.path };
     if (r.kind === "file") return { kind: "file", path: r.path };
+    if (r.kind === "language_file") return { kind: "file", path: r.path };
     if (r.kind === "contact") return { kind: "file", path: r.path };
     return { kind: "tag", nodeId: r.nodeId, label: r.label };
+  });
+  const activeKey = $derived(rows[active]?.key ?? null);
+
+  function scrollActiveIntoView(): void {
+    if (!searchPanel.open || !hitsEl || !activeKey) return;
+    requestAnimationFrame(() => {
+      const el = hitsEl?.querySelector<HTMLElement>('li[data-active="true"]');
+      el?.scrollIntoView({ block: "nearest" });
+    });
+  }
+
+  $effect(() => {
+    if (!hitsEl) return;
+    hitsResizeObs?.disconnect();
+    hitsResizeObs = new ResizeObserver(scrollActiveIntoView);
+    hitsResizeObs.observe(hitsEl);
+    return () => {
+      hitsResizeObs?.disconnect();
+      hitsResizeObs = null;
+    };
+  });
+
+  $effect(() => {
+    void activeKey;
+    void searchPanel.open;
+    scrollActiveIntoView();
+  });
+
+  onDestroy(() => {
+    hitsResizeObs?.disconnect();
   });
 
   /// Primary action for a row: open the underlying entity in the
@@ -421,7 +545,7 @@
     if (r.kind === "chunk") {
       close();
       await openInActivePane(r.hit.path);
-    } else if (r.kind === "file" || r.kind === "contact") {
+    } else if (r.kind === "file" || r.kind === "language_file" || r.kind === "contact") {
       // Filename / contact matches open the underlying file in the
       // editor exactly like a chunk hit would — the path IS the
       // payload, no chunk anchor to honour.
@@ -506,6 +630,10 @@
     openSettings();
   }
 
+  function openSearchStatus(): void {
+    searchStatusOverlay.open = true;
+  }
+
   function onSearchContextMenu(e: MouseEvent): void {
     // Bail if the right-click landed on the input — let the browser
     // show its native context menu (paste, spell, etc.) there.
@@ -547,6 +675,15 @@
             </option>
           {/each}
         </select>
+        <button
+          type="button"
+          class="chrome-btn"
+          onclick={openSearchStatus}
+          title="Show search index status"
+          aria-label="Show search index status"
+        >
+          <Database size={14} strokeWidth={1.75} aria-hidden="true" />
+        </button>
         <HamburgerMenu
           bind:this={menu}
           bind:open={menuOpen}
@@ -565,11 +702,12 @@
           <X size={14} strokeWidth={1.75} aria-hidden="true" />
         </button>
       </header>
-      <ul class="hits">
+      <ul class="hits" bind:this={hitsEl}>
         {#each rows as r, i (r.key)}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <li
+            data-active={i === active ? "true" : undefined}
             onmousedown={(e) => {
               e.preventDefault();
               selectRow(i);
@@ -616,6 +754,13 @@
                   <span class="path">{contactDisplayName(r.path)}</span>
                 </div>
                 <div class="preview muted mono">{r.path}</div>
+              {:else if r.kind === "language_file"}
+                <div class="row1">
+                  <KindChip kind="document" compact dim />
+                  <span class="path">{r.path}</span>
+                  <span class="score">{r.language}</span>
+                </div>
+                <div class="preview muted">{r.code.toLocaleString()} SLOC</div>
               {:else if r.kind === "file"}
                 <!-- Markdown / text filename match (deduped against
                      chunk hits in the rows combiner). The preview
@@ -671,10 +816,11 @@
         {:else if rows.length > 0}
           <span>
             {rows.length} hit{rows.length === 1 ? "" : "s"}
-            {#if tagRows.length + imageRows.length + contactRows.length + markdownFileRows.length > 0}
+            {#if tagRows.length + imageRows.length + contactRows.length + markdownFileRows.length + languageHits.length > 0}
               ({chunkHits.length} doc · {imageRows.length} image · {tagRows.length} tag
               {#if contactRows.length > 0} · {contactRows.length} contact{/if}
-              {#if markdownFileRows.length > 0} · {markdownFileRows.length} file{/if})
+              {#if markdownFileRows.length > 0} · {markdownFileRows.length} file{/if}
+              {#if languageHits.length > 0} · {languageHits.length} language{/if})
             {/if}
           </span>
         {:else}

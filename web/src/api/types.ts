@@ -466,6 +466,38 @@ export type GraphView = {
   edges: GraphViewEdge[];
 };
 
+export type FsGraphScope = "file" | "folder";
+export type FsGraphNodeKind = "folder" | "file" | "symlink" | "ghost";
+export type FsGraphEdgeKind = "contains" | "symlink" | "hardlink";
+
+export type FsGraphNode = {
+  id: string;
+  kind: FsGraphNodeKind;
+  name: string;
+  path: string;
+  size: number;
+  mtime?: number | null;
+  target?: string | null;
+  outside?: boolean;
+  broken?: boolean;
+};
+
+export type FsGraphEdge = {
+  source: string;
+  target: string;
+  kind: FsGraphEdgeKind;
+};
+
+export type FsGraphResponse = {
+  root: string;
+  scope: FsGraphScope;
+  path: string;
+  depth: number;
+  nodes: FsGraphNode[];
+  edges: FsGraphEdge[];
+  truncated: boolean;
+};
+
 export type WatchEvent =
   | { kind: "created"; path: string }
   | { kind: "modified"; path: string }
