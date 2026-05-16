@@ -817,6 +817,12 @@ export function persistStateToHash(): void {
 /// Back-compat alias used elsewhere in the tree.
 export const persistLayoutToHash = persistStateToHash;
 
+/// Test seam for URL-hash overlay restore. The public bootstrap path
+/// mixes hash, remote session, auth, and websocket startup; keeping
+/// this narrow lets regression tests cover hash parsing without
+/// faking the whole app lifecycle.
+export const __testApplyOverlaysFromHash = applyOverlaysFromHash;
+
 // ---- session persistence (per-window, server-side) ---------------------
 //
 // PUT/GET hit `<state>/sessions/<drive-key>/<window-id>.json`. The
