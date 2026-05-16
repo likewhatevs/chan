@@ -281,6 +281,7 @@
       class="fbtn"
       class:on={isBold}
       title="bold (Cmd/Ctrl+B)"
+      aria-label="bold"
       disabled={disabled}
       onmousedown={onMouseDownPin}
       onmouseup={onMouseUpUnpin}
@@ -290,6 +291,7 @@
       class="fbtn"
       class:on={isItalic}
       title="italic (Cmd/Ctrl+I)"
+      aria-label="italic"
       disabled={disabled}
       onmousedown={onMouseDownPin}
       onmouseup={onMouseUpUnpin}
@@ -299,6 +301,7 @@
       class="fbtn"
       class:on={isStrike}
       title="strikethrough (Cmd/Ctrl+Shift+S)"
+      aria-label="strikethrough"
       disabled={disabled}
       onmousedown={onMouseDownPin}
       onmouseup={onMouseUpUnpin}
@@ -308,6 +311,7 @@
       class="fbtn"
       class:on={isInlineCode}
       title="inline code (Cmd/Ctrl+E)"
+      aria-label="inline code"
       disabled={disabled}
       onmousedown={onMouseDownPin}
       onmouseup={onMouseUpUnpin}
@@ -395,17 +399,18 @@
 </div>
 
 <style>
-  /* Floating chrome anchored to the top-left of the editor canvas.
-     position: absolute inside the .editor-host wrapper means the
-     toolbar stays put even as the user scrolls the editor body.
-     The hover-scale wobble + box-shadow lift match the tab-menu
-     bubble and bottom pill so the motion language stays consistent
-     across the chrome (mouseenter overshoots ~2%, mouseleave settles
-     back through the same easeOutBack curve). */
+  /* Shared style toolbar chrome. File editors and assistant prompts
+     both render this component, so all control dimensions and states
+     live here instead of in the host-specific surfaces. */
   .style-toolbar {
+    --toolbar-control-h: 24px;
+    --toolbar-control-min-w: 26px;
+    --toolbar-control-radius: 4px;
+
     display: inline-flex;
     align-items: center;
-    gap: 2px;
+    gap: 3px;
+    max-width: calc(100% - 16px);
     padding: 4px 6px;
     background: var(--bg-card);
     border: 1px solid var(--border);
@@ -438,9 +443,8 @@
     z-index: 30;
   }
   /* In-flow: rendered as a normal block above the editor (used by
-     the assistant prompt so formatting chrome doesn't sit on top of
-     the user's typed text). Caller-controlled spacing via margins
-     on the parent flex layout. */
+     hosts that reserve layout space for the toolbar). Caller-owned
+     spacing stays outside this component. */
   .style-toolbar.inflow {
     align-self: flex-start;
   }
@@ -468,7 +472,8 @@
   .expand-zone {
     display: inline-flex;
     align-items: center;
-    gap: 2px;
+    gap: 3px;
+    min-width: 0;
   }
   /* Wraps the block-kind + buttons so we can animate it as a unit
      with the same easeOutBack pop the tab-menu bubble uses. The
@@ -478,9 +483,14 @@
   .fbtn-row {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 3px;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
     transform-origin: top left;
   }
+  .fbtn-row::-webkit-scrollbar { display: none; }
   /* Aa badge: always-on signal that the toolbar lives in this
      corner. Acts as the toolbar's left anchor; the formatting row
      opens to its right when expanded. */
@@ -488,11 +498,12 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 22px;
-    height: 22px;
-    padding: 0 4px;
+    min-width: var(--toolbar-control-min-w);
+    height: var(--toolbar-control-h);
+    padding: 0 5px;
     color: var(--text-secondary);
     font-weight: 600;
+    line-height: 1;
     user-select: none;
   }
   /* Vertical divider between the Aa badge and the heading selector
@@ -503,41 +514,60 @@
     width: 1px;
     margin: 2px 4px;
     background: var(--border);
+    flex: 0 0 auto;
   }
   .block-kind {
+    flex: 0 0 auto;
+    height: var(--toolbar-control-h);
+    min-width: 64px;
+    margin-right: 1px;
+    padding: 0 5px;
     background: transparent;
     color: var(--text);
     border: 1px solid var(--btn-border);
-    border-radius: 3px;
-    padding: 0 4px;
-    margin-right: 2px;
+    border-radius: var(--toolbar-control-radius);
     font: inherit;
     font-size: 12px;
-    height: 22px;
+    line-height: 1;
   }
   .fbtn {
-    min-width: 24px;
-    height: 22px;
-    text-align: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    min-width: var(--toolbar-control-min-w);
+    height: var(--toolbar-control-h);
+    padding: 0 5px;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 3px;
+    border-radius: var(--toolbar-control-radius);
     color: var(--text);
     cursor: pointer;
     font: inherit;
     font-size: 13px;
-    padding: 0 4px;
-    line-height: 20px;
+    line-height: 1;
+    text-align: center;
   }
+  .block-kind:hover:not(:disabled),
   .fbtn:hover:not(:disabled) {
     background: var(--hover-bg);
     border-color: var(--btn-border);
   }
+  .block-kind:focus-visible,
+  .fbtn:focus-visible {
+    outline: 2px solid var(--btn-hover);
+    outline-offset: 2px;
+  }
   .fbtn.on {
     background: var(--hover-bg);
     border-color: var(--btn-hover);
+    color: var(--text);
   }
-  .fbtn:disabled { cursor: default; opacity: 0.55; }
+  .block-kind:disabled,
+  .fbtn:disabled {
+    cursor: default;
+    opacity: 0.55;
+  }
   .fbtn b, .fbtn i, .fbtn s, .fbtn code { font-size: 13px; }
   .fbtn code { font-family: ui-monospace, monospace; }
 

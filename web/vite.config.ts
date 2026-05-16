@@ -12,7 +12,10 @@
 // to TS-only behavior (see src/api/wasm.ts).
 
 import { svelte } from "@sveltejs/vite-plugin-svelte";
-import { defineConfig } from "vite";
+import { fileURLToPath } from "node:url";
+import { defineConfig } from "vitest/config";
+
+const svelteClient = fileURLToPath(new URL("./node_modules/svelte/src/index-client.js", import.meta.url));
 
 export default defineConfig({
   base: "./",
@@ -31,5 +34,9 @@ export default defineConfig({
     emptyOutDir: true,
     target: "es2022",
     sourcemap: false,
+  },
+  test: {
+    environment: "jsdom",
+    alias: [{ find: /^svelte$/, replacement: svelteClient }],
   },
 });
