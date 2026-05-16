@@ -17,8 +17,6 @@ import type {
   IndexStatus,
   LlmCompletionRequest,
   LlmCompletionResponse,
-  LlmResumeRequest,
-  LlmResumeResponse,
   LlmStatus,
   LlmToolSpec,
   MoveResponse,
@@ -124,15 +122,6 @@ export const api = {
   /// its own upstream deadlines.
   llmComplete: (body: LlmCompletionRequest, signal?: AbortSignal) =>
     req<LlmCompletionResponse>("POST", "/api/llm/complete", body, signal, 0),
-  /// Resolve a paused `write_file` via chan-llm's `apply_resume`
-  /// path: server inserts the canonical PENDING_STATUS placeholder
-  /// if missing, runs the user's decision (apply / apply_as /
-  /// discard), then re-sends the transcript so the model gets a
-  /// chance to react. Returns the assistant continuation plus the
-  /// server-canonical `messages` for the frontend to mirror.
-  /// Same "no client-side timeout" rule as `llmComplete`.
-  llmResume: (body: LlmResumeRequest, signal?: AbortSignal) =>
-    req<LlmResumeResponse>("POST", "/api/llm/resume", body, signal, 0),
   /** Tool catalog: the server's `default_tools()` list. */
   llmTools: () => req<LlmToolSpec[]>("GET", "/api/llm/tools"),
   /// Per-file assistant conversation persistence. Each file's

@@ -83,8 +83,8 @@ pub struct AppState {
     /// channel without resubscribing the indexer to a fresh one.
     pub index_events_tx: broadcast::Sender<WatchEvent>,
     /// Loaded at boot; mutable for future PATCH /api/llm/config
-    /// (backend selection, auto_apply_writes toggle). Currently
-    /// only read by the status route and the complete handler.
+    /// (backend selection). Currently only read by the status
+    /// route and the complete handler.
     pub llm_config: Arc<Mutex<LlmConfig>>,
     /// chan-server's own preferences (attachments_dir,
     /// answers_dir, etc). Mutable via PATCH /api/server/config;

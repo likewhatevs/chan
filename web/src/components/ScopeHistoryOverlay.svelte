@@ -442,8 +442,6 @@
                         <li class="peek-turn user"><span class="who">you</span>{t.content}</li>
                       {:else if t.kind === "assistant"}
                         <li class="peek-turn assistant"><span class="who">assistant</span>{t.content}</li>
-                      {:else if t.kind === "edit"}
-                        <li class="peek-turn edit"><span class="who">edit</span>{t.edit.path}{#if t.edit.summary}: {t.edit.summary}{/if}</li>
                       {:else if t.kind === "tool"}
                         <li class="peek-turn tool"><span class="who">tool</span>{t.event.label}{#if t.event.result_summary} — {t.event.result_summary}{/if}</li>
                       {:else if t.kind === "assistant_switch"}
@@ -802,7 +800,7 @@
     font-weight: 600;
   }
   .peek-turn.user .who { color: var(--link); opacity: 1; }
-  .peek-turn.edit, .peek-turn.tool {
+  .peek-turn.tool {
     color: var(--text-secondary);
     font-style: italic;
   }

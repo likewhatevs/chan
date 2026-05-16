@@ -45,7 +45,7 @@ use routes::{
     api_get_contacts, api_get_drive, api_get_server_config, api_get_session, api_graph,
     api_headings, api_health, api_index_rebuild, api_index_status, api_link_targets, api_links,
     api_list_assistant, api_list_files, api_list_sessions, api_llm_cli_detection, api_llm_complete,
-    api_llm_resume, api_llm_status, api_llm_tools, api_move, api_patch_config, api_patch_drive,
+    api_llm_status, api_llm_tools, api_move, api_patch_config, api_patch_drive,
     api_patch_server_config, api_post_answer, api_post_attachment, api_post_contacts_import,
     api_put_assistant, api_put_session, api_read_file, api_report_file, api_report_prefix,
     api_resolve_link, api_search_content, api_search_files, api_storage_reset, api_write_file,
@@ -357,23 +357,13 @@ async fn build_app(
     })));
     let llm_config_arc = Arc::new(Mutex::new(llm_config));
     let bridge_drive_cell = state_for_bridge.clone();
-    let bridge_llm_config = llm_config_arc.clone();
-    let bridge = mcp_bridge::start(
-        socket_path.clone(),
-        move || {
-            let cell = bridge_drive_cell.read().expect("drive_cell poisoned");
-            cell.as_ref()
-                .expect("drive_cell present for the lifetime of the server")
-                .drive
-                .clone()
-        },
-        move || {
-            bridge_llm_config
-                .lock()
-                .expect("llm_config poisoned")
-                .auto_apply_writes
-        },
-    );
+    let bridge = mcp_bridge::start(socket_path.clone(), move || {
+        let cell = bridge_drive_cell.read().expect("drive_cell poisoned");
+        cell.as_ref()
+            .expect("drive_cell present for the lifetime of the server")
+            .drive
+            .clone()
+    });
     let (mcp_socket_path, mcp_bridge) = match bridge {
         Ok(handle) => (Some(handle.socket_path().to_path_buf()), Some(handle)),
         Err(e) => {
@@ -744,10 +734,6 @@ fn router(state: Arc<AppState>) -> Router {
     // separate layer carries the assistant-completion lockdown.
     let tunnel_public_block = Router::new()
         .route("/api/llm/complete", post(api_llm_complete))
-        // Resume is a sibling cost-bearing route: it sends a second
-        // turn to the backend after applying / discarding the
-        // paused write. Same lockdown gate as /complete.
-        .route("/api/llm/resume", post(api_llm_resume))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             tunnel_guard::tunnel_public_guard,

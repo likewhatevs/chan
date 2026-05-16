@@ -77,25 +77,17 @@ impl Drop for BridgeHandle {
 
 /// Bind the socket and spawn an accept loop. Each accepted connection
 /// gets a fresh `chan_llm::mcp::Server` constructed against the
-/// current drive Arc and the live `auto_apply_writes` setting (read
-/// at connect time so the user can toggle it mid-session and the
-/// next agent turn picks up the change).
+/// current drive Arc.
 #[cfg(unix)]
-pub fn start<DF, AF>(
-    socket_path: PathBuf,
-    drive_for: DF,
-    auto_apply_for: AF,
-) -> std::io::Result<BridgeHandle>
+pub fn start<DF>(socket_path: PathBuf, drive_for: DF) -> std::io::Result<BridgeHandle>
 where
     DF: Fn() -> Arc<chan_drive::Drive> + Send + Sync + 'static,
-    AF: Fn() -> bool + Send + Sync + 'static,
 {
     // Stale socket from a previous run that didn't get to clean up
     // (kill -9, panic in Drop): unlink so bind doesn't EADDRINUSE.
     let _ = std::fs::remove_file(&socket_path);
     let listener = UnixListener::bind(&socket_path)?;
     let drive_for = Arc::new(drive_for);
-    let auto_apply_for = Arc::new(auto_apply_for);
 
     let accept_loop = tokio::spawn(async move {
         loop {
@@ -110,10 +102,9 @@ where
                 }
             };
             let drive = drive_for();
-            let auto_apply = auto_apply_for();
             tokio::spawn(async move {
                 let (read, write) = stream.into_split();
-                let server = chan_llm::mcp::Server::new(drive, auto_apply);
+                let server = chan_llm::mcp::Server::new(drive);
                 if let Err(e) = server.serve_io(read, write).await {
                     tracing::debug!("mcp bridge session: {e}");
                 }
@@ -128,14 +119,9 @@ where
 }
 
 #[cfg(not(unix))]
-pub fn start<DF, AF>(
-    _socket_path: PathBuf,
-    _drive_for: DF,
-    _auto_apply_for: AF,
-) -> std::io::Result<BridgeHandle>
+pub fn start<DF>(_socket_path: PathBuf, _drive_for: DF) -> std::io::Result<BridgeHandle>
 where
     DF: Fn() -> Arc<chan_drive::Drive> + Send + Sync + 'static,
-    AF: Fn() -> bool + Send + Sync + 'static,
 {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,

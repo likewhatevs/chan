@@ -214,32 +214,6 @@ describe("renderScopeHistoryMarkdown", () => {
     expect(md).toContain("  - b.md");
   });
 
-  test("edit turn renders the proposal path and summary as a fenced block", () => {
-    const entry: ScopeHistoryEntry = {
-      id: "file:foo.md",
-      kind: "file",
-      title: "foo.md",
-      paths: ["foo.md"],
-      turn_count: 1,
-    };
-    const turns: AssistantTurn[] = [
-      {
-        kind: "edit",
-        edit: {
-          toolCallId: "t1",
-          path: "foo.md",
-          content: "hello world",
-          summary: "intro",
-          status: "applied",
-        },
-      },
-    ];
-    const md = renderScopeHistoryMarkdown(entry, turns);
-    expect(md).toContain("## Edit proposal — foo.md");
-    expect(md).toContain("> intro");
-    expect(md).toContain("```\nhello world\n```");
-  });
-
   test("tool turn collapses to an italic single line", () => {
     const entry: ScopeHistoryEntry = {
       id: "drive",

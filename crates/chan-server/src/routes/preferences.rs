@@ -61,7 +61,6 @@ pub struct AssistantPrefsView {
     #[serde(default)]
     pub default_backend: Option<AssistantBackendKind>,
     pub answers_dir: String,
-    pub auto_apply_writes: bool,
     /// Local `claude` CLI shell-executor backend. Carries no token /
     /// URL (auth runs through the user's installed CLI); only the
     /// enable flag and the optional model override.
@@ -141,7 +140,6 @@ pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
             effective_enabled: false,
             default_backend: None,
             answers_dir: String::new(),
-            auto_apply_writes: false,
             claude_cli: CliPrefsView::default(),
             gemini_cli: CliPrefsView::default(),
             codex_cli: CliPrefsView::default(),
@@ -151,7 +149,6 @@ pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
             effective_enabled: llm.active_backend().is_some(),
             default_backend: llm.backend.map(AssistantBackendKind::from_chan_llm),
             answers_dir: server.answers_dir.clone(),
-            auto_apply_writes: llm.auto_apply_writes,
             claude_cli: CliPrefsView {
                 enabled: llm.enabled.claude_cli,
                 model: llm.models.claude_cli.clone(),
@@ -396,7 +393,6 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
         llm.enabled.claude_cli = view.assistant.claude_cli.enabled;
         llm.enabled.gemini_cli = view.assistant.gemini_cli.enabled;
         llm.enabled.codex_cli = view.assistant.codex_cli.enabled;
-        llm.auto_apply_writes = view.assistant.auto_apply_writes;
         // CLI overrides: empty / None falls back to "let the CLI's
         // own config pick", which is what we want when the user
         // clears the field.
@@ -527,10 +523,7 @@ mod tests {
             serde_json::Value::Null
         );
         assert_eq!(json["assistant"]["answers_dir"], serde_json::json!(""));
-        assert_eq!(
-            json["assistant"]["auto_apply_writes"],
-            serde_json::json!(false)
-        );
+        assert!(json["assistant"].get("auto_apply_writes").is_none());
         assert_eq!(
             json["assistant"]["claude_cli"]["enabled"],
             serde_json::json!(false)

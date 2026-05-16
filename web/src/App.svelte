@@ -4,7 +4,6 @@
   // import BottomPill from "./components/BottomPill.svelte";
   import ConfirmModal from "./components/ConfirmModal.svelte";
   import ConflictModal from "./components/ConflictModal.svelte";
-  import DiffOverlay from "./components/DiffOverlay.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
   import FileBrowserOverlay from "./components/FileBrowserOverlay.svelte";
   import GraphPanel from "./components/GraphPanel.svelte";
@@ -41,7 +40,6 @@
     settingsOverlay,
     syncOverlayStack,
     topOverlay,
-    watchAutoApplyWrites,
     watchBubbleDisplayMode,
     watchSystemTheme,
   } from "./state/store.svelte";
@@ -194,8 +192,6 @@
     // render mode so flipping it in one window propagates to
     // every other open window live.
     watchBubbleDisplayMode();
-    // And for the composer's auto-apply toggle (next to Send).
-    watchAutoApplyWrites();
     // Idle tracker: after 2.5s without scroll/click/keypress, the
     // floating pills fade. Any input flips them back on.
     installIdleTracker();
@@ -473,7 +469,6 @@
 <ConfirmModal />
 <SearchPanel />
 <InlineAssist />
-<DiffOverlay />
 <GraphPanel />
 <SettingsPanel />
 <FileBrowserOverlay />

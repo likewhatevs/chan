@@ -3,8 +3,7 @@
 //! Most "preferences" the Settings UI surfaces already live in
 //! existing config files:
 //!
-//! - `assistant`: chan-llm's LlmConfig (backend, model,
-//!   auto_apply_writes, keys)
+//! - `assistant`: chan-llm's LlmConfig (backend, model, keys)
 //! - `attachments_dir`: ServerConfig
 //! - `answers_dir`: ServerConfig, mirrored into the assistant
 //!   subtree of the unified view because the frontend types it as

@@ -31,9 +31,7 @@ pub use graph::{
     api_backlinks, api_graph, api_headings, api_link_targets, api_links, api_resolve_link,
 };
 pub use health::api_health;
-pub use llm::{
-    api_llm_cli_detection, api_llm_complete, api_llm_resume, api_llm_status, api_llm_tools,
-};
+pub use llm::{api_llm_cli_detection, api_llm_complete, api_llm_status, api_llm_tools};
 pub use preferences::{
     api_get_config, api_get_server_config, api_patch_config, api_patch_server_config,
 };

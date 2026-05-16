@@ -18,14 +18,14 @@
   //       entire drive. In-memory only; replaces the "ask"
   //       tab that used to live in the search palette.
   //
-  // File edits land through chan-llm's standard `write_file` tool.
-  // When `auto_apply_writes` is off (default), chan-llm returns
-  // `Pending`, pauses with `stop_reason = ToolUse`, and we render
-  // the proposed write as an edit card; Apply / Discard inject the
-  // real tool result back so the next round closes the loop. The
-  // model can target any path in scope (the single file in file
-  // context, any of the visible files in group context, any path
-  // it discovers in drive context).
+  // File edits land through chan-llm's standard `write_file` tool
+  // and apply immediately to the drive. Permission gating moves to
+  // the model: when the user's intent looks destructive (refactor a
+  // batch of files, rewrite a directory, etc.), the model calls
+  // AskUserQuestion first; the host renders the options as
+  // clickable buttons (see the `survey` UserRequest path below)
+  // and POSTs the user's pick to /api/llm/answer so the paused
+  // backend resumes with the chosen labels.
 
   import { onDestroy, onMount } from "svelte";
   import {
@@ -43,15 +43,11 @@
     Network,
     PenLine,
     Settings,
-    ShieldCheck,
-    ShieldOff,
     X,
   } from "lucide-svelte";
 
   import { api, assistantHash16 } from "../api/client";
   import { renderMarkdown } from "../api/markdown";
-  import { isEditableText } from "../state/fileTypes";
-  import { appendDefaultMd } from "../state/pathValidate";
   import type {
     AgentActivity,
     AgentStatus,
@@ -77,13 +73,11 @@
     assistantOverlay,
     assistantSelection,
     assistantStream,
-    autoApplyWrites,
     availableAssistantContexts,
     bareToolName,
     beginAssistantStream,
     bubbleDisplayMode,
     type BubbleDisplayMode,
-    setAutoApplyWrites,
     setBubbleDisplayMode,
     clearFileConversation,
     clearGroupConversation,
@@ -105,17 +99,13 @@
     refreshTree,
     saveGroupConversation,
     confirmState,
-    diffOverlay,
     drive,
-    openDiffOverlay,
     openGraphForTag,
     normalizeAssistantText,
     type AssistantConversation,
-    type AssistantPendingEdit,
     type AssistantTurn,
     ui,
     uiConfirm,
-    uiPathPrompt,
     paneWidths,
     persistPaneWidths,
     blobKeyForGroupHash,
@@ -133,7 +123,6 @@
     setOverlayMaximized,
   } from "../state/pageWidth.svelte";
   import { layout, openInActivePane } from "../state/tabs.svelte";
-  import DiffOverlay from "./DiffOverlay.svelte";
   import OverlayShell from "./OverlayShell.svelte";
 
   /// Dropdown options derived from the live layout. Updated
@@ -453,10 +442,176 @@
     options: Array<{ label: string; description?: string | null }>;
   };
 
-  function surveyQuestions(request: UserRequest): SurveyQuestion[] {
-    if (request.kind !== "survey") return [];
+  /// Narrow `UserRequest` to its survey variant. The union includes
+  /// `UnknownUserRequest` (`{ kind: string; [k: string]: unknown }`)
+  /// which collapses the discriminator narrowing, so we read the
+  /// concrete fields by hand and return null when the shape is
+  /// anything other than a well-formed survey.
+  type Survey = {
+    kind: "survey";
+    id: string;
+    questions: SurveyQuestion[];
+  };
+  function asSurvey(request: UserRequest | null): Survey | null {
+    if (!request || request.kind !== "survey") return null;
+    const id = (request as { id?: unknown }).id;
     const questions = (request as { questions?: unknown }).questions;
-    return Array.isArray(questions) ? (questions as SurveyQuestion[]) : [];
+    if (typeof id !== "string" || !Array.isArray(questions)) return null;
+    return { kind: "survey", id, questions: questions as SurveyQuestion[] };
+  }
+
+  function surveyQuestions(request: UserRequest): SurveyQuestion[] {
+    return asSurvey(request)?.questions ?? [];
+  }
+
+  /// One picked-labels list per question. Indexed in lockstep with
+  /// the survey's `questions` array; reset whenever a new survey
+  /// id arrives so a fresh prompt starts empty. Single-select
+  /// questions hold zero or one entry; multi-select can hold many.
+  let surveyPicks = $state<string[][]>([]);
+  /// Id of the survey the current `surveyPicks` belongs to. Stored
+  /// separately so the reset effect can detect a new request even
+  /// when the user is mid-stream of an old one.
+  let activeSurveyId = $state<string | null>(null);
+  /// Disables the option row while the answer POST is in flight so
+  /// a double click can't send the same answer twice.
+  let submittingSurvey = $state(false);
+
+  $effect(() => {
+    const survey = asSurvey(assistantStream.userRequest);
+    if (survey) {
+      if (survey.id !== activeSurveyId) {
+        activeSurveyId = survey.id;
+        surveyPicks = survey.questions.map(() => []);
+        submittingSurvey = false;
+      }
+    } else if (activeSurveyId !== null) {
+      activeSurveyId = null;
+      surveyPicks = [];
+      submittingSurvey = false;
+    }
+  });
+
+  function isOptionPicked(qIdx: number, label: string): boolean {
+    return surveyPicks[qIdx]?.includes(label) ?? false;
+  }
+
+  /// Single-select: replace the question's selection with `label`.
+  /// Multi-select: toggle `label` in the list. Triggers an
+  /// auto-submit only when the survey has exactly one question AND
+  /// that question is single-select (the common case); everything
+  /// else waits for the explicit Send button.
+  function pickSurveyOption(qIdx: number, label: string): void {
+    const survey = asSurvey(assistantStream.userRequest);
+    if (!survey || submittingSurvey) return;
+    const q = survey.questions[qIdx];
+    if (!q) return;
+    const next = surveyPicks.slice();
+    const prev = next[qIdx] ?? [];
+    if (q.multi_select) {
+      next[qIdx] = prev.includes(label)
+        ? prev.filter((l) => l !== label)
+        : [...prev, label];
+    } else {
+      next[qIdx] = [label];
+    }
+    surveyPicks = next;
+    if (survey.questions.length === 1 && !q.multi_select) {
+      void submitSurvey();
+    }
+  }
+
+  function canSubmitSurvey(): boolean {
+    const survey = asSurvey(assistantStream.userRequest);
+    if (!survey || submittingSurvey) return false;
+    if (survey.questions.length === 0) return false;
+    return surveyPicks.every((picks) => picks.length > 0);
+  }
+
+  async function submitSurvey(): Promise<void> {
+    const survey = asSurvey(assistantStream.userRequest);
+    if (!survey || submittingSurvey) return;
+    if (!canSubmitSurvey()) return;
+    const ctx = currentContext;
+    if (!ctx || loading) return;
+    if (
+      assistantStream.sessionId !== null &&
+      assistantStream.contextId === ctx.id
+    ) {
+      error =
+        "a previous request is still running on this scope — press Stop to cancel it";
+      return;
+    }
+    const conv = conversationFor(ctx);
+    // Pair the AskUserQuestion tool_use (survey.id is the
+    // tool_call_id) with a tool_result message so Anthropic /
+    // Gemini's strict pairing stays valid on the next round. The
+    // user-visible scrollback gets a regular "you picked X" turn so
+    // the answer is part of the conversation log too.
+    const answerLabels: string[] = surveyPicks.flat();
+    const summary = answerLabels.length === 0
+      ? "(no selection)"
+      : answerLabels.join(", ");
+    const toolBody = JSON.stringify({
+      answers: surveyPicks.map((selected) => ({ selected })),
+    });
+    conv.messages.push({
+      role: "tool",
+      content: toolBody,
+      tool_call_id: survey.id,
+    });
+    conv.turns.push({
+      kind: "user",
+      content: summary,
+      created_at: Date.now(),
+    });
+    submittingSurvey = true;
+    // Clear the pending request immediately: the panel collapses
+    // while the next round runs. A late delta on the *previous*
+    // stream can't restore it because that stream ended; only the
+    // next `llm.user_request` frame on the new stream can.
+    assistantStream.userRequest = null;
+    activeSurveyId = null;
+    surveyPicks = [];
+
+    loading = true;
+    error = null;
+    pendingTurnTime = Date.now();
+    notifyAssistantStatus("assistant started", true);
+    const ctl = new AbortController();
+    setAssistantInflight(ctl);
+    const sessionId = crypto.randomUUID();
+    beginAssistantStream(sessionId, ctx.id);
+    try {
+      const tools = supportsTools() ? serverTools : undefined;
+      const resp = await api.llmComplete(
+        {
+          messages: conv.messages,
+          tools,
+          max_tokens: 4000,
+          session_id: sessionId,
+        },
+        ctl.signal,
+      );
+      handleResponse(ctx, conv, resp, null);
+      scheduleSave(ctx);
+      notifyAssistantStatus("assistant finished", true);
+    } catch (e) {
+      if ((e as Error).name === "AbortError") {
+        error = "stopped";
+        notifyAssistantStatus("assistant stopped", true);
+      } else {
+        error = (e as Error).message;
+        notifyAssistantStatus(`assistant error: ${error}`, true);
+      }
+    } finally {
+      loading = false;
+      submittingSurvey = false;
+      setAssistantInflight(null);
+      pendingTurnTime = null;
+      endAssistantStream(sessionId);
+      queueMicrotask(scrollToBottom);
+    }
   }
 
   function configuredAssistantBackend(): string | null | undefined {
@@ -613,7 +768,7 @@
     "  - graph_tags(): every `#tag` in the drive with the number of files that carry it. No args.\n" +
     "  - graph_files_with_tag(tag): files carrying the given tag (include the leading `#`).\n" +
     "  - repo_report(prefix?, paths?, include_files?): code/content snapshot — per-file language and SLOC counts, per-language roll-ups, COCOMO cost estimate. `include_files=true` adds the per-file rows (capped at 200). Use this when the user asks about repo size, language mix, where the content lives, or to scope a refactor.\n" +
-    "  - write_file(path, content): propose a complete file replacement. CALL THE TOOL — do NOT paste the proposed content into chat and ask the user to confirm. The host always shows your write_file call as a reviewable diff card with Apply / Discard buttons; that IS the confirmation UI. Even if the user explicitly says 'let me review' or 'don't auto-apply', you should still emit the tool call so the diff card renders. Always emit the FULL revised file content (no diffs, no partials).";
+    "  - write_file(path, content): replace a file's contents in the drive. Writes apply immediately — there is no per-file confirmation dialog. Always emit the FULL revised file content (no diffs, no partials). If the user's intent touches multiple files, a directory, or anything you'd want a sanity check on before committing, call AskUserQuestion FIRST with a numbered plan (e.g. options: 'Yes, proceed', 'Show me the plan again', 'Cancel') and wait for the answer before any write_file call.";
 
   const PROMPT_FILE_TOOLS =
     "You are the user's writing assistant inside chan, a personal-notes editor. " +
@@ -1080,37 +1235,19 @@
     }
   });
 
-  /// Close-time cleanup. Watches the overlay's open flag and fires
-  /// on the open->closed transition so every path that closes the
-  /// dialog gets the same handling. Two concerns rolled into one:
-  ///
-  /// - Dangling proposal: if the last turn is a pending edit, treat
-  ///   the close as a discard so the next round has a valid
-  ///   tool_result (Anthropic / Gemini both 400 on a dangling
-  ///   tool_use without a matching tool_result in the next user
-  ///   turn).
-  ///
-  /// - Close-while-streaming: when a request is still in flight,
-  ///   mark where the user stepped away so any turns that land
-  ///   while they're gone get a one-time "new since you left"
-  ///   divider on return. The HTTP request is NOT cancelled — Esc
-  ///   never stops the assistant, only closes the dialog; the
-  ///   explicit Stop button is the cancellation path.
+  /// Close-while-streaming: when a request is still in flight,
+  /// mark where the user stepped away so any turns that land while
+  /// they're gone get a one-time "new since you left" divider on
+  /// return. The HTTP request is NOT cancelled — Esc never stops
+  /// the assistant, only closes the dialog; the explicit Stop
+  /// button is the cancellation path.
   let wasAssistantOpen = false;
   $effect(() => {
     const isOpen = assistantOverlay.open;
-    if (wasAssistantOpen && !isOpen) {
-      if (currentContext) {
-        const conv = conversationFor(currentContext);
-        const last = conv.turns[conv.turns.length - 1];
-        if (last && last.kind === "edit" && last.edit.status === "pending") {
-          dismissEdit(last.edit, "user closed the dialog");
-        }
-        if (loading) {
-          conv.lastSeenTurnIndex = conv.turns.length;
-          scheduleSave(currentContext);
-        }
-      }
+    if (wasAssistantOpen && !isOpen && currentContext && loading) {
+      const conv = conversationFor(currentContext);
+      conv.lastSeenTurnIndex = conv.turns.length;
+      scheduleSave(currentContext);
     }
     wasAssistantOpen = isOpen;
   });
@@ -1191,16 +1328,6 @@
     return s.replace(/<\/?b>/g, "");
   }
 
-  /// chan-llm gates `write_file` calls behind `auto_apply_writes`:
-  /// when off, the tool returns `Pending`, chan-llm pauses with
-  /// `stop_reason = ToolUse`, and the host (us) is responsible for
-  /// surfacing a confirmation UI. We render those Pending writes as
-  /// edit cards in the scrollback; Apply / Discard inject the real
-  /// tool result back into the next round so the model sees the
-  /// outcome. There is no separate `propose_file_edit` tool — the
-  /// model only sees `write_file` (the chan-llm standard schema).
-  const WRITE_FILE_TOOL = "write_file";
-
   /// Timestamp captured when the user submits a prompt; drives
   /// the relative timestamp on the in-flight ASSISTANT placeholder
   /// bubble shown in the chat scrollback. Cleared when the
@@ -1242,17 +1369,6 @@
       return;
     }
     const conv = conversationFor(ctx);
-    // Auto-dismiss any still-pending edit before pushing the new
-    // user turn. Anthropic and Gemini both reject a request where
-    // an assistant tool_use isn't paired with a matching tool_result
-    // in the very next user turn; if the user types over a pending
-    // proposal without clicking Apply/Discard, the dangling tool_use
-    // would 400 the next round. Treat it as a soft dismissal so the
-    // model sees the user moved on.
-    const lastTurn = conv.turns[conv.turns.length - 1];
-    if (lastTurn && lastTurn.kind === "edit" && lastTurn.edit.status === "pending") {
-      dismissEdit(lastTurn.edit, "user moved on without acting");
-    }
     loading = true;
     error = null;
     pendingTurnTime = Date.now();
@@ -1321,11 +1437,6 @@
           tools,
           max_tokens: 4000,
           session_id: sessionId,
-          // Per-turn auto-apply toggle (composer button next to
-          // Send). Forwarded on every request so the MCP bridge
-          // reads the live value when claude-cli / gemini-cli's
-          // MCP child connects.
-          auto_apply_writes: autoApplyWrites.value,
           // Temperature intentionally omitted: every backend has
           // a sensible default, and reasoning / extended-thinking
           // models reject any explicit value. Letting the model
@@ -1465,16 +1576,6 @@
     assistantOverlay.open = false;
   }
 
-  /// Default path for proposed edits when the model omits the
-  /// `path` attr: file context uses its single path, group falls
-  /// back to the first visible path, drive leaves it empty
-  /// (the model is expected to specify in drive context).
-  function defaultEditPath(ctx: ScopeOption): string {
-    if (ctx.kind === "file") return ctx.path;
-    if (ctx.kind === "group") return ctx.paths[0] ?? "";
-    return "";
-  }
-
   function handleResponse(
     ctx: ScopeOption,
     conv: AssistantConversation,
@@ -1506,50 +1607,15 @@
     // Pair every tool call from this assistant turn with a tool
     // message in the same conversation order so Anthropic / Gemini
     // accept the next round (both reject a tool_use without a
-    // matching tool_result).
-    //
-    //   - read_file / list_files / search_content / repo_report:
-    //     chan-llm auto-executed these; the real result arrived
-    //     via the `llm.tool_result` WS frame and lives in
-    //     `assistantStream.toolResults`. Inject it verbatim.
-    //   - write_file: chan-llm paused with a PENDING_STATUS
-    //     placeholder. We do NOT push the placeholder; instead we
-    //     render an edit card and let Apply / Discard inject the
-    //     real result (mtime echo or dismissal note) at the moment
-    //     the user acts. The dangling tool_use is safe as long as
-    //     the user acts (or close/submit auto-dismisses it) before
-    //     the next /api/llm/complete fires.
+    // matching tool_result). chan-llm auto-executes every tool;
+    // the real result arrived via the `llm.tool_result` WS frame
+    // and lives in `assistantStream.toolResults`. Inject it
+    // verbatim, falling back to a generic stub when the WS frame
+    // didn't land (rare; usually a backend that emits `on_done`
+    // without the matching tool_result, e.g. error path) so the
+    // assistant turn still has a paired result.
     const captured = assistantStream.toolResults;
     for (const call of resp.tool_calls) {
-      // Normalize the tool name so the same dispatch works for the
-      // bare-name backends (Anthropic / Gemini / Ollama emit
-      // `write_file`) and the MCP-namespaced agentic CLIs (claude-cli
-      // / gemini-cli emit `mcp__chan__write_file`). Without this the
-      // edit card never rendered for claude-cli even though the
-      // tool_use block was correctly received.
-      const bare = bareToolName(call.name);
-      if (bare === WRITE_FILE_TOOL) {
-        const input = (call.input ?? {}) as {
-          path?: string;
-          content?: string;
-        };
-        const edit: AssistantPendingEdit = {
-          toolCallId: call.id,
-          path: input.path ?? defaultEditPath(ctx),
-          content: input.content ?? "",
-          // write_file's schema doesn't carry a model-supplied
-          // summary; leave null so the edit card hides the row.
-          summary: null,
-          status: "pending",
-        };
-        conv.turns.push({ kind: "edit", edit, created_at: Date.now() });
-        continue;
-      }
-      // Non-write tool: ship the captured result back as a tool
-      // message. Fall back to a generic "(no result)" stub when the
-      // WS frame didn't land (rare; usually a backend that emits
-      // `on_done` without the matching tool_result, e.g. error
-      // path) so the assistant turn still has a paired result.
       const result = captured[call.id];
       const body =
         result === undefined
@@ -1572,221 +1638,6 @@
   /// Edits without a corresponding open tab still record the
   /// decision; the user is expected to open the file separately
   /// to inspect, but the conversation stays consistent.
-  /// Persist a proposed edit. Writes the file to disk via the API
-  /// AND updates any open tabs at the same path. The on-disk write
-  /// is the load-bearing step: previously this only mutated open
-  /// tabs and counted on autosave to flush, which silently no-op'd
-  /// for proposals targeting a path with no tab open (the user saw
-  /// "applied" in green but the file never reached disk).
-  async function applyEdit(edit: AssistantPendingEdit): Promise<void> {
-    if (edit.status !== "pending") return;
-    // Refuse if any open tab on this path is filesystem-locked.
-    // Server-side write would reject too; pre-check spares a
-    // round-trip.
-    for (const node of Object.values(layout.nodes)) {
-      if (node.kind !== "leaf") continue;
-      for (const t of node.tabs) {
-        if (t.kind !== "file" || t.path !== edit.path) continue;
-        if (!t.fsWritable) {
-          error = `'${edit.path}' is read-only on disk; cannot apply edit`;
-          return;
-        }
-      }
-    }
-    // `apply_as` (vs `apply`) because the model's original
-    // write_file args may differ from what the user is about to
-    // commit — the diff overlay lets the user inspect, and Save-as
-    // / future inline-edit lets them change. Pass the path +
-    // content the user actually wants on disk; the server runs
-    // it through chan-drive and returns the canonical history.
-    await runResume(edit, {
-      kind: "apply_as",
-      path: edit.path,
-      content: edit.content,
-    });
-  }
-
-  /// Tool-call ids whose resume round-trip is currently
-  /// outstanding. Used to disable the Apply / Discard buttons
-  /// during the (multi-second on claude-cli) request and to
-  /// short-circuit double clicks.
-  let resumingIds = $state<Set<string>>(new Set());
-
-  /// Drive the /api/llm/resume round-trip. Replaces conv.messages
-  /// with the server-canonical history (chan-llm's PENDING_STATUS
-  /// placeholder swapped for the real result, plus any tool
-  /// messages chan-llm emitted while running the continuation),
-  /// flips the edit card to its terminal state, appends the
-  /// model's continuation as a fresh assistant turn, and pushes
-  /// any follow-up edit proposals as new cards. Errors leave the
-  /// edit in `pending` so the user can retry.
-  async function runResume(
-    edit: AssistantPendingEdit,
-    outcome:
-      | { kind: "apply" }
-      | { kind: "apply_as"; path: string; content: string }
-      | { kind: "discard"; reason: string | null },
-  ): Promise<void> {
-    const ctx = currentContext;
-    if (!ctx) return;
-    if (resumingIds.has(edit.toolCallId)) return; // double-click guard
-    const conv = conversationFor(ctx);
-    // Mark the edit as in-flight so the buttons render an
-    // "applying…" / "discarding…" state and a second click is a
-    // no-op. Without this the user re-clicks during the multi-
-    // second claude-cli round-trip thinking nothing happened.
-    resumingIds = new Set([...resumingIds, edit.toolCallId]);
-    ui.status =
-      outcome.kind === "discard" ? "dismissing edit…" : "accepting edit…";
-    try {
-      const resp = await api.llmResume({
-        call_id: edit.toolCallId,
-        messages: conv.messages,
-        outcome,
-      });
-      conv.messages = resp.messages;
-      edit.status = outcome.kind === "discard" ? "dismissed" : "applied";
-      // Refresh the tree so a brand-new path appears in the
-      // browser without waiting for the watcher's debounce.
-      void refreshTree();
-      // Update any open tabs at the affected path so the editor
-      // view doesn't drift behind disk.
-      if (outcome.kind === "apply_as") {
-        for (const node of Object.values(layout.nodes)) {
-          if (node.kind !== "leaf") continue;
-          for (const t of node.tabs) {
-            if (t.kind !== "file" || t.path !== outcome.path) continue;
-            t.content = outcome.content;
-            t.saved = outcome.content;
-          }
-        }
-      }
-      const content = normalizeAssistantText(resp.content);
-      if (content.trim()) {
-        conv.turns.push({
-          kind: "assistant",
-          content,
-          created_at: Date.now(),
-        });
-      }
-      // The model may have proposed another edit in the
-      // continuation. Surface those as fresh edit cards just like
-      // handleResponse does for the /complete path.
-      for (const call of resp.tool_calls) {
-        const bare = bareToolName(call.name);
-        if (bare !== WRITE_FILE_TOOL) continue;
-        const input = (call.input ?? {}) as { path?: string; content?: string };
-        const nextEdit: AssistantPendingEdit = {
-          toolCallId: call.id,
-          path: input.path ?? defaultEditPath(ctx),
-          content: input.content ?? "",
-          summary: null,
-          status: "pending",
-        };
-        conv.turns.push({ kind: "edit", edit: nextEdit, created_at: Date.now() });
-      }
-      scheduleSave(ctx);
-      ui.status = outcome.kind === "discard" ? "edit dismissed" : "edit accepted";
-      // Brief acknowledgment that auto-clears.
-      setTimeout(() => {
-        if (
-          ui.status === "edit accepted" ||
-          ui.status === "edit dismissed"
-        ) {
-          ui.status = null;
-        }
-      }, 2000);
-    } catch (e) {
-      error = `resume failed: ${(e as Error).message}`;
-      ui.status = `resume failed: ${(e as Error).message}`;
-    } finally {
-      // Always clear the in-flight flag so the user can retry on
-      // error (the edit stays pending) or interact with siblings.
-      resumingIds = new Set(
-        Array.from(resumingIds).filter((id) => id !== edit.toolCallId),
-      );
-    }
-    queueMicrotask(scrollToBottom);
-  }
-
-  /// Save a proposed edit to a NEW path instead of overwriting the
-  /// model's target. The proposal stays in `pending` so the user
-  /// can still Apply (overwrite original) or Discard afterward; we
-  /// don't inject a synthetic tool_result either, because the
-  /// model's pending write_file call hasn't been resolved one way
-  /// or the other. The user's intent here is "keep both versions",
-  /// not "accept the edit".
-  ///
-  /// Pre-seeds the prompt with `<base>-revision.md` so the common
-  /// case (save a variant alongside the source) is one Enter away.
-  async function saveEditAsNew(edit: AssistantPendingEdit): Promise<void> {
-    if (edit.status !== "pending") return;
-    const original = edit.path;
-    // Build a default destination next to the original. Strip a
-    // trailing `.md`/`.txt` if present so we can append `-revision`
-    // before the extension; an extensionless path just gets
-    // `-revision` and the modal's `appendDefaultMd` validator adds
-    // `.md` on its own.
-    const m = original.match(/^(.*?)(\.(md|txt))?$/i);
-    const stem = m?.[1] ?? original;
-    const ext = m?.[2] ?? "";
-    const defaultValue = `${stem}-revision${ext}`;
-    const target = await uiPathPrompt({
-      title: "save proposal to new file (.md added if no extension)",
-      defaultValue,
-      kind: "file",
-      mode: "create",
-      validate: (p) =>
-        isEditableText(p)
-          ? null
-          : `'${p}' is not an editable text file (only .md and .txt)`,
-    });
-    if (!target) return;
-    const path = appendDefaultMd(target);
-    try {
-      await api.create(path, false, edit.content);
-    } catch (e) {
-      error = `save-as failed: ${(e as Error).message}`;
-      return;
-    }
-    // Refresh the tree so the new file appears in the file browser
-    // immediately; the watcher event will arrive shortly but the
-    // explicit refresh keeps the UX snappy.
-    void refreshTree();
-    error = null;
-  }
-
-  /// Track which proposal was just copied so the matching button
-  /// briefly switches to a check icon. Keyed by toolCallId because
-  /// turn indexes shift as the conversation grows.
-  let copiedEditId = $state<string | null>(null);
-  let copiedEditTimer: ReturnType<typeof setTimeout> | null = null;
-  async function copyEdit(edit: AssistantPendingEdit): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(edit.content);
-      copiedEditId = edit.toolCallId;
-      if (copiedEditTimer) clearTimeout(copiedEditTimer);
-      copiedEditTimer = setTimeout(() => {
-        copiedEditId = null;
-        copiedEditTimer = null;
-      }, 1200);
-    } catch {
-      // Same fallback as copyTurn: clipboard write can fail in
-      // restricted contexts; silently leave the icon as-is.
-    }
-  }
-
-  function dismissEdit(edit: AssistantPendingEdit, reason: string): void {
-    if (edit.status !== "pending") return;
-    // Route through the same resume endpoint as Apply so the
-    // canonical chan-llm REJECTED_STATUS payload lands in history
-    // and the model gets to react to the dismissal in its next
-    // turn (instead of waiting for the user to prompt). Fire-and-
-    // forget: a network error leaves the edit pending and surfaces
-    // via the chat error line.
-    void runResume(edit, { kind: "discard", reason });
-  }
-
   function onWindowKey(e: KeyboardEvent): void {
     // Cmd/Ctrl+Enter is the only chord this listener handles.
     // Escape is owned by App.svelte's overlay-stack handler so a
@@ -1798,12 +1649,9 @@
     // background (lastSeen bookkeeping happens in the close-time
     // $effect above).
     //
-    // Two fullscreen surfaces still need to opt out of Cmd+Enter
-    // because they own their own Enter semantics:
-    //   - confirm modal (Enter confirms)
-    //   - diff overlay (Enter applies / dismisses)
+    // The confirm modal owns its own Enter semantics, so opt out
+    // when it's on screen.
     if (confirmState.open) return;
-    if (diffOverlay.open) return;
     if (visible && (e.metaKey || e.ctrlKey) && e.key === "Enter") {
       // Cmd/Ctrl+Enter sends from anywhere in the overlay
       // (prompt editor, source view, even chat scrollback). The
@@ -1815,48 +1663,12 @@
     }
   }
 
-  /// Resolve a pending edit by tool_call_id across every
-  /// conversation bucket. The DiffOverlay dispatches actions by
-  /// id so it stays decoupled from which scope owns the edit;
-  /// this lookup finds the matching pending edit so we can route
-  /// it through the same applyEdit / dismissEdit / saveEditAsNew
-  /// helpers the in-chat buttons use.
-  function findPendingEditById(id: string): AssistantPendingEdit | null {
-    const buckets: (AssistantConversation | null | undefined)[] = [
-      assistantConversations.drive,
-      ...Object.values(assistantConversations.byFile),
-      ...Object.values(assistantConversations.byGroup),
-    ];
-    for (const conv of buckets) {
-      if (!conv) continue;
-      for (const t of conv.turns) {
-        if (t.kind === "edit" && t.edit.toolCallId === id) return t.edit;
-      }
-    }
-    return null;
-  }
-
-  function onDiffEditAction(e: Event): void {
-    const ev = e as CustomEvent<{
-      action: "apply" | "dismiss" | "save-as" | "copy";
-      toolCallId: string;
-    }>;
-    const edit = findPendingEditById(ev.detail.toolCallId);
-    if (!edit) return;
-    if (ev.detail.action === "apply") void applyEdit(edit);
-    else if (ev.detail.action === "dismiss") dismissEdit(edit, "from diff view");
-    else if (ev.detail.action === "save-as") void saveEditAsNew(edit);
-    else if (ev.detail.action === "copy") void copyEdit(edit);
-  }
-
   onMount(() => {
     document.addEventListener("keydown", onWindowKey);
-    window.addEventListener("chan:assistant-edit-action", onDiffEditAction);
     setAssistantSaveFlush(flushPendingAssistantSave);
   });
   onDestroy(() => {
     document.removeEventListener("keydown", onWindowKey);
-    window.removeEventListener("chan:assistant-edit-action", onDiffEditAction);
     setAssistantSaveFlush(null);
   });
 
@@ -1903,58 +1715,6 @@
           ? (currentContext.paths[0] ?? null)
           : null,
   );
-
-  /// Pending proposals in the active conversation, surfaced as a
-  /// sticky bulk-action bar at the top of the scrollback when 2+
-  /// are queued. Each cleanup action mutates the same edit objects
-  /// the chat cards render, so the bar count and the per-card
-  /// status badges stay in lockstep.
-  const pendingEdits = $derived<AssistantPendingEdit[]>(
-    turns
-      .filter(
-        (t): t is Extract<AssistantTurn, { kind: "edit" }> => t.kind === "edit",
-      )
-      .map((t) => t.edit)
-      .filter((e) => e.status === "pending"),
-  );
-
-  /// Apply every pending proposal in order. Sequential — atomic
-  /// writes finish in ~5 ms locally, and serial errors are easier
-  /// to surface ("apply #3 of 5 failed") than a concurrent fan-out.
-  /// Each applyEdit mutates its edit object's status, which the
-  /// pendingEdits derived above re-reads, so the bar's count
-  /// shrinks live as we go.
-  async function applyAll(): Promise<void> {
-    // Snapshot the list before the loop because applyEdit removes
-    // entries from `pendingEdits` (status flips to "applied").
-    // Iterating over a live $derived would skip alternate items.
-    const queue = pendingEdits.slice();
-    let ok = 0;
-    let fail = 0;
-    for (const edit of queue) {
-      if (edit.status !== "pending") continue;
-      const before = edit.status;
-      await applyEdit(edit);
-      // applyEdit returns void; check the status it set.
-      if ((edit.status as string) === "applied") ok++;
-      else if (edit.status === before) fail++;
-    }
-    if (fail > 0) {
-      ui.status = `applied ${ok}/${queue.length} — ${fail} failed (see chat)`;
-    } else if (ok > 0) {
-      ui.status = `applied ${ok} edits`;
-    }
-  }
-
-  function discardAll(): void {
-    const queue = pendingEdits.slice();
-    for (const edit of queue) {
-      if (edit.status === "pending") {
-        dismissEdit(edit, "bulk discard");
-      }
-    }
-    if (queue.length > 0) ui.status = `discarded ${queue.length} edits`;
-  }
 
   /// Right-click context menu. The header/global surface carries
   /// assistant overlay commands, while the prompt owns editor-specific
@@ -2167,30 +1927,6 @@
                 model · (default)
               {/if}
             </div>
-          </div>
-        {/if}
-        {#if pendingEdits.length >= 2}
-          <!-- Bulk-action bar. Sticks to the top of the chat
-               scrollback whenever 2+ proposals are waiting on the
-               user. Per-card buttons keep working; this bar is
-               additive. Apply / Discard run sequentially through
-               the same applyEdit / dismissEdit code paths, so the
-               edit-card status badges flip live. -->
-          <div class="bulk-bar">
-            <span class="bulk-count">
-              {pendingEdits.length} pending edits
-            </span>
-            <button
-              type="button"
-              class="primary"
-              title="accept every pending proposal in order"
-              onclick={() => void applyAll()}
-            >Accept all</button>
-            <button
-              type="button"
-              title="dismiss every pending proposal"
-              onclick={discardAll}
-            >Dismiss all</button>
           </div>
         {/if}
         {#each turns as turn, i (i)}
@@ -2431,60 +2167,6 @@
                 {/if}
               {/if}
             </div>
-          {:else}
-            <div class="edit-card" class:applied={turn.edit.status === "applied"} class:dismissed={turn.edit.status === "dismissed"}>
-              <div class="edit-head">
-                <span class="kind-chip">propose edit</span>
-                <span class="path mono">{turn.edit.path}</span>
-                <span class="size">{turn.edit.content.length} chars</span>
-              </div>
-              {#if turn.edit.summary}
-                <div class="summary">{turn.edit.summary}</div>
-              {/if}
-              <details>
-                <summary>show full proposal</summary>
-                <!-- The proposal IS markdown (.md or .txt destined
-                     for the drive); render it through the same
-                     markdown pipeline as assistant bubbles so the
-                     user sees what the rendered file will look
-                     like, not the raw source. Source text is still
-                     available via the Copy button next to Apply. -->
-                <div class="proposal md">{@html renderMarkdown(turn.edit.content)}</div>
-              </details>
-              {#if turn.edit.status === "pending"}
-                {@const resuming = resumingIds.has(turn.edit.toolCallId)}
-                <!-- Order: Accept · Review · Copy · Save · Dismiss.
-                     Accept first (primary), Review (side-by-side
-                     diff vs. current content) next so the user can
-                     inspect before committing, then non-destructive
-                     verbs (Copy, Save) so the destructive Dismiss
-                     sits at the far end where mis-clicks cost least. -->
-                <div class="actions">
-                  <button type="button" class="primary" disabled={resuming} onclick={(e) => { e.stopPropagation(); void applyEdit(turn.edit); }}>{resuming ? "Accepting…" : "Accept"}</button>
-                  <button type="button" class="diff" disabled={resuming} title="show side-by-side diff against current content" onclick={(e) => { e.stopPropagation(); openDiffOverlay(turn.edit); }}>Review</button>
-                  <button
-                    type="button"
-                    class="copy"
-                    disabled={resuming}
-                    title="copy proposal to clipboard"
-                    aria-label="copy proposal"
-                    onclick={(e) => { e.stopPropagation(); void copyEdit(turn.edit); }}
-                  >
-                    {#if copiedEditId === turn.edit.toolCallId}
-                      <Check size={12} strokeWidth={2} aria-hidden="true" /><span>Copied</span>
-                    {:else}
-                      <Copy size={12} strokeWidth={1.75} aria-hidden="true" /><span>Copy</span>
-                    {/if}
-                  </button>
-                  <button type="button" class="save-as" disabled={resuming} title="save proposal to a new file" onclick={(e) => { e.stopPropagation(); void saveEditAsNew(turn.edit); }}>Save</button>
-                  <button type="button" disabled={resuming} onclick={(e) => { e.stopPropagation(); dismissEdit(turn.edit, "manual"); }}>{resuming ? "…" : "Dismiss"}</button>
-                </div>
-              {:else if turn.edit.status === "applied"}
-                <div class="status-tag ok">accepted</div>
-              {:else}
-                <div class="status-tag muted">dismissed</div>
-              {/if}
-            </div>
           {/if}
         {/each}
         {#if assistantStream.sessionId !== null && currentContext && assistantStream.contextId === currentContext.id}
@@ -2535,46 +2217,87 @@
                 </div>
               {/if}
             {/if}
-            {#if assistantStream.userRequest}
-              <div class="user-request" class:unknown={assistantStream.userRequest.kind !== "survey"}>
-                {#if assistantStream.userRequest.kind === "survey"}
-                  {@const questions = surveyQuestions(assistantStream.userRequest)}
-                  {#each questions as question, qi (`${qi}:${question.question}`)}
-                    <div class="survey-question">
-                      <div class="survey-head">
-                        {#if question.header}
-                          <span class="survey-header">{question.header}</span>
-                        {/if}
-                        <strong>{question.question}</strong>
-                      </div>
-                      {#if question.options.length > 0}
-                        <ul class="survey-options">
-                          {#each question.options as option, oi (`${oi}:${option.label}`)}
-                            <li>
-                              <span class="survey-mark" aria-hidden="true">{question.multi_select ? "[ ]" : "( )"}</span>
-                              <span class="survey-label">{option.label}</span>
-                              {#if option.description}
-                                <span class="survey-desc">{option.description}</span>
-                              {/if}
-                            </li>
-                          {/each}
-                        </ul>
-                      {/if}
-                    </div>
-                  {/each}
-                  <div class="survey-note">answering surveys mid-turn is not yet supported; the agent is waiting for input it cannot receive through this UI yet.</div>
-                {:else}
-                  <div class="survey-head">
-                    <strong>agent requested input</strong>
-                    <span class="survey-header">{assistantStream.userRequest.kind}</span>
-                  </div>
-                {/if}
-              </div>
-            {/if}
             {#if assistantStream.text.length > 0}
               <div class="body md streaming">{@html renderMarkdown(assistantStream.text)}<span class="caret" aria-hidden="true"></span></div>
             {:else}
               <div class="body">thinking{".".repeat(thinkingDots)}</div>
+            {/if}
+          </div>
+        {/if}
+        <!-- Survey panel: rendered as a sibling of the in-flight
+             bubble (not inside it) so it stays visible after the
+             agent process exits on AskUserQuestion. The matching
+             `endAssistantStream` deliberately does NOT clear
+             `userRequest`; this block is what keeps the answer UI
+             reachable across the gap until the user picks. -->
+        {#if assistantStream.userRequest && currentContext && (assistantStream.contextId === null || assistantStream.contextId === currentContext.id)}
+          <div class="user-request" class:unknown={assistantStream.userRequest.kind !== "survey"}>
+            {#if assistantStream.userRequest.kind === "survey"}
+              {@const questions = surveyQuestions(assistantStream.userRequest)}
+              {@const showSend = questions.length > 1 || (questions[0]?.multi_select ?? false)}
+              {#each questions as question, qi (`${qi}:${question.question}`)}
+                <div class="survey-question">
+                  <div class="survey-head">
+                    {#if question.header}
+                      <span class="survey-header">{question.header}</span>
+                    {/if}
+                    <strong>{question.question}</strong>
+                  </div>
+                  {#if question.options.length > 0}
+                    <ul class="survey-options" role={question.multi_select ? "group" : "radiogroup"}>
+                      {#each question.options as option, oi (`${oi}:${option.label}`)}
+                        <li>
+                          <!-- Pure button — the entire row is the
+                               hit target. `aria-pressed` for
+                               multi-select, `aria-checked` for
+                               single-select keeps assistive tech
+                               honest about the role. -->
+                          <button
+                            type="button"
+                            class="survey-option"
+                            class:picked={isOptionPicked(qi, option.label)}
+                            disabled={submittingSurvey}
+                            role={question.multi_select ? "switch" : "radio"}
+                            aria-pressed={question.multi_select ? isOptionPicked(qi, option.label) : undefined}
+                            aria-checked={question.multi_select ? undefined : isOptionPicked(qi, option.label)}
+                            onclick={() => pickSurveyOption(qi, option.label)}
+                          >
+                            <span class="survey-mark" aria-hidden="true">
+                              {#if question.multi_select}
+                                {isOptionPicked(qi, option.label) ? "[x]" : "[ ]"}
+                              {:else}
+                                {isOptionPicked(qi, option.label) ? "(•)" : "( )"}
+                              {/if}
+                            </span>
+                            <span class="survey-label">{option.label}</span>
+                            {#if option.description}
+                              <span class="survey-desc">{option.description}</span>
+                            {/if}
+                          </button>
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </div>
+              {/each}
+              {#if showSend}
+                <div class="survey-actions">
+                  <button
+                    type="button"
+                    class="survey-send"
+                    disabled={!canSubmitSurvey()}
+                    onclick={() => void submitSurvey()}
+                  >{submittingSurvey ? "Sending…" : "Send answer"}</button>
+                </div>
+              {:else if submittingSurvey}
+                <div class="survey-note">sending…</div>
+              {/if}
+            {:else}
+              <div class="survey-head">
+                <strong>agent requested input</strong>
+                <span class="survey-header">{assistantStream.userRequest.kind}</span>
+              </div>
+              <div class="survey-note">unknown request type — the agent is waiting for input this UI can't render.</div>
             {/if}
           </div>
         {/if}
@@ -2682,28 +2405,6 @@
             <span class="muted">Cmd+Enter to send  ·  /clear to reset</span>
           {/if}
         </span>
-        <!-- Auto-apply toggle sits left of Send so the user can flip
-             it per turn without leaving the chat. Persisted via
-             localStorage (chan.assistant.autoApply); the value rides
-             on every /api/llm/complete request so the MCP bridge
-             reads the live state when claude-cli / gemini-cli's
-             MCP child connects. -->
-        <button
-          class="action-btn auto-apply"
-          class:on={autoApplyWrites.value}
-          onclick={() => setAutoApplyWrites(!autoApplyWrites.value)}
-          title={autoApplyWrites.value
-            ? "auto-apply ON — writes land without confirmation (click to disable)"
-            : "auto-apply OFF — writes pause for review (click to enable)"}
-          aria-label={autoApplyWrites.value ? "auto-apply on" : "auto-apply off"}
-          aria-pressed={autoApplyWrites.value}
-        >
-          {#if autoApplyWrites.value}
-            <ShieldCheck size={14} strokeWidth={1.75} aria-hidden="true" />
-          {:else}
-            <ShieldOff size={14} strokeWidth={1.75} aria-hidden="true" />
-          {/if}
-        </button>
         {#if loading}
           <button
             class="action-btn stop"
@@ -2812,12 +2513,6 @@
     </button>
   </li>
 {/snippet}
-
-<!-- Fullscreen side-by-side diff for a pending edit. Lives at the
-     InlineAssist level (not App.svelte) since it's a strict child
-     of the assistant subsystem and its state only makes sense
-     while the assistant overlay is reachable. -->
-<DiffOverlay />
 
 <style>
   /* Full assistant overlay content. The header spans both the chat
@@ -3098,47 +2793,6 @@
   }
   .mono {
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  }
-
-  /* Bulk-action bar. Sticky-pinned to the top of the scrollable
-     chat area when 2+ proposals are pending. position: sticky
-     means it stays visible as the user scrolls through the
-     conversation looking for proposals to review. */
-  .bulk-bar {
-    position: sticky;
-    top: 0;
-    z-index: 3;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    margin-bottom: 4px;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    font-size: 13px;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
-  }
-  .bulk-bar .bulk-count {
-    flex: 1;
-    color: var(--text);
-    font-variant-numeric: tabular-nums;
-  }
-  .bulk-bar button {
-    background: var(--btn-bg);
-    color: var(--text);
-    border: 1px solid var(--btn-border);
-    border-radius: 4px;
-    padding: 3px 10px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 13px;
-  }
-  .bulk-bar button:hover { border-color: var(--btn-hover); }
-  .bulk-bar button.primary {
-    background: var(--link);
-    color: #fff;
-    border-color: var(--link);
   }
 
   /* Chat bubbles. User aligns right with a tinted background; the
@@ -3589,13 +3243,43 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 4px;
   }
   .survey-options li {
+    display: block;
+  }
+  /* Each option is a full-width button so the whole row is the
+     hit target — the TUI "press 1, 2, 3" feel translates to a tap
+     anywhere on the row in the GUI. */
+  .survey-option {
     display: grid;
     grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr);
-    gap: 6px;
+    gap: 8px;
     align-items: baseline;
+    width: 100%;
+    padding: 5px 8px;
+    background: var(--btn-bg);
+    color: var(--text);
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+  }
+  .survey-option:hover:not(:disabled) {
+    border-color: var(--btn-hover);
+  }
+  .survey-option:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  .survey-option.picked {
+    border-color: var(--link);
+    background: color-mix(in srgb, var(--link) 10%, var(--btn-bg));
+  }
+  .survey-option.picked .survey-mark {
+    color: var(--link);
   }
   .survey-mark {
     color: var(--text-secondary);
@@ -3609,6 +3293,25 @@
     color: var(--text-secondary);
     min-width: 0;
   }
+  .survey-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 8px;
+  }
+  .survey-send {
+    background: var(--link);
+    color: #fff;
+    border: 1px solid var(--link);
+    border-radius: 4px;
+    padding: 4px 12px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+  }
+  .survey-send:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
   .survey-note {
     margin-top: 8px;
     color: var(--text-secondary);
@@ -3619,150 +3322,6 @@
     0%, 100% { opacity: 1; }
     50% { opacity: 0.45; }
   }
-
-  /* Pending edit cards: full-width, distinct from chat bubbles
-     so the user reads them as actionable artifacts rather than
-     conversation. The collapsed details/summary keeps the
-     scrollback compact when the proposal is large. */
-  .edit-card {
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 8px 10px;
-    background: var(--bg-card);
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .edit-card.applied { border-color: var(--accent); }
-  .edit-card.dismissed { opacity: 0.6; }
-  .edit-head {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    color: var(--text-secondary);
-  }
-  .edit-head .kind-chip {
-    background: var(--link);
-    color: #fff;
-    padding: 1px 6px;
-    border-radius: 3px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-weight: 600;
-    font-size: 12px;
-  }
-  .edit-head .path { color: var(--text); font-family: ui-monospace, monospace; }
-  .edit-head .size { margin-left: auto; font-variant-numeric: tabular-nums; }
-  .edit-card .summary {
-    color: var(--text);
-    font-size: 15px;
-  }
-  .edit-card details summary {
-    cursor: pointer;
-    color: var(--text-secondary);
-    font-size: 13px;
-  }
-  .edit-card .proposal {
-    margin: 6px 0 0 0;
-    padding: 8px 10px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    font-size: 15px;
-    line-height: 1.5;
-    word-break: break-word;
-    max-height: 40vh;
-    overflow: auto;
-  }
-  /* Inherit the same .md scoped rules the assistant bubbles use
-     so the proposal preview formats identically to how the file
-     will render in the editor (headings, lists, fenced code,
-     blockquotes). The .md selector lives in a separate block
-     keyed on `.bubble .body.md`; redeclare for the proposal
-     container so the same :global rules apply. */
-  .edit-card .proposal :global(p) { margin: 0 0 0.4em 0; }
-  .edit-card .proposal :global(p:last-child) { margin-bottom: 0; }
-  .edit-card .proposal :global(h1),
-  .edit-card .proposal :global(h2),
-  .edit-card .proposal :global(h3),
-  .edit-card .proposal :global(h4) {
-    margin: 0.4em 0 0.2em 0;
-    font-weight: 600;
-  }
-  .edit-card .proposal :global(h1) { font-size: 16px; }
-  .edit-card .proposal :global(h2) { font-size: 15px; }
-  .edit-card .proposal :global(h3),
-  .edit-card .proposal :global(h4) { font-size: 16px; }
-  .edit-card .proposal :global(ul),
-  .edit-card .proposal :global(ol) {
-    margin: 0.2em 0;
-    padding-left: 1.4em;
-  }
-  .edit-card .proposal :global(li) { margin: 0.1em 0; }
-  .edit-card .proposal :global(code) {
-    background: var(--bg-elev);
-    padding: 0 4px;
-    border-radius: 3px;
-    font-family: ui-monospace, monospace;
-    font-size: 0.92em;
-  }
-  .edit-card .proposal :global(pre) {
-    background: var(--bg-elev);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 6px 8px;
-    overflow-x: auto;
-    margin: 0.4em 0;
-  }
-  .edit-card .proposal :global(pre code) {
-    background: transparent;
-    padding: 0;
-    border-radius: 0;
-    font-size: 14px;
-  }
-  .edit-card .proposal :global(a) {
-    color: var(--link);
-    text-decoration: underline;
-  }
-  .edit-card .proposal :global(blockquote) {
-    margin: 0.3em 0;
-    padding: 0.1em 0.6em;
-    border-left: 3px solid var(--border);
-    color: var(--text-secondary);
-  }
-  .edit-card .actions {
-    display: flex;
-    gap: 6px;
-  }
-  .edit-card .actions button {
-    background: var(--btn-bg);
-    color: var(--text);
-    border: 1px solid var(--btn-border);
-    border-radius: 4px;
-    padding: 4px 12px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 14px;
-  }
-  .edit-card .actions button:hover { border-color: var(--btn-hover); }
-  .edit-card .actions button.primary {
-    background: var(--link);
-    color: #fff;
-    border-color: var(--link);
-  }
-  /* Copy button keeps icon + label inline so the action row reads
-     left-to-right cleanly: Accept | Review | Copy | Save | Dismiss.
-     The icon SVG is rendered via {@html} so Svelte's scoped CSS
-     can't reach it directly; vertical alignment is fine via parent
-     flex. */
-  .edit-card .actions button.copy {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-  }
-  /* "Save" reuses the neutral chrome of Dismiss; no extra
-     rule needed beyond the `.edit-card .actions button` base. */
 
   /* "New since you stepped away" divider: a thin line + tiny
      centered label across the chat column. Shown once after the
@@ -3809,14 +3368,6 @@
     font-variant-numeric: tabular-nums;
     color: var(--text-secondary);
   }
-
-  .edit-card .status-tag {
-    font-size: 13px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-  .edit-card .status-tag.ok { color: var(--accent); }
-  .edit-card .status-tag.muted { color: var(--text-secondary); }
 
   .status-line {
     padding: 4px 12px;
@@ -3876,29 +3427,9 @@
     background: #d33;
     color: #fff;
   }
-  /* Auto-apply shield: muted while OFF (the safe default), accent
-     while ON so the diff-card-bypass mode is hard to miss. */
-  .action-btn.auto-apply {
-    color: var(--text-secondary);
-    border-color: var(--btn-border);
-  }
-  .action-btn.auto-apply:hover {
-    color: var(--text);
-    border-color: var(--text-secondary);
-  }
-  .action-btn.auto-apply.on {
-    color: var(--link);
-    border-color: var(--link);
-  }
-  .action-btn.auto-apply.on:hover {
-    background: var(--link);
-    color: #fff;
-  }
-
   /* One-shot info banner shown at the top of the chat when the
      configured model can't use tools. Distinct from chat bubbles
-     and edit cards so it reads as meta-context, not part of the
-     conversation. */
+     so it reads as meta-context, not part of the conversation. */
   .hint {
     border: 1px solid var(--border);
     border-left: 3px solid var(--link);

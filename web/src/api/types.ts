@@ -69,7 +69,6 @@ export type AssistantPrefs = {
   /// enable" round-trip; null means no default picked.
   default_backend: AssistantBackendKind | null;
   answers_dir: string;
-  auto_apply_writes: boolean;
   claude_cli: CliPrefs;
   gemini_cli: CliPrefs;
   codex_cli: CliPrefs;
@@ -153,10 +152,6 @@ export type LlmCompletionRequest = {
   /// frontend filter the broadcast channel to its own turn so
   /// streaming deltas from a sibling window don't crosstalk.
   session_id?: string;
-  /// Per-turn auto-apply override. Set by the composer toggle next
-  /// to Send. When true, tool-driven writes apply without surfacing
-  /// the diff card; when false, write_file calls pause for review.
-  auto_apply_writes?: boolean;
 };
 
 export type LlmStopReason =
@@ -274,8 +269,6 @@ export type UnknownUserRequest = {
   [key: string]: unknown;
 };
 
-/// Display-only for now; answering requires a later bidirectional
-/// control path.
 export type UserRequest =
   | {
       kind: "survey";
@@ -309,33 +302,6 @@ export type LlmCompletionResponse = {
   tool_calls: LlmToolCall[];
   stop_reason: LlmStopReason;
   model: string;
-};
-
-/// Decision passed to `/api/llm/resume` when the user acts on a
-/// paused `write_file`. `apply` runs the model's original args
-/// through chan-drive's sandbox; `apply_as` substitutes user-edited
-/// path / content; `discard` rejects with an optional reason.
-export type LlmResumeOutcome =
-  | { kind: "apply" }
-  | { kind: "apply_as"; path: string; content: string }
-  | { kind: "discard"; reason?: string | null };
-
-export type LlmResumeRequest = {
-  session_id?: string;
-  call_id: string;
-  messages: LlmMessage[];
-  outcome: LlmResumeOutcome;
-};
-
-export type LlmResumeResponse = {
-  content: string;
-  tool_calls: LlmToolCall[];
-  stop_reason: LlmStopReason;
-  model: string;
-  /// Server-canonical message history after the placeholder swap.
-  /// Frontend replaces `conv.messages` with this so the next round's
-  /// transcript matches what chan-llm just sent to the backend.
-  messages: LlmMessage[];
 };
 
 export type ThemeChoice = "system" | "light" | "dark";

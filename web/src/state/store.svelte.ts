@@ -263,24 +263,16 @@ export function onWatchEvent(e: unknown): void {
           (turn.event.partial_args ?? "") + a.partial_json;
       } else if (conv && activity.kind === "tool_started") {
         const a = activity as Extract<AgentActivity, { kind: "tool_started" }>;
-        const bare = bareToolName(a.name);
-        if (bare !== "write_file") {
-          ensureToolTurn(conv, a.id, a.name);
-        }
+        ensureToolTurn(conv, a.id, a.name);
       } else if (conv && activity.kind === "tool_finished") {
         const a = activity as Extract<AgentActivity, { kind: "tool_finished" }>;
-        const name = a.name ?? null;
-        if (name && bareToolName(name) === "write_file") {
-          removeToolTurn(conv, a.id);
-        } else {
-          const turn = ensureToolTurn(conv, a.id, name);
-          const err = a.is_error || isErrorOutput(a.output);
-          turn.event.status = err ? "error" : "ok";
-          turn.event.output = a.output;
-          turn.event.is_error = err;
-          turn.event.result_summary = summarizeToolResult(a.output);
-          turn.event.finished_at = Date.now();
-        }
+        const turn = ensureToolTurn(conv, a.id, a.name ?? null);
+        const err = a.is_error || isErrorOutput(a.output);
+        turn.event.status = err ? "error" : "ok";
+        turn.event.output = a.output;
+        turn.event.is_error = err;
+        turn.event.result_summary = summarizeToolResult(a.output);
+        turn.event.finished_at = Date.now();
       } else if (conv && activity.kind === "tool_denied") {
         const a = activity as Extract<AgentActivity, { kind: "tool_denied" }>;
         const id = a.id ?? `denied:${Date.now()}`;
@@ -303,26 +295,19 @@ export function onWatchEvent(e: unknown): void {
       // Narrate the call inline in the chat by appending a `tool`
       // turn to the currently-active conversation. The user sees
       // chips like `reading docs/foo.md` / `searching "X"` /
-      // `listing drive` form as the model works through its tool
-      // loop. Skip `write_file` (bare or MCP-namespaced): those
-      // calls become richer edit cards via handleResponse so the
-      // user can Apply / Discard.
+      // `writing notes/draft.md` form as the model works through
+      // its tool loop.
       const rawName = typeof f.call?.name === "string" ? f.call.name : "";
       const callId = typeof f.call?.id === "string" ? f.call.id : "";
       if (rawName && callId) {
         const bare = bareToolName(rawName);
-        if (bare !== "write_file") {
-          const conv = currentAssistantConversation();
-          if (conv) {
-            const turn = ensureToolTurn(conv, callId, rawName, f.call?.args);
-            turn.event.name = bare;
-            turn.event.label = labelForToolCall(rawName, f.call?.args);
-            turn.event.status = "running";
-            turn.event.args = f.call?.args;
-          }
-        } else {
-          const conv = currentAssistantConversation();
-          if (conv) removeToolTurn(conv, callId);
+        const conv = currentAssistantConversation();
+        if (conv) {
+          const turn = ensureToolTurn(conv, callId, rawName, f.call?.args);
+          turn.event.name = bare;
+          turn.event.label = labelForToolCall(rawName, f.call?.args);
+          turn.event.status = "running";
+          turn.event.args = f.call?.args;
         }
       }
     } else if (frameType === "llm.tool_result") {
@@ -1072,10 +1057,6 @@ export const searchPanel = $state<{
 /// frame arrives. Rendered inline in the chat scrollback as a
 /// compact chip; persists alongside regular turns so reopening
 /// the overlay shows the full tool-loop history.
-///
-/// Excludes `write_file` calls: those get their own richer edit
-/// card via the existing `AssistantPendingEdit` pathway because
-/// they require user action (Apply / Discard).
 export type AssistantToolEvent = {
   tool_call_id: string;
   /// Bare tool name (the `mcp__<server>__` prefix is stripped by
@@ -1106,17 +1087,6 @@ export type AssistantToolEvent = {
   started_at?: number;
   finished_at?: number;
   created_at: number;
-};
-
-export type AssistantPendingEdit = {
-  toolCallId: string;
-  path: string;
-  content: string;
-  summary: string | null;
-  /// "pending" until the user acts; then "applied" or
-  /// "dismissed". The card stays in the scrollback after action
-  /// so the conversation log is honest.
-  status: "pending" | "applied" | "dismissed";
 };
 
 /// Each turn carries the ms-since-epoch when it was added to the
@@ -1193,46 +1163,6 @@ export function watchBubbleDisplayMode(): () => void {
   return () => window.removeEventListener("storage", handler);
 }
 
-/// Per-turn auto-apply state. The composer toggle next to Send sets
-/// this; every /api/llm/complete request forwards it as
-/// `auto_apply_writes` so the MCP bridge sees the live value when
-/// claude-cli / gemini-cli's MCP child connects. Persisted to
-/// localStorage so the user's last choice survives reload; default
-/// is `false` (safe: writes pause for review through the diff card).
-const AUTO_APPLY_STORAGE_KEY = "chan.assistant.autoApply";
-
-function readAutoApply(): boolean {
-  try {
-    return localStorage.getItem(AUTO_APPLY_STORAGE_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-export const autoApplyWrites = $state<{ value: boolean }>({
-  value: readAutoApply(),
-});
-
-export function setAutoApplyWrites(v: boolean): void {
-  if (autoApplyWrites.value === v) return;
-  autoApplyWrites.value = v;
-  try {
-    localStorage.setItem(AUTO_APPLY_STORAGE_KEY, v ? "true" : "false");
-  } catch {
-    // private-mode Safari et al.
-  }
-}
-
-export function watchAutoApplyWrites(): () => void {
-  if (typeof window === "undefined") return () => {};
-  const handler = (e: StorageEvent) => {
-    if (e.key !== AUTO_APPLY_STORAGE_KEY) return;
-    autoApplyWrites.value = e.newValue === "true";
-  };
-  window.addEventListener("storage", handler);
-  return () => window.removeEventListener("storage", handler);
-}
-
 export type AssistantTurn =
   | { kind: "user"; content: string; created_at?: number }
   | {
@@ -1247,7 +1177,6 @@ export type AssistantTurn =
       created_at?: number;
       citations?: import("../api/types").ContentHit[];
     }
-  | { kind: "edit"; edit: AssistantPendingEdit; created_at?: number }
   | { kind: "tool"; event: AssistantToolEvent; created_at?: number };
 
 export type AssistantConversation = {
@@ -1725,98 +1654,6 @@ export function markAssistantScopeSeen(id: string): boolean {
   return false;
 }
 
-/// Fullscreen side-by-side diff view for a pending assistant edit.
-/// Opened from the edit card's "Diff" button; reads the file's
-/// current bytes from the open tab (if any) or from disk so the
-/// left side shows what's on the user's machine right now and the
-/// right side shows the assistant's proposal. The overlay carries
-/// its own Apply / Save-as / Discard actions so the user can act
-/// without bouncing back to the chat.
-export const diffOverlay = $state<{
-  open: boolean;
-  /// The pending edit being diffed. Captured by reference so the
-  /// overlay's Apply / Discard buttons mutate the same record the
-  /// chat scrollback renders.
-  edit: AssistantPendingEdit | null;
-  /// File path, mirrored from edit.path so the overlay can render
-  /// it independent of any later edit mutation.
-  path: string;
-  /// Original content for the left pane. Resolved at open-time:
-  /// open-tab buffer wins, falls back to api.read. Empty string
-  /// when the path doesn't exist yet (the proposal is creating a
-  /// brand-new file).
-  original: string;
-  /// True while the overlay is fetching the original content; the
-  /// view shows a small "loading…" indicator instead of empty L.
-  loading: boolean;
-  /// Error string from the api.read fallback; non-null only when
-  /// both the open-tab and disk reads failed. Surfaced in the
-  /// overlay header so the user knows the diff baseline is empty.
-  error: string | null;
-}>({
-  open: false,
-  edit: null,
-  path: "",
-  original: "",
-  loading: false,
-  error: null,
-});
-
-/// Open the diff overlay for `edit`, resolving the original
-/// content from the open tab (if the path is loaded) or from
-/// disk. Returns immediately; the overlay shows a brief
-/// "loading…" placeholder while the read completes.
-export function openDiffOverlay(edit: AssistantPendingEdit): void {
-  diffOverlay.edit = edit;
-  diffOverlay.path = edit.path;
-  diffOverlay.original = "";
-  diffOverlay.loading = true;
-  diffOverlay.error = null;
-  diffOverlay.open = true;
-  // First: check open tabs for a buffer at this path. Wins over
-  // disk because a user may have unsaved edits that the assistant's
-  // proposal will replace; the diff should be against what they
-  // see, not what's persisted.
-  for (const node of Object.values(layout.nodes)) {
-    if (node.kind !== "leaf") continue;
-    for (const t of node.tabs) {
-      if (t.kind === "file" && t.path === edit.path) {
-        diffOverlay.original = t.content;
-        diffOverlay.loading = false;
-        return;
-      }
-    }
-  }
-  // Fall back to disk. Treat 404 as "new file" (left side empty);
-  // any other error surfaces in the header.
-  void api.read(edit.path).then(
-    (resp) => {
-      diffOverlay.original = resp.content ?? "";
-      diffOverlay.loading = false;
-    },
-    (e) => {
-      const msg = (e as Error).message ?? String(e);
-      if (msg.includes("404") || msg.toLowerCase().includes("not found")) {
-        diffOverlay.original = "";
-        diffOverlay.loading = false;
-      } else {
-        diffOverlay.original = "";
-        diffOverlay.error = msg;
-        diffOverlay.loading = false;
-      }
-    },
-  );
-}
-
-export function closeDiffOverlay(): void {
-  diffOverlay.open = false;
-  diffOverlay.edit = null;
-  diffOverlay.path = "";
-  diffOverlay.original = "";
-  diffOverlay.loading = false;
-  diffOverlay.error = null;
-}
-
 /// Streaming buffer for the assistant turn currently in flight.
 /// Fed by `llm.delta` WS frames in `onWatchEvent`; consumed by
 /// InlineAssist to render a live-updating assistant bubble in
@@ -1898,7 +1735,11 @@ export function endAssistantStream(sessionId?: string): void {
   assistantStream.status = null;
   assistantStream.lastHeartbeatAt = null;
   assistantStream.activity = [];
-  assistantStream.userRequest = null;
+  // `userRequest` is intentionally NOT cleared here: when the model
+  // pauses on AskUserQuestion the agent process exits, the stream
+  // ends, and the survey buttons still need to be visible so the
+  // user can answer. The next round's `beginAssistantStream`
+  // resets it.
   assistantStream.error = null;
 }
 
@@ -2084,13 +1925,6 @@ function ensureToolTurn(
   };
   conv.turns.push(turn);
   return turn;
-}
-
-function removeToolTurn(conv: AssistantConversation, id: string): void {
-  const idx = conv.turns.findIndex(
-    (t) => t.kind === "tool" && t.event.tool_call_id === id,
-  );
-  if (idx >= 0) conv.turns.splice(idx, 1);
 }
 
 /// Truthy when a tool result JSON shape signals failure. chan-llm
@@ -3127,17 +2961,6 @@ export function renderScopeHistoryMarkdown(
       lines.push(
         `_assistant changed to ${t.backend}${t.model ? ` · ${t.model}` : " · default"}_`,
       );
-      lines.push("");
-    } else if (t.kind === "edit") {
-      lines.push(`## Edit proposal — ${t.edit.path}`);
-      lines.push("");
-      if (t.edit.summary) {
-        lines.push(`> ${t.edit.summary}`);
-        lines.push("");
-      }
-      lines.push("```");
-      lines.push(t.edit.content);
-      lines.push("```");
       lines.push("");
     } else {
       // tool turn: short summary line so the transcript stays

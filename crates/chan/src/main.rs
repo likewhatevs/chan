@@ -257,11 +257,6 @@ enum Command {
     Mcp {
         /// Drive root to expose. Must already be registered.
         path: PathBuf,
-        /// Apply write_file calls without producing a "deferred"
-        /// error. Off by default; chan-llm flips it on per session
-        /// when the user has enabled auto-apply in settings.
-        #[arg(long)]
-        auto_apply: bool,
     },
     /// Internal: stdio bridge to the MCP server hosted in-process
     /// by a running `chan serve`. Connects to the per-server Unix-
@@ -411,7 +406,7 @@ fn main() -> Result<()> {
                 verbose: cli.verbose > 0,
             }))
         }
-        Command::Mcp { path, auto_apply } => {
+        Command::Mcp { path } => {
             // Same shape as serve: stdio MCP needs a tokio runtime
             // for the async server, but everything outside it stays
             // sync.
@@ -419,7 +414,7 @@ fn main() -> Result<()> {
                 .enable_all()
                 .build()
                 .context("building tokio runtime")?;
-            rt.block_on(cmd_mcp(path, auto_apply))
+            rt.block_on(cmd_mcp(path))
         }
         Command::McpProxy { socket } => {
             let rt = tokio::runtime::Builder::new_multi_thread()
@@ -1031,11 +1026,11 @@ fn cmd_index(path: PathBuf) -> Result<()> {
 /// inherits that registry. If the drive isn't registered when the
 /// agent invokes the subcommand, that's a wiring bug worth
 /// surfacing rather than silently fixing.
-async fn cmd_mcp(path: PathBuf, auto_apply: bool) -> Result<()> {
+async fn cmd_mcp(path: PathBuf) -> Result<()> {
     let drive = library()?
         .open_drive(&path)
         .with_context(|| format!("opening drive {}", path.display()))?;
-    chan_llm::mcp::Server::new(drive, auto_apply)
+    chan_llm::mcp::Server::new(drive)
         .serve_stdio()
         .await
         .context("running MCP server")

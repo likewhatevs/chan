@@ -298,7 +298,10 @@ describe("assistant lifecycle websocket frames", () => {
     expect(assistantStream.status).toBeNull();
     expect(assistantStream.lastHeartbeatAt).toBeNull();
     expect(assistantStream.activity).toEqual([]);
-    expect(assistantStream.userRequest).toBeNull();
+    // userRequest survives endAssistantStream so the survey panel
+    // stays visible after the agent process exits on
+    // AskUserQuestion; the next beginAssistantStream resets it.
+    expect(assistantStream.userRequest).not.toBeNull();
   });
 
   test("existing delta frames still append streamed text", () => {
