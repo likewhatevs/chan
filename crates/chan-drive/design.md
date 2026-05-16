@@ -618,13 +618,11 @@ only `alice` is in `alice@example.com`. The picker also receives
 the deduplicated email list back so it can render a secondary line
 under the contact's name.
 
-The v3 migration cannot walk the filesystem (it runs inside
-`graph.rs`, with no Drive handle), so contacts indexed before v3
-keep `emails IS NULL`. `Drive::contacts_need_email_backfill`
-returns `true` while any such row exists; the chan-server indexer
-reads the flag on boot and queues a one-shot full rebuild so
-email-aware matching works without operator intervention. The
-flag clears as soon as every contact row has been re-parsed.
+The `emails` column is populated as contacts are parsed during a
+walk: the indexer's first pass over a fresh drive fills it in for
+every contact-kind file, and per-file edits update it through
+`replace_file`. Contacts that lack an email body section keep
+`emails IS NULL` and simply don't match email-substring queries.
 
 The chan-llm tool sandbox (and the MCP server it backs) does not
 expose a contacts-aware tool, by design. Agents reach contacts

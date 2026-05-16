@@ -2130,18 +2130,6 @@ impl Drive {
         self.graph()?.contacts_filtered(query, limit)
     }
 
-    /// True when at least one contact-kind row in the graph DB has
-    /// `emails IS NULL`. Set after a v3 schema migration finds
-    /// pre-v3 contact rows that haven't been re-indexed yet (the
-    /// migration cannot walk the filesystem itself, so the column
-    /// stays NULL until something re-parses the file). The chan-
-    /// server indexer reads this on boot and fires a one-shot full
-    /// rebuild so email-aware @ matching works without the user
-    /// having to think about it.
-    pub fn contacts_need_email_backfill(&self) -> Result<bool> {
-        self.graph()?.contacts_need_email_backfill()
-    }
-
     // ---- watch ----
 
     /// Start a recursive filesystem watcher on the drive. Drop

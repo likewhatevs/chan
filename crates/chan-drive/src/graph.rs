@@ -20,13 +20,7 @@
 //                                       so the @ picker can match
 //                                       `alice` against
 //                                       `alice@example.com`.
-//                                       NULL for non-contact rows
-//                                       and for legacy contact rows
-//                                       indexed before v3 (the
-//                                       indexer triggers a full
-//                                       rebuild when a backfill is
-//                                       needed; see
-//                                       contacts_need_email_backfill).
+//                                       NULL for non-contact rows.
 //
 //   edges(src      TEXT NOT NULL,    -- node rel_path
 //         dst      TEXT NOT NULL,    -- node rel_path
@@ -445,12 +439,9 @@ impl GraphView {
             // one transaction so a crash before the commit leaves
             // user_version = 2 with the column already idempotently
             // re-addable on the next open (the column_exists guard).
-            // No file-level backfill here (the migration runs inside
-            // graph.rs, with no Drive handle to walk the filesystem);
-            // contacts indexed before v3 keep emails = NULL, and
-            // `Drive::contacts_need_email_backfill` plus the chan-
-            // server indexer's initial-build trigger drive a one-
-            // shot full reindex on the next boot.
+            // Fresh installs build the column straight through this
+            // migration chain; no file-level backfill is required
+            // since the indexer parses every contact at first walk.
             let tx = conn.unchecked_transaction()?;
             if !Self::column_exists(&tx, "nodes", "emails")? {
                 tx.execute_batch("ALTER TABLE nodes ADD COLUMN emails TEXT;")?;
@@ -1173,23 +1164,6 @@ impl GraphView {
             }
             Ok(out)
         }
-    }
-
-    /// True when at least one contact-kind row has `emails` IS NULL.
-    /// Drives the chan-server indexer's one-shot full-rebuild trigger
-    /// after a v3 migration: contacts written before the column
-    /// existed have NULL there, so the picker can't email-match them
-    /// until they're re-indexed. A clean v3-from-scratch DB and a
-    /// drive whose contacts have all been re-indexed both report
-    /// `false` so the trigger doesn't fire on every boot.
-    pub fn contacts_need_email_backfill(&self) -> Result<bool> {
-        let conn = self.reader()?;
-        let n: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM nodes WHERE kind = 'contact' AND emails IS NULL",
-            [],
-            |r| r.get(0),
-        )?;
-        Ok(n > 0)
     }
 
     /// Link-autocomplete lookup. Drives the `[[` typeahead in the
@@ -2133,81 +2107,6 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, 6);
-    }
-
-    #[test]
-    fn migration_v3_adds_emails_column_and_marks_existing_contacts_for_backfill() {
-        // Open at v2, insert a contact-kind row by hand (simulating
-        // an upgrade from a chan that didn't track emails). Re-open:
-        // the migration adds the column without touching existing
-        // values, and `contacts_need_email_backfill` reports `true`
-        // so the chan-server indexer can drive a one-shot rebuild.
-        let tmp = TempDir::new().unwrap();
-        let db = tmp.path().join("g.sqlite");
-        {
-            let conn = rusqlite::Connection::open(&db).unwrap();
-            conn.execute_batch(
-                r#"
-                CREATE TABLE nodes (
-                    rel_path TEXT PRIMARY KEY,
-                    kind     TEXT NOT NULL,
-                    mtime    INTEGER,
-                    title    TEXT,
-                    basename TEXT
-                );
-                CREATE TABLE edges (
-                    src    TEXT NOT NULL,
-                    dst    TEXT NOT NULL,
-                    kind   TEXT NOT NULL,
-                    anchor TEXT,
-                    PRIMARY KEY (src, dst, kind)
-                );
-                CREATE TABLE headings (
-                    rel_path TEXT NOT NULL,
-                    level    INTEGER NOT NULL,
-                    text     TEXT NOT NULL,
-                    anchor   TEXT NOT NULL,
-                    ord      INTEGER NOT NULL,
-                    PRIMARY KEY (rel_path, ord)
-                );
-                INSERT INTO nodes(rel_path, kind, mtime, title, basename)
-                VALUES ('Contacts/Legacy.md', 'contact', 1, 'Legacy', 'Legacy.md');
-                PRAGMA user_version = 2;
-                "#,
-            )
-            .unwrap();
-        }
-        let g = GraphView::open(&db).unwrap();
-        let conn = g.reader().unwrap();
-        let v: i64 = conn
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(v, 6);
-        let cols: Vec<String> = {
-            let mut stmt = conn.prepare("PRAGMA table_info(nodes)").unwrap();
-            stmt.query_map([], |r| r.get::<_, String>(1))
-                .unwrap()
-                .map(|r| r.unwrap())
-                .collect()
-        };
-        assert!(cols.iter().any(|c| c == "emails"));
-        // Pre-v3 contact row has emails = NULL: backfill needed.
-        assert!(g.contacts_need_email_backfill().unwrap());
-        // After re-indexing the row with an email, the backfill flag
-        // clears.
-        g.replace_file(
-            "Contacts/Legacy.md",
-            Some("Legacy"),
-            Some(2),
-            None,
-            NodeKind::Contact,
-            &[],
-            &[],
-            Some("legacy@example.com"),
-            None,
-        )
-        .unwrap();
-        assert!(!g.contacts_need_email_backfill().unwrap());
     }
 
     /// Stages a few files into the staging tables, verifies the
