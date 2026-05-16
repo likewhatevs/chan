@@ -8,8 +8,6 @@
 //
 //   - which backend is selected
 //   - which model per backend
-//   - the auto_apply_writes flag (whether the assistant's write
-//     proposals hit disk without a per-call confirmation)
 //   - optional PATH override used to find subprocess CLIs
 //   - subprocess backend launch settings
 //
@@ -61,13 +59,6 @@ pub struct LlmConfig {
     /// a warning on the detection result.
     #[serde(default, skip_serializing_if = "is_false")]
     pub cli_allow_risky_mounts: bool,
-    /// When true, the assistant's `write_file` tool calls go to disk
-    /// without a per-call confirmation. When false, the consumer
-    /// (web frontend, native shell) must surface a confirmation UI
-    /// for each write. Default: false. Hard line: never silently
-    /// flip to true.
-    #[serde(default)]
-    pub auto_apply_writes: bool,
     /// Hard cap on a single MCP `read_image` response, in bytes.
     /// `None` means "use the chan-llm default"
     /// (`mcp::DEFAULT_MCP_IMAGE_MAX_BYTES`,
@@ -429,7 +420,6 @@ mod tests {
                 claude_cli: Some("opus".into()),
                 ..Default::default()
             },
-            auto_apply_writes: true,
             claude_cli: ClaudeCli::default(),
             gemini_cli: GeminiCli::default(),
             codex_cli: CodexCli::default(),

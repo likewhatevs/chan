@@ -1,23 +1,20 @@
 // Tool sandbox for the assistant.
 //
-// Four standard tools covering the editor's common operations:
+// Standard tools covering the editor's common operations:
 //
 //   read_file(path)       -> string
-//   write_file(path, ...) -> ok / NeedsConfirmation
+//   write_file(path, ...) -> { path, bytes_written }
 //   list_files()          -> tree
 //   search_content(query) -> hits
 //
-// All four route through `chan_drive::Drive` so the filesystem
+// All route through `chan_drive::Drive` so the filesystem
 // invariants (path sandbox, special-file refusal, atomic writes)
 // apply automatically. There's no escape hatch from chan-drive's
 // gates: even if a backend invents a novel tool call, our
-// `StandardTool::execute` never bypasses Drive.
-//
-// `auto_apply_writes`: when false, `write_file` returns `Pending`
-// instead of calling `Drive::write_text`. The caller (server,
-// native shell) shows a confirmation UI and re-issues the call
-// with the user's approval. When true, writes go straight to disk.
-// The flag lives in `LlmConfig`.
+// `StandardTool::execute` never bypasses Drive. Writes apply
+// immediately; permission gating for destructive batch work is
+// the model's responsibility (it calls `AskUserQuestion` before
+// the writes).
 
 use std::sync::Arc;
 
@@ -70,20 +67,15 @@ pub const REPO_REPORT_FILES_CAP: usize = 200;
 pub const WRITE_FILE_CONTENT_CAP_BYTES: usize = 2 * 1024 * 1024;
 
 /// Context the tools see. Owns an `Arc<Drive>` so tool calls cross
-/// thread boundaries cheaply; the auto-apply flag is checked
-/// per-call so toggling it at runtime takes immediate effect.
+/// thread boundaries cheaply.
 #[derive(Clone)]
 pub struct ToolContext {
     pub drive: Arc<Drive>,
-    pub auto_apply_writes: bool,
 }
 
 impl ToolContext {
-    pub fn new(drive: Arc<Drive>, auto_apply_writes: bool) -> Self {
-        Self {
-            drive,
-            auto_apply_writes,
-        }
+    pub fn new(drive: Arc<Drive>) -> Self {
+        Self { drive }
     }
 }
 
@@ -142,40 +134,20 @@ impl StandardTool {
     }
 }
 
-/// Outcome of a tool execution. `Pending` is the auto-apply gate:
-/// a write that would touch disk but the user hasn't confirmed yet.
-/// Consumers surface a UI for `Pending`, then re-issue with
-/// `auto_apply_writes = true` (or call `Drive::write_text` directly).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolOutcome {
-    Ok(Json),
-    /// A write was proposed but `auto_apply_writes` is off. Body
-    /// carries the proposed args so the host can echo them in the
-    /// confirmation UI.
-    Pending {
-        tool: String,
-        args: Json,
-    },
-}
-
-/// Run a tool by name with the given args. Returns either the
-/// tool's result JSON or a `Pending` indicator for unconfirmed
-/// writes. Unknown tools error.
-pub fn execute(name: &str, args: &Json, ctx: &ToolContext) -> Result<ToolOutcome> {
+/// Run a tool by name with the given args. Returns the tool's
+/// result JSON. Unknown tools error.
+pub fn execute(name: &str, args: &Json, ctx: &ToolContext) -> Result<Json> {
     let Some(tool) = StandardTool::from_name(name) else {
         return Err(LlmError::Tool(format!("unknown tool: {name}")));
     };
     match tool {
-        StandardTool::ReadFile => exec_read_file(args, ctx).map(ToolOutcome::Ok),
-        StandardTool::ListFiles => exec_list_files(args, ctx).map(ToolOutcome::Ok),
-        StandardTool::SearchContent => exec_search_content(args, ctx).map(ToolOutcome::Ok),
-        StandardTool::RepoReport => exec_repo_report(args, ctx).map(ToolOutcome::Ok),
-        StandardTool::GraphNeighbors => exec_graph_neighbors(args, ctx).map(ToolOutcome::Ok),
-        StandardTool::GraphTags => exec_graph_tags(args, ctx).map(ToolOutcome::Ok),
-        StandardTool::GraphFilesWithTag => {
-            exec_graph_files_with_tag(args, ctx).map(ToolOutcome::Ok)
-        }
+        StandardTool::ReadFile => exec_read_file(args, ctx),
+        StandardTool::ListFiles => exec_list_files(args, ctx),
+        StandardTool::SearchContent => exec_search_content(args, ctx),
+        StandardTool::RepoReport => exec_repo_report(args, ctx),
+        StandardTool::GraphNeighbors => exec_graph_neighbors(args, ctx),
+        StandardTool::GraphTags => exec_graph_tags(args, ctx),
+        StandardTool::GraphFilesWithTag => exec_graph_files_with_tag(args, ctx),
         StandardTool::WriteFile => exec_write_file(args, ctx),
     }
 }
@@ -453,7 +425,7 @@ fn exec_repo_report(args: &Json, ctx: &ToolContext) -> Result<Json> {
     Ok(value)
 }
 
-fn exec_write_file(args: &Json, ctx: &ToolContext) -> Result<ToolOutcome> {
+fn exec_write_file(args: &Json, ctx: &ToolContext) -> Result<Json> {
     let path = arg_string(args, "path")?;
     let content = arg_string(args, "content")?;
     // Reject oversized payloads before the tool result clones the
@@ -476,12 +448,6 @@ fn exec_write_file(args: &Json, ctx: &ToolContext) -> Result<ToolOutcome> {
     // which catches the case where the user (or another tool) has
     // edited the file between the assistant's read and its write.
     let expected_mtime_ns = args.get("expected_mtime_ns").and_then(|v| v.as_i64());
-    if !ctx.auto_apply_writes {
-        return Ok(ToolOutcome::Pending {
-            tool: "write_file".into(),
-            args: args.clone(),
-        });
-    }
     if let Some(expected) = expected_mtime_ns {
         ctx.drive
             .write_text_if_unchanged(path, Some(expected), content)?;
@@ -492,10 +458,10 @@ fn exec_write_file(args: &Json, ctx: &ToolContext) -> Result<ToolOutcome> {
         // round-trip mtime_ns.
         ctx.drive.write_text(path, content)?;
     }
-    Ok(ToolOutcome::Ok(serde_json::json!({
+    Ok(serde_json::json!({
         "path": path,
         "bytes_written": content.len(),
-    })))
+    }))
 }
 
 /// JSON-schema descriptor for one tool, in the common
@@ -655,7 +621,7 @@ mod tests {
         lib.register_drive(drive_dir.path(), Some("Test".into()))
             .unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
-        let ctx = ToolContext::new(drive, false);
+        let ctx = ToolContext::new(drive);
         (cfg, drive_dir, ctx)
     }
 
@@ -663,42 +629,22 @@ mod tests {
     fn read_file_returns_content() {
         let (_cfg, root, ctx) = fixture();
         std::fs::write(root.path().join("a.md"), "hello").unwrap();
-        let out = execute("read_file", &serde_json::json!({"path": "a.md"}), &ctx).unwrap();
-        match out {
-            ToolOutcome::Ok(v) => assert_eq!(v["content"], "hello"),
-            _ => panic!("expected Ok"),
-        }
+        let v = execute("read_file", &serde_json::json!({"path": "a.md"}), &ctx).unwrap();
+        assert_eq!(v["content"], "hello");
     }
 
     #[test]
-    fn write_file_pending_when_auto_apply_off() {
+    fn write_file_applies_immediately() {
         let (_cfg, _root, ctx) = fixture();
-        let out = execute(
+        let v = execute(
             "write_file",
-            &serde_json::json!({"path": "a.md", "content": "x"}),
+            &serde_json::json!({"path": "a.md", "content": "hello"}),
             &ctx,
         )
         .unwrap();
-        match out {
-            ToolOutcome::Pending { tool, .. } => assert_eq!(tool, "write_file"),
-            _ => panic!("expected Pending"),
-        }
-        // No file was written.
-        assert!(!ctx.drive.exists("a.md"));
-    }
-
-    #[test]
-    fn write_file_ok_when_auto_apply_on() {
-        let (_cfg, _root, mut ctx_owned) = fixture();
-        ctx_owned.auto_apply_writes = true;
-        let out = execute(
-            "write_file",
-            &serde_json::json!({"path": "a.md", "content": "hello"}),
-            &ctx_owned,
-        )
-        .unwrap();
-        assert!(matches!(out, ToolOutcome::Ok(_)));
-        assert_eq!(ctx_owned.drive.read_text("a.md").unwrap(), "hello");
+        assert_eq!(v["path"], "a.md");
+        assert_eq!(v["bytes_written"], 5);
+        assert_eq!(ctx.drive.read_text("a.md").unwrap(), "hello");
     }
 
     #[test]
@@ -713,19 +659,14 @@ mod tests {
         let (_cfg, root, ctx) = fixture();
         let big = "x".repeat(READ_FILE_CAP_BYTES + 1024);
         std::fs::write(root.path().join("big.md"), &big).unwrap();
-        let out = execute("read_file", &serde_json::json!({"path": "big.md"}), &ctx).unwrap();
-        match out {
-            ToolOutcome::Ok(v) => {
-                assert_eq!(v["truncated"], serde_json::Value::Bool(true));
-                assert_eq!(
-                    v["size"].as_u64().unwrap(),
-                    (READ_FILE_CAP_BYTES + 1024) as u64
-                );
-                let content = v["content"].as_str().unwrap();
-                assert!(content.len() <= READ_FILE_CAP_BYTES);
-            }
-            _ => panic!("expected Ok"),
-        }
+        let v = execute("read_file", &serde_json::json!({"path": "big.md"}), &ctx).unwrap();
+        assert_eq!(v["truncated"], serde_json::Value::Bool(true));
+        assert_eq!(
+            v["size"].as_u64().unwrap(),
+            (READ_FILE_CAP_BYTES + 1024) as u64
+        );
+        let content = v["content"].as_str().unwrap();
+        assert!(content.len() <= READ_FILE_CAP_BYTES);
     }
 
     #[test]
@@ -736,20 +677,15 @@ mod tests {
         std::fs::write(root.path().join("notes/a.md"), "x").unwrap();
         std::fs::write(root.path().join("notes/b.md"), "x").unwrap();
         std::fs::write(root.path().join("recipes/r.md"), "x").unwrap();
-        let out = execute("list_files", &serde_json::json!({"prefix": "notes"}), &ctx).unwrap();
-        match out {
-            ToolOutcome::Ok(v) => {
-                let entries = v["entries"].as_array().unwrap();
-                let paths: Vec<&str> = entries
-                    .iter()
-                    .map(|e| e["path"].as_str().unwrap())
-                    .collect();
-                assert!(paths.contains(&"notes/a.md"));
-                assert!(paths.contains(&"notes/b.md"));
-                assert!(!paths.iter().any(|p| p.starts_with("recipes/")));
-            }
-            _ => panic!("expected Ok"),
-        }
+        let v = execute("list_files", &serde_json::json!({"prefix": "notes"}), &ctx).unwrap();
+        let entries = v["entries"].as_array().unwrap();
+        let paths: Vec<&str> = entries
+            .iter()
+            .map(|e| e["path"].as_str().unwrap())
+            .collect();
+        assert!(paths.contains(&"notes/a.md"));
+        assert!(paths.contains(&"notes/b.md"));
+        assert!(!paths.iter().any(|p| p.starts_with("recipes/")));
     }
 
     #[test]
@@ -770,22 +706,16 @@ mod tests {
     fn read_file_returns_mtime_ns_for_round_trip() {
         let (_cfg, root, ctx) = fixture();
         std::fs::write(root.path().join("a.md"), "hello").unwrap();
-        let out = execute("read_file", &serde_json::json!({"path": "a.md"}), &ctx).unwrap();
-        match out {
-            ToolOutcome::Ok(v) => {
-                assert!(
-                    v["mtime_ns"].is_i64() || v["mtime_ns"].is_null(),
-                    "mtime_ns should be present (i64) or absent on FSes without ns mtime"
-                );
-            }
-            _ => panic!("expected Ok"),
-        }
+        let v = execute("read_file", &serde_json::json!({"path": "a.md"}), &ctx).unwrap();
+        assert!(
+            v["mtime_ns"].is_i64() || v["mtime_ns"].is_null(),
+            "mtime_ns should be present (i64) or absent on FSes without ns mtime"
+        );
     }
 
     #[test]
     fn write_file_with_mismatched_mtime_returns_conflict() {
-        let (_cfg, _root, mut ctx) = fixture();
-        ctx.auto_apply_writes = true;
+        let (_cfg, _root, ctx) = fixture();
         ctx.drive.write_text("a.md", "v1").unwrap();
         // Stale mtime from a parallel-universe earlier write.
         let stale = serde_json::json!({
@@ -802,8 +732,7 @@ mod tests {
 
     #[test]
     fn write_file_with_matching_mtime_succeeds() {
-        let (_cfg, _root, mut ctx) = fixture();
-        ctx.auto_apply_writes = true;
+        let (_cfg, _root, ctx) = fixture();
         ctx.drive.write_text("a.md", "v1").unwrap();
         let stat = ctx.drive.stat("a.md").unwrap();
         let args = serde_json::json!({
@@ -811,8 +740,8 @@ mod tests {
             "content": "v2",
             "expected_mtime_ns": stat.mtime_ns,
         });
-        let out = execute("write_file", &args, &ctx).unwrap();
-        assert!(matches!(out, ToolOutcome::Ok(_)));
+        let v = execute("write_file", &args, &ctx).unwrap();
+        assert_eq!(v["bytes_written"], 2);
         assert_eq!(ctx.drive.read_text("a.md").unwrap(), "v2");
     }
 
@@ -822,11 +751,7 @@ mod tests {
         std::fs::write(root.path().join("a.md"), "# a\n").unwrap();
         std::fs::write(root.path().join("b.md"), "# b\n").unwrap();
 
-        let out = execute("repo_report", &serde_json::json!({}), &ctx).unwrap();
-        let v = match out {
-            ToolOutcome::Ok(v) => v,
-            _ => panic!("expected Ok"),
-        };
+        let v = execute("repo_report", &serde_json::json!({}), &ctx).unwrap();
         assert_eq!(v["files_omitted"], serde_json::json!(true));
         assert!(v.get("files").is_none());
         assert!(v["totals"]["files"].as_u64().unwrap() >= 2);
@@ -839,16 +764,12 @@ mod tests {
         let (_cfg, root, ctx) = fixture();
         std::fs::write(root.path().join("a.md"), "# a\n").unwrap();
 
-        let out = execute(
+        let v = execute(
             "repo_report",
             &serde_json::json!({"include_files": true}),
             &ctx,
         )
         .unwrap();
-        let v = match out {
-            ToolOutcome::Ok(v) => v,
-            _ => panic!("expected Ok"),
-        };
         let files = v["files"].as_array().expect("files present");
         assert!(files.iter().any(|f| f["path"] == "a.md"));
     }
@@ -860,16 +781,12 @@ mod tests {
         std::fs::write(root.path().join("src/lib.rs"), "fn x() {}\n").unwrap();
         std::fs::write(root.path().join("README.md"), "# r\n").unwrap();
 
-        let out = execute(
+        let v = execute(
             "repo_report",
             &serde_json::json!({"prefix": "src", "include_files": true}),
             &ctx,
         )
         .unwrap();
-        let v = match out {
-            ToolOutcome::Ok(v) => v,
-            _ => panic!("expected Ok"),
-        };
         let files = v["files"].as_array().unwrap();
         assert!(files
             .iter()
@@ -884,7 +801,7 @@ mod tests {
         std::fs::create_dir_all(root.path().join("docs")).unwrap();
         std::fs::write(root.path().join("docs/x.md"), "# x\n").unwrap();
 
-        let out = execute(
+        let v = execute(
             "repo_report",
             &serde_json::json!({
                 "prefix": "docs",
@@ -894,10 +811,6 @@ mod tests {
             &ctx,
         )
         .unwrap();
-        let v = match out {
-            ToolOutcome::Ok(v) => v,
-            _ => panic!("expected Ok"),
-        };
         let files = v["files"].as_array().unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0]["path"], "a.md");
@@ -911,8 +824,7 @@ mod tests {
 
     #[test]
     fn write_file_rejects_non_text_via_chan_drive() {
-        let (_cfg, _root, mut ctx) = fixture();
-        ctx.auto_apply_writes = true;
+        let (_cfg, _root, ctx) = fixture();
         let err = execute(
             "write_file",
             &serde_json::json!({"path": "img.png", "content": "x"}),

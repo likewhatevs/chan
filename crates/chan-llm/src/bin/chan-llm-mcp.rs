@@ -7,17 +7,11 @@
 //! Usage:
 //!
 //!     chan-llm-mcp --drive /path/to/drive [--config /path/to/llm.toml]
-//!                  [--auto-apply] [--max-image-bytes N]
+//!                  [--max-image-bytes N]
 //!
-//! `--auto-apply` is the explicit, opt-in knob for letting the
-//! server's `write_file` tool hit disk without producing a
-//! "deferred" error. The default is OFF: the standalone binary
-//! still works for clients (Claude Desktop, Cursor, ...) that
-//! surface their own confirmation UI, but they have to flip the
-//! flag themselves once their user has consented. The embedded
-//! ClaudeCli path in chan-llm (issue #1) flips it from
-//! `LlmConfig.auto_apply_writes` so the user's preference in the
-//! chan UI carries through to the MCP subprocess.
+//! `write_file` writes apply immediately through chan-drive's
+//! sandbox; the MCP client is responsible for any user
+//! confirmation before invoking the tool.
 //!
 //! `--max-image-bytes N` overrides the per-response cap on
 //! `read_image` (default 10 MiB). chan-server / chan's embedded
@@ -95,7 +89,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut server = Server::new(drive, args.auto_apply);
+    let mut server = Server::new(drive);
     if let Some(cap) = args.max_image_bytes {
         server = server.with_max_image_bytes(cap);
     }
@@ -110,7 +104,7 @@ const USAGE: &str = "\
 chan-llm-mcp - MCP server exposing chan drive tools over stdio
 
 USAGE:
-    chan-llm-mcp --drive <path> [--config <path>] [--auto-apply]
+    chan-llm-mcp --drive <path> [--config <path>]
                  [--max-image-bytes <N>]
 
 OPTIONS:
@@ -119,11 +113,6 @@ OPTIONS:
                              (use `chan drive add`).
     --config <path>          Override for the chan-drive registry config
                              (defaults to ~/.chan/config.toml).
-    --auto-apply             Apply write_file tool calls without
-                             producing a 'deferred' error. Off by
-                             default: the MCP client is expected to
-                             surface a confirmation UI before flipping
-                             this on.
     --max-image-bytes <N>    Hard cap on a single read_image response,
                              in bytes. Default 10 MiB. Oversized files
                              error with `image too large` instead of
@@ -135,7 +124,6 @@ OPTIONS:
 struct Args {
     drive: Option<PathBuf>,
     config: Option<PathBuf>,
-    auto_apply: bool,
     max_image_bytes: Option<u64>,
     help: bool,
 }
@@ -153,7 +141,6 @@ impl Args {
                     let v = it.next().ok_or("--config needs a value")?;
                     out.config = Some(PathBuf::from(v));
                 }
-                "--auto-apply" => out.auto_apply = true,
                 "--max-image-bytes" => {
                     let v = it.next().ok_or("--max-image-bytes needs a value")?;
                     let n: u64 = v

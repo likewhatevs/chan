@@ -142,9 +142,11 @@ cap; in that case re-issue with a smaller scope (or open the file \
 in the editor if you need the full thing). Pass `mtime_ns` back \
 on `write_file` as `expected_mtime_ns` to detect concurrent edits.";
 
-/// Description of the write_file tool. Mentions the auto_apply
-/// gate so the model knows writes may be deferred to user
-/// confirmation.
+/// Description of the write_file tool. Writes apply immediately
+/// through chan-drive's sandbox; if the user's intent looks
+/// destructive (batch refactor across many files, etc.) the
+/// model is expected to call `AskUserQuestion` for a numbered
+/// confirmation BEFORE issuing the writes.
 pub const WRITE_FILE_DESC: &str = "\
 Replace the content of a file in the active drive (creates the \
 parent directory if needed). The path is POSIX-style relative to \
@@ -152,10 +154,10 @@ the drive root and must end in .md or .txt. New files are capped \
 at 2 MiB; existing files can be edited up to their current size. \
 Pass `expected_mtime_ns` (from your earlier read_file response) \
 to make the write a compare-and-swap; on conflict the call \
-errors and you can re-read before retrying. The host may surface \
-a confirmation UI before the write hits disk; if it does, you \
-will receive a tool result indicating whether the user accepted \
-or rejected the proposed write.";
+errors and you can re-read before retrying. Writes apply \
+immediately. When a request touches multiple files or feels \
+destructive, call AskUserQuestion first with a numbered plan and \
+wait for the user's answer before any write_file call.";
 
 /// Description of the list_files tool.
 pub const LIST_FILES_DESC: &str = "\

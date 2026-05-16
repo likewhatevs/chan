@@ -54,16 +54,6 @@ pub enum LlmError {
     Io(String),
     #[error("mcp: {0}")]
     Mcp(String),
-    /// Used by `session::apply_resume` and
-    /// `LlmSession::approve_pending` when the resume operation
-    /// can't proceed because the transcript has drifted (no
-    /// matching tool_call_id, the target message isn't actually a
-    /// pending placeholder, or the original tool call can't be
-    /// recovered from the prior assistant turn). Surfacing this as
-    /// a typed error rather than silently corrupting the
-    /// transcript catches host bugs in the confirmation flow.
-    #[error("resume: {0}")]
-    Resume(String),
 }
 
 impl From<std::io::Error> for LlmError {

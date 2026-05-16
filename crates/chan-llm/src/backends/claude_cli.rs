@@ -17,9 +17,8 @@
 //!
 //!   - Claude edits files directly under `cwd` (the drive root)
 //!     using its own Read / Write / Edit / Bash tools.
-//!   - chan-llm's tool sandbox (path scope, editable-text gate,
-//!     auto_apply_writes confirmation) is NOT applied to those
-//!     edits.
+//!   - chan-llm's tool sandbox (path scope, editable-text gate)
+//!     is NOT applied to those edits.
 //!   - We launch claude with `--permission-mode bypassPermissions`
 //!     because there is no human in front of claude's stdin to
 //!     answer its native permission prompts.
@@ -46,11 +45,11 @@
 //!   - `--permission-mode default` (we drop `bypassPermissions`):
 //!     anything not allow-listed blocks, which matches the contract.
 //!
-//! The auto-apply gate is owned by the MCP server side (in chan-
-//! server, the bridge reads `auto_apply_writes` per connection from
-//! the live config). When it's off, `write_file` returns a "deferred"
-//! error to claude (the host-approval side channel for resuming
-//! claude mid-call is tracked in chan-llm issue #1).
+//! Writes flow through the chan-llm MCP server and apply
+//! immediately through chan-drive's sandbox; per-call gating is
+//! the model's responsibility (it calls `AskUserQuestion` first
+//! for destructive batch work, which the host surfaces as a
+//! numbered prompt).
 //!
 //! Wire format:
 //!

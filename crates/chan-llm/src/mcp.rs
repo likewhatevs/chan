@@ -35,7 +35,7 @@ use rmcp::{
 use serde::Deserialize;
 
 use crate::error::LlmError;
-use crate::tools::{self, ToolContext, ToolOutcome};
+use crate::tools::{self, ToolContext};
 
 /// Default hard cap on a single `read_image` response, in bytes.
 /// 10 MiB covers the typical image attachment ceiling of frontier
@@ -82,12 +82,12 @@ pub fn is_supported_image(rel: &str) -> Option<&'static str> {
 // instead of `std::result::Result<T, ErrorData>` and break the trait
 // bound. Use fully qualified `crate::error::Result` where needed.
 
-/// MCP server handle. Owns a `ToolContext` (drive + auto-apply flag);
-/// each tool dispatch routes through `tools::execute`, so chan-drive's
+/// MCP server handle. Owns a `ToolContext` (drive handle); each
+/// tool dispatch routes through `tools::execute`, so chan-drive's
 /// path sandbox, special-file refusal, and editable-text gate apply
 /// to MCP-driven calls the same way they apply to in-process backends.
 ///
-/// Cloning is cheap: `ToolContext` is `Arc<Drive>` + a bool. The
+/// Cloning is cheap: `ToolContext` is just an `Arc<Drive>`. The
 /// rmcp tool macros expand into code that requires `Clone` on the
 /// host type.
 #[derive(Clone)]
@@ -103,9 +103,9 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(drive: Arc<Drive>, auto_apply_writes: bool) -> Self {
+    pub fn new(drive: Arc<Drive>) -> Self {
         Self {
-            ctx: ToolContext::new(drive, auto_apply_writes),
+            ctx: ToolContext::new(drive),
             max_image_bytes: DEFAULT_MCP_IMAGE_MAX_BYTES,
         }
     }
@@ -468,14 +468,8 @@ need to drill in. The per-file array is capped at 200 entries; if \
 )]
 impl ServerHandler for Server {}
 
-/// Adapter: dispatch into `tools::execute`, then translate
-/// `ToolOutcome` and `LlmError` into MCP-shaped responses.
-///
-/// `Pending` becomes an `invalid_params` error so the model itself
-/// surfaces the deferral instead of a write going through silently.
-/// The standalone binary forces auto-apply on, so this branch fires
-/// only in the embedded claude_cli path (issue #1) where a future
-/// side channel will let the host approve writes.
+/// Adapter: dispatch into `tools::execute`, then translate the
+/// result `Json` and any `LlmError` into MCP-shaped responses.
 ///
 /// Error messages are run through `mcp_safe_message` so chan-drive's
 /// Display strings (which may carry host absolute paths via
@@ -489,12 +483,8 @@ fn run_tool(
     ctx: &ToolContext,
 ) -> std::result::Result<String, ErrorData> {
     match tools::execute(name, args, ctx) {
-        Ok(ToolOutcome::Ok(v)) => serde_json::to_string(&v)
+        Ok(v) => serde_json::to_string(&v)
             .map_err(|e| ErrorData::internal_error(format!("serialize result: {e}"), None)),
-        Ok(ToolOutcome::Pending { tool, .. }) => Err(ErrorData::invalid_params(
-            format!("{tool} deferred: auto_apply_writes is off; user must approve"),
-            None,
-        )),
         Err(e) => Err(ErrorData::internal_error(mcp_safe_message(&e), None)),
     }
 }
@@ -537,7 +527,6 @@ fn mcp_safe_message(err: &LlmError) -> String {
         LlmError::Mcp(_) => "mcp error".to_string(),
         LlmError::BackendNotConfigured => "no backend configured".to_string(),
         LlmError::NotImplemented(_) => "not implemented".to_string(),
-        LlmError::Resume(_) => "resume failed".to_string(),
     }
 }
 
@@ -601,20 +590,20 @@ mod tests {
         );
     }
 
-    fn fixture(auto_apply: bool) -> (TempDir, TempDir, Server) {
+    fn fixture() -> (TempDir, TempDir, Server) {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_drive(drive_dir.path(), Some("Test".into()))
             .unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
-        let server = Server::new(drive, auto_apply);
+        let server = Server::new(drive);
         (cfg, drive_dir, server)
     }
 
     #[test]
     fn read_file_dispatches_to_drive() {
-        let (_cfg, root, server) = fixture(true);
+        let (_cfg, root, server) = fixture();
         std::fs::write(root.path().join("a.md"), "hello").unwrap();
         let out = server
             .read_file(Parameters(ReadFileParams {
@@ -627,25 +616,8 @@ mod tests {
     }
 
     #[test]
-    fn write_file_pending_when_auto_apply_off() {
-        let (_cfg, _root, server) = fixture(false);
-        let err = server
-            .write_file(Parameters(WriteFileParams {
-                path: "a.md".into(),
-                content: "x".into(),
-                expected_mtime_ns: None,
-            }))
-            .unwrap_err();
-        assert!(
-            err.message.to_lowercase().contains("deferred"),
-            "msg={}",
-            err.message
-        );
-    }
-
-    #[test]
-    fn write_file_ok_when_auto_apply_on() {
-        let (_cfg, root, server) = fixture(true);
+    fn write_file_applies_immediately() {
+        let (_cfg, root, server) = fixture();
         let out = server
             .write_file(Parameters(WriteFileParams {
                 path: "a.md".into(),
@@ -662,7 +634,7 @@ mod tests {
 
     #[test]
     fn list_files_returns_tree() {
-        let (_cfg, root, server) = fixture(true);
+        let (_cfg, root, server) = fixture();
         std::fs::write(root.path().join("a.md"), "x").unwrap();
         let out = server
             .list_files(Parameters(ListFilesParams { prefix: None }))
@@ -672,7 +644,7 @@ mod tests {
 
     #[test]
     fn write_file_rejects_non_text_via_chan_drive() {
-        let (_cfg, _root, server) = fixture(true);
+        let (_cfg, _root, server) = fixture();
         let err = server
             .write_file(Parameters(WriteFileParams {
                 path: "img.png".into(),
@@ -696,7 +668,7 @@ mod tests {
         // Trigger a path refusal that, prior to the scrub, would
         // echo "img.png" and any chan-drive Display detail. After
         // the scrub the message is category-only.
-        let (_cfg, _root, server) = fixture(true);
+        let (_cfg, _root, server) = fixture();
         let err = server
             .write_file(Parameters(WriteFileParams {
                 path: "img.png".into(),
@@ -734,7 +706,7 @@ mod tests {
 
     #[test]
     fn read_image_returns_base64_image_content() {
-        let (_cfg, root, server) = fixture(true);
+        let (_cfg, root, server) = fixture();
         // Minimal valid PNG: the 8-byte signature is enough to
         // verify round-trip; we don't care that it's a parseable
         // image, only that read_image reads the bytes verbatim and
@@ -756,7 +728,7 @@ mod tests {
 
     #[test]
     fn read_image_refuses_unsupported_extension() {
-        let (_cfg, root, server) = fixture(true);
+        let (_cfg, root, server) = fixture();
         std::fs::write(root.path().join("a.bmp"), b"BMP").unwrap();
         let err = server
             .read_image(Parameters(ReadImageParams {
@@ -774,7 +746,7 @@ mod tests {
 
     #[test]
     fn read_image_caps_response_size() {
-        let (_cfg, root, server_default) = fixture(true);
+        let (_cfg, root, server_default) = fixture();
         // Override the cap to 4 bytes so a 5-byte file overflows;
         // exercises with_max_image_bytes alongside the cap check.
         let server = server_default.with_max_image_bytes(4);
@@ -798,7 +770,7 @@ mod tests {
 
     #[test]
     fn read_image_path_sandbox_error_is_scrubbed() {
-        let (_cfg, _root, server) = fixture(true);
+        let (_cfg, _root, server) = fixture();
         // Path escape: chan-drive's path-resolver refuses this; the
         // error surfaces through mcp_safe_message as the scrubbed
         // category, no host filesystem detail.
@@ -821,14 +793,14 @@ mod tests {
 
     #[test]
     fn server_with_max_image_bytes_overrides_default() {
-        let (_cfg, _root, server_default) = fixture(true);
+        let (_cfg, _root, server_default) = fixture();
         let server = server_default.with_max_image_bytes(123);
         assert_eq!(server.max_image_bytes, 123);
     }
 
     #[test]
     fn server_defaults_to_default_image_cap() {
-        let (_cfg, _root, server) = fixture(true);
+        let (_cfg, _root, server) = fixture();
         assert_eq!(server.max_image_bytes, DEFAULT_MCP_IMAGE_MAX_BYTES);
     }
 

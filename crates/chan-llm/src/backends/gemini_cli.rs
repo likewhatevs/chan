@@ -17,9 +17,8 @@
 //!   - Gemini edits files directly under `cwd` (the drive root)
 //!     using its own `read_file` / `replace` / `run_shell_command`
 //!     / etc. native tools.
-//!   - chan-llm's tool sandbox (path scope, editable-text gate,
-//!     auto_apply_writes confirmation) is NOT applied to those
-//!     edits.
+//!   - chan-llm's tool sandbox (path scope, editable-text gate) is
+//!     NOT applied to those edits.
 //!   - We launch gemini with `--approval-mode yolo` because there
 //!     is no human in front of gemini's stdin to answer its native
 //!     confirmation prompts.
@@ -778,12 +777,11 @@ fn write_gemini_home_with_user(
     // chan's MCP write out of the registry too. The MCP path stays
     // protected because chan-drive's path sandbox refuses anything
     // outside the drive root and writes must land via our MCP
-    // server, which holds the `auto_apply_writes` gate. Gemini's
-    // built-in `write_file` (if the model ever reaches for it) is
-    // also constrained to the workspace by gemini-cli's own
-    // workspace-trust rules; with our `cwd` set to the drive root
-    // that confines built-in writes to the same tree the MCP path
-    // controls.
+    // server. Gemini's built-in `write_file` (if the model ever
+    // reaches for it) is also constrained to the workspace by
+    // gemini-cli's own workspace-trust rules; with our `cwd` set
+    // to the drive root that confines built-in writes to the same
+    // tree the MCP path controls.
     let policy_body = "\
 # chan-llm v2 lockdown: writes flow through the MCP server only.
 # `deny` here removes the tool from gemini's tool list entirely.
