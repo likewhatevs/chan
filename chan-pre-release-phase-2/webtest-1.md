@@ -138,3 +138,42 @@ release evidence.
   intentionally for the architect phase commit with [[chan-pre-release-phase-2/frontend-8.md]].
 - The scratch fixture directory `/tmp/chan-dev/Scratch/phase2-smoke/` was left
   in place for the next cycle.
+
+## 2026-05-16 16:51 BST: @@Webtest A architect-9 restart
+
+- Picked up [[chan-pre-release-phase-2/architect-9.md]] §1 workaround
+  restart because the prior cycle stopped 8788 without it.
+- Rotated the active report at
+  `/Users/fiorix/Library/Application Support/chan/report/205463a154c706e7/`
+  to `report.jsonl.webtestA-20260516-165052.bak` (the architect-9 path
+  `/tmp/chan-dev/.chan/report.jsonl` does not apply to this drive).
+- Restarted with `CHAN_UPDATE_CHECK=0 target/release/chan serve
+  /tmp/chan-dev --no-token --no-browser --port 8788`; new PID 22587.
+- `GET /api/health` -> `{"status":"ok"}`; index reached `state:"idle"`.
+- `GET /api/report/prefix?path=` reported 12 languages including
+  TypeScript, Rust, Svelte; `GET /api/graph/languages?depth=1` confirmed
+  the same 12 language nodes are live.
+- Ran [[chan-pre-release-phase-2/webtest-smoke.mjs]] end-to-end against
+  the rebuilt service; transcripts recorded in
+  [[chan-pre-release-phase-2/webtest-2.md]] under the 16:51 BST section.
+
+## 2026-05-16 16:52 BST: @@Webtest A tear-down
+
+- Stopped PID 22587 with SIGTERM after the architect-9 probe rerun.
+- Confirmed `lsof -nP -iTCP:8788 -sTCP:LISTEN` returns no rows.
+- Scratch fixture `/tmp/chan-dev/Scratch/phase2-smoke/` cleaned by the
+  smoke runner; verified `ls /tmp/chan-dev/Scratch/` empty.
+- Frontend type-gap fixes from the prior cycle remain uncommitted; no
+  new uncommitted changes from this cycle.
+
+## 2026-05-16 17:00 BST: @@Webtest A glyph-probe runtime verification
+
+- Restarted on 8788 (PID 26456) to runtime-verify @@Webtest B's added
+  `smokeFolderGlyphWireShape` probe before the architect phase commit.
+- Re-ran [[chan-pre-release-phase-2/webtest-smoke.mjs]] end-to-end in
+  default (pre-swap) mode; six probes green including the new one.
+- Stopped PID 26456 with SIGTERM; `lsof -nP -iTCP:8788 -sTCP:LISTEN`
+  returns no rows.
+- Scratch fixture cleaned by the runner's `finally` block.
+- Drift baseline + matrix transcript recorded in
+  [[chan-pre-release-phase-2/webtest-2.md]] under the 17:00 BST section.

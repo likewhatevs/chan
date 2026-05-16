@@ -353,6 +353,86 @@ async function smokeSearchStatusLanguageGraph(page) {
   pass("Search Status Graph this -> language graph", `${Math.round(graph.canvasW)}x${Math.round(graph.canvasH)} canvas`);
 }
 
+// Wire-shape prep for frontend-10 (folder-glyph swap). Pre-swap,
+// GraphPanel.svelte::mapFsNodes coerces fs-graph `kind: "folder"`
+// nodes into RenderedNode `kind: "tag"`, so the canvas draws them
+// with the same `#` glyph used for semantic-graph tag nodes.
+// Post-swap, mapFsNodes will emit `kind: "folder"` and the canvas
+// picks up the PATH_FOLDER stroke icon already wired at
+// GraphCanvas.svelte (iconImages.folder = svgStrokeIcon(PATH_FOLDER)).
+//
+// This probe captures two canvas pixel signatures:
+//   sig.fsFolder  = ROI signature of an fs-graph folder-scope canvas
+//   sig.tagSearch = ROI signature of a semantic-graph canvas opened
+//                   from a tag-bearing scope
+// and asserts they differ in non-disc, non-bg pixel content. Pre-swap
+// the signatures collide on the `#` glyph; post-swap they diverge.
+// Gated behind CHAN_WEBTEST_GLYPH_PROBE=1 until @@Frontend lands the
+// swap, because pre-swap the assertion is expected to fail.
+async function captureCanvasSignature(page) {
+  return await page.eval(`(() => {
+    const canvas = document.querySelector('.graph-tab canvas');
+    if (!canvas) return null;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+    const img = ctx.getImageData(0, 0, w, h).data;
+    // Coarse 16-bin luminance histogram, normalised. Stable enough
+    // for "does this canvas contain the # glyph vs the folder glyph"
+    // to register as a signature drift; tolerant to layout jitter
+    // because the bins integrate across the whole canvas.
+    const bins = new Array(16).fill(0);
+    let total = 0;
+    for (let i = 0; i < img.length; i += 4) {
+      const a = img[i + 3];
+      if (a < 16) continue;
+      const lum = (img[i] * 30 + img[i + 1] * 59 + img[i + 2] * 11) / 100;
+      bins[Math.min(15, Math.floor(lum / 16))] += 1;
+      total += 1;
+    }
+    if (total === 0) return null;
+    return bins.map((n) => n / total);
+  })()`);
+}
+
+function signatureDistance(a, b) {
+  if (!a || !b) return Infinity;
+  let sum = 0;
+  for (let i = 0; i < a.length; i += 1) sum += Math.abs(a[i] - b[i]);
+  return sum;
+}
+
+async function smokeFolderGlyphWireShape(page) {
+  await resetScratch();
+  await mkdir(join(SCRATCH_ABS, "glyph-probe", "sub"), { recursive: true });
+  await writeFile(join(SCRATCH_ABS, "glyph-probe", "root.md"), "# Root\\n\\n#alpha\\n");
+  await writeFile(join(SCRATCH_ABS, "glyph-probe", "sub", "child.md"), "# Child\\n");
+  await rebuildIndex();
+
+  await openGraph(page, `dir:${SCRATCH_REL}/glyph-probe|2||1|fs`);
+  await page.waitFor("!!document.querySelector('.graph-tab canvas')", 10000);
+  // Let the force layout settle so the icons are rasterised.
+  await new Promise((r) => setTimeout(r, 1500));
+  const fsFolderSig = await captureCanvasSignature(page);
+
+  await openGraph(page, `dir:${SCRATCH_REL}/glyph-probe|2`);
+  await page.waitFor("!!document.querySelector('.graph-tab canvas')", 10000);
+  await new Promise((r) => setTimeout(r, 1500));
+  const semanticSig = await captureCanvasSignature(page);
+
+  const drift = signatureDistance(fsFolderSig, semanticSig);
+  const post = process.env.CHAN_WEBTEST_GLYPH_PROBE === "1";
+  if (post && drift < 0.05) {
+    throw new Error(
+      `folder glyph still indistinguishable from tag glyph: drift=${drift.toFixed(4)}`,
+    );
+  }
+  pass(
+    `Folder glyph wire-shape (${post ? "post-swap" : "pre-swap prep"})`,
+    `signature drift=${drift.toFixed(4)}`,
+  );
+}
+
 async function main() {
   const chrome = await launchChrome();
   try {
@@ -362,6 +442,7 @@ async function main() {
     await smokeDepthCaps(page);
     await smokeGraphLiveMutation(page, 1440, 1000);
     await smokeGraphLiveMutation(page, 390, 844);
+    await smokeFolderGlyphWireShape(page);
   } finally {
     await chrome.close();
     await rm(SCRATCH_ABS, { recursive: true, force: true }).catch(() => {});

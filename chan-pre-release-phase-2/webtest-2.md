@@ -196,3 +196,239 @@ Status: smoke matrix complete for current phase-2 tasks; ready for
 - Final service state: PID 15857 stopped, port 8788 free.
 - Frontend type-gap fixes made during Webtest remain uncommitted intentionally
   for the architect phase commit.
+
+## 2026-05-16 16:51 BST: @@Webtest A architect-9 re-run
+
+Picked up [[chan-pre-release-phase-2/architect-9.md]] end-to-end after the
+prior cycle stopped 8788 without leaving it running. This re-run is a clean
+re-execution of the workaround restart and the three browser probes (G1a /
+G4 / G3) against the scratch fixture `/tmp/chan-dev/Scratch/phase2-smoke/`.
+
+### Report workaround restart
+
+- The architect-9 path `/tmp/chan-dev/.chan/report.jsonl` does not exist for
+  this drive; the active report lives in
+  `/Users/fiorix/Library/Application Support/chan/report/205463a154c706e7/`.
+- Rotated the active report to
+  `report.jsonl.webtestA-20260516-165052.bak` (was 101616 bytes, 525 rows,
+  generated 2026-05-16T15:38Z).
+- Restarted: `CHAN_UPDATE_CHECK=0 target/release/chan serve /tmp/chan-dev
+  --no-token --no-browser --port 8788`; PID 22587.
+- `GET /api/health` -> `{"status":"ok"}`.
+- Waited for `GET /api/index/status` to report `state:"idle"`.
+- `GET /api/report/prefix?path=` -> 12 languages: TypeScript, Rust, Svelte,
+  JSON, JavaScript, CSS, TOML, Makefile, HTML, BASH, Shell, Markdown.
+- `GET /api/graph/languages?depth=1` -> 12 language nodes (BASH, CSS, HTML,
+  JSON, JavaScript, Makefile, Markdown, Rust, Shell, Svelte, TOML,
+  TypeScript), confirming the language graph is back to live data.
+
+### Architect-9 probes — re-run results
+
+Smoke runner: `node chan-pre-release-phase-2/webtest-smoke.mjs` against the
+restarted 8788. Scratch fixture mutated only under
+`/tmp/chan-dev/Scratch/phase2-smoke/` and cleaned up by the runner.
+
+```
+PASS Search layout + per-file rows - 21 unique paths
+PASS Search Status Graph this -> language graph - 1099x810 canvas
+PASS Graph depth caps - file=1 group=2 dir=4 drive<=6
+PASS Graph live add + delete ghost 1440x1000 - scratch subtree mutation observed
+PASS Graph live add + delete ghost 390x844 - scratch subtree mutation observed
+```
+
+Mapping to architect-9 probe matrix:
+
+| Probe                           | Source task                                | Viewport(s)   | Result |
+|---------------------------------|--------------------------------------------|---------------|--------|
+| G1a ghost-while-open            | [[chan-pre-release-phase-2/backend-3.md]]  | 1440x1000, 390x844 | PASS — overlay opened on a fresh `ghost-probe.md`, selected node, deleted file under scratch, overlay flipped to `file does not exist` / `not in the current file listing` within the 250ms watcher debounce |
+| G4 live-add-while-open          | [[chan-pre-release-phase-2/frontend-7.md]] | 1440x1000, 390x844 | PASS — opened the directory graph on the scratch root, wrote a new `.md` into the same subtree, statusbar `nodes` total grew beyond the pre-add count without manual reload |
+| G3 depth-slider scope-aware cap | [[chan-pre-release-phase-2/frontend-9.md]] | 1440x1000     | PASS — file scope: max/value 1; group scope: max/value 2 (two-file layout payload); dir scope: max/value 4 against `depth-dir/a/b/c/leaf.md`; drive scope: slider disabled with max in [1,6] |
+
+No failures, no defects, no handoffs to file. Service left running on PID
+22587 for any architect follow-up; tearing down 8788 after this section.
+
+### Tear-down
+
+- `kill 22587`; confirmed `lsof -nP -iTCP:8788 -sTCP:LISTEN` returns no rows.
+- Scratch fixture `/tmp/chan-dev/Scratch/phase2-smoke/` is removed by the
+  runner's `finally` block; verified `ls /tmp/chan-dev/Scratch/` empty.
+- Rotated report backups left in place under the Application Support report
+  dir so the architect commit pass can decide whether to keep them.
+- Architect-9 probe matrix remains complete; T1 stays ready for @@Architect
+  close-out.
+
+## 2026-05-16 @@Webtest B: frontend-10 wire-shape probe prep
+
+Picked up the @@Webtest B lane in parallel with @@Webtest A's architect-9
+re-run (above). G3 depth-cap is doubly confirmed green from A's run, so I am
+not re-claiming it. Frontend-10 (folder-glyph swap) is still TODO with
+@@Frontend: [[chan-pre-release-phase-2/frontend-10.md]] is not started and
+`mapFsNodes` in `web/src/components/GraphPanel.svelte` (line 719) still
+coerces fs-graph `kind: "folder"` into RenderedNode `kind: "tag"`, so folder
+nodes still draw the `#` tag glyph. The canvas-side wiring is pre-staged in
+the architect bundle: `GraphCanvas.svelte` already has `DKind = ... | "folder"`,
+`PATH_FOLDER`, and `loadIcon(iconImages, "folder", svgStrokeIcon(PATH_FOLDER, bg))`.
+
+What I added to [[chan-pre-release-phase-2/webtest-smoke.mjs]]:
+
+- `captureCanvasSignature(page)` reads the `.graph-tab canvas` via
+  `getImageData` and folds the pixel buffer into a 16-bin luminance
+  histogram, normalised over non-transparent pixels. The bins integrate
+  across the whole canvas so they tolerate force-layout jitter but still
+  drift when per-node glyph shape changes (stroked folder outline vs filled
+  `#` text icon land in different luminance bins).
+- `signatureDistance(a, b)` returns the L1 distance between two histograms.
+- `smokeFolderGlyphWireShape(page)` creates
+  `Scratch/phase2-smoke/glyph-probe/{root.md, sub/child.md}`, rebuilds the
+  index, opens the fs-graph at that folder scope and the semantic graph at
+  the same scope, captures both signatures, and reports the L1 drift.
+- Post-swap assertion (`drift >= 0.05`) is gated behind
+  `CHAN_WEBTEST_GLYPH_PROBE=1`. Pre-swap the runner still exercises the
+  data-capture path and reports the drift number, but stays green so the
+  default matrix is not red while waiting on @@Frontend.
+
+Why histogram, not a DOM hook: GraphCanvas does not expose `window.__*` test
+hooks for its rendered node kinds, and adding one is frontend-owned scope.
+The pixel histogram is the most semantic-preserving option webtest can land
+unilaterally; the L1 drift number is informative even when the assertion is
+off.
+
+Verification:
+
+- `node --check chan-pre-release-phase-2/webtest-smoke.mjs`: pass.
+- Runtime verification of the new probe deferred to the next service
+  restart. Service is currently torn down (see @@Webtest A tear-down above);
+  re-running on a rebuilt service is part of the post-commit smoke matrix.
+
+Status: probe scaffolding in place; awaiting the architect's phase commit so
+I can do the full matrix re-run against the rebuilt service. If @@Frontend
+lands frontend-10 before the phase commit, I'll re-run with
+`CHAN_WEBTEST_GLYPH_PROBE=1` to flip the probe into hard-assert mode.
+
+## 2026-05-16 17:00 BST: @@Webtest A runtime-verify B's glyph probe
+
+Picked this up after the architect-9 re-run because B explicitly deferred
+runtime verification of the new `smokeFolderGlyphWireShape` probe to the
+next service restart, and the matrix needs to be known-green in default
+(pre-swap) mode before the phase commit so the post-commit rerun has a
+clean baseline.
+
+Restart:
+
+- `CHAN_UPDATE_CHECK=0 target/release/chan serve /tmp/chan-dev --no-token
+  --no-browser --port 8788`; PID 26456.
+- Health + index reached idle.
+- Reused the post-architect-9 report (regenerated at 16:51 BST), no second
+  rotation.
+
+Smoke runner: `node chan-pre-release-phase-2/webtest-smoke.mjs`
+(CHAN_WEBTEST_GLYPH_PROBE unset).
+
+```
+PASS Search layout + per-file rows - 21 unique paths
+PASS Search Status Graph this -> language graph - 1089x803 canvas
+PASS Graph depth caps - file=1 group=2 dir=4 drive<=6
+PASS Graph live add + delete ghost 1440x1000 - scratch subtree mutation observed
+PASS Graph live add + delete ghost 390x844 - scratch subtree mutation observed
+PASS Folder glyph wire-shape (pre-swap prep) - signature drift=0.7080
+```
+
+Findings:
+
+- The default matrix is regression-free against B's added scaffolding. All
+  five prior probes still green; the new probe runs in prep mode and
+  reports a drift number without ever throwing.
+- Drift between the fs-graph folder-scope canvas and the semantic-graph
+  canvas already measures 0.7080 pre-swap. That number reflects mostly
+  scene-composition differences (different node count + layout between
+  fs-graph and semantic-graph for the same scratch subtree), not glyph
+  identity. The pre-swap assertion is intentionally off; the post-swap
+  assertion (`>= 0.05`) is comfortably satisfied today but the test is
+  not load-bearing until @@Frontend lands frontend-10 and we re-run with
+  `CHAN_WEBTEST_GLYPH_PROBE=1`.
+- No defects; nothing to route via `architect-<source>-N.md`. B's idle
+  handoff in [[chan-pre-release-phase-2/architect-webtest-2.md]] stays
+  accurate: the scaffolding is now runtime-verified pre-swap.
+
+Tear-down:
+
+- `kill 26456`; confirmed `lsof -nP -iTCP:8788 -sTCP:LISTEN` returns no
+  rows.
+- Scratch fixture `/tmp/chan-dev/Scratch/phase2-smoke/` removed by the
+  runner's `finally` block.
+- No new uncommitted changes from this run; webtest-2.md update only.
+
+## 2026-05-16 @@Webtest B: post frontend-10 full matrix re-run
+
+@@Frontend landed [[chan-pre-release-phase-2/frontend-10.md]] (REVIEW):
+`GraphPanel.mapFsNodes` now emits `kind: "folder"` (with `path/files/code`
+fields) for `n.kind === "folder"` instead of coercing onto `kind: "tag"`.
+That removes the `#` glyph collision with semantic-graph tag nodes; the
+canvas-side wiring (`GraphCanvas.DKind = ... | "folder"`, `PATH_FOLDER`,
+`iconImages.folder`) is unchanged.
+
+Rebuild:
+
+- `cd web && npm run check`: 3911 files / 0 errors / 0 warnings.
+- `cd web && npm run build`: pass with existing Vite large-chunk and
+  ineffective dynamic import warnings.
+- `cargo build --release -p chan`: pass.
+
+Service:
+
+- Rotated stale report at
+  `/Users/fiorix/Library/Application Support/chan/report/205463a154c706e7/report.jsonl`
+  to `report.jsonl.webtestB-20260516-170305.bak` so the regenerated report
+  picks up the live source copy.
+- Started `target/release/chan serve /tmp/chan-dev --no-token --no-browser
+  --port 8788`; PID 27729; waited for `/api/index/status` idle (698 docs,
+  698 vectors, BAAI/bge-small-en-v1.5).
+- `/api/report/prefix?path=` reports 12 languages (TypeScript, Rust, Svelte,
+  JSON, JavaScript, CSS, TOML, Makefile, HTML, BASH, Shell, Markdown).
+
+Smoke runner: `CHAN_WEBTEST_GLYPH_PROBE=1 node
+chan-pre-release-phase-2/webtest-smoke.mjs`.
+
+```
+PASS Search layout + per-file rows - 21 unique paths
+PASS Search Status Graph this -> language graph - 1083x799 canvas
+PASS Graph depth caps - file=1 group=2 dir=4 drive<=6
+PASS Graph live add + delete ghost 1440x1000 - scratch subtree mutation observed
+PASS Graph live add + delete ghost 390x844 - scratch subtree mutation observed
+PASS Folder glyph wire-shape (post-swap) - signature drift=0.7578
+```
+
+Findings:
+
+- All six probes green. No regressions; the architect bundle (still
+  uncommitted in the working tree) and frontend-10 together pass the full
+  matrix end-to-end.
+- The glyph probe's post-swap drift (0.7578) only edges up from the pre-swap
+  drift @@Webtest A measured at 17:00 BST (0.7080), and @@Webtest A's note
+  applies: most of that drift is scene composition (different node counts +
+  layouts between fs-graph and semantic-graph for the same scratch subtree),
+  not glyph identity. The `>= 0.05` assertion is trivially satisfied in both
+  states. **The probe is therefore a smoke test for "both canvases render
+  without errors and produce non-empty pixels", not a precise glyph-identity
+  regression test.** Read appropriately by reviewers; if regression sensitivity
+  matters, a follow-up should add a frontend test hook
+  (e.g. `window.__chanGraphRenderedKinds`) and replace the histogram probe.
+- Visual confirmation that the folder glyph is now the stroked folder outline
+  (not `#`) belongs to Alex's eyeball or a future DOM hook.
+
+Tear-down:
+
+- `kill 27729`; confirmed `lsof -nP -iTCP:8788 -sTCP:LISTEN` returns no rows.
+- Scratch fixture `/tmp/chan-dev/Scratch/phase2-smoke/` removed by the
+  runner's `finally` block.
+- Rotated report backup `report.jsonl.webtestB-20260516-170305.bak` left in
+  place under `~/Library/Application Support/chan/report/205463a154c706e7/`.
+- Working-tree changes from this cycle: `chan-pre-release-phase-2/webtest-2.md`
+  (this section), `chan-pre-release-phase-2/journal.md` (B log entry),
+  `chan-pre-release-phase-2/architect-webtest-2.md` (B handoff). The
+  `web/src/components/GraphPanel.svelte` swap belongs to @@Frontend /
+  frontend-10 and rides the architect phase commit.
+
+Status: frontend-10 visual smoke is complete on B's side. T1 webtest scope is
+green end-to-end (architect-9 matrix + frontend-10 post-swap matrix). Ready
+for @@Architect commit pass.
