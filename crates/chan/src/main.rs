@@ -88,7 +88,7 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   ---
   Settings               Cmd+,
   Files                  Cmd+P
-  Assistant              Cmd+I
+  Agent                  Cmd+I
   Search across files    Cmd+Shift+F
   Graph                  Cmd+Shift+M
   Dismiss overlay        Esc
@@ -1571,7 +1571,7 @@ fn cmd_config(action: ConfigAction) -> Result<()> {
         ConfigAction::Get { key, json } => {
             let editor = EditorPrefs::load().context("loading editor preferences")?;
             let server = ServerConfig::load().context("loading server config")?;
-            let assistant = LlmConfig::load().context("loading assistant config")?;
+            let assistant = LlmConfig::load().context("loading agent config")?;
             match key.as_deref() {
                 None | Some("") => {
                     let output = ConfigOutput {
@@ -1607,9 +1607,9 @@ fn cmd_config(action: ConfigAction) -> Result<()> {
                 write_server_config_key(&mut cfg, "server.answers_dir", &raw_value)?;
                 cfg.save().context("saving server config")?;
             } else if key.starts_with("assistant.") {
-                let mut cfg = LlmConfig::load().context("loading assistant config")?;
+                let mut cfg = LlmConfig::load().context("loading agent config")?;
                 write_assistant_config_key(&mut cfg, &key, &raw_value)?;
-                cfg.save().context("saving assistant config")?;
+                cfg.save().context("saving agent config")?;
             } else {
                 let mut prefs = EditorPrefs::load().context("loading editor preferences")?;
                 write_pref_key(&mut prefs, &key, &raw_value)?;
@@ -1859,9 +1859,15 @@ fn parse_editor_theme(value: &str) -> Result<EditorTheme> {
 
 fn parse_line_spacing(value: &str) -> Result<LineSpacing> {
     match value {
-        "tight" => Ok(LineSpacing::Tight),
         "standard" => Ok(LineSpacing::Standard),
-        _ => anyhow::bail!("expected tight|standard, got `{value}`"),
+        "compact" => Ok(LineSpacing::Compact),
+        // Phase-3 renamed `tight` -> `compact` (same density target).
+        // Accept the legacy token so muscle memory and existing
+        // scripts keep working; the canonical reader (`config get`)
+        // echoes back `compact` so the user is nudged toward the new
+        // spelling without losing their preference.
+        "tight" => Ok(LineSpacing::Compact),
+        _ => anyhow::bail!("expected standard|compact, got `{value}`"),
     }
 }
 
@@ -1889,8 +1895,8 @@ fn editor_theme_label(t: EditorTheme) -> &'static str {
 
 fn line_spacing_label(s: LineSpacing) -> &'static str {
     match s {
-        LineSpacing::Tight => "tight",
         LineSpacing::Standard => "standard",
+        LineSpacing::Compact => "compact",
     }
 }
 
@@ -2334,6 +2340,43 @@ mod tests {
         let mut prefs = EditorPrefs::default();
         let err = write_pref_key(&mut prefs, "editor.theme", "neon").unwrap_err();
         assert!(err.to_string().contains("system|light|dark"));
+    }
+
+    #[test]
+    fn config_line_spacing_accepts_canonical_tokens() {
+        let mut prefs = EditorPrefs::default();
+        write_pref_key(&mut prefs, "editor.line_spacing", "standard").unwrap();
+        assert_eq!(prefs.line_spacing, LineSpacing::Standard);
+        write_pref_key(&mut prefs, "editor.line_spacing", "compact").unwrap();
+        assert_eq!(prefs.line_spacing, LineSpacing::Compact);
+    }
+
+    #[test]
+    fn config_line_spacing_accepts_legacy_tight_alias() {
+        // Pre-phase-3 CLI scripts and muscle memory may still pass
+        // `tight`; treat it as `compact` rather than erroring so
+        // `chan config set` doesn't break those callers. The read
+        // path normalizes the value back to `compact` (see
+        // `line_spacing_label`).
+        let mut prefs = EditorPrefs::default();
+        write_pref_key(&mut prefs, "editor.line_spacing", "tight").unwrap();
+        assert_eq!(prefs.line_spacing, LineSpacing::Compact);
+        assert_eq!(line_spacing_label(prefs.line_spacing), "compact");
+    }
+
+    #[test]
+    fn config_line_spacing_rejects_unknown_value() {
+        let mut prefs = EditorPrefs::default();
+        let err = write_pref_key(&mut prefs, "editor.line_spacing", "sparse").unwrap_err();
+        assert!(err.to_string().contains("standard|compact"));
+    }
+
+    #[test]
+    fn config_line_spacing_label_round_trips() {
+        // Read path: `chan config get editor.line_spacing` echoes
+        // the canonical lowercase token, not the legacy `tight`.
+        assert_eq!(line_spacing_label(LineSpacing::Standard), "standard");
+        assert_eq!(line_spacing_label(LineSpacing::Compact), "compact");
     }
 
     #[test]

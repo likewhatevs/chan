@@ -650,7 +650,7 @@ impl LlmSession {
     }
 
     pub fn backend(&self) -> Option<BackendKind> {
-        self.config.backend
+        self.config.active_backend()
     }
 
     pub fn tool_context(&self) -> ToolContext {
@@ -1146,6 +1146,21 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert!(matches!(events[0], Event::Error(_)));
         assert!(matches!(events[1], Event::Done(StopReason::Error)));
+    }
+
+    #[test]
+    fn backend_reports_none_when_selected_backend_is_disabled() {
+        let (_cfg, _root, drive) = fixture();
+        let config = LlmConfig {
+            backend: Some(backends::BackendKind::CodexCli),
+            enabled: crate::config::EnabledProviders {
+                claude_cli: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let session = LlmSession::new(drive, config);
+        assert_eq!(session.backend(), None);
     }
 
     #[cfg(unix)]

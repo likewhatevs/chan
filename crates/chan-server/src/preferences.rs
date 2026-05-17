@@ -17,7 +17,8 @@
 //!   - editor_theme (github / google_docs / word)
 //!   - theme  (system / light / dark)
 //!   - pane_widths (inspector / graph / file-browser sidebars)
-//!   - line_spacing (tight / standard)
+//!   - line_spacing (standard / compact; legacy `tight` deserializes as
+//!     compact)
 //!   - date_format (id; UI-side mapping in dateFormats.ts)
 //!
 //! The Preferences view returned over /api/drive and /api/config is
@@ -130,12 +131,19 @@ fn default_assistant_width() -> u32 {
     280
 }
 
+/// Editor density. `Standard` is the roomier default Google Docs /
+/// Word-style spacing; `Compact` tightens prose + list line-height
+/// for the Google Docs "single" look. The legacy `tight` value that
+/// pre-phase-3 drives wrote to preferences.toml deserializes as
+/// `Compact` so existing config files load without manual migration;
+/// the next save flushes the canonical `compact` token to disk.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LineSpacing {
     #[default]
-    Tight,
     Standard,
+    #[serde(alias = "tight")]
+    Compact,
 }
 
 fn default_date_format() -> String {
@@ -242,5 +250,70 @@ mod tests {
         };
         let s = toml::to_string(&prefs).unwrap();
         assert!(s.contains("editor_theme = \"google_docs\""), "got: {s}");
+    }
+
+    #[test]
+    fn line_spacing_default_is_standard() {
+        // Phase-3 flipped the default from `tight` to `standard`.
+        // The default is observable on a fresh drive that never wrote
+        // a preferences.toml; lock it down so a future refactor that
+        // re-orders the variants doesn't silently change behavior.
+        let prefs = EditorPrefs::default();
+        assert_eq!(prefs.line_spacing, LineSpacing::Standard);
+    }
+
+    #[test]
+    fn line_spacing_serializes_canonical_tokens() {
+        // Wire form must use the variant's lowercase name; the
+        // legacy `tight` token is read-only via #[serde(alias)] and
+        // must never be emitted on save.
+        let standard = toml::to_string(&EditorPrefs {
+            line_spacing: LineSpacing::Standard,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(
+            standard.contains("line_spacing = \"standard\""),
+            "got: {standard}"
+        );
+        let compact = toml::to_string(&EditorPrefs {
+            line_spacing: LineSpacing::Compact,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(
+            compact.contains("line_spacing = \"compact\""),
+            "got: {compact}"
+        );
+        assert!(
+            !compact.contains("\"tight\""),
+            "compact serializes as `tight`: {compact}"
+        );
+    }
+
+    #[test]
+    fn line_spacing_legacy_tight_loads_as_compact() {
+        // Pre-phase-3 drives have `line_spacing = "tight"` on disk.
+        // The serde alias lets those files load without manual
+        // migration; the next save flushes the canonical `compact`
+        // token, so this compatibility shim self-erodes over time.
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("preferences.toml");
+        std::fs::write(&p, "line_spacing = \"tight\"\n").unwrap();
+        let prefs = EditorPrefs::load_from(&p).unwrap();
+        assert_eq!(prefs.line_spacing, LineSpacing::Compact);
+        // Sanity: re-saving emits the canonical token.
+        prefs.save_to(&p).unwrap();
+        let saved = std::fs::read_to_string(&p).unwrap();
+        assert!(saved.contains("line_spacing = \"compact\""), "got: {saved}");
+    }
+
+    #[test]
+    fn line_spacing_compact_loads_as_compact() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("preferences.toml");
+        std::fs::write(&p, "line_spacing = \"compact\"\n").unwrap();
+        let prefs = EditorPrefs::load_from(&p).unwrap();
+        assert_eq!(prefs.line_spacing, LineSpacing::Compact);
     }
 }
