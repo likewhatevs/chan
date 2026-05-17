@@ -1,8 +1,7 @@
 # Chan Pre-Release Phase 5 Summary
 
-Status: **DRAFT** — populated while the final webtest re-smoke
-runs. @@Architect publishes the non-draft version at Alex's signal
-to close the phase.
+Status: **FINAL** — closed by @@Architect on Alex's "let's wrap!"
+signal after round-10 acceptance reported all PASS.
 
 Source request: [request.md](./request.md). Process:
 [process.md](./process.md). Journal: [journal.md](./journal.md).
@@ -183,22 +182,139 @@ checkout settle 3138ms, staged resume 235ms.
 
 ## Agent rankings and feedback
 
-(Populated by @@Architect at phase close, after the final smoke
-and commit lands. Holding the section so the structure is
-visible.)
+Rankings are about phase-5 fit, not ability in absolute. Every
+agent delivered.
 
-* **@@Architect** (me) — TBD.
-* **@@Backend** — TBD.
-* **@@Frontend** — TBD.
-* **@@Systacean** — TBD.
-* **@@Webtest A** — TBD.
-* **@@Webtest B** — TBD.
+* **@@Webtest A** — top of the phase. Caught BUG-WT5-A (create-
+  event indexer regression), BUG-WT5-C (terminal-reload bootstrap
+  race), and most importantly the **systacean-9 partial-redraw
+  regression that Alex flagged visually** — Webtest A's own
+  initial "PASS (MVP)" call was wrong; they corrected it under
+  Alex's direct callout and produced the diagnosis + screenshot
+  diff that drove [systacean-10](./systacean-10.md)'s fix. The
+  screenshot-diff bar they established is now the canonical
+  acceptance shape for any TUI reattach work. Constructive
+  feedback: file the initial smoke result with a "preliminary"
+  flag when the visual surface hasn't been compared against a
+  fresh-launch baseline; the round-9 mis-call cost a round.
+
+* **@@Systacean** — highest implementation throughput. Carried
+  the chan-llm deep prune, the indexer scheduling tightening,
+  the search-aggression knob, the VCS-aware fs-change path with
+  benchmark numbers, the chan-native PTY session registry +
+  byte-offset ring + idle prune + soft cap, the bootstrap-
+  hydration race fix (systacean-8), and the alt-screen sniff +
+  winsize wobble (systacean-10) — eight separate lanes, all
+  landing with full pre-push gate green. Constructive
+  feedback: the systacean-9 "MVP no-op resize" choice was a
+  reasonable read of the brief but the failure mode (chrome-
+  doesn't-redraw on no-op SIGWINCH) was knowable from htop's
+  documented signal behavior; a one-paragraph "how does this
+  actually trigger the structural repaint, not just the cell
+  refresh?" check during design would have saved Webtest A and
+  Alex a round.
+
+* **@@Frontend** — solid through wave 1 + wave 2, fast on every
+  task. Overlay removal, store/types residue, the bug-fix
+  bundle, persistent-terminal client side, frontend-5 hash-key
+  strip, frontend-6 hydrate-helper, frontend-7 per-tab session
+  key, frontend-9 alt-key word motions, frontend-10 MCP env
+  toggle + info + inject. Constructive feedback: frontend-6's
+  hydration call landed too late and was caught by Webtest A's
+  network trace; reading the lifecycle of `restoreLayout` +
+  Svelte mount order before writing the patch would have caught
+  the race up front. The systacean-8 fix (a Systacean lane Alex
+  re-routed off Frontend's plate) was the right shape — fetch
+  the blob first, pass to restoreLayout — and is worth carrying
+  forward as Frontend's mental model for store-bootstrap fixes.
+
+* **@@Backend** — narrow but disciplined. backend-1 (the agent
+  HTTP surface removal + terminal MCP env exposure), backend-2
+  (chan-desktop per-window session keys with focused client
+  tests), and backend-3 (env namespace scope-down to CHAN_-only
+  + `mcp_env` query param + doc sweep across six files). Every
+  Backend commit shipped with verification trailers and a
+  precise file list. Constructive feedback: backend-1 originally
+  set CLAUDE_/CODEX_/GEMINI_ aliases without flagging the
+  namespace-ownership question; better to ship the CHAN_-only
+  shape first and add CLI aliases later if and only if a user
+  needs them. Caught + fixed in backend-3 the same phase.
+
+* **@@Webtest B** — clean parallel scenarios. backend-3 spot-
+  check ahead of Webtest A's round-9 (so A could focus on
+  frontend-10 + systacean-9), the post-frontend-2 hash-state
+  probe, terminal MCP env probe, settings round-trip. Five
+  filed follow-ups (3 already fixed by frontend-7 / frontend-5
+  / backend-3, 2 parked). Constructive feedback: when the live
+  service is shared with Webtest A, make the rebuild + relaunch
+  ownership explicit in each progress note (A holds the
+  service lifecycle per webtest-1.md, but B's reads can read
+  the same PID; coordinate restarts).
+
+* **@@Architect** (me) — orientation lag at the start. By the
+  time I'd read the request, the process doc, and the
+  workspace, @@Backend and @@Frontend had already self-
+  dispatched and landed half of wave 1; I had to reconcile the
+  journal mid-flight rather than dispatch from a clean
+  baseline. Three full housekeeping rounds went into
+  reconciling status drift. Constructive feedback for next
+  phase: invest the first 5 minutes in skimming the process
+  doc + an `ls -la <phase-dir>` before reading request.md, so
+  the dispatch loop runs from minute one. The actual planning
+  and the wave-2 architecture (Option 4 chan-native registry,
+  the BUG-WT5-C diagnosis + fix shapes for systacean-8 and
+  systacean-10, the commit groupings, the docs sweep) were
+  fine. The tmux memo + Option 4 framing is reusable across
+  future phases; carrying that pattern forward.
 
 ## Final delivery
 
-* Local main is 3 commits ahead of `origin/main` at draft time
-  (the chan-term terminal trio). Wave-1 + wave-2 cleanup +
-  enhancement + bug-fix commits will land on top; the terminal
-  trio's commit messages get rewritten through
-  [architect-3](./architect-3.md). Push at phase close per the
-  decision recorded in [journal.md](./journal.md).
+Local `main` at phase close is **9 commits ahead of
+`origin/main`**:
+
+```
+7da49f6 release: close phase 5 tasks
+9ecb27d docs: refresh phase-5 boundary
+790fd02 web: phase-5 frontend (overlay removal + persistent terminals + ux)
+9e121d5 chan-server: prune agent surface + persistent terminal sessions
+58fe80a chan-drive: drop assistant blobs + vcs-aware indexing
+c748484 chan-llm: pare to MCP-only surface
+02be09c web: add terminal tab controls
+455c5df web: move terminal into workspace tabs
+9c1ea91 web: add terminal overlay
+```
+
+The three terminal-trio commits (`9c1ea91`, `455c5df`,
+`02be09c`) carry rewritten messages in the repo's canonical
+style per [architect-3](./architect-3.md); their tree contents
+are unchanged. The six new commits group phase-5 work by area
+per [architect-2](./architect-2.md):
+
+| Commit | Subject | Files | Lanes closed |
+|--------|---------|-------|--------------|
+| c748484 | chan-llm: pare to MCP-only surface | 17 | [systacean-1](./systacean-1.md) |
+| 58fe80a | chan-drive: drop assistant blobs + vcs-aware indexing | 14 | [systacean-1](./systacean-1.md), [systacean-2](./systacean-2.md), [systacean-3](./systacean-3.md), [systacean-4](./systacean-4.md), [systacean-6](./systacean-6.md) |
+| 9e121d5 | chan-server: prune agent surface + persistent terminal sessions | 21 | [backend-1](./backend-1.md), [backend-2](./backend-2.md), [backend-3](./backend-3.md), [systacean-2](./systacean-2.md), [systacean-3](./systacean-3.md), [systacean-5](./systacean-5.md), [systacean-9](./systacean-9.md), [systacean-10](./systacean-10.md) |
+| 790fd02 | web: phase-5 frontend | ~40 | [frontend-1](./frontend-1.md)–[frontend-10](./frontend-10.md) (except frontend-6 superseded by [systacean-8](./systacean-8.md), inline), [systacean-8](./systacean-8.md) |
+| 9ecb27d | docs: refresh phase-5 boundary | 3 | [architect-2](./architect-2.md) |
+| 7da49f6 | release: close phase 5 tasks | 22 | this directory |
+
+Pre-push gate on the final HEAD: `cargo fmt --check` ✓,
+`cargo clippy --all-targets -- -D warnings` ✓,
+`cargo build --no-default-features` ✓,
+`cargo test --workspace` ✓, `npm --prefix web run check` ✓,
+`npm --prefix web test -- --run` ✓ (16 files / 144 tests),
+`npm --prefix web run build` ✓.
+
+Working tree clean.
+
+The `chan` release binary is staged under `target/release/`
+from the parallel `make build-release` run that finished mid-
+commit-sequence; `cd desktop && make build` is running to
+produce `Chan.app` for the post-commit install lane
+([systacean-7](./systacean-7.md)). The post-commit
+click-around test service ([webtest-3](./webtest-3.md)) fires
+on the same trigger.
+
+Push to `origin/main` is the last action; @@Architect holds
+on Alex's explicit go for that step.

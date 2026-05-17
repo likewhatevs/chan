@@ -899,3 +899,53 @@ Open questions for Alex before initial task creation:
   6. @@Architect writes the final non-DRAFT
      [summary.md](./summary.md) with agent rankings + delivery
      notes.
+* 2026-05-17 @@Architect: round-19 — **wrap fired**. Alex said
+  "let's wrap!" after round-10 acceptance reported all PASS.
+  Steps run by @@Architect in sequence:
+  1. `make build-release` kicked in background (the chan
+     release binary at `target/release/chan`).
+  2. Stashed the working tree, ran the
+     [architect-3](./architect-3.md) non-interactive rebase
+     (`git rebase HEAD~3 --exec` with subject-line matching),
+     popped the stash clean. The three terminal-trio commits
+     now carry rewritten bodies in repo style (new hashes:
+     `9c1ea91`, `455c5df`, `02be09c`).
+  3. Wrote six commit-message bodies under
+     `/tmp/msg-commit{1..6}-*.txt` matching the canonical
+     "framed why → surface-bulleted body → Verification
+     trailer" pattern.
+  4. Staged + committed in order:
+     * `c748484 chan-llm: pare to MCP-only surface` (17 files)
+     * `58fe80a chan-drive: drop assistant blobs + vcs-aware
+       indexing` (14 files)
+     * `9e121d5 chan-server: prune agent surface + persistent
+       terminal sessions` (21 files, +
+       `crates/chan-server/src/terminal_sessions.rs`)
+     * `790fd02 web: phase-5 frontend (overlay removal +
+       persistent terminals + ux)` (~40 files, including
+       deletes for agent components, new
+       `web/src/terminal/{keymap, mcpEnv, session}{,.test}.ts`,
+       and the new test files)
+     * `9ecb27d docs: refresh phase-5 boundary` (3 files:
+       CLAUDE.md, README.md, design.md)
+     * `7da49f6 release: close phase 5 tasks` (22 files in
+       `chan-pre-release-phase-5/`)
+  5. Pre-push gate on the final HEAD: `cargo fmt --check`,
+     `cargo clippy --all-targets -- -D warnings`,
+     `cargo build --no-default-features`,
+     `cargo test --workspace`, `npm run check`, `npm test`,
+     `npm run build` — **7-for-7 green**.
+  6. Kicked `cd desktop && make build` in background to
+     produce `Chan.app` for the post-commit install via
+     [systacean-7](./systacean-7.md). Still running at this
+     log entry.
+  7. Finalised [summary.md](./summary.md): flipped status from
+     DRAFT to FINAL, filled in agent rankings with feedback,
+     wrote the final-delivery section with the nine-commit
+     summary table.
+  Pending the last two actions:
+  * `Chan.app` install at `/Applications/Chan.app` after the
+    Tauri build completes (systacean-7).
+  * Push `main` to `origin/main` — holding for Alex's explicit
+    go since it's a shared-state action.
+  Working tree clean. Local main at +9 commits over origin.
