@@ -137,7 +137,7 @@ export function visibleFilePaths(): string[] {
   for (const node of Object.values(layout.nodes)) {
     if (node.kind !== "leaf") continue;
     const active = node.tabs.find((t) => t.id === node.activeTabId);
-    if (active && active.path) out.add(active.path);
+    if (active?.kind === "file" && active.path) out.add(active.path);
   }
   return [...out].sort();
 }
@@ -318,7 +318,7 @@ export function defaultScopeId(): string {
   const node = layout.nodes[layout.activePaneId];
   if (node && node.kind === "leaf") {
     const t = node.tabs.find((tab) => tab.id === node.activeTabId);
-    if (t && t.path) return `file:${t.path}`;
+    if (t?.kind === "file" && t.path) return `file:${t.path}`;
   }
   return "drive";
 }

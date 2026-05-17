@@ -610,7 +610,6 @@ const HASH_SEARCH = "search";
 const HASH_SEARCH_SCOPE = "search_scope";
 const HASH_GRAPH = "graph";
 const HASH_ASSIST = "assist";
-const HASH_TERMINAL = "terminal";
 const HASH_SETTINGS = "settings";
 const HASH_SCOPE_HISTORY = "scopes";
 
@@ -761,9 +760,6 @@ function applyOverlaysFromHash(): void {
     }
     assistantOverlay.open = true;
   }
-  if (params.has(HASH_TERMINAL)) {
-    terminalOverlay.open = true;
-  }
   if (params.has(HASH_SETTINGS) && !SETTINGS_DISABLED) {
     settingsOverlay.open = true;
   }
@@ -840,11 +836,6 @@ export function persistStateToHash(): void {
     params.set(HASH_ASSIST, `${ins}:${body}`);
   } else {
     params.delete(HASH_ASSIST);
-  }
-  if (terminalOverlay.open) {
-    params.set(HASH_TERMINAL, "1");
-  } else {
-    params.delete(HASH_TERMINAL);
   }
   if (settingsOverlay.open) {
     params.set(HASH_SETTINGS, "1");
@@ -2632,7 +2623,6 @@ export function openGraphForTag(nodeId: string, _label: string): void {
 
 export const settingsOverlay = $state<{ open: boolean }>({ open: false });
 export const searchStatusOverlay = $state<{ open: boolean }>({ open: false });
-export const terminalOverlay = $state<{ open: boolean }>({ open: false });
 
 /// True when the server forbids opening Settings (today: tunnel
 /// mode with --tunnel-public). Sourced from the SPA shell meta tag
@@ -2644,11 +2634,6 @@ export const settingsDisabled = SETTINGS_DISABLED;
 export function openSettings(): void {
   if (SETTINGS_DISABLED) return;
   settingsOverlay.open = true;
-  scheduleSessionSave();
-}
-
-export function openTerminal(): void {
-  terminalOverlay.open = true;
   scheduleSessionSave();
 }
 
@@ -2705,7 +2690,6 @@ export type OverlayId =
   | "search-status"
   | "graph"
   | "assistant"
-  | "terminal"
   | "settings"
   | "scope-history";
 
@@ -2745,9 +2729,6 @@ export function closeOverlay(id: OverlayId): void {
     case "assistant":
       assistantOverlay.open = false;
       return;
-    case "terminal":
-      terminalOverlay.open = false;
-      return;
     case "settings":
       settingsOverlay.open = false;
       return;
@@ -2770,7 +2751,6 @@ export function syncOverlayStack(): void {
   if (searchStatusOverlay.open) open.add("search-status");
   if (graphOverlay.open) open.add("graph");
   if (assistantOverlay.open) open.add("assistant");
-  if (terminalOverlay.open) open.add("terminal");
   if (settingsOverlay.open) open.add("settings");
   if (scopeHistoryOverlay.open) open.add("scope-history");
   // Drop closed entries while preserving the existing relative

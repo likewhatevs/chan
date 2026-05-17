@@ -9,6 +9,7 @@
     layout,
     moveTab,
     openInPane,
+    openTerminalInPane,
     reorderTab,
     saveTab,
     setActivePane,
@@ -33,6 +34,7 @@
   import EnsoIcon from "./EnsoIcon.svelte";
   import FileEditorTab from "./FileEditorTab.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
+  import TerminalTab from "./TerminalTab.svelte";
   import {
     assistantHasUnreadForPath,
     assistantStream,
@@ -280,7 +282,7 @@
   let tabMouseDownPrevActive: string | null = null;
 
   async function onSave(): Promise<void> {
-    if (!active) return;
+    if (!active || active.kind !== "file") return;
     try {
       await saveTab(active);
     } catch (e) {
@@ -334,11 +336,19 @@
     if (t) {
       e.dataTransfer.setData(
         CROSS_TAB_MIME,
-        JSON.stringify({
-          path: t.path,
-          mode: t.mode,
-          inspectorOpen: t.inspectorOpen,
-        }),
+        JSON.stringify(
+          t.kind === "file"
+            ? {
+                kind: "file",
+                path: t.path,
+                mode: t.mode,
+                inspectorOpen: t.inspectorOpen,
+              }
+            : {
+                kind: "terminal",
+                title: t.title,
+              },
+        ),
       );
     }
   }
@@ -358,19 +368,21 @@
     }
   }
 
-  /// Open a cross-window file tab payload in this pane. Used by the
+  /// Open a cross-window tab payload in this pane. Used by the
   /// drop handlers when the intra-window check fails (the source
-  /// pane belongs to a different window). The tab gets appended via
-  /// the same `openInPane` helper used by every other "open file
-  /// here" entry point, so the load + dedupe-existing semantics
-  /// stay uniform. Drop position is not honoured for cross-window
-  /// drops; the user can reorder within the strip afterwards.
+  /// pane belongs to a different window). Drop position is not
+  /// honoured for cross-window drops; the user can reorder within
+  /// the strip afterwards.
   function acceptCrossWindowTab(payload: string): boolean {
-    let parsed: { path?: string };
+    let parsed: { kind?: string; path?: string };
     try {
       parsed = JSON.parse(payload);
     } catch {
       return false;
+    }
+    if (parsed.kind === "terminal") {
+      openTerminalInPane(pane.id);
+      return true;
     }
     if (!parsed.path) return false;
     void openInPane(pane.id, parsed.path);
@@ -648,6 +660,10 @@
               <FileText size={14} strokeWidth={1.75} />
             {/if}
           </span>
+        {:else if t.kind === "terminal"}
+          <span class="tab-icon" aria-hidden="true">
+            <Terminal size={14} strokeWidth={1.75} />
+          </span>
         {/if}
         <span
           class="path"
@@ -716,9 +732,9 @@
   </div>
 
   <div class="editor-wrap" bind:this={editorWrapEl}>
-    {#if active}
+    {#if active?.kind === "file"}
       <FileEditorTab tab={active} />
-    {:else}
+    {:else if !active}
       <div
         class="placeholder"
         aria-label="no tab open"
@@ -841,6 +857,9 @@
         </HamburgerMenu>
       </div>
     {/if}
+    {#each pane.tabs.filter((t) => t.kind === "terminal") as t (t.id)}
+      <TerminalTab tab={t} active={t.id === pane.activeTabId} />
+    {/each}
   </div>
 </div>
 
@@ -1000,7 +1019,13 @@
   .tab-icon.assist-unread { color: #d29922; }
   .tab.active .tab-icon.assist-unread { color: #d29922; }
   .actions { margin-left: auto; display: flex; align-items: center; padding-left: 4px; }
-  .editor-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .editor-wrap {
+    position: relative;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
   /* Empty pane: muted chan logo watermark above the keyboard-
      shortcut table, both centered. CSS mask paints the silhouette
      in the current text-secondary color so it adapts to light /

@@ -216,9 +216,13 @@ fn pty_size(cols: Option<u16>, rows: Option<u16>) -> PtySize {
 fn spawn_pty_session(cwd: PathBuf, size: PtySize) -> anyhow::Result<PtySession> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(size)?;
-    let shell = default_shell();
-    let mut cmd = CommandBuilder::new(&shell);
+    let mut cmd = CommandBuilder::new_default_prog();
     cmd.cwd(cwd);
+    if let Some(home) = terminal_home_dir() {
+        cmd.env("HOME", &home);
+        #[cfg(windows)]
+        cmd.env("USERPROFILE", home);
+    }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("CLICOLOR", "1");
@@ -323,15 +327,10 @@ fn spawn_pty_session(cwd: PathBuf, size: PtySize) -> anyhow::Result<PtySession> 
     })
 }
 
-fn default_shell() -> String {
-    #[cfg(windows)]
-    {
-        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
-    }
-    #[cfg(not(windows))]
-    {
-        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
-    }
+fn terminal_home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(dirs::home_dir)
 }
 
 #[cfg(test)]
@@ -477,6 +476,41 @@ mod tests {
             assert!(
                 out.contains("100") && out.contains("31"),
                 "tput should see resized PTY dimensions, got {out:?}"
+            );
+            passed += 1;
+        }
+
+        if command_available("pwd") {
+            ran += 1;
+            let tmp = tempfile::tempdir().expect("temp drive");
+            let cwd = tmp.path().to_path_buf();
+            let mut session =
+                spawn_pty_session(cwd.clone(), pty_size(Some(100), Some(31))).expect("spawn pty");
+            let _ = collect_until_idle(
+                &mut session,
+                Duration::from_millis(300),
+                Duration::from_millis(100),
+            )
+            .await;
+            session.input("stty -echo 2>/dev/null\r".to_string());
+            let _ = collect_until_idle(
+                &mut session,
+                Duration::from_millis(300),
+                Duration::from_millis(100),
+            )
+            .await;
+            session.input(
+                "printf '\\n__CWD_HOME_BEGIN__\\n'; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '\\n__CWD_HOME_END__\\n'\r"
+                    .to_string(),
+            );
+            let out = collect_until(&mut session, "__CWD_HOME_END__", Duration::from_secs(5)).await;
+            assert!(
+                out.contains(&cwd.display().to_string()),
+                "terminal should start at drive root cwd, got {out:?}"
+            );
+            assert!(
+                !out.contains(&format!("<HOME={}>", cwd.display())),
+                "terminal HOME should not be rewritten to drive root, got {out:?}"
             );
             passed += 1;
         }

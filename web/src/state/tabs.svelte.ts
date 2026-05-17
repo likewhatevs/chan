@@ -102,10 +102,7 @@ export function makeFindState(): FindState {
 
 /// File-content tab: holds the editable buffer for any text-class
 /// file (markdown documents, contact notes, and post-phase-3 also
-/// arbitrary source / config text like .py, .json, .yaml). File
-/// tabs are the only tab kind today; every other surface (file
-/// browser, search, graph, assistant, settings) is a window-level
-/// overlay built on `OverlayShell.svelte`.
+/// arbitrary source / config text like .py, .json, .yaml).
 export type FileTab = {
   kind: "file";
   /// File-kind discriminator inside the tab. Mirrors the wire kind
@@ -193,12 +190,20 @@ export type FileTab = {
   caret?: { from: number; to: number };
 };
 
-export type Tab = FileTab;
+export type TerminalTab = {
+  kind: "terminal";
+  id: string;
+  title: string;
+  createdAt: number;
+};
+
+export type Tab = FileTab | TerminalTab;
 
 /// Short display label for a tab — the file's basename so the tab
 /// strip stays scannable even when paths are deeply nested. The
 /// full path is reachable via `tabTooltip` for disambiguation.
 export function tabLabel(t: Tab): string {
+  if (t.kind === "terminal") return t.title;
   const p = t.path;
   if (!p) return p;
   const slash = p.lastIndexOf("/");
@@ -209,6 +214,7 @@ export function tabLabel(t: Tab): string {
 /// files with the same basename in different folders can still be
 /// told apart on hover.
 export function tabTooltip(t: Tab): string {
+  if (t.kind === "terminal") return "Terminal";
   return t.path;
 }
 
@@ -300,6 +306,24 @@ export function activeFileTab(): FileTab | null {
   const t = p.tabs.find((tab) => tab.id === p.activeTabId);
   if (!t || t.kind !== "file") return null;
   return t;
+}
+
+export function openTerminalInActivePane(): void {
+  openTerminalInPane(activePane().id);
+}
+
+export function openTerminalInPane(paneId: string): void {
+  const p = layout.nodes[paneId];
+  if (!p || p.kind !== "leaf") return;
+  const tab: TerminalTab = {
+    kind: "terminal",
+    id: id("term"),
+    title: "Terminal",
+    createdAt: Date.now(),
+  };
+  p.tabs.push(tab);
+  p.activeTabId = tab.id;
+  layout.activePaneId = p.id;
 }
 
 /// Fetch a file tab's content from disk and write it into the
@@ -432,7 +456,7 @@ export function closeTab(paneId: string, tabId: string): void {
   // "thinking…" indicator alive on a tab that no longer exists.
   // The conversation history stays in memory (and on disk) so
   // reopening the file later restores the bubbles up to the abort.
-  if (tab && tab.kind === "file") {
+  if (tab?.kind === "file") {
     cancelAssistantStreamForPath(tab.path);
   }
   p.tabs.splice(idx, 1);
@@ -508,6 +532,14 @@ export function reorderTab(paneId: string, tabId: string, toIndex: number): void
 /// elements doesn't survive splice + insert cleanly across panes, so
 /// we re-build a fresh object literal.
 function cloneTab(src: Tab): Tab {
+  if (src.kind === "terminal") {
+    return {
+      kind: "terminal",
+      id: src.id,
+      title: src.title,
+      createdAt: src.createdAt,
+    };
+  }
   return {
     kind: "file",
     fileKind: src.fileKind,
@@ -666,6 +698,7 @@ export function setTabSyntaxHighlight(tab: FileTab, on: boolean): void {
 
 /// Whether a tab represents an unsaved buffer.
 export function isDirty(t: Tab): boolean {
+  if (t.kind !== "file") return false;
   return t.content !== t.saved;
 }
 
@@ -858,8 +891,9 @@ export function dirtyPaths(): Set<string> {
 //   a: active tab in this pane (one per pane)
 //   f: focused pane (one per layout)
 type SerTab = {
-  k?: "f" | "b" | "s" | "g" | "h";
+  k?: "f" | "b" | "s" | "g" | "h" | "t";
   p?: string;
+  n?: string;
   m?: Mode;
   a?: 1;
   o?: 1;
@@ -897,6 +931,13 @@ function serializeNode(nodeId: string): SerNode | null {
   if (n.kind === "leaf") {
     const tabs: SerTab[] = n.tabs.map((t) => {
       const active = t.id === n.activeTabId ? { a: 1 as const } : {};
+      if (t.kind === "terminal") {
+        return {
+          k: "t",
+          n: t.title,
+          ...active,
+        };
+      }
       // Only file tabs exist; omit `k:"f"` since "f" is the default
       // (smaller hash).
       // Skip the caret field when it sits at the doc start. New tabs
@@ -969,6 +1010,17 @@ export async function restoreLayout(s: SerNode): Promise<void> {
         // session. All four are overlays now; silently drop any
         // saved entries from older session.json files instead of
         // leaving the user with unrecoverable orphans.
+        if (kind === "t") {
+          const tab: TerminalTab = {
+            kind: "terminal",
+            id: id("term"),
+            title: sertab.n || "Terminal",
+            createdAt: Date.now(),
+          };
+          p.tabs.push(tab);
+          if (sertab.a) p.activeTabId = tab.id;
+          continue;
+        }
         if (kind !== "f") continue;
         // Recompute fileKind from the path. Cheaper than persisting
         // it (the hash already carries the path) and keeps a session

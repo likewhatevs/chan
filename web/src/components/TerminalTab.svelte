@@ -1,14 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import {
-    Clipboard,
-    Maximize2,
-    Minimize2,
-    RotateCcw,
-    Search,
-    Terminal as TerminalIcon,
-    X,
-  } from "lucide-svelte";
+  import { Clipboard, RotateCcw, Search } from "lucide-svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import { SearchAddon } from "@xterm/addon-search";
@@ -16,19 +8,20 @@
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import "@xterm/xterm/css/xterm.css";
   import { withTokenQuery } from "../api/client";
-  import {
-    overlayMaximized,
-    setOverlayMaximized,
-  } from "../state/pageWidth.svelte";
-  import { terminalOverlay } from "../state/store.svelte";
-  import OverlayShell from "./OverlayShell.svelte";
+  import type { TerminalTab as TerminalTabState } from "../state/tabs.svelte";
+
+  let {
+    tab,
+    active,
+  }: {
+    tab: TerminalTabState;
+    active: boolean;
+  } = $props();
 
   type ServerFrame =
     | { type: "ready"; cols: number; rows: number }
     | { type: "exit"; code: number }
     | { type: "error"; message: string };
-
-  const visible = $derived(terminalOverlay.open);
 
   let host: HTMLDivElement | undefined = $state();
   let searchInput: HTMLInputElement | undefined = $state();
@@ -44,21 +37,16 @@
   let findQuery = $state("");
 
   $effect(() => {
-    if (!visible) {
-      teardown();
-      return;
-    }
+    if (!host || term) return;
     void tick().then(start);
+    return teardown;
   });
 
-  function close(): void {
-    terminalOverlay.open = false;
-  }
-
-  function doToggleOverlayMaximized(): void {
-    setOverlayMaximized(!overlayMaximized.on);
+  $effect(() => {
+    if (!active) return;
     queueFit();
-  }
+    queueMicrotask(() => term?.focus());
+  });
 
   function start(): void {
     if (!host || term) return;
@@ -113,7 +101,7 @@
     resizeObserver.observe(host);
     queueFit();
     connect();
-    queueMicrotask(() => term?.focus());
+    if (active) queueMicrotask(() => term?.focus());
   }
 
   function connect(): void {
@@ -205,14 +193,9 @@
     fit = null;
     search = null;
     serialize = null;
-    status = "closed";
-    statusDetail = "";
-    findOpen = false;
-    findQuery = "";
   }
 
   function restart(): void {
-    if (!visible) return;
     teardown();
     void tick().then(start);
   }
@@ -261,98 +244,88 @@
   }
 
   function onShellKeydown(e: KeyboardEvent): void {
-    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+    if (
+      (e.metaKey || e.ctrlKey) &&
+      !e.shiftKey &&
+      !e.altKey &&
+      e.key.toLowerCase() === "f"
+    ) {
       e.preventDefault();
       openFind();
     }
   }
 </script>
 
-<OverlayShell id="terminal" open={visible} onClose={close}>
-  <div class="terminal-shell" role="presentation" onkeydown={onShellKeydown}>
-    <header>
-      <button
-        type="button"
-        class="chrome-btn"
-        onclick={doToggleOverlayMaximized}
-        title={overlayMaximized.on ? "Restore size" : "Maximize"}
-        aria-label={overlayMaximized.on ? "Restore size" : "Maximize"}
-      >
-        {#if overlayMaximized.on}
-          <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        {:else}
-          <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        {/if}
-      </button>
-      <div class="title">
-        <TerminalIcon size={15} strokeWidth={1.75} aria-hidden="true" />
-        <span>Terminal</span>
-      </div>
-      <span class:connected={status === "connected"} class="status">
-        {status}{statusDetail ? ` - ${statusDetail}` : ""}
-      </span>
-      {#if findOpen}
-        <input
-          bind:this={searchInput}
-          class="find"
-          value={findQuery}
-          placeholder="find"
-          spellcheck="false"
-          oninput={(e) => {
-            findQuery = (e.currentTarget as HTMLInputElement).value;
-            runFind(true);
-          }}
-          onkeydown={onFindKeydown}
-        />
-      {/if}
-      <button type="button" class="chrome-btn" onclick={openFind} title="Find" aria-label="Find">
-        <Search size={14} strokeWidth={1.75} aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        class="chrome-btn"
-        onclick={copyScrollback}
-        title="Copy scrollback"
-        aria-label="Copy scrollback"
-      >
-        <Clipboard size={14} strokeWidth={1.75} aria-hidden="true" />
-      </button>
-      <button type="button" class="chrome-btn" onclick={restart} title="Restart" aria-label="Restart">
-        <RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />
-      </button>
-      <button type="button" class="chrome-btn close" onclick={close} title="Close" aria-label="Close">
-        <X size={14} strokeWidth={1.75} aria-hidden="true" />
-      </button>
-    </header>
-    <div class="terminal-host" bind:this={host}></div>
-  </div>
-</OverlayShell>
+<div
+  class="terminal-tab"
+  class:active
+  data-terminal-tab-id={tab.id}
+  role="tabpanel"
+  aria-hidden={!active}
+  onkeydown={onShellKeydown}
+>
+  <header>
+    <span class:connected={status === "connected"} class="status">
+      {status}{statusDetail ? ` - ${statusDetail}` : ""}
+    </span>
+    {#if findOpen}
+      <input
+        bind:this={searchInput}
+        class="find"
+        value={findQuery}
+        placeholder="find"
+        spellcheck="false"
+        oninput={(e) => {
+          findQuery = (e.currentTarget as HTMLInputElement).value;
+          runFind(true);
+        }}
+        onkeydown={onFindKeydown}
+      />
+    {/if}
+    <button type="button" class="tool-btn" onclick={openFind} title="Find" aria-label="Find">
+      <Search size={14} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+    <button
+      type="button"
+      class="tool-btn"
+      onclick={copyScrollback}
+      title="Copy scrollback"
+      aria-label="Copy scrollback"
+    >
+      <Clipboard size={14} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+    <button type="button" class="tool-btn" onclick={restart} title="Restart" aria-label="Restart">
+      <RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+  </header>
+  <div class="terminal-host" bind:this={host}></div>
+</div>
 
 <style>
-  .terminal-shell {
+  .terminal-tab {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
+    min-width: 0;
     min-height: 0;
-    height: 100%;
     background: var(--bg);
+    color: var(--text);
+    visibility: hidden;
+    pointer-events: none;
+  }
+  .terminal-tab.active {
+    visibility: visible;
+    pointer-events: auto;
   }
   header {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 10px;
+    padding: 6px 8px;
     border-bottom: 1px solid var(--border);
     background: var(--bg-card);
     flex-shrink: 0;
-  }
-  .title {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text);
-    min-width: 0;
   }
   .status {
     color: var(--text-secondary);
@@ -381,7 +354,7 @@
   .find:focus {
     border-color: var(--link);
   }
-  .chrome-btn {
+  .tool-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -393,12 +366,9 @@
     border: 1px solid var(--border);
     border-radius: 4px;
     cursor: pointer;
-    transition:
-      color 0.15s ease,
-      border-color 0.15s ease;
     flex-shrink: 0;
   }
-  .chrome-btn:hover {
+  .tool-btn:hover {
     color: var(--text);
     border-color: var(--btn-hover);
   }
@@ -418,10 +388,7 @@
   @media (max-width: 640px) {
     header {
       gap: 6px;
-      padding: 7px 8px;
-    }
-    .title span {
-      display: none;
+      padding: 6px;
     }
     .find {
       width: 112px;

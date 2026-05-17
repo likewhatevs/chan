@@ -15,7 +15,6 @@
   import SearchPanel from "./components/SearchPanel.svelte";
   import SearchStatusOverlay from "./components/SearchStatusOverlay.svelte";
   import SettingsPanel from "./components/SettingsPanel.svelte";
-  import TerminalOverlay from "./components/TerminalOverlay.svelte";
   import Workspace from "./components/Workspace.svelte";
   import {
     applyInitialTheme,
@@ -32,7 +31,6 @@
     openBrowser,
     openGraph,
     openSettings,
-    openTerminal,
     persistLayoutToHash,
     reconnectWatcher,
     refreshDrive,
@@ -43,7 +41,6 @@
     searchPanel,
     settingsOverlay,
     syncOverlayStack,
-    terminalOverlay,
     topOverlay,
     watchBubbleDisplayMode,
     watchSystemTheme,
@@ -62,6 +59,7 @@
     selectNextTabInActivePane,
     selectPrevTabInActivePane,
     selectTabAtIndexInActivePane,
+    openTerminalInActivePane,
   } from "./state/tabs.svelte";
   import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
   import {
@@ -89,6 +87,7 @@
       void node.activeTabId;
       void node.tabs.length;
       for (const t of node.tabs) {
+        if (t.kind !== "file") continue;
         void t.path;
         void t.mode;
         // Reading t.content here makes the effect rerun on every
@@ -132,7 +131,6 @@
     void assistantOverlay.contextId;
     void assistantOverlay.prompt;
     void assistantOverlay.inspectorOpen;
-    void terminalOverlay.open;
     void browserOverlay.open;
     void browserOverlay.inspectorOpen;
     void browserSelection.path;
@@ -187,7 +185,6 @@
     void searchPanel.open;
     void graphOverlay.open;
     void assistantOverlay.open;
-    void terminalOverlay.open;
     void settingsOverlay.open;
     void scopeHistoryOverlay.open;
     void searchStatusOverlay.open;
@@ -332,11 +329,7 @@
     }
     if (meta && !e.shiftKey && !e.altKey && e.code === "Backquote") {
       e.preventDefault();
-      if (terminalOverlay.open) {
-        terminalOverlay.open = false;
-      } else {
-        openTerminal();
-      }
+      openTerminalInActivePane();
       return;
     }
     if (e.altKey && e.shiftKey && !meta) {
@@ -409,8 +402,7 @@
         else openGraph();
         return;
       case "app.terminal.toggle":
-        if (terminalOverlay.open) closeOverlay("terminal");
-        else openTerminal();
+        openTerminalInActivePane();
         return;
       case "app.tab.next":
         selectNextTabInActivePane();
@@ -502,7 +494,6 @@
 <SearchStatusOverlay />
 <InlineAssist />
 <GraphPanel />
-<TerminalOverlay />
 <SettingsPanel />
 <FileBrowserOverlay />
 <ScopeHistoryOverlay />

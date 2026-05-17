@@ -1067,6 +1067,7 @@ dependencies = [
  "chan-llm",
  "chan-tunnel-client",
  "chan-tunnel-proto",
+ "dirs 5.0.1",
  "open",
  "percent-encoding",
  "portable-pty",
