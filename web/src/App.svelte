@@ -15,6 +15,7 @@
   import SearchPanel from "./components/SearchPanel.svelte";
   import SearchStatusOverlay from "./components/SearchStatusOverlay.svelte";
   import SettingsPanel from "./components/SettingsPanel.svelte";
+  import TerminalOverlay from "./components/TerminalOverlay.svelte";
   import Workspace from "./components/Workspace.svelte";
   import {
     applyInitialTheme,
@@ -31,6 +32,7 @@
     openBrowser,
     openGraph,
     openSettings,
+    openTerminal,
     persistLayoutToHash,
     reconnectWatcher,
     refreshDrive,
@@ -41,6 +43,7 @@
     searchPanel,
     settingsOverlay,
     syncOverlayStack,
+    terminalOverlay,
     topOverlay,
     watchBubbleDisplayMode,
     watchSystemTheme,
@@ -129,6 +132,7 @@
     void assistantOverlay.contextId;
     void assistantOverlay.prompt;
     void assistantOverlay.inspectorOpen;
+    void terminalOverlay.open;
     void browserOverlay.open;
     void browserOverlay.inspectorOpen;
     void browserSelection.path;
@@ -183,6 +187,7 @@
     void searchPanel.open;
     void graphOverlay.open;
     void assistantOverlay.open;
+    void terminalOverlay.open;
     void settingsOverlay.open;
     void scopeHistoryOverlay.open;
     void searchStatusOverlay.open;
@@ -247,6 +252,7 @@
   ///   Cmd/Ctrl+I             -> Assistant (toggle)        [VS Code Copilot inline]
   ///   Cmd/Ctrl+Shift+F       -> Search across files       [VS Code Find in Files]
   ///   Cmd/Ctrl+Shift+M       -> Graph (toggle)
+  ///   Cmd/Ctrl+`             -> Terminal (toggle)
   ///   Alt+Shift+[ / ]        -> previous / next tab       (web fallback)
   ///   Ctrl+Alt+1..9          -> jump to tab N             (web fallback)
   ///   Ctrl+Alt+N             -> new file                  (web fallback)
@@ -324,6 +330,15 @@
       }
       return;
     }
+    if (meta && !e.shiftKey && !e.altKey && e.code === "Backquote") {
+      e.preventDefault();
+      if (terminalOverlay.open) {
+        terminalOverlay.open = false;
+      } else {
+        openTerminal();
+      }
+      return;
+    }
     if (e.altKey && e.shiftKey && !meta) {
       // e.code is layout-and-modifier-independent, so this branch
       // matches even though Option mangles e.key into `«` / `»` on
@@ -392,6 +407,10 @@
       case "app.graph.toggle":
         if (graphOverlay.open) closeOverlay("graph");
         else openGraph();
+        return;
+      case "app.terminal.toggle":
+        if (terminalOverlay.open) closeOverlay("terminal");
+        else openTerminal();
         return;
       case "app.tab.next":
         selectNextTabInActivePane();
@@ -483,6 +502,7 @@
 <SearchStatusOverlay />
 <InlineAssist />
 <GraphPanel />
+<TerminalOverlay />
 <SettingsPanel />
 <FileBrowserOverlay />
 <ScopeHistoryOverlay />

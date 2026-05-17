@@ -26,6 +26,7 @@
     Settings,
     SquareSplitHorizontal,
     SquareSplitVertical,
+    Terminal,
     User,
     X,
   } from "lucide-svelte";
@@ -153,6 +154,12 @@
       icon: Network,
       command: "app.graph.toggle",
       chordId: "app.graph.toggle",
+    },
+    {
+      label: "Terminal",
+      icon: Terminal,
+      command: "app.terminal.toggle",
+      chordId: "app.terminal.toggle",
     },
     {
       label: "Call Agent",

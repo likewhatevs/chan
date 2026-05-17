@@ -25,6 +25,7 @@ export default defineConfig({
     // While iterating, proxy API + WS to a `md serve` instance so we get
     // the real backend without rebuilding the binary on every change.
     proxy: {
+      "/api/terminal/ws": { target: "ws://127.0.0.1:8787", ws: true },
       "/api": "http://127.0.0.1:8787",
       "/ws": { target: "ws://127.0.0.1:8787", ws: true },
     },

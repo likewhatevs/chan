@@ -50,7 +50,7 @@ use routes::{
     api_patch_config, api_patch_drive, api_patch_server_config, api_post_answer,
     api_post_attachment, api_post_contacts_import, api_put_assistant, api_put_session,
     api_read_file, api_report_file, api_report_prefix, api_resolve_link, api_search_content,
-    api_search_files, api_storage_reset, api_write_file, ws_upgrade,
+    api_search_files, api_storage_reset, api_terminal_ws, api_write_file, ws_upgrade,
 };
 use signal::{now_unix_secs, print_qr_if_tty, spawn_idle_watcher, spawn_signal_watcher};
 use state::{AppState, DriveCell};
@@ -827,6 +827,7 @@ fn router(state: Arc<AppState>) -> Router {
             post(api_post_contacts_import).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
         )
         .route("/api/health", get(api_health))
+        .route("/api/terminal/ws", get(api_terminal_ws))
         .route("/ws", get(ws_upgrade))
         .merge(settings_writes)
         .merge(tunnel_public_block);

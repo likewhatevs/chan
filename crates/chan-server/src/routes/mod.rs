@@ -19,6 +19,7 @@ mod report;
 mod search;
 mod sessions;
 mod storage;
+mod terminal;
 mod ws;
 
 pub use attachments::api_post_attachment;
@@ -46,4 +47,5 @@ pub use sessions::{
     api_put_session,
 };
 pub use storage::api_storage_reset;
+pub use terminal::api_terminal_ws;
 pub use ws::ws_upgrade;

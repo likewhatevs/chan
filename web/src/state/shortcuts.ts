@@ -98,6 +98,13 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "App",
   },
   {
+    id: "app.terminal.toggle",
+    label: "Terminal",
+    web: "Mod+`",
+    native: "Mod+`",
+    group: "App",
+  },
+  {
     id: "ui.overlay.dismiss",
     label: "Dismiss overlay",
     web: "Esc",
