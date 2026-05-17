@@ -707,6 +707,7 @@
             path={tab.path}
             showRefs
             onNavigate={(p) => void openInActivePane(p)}
+            onReveal={revealInBrowser}
             onSetAsScope={() => openFsGraphForFile(tab.path)}
           />
         </Inspector>

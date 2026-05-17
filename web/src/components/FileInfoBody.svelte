@@ -589,6 +589,13 @@
         </p>
       {/if}
     {/if}
+    {#if onReveal && !image && !pdf}
+      <!-- "Show File": reveal this file in the file browser. The
+           editor binds this so its details panel mirrors the tab
+           menu's reveal action; image / pdf entries render their
+           own "Show in file browser" variant a few lines above. -->
+      <button class="open" onclick={onReveal}>Show File</button>
+    {/if}
     {#if onSetAsScope}
       <!-- "Graph this" re-scopes the current graph to this file (or
            image) and re-pins it as the focal node. Only rendered
