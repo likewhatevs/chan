@@ -224,7 +224,7 @@
     const to = Math.min(Math.max(0, caretPending.to), lim);
     view.dispatch({
       selection: { anchor: from, head: to },
-      effects: EditorView.scrollIntoView(from, { y: "center" }),
+      effects: EditorView.scrollIntoView(from, { y: "nearest" }),
     });
     caretRestored = true;
     caretPending = null;

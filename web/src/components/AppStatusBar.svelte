@@ -12,11 +12,6 @@
   //   - status   : transient `ui.status` messages (move/rename/delete
   //                failures, etc).
   //
-  // Note: assistant activity intentionally does NOT live here.
-  // The per-tab flashing dot on file tabs covers in-scope files;
-  // tool-loop narration streams inline in the chat. Surfacing the
-  // same signal in a third place added noise without information.
-  //
   // Hide model: bar disappears entirely when no section has
   // content, and collapses to a pill on click. No idle fade and no
   // time-based auto-dismiss; a section clears only when its source
@@ -51,10 +46,6 @@
   /// - transient ui.status → clear the message. These are error
   ///   crumbs (move/rename/delete failures); clicking to dismiss
   ///   matches the user's expectation of "I saw it, move on".
-  ///
-  /// Agent activity is intentionally NOT surfaced here (see the
-  /// block comment at the top of this file) so there is no
-  /// agent-routing case.
   function onClickIndex(): void {
     openSettings();
   }

@@ -14,10 +14,10 @@
 import { api } from "../api/client";
 import { ApiError } from "../api/errors";
 import type { FindRange } from "../editor/find";
+import { uiConfirm } from "./confirm.svelte";
 import { classifyPath, isCsv, isEditableText, isJson } from "./fileTypes";
 import type { FileKind } from "./kinds";
 import { notify } from "./notify.svelte";
-import { cancelAssistantStreamForPath } from "./store.svelte";
 
 let nextId = 1;
 function id(prefix: string): string {
@@ -197,6 +197,10 @@ export type TerminalTab = {
   createdAt: number;
   broadcastEnabled: boolean;
   broadcastTargetIds: string[];
+  mcpEnv?: boolean;
+  sessionMcpEnv?: boolean;
+  terminalSessionId?: string;
+  lastSeq?: number;
 };
 
 export type Tab = FileTab | TerminalTab;
@@ -336,6 +340,10 @@ export function openTerminalInPane(paneId: string): void {
     createdAt: Date.now(),
     broadcastEnabled: false,
     broadcastTargetIds: [],
+    mcpEnv: true,
+    sessionMcpEnv: undefined,
+    terminalSessionId: undefined,
+    lastSeq: undefined,
   };
   p.tabs.push(tab);
   p.activeTabId = tab.id;
@@ -367,6 +375,37 @@ export function setTerminalBroadcastTarget(
   tab.broadcastTargetIds = [...next];
 }
 
+export function terminalMcpEnvEnabled(tab: TerminalTab): boolean {
+  return tab.mcpEnv !== false;
+}
+
+export function setTerminalMcpEnv(tab: TerminalTab, enabled: boolean): void {
+  tab.mcpEnv = enabled;
+}
+
+export function setTerminalSession(
+  tab: TerminalTab,
+  sessionId: string,
+  lastSeq: number,
+  sessionMcpEnv?: boolean,
+): void {
+  const wasFresh = !tab.terminalSessionId || tab.terminalSessionId !== sessionId;
+  tab.terminalSessionId = sessionId;
+  tab.lastSeq = Math.max(0, Math.floor(lastSeq));
+  if (wasFresh) tab.sessionMcpEnv = sessionMcpEnv ?? terminalMcpEnvEnabled(tab);
+}
+
+export function advanceTerminalSeq(tab: TerminalTab, bytes: number): void {
+  if (!tab.terminalSessionId || !Number.isFinite(bytes) || bytes <= 0) return;
+  tab.lastSeq = Math.max(0, Math.floor(tab.lastSeq ?? 0)) + Math.floor(bytes);
+}
+
+export function clearTerminalSession(tab: TerminalTab): void {
+  tab.terminalSessionId = undefined;
+  tab.lastSeq = undefined;
+  tab.sessionMcpEnv = undefined;
+}
+
 export function allTerminalTabs(): TerminalTab[] {
   const out: TerminalTab[] = [];
   for (const node of Object.values(layout.nodes)) {
@@ -380,11 +419,20 @@ export function allTerminalTabs(): TerminalTab[] {
 
 type TerminalInputSink = (data: string) => void;
 const terminalInputSinks = new Map<string, TerminalInputSink>();
+type TerminalCloseSink = () => void;
+const terminalCloseSinks = new Map<string, TerminalCloseSink>();
 
 export function registerTerminalInputSink(tabId: string, sink: TerminalInputSink): () => void {
   terminalInputSinks.set(tabId, sink);
   return () => {
     if (terminalInputSinks.get(tabId) === sink) terminalInputSinks.delete(tabId);
+  };
+}
+
+export function registerTerminalCloseSink(tabId: string, sink: TerminalCloseSink): () => void {
+  terminalCloseSinks.set(tabId, sink);
+  return () => {
+    if (terminalCloseSinks.get(tabId) === sink) terminalCloseSinks.delete(tabId);
   };
 }
 
@@ -396,6 +444,49 @@ export function broadcastTerminalInput(sourceTab: TerminalTab, data: string): vo
     if (tab.id === sourceTab.id || !targets.has(tab.id)) continue;
     terminalInputSinks.get(tab.id)?.(data);
   }
+}
+
+type CloseTabsOptions = {
+  force?: boolean;
+};
+
+function isLiveTerminal(t: Tab): boolean {
+  return t.kind === "terminal" && terminalInputSinks.has(t.id);
+}
+
+function closeRisk(t: Tab): "dirty-file" | "live-terminal" | null {
+  if (isDirty(t)) return "dirty-file";
+  if (isLiveTerminal(t)) return "live-terminal";
+  return null;
+}
+
+async function confirmCloseTabs(
+  tabs: Tab[],
+  opts?: CloseTabsOptions,
+): Promise<boolean> {
+  if (opts?.force) return true;
+  const risky = tabs.filter((t) => closeRisk(t) !== null);
+  if (risky.length === 0) return true;
+  const dirty = risky.filter((t) => closeRisk(t) === "dirty-file");
+  const terminals = risky.filter((t) => closeRisk(t) === "live-terminal");
+  const parts: string[] = [];
+  if (dirty.length > 0) {
+    const label = dirty.length === 1 ? tabLabel(dirty[0]!) : `${dirty.length} unsaved files`;
+    parts.push(`${label} has unsaved changes`);
+  }
+  if (terminals.length > 0) {
+    const label =
+      terminals.length === 1
+        ? terminalTabName(terminals[0] as TerminalTab)
+        : `${terminals.length} live terminals`;
+    parts.push(`${label} is still running`);
+  }
+  return uiConfirm({
+    title: "Close tab?",
+    message: `${parts.join(" and ")}. Close anyway?`,
+    confirmLabel: "Close",
+    destructive: dirty.length > 0,
+  });
 }
 
 /// Fetch a file tab's content from disk and write it into the
@@ -544,20 +635,26 @@ export function selectNextPane(): void {
   layout.activePaneId = panes[(idx + 1) % panes.length]!;
 }
 
-export function closeTab(paneId: string, tabId: string): void {
+export function closeTab(
+  paneId: string,
+  tabId: string,
+  opts?: CloseTabsOptions,
+): Promise<void> {
+  return closeTabAsync(paneId, tabId, opts);
+}
+
+async function closeTabAsync(
+  paneId: string,
+  tabId: string,
+  opts?: CloseTabsOptions,
+): Promise<void> {
   const p = pane(paneId);
   const idx = p.tabs.findIndex((t) => t.id === tabId);
   if (idx < 0) return;
   const tab = p.tabs[idx];
-  // If the assistant is mid-request on the file we're closing, tear
-  // the request down. The user is clearly walking away from this
-  // scope; leaving the stream running would (a) finish a turn against
-  // a context the UI no longer surfaces and (b) keep the
-  // "thinking…" indicator alive on a tab that no longer exists.
-  // The conversation history stays in memory (and on disk) so
-  // reopening the file later restores the bubbles up to the abort.
-  if (tab?.kind === "file") {
-    cancelAssistantStreamForPath(tab.path);
+  if (!(await confirmCloseTabs([tab], opts))) return;
+  if (tab.kind === "terminal") {
+    terminalCloseSinks.get(tab.id)?.();
   }
   p.tabs.splice(idx, 1);
   if (p.activeTabId === tabId) {
@@ -573,17 +670,13 @@ export function closeTab(paneId: string, tabId: string): void {
 /// flow so the editor doesn't keep showing a now-deleted file
 /// after the user wipes the drive. Pane structure is left
 /// alone (the workspace's split tree survives), only the tabs go.
-/// Cancels any in-flight assistant request whose context lives in
-/// one of the panes being cleared — same reasoning as `closeTab`,
-/// just bulk.
-export function closeAllTabs(): void {
+export async function closeAllTabs(opts?: CloseTabsOptions): Promise<void> {
+  const tabs = Object.values(layout.nodes).flatMap((node) =>
+    node.kind === "leaf" ? node.tabs : [],
+  );
+  if (!(await confirmCloseTabs(tabs, opts))) return;
   for (const node of Object.values(layout.nodes)) {
     if (node.kind !== "leaf") continue;
-    for (const t of node.tabs) {
-      if (t.kind === "file") {
-        cancelAssistantStreamForPath(t.path);
-      }
-    }
     node.tabs.length = 0;
     node.activeTabId = null;
   }
@@ -594,15 +687,12 @@ export function closeAllTabs(): void {
 ///     the parent split's place).
 ///   - root pane: there must always be at least one pane on screen, so
 ///     just clear the tabs (returns to the empty "no file open" state).
-/// Cancels any in-flight assistant request whose context lives in
-/// the pane being closed.
-export function closePane(paneId: string): void {
+export async function closePane(
+  paneId: string,
+  opts?: CloseTabsOptions,
+): Promise<void> {
   const p = pane(paneId);
-  for (const t of p.tabs) {
-    if (t.kind === "file") {
-      cancelAssistantStreamForPath(t.path);
-    }
-  }
+  if (!(await confirmCloseTabs(p.tabs, opts))) return;
   p.tabs.length = 0;
   p.activeTabId = null;
   if (paneId !== layout.rootId) {
@@ -640,6 +730,10 @@ function cloneTab(src: Tab): Tab {
       createdAt: src.createdAt,
       broadcastEnabled: src.broadcastEnabled,
       broadcastTargetIds: [...src.broadcastTargetIds],
+      mcpEnv: src.mcpEnv,
+      sessionMcpEnv: src.sessionMcpEnv,
+      terminalSessionId: src.terminalSessionId,
+      lastSeq: src.lastSeq,
     };
   }
   return {
@@ -1021,13 +1115,25 @@ type SerTab = {
   /// `h: 0` when the user has explicitly disabled highlighting
   /// for this tab. Restores without the field land on default-on.
   h?: 0;
+  /// Terminal PTY session id. Only emitted in the per-window
+  /// session payload, never in the shareable URL hash.
+  tsid?: string;
+  /// Last byte-sequence offset processed from the terminal session.
+  tseq?: number;
+  /// Desired MCP env injection for fresh terminal sessions. Default on.
+  me?: 0;
+  /// MCP env mode used by the persisted PTY session. Default on.
+  sme?: 0;
 };
 type SerLeaf = { k: "l"; t: SerTab[]; f?: 1 };
 type SerSplit = { k: "s"; d: "r" | "c"; a: SerNode; b: SerNode; r?: number };
 type SerNode = SerLeaf | SerSplit;
 
 /// Walk the layout starting at `nodeId`, producing a serializable tree.
-function serializeNode(nodeId: string): SerNode | null {
+function serializeNode(
+  nodeId: string,
+  opts: SerializeLayoutOptions,
+): SerNode | null {
   const n = layout.nodes[nodeId];
   if (!n) return null;
   if (n.kind === "leaf") {
@@ -1037,6 +1143,14 @@ function serializeNode(nodeId: string): SerNode | null {
         return {
           k: "t",
           n: t.title,
+          ...(opts.terminalSessions && t.mcpEnv === false ? { me: 0 as const } : {}),
+          ...(opts.terminalSessions && t.terminalSessionId
+            ? {
+                tsid: t.terminalSessionId,
+                tseq: Math.max(0, Math.floor(t.lastSeq ?? 0)),
+                ...(t.sessionMcpEnv === false ? { sme: 0 as const } : {}),
+              }
+            : {}),
           ...active,
         };
       }
@@ -1067,8 +1181,8 @@ function serializeNode(nodeId: string): SerNode | null {
       ...(n.id === layout.activePaneId ? { f: 1 as const } : {}),
     };
   }
-  const a = serializeNode(n.a);
-  const b = serializeNode(n.b);
+  const a = serializeNode(n.a, opts);
+  const b = serializeNode(n.b, opts);
   if (!a || !b) return null;
   // Only emit `r` if the split has been resized off the 50/50
   // default. Tiny rounding kindness so the URL hash stays short.
@@ -1080,8 +1194,12 @@ function serializeNode(nodeId: string): SerNode | null {
 /// Snapshot of the layout for persistence in the URL hash. Returns
 /// `null` if the layout is uninteresting (a single empty pane), so we
 /// don't litter the URL when there's nothing to save.
-export function serializeLayout(): SerNode | null {
-  const tree = serializeNode(layout.rootId);
+type SerializeLayoutOptions = {
+  terminalSessions?: boolean;
+};
+
+export function serializeLayout(opts: SerializeLayoutOptions = {}): SerNode | null {
+  const tree = serializeNode(layout.rootId, opts);
   if (!tree) return null;
   if (tree.k === "l" && tree.t.length === 0) return null;
   return tree;
@@ -1090,15 +1208,24 @@ export function serializeLayout(): SerNode | null {
 /// Replace the live layout with the deserialized tree, then kick off a
 /// content load for every tab. The DOM updates as content arrives;
 /// tabs initially appear in a "loading…" state.
-export async function restoreLayout(s: SerNode): Promise<void> {
+export async function restoreLayout(
+  s: SerNode,
+  sessionLayout: SerNode | null = null,
+): Promise<void> {
   // Clear current state.
   for (const k of Object.keys(layout.nodes)) delete layout.nodes[k];
 
   let activePaneId: string | null = null;
   const tabsToLoad: { paneId: string; tabId: string; path: string }[] = [];
+  const sessionLeaves = serializedLeaves(sessionLayout);
+  let leafIndex = 0;
 
   function build(node: SerNode): string {
     if (node.k === "l") {
+      const sessionLeaf = sessionLeaves[leafIndex++] ?? null;
+      const savedTerms =
+        sessionLeaf?.t.filter((t) => (t.k ?? "f") === "t") ?? [];
+      let termIndex = 0;
       const p: LeafNode = {
         kind: "leaf",
         id: id("pane"),
@@ -1113,6 +1240,20 @@ export async function restoreLayout(s: SerNode): Promise<void> {
         // saved entries from older session.json files instead of
         // leaving the user with unrecoverable orphans.
         if (kind === "t") {
+          const savedTerm = savedTerms[termIndex++];
+          const terminalSessionId = sertab.tsid ?? savedTerm?.tsid;
+          const mcpEnv =
+            sertab.me === 0 ? false : savedTerm?.me === 0 ? false : true;
+          const sessionMcpEnv =
+            terminalSessionId && (sertab.sme === 0 || savedTerm?.sme === 0)
+              ? false
+              : terminalSessionId
+                ? true
+                : undefined;
+          const rawSeq =
+            typeof sertab.tseq === "number" && Number.isFinite(sertab.tseq)
+              ? sertab.tseq
+              : savedTerm?.tseq;
           const tab: TerminalTab = {
             kind: "terminal",
             id: id("term"),
@@ -1120,6 +1261,13 @@ export async function restoreLayout(s: SerNode): Promise<void> {
             createdAt: Date.now(),
             broadcastEnabled: false,
             broadcastTargetIds: [],
+            mcpEnv,
+            sessionMcpEnv,
+            terminalSessionId,
+            lastSeq:
+              typeof rawSeq === "number" && Number.isFinite(rawSeq)
+                ? Math.max(0, Math.floor(rawSeq))
+                : undefined,
           };
           p.tabs.push(tab);
           if (sertab.a) p.activeTabId = tab.id;
@@ -1210,6 +1358,45 @@ export async function restoreLayout(s: SerNode): Promise<void> {
   await Promise.all(
     tabsToLoad.map((t) => loadTabContent(t.paneId, t.tabId, t.path)),
   );
+}
+
+function serializedLeaves(node: SerNode | null, out: SerLeaf[] = []): SerLeaf[] {
+  if (!node) return out;
+  if (node.k === "l") {
+    out.push(node);
+    return out;
+  }
+  serializedLeaves(node.a, out);
+  serializedLeaves(node.b, out);
+  return out;
+}
+
+/// Copy terminal PTY session metadata from a per-window session layout
+/// onto the live layout after a shareable URL-hash layout restore.
+/// The hash deliberately omits `tsid`/`tseq`; this graft keeps reloads
+/// from abandoning the server-side PTY while still keeping copied URLs
+/// free of private terminal ids.
+export function hydrateTerminalSessionsFromLayout(sessionLayout: SerNode | null): void {
+  const sessionLeaves = serializedLeaves(sessionLayout);
+  const livePaneIds = leafIdsInOrder(layout.rootId);
+  for (let i = 0; i < livePaneIds.length; i++) {
+    const live = layout.nodes[livePaneIds[i]!];
+    const saved = sessionLeaves[i];
+    if (!live || live.kind !== "leaf" || !saved) continue;
+    const liveTerms = live.tabs.filter((t): t is TerminalTab => t.kind === "terminal");
+    const savedTerms = saved.t.filter((t) => (t.k ?? "f") === "t");
+    for (let j = 0; j < liveTerms.length; j++) {
+      const savedTerm = savedTerms[j];
+      if (!savedTerm?.tsid) continue;
+      liveTerms[j]!.terminalSessionId = savedTerm.tsid;
+      liveTerms[j]!.mcpEnv = savedTerm.me === 0 ? false : true;
+      liveTerms[j]!.sessionMcpEnv = savedTerm.sme === 0 ? false : true;
+      liveTerms[j]!.lastSeq =
+        typeof savedTerm.tseq === "number" && Number.isFinite(savedTerm.tseq)
+          ? Math.max(0, Math.floor(savedTerm.tseq))
+          : undefined;
+    }
+  }
 }
 
 function firstLeafId(nodeId: string): string {

@@ -7,7 +7,7 @@
 // platform-specific path.
 //
 // The seam exists as a single module so client.ts can stay focused
-// on the typed API surface (file ops, search, llm, ...) and leave
+// on the typed API surface (file ops, search, graph, ...) and leave
 // wire mechanics (token plumbing, fetch shape, WebSocket reconnect)
 // here.
 //
@@ -111,8 +111,7 @@ export function authToken(): string | null {
 /// forever and the user would see "loading…" with no way out.
 ///
 /// Pass `timeoutMs: 0` to disable the cap. Reserve that for
-/// endpoints that legitimately run for minutes (assistant
-/// completions with tool-use loops, etc.) and rely on the
+/// endpoints that legitimately run for minutes and rely on the
 /// caller-supplied AbortSignal for user-initiated cancel.
 export async function request<T>(
   method: string,

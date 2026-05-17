@@ -278,8 +278,7 @@ function isFenceClosedAtDocEnd(view: EditorView): boolean {
 
 /// ArrowDown + Mod-Enter binding: exit a fenced code block when the
 /// caret sits inside one on the last line of the doc. Returns false
-/// otherwise so the key keeps its default behaviour (cursorDown /
-/// assistant submit).
+/// otherwise so the key keeps its default behaviour.
 export function escapeFenceAtDocEnd(view: EditorView): boolean {
   if (!isCaretInsideFenceAtDocEnd(view)) return false;
   return exitFenceAtDocEnd(view);
@@ -313,8 +312,8 @@ export function escapeFenceOnEnterAtCloser(view: EditorView): boolean {
 /// kept missing edge cases (empty trailing line, lezer's
 /// resolveInner side-bias, unclosed fence parsing); this command
 /// is the user-controlled out: press Mod-Enter, get out. If the
-/// caret is not in any fence, return false so Mod-Enter keeps its
-/// other meaning (assistant submit).
+/// caret is not in any fence, return false so Mod-Enter can fall
+/// through to the caller's next key binding.
 export function exitFenceAnywhere(view: EditorView): boolean {
   const sel = view.state.selection.main;
   if (!sel.empty) return false;

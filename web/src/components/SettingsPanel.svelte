@@ -1,7 +1,6 @@
 <script lang="ts">
   // Settings overlay. Per-device-global preferences form (editor
-  // theme, assistant, attachments_dir, default-drive path) plus the
-  // local CLI assistant backend picker.
+  // theme, editor density, date format, and theme).
   //
   // The drive display name is edited from the file-browser
   // hamburger, not here, so the settings overlay is purely
@@ -10,11 +9,9 @@
   // Auto-saves on change (500 ms debounce).
 
   import { onMount } from "svelte";
-  import { ApiError, api } from "../api/client";
+  import { api } from "../api/client";
   import type {
-    AssistantBackendKind,
     BuildInfo,
-    CliDetectionView,
     EditorTheme,
     GlobalConfig,
     LineSpacing,
@@ -59,84 +56,10 @@
   /// stays visible.
   type SaveStatus = "idle" | "saving" | "saved" | { error: string };
   let saveStatus = $state<SaveStatus>("idle");
-  // Per-CLI readiness from /api/llm/cli_detection. Refreshed on
-  // mount, dropdown change, and after a successful override save.
-  let cliDetections = $state<CliDetectionView[]>([]);
-  let cliDetectionLoading = $state(false);
-  let cliDetectionError = $state<string | null>(null);
-  let assistantSaveError = $state<string | null>(null);
-  let selectedCli = $state<CliBackendKind>("claude_cli");
-
   /// Build identity for the About footer. Loaded on mount; the
   /// version + embeddings feature flag are static for the running
   /// binary so a single fetch is enough.
   let buildInfo = $state<BuildInfo | null>(null);
-
-  async function loadCliDetection(): Promise<void> {
-    if (cliDetectionLoading) return;
-    cliDetectionLoading = true;
-    cliDetectionError = null;
-    try {
-      cliDetections = (await api.llmCliDetection()).detections;
-    } catch (e) {
-      cliDetections = [];
-      cliDetectionError = cliDetectionErrorMessage(e);
-    } finally {
-      cliDetectionLoading = false;
-    }
-  }
-
-  type CliBackendKind = Extract<
-    AssistantBackendKind,
-    "claude_cli" | "gemini_cli" | "codex_cli"
-  >;
-
-  function cliPrefs(
-    a: Preferences["assistant"],
-    kind: CliBackendKind,
-  ): Preferences["assistant"][CliBackendKind] {
-    return a[kind];
-  }
-
-  function activeCliKind(): CliBackendKind {
-    return selectedCli;
-  }
-
-  function activeDetection(): CliDetectionView | null {
-    const kind = activeCliKind();
-    return cliDetections.find((d) => d.backend === kind) ?? null;
-  }
-
-  function cliDetectionErrorMessage(e: unknown): string {
-    if (e instanceof ApiError) {
-      if (e.status === 404) {
-        return "CLI detection endpoint is unavailable; restart the chan backend so it serves the latest API.";
-      }
-      return `CLI detection failed (${e.status}): ${e.message}`;
-    }
-    return `CLI detection failed: ${(e as Error).message}`;
-  }
-
-  function activeDetectionReason(): string {
-    const detection = activeDetection();
-    if (detection?.reason) return detection.reason;
-    if (cliDetectionError) return cliDetectionError;
-    if (cliDetections.length > 0) {
-      return `no detection record returned for ${activeCliKind()}`;
-    }
-    return "not ready";
-  }
-
-  function commandLabel(detection: CliDetectionView | null): string | null {
-    if (!detection || detection.command.length === 0) return null;
-    return detection.command.join(" ");
-  }
-
-  function onActiveCliChange(e: Event): void {
-    selectedCli = (e.currentTarget as HTMLSelectElement).value as CliBackendKind;
-    assistantSaveError = null;
-    void loadCliDetection();
-  }
   // When the upstream drive info changes (initial load, external
   // edit, server restart), reset the form to the server state.
   // We intentionally only sync into the form when there's no local
@@ -159,17 +82,10 @@
     }
   });
 
-  /// Fill in optional sub-views the server only learned about
-  /// recently. An older chan-server returns `assistant.claude_cli`
-  /// / `assistant.gemini_cli` as undefined; the model <select>
-  /// crashes on `.model` access. Applied to BOTH editing and
-  /// globalConfig so dirty() doesn't see a permanent diff and
-  /// trigger an autosave loop.
+  /// Fill in optional preference fields older servers may omit.
+  /// Applied to BOTH editing and globalConfig so dirty() doesn't
+  /// see a permanent diff and trigger an autosave loop.
   function normalizePrefs(p: Preferences): Preferences {
-    const a = p.assistant as { [k: string]: unknown };
-    if (a.claude_cli === undefined) a.claude_cli = { enabled: false, model: null };
-    if (a.gemini_cli === undefined) a.gemini_cli = { enabled: false, model: null };
-    if (a.codex_cli === undefined) a.codex_cli = { enabled: false, model: null };
     if (p.line_spacing === "tight") p.line_spacing = "compact";
     if (p.line_spacing !== "compact" && p.line_spacing !== "standard") {
       p.line_spacing = "standard";
@@ -215,7 +131,6 @@
     if (!editing || inflight) return;
     inflight = true;
     saveStatus = "saving";
-    assistantSaveError = null;
     if (savedFlashTimer) {
       clearTimeout(savedFlashTimer);
       savedFlashTimer = null;
@@ -245,7 +160,6 @@
       }
       if (globalConfig) normalizePrefs(globalConfig.preferences);
       failedSaveSnap = null;
-      void loadCliDetection();
       saveStatus = "saved";
       savedFlashTimer = setTimeout(() => {
         if (saveStatus === "saved") saveStatus = "idle";
@@ -254,7 +168,6 @@
     } catch (e) {
       const message = (e as Error).message;
       failedSaveSnap = sent;
-      assistantSaveError = message;
       saveStatus = { error: message };
     } finally {
       inflight = false;
@@ -320,18 +233,8 @@
     // Make sure we have the latest server state when the tab opens.
     void refreshDrive();
     void loadGlobalConfig();
-    void loadCliDetection();
     void loadBuildInfo();
   });
-
-  /// Friendly labels used in the provider list. Centralized so the
-  /// dropdown ordering and the row ordering stay consistent across
-  /// the markup below.
-  const PROVIDER_ROWS: { kind: CliBackendKind; label: string; hint: string }[] = [
-    { kind: "claude_cli", label: "Claude CLI", hint: "local `claude` shell-executor" },
-    { kind: "gemini_cli", label: "Gemini CLI", hint: "local `gemini` shell-executor" },
-    { kind: "codex_cli", label: "Codex CLI", hint: "local `codex` shell-executor" },
-  ];
 </script>
 
 <OverlayShell id="settings" open={visible} onClose={close}>
@@ -376,65 +279,6 @@
   <div class="placeholder">loading settings…</div>
 {:else}
   <div class="settings">
-    <section>
-      <h3>Agent</h3>
-      <p class="hint">
-        Configure each local agent CLI and optionally override its
-        binary lookup.
-      </p>
-
-      <div class="assistant-config">
-        <div class="assistant-control">
-          <label class="assistant-field">
-            <span>Agent CLI</span>
-            <select value={activeCliKind()} onchange={onActiveCliChange}>
-              {#each PROVIDER_ROWS as row (row.kind)}
-                <option value={row.kind}>{row.label}</option>
-              {/each}
-            </select>
-          </label>
-
-          <div class="cli-readiness" aria-live="polite">
-            {#if cliDetectionLoading && !activeDetection()}
-              <span class="status-dot muted-dot"></span>
-              <span class="muted">checking…</span>
-            {:else if activeDetection()?.ready}
-              <span class="status-dot ok-dot"></span>
-              <span class="ok">ready</span>
-            {:else}
-              <span class="status-dot err-dot"></span>
-              <span class="err">{activeDetectionReason()}</span>
-            {/if}
-          </div>
-        </div>
-
-        <div class="assistant-control">
-          <label class="assistant-field">
-            <span>Binary path override</span>
-            <input
-              value={cliPrefs(editing.assistant, activeCliKind()).cmd_override ?? ""}
-              placeholder={commandLabel(activeDetection()) ?? "use PATH"}
-              spellcheck="false"
-              autocomplete="off"
-              oninput={(e) => {
-                if (!editing) return;
-                const value = (e.currentTarget as HTMLInputElement).value.trim();
-                cliPrefs(editing.assistant, activeCliKind()).cmd_override =
-                  value === "" ? null : value;
-                assistantSaveError = null;
-              }}
-            />
-          </label>
-          <div class="hint-text">
-            leave blank to resolve {activeCliKind().replace("_cli", "")} from PATH
-          </div>
-          {#if assistantSaveError}
-            <div class="override-error">{assistantSaveError}</div>
-          {/if}
-        </div>
-      </div>
-    </section>
-
     <div class="section-row">
     <section>
       <h3>Editor theme</h3>
@@ -753,69 +597,7 @@
     border-color: var(--link);
     background: var(--hover-bg);
   }
-  /* Inline status colors for the Assistant section's key state. */
   .v .ok { color: var(--accent); }
-  .cli-readiness .ok { color: var(--accent); }
-  .cli-readiness .err { color: var(--warn-text); }
-  .assistant-config {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.8rem;
-    margin-top: 0.2rem;
-  }
-  .assistant-control {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    min-width: 0;
-  }
-  .assistant-field {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 4px;
-    font-size: 14px;
-  }
-  .assistant-field > span {
-    color: var(--text-secondary);
-    font-size: 13px;
-  }
-  .assistant-field select,
-  .assistant-field input {
-    background: var(--bg-card);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 4px 6px;
-    font: inherit;
-    font-size: 14px;
-    outline: none;
-    width: 100%;
-  }
-  .assistant-field select:focus,
-  .assistant-field input:focus { border-color: var(--link); }
-  .cli-readiness {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    color: var(--text-secondary);
-    font-size: 13px;
-    min-height: 1.4rem;
-  }
-  .status-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-  .ok-dot { background: var(--accent); }
-  .err-dot { background: var(--warn-text); }
-  .muted-dot { background: var(--text-secondary); }
-  .override-error {
-    color: var(--warn-text);
-    font-size: 12px;
-    line-height: 1.35;
-  }
   /* Tab-bar autosave indicator. Sits between the title and the
      actions strip. Empty when idle (no extra padding). */
   .save-status { font-size: 14px; min-width: 60px; text-align: right; }
@@ -823,8 +605,7 @@
   .save-status .err { color: #d33; }
   .save-status .muted { color: var(--text-secondary); }
   @media (max-width: 760px) {
-    .section-row,
-    .assistant-config {
+    .section-row {
       grid-template-columns: 1fr;
     }
   }

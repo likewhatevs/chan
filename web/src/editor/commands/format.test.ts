@@ -122,7 +122,7 @@ describe("exitFenceAnywhere (Mod-Enter from inside any fenced block)", () => {
     expect(view.state.doc.toString()).toBe("```python\nhello\n```\n");
   });
 
-  test("not inside a fence: returns false so Mod-Enter falls through to assistant submit", () => {
+  test("not inside a fence: returns false so Mod-Enter falls through", () => {
     const doc = "hello world";
     mount(doc, doc.length);
     expect(exitFenceAnywhere(view)).toBe(false);

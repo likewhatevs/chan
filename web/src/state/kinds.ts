@@ -74,8 +74,8 @@ export function labelFor(kind: Kind): string {
 ///   folder -> grey (--g-folder)
 ///   date -> grey (--text-secondary, low-emphasis neutral)
 /// These flow through every surface (file tree, inspector, search,
-/// agent, graph) via this single switch instead of being hardcoded
-/// per component.
+/// graph) via this single switch instead of being hardcoded per
+/// component.
 export function colorVarFor(kind: Kind): string {
   switch (kind) {
     case "document":

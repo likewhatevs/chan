@@ -1,6 +1,6 @@
 <script lang="ts">
-  // Shared shell for the floating overlays (search, assistant,
-  // graph). Owns the parts every overlay needs to be the same:
+  // Shared shell for the floating overlays (search, graph, files,
+  // settings). Owns the parts every overlay needs to be the same:
   //
   //   - dim backdrop layer that closes on click,
   //   - centered panel container that swallows clicks (so a click
@@ -22,9 +22,7 @@
   // uniform margin (reserved by .overlay's padding) on every side.
   // The panel grows to take all the height available between the
   // top and bottom paddings rather than hugging the bottom of the
-  // viewport. The width prop caps the cross-axis (search / settings
-  // can stay narrower; assistant / graph go wide). Defaults are
-  // wide enough for assistant + graph; overrides land in the
+  // viewport. The width prop caps the cross-axis; overrides land in
   // narrower panels.
 
   import type { Snippet } from "svelte";

@@ -21,15 +21,6 @@
 const STORAGE_KEY = "chan.pageWidth.ratio";
 const CSS_VAR = "--chan-page-max-width";
 
-/// Independent cap for the assistant overlay's prompt column. Lives
-/// next to `pageWidth` because it shares the slider bounds + ratio
-/// idiom, but writes to its own localStorage key and a separate CSS
-/// variable so adjusting one doesn't move the other. The assistant
-/// menu's slider feeds this state, and the prompt-wrap consumes the
-/// resolved percentage as a `max-width` (% of the overlay column, so
-/// no resize bookkeeping is needed).
-const ASSISTANT_STORAGE_KEY = "chan.assistantPromptWidth.ratio";
-
 /// Slider bounds in percent. 100 % is the "no cap" sentinel; below
 /// 25 % the editor would be unusably narrow on any normal window,
 /// so we clamp there.
@@ -49,10 +40,6 @@ const MIN_RESOLVED_PX = 240;
 const DEFAULT_RATIO = 0.8;
 
 export const pageWidth = $state<{ ratio: number }>({ ratio: DEFAULT_RATIO });
-
-export const assistantPromptWidth = $state<{ ratio: number }>({
-  ratio: DEFAULT_RATIO,
-});
 
 /// Global overlay-maximize toggle. When on, every OverlayShell
 /// widens its panel from `min(1200px, calc(100vw - 48px))` to
@@ -108,33 +95,7 @@ export function applyInitialPageWidth(): void {
   if (typeof window === "undefined") return;
   pageWidth.ratio = readRatio();
   applyToDom(pageWidth.ratio);
-  assistantPromptWidth.ratio = readAssistantRatio();
   overlayMaximized.on = readOverlayMaximized();
-}
-
-function readAssistantRatio(): number {
-  try {
-    const raw = localStorage.getItem(ASSISTANT_STORAGE_KEY);
-    if (!raw) return DEFAULT_RATIO;
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return DEFAULT_RATIO;
-    return clampRatio(n);
-  } catch {
-    return DEFAULT_RATIO;
-  }
-}
-
-/// User-driven update for the assistant prompt cap. Pure state +
-/// persistence; the prompt-wrap reads `assistantPromptWidth.ratio`
-/// directly as a `max-width` percentage, so no DOM apply is needed.
-export function setAssistantPromptWidth(r: number): void {
-  const next = clampRatio(r);
-  assistantPromptWidth.ratio = next;
-  try {
-    localStorage.setItem(ASSISTANT_STORAGE_KEY, String(next));
-  } catch {
-    /* quota or disabled storage; in-memory value still applies */
-  }
 }
 
 function readOverlayMaximized(): boolean {

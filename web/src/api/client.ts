@@ -6,7 +6,6 @@
 
 import type {
   BuildInfo,
-  CliDetectionResponse,
   ContentSearchResponse,
   FileResponse,
   FsGraphResponse,
@@ -17,10 +16,6 @@ import type {
   HeadingRow,
   IndexStatus,
   LanguageGraphResponse,
-  LlmCompletionRequest,
-  LlmCompletionResponse,
-  LlmStatus,
-  LlmToolSpec,
   MoveResponse,
   ReportFileStats,
   ReportPrefix,
@@ -56,6 +51,55 @@ export function withTokenQuery(path: string): string {
   return transportWithTokenQuery(path);
 }
 
+const BROWSER_SESSION_WINDOW_KEY = "chan.session.window";
+let sessionStorageWarningShown = false;
+
+function randomBrowserSessionId(): string {
+  const bytes = new Uint8Array(4);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+  return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function browserSessionWindowId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const existing = window.sessionStorage.getItem(BROWSER_SESSION_WINDOW_KEY);
+    if (existing?.trim()) return existing.trim();
+    const generated = randomBrowserSessionId();
+    window.sessionStorage.setItem(BROWSER_SESSION_WINDOW_KEY, generated);
+    return generated;
+  } catch {
+    if (!sessionStorageWarningShown) {
+      sessionStorageWarningShown = true;
+      console.warn("[chan] sessionStorage unavailable; falling back to shared session key");
+    }
+    return null;
+  }
+}
+
+/// Session blob key for this browser/webview window. chan-desktop
+/// appends `?w=<window-label>` to each drive window URL; plain browser
+/// tabs get a per-tab sessionStorage key so they do not overwrite
+/// each other. If storage is unavailable we fall back to historical
+/// shared `default` behavior.
+export function sessionWindowId(): string {
+  if (typeof window === "undefined") return "default";
+  const raw = new URL(window.location.href).searchParams.get("w");
+  const trimmed = raw?.trim();
+  if (trimmed) return trimmed;
+  return browserSessionWindowId() ?? "default";
+}
+
+export function sessionPath(): string {
+  return `/api/session?w=${encodeURIComponent(sessionWindowId())}`;
+}
+
 function req<T>(
   method: string,
   path: string,
@@ -66,35 +110,11 @@ function req<T>(
   return request<T>(method, path, body, signal, timeoutMs);
 }
 
-/// First 16 hex chars of SHA-256(input). Reused for assistant blob
-/// keys (file paths and group sortedKeys both go through this) so
-/// arbitrary user strings land inside chan-drive's strict blob-key
-/// validator (alnum + `-_.`, max 100 chars). Truncating to 64 bits
-/// is fine at our scale: a single drive maxes out around hundreds
-/// of conversations, where the birthday-bound collision risk is on
-/// the order of 1e-15.
-export async function assistantHash16(input: string): Promise<string> {
-  const buf = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(input),
-  );
-  const bytes = new Uint8Array(buf);
-  let hex = "";
-  for (let i = 0; i < 8; i++) {
-    hex += bytes[i]!.toString(16).padStart(2, "0");
-  }
-  return hex;
-}
-
-async function blobKeyForPath(path: string): Promise<string> {
-  return `${await assistantHash16(path)}.json`;
-}
-
 export const api = {
   drive: () => req<DriveInfo>("GET", "/api/drive"),
   /// Update the drive's display name in the global registry.
-  /// Other preferences (fonts, assistant backend, attachments dir)
-  /// live in the global config and round-trip through /api/config.
+  /// Other preferences live in the global config and round-trip
+  /// through /api/config.
   /// Empty / whitespace-only name clears the field.
   updatePreferences: (body: { name?: string | null }) =>
     req<DriveInfo>("PATCH", "/api/drive", body),
@@ -104,96 +124,6 @@ export const api = {
   /// Replace the global config (whole-block PATCH).
   updateConfig: (body: GlobalConfig) =>
     req<GlobalConfig>("PATCH", "/api/config", body),
-  /// LLM backend status: which backend, model, and key state. Used
-  /// by the Settings tab "Assistant" section to show ready / not
-  /// ready and where the user should set their key.
-  llmStatus: () => req<LlmStatus>("GET", "/api/llm/status"),
-  /// Detect all local assistant CLIs using the current configured
-  /// command overrides.
-  llmCliDetection: () => req<CliDetectionResponse>("GET", "/api/llm/cli_detection"),
-  /// One-shot assistant call. The whole conversation lives in
-  /// `messages`; the server forwards to the configured backend.
-  /// `signal` lets the caller abort a slow request (the Stop
-  /// button in the inline-assist panel uses this); aborting drops
-  /// the connection, axum sees the disconnect and the upstream
-  /// (Anthropic / Ollama) request gets cancelled too.
-  ///
-  /// No client-side timeout: tool-use loops and slow models can
-  /// legitimately run for minutes. The user-facing Stop button
-  /// (via `signal`) is the cancellation path; the server enforces
-  /// its own upstream deadlines.
-  llmComplete: (body: LlmCompletionRequest, signal?: AbortSignal) =>
-    req<LlmCompletionResponse>("POST", "/api/llm/complete", body, signal, 0),
-  /** Tool catalog: the server's `default_tools()` list. */
-  llmTools: () => req<LlmToolSpec[]>("GET", "/api/llm/tools"),
-  /// Per-file assistant conversation persistence. Each file's
-  /// conversation is its own JSON under `.chan/assistant/`, keyed
-  /// by `<sha256(path)[..16]>.json`. The hash hides the raw path
-  /// from chan-drive's blob-key validator (which forbids `/` and
-  /// other separators) and matches the on-disk shape the codebase
-  /// shipped with before the chan-core -> chan-drive rename.
-  /// `null` from get means no conversation yet (server returns
-  /// 204).
-  getConversation: async (path: string): Promise<unknown | null> => {
-    const key = await blobKeyForPath(path);
-    const v = await req<unknown | undefined>(
-      "GET",
-      `/api/assistant/conversation?path=${encodeURIComponent(key)}`,
-    );
-    return v ?? null;
-  },
-  putConversation: async (path: string, body: unknown): Promise<void> => {
-    const key = await blobKeyForPath(path);
-    await req<void>(
-      "PUT",
-      `/api/assistant/conversation?path=${encodeURIComponent(key)}`,
-      body,
-    );
-  },
-  deleteConversation: async (path: string): Promise<void> => {
-    const key = await blobKeyForPath(path);
-    await req<void>(
-      "DELETE",
-      `/api/assistant/conversation?path=${encodeURIComponent(key)}`,
-    );
-  },
-  /// Generic assistant blob get/put/delete. Same endpoint as
-  /// getConversation but typed for non-file keys: the group-LRU
-  /// manifest (`g_index`) and hashed group conversations
-  /// (`g_<sha256(sortedKey)>`).
-  getAssistantBlob: async (key: string): Promise<unknown | null> => {
-    const v = await req<unknown | undefined>(
-      "GET",
-      `/api/assistant/conversation?path=${encodeURIComponent(key)}`,
-    );
-    return v ?? null;
-  },
-  putAssistantBlob: (key: string, body: unknown) =>
-    req<void>(
-      "PUT",
-      `/api/assistant/conversation?path=${encodeURIComponent(key)}`,
-      body,
-    ),
-  deleteAssistantBlob: (key: string) =>
-    req<void>(
-      "DELETE",
-      `/api/assistant/conversation?path=${encodeURIComponent(key)}`,
-    ),
-  /// List every assistant-blob key on disk (per-file hashes, the
-  /// group manifest, the group blobs, the drive blob). The scope-
-  /// history overlay reads this to enumerate persisted threads;
-  /// every other caller knows its key up front.
-  listAssistantBlobs: () =>
-    req<string[]>("GET", "/api/assistant/conversations"),
-  /// Save a markdown blob under the configured answers_dir.
-  /// Body shape matches the server's `AnswerBody`: `content` is
-  /// the raw markdown; optional `name` overrides the filename
-  /// stem (the server falls back to the first H1, then a
-  /// timestamp slug). Returns the drive-relative path that was
-  /// written. Used by the scope-history overlay's "Export to .md"
-  /// action.
-  saveAnswerMarkdown: (body: { content: string; name?: string }) =>
-    req<{ path: string }>("POST", "/api/answers", body),
   /** Upload an image attachment. Multipart POST that the editor's `![`
    *  picker, drag-and-drop, and clipboard paste all funnel through.
    *  Returns the drive-relative path of the saved file.
@@ -398,18 +328,18 @@ export const api = {
   storageReset: (mode: ResetMode) =>
     req<ResetResponse>("POST", "/api/storage/reset", { mode }),
   /// Read the persisted session payload. Server keys by `?w=<id>`;
-  /// the browser frontend always uses "default" so a single drive
-  /// has one session file. Returns `null` when none exists yet
+  /// chan-desktop windows pass their unique window label in the page URL,
+  /// while normal browser tabs use `default`. Returns `null` when none exists yet
   /// (server returns 204 → req() yields undefined → coerced to
   /// null for the caller's convenience).
   getSession: async (): Promise<unknown | null> => {
-    const v = await req<unknown | undefined>("GET", "/api/session?w=default");
+    const v = await req<unknown | undefined>("GET", sessionPath());
     return v ?? null;
   },
   /// Persist the session payload. Body shape is opaque to the
   /// server; the frontend sends `serializeLayout()` output.
   putSession: (body: unknown) =>
-    req<void>("PUT", "/api/session?w=default", body),
+    req<void>("PUT", sessionPath(), body),
   links: () => req<GraphSnapshot>("GET", "/api/links"),
   /// Typed graph payload powering the graph view tab.
   graph: () => req<GraphView>("GET", "/api/graph"),
@@ -428,50 +358,7 @@ export const api = {
       "GET",
       `/api/fs-graph?scope=${encodeURIComponent(opts.scope)}&path=${encodeURIComponent(opts.path)}&depth=${encodeURIComponent(String(opts.depth ?? 1))}`,
     ),
-  /// Keepalive variant of putConversation. Fires the PUT with
-  /// `keepalive: true` so the request survives a page unload (the
-  /// pagehide flush registered by `installSessionFlushHook` calls this
-  /// on any pending assistant save). Synchronous (no await on response)
-  /// because the page is going away; the catch swallows errors that
-  /// arrive after teardown.
-  putConversationKeepalive: async (
-    path: string,
-    body: unknown,
-  ): Promise<void> => {
-    const key = await blobKeyForPath(path);
-    sendKeepalive(
-      `/api/assistant/conversation?path=${encodeURIComponent(key)}`,
-      body,
-    );
-  },
-  /// Same shape as putConversationKeepalive for the generic blob
-  /// endpoint (group / drive conversations).
-  putAssistantBlobKeepalive: (key: string, body: unknown): void => {
-    sendKeepalive(
-      `/api/assistant/conversation?path=${encodeURIComponent(key)}`,
-      body,
-    );
-  },
 };
-
-/// Fire a JSON PUT with `keepalive: true` so the request is allowed
-/// to outlive the document. Mirrors `flushSessionSaveOnExit`'s shape;
-/// no response handling because the page is unloading.
-function sendKeepalive(path: string, body: unknown): void {
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  const tok = transportAuthToken();
-  if (tok) headers.authorization = `Bearer ${tok}`;
-  try {
-    fetch(apiPath(path), {
-      method: "PUT",
-      headers,
-      body: JSON.stringify(body),
-      keepalive: true,
-    }).catch(() => {});
-  } catch {
-    /* page is going away; nothing useful we can do */
-  }
-}
 
 /// Encode a path as a sequence of percent-encoded segments. We keep `/`
 /// raw so axum's `*path` capture works.

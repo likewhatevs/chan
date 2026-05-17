@@ -1,12 +1,6 @@
 <script lang="ts">
-  // Generic chat-style bubble. Visually matches the assistant /
-  // user bubbles in InlineAssist (same CSS variables for the body
-  // background, same role + timestamp row, same rounded body).
-  // InlineAssist still ships its own inline markup because its
-  // bubbles wrap a lot of streaming / mode-toggle / tool-chip /
-  // edit-card behaviour that doesn't belong in a generic shell.
-  // This component covers the read-only callers: search results
-  // and the scope-history overlay.
+  // Generic chat-style bubble. Used by read-only callers that want
+  // role/timestamp chrome around compact text.
   //
   // The shell intentionally exposes no interaction: click handling,
   // keyboard focus, and the `active` highlight are owned by the
@@ -25,11 +19,10 @@
     header,
   }: {
     /// Horizontal alignment. `right` mirrors the user-side bubble
-    /// (right-aligned, tinted body); `left` matches the assistant /
-    /// neutral bubble.
+    /// (right-aligned, tinted body); `left` is the neutral bubble.
     align?: "left" | "right";
     /// Optional uppercase role label rendered above the body (e.g.
-    /// "You", "Assistant", "Group"). Omit to skip the role row
+    /// "You", "Group"). Omit to skip the role row
     /// unless `timestampLabel` or `header` is supplied.
     role?: string;
     /// Pre-formatted relative-time string (e.g. "3m ago"). The
@@ -63,9 +56,7 @@
 </div>
 
 <style>
-  /* Visual contract mirrors the inline bubbles in InlineAssist so
-     the two surfaces read as the same component family. Same
-     CSS variables, same max-width, same role + ts typography. */
+  /* Same max-width and role + timestamp typography across callers. */
   .bubble {
     max-width: 85%;
     display: flex;
@@ -95,14 +86,14 @@
   }
 
   .body {
-    background: var(--assistant-bubble-bg);
+    background: var(--bubble-bg);
     padding: 6px 10px;
     border-radius: 8px;
     font-size: 15px;
     line-height: 1.5;
     word-break: break-word;
   }
-  .bubble.right .body { background: var(--assistant-user-bubble-bg); }
+  .bubble.right .body { background: var(--bubble-right-bg); }
 
   /* Active highlight for list-driven keyboard navigation. Soft
      ring around the body so the row reads as "selected" without

@@ -128,7 +128,7 @@ export function dateAtCaret(view: EditorView): {
 /// Cmd+Enter at a date pill: open the popover so the user can
 /// re-pick day / format with the keyboard. Returns true (consumed)
 /// when a pill matches; false to fall through to the next keymap
-/// entry (which today is Mod-Enter → assistant submit).
+/// entry.
 export function openDateAtCaret(view: EditorView): boolean {
   const hit = dateAtCaret(view);
   if (!hit) return false;

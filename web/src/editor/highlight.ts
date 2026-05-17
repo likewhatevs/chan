@@ -60,9 +60,8 @@ function paletteHighlight(p: Palette): HighlightStyle {
     // attribute names so bare identifiers (e.g. `foo` on its own
     // line in a python block) fall through to the editor's body
     // color: white on dark, near-black on light. GitHub Primer
-    // paints these orange, but #ffa657 collides with the chan
-    // brand orange (--assistant-accent / ensō logo), so we
-    // deliberately diverge.
+    // paints these orange, but #ffa657 collides with chan's
+    // document/brand orange, so we deliberately diverge.
     { tag: [t.typeName, t.namespace, t.className, t.tagName], color: p.tag },
     { tag: [t.regexp, t.escape], color: p.regexp },
     { tag: t.invalid, color: p.invalid },

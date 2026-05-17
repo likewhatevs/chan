@@ -1,19 +1,15 @@
-// Lightweight markdown -> sanitized HTML helper for assistant chat
-// bubbles. Unlike the editor (TipTap-driven, round-tripped via
-// tiptap-markdown), the chat panel just needs read-only rendering
-// of headers / lists / code / links / paragraphs.
+// Lightweight markdown -> sanitized HTML helper for read-only
+// previews that need headers / lists / code / links / paragraphs.
 //
 // Output is sanitized via DOMPurify before any {@html ...} insert
-// even though the assistant is our own backend: the model can be
-// influenced by tool results and we want a single chokepoint that
-// stays safe regardless of upstream behavior changes.
+// so every {@html ...} insertion goes through the same chokepoint.
 
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 
-// Defaults are fine for chat output: GFM (tables, strikethrough),
+// Defaults are fine for previews: GFM (tables, strikethrough),
 // auto-linking off (we don't want to silently rewrite text), no
-// breaks (let the model decide paragraph boundaries).
+// breaks (preserve authored paragraph boundaries).
 marked.setOptions({
   gfm: true,
   breaks: false,

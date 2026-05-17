@@ -33,9 +33,8 @@ export interface DatePopoverOpts {
   /// When true, the popover renders as a pure visualization: the
   /// format-row controls are omitted, day cells aren't clickable,
   /// keyboard navigation is disabled, and Enter / day-click never
-  /// fire `onCommit`. Used by the assistant chat's read-only
-  /// editor view and by any other surface (fs-locked file, user
-  /// "read" toggle) where the date pill is informational only.
+  /// fire `onCommit`. Used by read-only surfaces (fs-locked file,
+  /// user "read" toggle) where the date pill is informational only.
   readonly?: boolean;
 }
 

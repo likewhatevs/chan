@@ -52,14 +52,10 @@
     disabled?: boolean;
     /// Show the image-insert button. Defaults on for the file
     /// editor; opt out from contexts where pasting `![alt](url)`
-    /// into the buffer doesn't make sense (the assistant prompt,
-    /// where the markdown gets serialized straight into a request).
+    /// into the buffer doesn't make sense.
     showImage?: boolean;
     /// Floating pill (position: absolute over the editor canvas)
-    /// vs in-flow row (block-level above the editor). The file
-    /// editor uses floating; the assistant prompt mounts it above
-    /// the prompt box as a row so the formatting chrome doesn't
-    /// sit on top of the text the user is typing.
+    /// vs in-flow row (block-level above the editor).
     floating?: boolean;
     /// Optional current rendering mode. When set together with
     /// `onModeToggle`, the toolbar grows a trailing source/wysiwyg
@@ -399,9 +395,8 @@
 </div>
 
 <style>
-  /* Shared style toolbar chrome. File editors and assistant prompts
-     both render this component, so all control dimensions and states
-     live here instead of in the host-specific surfaces. */
+  /* Shared style toolbar chrome. All control dimensions and states
+     live here instead of in host-specific surfaces. */
   .style-toolbar {
     --toolbar-control-h: 24px;
     --toolbar-control-min-w: 26px;

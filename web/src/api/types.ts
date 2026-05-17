@@ -7,8 +7,8 @@ export type DriveInfo = {
   /// Mirror of GlobalConfig.preferences. Per-drive overrides
   /// were removed; settings are always per-device-global. Carried
   /// here so a single `/api/drive` round-trip is enough to
-  /// render the editor with the right fonts / assistant config
-  /// without a follow-up `/api/config` fetch.
+  /// render the editor with the right fonts without a follow-up
+  /// `/api/config` fetch.
   preferences: Preferences;
 };
 
@@ -44,266 +44,6 @@ export type KnownDrive = {
 /// (toolbar, panes, status bar) is not affected.
 export type EditorTheme = "github" | "google_docs" | "word";
 
-export type AssistantBackendKind =
-  | "claude_cli"
-  | "gemini_cli"
-  | "codex_cli";
-
-/// Per-CLI override surface. The local `claude` / `gemini` / `codex` CLIs own
-/// their own auth, so the only Settings-managed field is `enabled`;
-/// `model` is written from the assistant overlay's inspector.
-export type CliPrefs = {
-  enabled: boolean;
-  model?: string | null;
-  cmd_override?: string | null;
-};
-
-export type AssistantPrefs = {
-  /// Derived server-side: true when a default backend is set AND the
-  /// matching provider's enable flag is on. Read-only on PATCH (the
-  /// server recomputes it from the per-provider flags). Drives the
-  /// assistant button / Cmd+I gate.
-  effective_enabled: boolean;
-  /// Which provider is the default assistant. Sticky across enable/
-  /// disable toggles so user intent survives a "disable then re-
-  /// enable" round-trip; null means no default picked.
-  default_backend: AssistantBackendKind | null;
-  answers_dir: string;
-  claude_cli: CliPrefs;
-  gemini_cli: CliPrefs;
-  codex_cli: CliPrefs;
-};
-
-export type LlmModelEntry = {
-  name: string;
-  supports_tools: boolean;
-  /// Whether the model accepts an extended-thinking `thinking`
-  /// block on the wire. Today only Anthropic Opus / Sonnet 4.x
-  /// return true here; the inspector hides the effort knob when
-  /// false.
-  supports_thinking: boolean;
-};
-
-export type LlmStatus = {
-  backend: string;
-  model: string | null;
-  ready: boolean;
-  /// Human-readable explanation of why `ready = false`. Absent
-  /// when the assistant is ready.
-  reason?: string | null;
-  enabled: boolean;
-  supports_tools: boolean;
-};
-
-export type CliDetectionView = {
-  backend: AssistantBackendKind;
-  ready: boolean;
-  command: string[];
-  reason?: string | null;
-};
-
-export type CliDetectionResponse = {
-  detections: CliDetectionView[];
-};
-
-/// Mirror of chan-core's Message / ToolSpec / etc. Kept loose
-/// (unknown JSON for tool inputs) since the schema is owned by
-/// the backend.
-export type LlmRole = "system" | "user" | "assistant" | "tool";
-
-export type LlmMessage = {
-  role: LlmRole;
-  content: string;
-  tool_call_id?: string;
-  tool_calls?: LlmToolCall[];
-  /// Optional multimodal payload on `Role::User` messages. Each
-  /// entry is base64-encoded image bytes plus the MIME. The
-  /// chan-llm backend that handles the request forwards them
-  /// natively (Anthropic image content block, Gemini inline_data,
-  /// Ollama images array); backends without image support drop
-  /// them silently — the text content is still authoritative.
-  images?: LlmImageInput[];
-};
-
-export type LlmImageInput = {
-  mime_type: string;
-  data: string;
-};
-
-export type LlmToolSpec = {
-  name: string;
-  description: string;
-  input_schema: unknown;
-};
-
-export type LlmToolCall = {
-  id: string;
-  name: string;
-  input: unknown;
-};
-
-export type LlmCompletionRequest = {
-  messages: LlmMessage[];
-  tools?: LlmToolSpec[];
-  max_tokens?: number;
-  temperature?: number;
-  /// Client-generated correlation id echoed on every llm.* WS frame
-  /// the server emits while this request is in flight. Lets the
-  /// frontend filter the broadcast channel to its own turn so
-  /// streaming deltas from a sibling window don't crosstalk.
-  session_id?: string;
-};
-
-export type LlmStopReason =
-  | "end_turn"
-  | "max_tokens"
-  | "tool_use"
-  | "stop_sequence"
-  | "cancelled"
-  | "other";
-
-export type UnknownAgentStatus = {
-  kind: string;
-  [key: string]: unknown;
-};
-
-/// Mirrors chan-llm's non-exhaustive `AgentStatus`; unknown kinds
-/// must be tolerated by reducers and UI.
-export type AgentStatus =
-  | { kind: "spawned"; backend: string; pid: number | null }
-  | {
-      kind: "ready";
-      backend: string;
-      session_id: string | null;
-      model: string | null;
-      version: string | null;
-    }
-  | { kind: "thinking"; backend: string; status: string | null }
-  | { kind: "heartbeat"; backend: string; idle_ms: number }
-  | { kind: "turn_stopping"; backend: string; reason: string | null }
-  | {
-      kind: "rate_limit";
-      backend: string;
-      status: string;
-      resets_at: string | null;
-      rate_limit_type: string | null;
-      in_overage: boolean;
-    }
-  | { kind: "exited"; backend: string; code: number | null; success: boolean }
-  | { kind: "unhealthy"; backend: string; reason: string; detail: string | null }
-  | { kind: "cancelled"; backend: string }
-  | UnknownAgentStatus;
-
-export type UnknownAgentActivity = {
-  kind: string;
-  [key: string]: unknown;
-};
-
-/// Mirrors chan-llm's non-exhaustive `AgentActivity`; JSON payloads
-/// owned by backend tools stay unknown until a caller narrows them.
-export type AgentActivity =
-  | { kind: "session_started"; backend: string; session_id: string | null }
-  | {
-      kind: "message_started";
-      backend: string;
-      message_id: string | null;
-      parent_id?: string | null;
-    }
-  | { kind: "thinking_started"; backend: string; parent_id?: string | null }
-  | {
-      kind: "thinking_delta";
-      backend: string;
-      text: string;
-      parent_id?: string | null;
-    }
-  | {
-      kind: "tool_started";
-      backend: string;
-      id: string;
-      name: string;
-      parent_id?: string | null;
-    }
-  | {
-      kind: "tool_args_delta";
-      backend: string;
-      id: string | null;
-      partial_json: string;
-      parent_id?: string | null;
-    }
-  | {
-      kind: "tool_finished";
-      backend: string;
-      id: string;
-      name: string | null;
-      output: unknown;
-      is_error: boolean;
-      parent_id?: string | null;
-    }
-  | {
-      kind: "tool_denied";
-      backend: string;
-      id: string | null;
-      name: string | null;
-      reason: string | null;
-      input: unknown;
-      parent_id?: string | null;
-    }
-  | { kind: "agent_note"; backend: string; text: string; parent_id?: string | null }
-  | { kind: "turn_usage"; backend: string; usage: unknown }
-  | UnknownAgentActivity;
-
-export type UserOption = {
-  label: string;
-  description?: string | null;
-};
-
-export type UserQuestion = {
-  question: string;
-  header?: string | null;
-  multi_select: boolean;
-  options: UserOption[];
-};
-
-export type UnknownUserRequest = {
-  kind: string;
-  [key: string]: unknown;
-};
-
-export type UserRequest =
-  | {
-      kind: "survey";
-      backend: string;
-      id: string;
-      questions: UserQuestion[];
-      parent_id: string | null;
-    }
-  | UnknownUserRequest;
-
-export type LlmStatusFrame = {
-  type: "llm.status";
-  session_id: string;
-  status: AgentStatus;
-};
-
-export type LlmActivityFrame = {
-  type: "llm.activity";
-  session_id: string;
-  activity: AgentActivity;
-};
-
-export type LlmUserRequestFrame = {
-  type: "llm.user_request";
-  session_id: string;
-  request: UserRequest;
-};
-
-export type LlmCompletionResponse = {
-  content: string;
-  tool_calls: LlmToolCall[];
-  stop_reason: LlmStopReason;
-  model: string;
-};
-
 export type ThemeChoice = "system" | "light" | "dark";
 
 export type PaneWidths = {
@@ -315,10 +55,6 @@ export type PaneWidths = {
   /// Optional on the wire so older servers (no `outline` field in
   /// PaneWidths) still parse cleanly; the client fills the default.
   outline?: number;
-  /// Width of the assistant overlay's right-side inspector pane.
-  /// Optional on the wire so older servers (no `assistant` field in
-  /// PaneWidths) still parse cleanly; the client fills the default.
-  assistant?: number;
 };
 
 /// Vertical density for paragraphs and lists in the editor.
@@ -326,9 +62,16 @@ export type PaneWidths = {
 /// legacy read alias accepted from older persisted configs.
 export type LineSpacing = "standard" | "compact" | "tight";
 
+export type SearchAggression = "conservative" | "balanced" | "aggressive";
+
+export type TerminalPreferences = {
+  idle_timeout_secs: number;
+  session_cap: number;
+  ring_bytes: number;
+};
+
 export type Preferences = {
   editor_theme: EditorTheme;
-  assistant: AssistantPrefs;
   /// Where image uploads land (relative to drive root). Default
   /// `attachments/`. Not exposed in the Settings UI; round-tripped
   /// here so save() doesn't accidentally reset the value when the
@@ -346,6 +89,13 @@ export type Preferences = {
   /// selection in the calendar picker's format dropdown.
   /// Format ids are defined in `web/src/editor/dateFormats.ts`.
   date_format: string;
+  /// Search indexer resource profile. Not surfaced in Settings yet,
+  /// but round-tripped by /api/config so CLI/server config changes
+  /// remain visible to clients.
+  search_aggression: SearchAggression;
+  /// Terminal PTY session retention settings. Not surfaced in
+  /// Settings yet; round-tripped for config preservation.
+  terminal: TerminalPreferences;
 };
 
 export type TreeEntry = {

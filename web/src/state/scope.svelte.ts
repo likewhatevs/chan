@@ -1,5 +1,5 @@
-// Shared scope picker for the floating overlays (search, assistant,
-// graph). All three surfaces care about the same question — "what
+// Shared scope picker for the floating overlays (search, graph).
+// Both surfaces care about the same question — "what
 // part of my world are we working on right now?" — and render the
 // same dropdown:
 //
@@ -13,18 +13,16 @@
 //     than the drive but broader than a single file),
 //   - a "git repo" entry per repo covering visible files (git_repo
 //     scope; a project subset of the drive),
-//   - a "whole drive" entry that always exists (drive scope;
-//     each surface labels it differently — assistant says
-//     "Drive Q&A", graph says "Whole drive"),
+//   - a "whole drive" entry that always exists (drive scope),
 //   - a "global" entry for cross-drive scope (every chan drive
 //     this user has touched). Surfaced as a placeholder for now;
 //     enabled flips on once backend cross-drive indexing exists.
 //
 // The id format is the discriminator the consumer stores:
 // `file:<path>`, `group:<key>`, `dir:<path>`, `git_repo:<root>`,
-// `drive`, or `global`. Per-surface state objects (e.g.
-// `assistantOverlay.contextId`, `graphOverlay.scopeId`) hold the
-// chosen id; the helpers here turn it into a typed ScopeOption.
+// `drive`, or `global`. Per-surface state objects such as
+// `graphOverlay.scopeId` hold the chosen id; the helpers here turn
+// it into a typed ScopeOption.
 
 import { layout } from "./tabs.svelte";
 // The `dir` scope reads the file browser overlay's current
@@ -49,9 +47,7 @@ export type ScopeOption =
       enabled?: boolean;
       /// True when the underlying tab is read-only (filesystem-
       /// locked or user-toggled). Read-only files stay searchable
-      /// and answerable but the assistant can't write to them; the
-      /// dropdown appends a "(read-only)" tag and the apply-edit
-      /// path refuses to save.
+      /// and visible; consumers can mark them in their dropdowns.
       readOnly?: boolean;
     }
   | {

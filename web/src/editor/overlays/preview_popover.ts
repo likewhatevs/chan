@@ -1,7 +1,7 @@
 // File preview popover. Anchored to a clicked widget (wiki / contact
 // pill, image atom etc.) and shown in read-only contexts where the
-// usual "click reveals source" affordance doesn't apply (assistant
-// chat replies, user-toggled read mode, fs-locked file).
+// usual "click reveals source" affordance doesn't apply (user-toggled
+// read mode, fs-locked file).
 //
 // Behavior:
 //   - markdown / text files: fetch and render via the chat-bubble

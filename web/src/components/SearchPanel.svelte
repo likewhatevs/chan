@@ -6,10 +6,8 @@
   // inspector on the right; double-click / Enter routes to the
   // editor (or graph, for a tag).
   //
-  // Q&A used to live here as a second tab; it moved to the global
-  // assistant overlay (Cmd/Ctrl+H) in v3 so all assistant flows
-  // share one panel and one context picker. This file is search-
-  // only now.
+  // Q&A used to live here as a second tab; that surface has been
+  // removed, so this file is search-only now.
 
   import { onDestroy } from "svelte";
   import { untrack } from "svelte";
@@ -171,7 +169,7 @@
   }
 
   /// Scope picker shape — same dropdown contract as Graph and
-  /// Assistant. Re-derives whenever the layout shifts so opening a
+  /// details pane. Re-derives whenever the layout shifts so opening a
   /// new pane or switching the visible tab refreshes the options
   /// without reopening the panel.
   const scopeOptions = $derived<ScopeOption[]>(availableSearchScopes());

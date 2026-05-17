@@ -262,10 +262,10 @@
   }
   /* Two-column row layout used inside HamburgerMenu rows: label
      flush-left, chord (Cmd+P, …) flush-right. Defined globally so
-     every overlay menu (search, graph, files, assistant) and the
-     empty-pane menu share one set of class names. Rows without a
-     registered chord still render an empty `.menu-row-chord`
-     sibling so the right column stays vertically aligned. */
+     every overlay menu and the empty-pane menu share one set of
+     class names. Rows without a registered chord still render an
+     empty `.menu-row-chord` sibling so the right column stays
+     vertically aligned. */
   :global(.menu-row-label) {
     flex: 1;
   }

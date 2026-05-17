@@ -7,11 +7,10 @@
 //
 // Reset triggers: mousedown, click, touchstart, plus a
 // `selectionchange` listener that only fires when a real, non-empty
-// text selection lands (the pill's two useful actions on a selection
-// are Search and Assistant). Keyboard input (`keydown`) is NOT a
-// reset trigger: typing or arrow-key caret motion should leave the
-// floating pills hidden. Mouse motion / wheel / scroll are NOT reset
-// triggers either: cursor-following scroll while the user types
+// text selection lands (used by the search action). Keyboard input
+// (`keydown`) is NOT a reset trigger: typing or arrow-key caret
+// motion should leave the floating pills hidden. Mouse motion / wheel /
+// scroll are NOT reset triggers either: cursor-following scroll while the user types
 // would otherwise pop the pill back on every line wrap, and ambient
 // mouse twitches over the writing surface are not real intent. The
 // pill stays hidden until the user clicks or selects text.

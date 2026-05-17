@@ -33,7 +33,6 @@
     Table2,
     Type,
   } from "lucide-svelte";
-  import EnsoIcon from "./EnsoIcon.svelte";
   import {
     SHORTCUTS,
     currentOS,
@@ -60,7 +59,6 @@
 
   import {
     fileOps,
-    openAssistant,
     openFsGraphForFile,
     openGraphForFile,
     openGraphForTag,
@@ -242,7 +240,7 @@
   // Re-uses the existing tab menu bubble (the same one that opens
   // from the tab dot). The bubble carries Duplicate / Rename /
   // mode-toggle / outline / style-toolbar plus our three new
-  // actions (Reload / Call assistant / Graph this). Anchored at
+  // actions (Reload / Search / Graph this). Anchored at
   // the click coords by synthesizing a zero-size rect.
 
   function onEditorContext(e: MouseEvent): void {
@@ -266,11 +264,6 @@
     } catch (err) {
       console.error("[chan] reload failed", err);
     }
-  }
-
-  function doOpenAssistant(): void {
-    closeTabMenu();
-    openAssistant();
   }
 
   function doOpenSettings(): void {
@@ -529,13 +522,6 @@
           </span>
           <span class="mbtn-label">Graph this</span>
           <span class="mbtn-chord">{chordLabel("app.graph.toggle")}</span>
-        </button>
-        <button class="mbtn" onclick={doOpenAssistant}>
-          <span class="mbtn-icon">
-            <EnsoIcon size={16} />
-          </span>
-          <span class="mbtn-label">Call Agent</span>
-          <span class="mbtn-chord">{chordLabel("app.assistant.toggle")}</span>
         </button>
         <div class="msep" role="separator"></div>
         {#if splitsAllowed}

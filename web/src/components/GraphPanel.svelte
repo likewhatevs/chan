@@ -17,7 +17,6 @@
   import {
     ArrowLeft,
     ArrowRight,
-    Clock,
     Maximize2,
     Minimize2,
     Settings,
@@ -44,7 +43,6 @@
     graphReloadSignal,
     graphOverlay,
     openBrowser,
-    openScopeHistory,
     openSettings,
     paneWidths,
     persistPaneWidths,
@@ -70,8 +68,8 @@
 
   const visible = $derived(graphOverlay.open);
 
-  /// Dropdown options derived from the live layout. Same shape as
-  /// the assistant overlay; relabels "drive" as "Whole drive".
+  /// Dropdown options derived from the live layout; relabels
+  /// "drive" as "Whole drive".
   const scopeOptions = $derived<ScopeOption[]>(availableGraphScopes());
 
   const currentScope = $derived<ScopeOption | null>(
@@ -80,7 +78,8 @@
 
   /// Snap to a sensible scope on open if the saved scopeId no longer
   /// resolves (file closed since last open, group set changed). Skip
-  /// while the overlay is closed for the same reason as the assistant.
+  /// while the overlay is closed so background layout changes do not
+  /// rewrite saved graph state.
   $effect(() => {
     if (!visible) return;
     if (!currentScope) graphOverlay.scopeId = defaultScopeId();
@@ -971,14 +970,6 @@
         </option>
       {/each}
     </select>
-    <button
-      class="scope-history-btn"
-      onclick={openScopeHistory}
-      title="Open scope history"
-      aria-label="Open scope history"
-    >
-      <Clock size={14} strokeWidth={1.75} aria-hidden="true" />
-    </button>
     <div class="filters">
       {#each ["link", "tag", "mention", "language", "img", "folder"] as const as kind (kind)}
         {@const driveLike =
@@ -1329,28 +1320,8 @@
     cursor: pointer;
   }
   .scope-select:focus { outline: none; border-color: var(--link); }
-  .scope-history-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 24px;
-    padding: 0;
-    background: var(--bg);
-    color: var(--text-secondary);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    cursor: pointer;
-    transition: color 0.15s ease, border-color 0.15s ease;
-    flex-shrink: 0;
-  }
-  .scope-history-btn:hover {
-    color: var(--text);
-    border-color: var(--btn-hover);
-  }
   /* Window-manager chrome: maximize/restore on the far left of the
-     bar, close on the far right. Matches the scope-history-btn
-     styling so all overlay headers wear the same skin. */
+     bar, close on the far right. */
   .chrome-btn {
     display: inline-flex;
     align-items: center;

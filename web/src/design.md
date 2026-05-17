@@ -56,12 +56,7 @@ Tag (#)         Green       Hue-separated from media
 Contact         Yellow      Warm warning family (distinct from doc)
 Date / time     Grey        Neutral, low emphasis
 Broken / error  Red         Standard alert family
-Assistant       Orange      Brand family, softened
 ```
-
-The orange in document and assistant is the same family, but the
-assistant ensō is a softer tone so the brand mark does not fight
-content references in the editor.
 
 ## Resolved values per surface
 
@@ -91,7 +86,6 @@ Token              Dark         Light       Concept
 --g-binary         #58a6ff      #0969da     Binary file hue (FILE blue)
 --g-folder         #8e8e93      #6c6c70     Folder hue (neutral grey)
 --warn-text        #e3b341      #9a6700     Contact / warning
---assistant-accent #e58c4d      #c46a2a     Brand ensō
 --pill-wiki-fg     #ff8a3d      #c25a1f     Document pill
 --pill-image-fg    #b07dff      #7a4cd8     Media pill
 --pill-tag-fg      #6cd07a      #2f9444     Tag pill
@@ -188,9 +182,6 @@ Functional  --accent               Success green
             --warn-text            Warning amber (= contact hue)
             --danger-text          Errors / destructive
             --info-text            Unsaved-buffer dot
-Assistant   --assistant-bubble-bg          Assistant chat bubble
-            --assistant-user-bubble-bg     User chat bubble
-            --assistant-accent             Ensō tint
 Buttons     --btn-bg               Button face
             --btn-border           Button border
             --btn-hover            Button hover ring

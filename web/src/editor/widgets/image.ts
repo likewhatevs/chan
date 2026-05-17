@@ -73,8 +73,8 @@ function imageEditEntered(
 
 /// Lucide Copy + Check icons inlined as SVG strings — the widget is
 /// raw DOM, not Svelte, so we can't reuse lucide-svelte components.
-/// Sizes / stroke widths match the assistant-chat copy button
-/// (size 12, strokeWidth 1.75 for Copy; strokeWidth 2 for Check).
+/// Compact 12px icons with stroke weights tuned for the image
+/// widget's small action row.
 const COPY_ICON_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
 const CHECK_ICON_SVG =
@@ -288,8 +288,8 @@ class ImageWidget extends WidgetType {
     });
     wrap.appendChild(img);
 
-    // Read-only contexts (assistant chat replies, user-toggled
-    // read mode, fs-locked file) suppress the write-side chrome:
+    // Read-only contexts (user-toggled read mode, fs-locked file)
+    // suppress the write-side chrome:
     // no resize handle and no Edit button. The View / zoom button
     // stays so the user can fullscreen the image. Same live-facet
     // check the date / wiki widgets use.
@@ -321,10 +321,8 @@ class ImageWidget extends WidgetType {
       actions.appendChild(editBtn);
     }
     // Copy sits last in the row (Edit · View · Copy), available in
-    // read-only too (assistant chat replies, fs-locked file). Icon-
-    // only so the row stays compact; the same Lucide Copy glyph the
-    // assistant-chat copy buttons use. Transient Check feedback on
-    // success.
+    // read-only too. Icon-only so the row stays compact; transient
+    // Check feedback on success.
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
     copyBtn.className = "cm-md-image-action cm-md-image-copy";

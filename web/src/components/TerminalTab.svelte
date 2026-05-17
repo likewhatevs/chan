@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { Check, Clipboard, Pencil, Radio, RotateCcw, Search } from "lucide-svelte";
+  import { Check, Clipboard, Info, Pencil, Radio, RotateCcw, Search } from "lucide-svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import { SearchAddon } from "@xterm/addon-search";
@@ -10,15 +10,25 @@
   import { withTokenQuery } from "../api/client";
   import { chordFor } from "../state/shortcuts";
   import {
+    advanceTerminalSeq,
     allTerminalTabs,
     broadcastTerminalInput,
+    clearTerminalSession,
+    registerTerminalCloseSink,
     registerTerminalInputSink,
     renameTerminalTab,
     setTerminalBroadcastEnabled,
     setTerminalBroadcastTarget,
+    setTerminalMcpEnv,
+    setTerminalSession,
+    terminalMcpEnvEnabled,
     terminalTabName,
     type TerminalTab as TerminalTabState,
   } from "../state/tabs.svelte";
+  import { scheduleSessionSave } from "../state/store.svelte";
+  import { terminalWsPath } from "../terminal/session";
+  import { handleTerminalMetaKey } from "../terminal/keymap";
+  import { injectShowMcpEnvCommand } from "../terminal/mcpEnv";
   import { clampMenu } from "./menuClamp";
   import {
     closeTabMenu,
@@ -35,8 +45,13 @@
 
   type ServerFrame =
     | { type: "ready"; cols: number; rows: number }
+    | { type: "session"; id: string; seq: number; missed_bytes?: number }
+    | { type: "resize_other"; cols: number; rows: number }
+    | { type: "closed"; reason: CloseReason }
     | { type: "exit"; code: number }
-    | { type: "error"; message: string };
+    | { type: "error"; message?: string; reason?: string };
+
+  type CloseReason = "idle" | "drive" | "shutdown" | "explicit" | "capped" | "error";
 
   let host: HTMLDivElement | undefined = $state();
   let searchInput: HTMLInputElement | undefined = $state();
@@ -48,8 +63,14 @@
   let resizeObserver: ResizeObserver | null = null;
   let status = $state<"closed" | "connecting" | "connected" | "exited">("closed");
   let statusDetail = $state("");
+  let missedBytes = $state(0);
+  let sessionClosedReason = $state<CloseReason | null>(null);
   let findOpen = $state(false);
   let findQuery = $state("");
+  let mcpInfoOpen = $state(false);
+  let sawSessionControl = false;
+  let lastSessionSave = 0;
+  let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null;
   const menuOpen = $derived(tabMenu.openForTabId === tab.id);
   const menuPos = $derived.by(() => {
     const a = tabMenu.anchor;
@@ -61,6 +82,8 @@
   );
   const selectedBroadcastTargets = $derived(new Set(tab.broadcastTargetIds));
   const broadcastChord = chordFor("app.terminal.broadcast.toggle") ?? "";
+  const mcpEnvOn = $derived(terminalMcpEnvEnabled(tab));
+  const showMcpEnvDisabled = $derived(tab.sessionMcpEnv === false);
 
   $effect(() => {
     if (!host || term) return;
@@ -68,7 +91,14 @@
     return teardown;
   });
 
-  $effect(() => registerTerminalInputSink(tab.id, (data) => sendInput(data)));
+  $effect(() => {
+    const unregisterInput = registerTerminalInputSink(tab.id, (data) => sendInput(data));
+    const unregisterClose = registerTerminalCloseSink(tab.id, explicitCloseSession);
+    return () => {
+      unregisterInput();
+      unregisterClose();
+    };
+  });
 
   $effect(() => {
     if (!active) return;
@@ -90,6 +120,7 @@
         'SFMono-Regular, ui-monospace, Menlo, Consolas, "Liberation Mono", monospace',
       fontSize: 13,
       lineHeight: 1.15,
+      macOptionIsMeta: true,
       scrollback: 20_000,
       tabStopWidth: 8,
       theme: {
@@ -123,10 +154,8 @@
     term.loadAddon(serialize);
     term.loadAddon(new WebLinksAddon());
     term.open(host);
-    term.onData((data) => {
-      sendInput(data);
-      broadcastTerminalInput(tab, data);
-    });
+    term.attachCustomKeyEventHandler((ev) => handleTerminalMetaKey(ev, sendUserInput));
+    term.onData(sendUserInput);
     term.onResize(({ cols, rows }) => send({ type: "resize", cols, rows }));
     resizeObserver = new ResizeObserver(queueFit);
     resizeObserver.observe(host);
@@ -140,13 +169,20 @@
     closeSocket();
     status = "connecting";
     statusDetail = "";
+    missedBytes = 0;
+    sessionClosedReason = null;
+    sawSessionControl = false;
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const params = new URLSearchParams({
-      cols: String(term.cols),
-      rows: String(term.rows),
-      tab_name: terminalTabName(tab),
-    });
-    const path = withTokenQuery(`/api/terminal/ws?${params.toString()}`);
+    const path = withTokenQuery(
+      terminalWsPath({
+        cols: term.cols,
+        rows: term.rows,
+        tabName: terminalTabName(tab),
+        sessionId: tab.terminalSessionId,
+        lastSeq: tab.lastSeq,
+        mcpEnv: mcpEnvOn,
+      }),
+    );
     ws = new WebSocket(`${proto}//${window.location.host}${path}`);
     ws.binaryType = "arraybuffer";
     ws.onopen = () => {
@@ -156,11 +192,15 @@
     };
     ws.onmessage = async (event) => {
       if (event.data instanceof ArrayBuffer) {
-        term?.write(new Uint8Array(event.data));
+        const bytes = new Uint8Array(event.data);
+        term?.write(bytes);
+        recordOutputBytes(bytes.byteLength);
         return;
       }
       if (event.data instanceof Blob) {
-        term?.write(new Uint8Array(await event.data.arrayBuffer()));
+        const bytes = new Uint8Array(await event.data.arrayBuffer());
+        term?.write(bytes);
+        recordOutputBytes(bytes.byteLength);
         return;
       }
       let frame: ServerFrame;
@@ -171,20 +211,72 @@
       }
       if (frame.type === "ready") {
         statusDetail = `${frame.cols}x${frame.rows}`;
+      } else if (frame.type === "session") {
+        sawSessionControl = true;
+        setTerminalSession(tab, frame.id, frame.seq, mcpEnvOn);
+        scheduleTerminalSessionSave();
+        missedBytes = Math.max(0, Math.floor(frame.missed_bytes ?? 0));
+        status = "connected";
+        statusDetail = `session ${frame.id.slice(0, 8)}`;
+        if (missedBytes > 0) {
+          term?.writeln(`\r\nterminal replay missed ${missedBytes} bytes`);
+        }
+      } else if (frame.type === "resize_other") {
+        term?.resize(frame.cols, frame.rows);
+        statusDetail = `${frame.cols}x${frame.rows}`;
+      } else if (frame.type === "closed") {
+        sessionClosedReason = frame.reason;
+        status = "exited";
+        statusDetail = `session ended (${frame.reason})`;
+        clearTerminalSession(tab);
+        scheduleTerminalSessionSave();
+        term?.writeln(`\r\nsession ended (${frame.reason})`);
       } else if (frame.type === "exit") {
         status = "exited";
         statusDetail = `exit ${frame.code}`;
+        clearTerminalSession(tab);
+        scheduleTerminalSessionSave();
       } else if (frame.type === "error") {
-        statusDetail = frame.message;
-        term?.writeln(`\r\nterminal error: ${frame.message}`);
+        const detail = frame.message ?? frame.reason ?? "unknown error";
+        statusDetail = detail;
+        term?.writeln(`\r\nterminal error: ${detail}`);
       }
     };
     ws.onclose = () => {
+      if (tab.terminalSessionId && !sawSessionControl && status === "connecting") {
+        clearTerminalSession(tab);
+        scheduleTerminalSessionSave();
+      }
       if (status !== "exited") status = "closed";
     };
     ws.onerror = () => {
       statusDetail = "connection failed";
+      if (tab.terminalSessionId && !sawSessionControl) {
+        clearTerminalSession(tab);
+        scheduleTerminalSessionSave();
+      }
     };
+  }
+
+  function recordOutputBytes(bytes: number): void {
+    advanceTerminalSeq(tab, bytes);
+    scheduleTerminalSessionSave();
+  }
+
+  function scheduleTerminalSessionSave(): void {
+    const now = Date.now();
+    const elapsed = now - lastSessionSave;
+    if (elapsed >= 1000) {
+      lastSessionSave = now;
+      scheduleSessionSave();
+      return;
+    }
+    if (sessionSaveTimer) return;
+    sessionSaveTimer = setTimeout(() => {
+      sessionSaveTimer = null;
+      lastSessionSave = Date.now();
+      scheduleSessionSave();
+    }, 1000 - elapsed);
   }
 
   function send(frame: unknown): void {
@@ -194,6 +286,11 @@
 
   function sendInput(data: string): void {
     send({ type: "input", data });
+  }
+
+  function sendUserInput(data: string): void {
+    sendInput(data);
+    broadcastTerminalInput(tab, data);
   }
 
   function queueFit(): void {
@@ -223,6 +320,10 @@
   }
 
   function teardown(): void {
+    if (sessionSaveTimer) {
+      clearTimeout(sessionSaveTimer);
+      sessionSaveTimer = null;
+    }
     closeSocket();
     resizeObserver?.disconnect();
     resizeObserver = null;
@@ -234,8 +335,17 @@
   }
 
   function restart(): void {
+    explicitCloseSession();
     teardown();
     void tick().then(start);
+  }
+
+  function explicitCloseSession(): void {
+    if (tab.terminalSessionId) {
+      send({ type: "close" });
+      clearTerminalSession(tab);
+      scheduleTerminalSessionSave();
+    }
   }
 
   async function copyScrollback(): Promise<void> {
@@ -312,6 +422,17 @@
   function toggleBroadcast(): void {
     setTerminalBroadcastEnabled(tab, !tab.broadcastEnabled);
   }
+
+  function toggleMcpEnv(): void {
+    setTerminalMcpEnv(tab, !mcpEnvOn);
+    scheduleTerminalSessionSave();
+  }
+
+  function showMcpEnv(): void {
+    if (showMcpEnvDisabled) return;
+    injectShowMcpEnvCommand(sendUserInput);
+    term?.focus();
+  }
 </script>
 
 <svelte:window onkeydown={onMenuKeydown} onpointerdown={onDocPointerDown} />
@@ -362,6 +483,37 @@
           </span>
           <span class="mbtn-chord">{broadcastChord}</span>
         </button>
+        <div class="mcp-env-row">
+          <button class="mbtn" class:on={mcpEnvOn} onclick={toggleMcpEnv}>
+            <span class="mbtn-icon">
+              {#if mcpEnvOn}
+                <Check size={15} strokeWidth={2} aria-hidden="true" />
+              {/if}
+            </span>
+            <span class="mbtn-label">Set MCP env vars</span>
+          </button>
+          <button
+            type="button"
+            class="info-btn"
+            aria-label="About MCP env vars"
+            aria-expanded={mcpInfoOpen}
+            onclick={() => (mcpInfoOpen = !mcpInfoOpen)}
+          >
+            <Info size={15} strokeWidth={1.75} aria-hidden="true" />
+          </button>
+        </div>
+        {#if mcpInfoOpen}
+          <div class="mcp-info">
+            When on, chan sets CHAN_MCP_SOCKET, CHAN_MCP_SERVER_JSON, and friends in the
+            PTY env so external agent CLIs can discover the chan MCP server
+            automatically. Turn this off to launch a vanilla shell. Applies to new
+            sessions only.
+          </div>
+        {/if}
+        <button class="mbtn" disabled={showMcpEnvDisabled} onclick={showMcpEnv}>
+          <span class="mbtn-icon"></span>
+          <span class="mbtn-label">Show MCP env in terminal</span>
+        </button>
         <div class="msep" role="separator"></div>
         {#if otherTerminalTabs.length === 0}
           <div class="empty-targets">No other terminal tabs</div>
@@ -394,6 +546,12 @@
     <span class:connected={status === "connected"} class="status">
       {status}{statusDetail ? ` - ${statusDetail}` : ""}
     </span>
+    {#if missedBytes > 0}
+      <span class="session-note">missed {missedBytes} bytes</span>
+    {/if}
+    {#if sessionClosedReason}
+      <button type="button" class="resume-btn" onclick={restart}>Start new session</button>
+    {/if}
     {#if findOpen}
       <input
         bind:this={searchInput}
@@ -464,6 +622,23 @@
   }
   .status.connected {
     color: var(--accent);
+  }
+  .session-note {
+    color: var(--warn-text);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .resume-btn {
+    border: 1px solid var(--border);
+    background: var(--btn-bg);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .resume-btn:hover {
+    border-color: var(--btn-hover);
   }
   .find {
     width: min(220px, 28vw);
@@ -586,12 +761,48 @@
   .mbtn.on {
     background: var(--hover-bg);
   }
+  .mbtn:disabled {
+    color: var(--text-secondary);
+    cursor: not-allowed;
+    opacity: 0.58;
+  }
+  .mbtn:disabled:hover {
+    background: none;
+  }
   .mbtn-icon {
     width: 18px;
     flex-shrink: 0;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+  }
+  .mcp-env-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+  .info-btn {
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .info-btn:hover,
+  .info-btn[aria-expanded="true"] {
+    background: var(--hover-bg);
+    color: var(--text);
+  }
+  .mcp-info {
+    margin: 2px 8px 6px 34px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.35;
   }
   .mbtn-label,
   .target-name {

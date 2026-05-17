@@ -18,7 +18,6 @@
   } from "../state/tabs.svelte";
 
   import {
-    Bell,
     FilePlus,
     FileText,
     Folder,
@@ -31,16 +30,12 @@
     User,
     X,
   } from "lucide-svelte";
-  import EnsoIcon from "./EnsoIcon.svelte";
   import FileEditorTab from "./FileEditorTab.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import TerminalTab from "./TerminalTab.svelte";
   import {
-    assistantHasUnreadForPath,
-    assistantStream,
     drive,
     indexStatus,
-    pathInAssistantScope,
     tree,
   } from "../state/store.svelte";
   import { tabLabel, tabTooltip } from "../state/tabs.svelte";
@@ -122,9 +117,7 @@
   /// column rather than disappearing.
   type EmptyMenuRow = {
     label: string;
-    // Lucide icons (legacy Svelte component class) and EnsoIcon
-    // (Svelte 5 component) don't share a single TS type, but both
-    // accept `size` + `strokeWidth` at the call site below.
+    // Lucide icons accept `size` + `strokeWidth` at the call site below.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     icon: any;
     command: string;
@@ -162,12 +155,6 @@
       icon: Terminal,
       command: "app.terminal.toggle",
       chordId: "app.terminal.toggle",
-    },
-    {
-      label: "Call Agent",
-      icon: EnsoIcon,
-      command: "app.assistant.toggle",
-      chordId: "app.assistant.toggle",
     },
   ];
   function chordLabel(id: string | undefined): string {
@@ -646,15 +633,8 @@
         {#if t.kind === "file" && t.loading}
           <span class="marker spinner" aria-hidden="true"></span>
         {:else if t.kind === "file"}
-          <!-- Bell takes precedence over the kind icon when the
-               assistant left an unread reply for this file (user
-               had the overlay closed when it landed). Clearing
-               happens when the user opens the assistant on this
-               scope. -->
-          <span class="tab-icon" class:assist-unread={assistantHasUnreadForPath(t.path)} aria-hidden="true">
-            {#if assistantHasUnreadForPath(t.path)}
-              <Bell size={14} strokeWidth={1.75} />
-            {:else if contactPaths.has(t.path)}
+          <span class="tab-icon" aria-hidden="true">
+            {#if contactPaths.has(t.path)}
               <User size={14} strokeWidth={1.75} />
             {:else}
               <FileText size={14} strokeWidth={1.75} />
@@ -700,14 +680,6 @@
             });
           }}
         >{tabLabel(t)}</span>
-        {#if t.kind === "file" && assistantStream.sessionId !== null && pathInAssistantScope(t.path)}
-          <!-- Flashing amber dot next to the title: the assistant
-               has an in-flight turn scoped to this file (file: or
-               group: context that includes this path). Disappears
-               when the request completes or the user dismisses /
-               re-scopes the overlay. -->
-          <span class="assist-pulse" title="agent working" aria-label="agent working"></span>
-        {/if}
         {#if isDirty(t)}
           <span class="dirty unsaved" title="unsaved changes">●</span>
         {/if}
@@ -805,7 +777,7 @@
             {/if}
             <p class="placeholder-hint">
               Each pane's visible tab is part of the scope<br />
-              for Agent and Graph.
+              for Graph.
             </p>
             <pre class="placeholder-shortcuts">{shortcutTable}</pre>
           {/if}
@@ -1009,28 +981,6 @@
     line-height: 1;
     color: var(--info-text);
   }
-  /* Flashing dot rendered next to the file title while the
-     assistant has an in-flight turn scoped to this file. Same
-     amber palette the bottom-left status bar uses for "working"
-     dots so the visual language stays consistent across surfaces;
-     the pulse animation makes it readable at a glance without
-     adding text chrome to the tab strip. */
-  .assist-pulse {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: #d29922;
-    box-shadow: 0 0 4px rgba(210, 153, 34, 0.55);
-    flex-shrink: 0;
-    animation: chan-tab-assist-pulse 1.1s ease-in-out infinite;
-  }
-  @keyframes chan-tab-assist-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.35; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .assist-pulse { animation: none; opacity: 0.85; }
-  }
   .path { white-space: nowrap; }
   /* Per-tab kind icon: User for contact-kind files, FileText
      otherwise. Sized to the tab font and stroked with text-secondary
@@ -1042,12 +992,6 @@
     flex-shrink: 0;
   }
   .tab.active .tab-icon { color: var(--text); }
-  /* Bell variant when an assistant reply is waiting on this file:
-     amber tint to match the per-tab "working" dot palette, so the
-     two assistant-related tab signals (working / unread) share a
-     consistent visual language. */
-  .tab-icon.assist-unread { color: #d29922; }
-  .tab.active .tab-icon.assist-unread { color: #d29922; }
   .actions { margin-left: auto; display: flex; align-items: center; padding-left: 4px; }
   .editor-wrap {
     position: relative;

@@ -360,7 +360,7 @@
             onCaretChange(sel.from, sel.to);
           }
         }),
-        // Cmd/Ctrl+Enter -> onSubmit (assistant prompt). Registered
+        // Cmd/Ctrl+Enter -> onSubmit. Registered
         // via Prec.high so it beats CM6 default Enter (which would
         // insert a newline first). Returning true consumes the event.
         Prec.high(
@@ -368,8 +368,7 @@
             // Mod-Enter at a date pill opens the calendar / format
             // popover (keyboard equivalent of clicking the pill).
             // Returns false when the caret isn't on a date so the
-            // next entry below — assistant submit — gets the
-            // keypress.
+            // next entry below gets the keypress.
             {
               key: "Mod-Enter",
               run: (view) => openDateAtCaret(view),
@@ -380,7 +379,7 @@
             // and ArrowDown is a no-op — the user has no way out.
             // Each returns false when the trap conditions don't
             // apply so the keys keep their default behaviour
-            // (cursorDown / assistant submit / new line in code).
+            // (cursorDown / caller submit / new line in code).
             { key: "ArrowDown", run: (view) => fmt.escapeFenceAtDocEnd(view) },
             // Mod-Enter inside any fenced code block: append a fresh
             // line just past the block end and place the caret
@@ -458,7 +457,7 @@
     const to = Math.min(Math.max(0, caretPending.to), lim);
     view.dispatch({
       selection: { anchor: from, head: to },
-      effects: EditorView.scrollIntoView(from, { y: "center" }),
+      effects: EditorView.scrollIntoView(from, { y: "nearest" }),
     });
     caretRestored = true;
     caretPending = null;
@@ -596,8 +595,7 @@
        orphaned during the CM6 migration — its old consumer lived
        on the legacy `.md-wysiwyg` class. Restoring the wiring
        lets the file editor's "Show Style Toolbar" toggle actually
-       shift the document, matching what the assistant prompt
-       already does. */
+       shift the document. */
     padding-top: var(--editor-top-pad, 0.5rem) !important;
     /* Always keep 60px below the last line. Combined with the 60px
        bottom scrollMargin in breathing_room.ts, this is what gives
@@ -1644,9 +1642,8 @@
     min-height: 0;
     line-height: 1.5;
   }
-  /* Body markdown rendering: same vibe as the assistant bubbles'
-     .md class but scoped to the preview body so the rules apply
-     to children sanitized by DOMPurify. */
+  /* Body markdown rendering scoped to the preview body so the rules
+     apply to children sanitized by DOMPurify. */
   :global(.md-preview-md p) { margin: 0 0 0.4em 0; }
   :global(.md-preview-md p:last-child) { margin-bottom: 0; }
   :global(.md-preview-md h1),

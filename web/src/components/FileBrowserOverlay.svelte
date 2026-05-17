@@ -541,9 +541,8 @@
   }
   .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Window-manager chrome: maximize/restore on the left edge, close
-     on the right. Sized + styled to match the scope-history button
-     used in the search / graph / assistant headers so all overlay
-     headers wear the same skin. */
+     on the right. Sized + styled to match the search / graph
+     headers so all overlay headers wear the same skin. */
   .chrome-btn {
     display: inline-flex;
     align-items: center;

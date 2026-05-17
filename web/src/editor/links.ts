@@ -11,8 +11,7 @@
 /// the URL portion is rewritten to a file-relative path with an
 /// explicit `./` or `../` prefix so the discriminator at parse
 /// time can tell relative URLs from legacy drive-rooted ones.
-/// When omitted (e.g. assistant prompt context, no source file),
-/// the URL stays drive-rooted.
+/// When omitted (no source file), the URL stays drive-rooted.
 ///
 /// `wasAbs` overrides the relativization: if true, the URL is
 /// emitted in drive-rooted form with a leading slash, preserving
@@ -29,9 +28,8 @@ export function wikiLinkToMarkdown(
   // (`/path`) regardless of `fromPath`. Otherwise, with `fromPath`
   // set, the URL is rewritten to a file-relative path so notes
   // stay portable across project layouts. Without `fromPath`, fall
-  // back to the legacy drive-rooted form (no slash) so the
-  // assistant prompt and other no-source-file callers keep their
-  // existing semantics.
+  // back to the legacy drive-rooted form (no slash) so no-source-file
+  // callers keep their existing semantics.
   const path = wasAbs
     ? `/${target}`
     : fromPath

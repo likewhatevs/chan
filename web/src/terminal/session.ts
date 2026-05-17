@@ -1,0 +1,24 @@
+export type TerminalWsPathOpts = {
+  cols: number;
+  rows: number;
+  tabName: string;
+  sessionId?: string | null;
+  lastSeq?: number | null;
+  mcpEnv?: boolean | null;
+};
+
+export function terminalWsPath(opts: TerminalWsPathOpts): string {
+  const params = new URLSearchParams({
+    cols: String(opts.cols),
+    rows: String(opts.rows),
+    tab_name: opts.tabName,
+  });
+  const sessionId = opts.sessionId?.trim();
+  if (sessionId) {
+    params.set("session", sessionId);
+    params.set("since", String(Math.max(0, Math.floor(opts.lastSeq ?? 0))));
+  } else if (opts.mcpEnv === false) {
+    params.set("mcp_env", "off");
+  }
+  return `/api/terminal/ws?${params.toString()}`;
+}

@@ -1,9 +1,9 @@
 <script lang="ts">
   // In-page confirm dialog. Same WKWebView story as PromptModal:
   // window.confirm is unreliable in Tauri, so we drive a small modal
-  // off confirmState in the store.
+  // off confirmState in shared state.
 
-  import { confirmState, resolveConfirm } from "../state/store.svelte";
+  import { confirmState, resolveConfirm } from "../state/confirm.svelte";
 
   let okEl: HTMLButtonElement | undefined = $state();
 

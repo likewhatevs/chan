@@ -1,24 +1,20 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import AppStatusBar from "./components/AppStatusBar.svelte";
-  // import BottomPill from "./components/BottomPill.svelte";
   import ConfirmModal from "./components/ConfirmModal.svelte";
   import ConflictModal from "./components/ConflictModal.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
   import FileBrowserOverlay from "./components/FileBrowserOverlay.svelte";
   import GraphPanel from "./components/GraphPanel.svelte";
-  import InlineAssist from "./components/InlineAssist.svelte";
   import MissingTokenOverlay from "./components/MissingTokenOverlay.svelte";
   import PathPromptModal from "./components/PathPromptModal.svelte";
   import PromptModal from "./components/PromptModal.svelte";
-  import ScopeHistoryOverlay from "./components/ScopeHistoryOverlay.svelte";
   import SearchPanel from "./components/SearchPanel.svelte";
   import SearchStatusOverlay from "./components/SearchStatusOverlay.svelte";
   import SettingsPanel from "./components/SettingsPanel.svelte";
   import Workspace from "./components/Workspace.svelte";
   import {
     applyInitialTheme,
-    assistantOverlay,
     bootstrap,
     installSessionFlushHook,
     browserOverlay,
@@ -27,7 +23,6 @@
     drive,
     fileOps,
     graphOverlay,
-    openAssistant,
     openBrowser,
     openGraph,
     openSettings,
@@ -36,13 +31,11 @@
     refreshDrive,
     refreshTree,
     scheduleSessionSave,
-    scopeHistoryOverlay,
     searchStatusOverlay,
     searchPanel,
     settingsOverlay,
     syncOverlayStack,
     topOverlay,
-    watchBubbleDisplayMode,
     watchSystemTheme,
   } from "./state/store.svelte";
   import {
@@ -135,10 +128,6 @@
     // narrows the search to a folder / file / repo.
     void searchPanel.scopeId;
     void searchPanel.inspectorOpen;
-    void assistantOverlay.open;
-    void assistantOverlay.contextId;
-    void assistantOverlay.prompt;
-    void assistantOverlay.inspectorOpen;
     void browserOverlay.open;
     void browserOverlay.inspectorOpen;
     void browserSelection.path;
@@ -156,7 +145,6 @@
     // the overlay restores the user's choice.
     void graphOverlay.filters.folder;
     void graphOverlay.inspectorOpen;
-    void scopeHistoryOverlay.open;
     persistLayoutToHash();
     scheduleSessionSave();
   });
@@ -192,9 +180,7 @@
     void browserOverlay.open;
     void searchPanel.open;
     void graphOverlay.open;
-    void assistantOverlay.open;
     void settingsOverlay.open;
-    void scopeHistoryOverlay.open;
     void searchStatusOverlay.open;
     syncOverlayStack();
   });
@@ -210,10 +196,6 @@
     watchSystemTheme();
     // Cross-window sync of the page-width setting via the storage event.
     watchPageWidth();
-    // Same storage-event sync for the assistant chat's bubble
-    // render mode so flipping it in one window propagates to
-    // every other open window live.
-    watchBubbleDisplayMode();
     // Idle tracker: after 2.5s without scroll/click/keypress, the
     // floating pills fade. Any input flips them back on.
     installIdleTracker();
@@ -254,7 +236,6 @@
   ///
   ///   Cmd/Ctrl+,             -> Settings (open)
   ///   Cmd/Ctrl+P             -> Files (toggle)            [VS Code Quick Open]
-  ///   Cmd/Ctrl+I             -> Assistant (toggle)        [VS Code Copilot inline]
   ///   Cmd/Ctrl+Shift+F       -> Search across files       [VS Code Find in Files]
   ///   Cmd/Ctrl+Shift+M       -> Graph (toggle)
   ///   Cmd/Ctrl+`             -> Terminal (toggle)
@@ -306,19 +287,6 @@
       e.preventDefault();
       browserOverlay.open = !browserOverlay.open;
       if (browserOverlay.open) openBrowser();
-      return;
-    }
-    if (meta && !e.shiftKey && !e.altKey && e.code === "KeyI") {
-      // Assistant master switch: when disabled in Settings, the
-      // chord falls through and the user gets no visible response,
-      // matching the hidden bottom-pill button.
-      if (!(drive.info?.preferences.assistant.effective_enabled ?? false)) return;
-      e.preventDefault();
-      if (assistantOverlay.open) {
-        assistantOverlay.open = false;
-      } else {
-        openAssistant();
-      }
       return;
     }
     if (meta && e.shiftKey && !e.altKey && e.code === "KeyF") {
@@ -412,11 +380,6 @@
         if (browserOverlay.open) closeOverlay("browser");
         else openBrowser();
         return;
-      case "app.assistant.toggle":
-        if (!(drive.info?.preferences.assistant.effective_enabled ?? false)) return;
-        if (assistantOverlay.open) closeOverlay("assistant");
-        else openAssistant();
-        return;
       case "app.search.toggle":
         searchPanel.open = !searchPanel.open;
         return;
@@ -507,12 +470,6 @@
     <Workspace />
   </main>
 </div>
-<!-- Floating navigation pill: every overlay (files / search /
-     graph / settings / assistant) is reachable from anywhere in
-     the workspace. Temporarily disabled while we rethink the
-     navigation surface; right-click menus + keyboard chords cover
-     the same actions in the meantime. -->
-<!-- <BottomPill /> -->
 <!-- Bottom-left ambient status bar: indexer state, import
      progress, transient ui.status messages. Window-level and
      lifted above every overlay so users keep visibility on
@@ -524,11 +481,9 @@
 <ConfirmModal />
 <SearchPanel />
 <SearchStatusOverlay />
-<InlineAssist />
 <GraphPanel />
 <SettingsPanel />
 <FileBrowserOverlay />
-<ScopeHistoryOverlay />
 <!-- CAS conflict prompt: surfaces when a save returns 409. Mounted
      once per window so any pane can trigger it; the dialog itself
      keys off `conflictDialog.tabId`. -->
@@ -546,8 +501,7 @@
      The neutrals mirror Apple's Notes / system grays so chan reads
      as "the markdown notes app" rather than "GitHub Dark with our
      stuff in it"; functional colors (link blue, accent green, warn
-     amber, pane focus) are kept distinct from the brand orange so
-     they don't fight the assistant accent. */
+     amber, pane focus) are kept distinct. */
   :global(:root) {
     --bg: #1c1c1e;
     --bg-card: #232325;
@@ -599,19 +553,8 @@
     --tab-inactive-bg: #232325;
     --smart-bg: rgba(88, 166, 255, 0.18);
     --pane-focus: #388bfd;
-    /* Assistant chat bubbles. The user bubble takes a stronger blue
-       tint so it stands out against the panel; the assistant bubble
-       sits on a subtle off-bg shade so two adjacent assistant turns
-       still read as discrete messages. Dark-mode values keep enough
-       contrast over the dark panel; light-mode overrides below pick
-       Apple-Messages-style pastels so the bubbles don't disappear
-       into white. */
-    --assistant-bubble-bg: #2a2a2c;
-    --assistant-user-bubble-bg: rgba(88, 166, 255, 0.28);
-    /* Brand accent for the assistant button (brand orange, matching
-       chan.app). Single source for the ensō tint; light/dark each
-       get their own shade so the silhouette reads on both. */
-    --assistant-accent: #e58c4d;
+    --bubble-bg: #2a2a2c;
+    --bubble-right-bg: rgba(88, 166, 255, 0.28);
     /* Graph palette: only doc / image / tag are rendered now,
        matching the chan brand's warm orange primary plus a
        hue-separated supporting pair (purple for images, green
@@ -681,13 +624,8 @@
     --tab-inactive-bg: #ececec;
     --smart-bg: rgba(80, 120, 200, 0.12);
     --pane-focus: #7aa6e0;
-    /* Light-mode bubble tints: assistant on a warmer gray so it
-       sits clearly above the white panel; user on Apple-Messages
-       blue (#dbeafe-ish, slightly more saturated) so the two
-       sides are distinguishable at a glance. */
-    --assistant-bubble-bg: #ececef;
-    --assistant-user-bubble-bg: #cfe1fb;
-    --assistant-accent: #c46a2a;
+    --bubble-bg: #ececef;
+    --bubble-right-bg: #cfe1fb;
     /* Light-mode graph palette: deeper, less saturated than dark
        mode so the same node hues stay legible against light bg
        without glaring. */
