@@ -61,6 +61,7 @@
   import {
     fileOps,
     openAssistant,
+    openFsGraphForFile,
     openGraphForFile,
     openGraphForTag,
     openSettings,
@@ -706,6 +707,7 @@
             path={tab.path}
             showRefs
             onNavigate={(p) => void openInActivePane(p)}
+            onSetAsScope={() => openFsGraphForFile(tab.path)}
           />
         </Inspector>
       {/if}

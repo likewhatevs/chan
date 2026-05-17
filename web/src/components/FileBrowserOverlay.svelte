@@ -43,6 +43,8 @@
     fileOps,
     graphOverlay,
     isFullyExpanded,
+    openFsGraphForDirectory,
+    openFsGraphForFile,
     openSettings,
     paneWidths,
     persistPaneWidths,
@@ -155,6 +157,19 @@
 
   function clearSelection(): void {
     browserSelection.path = null;
+  }
+
+  /// "Graph this" from the inspector mirrors the file-tree row's
+  /// right-click action: open the filesystem graph scoped to the
+  /// selected entry. The file browser surfaces fs links (folders,
+  /// symlinks, hardlinks) by default; semantic-graph entry points
+  /// live on the editor and the per-tag chips.
+  function graphSelection(): void {
+    const path = browserSelection.path;
+    if (path === null) return;
+    const entry = tree.entries.find((e) => e.path === path);
+    if (entry?.is_dir) openFsGraphForDirectory(path);
+    else openFsGraphForFile(path);
   }
 
   /// Hamburger menu handle. The shared HamburgerMenu component owns
@@ -372,6 +387,7 @@
               path={browserSelection.path}
               onOpen={openSelected}
               onClose={clearSelection}
+              onSetAsScope={graphSelection}
               showRefs
               onNavigate={(p) => {
                 void openInActivePane(p);

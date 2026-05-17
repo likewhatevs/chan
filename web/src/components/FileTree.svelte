@@ -1024,7 +1024,10 @@
     color: var(--text);
     border-radius: 4px;
     box-shadow: 0 4px 12px rgba(0,0,0,.4);
-    z-index: 10000;
+    /* Above OverlayShell's z-index (25000 + depth*10) so the portal'd
+       context menu paints over the file-browser panel's backdrop
+       instead of behind it. Matches HamburgerMenu's bubble layer. */
+    z-index: 25500;
     display: flex;
     flex-direction: column;
     min-width: 180px;

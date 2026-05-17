@@ -448,7 +448,13 @@
   );
   const fsNodeById = $derived(new Map(fsNodes.map((n) => [n.id, n])));
   const selectedFsNode = $derived<FsGraphNode | null>(
-    filesystemMode && selectedId ? (fsNodeById.get(selectedId) ?? null) : null,
+    // The drive-root folder has id="" (empty path = drive root), so
+    // `selectedId` is checked with `!== null` rather than a truthy
+    // test — otherwise clicking the root node silently no-op's the
+    // inspector.
+    filesystemMode && selectedId !== null
+      ? (fsNodeById.get(selectedId) ?? null)
+      : null,
   );
 
   /// True when the graph claims the node is a real file but the
@@ -527,6 +533,25 @@
   function revealSelectedFile(): void {
     if (selectedNode && selectedNode.kind === "file" && !selectedNode.missing) {
       revealAndSelect(selectedNode.path);
+      openBrowser();
+      browserOverlay.inspectorOpen = true;
+      close();
+    }
+  }
+
+  /// "Show Folder" handler for fs-mode folder nodes. Same pattern as
+  /// revealSelectedFile but pulls the path off the FsGraphNode since
+  /// folders don't have a semantic-graph counterpart in selectedNode.
+  function revealSelectedFolder(): void {
+    if (
+      selectedFsNode &&
+      selectedFsNode.kind === "folder" &&
+      selectedFsNode.path !== undefined
+    ) {
+      // path === "" is the drive root; revealAndSelect handles it
+      // by leaving the tree's expansion alone and clearing the
+      // selection. The browser opens at the drive level.
+      revealAndSelect(selectedFsNode.path);
       openBrowser();
       browserOverlay.inspectorOpen = true;
       close();
@@ -949,7 +974,46 @@
       onResize={persistPaneWidths}
       onClose={() => (graphOverlay.inspectorOpen = false)}
     >
-      {#if selectedFsNode}
+      {#if selectedFsNode && (selectedFsNode.kind === "folder" || selectedFsNode.kind === "file") && selectedFsNode.path !== undefined && !selectedFsNode.broken}
+        <!-- Real fs-mode file or folder: render the same body as the
+             file browser / editor inspector (counts, size, code
+             report; tags / refs / backlinks for files) by routing
+             through InspectorBody. FileInfoBody dispatches on
+             entry.is_dir so the "file" selection variant covers both
+             shapes. Folder gets "Show Folder" instead of "Graph
+             this" (user is already inside the graph); file keeps
+             "Open in this pane" + "Graph this" so the file inspector
+             reads identically across surfaces. -->
+        {@const fsPath = selectedFsNode.path}
+        {@const fsKind = selectedFsNode.kind}
+        <InspectorBody
+          selection={{ kind: "file", path: fsPath }}
+          showRefs
+          onOpen={fsKind === "file"
+            ? () => { void openInActivePane(fsPath); close(); }
+            : undefined}
+          onReveal={fsKind === "folder" ? revealSelectedFolder : undefined}
+          onSetAsScope={fsKind === "file"
+            ? () => {
+                // Re-scope the current fs graph to this file's
+                // neighbourhood; mode stays "filesystem" so folders
+                // remain in the plot. Depth resets to 1 — caller
+                // can widen via the slider.
+                graphOverlay.depth = 1;
+                graphOverlay.scopeId = `file:${fsPath}`;
+                graphOverlay.pendingSelectId = selectedFsNode!.id;
+                selectedId = selectedFsNode!.id;
+              }
+            : undefined}
+          onNavigate={(p) => {
+            const peer = fsNodes.find((n) => n.path === p);
+            if (peer) {
+              selectedId = peer.id;
+              graphOverlay.inspectorOpen = true;
+            }
+          }}
+        />
+      {:else if selectedFsNode}
         <div class="ghost-body">
           <header class="head">
             <KindChip

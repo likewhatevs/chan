@@ -590,7 +590,7 @@
       canvas.height / (dpr * transform.k),
     );
 
-    const adj = selectedId ? adjacency.get(selectedId) : null;
+    const adj = selectedId !== null ? adjacency.get(selectedId) : null;
 
     // Edges first so nodes paint on top. Group by kind so we only
     // change strokeStyle once per kind.
@@ -775,7 +775,7 @@
   function onMouseMove(e: MouseEvent): void {
     if (!canvas) return;
     const p = localCoords(e);
-    if (dragId) {
+    if (dragId !== null) {
       const n = nodeById.get(dragId);
       if (!n) return;
       const w = screenToWorld(p.x, p.y);
@@ -797,7 +797,7 @@
     const p = localCoords(e);
     const moved =
       downAt && (Math.abs(p.x - downAt.x) > 3 || Math.abs(p.y - downAt.y) > 3);
-    if (dragId) {
+    if (dragId !== null) {
       const n = nodeById.get(dragId);
       if (n && !n.isFocal) {
         // Release the node back to the simulation. Focal nodes

@@ -25,6 +25,7 @@
     GraphEdge,
     ReportFileStats,
     ReportPrefix,
+    TreeEntry,
   } from "../api/types";
   import { isEditableText, isImage, isPdf } from "../state/fileTypes";
   import { basename, formatMtime, formatSize } from "../state/format";
@@ -36,6 +37,8 @@
   import { openImageZoom } from "../state/imageZoom";
   import { openPdfViewer } from "../state/pdfViewer";
   import {
+    drive,
+    loadTreeDir,
     openGraphAtNode,
     openGraphForFile,
     openGraphForTag,
@@ -73,11 +76,12 @@
   }: {
     path: string | null;
     onOpen?: () => void;
-    /// Image-inspector counterpart to `onOpen`. Renders a
-    /// "Show in file browser" button on image entries; the host
-    /// reveals the path in its tree and closes itself. Absent = no
-    /// button (e.g. when the inspector already lives inside the
-    /// file browser).
+    /// Image / folder counterpart to `onOpen`. Renders a
+    /// "Show in file browser" button on image entries and a
+    /// "Show Folder" button on directory entries; the host reveals
+    /// the path in its tree and closes itself. Absent = no button
+    /// (e.g. when the inspector already lives inside the file
+    /// browser).
     onReveal?: () => void;
     onClose?: () => void;
     /// When true, fetch + render tags / mentions / dates / links /
@@ -108,7 +112,39 @@
     new Map(tree.entries.map((e) => [e.path, e])),
   );
 
-  const entry = $derived(path ? (entryByPath.get(path) ?? null) : null);
+  const entry = $derived.by(() => {
+    if (path === null || path === undefined) return null;
+    if (path === "") {
+      // Drive root: no entry exists in tree.entries (the listing only
+      // contains children). Synthesize a folder-shaped record so the
+      // folder branch renders aggregate stats over the whole drive.
+      // The mtime field stays null because the drive root has no
+      // intrinsic timestamp; dirStats picks up the latest mtime
+      // across descendants instead.
+      return {
+        path: "",
+        is_dir: true,
+        mtime: null,
+        size: 0,
+      } as TreeEntry;
+    }
+    return entryByPath.get(path) ?? null;
+  });
+
+  /// The file tree lazy-loads directory contents, so opening a file
+  /// the user hasn't yet drilled into via the browser (a direct URL,
+  /// the editor tab's "Show Details", a search result) leaves the
+  /// entry missing from `tree.entries` and the inspector blank.
+  /// When that happens, fetch the parent directory's listing so the
+  /// entry shows up. Cheap: `loadTreeDir` short-circuits when the
+  /// dir is already loaded or in flight.
+  $effect(() => {
+    if (!path || entry) return;
+    const parent = path.includes("/")
+      ? path.slice(0, path.lastIndexOf("/"))
+      : "";
+    void loadTreeDir(parent);
+  });
 
   const dirStats = $derived.by(() => {
     if (!entry || !entry.is_dir) return null;
@@ -370,7 +406,9 @@
     <header class="head">
       <KindChip kind="folder" block />
     </header>
-    <h3 class="title" title={entry.path || "/"}>{basename(entry.path) || "(root)"}</h3>
+    <h3 class="title" title={entry.path || "/"}>
+      {basename(entry.path) || drive.info?.name || "(root)"}
+    </h3>
     {#if dirStats}
       <div class="meta-grid">
         <span class="k">files</span>
@@ -438,6 +476,17 @@
       <div class="refs-loading">loading report…</div>
     {:else if reportError}
       <div class="refs-error">report unavailable: {reportError}</div>
+    {/if}
+    {#if onReveal}
+      <!-- "Show Folder": jump to the file browser with this folder
+           selected. Hosted by surfaces that don't already live inside
+           the browser (graph fs-mode inspector). The file browser
+           itself leaves this prop unbound so the button doesn't
+           render twice on its own surface. -->
+      <button class="open" onclick={onReveal}>Show Folder</button>
+    {/if}
+    {#if onSetAsScope}
+      <button class="open" onclick={onSetAsScope}>Graph this</button>
     {/if}
   </div>
 {:else}
@@ -760,7 +809,15 @@
     padding: 5px 0;
     cursor: pointer;
     font: inherit;
+    /* Own the spacing above the button so it doesn't matter whether
+       the preceding element has a bottom margin (file: standalone
+       .meta-grid keeps 0.6rem; folder: the cocomo grid zeroes its
+       margin and used to leave the button flush against
+       "developers"). Adjacent buttons collapse to a tighter gap so
+       a group of actions reads as a single block. */
+    margin-top: 0.6rem;
   }
+  .open + .open { margin-top: 0.35rem; }
   .open:hover { border-color: var(--btn-hover); }
   /* Reference sections (tags / mentions / dates / links / backlinks).
      Visual style mirrors the graph panel's aside so the two
