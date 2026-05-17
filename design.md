@@ -11,32 +11,42 @@ layout, or the frontend embed / serve story.
 
 ```
 crates/
-  chan           binary. CLI + dispatch into subcommands; embeds the
-                 frontend via chan-server's rust-embed bundle.
-  chan-server    HTTP + WebSocket surface. Wraps chan-drive in axum
-                 routes; consumes chan-llm for assistant routes.
-  fetch-models   build helper. Pre-fetches the default embedding
-                 model into chan-server's resources/ so release
-                 builds bundle it. Not invoked by `cargo build`.
+  chan                  binary. CLI + dispatch into subcommands;
+                        embeds the frontend via chan-server's
+                        rust-embed bundle.
+  chan-server           HTTP + WebSocket surface. Wraps chan-drive
+                        in axum routes; hosts the in-process MCP
+                        server over a Unix-domain socket.
+  chan-drive            filesystem boundary, drive registry, search
+                        + graph indexer, watch, report engine.
+  chan-llm              MCP-only library: chan MCP server, tool
+                        schemas, embedded prompts, key resolution.
+  chan-report           report engine shared with chan-drive.
+  chan-tunnel-{proto,
+    client, server}     h2/yamux drive tunnel: wire protocol, the
+                        client chan-server dials, and the
+                        standalone server hosted near the gateway.
+  fetch-models          build helper. Pre-fetches the default
+                        embedding model into chan-server's
+                        resources/ so release builds bundle it.
+                        Not invoked by `cargo build`.
 
-web/             Svelte frontend, embedded into the binary at build
-                 time via rust-embed.
+web/                    Svelte frontend, embedded into the binary
+                        at build time via rust-embed.
+
+desktop/                Tauri shell (`chan-desktop`). Launches
+                        `chan serve` per drive and renders the
+                        editor in a webview window. Per-window
+                        state is keyed by `w=<window-label>`.
 ```
 
-One sibling repo, depended on as path deps:
-
-- `chan-writer/chan-core` is a Cargo workspace with the filesystem
-  / search / graph layer (`chan-drive`), the LLM layer
-  (`chan-llm`), and the tunnel transport
-  (`chan-tunnel-{proto,client,server}`). chan and chan-server pull
-  in `chan-drive`, `chan-llm`, `chan-tunnel-client`, and
-  `chan-tunnel-proto` as path deps. The drive + LLM split keeps
-  app-level HTTP / frontend concerns out of those crates so native
-  shells (iOS / Android, future) can link them via uniffi without
-  dragging in this repo's axum / tower / reqwest stack.
-
-The path deps assume a sibling-checkout layout. Switch to git or
-crates.io when the repos go public.
+Phase 5 collapsed the historical `chan-writer/chan-core` sibling
+workspace into this repo: chan-drive, chan-llm, chan-report, and
+the three chan-tunnel-* crates are workspace members here, not
+path deps. The drive split still keeps app-level HTTP / frontend
+concerns out of chan-drive / chan-llm so native shells (iOS /
+Android, future) can link `chan-drive` via uniffi without
+dragging in this repo's axum / tower / reqwest stack.
 
 ## Crate responsibilities
 
@@ -49,10 +59,17 @@ and `chan_drive::Drive` for per-drive operations. Calls
 Self-upgrade flow lives in `crates/chan/src/update.rs`. No HTTP
 routes, no LLM code, no filesystem access outside chan-drive.
 
-The binary also exposes two hidden subcommands the assistant
-backends spawn: `chan __mcp <drive-root>` runs chan-llm's MCP
-server on stdio; `chan __mcp-proxy <socket>` is a stdio bridge
-into the in-process MCP server hosted by a running `chan serve`.
+The binary also exposes two hidden MCP subcommands that external
+agent CLIs invoke through environment variables exported by the
+embedded terminal: `chan __mcp <drive-root>` runs chan-llm's MCP
+server on stdio (used when no running `chan serve` is reachable);
+`chan __mcp-proxy <socket>` is a stdio bridge into the in-process
+MCP server hosted by a running `chan serve`. The embedded terminal
+exports `CHAN_MCP_SERVER_JSON` and companion `CHAN_MCP_*`
+discovery variables. Chan deliberately avoids CLI-owned env
+namespaces such as `CLAUDE_`, `CODEX_`, and `GEMINI_`; external
+tools can translate the `CHAN_` descriptor into their own MCP
+configuration.
 
 Subcommand surface today:
 
@@ -84,22 +101,21 @@ existing files (default) or overwrites (`--overwrite`).
 Owns: HTTP + WebSocket routes, per-launch token auth middleware,
 embedded-frontend serving (rust-embed), background indexer +
 watcher subscription, in-process MCP bridge over a Unix-domain
-socket, model-bundle seeding. Depends on `chan-drive` for
-filesystem + search + graph + watch primitives, on `chan-llm` for
-the assistant routes, and on `chan-tunnel-client` for tunnel
-transport.
+socket, embedded terminal PTY (with MCP env exposure), model-
+bundle seeding. Depends on `chan-drive` for filesystem + search
++ graph + watch primitives, on `chan-llm` for the MCP server,
+and on `chan-tunnel-client` for tunnel transport.
 
 Module layout (`crates/chan-server/src/`):
 
 ```
 auth.rs          per-launch bearer token + axum middleware
-bus.rs           watcher / LLM event bridges into the WS broadcast
-cli_resolve.rs   resolve claude / gemini binaries from PATH + fallbacks
+bus.rs           watcher event bridge into the WS broadcast
 config.rs        ServerConfig (server.toml)
 embed_seed.rs    extract the baked-in model bundle on first launch
 error.rs         Error + err_*() response builders
 indexer.rs       background search/graph indexer (boot + per-event)
-mcp_bridge.rs    Unix-socket MCP server for agent subprocesses
+mcp_bridge.rs    Unix-socket MCP server for external agent CLIs
 preferences.rs   EditorPrefs (preferences.toml)
 qr.rs            terminal QR for the launch banner
 self_writes.rs   suppress watcher events that echo our own writes
@@ -107,53 +123,53 @@ signal.rs        SIGINT/SIGTERM + idle-timeout watchers; clock
 state.rs         AppState, DriveCell
 static_assets.rs WebAssets (rust-embed) + SPA fallback
 store.rs         shared atomic load/save for TOML configs
+tunnel_guard.rs  middleware refusing settings writes in --tunnel-public
 util.rs          slug, h1, timestamp, opaque-JSON helpers
 lib.rs           ServeConfig, sanitize_prefix, build_app, serve,
                  serve_via_tunnel, router
 
 routes/
   attachments.rs   POST /api/attachments (multipart upload)
-  contacts.rs      POST /api/contacts/import (multipart CSV)
   build_info.rs    GET /api/build-info
+  contacts.rs      POST /api/contacts/import (multipart CSV)
   drive.rs         GET/PATCH /api/drive, GET /api/cloud-drives
   files.rs         /api/files, /api/files/*path, /api/move
-  graph.rs         /api/links, /api/graph, /api/backlinks/*path,
-                   /api/link-targets, /api/resolve-link, /api/headings
+  fs_graph.rs      GET /api/fs-graph (filesystem-shaped scopes)
+  graph.rs         /api/links, /api/graph, /api/graph/languages,
+                   /api/backlinks/*path, /api/link-targets,
+                   /api/resolve-link, /api/headings
   health.rs        GET /api/health
-  llm.rs           /api/llm/* (status, tools, complete, keys, models)
   preferences.rs   /api/server/config + /api/config (unified view)
+  report.rs        /api/report/{file,prefix}
   search.rs        /api/search/{files,content}, /api/index/*
-  sessions.rs      /api/session*, /api/assistant/conversation*,
-                   /api/answers
+  sessions.rs      /api/session* (per-window editor session blob)
   storage.rs       POST /api/storage/reset
-  ws.rs            GET /ws (watcher + LLM streaming side channel)
+  terminal.rs      GET /api/terminal/ws (PTY WebSocket; exports
+                   CHAN_MCP_* env by default)
+  ws.rs            GET /ws (watcher side channel)
 ```
 
-### chan-llm (in chan-core workspace)
+### chan-llm
 
-Owns: LLM backends (Anthropic, Gemini, Ollama, claude_cli,
-gemini_cli), embedded prompts, the tool execution sandbox
-(`read_file`, `write_file`, `list_files`, `search_content`
-implemented against `chan-drive`), and key resolution (env / OS
-keychain / `<config>/chan/api-keys.toml`). Tool reads / writes
-always go through `chan_drive::Drive` so the filesystem gates
-apply.
+Owns: the chan MCP server (`chan_llm::mcp::Server`), tool schemas
+exposed over MCP, embedded prompt text, and MCP key resolution.
+Tool reads / writes always go through `chan_drive::Drive` so the
+filesystem gates apply.
 
-chan-server is one of two consumer shapes:
+Phase 5 narrowed chan-llm to this MCP-only surface. The in-app
+`LlmSession`, CLI backends (`claude_cli`, `codex_cli`,
+`gemini_cli`), and their associated tool-loop and listener
+plumbing were removed when the in-app Agent overlay was deleted.
+External agent CLIs (claude, codex, gemini) connect to the chan
+MCP server by reading the `CHAN_MCP_*` environment variables the
+embedded terminal exports and translating them to their own MCP
+configuration.
 
-- chan-server (here) wraps `LlmSession` in axum routes and
-  forwards `SessionListener` events over WebSocket.
-- Native shells (iOS / Android, future) link chan-llm via uniffi
-  alongside chan-drive and implement `SessionListener` in
-  Swift / Kotlin.
-
-The agentic backends (claude_cli, gemini_cli) launch the local
-CLIs as subprocesses and route the agent's file edits through an
-MCP server. chan-server hosts that MCP server in-process behind a
-Unix-domain socket; the agent's MCP child connects via `chan
-__mcp-proxy`, which is just a stdio<->socket pipe. This sidesteps
-chan-drive's per-drive flock that would otherwise reject the
-child's `Library::open_drive`.
+chan-server hosts the MCP server in-process behind a Unix-domain
+socket (`crates/chan-server/src/mcp_bridge.rs`). External
+subprocesses connect via `chan __mcp-proxy <socket>`, which is a
+stdio<->socket pipe. This sidesteps chan-drive's per-drive flock
+that would otherwise reject a child's `Library::open_drive`.
 
 ## Frontend embed: build, serve, prefix
 
@@ -275,17 +291,16 @@ writes.
 | Editor preferences                 | chan-server |
 | Server preferences                 | chan-server |
 | Sessions / window layouts          | chan-drive (storage), chan-server (HTTP) |
-| Assistant chat history             | chan-drive (storage), chan-server (HTTP) |
-| Attachments / answers dirs         | chan-server |
-| LLM backends + tools + keys        | chan-llm    |
+| Attachments dir                    | chan-server |
+| Embedded terminal PTY              | chan-server |
 | MCP server (in-proc + bridge)      | chan-llm + chan-server |
-| Tunnel transport                   | chan-tunnel-client (chan-core) |
+| Tunnel transport                   | chan-tunnel-client |
 | Self-upgrade flow                  | chan binary |
 
 The split keeps app-level concerns (HTTP, WebSocket, frontend
-bundle, editor preferences, assistant chat persistence) out of
-chan-drive so native shells can link the drive layer via uniffi
-without dragging in axum / reqwest / the rest of the HTTP stack.
+bundle, editor preferences, terminal PTY) out of chan-drive so
+native shells can link the drive layer via uniffi without
+dragging in axum / reqwest / the rest of the HTTP stack.
 
 The Tauri desktop / mobile shells are parked. They get
 `chan-writer/chan-desktop` (or similar) when the time comes and

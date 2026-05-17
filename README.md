@@ -3,9 +3,8 @@
 Notes app for plain markdown drives. `chan` is a single static binary
 that bundles a CLI and a local HTTP server; the server serves a
 Svelte WYSIWYG editor that the user edits notes in. Cross-file
-`[[wiki-link]]` autocomplete, BM25 + embedding hybrid search, and an
-optional assistant pane wired to Anthropic, Gemini, Ollama, or the
-local `claude` / `gemini` CLIs.
+`[[wiki-link]]` autocomplete, BM25 + embedding hybrid search, link
+graphs, reports, and embedded terminal tabs are built in.
 
 Single-user, single-machine. Loopback HTTP by default; an opt-in
 tunnel mode publishes the same drive at
@@ -17,7 +16,8 @@ tunnel mode publishes the same drive at
 crates/
   chan           binary. CLI + dispatch.
   chan-drive     filesystem, search, and graph primitives.
-  chan-llm       LLM backends, prompts, and tool sandbox.
+  chan-llm       MCP server/tool sandbox used to expose a drive to
+                 terminal-launched agent CLIs.
   chan-report    language/SLOC/COCOMO report support.
   chan-server    HTTP + WebSocket surface; embeds the web bundle.
   chan-tunnel-*  tunnel protocol, client, and server libraries.
@@ -65,7 +65,15 @@ per-machine cache. Plain `cargo build` ships an empty stub: at
 runtime the seeder downloads from HuggingFace as a fallback.
 
 `HTTPS_PROXY` / `HTTP_PROXY` are honored everywhere chan reaches
-out (model fetch, self-upgrade probe, LLM backends).
+out (model fetch, self-upgrade probe).
+
+Embedded terminal tabs start at the drive root and export Chan MCP
+discovery variables when the server's MCP bridge is available:
+`CHAN_MCP_SERVER_NAME=chan`, `CHAN_MCP_SOCKET`,
+`CHAN_MCP_COMMAND`, `CHAN_MCP_COMMAND_JSON`, and
+`CHAN_MCP_SERVER_JSON`. Chan only writes its own `CHAN_` namespace;
+terminal-launched tools can translate that descriptor into their own
+CLI-specific MCP configuration.
 
 ## Run
 

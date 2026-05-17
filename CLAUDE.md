@@ -19,42 +19,58 @@ bundle embedded via rust-embed.
 
 ```
 crates/
-  chan          the binary. Parses CLI args, dispatches subcommands,
-                mounts the embedded frontend. Self-upgrade lives in
-                src/update.rs.
-  chan-server   HTTP + WebSocket surface. Wraps chan-drive in axum
-                routes; uses chan-llm for assistant routes. Per-area
-                handlers live in src/routes/{drive, files, search,
-                graph, llm, sessions, attachments, storage,
-                preferences, contacts, build_info, ws, health}.rs;
-                lib.rs holds ServeConfig + build_app + serve +
-                serve_via_tunnel + router(). Top-level modules:
-                auth, bus, cli_resolve, config, embed_seed, error,
-                indexer, mcp_bridge, preferences, qr, self_writes,
-                signal, state, static_assets, store, util.
-  fetch-models  build helper. Pre-fetches the BGE-small embedding
-                model into chan-server/resources/ so release builds
-                bundle it. Run via `make models`; not invoked by
-                `cargo build` directly.
+  chan                  the binary. Parses CLI args, dispatches
+                        subcommands, mounts the embedded frontend.
+                        Self-upgrade lives in src/update.rs.
+  chan-server           HTTP + WebSocket surface. Wraps chan-drive
+                        in axum routes; exposes the in-process MCP
+                        server over a Unix-domain socket. Per-area
+                        handlers live in src/routes/{drive, files,
+                        search, graph, fs_graph, report, sessions,
+                        attachments, storage, preferences, contacts,
+                        build_info, terminal, ws, health}.rs;
+                        lib.rs holds ServeConfig + build_app + serve
+                        + serve_via_tunnel + router(). Top-level
+                        modules: auth, bus, config, embed_seed,
+                        error, indexer, mcp_bridge, preferences,
+                        qr, self_writes, signal, state,
+                        static_assets, store, tunnel_guard, util.
+  chan-drive            filesystem boundary, drive registry, search
+                        + graph indexer, watch, report engine. The
+                        only crate that touches user content on
+                        disk.
+  chan-llm              MCP-only library after Phase 5: the chan
+                        MCP `Server`, tool schemas, embedded prompt
+                        text, and the MCP key/config plumbing.
+                        chan-server consumes only
+                        `chan_llm::mcp::Server` via
+                        `crates/chan-server/src/mcp_bridge.rs`.
+  chan-report           report engine shared with chan-drive.
+  chan-tunnel-{proto,
+    client, server}     h2/yamux drive tunnel. chan-server pulls
+                        chan-tunnel-client; the standalone tunnel
+                        server lives next door for the cloud side.
+  fetch-models          build helper. Pre-fetches the BGE-small
+                        embedding model into chan-server/resources/
+                        so release builds bundle it. Run via
+                        `make models`; not invoked by `cargo build`
+                        directly.
 
-web/            Svelte frontend, embedded into the binary at build
-                time via rust-embed.
+web/                    Svelte frontend, embedded into the binary
+                        at build time via rust-embed.
+
+desktop/                Tauri shell. Cross-platform desktop wrapper
+                        (`chan-desktop`) that launches `chan serve`
+                        per drive and mounts the editor in a
+                        webview window. Per-window state is keyed
+                        by a `w=<window-label>` URL parameter.
 ```
 
-One sibling repo, pulled in as a path dep:
-
-- `chan-writer/chan-core` is a Cargo workspace hosting
-  `chan-drive` (filesystem, search, graph, drive registry),
-  `chan-llm` (LLM backends, embedded prompts, tool sandbox,
-  key resolution), and `chan-tunnel-{proto,client,server}`
-  (h2/yamux drive tunnel). chan and chan-server pull in
-  `chan-drive`, `chan-llm`, and `chan-tunnel-client` as path
-  deps. Native shells (iOS / Android) link `chan-drive` and
-  `chan-llm` via uniffi without dragging in this repo's HTTP
-  stack.
-
-We depend on the chan-core workspace via sibling-checkout path
-deps; switch to git or crates.io when the repos go public.
+Phase 5 collapsed the chan-core sibling workspace into this repo:
+chan-drive, chan-llm, chan-report, and the three chan-tunnel-*
+crates are all workspace members here. Native shells (iOS / Android)
+still link `chan-drive` via uniffi without dragging in this repo's
+HTTP stack.
 
 ## Build & Test
 
@@ -129,15 +145,28 @@ inbound transport. The bearer-token gate is auto-disabled in tunnel
 mode (the gateway in front of drive.chan.app is the trust boundary;
 default behavior 404s anonymous visitors, opt out with
 `--tunnel-public`). Wire protocol lives in
-`../chan-core/crates/chan-tunnel-proto`.
+`crates/chan-tunnel-proto`.
 
 ### App-level vs core
 
-What lives in chan-drive (filesystem, search, graph) vs what
-lives here (HTTP, editor preferences, sessions, attachments) is
-a hard line. Don't push library concerns into chan-drive, and
-don't reimplement library primitives here. When in doubt, read
-`../chan-core/crates/chan-drive/design.md`.
+What lives in chan-drive (filesystem, search, graph, watch, report)
+vs what lives in chan-server (HTTP, editor preferences, sessions,
+attachments, terminal, MCP bridge) is a hard line. Don't push
+library concerns into chan-drive, and don't reimplement library
+primitives in chan-server. When in doubt, read
+`crates/chan-drive/design.md`.
+
+### MCP server only, no in-app agent
+
+Phase 5 removed the in-app Agent overlay and the chan-server
+`/api/llm/*` / `/api/assistant/*` HTTP surface. External agents
+(claude, codex, gemini) connect through the in-process MCP server
+exposed over a Unix-domain socket by `mcp_bridge.rs`; the embedded
+terminal exports `CHAN_MCP_SERVER_JSON` and companion `CHAN_MCP_*`
+discovery variables. Chan does not write CLI-owned env namespaces;
+tools can translate the `CHAN_` descriptor into their own MCP config
+shape. Do not reintroduce in-app agent UI or chan-server-side chat
+APIs without a phase-level decision.
 
 ## Writing Rules
 
@@ -167,11 +196,11 @@ don't reimplement library primitives here. When in doubt, read
   goes through `crate::store::{load_toml, save_toml}` so atomic
   writes + parent-dir fsync match the rest of the app. Don't roll
   a fresh `tempfile + rename` by hand.
-- **LLM lives in chan-llm**: backends, tools, prompts, and key
-  resolution all live in the chan-llm crate (chan-core
-  workspace). chan-server's /api/llm/* routes wrap
-  `chan_llm::LlmSession`. The `chan` binary never directly
-  invokes a backend.
+- **chan-llm is MCP-only**: after Phase 5 the crate exposes the
+  chan MCP `Server`, its tool schemas, embedded prompts, and key
+  resolution. There is no in-app agent session and no CLI
+  backend wrappers; external agents connect through the in-process
+  MCP server in `crates/chan-server/src/mcp_bridge.rs`.
 - **Pinned toolchain**: do not introduce code that requires a
   newer Rust than `rust-toolchain.toml` declares without bumping
   the pin in the same commit.
@@ -181,6 +210,8 @@ don't reimplement library primitives here. When in doubt, read
 - **Design and architecture**: [`design.md`](design.md). Single
   load-bearing reference for the workspace layout and the
   chan-drive contract.
-- **chan-drive design**: `../chan-core/crates/chan-drive/design.md`.
+- **chan-drive design**: [`crates/chan-drive/design.md`](crates/chan-drive/design.md).
   Read before proposing chan-drive changes.
+- **chan-tunnel-proto design**:
+  [`crates/chan-tunnel-proto/design.md`](crates/chan-tunnel-proto/design.md).
 - **Issue tracker**: GitHub repo `chan-writer/chan`.
