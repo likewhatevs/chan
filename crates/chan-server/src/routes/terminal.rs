@@ -26,6 +26,7 @@ const MAX_ROWS: u16 = 200;
 pub struct TerminalQuery {
     cols: Option<u16>,
     rows: Option<u16>,
+    tab_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,16 +92,22 @@ pub async fn api_terminal_ws(
     }
 
     let size = pty_size(query.cols, query.rows);
-    ws.on_upgrade(move |socket| terminal_ws(socket, state, size))
+    let tab_name = query.tab_name.as_deref().and_then(normalize_tab_name);
+    ws.on_upgrade(move |socket| terminal_ws(socket, state, size, tab_name))
         .into_response()
 }
 
-async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, size: PtySize) {
+async fn terminal_ws(
+    mut socket: WebSocket,
+    state: Arc<AppState>,
+    size: PtySize,
+    tab_name: Option<String>,
+) {
     state
         .last_activity
         .store(now_unix_secs(), Ordering::Relaxed);
 
-    let mut session = match spawn_pty_session(state.drive_root.clone(), size) {
+    let mut session = match spawn_pty_session(state.drive_root.clone(), size, tab_name) {
         Ok(session) => session,
         Err(e) => {
             let _ = send_frame(
@@ -213,7 +220,19 @@ fn pty_size(cols: Option<u16>, rows: Option<u16>) -> PtySize {
     }
 }
 
-fn spawn_pty_session(cwd: PathBuf, size: PtySize) -> anyhow::Result<PtySession> {
+fn normalize_tab_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.chars().take(128).collect())
+}
+
+fn spawn_pty_session(
+    cwd: PathBuf,
+    size: PtySize,
+    tab_name: Option<String>,
+) -> anyhow::Result<PtySession> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(size)?;
     let mut cmd = CommandBuilder::new_default_prog();
@@ -229,6 +248,9 @@ fn spawn_pty_session(cwd: PathBuf, size: PtySize) -> anyhow::Result<PtySession> 
     cmd.env("CLICOLOR_FORCE", "1");
     cmd.env("FORCE_COLOR", "3");
     cmd.env("CHAN", "1");
+    if let Some(tab_name) = tab_name {
+        cmd.env("CHAN_TAB_NAME", tab_name);
+    }
     cmd.env_remove("NO_COLOR");
     cmd.env_remove("CI");
     cmd.env_remove("CODEX_CI");
@@ -404,9 +426,12 @@ mod tests {
 
     async fn run_shell_probe(command: &str, end: &str) -> String {
         let tmp = tempfile::tempdir().expect("temp drive");
-        let mut session =
-            spawn_pty_session(tmp.path().to_path_buf(), pty_size(Some(100), Some(31)))
-                .expect("spawn pty");
+        let mut session = spawn_pty_session(
+            tmp.path().to_path_buf(),
+            pty_size(Some(100), Some(31)),
+            None,
+        )
+        .expect("spawn pty");
         let _ = collect_until_idle(
             &mut session,
             Duration::from_millis(300),
@@ -484,8 +509,12 @@ mod tests {
             ran += 1;
             let tmp = tempfile::tempdir().expect("temp drive");
             let cwd = tmp.path().to_path_buf();
-            let mut session =
-                spawn_pty_session(cwd.clone(), pty_size(Some(100), Some(31))).expect("spawn pty");
+            let mut session = spawn_pty_session(
+                cwd.clone(),
+                pty_size(Some(100), Some(31)),
+                Some("build".to_string()),
+            )
+            .expect("spawn pty");
             let _ = collect_until_idle(
                 &mut session,
                 Duration::from_millis(300),
@@ -500,7 +529,7 @@ mod tests {
             )
             .await;
             session.input(
-                "printf '\\n__CWD_HOME_BEGIN__\\n'; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '\\n__CWD_HOME_END__\\n'\r"
+                "printf '\\n__CWD_HOME_BEGIN__\\n'; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '\\n__CWD_HOME_END__\\n'\r"
                     .to_string(),
             );
             let out = collect_until(&mut session, "__CWD_HOME_END__", Duration::from_secs(5)).await;
@@ -511,6 +540,10 @@ mod tests {
             assert!(
                 !out.contains(&format!("<HOME={}>", cwd.display())),
                 "terminal HOME should not be rewritten to drive root, got {out:?}"
+            );
+            assert!(
+                out.contains("<CHAN_TAB_NAME=build>"),
+                "terminal should expose the tab name env var, got {out:?}"
             );
             passed += 1;
         }
@@ -528,9 +561,12 @@ mod tests {
         if command_available("less") {
             ran += 1;
             let tmp = tempfile::tempdir().expect("temp drive");
-            let mut session =
-                spawn_pty_session(tmp.path().to_path_buf(), pty_size(Some(100), Some(31)))
-                    .expect("spawn pty");
+            let mut session = spawn_pty_session(
+                tmp.path().to_path_buf(),
+                pty_size(Some(100), Some(31)),
+                None,
+            )
+            .expect("spawn pty");
             let _ = collect_until_idle(
                 &mut session,
                 Duration::from_millis(300),

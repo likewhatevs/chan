@@ -91,6 +91,8 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   Agent                  Cmd+I
   Search across files    Cmd+Shift+F
   Graph                  Cmd+Shift+M
+  Terminal               Cmd+`
+  Terminal broadcast     Cmd+Shift+I
   Dismiss overlay        Esc
 
   File
@@ -103,6 +105,11 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   Next tab               Alt+Shift+]
   Previous tab           Alt+Shift+[
   Jump to tab N          Ctrl+Alt+1..9
+
+  Panes
+  -----
+  Previous pane          Cmd+[
+  Next pane              Cmd+]
 
 Handled by the browser:
 

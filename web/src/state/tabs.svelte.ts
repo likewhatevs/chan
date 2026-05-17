@@ -195,6 +195,8 @@ export type TerminalTab = {
   id: string;
   title: string;
   createdAt: number;
+  broadcastEnabled: boolean;
+  broadcastTargetIds: string[];
 };
 
 export type Tab = FileTab | TerminalTab;
@@ -203,7 +205,7 @@ export type Tab = FileTab | TerminalTab;
 /// strip stays scannable even when paths are deeply nested. The
 /// full path is reachable via `tabTooltip` for disambiguation.
 export function tabLabel(t: Tab): string {
-  if (t.kind === "terminal") return t.title;
+  if (t.kind === "terminal") return terminalTabName(t);
   const p = t.path;
   if (!p) return p;
   const slash = p.lastIndexOf("/");
@@ -214,8 +216,12 @@ export function tabLabel(t: Tab): string {
 /// files with the same basename in different folders can still be
 /// told apart on hover.
 export function tabTooltip(t: Tab): string {
-  if (t.kind === "terminal") return "Terminal";
+  if (t.kind === "terminal") return terminalTabName(t);
   return t.path;
+}
+
+export function terminalTabName(t: TerminalTab): string {
+  return t.title.trim() || "Terminal";
 }
 
 export type Pane = {
@@ -308,6 +314,14 @@ export function activeFileTab(): FileTab | null {
   return t;
 }
 
+export function activeTerminalTab(): TerminalTab | null {
+  const p = activePane();
+  if (!p.activeTabId) return null;
+  const t = p.tabs.find((tab) => tab.id === p.activeTabId);
+  if (!t || t.kind !== "terminal") return null;
+  return t;
+}
+
 export function openTerminalInActivePane(): void {
   openTerminalInPane(activePane().id);
 }
@@ -320,10 +334,68 @@ export function openTerminalInPane(paneId: string): void {
     id: id("term"),
     title: "Terminal",
     createdAt: Date.now(),
+    broadcastEnabled: false,
+    broadcastTargetIds: [],
   };
   p.tabs.push(tab);
   p.activeTabId = tab.id;
   layout.activePaneId = p.id;
+}
+
+export function renameTerminalTab(tab: TerminalTab, title: string): void {
+  tab.title = title;
+}
+
+export function setTerminalBroadcastEnabled(tab: TerminalTab, enabled: boolean): void {
+  tab.broadcastEnabled = enabled;
+}
+
+export function toggleActiveTerminalBroadcast(): void {
+  const tab = activeTerminalTab();
+  if (!tab) return;
+  tab.broadcastEnabled = !tab.broadcastEnabled;
+}
+
+export function setTerminalBroadcastTarget(
+  tab: TerminalTab,
+  targetId: string,
+  enabled: boolean,
+): void {
+  const next = new Set(tab.broadcastTargetIds);
+  if (enabled) next.add(targetId);
+  else next.delete(targetId);
+  tab.broadcastTargetIds = [...next];
+}
+
+export function allTerminalTabs(): TerminalTab[] {
+  const out: TerminalTab[] = [];
+  for (const node of Object.values(layout.nodes)) {
+    if (node.kind !== "leaf") continue;
+    for (const tab of node.tabs) {
+      if (tab.kind === "terminal") out.push(tab);
+    }
+  }
+  return out;
+}
+
+type TerminalInputSink = (data: string) => void;
+const terminalInputSinks = new Map<string, TerminalInputSink>();
+
+export function registerTerminalInputSink(tabId: string, sink: TerminalInputSink): () => void {
+  terminalInputSinks.set(tabId, sink);
+  return () => {
+    if (terminalInputSinks.get(tabId) === sink) terminalInputSinks.delete(tabId);
+  };
+}
+
+export function broadcastTerminalInput(sourceTab: TerminalTab, data: string): void {
+  if (!sourceTab.broadcastEnabled) return;
+  const targets = new Set(sourceTab.broadcastTargetIds);
+  if (targets.size === 0) return;
+  for (const tab of allTerminalTabs()) {
+    if (tab.id === sourceTab.id || !targets.has(tab.id)) continue;
+    terminalInputSinks.get(tab.id)?.(data);
+  }
 }
 
 /// Fetch a file tab's content from disk and write it into the
@@ -444,6 +516,34 @@ export function selectTabAtIndexInActivePane(index: number): void {
   p.activeTabId = p.tabs[index].id;
 }
 
+function leafIdsInOrder(nodeId: string, out: string[] = []): string[] {
+  const n = layout.nodes[nodeId];
+  if (!n) return out;
+  if (n.kind === "leaf") {
+    out.push(n.id);
+    return out;
+  }
+  leafIdsInOrder(n.a, out);
+  leafIdsInOrder(n.b, out);
+  return out;
+}
+
+export function selectPrevPane(): void {
+  const panes = leafIdsInOrder(layout.rootId);
+  if (panes.length < 2) return;
+  const idx = panes.indexOf(layout.activePaneId);
+  if (idx < 0) return;
+  layout.activePaneId = panes[(idx - 1 + panes.length) % panes.length]!;
+}
+
+export function selectNextPane(): void {
+  const panes = leafIdsInOrder(layout.rootId);
+  if (panes.length < 2) return;
+  const idx = panes.indexOf(layout.activePaneId);
+  if (idx < 0) return;
+  layout.activePaneId = panes[(idx + 1) % panes.length]!;
+}
+
 export function closeTab(paneId: string, tabId: string): void {
   const p = pane(paneId);
   const idx = p.tabs.findIndex((t) => t.id === tabId);
@@ -538,6 +638,8 @@ function cloneTab(src: Tab): Tab {
       id: src.id,
       title: src.title,
       createdAt: src.createdAt,
+      broadcastEnabled: src.broadcastEnabled,
+      broadcastTargetIds: [...src.broadcastTargetIds],
     };
   }
   return {
@@ -1016,6 +1118,8 @@ export async function restoreLayout(s: SerNode): Promise<void> {
             id: id("term"),
             title: sertab.n || "Terminal",
             createdAt: Date.now(),
+            broadcastEnabled: false,
+            broadcastTargetIds: [],
           };
           p.tabs.push(tab);
           if (sertab.a) p.activeTabId = tab.id;

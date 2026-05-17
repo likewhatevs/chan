@@ -56,10 +56,13 @@
     openInActivePane,
     saveTab,
     scheduleAutosave,
+    selectNextPane,
     selectNextTabInActivePane,
+    selectPrevPane,
     selectPrevTabInActivePane,
     selectTabAtIndexInActivePane,
     openTerminalInActivePane,
+    toggleActiveTerminalBroadcast,
   } from "./state/tabs.svelte";
   import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
   import {
@@ -87,7 +90,12 @@
       void node.activeTabId;
       void node.tabs.length;
       for (const t of node.tabs) {
-        if (t.kind !== "file") continue;
+        if (t.kind === "terminal") {
+          void t.title;
+          void t.broadcastEnabled;
+          void t.broadcastTargetIds.length;
+          continue;
+        }
         void t.path;
         void t.mode;
         // Reading t.content here makes the effect rerun on every
@@ -327,9 +335,24 @@
       }
       return;
     }
+    if (meta && e.shiftKey && !e.altKey && e.code === "KeyI") {
+      e.preventDefault();
+      toggleActiveTerminalBroadcast();
+      return;
+    }
     if (meta && !e.shiftKey && !e.altKey && e.code === "Backquote") {
       e.preventDefault();
       openTerminalInActivePane();
+      return;
+    }
+    if (meta && !e.shiftKey && !e.altKey && e.code === "BracketLeft") {
+      e.preventDefault();
+      selectPrevPane();
+      return;
+    }
+    if (meta && !e.shiftKey && !e.altKey && e.code === "BracketRight") {
+      e.preventDefault();
+      selectNextPane();
       return;
     }
     if (e.altKey && e.shiftKey && !meta) {
@@ -403,6 +426,15 @@
         return;
       case "app.terminal.toggle":
         openTerminalInActivePane();
+        return;
+      case "app.terminal.broadcast.toggle":
+        toggleActiveTerminalBroadcast();
+        return;
+      case "app.pane.next":
+        selectNextPane();
+        return;
+      case "app.pane.prev":
+        selectPrevPane();
         return;
       case "app.tab.next":
         selectNextTabInActivePane();

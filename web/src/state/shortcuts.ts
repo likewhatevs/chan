@@ -35,7 +35,7 @@ export type Platform = "web" | "native";
 /// itself doesn't branch on OS — only the printable label does.
 export type OS = "mac" | "linux" | "windows";
 
-export type ShortcutGroup = "App" | "File" | "Tabs" | "Find";
+export type ShortcutGroup = "App" | "File" | "Tabs" | "Panes" | "Find";
 
 export type Shortcut = {
   /// Stable command id. Matches `chan:command` event names so a
@@ -105,6 +105,13 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "App",
   },
   {
+    id: "app.terminal.broadcast.toggle",
+    label: "Terminal broadcast",
+    web: "Mod+Shift+I",
+    native: "Mod+Shift+I",
+    group: "App",
+  },
+  {
     id: "ui.overlay.dismiss",
     label: "Dismiss overlay",
     web: "Esc",
@@ -154,6 +161,21 @@ export const SHORTCUTS: readonly Shortcut[] = [
     web: "Ctrl+Alt+1..9",
     native: "Mod+1..9",
     group: "Tabs",
+  },
+  // Pane navigation
+  {
+    id: "app.pane.prev",
+    label: "Previous pane",
+    web: "Mod+[",
+    native: "Mod+[",
+    group: "Panes",
+  },
+  {
+    id: "app.pane.next",
+    label: "Next pane",
+    web: "Mod+]",
+    native: "Mod+]",
+    group: "Panes",
   },
   // Find on page — browser owns Cmd+F/G/Shift+G in the web build.
   {

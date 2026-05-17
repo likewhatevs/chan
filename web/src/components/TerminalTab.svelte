@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { Clipboard, RotateCcw, Search } from "lucide-svelte";
+  import { Check, Clipboard, Pencil, Radio, RotateCcw, Search } from "lucide-svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import { SearchAddon } from "@xterm/addon-search";
@@ -8,7 +8,22 @@
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import "@xterm/xterm/css/xterm.css";
   import { withTokenQuery } from "../api/client";
-  import type { TerminalTab as TerminalTabState } from "../state/tabs.svelte";
+  import { chordFor } from "../state/shortcuts";
+  import {
+    allTerminalTabs,
+    broadcastTerminalInput,
+    registerTerminalInputSink,
+    renameTerminalTab,
+    setTerminalBroadcastEnabled,
+    setTerminalBroadcastTarget,
+    terminalTabName,
+    type TerminalTab as TerminalTabState,
+  } from "../state/tabs.svelte";
+  import { clampMenu } from "./menuClamp";
+  import {
+    closeTabMenu,
+    tabMenu,
+  } from "../state/tabMenu.svelte";
 
   let {
     tab,
@@ -35,12 +50,25 @@
   let statusDetail = $state("");
   let findOpen = $state(false);
   let findQuery = $state("");
+  const menuOpen = $derived(tabMenu.openForTabId === tab.id);
+  const menuPos = $derived.by(() => {
+    const a = tabMenu.anchor;
+    if (!a) return { x: 0, y: 0 };
+    return { x: Math.round(a.left), y: Math.round(a.bottom + 4) };
+  });
+  const otherTerminalTabs = $derived(
+    allTerminalTabs().filter((candidate) => candidate.id !== tab.id),
+  );
+  const selectedBroadcastTargets = $derived(new Set(tab.broadcastTargetIds));
+  const broadcastChord = chordFor("app.terminal.broadcast.toggle") ?? "";
 
   $effect(() => {
     if (!host || term) return;
     void tick().then(start);
     return teardown;
   });
+
+  $effect(() => registerTerminalInputSink(tab.id, (data) => sendInput(data)));
 
   $effect(() => {
     if (!active) return;
@@ -95,7 +123,10 @@
     term.loadAddon(serialize);
     term.loadAddon(new WebLinksAddon());
     term.open(host);
-    term.onData((data) => send({ type: "input", data }));
+    term.onData((data) => {
+      sendInput(data);
+      broadcastTerminalInput(tab, data);
+    });
     term.onResize(({ cols, rows }) => send({ type: "resize", cols, rows }));
     resizeObserver = new ResizeObserver(queueFit);
     resizeObserver.observe(host);
@@ -110,9 +141,12 @@
     status = "connecting";
     statusDetail = "";
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const path = withTokenQuery(
-      `/api/terminal/ws?cols=${term.cols}&rows=${term.rows}`,
-    );
+    const params = new URLSearchParams({
+      cols: String(term.cols),
+      rows: String(term.rows),
+      tab_name: terminalTabName(tab),
+    });
+    const path = withTokenQuery(`/api/terminal/ws?${params.toString()}`);
     ws = new WebSocket(`${proto}//${window.location.host}${path}`);
     ws.binaryType = "arraybuffer";
     ws.onopen = () => {
@@ -156,6 +190,10 @@
   function send(frame: unknown): void {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify(frame));
+  }
+
+  function sendInput(data: string): void {
+    send({ type: "input", data });
   }
 
   function queueFit(): void {
@@ -254,7 +292,29 @@
       openFind();
     }
   }
+
+  function onMenuKeydown(e: KeyboardEvent): void {
+    if (e.key === "Escape" && menuOpen) {
+      e.preventDefault();
+      closeTabMenu();
+    }
+  }
+
+  function onDocPointerDown(e: PointerEvent): void {
+    if (!menuOpen) return;
+    const t = e.target as Element | null;
+    if (!t) return;
+    if (t.closest(".terminal-tab-menu-bubble")) return;
+    if (t.closest(".tab")) return;
+    closeTabMenu();
+  }
+
+  function toggleBroadcast(): void {
+    setTerminalBroadcastEnabled(tab, !tab.broadcastEnabled);
+  }
 </script>
+
+<svelte:window onkeydown={onMenuKeydown} onpointerdown={onDocPointerDown} />
 
 <div
   class="terminal-tab"
@@ -264,6 +324,72 @@
   aria-hidden={!active}
   onkeydown={onShellKeydown}
 >
+  {#if menuOpen}
+    <div
+      class="terminal-tab-menu-bubble"
+      role="menu"
+      tabindex="-1"
+      aria-label="terminal tab menu"
+      use:clampMenu={menuPos}
+      onmousedown={(e) => e.stopPropagation()}
+    >
+      <label class="rename-row">
+        <span class="rename-label">
+          <Pencil size={15} strokeWidth={1.75} aria-hidden="true" />
+          <span>Name</span>
+        </span>
+        <input
+          class="rename-input"
+          value={tab.title}
+          spellcheck="false"
+          oninput={(e) => renameTerminalTab(tab, (e.currentTarget as HTMLInputElement).value)}
+          onkeydown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              closeTabMenu();
+              term?.focus();
+            }
+          }}
+        />
+      </label>
+      <div class="action-list">
+        <button class="mbtn" class:on={tab.broadcastEnabled} onclick={toggleBroadcast}>
+          <span class="mbtn-icon">
+            <Radio size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">
+            {tab.broadcastEnabled ? "Broadcast Input On" : "Broadcast Input Off"}
+          </span>
+          <span class="mbtn-chord">{broadcastChord}</span>
+        </button>
+        <div class="msep" role="separator"></div>
+        {#if otherTerminalTabs.length === 0}
+          <div class="empty-targets">No other terminal tabs</div>
+        {:else}
+          {#each otherTerminalTabs as target (target.id)}
+            <label class="target-row">
+              <span class="target-check">
+                <input
+                  type="checkbox"
+                  checked={selectedBroadcastTargets.has(target.id)}
+                  onchange={(e) =>
+                    setTerminalBroadcastTarget(
+                      tab,
+                      target.id,
+                      (e.currentTarget as HTMLInputElement).checked,
+                    )}
+                />
+                {#if selectedBroadcastTargets.has(target.id)}
+                  <Check size={13} strokeWidth={2} aria-hidden="true" />
+                {/if}
+              </span>
+              <span class="target-name">{terminalTabName(target)}</span>
+            </label>
+          {/each}
+        {/if}
+      </div>
+    </div>
+  {/if}
   <header>
     <span class:connected={status === "connected"} class="status">
       {status}{statusDetail ? ` - ${statusDetail}` : ""}
@@ -384,6 +510,144 @@
   }
   .terminal-host :global(.xterm-viewport) {
     scrollbar-color: var(--separator) var(--bg);
+  }
+  .terminal-tab-menu-bubble {
+    position: fixed;
+    z-index: 50;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+    padding: 6px;
+    min-width: 260px;
+    max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+    color: var(--text);
+    font-size: 13px;
+    transform-origin: top left;
+    animation: bubble-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  @keyframes bubble-pop {
+    0% { opacity: 0; transform: scale(0.92); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .terminal-tab-menu-bubble { animation: none; }
+  }
+  .rename-row {
+    display: grid;
+    grid-template-columns: auto minmax(120px, 1fr);
+    align-items: center;
+    gap: 10px;
+    padding: 6px 4px 8px;
+    border-bottom: 1px solid var(--separator);
+  }
+  .rename-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--text-secondary);
+    min-width: 0;
+  }
+  .rename-input {
+    min-width: 0;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 5px 7px;
+    font: inherit;
+    outline: none;
+  }
+  .rename-input:focus {
+    border-color: var(--link);
+  }
+  .action-list {
+    display: flex;
+    flex-direction: column;
+    padding-top: 4px;
+  }
+  .mbtn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    padding: 6px 8px;
+    text-align: left;
+  }
+  .mbtn:hover,
+  .mbtn.on {
+    background: var(--hover-bg);
+  }
+  .mbtn-icon {
+    width: 18px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .mbtn-label,
+  .target-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mbtn-chord {
+    margin-left: 1.5rem;
+    color: var(--text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+  }
+  .msep {
+    height: 1px;
+    background: var(--separator, var(--border));
+    margin: 4px 2px;
+  }
+  .empty-targets {
+    padding: 7px 8px;
+    color: var(--text-secondary);
+  }
+  .target-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-radius: 4px;
+    padding: 6px 8px;
+    cursor: pointer;
+  }
+  .target-row:hover {
+    background: var(--hover-bg);
+  }
+  .target-check {
+    position: relative;
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .target-check input {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+  .target-check {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    background: var(--bg);
   }
   @media (max-width: 640px) {
     header {

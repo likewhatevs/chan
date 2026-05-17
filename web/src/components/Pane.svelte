@@ -51,7 +51,7 @@
     formatChord,
     renderTable,
   } from "../state/shortcuts";
-  import { tabMenu, toggleTabMenu } from "../state/tabMenu.svelte";
+  import { openTabMenu, tabMenu, toggleTabMenu } from "../state/tabMenu.svelte";
   import { onDestroy } from "svelte";
   import { applyPageWidthToElement, pageWidth } from "../state/pageWidth.svelte";
 
@@ -665,10 +665,40 @@
             <Terminal size={14} strokeWidth={1.75} />
           </span>
         {/if}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
         <span
           class="path"
-          aria-haspopup={t.kind === "file" ? "menu" : undefined}
-          aria-expanded={t.kind === "file" && tabMenu.openForTabId === t.id}
+          aria-haspopup={t.kind === "file" || t.kind === "terminal" ? "menu" : undefined}
+          aria-expanded={(t.kind === "file" || t.kind === "terminal") && tabMenu.openForTabId === t.id}
+          onclick={(e) => {
+            if (t.kind !== "terminal") return;
+            e.stopPropagation();
+            const wasActive = tabMouseDownPrevActive === t.id;
+            tabMouseDownPrevActive = null;
+            if (!wasActive) return;
+            const row = (e.currentTarget as HTMLElement).closest(".tab") as HTMLElement | null;
+            const r = (row ?? (e.currentTarget as HTMLElement)).getBoundingClientRect();
+            toggleTabMenu(t.id, {
+              left: r.left,
+              top: r.top,
+              right: r.right,
+              bottom: r.bottom,
+            });
+          }}
+          oncontextmenu={(e) => {
+            if (t.kind !== "terminal") return;
+            e.preventDefault();
+            e.stopPropagation();
+            pane.activeTabId = t.id;
+            layout.activePaneId = pane.id;
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            openTabMenu(t.id, {
+              left: r.left,
+              top: r.top,
+              right: r.right,
+              bottom: r.bottom,
+            });
+          }}
         >{tabLabel(t)}</span>
         {#if t.kind === "file" && assistantStream.sessionId !== null && pathInAssistantScope(t.path)}
           <!-- Flashing amber dot next to the title: the assistant

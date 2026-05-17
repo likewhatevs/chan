@@ -560,6 +560,9 @@ const KEY_BRIDGE_JS: &str = r#"
         case 'KeyW': fire(e, 'app.tab.close');        return;
         case 'KeyF': fire(e, 'app.find.open');        return;
         case 'KeyG': fire(e, 'app.find.next');        return;
+        case 'Backquote': fire(e, 'app.terminal.toggle'); return;
+        case 'BracketLeft': fire(e, 'app.pane.prev'); return;
+        case 'BracketRight': fire(e, 'app.pane.next'); return;
       }
       const m = code.match(/^Digit([1-9])$/);
       if (m) {
@@ -570,6 +573,7 @@ const KEY_BRIDGE_JS: &str = r#"
       switch (code) {
         case 'KeyF':         fire(e, 'app.search.toggle'); return;
         case 'KeyG':         fire(e, 'app.find.prev');     return;
+        case 'KeyI':         fire(e, 'app.terminal.broadcast.toggle'); return;
         case 'KeyM':         fire(e, 'app.graph.toggle');  return;
         case 'BracketLeft':  fire(e, 'app.tab.prev');      return;
         case 'BracketRight': fire(e, 'app.tab.next');      return;
