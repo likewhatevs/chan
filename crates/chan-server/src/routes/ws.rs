@@ -1,4 +1,4 @@
-//! GET /ws — WebSocket pump for watcher events and LLM streaming frames.
+//! GET /ws — WebSocket pump for watcher and progress frames.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -18,16 +18,14 @@ pub async fn ws_upgrade(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade
     ws.on_upgrade(move |socket| ws_pump(socket, rx, last_activity, shutdown_rx))
 }
 
-/// Forward pre-serialized JSON envelope frames to one WebSocket
-/// client until either side hangs up. Producers (WatchBroadcast,
-/// LlmBroadcastListener) build the JSON once; this pump just
-/// fans out. Lagged subscribers skip ahead rather than tearing
-/// down the connection.
+/// Forward pre-serialized JSON envelope frames to one WebSocket client
+/// until either side hangs up. Producers build the JSON once; this pump
+/// just fans out. Lagged subscribers skip ahead rather than tearing down
+/// the connection.
 ///
-/// Each successful send bumps `last_activity` so that LLM token
-/// streams and watcher events keep the idle-timeout window open
-/// (otherwise a long generation could be killed by `--timeout`).
-/// Idle subscribers with no traffic do not bump the timer.
+/// Each successful send bumps `last_activity` so watcher/progress events
+/// keep the idle-timeout window open. Idle subscribers with no traffic do
+/// not bump the timer.
 async fn ws_pump(
     mut socket: WebSocket,
     mut rx: broadcast::Receiver<String>,

@@ -30,6 +30,7 @@ mod signal;
 mod state;
 mod static_assets;
 mod store;
+mod terminal_sessions;
 mod tunnel_guard;
 mod util;
 
@@ -41,20 +42,19 @@ pub use routes::{build_fs_graph, FsGraphResponse, FsGraphScope};
 use auth::{auth_middleware, load_or_create_token};
 use bus::{make_progress_broadcast, make_watch_bridge};
 use routes::{
-    api_backlinks, api_build_info, api_clear_assistant, api_cloud_drives, api_create_file,
-    api_delete_assistant, api_delete_file, api_delete_session, api_fs_graph, api_get_assistant,
-    api_get_config, api_get_contacts, api_get_drive, api_get_server_config, api_get_session,
-    api_graph, api_headings, api_health, api_index_rebuild, api_index_status, api_language_graph,
-    api_link_targets, api_links, api_list_assistant, api_list_files, api_list_sessions,
-    api_llm_cli_detection, api_llm_complete, api_llm_status, api_llm_tools, api_move,
-    api_patch_config, api_patch_drive, api_patch_server_config, api_post_answer,
-    api_post_attachment, api_post_contacts_import, api_put_assistant, api_put_session,
-    api_read_file, api_report_file, api_report_prefix, api_resolve_link, api_search_content,
-    api_search_files, api_storage_reset, api_terminal_ws, api_write_file, ws_upgrade,
+    api_backlinks, api_build_info, api_cloud_drives, api_create_file, api_delete_file,
+    api_delete_session, api_fs_graph, api_get_config, api_get_contacts, api_get_drive,
+    api_get_server_config, api_get_session, api_graph, api_headings, api_health, api_index_rebuild,
+    api_index_status, api_language_graph, api_link_targets, api_links, api_list_files,
+    api_list_sessions, api_move, api_patch_config, api_patch_drive, api_patch_server_config,
+    api_post_attachment, api_post_contacts_import, api_put_session, api_read_file, api_report_file,
+    api_report_prefix, api_resolve_link, api_search_content, api_search_files, api_storage_reset,
+    api_terminal_ws, api_write_file, ws_upgrade,
 };
 use signal::{now_unix_secs, print_qr_if_tty, spawn_idle_watcher, spawn_signal_watcher};
 use state::{AppState, DriveCell};
 use static_assets::serve_static;
+use terminal_sessions::{Registry as TerminalRegistry, RegistryConfig as TerminalRegistryConfig};
 
 /// Tunnel drive-name helpers re-exported from chan-tunnel-proto so
 /// the `chan` binary can pre-validate / pre-sanitize without taking
@@ -74,8 +74,7 @@ use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{get, patch, post};
 use axum::Router;
-use chan_drive::{Drive, Library, WatchEvent};
-use chan_llm::LlmConfig;
+use chan_drive::{Drive, Library, SearchAggression, WatchEvent};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch};
 use tower_http::trace::TraceLayer;
@@ -105,6 +104,9 @@ pub struct ServeConfig {
     /// listener binds. Set by the CLI for the default `chan serve`
     /// flow; suppressed for tunnel mode (no local URL to open).
     pub open_browser: bool,
+    /// Optional one-shot override for the search indexer's resource
+    /// profile. When absent, the persisted server config decides.
+    pub search_aggression: Option<SearchAggression>,
     /// Tell the SPA shell to grey out the Settings entry point so a
     /// non-owner viewer can't open the settings panel. Surfaced to
     /// the frontend as `<meta name="chan-settings-disabled">`, and
@@ -122,16 +124,13 @@ pub struct ServeConfig {
     /// distinguished from a hostile third party. Stricter than
     /// `settings_disabled`:
     ///
-    ///   - the `tunnel_guard::tunnel_public_guard` middleware refuses
-    ///     cost-bearing routes (today `POST /api/llm/complete`);
     ///   - read-only handlers that expose host-level data
-    ///     (`GET /api/drive`, `GET /api/config`, `GET /api/cloud-drives`,
-    ///     `GET /api/llm/status`) redact paths and disable signals
-    ///     before serializing.
+    ///     (`GET /api/drive`, `GET /api/config`, `GET /api/cloud-drives`)
+    ///     redact paths before serializing.
     ///
-    /// Hosted (OAuth-gated) tunnel runs leave this false: the
-    /// gateway has already proven the viewer is the drive owner, so
-    /// the assistant and host-level reads stay available.
+    /// Hosted (OAuth-gated) tunnel runs leave this false: the gateway
+    /// has already proven the viewer is the drive owner, so host-level
+    /// reads stay available.
     pub tunnel_public: bool,
 }
 
@@ -232,6 +231,10 @@ struct AppArtifacts {
     /// rebuild on shutdown. The Arc also lives inside the router's
     /// DriveCell; this is just a second pointer to the same thing.
     indexer: Arc<indexer::Indexer>,
+    /// Background idle-prune/shutdown task for long-lived terminal
+    /// sessions. Held so dropping AppArtifacts aborts it if serve()
+    /// exits without the shutdown channel firing.
+    _terminal_pruner: tokio::task::JoinHandle<()>,
     /// Mutable handle to the URL prefix injected into the SPA shell
     /// as `<meta name="chan-prefix">`. Local serve sets it once at
     /// build time from `ServeConfig::prefix`; tunnel mode swaps in
@@ -273,13 +276,22 @@ async fn build_app(
     #[cfg(feature = "embeddings")]
     embed_seed::seed_models_from_bundle();
 
-    // Unified event stream: every /ws subscriber gets watcher
-    // events AND assistant streaming events from the same channel.
-    // Producers serialize to JSON strings (with a `type` field as
-    // the discriminator); the WS pump just forwards strings as
-    // text frames. Buffer of 256 is enough headroom for typical
-    // bursts (mass rename, LLM token-stream); slow subscribers
-    // see Lagged and skip ahead rather than blocking the sender.
+    // Server config: same fall-back-on-malformed policy as the
+    // editor preferences. Load before spawning the indexer so its
+    // resource profile applies from the initial boot rebuild.
+    let server_config = ServerConfig::load().unwrap_or_else(|e| {
+        tracing::warn!("malformed server config, falling back to defaults: {e}");
+        ServerConfig::default()
+    });
+    let search_aggression = server_config.effective_search_aggression(config.search_aggression);
+
+    // Unified event stream: every /ws subscriber gets watcher and
+    // progress events from the same channel. Producers serialize to
+    // JSON strings (with a `type` field as the discriminator); the WS
+    // pump just forwards strings as text frames. Buffer of 256 is
+    // enough headroom for typical bursts (mass rename, reindex
+    // progress); slow subscribers see Lagged and skip ahead rather
+    // than blocking the sender.
     let (events_tx, _) = broadcast::channel::<String>(256);
     // Indexer feed: raw WatchEvent for the background indexer
     // task. Larger buffer than the JSON channel because the
@@ -308,31 +320,14 @@ async fn build_app(
         drive.clone(),
         index_events_tx.subscribe(),
         true,
+        search_aggression,
         progress_sink,
     ));
     let indexer_handle = indexer.clone();
 
-    // LLM config: load once at boot. Falling back to defaults on
-    // a malformed file keeps the server bootable; user fixes the
-    // TOML and restarts.
-    let llm_config = LlmConfig::load().unwrap_or_else(|e| {
-        tracing::warn!("malformed llm config, falling back to defaults: {e}");
-        LlmConfig::default()
-    });
-
-    // Server config: same fall-back-on-malformed policy as the
-    // LLM config. Holds chan-server-specific paths
-    // (attachments_dir, answers_dir).
-    let server_config = ServerConfig::load().unwrap_or_else(|e| {
-        tracing::warn!("malformed server config, falling back to defaults: {e}");
-        ServerConfig::default()
-    });
-
     // Editor preferences: fonts / theme / pane widths / line spacing /
-    // date format. The remaining "preferences" surfaced by the
-    // Settings UI live in LlmConfig (assistant) and ServerConfig
-    // (attachments / answers dirs); the unified view returned over
-    // /api/drive and /api/config joins all three.
+    // date format. The unified view returned over /api/drive and
+    // /api/config joins these with ServerConfig.
     let editor_prefs = EditorPrefs::load().unwrap_or_else(|e| {
         tracing::warn!("malformed editor preferences, falling back to defaults: {e}");
         EditorPrefs::default()
@@ -356,7 +351,6 @@ async fn build_app(
         watch_handle: Some(watch_handle),
         indexer,
     })));
-    let llm_config_arc = Arc::new(Mutex::new(llm_config));
     let bridge_drive_cell = state_for_bridge.clone();
     let bridge = mcp_bridge::start(socket_path.clone(), move || {
         let cell = bridge_drive_cell.read().expect("drive_cell poisoned");
@@ -372,6 +366,12 @@ async fn build_app(
             (None, None)
         }
     };
+    let terminal_sessions = Arc::new(TerminalRegistry::new(TerminalRegistryConfig {
+        drive_root: drive_root.clone(),
+        mcp_socket_path: mcp_socket_path.clone(),
+        terminal: server_config.terminal.clone(),
+    }));
+    let terminal_pruner = terminal_sessions.clone().spawn_pruner(shutdown_rx.clone());
 
     let state = Arc::new(AppState {
         library,
@@ -383,12 +383,11 @@ async fn build_app(
         tunnel_public: config.tunnel_public,
         events_tx,
         index_events_tx,
-        llm_config: llm_config_arc,
         server_config: Mutex::new(server_config),
         editor_prefs: Mutex::new(editor_prefs),
         self_writes,
         last_activity: last_activity.clone(),
-        mcp_socket_path,
+        terminal_sessions,
         shutdown_rx,
     });
     // Nest under the prefix so `--prefix=/foo` makes every existing
@@ -407,6 +406,7 @@ async fn build_app(
         token,
         last_activity,
         indexer: indexer_handle,
+        _terminal_pruner: terminal_pruner,
         prefix,
         mcp_bridge,
         shutdown_tx,
@@ -518,15 +518,29 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
 /// leaves it live (the gateway proves the viewer is the drive owner,
 /// even on a different device), while `--tunnel-public` greys it out
 /// because anonymous visitors must not mutate owner config.
+#[derive(Debug, Clone)]
+pub struct TunnelServeConfig<'a> {
+    pub tunnel_url: &'a str,
+    pub token: String,
+    pub drive_name: String,
+    pub public: bool,
+    pub open_browser: bool,
+    pub search_aggression: Option<SearchAggression>,
+}
+
 pub async fn serve_via_tunnel(
     library: Library,
     drive: Arc<Drive>,
-    tunnel_url: &str,
-    token: String,
-    drive_name: String,
-    public: bool,
-    open_browser: bool,
+    config: TunnelServeConfig<'_>,
 ) -> Result<(), Error> {
+    let TunnelServeConfig {
+        tunnel_url,
+        token,
+        drive_name,
+        public,
+        open_browser,
+        search_aggression,
+    } = config;
     // The addr field is unused in tunnel mode (no local listener);
     // any parseable SocketAddr works. Prefix is empty: the public
     // gateway strips /{user}/{drive} before forwarding, so handlers
@@ -541,15 +555,16 @@ pub async fn serve_via_tunnel(
         // `open_browser` parameter on serve_via_tunnel. The local
         // serve() open path is never reached in tunnel mode.
         open_browser: false,
+        search_aggression,
         // Settings track `public`: OAuth-gated runs leave the panel
         // live (the gateway has proven the viewer is the drive
         // owner), `--tunnel-public` greys it out so anonymous
         // visitors can't mutate owner config.
         settings_disabled: public,
-        // Forward the public-tunnel flag verbatim. The handlers /
-        // middleware consume this for the harsher restrictions that
-        // only apply when the gateway is not authenticating the
-        // viewer (assistant gate, host-path redactions).
+        // Forward the public-tunnel flag verbatim. Handlers consume
+        // this for restrictions that only apply when the gateway is
+        // not authenticating the viewer (terminal gate, host-path
+        // redactions).
         tunnel_public: public,
     };
     let artifacts = build_app(library, drive, &server_config).await?;
@@ -721,34 +736,11 @@ fn router(state: Arc<AppState>) -> Router {
             tunnel_guard::settings_guard,
         ));
 
-    // ---- Public-tunnel gate -----------------------------------------
-    //
-    // Refused with 403 by `tunnel_guard::tunnel_public_guard` only
-    // when the server was started with `--tunnel-public`. The hosted
-    // (OAuth-gated) tunnel run leaves this open so the owner viewing
-    // their drive from another device can still use the assistant
-    // their machine paid for.
-    //
-    // /api/llm/complete is the cost-bearing route: a single call can
-    // burn minutes of Claude/Gemini token budget. The settings-write
-    // gate alone does not cover it (no settings are mutated), so this
-    // separate layer carries the assistant-completion lockdown.
-    let tunnel_public_block = Router::new()
-        .route("/api/llm/complete", post(api_llm_complete))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            tunnel_guard::tunnel_public_guard,
-        ));
-
     // ---- Open routes ------------------------------------------------
     //
-    // Everything not in the two gated sub-routers above: read-only
+    // Everything not in the gated sub-router above: read-only
     // endpoints, drive-content writes (allowed in tunnel mode by
-    // design), and per-window session storage. The read-side handlers
-    // that would otherwise expose host-level data
-    // (`api_get_drive`, `api_get_config`, `api_cloud_drives`,
-    // `api_llm_status`) redact the response themselves when
-    // `state.tunnel_public` is set.
+    // design), and per-window session storage.
     let api = Router::new()
         .route("/api/drive", get(api_get_drive))
         .route("/api/cloud-drives", get(api_cloud_drives))
@@ -773,9 +765,6 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/backlinks/*path", get(api_backlinks))
         .route("/api/report/file", get(api_report_file))
         .route("/api/report/prefix", get(api_report_prefix))
-        .route("/api/llm/status", get(api_llm_status))
-        .route("/api/llm/cli_detection", get(api_llm_cli_detection))
-        .route("/api/llm/tools", get(api_llm_tools))
         .route("/api/server/config", get(api_get_server_config))
         .route("/api/config", get(api_get_config))
         .route("/api/build-info", get(api_build_info))
@@ -792,21 +781,6 @@ fn router(state: Arc<AppState>) -> Router {
                 .delete(api_delete_session),
         )
         .route("/api/sessions", get(api_list_sessions))
-        // Assistant per-conversation blob keyed by file path or group
-        // key (?path=<key>). Same query-string contract as /api/session
-        // for the same reason. The plural sibling endpoint covers
-        // listing and clearing all conversations at once.
-        .route(
-            "/api/assistant/conversation",
-            get(api_get_assistant)
-                .put(api_put_assistant)
-                .delete(api_delete_assistant),
-        )
-        .route(
-            "/api/assistant/conversations",
-            get(api_list_assistant).delete(api_clear_assistant),
-        )
-        .route("/api/answers", post(api_post_answer))
         .route(
             "/api/attachments",
             // Image attachments cap. Axum's default body limit is
@@ -829,8 +803,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/health", get(api_health))
         .route("/api/terminal/ws", get(api_terminal_ws))
         .route("/ws", get(ws_upgrade))
-        .merge(settings_writes)
-        .merge(tunnel_public_block);
+        .merge(settings_writes);
     Router::new()
         .merge(api)
         .fallback(serve_static)

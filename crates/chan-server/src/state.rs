@@ -10,11 +10,11 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, RwLock};
 
 use chan_drive::{Drive, Library, WatchEvent, WatchHandle};
-use chan_llm::LlmConfig;
 use tokio::sync::{broadcast, watch};
 
 use crate::indexer;
 use crate::self_writes::SelfWrites;
+use crate::terminal_sessions::Registry as TerminalRegistry;
 use crate::{EditorPrefs, ServerConfig};
 
 /// Server state shared across all handlers.
@@ -56,14 +56,10 @@ pub struct AppState {
     /// `settings_disabled`: only true on `--tunnel-public` runs
     /// where the gateway is NOT authenticating the viewer. Read by:
     ///
-    ///   - `tunnel_guard::tunnel_public_guard`: refuses
-    ///     `POST /api/llm/complete` so an anonymous visitor cannot
-    ///     spend the owner's LLM tokens;
     ///   - the read-only handlers that would otherwise leak host
     ///     state (`api_get_drive`, `api_get_config`,
-    ///     `api_cloud_drives`, `api_llm_status`): they strip
-    ///     absolute paths, the drive registry, and assistant
-    ///     readiness signals before serializing.
+    ///     `api_cloud_drives`): they strip absolute paths and the
+    ///     drive registry before serializing.
     pub tunnel_public: bool,
     /// Last activity timestamp (unix seconds). Bumped by HTTP
     /// middleware on every request, by `ws_upgrade` on connect,
@@ -73,22 +69,17 @@ pub struct AppState {
     /// task only runs when `--timeout` is set.
     pub last_activity: Arc<AtomicU64>,
     /// Pre-serialized JSON-envelope frames: `{"type": "watch",
-    /// "event": ...}`, `{"type": "llm.delta", "session_id": ...,
-    /// "text": ...}`, etc. One channel; the `type` field tells
-    /// the frontend what to do.
+    /// "event": ...}`, `{"type": "progress", "event": ...}`, etc.
+    /// One channel; the `type` field tells the frontend what to do.
     pub events_tx: broadcast::Sender<String>,
     /// Raw watcher events feeding the background indexer. Lives at
     /// AppState scope (not just inside DriveCell) so the bridge
     /// constructor at /api/storage/reset time can reuse the same
     /// channel without resubscribing the indexer to a fresh one.
     pub index_events_tx: broadcast::Sender<WatchEvent>,
-    /// Loaded at boot; mutable for future PATCH /api/llm/config
-    /// (backend selection). Currently only read by the status
-    /// route and the complete handler.
-    pub llm_config: Arc<Mutex<LlmConfig>>,
-    /// chan-server's own preferences (attachments_dir,
-    /// answers_dir, etc). Mutable via PATCH /api/server/config;
-    /// reads route through the get handler.
+    /// chan-server's own preferences (attachments_dir, etc). Mutable
+    /// via PATCH /api/server/config; reads route through the get
+    /// handler.
     pub server_config: Mutex<ServerConfig>,
     /// Editor preferences: fonts / theme / pane widths / line
     /// spacing / date format. Persisted to
@@ -100,14 +91,11 @@ pub struct AppState {
     /// queue before forwarding so an editor save doesn't bounce
     /// back as an "external edit" event.
     pub self_writes: Arc<SelfWrites>,
-    /// Path to the Unix-domain socket where the in-process MCP
-    /// server is exposed for agent subprocesses (claude / gemini).
-    /// `None` when the bridge couldn't bind (read-only tmpdir,
-    /// exotic platforms); the agent backends fall back to v1
-    /// black-box mode in that case. The bridge handle that owns
-    /// the socket file lives on `AppArtifacts` so it gets dropped
-    /// (and the file unlinked) when serve() unwinds.
-    pub mcp_socket_path: Option<PathBuf>,
+    /// Long-lived PTY session registry. WebSocket terminal routes
+    /// attach/detach to entries here; the PTY itself outlives a
+    /// browser reload until explicit close, drive close, shutdown,
+    /// cap eviction, or idle prune.
+    pub terminal_sessions: Arc<TerminalRegistry>,
     /// Process-wide shutdown signal. Fires once SIGINT/SIGTERM or
     /// the idle-timeout watcher trip. Long-lived handlers (e.g.
     /// `/ws`) observe this to close their sockets promptly so axum's
@@ -183,11 +171,11 @@ pub(crate) mod test_support {
     use std::sync::{Arc, Mutex, RwLock};
 
     use chan_drive::Library;
-    use chan_llm::LlmConfig;
     use tokio::sync::{broadcast, watch};
 
     use super::AppState;
     use crate::self_writes::SelfWrites;
+    use crate::terminal_sessions::{Registry as TerminalRegistry, RegistryConfig};
     use crate::{EditorPrefs, ServerConfig};
 
     /// Build an `AppState` with the two policy bools set to the
@@ -226,12 +214,15 @@ pub(crate) mod test_support {
             tunnel_public,
             events_tx,
             index_events_tx,
-            llm_config: Arc::new(Mutex::new(LlmConfig::default())),
             server_config: Mutex::new(ServerConfig::default()),
             editor_prefs: Mutex::new(EditorPrefs::default()),
             self_writes: Arc::new(SelfWrites::new()),
             last_activity: Arc::new(AtomicU64::new(0)),
-            mcp_socket_path: None,
+            terminal_sessions: Arc::new(TerminalRegistry::new(RegistryConfig {
+                drive_root: PathBuf::from("/dev/null"),
+                mcp_socket_path: None,
+                terminal: ServerConfig::default().terminal,
+            })),
             shutdown_rx,
         })
     }

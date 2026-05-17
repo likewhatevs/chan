@@ -2,9 +2,9 @@
 //!
 //! `Error` is the crate-wide error returned by `serve()`/`serve_via_tunnel()`.
 //! The `err_*` helpers shape uniform `{"error": "..."}` JSON bodies and map
-//! chan-drive / chan-llm errors onto the right HTTP status. Routes call into
-//! these instead of building responses by hand so the wire shape stays
-//! consistent across handlers.
+//! chan-drive errors onto the right HTTP status. Routes call into these instead
+//! of building responses by hand so the wire shape stays consistent across
+//! handlers.
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -43,12 +43,10 @@ pub fn err_settings_locked() -> Response {
     )
 }
 
-/// Refusal returned by `tunnel_guard::tunnel_public_guard` for
-/// cost-bearing routes that must not be reachable from anonymous
-/// visitors when the server is running with `--tunnel-public`. The
-/// drive owner's LLM tokens, the indexer's CPU/IO budget, and the
-/// local CLI agent processes are all attached to the owner's machine; an
-/// unauthenticated visitor cannot be allowed to draw on them.
+/// Refusal returned by public-tunnel-locked routes that must not be
+/// reachable from anonymous visitors. Terminal sessions run local
+/// processes on the owner's machine; unauthenticated visitors cannot
+/// be allowed to spawn them.
 pub fn err_tunnel_public_locked() -> Response {
     err(
         StatusCode::FORBIDDEN,

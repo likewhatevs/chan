@@ -426,9 +426,10 @@ fn build_drive_window(
     title: &str,
     url: &str,
 ) -> Result<(), String> {
-    let Ok(parsed) = url.parse::<tauri::Url>() else {
+    let Ok(mut parsed) = url.parse::<tauri::Url>() else {
         return Err(format!("bad chan URL for {window_label}: {url}"));
     };
+    parsed.query_pairs_mut().append_pair("w", window_label);
     let app_owned = app.clone();
     let label_owned = window_label.to_string();
     let title_owned = title.to_string();
@@ -555,7 +556,6 @@ const KEY_BRIDGE_JS: &str = r#"
     if (!shift) {
       switch (code) {
         case 'KeyP': fire(e, 'app.files.toggle');     return;
-        case 'KeyI': fire(e, 'app.assistant.toggle'); return;
         case 'KeyN': fire(e, 'app.file.new');         return;
         case 'KeyW': fire(e, 'app.tab.close');        return;
         case 'KeyF': fire(e, 'app.find.open');        return;

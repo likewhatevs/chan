@@ -1,5 +1,5 @@
-//! Bridges from chan-drive's watcher and chan-llm's session listener
-//! into the shared `events_tx` JSON broadcast channel.
+//! Bridges chan-drive watcher/progress callbacks into the shared
+//! `events_tx` JSON broadcast channel.
 //!
 //! Both producers fan into one channel; each frame carries a `type`
 //! discriminator so the frontend can route on it. Watcher events also
@@ -10,10 +10,6 @@
 use std::sync::Arc;
 
 use chan_drive::{ProgressCallback, ProgressEvent, WatchCallback, WatchEvent};
-use chan_llm::{
-    AgentActivity, AgentStatus, Delta, SessionListener, StopReason, ToolCall, ToolResult,
-    UserRequest,
-};
 use tokio::sync::broadcast;
 
 use crate::self_writes::SelfWrites;
@@ -86,8 +82,7 @@ fn event_is_self_echo(event: &WatchEvent, sw: &SelfWrites) -> bool {
 /// JSON-envelope broadcast channel. Every progress tick (per-file
 /// during reindex, per-batch during embedding, etc.) lands on the
 /// same `/ws` stream every other producer uses, with `type` set to
-/// `"progress"` so the frontend can route the frame distinctly
-/// from `watch` and `llm.*`.
+/// `"progress"` so the frontend can route the frame distinctly.
 ///
 /// `Send + Sync` because `ProgressCallback` can fire from worker
 /// threads inside the embedder and graph rebuilders.
@@ -114,77 +109,10 @@ impl ProgressCallback for ProgressBroadcast {
     }
 }
 
-/// Bridge from chan-llm's SessionListener into the shared broadcast
-/// channel. One listener instance per /api/llm/complete call; dropped
-/// when the session emits `Done` or when the consumer drops the
-/// `Arc` at the end of the request handler.
-///
-/// `session_id` is client-supplied so the frontend can correlate
-/// streaming events to its in-flight assistant turn (multiple
-/// turns can interleave on the same socket).
-pub struct LlmBroadcastListener {
-    pub tx: broadcast::Sender<String>,
-    pub session_id: String,
-}
-
-impl LlmBroadcastListener {
-    fn send(&self, ty: &str, body: serde_json::Value) {
-        let mut frame = serde_json::Map::new();
-        frame.insert("type".into(), ty.into());
-        frame.insert("session_id".into(), self.session_id.clone().into());
-        if let serde_json::Value::Object(map) = body {
-            for (k, v) in map {
-                frame.insert(k, v);
-            }
-        }
-        if let Ok(s) = serde_json::to_string(&serde_json::Value::Object(frame)) {
-            let _ = self.tx.send(s);
-        }
-    }
-}
-
-impl SessionListener for LlmBroadcastListener {
-    fn on_status(&self, status: AgentStatus) {
-        self.send("llm.status", serde_json::json!({"status": status}));
-    }
-    fn on_activity(&self, activity: AgentActivity) {
-        self.send("llm.activity", serde_json::json!({"activity": activity}));
-    }
-    fn on_user_request(&self, request: UserRequest) {
-        self.send("llm.user_request", serde_json::json!({"request": request}));
-    }
-    fn on_delta(&self, d: Delta) {
-        self.send("llm.delta", serde_json::json!({"text": d.text}));
-    }
-    fn on_tool_call(&self, c: ToolCall) {
-        self.send("llm.tool_call", serde_json::json!({"call": c}));
-    }
-    fn on_tool_result(&self, r: ToolResult) {
-        self.send("llm.tool_result", serde_json::json!({"result": r}));
-    }
-    fn on_done(&self, r: StopReason) {
-        self.send("llm.done", serde_json::json!({"reason": r}));
-    }
-    fn on_error(&self, e: String) {
-        self.send("llm.error", serde_json::json!({"error": e}));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::Value;
-
-    fn listener() -> (LlmBroadcastListener, broadcast::Receiver<String>) {
-        let (tx, rx) = broadcast::channel(8);
-        (
-            LlmBroadcastListener {
-                tx,
-                session_id: "A".to_string(),
-            },
-            rx,
-        )
-    }
 
     fn recv_json(rx: &mut broadcast::Receiver<String>) -> Value {
         let raw = rx.try_recv().expect("broadcast frame");
@@ -192,117 +120,19 @@ mod tests {
     }
 
     #[test]
-    fn status_frame_serializes_with_session_id() {
-        let (listener, mut rx) = listener();
-        let status = AgentStatus::Heartbeat {
-            backend: "claude_cli".into(),
-            idle_ms: 1500,
-        };
-
-        listener.on_status(status.clone());
-
-        let frame = recv_json(&mut rx);
-        assert_eq!(frame["type"], "llm.status");
-        assert_eq!(frame["session_id"], "A");
-        assert_eq!(
-            frame["status"],
-            serde_json::to_value(status).expect("status value")
-        );
-    }
-
-    #[test]
-    fn activity_frame_serializes_with_session_id() {
-        let (listener, mut rx) = listener();
-        let activity = AgentActivity::ToolStarted {
-            backend: "claude_cli".into(),
-            id: "toolu_1".into(),
-            name: "read_file".into(),
-            parent_id: Some("msg_1".into()),
-        };
-
-        listener.on_activity(activity.clone());
+    fn progress_frame_serializes() {
+        let (tx, mut rx) = broadcast::channel(8);
+        let sink = make_progress_broadcast(&tx);
+        sink.on_progress(ProgressEvent {
+            stage: chan_drive::ProgressStage::IndexFile,
+            current: 1,
+            total: 2,
+            label: Some("a.md".into()),
+            eta_secs: None,
+        });
 
         let frame = recv_json(&mut rx);
-        assert_eq!(frame["type"], "llm.activity");
-        assert_eq!(frame["session_id"], "A");
-        assert_eq!(
-            frame["activity"],
-            serde_json::to_value(activity).expect("activity value")
-        );
-    }
-
-    #[test]
-    fn user_request_frame_serializes_with_session_id() {
-        let (listener, mut rx) = listener();
-        let request = UserRequest::Survey {
-            backend: "claude_cli".into(),
-            id: "survey_1".into(),
-            questions: vec![chan_llm::UserQuestion {
-                question: "Proceed?".into(),
-                header: Some("Confirm".into()),
-                multi_select: false,
-                options: vec![chan_llm::UserOption {
-                    label: "Yes".into(),
-                    description: Some("Continue".into()),
-                }],
-            }],
-            parent_id: Some("msg_1".into()),
-        };
-
-        listener.on_user_request(request.clone());
-
-        let frame = recv_json(&mut rx);
-        assert_eq!(frame["type"], "llm.user_request");
-        assert_eq!(frame["session_id"], "A");
-        assert_eq!(
-            frame["request"],
-            serde_json::to_value(request).expect("request value")
-        );
-    }
-
-    #[test]
-    fn existing_llm_frames_keep_shape() {
-        let (listener, mut rx) = listener();
-
-        listener.on_delta(Delta { text: "hi".into() });
-        let frame = recv_json(&mut rx);
-        assert_eq!(frame["type"], "llm.delta");
-        assert_eq!(frame["session_id"], "A");
-        assert_eq!(frame["text"], "hi");
-
-        let call = ToolCall {
-            id: "call_1".into(),
-            name: "read_file".into(),
-            args: serde_json::json!({"path": "a.md"}),
-        };
-        listener.on_tool_call(call.clone());
-        let frame = recv_json(&mut rx);
-        assert_eq!(frame["type"], "llm.tool_call");
-        assert_eq!(
-            frame["call"],
-            serde_json::to_value(call).expect("call value")
-        );
-
-        let result = ToolResult {
-            id: "call_1".into(),
-            output: serde_json::json!({"ok": true}),
-        };
-        listener.on_tool_result(result.clone());
-        let frame = recv_json(&mut rx);
-        assert_eq!(frame["type"], "llm.tool_result");
-        assert_eq!(
-            frame["result"],
-            serde_json::to_value(result).expect("result value")
-        );
-
-        listener.on_done(StopReason::EndOfTurn);
-        let frame = recv_json(&mut rx);
-        assert_eq!(frame["type"], "llm.done");
-        assert_eq!(frame["reason"], "end_of_turn");
-
-        listener.on_error("boom".into());
-        let frame = recv_json(&mut rx);
-        assert_eq!(frame["type"], "llm.error");
-        assert_eq!(frame["error"], "boom");
+        assert_eq!(frame["type"], "progress");
+        assert_eq!(frame["event"]["stage"], "IndexFile");
     }
 }

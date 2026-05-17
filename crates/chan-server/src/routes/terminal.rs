@@ -1,21 +1,20 @@
 //! GET /api/terminal/ws - interactive PTY-backed terminal sessions.
 
-use std::io::{Read, Write};
-use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::PtySize;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
 
 use crate::error::err_tunnel_public_locked;
 use crate::signal::now_unix_secs;
 use crate::state::AppState;
+use crate::terminal_sessions::{
+    CloseReason, CreateError, CreateOptions, SessionEvent, ALT_SCREEN_ATTACH_PRELUDE,
+};
 
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
@@ -24,9 +23,26 @@ const MAX_ROWS: u16 = 200;
 
 #[derive(Debug, Deserialize)]
 pub struct TerminalQuery {
+    session: Option<String>,
+    since: Option<u64>,
     cols: Option<u16>,
     rows: Option<u16>,
     tab_name: Option<String>,
+    mcp_env: Option<TerminalMcpEnv>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum TerminalMcpEnv {
+    #[default]
+    On,
+    Off,
+}
+
+impl TerminalMcpEnv {
+    fn enabled(self) -> bool {
+        matches!(self, Self::On)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -36,50 +52,33 @@ enum ClientFrame {
     Input { data: String },
     #[serde(rename = "resize")]
     Resize { cols: u16, rows: u16 },
+    #[serde(rename = "close")]
+    Close,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 enum ServerFrame {
+    #[serde(rename = "session")]
+    Session {
+        id: String,
+        seq: u64,
+        missed_bytes: u64,
+    },
     #[serde(rename = "ready")]
     Ready { cols: u16, rows: u16 },
-    #[serde(skip)]
-    Output { data: Vec<u8> },
+    #[serde(rename = "resize")]
+    Resize { cols: u16, rows: u16 },
     #[serde(rename = "exit")]
     Exit { code: u32 },
+    #[serde(rename = "closed")]
+    Closed { reason: CloseReason },
     #[serde(rename = "error")]
-    Error { message: String },
-}
-
-enum PtyCommand {
-    Input(String),
-    Resize(PtySize),
-    Kill,
-}
-
-struct PtySession {
-    tx: std::sync::mpsc::Sender<PtyCommand>,
-    rx: mpsc::UnboundedReceiver<ServerFrame>,
-}
-
-impl PtySession {
-    fn input(&self, data: String) {
-        let _ = self.tx.send(PtyCommand::Input(data));
-    }
-
-    fn resize(&self, size: PtySize) {
-        let _ = self.tx.send(PtyCommand::Resize(size));
-    }
-
-    fn kill(&self) {
-        let _ = self.tx.send(PtyCommand::Kill);
-    }
-}
-
-impl Drop for PtySession {
-    fn drop(&mut self) {
-        let _ = self.tx.send(PtyCommand::Kill);
-    }
+    Error {
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<&'static str>,
+    },
 }
 
 pub async fn api_terminal_ws(
@@ -93,35 +92,99 @@ pub async fn api_terminal_ws(
 
     let size = pty_size(query.cols, query.rows);
     let tab_name = query.tab_name.as_deref().and_then(normalize_tab_name);
-    ws.on_upgrade(move |socket| terminal_ws(socket, state, size, tab_name))
-        .into_response()
+    let mcp_env = query.mcp_env.unwrap_or_default().enabled();
+    ws.on_upgrade(move |socket| {
+        terminal_ws(
+            socket,
+            state,
+            query.session,
+            query.since,
+            size,
+            tab_name,
+            mcp_env,
+        )
+    })
+    .into_response()
 }
 
 async fn terminal_ws(
     mut socket: WebSocket,
     state: Arc<AppState>,
+    session_id: Option<String>,
+    since: Option<u64>,
     size: PtySize,
     tab_name: Option<String>,
+    mcp_env: bool,
 ) {
     state
         .last_activity
         .store(now_unix_secs(), Ordering::Relaxed);
 
-    let mut session = match spawn_pty_session(state.drive_root.clone(), size, tab_name) {
-        Ok(session) => session,
-        Err(e) => {
-            let _ = send_frame(
-                &mut socket,
-                ServerFrame::Error {
-                    message: format!("failed to start terminal: {e}"),
-                },
-            )
-            .await;
-            return;
-        }
+    let opts = CreateOptions {
+        size,
+        tab_name,
+        mcp_env,
     };
+    let mut session =
+        match state
+            .terminal_sessions
+            .get_or_create(session_id.as_deref(), since, opts)
+        {
+            Ok(session) => session,
+            Err(CreateError::Capped) => {
+                let _ = send_frame(
+                    &mut socket,
+                    ServerFrame::Error {
+                        message: "terminal session cap reached".into(),
+                        reason: Some(CloseReason::Capped.as_str()),
+                    },
+                )
+                .await;
+                let _ = socket
+                    .send(Message::Close(Some(CloseFrame {
+                        code: 1013,
+                        reason: "terminal session cap reached".into(),
+                    })))
+                    .await;
+                return;
+            }
+            Err(CreateError::Spawn(e)) => {
+                let _ = send_frame(
+                    &mut socket,
+                    ServerFrame::Error {
+                        message: format!("failed to start terminal: {e}"),
+                        reason: None,
+                    },
+                )
+                .await;
+                return;
+            }
+        };
     let mut shutdown_rx = state.shutdown_rx.clone();
 
+    let _ = send_frame(
+        &mut socket,
+        ServerFrame::Session {
+            id: session.id().to_owned(),
+            seq: session.seq,
+            missed_bytes: session.missed_bytes,
+        },
+    )
+    .await;
+    for chunk in &session.replay {
+        if socket.send(Message::Binary(chunk.clone())).await.is_err() {
+            return;
+        }
+    }
+    if session.alt_screen
+        && socket
+            .send(Message::Binary(ALT_SCREEN_ATTACH_PRELUDE.to_vec()))
+            .await
+            .is_err()
+    {
+        return;
+    }
+    session.request_redraw();
     let _ = send_frame(
         &mut socket,
         ServerFrame::Ready {
@@ -135,7 +198,6 @@ async fn terminal_ws(
         tokio::select! {
             biased;
             _ = shutdown_rx.changed() => {
-                session.kill();
                 let _ = socket
                     .send(Message::Close(Some(CloseFrame {
                         code: 1001,
@@ -146,54 +208,79 @@ async fn terminal_ws(
             }
             msg = socket.recv() => {
                 let Some(msg) = msg else {
-                    session.kill();
                     break;
                 };
                 match msg {
                     Ok(Message::Text(text)) => {
                         match serde_json::from_str::<ClientFrame>(&text) {
                             Ok(ClientFrame::Input { data }) => {
-                                session.input(data);
+                                session.send_input(data.as_bytes());
                                 state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
                             }
                             Ok(ClientFrame::Resize { cols, rows }) => {
                                 session.resize(pty_size(Some(cols), Some(rows)));
                                 state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
                             }
+                            Ok(ClientFrame::Close) => {
+                                let id = session.id().to_owned();
+                                state.terminal_sessions.close(&id, CloseReason::Explicit);
+                            }
                             Err(e) => {
                                 let _ = send_frame(
                                     &mut socket,
                                     ServerFrame::Error {
                                         message: format!("invalid terminal frame: {e}"),
+                                        reason: None,
                                     },
                                 )
                                 .await;
                             }
                         }
                     }
-                    Ok(Message::Close(_)) => {
-                        session.kill();
-                        break;
-                    }
+                    Ok(Message::Close(_)) => break,
                     Ok(Message::Ping(_)) | Ok(Message::Pong(_)) | Ok(Message::Binary(_)) => {}
-                    Err(_) => {
-                        session.kill();
-                        break;
-                    }
+                    Err(_) => break,
                 }
             }
-            frame = session.rx.recv() => {
-                let Some(frame) = frame else {
-                    break;
-                };
-                let is_exit = matches!(frame, ServerFrame::Exit { .. });
-                if send_frame(&mut socket, frame).await.is_err() {
-                    session.kill();
-                    break;
-                }
-                state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
-                if is_exit {
-                    break;
+            event = session.rx.recv() => {
+                match event {
+                    Ok(SessionEvent::Output(data)) => {
+                        if socket.send(Message::Binary(data)).await.is_err() {
+                            break;
+                        }
+                        state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
+                    }
+                    Ok(SessionEvent::Resize(size)) => {
+                        if send_frame(&mut socket, ServerFrame::Resize { cols: size.cols, rows: size.rows }).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(SessionEvent::Exit(code)) => {
+                        let id = session.id().to_owned();
+                        state.terminal_sessions.remove(&id);
+                        let _ = send_frame(&mut socket, ServerFrame::Exit { code }).await;
+                        break;
+                    }
+                    Ok(SessionEvent::Error(message)) => {
+                        if send_frame(&mut socket, ServerFrame::Error { message, reason: None }).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(SessionEvent::Closed(reason)) => {
+                        let _ = send_frame(&mut socket, ServerFrame::Closed { reason }).await;
+                        break;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        let _ = send_frame(
+                            &mut socket,
+                            ServerFrame::Error {
+                                message: "terminal output lagged; reconnect to replay retained scrollback".into(),
+                                reason: None,
+                            },
+                        )
+                        .await;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         }
@@ -201,9 +288,6 @@ async fn terminal_ws(
 }
 
 async fn send_frame(socket: &mut WebSocket, frame: ServerFrame) -> Result<(), axum::Error> {
-    if let ServerFrame::Output { data } = frame {
-        return socket.send(Message::Binary(data)).await;
-    }
     socket
         .send(Message::Text(serde_json::to_string(&frame).unwrap_or_else(
             |e| format!(r#"{{"type":"error","message":"serialize failed: {e}"}}"#),
@@ -228,138 +312,54 @@ fn normalize_tab_name(name: &str) -> Option<String> {
     Some(trimmed.chars().take(128).collect())
 }
 
-fn spawn_pty_session(
-    cwd: PathBuf,
-    size: PtySize,
-    tab_name: Option<String>,
-) -> anyhow::Result<PtySession> {
-    let pty_system = native_pty_system();
-    let pair = pty_system.openpty(size)?;
-    let mut cmd = CommandBuilder::new_default_prog();
-    cmd.cwd(cwd);
-    if let Some(home) = terminal_home_dir() {
-        cmd.env("HOME", &home);
-        #[cfg(windows)]
-        cmd.env("USERPROFILE", home);
-    }
-    cmd.env("TERM", "xterm-256color");
-    cmd.env("COLORTERM", "truecolor");
-    cmd.env("CLICOLOR", "1");
-    cmd.env("CLICOLOR_FORCE", "1");
-    cmd.env("FORCE_COLOR", "3");
-    cmd.env("CHAN", "1");
-    if let Some(tab_name) = tab_name {
-        cmd.env("CHAN_TAB_NAME", tab_name);
-    }
-    cmd.env_remove("NO_COLOR");
-    cmd.env_remove("CI");
-    cmd.env_remove("CODEX_CI");
-    let mut child = pair.slave.spawn_command(cmd)?;
-    drop(pair.slave);
-
-    let mut reader = pair.master.try_clone_reader()?;
-    let mut writer = pair.master.take_writer()?;
-    let mut killer = child.clone_killer();
-
-    let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<PtyCommand>();
-    let (frame_tx, frame_rx) = mpsc::unbounded_channel::<ServerFrame>();
-
-    {
-        let frame_tx = frame_tx.clone();
-        std::thread::Builder::new()
-            .name("chan-terminal-reader".into())
-            .spawn(move || {
-                let mut buf = [0u8; 8192];
-                loop {
-                    match reader.read(&mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            if frame_tx
-                                .send(ServerFrame::Output {
-                                    data: buf[..n].to_vec(),
-                                })
-                                .is_err()
-                            {
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            let _ = frame_tx.send(ServerFrame::Error {
-                                message: format!("terminal read failed: {e}"),
-                            });
-                            break;
-                        }
-                    }
-                }
-            })?;
-    }
-
-    {
-        let frame_tx = frame_tx.clone();
-        std::thread::Builder::new()
-            .name("chan-terminal-controller".into())
-            .spawn(move || loop {
-                while let Ok(cmd) = cmd_rx.try_recv() {
-                    match cmd {
-                        PtyCommand::Input(data) => {
-                            if let Err(e) = writer.write_all(data.as_bytes()) {
-                                let _ = frame_tx.send(ServerFrame::Error {
-                                    message: format!("terminal write failed: {e}"),
-                                });
-                                let _ = killer.kill();
-                                return;
-                            }
-                            let _ = writer.flush();
-                        }
-                        PtyCommand::Resize(size) => {
-                            if let Err(e) = pair.master.resize(size) {
-                                let _ = frame_tx.send(ServerFrame::Error {
-                                    message: format!("terminal resize failed: {e}"),
-                                });
-                            }
-                        }
-                        PtyCommand::Kill => {
-                            let _ = killer.kill();
-                            return;
-                        }
-                    }
-                }
-
-                match child.try_wait() {
-                    Ok(Some(status)) => {
-                        let _ = frame_tx.send(ServerFrame::Exit {
-                            code: status.exit_code(),
-                        });
-                        return;
-                    }
-                    Ok(None) => std::thread::sleep(Duration::from_millis(25)),
-                    Err(e) => {
-                        let _ = frame_tx.send(ServerFrame::Error {
-                            message: format!("terminal wait failed: {e}"),
-                        });
-                        return;
-                    }
-                }
-            })?;
-    }
-
-    Ok(PtySession {
-        tx: cmd_tx,
-        rx: frame_rx,
-    })
-}
-
-fn terminal_home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .or_else(dirs::home_dir)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::TerminalConfig;
+    use crate::terminal_sessions::{AttachHandle, Registry, RegistryConfig};
     use std::process::Command;
     use std::time::{Duration, Instant};
+
+    struct TestTerminal {
+        _registry: Registry,
+        handle: AttachHandle,
+    }
+
+    impl TestTerminal {
+        fn spawn(
+            cwd: std::path::PathBuf,
+            size: PtySize,
+            tab_name: Option<String>,
+            mcp_socket_path: Option<std::path::PathBuf>,
+        ) -> Self {
+            Self::spawn_with_mcp_env(cwd, size, tab_name, mcp_socket_path, true)
+        }
+
+        fn spawn_with_mcp_env(
+            cwd: std::path::PathBuf,
+            size: PtySize,
+            tab_name: Option<String>,
+            mcp_socket_path: Option<std::path::PathBuf>,
+            mcp_env: bool,
+        ) -> Self {
+            let registry = Registry::new(RegistryConfig {
+                drive_root: cwd,
+                mcp_socket_path,
+                terminal: TerminalConfig::default(),
+            });
+            let handle = registry
+                .create(CreateOptions {
+                    size,
+                    tab_name,
+                    mcp_env,
+                })
+                .expect("spawn pty");
+            Self {
+                _registry: registry,
+                handle,
+            }
+        }
+    }
 
     fn command_available(name: &str) -> bool {
         Command::new("sh")
@@ -370,7 +370,7 @@ mod tests {
             .unwrap_or(false)
     }
 
-    async fn collect_until(session: &mut PtySession, needle: &str, timeout: Duration) -> String {
+    async fn collect_until(session: &mut AttachHandle, needle: &str, timeout: Duration) -> String {
         let deadline = Instant::now() + timeout;
         let mut out = String::new();
         loop {
@@ -379,20 +379,18 @@ mod tests {
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             match tokio::time::timeout(remaining, session.rx.recv()).await {
-                Ok(Some(ServerFrame::Output { data })) => {
-                    out.push_str(&String::from_utf8_lossy(&data))
-                }
-                Ok(Some(ServerFrame::Error { message })) => {
+                Ok(Ok(SessionEvent::Output(data))) => out.push_str(&String::from_utf8_lossy(&data)),
+                Ok(Ok(SessionEvent::Error(message))) => {
                     out.push_str(&format!("\n__ERROR__{message}\n"));
                 }
-                Ok(Some(_)) => {}
-                Ok(None) | Err(_) => return out,
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) | Err(_) => return out,
             }
         }
     }
 
     async fn collect_until_idle(
-        session: &mut PtySession,
+        session: &mut AttachHandle,
         timeout: Duration,
         idle: Duration,
     ) -> String {
@@ -409,16 +407,16 @@ mod tests {
             let remaining = deadline.saturating_duration_since(Instant::now());
             let wait = remaining.min(Duration::from_millis(100));
             match tokio::time::timeout(wait, session.rx.recv()).await {
-                Ok(Some(ServerFrame::Output { data })) => {
+                Ok(Ok(SessionEvent::Output(data))) => {
                     out.push_str(&String::from_utf8_lossy(&data));
                     last_output = Instant::now();
                 }
-                Ok(Some(ServerFrame::Error { message })) => {
+                Ok(Ok(SessionEvent::Error(message))) => {
                     out.push_str(&format!("\n__ERROR__{message}\n"));
                     last_output = Instant::now();
                 }
-                Ok(Some(_)) => {}
-                Ok(None) => return out,
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) => return out,
                 Err(_) => {}
             }
         }
@@ -426,30 +424,34 @@ mod tests {
 
     async fn run_shell_probe(command: &str, end: &str) -> String {
         let tmp = tempfile::tempdir().expect("temp drive");
-        let mut session = spawn_pty_session(
+        let mut terminal = TestTerminal::spawn(
             tmp.path().to_path_buf(),
             pty_size(Some(100), Some(31)),
             None,
-        )
-        .expect("spawn pty");
+            None,
+        );
         let _ = collect_until_idle(
-            &mut session,
+            &mut terminal.handle,
             Duration::from_millis(300),
             Duration::from_millis(100),
         )
         .await;
-        session.input("stty -echo 2>/dev/null\r".to_string());
+        terminal
+            .handle
+            .send_input("stty -echo 2>/dev/null\r".as_bytes());
         let _ = collect_until_idle(
-            &mut session,
+            &mut terminal.handle,
             Duration::from_millis(300),
             Duration::from_millis(100),
         )
         .await;
-        session.input(format!("{command}\r"));
-        let mut out = collect_until(&mut session, end, Duration::from_secs(5)).await;
+        terminal
+            .handle
+            .send_input(format!("{command}\r").as_bytes());
+        let mut out = collect_until(&mut terminal.handle, end, Duration::from_secs(5)).await;
         out.push_str(
             &collect_until_idle(
-                &mut session,
+                &mut terminal.handle,
                 Duration::from_millis(300),
                 Duration::from_millis(100),
             )
@@ -509,30 +511,36 @@ mod tests {
             ran += 1;
             let tmp = tempfile::tempdir().expect("temp drive");
             let cwd = tmp.path().to_path_buf();
-            let mut session = spawn_pty_session(
+            let mut terminal = TestTerminal::spawn(
                 cwd.clone(),
                 pty_size(Some(100), Some(31)),
                 Some("build".to_string()),
-            )
-            .expect("spawn pty");
-            let _ = collect_until_idle(
-                &mut session,
-                Duration::from_millis(300),
-                Duration::from_millis(100),
-            )
-            .await;
-            session.input("stty -echo 2>/dev/null\r".to_string());
-            let _ = collect_until_idle(
-                &mut session,
-                Duration::from_millis(300),
-                Duration::from_millis(100),
-            )
-            .await;
-            session.input(
-                "printf '\\n__CWD_HOME_BEGIN__\\n'; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '\\n__CWD_HOME_END__\\n'\r"
-                    .to_string(),
+                Some(std::path::PathBuf::from("/tmp/chan-test.sock")),
             );
-            let out = collect_until(&mut session, "__CWD_HOME_END__", Duration::from_secs(5)).await;
+            let _ = collect_until_idle(
+                &mut terminal.handle,
+                Duration::from_millis(300),
+                Duration::from_millis(100),
+            )
+            .await;
+            terminal
+                .handle
+                .send_input("stty -echo 2>/dev/null\r".as_bytes());
+            let _ = collect_until_idle(
+                &mut terminal.handle,
+                Duration::from_millis(300),
+                Duration::from_millis(100),
+            )
+            .await;
+            terminal.handle.send_input(
+                b"printf '\\n__CWD_HOME_BEGIN__\\n'; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; env | grep -E '^(CHAN|CLAUDE|CODEX|GEMINI)_MCP_' | sort; printf '\\n__CWD_HOME_END__\\n'\r",
+            );
+            let out = collect_until(
+                &mut terminal.handle,
+                "__CWD_HOME_END__",
+                Duration::from_secs(5),
+            )
+            .await;
             assert!(
                 out.contains(&cwd.display().to_string()),
                 "terminal should start at drive root cwd, got {out:?}"
@@ -544,6 +552,26 @@ mod tests {
             assert!(
                 out.contains("<CHAN_TAB_NAME=build>"),
                 "terminal should expose the tab name env var, got {out:?}"
+            );
+            assert!(
+                out.contains("CHAN_MCP_SOCKET=/tmp/chan-test.sock"),
+                "terminal should expose the MCP socket env var, got {out:?}"
+            );
+            assert!(
+                out.contains("CHAN_MCP_SERVER_NAME=chan"),
+                "terminal should expose the MCP server name env var, got {out:?}"
+            );
+            assert!(
+                out.contains("CHAN_MCP_SERVER_JSON=")
+                    && out.contains("CHAN_MCP_COMMAND=")
+                    && out.contains("CHAN_MCP_COMMAND_JSON="),
+                "terminal should expose only chan MCP discovery env vars, got {out:?}"
+            );
+            assert!(
+                !out.contains("CLAUDE_MCP_SERVER_JSON=")
+                    && !out.contains("CODEX_MCP_SERVER_JSON=")
+                    && !out.contains("GEMINI_MCP_SERVER_JSON="),
+                "terminal should not expose third-party MCP aliases, got {out:?}"
             );
             passed += 1;
         }
@@ -561,34 +589,39 @@ mod tests {
         if command_available("less") {
             ran += 1;
             let tmp = tempfile::tempdir().expect("temp drive");
-            let mut session = spawn_pty_session(
+            let mut terminal = TestTerminal::spawn(
                 tmp.path().to_path_buf(),
                 pty_size(Some(100), Some(31)),
                 None,
-            )
-            .expect("spawn pty");
+                None,
+            );
             let _ = collect_until_idle(
-                &mut session,
+                &mut terminal.handle,
                 Duration::from_millis(300),
                 Duration::from_millis(100),
             )
             .await;
-            session.input("stty -echo 2>/dev/null\r".to_string());
+            terminal
+                .handle
+                .send_input("stty -echo 2>/dev/null\r".as_bytes());
             let _ = collect_until_idle(
-                &mut session,
+                &mut terminal.handle,
                 Duration::from_millis(300),
                 Duration::from_millis(100),
             )
             .await;
-            session.input("printf 'alpha\\nbeta\\n' | less\r".to_string());
-            let out = collect_until(&mut session, "alpha", Duration::from_secs(5)).await;
+            terminal
+                .handle
+                .send_input(b"printf 'alpha\\nbeta\\n' | less\r");
+            let out = collect_until(&mut terminal.handle, "alpha", Duration::from_secs(5)).await;
             assert!(
                 out.contains("alpha"),
                 "less should render piped text, got {out:?}"
             );
-            session.input("q".to_string());
-            session.input("printf '\\n__LESS_END__\\n'\r".to_string());
-            let out = collect_until(&mut session, "__LESS_END__", Duration::from_secs(5)).await;
+            terminal.handle.send_input(b"q");
+            terminal.handle.send_input(b"printf '\\n__LESS_END__\\n'\r");
+            let out =
+                collect_until(&mut terminal.handle, "__LESS_END__", Duration::from_secs(5)).await;
             assert!(
                 out.contains("__LESS_END__"),
                 "shell should remain usable after quitting less, got {out:?}"
@@ -601,5 +634,52 @@ mod tests {
             "no conditional PTY validation commands were available"
         );
         assert!(passed > 0, "no conditional PTY validation passed");
+    }
+
+    #[tokio::test]
+    async fn mcp_env_off_omits_chan_mcp_vars() {
+        if !command_available("env") {
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("temp drive");
+        let mut terminal = TestTerminal::spawn_with_mcp_env(
+            tmp.path().to_path_buf(),
+            pty_size(Some(100), Some(31)),
+            Some("plain".to_string()),
+            Some(std::path::PathBuf::from("/tmp/chan-test.sock")),
+            false,
+        );
+        let _ = collect_until_idle(
+            &mut terminal.handle,
+            Duration::from_millis(300),
+            Duration::from_millis(100),
+        )
+        .await;
+        terminal
+            .handle
+            .send_input("stty -echo 2>/dev/null\r".as_bytes());
+        let _ = collect_until_idle(
+            &mut terminal.handle,
+            Duration::from_millis(300),
+            Duration::from_millis(100),
+        )
+        .await;
+        terminal.handle.send_input(
+            b"printf '\\n__MCP_ENV_OFF_BEGIN__\\n'; env | grep '^CHAN_MCP_' || true; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '\\n__MCP_ENV_OFF_END__\\n'\r",
+        );
+        let out = collect_until(
+            &mut terminal.handle,
+            "__MCP_ENV_OFF_END__",
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(
+            !out.contains("CHAN_MCP_"),
+            "mcp_env=false should omit CHAN_MCP_* env vars, got {out:?}"
+        );
+        assert!(
+            out.contains("<CHAN_TAB_NAME=plain>"),
+            "mcp_env=false should not affect CHAN_TAB_NAME, got {out:?}"
+        );
     }
 }

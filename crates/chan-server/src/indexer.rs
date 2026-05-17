@@ -21,10 +21,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chan_drive::{Drive, ProgressCallback, ProgressEvent, ProgressStage, WatchEvent, WatchKind};
+use chan_drive::{
+    Drive, ProgressCallback, ProgressEvent, ProgressStage, SearchAggression, VcsKind, WatchEvent,
+    WatchKind,
+};
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
+
+const VCS_BURST_REBUILD_THRESHOLD: usize = 64;
 
 /// Snapshot of indexer state. Returned verbatim by
 /// `/api/index/status` (the frontend's IndexStatus tagged union).
@@ -87,6 +92,7 @@ impl Indexer {
         drive: Arc<Drive>,
         watch_events: broadcast::Receiver<WatchEvent>,
         initial_build: bool,
+        search_aggression: SearchAggression,
         progress_sink: Arc<dyn ProgressCallback>,
     ) -> Self {
         let stats = drive.index_stats().unwrap_or_else(|e| {
@@ -103,6 +109,9 @@ impl Indexer {
             indexed_vectors: stats.indexed_vectors,
             model: stats.model.clone(),
         }));
+        let watch_context = WatchContext {
+            vcs_kind: chan_drive::detect_drive_vcs(drive.root()),
+        };
 
         // Coordinator task: serializes "rebuild now" requests so
         // the watcher loop and the on-boot trigger can't both ask
@@ -117,6 +126,7 @@ impl Indexer {
             status.clone(),
             rebuild_rx,
             cancel.clone(),
+            search_aggression,
             progress_sink.clone(),
         );
         // Trigger a full rebuild when either side of the index is
@@ -146,6 +156,8 @@ impl Indexer {
             watch_events,
             rebuild_tx.clone(),
             cancel.clone(),
+            search_aggression,
+            watch_context,
         );
 
         Self {
@@ -191,6 +203,7 @@ fn spawn_coordinator(
     status: Arc<Mutex<IndexStatus>>,
     mut rx: mpsc::UnboundedReceiver<()>,
     cancel: Arc<AtomicBool>,
+    search_aggression: SearchAggression,
     progress_sink: Arc<dyn ProgressCallback>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -205,6 +218,7 @@ fn spawn_coordinator(
             let status_w = status.clone();
             let cancel_w = cancel.clone();
             let progress_w = progress_sink.clone();
+            let aggression = search_aggression;
             *status_w.lock().unwrap() = IndexStatus::Building {
                 current: 0,
                 total: 0,
@@ -215,7 +229,7 @@ fn spawn_coordinator(
                     status: status_w,
                     forward: progress_w,
                 };
-                drive_w.reindex_with(Some(&cancel_w), &progress)
+                drive_w.reindex_with_aggression(Some(&cancel_w), &progress, aggression)
             })
             .await;
             match result {
@@ -250,6 +264,8 @@ fn spawn_watcher_loop(
     mut rx: broadcast::Receiver<WatchEvent>,
     rebuild_tx: mpsc::UnboundedSender<()>,
     cancel: Arc<AtomicBool>,
+    search_aggression: SearchAggression,
+    watch_context: WatchContext,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let pending: Arc<Mutex<HashMap<String, PendingChange>>> =
@@ -260,11 +276,11 @@ fn spawn_watcher_loop(
         let cancel_w = cancel.clone();
 
         // Worker: every 200 ms, drain paths whose last event is at
-        // least 1 s in the past and apply them. We don't bound the
+        // least the configured debounce in the past and apply them. We don't bound the
         // worker to the lifetime of the listener task: dropping the
         // Indexer aborts both join handles via tokio's task drop.
         let worker = tokio::spawn(async move {
-            let debounce = Duration::from_secs(1);
+            let debounce = search_aggression.debounce();
             loop {
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 if cancel_w.load(Ordering::Relaxed) {
@@ -318,48 +334,38 @@ fn spawn_watcher_loop(
         // Listener: feed `pending` from the watcher channel.
         loop {
             match rx.recv().await {
-                Ok(event) => {
-                    if let Some(change) = relevant(&event) {
+                Ok(event) => match classify_watch_event(&event, watch_context) {
+                    WatchAction::Changes(changes) => {
                         let mut p = pending.lock().unwrap();
-                        let entry = p
-                            .entry(change.path.clone())
-                            .or_insert_with(|| change.clone());
-                        // Latest event wins on the deleted flag: a
-                        // create-then-delete burst should end as a
-                        // delete.
-                        entry.deleted = change.deleted;
-                        entry.last_seen = Instant::now();
-                    } else if matches!(event.kind, WatchKind::Renamed) {
-                        // Rename surfaces as one event with both
-                        // `path` (from) and `to` (destination).
-                        // forget(from) + index(to). Two pending
-                        // entries: one delete, one upsert.
-                        if let Some(from) = event.path {
-                            if from.ends_with(".md") {
-                                pending.lock().unwrap().insert(
-                                    from.clone(),
-                                    PendingChange {
-                                        path: from,
-                                        deleted: true,
-                                        last_seen: Instant::now(),
-                                    },
-                                );
-                            }
+                        for change in changes {
+                            let entry = p
+                                .entry(change.path.clone())
+                                .or_insert_with(|| change.clone());
+                            // Latest event wins on the deleted flag:
+                            // a create-then-delete burst should end
+                            // as a delete.
+                            entry.deleted = change.deleted;
+                            entry.last_seen = change.last_seen;
                         }
-                        if let Some(to) = event.to {
-                            if to.ends_with(".md") {
-                                pending.lock().unwrap().insert(
-                                    to.clone(),
-                                    PendingChange {
-                                        path: to,
-                                        deleted: false,
-                                        last_seen: Instant::now(),
-                                    },
-                                );
-                            }
+                        if should_rebuild_for_vcs_burst(watch_context, p.len()) {
+                            p.clear();
+                            tracing::warn!(
+                                threshold = VCS_BURST_REBUILD_THRESHOLD,
+                                "indexer: VCS-aware watcher burst exceeded threshold; requesting rebuild"
+                            );
+                            let _ = rebuild_tx.send(());
                         }
                     }
-                }
+                    WatchAction::Rebuild { reason } => {
+                        pending.lock().unwrap().clear();
+                        tracing::warn!(
+                            reason,
+                            "indexer: watcher event stream lost scope; requesting rebuild"
+                        );
+                        let _ = rebuild_tx.send(());
+                    }
+                    WatchAction::Ignore => {}
+                },
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     // Dropped events; we've missed `n` of them. The
                     // safest catch-up is a full rebuild request,
@@ -377,11 +383,23 @@ fn spawn_watcher_loop(
     })
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingChange {
     path: String,
     deleted: bool,
     last_seen: Instant,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct WatchContext {
+    vcs_kind: Option<VcsKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WatchAction {
+    Changes(Vec<PendingChange>),
+    Rebuild { reason: &'static str },
+    Ignore,
 }
 
 /// Result of applying one debounced watcher change. Distinguishes
@@ -451,43 +469,83 @@ fn apply_watch_change(
     }
 }
 
-/// Translate a `WatchEvent` into a markdown-only "rebuild this
-/// file" task. Non-md paths and rename events (handled separately
-/// by the caller because rename has both `path` and `to`) are
-/// returned as None. Provider-level errors are logged and
-/// dropped: the watcher channel itself stays subscribed; chan-core
-/// recommends a full reindex in this case but we don't trigger one
-/// today (TODO: wire a reindex on watcher loss).
-fn relevant(event: &WatchEvent) -> Option<PendingChange> {
-    if matches!(event.kind, WatchKind::ProviderError) {
-        tracing::warn!(
-            backend_message = ?event.path,
-            "indexer: filesystem watcher reported a provider error; \
-             search index may drift until the next manual reindex"
-        );
-        return None;
+/// Translate a watcher event into indexer work. `Drive::watch` has
+/// already warmed chan-report and runs its report fan-out before the
+/// event reaches this scheduler; full rebuilds run graph-first inside
+/// `Drive::reindex_with`, so provider-loss recovery preserves the
+/// graph/report-before-search priority boundary.
+fn classify_watch_event(event: &WatchEvent, context: WatchContext) -> WatchAction {
+    if context.vcs_kind.is_some() && watch_event_touches_vcs_control(event) {
+        return WatchAction::Rebuild {
+            reason: "vcs-control",
+        };
     }
-    let path = event.path.as_deref()?;
-    if !path.ends_with(".md") {
-        return None;
-    }
+    let now = Instant::now();
     match event.kind {
-        WatchKind::Created | WatchKind::Modified => Some(PendingChange {
-            path: path.to_owned(),
-            deleted: false,
-            last_seen: Instant::now(),
-        }),
-        WatchKind::Removed => Some(PendingChange {
-            path: path.to_owned(),
-            deleted: true,
-            last_seen: Instant::now(),
-        }),
-        // Renamed: the caller fans out to forget(from) + index(to).
-        WatchKind::Renamed => None,
-        // Already handled at the top of the function; listed to
-        // keep the match exhaustive on future variant additions.
-        WatchKind::ProviderError => None,
+        WatchKind::ProviderError => WatchAction::Rebuild {
+            reason: "provider-error",
+        },
+        WatchKind::Created | WatchKind::Modified | WatchKind::Removed => {
+            let Some(path) = event.path.as_deref() else {
+                return WatchAction::Rebuild {
+                    reason: "path-less event",
+                };
+            };
+            if !chan_drive::fs_ops::is_indexable_text(path) {
+                return WatchAction::Ignore;
+            }
+            WatchAction::Changes(vec![PendingChange {
+                path: path.to_owned(),
+                deleted: matches!(event.kind, WatchKind::Removed),
+                last_seen: now,
+            }])
+        }
+        WatchKind::Renamed => {
+            let mut changes = Vec::with_capacity(2);
+            if let Some(from) = event.path.as_deref() {
+                if chan_drive::fs_ops::is_indexable_text(from) {
+                    changes.push(PendingChange {
+                        path: from.to_owned(),
+                        deleted: true,
+                        last_seen: now,
+                    });
+                }
+            }
+            if let Some(to) = event.to.as_deref() {
+                if chan_drive::fs_ops::is_indexable_text(to) {
+                    changes.push(PendingChange {
+                        path: to.to_owned(),
+                        deleted: false,
+                        last_seen: now,
+                    });
+                }
+            }
+            if event.path.is_none() && event.to.is_none() {
+                WatchAction::Rebuild {
+                    reason: "path-less rename",
+                }
+            } else if changes.is_empty() {
+                WatchAction::Ignore
+            } else {
+                WatchAction::Changes(changes)
+            }
+        }
     }
+}
+
+fn watch_event_touches_vcs_control(event: &WatchEvent) -> bool {
+    event
+        .path
+        .as_deref()
+        .is_some_and(chan_drive::is_vcs_control_path)
+        || event
+            .to
+            .as_deref()
+            .is_some_and(chan_drive::is_vcs_control_path)
+}
+
+fn should_rebuild_for_vcs_burst(context: WatchContext, pending_len: usize) -> bool {
+    context.vcs_kind.is_some() && pending_len >= VCS_BURST_REBUILD_THRESHOLD
 }
 
 /// Pull paths whose last event is older than `window` and remove
@@ -509,6 +567,9 @@ fn collect_due(
             out.push(v);
         }
     }
+    // Deletions first: stale graph/search rows disappear before any
+    // upserts from the same burst add new rows.
+    out.sort_by_key(|c| !c.deleted);
     out
 }
 
@@ -572,7 +633,7 @@ fn set_idle(drive: &Drive, status: &Mutex<IndexStatus>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chan_drive::Library;
+    use chan_drive::{Library, SearchMode, SearchOpts};
     use std::fs;
     use tempfile::TempDir;
 
@@ -585,12 +646,205 @@ mod tests {
         (cfg, drive_dir, drive)
     }
 
+    fn ev(kind: WatchKind, path: Option<&str>, to: Option<&str>) -> WatchEvent {
+        WatchEvent {
+            kind,
+            path: path.map(str::to_owned),
+            to: to.map(str::to_owned),
+        }
+    }
+
+    fn classify(event: &WatchEvent) -> WatchAction {
+        classify_watch_event(event, WatchContext::default())
+    }
+
+    fn classify_vcs(event: &WatchEvent) -> WatchAction {
+        classify_watch_event(
+            event,
+            WatchContext {
+                vcs_kind: Some(VcsKind::Git),
+            },
+        )
+    }
+
+    #[test]
+    fn classify_watch_event_uses_chan_drive_indexable_gate() {
+        match classify(&ev(WatchKind::Modified, Some("notes/a.txt"), None)) {
+            WatchAction::Changes(changes) => {
+                assert_eq!(changes.len(), 1);
+                assert_eq!(changes[0].path, "notes/a.txt");
+                assert!(!changes[0].deleted);
+            }
+            other => panic!("expected .txt change, got {other:?}"),
+        }
+
+        assert!(matches!(
+            classify(&ev(WatchKind::Modified, Some("src/lib.rs"), None)),
+            WatchAction::Ignore
+        ));
+    }
+
+    #[test]
+    fn classify_watch_event_requests_rebuild_on_lost_scope() {
+        assert!(matches!(
+            classify(&ev(WatchKind::ProviderError, Some("overflow"), None)),
+            WatchAction::Rebuild {
+                reason: "provider-error"
+            }
+        ));
+        assert!(matches!(
+            classify(&ev(WatchKind::Modified, None, None)),
+            WatchAction::Rebuild {
+                reason: "path-less event"
+            }
+        ));
+        assert!(matches!(
+            classify(&ev(WatchKind::Renamed, None, None)),
+            WatchAction::Rebuild {
+                reason: "path-less rename"
+            }
+        ));
+    }
+
+    #[test]
+    fn classify_watch_event_splits_indexable_rename() {
+        match classify(&ev(WatchKind::Renamed, Some("old.md"), Some("new.txt"))) {
+            WatchAction::Changes(changes) => {
+                assert_eq!(changes.len(), 2);
+                assert_eq!(changes[0].path, "old.md");
+                assert!(changes[0].deleted);
+                assert_eq!(changes[1].path, "new.txt");
+                assert!(!changes[1].deleted);
+            }
+            other => panic!("expected rename changes, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_watch_event_requests_rebuild_on_vcs_control_paths() {
+        assert!(matches!(
+            classify_vcs(&ev(WatchKind::Modified, Some(".git/HEAD"), None)),
+            WatchAction::Rebuild {
+                reason: "vcs-control"
+            }
+        ));
+        assert!(matches!(
+            classify_vcs(&ev(WatchKind::Renamed, Some("tmp"), Some(".hg/dirstate"))),
+            WatchAction::Rebuild {
+                reason: "vcs-control"
+            }
+        ));
+        assert!(matches!(
+            classify(&ev(WatchKind::Modified, Some(".git/HEAD"), None)),
+            WatchAction::Ignore
+        ));
+    }
+
+    #[test]
+    fn vcs_burst_threshold_only_applies_to_vcs_aware_drives() {
+        assert!(!should_rebuild_for_vcs_burst(
+            WatchContext::default(),
+            VCS_BURST_REBUILD_THRESHOLD
+        ));
+        assert!(!should_rebuild_for_vcs_burst(
+            WatchContext {
+                vcs_kind: Some(VcsKind::Git),
+            },
+            VCS_BURST_REBUILD_THRESHOLD - 1,
+        ));
+        assert!(should_rebuild_for_vcs_burst(
+            WatchContext {
+                vcs_kind: Some(VcsKind::Git),
+            },
+            VCS_BURST_REBUILD_THRESHOLD,
+        ));
+    }
+
+    #[test]
+    fn collect_due_applies_deletions_before_upserts() {
+        let pending = Mutex::new(HashMap::from([
+            (
+                "new.md".to_string(),
+                PendingChange {
+                    path: "new.md".to_string(),
+                    deleted: false,
+                    last_seen: Instant::now() - Duration::from_secs(2),
+                },
+            ),
+            (
+                "old.md".to_string(),
+                PendingChange {
+                    path: "old.md".to_string(),
+                    deleted: true,
+                    last_seen: Instant::now() - Duration::from_secs(2),
+                },
+            ),
+        ]));
+
+        let due = collect_due(&pending, Duration::from_secs(1));
+        assert_eq!(due.len(), 2);
+        assert_eq!(due[0].path, "old.md");
+        assert!(due[0].deleted);
+        assert_eq!(due[1].path, "new.md");
+        assert!(!due[1].deleted);
+    }
+
     #[test]
     fn apply_watch_change_indexes_regular_file() {
         let (_cfg, dir, drive) = setup_drive();
         fs::write(dir.path().join("a.md"), "# A\n\nbody\n").unwrap();
         let outcome = apply_watch_change(&drive, "a.md", false).unwrap();
         assert_eq!(outcome, ApplyOutcome::Indexed);
+    }
+
+    #[test]
+    fn create_event_admits_new_indexable_file_into_bm25() {
+        let (_cfg, dir, drive) = setup_drive();
+        fs::write(
+            dir.path().join("brand.md"),
+            "# Brand\n\nnew doc with keyword brandnewprobe\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("brand.txt"),
+            "plain text with keyword brandnewprobetxt\n",
+        )
+        .unwrap();
+
+        for path in ["brand.md", "brand.txt"] {
+            let change = match classify(&ev(WatchKind::Created, Some(path), None)) {
+                WatchAction::Changes(mut changes) => {
+                    assert_eq!(changes.len(), 1);
+                    changes.remove(0)
+                }
+                other => panic!("expected created change for {path}, got {other:?}"),
+            };
+            assert_eq!(
+                apply_watch_change(&drive, &change.path, change.deleted).unwrap(),
+                ApplyOutcome::Indexed
+            );
+        }
+
+        let stats = drive.index_stats().unwrap();
+        assert_eq!(stats.indexed_docs, 2);
+
+        let opts = SearchOpts {
+            mode: SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert!(drive
+            .search("brandnewprobe", &opts)
+            .unwrap()
+            .hits
+            .iter()
+            .any(|hit| hit.path == "brand.md"));
+        assert!(drive
+            .search("brandnewprobetxt", &opts)
+            .unwrap()
+            .hits
+            .iter()
+            .any(|hit| hit.path == "brand.txt"));
     }
 
     #[test]

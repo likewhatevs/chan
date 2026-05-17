@@ -3,11 +3,7 @@
 //! Most "preferences" the Settings UI surfaces already live in
 //! existing config files:
 //!
-//! - `assistant`: chan-llm's LlmConfig (backend, model, keys)
 //! - `attachments_dir`: ServerConfig
-//! - `answers_dir`: ServerConfig, mirrored into the assistant
-//!   subtree of the unified view because the frontend types it as
-//!   a sibling of `backend`
 //! - `default_drive_root`: chan-drive's Registry (config.toml)
 //! - `drives`: chan-drive's Registry
 //!
@@ -22,9 +18,9 @@
 //!   - date_format (id; UI-side mapping in dateFormats.ts)
 //!
 //! The Preferences view returned over /api/drive and /api/config is
-//! assembled in lib.rs by joining EditorPrefs with the LlmConfig and
-//! ServerConfig stores. PATCH /api/config splits the incoming body
-//! the same way: edits land in whichever store owns the field.
+//! assembled in lib.rs by joining EditorPrefs with ServerConfig.
+//! PATCH /api/config splits the incoming body the same way: edits land
+//! in whichever store owns the field.
 
 use std::path::{Path, PathBuf};
 
@@ -99,10 +95,6 @@ pub struct PaneWidths {
     // cleanly. Width of the left-side outline pane in the file editor.
     #[serde(default = "default_outline_width")]
     pub outline: u32,
-    // Per-field default so older preferences.toml (written before the
-    // assistant inspector was persisted) load cleanly.
-    #[serde(default = "default_assistant_width")]
-    pub assistant: u32,
 }
 
 impl Default for PaneWidths {
@@ -114,7 +106,6 @@ impl Default for PaneWidths {
             browser: 240,
             search: default_search_width(),
             outline: default_outline_width(),
-            assistant: default_assistant_width(),
         }
     }
 }
@@ -125,10 +116,6 @@ fn default_search_width() -> u32 {
 
 fn default_outline_width() -> u32 {
     220
-}
-
-fn default_assistant_width() -> u32 {
-    280
 }
 
 /// Editor density. `Standard` is the roomier default Google Docs /
@@ -227,7 +214,6 @@ mod tests {
         assert_eq!(prefs.pane_widths.browser, 250);
         assert_eq!(prefs.pane_widths.search, default_search_width());
         assert_eq!(prefs.pane_widths.outline, default_outline_width());
-        assert_eq!(prefs.pane_widths.assistant, default_assistant_width());
     }
 
     #[test]

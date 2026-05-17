@@ -21,6 +21,7 @@ use crate::bus::{make_progress_broadcast, make_watch_bridge};
 use crate::error::{err, err_from};
 use crate::indexer::Indexer;
 use crate::state::{AppState, DriveCell};
+use crate::terminal_sessions::CloseReason;
 
 /// Body of `POST /api/storage/reset`. Two modes mirror the chan-
 /// core enum; the JSON tag is lowercased for the frontend's
@@ -121,6 +122,7 @@ fn err_from_reset(e: &ResetError) -> Response {
 /// with `DriveLocked`.
 fn perform_reset(state: &AppState, mode: ResetMode) -> Result<chan_drive::ResetReport, ResetError> {
     let mut cell_guard = state.drive_cell.write().expect("drive cell poisoned");
+    state.terminal_sessions.close_all(CloseReason::Drive);
     let mut cell = cell_guard
         .take()
         .expect("drive cell missing outside reset window");
@@ -150,10 +152,17 @@ fn perform_reset(state: &AppState, mode: ResetMode) -> Result<chan_drive::ResetR
         let bridge =
             make_watch_bridge(&state.events_tx, &state.index_events_tx, &state.self_writes);
         let watch_handle = drive_strong.watch(bridge).map_err(ResetError::Core)?;
+        let search_aggression = state
+            .server_config
+            .lock()
+            .expect("server config poisoned")
+            .search
+            .aggression;
         let indexer = Arc::new(Indexer::spawn(
             drive_strong.clone(),
             state.index_events_tx.subscribe(),
             true,
+            search_aggression,
             make_progress_broadcast(&state.events_tx),
         ));
         *cell_guard = Some(DriveCell {
@@ -177,6 +186,12 @@ fn perform_reset(state: &AppState, mode: ResetMode) -> Result<chan_drive::ResetR
         .map_err(ResetError::Core)?;
     let bridge = make_watch_bridge(&state.events_tx, &state.index_events_tx, &state.self_writes);
     let watch_handle = drive.watch(bridge).map_err(ResetError::Core)?;
+    let search_aggression = state
+        .server_config
+        .lock()
+        .expect("server config poisoned")
+        .search
+        .aggression;
     // Fresh indexer pinned to the new Drive Arc. Reset wiped the
     // index dir if `mode` includes Index, so initial_build=true
     // will catch zero docs and kick a rebuild.
@@ -184,6 +199,7 @@ fn perform_reset(state: &AppState, mode: ResetMode) -> Result<chan_drive::ResetR
         drive.clone(),
         state.index_events_tx.subscribe(),
         true,
+        search_aggression,
         make_progress_broadcast(&state.events_tx),
     ));
     *cell_guard = Some(DriveCell {

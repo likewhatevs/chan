@@ -4,11 +4,7 @@
 //!   - `settings_guard` returns 403 when `AppState::settings_disabled`
 //!     is true (any tunnel run, hosted or public). Applied to the
 //!     settings-write routes (drive rename, prefs / server-config
-//!     PATCH, LLM key set / clear, storage reset, index rebuild).
-//!   - `tunnel_public_guard` returns 403 when `AppState::tunnel_public`
-//!     is true (only `--tunnel-public`). Applied to cost-bearing
-//!     routes that an anonymous visitor must not be able to drive
-//!     against the owner's machine (today: `POST /api/llm/complete`).
+//!     PATCH, storage reset, index rebuild).
 //!
 //! Both run as middleware on a sub-router rather than as per-handler
 //! guards: that way the refusal lands before axum's `Json<...>` /
@@ -24,7 +20,7 @@ use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 
-use crate::error::{err_settings_locked, err_tunnel_public_locked};
+use crate::error::err_settings_locked;
 use crate::state::AppState;
 
 pub async fn settings_guard(
@@ -34,17 +30,6 @@ pub async fn settings_guard(
 ) -> Response {
     if state.settings_disabled {
         return err_settings_locked();
-    }
-    next.run(req).await
-}
-
-pub async fn tunnel_public_guard(
-    State(state): State<Arc<AppState>>,
-    req: Request<Body>,
-    next: Next,
-) -> Response {
-    if state.tunnel_public {
-        return err_tunnel_public_locked();
     }
     next.run(req).await
 }
@@ -71,7 +56,7 @@ mod tests {
     use axum::Router;
     use tower::ServiceExt;
 
-    use super::{settings_guard, tunnel_public_guard};
+    use super::settings_guard;
     use crate::state::test_support::make_test_state;
 
     async fn ok_handler() -> &'static str {
@@ -117,25 +102,6 @@ mod tests {
     async fn settings_guard_blocks_when_settings_disabled() {
         let state = make_test_state(true, false);
         let app = build_router(state, settings_guard);
-        assert_eq!(status_of(app).await, StatusCode::FORBIDDEN);
-    }
-
-    #[tokio::test]
-    async fn tunnel_public_guard_passes_on_hosted_tunnel() {
-        // `settings_disabled = true, tunnel_public = false` proves
-        // the two guards are independent: settings can be locked
-        // without the public-tunnel restrictions kicking in.
-        // (Real configs today bind these together via `public`, but
-        // the middleware must not assume that coupling.)
-        let state = make_test_state(true, false);
-        let app = build_router(state, tunnel_public_guard);
-        assert_eq!(status_of(app).await, StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn tunnel_public_guard_blocks_on_public_tunnel() {
-        let state = make_test_state(true, true);
-        let app = build_router(state, tunnel_public_guard);
         assert_eq!(status_of(app).await, StatusCode::FORBIDDEN);
     }
 }

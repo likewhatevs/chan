@@ -13,7 +13,6 @@ mod files;
 mod fs_graph;
 mod graph;
 mod health;
-mod llm;
 mod preferences;
 mod report;
 mod search;
@@ -35,17 +34,12 @@ pub use graph::{
     api_resolve_link,
 };
 pub use health::api_health;
-pub use llm::{api_llm_cli_detection, api_llm_complete, api_llm_status, api_llm_tools};
 pub use preferences::{
     api_get_config, api_get_server_config, api_patch_config, api_patch_server_config,
 };
 pub use report::{api_report_file, api_report_prefix};
 pub use search::{api_index_rebuild, api_index_status, api_search_content, api_search_files};
-pub use sessions::{
-    api_clear_assistant, api_delete_assistant, api_delete_session, api_get_assistant,
-    api_get_session, api_list_assistant, api_list_sessions, api_post_answer, api_put_assistant,
-    api_put_session,
-};
+pub use sessions::{api_delete_session, api_get_session, api_list_sessions, api_put_session};
 pub use storage::api_storage_reset;
 pub use terminal::api_terminal_ws;
 pub use ws::ws_upgrade;

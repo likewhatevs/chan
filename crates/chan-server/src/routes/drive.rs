@@ -26,8 +26,8 @@ struct DriveInfo {
     /// Per-device preferences view. The frontend uses this to seed
     /// the editor (fonts, theme, line spacing) without a follow-up
     /// /api/config round-trip. Same shape as
-    /// `GlobalConfig.preferences`; assembled by joining
-    /// EditorPrefs + ServerConfig + LlmConfig.
+    /// `GlobalConfig.preferences`; assembled by joining EditorPrefs
+    /// and ServerConfig.
     preferences: PreferencesView,
 }
 

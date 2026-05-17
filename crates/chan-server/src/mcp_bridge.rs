@@ -1,16 +1,15 @@
 //! In-process MCP server exposed over a Unix-domain socket.
 //!
-//! chan-llm's gemini_cli / claude_cli backends both want to launch
-//! the chan MCP server as a subprocess so the agent's writes round-
-//! trip through chan-drive's gates. The original wiring spawned
-//! `chan __mcp <drive_root>`, which then called `Library::open_drive`
-//! a second time. chan-drive holds a per-drive flock for single-
-//! writer ownership, so the child failed with `DriveLocked` and the
-//! agent silently fell back to its native (un-sandboxed) tools.
+//! External MCP agents want to launch the chan MCP server as a
+//! subprocess so writes round-trip through chan-drive's gates. The
+//! original wiring spawned `chan __mcp <drive_root>`, which then
+//! called `Library::open_drive` a second time. chan-drive holds a
+//! per-drive flock for single-writer ownership, so the child failed
+//! with `DriveLocked`.
 //!
 //! The bridge resolves that conflict: chan-server already owns an
 //! `Arc<Drive>` for the drive it serves, so the MCP service is run
-//! in-process. Each agent session connects through `chan __mcp-proxy`
+//! in-process. Each external agent connects through `chan __mcp-proxy`
 //! to a Unix-domain socket the bridge listens on; the proxy just
 //! pipes stdin/stdout through the socket. No second drive open, no
 //! flock contention.

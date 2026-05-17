@@ -1,5 +1,4 @@
-//! Small route-shared helpers: filename slugs, opaque-JSON responses,
-//! markdown heading sniffing.
+//! Small route-shared helpers: filename slugs and opaque-JSON responses.
 
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
@@ -16,20 +15,6 @@ pub fn raw_json_response(bytes: Vec<u8>) -> Response {
         bytes,
     )
         .into_response()
-}
-
-/// Pull a level-1 heading from a single line. Returns `None` for any
-/// line that isn't `# heading-text`. Leading whitespace is tolerated;
-/// trailing `#` runs (`# title #`) are trimmed.
-pub fn extract_h1(line: &str) -> Option<String> {
-    let trimmed = line.trim_start();
-    let stripped = trimmed.strip_prefix("# ")?;
-    let s = stripped.trim().trim_end_matches('#').trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
 }
 
 /// Strip a string into a filesystem-safe slug. Keeps ASCII alnum,
@@ -58,13 +43,6 @@ pub fn slugify_for_filename(s: &str) -> String {
         out.remove(0);
     }
     out
-}
-
-/// Fallback name when no header / explicit name was provided:
-/// `answer-<unix-seconds>`. Uses the system clock; tests should
-/// pass `name` to keep filenames deterministic.
-pub fn timestamp_slug() -> String {
-    format!("answer-{}", crate::signal::now_unix_secs())
 }
 
 /// Split `foo.bar.PNG` into (`"foo.bar"`, Some("PNG")). Bare
