@@ -6,7 +6,7 @@
 //!
 //! Usage:
 //!
-//!     chan-llm-mcp --drive /path/to/drive [--config /path/to/llm.toml]
+//!     chan-llm-mcp --drive /path/to/drive [--config /path/to/config.toml]
 //!                  [--max-image-bytes N]
 //!
 //! `write_file` writes apply immediately through chan-drive's
@@ -14,10 +14,8 @@
 //! confirmation before invoking the tool.
 //!
 //! `--max-image-bytes N` overrides the per-response cap on
-//! `read_image` (default 10 MiB). chan-server / chan's embedded
-//! `__mcp` subcommand resolve this from
-//! `LlmConfig::mcp_image_max_bytes`; the standalone binary
-//! takes a CLI flag instead to avoid pulling in llm.toml here.
+//! `read_image` (default 10 MiB). The standalone binary keeps this
+//! as a CLI flag so it can stay independent of app settings.
 
 use std::path::PathBuf;
 use std::process::ExitCode;

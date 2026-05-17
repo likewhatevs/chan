@@ -465,8 +465,8 @@ fn exec_write_file(args: &Json, ctx: &ToolContext) -> Result<Json> {
 }
 
 /// JSON-schema descriptor for one tool, in the common
-/// `{name, description, parameters}` form. MCP and future backends
-/// translate from this to their wire format.
+/// `{name, description, parameters}` form. MCP hosts translate from
+/// this to their wire format.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ToolSchema {
     pub name: &'static str,
@@ -475,8 +475,7 @@ pub struct ToolSchema {
 }
 
 /// Return JSON-schema descriptors for the built-in tools.
-/// Backends call this once per request to populate their
-/// vendor-specific `tools` field.
+/// Hosts call this to populate their MCP tool surface.
 pub fn standard_tool_schemas() -> Vec<ToolSchema> {
     vec![
         ToolSchema {

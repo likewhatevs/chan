@@ -1,16 +1,14 @@
 //! MCP server: stdio transport that exposes the chan-llm tool sandbox
 //! as a Model Context Protocol service.
 //!
-//! Two consumers wear this:
+//! Two consumers use this:
 //!
 //!   - The `chan-llm-mcp` binary, which any MCP client (Claude
 //!     Desktop, Claude Code, Cursor, Continue, ...) can spawn against
 //!     a chan drive to gain chan-drive-sandboxed file access.
-//!   - The ClaudeCli backend (v2 follow-up; see issue #1): chan-llm
-//!     writes a temporary `--mcp-config` file pointing at
-//!     chan-llm-mcp and disallows claude's native Read / Write /
-//!     Edit / Glob / Grep tools, so the agent's edits flow through
-//!     `tools::execute` and chan-drive's gates fire.
+//!   - The `chan __mcp` subcommand and chan-server MCP bridge, which
+//!     host the same tool service for external agents without
+//!     reopening the drive.
 //!
 //! Tools exposed: `read_file`, `write_file`, `list_files`,
 //! `search_content`, and `read_image`. The first four route through
@@ -18,8 +16,8 @@
 //! binary read path: it pulls bytes through `Drive::read` (path
 //! sandbox, regular-file gate, lstat) and returns base64-encoded
 //! image content as an MCP `image` content block, capped at
-//! `max_image_bytes` (default 10 MiB, configurable via
-//! `LlmConfig::mcp_image_max_bytes` or `--max-image-bytes`).
+//! `max_image_bytes` (default 10 MiB, configurable by the server
+//! builder or `--max-image-bytes`).
 
 use std::sync::Arc;
 
@@ -42,7 +40,7 @@ use crate::tools::{self, ToolContext};
 /// vision models with margin for base64's ~33% inflation; oversized
 /// images surface as an `invalid_params` error so the model can
 /// recover instead of bloating a single tool turn. Overridable via
-/// `LlmConfig::mcp_image_max_bytes` or `--max-image-bytes` on the
+/// `Server::with_max_image_bytes` or `--max-image-bytes` on the
 /// standalone binary.
 pub const DEFAULT_MCP_IMAGE_MAX_BYTES: u64 = 10 * 1024 * 1024;
 
@@ -85,7 +83,7 @@ pub fn is_supported_image(rel: &str) -> Option<&'static str> {
 /// MCP server handle. Owns a `ToolContext` (drive handle); each
 /// tool dispatch routes through `tools::execute`, so chan-drive's
 /// path sandbox, special-file refusal, and editable-text gate apply
-/// to MCP-driven calls the same way they apply to in-process backends.
+/// to MCP-driven calls.
 ///
 /// Cloning is cheap: `ToolContext` is just an `Arc<Drive>`. The
 /// rmcp tool macros expand into code that requires `Clone` on the
@@ -111,10 +109,9 @@ impl Server {
     }
 
     /// Override the per-response `read_image` byte cap. Mirrors the
-    /// builder shape that backends use elsewhere in chan-llm: a
     /// caller that doesn't care about the cap keeps the default;
-    /// chan-server / the standalone binary set it from
-    /// `LlmConfig::mcp_image_max_bytes` (or `--max-image-bytes`).
+    /// chan-server and the standalone binary can set it from their
+    /// own configuration surfaces.
     pub fn with_max_image_bytes(mut self, n: u64) -> Self {
         self.max_image_bytes = n;
         self
@@ -520,13 +517,7 @@ fn mcp_safe_message(err: &LlmError) -> String {
         }
         LlmError::Io(_) => "i/o error".to_string(),
         LlmError::Tool(msg) => format!("tool error: {msg}"),
-        LlmError::BackendError { status, .. } => format!("backend error: {status}"),
-        LlmError::CliNotFound { .. } => "agent CLI not found".to_string(),
-        LlmError::ConfigDecode(_) => "config decode error".to_string(),
-        LlmError::ConfigEncode(_) => "config encode error".to_string(),
         LlmError::Mcp(_) => "mcp error".to_string(),
-        LlmError::BackendNotConfigured => "no backend configured".to_string(),
-        LlmError::NotImplemented(_) => "not implemented".to_string(),
     }
 }
 

@@ -8,22 +8,6 @@ pub type Result<T> = std::result::Result<T, LlmError>;
 
 #[derive(Debug, Error)]
 pub enum LlmError {
-    #[error("backend not implemented yet: {0}")]
-    NotImplemented(String),
-    #[error("no backend configured; set one in chan settings before sending")]
-    BackendNotConfigured,
-    #[error("{backend} CLI unavailable: {command}: {reason}")]
-    CliNotFound {
-        backend: String,
-        command: String,
-        reason: String,
-    },
-    #[error("config decode error: {0}")]
-    ConfigDecode(String),
-    #[error("config encode error: {0}")]
-    ConfigEncode(String),
-    #[error("backend error: {status}: {message}")]
-    BackendError { status: u16, message: String },
     #[error("tool error: {0}")]
     Tool(String),
     /// Catch-all for chan-drive errors that don't have a typed
@@ -34,8 +18,8 @@ pub enum LlmError {
     /// into this string and broke host UX.
     #[error("chan-drive: {0}")]
     Core(String),
-    /// chan-drive's `WriteConflict` passthrough. The assistant's
-    /// write was a CAS against `current_mtime_ns` and the file
+    /// chan-drive's `WriteConflict` passthrough. The write was a
+    /// CAS against `current_mtime_ns` and the file
     /// changed under it; the host should re-read and retry.
     #[error("write conflict: file changed on disk (current mtime ns: {current_mtime_ns:?})")]
     WriteConflict { current_mtime_ns: Option<i64> },
@@ -90,17 +74,5 @@ impl From<chan_drive::ChanError> for LlmError {
             | chan_drive::ChanError::SymlinkEscape(_) => LlmError::PathRefused(e.to_string()),
             other => LlmError::Core(other.to_string()),
         }
-    }
-}
-
-impl From<toml::de::Error> for LlmError {
-    fn from(e: toml::de::Error) -> Self {
-        LlmError::ConfigDecode(e.to_string())
-    }
-}
-
-impl From<toml::ser::Error> for LlmError {
-    fn from(e: toml::ser::Error) -> Self {
-        LlmError::ConfigEncode(e.to_string())
     }
 }

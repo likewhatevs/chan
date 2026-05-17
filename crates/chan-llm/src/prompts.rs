@@ -12,8 +12,7 @@
 ///
 /// The prompt enumerates the standard tools inline (read /
 /// write / list / search plus repo_report and the graph_* tools,
-/// and read_image for MCP-backed sessions). CLI-agent backends run
-/// their own tool loops, so hosts can swap in
+/// and read_image for MCP clients). Hosts can swap in
 /// `SYSTEM_PROMPT_NO_TOOLS` when chan's standard tool schemas are
 /// not advertised directly.
 pub const SYSTEM_PROMPT: &str = "\
@@ -86,10 +85,8 @@ open. You don't have tools to read or modify files in this turn; \
 answer based on the conversation context and any content the user \
 has pasted into the messages. Be concise.";
 
-/// Per-session directive prepended to whatever system prompt the
-/// host passes to the agentic CLI backends (`claude_cli`,
-/// `gemini_cli`, `codex_cli`). These backends are full agents
-/// with their own tool-use heuristics, and they tend to default
+/// Per-session directive for external MCP-capable agents. These
+/// agents have their own tool-use heuristics, and they tend to default
 /// to a cautious
 /// \"show the user the proposal and wait for confirmation\" mode
 /// when run interactively; pasting the would-be file content as
@@ -218,10 +215,9 @@ membership as a direct lookup, so it's preferable to scanning every \
 file with search_content when the user has a specific tag in mind.";
 
 /// Description of the read_image tool. MCP-only: not surfaced
-/// through `tools::standard_tool_schemas()` because the in-process
-/// backends don't have a multimodal-content slot today (issue #2's
-/// follow-up). Pinned against the inlined `#[tool]` literal in
-/// `mcp.rs` via `mcp_descriptions_match_prompts`.
+/// through `tools::standard_tool_schemas()`. Pinned against the
+/// inlined `#[tool]` literal in `mcp.rs` via
+/// `mcp_descriptions_match_prompts`.
 pub const READ_IMAGE_DESC: &str = "\
 Read a raster image from the active drive and return it as an MCP \
 image content block. The path is POSIX-style relative to the drive \
