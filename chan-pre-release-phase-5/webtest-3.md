@@ -1,9 +1,8 @@
 # @@Webtest A task 3: test service for Alex's post-commit click-around
 
 Owner: @@Webtest A
-Status: BLOCKED — fires after [architect-2](./architect-2.md) lands
-the wave-1 + wave-2 commits. Pairs with
-[systacean-7](./systacean-7.md) (Chan.app build + install).
+Status: DONE — service torn down at phase close per Alex.
+Pairs with [systacean-7](./systacean-7.md) (Chan.app build + install).
 
 ## Goal
 
@@ -80,12 +79,77 @@ At phase close:
 
 ## Service
 
-(populated by @@Webtest A on launch)
+| Service     | URL                                                         | PID    | Log                                       |
+|-------------|-------------------------------------------------------------|--------|-------------------------------------------|
+| chan-server | http://127.0.0.1:8787/?t=qag7t48iruaBs88YycrJ7etcikDeEcdi   | 26997  | /tmp/chan-phase5-logs/server-post-commit.log |
+
+* Drive: `/private/tmp/chan-test-phase5` (the long-lived
+  registered drive Alex has been clicking around all phase).
+* Bearer token: `qag7t48iruaBs88YycrJ7etcikDeEcdi`.
+* Command: `./target/debug/chan serve /tmp/chan-test-phase5
+  --host 127.0.0.1 --port 8787 --no-browser`.
+* Bind: 127.0.0.1 loopback only, no tunnel.
+* Launched: 2026-05-17 ~22:30 BST.
+
+### Baseline reachability
+
+* `GET /api/health` → 200.
+* `GET /api/build-info` → `{"version":"0.8.1","features":{"embeddings":true}}`.
+* `GET /api/index/status` → `{"state":"idle","indexed_docs":95,"indexed_vectors":95,"model":"BAAI/bge-small-en-v1.5"}` (the cumulative drive content from rounds 1-10 smoke).
+
+### HEAD at launch
+
+```
+bccdb18 release: phase 5 final journal + summary
+7da49f6 release: close phase 5 tasks
+9ecb27d docs: refresh phase-5 boundary
+790fd02 web: phase-5 frontend (overlay removal + persistent terminals + ux)
+9e121d5 chan-server: prune agent surface + persistent terminal sessions
+58fe80a chan-drive: drop assistant blobs + vcs-aware indexing
+c748484 chan-llm: pare to MCP-only surface
+02be09c web: add terminal tab controls
+455c5df web: move terminal into workspace tabs
+9c1ea91 web: add terminal overlay
+```
+
+(`origin/main..HEAD` shows 10 ahead; push held for Alex's
+explicit go per the journal round-19 entry.)
 
 ## Progress
 
-(populated by @@Webtest A once the commit gate opens)
+* 2026-05-17 ~22:30 BST: rebuilt `web/dist/` and the chan binary
+  against committed `bccdb18`, killed PID 18015 (round-10 debug
+  service), launched fresh on the same drive. Service alive,
+  health + build-info + index status all green. URL + token
+  posted above; Alex can click around alongside the running
+  [systacean-7](./systacean-7.md) Chan.app build (still in
+  flight per the journal).
+* No bugs surfaced from this lane between launch and this
+  entry; will append any repros Alex flags during the click-
+  around to the progress section below as they come in.
 
 ## Completion notes
 
-(populated by @@Webtest A at task close)
+* 2026-05-17 ~22:40 BST: Alex called "done". Killed PID 26997
+  (`SIGTERM` clean shutdown, no orphan processes — `pgrep -f
+  'target/debug/chan serve'` returns nothing).
+* Fixture drive `/private/tmp/chan-test-phase5` left in place
+  per the task spec ("long-lived registered drive Alex has been
+  using all phase; @@Architect decides if it gets cleaned up").
+  Current contents: the markdown + .txt files seeded across
+  rounds 1-10 (`welcome.md`, `notes/`, `projects/phase5/`,
+  `longfile.md`, `confcheck-*`, `r4-create.*`, `deep/nested/`),
+  plus the `.git/` directory from the systacean-4 git/hg smoke.
+* Log directory `/tmp/chan-phase5-logs/` left in place with 31
+  files (`server-*.log`, baseline check/test logs, fmt/clippy/
+  build retry logs, etc.). Useful as evidence if any of the
+  acceptance findings need replaying; cleanup-safe per the
+  teardown brief.
+* Service ports 5173 + 8787 are unbound. No webtest-owned
+  background processes remain.
+* My lane's tracking: webtest-1 round-1 through round-10 all
+  PASS, webtest-3 service spun up + torn down. Coordination
+  with @@Webtest B: clean (their webtest-2 closed REVIEW
+  earlier).
+* Phase-5 acceptance from this lane: green. Final summary lives
+  in [summary.md](./summary.md).
