@@ -719,21 +719,97 @@
         return;
       }
       languageMaxDepth = 0;
-      const g: GraphView = await api.graph();
-      const renderedNodes: RenderedNode[] = g.nodes.filter(
-        (n): n is RenderedNode =>
-          n.kind === "file" || n.kind === "tag" || n.kind === "mention",
-      );
-      const renderedEdges: RenderedEdge[] = g.edges.filter(
-        (e): e is RenderedEdge =>
-          e.kind === "link" || e.kind === "tag" || e.kind === "mention",
-      );
+      // Drive- and global-scope graphs are the user's overview of
+      // the whole library. Merge the semantic graph (files / tags /
+      // mentions / link / tag / mention edges) with the filesystem
+      // graph (folders + "contains" edges) and the language graph
+      // (language nodes + language edges) so a glance shows every
+      // structural axis at once. Tighter scopes (file / dir / tag /
+      // group) stick to a single source so the canvas stays focused.
+      const driveLike =
+        currentScope?.kind === "drive" || currentScope?.kind === "global";
+      const [g, fs, lg] = await Promise.all([
+        api.graph(),
+        driveLike
+          ? api.fsGraph({
+              scope: "folder",
+              path: "",
+              depth: Math.max(graphOverlay.depth, 1),
+            }).catch(() => null)
+          : Promise.resolve(null),
+        driveLike
+          ? api.languageGraph({ depth: graphOverlay.depth }).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+      const seenIds = new Set<string>();
+      const renderedNodes: RenderedNode[] = [];
+      const renderedEdges: RenderedEdge[] = [];
+      for (const n of g.nodes) {
+        if (
+          (n.kind === "file" || n.kind === "tag" || n.kind === "mention") &&
+          !seenIds.has(n.id)
+        ) {
+          renderedNodes.push(n);
+          seenIds.add(n.id);
+        }
+      }
+      for (const e of g.edges) {
+        if (e.kind === "link" || e.kind === "tag" || e.kind === "mention") {
+          renderedEdges.push(e as RenderedEdge);
+        }
+      }
+      if (fs) {
+        fsNodes = fs.nodes;
+        fsTruncated = fs.truncated;
+        for (const n of mapFsNodes(fs)) {
+          if (n.kind === "folder" && !seenIds.has(n.id)) {
+            renderedNodes.push(n);
+            seenIds.add(n.id);
+          }
+        }
+        for (const e of mapFsEdges(fs)) {
+          // Drop edges that reference a node we didn't keep (file
+          // nodes in fs-graph collide with the semantic graph's
+          // ids; we trust those over fs-graph's lighter file
+          // records, but the edges themselves still want to land
+          // when both endpoints are present).
+          if (seenIds.has(e.source) && seenIds.has(e.target)) {
+            renderedEdges.push(e);
+          }
+        }
+      }
+      if (lg) {
+        // Language graph emits Folder nodes with id "folder:<path>"
+        // while fs-graph keys folders by plain "<path>". Strip the
+        // prefix on edge targets so the language→folder edges land
+        // on the same nodes the user already sees. Folder nodes from
+        // the language graph itself are dropped (fs-graph version
+        // wins).
+        for (const n of lg.nodes) {
+          if (n.kind === "language" && !seenIds.has(n.id)) {
+            renderedNodes.push(n);
+            seenIds.add(n.id);
+          }
+        }
+        for (const e of lg.edges) {
+          const target = e.target.startsWith("folder:")
+            ? e.target.slice("folder:".length)
+            : e.target;
+          if (seenIds.has(e.source) && seenIds.has(target)) {
+            renderedEdges.push({
+              source: e.source,
+              target,
+              kind: "language",
+            });
+          }
+        }
+      }
       nodes = renderedNodes;
       edges = renderedEdges;
       // Honour any selection openGraphAtNode pre-loaded into the
       // overlay state so the inspector opens on the right node.
       const pending = graphOverlay.pendingSelectId;
-      if (pending && renderedNodes.some((n) => n.id === pending)) {
+      if (pending !== null && renderedNodes.some((n) => n.id === pending)) {
         selectedId = pending;
         graphOverlay.inspectorOpen = true;
       }
@@ -900,7 +976,9 @@
     </button>
     <div class="filters">
       {#each ["link", "tag", "mention", "language", "img", "folder"] as const as kind (kind)}
-        {#if (!filesystemMode || (kind !== "img" && kind !== "language")) && (languageMode ? kind === "language" : kind !== "language") && (kind !== "folder" || filesystemMode)}
+        {@const driveLike =
+          currentScope?.kind === "drive" || currentScope?.kind === "global"}
+        {#if (!filesystemMode || (kind !== "img" && kind !== "language")) && (languageMode ? kind === "language" : kind !== "language" || driveLike) && (kind !== "folder" || filesystemMode || driveLike)}
           <label class="chip" class:on={show[kind]}>
             <input type="checkbox" bind:checked={show[kind]} />
             <span class="dot" style="background:{FILTER_COLORS[kind]}"></span>
