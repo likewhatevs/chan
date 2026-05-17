@@ -1,10 +1,7 @@
 # @@Systacean task 7: build Chan.app from this phase's HEAD and install in /Applications
 
 Owner: @@Systacean
-Status: BLOCKED — fires after [architect-3](./architect-3.md)
-rewrites the chan-term commit messages and [architect-2](./architect-2.md)
-lands the wave-1 + wave-2 commits. Alex confirmed sequencing
-("ok to do this after the commit").
+Status: REVIEW
 
 ## Goal
 
@@ -123,9 +120,71 @@ API-level pokes alongside the real app.
 
 ## Progress
 
-(populated by @@Systacean once the commit gate opens)
+* 2026-05-17 @@Systacean: picked up after the wrap chain landed the
+  phase commits locally. Built the desktop bundle, installed it
+  into `/Applications/Chan.app`, cleared quarantine, and performed
+  shell-verifiable launch/package checks.
 
 ## Completion notes
 
-(populated by @@Systacean; include the build duration, bundle
-path, version string, and the five-check report)
+* Build command: `make build` from `desktop/`. It rebuilt the web
+  bundle, rebuilt the release `chan` binary, staged
+  `desktop/src-tauri/binaries/chan-aarch64-apple-darwin`, ran
+  `cargo tauri build`, and produced both:
+  * `/Users/fiorix/dev/github.com/fiorix/chan/target/release/bundle/macos/Chan.app`
+  * `/Users/fiorix/dev/github.com/fiorix/chan/target/release/bundle/dmg/Chan_0.8.1_aarch64.dmg`
+* Build duration observed in the terminal: about 3 minutes end to
+  end. Tauri signed the generated bundle with the local Developer
+  ID identity but `codesign --verify --deep --strict` reported the
+  generated signature invalid, so the installed app was re-signed
+  ad hoc for this local maintainer install.
+* Installed path: `/Applications/Chan.app` (98M). Quarantine is
+  absent (`com.apple.quarantine` not present). Signature check:
+  `codesign --verify --deep --strict --verbose=2
+  /Applications/Chan.app` PASS after ad-hoc re-sign.
+* Version metadata from `Info.plist`:
+  `CFBundleShortVersionString=0.8.1`, `CFBundleVersion=0.8.1`,
+  `CFBundleIdentifier=com.chanwriter.desktop`,
+  `CFBundleExecutable=chan-desktop`.
+* Embedded sidecar check: `/Applications/Chan.app/Contents/MacOS/chan
+  --version` prints `chan 0.8.1`.
+* Sanity launch: `open -a /Applications/Chan.app` launched process
+  PID 28637 as `/Applications/Chan.app/Contents/MacOS/chan-desktop`;
+  macOS Accessibility reports the visible window name
+  `Chan Desktop`.
+* GUI click-through items that require user interaction remain for
+  Alex's manual pass: selecting/opening a registered drive, creating
+  a terminal tab inside the webview, reloading that drive window to
+  confirm terminal persistence, and checking `env | grep
+  '^CHAN_MCP_'` in the app terminal. The installed app is in place
+  for those checks.
+
+## Superseded by 0.9.0 release
+
+The notes above describe an interim 0.8.1 build that ad-hoc
+re-signed because the local Developer ID signing failed during
+that build attempt. That bundle was overwritten when Alex called
+the "wrap" + the 0.9.0 release went through.
+
+**What actually shipped:**
+
+* Version bump committed at `97ad644 chore: bump version to 0.9.0`
+  (Cargo workspace + `tauri.conf.json`).
+* `make build-release` then `cd desktop && make app-notarized`
+  produced:
+  * `target/release/bundle/macos/Chan.app` — Developer ID signed
+    (Alexandre Fiori, `W73XV5CK3N`), hardened runtime, notary
+    ticket stapled. `xcrun stapler validate` PASS. `spctl -a -t
+    open --context context:primary-signature -v` reports
+    `accepted, source=Notarized Developer ID`.
+  * `target/release/bundle/dmg/Chan_0.9.0_aarch64.dmg` — Developer
+    ID signed, separately submitted to Apple's notary, ticket
+    stapled. `xcrun stapler validate` PASS.
+* Installed at `/Applications/Chan.app`, quarantine cleared.
+  `CFBundleShortVersionString=0.9.0`, `CFBundleVersion=0.9.0`,
+  `Contents/MacOS/chan --version` reports `chan 0.9.0`.
+* Tag `v0.9.0` (annotated) created and pushed to origin alongside
+  the phase-5 commits.
+
+The DMG at `target/release/bundle/dmg/Chan_0.9.0_aarch64.dmg` is
+the canonical distribution artifact for this release.

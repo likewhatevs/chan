@@ -150,7 +150,7 @@ remaining cleanup residue plus enhancements and bug fixes.
 | [systacean-6](./systacean-6.md) | @@Systacean | REVIEW | BUG-WT5-A confirmed resolved by [systacean-4](./systacean-4.md)'s watcher classifier/filter path: Created and Modified indexable files now share the same per-file apply path. Added `create_event_admits_new_indexable_file_into_bm25` for new `.md` and `.txt` create events. Full gate green. |
 | [frontend-5](./frontend-5.md) | @@Frontend | REVIEW | Strip unknown legacy keys from the URL hash on the next hash write so pre-Phase-5 fragments stop surviving reloads. `persistStateToHash()` canonicalizes to known keys; regression test keeps live `settings=1` while dropping stale keys. Verified `npm --prefix web run check`, `npm --prefix web test -- --run`, `npm --prefix web run build` (build warnings only). |
 | [architect-3](./architect-3.md) | @@Architect | TODO | Rewrite the three chan-term commit messages (`0f4614e`, `980fc3e`, `963bade`) to match the repo's canonical style (68-col wrap, surface-bulleted body, framed why). Drafts in the task file; non-interactive rebase recipe captured. Runs after wave-2 finishes and before the final push. |
-| [systacean-7](./systacean-7.md) | @@Systacean | BLOCKED | Build Chan.app from this phase's HEAD and install at `/Applications/Chan.app` so Alex can click through Phase 5 changes alongside summary.md. Steps: `make build-release` (frontend + model bundle + release `chan`), `cd desktop && make build` (Tauri), copy to `/Applications`, clear quarantine, five-check sanity launch. Fires after [architect-3](./architect-3.md) + [architect-2](./architect-2.md) land. |
+| [systacean-7](./systacean-7.md) | @@Systacean | REVIEW | Built and installed Phase 5 `Chan.app` at `/Applications/Chan.app` from local wrapped HEAD. `desktop/make build` produced `target/release/bundle/macos/Chan.app` and `target/release/bundle/dmg/Chan_0.8.1_aarch64.dmg`; installed app is 0.8.1, quarantine-free, ad-hoc re-signed with `codesign --verify --deep --strict` PASS, and launches as `chan-desktop` with window `Chan Desktop`. Alex owns the remaining manual click-through inside the GUI. |
 | [webtest-3](./webtest-3.md) | @@Webtest A | BLOCKED | After the commits land, rebuild `target/debug/chan` against committed HEAD and bring the test service back up on the existing `chan-test-phase5` drive so Alex has a plain-browser surface for click-around bug hunting alongside Chan.app. Posts URL + bearer token in the task file. |
 | [frontend-3](./frontend-3.md) | @@Frontend | REVIEW | Wave 2 bug fixes. Added shared in-app close confirmation for dirty file tabs and live terminal tabs, reviewed per-window session path/tests from [backend-2](./backend-2.md), and changed saved-caret restore to nearest scrolling. Verified `npm --prefix web run check`, `npm --prefix web test -- --run`, `npm --prefix web run build` (build warnings only). |
 
@@ -949,3 +949,47 @@ Open questions for Alex before initial task creation:
   * Push `main` to `origin/main` — holding for Alex's explicit
     go since it's a shared-state action.
   Working tree clean. Local main at +9 commits over origin.
+* 2026-05-17 @@Systacean: [systacean-7](./systacean-7.md)
+  REVIEW. The desktop build did not leave an app bundle in
+  `desktop/src-tauri/target/...`; reran `make build` from
+  `desktop/`, which rebuilt the web bundle, release `chan`,
+  staged `desktop/src-tauri/binaries/chan-aarch64-apple-darwin`,
+  and produced
+  `target/release/bundle/macos/Chan.app` plus
+  `target/release/bundle/dmg/Chan_0.8.1_aarch64.dmg`. Installed
+  the app at `/Applications/Chan.app`, cleared quarantine, and
+  ad-hoc re-signed because the generated Developer ID signature
+  failed `codesign --verify --deep --strict` locally. Installed
+  verification: `CFBundleShortVersionString=0.8.1`,
+  `CFBundleVersion=0.8.1`,
+  `/Applications/Chan.app/Contents/MacOS/chan --version` prints
+  `chan 0.8.1`, `codesign --verify --deep --strict --verbose=2
+  /Applications/Chan.app` PASS, `com.apple.quarantine` absent,
+  `open -a /Applications/Chan.app` launched PID 28637, and
+  Accessibility reports window `Chan Desktop`. Alex still owns
+  the hands-on GUI click-through inside the app.
+* 2026-05-17 @@Architect: round-20 — phase release. Alex
+  requested a cargo version bump + git tag + notarized DMG
+  before the final push. Bumped workspace + `tauri.conf.json`
+  from `0.8.1` to `0.9.0` (`97ad644 chore: bump version to
+  0.9.0`); rebuilt the release `chan` binary at 0.9.0; ran
+  `cd desktop && make app-notarized` end to end (after one
+  retry against an updated `chan-notary` keychain password
+  Alex refreshed). Apple notary returned `Accepted` for the
+  `.app` and separately for the `.dmg`; both stapled and
+  validated. Installed `/Applications/Chan.app` at 0.9.0
+  (Gatekeeper `accepted, source=Notarized Developer ID`).
+  Annotated tag `v0.9.0` created and pushed; `git push
+  --follow-tags origin main` succeeded, taking origin from
+  `06017f4` to `97ad644` (+12 commits) and publishing the
+  v0.9.0 tag plus a handful of stale local tags from prior
+  releases. The DMG at
+  `target/release/bundle/dmg/Chan_0.9.0_aarch64.dmg` is the
+  canonical distribution artifact.
+
+  Note: the round-19 entry above + the original
+  [systacean-7](./systacean-7.md) progress/completion notes
+  describe an interim 0.8.1 ad-hoc re-signed build that was
+  superseded by this release. systacean-7 carries a
+  "Superseded by 0.9.0 release" addendum recording the actual
+  shipped state.
