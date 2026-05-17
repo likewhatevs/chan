@@ -34,7 +34,7 @@ pub struct Registry {
 /// `uuid` is the stable per-drive identity, 16 hex chars, minted at
 /// first register and preserved across `Library::move_drive`. All
 /// per-drive sidecar paths (graph DB, search index, sessions,
-/// assistant, tokens, trash, report) live under this uuid, so the
+/// tokens, trash, report) live under this uuid, so the
 /// drive's filesystem path can move freely without invalidating its
 /// state. Two registrations of the same path at different times
 /// produce different uuids: that is the structural fix for

@@ -21,8 +21,8 @@ use crate::registry::{KnownDrive, Registry};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResetMode {
     /// Wipe per-drive chan-managed state (search index, graph DB,
-    /// session blobs, assistant blobs, app tokens). Keep the
-    /// registry entry, the user's notes tree, and the trash.
+    /// session blobs, app tokens). Keep the registry entry, the
+    /// user's notes tree, and the trash.
     State,
     /// `State` plus drop the registry entry. The next `open_drive`
     /// against this path treats it as a fresh, never-seen drive.
@@ -186,7 +186,7 @@ impl Library {
 
     /// Drop a drive from the registry AND wipe its per-drive
     /// chan-managed state (search index, graph DB, session blobs,
-    /// assistant blobs, app tokens). Equivalent to
+    /// app tokens). Equivalent to
     /// `reset_drive(root, ResetMode::Everything)` plus a `false`
     /// return when the drive wasn't registered.
     ///
@@ -280,7 +280,6 @@ impl Library {
     ///   - search index (`<cache>/chan/index/<key>/`)
     ///   - graph DB and sqlite sidecars (`<state>/chan/graph/<key>/`)
     ///   - session blobs (`<state>/chan/sessions/<key>/`)
-    ///   - assistant blobs (`<state>/chan/assistant/<key>/`)
     ///   - app tokens (`<state>/chan/tokens/<key>/`)
     ///
     /// `ResetMode::Everything` additionally drops the registry
@@ -305,10 +304,10 @@ impl Library {
 
     /// `reset_drive` plus a `ProgressCallback`. Fires one
     /// `ProgressStage::Reset` event per subsystem (index, graph,
-    /// sessions, assistant, tokens) as it is wiped, so a UI can
+    /// sessions, tokens) as it is wiped, so a UI can
     /// surface "wiping <subsystem>..." without instrumenting each
     /// caller. The label carries the subsystem name; `current` /
-    /// `total` count through the fixed five-subsystem list.
+    /// `total` count through the fixed four-subsystem list.
     pub fn reset_drive_with(
         &self,
         root: &Path,
@@ -354,11 +353,10 @@ impl Library {
         let drive_paths = paths::drive_paths_for_uuid(&uuid);
         let _lock = DriveLock::acquire(&drive_paths.lock)?;
         let mut removed = 0;
-        let subsystems: [(&str, &Path); 5] = [
+        let subsystems: [(&str, &Path); 4] = [
             ("index", &drive_paths.index),
             ("graph", &drive_paths.graph_dir),
             ("sessions", &drive_paths.sessions),
-            ("assistant", &drive_paths.assistant),
             ("tokens", &drive_paths.tokens),
         ];
         let total = subsystems.len() as u64;
@@ -393,7 +391,7 @@ impl Library {
 
     /// Record an `mv` of a registered drive's directory. Preserves
     /// the drive's `uuid` (and therefore all its sidecar state,
-    /// graph DB, search index, sessions, assistant, tokens, trash,
+    /// graph DB, search index, sessions, tokens, trash,
     /// report), only rewriting the `path` field on the registry
     /// row.
     ///
@@ -706,9 +704,9 @@ mod tests {
 
     /// Populate per-drive state so we have something to wipe:
     /// reindex (creates index segments + graph DB), put a session
-    /// blob, put an assistant blob, drop a fake token. Also writes
-    /// a markdown file inside the drive so the test can verify
-    /// reset doesn't touch the user's notes.
+    /// blob, drop a fake token. Also writes a markdown file inside
+    /// the drive so the test can verify reset doesn't touch the
+    /// user's notes.
     fn populate_state(lib: &Library, root: &Path) {
         let drive = lib.open_drive(root).unwrap();
         drive
@@ -716,7 +714,6 @@ mod tests {
             .unwrap();
         drive.reindex(None).unwrap();
         drive.put_session("win-1", b"layout").unwrap();
-        drive.put_assistant("conv-a", b"chat").unwrap();
         let p = drive.paths();
         std::fs::create_dir_all(&p.tokens).unwrap();
         std::fs::write(p.tokens.join("server.token"), b"deadbeef").unwrap();
@@ -932,7 +929,6 @@ mod tests {
         assert!(p.index.exists());
         assert!(p.graph_db.exists());
         assert!(p.sessions.exists());
-        assert!(p.assistant.exists());
         assert!(p.tokens.exists());
 
         let report = lib.reset_drive(drive.path(), ResetMode::State).unwrap();
@@ -942,7 +938,6 @@ mod tests {
         assert!(!p.index.exists());
         assert!(!p.graph_db.parent().unwrap().exists());
         assert!(!p.sessions.exists());
-        assert!(!p.assistant.exists());
         assert!(!p.tokens.exists());
 
         // User's notes and the registry survive.
@@ -1070,7 +1065,6 @@ mod tests {
         assert!(!p.index.exists());
         assert!(!p.graph_db.parent().unwrap().exists());
         assert!(!p.sessions.exists());
-        assert!(!p.assistant.exists());
         assert!(!p.tokens.exists());
         assert!(lib.list_drives().is_empty());
 

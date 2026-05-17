@@ -36,8 +36,8 @@ build (iOS, minimal targets).
       `backlinks`, `tags`, `files_with_tag`, `replace_file`.
     - Watch: `watch(Arc<dyn WatchCallback>)` returns a
       `WatchHandle`; drop to stop.
-    - Blob storage: `put_session` / `put_assistant` and friends
-      for opaque host JSON (sessions, chat history).
+    - Blob storage: `put_session` and friends for opaque host JSON
+      (window/session state).
   - `ChanError`: one umbrella enum, primitive payloads, FFI-safe.
 
 All public types are owned (no lifetimes), `Send + Sync`, and

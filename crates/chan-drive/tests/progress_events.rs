@@ -199,8 +199,8 @@ fn reset_drive_with_emits_one_event_per_subsystem() {
             .filter(|e| e.stage == ProgressStage::Reset)
             .cloned()
             .collect();
-    // Five subsystems: index, graph, sessions, assistant, tokens.
-    assert_eq!(reset_events.len(), 5, "got events: {reset_events:?}");
+    // Four subsystems: index, graph, sessions, tokens.
+    assert_eq!(reset_events.len(), 4, "got events: {reset_events:?}");
     let labels: Vec<_> = reset_events
         .iter()
         .filter_map(|e| e.label.clone())
@@ -208,7 +208,6 @@ fn reset_drive_with_emits_one_event_per_subsystem() {
     assert!(labels.contains(&"index".to_string()));
     assert!(labels.contains(&"graph".to_string()));
     assert!(labels.contains(&"sessions".to_string()));
-    assert!(labels.contains(&"assistant".to_string()));
     assert!(labels.contains(&"tokens".to_string()));
 }
 

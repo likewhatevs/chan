@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::bm25::{Bm25Error, Bm25Index};
@@ -360,15 +360,13 @@ impl Index {
         // resident chunk memory: roughly that many parsed files in
         // flight at once.
         //
-        // Workers per call: `available_parallelism - 2`, clamped to
-        // [1, 6]. Two cores held back so the server's tokio runtime
-        // and the OS UI thread keep breathing during a reindex of a
-        // large drive. The cap of 6 is empirical: above it tantivy's
-        // internal indexing threads + the embed model's tokio runtime
-        // start contending and wall-clock stops improving.
-        let worker_count = effective_workers();
+        // Worker and batch budget come from `SearchAggression`.
+        // Balanced preserves the historical behavior:
+        // `available_parallelism - 2`, clamped to [1, 6].
+        let budget = opts.aggression.budget();
+        let worker_count = budget.worker_count;
         let next = AtomicUsize::new(0);
-        let (tx, rx) = std::sync::mpsc::sync_channel::<WorkerOut>(worker_count * 4);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<WorkerOut>(budget.queue_bound);
         let chunking_cfg = cfg_at_start.chunking.clone();
         let drive_root = &self.drive_root;
         let files_ref = &files;
@@ -472,11 +470,11 @@ impl Index {
                     pending_chunks += chunks.len();
                     let rel_for_label = msg.rel.clone();
                     pending.push((msg.rel, chunks));
-                    if pending_chunks >= EMBED_BATCH_CHUNKS {
+                    if pending_chunks >= budget.embed_batch_chunks {
                         progress.on_progress(ProgressEvent {
                             stage: ProgressStage::EmbedBatch,
                             current: pending_chunks as u64,
-                            total: EMBED_BATCH_CHUNKS as u64,
+                            total: budget.embed_batch_chunks as u64,
                             label: Some(format!("files={} last={rel_for_label}", pending.len())),
                             // EmbedBatch fires once per buffer flush, not
                             // per chunk, so a rate-based ETA across batches
@@ -514,7 +512,7 @@ impl Index {
             progress.on_progress(ProgressEvent {
                 stage: ProgressStage::EmbedBatch,
                 current: pending_chunks as u64,
-                total: EMBED_BATCH_CHUNKS as u64,
+                total: budget.embed_batch_chunks as u64,
                 label: Some(format!("tail files={} last={last}", pending.len())),
                 eta_secs: None,
             });
@@ -889,7 +887,6 @@ impl Index {
 // over a useful work unit, small enough that working memory stays
 // modest (~12 MB at 384-dim) on big drives. Only used when the
 // `embeddings` feature is on; harmless otherwise.
-#[cfg(feature = "embeddings")]
 const EMBED_BATCH_CHUNKS: usize = 4096;
 
 /// One worker -> main message. The worker is responsible only for
@@ -909,11 +906,101 @@ struct WorkerOut {
 /// the OS) so reindex never starves foreground work. The upper
 /// cap of 6 keeps the embedding model and tantivy's writer threads
 /// from contending past the point where wall-clock improves.
-fn effective_workers() -> usize {
+fn balanced_workers() -> usize {
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(2);
     cores.saturating_sub(2).clamp(1, 6)
+}
+
+/// Search indexer resource profile. The enum is intentionally small:
+/// each level maps onto existing budget knobs rather than exposing a
+/// bag of private internals.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchAggression {
+    /// Minimize foreground impact: one reader/chunker, small queue,
+    /// smaller embedding flushes, longer server debounce.
+    Conservative,
+    /// Historical behavior and default.
+    #[default]
+    Balanced,
+    /// Favor rebuild wall-clock over foreground headroom.
+    Aggressive,
+}
+
+impl SearchAggression {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SearchAggression::Conservative => "conservative",
+            SearchAggression::Balanced => "balanced",
+            SearchAggression::Aggressive => "aggressive",
+        }
+    }
+
+    pub fn debounce(self) -> std::time::Duration {
+        match self {
+            SearchAggression::Conservative => std::time::Duration::from_secs(2),
+            SearchAggression::Balanced => std::time::Duration::from_secs(1),
+            SearchAggression::Aggressive => std::time::Duration::from_millis(250),
+        }
+    }
+
+    pub fn budget(self) -> SearchBudget {
+        let worker_count = match self {
+            SearchAggression::Conservative => 1,
+            SearchAggression::Balanced => balanced_workers(),
+            SearchAggression::Aggressive => {
+                let cores = std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(2);
+                cores.saturating_sub(1).clamp(1, 8)
+            }
+        };
+        let queue_multiplier = match self {
+            SearchAggression::Conservative => 2,
+            SearchAggression::Balanced => 4,
+            SearchAggression::Aggressive => 8,
+        };
+        let embed_batch_chunks = match self {
+            SearchAggression::Conservative => 1024,
+            SearchAggression::Balanced => EMBED_BATCH_CHUNKS,
+            SearchAggression::Aggressive => 8192,
+        };
+        SearchBudget {
+            worker_count,
+            queue_bound: worker_count * queue_multiplier,
+            embed_batch_chunks,
+        }
+    }
+}
+
+impl std::str::FromStr for SearchAggression {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "conservative" => Ok(SearchAggression::Conservative),
+            "balanced" => Ok(SearchAggression::Balanced),
+            "aggressive" => Ok(SearchAggression::Aggressive),
+            other => Err(format!(
+                "expected conservative|balanced|aggressive, got `{other}`"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for SearchAggression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchBudget {
+    pub worker_count: usize,
+    pub queue_bound: usize,
+    pub embed_batch_chunks: usize,
 }
 
 /// Knobs for `Index::build_all`.
@@ -922,12 +1009,15 @@ pub struct BuildOptions {
     /// When `false`, skip embeddings (`chan index --mode bm25` and
     /// unit tests). Default: `true`.
     pub include_vectors: bool,
+    /// Search indexer resource budget. Default: balanced.
+    pub aggression: SearchAggression,
 }
 
 impl Default for BuildOptions {
     fn default() -> Self {
         Self {
             include_vectors: true,
+            aggression: SearchAggression::Balanced,
         }
     }
 }
@@ -1030,6 +1120,82 @@ mod tests {
     fn no_vectors() -> BuildOptions {
         BuildOptions {
             include_vectors: false,
+            ..BuildOptions::default()
+        }
+    }
+
+    #[test]
+    fn search_aggression_budget_profiles_are_bounded() {
+        let conservative = SearchAggression::Conservative.budget();
+        let balanced = SearchAggression::Balanced.budget();
+        let aggressive = SearchAggression::Aggressive.budget();
+
+        assert_eq!(conservative.worker_count, 1);
+        assert_eq!(conservative.queue_bound, 2);
+        assert_eq!(conservative.embed_batch_chunks, 1024);
+        assert_eq!(balanced.queue_bound, balanced.worker_count * 4);
+        assert_eq!(balanced.embed_batch_chunks, EMBED_BATCH_CHUNKS);
+        assert!(aggressive.worker_count <= 8);
+        assert_eq!(aggressive.queue_bound, aggressive.worker_count * 8);
+        assert_eq!(aggressive.embed_batch_chunks, 8192);
+    }
+
+    #[test]
+    fn search_aggression_parse_and_display_are_stable() {
+        assert_eq!(
+            "conservative".parse::<SearchAggression>().unwrap(),
+            SearchAggression::Conservative
+        );
+        assert_eq!(SearchAggression::Balanced.to_string(), "balanced");
+        assert!("turbo".parse::<SearchAggression>().is_err());
+    }
+
+    #[test]
+    #[ignore = "manual profile for phase task notes; not a CI benchmark"]
+    fn search_aggression_fixture_profile() {
+        let tmp = make_drive();
+        for i in 0..240 {
+            std::fs::write(
+                tmp.path().join(format!("note-{i:03}.md")),
+                format!("# note {i}\n\nalpha beta gamma delta epsilon\n\n## section\n\nbody {i}\n"),
+            )
+            .unwrap();
+        }
+
+        for aggression in [
+            SearchAggression::Conservative,
+            SearchAggression::Balanced,
+            SearchAggression::Aggressive,
+        ] {
+            let dir = tmp.path().join(format!("idx-{}", aggression.as_str()));
+            let idx = Index::open(tmp.path(), &dir).unwrap();
+            let started = std::time::Instant::now();
+            let summary = idx
+                .build_all(
+                    BuildOptions {
+                        include_vectors: false,
+                        aggression,
+                    },
+                    &crate::progress::NoProgress,
+                    None,
+                )
+                .unwrap();
+            let elapsed = started.elapsed();
+            let budget = aggression.budget();
+            println!(
+                "search_aggression={} elapsed_ms={} files={} indexed={} chunks={} workers={} queue={} debounce_ms={}",
+                aggression,
+                elapsed.as_millis(),
+                summary.files,
+                summary.indexed,
+                summary.chunks,
+                budget.worker_count,
+                budget.queue_bound,
+                aggression.debounce().as_millis(),
+            );
+            assert!(summary.errors.is_empty());
+            assert_eq!(summary.files, 240);
+            assert!(elapsed < std::time::Duration::from_secs(30));
         }
     }
 
@@ -1324,6 +1490,7 @@ mod tests {
             .build_all(
                 BuildOptions {
                     include_vectors: true,
+                    ..BuildOptions::default()
                 },
                 &crate::progress::NoProgress,
                 None,
@@ -1399,6 +1566,7 @@ mod tests {
         let summary = idx.build_all(
             BuildOptions {
                 include_vectors: true,
+                ..BuildOptions::default()
             },
             &crate::progress::NoProgress,
             None,

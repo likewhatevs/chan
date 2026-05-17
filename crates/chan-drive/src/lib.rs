@@ -18,7 +18,7 @@
 // What is intentionally NOT here:
 //   - HTTP server, WebSocket transport, frontend bundle. Those live in
 //     `chan` (the CLI + embedded editor).
-//   - LLM/assistant code, API key storage. App-level concern.
+//   - LLM/agent code, API key storage. App-level concern.
 //   - Editor preferences (fonts, theme). App-level concern.
 
 mod blob;
@@ -62,7 +62,7 @@ pub use graph::{
 };
 pub use index::{
     BuildOptions, BuildSummary, Chunking, Hit, IndexConfig, IndexStats, Mode as SearchMode,
-    SearchResult, DEFAULT_MODEL,
+    SearchAggression, SearchBudget, SearchResult, DEFAULT_MODEL,
 };
 pub use indexer::{GraphIndexer, DEFAULT_DEBOUNCE_MS};
 pub use library::{Library, ResetMode, ResetReport, SweepReport};
@@ -71,5 +71,5 @@ pub use progress::{
 };
 pub use registry::{KnownDrive, Registry};
 pub use trash::{TrashEntry, TRASH_RETENTION_SECS};
-pub use vcs::{detect_parent_vcs, VcsKind, VcsParent};
+pub use vcs::{detect_drive_vcs, detect_parent_vcs, is_vcs_control_path, VcsKind, VcsParent};
 pub use watch::{WatchCallback, WatchEvent, WatchHandle, WatchKind};

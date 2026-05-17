@@ -1,8 +1,6 @@
-// Per-drive blob storage. Two kinds today: opaque per-window
-// session blobs (`paths.sessions`) and per-conversation assistant
-// chat history (`paths.assistant`). The schema of the stored bytes
-// is the host's concern; chan-drive treats every blob as opaque
-// and just guarantees:
+// Per-drive session blob storage. The schema of the stored bytes is
+// the host's concern; chan-drive treats every blob as opaque and just
+// guarantees:
 //
 //   - atomic writes (tmpfile + fsync + rename);
 //   - the key is a flat identifier, never a path component;
@@ -16,10 +14,9 @@
 //
 // Why blobs in chan-drive: native shells (iOS / Android, future)
 // link chan-drive via uniffi and use these methods directly to
-// persist editor state and assistant conversations. Pushing the
-// I/O up to host code would force every shell to reimplement the
-// safety story (atomic writes, path sandbox); centralising here
-// keeps that story in one place.
+// persist editor state. Pushing the I/O up to host code would force
+// every shell to reimplement the safety story (atomic writes, path
+// sandbox); centralising here keeps that story in one place.
 
 use std::fs;
 use std::path::Path;
@@ -134,24 +131,6 @@ pub(crate) fn delete(bucket: &Path, key: &str) -> Result<()> {
     }
 }
 
-/// Wipe every blob in the bucket. Subdirs (which `put` never
-/// creates) are left alone so a stray dir from another tool
-/// doesn't get nuked here.
-pub(crate) fn clear(bucket: &Path) -> Result<()> {
-    let rd = match fs::read_dir(bucket) {
-        Ok(rd) => rd,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e.into()),
-    };
-    for entry in rd.flatten() {
-        let Ok(ft) = entry.file_type() else { continue };
-        if ft.is_file() {
-            let _ = fs::remove_file(entry.path());
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,17 +184,6 @@ mod tests {
         delete(tmp.path(), "x").unwrap();
         delete(tmp.path(), "x").unwrap(); // no error second time
         assert!(get(tmp.path(), "x").unwrap().is_none());
-    }
-
-    #[test]
-    fn clear_wipes_files_only() {
-        let tmp = TempDir::new().unwrap();
-        put(tmp.path(), "a", b"").unwrap();
-        put(tmp.path(), "b", b"").unwrap();
-        std::fs::create_dir(tmp.path().join("subdir")).unwrap();
-        clear(tmp.path()).unwrap();
-        assert!(list(tmp.path()).unwrap().is_empty());
-        assert!(tmp.path().join("subdir").is_dir(), "subdir survived");
     }
 
     #[test]

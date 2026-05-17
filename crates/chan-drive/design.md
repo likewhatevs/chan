@@ -28,18 +28,16 @@ In scope:
   - Cross-process advisory writer lock (fs4 / flock / LockFileEx).
   - Path-traversal sandboxing and editable-text whitelist.
   - Atomic writes for every chan-drive-managed file.
-  - Per-drive blob storage for opaque host JSON: pane sessions
-    and assistant chat history. chan-drive stores bytes keyed
-    by a flat identifier; the schema is the host's choice.
+  - Per-drive blob storage for opaque host JSON: pane sessions.
+    chan-drive stores bytes keyed by a flat identifier; the
+    schema is the host's choice.
 
 Out of scope:
 
   - HTTP, WebSocket, frontend bundle. Those live in
     `chan-writer/chan`.
-  - LLM tool calls, API key storage, prompt content. The blob
-    storage above gives a place to PUT chat history; chan-llm
-    owns the schema and the HTTP / FFI orchestrator calls
-    `put_assistant`.
+  - LLM tool calls, API key storage, prompt content, and agent
+    transcript storage. App-level concern.
   - Editor preferences (fonts, theme, keybindings, attachments
     dir). App-level; the consumer owns its own config file.
   - User authentication, multi-user collaboration, cloud sync of
@@ -95,7 +93,7 @@ holding the cross-process writer lock for its lifetime.
 Each registry row carries a stable `uuid` (16 hex chars) minted at
 first register via `paths::mint_uuid` and preserved across
 `Library::move_drive`. All per-drive sidecar paths (graph DB,
-search index, sessions, assistant, tokens, trash, report) live
+search index, sessions, tokens, trash, report) live
 under this uuid. Consequences:
 
   - Moving the drive directory (recorded via `move_drive`) is a
@@ -117,7 +115,7 @@ clean up after pre-PR1 unregisters that left state behind, or
 after a `move_drive`-then-deleted-at-new-location workflow.
 
 `reset_drive` wipes per-drive chan-managed state (search index,
-graph DB, session and assistant blobs, app tokens). It never
+graph DB, session blobs, app tokens). It never
 touches the user's notes tree. The trash is preserved (it holds
 user-deleted files, recoverable user data, not chan-managed
 cache). The lock dir is preserved (cross-process coordination, no
@@ -702,12 +700,6 @@ Drive::get_session(key: &str) -> Result<Option<Vec<u8>>>
 Drive::list_sessions() -> Result<Vec<String>>
 Drive::delete_session(key: &str) -> Result<()>
 
-Drive::put_assistant(key: &str, content: &[u8]) -> Result<()>
-Drive::get_assistant(key: &str) -> Result<Option<Vec<u8>>>
-Drive::list_assistant() -> Result<Vec<String>>
-Drive::delete_assistant(key: &str) -> Result<()>
-Drive::clear_assistant() -> Result<()>
-
 Drive::import_contacts(dir: &str,
     contacts: Vec<Contact>,
     opts: ImportOpts,
@@ -1097,7 +1089,6 @@ chan-drive never emits events for it or includes it in
 
 $DATA_DIR/chan/                   (state_dir; persistent)
   sessions/<key>/                 per-drive opaque session blobs
-  assistant/<key>/                per-drive assistant chat history
   graph/<key>/graph.sqlite        per-drive graph DB
   locks/<key>/writer.lock         per-drive cross-process lock
   tokens/<key>/                   per-drive bearer-token store
@@ -1254,9 +1245,8 @@ Usage shape:
 axum routes and serves the embedded Svelte frontend (rust-embed).
 It exposes REST endpoints for filesystem ops, search, graph
 traversal, link autocomplete, and trash management; a WebSocket
-channel for `WatchEvent`s; and the assistant and session blob
-endpoints that proxy directly to `put_assistant` /
-`put_session`.
+channel for `WatchEvent`s; and session blob endpoints that proxy
+directly to `put_session`.
 
 It depends on `chan-drive` with `default-features = false` and
 forwards `embeddings`, `metal`, `cuda` through its own feature

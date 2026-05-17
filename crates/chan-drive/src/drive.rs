@@ -1,8 +1,8 @@
 // Drive: a registered directory exposed as a sandboxed filesystem
 // plus search and graph. All I/O routes through `resolve_safe` and
 // the editable-text gate. Per-drive state (index, graph, sessions,
-// assistant history) lives outside the user's notes tree, keyed by
-// the canonical drive path.
+// tokens, trash, report) lives outside the user's notes tree, keyed
+// by the canonical drive path.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use crate::error::{ChanError, Result};
 use crate::fs_ops;
 use crate::graph::GraphView;
-use crate::index::{BuildOptions, BuildSummary, Index, Mode as SearchMode, SearchResult};
+use crate::index::{
+    BuildOptions, BuildSummary, Index, Mode as SearchMode, SearchAggression, SearchResult,
+};
 use crate::lock::DriveLock;
 use crate::markdown;
 use crate::paths::{drive_paths_for_uuid, DrivePaths};
@@ -433,9 +435,9 @@ impl Drive {
         self.entry.name.as_deref()
     }
 
-    /// Per-drive paths (sessions, assistant history, index dir,
-    /// graph DB, lock). Exposed for apps that want to put their
-    /// own state alongside chan-drive's.
+    /// Per-drive paths (sessions, index dir, graph DB, lock).
+    /// Exposed for apps that want to put their own state alongside
+    /// chan-drive's.
     pub fn paths(&self) -> &DrivePaths {
         &self.paths
     }
@@ -985,37 +987,6 @@ impl Drive {
         crate::blob::delete(&self.paths.sessions, key)
     }
 
-    // ---- assistant blobs ----
-    //
-    // Per-conversation opaque JSON (typically keyed by sha256 of
-    // the related file's drive-relative path). Same shape as
-    // sessions; separate bucket so listing one doesn't bleed the
-    // other.
-
-    /// Atomically write an assistant conversation blob.
-    pub fn put_assistant(&self, key: &str, content: &[u8]) -> Result<()> {
-        crate::blob::put(&self.paths.assistant, key, content)
-    }
-
-    pub fn get_assistant(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        crate::blob::get(&self.paths.assistant, key)
-    }
-
-    pub fn list_assistant(&self) -> Result<Vec<String>> {
-        crate::blob::list(&self.paths.assistant)
-    }
-
-    pub fn delete_assistant(&self, key: &str) -> Result<()> {
-        crate::blob::delete(&self.paths.assistant, key)
-    }
-
-    /// Wipe every assistant conversation for this drive (the
-    /// `/clear` UX). Does not touch the search index; that comes
-    /// when the assistant-content indexing piece lands.
-    pub fn clear_assistant(&self) -> Result<()> {
-        crate::blob::clear(&self.paths.assistant)
-    }
-
     /// Write one markdown note per `Contact` into `dir` (drive-
     /// relative; created if missing). Each note carries a
     /// `chan.kind: contact` frontmatter so downstream consumers
@@ -1435,6 +1406,19 @@ impl Drive {
         cancel: Option<&AtomicBool>,
         progress: &dyn crate::progress::ProgressCallback,
     ) -> Result<BuildSummary> {
+        self.reindex_with_aggression(cancel, progress, SearchAggression::Balanced)
+    }
+
+    /// Same as `reindex_with`, with an explicit search indexer
+    /// resource profile for the search pass. The graph rebuild stays
+    /// unchanged; the aggression level only affects search build
+    /// workers, queue depth, embed batching, and server debounce.
+    pub fn reindex_with_aggression(
+        &self,
+        cancel: Option<&AtomicBool>,
+        progress: &dyn crate::progress::ProgressCallback,
+        aggression: SearchAggression,
+    ) -> Result<BuildSummary> {
         // Guard flips `reindexing` true for the lifetime of this call
         // and back to false on every exit path (`?` early return,
         // cancellation, panic). The flag is what `is_reindexing()`
@@ -1471,7 +1455,14 @@ impl Drive {
         // subtrees to skip.
         index.set_walk_filter(Arc::clone(&self.walk_filter));
         let summary = index
-            .build_all(BuildOptions::default(), progress, cancel)
+            .build_all(
+                BuildOptions {
+                    aggression,
+                    ..BuildOptions::default()
+                },
+                progress,
+                cancel,
+            )
             .map_err(|e| match e {
                 crate::index::IndexError::Cancelled => ChanError::Cancelled,
                 other => other.into(),
@@ -1575,16 +1566,16 @@ impl Drive {
                 cursor = ?initial_cursor,
                 "rebuild_graph: resuming from staged cursor",
             );
-            let live: std::collections::HashSet<String> = entries
+            let live: std::collections::HashMap<String, (Option<i64>, Option<i64>)> = entries
                 .iter()
                 .filter(|e| !e.is_dir && fs_ops::is_indexable_text(&e.path))
-                .map(|e| e.path.clone())
+                .map(|e| (e.path.clone(), (e.mtime, Some(e.size as i64))))
                 .collect();
-            let purged = graph.sanitize_staging(&live)?;
+            let purged = graph.sanitize_staging_against_live(&live, true)?;
             if purged > 0 {
                 tracing::info!(
                     purged,
-                    "rebuild_graph: removed staged rows for files no longer on disk",
+                    "rebuild_graph: removed staged rows stale against disk",
                 );
             }
         } else {
@@ -1757,8 +1748,8 @@ impl Drive {
     /// markdown (e.g. `[[recipes/pasta]]` -> `dst="recipes/pasta"`),
     /// so backlinks queries match the stored form. Consumers that
     /// want to navigate to or read the actual file (the editor's
-    /// click-on-link, the assistant's `read_file` tool when given
-    /// a wiki target) call this to find the real path.
+    /// click-on-link, or an MCP `read_file` call given a wiki target)
+    /// call this to find the real path.
     ///
     /// Algorithm:
     ///   1. Split off `#anchor` (everything after the first `#`).
@@ -3830,11 +3821,17 @@ mod tests {
         // and crashed before reaching c.md.
         let graph = drive.graph().unwrap();
         for rel in ["a.md", "b.md"] {
+            let meta = std::fs::metadata(drive_dir.path().join(rel)).unwrap();
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64);
             let fg = crate::graph::FileGraph {
                 rel,
                 title: Some("staged-title-must-be-overwritten"),
-                mtime: Some(42),
-                size: None,
+                mtime,
+                size: Some(meta.len() as i64),
                 node_kind: crate::graph::NodeKind::File,
                 edges: &[],
                 headings: &[],
@@ -3854,6 +3851,183 @@ mod tests {
         assert_eq!(files, vec!["a.md", "b.md", "c.md"]);
         // Staging is empty after the swap.
         assert!(drive.graph().unwrap().staging_cursor().unwrap().is_none());
+    }
+
+    #[test]
+    fn reindex_resume_reparses_staged_file_changed_by_checkout() {
+        // Checkout-storm hardening: a prior run staged a.md and
+        // crashed. Before the next process resumes, the working tree
+        // changes a.md in place. Resume must not trust the stale
+        // staged row just because its path is <= the cursor; the
+        // staging stat tuple no longer matches disk, so the row is
+        // purged and parsed again.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        drive
+            .write_text("a.md", "# old\nold-checkout-token\n")
+            .unwrap();
+        drive.write_text("b.md", "# b\n").unwrap();
+
+        let graph = drive.graph().unwrap();
+        let fg = crate::graph::FileGraph {
+            rel: "a.md",
+            title: Some("old"),
+            mtime: Some(1),
+            size: Some(1),
+            node_kind: crate::graph::NodeKind::File,
+            edges: &[],
+            headings: &[],
+            emails: None,
+            aliases: None,
+        };
+        graph.stage_file(&fg).unwrap();
+        assert_eq!(graph.staging_cursor().unwrap().as_deref(), Some("a.md"));
+
+        std::fs::write(
+            drive_dir.path().join("a.md"),
+            "# new\nnew-checkout-token after checkout\n",
+        )
+        .unwrap();
+        drive.reindex(None).unwrap();
+
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert!(
+            drive
+                .search("old-checkout-token", &opts)
+                .unwrap()
+                .hits
+                .is_empty(),
+            "stale staged content must not survive resume",
+        );
+        let hits = drive.search("new-checkout-token", &opts).unwrap().hits;
+        assert_eq!(hits.first().map(|h| h.path.as_str()), Some("a.md"));
+    }
+
+    #[test]
+    fn reindex_after_simulated_checkout_matches_fresh_full_reindex() {
+        // Simulate a checkout by replacing a tracked set of files
+        // through atomic renames outside Drive's write APIs. Once the
+        // full rebuild settles, graph + search must match a fresh
+        // drive built directly from the post-checkout tree.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let fresh_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), Some("checkout".into()))
+            .unwrap();
+        lib.register_drive(fresh_dir.path(), Some("fresh".into()))
+            .unwrap();
+
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        drive
+            .write_text("keep.md", "# keep\nshared-token\n")
+            .unwrap();
+        drive.write_text("swap.md", "# old\nold-token\n").unwrap();
+        drive
+            .write_text("delete.md", "# delete\nold-token\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+
+        std::fs::write(
+            drive_dir.path().join("swap.tmp"),
+            "# new\ncheckout-token shared-token\n",
+        )
+        .unwrap();
+        std::fs::rename(
+            drive_dir.path().join("swap.tmp"),
+            drive_dir.path().join("swap.md"),
+        )
+        .unwrap();
+        std::fs::remove_file(drive_dir.path().join("delete.md")).unwrap();
+        std::fs::write(drive_dir.path().join("add.md"), "# add\ncheckout-token\n").unwrap();
+        drive.reindex(None).unwrap();
+
+        std::fs::write(fresh_dir.path().join("keep.md"), "# keep\nshared-token\n").unwrap();
+        std::fs::write(
+            fresh_dir.path().join("swap.md"),
+            "# new\ncheckout-token shared-token\n",
+        )
+        .unwrap();
+        std::fs::write(fresh_dir.path().join("add.md"), "# add\ncheckout-token\n").unwrap();
+        let fresh = lib.open_drive(fresh_dir.path()).unwrap();
+        fresh.reindex(None).unwrap();
+
+        assert_eq!(
+            capture_recovery_state(&drive, "checkout-token"),
+            capture_recovery_state(&fresh, "checkout-token"),
+        );
+    }
+
+    #[test]
+    #[ignore = "manual phase-5 checkout/resume profile; not a CI benchmark"]
+    fn checkout_and_resume_profile() {
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        for i in 0..80 {
+            drive
+                .write_text(
+                    &format!("notes/note-{i:03}.md"),
+                    &format!("# note {i}\n\nseed-token {i}\n"),
+                )
+                .unwrap();
+        }
+
+        let started = std::time::Instant::now();
+        drive.reindex(None).unwrap();
+        let initial = started.elapsed();
+
+        let started = std::time::Instant::now();
+        for i in 0..20 {
+            let rel = format!("notes/note-{i:03}.md");
+            let tmp = drive_dir.path().join(format!("notes/.swap-{i:03}.md"));
+            std::fs::write(&tmp, format!("# note {i}\n\ncheckout-token {i}\n")).unwrap();
+            std::fs::rename(tmp, drive_dir.path().join(&rel)).unwrap();
+        }
+        drive.reindex(None).unwrap();
+        let checkout = started.elapsed();
+
+        let graph = drive.graph().unwrap();
+        for i in 0..20 {
+            let rel = format!("notes/note-{i:03}.md");
+            let meta = std::fs::metadata(drive_dir.path().join(&rel)).unwrap();
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64);
+            let fg = crate::graph::FileGraph {
+                rel: &rel,
+                title: Some("profile-staged"),
+                mtime,
+                size: Some(meta.len() as i64),
+                node_kind: crate::graph::NodeKind::File,
+                edges: &[],
+                headings: &[],
+                emails: None,
+                aliases: None,
+            };
+            graph.stage_file(&fg).unwrap();
+        }
+        let started = std::time::Instant::now();
+        drive.reindex(None).unwrap();
+        let resume = started.elapsed();
+
+        println!(
+            "checkout_profile files=80 touched=20 initial_ms={} checkout_settle_ms={} resume_ms={}",
+            initial.as_millis(),
+            checkout.as_millis(),
+            resume.as_millis(),
+        );
     }
 
     #[test]
@@ -4438,25 +4612,6 @@ mod tests {
         assert!(drive.get_session("win-1").unwrap().is_none());
         // Idempotent.
         drive.delete_session("win-1").unwrap();
-    }
-
-    #[test]
-    fn assistant_blob_round_trip_and_clear() {
-        let (_cfg, _root, drive) = fixture();
-        drive.put_assistant("conv-a", b"chat-1").unwrap();
-        drive.put_assistant("conv-b", b"chat-2").unwrap();
-        assert_eq!(drive.list_assistant().unwrap().len(), 2);
-        drive.clear_assistant().unwrap();
-        assert!(drive.list_assistant().unwrap().is_empty());
-    }
-
-    #[test]
-    fn session_and_assistant_buckets_are_separate() {
-        let (_cfg, _root, drive) = fixture();
-        drive.put_session("k", b"in-sessions").unwrap();
-        drive.put_assistant("k", b"in-assistant").unwrap();
-        assert_eq!(drive.get_session("k").unwrap().unwrap(), b"in-sessions");
-        assert_eq!(drive.get_assistant("k").unwrap().unwrap(), b"in-assistant");
     }
 
     #[test]

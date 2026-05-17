@@ -5,8 +5,11 @@
 // callback trait, no closures across the boundary). The native
 // implementation uses `notify` and runs the watcher on its own
 // thread; events are filtered through `is_chan_internal` and
-// `walk_drive`'s pruning rules so `.chan/` and `.git/` activity
-// never reaches the callback.
+// `walk_drive`'s pruning rules so `.chan/` and most `.git/` / `.hg/`
+// activity never reaches the callback. A tiny allowlist of VCS
+// control files (`.git/HEAD`, `.git/index`, `.hg/dirstate`) is
+// forwarded so the server indexer can recognize checkout storms and
+// fall back to a full rebuild.
 //
 // Consumer expectations:
 //
@@ -42,6 +45,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::fs_ops::is_chan_internal;
+use crate::vcs::is_vcs_control_path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WatchKind {
@@ -193,7 +197,14 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 }
 
 fn is_filtered(rel: &str) -> bool {
-    is_chan_internal(rel) || rel == ".git" || rel.starts_with(".git/")
+    if is_vcs_control_path(rel) {
+        return false;
+    }
+    is_chan_internal(rel)
+        || rel == ".git"
+        || rel.starts_with(".git/")
+        || rel == ".hg"
+        || rel.starts_with(".hg/")
 }
 
 fn relativize(root: &Path, p: &Path) -> Option<String> {
@@ -292,5 +303,14 @@ mod tests {
         // Subsequent normal event lands.
         assert_eq!(events.last().unwrap().kind, WatchKind::Modified);
         assert_eq!(events.last().unwrap().path.as_deref(), Some("b.md"));
+    }
+
+    #[test]
+    fn filter_allows_vcs_control_paths_but_hides_other_vcs_noise() {
+        assert!(!is_filtered(".git/HEAD"));
+        assert!(!is_filtered(".git/index"));
+        assert!(!is_filtered(".hg/dirstate"));
+        assert!(is_filtered(".git/objects/pack/foo"));
+        assert!(is_filtered(".hg/store/data/foo"));
     }
 }

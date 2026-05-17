@@ -883,17 +883,54 @@ impl GraphView {
         &self,
         live_files: &std::collections::HashSet<String>,
     ) -> Result<usize> {
+        let live: std::collections::HashMap<String, (Option<i64>, Option<i64>)> = live_files
+            .iter()
+            .map(|rel| (rel.clone(), (None, None)))
+            .collect();
+        self.sanitize_staging_against_live(&live, false)
+    }
+
+    /// Drop staging rows that either disappeared from disk or no
+    /// longer match the current disk stat tuple. Used by resumed full
+    /// reindex after a checkout/sync storm: already-staged rows are
+    /// only safe to skip when they still describe the current file.
+    pub fn sanitize_staging_against_live(
+        &self,
+        live_files: &std::collections::HashMap<String, (Option<i64>, Option<i64>)>,
+        compare_stats: bool,
+    ) -> Result<usize> {
         let conn = self.writer.lock().unwrap();
-        let staged: Vec<String> = {
-            let mut stmt = conn.prepare("SELECT rel_path FROM staging_nodes")?;
-            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let staged: Vec<(String, Option<i64>, Option<i64>)> = {
+            let mut stmt = conn.prepare("SELECT rel_path, mtime, size FROM staging_nodes")?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<i64>>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                ))
+            })?;
             let mut out = Vec::new();
             for row in rows {
                 out.push(row?);
             }
             out
         };
-        let stale: Vec<&String> = staged.iter().filter(|p| !live_files.contains(*p)).collect();
+        let stale: Vec<&String> = staged
+            .iter()
+            .filter_map(
+                |(rel, staged_mtime, staged_size)| match live_files.get(rel) {
+                    None => Some(rel),
+                    Some((live_mtime, live_size)) if compare_stats => {
+                        if staged_mtime != live_mtime || staged_size != live_size {
+                            Some(rel)
+                        } else {
+                            None
+                        }
+                    }
+                    Some(_) => None,
+                },
+            )
+            .collect();
         if stale.is_empty() {
             return Ok(0);
         }

@@ -63,8 +63,8 @@ pub fn config_dir() -> PathBuf {
     }
 }
 
-/// Per-user state dir. Per-drive sessions and assistant history,
-/// optional process tokens. Persistent.
+/// Per-user state dir. Per-drive sessions and optional process
+/// tokens. Persistent.
 pub fn state_dir() -> PathBuf {
     dirs::data_dir()
         .map(|p| p.join("chan"))
@@ -136,9 +136,6 @@ pub struct DrivePaths {
     /// Per-drive sessions directory. Opaque JSON; chan-drive does
     /// not interpret. Apps put window/pane layout files here.
     pub sessions: PathBuf,
-    /// Per-drive assistant conversation directory. Each file keyed
-    /// by sha256 of the source markdown path.
-    pub assistant: PathBuf,
     /// Per-drive search-index directory (tantivy segments + config).
     /// Lives in cache_dir so a wipe rebuilds without data loss.
     pub index: PathBuf,
@@ -185,7 +182,6 @@ pub fn drive_paths_for_uuid(uuid: &str) -> DrivePaths {
     let graph_dir = state.join("graph").join(uuid);
     DrivePaths {
         sessions: state.join("sessions").join(uuid),
-        assistant: state.join("assistant").join(uuid),
         index: cache.join("index").join(uuid),
         graph_db: graph_dir.join("graph.sqlite"),
         graph_dir,
@@ -205,7 +201,6 @@ pub fn drive_subsystem_dirs() -> Vec<PathBuf> {
     let cache = cache_dir();
     vec![
         state.join("sessions"),
-        state.join("assistant"),
         state.join("graph"),
         state.join("locks"),
         state.join("tokens"),
@@ -360,14 +355,7 @@ mod tests {
     fn drive_paths_share_the_same_uuid() {
         let uuid = "deadbeefcafebab0";
         let p = drive_paths_for_uuid(uuid);
-        for path in [
-            &p.sessions,
-            &p.assistant,
-            &p.index,
-            &p.lock,
-            &p.tokens,
-            &p.trash,
-        ] {
+        for path in [&p.sessions, &p.index, &p.lock, &p.tokens, &p.trash] {
             assert!(path.to_string_lossy().contains(uuid));
         }
         assert!(p.graph_db.to_string_lossy().contains(uuid));
@@ -407,7 +395,6 @@ mod tests {
         // Each of these parents-of-uuid-dir must appear in dirs.
         let parents: Vec<PathBuf> = [
             &p.sessions,
-            &p.assistant,
             &p.graph_dir,
             &p.lock,
             &p.tokens,

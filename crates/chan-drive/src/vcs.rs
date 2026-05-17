@@ -66,6 +66,28 @@ pub fn detect_parent_vcs(path: &Path) -> Option<VcsParent> {
     detect_parent_vcs_with_home(path, dirs::home_dir())
 }
 
+/// Detect whether the drive root itself is a VCS working tree whose
+/// control files can signal a bulk checkout/update.
+///
+/// This is deliberately narrower than [`detect_parent_vcs`]: it only
+/// checks the root the user chose, and only the mutable control files
+/// the watcher cares about. We do not shell out or parse VCS metadata.
+pub fn detect_drive_vcs(path: &Path) -> Option<VcsKind> {
+    if is_regular_file(&path.join(".git").join("HEAD")) {
+        return Some(VcsKind::Git);
+    }
+    if is_regular_file(&path.join(".hg").join("dirstate")) {
+        return Some(VcsKind::Mercurial);
+    }
+    None
+}
+
+/// VCS control paths worth surfacing through the watcher even though
+/// the rest of `.git/` and `.hg/` stays hidden from normal consumers.
+pub fn is_vcs_control_path(rel: &str) -> bool {
+    matches!(rel, ".git/HEAD" | ".git/index" | ".hg/dirstate")
+}
+
 /// Test seam: the same algorithm as [`detect_parent_vcs`], but with
 /// an explicit `home` override so tests can drive the `$HOME` stop
 /// without touching the developer's real home directory.
@@ -147,6 +169,12 @@ fn is_real_dir(p: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn is_regular_file(p: &Path) -> bool {
+    std::fs::symlink_metadata(p)
+        .map(|md| md.file_type().is_file())
+        .unwrap_or(false)
+}
+
 #[cfg(unix)]
 fn dev_of(path: &Path) -> Option<u64> {
     use std::os::unix::fs::MetadataExt;
@@ -220,6 +248,39 @@ mod tests {
         mkdir(&drive);
         let got = detect_parent_vcs_with_home(&drive, None).unwrap();
         assert_eq!(got.kind, VcsKind::Mercurial);
+    }
+
+    #[test]
+    fn detects_drive_vcs_from_checkout_control_files() {
+        let tmp = TempDir::new().unwrap();
+        mkdir(&tmp.path().join(".git"));
+        std::fs::write(tmp.path().join(".git/HEAD"), b"ref: refs/heads/main\n").unwrap();
+        assert_eq!(detect_drive_vcs(tmp.path()), Some(VcsKind::Git));
+
+        let hg = TempDir::new().unwrap();
+        mkdir(&hg.path().join(".hg"));
+        std::fs::write(hg.path().join(".hg/dirstate"), b"state").unwrap();
+        assert_eq!(detect_drive_vcs(hg.path()), Some(VcsKind::Mercurial));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn drive_vcs_detection_rejects_symlinked_control_files() {
+        let tmp = TempDir::new().unwrap();
+        mkdir(&tmp.path().join(".git"));
+        let target = tmp.path().join("head-target");
+        std::fs::write(&target, b"ref: refs/heads/main\n").unwrap();
+        std::os::unix::fs::symlink(&target, tmp.path().join(".git/HEAD")).unwrap();
+        assert_eq!(detect_drive_vcs(tmp.path()), None);
+    }
+
+    #[test]
+    fn vcs_control_path_allowlist_is_exact() {
+        assert!(is_vcs_control_path(".git/HEAD"));
+        assert!(is_vcs_control_path(".git/index"));
+        assert!(is_vcs_control_path(".hg/dirstate"));
+        assert!(!is_vcs_control_path(".git/objects/pack"));
+        assert!(!is_vcs_control_path(".hg/store/data"));
     }
 
     #[test]
