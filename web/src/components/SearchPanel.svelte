@@ -32,7 +32,7 @@
     browserOverlay,
     loadTreeDir,
     openBrowser,
-    openGraphForFile,
+    openFsGraphForFile,
     openGraphForTag,
     openSettings,
     paneWidths,
@@ -909,7 +909,7 @@
                 openGraphForTag(sel.nodeId, sel.label);
               } else if (sel?.kind === "file") {
                 close();
-                openGraphForFile(sel.path);
+                openFsGraphForFile(sel.path);
               }
               // Mention "Set as Scope" stays unwired here — the
               // search panel doesn't surface mention rows yet, so

@@ -543,18 +543,19 @@
     }
   }
 
-  /// "Show Folder" handler for fs-mode folder nodes. Same pattern as
-  /// revealSelectedFile but pulls the path off the FsGraphNode since
-  /// folders don't have a semantic-graph counterpart in selectedNode.
-  function revealSelectedFolder(): void {
+  /// "Show File" / "Show Folder" handler for fs-mode nodes. Same
+  /// pattern as revealSelectedFile but pulls the path off the
+  /// FsGraphNode so it works for folders (which have no semantic-
+  /// graph counterpart in selectedNode) and for files surfaced
+  /// only via the fs-graph. path === "" is the drive root;
+  /// revealAndSelect handles it by clearing the tree selection
+  /// and opening the browser at the drive level.
+  function revealSelectedFsEntry(): void {
     if (
       selectedFsNode &&
-      selectedFsNode.kind === "folder" &&
+      (selectedFsNode.kind === "folder" || selectedFsNode.kind === "file") &&
       selectedFsNode.path !== undefined
     ) {
-      // path === "" is the drive root; revealAndSelect handles it
-      // by leaving the tree's expansion alone and clearing the
-      // selection. The browser opens at the drive level.
       revealAndSelect(selectedFsNode.path);
       openBrowser();
       browserOverlay.inspectorOpen = true;
@@ -1082,7 +1083,7 @@
           onOpen={fsKind === "file"
             ? () => { void openInActivePane(fsPath); close(); }
             : undefined}
-          onReveal={fsKind === "folder" ? revealSelectedFolder : undefined}
+          onReveal={revealSelectedFsEntry}
           onSetAsScope={fsKind === "file"
             ? () => {
                 // Re-scope the current fs graph to this file's
