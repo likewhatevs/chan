@@ -74,7 +74,7 @@
 
   // ---- types: d3-shaped working copies ---------------------------------
 
-  type DKind = "doc" | "img" | "contact" | "tag" | "mention" | "language" | "folder";
+  type DKind = "doc" | "img" | "contact" | "tag" | "mention" | "language" | "folder" | "drive";
   type DNode = {
     id: string;
     label: string;
@@ -197,6 +197,13 @@
     `<polyline points='20 16 15 11 5 19'/>`;
   const PATH_FOLDER =
     `<path d='M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/>`;
+  /// Lucide HardDrive — used as the drive-root glyph so the node
+  /// reads as the storage anchor, distinct from any other folder.
+  const PATH_DRIVE =
+    `<line x1='22' y1='12' x2='2' y2='12'/>` +
+    `<path d='M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z'/>` +
+    `<line x1='6' y1='16' x2='6.01' y2='16'/>` +
+    `<line x1='10' y1='16' x2='10.01' y2='16'/>`;
 
   function svgStrokeIcon(inner: string, stroke: string): string {
     const svg =
@@ -243,6 +250,10 @@
     loadIcon(iconImages, "mention", svgStrokeIcon(PATH_CONTACT, bg));
     loadIcon(iconImages, "language", svgTextIcon("{ }", bg));
     loadIcon(iconImages, "folder", svgStrokeIcon(PATH_FOLDER, bg));
+    // Drive root: stroke against the dark fill so the glyph still
+    // reads; uses text-secondary (lifted off the bgCard fill that
+    // matches the panel background).
+    loadIcon(iconImages, "drive", svgStrokeIcon(PATH_DRIVE, ghostStroke));
     // Ghost variants — stroked in text-secondary so the icon
     // reads against the empty bgCard fill the ghost ring sits
     // over. Same paths as the regular set; only the stroke
@@ -254,6 +265,7 @@
     loadIcon(ghostIconImages, "mention", svgStrokeIcon(PATH_CONTACT, ghostStroke));
     loadIcon(ghostIconImages, "language", svgTextIcon("{ }", ghostStroke));
     loadIcon(ghostIconImages, "folder", svgStrokeIcon(PATH_FOLDER, ghostStroke));
+    loadIcon(ghostIconImages, "drive", svgStrokeIcon(PATH_DRIVE, ghostStroke));
   }
 
   // ---- theme ------------------------------------------------------------
@@ -345,7 +357,10 @@
   }
 
   function renderRadius(kind: DKind, id: string): number {
-    const base = kind === "doc" ? RADIUS_DOC : RADIUS_BASE;
+    // Drive root is the structural anchor of the whole graph — size
+    // it like the doc nodes so it reads as a primary hub instead of
+    // a leaf folder.
+    const base = kind === "doc" || kind === "drive" ? RADIUS_DOC : RADIUS_BASE;
     if (maxBacklinks <= 0) return base;
     const bl = backlinks.get(id) ?? 0;
     // Linear ramp from base to base*RADIUS_HUB_SCALE across the
@@ -370,7 +385,9 @@
         ? classifyFile(n.path, n.node_kind)
         : n.kind === "tag" ? "tag"
           : n.kind === "mention" ? "mention"
-            : n.kind;
+            : n.kind === "folder" && n.id === ""
+              ? "drive"
+              : n.kind;
       const existing = nodeById.get(n.id);
       const missing = n.kind === "file" && Boolean(n.missing);
       const isFocal = focalSet.has(n.id);
@@ -661,6 +678,7 @@
         : n.kind === "contact" ? theme.mention
         : n.kind === "mention" ? theme.mention
         : n.kind === "language" ? theme.accent
+        : n.kind === "drive" ? theme.bgCard
         : n.kind === "folder" ? theme.folder
         : theme.tag;
       ctx.beginPath();

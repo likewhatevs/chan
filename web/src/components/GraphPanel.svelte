@@ -55,6 +55,7 @@
   import { type ScopeOption, defaultScopeId } from "../state/scope.svelte";
   import ResizeHandle from "./ResizeHandle.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
+  import DriveInfoBody from "./DriveInfoBody.svelte";
   import Inspector from "./Inspector.svelte";
   import OverlayShell from "./OverlayShell.svelte";
   import InspectorBody, { type InspectorSelection } from "./InspectorBody.svelte";
@@ -444,7 +445,10 @@
   const nodeById = $derived(new Map(nodes.map((n) => [n.id, n])));
 
   const selectedNode = $derived<RenderedNode | null>(
-    selectedId ? (nodeById.get(selectedId) ?? null) : null,
+    // `selectedId !== null` (not a truthy test): the drive-root
+    // node carries id="" in the drive-scope merged view, and a
+    // truthy test would silently null it out.
+    selectedId !== null ? (nodeById.get(selectedId) ?? null) : null,
   );
   const fsNodeById = $derived(new Map(fsNodes.map((n) => [n.id, n])));
   const selectedFsNode = $derived<FsGraphNode | null>(
@@ -1052,7 +1056,15 @@
       onResize={persistPaneWidths}
       onClose={() => (graphOverlay.inspectorOpen = false)}
     >
-      {#if selectedFsNode && (selectedFsNode.kind === "folder" || selectedFsNode.kind === "file") && selectedFsNode.path !== undefined && !selectedFsNode.broken}
+      {#if (selectedFsNode?.kind === "folder" && selectedFsNode.id === "") || (selectedNode?.kind === "folder" && selectedNode.id === "")}
+        <!-- Drive root: same body the file browser hamburger
+             menu's Folder row pops (DriveInfoBody) so the
+             whole-drive config lives in one place across surfaces.
+             Differentiated visually by GraphCanvas painting the
+             "drive" sub-kind in a darker fill with the HardDrive
+             glyph. -->
+        <DriveInfoBody />
+      {:else if selectedFsNode && (selectedFsNode.kind === "folder" || selectedFsNode.kind === "file") && selectedFsNode.path !== undefined && !selectedFsNode.broken}
         <!-- Real fs-mode file or folder: render the same body as the
              file browser / editor inspector (counts, size, code
              report; tags / refs / backlinks for files) by routing
