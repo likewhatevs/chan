@@ -35,6 +35,8 @@
   import {
     assistantHasUnreadForPath,
     assistantStream,
+    drive,
+    indexStatus,
     pathInAssistantScope,
     tree,
   } from "../state/store.svelte";
@@ -53,6 +55,37 @@
   let { pane }: { pane: LeafNode } = $props();
 
   const active = $derived(pane.tabs.find((t) => t.id === pane.activeTabId) ?? null);
+
+  // ---- empty-pane dashboard summary --------------------------------------
+  // Per request.md, the empty-tab background is now the primary
+  // dashboard surface. These derivations give the placeholder a
+  // small, factual "your drive" header above the shortcut table
+  // without turning the surface into a marketing page.
+  const driveSummary = $derived.by(() => {
+    const entries = tree.entries;
+    let files = 0;
+    let folders = 0;
+    let contacts = 0;
+    for (const e of entries) {
+      if (e.is_dir) folders++;
+      else {
+        files++;
+        if (e.kind === "contact") contacts++;
+      }
+    }
+    return { files, folders, contacts };
+  });
+  const indexLabel = $derived.by<string | null>(() => {
+    const s = indexStatus.value;
+    if (!s) return null;
+    if (s.state === "building") {
+      if (s.total > 0) return `indexing ${s.current}/${s.total}`;
+      return "indexing…";
+    }
+    if (s.state === "reindexing") return "reindexing…";
+    if (s.state === "error") return "index error";
+    return null;
+  });
 
   /// Per-path "is this file a contact?" lookup. Drives the tab-strip
   /// icon (User glyph for contacts, FileText otherwise) so a row of
@@ -122,7 +155,7 @@
       chordId: "app.graph.toggle",
     },
     {
-      label: "Call Assistant",
+      label: "Call Agent",
       icon: EnsoIcon,
       command: "app.assistant.toggle",
       chordId: "app.assistant.toggle",
@@ -620,7 +653,7 @@
                group: context that includes this path). Disappears
                when the request completes or the user dismisses /
                re-scopes the overlay. -->
-          <span class="assist-pulse" title="assistant working" aria-label="assistant working"></span>
+          <span class="assist-pulse" title="agent working" aria-label="agent working"></span>
         {/if}
         {#if isDirty(t)}
           <span class="dirty unsaved" title="unsaved changes">●</span>
@@ -687,14 +720,39 @@
       >
         <div class="placeholder-stack">
           <div class="placeholder-mark"></div>
-          <!-- Hint + shortcut table only on the lone-pane case. In a
-               multi-pane layout the extra panes are workspace setup
-               (the user is about to drop files in), so the chrome
-               just gets in the way; the logo alone is enough. -->
+          <!-- Drive header + shortcut table only on the lone-pane
+               case. In a multi-pane layout the extra panes are
+               workspace setup (the user is about to drop files in),
+               so the dashboard chrome just gets in the way; the
+               logo alone is enough.
+
+               Per request.md, this surface is the primary
+               dashboard. The header keeps the dashboard factual
+               (drive name + counts + index state) instead of
+               marketing copy; the shortcut table below stays as
+               the discovery surface for chords. -->
           {#if !multiPane}
+            {#if drive.info}
+              <div class="dashboard-header" aria-label="drive summary">
+                <div class="dashboard-name">{drive.info.name ?? "(unnamed)"}</div>
+                <div class="dashboard-stats">
+                  <span>{driveSummary.files} files</span>
+                  <span class="sep" aria-hidden="true">·</span>
+                  <span>{driveSummary.folders} folders</span>
+                  {#if driveSummary.contacts > 0}
+                    <span class="sep" aria-hidden="true">·</span>
+                    <span>{driveSummary.contacts} contacts</span>
+                  {/if}
+                  {#if indexLabel}
+                    <span class="sep" aria-hidden="true">·</span>
+                    <span class="dashboard-index">{indexLabel}</span>
+                  {/if}
+                </div>
+              </div>
+            {/if}
             <p class="placeholder-hint">
               Each pane's visible tab is part of the scope<br />
-              for Assistant and Graph.
+              for Agent and Graph.
             </p>
             <pre class="placeholder-shortcuts">{shortcutTable}</pre>
           {/if}
@@ -983,6 +1041,40 @@
     font-size: 13px;
     line-height: 1.4;
     max-width: 360px;
+  }
+  /* Dashboard header: factual drive summary on the empty-pane
+     background. Reads above the shortcut table on the lone-pane
+     case only (multi-pane bg keeps the bare logo). Kept compact
+     so the surface still scans as a soft empty state rather
+     than a marketing splash. */
+  .dashboard-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    margin-top: -0.5rem;
+  }
+  .dashboard-name {
+    font-size: 18px;
+    color: var(--text);
+    opacity: 0.85;
+    letter-spacing: 0.01em;
+  }
+  .dashboard-stats {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.4rem;
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+  .dashboard-stats .sep {
+    opacity: 0.5;
+  }
+  /* Index activity pulls toward --warn-text so a building /
+     reindexing line draws the eye without becoming an error. */
+  .dashboard-index {
+    color: var(--warn-text);
   }
   @media (prefers-reduced-motion: reduce) {
     .tab,

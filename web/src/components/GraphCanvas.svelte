@@ -268,6 +268,13 @@
     tag: string;
     mention: string;
     accent: string;
+    /// Folder node fill (filesystem graph mode). Per request.md
+    /// folders render in grey across every surface.
+    folder: string;
+    /// Binary file fill, paired with the inspector FILE blue per
+    /// request.md so binary files read the same hue in the graph
+    /// as in the file tree / inspector / search list.
+    binary: string;
   };
 
   function readTheme(host: HTMLElement): ThemeColors {
@@ -283,13 +290,15 @@
       tag: v("--g-tag", "#6cd07a"),
       mention: v("--warn-text", "#e3b341"),
       accent: v("--accent", "#3fb950"),
+      folder: v("--g-folder", "#8e8e93"),
+      binary: v("--g-binary", "#58a6ff"),
     };
   }
 
   let theme: ThemeColors = $state({
     bg: "#1c1c1e", bgCard: "#232325", text: "#ebebf0", textSec: "#8e8e93",
     doc: "#ff8a3d", img: "#b07dff", tag: "#6cd07a", mention: "#e3b341",
-    accent: "#3fb950",
+    accent: "#3fb950", folder: "#8e8e93", binary: "#58a6ff",
   });
 
   function refreshTheme(): void {
@@ -652,7 +661,7 @@
         : n.kind === "contact" ? theme.mention
         : n.kind === "mention" ? theme.mention
         : n.kind === "language" ? theme.accent
-        : n.kind === "folder" ? theme.tag
+        : n.kind === "folder" ? theme.folder
         : theme.tag;
       ctx.beginPath();
       ctx.arc(n.x, n.y, n.radius, 0, Math.PI * 2);

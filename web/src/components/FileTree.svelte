@@ -5,7 +5,18 @@
   // then renders rows with expand/collapse, click-to-open, and a context
   // menu for create/rename/delete.
 
-  import { FilePlus, FolderPlus, Network, Pencil, Search, Trash2 } from "lucide-svelte";
+  import {
+    ChevronDown,
+    ChevronRight,
+    FilePlus,
+    Folder,
+    FolderOpen,
+    FolderPlus,
+    Network,
+    Pencil,
+    Search,
+    Trash2,
+  } from "lucide-svelte";
   import { clampMenu } from "./menuClamp";
   import type { TreeEntry } from "../api/types";
   import { isEditableText } from "../state/fileTypes";
@@ -518,6 +529,110 @@
     treeRootEl?.focus();
   }
 
+  // ---- find within visible/expanded entries ---------------------------------
+  // Cmd+F in the File Browser overlay sets a query here; matches are
+  // computed against the current `visibleRows` set, so only entries
+  // already expanded into view are eligible. The current match is
+  // moved into `browserSelection` so opening (Enter) and scrolling
+  // reuse the existing selection plumbing.
+
+  type FindCountCb = (total: number, current: number) => void;
+  let findQueryState = $state<string>("");
+  let findOnCount: FindCountCb | undefined;
+  let findCurrentIndex = $state<number>(-1);
+  /// Non-reactive cache of the query string the cursor was last
+  /// seeded to. Lets the cursor-management effect distinguish a
+  /// fresh query (reset to first match) from a same-query match set
+  /// update (e.g. user expanded a sibling folder mid-search) where
+  /// the cursor should stay where the user left it.
+  let lastSeededQuery: string | null = null;
+
+  const findMatchPaths = $derived.by<string[]>(() => {
+    const q = findQueryState.trim().toLowerCase();
+    if (!q) return [];
+    const out: string[] = [];
+    for (const r of visibleRows) {
+      const name = r.path.split("/").pop() ?? r.path;
+      if (name.toLowerCase().includes(q)) out.push(r.path);
+    }
+    return out;
+  });
+  const findMatchSet = $derived<Set<string>>(new Set(findMatchPaths));
+
+  /// Cursor management for find. Runs in two distinct branches:
+  ///
+  ///   1. Query just changed (or first match-set seen for a query):
+  ///      reset cursor to the first match, scroll it into view, and
+  ///      record the new query in `lastSeededQuery`. Empty query
+  ///      drops the cursor to -1.
+  ///   2. Same query, match set updated (folder expanded / collapsed
+  ///      while find was open): clamp cursor into range, but DO NOT
+  ///      reset to 0 — that would fight findStep, which moves the
+  ///      cursor and triggers this effect via the findCurrentIndex
+  ///      / findMatchPaths read below.
+  ///
+  /// Always republish the count via findOnCount so the host counter
+  /// stays in sync regardless of which branch ran.
+  $effect(() => {
+    const q = findQueryState;
+    const paths = findMatchPaths;
+    const n = paths.length;
+    if (q !== lastSeededQuery) {
+      lastSeededQuery = q;
+      if (n === 0) {
+        findCurrentIndex = -1;
+      } else {
+        findCurrentIndex = 0;
+        browserSelection.path = paths[0]!;
+        queueScrollIntoView(paths[0]!);
+      }
+      findOnCount?.(n, findCurrentIndex);
+      return;
+    }
+    if (n === 0) {
+      findCurrentIndex = -1;
+    } else if (findCurrentIndex >= n) {
+      findCurrentIndex = n - 1;
+    } else if (findCurrentIndex < 0) {
+      findCurrentIndex = 0;
+    }
+    findOnCount?.(n, findCurrentIndex);
+  });
+
+  /// Set the active find query. Empty string clears the highlight.
+  /// `onCount` (optional) receives `(total, current0Based)` whenever
+  /// the match set or cursor moves so the host can drive a counter.
+  export function setFindQuery(q: string, onCount?: FindCountCb): void {
+    findOnCount = onCount;
+    findQueryState = q;
+  }
+
+  /// Step to the next / previous match (wraps). No-op when there are
+  /// no matches.
+  export function findStep(direction: 1 | -1): void {
+    const n = findMatchPaths.length;
+    if (n === 0) return;
+    const cur = findCurrentIndex < 0 ? 0 : findCurrentIndex;
+    findCurrentIndex = (cur + direction + n) % n;
+    const path = findMatchPaths[findCurrentIndex]!;
+    browserSelection.path = path;
+    queueScrollIntoView(path);
+    findOnCount?.(n, findCurrentIndex);
+  }
+
+  export function clearFind(): void {
+    setFindQuery("");
+  }
+
+  /// True when this row's name matches the active find query. Used
+  /// to paint the `.find-match` class on matching rows; the row at
+  /// `findCurrentIndex` additionally gets `.find-match--current`.
+  function rowMatchClass(path: string): string {
+    if (!findMatchSet.has(path)) return "";
+    const idx = findMatchPaths.indexOf(path);
+    return idx === findCurrentIndex ? "find-match find-match--current" : "find-match";
+  }
+
   /// Svelte action: register / unregister a row's DOM element in
   /// `rowEls` so `queueScrollIntoView` can find it without a global
   /// query. Cleans up on unmount.
@@ -526,6 +641,23 @@
     return {
       destroy() {
         if (rowEls.get(path) === node) rowEls.delete(path);
+      },
+    };
+  }
+
+  /// Move the context-menu element out to <body> so its `position:
+  /// fixed` resolves against the viewport. OverlayShell's `.panel`
+  /// gets a transform on hover (and during the open animation), and
+  /// any non-`none` transform on an ancestor reparents fixed-
+  /// positioned descendants to that ancestor instead of the viewport
+  /// — without this portal the right-click menu visibly drifts away
+  /// from the click point, especially with the inspector pane open
+  /// (per Alex's phase-3 screenshot). Mirrors HamburgerMenu's portal.
+  function portal(node: HTMLElement): { destroy(): void } {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        node.parentNode?.removeChild(node);
       },
     };
   }
@@ -586,7 +718,7 @@
   <li>
     {#if node.kind === "dir"}
       <div
-        class="row dir"
+        class={`row dir ${rowMatchClass(node.path)}`}
         class:selected={browserSelection.path === node.path}
         class:zebra={rowIndex % 2 === 1}
         class:drop-target={dropTarget === node.path}
@@ -603,9 +735,28 @@
         ondrop={(e) => onRowDrop(e, node.path)}
         use:trackRow={node.path}
       >
-        <button class="twirl" onclick={() => toggle(node.path)}>
-          {expanded[node.path] ? "▾" : "▸"}
+        <button
+          class="twirl"
+          onclick={() => toggle(node.path)}
+          aria-label={expanded[node.path] ? "collapse" : "expand"}
+        >
+          {#if expanded[node.path]}
+            <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" />
+          {:else}
+            <ChevronRight size={14} strokeWidth={1.75} aria-hidden="true" />
+          {/if}
         </button>
+        <!-- GitHub-style folder glyph (open chevron + folder mirror the
+             dark file-tree styling from request.md). The icon swaps
+             between open / closed so a glance over the column reads
+             expand state without parsing chevrons. -->
+        <span class="row-icon dir-icon" aria-hidden="true">
+          {#if expanded[node.path]}
+            <FolderOpen size={14} strokeWidth={1.75} />
+          {:else}
+            <Folder size={14} strokeWidth={1.75} />
+          {/if}
+        </span>
         <!-- Click on folder name: toggle expand AND select. Selecting
              keeps the side panel synced with what the user is
              investigating; toggling preserves the existing browse
@@ -640,7 +791,7 @@
       {@const kind = classifyFile(node.path, contact ? "contact" : undefined)}
       {@const Icon = iconFor(kind)}
       <div
-        class="row file"
+        class={`row file ${rowMatchClass(node.path)}`}
         class:selected={browserSelection.path === node.path}
         class:non-editable={!editable}
         class:contact
@@ -683,7 +834,7 @@
 {/snippet}
 
 {#if menu}
-  <div class="ctx" use:clampMenu={{ x: menu.x, y: menu.y }}>
+  <div class="ctx" use:portal use:clampMenu={{ x: menu.x, y: menu.y }}>
     {#if menu.isDir}
       <button onclick={() => newFile(menu!.path)}>
         <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -758,7 +909,29 @@
     width: 14px;
     height: 14px;
     padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     color: var(--text-secondary);
+  }
+  /* Folder glyph: pulls toward --accent so the folder column reads
+     as the navigational scaffold separate from the per-file kind
+     icons. Sits beside the chevron and before the folder name. */
+  .row.dir .dir-icon {
+    color: var(--g-folder);
+    margin-right: 2px;
+  }
+  /* Cmd+F highlight on rows whose filename matches the active find
+     query (FileBrowserOverlay drives setFindQuery). The current
+     match gets a stronger ring so step-through (Enter / Shift+Enter)
+     is visually obvious. Uses --warn-text so the highlight reads as
+     "attention" without colliding with selection or hover bands. */
+  .row.find-match {
+    background: color-mix(in srgb, var(--warn-text, #e3b341) 16%, transparent);
+  }
+  .row.find-match--current {
+    background: color-mix(in srgb, var(--warn-text, #e3b341) 28%, transparent);
+    box-shadow: inset 0 0 0 1px var(--warn-text, #e3b341);
   }
   /* Per-kind glyph at the row's left edge. Mirrors the tab-strip
      icon (FileText / User / Image / etc.) so the file reads with the

@@ -73,12 +73,69 @@
   /// every open of the overlay so arrows / Enter are immediately
   /// live. `tick()` waits for the OverlayShell mount so the tree
   /// element exists in the DOM before we focus it.
-  let treeRef: { focusTree(): void } | undefined = $state();
+  interface TreeRef {
+    focusTree(): void;
+    setFindQuery(q: string, onCount?: (total: number, current: number) => void): void;
+    findStep(direction: 1 | -1): void;
+    clearFind(): void;
+  }
+  let treeRef: TreeRef | undefined = $state();
   $effect(() => {
     if (browserOverlay.open) {
       void tick().then(() => treeRef?.focusTree());
     }
   });
+
+  // ---- find within visible/expanded entries (Cmd+F) -----------------------
+  // The bar opens on Cmd+F, focuses an input that drives FileTree's
+  // exported find API, and closes on Esc. Restricted to entries
+  // already expanded into view per request.md so the find behavior
+  // matches the user's mental model ("find in what I can see").
+  let findOpen = $state(false);
+  let findQuery = $state("");
+  let findCount = $state({ total: 0, current: -1 });
+  let findInputEl: HTMLInputElement | undefined = $state();
+
+  function openFind(): void {
+    findOpen = true;
+    void tick().then(() => findInputEl?.focus());
+  }
+  function closeFind(): void {
+    findOpen = false;
+    findQuery = "";
+    treeRef?.clearFind();
+    treeRef?.focusTree();
+  }
+  $effect(() => {
+    if (!findOpen) return;
+    treeRef?.setFindQuery(findQuery, (total, current) => {
+      findCount = { total, current };
+    });
+  });
+  function onFindKeydown(e: KeyboardEvent): void {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      closeFind();
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (findCount.total === 0) return;
+      treeRef?.findStep(e.shiftKey ? -1 : 1);
+      return;
+    }
+  }
+  function onBrowserKeydown(e: KeyboardEvent): void {
+    // Cmd+F (Mac) / Ctrl+F (other). Only intercept when the browser
+    // is the focused overlay — global chord routing is handled
+    // elsewhere; this is the in-overlay shortcut for the file tree.
+    if (e.key !== "f" && e.key !== "F") return;
+    if (!(e.metaKey || e.ctrlKey)) return;
+    if (e.altKey || e.shiftKey) return;
+    e.preventDefault();
+    openFind();
+  }
 
   function close(): void {
     browserOverlay.open = false;
@@ -208,7 +265,12 @@
 </script>
 
 <OverlayShell id="browser" open={visible} onClose={close}>
-  <div class="browser" oncontextmenu={onBrowserContextMenu} role="presentation">
+  <div
+    class="browser"
+    oncontextmenu={onBrowserContextMenu}
+    onkeydown={onBrowserKeydown}
+    role="presentation"
+  >
     <header>
       <button
         type="button"
@@ -246,6 +308,54 @@
     </header>
     <div class="body">
       <div class="tree-wrap">
+        {#if findOpen}
+          <div class="find-bar" role="search" aria-label="find in file browser">
+            <input
+              bind:this={findInputEl}
+              bind:value={findQuery}
+              onkeydown={onFindKeydown}
+              class="find-input"
+              class:no-matches={findQuery !== "" && findCount.total === 0}
+              type="text"
+              placeholder="Find in visible entries"
+              aria-label="find query"
+              spellcheck="false"
+              autocomplete="off"
+            />
+            <span class="find-counter" aria-live="polite">
+              {#if findQuery === ""}
+                {""}
+              {:else if findCount.total === 0}
+                0 of 0
+              {:else}
+                {findCount.current + 1} of {findCount.total}
+              {/if}
+            </span>
+            <button
+              type="button"
+              class="find-btn"
+              onclick={() => treeRef?.findStep(-1)}
+              disabled={findCount.total === 0}
+              title="previous match (Shift+Enter)"
+              aria-label="previous match"
+            >▲</button>
+            <button
+              type="button"
+              class="find-btn"
+              onclick={() => treeRef?.findStep(1)}
+              disabled={findCount.total === 0}
+              title="next match (Enter)"
+              aria-label="next match"
+            >▼</button>
+            <button
+              type="button"
+              class="find-btn"
+              onclick={closeFind}
+              title="close (Esc)"
+              aria-label="close find"
+            >×</button>
+          </div>
+        {/if}
         <FileTree bind:this={treeRef} />
       </div>
       {#if browserOverlay.inspectorOpen}
@@ -473,5 +583,67 @@
     flex: 1;
     overflow-y: auto;
     padding: 0.25rem 0;
+    position: relative;
+  }
+  /* Find bar styling mirrors the editor's FindBar.svelte so users
+     get the same visual model in both surfaces. Pinned to the top
+     of the tree column rather than the corner so it doesn't cover
+     the first row of the tree. */
+  .find-bar {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text);
+  }
+  .find-input {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 6px;
+    font: inherit;
+    outline: none;
+  }
+  .find-input:focus {
+    border-color: var(--accent, var(--btn-hover));
+  }
+  .find-input.no-matches {
+    box-shadow: 0 0 0 1px #d33 inset;
+  }
+  .find-counter {
+    min-width: 56px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+    font-size: 12px;
+    padding: 0 2px;
+  }
+  .find-btn {
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1;
+    padding: 3px 6px;
+  }
+  .find-btn:hover:not(:disabled) {
+    background: var(--hover-bg);
+    color: var(--text);
+  }
+  .find-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 </style>

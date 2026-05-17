@@ -322,9 +322,9 @@ export type PaneWidths = {
 };
 
 /// Vertical density for paragraphs and lists in the editor.
-/// `tight` matches Google Docs spacing; `standard` keeps the older
-/// roomier spacing. Default is `tight`.
-export type LineSpacing = "tight" | "standard";
+/// `standard` is the default; `compact` is denser. `tight` is a
+/// legacy read alias accepted from older persisted configs.
+export type LineSpacing = "standard" | "compact" | "tight";
 
 export type Preferences = {
   editor_theme: EditorTheme;

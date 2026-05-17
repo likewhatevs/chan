@@ -240,17 +240,17 @@
   {:else if readyList.length === 0}
     <div class="placeholder muted">
       {#if cliDetectionLoading}
-        checking assistant CLIs…
+        checking agent CLIs…
       {:else if cliDetectionError}
-        assistant readiness failed: {cliDetectionError}
+        agent readiness failed: {cliDetectionError}
       {:else}
-        No ready assistant CLIs. Open Settings (Cmd/Ctrl+,) to inspect
+        No ready agent CLIs. Open Settings (Cmd/Ctrl+,) to inspect
         each CLI's readiness and binary override.
       {/if}
     </div>
   {:else}
     <label class="field">
-      <span>Active assistant</span>
+      <span>Active agent</span>
       <select value={activeProvider ?? ""} onchange={onActiveProviderChange}>
         {#each readyList as p (p.kind)}
           <option value={p.kind}>{p.label}</option>

@@ -110,9 +110,9 @@
     class:on={assistantOverlay.open && assistantEnabled}
     class:disabled={!assistantEnabled}
     title={assistantEnabled
-      ? tip("Assistant", "app.assistant.toggle")
-      : "Assistant is off — enable it in Settings"}
-    aria-label="Assistant"
+      ? tip("Agent", "app.assistant.toggle")
+      : "Agent is off — enable it in Settings"}
+    aria-label="Agent"
     aria-disabled={!assistantEnabled}
     disabled={!assistantEnabled}
     onclick={openAssistant}

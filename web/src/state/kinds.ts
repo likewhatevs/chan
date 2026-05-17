@@ -64,6 +64,18 @@ export function labelFor(kind: Kind): string {
 /// the cross-surface mapping. `text` aliases `--g-doc` for now
 /// because the two share the document hue family until we pick a
 /// separate tone (the visual distinction is icon + label, not hue).
+///
+/// Per phase-3 request.md the kind palette is now:
+///   document/text -> orange  (--g-doc)
+///   contact/mention -> yellow (--warn-text)
+///   media -> purple (--g-img)
+///   tag -> green (--g-tag)
+///   binary -> FILE blue (--g-binary)
+///   folder -> grey (--g-folder)
+///   date -> grey (--text-secondary, low-emphasis neutral)
+/// These flow through every surface (file tree, inspector, search,
+/// agent, graph) via this single switch instead of being hardcoded
+/// per component.
 export function colorVarFor(kind: Kind): string {
   switch (kind) {
     case "document":
@@ -77,10 +89,11 @@ export function colorVarFor(kind: Kind): string {
     case "tag":
       return "var(--g-tag)";
     case "binary":
+      return "var(--g-binary)";
     case "date":
       return "var(--text-secondary)";
     case "folder":
-      return "var(--accent)";
+      return "var(--g-folder)";
   }
 }
 

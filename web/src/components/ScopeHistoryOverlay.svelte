@@ -441,11 +441,11 @@
                       {#if t.kind === "user"}
                         <li class="peek-turn user"><span class="who">you</span>{t.content}</li>
                       {:else if t.kind === "assistant"}
-                        <li class="peek-turn assistant"><span class="who">assistant</span>{t.content}</li>
+                        <li class="peek-turn assistant"><span class="who">agent</span>{t.content}</li>
                       {:else if t.kind === "tool"}
                         <li class="peek-turn tool"><span class="who">tool</span>{t.event.label}{#if t.event.result_summary} — {t.event.result_summary}{/if}</li>
                       {:else if t.kind === "assistant_switch"}
-                        <li class="peek-turn tool"><span class="who">assistant</span>changed to {t.backend}{#if t.model} — {t.model}{/if}</li>
+                        <li class="peek-turn tool"><span class="who">agent</span>changed to {t.backend}{#if t.model} — {t.model}{/if}</li>
                       {/if}
                     {/each}
                   </ul>

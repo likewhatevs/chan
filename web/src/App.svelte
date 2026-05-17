@@ -120,6 +120,9 @@
     void settingsOverlay.open;
     void searchPanel.open;
     void searchPanel.query;
+    // search_scope= sibling key in the hash captures this; bumping
+    // it here ensures the persistence effect reruns when the user
+    // narrows the search to a folder / file / repo.
     void searchPanel.scopeId;
     void searchPanel.inspectorOpen;
     void assistantOverlay.open;
@@ -137,6 +140,11 @@
     void graphOverlay.filters.tag;
     void graphOverlay.filters.mention;
     void graphOverlay.filters.img;
+    // `folder` lives alongside the other graph filter slots; the
+    // overlay shows the chip only in filesystem mode, but the URL
+    // hash round-trips its state regardless so closing/reopening
+    // the overlay restores the user's choice.
+    void graphOverlay.filters.folder;
     void graphOverlay.inspectorOpen;
     void scopeHistoryOverlay.open;
     persistLayoutToHash();
@@ -568,6 +576,13 @@
     --g-doc: #ff8a3d;
     --g-img: #b07dff;
     --g-tag: #6cd07a;
+    /* Binary file kind (zip, tarballs, executables, fonts, PDFs) and
+       folder kind. Binary tracks the inspector FILE-chip blue so the
+       same hue reads as "file" everywhere it surfaces. Folder pulls
+       toward --text-secondary so directory rows recede next to the
+       per-file kind chips — per request.md. */
+    --g-binary: #58a6ff;
+    --g-folder: #8e8e93;
     /* Inline editor pills (wiki link, image, tag, contact, date,
        broken). Hues track the canonical concept palette so the
        same item reads with the same color across the graph, the
@@ -636,6 +651,8 @@
     --g-doc: #c25a1f;
     --g-img: #7a4cd8;
     --g-tag: #2f9444;
+    --g-binary: #0969da;
+    --g-folder: #6c6c70;
     /* Light-mode pill palette. Same canonical mapping as dark
        (document orange, media purple, tag green, contact yellow,
        date grey, broken red), but deeper foreground hues and

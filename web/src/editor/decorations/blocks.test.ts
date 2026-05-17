@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { listDepthClass } from "./blocks";
+import { listDepthClass, listLineClass } from "./blocks";
 
 describe("listDepthClass", () => {
   test("maps top-level list lines to depth zero", () => {
@@ -18,5 +18,25 @@ describe("listDepthClass", () => {
 
   test("caps very deep indentation at the supported guide class", () => {
     expect(listDepthClass("                - deep")).toBe("cm-md-list-depth-6");
+  });
+});
+
+describe("listLineClass", () => {
+  test("marks list lines that contain markdown images", () => {
+    expect(listLineClass("- Step with image ![alt](pic.png)")).toContain(
+      "cm-md-list-line-image",
+    );
+    expect(listLineClass("  ![](images/pic.png#w=200)")).toContain(
+      "cm-md-list-line-image",
+    );
+  });
+
+  test("does not mark ordinary list lines as image-bearing", () => {
+    expect(listLineClass("- Step with [link](doc.md)")).toBe(
+      "cm-md-list-line cm-md-list-depth-0",
+    );
+    expect(listLineClass("- Escaped \\![alt](pic.png)")).toBe(
+      "cm-md-list-line cm-md-list-depth-0",
+    );
   });
 });

@@ -152,3 +152,22 @@ function basenameOf(path: string): string {
   const slash = path.lastIndexOf("/");
   return slash >= 0 ? path.slice(slash + 1) : path;
 }
+
+/// Default stem used by the new-file path prompt when it proposes
+/// a placeholder filename inside a freshly-completed directory.
+/// Kept as a constant so the helper that builds the proposed path
+/// and any future UI hint can share one source of truth.
+export const DEFAULT_NEW_FILENAME_STEM = "untitled";
+
+/// Build the placeholder filename the new-file prompt suggests
+/// after the user has Tab-completed a directory. `parent` is the
+/// raw typed value at the moment of suggestion: empty for top-
+/// level files, or a directory path that should end with `/` (a
+/// missing trailing slash is tolerated so callers don't have to
+/// pre-format). Always returns a path ending in `.md` — that's
+/// the default chan-drive considers editable text.
+export function proposeDefaultFilename(parent: string): string {
+  const prefix =
+    parent === "" || parent.endsWith("/") ? parent : `${parent}/`;
+  return `${prefix}${DEFAULT_NEW_FILENAME_STEM}.md`;
+}

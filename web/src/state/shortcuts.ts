@@ -78,7 +78,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   },
   {
     id: "app.assistant.toggle",
-    label: "Assistant",
+    label: "Agent",
     web: "Mod+I",
     native: "Mod+I",
     group: "App",

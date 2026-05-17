@@ -153,12 +153,14 @@
     const n = find.matches.length;
     if (n === 0) return;
     find.currentIndex = (Math.max(0, find.currentIndex) + 1) % n;
+    adapter?.placeCursor(find.currentIndex);
   }
   function goPrev(): void {
     const n = find.matches.length;
     if (n === 0) return;
     const cur = find.currentIndex < 0 ? 0 : find.currentIndex;
     find.currentIndex = (cur - 1 + n) % n;
+    adapter?.placeCursor(find.currentIndex);
   }
   function close(): void {
     closeFind(tabId);

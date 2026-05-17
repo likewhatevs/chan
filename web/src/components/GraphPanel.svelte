@@ -112,10 +112,11 @@
   >;
   /// Chip toggles. `link`, `tag`, `mention` are edge-kind filters
   /// (the visual element they govern is the edge plus any node only
-  /// reachable through edges of that kind). `img` is a node filter:
-  /// flipping it off hides every file node whose path classifies as
-  /// an image, along with any edge touching one.
-  type FilterKind = "link" | "tag" | "mention" | "language" | "img";
+  /// reachable through edges of that kind). `img` and `folder` are
+  /// node filters: flipping them off hides every file node whose
+  /// path classifies as image / folder, along with any edge
+  /// touching one.
+  type FilterKind = "link" | "tag" | "mention" | "language" | "img" | "folder";
 
   // ---- state -------------------------------------------------------------
 
@@ -365,6 +366,19 @@
     return ids;
   });
 
+  /// Folder node ids hidden when the folder chip is off. Only meaningful
+  /// in filesystem mode where folder-kind nodes are emitted; in
+  /// markdown / language modes there are no folder nodes so the set
+  /// stays empty and the toggle is a no-op.
+  const hiddenFolderIds = $derived.by(() => {
+    const ids = new Set<string>();
+    if (show.folder) return ids;
+    for (const n of nodes) {
+      if (n.kind === "folder") ids.add(n.id);
+    }
+    return ids;
+  });
+
   const visibleEdges = $derived(
     edges.filter(
       (e) =>
@@ -373,6 +387,8 @@
         !hiddenImageIds.has(e.target) &&
         !hiddenContactIds.has(e.source) &&
         !hiddenContactIds.has(e.target) &&
+        !hiddenFolderIds.has(e.source) &&
+        !hiddenFolderIds.has(e.target) &&
         (scopedNodeIds === null ||
           (scopedNodeIds.has(e.source) && scopedNodeIds.has(e.target))),
     ),
@@ -381,7 +397,10 @@
     const ids = new Set<string>();
     for (const n of nodes) {
       if (scopedNodeIds !== null && !scopedNodeIds.has(n.id)) continue;
+      if (hiddenFolderIds.has(n.id)) continue;
       if (n.kind === "file" && !hiddenImageIds.has(n.id) && !hiddenContactIds.has(n.id)) {
+        ids.add(n.id);
+      } else if (n.kind === "folder") {
         ids.add(n.id);
       }
     }
@@ -404,9 +423,14 @@
       mention: 0,
       language: 0,
       img: 0,
+      folder: 0,
     };
     for (const e of edges) c[e.kind]++;
     for (const n of nodes) {
+      if (n.kind === "folder") {
+        c.folder++;
+        continue;
+      }
       if (n.kind !== "file") continue;
       const cls = classifyFile(n.path, n.node_kind);
       if (cls === "img") c.img++;
@@ -572,6 +596,7 @@
     mention: EDGE_COLORS.mention,
     language: EDGE_COLORS.language,
     img: "var(--g-img)",
+    folder: "var(--g-folder)",
   };
 
 
@@ -849,13 +874,19 @@
       <Clock size={14} strokeWidth={1.75} aria-hidden="true" />
     </button>
     <div class="filters">
-      {#each ["link", "tag", "mention", "language", "img"] as const as kind (kind)}
-        {#if (!filesystemMode || kind !== "img") && (languageMode ? kind === "language" : kind !== "language")}
+      {#each ["link", "tag", "mention", "language", "img", "folder"] as const as kind (kind)}
+        {#if (!filesystemMode || (kind !== "img" && kind !== "language")) && (languageMode ? kind === "language" : kind !== "language") && (kind !== "folder" || filesystemMode)}
           <label class="chip" class:on={show[kind]}>
             <input type="checkbox" bind:checked={show[kind]} />
             <span class="dot" style="background:{FILTER_COLORS[kind]}"></span>
             {#if filesystemMode}
-              {kind === "link" ? "contains" : kind === "tag" ? "symlink" : "hardlink"}
+              {kind === "link"
+                ? "contains"
+                : kind === "tag"
+                  ? "symlink"
+                  : kind === "mention"
+                    ? "hardlink"
+                    : "folder"}
             {:else}
               {kind === "mention" ? "contact" : kind === "img" ? "media" : kind}
             {/if}

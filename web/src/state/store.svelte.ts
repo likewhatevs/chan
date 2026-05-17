@@ -607,6 +607,7 @@ const HASH_LAYOUT = "s";
 const HASH_SIDEBAR = "c"; // "1" if collapsed, absent if expanded
 const HASH_BROWSER = "files";
 const HASH_SEARCH = "search";
+const HASH_SEARCH_SCOPE = "search_scope";
 const HASH_GRAPH = "graph";
 const HASH_ASSIST = "assist";
 const HASH_SETTINGS = "settings";
@@ -643,20 +644,32 @@ function readLayoutHash(): ReturnType<typeof serializeLayout> {
   }
 }
 
-/// Encode the graph filter chips as a 4-char string of `0`/`1`,
-/// order: link, tag, mention, img. All-on (the default) returns
-/// the empty string so a fresh graph open doesn't bloat the URL.
+/// Encode the graph filter chips as a 6-char string of `0`/`1`,
+/// order: link, tag, mention, language, img, folder. All-on (the
+/// default) returns the empty string so a fresh graph open
+/// doesn't bloat the URL. Legacy 5-char hashes (pre-folder)
+/// decode with `folder` treated as the default (on).
 function encodeGraphFilters(f: GraphFilters): string {
-  if (f.link && f.tag && f.mention && f.language && f.img) return "";
+  if (f.link && f.tag && f.mention && f.language && f.img && f.folder) return "";
   const bit = (v: boolean) => (v ? "1" : "0");
-  return `${bit(f.link)}${bit(f.tag)}${bit(f.mention)}${bit(f.language)}${bit(f.img)}`;
+  return `${bit(f.link)}${bit(f.tag)}${bit(f.mention)}${bit(f.language)}${bit(f.img)}${bit(f.folder)}`;
 }
 
 function decodeGraphFilters(s: string): GraphFilters {
   // Empty / missing string = defaults (all on).
   if (!s) return { ...DEFAULT_GRAPH_FILTERS };
-  const ch = (i: number) => (s[i] === "0" ? false : true);
-  return { link: ch(0), tag: ch(1), mention: ch(2), language: ch(3), img: ch(4) };
+  // Missing trailing chars (older hash format) fall back to "on"
+  // for the corresponding filter so legacy URLs land on the
+  // previous behaviour, not a silently hidden category.
+  const ch = (i: number) => (s[i] === "0" ? false : s[i] === "1" ? true : true);
+  return {
+    link: ch(0),
+    tag: ch(1),
+    mention: ch(2),
+    language: ch(3),
+    img: ch(4),
+    folder: ch(5),
+  };
 }
 
 /// Split `<flag>:<rest>` where flag is a single `0`/`1` for an
@@ -693,9 +706,14 @@ function applyOverlaysFromHash(): void {
   }
   if (params.has(HASH_SEARCH)) {
     // Encoding: `<inspectorBit>:<query>`. Both fields optional.
+    // Scope rides in a sibling `HASH_SEARCH_SCOPE` key so user
+    // queries can contain any character (`|`, `:`, `,`) without
+    // colliding with the encoding separators.
     const [ins, query] = splitInspectorBit(params.get(HASH_SEARCH) ?? "");
     if (ins !== null) searchPanel.inspectorOpen = ins;
     searchPanel.query = query;
+    const scope = params.get(HASH_SEARCH_SCOPE);
+    if (scope) searchPanel.scopeId = scope;
     searchPanel.open = true;
   }
   if (params.has(HASH_GRAPH)) {
@@ -717,6 +735,7 @@ function applyOverlaysFromHash(): void {
     graphOverlay.filters.mention = f.mention;
     graphOverlay.filters.language = f.language;
     graphOverlay.filters.img = f.img;
+    graphOverlay.filters.folder = f.folder;
     if (ins === "0" || ins === "1") graphOverlay.inspectorOpen = ins === "1";
     graphOverlay.mode =
       mode === "fs" ? "filesystem" : mode === "lang" ? "language" : "semantic";
@@ -778,8 +797,17 @@ export function persistStateToHash(): void {
   if (searchPanel.open) {
     const ins = searchPanel.inspectorOpen ? "1" : "0";
     params.set(HASH_SEARCH, `${ins}:${searchPanel.query ?? ""}`);
+    // Sibling scope key. Omit on the drive default so common URLs
+    // stay short; presence overrides the default on restore.
+    const scope = searchPanel.scopeId;
+    if (scope && scope !== "drive") {
+      params.set(HASH_SEARCH_SCOPE, scope);
+    } else {
+      params.delete(HASH_SEARCH_SCOPE);
+    }
   } else {
     params.delete(HASH_SEARCH);
+    params.delete(HASH_SEARCH_SCOPE);
   }
   if (graphOverlay.open) {
     const chips = encodeGraphFilters(graphOverlay.filters);
@@ -1672,6 +1700,11 @@ export const assistantOverlay = $state<{
   /// reopens the assistant with whatever the user had typed but
   /// not yet submitted.
   prompt: string;
+  /// One-shot caret target for prompt opens that programmatically
+  /// seed text, such as selected-editor-text quote prefill. Not
+  /// persisted in the URL: restored prompt drafts should keep the
+  /// editor component's normal mount behavior.
+  promptCaretTarget: number | null;
   /// Style toolbar visibility. Mirrors the per-tab knob in the
   /// file editor; the toolbar mounts only when this flips on,
   /// and the prompt's top padding grows to keep the first line
@@ -1687,6 +1720,7 @@ export const assistantOverlay = $state<{
   open: false,
   contextId: "drive",
   prompt: "",
+  promptCaretTarget: null,
   styleToolbarOpen: false,
   inspectorOpen: false,
 });
@@ -2224,7 +2258,12 @@ export function openAssistant(): void {
   assistantOverlay.contextId = defaultScopeId();
   if (!wasOpen) {
     const sel = captureWindowSelection();
-    if (sel) assistantOverlay.prompt = formatQuotePrefill(sel);
+    if (sel) {
+      assistantOverlay.prompt = formatQuotePrefill(sel);
+      assistantOverlay.promptCaretTarget = assistantOverlay.prompt.length;
+    } else {
+      assistantOverlay.promptCaretTarget = null;
+    }
   }
   assistantOverlay.open = true;
   scheduleSessionSave();
@@ -2412,6 +2451,13 @@ export type GraphFilters = {
   mention: boolean;
   language: boolean;
   img: boolean;
+  /// Folder NODE filter, applicable to filesystem graph mode where
+  /// folder nodes are emitted by the backend. Frontend-only toggle
+  /// — hides folder nodes (and edges touching them) without
+  /// changing the backend request. Per request.md, folders as
+  /// nodes often crowd a whole-drive graph; the toggle lets the
+  /// user collapse them for a cleaner view.
+  folder: boolean;
 };
 
 export const DEFAULT_GRAPH_FILTERS: GraphFilters = {
@@ -2420,6 +2466,7 @@ export const DEFAULT_GRAPH_FILTERS: GraphFilters = {
   mention: true,
   language: true,
   img: true,
+  folder: true,
 };
 
 export const graphOverlay = $state<{

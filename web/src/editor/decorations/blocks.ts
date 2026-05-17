@@ -153,7 +153,8 @@ const LINE_FRONTMATTER = Decoration.line({
 });
 const HIDE = Decoration.replace({});
 
-const LIST_LINE_DECO = new Map<number, ReturnType<typeof Decoration.line>>();
+const LIST_LINE_DECO = new Map<string, ReturnType<typeof Decoration.line>>();
+const MARKDOWN_IMAGE_RE = /(^|[^\\])!\[[^\]\n]*\]\([^)\n]*\)/;
 
 export function listDepthClass(text: string): string {
   const leading = text.match(/^[ \t]*/)?.[0] ?? "";
@@ -162,14 +163,20 @@ export function listDepthClass(text: string): string {
   return `cm-md-list-depth-${Math.min(6, Math.floor(columns / 2))}`;
 }
 
+export function listLineClass(text: string): string {
+  const classes = ["cm-md-list-line", listDepthClass(text)];
+  if (MARKDOWN_IMAGE_RE.test(text)) classes.push("cm-md-list-line-image");
+  return classes.join(" ");
+}
+
 function listLineDecoration(text: string): ReturnType<typeof Decoration.line> {
-  const depth = Number(listDepthClass(text).slice("cm-md-list-depth-".length));
-  const cached = LIST_LINE_DECO.get(depth);
+  const className = listLineClass(text);
+  const cached = LIST_LINE_DECO.get(className);
   if (cached) return cached;
   const deco = Decoration.line({
-    attributes: { class: `cm-md-list-line cm-md-list-depth-${depth}` },
+    attributes: { class: className },
   });
-  LIST_LINE_DECO.set(depth, deco);
+  LIST_LINE_DECO.set(className, deco);
   return deco;
 }
 

@@ -18,7 +18,7 @@
 
   import { onDestroy, onMount } from "svelte";
   import { Compartment, EditorState, Prec, type Extension } from "@codemirror/state";
-  import { EditorView, keymap } from "@codemirror/view";
+  import { EditorView, drawSelection, keymap } from "@codemirror/view";
   import { syntaxTree } from "@codemirror/language";
   import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
   import { drive, ui } from "../state/store.svelte";
@@ -66,6 +66,7 @@
   } from "./commands/list";
   import type { FindAdapter } from "./find";
   import { breathingRoom } from "./breathing_room";
+  import { listGuideVisibility } from "./extensions/list_guide_visibility";
 
   let {
     value = $bindable(""),
@@ -112,7 +113,12 @@
   /// first non-empty content apply. Same gate as Source.svelte.
   let caretRestored = false;
 
-  const density = $derived(drive.info?.preferences?.line_spacing ?? "tight");
+  function editorDensity(value: string | null | undefined): "standard" | "compact" {
+    if (value === "compact" || value === "tight") return "compact";
+    return "standard";
+  }
+
+  const density = $derived(editorDensity(drive.info?.preferences?.line_spacing));
 
   let host: HTMLDivElement | undefined;
   let view: EditorView | undefined;
@@ -288,7 +294,15 @@
   export function focusEnd(): void {
     if (!view) return;
     const end = view.state.doc.length;
-    view.dispatch({ selection: { anchor: end } });
+    focusAt(end);
+  }
+
+  /// Place caret at a specific document offset and focus.
+  export function focusAt(pos: number): void {
+    if (!view) return;
+    const lim = view.state.doc.length;
+    const anchor = Math.min(Math.max(0, pos), lim);
+    view.dispatch({ selection: { anchor } });
     view.focus();
   }
 
@@ -303,7 +317,19 @@
         headingFold(),
         theme.extension,
         EditorView.lineWrapping,
+        // Replace the browser-native text selection with CM6's
+        // synthetic selection layer. Browser selection rectangles
+        // are rendered per fragment and don't clear when the caret
+        // moves to a non-CM target (e.g. focusing the FindBar
+        // input), leaving stale blue rectangles around image
+        // widgets visible across the canvas. The synthetic layer
+        // tracks the editor's selection state directly and clears
+        // on every selection change, which fixes the
+        // image/list-block residuals reported in
+        // [frontend-2.md](../../chan-pre-release-phase-3/frontend-2.md).
+        drawSelection(),
         breathingRoom(),
+        listGuideVisibility(),
         findField,
         chanDecorations(),
         tagDecorations({ onTagClick }),
@@ -653,8 +679,8 @@
   :global(.md-wysiwyg-cm6 .cm-foldPlaceholder:hover) {
     color: var(--text);
   }
-  :global(.md-wysiwyg-cm6[data-density="tight"] .cm-line) { line-height: 1.5; }
   :global(.md-wysiwyg-cm6[data-density="standard"] .cm-line) { line-height: 1.8; }
+  :global(.md-wysiwyg-cm6[data-density="compact"] .cm-line) { line-height: 1.65; }
 
   /* ---- mark decoration classes ---- */
   :global(.md-wysiwyg-cm6 .cm-md-bold) { font-weight: 700; }
@@ -828,11 +854,40 @@
   }
   /* Left indent and guides on every line of every list (bullet,
      ordered, task). Three-class chain matches the fence-row pattern
-     so the rule beats CM6's `.cm-line` default cascade. */
+     so the rule beats CM6's `.cm-line` default cascade.
+
+     Wrap alignment: padding-left scales per depth so soft-wrapped
+     visual rows hang under the parent line's content instead of
+     collapsing back to the gutter. The negative text-indent pulls
+     row 1 left by the same amount so the source indent + marker
+     still render at the visible left edge. Marker width is
+     approximated as 2ch (matches "- ", "1.", etc.); ordered or
+     task markers >2ch will hang slightly inside but never flush
+     left. See request.md "Multi-level indent ... long-sentence line". */
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-line) {
     --cm-md-list-guide: color-mix(in srgb, var(--text-secondary, #888) 32%, transparent);
-    padding-left: 32px !important;
+    --cm-md-list-prefix: 2ch;
+    padding-left: calc(32px + var(--cm-md-list-prefix)) !important;
+    text-indent: calc(-1 * var(--cm-md-list-prefix));
     position: relative;
+  }
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-1) {
+    --cm-md-list-prefix: 4ch;
+  }
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-2) {
+    --cm-md-list-prefix: 6ch;
+  }
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-3) {
+    --cm-md-list-prefix: 8ch;
+  }
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-4) {
+    --cm-md-list-prefix: 10ch;
+  }
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-5) {
+    --cm-md-list-prefix: 12ch;
+  }
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-6) {
+    --cm-md-list-prefix: 14ch;
   }
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-line::before) {
     content: "";
@@ -843,6 +898,20 @@
     width: 1px;
     background: var(--cm-md-list-guide);
     pointer-events: none;
+    opacity: 1;
+    transition: opacity 0.25s ease-out;
+  }
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-line.cm-md-list-line-image::before) {
+    top: auto;
+    bottom: 0.2em;
+    height: 1.4em;
+  }
+  /* listGuideVisibility() flips this attribute to "off" 1.5s after
+     the caret leaves a list line. The transition makes the bars
+     fade smoothly so the user perceives them as deferring to the
+     prose rather than blinking out. */
+  :global(.md-wysiwyg-cm6 .cm-editor[data-list-guides="off"] .cm-line.cm-md-list-line::before) {
+    opacity: 0;
   }
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-1::before) {
     box-shadow: 2ch 0 0 var(--cm-md-list-guide);

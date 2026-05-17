@@ -533,7 +533,7 @@
           <span class="mbtn-icon">
             <EnsoIcon size={16} />
           </span>
-          <span class="mbtn-label">Call Assistant</span>
+          <span class="mbtn-label">Call Agent</span>
           <span class="mbtn-chord">{chordLabel("app.assistant.toggle")}</span>
         </button>
         <div class="msep" role="separator"></div>

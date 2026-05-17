@@ -17,6 +17,7 @@
     CliDetectionView,
     EditorTheme,
     GlobalConfig,
+    LineSpacing,
     Preferences,
   } from "../api/types";
   import { Maximize2, Minimize2, X } from "lucide-svelte";
@@ -169,6 +170,10 @@
     if (a.claude_cli === undefined) a.claude_cli = { enabled: false, model: null };
     if (a.gemini_cli === undefined) a.gemini_cli = { enabled: false, model: null };
     if (a.codex_cli === undefined) a.codex_cli = { enabled: false, model: null };
+    if (p.line_spacing === "tight") p.line_spacing = "compact";
+    if (p.line_spacing !== "compact" && p.line_spacing !== "standard") {
+      p.line_spacing = "standard";
+    }
     return p;
   }
 
@@ -372,16 +377,16 @@
 {:else}
   <div class="settings">
     <section>
-      <h3>Assistant</h3>
+      <h3>Agent</h3>
       <p class="hint">
-        Configure each local assistant CLI and optionally override
-        its binary lookup.
+        Configure each local agent CLI and optionally override its
+        binary lookup.
       </p>
 
       <div class="assistant-config">
         <div class="assistant-control">
           <label class="assistant-field">
-            <span>Assistant CLI</span>
+            <span>Agent CLI</span>
             <select value={activeCliKind()} onchange={onActiveCliChange}>
               {#each PROVIDER_ROWS as row (row.kind)}
                 <option value={row.kind}>{row.label}</option>
@@ -501,16 +506,15 @@
     <section>
       <h3>Layout</h3>
       <p class="hint">
-        Tight matches Google Docs spacing for paragraphs and lists;
-        standard keeps the older roomier layout. Line height drops
-        too in tight mode so prose and bullets share the same cadence.
+        Standard is the default reading density; compact tightens paragraph
+        and list spacing while keeping the editor readable.
       </p>
       <!-- Reuses .theme-row / .theme-opt pill styles so this radio
            visually matches the Theme picker above. -->
       <div class="theme-row" role="radiogroup" aria-label="Line spacing">
         {#each [
-          { value: "tight", label: "Tight" },
           { value: "standard", label: "Standard" },
+          { value: "compact", label: "Compact" },
         ] as opt (opt.value)}
           <label class="theme-opt" class:on={editing.line_spacing === opt.value}>
             <input
@@ -519,7 +523,7 @@
               value={opt.value}
               checked={editing.line_spacing === opt.value}
               onchange={() => {
-                editing!.line_spacing = opt.value as "tight" | "standard";
+                editing!.line_spacing = opt.value as LineSpacing;
               }}
             />
             <span>{opt.label}</span>

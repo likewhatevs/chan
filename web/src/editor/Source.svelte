@@ -30,11 +30,14 @@
   import { codeLanguages } from "./markdown/code_languages";
 
   // Editor density follows the user's line_spacing pref. Same hook
-  // the Wysiwyg side uses (see Wysiwyg.svelte:820), exposed here as
-  // a `data-density` attribute on .md-source so the CSS rules below
-  // can dial line-height between tight (gdocs-like) and standard
-  // (older roomier) without rebuilding the CodeMirror editor.
-  const density = $derived(drive.info?.preferences?.line_spacing ?? "tight");
+  // the Wysiwyg side uses, exposed here as a `data-density` attribute
+  // on .md-source so CSS can dial line-height without rebuilding the
+  // CodeMirror editor. Legacy `tight` reads as canonical `compact`.
+  function editorDensity(value: string | null | undefined): "standard" | "compact" {
+    if (value === "compact" || value === "tight") return "compact";
+    return "standard";
+  }
+  const density = $derived(editorDensity(drive.info?.preferences?.line_spacing));
 
   let {
     value = $bindable(""),
@@ -101,6 +104,17 @@
       selection: { anchor: pos },
       effects: EditorView.scrollIntoView(pos, { y: "start" }),
     });
+    view.focus();
+  }
+
+  /// Place caret at a specific document offset and focus. Used by
+  /// prompt surfaces that programmatically seed text before the
+  /// editor mounts.
+  export function focusAt(pos: number): void {
+    if (!view) return;
+    const lim = view.state.doc.length;
+    const anchor = Math.min(Math.max(0, pos), lim);
+    view.dispatch({ selection: { anchor } });
     view.focus();
   }
 
@@ -318,13 +332,10 @@
   :global(.chan-page-capped .md-source .cm-editor) {
     background-color: var(--bg) !important;
   }
-  /* Line-spacing pref. Mirrors the Wysiwyg's data-density rules so
-     toggling between tight (default, gdocs-like) and standard
-     (older, roomier) flips both editors in lockstep. CodeMirror's
-     default line-height (1.4) becomes the tight value; standard
-     bumps to 1.7 to match the WYSIWYG's normal-mode feel. */
-  :global(.md-source[data-density="tight"] .cm-line) { line-height: 1.4; }
+  /* Line-spacing pref. Mirrors the Wysiwyg data-density rules so
+     standard and compact flip both editors in lockstep. */
   :global(.md-source[data-density="standard"] .cm-line) { line-height: 1.7; }
+  :global(.md-source[data-density="compact"] .cm-line) { line-height: 1.55; }
 
   /* Find-on-page highlight (mirror of the Wysiwyg rule). The
      CodeMirror Decoration.mark wraps each match in a <span> with

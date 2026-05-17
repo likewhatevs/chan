@@ -14,10 +14,13 @@
     tree,
   } from "../state/store.svelte";
   import {
+    DEFAULT_NEW_FILENAME_STEM,
     appendDefaultMd,
     preserveExtension,
+    proposeDefaultFilename,
     validatePath,
   } from "../state/pathValidate";
+  import { longestCommonPrefix } from "../state/lcp";
   import type { PathPromptMode } from "../state/store.svelte";
 
   let value = $state("");
@@ -115,27 +118,63 @@
   /// (typed `foo/` but `foo` is a file, not a directory).
   const entryByPath = $derived(new Map(tree.entries.map((e) => [e.path, e])));
 
+  /// Tagged suggestion. `dir` is the existing autocomplete from the
+  /// loaded tree; `new-file` is the placeholder filename the prompt
+  /// offers in new-file create mode after the user Tab-completes a
+  /// directory, so they can Tab/Enter to land on `<dir>/untitled.md`
+  /// without thinking up a name first.
+  type Suggestion =
+    | { kind: "dir"; path: string }
+    | { kind: "new-file"; path: string };
+
   /// Suggestions: directories whose path starts with whatever the
   /// user has typed, minus the source path of an in-flight rename
   /// (no point suggesting "move into yourself"). Capped so we
   /// never paint a thousand-row dropdown on a fresh drive that
-  /// has only directories yet.
+  /// has only directories yet. The placeholder filename suggestion
+  /// (`new-file` kind) is appended at the end so it always sits
+  /// below the folder list and isn't subject to the cap.
   const SUGGESTION_LIMIT = 8;
-  const suggestions = $derived.by(() => {
+  const suggestions = $derived.by<Suggestion[]>(() => {
     const q = value.trim();
-    if (q === "") return [] as string[];
+    if (q === "") return [];
     const src = pathPromptState.sourcePath;
-    const out: string[] = [];
+    const out: Suggestion[] = [];
     for (const dir of folderSet) {
       if (!dir.startsWith(q)) continue;
       if (dir === q) continue; // exact match already typed; skip
       if (src && (dir === src || dir.startsWith(`${src}/`))) continue;
-      out.push(dir);
+      out.push({ kind: "dir", path: dir });
       if (out.length >= SUGGESTION_LIMIT) break;
     }
-    out.sort();
+    out.sort((a, b) => a.path.localeCompare(b.path));
+    // New-file create mode: once the user has completed a directory
+    // (value ends in `/`) or is at the drive root (value === ""
+    // doesn't trigger because the suggestions list is empty there),
+    // surface a placeholder so Tab/Enter lands them on
+    // `<dir>/untitled.md` with the stem pre-selected.
+    if (
+      pathPromptState.kind === "file" &&
+      pathPromptState.mode === "create" &&
+      q.endsWith("/")
+    ) {
+      const proposed = proposeDefaultFilename(q);
+      // Skip when an entry at this exact path already exists; the
+      // overwrite/kind-mismatch status row already handles that.
+      if (!entryByPath.has(proposed)) {
+        out.push({ kind: "new-file", path: proposed });
+      }
+    }
     return out;
   });
+  /// Subset of `suggestions` that participates in LCP-extension.
+  /// The placeholder filename is excluded because its path is a
+  /// proposed name, not a fact about the drive — folding it into
+  /// the LCP would push the user's typed value past the directory
+  /// boundary on the first Tab.
+  const dirSuggestions = $derived(
+    suggestions.filter((s) => s.kind === "dir").map((s) => s.path),
+  );
 
   /// Walk every ancestor of `path` and return the ones that don't
   /// exist as folders yet. Used so the status row can announce both
@@ -272,16 +311,33 @@
     resolvePathPrompt(null);
   }
 
-  function applySuggestion(s: string): void {
-    // Append `/` so the user's next keystroke extends the path
-    // *into* the chosen folder rather than rewriting its name.
-    // Validation rejects a path that ends in `/` (so Enter on the
-    // bare "Recipes/" doesn't submit and create a stray .md), which
-    // makes the trailing slash a free affordance: visible cue + a
-    // submit guard.
-    value = `${s}/`;
+  function applySuggestion(s: Suggestion): void {
+    if (s.kind === "dir") {
+      // Append `/` so the user's next keystroke extends the path
+      // *into* the chosen folder rather than rewriting its name.
+      // Validation rejects a path that ends in `/` (so Enter on the
+      // bare "Recipes/" doesn't submit and create a stray .md),
+      // which makes the trailing slash a free affordance: visible
+      // cue + a submit guard.
+      value = `${s.path}/`;
+      highlightIdx = -1;
+      queueMicrotask(() => inputEl?.focus());
+      return;
+    }
+    // new-file placeholder: drop in the proposed path and pre-
+    // select the stem so the user's next keystroke replaces
+    // `untitled` rather than landing after it. Enter from this
+    // state submits the path as-is.
+    value = s.path;
     highlightIdx = -1;
-    queueMicrotask(() => inputEl?.focus());
+    const stemStart = s.path.lastIndexOf("/") + 1;
+    const dotIdx = s.path.lastIndexOf(".");
+    const stemEnd =
+      dotIdx > stemStart ? dotIdx : stemStart + DEFAULT_NEW_FILENAME_STEM.length;
+    queueMicrotask(() => {
+      inputEl?.focus();
+      inputEl?.setSelectionRange(stemStart, stemEnd);
+    });
   }
 
   function onKey(e: KeyboardEvent): void {
@@ -296,10 +352,40 @@
       e.preventDefault();
       cancel();
     } else if (e.key === "Tab" && suggestions.length > 0) {
-      // Tab cycles into / through the suggestion list, completing the
-      // first one when nothing is highlighted yet. Shift+Tab goes
-      // backwards (and out, when at -1).
+      // Tab-complete:
+      //   1. If a suggestion is already highlighted, Tab accepts
+      //      that one. This keeps Tab as the primary completer per
+      //      the shell convention "arrow down to pick, Tab to
+      //      accept" so users don't have to switch to Enter just
+      //      to lock in a choice.
+      //   2. Single match → accept directly. Same one-Tab fast
+      //      path the dir-only flow used before adding the new-
+      //      file placeholder.
+      //   3. Otherwise extend the input to the longest common
+      //      prefix of the directory suggestions (the placeholder
+      //      filename is excluded from LCP — it's a proposal, not
+      //      a fact about the drive). Shift+Tab cycles backwards
+      //      from the bottom.
       e.preventDefault();
+      if (
+        !e.shiftKey &&
+        highlightIdx >= 0 &&
+        highlightIdx < suggestions.length
+      ) {
+        applySuggestion(suggestions[highlightIdx]);
+        return;
+      }
+      if (!e.shiftKey && suggestions.length === 1) {
+        applySuggestion(suggestions[0]!);
+        return;
+      }
+      const typed = value;
+      const lcp = longestCommonPrefix(dirSuggestions);
+      if (!e.shiftKey && lcp.length > typed.length) {
+        value = lcp;
+        highlightIdx = -1;
+        return;
+      }
       if (e.shiftKey) {
         highlightIdx = highlightIdx <= -1 ? suggestions.length - 1 : highlightIdx - 1;
       } else {
@@ -334,19 +420,22 @@
 
       {#if suggestions.length > 0}
         <ul class="suggestions" role="listbox">
-          {#each suggestions as s, i (s)}
+          {#each suggestions as s, i (s.path + s.kind)}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
             <li
               role="option"
               aria-selected={i === highlightIdx}
               class:active={i === highlightIdx}
+              class:placeholder={s.kind === "new-file"}
               onmousedown={(e) => {
                 e.preventDefault();
                 applySuggestion(s);
               }}
               onmouseenter={() => (highlightIdx = i)}
-            >{s}/</li>
+            >{#if s.kind === "dir"}{s.path}/{:else}{s.path}
+              <span class="placeholder-hint">(new file — Tab to accept)</span>
+            {/if}</li>
           {/each}
         </ul>
       {/if}
@@ -456,6 +545,26 @@
   .suggestions li:hover {
     background: var(--hover-bg);
     color: var(--text);
+  }
+  /* Placeholder filename row sits visually adjacent to the folder
+     suggestions but reads as a proposal rather than a real file:
+     muted italic text, a light separator above it, and an inline
+     hint that points the user at Tab. */
+  .suggestions li.placeholder {
+    font-style: italic;
+    color: var(--text-secondary);
+    border-top: 1px dashed var(--border);
+  }
+  .suggestions li.placeholder.active,
+  .suggestions li.placeholder:hover {
+    color: var(--text);
+  }
+  .suggestions li .placeholder-hint {
+    font-style: normal;
+    color: var(--text-secondary);
+    font-size: 11px;
+    margin-left: 6px;
+    opacity: 0.8;
   }
   .status {
     font-size: 13px;

@@ -43,11 +43,17 @@ export function scanMatches(
 }
 
 /// Imperative surface each editor exposes to FindBar.svelte.
-/// `scan` is pure (no side effects); the other three drive the
-/// view's decoration / scroll state.
+/// `scan` is pure (no side effects); the others drive the view's
+/// decoration / scroll / selection state.
+///
+/// `placeCursor` is invoked on Enter / Shift+Enter only; it sets
+/// the editor selection to the start of the current match without
+/// stealing focus from the find input, so a later Esc lands the
+/// caret on the match the user navigated to.
 export interface FindAdapter {
   scan(query: string, opts: FindOptions): FindRange[];
   highlightAll(matches: FindRange[], currentIndex: number): void;
   clearHighlights(): void;
   scrollIntoView(currentIndex: number): void;
+  placeCursor(currentIndex: number): void;
 }

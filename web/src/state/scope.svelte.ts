@@ -100,6 +100,34 @@ export function scopeKey(paths: readonly string[]): string {
   return [...paths].sort().join("|");
 }
 
+/// Drive-relative parent directory of `path`. Returns "" for paths
+/// at the drive root (no parent) and for the empty string. Folders
+/// follow the same rule as files; the caller decides whether to
+/// treat the empty parent as "drive scope" or skip.
+export function parentDir(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i === -1 ? "" : path.slice(0, i);
+}
+
+/// Longest common parent directory across `paths`. Drives the
+/// auto-added "common ancestor" scope option per request.md when
+/// multiple files share an enclosing folder. Returns "" when the
+/// paths have no shared ancestor below the drive root.
+export function commonAncestor(paths: readonly string[]): string {
+  if (paths.length === 0) return "";
+  const first = paths[0]!.split("/");
+  first.pop();
+  let prefix: string[] = first;
+  for (let i = 1; i < paths.length && prefix.length > 0; i++) {
+    const segs = paths[i]!.split("/");
+    segs.pop();
+    let j = 0;
+    while (j < prefix.length && j < segs.length && prefix[j] === segs[j]) j++;
+    prefix = prefix.slice(0, j);
+  }
+  return prefix.join("/");
+}
+
 /// Paths for every file tab currently active in any leaf pane.
 /// Returns each path at most once, sorted alphabetically. Drives
 /// every overlay's "context dropdown" + the cleanup pass that
@@ -213,6 +241,30 @@ export function availableScopeOptions(opts: {
       path: dirPath,
     });
   }
+  // Auto-derived dir scopes — per request.md, when the scope is a
+  // single .md file include its parent folder, and when multiple
+  // files share the scope (group) include their first common
+  // ancestor. Both surface as `dir:<path>` so the consumer doesn't
+  // care how the option got into the list.
+  const dirScopes = new Set<string>(
+    out.filter((o) => o.kind === "dir").map((o) => o.id),
+  );
+  function pushDir(path: string, prefix: string): void {
+    if (!path) return;
+    const id = `dir:${path}`;
+    if (dirScopes.has(id)) return;
+    dirScopes.add(id);
+    const slash = path.lastIndexOf("/");
+    const name = slash >= 0 ? path.slice(slash + 1) : path;
+    out.push({
+      id,
+      kind: "dir",
+      label: `${prefix}: ${name}/`,
+      path,
+    });
+  }
+  for (const path of files) pushDir(parentDir(path), "parent dir");
+  if (files.length >= 2) pushDir(commonAncestor(files), "common ancestor");
   for (const root of visibleRepoRoots()) {
     // Display label: just the repo's basename (the rightmost
     // path segment) since the path is relative to the drive

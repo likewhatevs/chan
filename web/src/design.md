@@ -88,6 +88,8 @@ Token              Dark         Light       Concept
 --g-doc            #ff8a3d      #c25a1f     Document hue
 --g-img            #b07dff      #7a4cd8     Media hue
 --g-tag            #6cd07a      #2f9444     Tag hue
+--g-binary         #58a6ff      #0969da     Binary file hue (FILE blue)
+--g-folder         #8e8e93      #6c6c70     Folder hue (neutral grey)
 --warn-text        #e3b341      #9a6700     Contact / warning
 --assistant-accent #e58c4d      #c46a2a     Brand ensō
 --pill-wiki-fg     #ff8a3d      #c25a1f     Document pill
@@ -136,11 +138,11 @@ document    document    --g-doc             FileText
 contact     contact     --warn-text         User
 text*       text        --g-doc (alias)     FileCode
 media       media       --g-img             Image
-binary      binary      --text-secondary    File
+binary      binary      --g-binary          File
 tag         tag         --g-tag             Hash
 mention     mention     --warn-text         User
 date        date        --text-secondary    Calendar
-folder      folder      --accent            Folder
+folder      folder      --g-folder          Folder
 ```
 
 *Reserved. `classifyFile` does not emit `text` until chan-drive

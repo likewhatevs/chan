@@ -28,10 +28,42 @@
   import {
     indexStatus,
     importStatus,
+    openBrowser,
+    openSettings,
     ui,
   } from "../state/store.svelte";
 
   let collapsed = $state(false);
+
+  /// Click handlers per status section, per request.md "Clicking on
+  /// the status bar when an event is shown should pop up the overlay
+  /// related to that event." Backend-1 confirms the wire already
+  /// carries enough info to route — the rule lives entirely on the
+  /// frontend.
+  ///
+  /// - index → Settings overlay (its About / search-index area is
+  ///   the closest "index status page" we have today; no dedicated
+  ///   overlay exists, and adding one is out of scope for phase 3
+  ///   per the journal "narrow rather than new surfaces" note).
+  /// - import → File Browser overlay (where the contacts importer
+  ///   is launched / lives; the modal that fires the long-running
+  ///   import is reachable from the file browser hamburger).
+  /// - transient ui.status → clear the message. These are error
+  ///   crumbs (move/rename/delete failures); clicking to dismiss
+  ///   matches the user's expectation of "I saw it, move on".
+  ///
+  /// Agent activity is intentionally NOT surfaced here (see the
+  /// block comment at the top of this file) so there is no
+  /// agent-routing case.
+  function onClickIndex(): void {
+    openSettings();
+  }
+  function onClickImport(): void {
+    openBrowser();
+  }
+  function onClickStatus(): void {
+    ui.status = null;
+  }
 
   /// Indexer section: hidden when idle (steady state should be
   /// quiet) and when the poller hasn't replied yet (`null`).
@@ -61,7 +93,14 @@
       <div class="row">
         {#if indexVisible}
           {@const s = indexStatus.value!}
-          <span class="section" class:err={s.state === "error"}>
+          <button
+            type="button"
+            class="section btn"
+            class:err={s.state === "error"}
+            onclick={onClickIndex}
+            title="open index status"
+            aria-label="open index status"
+          >
             <span
               class="dot"
               class:working={s.state !== "error"}
@@ -76,22 +115,34 @@
             {:else if s.state === "error"}
               index error: <span class="muted">{s.message}</span>
             {/if}
-          </span>
+          </button>
         {/if}
         {#if indexVisible && importVisible}
           <span class="sep">·</span>
         {/if}
         {#if importVisible}
-          <span class="section">
+          <button
+            type="button"
+            class="section btn"
+            onclick={onClickImport}
+            title="open import surface"
+            aria-label="open import surface"
+          >
             <span class="dot working"></span>
             {importStatus.value!.label}
-          </span>
+          </button>
         {/if}
         {#if (indexVisible || importVisible) && statusVisible}
           <span class="sep">·</span>
         {/if}
         {#if statusVisible}
-          <span class="section status-msg">{ui.status}</span>
+          <button
+            type="button"
+            class="section status-msg btn"
+            onclick={onClickStatus}
+            title="dismiss"
+            aria-label="dismiss status message"
+          >{ui.status}</button>
         {/if}
       </div>
     {/if}
@@ -149,6 +200,27 @@
     gap: 6px;
     color: var(--text);
     font-variant-numeric: tabular-nums;
+  }
+  /* Section rendered as a button (clickable per request.md). Keep
+     the visual identical to the original <span> so the bar's
+     ambient style does not change; only adds pointer affordance
+     + a subtle hover hint. */
+  .section.btn {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 120ms ease, color 120ms ease;
+  }
+  .section.btn:hover {
+    background: var(--hover-bg);
+    color: var(--text);
+  }
+  .section.btn:focus-visible {
+    outline: 1px solid var(--link);
+    outline-offset: 1px;
   }
   .section.err {
     color: var(--warn-text);

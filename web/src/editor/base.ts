@@ -203,6 +203,21 @@ export function makeFindAdapter(getView: () => EditorView | undefined): FindAdap
         effects: EditorView.scrollIntoView(r.from, { y: "center" }),
       });
     },
+    placeCursor(currentIndex: number): void {
+      const view = getView();
+      if (!view) return;
+      const f = view.state.field(findField, false);
+      if (!f) return;
+      const r = f.ranges[currentIndex];
+      if (!r) return;
+      // Set a zero-width selection at the match start. Skipping
+      // `view.focus()` keeps the FindBar input focused so the user
+      // can step through more matches; Esc later returns focus to
+      // the editor and the caret is already on the match.
+      view.dispatch({
+        selection: { anchor: r.from, head: r.from },
+      });
+    },
   };
 }
 

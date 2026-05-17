@@ -8,13 +8,16 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   __testApplyOverlaysFromHash,
   assistantConversations,
+  assistantOverlay,
   assistantStream,
   bareToolName,
   beginAssistantStream,
   endAssistantStream,
+  formatQuotePrefill,
   graphOverlay,
   graphReloadSignal,
   onWatchEvent,
+  openAssistant,
   persistStateToHash,
 } from "./store.svelte";
 
@@ -35,6 +38,12 @@ afterEach(() => {
   assistantConversations.drive = null;
   assistantConversations.byFile = {};
   assistantConversations.byGroup = {};
+  assistantOverlay.open = false;
+  assistantOverlay.contextId = "drive";
+  assistantOverlay.prompt = "";
+  assistantOverlay.promptCaretTarget = null;
+  assistantOverlay.inspectorOpen = false;
+  assistantOverlay.styleToolbarOpen = false;
   graphOverlay.open = false;
   graphOverlay.mode = "semantic";
   graphOverlay.scopeId = "drive";
@@ -47,6 +56,34 @@ afterEach(() => {
   graphOverlay.pendingSelectId = null;
   graphReloadSignal.nonce = 0;
   window.history.replaceState(null, "", "/");
+});
+
+describe("assistant quote prefill", () => {
+  test("formats multiline selections as blockquotes with typing space after", () => {
+    expect(formatQuotePrefill("alpha\n\nbeta")).toBe("> alpha\n>\n> beta\n\n\n");
+  });
+
+  test("fresh open with selection seeds caret target after quote", () => {
+    const original = window.getSelection;
+    const selected = "alpha\nbeta";
+    window.getSelection = (() =>
+      ({
+        rangeCount: 1,
+        toString: () => selected,
+      }) as Selection) as typeof window.getSelection;
+
+    try {
+      openAssistant();
+    } finally {
+      window.getSelection = original;
+    }
+
+    expect(assistantOverlay.open).toBe(true);
+    expect(assistantOverlay.prompt).toBe("> alpha\n> beta\n\n\n");
+    expect(assistantOverlay.promptCaretTarget).toBe(
+      assistantOverlay.prompt.length,
+    );
+  });
 });
 
 describe("assistant lifecycle websocket frames", () => {

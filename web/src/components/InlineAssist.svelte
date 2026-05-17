@@ -241,6 +241,7 @@
   /// it can call into Wysiwyg's mark/block-kind API. Source mode
   /// gets a disabled toolbar (a textarea ignores formatting).
   let wysiwygRef: Wysiwyg | undefined = $state();
+  let sourceRef: Source | undefined = $state();
 
   /// Bumped on every selection / doc change inside the prompt
   /// Wysiwyg so the StyleToolbar's active-mark / current-block
@@ -256,6 +257,127 @@
   // state) so it round-trips through the URL hash. Local alias
   // keeps the binding sites compact.
   let loading = $state(false);
+
+  /// `openAssistant()` may seed the prompt with a blockquote from
+  /// the current document selection. CM6 prompt editors focus at
+  /// doc-start on mount by default, so consume the store's one-shot
+  /// target after the active prompt editor is mounted and place the
+  /// caret where the user should type.
+  $effect(() => {
+    if (!visible) return;
+    const target = assistantOverlay.promptCaretTarget;
+    if (target === null) return;
+    const editor = promptMode === "wysiwyg" ? wysiwygRef : sourceRef;
+    if (!editor) return;
+    requestAnimationFrame(() => {
+      if (promptMode === "wysiwyg") {
+        wysiwygRef?.focusAt(target);
+      } else {
+        sourceRef?.focusAt(target);
+      }
+    });
+    assistantOverlay.promptCaretTarget = null;
+  });
+
+  // ---- in-overlay find over the active session's chat history ----------
+  // Per request.md, Cmd+F inside the Agent overlay searches the
+  // current conversation. We do not reuse the editor's FindAdapter
+  // (which targets a CodeMirror buffer) because the chat is rendered
+  // as a tree of `.bubble` DOM nodes; the simplest accurate match
+  // walks those nodes' textContent. Highlight applies a class to
+  // matched bubbles; Enter / Shift+Enter steps the current match
+  // index and scrolls the active bubble into view.
+  let findOpen = $state(false);
+  let findQuery = $state("");
+  let findMatches: HTMLElement[] = $state([]);
+  let findCurrentIdx = $state(-1);
+  let findInputEl: HTMLInputElement | undefined = $state();
+
+  function refreshFindMatches(): void {
+    if (!scrollEl) {
+      findMatches = [];
+      findCurrentIdx = -1;
+      return;
+    }
+    const q = findQuery.trim().toLowerCase();
+    if (q === "") {
+      findMatches = [];
+      findCurrentIdx = -1;
+      return;
+    }
+    const bubbles = Array.from(scrollEl.querySelectorAll<HTMLElement>(".bubble"));
+    findMatches = bubbles.filter((el) => (el.textContent ?? "").toLowerCase().includes(q));
+    findCurrentIdx = findMatches.length > 0 ? 0 : -1;
+  }
+
+  function paintFindHighlights(): void {
+    if (!scrollEl) return;
+    const all = scrollEl.querySelectorAll<HTMLElement>(".bubble");
+    all.forEach((el) => {
+      el.classList.remove("find-match", "find-match--current");
+    });
+    findMatches.forEach((el, i) => {
+      el.classList.add("find-match");
+      if (i === findCurrentIdx) {
+        el.classList.add("find-match--current");
+        el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      }
+    });
+  }
+
+  $effect(() => {
+    if (!findOpen) return;
+    void findQuery;
+    refreshFindMatches();
+  });
+
+  $effect(() => {
+    if (!findOpen) return;
+    void findMatches;
+    void findCurrentIdx;
+    paintFindHighlights();
+  });
+
+  function openFind(): void {
+    findOpen = true;
+    setTimeout(() => findInputEl?.focus(), 0);
+  }
+  function closeFind(): void {
+    findOpen = false;
+    findQuery = "";
+    findMatches = [];
+    findCurrentIdx = -1;
+    if (scrollEl) {
+      scrollEl.querySelectorAll(".bubble").forEach((el) => {
+        el.classList.remove("find-match", "find-match--current");
+      });
+    }
+  }
+  function findStep(direction: 1 | -1): void {
+    if (findMatches.length === 0) return;
+    const cur = findCurrentIdx < 0 ? 0 : findCurrentIdx;
+    findCurrentIdx = (cur + direction + findMatches.length) % findMatches.length;
+    paintFindHighlights();
+  }
+  function onFindKeydown(e: KeyboardEvent): void {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      closeFind();
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      findStep(e.shiftKey ? -1 : 1);
+    }
+  }
+  function onAssistantKeydown(e: KeyboardEvent): void {
+    if (e.key !== "f" && e.key !== "F") return;
+    if (!(e.metaKey || e.ctrlKey)) return;
+    if (e.altKey || e.shiftKey) return;
+    e.preventDefault();
+    openFind();
+  }
   let error = $state<string | null>(null);
   let scrollResizeObs: ResizeObserver | null = null;
   let scrollRaf: number | null = null;
@@ -621,8 +743,40 @@
     }
   }
 
+  /// Backend pinned by the current conversation's most-recent
+  /// `assistant_switch` turn, if any. Per backend-1.md the
+  /// conversation history records every backend swap, so the active
+  /// turn's banner should reflect what the conversation last spoke
+  /// to — not the global selector. Without this, the empty-state
+  /// banner reads "CODEX CLI" while the conversation transcript is
+  /// Claude's (CODEx-on-CLAUDE symptom from request.md).
+  function conversationBackend(): string | undefined {
+    const ctx = currentContext;
+    if (!ctx) return undefined;
+    let conv: AssistantConversation | null | undefined;
+    if (ctx.kind === "file") {
+      conv = assistantConversations.byFile[ctx.path];
+    } else if (ctx.kind === "group") {
+      conv = assistantConversations.byGroup[ctx.key];
+    } else {
+      conv = assistantConversations.drive;
+    }
+    if (!conv) return undefined;
+    for (let i = conv.turns.length - 1; i >= 0; i--) {
+      const t = conv.turns[i]!;
+      if (t.kind === "assistant_switch") return t.backend;
+    }
+    return undefined;
+  }
+
   function configuredAssistantBackend(): string | null | undefined {
+    // Resolution order per backend-1.md: the active conversation's
+    // own assistant_switch history wins so reopening a saved Claude
+    // conversation keeps its banner; then the global selector
+    // (assistantSelection.backend), then the drive's default, then
+    // the live llmStatus tag.
     return (
+      conversationBackend() ??
       assistantSelection.backend ??
       drive.info?.preferences.assistant.default_backend ??
       llmStatus?.backend
@@ -631,6 +785,11 @@
 
   function configuredAssistantModel(): string | null | undefined {
     const backend = configuredAssistantBackend();
+    // Use the global selector's model only when it agrees with the
+    // resolved backend; otherwise the selector's model would be
+    // attached to a different conversation's backend and read as
+    // mismatched on the banner (e.g. Claude conversation showing a
+    // Codex model id from a leftover selector pick).
     if (assistantSelection.backend === backend && assistantSelection.model !== null) {
       return assistantSelection.model;
     }
@@ -1847,7 +2006,12 @@
 
 <OverlayShell id="assistant" open={visible} onClose={close}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="assistant-shell" oncontextmenu={onAssistantContextMenu} role="presentation">
+<div
+  class="assistant-shell"
+  oncontextmenu={onAssistantContextMenu}
+  onkeydown={onAssistantKeydown}
+  role="presentation"
+>
   <header>
         <button
           type="button"
@@ -1916,6 +2080,55 @@
   >
     {@render promptMenuItems()}
   </HamburgerMenu>
+
+  {#if findOpen}
+    <div class="agent-find-bar" role="search" aria-label="find in chat history">
+      <input
+        bind:this={findInputEl}
+        bind:value={findQuery}
+        onkeydown={onFindKeydown}
+        class="agent-find-input"
+        class:no-matches={findQuery !== "" && findMatches.length === 0}
+        type="text"
+        placeholder="Find in conversation"
+        aria-label="find query"
+        spellcheck="false"
+        autocomplete="off"
+      />
+      <span class="agent-find-counter" aria-live="polite">
+        {#if findQuery === ""}
+          {""}
+        {:else if findMatches.length === 0}
+          0 of 0
+        {:else}
+          {findCurrentIdx + 1} of {findMatches.length}
+        {/if}
+      </span>
+      <button
+        type="button"
+        class="agent-find-btn"
+        onclick={() => findStep(-1)}
+        disabled={findMatches.length === 0}
+        title="previous match (Shift+Enter)"
+        aria-label="previous match"
+      >▲</button>
+      <button
+        type="button"
+        class="agent-find-btn"
+        onclick={() => findStep(1)}
+        disabled={findMatches.length === 0}
+        title="next match (Enter)"
+        aria-label="next match"
+      >▼</button>
+      <button
+        type="button"
+        class="agent-find-btn"
+        onclick={closeFind}
+        title="close (Esc)"
+        aria-label="close find"
+      >×</button>
+    </div>
+  {/if}
 
   <div class="assistant-layout">
     <div
@@ -2417,7 +2630,7 @@
               onSelectionChange={() => (selVer = selVer + 1)}
             />
           {:else}
-            <Source bind:value={assistantOverlay.prompt} />
+            <Source bind:this={sourceRef} bind:value={assistantOverlay.prompt} />
           {/if}
           {#if assistantOverlay.styleToolbarOpen && promptMode === "wysiwyg"}
             <StyleToolbar
@@ -2464,7 +2677,7 @@
     </div>
     {#if assistantOverlay.inspectorOpen}
       <Inspector
-        title="Assistant"
+        title="Agent"
         bind:width={paneWidths.assistant}
         onResize={persistPaneWidths}
         onClose={() => (assistantOverlay.inspectorOpen = false)}
@@ -2843,9 +3056,78 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+    border-radius: 8px;
+    transition: background 160ms ease, box-shadow 160ms ease;
   }
   .bubble.user { align-self: flex-end; align-items: flex-end; }
   .bubble.assistant { align-self: stretch; align-items: flex-start; }
+  /* Cmd+F highlight: matched bubbles get a soft warn tint; the
+     current step adds an inset outline so the user sees where
+     Enter/Shift+Enter just landed. Same palette family as the
+     File Browser's row find-match for cross-overlay consistency. */
+  :global(.bubble.find-match) {
+    background: color-mix(in srgb, var(--warn-text, #e3b341) 12%, transparent);
+  }
+  :global(.bubble.find-match--current) {
+    background: color-mix(in srgb, var(--warn-text, #e3b341) 22%, transparent);
+    box-shadow: inset 0 0 0 1px var(--warn-text, #e3b341);
+  }
+  /* In-overlay find bar, mirrors File Browser overlay find bar
+     styling so the affordance reads the same in both surfaces. */
+  .agent-find-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text);
+  }
+  .agent-find-input {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 6px;
+    font: inherit;
+    outline: none;
+  }
+  .agent-find-input:focus {
+    border-color: var(--accent, var(--btn-hover));
+  }
+  .agent-find-input.no-matches {
+    box-shadow: 0 0 0 1px #d33 inset;
+  }
+  .agent-find-counter {
+    min-width: 56px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+    font-size: 12px;
+    padding: 0 2px;
+  }
+  .agent-find-btn {
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1;
+    padding: 3px 6px;
+  }
+  .agent-find-btn:hover:not(:disabled) {
+    background: var(--hover-bg);
+    color: var(--text);
+  }
+  .agent-find-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
   /* The in-flight placeholder reads as a real bubble (same role
      line, same column) but with a slightly muted body so the
      user doesn't mistake the dots for actual assistant output. */
