@@ -74,6 +74,30 @@ under the pinned compiler with `RUSTFLAGS=-D warnings` plus
 `rust-toolchain.toml` and fix any new clippy findings in the
 same commit.
 
+## Test Server Workflow
+
+When the user asks for a test server (e.g. "spin up a test
+server", "let's try this in the browser"):
+
+1. **Ask first**: new drive under `/tmp/chan-test-<something>`,
+   or reuse an existing registered one? `chan list` shows the
+   options. For a new drive, also ask what to seed it with
+   (empty, a few sample notes, copy of an existing tree).
+2. **Build + launch**: `cargo build -p chan` rebuilds the binary
+   with the current `web/dist/` bundle, then
+   `./target/debug/chan serve <path>` in the background. The URL
+   with the per-launch bearer token lands on stderr.
+3. **Reload on frontend changes**: rust-embed bakes the bundle
+   in at compile time, so every web edit needs the full cycle:
+   stop the server, `npm run build` in `web/`, `cargo build -p
+   chan`, restart. There is no hot reload. A stale browser tab
+   also needs a hard reload to pick up the new hashed bundle
+   filenames.
+4. **Tear down**: stop the server process, `rm -rf` the temp
+   drive directory if it was a throwaway, then `chan remove
+   <path>` to drop the registry entry. `chan remove` takes the
+   path, not the display name.
+
 ## Project Principles
 
 ### Drive is the boundary
