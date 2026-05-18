@@ -57,6 +57,11 @@ export type PaneWidths = {
   outline?: number;
 };
 
+export type BrowserSidePanes = {
+  left: boolean;
+  right: boolean;
+};
+
 /// Vertical density for paragraphs and lists in the editor.
 /// `standard` is the default; `compact` is denser. `tight` is a
 /// legacy read alias accepted from older persisted configs.
@@ -83,6 +88,8 @@ export type Preferences = {
   /// Sidebar widths shared across all panes (file editor inspector,
   /// graph details, file browser). Per-machine.
   pane_widths: PaneWidths;
+  /// Docked file-browser panes attached outside the workspace.
+  browser_side_panes: BrowserSidePanes;
   /// Editor density for paragraphs and lists.
   line_spacing: LineSpacing;
   /// Default format used by @date / @today and as the initial

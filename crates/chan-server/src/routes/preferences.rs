@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::TerminalConfig;
 use crate::error::{err, Error};
 use crate::state::AppState;
-use crate::{EditorTheme, LineSpacing, PaneWidths, ThemeChoice};
+use crate::{BrowserSidePanes, EditorTheme, LineSpacing, PaneWidths, ThemeChoice};
 
 /// Unified preferences shape returned over /api/drive and /api/config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +27,8 @@ pub struct PreferencesView {
     pub attachments_dir: String,
     pub theme: ThemeChoice,
     pub pane_widths: PaneWidths,
+    #[serde(default)]
+    pub browser_side_panes: BrowserSidePanes,
     pub line_spacing: LineSpacing,
     pub date_format: String,
     pub search_aggression: SearchAggression,
@@ -41,6 +43,7 @@ pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
         attachments_dir: server.attachments_dir.clone(),
         theme: editor.theme,
         pane_widths: editor.pane_widths,
+        browser_side_panes: editor.browser_side_panes,
         line_spacing: editor.line_spacing,
         date_format: editor.date_format.clone(),
         search_aggression: server.search.aggression,
@@ -199,6 +202,7 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
         editor.editor_theme = view.editor_theme;
         editor.theme = view.theme;
         editor.pane_widths = view.pane_widths;
+        editor.browser_side_panes = view.browser_side_panes;
         editor.line_spacing = view.line_spacing;
         editor.date_format = view.date_format;
         editor.save()?;

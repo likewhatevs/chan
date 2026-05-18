@@ -5,6 +5,7 @@
   import ConflictModal from "./components/ConflictModal.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
   import FileBrowserOverlay from "./components/FileBrowserOverlay.svelte";
+  import FileBrowserSidePane from "./components/FileBrowserSidePane.svelte";
   import GraphPanel from "./components/GraphPanel.svelte";
   import MissingTokenOverlay from "./components/MissingTokenOverlay.svelte";
   import PathPromptModal from "./components/PathPromptModal.svelte";
@@ -19,6 +20,7 @@
     installSessionFlushHook,
     browserOverlay,
     browserSelection,
+    browserSidePanes,
     closeOverlay,
     drive,
     fileOps,
@@ -131,6 +133,8 @@
     void searchPanel.inspectorOpen;
     void browserOverlay.open;
     void browserOverlay.inspectorOpen;
+    void browserSidePanes.left;
+    void browserSidePanes.right;
     void browserSelection.path;
     void graphOverlay.open;
     void graphOverlay.scopeId;
@@ -365,6 +369,7 @@
       if (e.code === "KeyN") {
         e.preventDefault();
         void fileOps.createFile("");
+        return;
       }
     }
   }
@@ -477,9 +482,15 @@
 </script>
 
 <div class="app">
+  {#if browserSidePanes.left}
+    <FileBrowserSidePane side="left" />
+  {/if}
   <main>
     <Workspace />
   </main>
+  {#if browserSidePanes.right}
+    <FileBrowserSidePane side="right" />
+  {/if}
 </div>
 <!-- Bottom-left ambient status bar: indexer state, import
      progress, transient ui.status messages. Window-level and

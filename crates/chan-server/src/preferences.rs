@@ -13,6 +13,7 @@
 //!   - editor_theme (github / google_docs / word)
 //!   - theme  (system / light / dark)
 //!   - pane_widths (inspector / graph / file-browser sidebars)
+//!   - browser_side_panes (left / right docked file-browser state)
 //!   - line_spacing (standard / compact; legacy `tight` deserializes as
 //!     compact)
 //!   - date_format (id; UI-side mapping in dateFormats.ts)
@@ -41,6 +42,8 @@ pub struct EditorPrefs {
     #[serde(default)]
     pub pane_widths: PaneWidths,
     #[serde(default)]
+    pub browser_side_panes: BrowserSidePanes,
+    #[serde(default)]
     pub line_spacing: LineSpacing,
     #[serde(default = "default_date_format")]
     pub date_format: String,
@@ -52,6 +55,7 @@ impl Default for EditorPrefs {
             editor_theme: EditorTheme::default(),
             theme: ThemeChoice::default(),
             pane_widths: PaneWidths::default(),
+            browser_side_panes: BrowserSidePanes::default(),
             line_spacing: LineSpacing::default(),
             date_format: default_date_format(),
         }
@@ -116,6 +120,12 @@ fn default_search_width() -> u32 {
 
 fn default_outline_width() -> u32 {
     220
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserSidePanes {
+    pub left: bool,
+    pub right: bool,
 }
 
 /// Editor density. `Standard` is the roomier default Google Docs /
