@@ -24,7 +24,7 @@
   import { SerializeAddon } from "@xterm/addon-serialize";
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import "@xterm/xterm/css/xterm.css";
-  import { withTokenQuery } from "../api/client";
+  import { sessionWindowId, withTokenQuery } from "../api/client";
   import { chordFor } from "../state/shortcuts";
   import {
     advanceTerminalSeq,
@@ -255,6 +255,7 @@
         cols: term.cols,
         rows: term.rows,
         tabName: terminalTabName(tab),
+        windowId: sessionWindowId(),
         sessionId: tab.terminalSessionId,
         lastSeq: tab.lastSeq,
         mcpEnv: mcpEnvOn,

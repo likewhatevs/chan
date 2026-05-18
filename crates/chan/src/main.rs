@@ -48,8 +48,9 @@ use chan_server::{
     build_fs_graph, EditorPrefs, EditorTheme, FsGraphResponse, FsGraphScope as ServerFsGraphScope,
     LineSpacing, ServeConfig, ServerConfig, ThemeChoice, TunnelServeConfig,
 };
-use clap::{Parser, Subcommand, ValueEnum};
-use serde::Serialize;
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
+use serde::{Deserialize, Serialize};
 
 mod update;
 
@@ -141,6 +142,18 @@ enum Command {
     },
     /// List registered drives, most-recent first.
     List,
+    /// Open a path in the current chan window from a chan terminal.
+    Open {
+        /// File or directory path. Relative paths resolve against
+        /// the shell's current working directory.
+        #[arg(value_hint = clap::ValueHint::AnyPath)]
+        path: PathBuf,
+    },
+    /// Generate shell completion scripts.
+    Completions {
+        /// Shell to generate completions for.
+        shell: Shell,
+    },
     /// Drop a drive from the registry. Does not delete the
     /// directory or its content; only forgets it on this machine.
     Remove { path: PathBuf },
@@ -434,6 +447,14 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Add { path, name } => cmd_add(path, name),
         Command::List => cmd_list(),
+        Command::Open { path } => {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .context("building tokio runtime")?;
+            rt.block_on(cmd_open(path))
+        }
+        Command::Completions { shell } => cmd_completions(shell),
         Command::Remove { path } => cmd_remove(path),
         Command::Rename { path, name } => cmd_rename(path, name),
         Command::Serve {
@@ -791,6 +812,13 @@ fn cmd_list() -> Result<()> {
             d.last_opened.format("%Y-%m-%d %H:%M"),
         );
     }
+    Ok(())
+}
+
+fn cmd_completions(shell: Shell) -> Result<()> {
+    let mut cmd = Cli::command();
+    let bin_name = cmd.get_name().to_string();
+    clap_complete::generate(shell, &mut cmd, bin_name, &mut std::io::stdout());
     Ok(())
 }
 
@@ -1161,6 +1189,110 @@ async fn cmd_mcp(path: PathBuf) -> Result<()> {
         .serve_stdio()
         .await
         .context("running MCP server")
+}
+
+#[derive(Debug)]
+struct OpenEnv {
+    window_id: String,
+    control_socket: PathBuf,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ControlRequest {
+    OpenPath { window_id: String, path: PathBuf },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum ControlResponse {
+    Ok { message: String },
+    Error { message: String },
+}
+
+fn open_env_from(window_id: Option<String>, control_socket: Option<String>) -> Result<OpenEnv> {
+    let window_id = window_id
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("not running inside a chan session; chan open requires $CHAN_WINDOW_ID")
+        })?;
+    let control_socket = control_socket
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "not running inside a chan session; chan open requires $CHAN_CONTROL_SOCKET"
+            )
+        })?;
+    Ok(OpenEnv {
+        window_id,
+        control_socket: PathBuf::from(control_socket),
+    })
+}
+
+fn open_env() -> Result<OpenEnv> {
+    open_env_from(
+        std::env::var("CHAN_WINDOW_ID").ok(),
+        std::env::var("CHAN_CONTROL_SOCKET").ok(),
+    )
+}
+
+async fn cmd_open(path: PathBuf) -> Result<()> {
+    let env = open_env()?;
+    let abs = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .context("resolving current directory")?
+            .join(path)
+    };
+    send_control_request(
+        &env.control_socket,
+        ControlRequest::OpenPath {
+            window_id: env.window_id,
+            path: abs,
+        },
+    )
+    .await
+}
+
+#[cfg(unix)]
+async fn send_control_request(socket: &Path, request: ControlRequest) -> Result<()> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixStream;
+
+    let stream = UnixStream::connect(socket)
+        .await
+        .with_context(|| format!("connecting to chan control socket {}", socket.display()))?;
+    let (read, mut write) = stream.into_split();
+    let mut payload = serde_json::to_vec(&request).context("encoding control request")?;
+    payload.push(b'\n');
+    write
+        .write_all(&payload)
+        .await
+        .context("writing control request")?;
+    write.shutdown().await.context("closing control request")?;
+
+    let mut line = String::new();
+    BufReader::new(read)
+        .read_line(&mut line)
+        .await
+        .context("reading control response")?;
+    let response: ControlResponse =
+        serde_json::from_str(&line).context("decoding control response")?;
+    match response {
+        ControlResponse::Ok { message } => {
+            eprintln!("{message}");
+            Ok(())
+        }
+        ControlResponse::Error { message } => anyhow::bail!("{message}"),
+    }
+}
+
+#[cfg(not(unix))]
+async fn send_control_request(_socket: &Path, _request: ControlRequest) -> Result<()> {
+    anyhow::bail!("chan open requires unix-domain sockets on this build");
 }
 
 /// Bridge between the agent subprocess and the MCP server hosted in
@@ -2024,6 +2156,23 @@ mod tests {
         assert!(parse_idle_timeout("-5s").is_err()); // negative
         assert!(parse_idle_timeout("five s").is_err());
         assert!(parse_idle_timeout("1.5m").is_err()); // no fractional
+    }
+
+    #[test]
+    fn open_env_requires_window_id_and_control_socket() {
+        let err = open_env_from(None, Some("/tmp/chan-control.sock".into())).unwrap_err();
+        assert!(err.to_string().contains("CHAN_WINDOW_ID"));
+
+        let err = open_env_from(Some("win".into()), None).unwrap_err();
+        assert!(err.to_string().contains("CHAN_CONTROL_SOCKET"));
+
+        let env = open_env_from(
+            Some(" win ".into()),
+            Some(" /tmp/chan-control.sock ".into()),
+        )
+        .unwrap();
+        assert_eq!(env.window_id, "win");
+        assert_eq!(env.control_socket, PathBuf::from("/tmp/chan-control.sock"));
     }
 
     #[test]

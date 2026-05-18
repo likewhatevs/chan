@@ -221,6 +221,7 @@ pub(crate) mod test_support {
             terminal_sessions: Arc::new(TerminalRegistry::new(RegistryConfig {
                 drive_root: PathBuf::from("/dev/null"),
                 mcp_socket_path: None,
+                control_socket_path: None,
                 terminal: ServerConfig::default().terminal,
             })),
             shutdown_rx,

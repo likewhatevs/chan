@@ -2,6 +2,7 @@ export type TerminalWsPathOpts = {
   cols: number;
   rows: number;
   tabName: string;
+  windowId?: string | null;
   sessionId?: string | null;
   lastSeq?: number | null;
   mcpEnv?: boolean | null;
@@ -14,6 +15,8 @@ export function terminalWsPath(opts: TerminalWsPathOpts): string {
     rows: String(opts.rows),
     tab_name: opts.tabName,
   });
+  const windowId = opts.windowId?.trim();
+  if (windowId) params.set("window_id", windowId);
   const sessionId = opts.sessionId?.trim();
   if (sessionId) {
     params.set("session", sessionId);

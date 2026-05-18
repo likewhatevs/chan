@@ -12,6 +12,7 @@ import {
   authToken,
   openWatchSocket,
   sessionPath,
+  sessionWindowId,
   type WsStatus,
 } from "../api/client";
 import {
@@ -184,6 +185,10 @@ export function applyServerPreferences(): void {
     // so the file-editor outline pane has a sane width on first use.
     paneWidths.outline = prefs.pane_widths.outline ?? DEFAULT_PANE_WIDTHS.outline;
   }
+  if (prefs.browser_side_panes) {
+    browserSidePanes.left = prefs.browser_side_panes.left;
+    browserSidePanes.right = prefs.browser_side_panes.right;
+  }
 }
 
 /** Subscribe to OS-level color-scheme changes. While the user is in
@@ -223,6 +228,10 @@ export function onWatchEvent(e: unknown): void {
   // route to the indexer-status sink so the bottom-left status pill
   // animates live as `Drive::reindex_with` walks the drive.
   const frameType = (e as { type?: string } | null)?.type;
+  if (frameType === "window_command") {
+    void handleWindowCommand(e);
+    return;
+  }
   if (frameType === "progress") {
     applyProgressEvent(
       (e as { event?: ProgressFrame } | null)?.event ?? null,
@@ -278,6 +287,32 @@ export function onWatchEvent(e: unknown): void {
     for (const { tabId } of tabsForPath(p)) {
       void refreshTabFromDisk(tabId);
     }
+  }
+}
+
+type WindowCommandFrame =
+  | { type: "window_command"; window_id: string; command: "open_file"; path: string }
+  | {
+      type: "window_command";
+      window_id: string;
+      command: "open_browser";
+      path: string;
+      select?: string | null;
+    };
+
+async function handleWindowCommand(raw: unknown): Promise<void> {
+  const frame = raw as Partial<WindowCommandFrame> | null;
+  if (!frame || frame.window_id !== sessionWindowId()) return;
+  if (frame.command === "open_file" && typeof frame.path === "string") {
+    await openInActivePane(frame.path);
+    ui.status = `opened ${frame.path}`;
+    return;
+  }
+  if (frame.command === "open_browser" && typeof frame.path === "string") {
+    browserOverlay.open = true;
+    revealAndSelect(typeof frame.select === "string" ? frame.select : frame.path);
+    ui.status = frame.select ? `selected ${frame.select}` : `opened ${frame.path || "/"}`;
+    scheduleSessionSave();
   }
 }
 
@@ -1463,6 +1498,11 @@ export const paneWidths = $state<{
   outline: number;
 }>({ ...DEFAULT_PANE_WIDTHS });
 
+export const browserSidePanes = $state<{
+  left: boolean;
+  right: boolean;
+}>({ left: false, right: false });
+
 /// Currently inspected entry in the File Browser tab. Module-level
 /// (shared across browser tabs); selection is ephemeral so the
 /// minor cross-tab leakage is acceptable and avoids per-tab plumbing.
@@ -1546,6 +1586,36 @@ export function persistDateFormat(formatId: string): void {
         };
       }
     });
+}
+
+let sidePanesPersistInflight: Promise<void> = Promise.resolve();
+
+export function setBrowserSidePane(side: "left" | "right", open: boolean): void {
+  if (browserSidePanes[side] === open) return;
+  browserSidePanes[side] = open;
+  persistBrowserSidePanes();
+}
+
+export function toggleBrowserSidePane(side: "left" | "right"): void {
+  setBrowserSidePane(side, !browserSidePanes[side]);
+}
+
+function persistBrowserSidePanes(): void {
+  const snapshot = {
+    left: browserSidePanes.left,
+    right: browserSidePanes.right,
+  };
+  sidePanesPersistInflight = sidePanesPersistInflight.catch(() => {}).then(async () => {
+    const cfg = await api.config();
+    const cur = cfg.preferences.browser_side_panes;
+    if (cur && cur.left === snapshot.left && cur.right === snapshot.right) {
+      return;
+    }
+    await api.updateConfig({
+      ...cfg,
+      preferences: { ...cfg.preferences, browser_side_panes: snapshot },
+    });
+  });
 }
 
 /// Expanded-directory map for the file browser tree. Lifted out of

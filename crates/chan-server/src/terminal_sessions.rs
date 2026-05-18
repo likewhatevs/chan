@@ -35,6 +35,7 @@ pub const ALT_SCREEN_ATTACH_PRELUDE: &[u8] = b"\x1b[?1049h\x1b[2J\x1b[H";
 pub struct RegistryConfig {
     pub drive_root: PathBuf,
     pub mcp_socket_path: Option<PathBuf>,
+    pub control_socket_path: Option<PathBuf>,
     pub terminal: TerminalConfig,
 }
 
@@ -48,6 +49,7 @@ pub struct Registry {
 pub struct CreateOptions {
     pub size: PtySize,
     pub tab_name: Option<String>,
+    pub window_id: Option<String>,
     pub mcp_env: bool,
     pub cwd: Option<PathBuf>,
 }
@@ -337,6 +339,14 @@ impl Session {
         }
         if let Some(tab_name) = opts.tab_name {
             cmd.env("CHAN_TAB_NAME", tab_name);
+        }
+        if let Some(window_id) = opts.window_id {
+            cmd.env("CHAN_WINDOW_ID", window_id);
+        }
+        if let Some(socket_path) = config.control_socket_path.as_deref() {
+            if let Some(socket) = socket_path.to_str() {
+                cmd.env("CHAN_CONTROL_SOCKET", socket);
+            }
         }
         cmd.env_remove("NO_COLOR");
         cmd.env_remove("CI");
@@ -734,6 +744,8 @@ fn clear_mcp_env(cmd: &mut CommandBuilder) {
         "CHAN_MCP_COMMAND",
         "CHAN_MCP_COMMAND_JSON",
         "CHAN_MCP_SERVER_JSON",
+        "CHAN_WINDOW_ID",
+        "CHAN_CONTROL_SOCKET",
     ] {
         cmd.env_remove(key);
     }
@@ -756,6 +768,7 @@ mod tests {
         RegistryConfig {
             drive_root,
             mcp_socket_path: None,
+            control_socket_path: None,
             terminal: TerminalConfig {
                 idle_timeout_secs: idle,
                 session_cap: cap,
@@ -900,6 +913,7 @@ mod tests {
             .create(CreateOptions {
                 size: test_size(),
                 tab_name: None,
+                window_id: None,
                 mcp_env: true,
                 cwd: None,
             })
@@ -919,6 +933,7 @@ mod tests {
             .create(CreateOptions {
                 size: test_size(),
                 tab_name: None,
+                window_id: None,
                 mcp_env: true,
                 cwd: None,
             })
@@ -927,6 +942,7 @@ mod tests {
             .create(CreateOptions {
                 size: test_size(),
                 tab_name: None,
+                window_id: None,
                 mcp_env: true,
                 cwd: None,
             })
@@ -941,6 +957,7 @@ mod tests {
             .create(CreateOptions {
                 size: test_size(),
                 tab_name: None,
+                window_id: None,
                 mcp_env: true,
                 cwd: None,
             })
@@ -963,6 +980,7 @@ mod tests {
                     pixel_height: 0,
                 },
                 tab_name: None,
+                window_id: None,
                 mcp_env: true,
                 cwd: None,
             })
@@ -995,6 +1013,7 @@ mod tests {
             .create(CreateOptions {
                 size: test_size(),
                 tab_name: None,
+                window_id: None,
                 mcp_env: true,
                 cwd: None,
             })

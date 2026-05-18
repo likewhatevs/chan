@@ -26,6 +26,19 @@ describe("terminalWsPath", () => {
     );
   });
 
+  test("adds window id when provided", () => {
+    expect(
+      terminalWsPath({
+        cols: 80,
+        rows: 24,
+        tabName: "shell",
+        windowId: "drive-notes-7",
+      }),
+    ).toBe(
+      "/api/terminal/ws?cols=80&rows=24&tab_name=shell&window_id=drive-notes-7",
+    );
+  });
+
   test("reattach starts from zero when no sequence was persisted", () => {
     expect(
       terminalWsPath({

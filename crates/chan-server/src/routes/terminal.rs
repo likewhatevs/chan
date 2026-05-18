@@ -30,6 +30,7 @@ pub struct TerminalQuery {
     cols: Option<u16>,
     rows: Option<u16>,
     tab_name: Option<String>,
+    window_id: Option<String>,
     mcp_env: Option<TerminalMcpEnv>,
     cwd: Option<String>,
 }
@@ -107,6 +108,7 @@ pub async fn api_terminal_ws(
 
     let size = pty_size(query.cols, query.rows);
     let tab_name = query.tab_name.as_deref().and_then(normalize_tab_name);
+    let window_id = query.window_id.as_deref().and_then(normalize_window_id);
     let mcp_env = query.mcp_env.unwrap_or_default().enabled();
     let cwd = if query.session.is_some() {
         None
@@ -121,6 +123,7 @@ pub async fn api_terminal_ws(
         since: query.since,
         size,
         tab_name,
+        window_id,
         mcp_env,
         cwd,
     };
@@ -133,6 +136,7 @@ struct TerminalWsOptions {
     since: Option<u64>,
     size: PtySize,
     tab_name: Option<String>,
+    window_id: Option<String>,
     mcp_env: bool,
     cwd: Option<PathBuf>,
 }
@@ -145,6 +149,7 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
     let create_opts = CreateOptions {
         size: opts.size,
         tab_name: opts.tab_name,
+        window_id: opts.window_id,
         mcp_env: opts.mcp_env,
         cwd: opts.cwd,
     };
@@ -344,6 +349,14 @@ fn normalize_tab_name(name: &str) -> Option<String> {
     Some(trimmed.chars().take(128).collect())
 }
 
+fn normalize_window_id(id: &str) -> Option<String> {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.chars().take(256).collect())
+}
+
 fn resolve_terminal_cwd(drive_root: &Path, cwd: Option<&str>) -> Result<Option<PathBuf>, String> {
     let Some(raw) = cwd else {
         return Ok(None);
@@ -396,12 +409,14 @@ mod tests {
             let registry = Registry::new(RegistryConfig {
                 drive_root: cwd,
                 mcp_socket_path,
+                control_socket_path: Some(std::path::PathBuf::from("/tmp/chan-control-test.sock")),
                 terminal: TerminalConfig::default(),
             });
             let handle = registry
                 .create(CreateOptions {
                     size,
                     tab_name,
+                    window_id: Some("window-test".into()),
                     mcp_env,
                     cwd: None,
                 })
@@ -649,7 +664,7 @@ mod tests {
             )
             .await;
             terminal.handle.send_input(
-                b"printf '\\n__CWD_HOME_BEGIN__\\n'; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; env | grep -E '^(CHAN|CLAUDE|CODEX|GEMINI)_MCP_' | sort; printf '\\n__CWD_HOME_END__\\n'\r",
+                b"printf '\\n__CWD_HOME_BEGIN__\\n'; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '<CHAN_WINDOW_ID=%s>\\n' \"$CHAN_WINDOW_ID\"; printf '<CHAN_CONTROL_SOCKET=%s>\\n' \"$CHAN_CONTROL_SOCKET\"; env | grep -E '^(CHAN|CLAUDE|CODEX|GEMINI)_MCP_' | sort; printf '\\n__CWD_HOME_END__\\n'\r",
             );
             let out = collect_until(
                 &mut terminal.handle,
@@ -668,6 +683,14 @@ mod tests {
             assert!(
                 out.contains("<CHAN_TAB_NAME=build>"),
                 "terminal should expose the tab name env var, got {out:?}"
+            );
+            assert!(
+                out.contains("<CHAN_WINDOW_ID=window-test>"),
+                "terminal should expose the window id env var, got {out:?}"
+            );
+            assert!(
+                out.contains("<CHAN_CONTROL_SOCKET=/tmp/chan-control-test.sock>"),
+                "terminal should expose the control socket env var, got {out:?}"
             );
             assert!(
                 out.contains("CHAN_MCP_SOCKET=/tmp/chan-test.sock"),
@@ -781,7 +804,7 @@ mod tests {
         )
         .await;
         terminal.handle.send_input(
-            b"printf '\\n__MCP_ENV_OFF_BEGIN__\\n'; env | grep '^CHAN_MCP_' || true; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '\\n__MCP_ENV_OFF_END__\\n'\r",
+            b"printf '\\n__MCP_ENV_OFF_BEGIN__\\n'; env | grep '^CHAN_MCP_' || true; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '<CHAN_WINDOW_ID=%s>\\n' \"$CHAN_WINDOW_ID\"; printf '<CHAN_CONTROL_SOCKET=%s>\\n' \"$CHAN_CONTROL_SOCKET\"; printf '\\n__MCP_ENV_OFF_END__\\n'\r",
         );
         let out = collect_until(
             &mut terminal.handle,
@@ -796,6 +819,11 @@ mod tests {
         assert!(
             out.contains("<CHAN_TAB_NAME=plain>"),
             "mcp_env=false should not affect CHAN_TAB_NAME, got {out:?}"
+        );
+        assert!(
+            out.contains("<CHAN_WINDOW_ID=window-test>")
+                && out.contains("<CHAN_CONTROL_SOCKET=/tmp/chan-control-test.sock>"),
+            "mcp_env=false should not affect chan control env vars, got {out:?}"
         );
     }
 }

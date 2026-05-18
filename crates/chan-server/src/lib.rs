@@ -18,6 +18,7 @@
 mod auth;
 mod bus;
 mod config;
+mod control_socket;
 mod embed_seed;
 mod error;
 mod indexer;
@@ -36,7 +37,9 @@ mod util;
 
 pub use config::ServerConfig;
 pub use error::Error;
-pub use preferences::{EditorPrefs, EditorTheme, LineSpacing, PaneWidths, ThemeChoice};
+pub use preferences::{
+    BrowserSidePanes, EditorPrefs, EditorTheme, LineSpacing, PaneWidths, ThemeChoice,
+};
 pub use routes::{build_fs_graph, FsGraphResponse, FsGraphScope};
 
 use auth::{auth_middleware, load_or_create_token};
@@ -248,6 +251,9 @@ struct AppArtifacts {
     /// `None` when the bridge failed to bind (best-effort: agents
     /// fall back to v1 black-box mode).
     mcp_bridge: Option<mcp_bridge::BridgeHandle>,
+    /// First-party control socket for local CLI helpers. Held for
+    /// the same lifetime as the MCP bridge.
+    control_socket: Option<control_socket::ControlHandle>,
     /// Shutdown signal sender. Fed by SIGINT/SIGTERM and (optionally)
     /// the idle-timeout watcher. Receivers live on `AppState` and in
     /// `serve()` / `serve_via_tunnel()` for the runloop select.
@@ -366,9 +372,27 @@ async fn build_app(
             (None, None)
         }
     };
+    let control_socket_path = control_socket::pick_socket_path();
+    let control = control_socket::start(
+        control_socket_path.clone(),
+        state_for_bridge.clone(),
+        events_tx.clone(),
+        self_writes.clone(),
+    );
+    let (control_socket_path, control_socket) = match control {
+        Ok(handle) => (Some(handle.socket_path().to_path_buf()), Some(handle)),
+        Err(e) => {
+            tracing::warn!(
+                "control socket bind failed at {}: {e}",
+                control_socket_path.display()
+            );
+            (None, None)
+        }
+    };
     let terminal_sessions = Arc::new(TerminalRegistry::new(TerminalRegistryConfig {
         drive_root: drive_root.clone(),
         mcp_socket_path: mcp_socket_path.clone(),
+        control_socket_path: control_socket_path.clone(),
         terminal: server_config.terminal.clone(),
     }));
     let terminal_pruner = terminal_sessions.clone().spawn_pruner(shutdown_rx.clone());
@@ -409,6 +433,7 @@ async fn build_app(
         _terminal_pruner: terminal_pruner,
         prefix,
         mcp_bridge,
+        control_socket,
         shutdown_tx,
     })
 }
@@ -446,6 +471,7 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
     // accept loop. Bound to a `let _` so clippy doesn't warn on
     // `let _ = artifacts.mcp_bridge` discarding the guard prematurely.
     let _mcp_bridge = artifacts.mcp_bridge;
+    let _control_socket = artifacts.control_socket;
 
     // Single shutdown channel fed by both the idle-timeout watcher
     // (when --timeout is set) and SIGINT/SIGTERM. axum's
@@ -572,6 +598,7 @@ pub async fn serve_via_tunnel(
     // Keep the MCP bridge alive for the tunnel session; bound here
     // so the socket file is unlinked when serve_via_tunnel returns.
     let _mcp_bridge = artifacts.mcp_bridge;
+    let _control_socket = artifacts.control_socket;
     let indexer = artifacts.indexer;
 
     // Same shutdown wiring as `serve()`: signal_watcher drives a

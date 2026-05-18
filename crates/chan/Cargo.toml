@@ -38,6 +38,7 @@ chan-server = { path = "../chan-server", default-features = false }
 # binary instead of shipping a separate `chan-llm-mcp` companion.
 chan-llm = { workspace = true, features = ["mcp"] }
 clap = { workspace = true }
+clap_complete = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

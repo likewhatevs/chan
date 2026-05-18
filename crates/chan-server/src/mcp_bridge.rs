@@ -33,10 +33,14 @@ use tokio::task::JoinHandle;
 /// `sun_path` at 104 bytes, so the suffix is short and the directory
 /// short; `/tmp/chan-mcp-<pid>-<8 hex>.sock` fits well within that.
 pub fn pick_socket_path() -> PathBuf {
+    pick_named_socket_path("mcp")
+}
+
+pub(crate) fn pick_named_socket_path(name: &str) -> PathBuf {
     let mut bytes = [0u8; 4];
     rand::thread_rng().fill_bytes(&mut bytes);
     let suffix: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    std::env::temp_dir().join(format!("chan-mcp-{}-{}.sock", std::process::id(), suffix))
+    std::env::temp_dir().join(format!("chan-{name}-{}-{suffix}.sock", std::process::id()))
 }
 
 /// Bridge handle returned from `start`. Drop = abort the accept loop
