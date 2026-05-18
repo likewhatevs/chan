@@ -28,6 +28,11 @@
   import type { FindAdapter } from "./find";
   import { breathingRoom } from "./breathing_room";
   import { codeLanguages } from "./markdown/code_languages";
+  import {
+    removeTrailingWhitespace,
+    toggleCodeBlocks,
+    trailingWhitespaceHighlight,
+  } from "./tools";
 
   // Editor density follows the user's line_spacing pref. Same hook
   // the Wysiwyg side uses, exposed here as a `data-density` attribute
@@ -43,6 +48,7 @@
     value = $bindable(""),
     path = "",
     syntaxHighlight = true,
+    highlightTrailingWhitespace = false,
     initialCaret = null,
     onCaretChange,
   }: {
@@ -54,6 +60,7 @@
     /// compartment reconfigures to an empty extension array so CM
     /// renders plain text. Default true.
     syntaxHighlight?: boolean;
+    highlightTrailingWhitespace?: boolean;
     initialCaret?: { from: number; to: number } | null;
     onCaretChange?: (from: number, to: number) => void;
   } = $props();
@@ -81,6 +88,7 @@
   // (markdown + "no highlight"); text-class language packs land via
   // an async reconfigure after mount.
   const language = new Compartment();
+  const trailingWhitespace = new Compartment();
   // Track the language we last asked for; used to dedupe redundant
   // reconfigures when reactive deps re-fire without an actual change
   // (Svelte runs $effect on any prop touch).
@@ -118,6 +126,16 @@
     view.focus();
   }
 
+  export function removeTrailingWhitespaceInEditor(): boolean {
+    if (!view) return false;
+    return removeTrailingWhitespace(view);
+  }
+
+  export function toggleCodeBlocksInEditor(): boolean {
+    if (!view) return false;
+    return toggleCodeBlocks(view);
+  }
+
   onMount(() => {
     if (!host) return;
     // Seed the language compartment with whatever we can resolve
@@ -136,6 +154,7 @@
         // detection like the WYSIWYG side). Shift-Tab outdents.
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
         language.of(initialLang),
+        trailingWhitespace.of(highlightTrailingWhitespace ? trailingWhitespaceHighlight() : []),
         theme.extension,
         EditorView.lineWrapping,
         breathingRoom(),
@@ -256,6 +275,15 @@
     void syntaxHighlight;
     void applyLanguage();
   });
+
+  $effect(() => {
+    if (!view) return;
+    view.dispatch({
+      effects: trailingWhitespace.reconfigure(
+        highlightTrailingWhitespace ? trailingWhitespaceHighlight() : [],
+      ),
+    });
+  });
 </script>
 
 <div class="md-source" data-density={density} bind:this={host}></div>
@@ -349,5 +377,9 @@
   :global(.md-source .find-match--current) {
     background: var(--find-match-current-bg, rgba(255, 140, 0, 0.65));
     outline: 1px solid var(--find-match-current-border, rgba(180, 80, 0, 0.9));
+  }
+  :global(.md-source .cm-trailing-whitespace) {
+    background: rgba(220, 38, 38, 0.22);
+    border-radius: 2px;
   }
 </style>

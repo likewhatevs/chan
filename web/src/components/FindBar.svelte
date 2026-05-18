@@ -134,14 +134,19 @@
   });
 
   // Auto-focus the input on mount + whenever it comes back into
-  // the DOM after a mode switch.
+  // the DOM after a mode switch. `focusNonce` also bumps when the
+  // bar is already open and the host sends app.find.open again.
   $effect(() => {
     if (!inputEl) return;
     // Touch find.open / tabId so the focus runs on every fresh
     // mount.
     find.open;
     tabId;
-    void tick().then(() => inputEl?.focus());
+    find.focusNonce;
+    void tick().then(() => {
+      inputEl?.focus();
+      if (find.query) inputEl?.select();
+    });
   });
 
   onDestroy(() => {
@@ -195,50 +200,60 @@
     return `${clamp(find.currentIndex, n) + 1} of ${n}`;
   });
   const noMatches = $derived(find.query !== "" && find.matches.length === 0);
+  const stateMessage = $derived.by(() => {
+    if (find.query === "") return "Empty search, type something";
+    if (find.matches.length === 0) return "No matches in this document.";
+    return "";
+  });
 </script>
 
 <div class="find-bar" role="search" aria-label="find in document">
-  <input
-    bind:this={inputEl}
-    bind:value={find.query}
-    onkeydown={onKeydown}
-    class="find-input"
-    class:no-matches={noMatches}
-    type="text"
-    placeholder="Find in document"
-    aria-label="find query"
-    spellcheck="false"
-    autocomplete="off"
-  />
-  <span class="find-counter" aria-live="polite">{counter}</span>
-  <button
-    class="find-btn"
-    onclick={onCaseToggle}
-    class:on={find.caseSensitive}
-    title="match case"
-    aria-label="match case"
-    aria-pressed={find.caseSensitive}
-  >Aa</button>
-  <button
-    class="find-btn"
-    onclick={goPrev}
-    disabled={find.matches.length === 0}
-    title="previous match (Shift+Enter)"
-    aria-label="previous match"
-  >▲</button>
-  <button
-    class="find-btn"
-    onclick={goNext}
-    disabled={find.matches.length === 0}
-    title="next match (Enter)"
-    aria-label="next match"
-  >▼</button>
-  <button
-    class="find-btn"
-    onclick={close}
-    title="close (Esc)"
-    aria-label="close find bar"
-  >×</button>
+  <div class="find-row">
+    <input
+      bind:this={inputEl}
+      bind:value={find.query}
+      onkeydown={onKeydown}
+      class="find-input"
+      class:no-matches={noMatches}
+      type="text"
+      placeholder="Find in document"
+      aria-label="find query"
+      spellcheck="false"
+      autocomplete="off"
+    />
+    <span class="find-counter" aria-live="polite">{counter}</span>
+    <button
+      class="find-btn"
+      onclick={onCaseToggle}
+      class:on={find.caseSensitive}
+      title="match case"
+      aria-label="match case"
+      aria-pressed={find.caseSensitive}
+    >Aa</button>
+    <button
+      class="find-btn"
+      onclick={goPrev}
+      disabled={find.matches.length === 0}
+      title="previous match (Shift+Enter)"
+      aria-label="previous match"
+    >▲</button>
+    <button
+      class="find-btn"
+      onclick={goNext}
+      disabled={find.matches.length === 0}
+      title="next match (Enter)"
+      aria-label="next match"
+    >▼</button>
+    <button
+      class="find-btn"
+      onclick={close}
+      title="close (Esc)"
+      aria-label="close find bar"
+    >×</button>
+  </div>
+  {#if stateMessage}
+    <div class="find-state" aria-live="polite">{stateMessage}</div>
+  {/if}
 </div>
 
 <style>
@@ -248,7 +263,8 @@
     right: 8px;
     z-index: 40;
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    align-items: stretch;
     gap: 4px;
     padding: 4px 6px;
     background: var(--bg-card);
@@ -257,6 +273,11 @@
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
     font-size: 13px;
     color: var(--text);
+  }
+  .find-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
   }
   .find-input {
     width: 280px;
@@ -304,5 +325,10 @@
   .find-btn:disabled {
     opacity: 0.4;
     cursor: default;
+  }
+  .find-state {
+    color: var(--text-secondary);
+    font-size: 12px;
+    padding: 1px 2px 0;
   }
 </style>

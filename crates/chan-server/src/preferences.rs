@@ -17,6 +17,7 @@
 //!   - line_spacing (standard / compact; legacy `tight` deserializes as
 //!     compact)
 //!   - date_format (id; UI-side mapping in dateFormats.ts)
+//!   - strip_trailing_whitespace_on_save
 //!
 //! The Preferences view returned over /api/drive and /api/config is
 //! assembled in lib.rs by joining EditorPrefs with ServerConfig.
@@ -47,6 +48,8 @@ pub struct EditorPrefs {
     pub line_spacing: LineSpacing,
     #[serde(default = "default_date_format")]
     pub date_format: String,
+    #[serde(default)]
+    pub strip_trailing_whitespace_on_save: bool,
 }
 
 impl Default for EditorPrefs {
@@ -58,6 +61,7 @@ impl Default for EditorPrefs {
             browser_side_panes: BrowserSidePanes::default(),
             line_spacing: LineSpacing::default(),
             date_format: default_date_format(),
+            strip_trailing_whitespace_on_save: false,
         }
     }
 }

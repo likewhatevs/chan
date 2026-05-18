@@ -25,6 +25,7 @@ import { openBubbleShell } from "../bubble";
 import type { BubbleHandle } from "./types";
 import { createCaretAnchor } from "./anchor";
 import { api } from "../../api/client";
+import { indexStatus } from "../../state/store.svelte";
 import {
   filterBlocks,
   insertBlockAnchor,
@@ -32,6 +33,7 @@ import {
   parseBlocks,
   type ParsedBlock,
 } from "../extensions/wikiBlocks";
+import { completionEmptyState, renderBubbleEmptyState } from "./empty_state";
 
 export interface WikiBubbleOpts {
   view: EditorView;
@@ -146,24 +148,28 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
 
   function render(): void {
     list.innerHTML = "";
+    list.classList.remove("md-bubble-empty-state");
     const hits = activeHits();
     if (hits.length === 0) {
       if (mode.kind === "file") {
-        status.textContent = query.length === 0
-          ? "Type to search files"
-          : "No matches";
+        renderBubbleEmptyState(list, completionEmptyState(query, indexStatus.value));
+        status.textContent = "";
+        status.classList.add("md-bubble-status-empty");
       } else if (mode.kind === "heading") {
         status.textContent = headingTarget === mode.target
           ? "No matching headings"
           : "Loading headings...";
+        status.classList.remove("md-bubble-status-empty");
       } else {
         status.textContent = blockTarget === mode.target
           ? "No matching blocks"
           : "Loading blocks...";
+        status.classList.remove("md-bubble-status-empty");
       }
       shell.reposition();
       return;
     }
+    status.classList.remove("md-bubble-status-empty");
     const openHint = opts.onOpenLink ? " · ⌘↵ open" : "";
     if (mode.kind === "heading") {
       status.textContent = `${hits.length} heading${hits.length === 1 ? "" : "s"} in ${mode.target} · ↵ insert${openHint}`;

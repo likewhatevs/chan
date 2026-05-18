@@ -43,6 +43,7 @@ import {
 import { graphData, invalidateGraph, ensureGraphLoaded } from "./graphData.svelte";
 import { SETTINGS_DISABLED, withTokenQuery } from "../api/transport";
 import { uiConfirm } from "./confirm.svelte";
+import { applyEditorToolPreferences } from "./editorTools.svelte";
 export const drive = $state<{ info: DriveInfo | null }>({ info: null });
 
 export const tree = $state<{
@@ -189,6 +190,7 @@ export function applyServerPreferences(): void {
     browserSidePanes.left = prefs.browser_side_panes.left;
     browserSidePanes.right = prefs.browser_side_panes.right;
   }
+  applyEditorToolPreferences(prefs);
 }
 
 /** Subscribe to OS-level color-scheme changes. While the user is in

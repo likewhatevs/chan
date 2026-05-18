@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { api } from "../api/client";
 import { confirmState, resolveConfirm } from "./confirm.svelte";
+import { editorToolsPrefs } from "./editorTools.svelte";
 import {
   activePane,
   broadcastTerminalInput,
@@ -13,6 +14,7 @@ import {
   hydrateTerminalSessionsFromLayout,
   layout,
   openInPane,
+  openFind,
   openTerminalInPane,
   removeTerminalFromBroadcastGroup,
   registerTerminalInputSink,
@@ -68,6 +70,8 @@ function fileTab(partial: Partial<FileTab> = {}): FileTab {
     fsWritable: true,
     styleToolbarOpen: false,
     syntaxHighlight: true,
+    highlightTrailingWhitespace: false,
+    codeBlocksCollapsed: false,
     ...partial,
   };
 }
@@ -90,6 +94,7 @@ afterEach(() => {
   resolveConfirm(false);
   resetLayout([]);
   clearRecentlyClosedTabsForTest();
+  editorToolsPrefs.stripTrailingWhitespaceOnSave = false;
 });
 
 describe("tab close confirmation", () => {
@@ -167,6 +172,22 @@ describe("tab drag and drop", () => {
     expect(activePane().activeTabId).toBe(active.id);
     expect(shouldCloseTabAfterDragEnd(pane.id, active.id, "move")).toBe(false);
     expect(activePane().tabs.map((tab) => tab.id)).toEqual([inactive.id, active.id]);
+  });
+});
+
+describe("find state", () => {
+  test("reopening an already open find bar bumps the focus nonce", () => {
+    const tab = fileTab();
+    resetLayout([tab]);
+
+    openFind(tab.id);
+    const opened = activePane().tabs[0] as FileTab;
+    expect(opened.find?.open).toBe(true);
+    expect(opened.find?.focusNonce).toBe(1);
+
+    openFind(tab.id);
+    expect(opened.find?.open).toBe(true);
+    expect(opened.find?.focusNonce).toBe(2);
   });
 });
 
@@ -461,6 +482,23 @@ describe("terminal tab naming", () => {
 });
 
 describe("autosave", () => {
+  test("strips trailing whitespace on save when the preference is enabled", async () => {
+    editorToolsPrefs.stripTrailingWhitespaceOnSave = true;
+    const tab = fileTab({
+      content: "a  \n\tb\t\n",
+      saved: "",
+      savedMtime: 1,
+    });
+    resetLayout([tab]);
+    const write = vi.spyOn(api, "write").mockResolvedValue({ mtime: 2 });
+
+    await saveTab(tab);
+
+    expect(write).toHaveBeenCalledWith("notes/a.md", "a\n\tb\n", 1);
+    expect(tab.content).toBe("a\n\tb\n");
+    expect(tab.saved).toBe("a\n\tb\n");
+  });
+
   test("serializes overlapping saves and keeps edits after an in-flight save dirty", async () => {
     vi.useFakeTimers();
     const tab = fileTab({ content: "v1", saved: "base", savedMtime: 1 });

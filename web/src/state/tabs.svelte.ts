@@ -14,7 +14,9 @@
 import { api } from "../api/client";
 import { ApiError } from "../api/errors";
 import type { FindRange } from "../editor/find";
+import { stripTrailingWhitespaceText } from "../editor/tools";
 import { uiConfirm } from "./confirm.svelte";
+import { editorToolsPrefs } from "./editorTools.svelte";
 import { classifyPath, isCsv, isEditableText, isJson } from "./fileTypes";
 import type { FileKind } from "./kinds";
 import { notify } from "./notify.svelte";
@@ -87,6 +89,10 @@ export type FindState = {
   /// scan. The counter reads "10000+" instead of "N of M" when
   /// this is set so users know they're seeing a truncated count.
   truncated: boolean;
+  /// Bumped every time app.find.open targets this tab. Lets an
+  /// already-mounted FindBar re-focus its input instead of treating
+  /// the command as a no-op.
+  focusNonce: number;
 };
 
 export function makeFindState(): FindState {
@@ -97,6 +103,7 @@ export function makeFindState(): FindState {
     matches: [],
     currentIndex: -1,
     truncated: false,
+    focusNonce: 0,
   };
 }
 
@@ -182,6 +189,12 @@ export type FileTab = {
   /// Per-tab so a "reading" tab can read code with plain text and
   /// an adjacent "editing" tab can keep syntax on.
   syntaxHighlight: boolean;
+  /// Visualize trailing spaces and tabs in the mounted editor. Per-tab
+  /// because it is an inspection aid, not a document property.
+  highlightTrailingWhitespace: boolean;
+  /// Whether the user last asked this tab to collapse fenced code
+  /// blocks. The mounted editor performs the actual folds.
+  codeBlocksCollapsed: boolean;
   /// Last known caret position (doc offsets), persisted across the
   /// Wysiwyg <-> Source mode toggle and across page reloads via
   /// the URL-hash session. The active editor pushes updates here
@@ -446,6 +459,7 @@ export function openFind(tabId: string): void {
   if (!found) return;
   if (!found.tab.find) found.tab.find = makeFindState();
   found.tab.find.open = true;
+  found.tab.find.focusNonce += 1;
 }
 
 /// Close the find bar for the named tab. Leaves the query string
@@ -826,6 +840,8 @@ export async function openInPane(paneId: string, path: string): Promise<void> {
     fsWritable: true,
     styleToolbarOpen: false,
     syntaxHighlight: true,
+    highlightTrailingWhitespace: false,
+    codeBlocksCollapsed: false,
   };
   p.tabs.push(newTab);
   p.activeTabId = newTab.id;
@@ -1031,6 +1047,8 @@ function cloneTab(src: Tab): Tab {
     fsWritable: src.fsWritable,
     styleToolbarOpen: src.styleToolbarOpen,
     syntaxHighlight: src.syntaxHighlight,
+    highlightTrailingWhitespace: src.highlightTrailingWhitespace,
+    codeBlocksCollapsed: src.codeBlocksCollapsed,
     caret: src.caret ? { ...src.caret } : undefined,
     // Find state is per-tab UI state; drop it when the tab moves
     // panes so the destination opens fresh without a half-mounted
@@ -1169,6 +1187,12 @@ export function setTabStyleToolbarOpen(tab: FileTab, open: boolean): void {
 export function setTabSyntaxHighlight(tab: FileTab, on: boolean): void {
   tab.syntaxHighlight = on;
 }
+export function setTabHighlightTrailingWhitespace(tab: FileTab, on: boolean): void {
+  tab.highlightTrailingWhitespace = on;
+}
+export function setTabCodeBlocksCollapsed(tab: FileTab, collapsed: boolean): void {
+  tab.codeBlocksCollapsed = collapsed;
+}
 
 /// Whether a tab represents an unsaved buffer.
 export function isDirty(t: Tab): boolean {
@@ -1284,10 +1308,17 @@ async function performSaveOnce(t: FileTab): Promise<void> {
     }
   }
   const path = t.path;
-  const content = t.content;
+  const sourceContent = t.content;
+  const stripOnSave = editorToolsPrefs.stripTrailingWhitespaceOnSave;
+  const content = stripOnSave
+    ? stripTrailingWhitespaceText(sourceContent)
+    : sourceContent;
   const expectedMtime = t.savedMtime;
   try {
     const r = await api.write(path, content, expectedMtime);
+    if (stripOnSave && content !== sourceContent && t.content === sourceContent) {
+      t.content = content;
+    }
     t.saved = content;
     t.savedMtime = r.mtime ?? null;
     t.error = null;
@@ -1638,6 +1669,8 @@ export async function restoreLayout(
           // highlight on this tab; any other value (absent / 1)
           // restores to default-on.
           syntaxHighlight: sertab.h !== 0,
+          highlightTrailingWhitespace: false,
+          codeBlocksCollapsed: false,
           // Restored caret rides through to the editor via tab.caret;
           // the editor lands it once content finishes loading.
           caret:

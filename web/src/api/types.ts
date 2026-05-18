@@ -96,6 +96,9 @@ export type Preferences = {
   /// selection in the calendar picker's format dropdown.
   /// Format ids are defined in `web/src/editor/dateFormats.ts`.
   date_format: string;
+  /// When true, saves strip trailing spaces and tabs before writing
+  /// text buffers to disk.
+  strip_trailing_whitespace_on_save: boolean;
   /// Search indexer resource profile. Not surfaced in Settings yet,
   /// but round-tripped by /api/config so CLI/server config changes
   /// remain visible to clients.

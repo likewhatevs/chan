@@ -67,12 +67,18 @@
   import type { FindAdapter } from "./find";
   import { breathingRoom } from "./breathing_room";
   import { listGuideVisibility } from "./extensions/list_guide_visibility";
+  import {
+    removeTrailingWhitespace,
+    toggleCodeBlocks,
+    trailingWhitespaceHighlight,
+  } from "./tools";
 
   let {
     value = $bindable(""),
     readonly = false,
     currentPath = null,
     wikiPickerPrefix = null,
+    highlightTrailingWhitespace = false,
     initialCaret = null,
     onSubmit,
     onSelectionChange,
@@ -86,6 +92,7 @@
     readonly?: boolean;
     currentPath?: string | null;
     wikiPickerPrefix?: string | null;
+    highlightTrailingWhitespace?: boolean;
     initialCaret?: { from: number; to: number } | null;
     onSubmit?: () => void;
     onSelectionChange?: () => void;
@@ -125,6 +132,7 @@
   const sync = createValueSync();
   const theme = makeThemeCompartment(ui.theme);
   const editableCompartment = new Compartment();
+  const trailingWhitespace = new Compartment();
   /// Compartment for the write-side bundle (bubble listener / bubble
   /// keymap / image drop / HTML paste). Wraps these so flipping
   /// `readonly` at runtime — e.g. user clicks the editor's "read"
@@ -283,6 +291,14 @@
   export function toggleLink(url?: string): void {
     if (view) fmt.toggleLink(view, url);
   }
+  export function removeTrailingWhitespaceInEditor(): boolean {
+    if (!view) return false;
+    return removeTrailingWhitespace(view);
+  }
+  export function toggleCodeBlocksInEditor(): boolean {
+    if (!view) return false;
+    return toggleCodeBlocks(view);
+  }
   export function isActive(name: string): boolean {
     return view ? fmt.isActive(view, name) : false;
   }
@@ -316,6 +332,7 @@
         chanMarkdown(),
         headingFold(),
         theme.extension,
+        trailingWhitespace.of(highlightTrailingWhitespace ? trailingWhitespaceHighlight() : []),
         EditorView.lineWrapping,
         // Replace the browser-native text selection with CM6's
         // synthetic selection layer. Browser selection rectangles
@@ -476,6 +493,15 @@
   $effect(() => {
     if (!view) return;
     theme.reconfigure(view, ui.theme);
+  });
+
+  $effect(() => {
+    if (!view) return;
+    view.dispatch({
+      effects: trailingWhitespace.reconfigure(
+        highlightTrailingWhitespace ? trailingWhitespaceHighlight() : [],
+      ),
+    });
   });
 
   // Reconfigure editability when the readonly prop flips. Runs in its
@@ -1791,5 +1817,9 @@
   :global(.md-wysiwyg-cm6 .find-match--current) {
     background: var(--find-match-current-bg, rgba(255, 140, 0, 0.65));
     outline: 1px solid var(--find-match-current-border, rgba(180, 80, 0, 0.9));
+  }
+  :global(.md-wysiwyg-cm6 .cm-trailing-whitespace) {
+    background: rgba(220, 38, 38, 0.22);
+    border-radius: 2px;
   }
 </style>

@@ -21,6 +21,7 @@ import { openBubbleShell } from "../bubble";
 import { createCaretAnchor } from "./anchor";
 import type { BubbleHandle } from "./types";
 import { api } from "../../api/client";
+import { indexStatus } from "../../state/store.svelte";
 import {
   isImagePath,
   parseImageSrc,
@@ -30,6 +31,7 @@ import {
 } from "../extensions/image";
 import { convertHeicForUpload } from "./heic";
 import { relativizePath } from "../links";
+import { completionEmptyState, renderBubbleEmptyState } from "./empty_state";
 
 export interface ImageBubbleOpts {
   view: EditorView;
@@ -247,12 +249,16 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
 
   function render(): void {
     list.innerHTML = "";
+    list.classList.remove("md-bubble-empty-state");
     if (hits.length === 0) {
-      status.textContent = catalog.length === 0
-        ? "Loading images..."
-        : query.length === 0
-          ? "No images in drive"
-          : "No matches";
+      if (catalog.length === 0 && query.trim() !== "") {
+        status.textContent = "Loading images...";
+        status.classList.remove("md-bubble-status-empty");
+      } else {
+        renderBubbleEmptyState(list, completionEmptyState(query, indexStatus.value));
+        status.textContent = "";
+        status.classList.add("md-bubble-status-empty");
+      }
       // Still render the preview even with empty hits — in raw mode
       // the fallback uses the current URL slot text, so the user
       // sees the image they're editing even when the catalog
@@ -261,6 +267,7 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
       shell.reposition();
       return;
     }
+    status.classList.remove("md-bubble-status-empty");
     const openHint = opts.onOpenLink ? " · ⌘↵ open" : "";
     status.textContent = `${hits.length} result${hits.length === 1 ? "" : "s"} · ↵ insert${openHint}`;
     for (let i = 0; i < hits.length; i++) {

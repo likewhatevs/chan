@@ -31,6 +31,7 @@ pub struct PreferencesView {
     pub browser_side_panes: BrowserSidePanes,
     pub line_spacing: LineSpacing,
     pub date_format: String,
+    pub strip_trailing_whitespace_on_save: bool,
     pub search_aggression: SearchAggression,
     pub terminal: TerminalConfig,
 }
@@ -46,6 +47,7 @@ pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
         browser_side_panes: editor.browser_side_panes,
         line_spacing: editor.line_spacing,
         date_format: editor.date_format.clone(),
+        strip_trailing_whitespace_on_save: editor.strip_trailing_whitespace_on_save,
         search_aggression: server.search.aggression,
         terminal: server.terminal.clone(),
     }
@@ -205,6 +207,7 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
         editor.browser_side_panes = view.browser_side_panes;
         editor.line_spacing = view.line_spacing;
         editor.date_format = view.date_format;
+        editor.strip_trailing_whitespace_on_save = view.strip_trailing_whitespace_on_save;
         editor.save()?;
     }
     {

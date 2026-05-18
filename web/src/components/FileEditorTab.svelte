@@ -19,6 +19,7 @@
     Braces,
     Code2,
     Copy,
+    Eraser,
     FilePlus,
     Folder,
     History,
@@ -29,6 +30,8 @@
     RotateCw,
     Search as SearchIcon,
     Settings as SettingsIcon,
+    Square,
+    SquareCheck,
     SquareSplitHorizontal,
     SquareSplitVertical,
     Table2,
@@ -54,12 +57,19 @@
     setMode,
     setTabCaret,
     setTabInspectorOpen,
+    setTabCodeBlocksCollapsed,
+    setTabHighlightTrailingWhitespace,
     setTabOutlineOpen,
     setTabStyleToolbarOpen,
     setTabSyntaxHighlight,
     type FileTab,
   } from "../state/tabs.svelte";
   import WikiStatusBar from "./WikiStatusBar.svelte";
+  import {
+    editorToolsPrefs,
+    persistStripTrailingWhitespaceOnSave,
+  } from "../state/editorTools.svelte";
+  import { stripTrailingWhitespaceText } from "../editor/tools";
 
   import {
     fileOps,
@@ -267,6 +277,41 @@
     closeTabMenu();
   }
 
+  const markdownToolsEnabled = $derived(tab.fileKind !== "text");
+
+  function doToggleTrailingWhitespace(): void {
+    setTabHighlightTrailingWhitespace(tab, !tab.highlightTrailingWhitespace);
+    closeTabMenu();
+  }
+
+  function doToggleCodeBlocks(): void {
+    if (!markdownToolsEnabled) return;
+    const changed =
+      tab.mode === "wysiwyg"
+        ? wysiwygRef?.toggleCodeBlocksInEditor()
+        : sourceRef?.toggleCodeBlocksInEditor();
+    if (changed) setTabCodeBlocksCollapsed(tab, !tab.codeBlocksCollapsed);
+    closeTabMenu();
+  }
+
+  function doRemoveTrailingWhitespace(): void {
+    const changed =
+      tab.mode === "wysiwyg"
+        ? wysiwygRef?.removeTrailingWhitespaceInEditor()
+        : sourceRef?.removeTrailingWhitespaceInEditor();
+    if (!changed) {
+      const stripped = stripTrailingWhitespaceText(tab.content);
+      if (stripped !== tab.content) tab.content = stripped;
+    }
+    closeTabMenu();
+  }
+
+  function doToggleAutoStripWhitespace(): void {
+    void persistStripTrailingWhitespaceOnSave(
+      !editorToolsPrefs.stripTrailingWhitespaceOnSave,
+    );
+  }
+
   // ---- right-click context menu --------------------------------------
   // Re-uses the existing tab menu bubble (the same one that opens
   // from the tab dot). The bubble carries Duplicate / Rename /
@@ -469,6 +514,55 @@
             <span class="mbtn-chord"></span>
           </button>
         {/if}
+        <button
+          class="mbtn"
+          onclick={doToggleTrailingWhitespace}
+          class:on={tab.highlightTrailingWhitespace}
+        >
+          <span class="mbtn-icon">
+            <Highlighter size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Highlight trailing whitespace</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        {#if markdownToolsEnabled}
+          <button
+            class="mbtn"
+            onclick={doToggleCodeBlocks}
+            class:on={tab.codeBlocksCollapsed}
+          >
+            <span class="mbtn-icon">
+              <Code2 size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">
+              {tab.codeBlocksCollapsed ? "Expand code blocks" : "Collapse code blocks"}
+            </span>
+            <span class="mbtn-chord"></span>
+          </button>
+        {/if}
+        <button class="mbtn" onclick={doRemoveTrailingWhitespace}>
+          <span class="mbtn-icon">
+            <Eraser size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Remove trailing whitespace</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <button
+          class="mbtn"
+          onclick={doToggleAutoStripWhitespace}
+          class:on={editorToolsPrefs.stripTrailingWhitespaceOnSave}
+        >
+          <span class="mbtn-icon">
+            {#if editorToolsPrefs.stripTrailingWhitespaceOnSave}
+              <SquareCheck size={16} strokeWidth={1.75} aria-hidden="true" />
+            {:else}
+              <Square size={16} strokeWidth={1.75} aria-hidden="true" />
+            {/if}
+          </span>
+          <span class="mbtn-label">Run automatically on save / auto-save</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <div class="msep" role="separator"></div>
         <button class="mbtn" onclick={doToggleOutline} class:on={tab.outlineOpen}>
           <span class="mbtn-icon">
             {#if tab.outlineOpen}
@@ -654,6 +748,7 @@
             bind:this={wysiwygRef}
             bind:value={tab.content}
             readonly={readOnly}
+            highlightTrailingWhitespace={tab.highlightTrailingWhitespace}
             initialCaret={tab.caret ?? null}
             onCaretChange={(from, to) => setTabCaret(tab, from, to)}
             onSelectionChange={() => (selVer = selVer + 1)}
@@ -733,6 +828,7 @@
             bind:value={tab.content}
             path={tab.path}
             syntaxHighlight={tab.syntaxHighlight}
+            highlightTrailingWhitespace={tab.highlightTrailingWhitespace}
             initialCaret={tab.caret ?? null}
             onCaretChange={(from, to) => setTabCaret(tab, from, to)}
           />

@@ -697,6 +697,36 @@
     background: var(--bg);
     overflow: hidden;
   }
+  :global(.md-bubble .md-bubble-status.md-bubble-status-empty) {
+    border-top: 0;
+    margin-top: 0;
+    padding: 0;
+  }
+  :global(.md-bubble .md-bubble-empty-state) {
+    padding: 7px 8px;
+    color: var(--text-secondary, #888);
+    gap: 2px;
+  }
+  :global(.md-bubble .md-bubble-empty-primary) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text);
+  }
+  :global(.md-bubble .md-bubble-empty-secondary) {
+    font-size: 12px;
+  }
+  :global(.md-bubble .md-bubble-spinner) {
+    width: 10px;
+    height: 10px;
+    border: 2px solid var(--border, #ddd);
+    border-top-color: var(--accent, #2563b8);
+    border-radius: 999px;
+    animation: md-bubble-spin 700ms linear infinite;
+  }
+  @keyframes md-bubble-spin {
+    to { transform: rotate(360deg); }
+  }
   .app {
     display: flex;
     height: 100vh;
