@@ -1,10 +1,9 @@
 <script lang="ts">
-  import { Check, ChevronDown, ChevronUp, CircleSlash, RefreshCw } from "lucide-svelte";
-  import { api } from "../api/client";
+  import { ChevronDown, ChevronUp, RefreshCw } from "lucide-svelte";
   import type { BubbleOverlayMode } from "../api/types";
   import { openExternalUrl } from "../editor/external_links";
   import { drive } from "../state/store.svelte";
-  import type { ScopeGrant, TerminalWatcherState, WatcherEvent } from "../state/tabs.svelte";
+  import type { SurveyOption, TerminalWatcherState, WatcherEvent } from "../state/tabs.svelte";
   import { normalizeStandingOptions, writeSurveyReply } from "../state/watcherEvents";
 
   let {
@@ -15,14 +14,25 @@
     onRefresh: () => Promise<void> | void;
   } = $props();
 
+  type NumberedOption = SurveyOption & { n: number };
+
   const mode = $derived<BubbleOverlayMode>(
     drive.info?.preferences.bubble_overlay_mode === "tray" ? "tray" : "stack",
   );
   const visibleEvents = $derived(watcher.events.filter((event) => event.type !== "survey-reply"));
+  const orderedEvents = $derived([...visibleEvents].reverse());
   const collapsed = $derived(mode === "tray" && !watcher.trayExpanded);
-  let selections = $state<Record<string, Record<number, string>>>({});
-  let scopeGrants = $state<Record<string, ScopeGrant>>({});
+  let answers = $state<Record<string, Record<number, string>>>({});
+  let focusedQuestion = $state<Record<string, number>>({});
+  let focusedBubbleId = $state<string | null>(null);
   let busyReply = $state<string | null>(null);
+
+  $effect(() => {
+    const ids = new Set(orderedEvents.map((event) => event.id));
+    if (!focusedBubbleId || !ids.has(focusedBubbleId)) {
+      focusedBubbleId = orderedEvents[0]?.id ?? null;
+    }
+  });
 
   function textParts(text: string): Array<{ text: string; href?: string }> {
     const out: Array<{ text: string; href?: string }> = [];
@@ -38,39 +48,46 @@
     return out;
   }
 
-  async function setMode(next: BubbleOverlayMode): Promise<void> {
-    if (mode === next) return;
-    if (drive.info) {
-      drive.info = {
-        ...drive.info,
-        preferences: { ...drive.info.preferences, bubble_overlay_mode: next },
-      };
+  function optionsFor(event: WatcherEvent, questionIndex: number): NumberedOption[] {
+    const question = event.questions?.[questionIndex];
+    const base = question?.options ?? [];
+    const standing = normalizeStandingOptions(event.standing_options);
+    return [...base, ...standing].slice(0, 9).map((option, idx) => ({
+      ...option,
+      n: idx + 1,
+    }));
+  }
+
+  async function answer(event: WatcherEvent, questionIndex: number, option: SurveyOption): Promise<void> {
+    const byQuestion = { ...(answers[event.id] ?? {}), [questionIndex]: option.key };
+    answers[event.id] = byQuestion;
+    const total = event.questions?.length ?? 0;
+    if (total <= 1) {
+      await commit(event, byQuestion);
+      return;
     }
-    await api.setBubbleOverlayMode(next);
+    const next = nextUnanswered(total, byQuestion, questionIndex);
+    if (next === null) {
+      await commit(event, byQuestion);
+    } else {
+      focusedQuestion[event.id] = next;
+    }
   }
 
-  function choose(event: WatcherEvent, questionIndex: number, key: string): void {
-    const byQuestion = { ...(selections[event.id] ?? {}) };
-    byQuestion[questionIndex] = key;
-    selections[event.id] = byQuestion;
+  async function skip(event: WatcherEvent): Promise<void> {
+    await commit(event, {});
   }
 
-  async function submit(event: WatcherEvent, skip = false): Promise<void> {
+  async function commit(event: WatcherEvent, byQuestion: Record<number, string>): Promise<void> {
+    if (busyReply) return;
     busyReply = event.id;
     watcher.error = undefined;
     try {
-      const answers = skip
-        ? []
-        : Object.entries(selections[event.id] ?? {}).map(([idx, key]) => ({
-            question_index: Number(idx),
-            key,
-          }));
-      await writeSurveyReply(
-        watcher.path,
-        event,
-        answers,
-        skip ? "one-shot" : scopeGrants[event.id] ?? "one-shot",
-      );
+      const replyAnswers = Object.entries(byQuestion).map(([idx, key]) => ({
+        question_index: Number(idx),
+        key,
+      }));
+      await writeSurveyReply(watcher.path, event, replyAnswers, "one-shot");
       watcher.events = watcher.events.filter((candidate) => candidate.id !== event.id);
     } catch (err) {
       watcher.error = `reply failed: ${(err as Error).message}`;
@@ -78,89 +95,149 @@
       busyReply = null;
     }
   }
+
+  function nextUnanswered(
+    total: number,
+    byQuestion: Record<number, string>,
+    from: number,
+  ): number | null {
+    for (let offset = 1; offset <= total; offset += 1) {
+      const idx = (from + offset) % total;
+      if (byQuestion[idx] === undefined) return idx;
+    }
+    return null;
+  }
+
+  function setFocusedQuestion(event: WatcherEvent, idx: number): void {
+    const total = event.questions?.length ?? 0;
+    if (total === 0) return;
+    focusedQuestion[event.id] = ((idx % total) + total) % total;
+    focusedBubbleId = event.id;
+  }
+
+  function focusAdjacentBubble(delta: number): void {
+    if (orderedEvents.length === 0) return;
+    const current = Math.max(0, orderedEvents.findIndex((event) => event.id === focusedBubbleId));
+    const next = (current + delta + orderedEvents.length) % orderedEvents.length;
+    focusedBubbleId = orderedEvents[next]?.id ?? null;
+  }
+
+  function keyTarget(): WatcherEvent | null {
+    if (collapsed) return null;
+    return orderedEvents.find((event) => event.id === focusedBubbleId) ?? orderedEvents[0] ?? null;
+  }
+
+  function editableTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof Element)) return false;
+    const el = target as HTMLElement;
+    return Boolean(el?.closest("input, textarea, select, [contenteditable='true']"));
+  }
+
+  function onWindowKeydown(e: KeyboardEvent): void {
+    if (editableTarget(e.target)) return;
+    const event = keyTarget();
+    if (!event || event.type !== "survey" || !event.questions?.length) return;
+    if ((e.metaKey || e.ctrlKey) && e.key === "ArrowDown") {
+      e.preventDefault();
+      focusAdjacentBubble(1);
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === "ArrowUp") {
+      e.preventDefault();
+      focusAdjacentBubble(-1);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      void skip(event);
+      return;
+    }
+    if (e.key === "Tab" || e.key === "ArrowRight" || e.key === "ArrowLeft") {
+      const total = event.questions.length;
+      if (total > 1) {
+        e.preventDefault();
+        const cur = focusedQuestion[event.id] ?? 0;
+        setFocusedQuestion(event, cur + (e.shiftKey || e.key === "ArrowLeft" ? -1 : 1));
+      }
+      return;
+    }
+    if (/^[1-9]$/.test(e.key)) {
+      const qi = focusedQuestion[event.id] ?? 0;
+      const option = optionsFor(event, qi).find((candidate) => candidate.n === Number(e.key));
+      if (option) {
+        e.preventDefault();
+        void answer(event, qi, option);
+      }
+    }
+  }
 </script>
+
+<svelte:window onkeydown={onWindowKeydown} />
 
 {#if visibleEvents.length > 0 || watcher.loading || watcher.error}
   <section class="bubble-overlay" class:tray={mode === "tray"} aria-label="watcher events">
-    <div class="bubble-toolbar">
-      <button type="button" class:on={mode === "stack"} onclick={() => void setMode("stack")}>stack</button>
-      <button type="button" class:on={mode === "tray"} onclick={() => void setMode("tray")}>tray</button>
-      <button type="button" class="icon" onclick={() => void onRefresh()} aria-label="Refresh watcher events" title="Refresh">
-        <RefreshCw size={14} strokeWidth={1.8} aria-hidden="true" />
-      </button>
-    </div>
     {#if watcher.error}
       <div class="bubble error">{watcher.error}</div>
     {/if}
     {#if watcher.loading}
-      <div class="bubble muted">Loading…</div>
+      <div class="bubble muted">Loading...</div>
     {:else if collapsed}
       <button type="button" class="tray-chip" onclick={() => (watcher.trayExpanded = true)}>
         <ChevronDown size={15} strokeWidth={1.8} aria-hidden="true" />
         <span>{visibleEvents.length} watcher event{visibleEvents.length === 1 ? "" : "s"}</span>
       </button>
     {:else}
-      {#if mode === "tray"}
-        <button type="button" class="tray-chip" onclick={() => (watcher.trayExpanded = false)}>
-          <ChevronUp size={15} strokeWidth={1.8} aria-hidden="true" />
-          <span>collapse</span>
-        </button>
-      {/if}
       <div class="bubble-list">
-        {#each visibleEvents as event (event.id)}
-          <article class="bubble">
+        {#each orderedEvents as event (event.id)}
+          <article
+            class="bubble"
+            class:focused={focusedBubbleId === event.id}
+            onmouseenter={() => (focusedBubbleId = event.id)}
+          >
             <div class="bubble-head">
               <span>{event.from}</span>
-              {#if event.topic}<span>{event.topic}</span>{/if}
+              <div class="bubble-head-actions">
+                {#if mode === "tray"}
+                  <button type="button" class="icon" onclick={() => (watcher.trayExpanded = false)} aria-label="Collapse watcher tray" title="Collapse">
+                    <ChevronUp size={14} strokeWidth={1.8} aria-hidden="true" />
+                  </button>
+                {/if}
+                <button type="button" class="icon" onclick={() => void onRefresh()} aria-label="Refresh watcher events" title="Refresh">
+                  <RefreshCw size={14} strokeWidth={1.8} aria-hidden="true" />
+                </button>
+              </div>
             </div>
             {#if event.type === "survey" && event.questions?.length}
-              <div class="survey">
-                {#each event.questions as question, qi}
-                  <fieldset>
-                    <legend>{question.header}</legend>
-                    <p>{question.text}</p>
-                    <div class="choices">
-                      {#each question.options as option (option.key)}
-                        <button
-                          type="button"
-                          class:on={selections[event.id]?.[qi] === option.key}
-                          onclick={() => choose(event, qi, option.key)}
-                        >
-                          {#if selections[event.id]?.[qi] === option.key}
-                            <Check size={13} strokeWidth={2} aria-hidden="true" />
-                          {/if}
-                          <span>{option.label}</span>
-                        </button>
-                      {/each}
-                    </div>
-                  </fieldset>
-                {/each}
-                <div class="standing">
-                  {#each normalizeStandingOptions(event.standing_options) as option (option.key)}
-                    <button type="button" onclick={() => choose(event, 0, option.key)}>
-                      {option.label}
+              {@const qi = focusedQuestion[event.id] ?? 0}
+              {@const question = event.questions[qi] ?? event.questions[0]}
+              <div class="survey" data-multitopic={event.questions.length > 1}>
+                {#if event.questions.length > 1}
+                  <div class="topic-tabs" role="tablist" aria-label="survey topics">
+                    {#each event.questions as topic, idx}
+                      <button
+                        type="button"
+                        class:on={idx === qi}
+                        class:answered={answers[event.id]?.[idx] !== undefined}
+                        onclick={() => setFocusedQuestion(event, idx)}
+                      >
+                        <span>{topic.header || `Q${idx + 1}`}</span>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+                <p class="question">{question?.text ?? ""}</p>
+                <div class:option-row={event.questions.length === 1} class:option-stack={event.questions.length > 1}>
+                  {#each optionsFor(event, qi) as option (option.key)}
+                    <button
+                      type="button"
+                      class:on={answers[event.id]?.[qi] === option.key}
+                      disabled={busyReply === event.id}
+                      onclick={() => void answer(event, qi, option)}
+                    >
+                      <kbd>{option.n}</kbd>
+                      <span>{option.label}</span>
                     </button>
                   {/each}
-                </div>
-                <label class="scope">
-                  <span>Scope</span>
-                  <select
-                    value={scopeGrants[event.id] ?? "one-shot"}
-                    onchange={(e) => (scopeGrants[event.id] = (e.currentTarget as HTMLSelectElement).value as ScopeGrant)}
-                  >
-                    <option value="one-shot">one-shot</option>
-                    <option value="topic-session">topic-session</option>
-                    <option value="topic-phase">topic-phase</option>
-                  </select>
-                </label>
-                <div class="survey-actions">
-                  <button type="button" onclick={() => void submit(event)} disabled={busyReply === event.id}>
-                    Submit
-                  </button>
-                  <button type="button" onclick={() => void submit(event, true)} disabled={busyReply === event.id}>
-                    <CircleSlash size={13} strokeWidth={1.8} aria-hidden="true" />
-                    <span>Skip / not now</span>
-                  </button>
                 </div>
               </div>
             {:else}
@@ -192,36 +269,17 @@
     gap: 8px;
     pointer-events: none;
   }
-  .bubble-overlay :where(button, select) { pointer-events: auto; }
-  .bubble-toolbar {
-    display: flex;
-    justify-content: flex-end;
-    gap: 4px;
-  }
-  .bubble-toolbar button,
+  .bubble-overlay :where(button, article) { pointer-events: auto; }
   .tray-chip,
-  .choices button,
-  .standing button,
-  .survey-actions button {
+  .icon,
+  .option-row button,
+  .option-stack button,
+  .topic-tabs button {
     border: 1px solid var(--border);
     background: color-mix(in srgb, var(--bg-card) 92%, transparent);
     color: var(--text);
     border-radius: 4px;
     font: inherit;
-  }
-  .bubble-toolbar button {
-    min-height: 24px;
-    padding: 0 8px;
-    color: var(--text-secondary);
-  }
-  .bubble-toolbar button.on,
-  .choices button.on {
-    color: var(--link);
-    border-color: var(--link);
-  }
-  .bubble-toolbar .icon {
-    width: 28px;
-    padding: 0;
   }
   .tray-chip {
     align-self: flex-end;
@@ -238,77 +296,106 @@
   }
   .bubble {
     align-self: flex-end;
-    width: min(560px, 100%);
-    padding: 10px;
+    width: min(520px, 100%);
+    padding: 9px;
     border: 1px solid var(--border);
     border-radius: 6px;
     background: color-mix(in srgb, var(--bg-card) 88%, transparent);
     color: var(--text);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
-    pointer-events: auto;
+    outline: none;
+  }
+  .bubble.focused {
+    border-color: var(--link);
   }
   .bubble.error { color: var(--danger-text); }
   .bubble.muted { color: var(--text-secondary); }
   .bubble-head {
     display: flex;
     justify-content: space-between;
+    align-items: center;
     gap: 12px;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
     font-size: 12px;
     color: var(--text-secondary);
   }
-  fieldset {
-    border: 0;
-    padding: 0;
-    margin: 0 0 9px;
+  .bubble-head-actions {
+    display: inline-flex;
+    gap: 4px;
   }
-  legend {
-    font-size: 12px;
-    font-weight: 600;
+  .icon {
+    width: 24px;
+    height: 22px;
     padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
   }
-  p {
-    margin: 3px 0 7px;
+  .question {
+    margin: 0 0 8px;
     line-height: 1.35;
   }
-  .choices,
-  .standing,
-  .survey-actions,
-  .scope {
+  .topic-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+    overflow-x: auto;
+  }
+  .topic-tabs button {
+    min-width: 54px;
+    min-height: 26px;
+    padding: 0 8px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+  }
+  .topic-tabs button.on {
+    color: var(--link);
+    border-color: var(--link);
+  }
+  .topic-tabs button.answered::after {
+    content: "*";
+    margin-left: 4px;
+    color: var(--success-text, var(--link));
+  }
+  .option-row {
     display: flex;
     flex-wrap: wrap;
-    align-items: center;
     gap: 6px;
   }
-  .choices button,
-  .standing button,
-  .survey-actions button {
+  .option-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .option-row button,
+  .option-stack button {
     min-height: 28px;
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 7px;
     padding: 0 9px;
+    text-align: left;
   }
-  .standing {
-    margin-top: 6px;
-    padding-top: 7px;
-    border-top: 1px solid var(--border);
+  .option-stack button {
+    justify-content: flex-start;
   }
-  .scope {
-    margin-top: 8px;
-    font-size: 12px;
-    color: var(--text-secondary);
+  .option-row button.on,
+  .option-stack button.on {
+    color: var(--link);
+    border-color: var(--link);
   }
-  .scope select {
-    height: 26px;
+  kbd {
+    min-width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--bg-card);
+    border-radius: 3px;
+    background: var(--bg);
     color: var(--text);
-  }
-  .survey-actions {
-    margin-top: 9px;
-    justify-content: flex-end;
+    font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   .link {
     border: 0;

@@ -8,6 +8,7 @@
   import { appendDefaultMd } from "../state/pathValidate";
   import { isEditableText } from "../state/fileTypes";
   import {
+    drive,
     refreshTree,
     ui,
     uiPathPrompt,
@@ -185,6 +186,21 @@
       watcherBusy = false;
     }
   }
+
+  async function setBubbleMode(mode: "stack" | "tray"): Promise<void> {
+    menu = null;
+    if (drive.info) {
+      drive.info = {
+        ...drive.info,
+        preferences: { ...drive.info.preferences, bubble_overlay_mode: mode },
+      };
+    }
+    try {
+      await api.setBubbleOverlayMode(mode);
+    } catch (err) {
+      ui.status = `bubble mode failed: ${(err as Error).message}`;
+    }
+  }
 </script>
 
 <svelte:window onpointerdown={onWindowPointerDown} />
@@ -299,6 +315,14 @@
           <span>Stop watching</span>
         </button>
       {/if}
+      <button type="button" onclick={() => void setBubbleMode("stack")}>
+        <Type size={15} strokeWidth={1.75} aria-hidden="true" />
+        <span>Bubble stack</span>
+      </button>
+      <button type="button" onclick={() => void setBubbleMode("tray")}>
+        <Type size={15} strokeWidth={1.75} aria-hidden="true" />
+        <span>Bubble tray</span>
+      </button>
     </div>
   {/if}
 </div>
