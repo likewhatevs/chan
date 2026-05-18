@@ -267,17 +267,17 @@ enum Command {
     },
     /// Query graph/index data for a drive.
     ///
-    /// --scope all reads the semantic markdown graph. --scope file/folder reads
+    /// --scope all reads the semantic markdown graph. --scope file/directory reads
     /// the filesystem graph used by the File Browser's "Graph this" action.
     Graph {
         path: PathBuf,
-        /// Scope the graph query to the whole drive, one file, or a folder subtree.
+        /// Scope the graph query to the whole drive, one file, or a directory subtree.
         #[arg(long, value_enum, default_value_t = GraphScope::All)]
         scope: GraphScope,
-        /// Drive-relative file or folder path for --scope file/folder.
+        /// Drive-relative file or directory path for --scope file/directory.
         #[arg(long)]
         target: Option<String>,
-        /// Folder depth for --scope folder. 1 means direct children only.
+        /// Directory depth for --scope directory. 1 means direct children only.
         #[arg(long, default_value_t = 1)]
         depth: usize,
         /// Maximum number of edges printed in text mode.
@@ -373,7 +373,7 @@ enum ImportSource {
     Csv {
         /// Path to the CSV file.
         file: PathBuf,
-        /// Drive-relative folder where notes will land. Created
+        /// Drive-relative directory where notes will land. Created
         /// if it does not exist. Use `""` to write at the drive
         /// root.
         #[arg(long)]
@@ -403,7 +403,7 @@ enum ImportSource {
 enum GraphScope {
     All,
     File,
-    Folder,
+    Directory,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1370,7 +1370,7 @@ fn cmd_filesystem_graph(
     let fs_scope = match scope {
         GraphScope::All => unreachable!("all scope is handled by cmd_graph"),
         GraphScope::File => ServerFsGraphScope::File,
-        GraphScope::Folder => ServerFsGraphScope::Folder,
+        GraphScope::Directory => ServerFsGraphScope::Directory,
     };
     if scope == GraphScope::File && target.as_deref().unwrap_or("").is_empty() {
         anyhow::bail!("--target is required for --scope file");
@@ -1519,14 +1519,14 @@ fn graph_scope_nodes(
             }
             Ok(vec![target])
         }
-        GraphScope::Folder => {
+        GraphScope::Directory => {
             let target = target.unwrap_or("").trim_matches('/');
             if !target.is_empty() {
                 let stat = drive
                     .stat(target)
-                    .with_context(|| format!("stat graph folder target `{target}`"))?;
+                    .with_context(|| format!("stat graph directory target `{target}`"))?;
                 if !stat.is_dir {
-                    anyhow::bail!("--scope folder requires a directory; `{target}` is not");
+                    anyhow::bail!("--scope directory requires a directory; `{target}` is not");
                 }
             }
             let entries = if target.is_empty() {
@@ -1534,7 +1534,7 @@ fn graph_scope_nodes(
             } else {
                 drive
                     .list_tree_prefix(target)
-                    .context("listing folder tree")?
+                    .context("listing directory tree")?
             };
             let files: std::collections::BTreeSet<String> = graph
                 .files()
@@ -1544,7 +1544,7 @@ fn graph_scope_nodes(
             Ok(entries
                 .into_iter()
                 .filter(|e| !e.is_dir)
-                .filter(|e| folder_depth_in_scope(&e.path, target, depth))
+                .filter(|e| directory_depth_in_scope(&e.path, target, depth))
                 .map(|e| e.path)
                 .filter(|p| files.contains(p))
                 .collect())
@@ -1552,15 +1552,18 @@ fn graph_scope_nodes(
     }
 }
 
-fn folder_depth_in_scope(path: &str, folder: &str, depth: usize) -> bool {
+fn directory_depth_in_scope(path: &str, directory: &str, depth: usize) -> bool {
     if depth == 0 {
         return false;
     }
-    let rel = if folder.is_empty() {
+    let rel = if directory.is_empty() {
         path
-    } else if path == folder {
+    } else if path == directory {
         ""
-    } else if let Some(rest) = path.strip_prefix(folder).and_then(|s| s.strip_prefix('/')) {
+    } else if let Some(rest) = path
+        .strip_prefix(directory)
+        .and_then(|s| s.strip_prefix('/'))
+    {
         rest
     } else {
         return false;
@@ -1572,7 +1575,7 @@ fn graph_scope_label(scope: GraphScope) -> &'static str {
     match scope {
         GraphScope::All => "all",
         GraphScope::File => "file",
-        GraphScope::Folder => "folder",
+        GraphScope::Directory => "directory",
     }
 }
 
@@ -2051,19 +2054,19 @@ mod tests {
     }
 
     #[test]
-    fn folder_graph_scope_depth_matches_direct_children() {
-        assert!(folder_depth_in_scope("notes/a.md", "notes", 1));
-        assert!(!folder_depth_in_scope("notes/archive/a.md", "notes", 1));
-        assert!(folder_depth_in_scope("notes/archive/a.md", "notes", 2));
-        assert!(!folder_depth_in_scope("other/a.md", "notes", 2));
+    fn directory_graph_scope_depth_matches_direct_children() {
+        assert!(directory_depth_in_scope("notes/a.md", "notes", 1));
+        assert!(!directory_depth_in_scope("notes/archive/a.md", "notes", 1));
+        assert!(directory_depth_in_scope("notes/archive/a.md", "notes", 2));
+        assert!(!directory_depth_in_scope("other/a.md", "notes", 2));
     }
 
     #[test]
     fn root_graph_scope_depth_matches_top_level_files() {
-        assert!(folder_depth_in_scope("a.md", "", 1));
-        assert!(!folder_depth_in_scope("notes/a.md", "", 1));
-        assert!(folder_depth_in_scope("notes/a.md", "", 2));
-        assert!(!folder_depth_in_scope("a.md", "", 0));
+        assert!(directory_depth_in_scope("a.md", "", 1));
+        assert!(!directory_depth_in_scope("notes/a.md", "", 1));
+        assert!(directory_depth_in_scope("notes/a.md", "", 2));
+        assert!(!directory_depth_in_scope("a.md", "", 0));
     }
 
     #[test]
@@ -2351,11 +2354,11 @@ mod tests {
     }
 
     #[test]
-    fn graph_scope_folder_rejects_escape_target() {
+    fn graph_scope_directory_rejects_escape_target() {
         let (_cfg, _root, drive) = open_graph_test_drive();
         let graph = drive.graph().unwrap();
         let err =
-            graph_scope_nodes(&drive, graph, GraphScope::Folder, Some("../etc"), 1).unwrap_err();
+            graph_scope_nodes(&drive, graph, GraphScope::Directory, Some("../etc"), 1).unwrap_err();
         let msg = format!("{err:#}");
         assert!(
             msg.contains("escapes drive root") || msg.contains("PathEscape"),

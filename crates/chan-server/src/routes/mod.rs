@@ -13,6 +13,7 @@ mod files;
 mod fs_graph;
 mod graph;
 mod health;
+mod inspector;
 mod preferences;
 mod report;
 mod search;
@@ -34,6 +35,7 @@ pub use graph::{
     api_resolve_link,
 };
 pub use health::api_health;
+pub use inspector::api_inspector;
 pub use preferences::{
     api_get_config, api_get_server_config, api_patch_config, api_patch_server_config,
 };

@@ -45,11 +45,11 @@ use routes::{
     api_backlinks, api_build_info, api_cloud_drives, api_create_file, api_delete_file,
     api_delete_session, api_fs_graph, api_get_config, api_get_contacts, api_get_drive,
     api_get_server_config, api_get_session, api_graph, api_headings, api_health, api_index_rebuild,
-    api_index_status, api_language_graph, api_link_targets, api_links, api_list_files,
-    api_list_sessions, api_move, api_patch_config, api_patch_drive, api_patch_server_config,
-    api_post_attachment, api_post_contacts_import, api_put_session, api_read_file, api_report_file,
-    api_report_prefix, api_resolve_link, api_search_content, api_search_files, api_storage_reset,
-    api_terminal_ws, api_write_file, ws_upgrade,
+    api_index_status, api_inspector, api_language_graph, api_link_targets, api_links,
+    api_list_files, api_list_sessions, api_move, api_patch_config, api_patch_drive,
+    api_patch_server_config, api_post_attachment, api_post_contacts_import, api_put_session,
+    api_read_file, api_report_file, api_report_prefix, api_resolve_link, api_search_content,
+    api_search_files, api_storage_reset, api_terminal_ws, api_write_file, ws_upgrade,
 };
 use signal::{now_unix_secs, print_qr_if_tty, spawn_idle_watcher, spawn_signal_watcher};
 use state::{AppState, DriveCell};
@@ -762,6 +762,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/graph", get(api_graph))
         .route("/api/graph/languages", get(api_language_graph))
         .route("/api/fs-graph", get(api_fs_graph))
+        .route("/api/inspector", get(api_inspector))
         .route("/api/backlinks/*path", get(api_backlinks))
         .route("/api/report/file", get(api_report_file))
         .route("/api/report/prefix", get(api_report_prefix))

@@ -17,7 +17,7 @@
 //! `chan contacts import csv` CLI for parity) sends:
 //!
 //!   file       multipart   the CSV bytes
-//!   dest_dir   text        drive-relative folder (created if absent;
+//!   dest_dir   text        drive-relative directory (created if absent;
 //!                          empty string writes at the drive root)
 //!   provider   text        "google" today; flag is forward-compat
 //!   overwrite  text        "true" / "false" (default false)

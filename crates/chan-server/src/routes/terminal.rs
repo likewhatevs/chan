@@ -1,10 +1,12 @@
 //! GET /api/terminal/ws - interactive PTY-backed terminal sessions.
 
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use portable_pty::PtySize;
 use serde::{Deserialize, Serialize};
@@ -29,6 +31,7 @@ pub struct TerminalQuery {
     rows: Option<u16>,
     tab_name: Option<String>,
     mcp_env: Option<TerminalMcpEnv>,
+    cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -52,6 +55,8 @@ enum ClientFrame {
     Input { data: String },
     #[serde(rename = "resize")]
     Resize { cols: u16, rows: u16 },
+    #[serde(rename = "cwd")]
+    Cwd,
     #[serde(rename = "close")]
     Close,
 }
@@ -66,7 +71,17 @@ enum ServerFrame {
         missed_bytes: u64,
     },
     #[serde(rename = "ready")]
-    Ready { cols: u16, rows: u16 },
+    Ready {
+        cols: u16,
+        rows: u16,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+    },
+    #[serde(rename = "cwd")]
+    Cwd {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+    },
     #[serde(rename = "resize")]
     Resize { cols: u16, rows: u16 },
     #[serde(rename = "exit")]
@@ -93,73 +108,81 @@ pub async fn api_terminal_ws(
     let size = pty_size(query.cols, query.rows);
     let tab_name = query.tab_name.as_deref().and_then(normalize_tab_name);
     let mcp_env = query.mcp_env.unwrap_or_default().enabled();
-    ws.on_upgrade(move |socket| {
-        terminal_ws(
-            socket,
-            state,
-            query.session,
-            query.since,
-            size,
-            tab_name,
-            mcp_env,
-        )
-    })
-    .into_response()
+    let cwd = if query.session.is_some() {
+        None
+    } else {
+        match resolve_terminal_cwd(&state.drive_root, query.cwd.as_deref()) {
+            Ok(cwd) => cwd,
+            Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        }
+    };
+    let opts = TerminalWsOptions {
+        session_id: query.session,
+        since: query.since,
+        size,
+        tab_name,
+        mcp_env,
+        cwd,
+    };
+    ws.on_upgrade(move |socket| terminal_ws(socket, state, opts))
+        .into_response()
 }
 
-async fn terminal_ws(
-    mut socket: WebSocket,
-    state: Arc<AppState>,
+struct TerminalWsOptions {
     session_id: Option<String>,
     since: Option<u64>,
     size: PtySize,
     tab_name: Option<String>,
     mcp_env: bool,
-) {
+    cwd: Option<PathBuf>,
+}
+
+async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: TerminalWsOptions) {
     state
         .last_activity
         .store(now_unix_secs(), Ordering::Relaxed);
 
-    let opts = CreateOptions {
-        size,
-        tab_name,
-        mcp_env,
+    let create_opts = CreateOptions {
+        size: opts.size,
+        tab_name: opts.tab_name,
+        mcp_env: opts.mcp_env,
+        cwd: opts.cwd,
     };
-    let mut session =
-        match state
-            .terminal_sessions
-            .get_or_create(session_id.as_deref(), since, opts)
-        {
-            Ok(session) => session,
-            Err(CreateError::Capped) => {
-                let _ = send_frame(
-                    &mut socket,
-                    ServerFrame::Error {
-                        message: "terminal session cap reached".into(),
-                        reason: Some(CloseReason::Capped.as_str()),
-                    },
-                )
+    let mut session = match state.terminal_sessions.get_or_create(
+        opts.session_id.as_deref(),
+        opts.since,
+        create_opts,
+    ) {
+        Ok(session) => session,
+        Err(CreateError::Capped) => {
+            let _ = send_frame(
+                &mut socket,
+                ServerFrame::Error {
+                    message: "terminal session cap reached".into(),
+                    reason: Some(CloseReason::Capped.as_str()),
+                },
+            )
+            .await;
+            let _ = socket
+                .send(Message::Close(Some(CloseFrame {
+                    code: 1013,
+                    reason: "terminal session cap reached".into(),
+                })))
                 .await;
-                let _ = socket
-                    .send(Message::Close(Some(CloseFrame {
-                        code: 1013,
-                        reason: "terminal session cap reached".into(),
-                    })))
-                    .await;
-                return;
-            }
-            Err(CreateError::Spawn(e)) => {
-                let _ = send_frame(
-                    &mut socket,
-                    ServerFrame::Error {
-                        message: format!("failed to start terminal: {e}"),
-                        reason: None,
-                    },
-                )
-                .await;
-                return;
-            }
-        };
+            return;
+        }
+        Err(CreateError::Spawn(e)) => {
+            let _ = send_frame(
+                &mut socket,
+                ServerFrame::Error {
+                    message: format!("failed to start terminal: {e}"),
+                    reason: None,
+                },
+            )
+            .await;
+            return;
+        }
+    };
     let mut shutdown_rx = state.shutdown_rx.clone();
 
     let _ = send_frame(
@@ -188,8 +211,9 @@ async fn terminal_ws(
     let _ = send_frame(
         &mut socket,
         ServerFrame::Ready {
-            cols: size.cols,
-            rows: size.rows,
+            cols: opts.size.cols,
+            rows: opts.size.rows,
+            cwd: session.cwd().map(path_to_wire),
         },
     )
     .await;
@@ -220,6 +244,10 @@ async fn terminal_ws(
                             Ok(ClientFrame::Resize { cols, rows }) => {
                                 session.resize(pty_size(Some(cols), Some(rows)));
                                 state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
+                            }
+                            Ok(ClientFrame::Cwd) => {
+                                let cwd = session.cwd().map(path_to_wire);
+                                let _ = send_frame(&mut socket, ServerFrame::Cwd { cwd }).await;
                             }
                             Ok(ClientFrame::Close) => {
                                 let id = session.id().to_owned();
@@ -295,6 +323,10 @@ async fn send_frame(socket: &mut WebSocket, frame: ServerFrame) -> Result<(), ax
         .await
 }
 
+fn path_to_wire(path: PathBuf) -> String {
+    path.to_string_lossy().into_owned()
+}
+
 fn pty_size(cols: Option<u16>, rows: Option<u16>) -> PtySize {
     PtySize {
         cols: cols.unwrap_or(DEFAULT_COLS).clamp(1, MAX_COLS),
@@ -312,11 +344,30 @@ fn normalize_tab_name(name: &str) -> Option<String> {
     Some(trimmed.chars().take(128).collect())
 }
 
+fn resolve_terminal_cwd(drive_root: &Path, cwd: Option<&str>) -> Result<Option<PathBuf>, String> {
+    let Some(raw) = cwd else {
+        return Ok(None);
+    };
+    let rel = raw.trim();
+    let abs = if rel.is_empty() {
+        drive_root.to_path_buf()
+    } else {
+        chan_drive::fs_ops::resolve_safe_strict(drive_root, rel)
+            .map_err(|e| format!("invalid terminal cwd: {e}"))?
+    };
+    let meta = std::fs::metadata(&abs).map_err(|e| format!("invalid terminal cwd: {e}"))?;
+    if !meta.is_dir() {
+        return Err("invalid terminal cwd: path is not a directory".into());
+    }
+    Ok(Some(abs))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::TerminalConfig;
     use crate::terminal_sessions::{AttachHandle, Registry, RegistryConfig};
+    use std::fs;
     use std::process::Command;
     use std::time::{Duration, Instant};
 
@@ -352,6 +403,7 @@ mod tests {
                     size,
                     tab_name,
                     mcp_env,
+                    cwd: None,
                 })
                 .expect("spawn pty");
             Self {
@@ -368,6 +420,28 @@ mod tests {
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
+    }
+
+    #[test]
+    fn resolve_terminal_cwd_allows_drive_relative_directory() {
+        let tmp = tempfile::tempdir().expect("temp drive");
+        fs::create_dir_all(tmp.path().join("notes/work")).expect("create dir");
+
+        let cwd = resolve_terminal_cwd(tmp.path(), Some("notes/work"))
+            .expect("valid cwd")
+            .expect("cwd set");
+
+        assert_eq!(cwd, tmp.path().join("notes/work"));
+    }
+
+    #[test]
+    fn resolve_terminal_cwd_rejects_escape_and_files() {
+        let tmp = tempfile::tempdir().expect("temp drive");
+        fs::create_dir_all(tmp.path().join("notes")).expect("create dir");
+        fs::write(tmp.path().join("notes/today.md"), "x").expect("create file");
+
+        assert!(resolve_terminal_cwd(tmp.path(), Some("../outside")).is_err());
+        assert!(resolve_terminal_cwd(tmp.path(), Some("notes/today.md")).is_err());
     }
 
     async fn collect_until(session: &mut AttachHandle, needle: &str, timeout: Duration) -> String {
@@ -458,6 +532,48 @@ mod tests {
             .await,
         );
         out
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn terminal_session_reports_live_cwd() {
+        let tmp = tempfile::tempdir().expect("temp drive");
+        let subdir = tmp.path().join("work");
+        fs::create_dir_all(&subdir).expect("create subdir");
+        let root = tmp.path().canonicalize().expect("canonical root");
+        let subdir = subdir.canonicalize().expect("canonical subdir");
+        let mut terminal =
+            TestTerminal::spawn(root.clone(), pty_size(Some(100), Some(31)), None, None);
+        let _ = collect_until_idle(
+            &mut terminal.handle,
+            Duration::from_millis(300),
+            Duration::from_millis(100),
+        )
+        .await;
+
+        assert_eq!(
+            terminal
+                .handle
+                .cwd()
+                .as_ref()
+                .and_then(|p| p.canonicalize().ok()),
+            Some(root),
+            "fresh terminal should report drive root cwd"
+        );
+
+        terminal.handle.send_input(b"cd work\r");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if terminal.handle.cwd().and_then(|p| p.canonicalize().ok()) == Some(subdir.clone()) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "terminal cwd did not update to {}",
+                subdir.display()
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     #[tokio::test]

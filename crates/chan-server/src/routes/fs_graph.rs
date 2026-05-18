@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::err;
 use crate::state::AppState;
 
-/// Hard cap on `depth` for scope=folder. Six is enough for a project-
+/// Hard cap on `depth` for scope=directory. Six is enough for a project-
 /// style drive (a few levels of grouping) without letting a single
 /// request walk a deep dependency tree disguised as a notes drive.
 const MAX_DEPTH: usize = 6;
@@ -48,7 +48,7 @@ const MAX_NODES: usize = 10_000;
 
 #[derive(Deserialize)]
 pub struct FsGraphParams {
-    /// `file` or `folder`. Default `folder` so a bare
+    /// `file` or `directory`. Default `directory` so a bare
     /// `/api/fs-graph?path=...` is the common case (drive overview /
     /// directory snapshot).
     #[serde(default = "default_scope")]
@@ -58,7 +58,7 @@ pub struct FsGraphParams {
     /// `..`-traversal is rejected before any I/O.
     #[serde(default)]
     path: String,
-    /// For scope=folder: how many levels of children to walk.
+    /// For scope=directory: how many levels of children to walk.
     /// Depth 1 means direct children only. Capped at `MAX_DEPTH`.
     /// Ignored for scope=file (always returns the file and its
     /// parent / symlink target).
@@ -67,7 +67,7 @@ pub struct FsGraphParams {
 }
 
 fn default_scope() -> FsGraphScope {
-    FsGraphScope::Folder
+    FsGraphScope::Directory
 }
 
 fn default_depth() -> usize {
@@ -78,14 +78,14 @@ fn default_depth() -> usize {
 #[serde(rename_all = "lowercase")]
 pub enum FsGraphScope {
     File,
-    Folder,
+    Directory,
 }
 
 impl FsGraphScope {
     fn label(self) -> &'static str {
         match self {
             FsGraphScope::File => "file",
-            FsGraphScope::Folder => "folder",
+            FsGraphScope::Directory => "directory",
         }
     }
 }
@@ -100,7 +100,7 @@ pub struct FsGraphResponse {
     /// The request's `path` after lexical normalization (empty means
     /// drive root).
     pub path: String,
-    /// The effective folder depth used. For scope=file this is always
+    /// The effective directory depth used. For scope=file this is always
     /// 0 (the file plus its parent / target are the response).
     pub depth: usize,
     pub nodes: Vec<NodeView>,
@@ -135,6 +135,12 @@ pub struct NodeView {
     /// File size in bytes (regular files only; 0 for everything
     /// else).
     pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_class: Option<chan_drive::PathClass>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission: Option<chan_drive::PathPermission>,
+    #[serde(skip_serializing_if = "is_one")]
+    pub link_count: u64,
     /// Last-modified time in unix seconds, when available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mtime: Option<i64>,
@@ -149,10 +155,17 @@ pub struct NodeView {
     /// (broken `readlink`) or unreadable entries.
     #[serde(skip_serializing_if = "is_false")]
     pub broken: bool,
+    /// True for symlink nodes whose target resolves outside the drive.
+    #[serde(skip_serializing_if = "is_false")]
+    pub target_escapes_drive: bool,
 }
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+fn is_one(n: &u64) -> bool {
+    *n == 1
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -174,6 +187,10 @@ impl FsGraphError {
             status,
             message: message.into(),
         }
+    }
+
+    pub(crate) fn into_response(self) -> Response {
+        err(self.status, self.message)
     }
 }
 
@@ -244,20 +261,20 @@ pub fn build_fs_graph(
 
     let depth = requested_depth.clamp(1, MAX_DEPTH);
 
-    // Reject scope=folder against a non-directory up front so the
+    // Reject scope=directory against a non-directory up front so the
     // walker stays infallible; the wire error shape matches the
     // 400 we use elsewhere.
-    if scope == FsGraphScope::Folder && !meta.is_dir() {
+    if scope == FsGraphScope::Directory && !meta.is_dir() {
         return Err(FsGraphError::new(
             StatusCode::BAD_REQUEST,
-            format!("scope=folder requires a directory; {rel} is not"),
+            format!("scope=directory requires a directory; {rel} is not"),
         ));
     }
 
     let mut walker = FsGraphWalker::new(root.clone());
     match scope {
         FsGraphScope::File => walker.walk_file(&rel, &abs, &meta),
-        FsGraphScope::Folder => walker.walk_folder(&rel, &abs, &meta, depth),
+        FsGraphScope::Directory => walker.walk_directory(&rel, &abs, &meta, depth),
     }
 
     let (nodes, edges, truncated) = walker.finish();
@@ -267,7 +284,7 @@ pub fn build_fs_graph(
         path: rel,
         depth: match scope {
             FsGraphScope::File => 0,
-            FsGraphScope::Folder => depth,
+            FsGraphScope::Directory => depth,
         },
         nodes,
         edges,
@@ -387,6 +404,28 @@ fn basename_of(rel: &str, abs: &Path) -> String {
     }
 }
 
+fn node_kind_from_class(
+    class: Option<&chan_drive::PathClass>,
+    ft: &std::fs::FileType,
+) -> &'static str {
+    match class.map(|c| c.kind) {
+        Some(chan_drive::PathKind::Symlink) => "symlink",
+        Some(chan_drive::PathKind::Directory) => "directory",
+        Some(chan_drive::PathKind::RegularFile) => "file",
+        Some(
+            chan_drive::PathKind::Fifo
+            | chan_drive::PathKind::Socket
+            | chan_drive::PathKind::BlockDevice
+            | chan_drive::PathKind::CharDevice
+            | chan_drive::PathKind::Other,
+        ) => "ghost",
+        None if ft.is_symlink() => "symlink",
+        None if ft.is_dir() => "directory",
+        None if ft.is_file() => "file",
+        None => "ghost",
+    }
+}
+
 /// Internal accumulator. Holds the nodes/edges plus dedup tables so
 /// each path emits a single node and each pair of hardlinks emits a
 /// single `hardlink` edge.
@@ -454,9 +493,9 @@ impl FsGraphWalker {
         self.nodes.entry(node.id.clone()).or_insert(node);
     }
 
-    /// File-scope walk: emit the requested path, its parent folder
+    /// File-scope walk: emit the requested path, its parent directory
     /// (when not at drive root), and, if the path is a symlink,
-    /// classify its target. Folder targets are NOT walked here; we
+    /// classify its target. Directory targets are NOT walked here; we
     /// stay shallow so `scope=file` is cheap.
     fn walk_file(&mut self, rel: &str, abs: &Path, meta: &Metadata) {
         self.visit_entry(rel, abs, meta);
@@ -473,13 +512,16 @@ impl FsGraphWalker {
         }
     }
 
-    /// Folder-scope walk: emit the folder node, then walk its
+    /// Directory-scope walk: emit the directory node, then walk its
     /// children up to `depth` levels. Depth 1 = direct children
     /// only. Caller MUST have verified that `meta.is_dir()`; the
     /// route enforces this before invoking the walker.
-    fn walk_folder(&mut self, rel: &str, abs: &Path, meta: &Metadata, depth: usize) {
-        debug_assert!(meta.is_dir(), "walk_folder called on non-directory");
+    fn walk_directory(&mut self, rel: &str, abs: &Path, meta: &Metadata, depth: usize) {
+        debug_assert!(meta.is_dir(), "walk_directory called on non-directory");
         self.visit_entry(rel, abs, meta);
+        if meta.permissions().readonly() {
+            return;
+        }
         let mut visited_dirs: HashSet<(u64, u64)> = HashSet::new();
         if let Some(key) = inode_key(meta) {
             visited_dirs.insert(key);
@@ -534,10 +576,14 @@ impl FsGraphWalker {
                         name: name_str.to_string(),
                         path: child_rel.clone(),
                         size: 0,
+                        path_class: None,
+                        permission: None,
+                        link_count: 1,
                         mtime: None,
                         target: None,
                         outside: false,
                         broken: true,
+                        target_escapes_drive: false,
                     };
                     self.insert_node(ghost);
                     self.push_edge(parent_rel.to_owned(), child_rel, "contains");
@@ -547,7 +593,10 @@ impl FsGraphWalker {
             self.visit_entry(&child_rel, &child_abs, &child_meta);
             self.push_edge(parent_rel.to_owned(), child_rel.clone(), "contains");
 
-            if child_meta.is_dir() && !child_meta.file_type().is_symlink() {
+            if child_meta.is_dir()
+                && !child_meta.file_type().is_symlink()
+                && !child_meta.permissions().readonly()
+            {
                 if let Some(key) = inode_key(&child_meta) {
                     if !visited_dirs.insert(key) {
                         // Already walked this inode; skip to avoid
@@ -565,18 +614,8 @@ impl FsGraphWalker {
     /// hardlink candidates so `finish()` can emit dedup edges.
     fn visit_entry(&mut self, rel: &str, abs: &Path, meta: &Metadata) {
         let ft = meta.file_type();
-        let kind = if ft.is_symlink() {
-            "symlink"
-        } else if ft.is_dir() {
-            "folder"
-        } else if ft.is_file() {
-            "file"
-        } else {
-            // FIFOs, sockets, char/block devices. The content index
-            // drops these; the graph surfaces them as `ghost` so the
-            // user can still see they exist.
-            "ghost"
-        };
+        let class = chan_drive::fs_ops::classify_abs(&self.root, abs).ok();
+        let kind = node_kind_from_class(class.as_ref(), &ft);
 
         let mut node = NodeView {
             id: rel.to_owned(),
@@ -584,10 +623,17 @@ impl FsGraphWalker {
             name: basename_of(rel, abs),
             path: rel.to_owned(),
             size: if ft.is_file() { meta.len() } else { 0 },
+            path_class: class.clone(),
+            permission: class.as_ref().map(|c| c.permission),
+            link_count: class.as_ref().map(|c| c.link_count).unwrap_or(1),
             mtime: mtime_of(meta),
             target: None,
             outside: false,
             broken: false,
+            target_escapes_drive: class
+                .as_ref()
+                .map(|c| c.target_escapes_drive)
+                .unwrap_or(false),
         };
 
         if ft.is_symlink() {
@@ -639,10 +685,14 @@ impl FsGraphWalker {
                 name: target.to_string_lossy().into_owned(),
                 path: String::new(),
                 size: 0,
+                path_class: None,
+                permission: None,
+                link_count: 1,
                 mtime: None,
                 target: Some(target.to_string_lossy().into_owned()),
                 outside: true,
                 broken: false,
+                target_escapes_drive: false,
             };
             self.insert_node(ghost);
             self.push_edge(src_rel.to_owned(), ghost_id, "symlink");
@@ -663,10 +713,14 @@ impl FsGraphWalker {
                     name: target.to_string_lossy().into_owned(),
                     path: String::new(),
                     size: 0,
+                    path_class: None,
+                    permission: None,
+                    link_count: 1,
                     mtime: None,
                     target: Some(target.to_string_lossy().into_owned()),
                     outside: false,
                     broken: true,
+                    target_escapes_drive: false,
                 };
                 self.insert_node(ghost);
                 self.push_edge(src_rel.to_owned(), ghost_id, "symlink");
@@ -699,10 +753,14 @@ impl FsGraphWalker {
                         .to_owned(),
                     path: target_rel.clone(),
                     size: 0,
+                    path_class: None,
+                    permission: None,
+                    link_count: 1,
                     mtime: None,
                     target: Some(target.to_string_lossy().into_owned()),
                     outside: false,
                     broken: true,
+                    target_escapes_drive: false,
                 };
                 self.insert_node(ghost);
                 self.push_edge(src_rel.to_owned(), target_rel, "symlink");
@@ -721,15 +779,8 @@ impl FsGraphWalker {
             return;
         }
         let ft = meta.file_type();
-        let kind = if ft.is_symlink() {
-            "symlink"
-        } else if ft.is_dir() {
-            "folder"
-        } else if ft.is_file() {
-            "file"
-        } else {
-            "ghost"
-        };
+        let class = chan_drive::fs_ops::classify_abs(&self.root, abs).ok();
+        let kind = node_kind_from_class(class.as_ref(), &ft);
         let target_readlink = if ft.is_symlink() {
             std::fs::read_link(abs)
                 .ok()
@@ -743,10 +794,17 @@ impl FsGraphWalker {
             name: basename_of(rel, abs),
             path: rel.to_owned(),
             size: if ft.is_file() { meta.len() } else { 0 },
+            path_class: class.clone(),
+            permission: class.as_ref().map(|c| c.permission),
+            link_count: class.as_ref().map(|c| c.link_count).unwrap_or(1),
             mtime: mtime_of(meta),
             target: target_readlink,
             outside: false,
             broken: false,
+            target_escapes_drive: class
+                .as_ref()
+                .map(|c| c.target_escapes_drive)
+                .unwrap_or(false),
         };
         self.insert_node(node);
     }
@@ -843,7 +901,7 @@ mod tests {
         };
         let meta = std::fs::symlink_metadata(&abs).expect("stat scope");
         match scope {
-            FsGraphScope::Folder => walker.walk_folder(rel, &abs, &meta, depth),
+            FsGraphScope::Directory => walker.walk_directory(rel, &abs, &meta, depth),
             FsGraphScope::File => walker.walk_file(rel, &abs, &meta),
         }
         let (nodes, edges, truncated) = walker.finish();
@@ -853,7 +911,7 @@ mod tests {
             path: rel.to_owned(),
             depth: match scope {
                 FsGraphScope::File => 0,
-                FsGraphScope::Folder => depth,
+                FsGraphScope::Directory => depth,
             },
             nodes,
             edges,
@@ -863,6 +921,14 @@ mod tests {
 
     fn node_kind<'a>(resp: &'a FsGraphResponse, id: &str) -> Option<&'a str> {
         resp.nodes.iter().find(|n| n.id == id).map(|n| n.kind)
+    }
+
+    fn node<'a>(resp: &'a FsGraphResponse, id: &str) -> Option<&'a NodeView> {
+        resp.nodes.iter().find(|n| n.id == id)
+    }
+
+    fn node_path_kind(resp: &FsGraphResponse, id: &str) -> Option<chan_drive::PathKind> {
+        node(resp, id).and_then(|n| n.path_class.as_ref().map(|class| class.kind))
     }
 
     fn has_edge(resp: &FsGraphResponse, src: &str, dst: &str, kind: &str) -> bool {
@@ -886,15 +952,15 @@ mod tests {
     }
 
     #[test]
-    fn folder_scope_depth_one_lists_direct_children() {
+    fn directory_scope_depth_one_lists_direct_children() {
         let tmp = TempDir::new().unwrap();
         write(&tmp.path().join("top.md"), "# top");
         write(&tmp.path().join("sub/nested.md"), "# n");
         write(&tmp.path().join("sub/deep/deep.md"), "# d");
 
-        let resp = walk(tmp.path(), FsGraphScope::Folder, "", 1);
+        let resp = walk(tmp.path(), FsGraphScope::Directory, "", 1);
         assert_eq!(node_kind(&resp, "top.md"), Some("file"));
-        assert_eq!(node_kind(&resp, "sub"), Some("folder"));
+        assert_eq!(node_kind(&resp, "sub"), Some("directory"));
         // Depth=1 must NOT enumerate sub's contents.
         assert!(
             node_kind(&resp, "sub/nested.md").is_none(),
@@ -906,15 +972,37 @@ mod tests {
     }
 
     #[test]
-    fn folder_scope_deeper_includes_grandchildren() {
+    fn directory_scope_deeper_includes_grandchildren() {
         let tmp = TempDir::new().unwrap();
         write(&tmp.path().join("sub/nested.md"), "# n");
         write(&tmp.path().join("sub/deep/deep.md"), "# d");
 
-        let resp = walk(tmp.path(), FsGraphScope::Folder, "sub", 2);
+        let resp = walk(tmp.path(), FsGraphScope::Directory, "sub", 2);
         assert_eq!(node_kind(&resp, "sub/nested.md"), Some("file"));
-        assert_eq!(node_kind(&resp, "sub/deep"), Some("folder"));
+        assert_eq!(node_kind(&resp, "sub/deep"), Some("directory"));
         assert_eq!(node_kind(&resp, "sub/deep/deep.md"), Some("file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_directory_is_a_dead_end() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        write(&tmp.path().join("locked/hidden.md"), "# hidden");
+        fs::set_permissions(tmp.path().join("locked"), fs::Permissions::from_mode(0o555)).unwrap();
+
+        let resp = walk(tmp.path(), FsGraphScope::Directory, "", 2);
+        let locked = node(&resp, "locked").expect("locked directory node");
+        assert_eq!(locked.kind, "directory");
+        assert_eq!(
+            locked.permission,
+            Some(chan_drive::PathPermission::ReadOnly)
+        );
+        assert!(
+            node_kind(&resp, "locked/hidden.md").is_none(),
+            "read-only directory should not be expanded"
+        );
     }
 
     #[test]
@@ -924,7 +1012,7 @@ mod tests {
         write(&tmp.path().join(".chan/lock"), "x");
         write(&tmp.path().join(".git/HEAD"), "x");
 
-        let resp = walk(tmp.path(), FsGraphScope::Folder, "", 2);
+        let resp = walk(tmp.path(), FsGraphScope::Directory, "", 2);
         assert!(node_kind(&resp, ".chan").is_none(), "saw .chan node");
         assert!(node_kind(&resp, ".git").is_none(), "saw .git node");
         assert_eq!(node_kind(&resp, "top.md"), Some("file"));
@@ -937,8 +1025,12 @@ mod tests {
         write(&tmp.path().join("top.md"), "# t");
         symlink("top.md", tmp.path().join("alias.md")).unwrap();
 
-        let resp = walk(tmp.path(), FsGraphScope::Folder, "", 1);
+        let resp = walk(tmp.path(), FsGraphScope::Directory, "", 1);
         assert_eq!(node_kind(&resp, "alias.md"), Some("symlink"));
+        assert_eq!(
+            node_path_kind(&resp, "alias.md"),
+            Some(chan_drive::PathKind::Symlink)
+        );
         assert_eq!(node_kind(&resp, "top.md"), Some("file"));
         assert!(
             has_edge(&resp, "alias.md", "top.md", "symlink"),
@@ -956,7 +1048,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         symlink("does-not-exist.md", tmp.path().join("broken.md")).unwrap();
 
-        let resp = walk(tmp.path(), FsGraphScope::Folder, "", 1);
+        let resp = walk(tmp.path(), FsGraphScope::Directory, "", 1);
         assert_eq!(node_kind(&resp, "broken.md"), Some("symlink"));
         let ghost = resp
             .nodes
@@ -974,8 +1066,12 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         symlink("/etc/hosts", tmp.path().join("escape.md")).unwrap();
 
-        let resp = walk(tmp.path(), FsGraphScope::Folder, "", 1);
+        let resp = walk(tmp.path(), FsGraphScope::Directory, "", 1);
         assert_eq!(node_kind(&resp, "escape.md"), Some("symlink"));
+        assert_eq!(
+            node_path_kind(&resp, "escape.md"),
+            Some(chan_drive::PathKind::Symlink)
+        );
         let ghost = resp
             .nodes
             .iter()
@@ -989,7 +1085,9 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn fifo_surfaces_as_ghost() {
+    fn fifo_and_socket_surface_as_ghost_with_path_class() {
+        use std::os::unix::net::UnixListener;
+
         let tmp = TempDir::new().unwrap();
         let fifo_path = tmp.path().join("pipe.fifo");
         // Shell out to `mkfifo` rather than pulling in libc just for
@@ -1003,11 +1101,26 @@ mod tests {
             Ok(s) if s.success() => {}
             _ => return,
         }
-        let resp = walk(tmp.path(), FsGraphScope::Folder, "", 1);
+        let _listener = UnixListener::bind(tmp.path().join("sock")).unwrap();
+
+        let resp = walk(tmp.path(), FsGraphScope::Directory, "", 1);
         assert_eq!(
             node_kind(&resp, "pipe.fifo"),
             Some("ghost"),
             "FIFO must surface as a ghost, not be silently dropped"
+        );
+        assert_eq!(
+            node_path_kind(&resp, "pipe.fifo"),
+            Some(chan_drive::PathKind::Fifo)
+        );
+        assert_eq!(
+            node_kind(&resp, "sock"),
+            Some("ghost"),
+            "socket must surface as a ghost, not be silently dropped"
+        );
+        assert_eq!(
+            node_path_kind(&resp, "sock"),
+            Some(chan_drive::PathKind::Socket)
         );
     }
 
@@ -1019,7 +1132,7 @@ mod tests {
         write(&tmp.path().join("top.md"), "# t");
         hard_link(tmp.path().join("top.md"), tmp.path().join("twin.md")).unwrap();
 
-        let resp = walk(tmp.path(), FsGraphScope::Folder, "", 1);
+        let resp = walk(tmp.path(), FsGraphScope::Directory, "", 1);
         assert_eq!(node_kind(&resp, "top.md"), Some("file"));
         assert_eq!(node_kind(&resp, "twin.md"), Some("file"));
         // Sorted lexicographically: "top.md" < "twin.md".
@@ -1044,7 +1157,7 @@ mod tests {
         symlink("b.md", tmp.path().join("a.md")).unwrap();
         symlink("a.md", tmp.path().join("b.md")).unwrap();
 
-        let resp = walk(tmp.path(), FsGraphScope::Folder, "", 1);
+        let resp = walk(tmp.path(), FsGraphScope::Directory, "", 1);
         assert_eq!(node_kind(&resp, "a.md"), Some("symlink"));
         assert_eq!(node_kind(&resp, "b.md"), Some("symlink"));
         assert!(has_edge(&resp, "a.md", "b.md", "symlink"));
@@ -1058,7 +1171,7 @@ mod tests {
 
         let resp = walk(tmp.path(), FsGraphScope::File, "sub/nested.md", 0);
         assert_eq!(node_kind(&resp, "sub/nested.md"), Some("file"));
-        assert_eq!(node_kind(&resp, "sub"), Some("folder"));
+        assert_eq!(node_kind(&resp, "sub"), Some("directory"));
         assert!(has_edge(&resp, "sub", "sub/nested.md", "contains"));
     }
 
@@ -1072,7 +1185,7 @@ mod tests {
     }
 
     /// Drive-bootstrapped tests for the public `build_fs_graph` entry
-    /// point — the CLI's `chan graph --scope file|folder` now calls
+    /// point — the CLI's `chan graph --scope file|directory` now calls
     /// this directly, so its rejection contract needs explicit
     /// coverage in addition to the walker-only tests above.
     fn open_drive() -> (TempDir, TempDir, std::sync::Arc<chan_drive::Drive>) {
@@ -1089,7 +1202,7 @@ mod tests {
     #[test]
     fn build_fs_graph_rejects_escape_path() {
         let (_cfg, _root, drive) = open_drive();
-        let err = build_fs_graph(&drive, FsGraphScope::Folder, "../etc", 1).unwrap_err();
+        let err = build_fs_graph(&drive, FsGraphScope::Directory, "../etc", 1).unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert!(
             err.message.contains("escape"),
@@ -1112,9 +1225,9 @@ mod tests {
     }
 
     #[test]
-    fn build_fs_graph_rejects_folder_scope_on_file() {
+    fn build_fs_graph_rejects_directory_scope_on_file() {
         let (_cfg, _root, drive) = open_drive();
-        let err = build_fs_graph(&drive, FsGraphScope::Folder, "notes/a.md", 1).unwrap_err();
+        let err = build_fs_graph(&drive, FsGraphScope::Directory, "notes/a.md", 1).unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert!(
             err.message.contains("requires a directory"),
@@ -1139,10 +1252,11 @@ mod tests {
         // posix system.
         symlink("/etc", root.path().join("escape-link")).unwrap();
 
-        // Folder scope through the escape link: hostnames dir on
+        // Directory scope through the escape link: hostnames dir on
         // macOS, hosts dir on Linux. Pick a path that's almost
         // certainly present.
-        let err = build_fs_graph(&drive, FsGraphScope::Folder, "escape-link/ssl", 1).unwrap_err();
+        let err =
+            build_fs_graph(&drive, FsGraphScope::Directory, "escape-link/ssl", 1).unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert!(
             err.message.contains("escapes drive root"),
@@ -1195,21 +1309,21 @@ mod tests {
     #[test]
     fn build_fs_graph_root_scope_returns_drive_root() {
         let (_cfg, _root, drive) = open_drive();
-        let resp = build_fs_graph(&drive, FsGraphScope::Folder, "", 1).unwrap();
-        assert_eq!(resp.scope, "folder");
+        let resp = build_fs_graph(&drive, FsGraphScope::Directory, "", 1).unwrap();
+        assert_eq!(resp.scope, "directory");
         assert_eq!(resp.path, "");
         // Drive root is keyed by the empty string; depth 1 lists the
         // top-level `notes/` directory.
         assert!(
             resp.nodes
                 .iter()
-                .any(|n| n.id.is_empty() && n.kind == "folder"),
+                .any(|n| n.id.is_empty() && n.kind == "directory"),
             "drive root node missing from response"
         );
         assert!(
             resp.nodes
                 .iter()
-                .any(|n| n.id == "notes" && n.kind == "folder"),
+                .any(|n| n.id == "notes" && n.kind == "directory"),
             "notes/ should be a direct child at depth 1"
         );
     }

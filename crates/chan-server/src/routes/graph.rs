@@ -17,10 +17,11 @@ use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_drive::{EdgeKind, ReportFileStats};
+use chan_drive::{EdgeKind, FileClass, PathClass, ReportFileStats};
 use serde::{Deserialize, Serialize};
 
 use crate::error::err_from;
+use crate::routes::fs_graph::{build_fs_graph, FsGraphScope};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -122,19 +123,21 @@ pub async fn api_links(State(state): State<Arc<AppState>>) -> Response {
 /// Node kinds: file (one per indexed path), tag (#name), mention
 /// (@@name). Date nodes from the typescript type aren't emitted;
 /// chan-drive's EdgeKind has no date variant today.
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct GraphViewResponse {
     nodes: Vec<GraphNodeView>,
     edges: Vec<GraphEdgeView>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 enum GraphNodeView {
     File {
         id: String,
         label: String,
         path: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path_class: Option<PathClass>,
         /// `chan.kind` for the underlying file. "contact" for notes
         /// flagged with `chan.kind: contact` frontmatter; absent for
         /// regular markdown so the visualizer's default doc styling
@@ -148,6 +151,31 @@ enum GraphNodeView {
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         missing: bool,
     },
+    Media {
+        id: String,
+        label: String,
+        path: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path_class: Option<PathClass>,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        missing: bool,
+    },
+    Directory {
+        id: String,
+        label: String,
+        path: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path_class: Option<PathClass>,
+        files: u64,
+        code: u64,
+    },
+    Language {
+        id: String,
+        label: String,
+        language: String,
+        files: u64,
+        code: u64,
+    },
     Tag {
         id: String,
         label: String,
@@ -158,17 +186,50 @@ enum GraphNodeView {
     },
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct GraphEdgeView {
     source: String,
     target: String,
-    /// "link" | "tag" | "mention". Lowercase to match the
+    /// "link" | "tag" | "mention" | "contains" | "language".
+    /// Lowercase to match the
     /// frontend's GraphViewEdgeKind type.
     kind: &'static str,
     /// Only meaningful for link edges: true when the link resolves
     /// to a missing file. Other kinds skip the field.
     #[serde(skip_serializing_if = "Option::is_none")]
     broken: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rank: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    files: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<u64>,
+}
+
+#[derive(Deserialize)]
+pub struct GraphParams {
+    #[serde(default = "default_graph_scope")]
+    scope: GraphScope,
+    #[serde(default)]
+    path: String,
+    #[serde(default = "default_graph_depth")]
+    depth: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum GraphScope {
+    Drive,
+    Directory,
+    File,
+}
+
+fn default_graph_scope() -> GraphScope {
+    GraphScope::Drive
+}
+
+fn default_graph_depth() -> usize {
+    6
 }
 
 #[derive(Deserialize)]
@@ -196,7 +257,7 @@ enum LanguageGraphNode {
         files: u64,
         code: u64,
     },
-    Folder {
+    Directory {
         id: String,
         label: String,
         path: String,
@@ -216,7 +277,7 @@ struct LanguageGraphEdge {
 }
 
 #[derive(Debug, Clone, Default)]
-struct LanguageFolderStats {
+struct LanguageDirectoryStats {
     files: u64,
     code: u64,
 }
@@ -348,11 +409,11 @@ fn language_node_id(language: &str) -> String {
     format!("language:{language}")
 }
 
-fn folder_node_id(path: &str) -> String {
-    format!("folder:{path}")
+fn directory_node_id(path: &str) -> String {
+    format!("directory:{path}")
 }
 
-fn folder_label(path: &str) -> String {
+fn directory_label(path: &str) -> String {
     if path.is_empty() {
         "/".to_string()
     } else {
@@ -364,7 +425,7 @@ fn folder_label(path: &str) -> String {
     }
 }
 
-fn parent_folder(path: &str) -> String {
+fn parent_directory(path: &str) -> String {
     std::path::Path::new(path)
         .parent()
         .and_then(|p| p.to_str())
@@ -381,7 +442,7 @@ fn build_language_graph(
     let filter = language_filter.map(str::to_lowercase);
     let mut by_language: std::collections::BTreeMap<
         String,
-        std::collections::BTreeMap<String, LanguageFolderStats>,
+        std::collections::BTreeMap<String, LanguageDirectoryStats>,
     > = std::collections::BTreeMap::new();
 
     for file in files {
@@ -393,11 +454,11 @@ fn build_language_graph(
                 continue;
             }
         }
-        let folder = parent_folder(&file.path);
+        let directory = parent_directory(&file.path);
         let stats = by_language
             .entry(file.language.clone())
             .or_default()
-            .entry(folder)
+            .entry(directory)
             .or_default();
         stats.files += 1;
         stats.code += file.code;
@@ -405,7 +466,7 @@ fn build_language_graph(
 
     let max_depth = by_language
         .values()
-        .map(|folders| u32::try_from(folders.len()).unwrap_or(u32::MAX))
+        .map(|directories| u32::try_from(directories.len()).unwrap_or(u32::MAX))
         .max()
         .unwrap_or(0);
     let effective_depth = if depth == 0 {
@@ -416,11 +477,11 @@ fn build_language_graph(
 
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
-    let mut folder_totals: std::collections::BTreeMap<String, LanguageFolderStats> =
+    let mut directory_totals: std::collections::BTreeMap<String, LanguageDirectoryStats> =
         std::collections::BTreeMap::new();
 
-    for (language, folders) in &by_language {
-        let mut ranked: Vec<(&String, &LanguageFolderStats)> = folders.iter().collect();
+    for (language, directories) in &by_language {
+        let mut ranked: Vec<(&String, &LanguageDirectoryStats)> = directories.iter().collect();
         ranked.sort_by(|(a_path, a), (b_path, b)| {
             b.files
                 .cmp(&a.files)
@@ -428,8 +489,8 @@ fn build_language_graph(
                 .then_with(|| a_path.cmp(b_path))
         });
 
-        let language_files = folders.values().map(|s| s.files).sum();
-        let language_code = folders.values().map(|s| s.code).sum();
+        let language_files = directories.values().map(|s| s.files).sum();
+        let language_code = directories.values().map(|s| s.code).sum();
         nodes.push(LanguageGraphNode::Language {
             id: language_node_id(language),
             label: language.clone(),
@@ -438,17 +499,17 @@ fn build_language_graph(
             code: language_code,
         });
 
-        for (idx, (folder, stats)) in ranked.into_iter().enumerate() {
+        for (idx, (directory, stats)) in ranked.into_iter().enumerate() {
             let rank = u32::try_from(idx + 1).unwrap_or(u32::MAX);
             if effective_depth != 0 && rank > effective_depth {
                 continue;
             }
-            let totals = folder_totals.entry(folder.clone()).or_default();
+            let totals = directory_totals.entry(directory.clone()).or_default();
             totals.files += stats.files;
             totals.code += stats.code;
             edges.push(LanguageGraphEdge {
                 source: language_node_id(language),
-                target: folder_node_id(folder),
+                target: directory_node_id(directory),
                 kind: "language",
                 rank,
                 files: stats.files,
@@ -457,11 +518,11 @@ fn build_language_graph(
         }
     }
 
-    for (folder, stats) in folder_totals {
-        nodes.push(LanguageGraphNode::Folder {
-            id: folder_node_id(&folder),
-            label: folder_label(&folder),
-            path: folder,
+    for (directory, stats) in directory_totals {
+        nodes.push(LanguageGraphNode::Directory {
+            id: directory_node_id(&directory),
+            label: directory_label(&directory),
+            path: directory,
             files: stats.files,
             code: stats.code,
         });
@@ -472,6 +533,214 @@ fn build_language_graph(
         nodes,
         edges,
     }
+}
+
+fn graph_scope_path(p: &GraphParams) -> &str {
+    match p.scope {
+        GraphScope::Drive => "",
+        GraphScope::Directory | GraphScope::File => p.path.trim_matches('/'),
+    }
+}
+
+fn path_class_for_graph(drive: &chan_drive::Drive, path: &str) -> Option<PathClass> {
+    chan_drive::fs_ops::classify_path(drive.root(), path).ok()
+}
+
+fn is_media_graph_path(path: &str) -> bool {
+    matches!(
+        chan_drive::fs_ops::classify(path),
+        FileClass::Image | FileClass::Pdf
+    )
+}
+
+fn fs_node_graph_id(node: &super::fs_graph::NodeView) -> String {
+    if node.kind == "directory" {
+        directory_node_id(&node.path)
+    } else {
+        node.id.clone()
+    }
+}
+
+fn merge_directory_node(
+    nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
+    id: String,
+    label: String,
+    path: String,
+    path_class: Option<PathClass>,
+    files: u64,
+    code: u64,
+) {
+    if let Some(GraphNodeView::Directory {
+        path_class: existing_class,
+        files: existing_files,
+        code: existing_code,
+        ..
+    }) = nodes.get_mut(&id)
+    {
+        if existing_class.is_none() {
+            *existing_class = path_class;
+        }
+        *existing_files = (*existing_files).max(files);
+        *existing_code = (*existing_code).max(code);
+        return;
+    }
+
+    nodes.insert(
+        id.clone(),
+        GraphNodeView::Directory {
+            id,
+            label,
+            path,
+            path_class,
+            files,
+            code,
+        },
+    );
+}
+
+fn merge_filesystem_layer(
+    drive: &chan_drive::Drive,
+    p: &GraphParams,
+    nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
+    edges: &mut Vec<GraphEdgeView>,
+) -> Result<(), super::fs_graph::FsGraphError> {
+    let path = graph_scope_path(p);
+    let scope = match p.scope {
+        GraphScope::File => FsGraphScope::File,
+        GraphScope::Drive | GraphScope::Directory => FsGraphScope::Directory,
+    };
+    let fs_graph = build_fs_graph(drive, scope, path, p.depth)?;
+    let mut id_map = std::collections::BTreeMap::new();
+
+    for node in fs_graph.nodes {
+        let id = fs_node_graph_id(&node);
+        id_map.insert(node.id.clone(), id.clone());
+        match node.kind {
+            "directory" => {
+                merge_directory_node(nodes, id, node.name, node.path, node.path_class, 0, 0)
+            }
+            _ if is_media_graph_path(&node.path) => {
+                nodes.entry(id.clone()).or_insert(GraphNodeView::Media {
+                    id,
+                    label: node.name,
+                    path: node.path,
+                    path_class: node.path_class,
+                    missing: node.broken,
+                });
+            }
+            _ => {
+                nodes.entry(id.clone()).or_insert(GraphNodeView::File {
+                    id,
+                    label: node.name,
+                    path: node.path,
+                    path_class: node.path_class,
+                    node_kind: None,
+                    missing: node.broken,
+                });
+            }
+        }
+    }
+
+    for edge in fs_graph.edges {
+        let source = id_map
+            .get(&edge.source)
+            .cloned()
+            .unwrap_or(edge.source.clone());
+        let target = id_map
+            .get(&edge.target)
+            .cloned()
+            .unwrap_or(edge.target.clone());
+        edges.push(GraphEdgeView {
+            source,
+            target,
+            kind: match edge.kind {
+                "contains" => "contains",
+                "symlink" => "link",
+                "hardlink" => "link",
+                _ => edge.kind,
+            },
+            broken: None,
+            rank: None,
+            files: None,
+            code: None,
+        });
+    }
+
+    Ok(())
+}
+
+fn scoped_report_files(
+    drive: &chan_drive::Drive,
+    p: &GraphParams,
+) -> chan_drive::Result<Vec<ReportFileStats>> {
+    let path = graph_scope_path(p);
+    let report = match p.scope {
+        GraphScope::Drive => drive.report()?,
+        GraphScope::Directory => drive.report_for_prefix(path)?,
+        GraphScope::File => drive.report_for_files(&[path.to_string()])?,
+    };
+    Ok(report.files)
+}
+
+fn merge_language_layer(
+    drive: &chan_drive::Drive,
+    p: &GraphParams,
+    nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
+    edges: &mut Vec<GraphEdgeView>,
+) -> chan_drive::Result<()> {
+    let files = scoped_report_files(drive, p)?;
+    let language_graph =
+        build_language_graph(&files, u32::try_from(p.depth).unwrap_or(u32::MAX), None);
+
+    for node in language_graph.nodes {
+        match node {
+            LanguageGraphNode::Language {
+                id,
+                label,
+                language,
+                files,
+                code,
+            } => {
+                nodes.insert(
+                    id.clone(),
+                    GraphNodeView::Language {
+                        id,
+                        label,
+                        language,
+                        files,
+                        code,
+                    },
+                );
+            }
+            LanguageGraphNode::Directory {
+                id,
+                label,
+                path,
+                files,
+                code,
+            } => merge_directory_node(
+                nodes,
+                id,
+                label,
+                path.clone(),
+                path_class_for_graph(drive, &path),
+                files,
+                code,
+            ),
+        }
+    }
+
+    edges.extend(language_graph.edges.into_iter().map(|edge| GraphEdgeView {
+        source: edge.source,
+        target: edge.target,
+        kind: edge.kind,
+        broken: None,
+        rank: Some(edge.rank),
+        files: Some(edge.files),
+        code: Some(edge.code),
+    }));
+
+    Ok(())
 }
 
 pub async fn api_language_graph(
@@ -490,7 +759,10 @@ pub async fn api_language_graph(
     .into_response()
 }
 
-pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
+pub async fn api_graph(
+    State(state): State<Arc<AppState>>,
+    Query(p): Query<GraphParams>,
+) -> Response {
     let drive = state.drive();
     let graph = match drive.graph() {
         Ok(g) => g,
@@ -621,34 +893,46 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
     // they exist on disk). Ghost file nodes for unresolved link
     // targets so the graph shows broken links as dangling muted
     // nodes.
-    let mut nodes: Vec<GraphNodeView> = Vec::new();
+    let mut nodes: std::collections::BTreeMap<String, GraphNodeView> =
+        std::collections::BTreeMap::new();
     for path in &files {
-        nodes.push(GraphNodeView::File {
-            id: path.clone(),
-            label: file_label(path),
-            path: path.clone(),
-            node_kind: if contact_paths.contains(path) {
-                Some("contact")
-            } else {
-                None
+        nodes.insert(
+            path.clone(),
+            GraphNodeView::File {
+                id: path.clone(),
+                label: file_label(path),
+                path: path.clone(),
+                path_class: path_class_for_graph(&drive, path),
+                node_kind: if contact_paths.contains(path) {
+                    Some("contact")
+                } else {
+                    None
+                },
+                missing: !present_files.contains(path.as_str()),
             },
-            missing: !present_files.contains(path.as_str()),
-        });
+        );
     }
     for img in &referenced_images {
-        nodes.push(GraphNodeView::File {
-            id: img.clone(),
-            label: file_label(img),
-            path: img.clone(),
-            node_kind: None,
-            missing: false,
-        });
+        nodes.insert(
+            img.clone(),
+            GraphNodeView::Media {
+                id: img.clone(),
+                label: file_label(img),
+                path: img.clone(),
+                path_class: path_class_for_graph(&drive, img),
+                missing: false,
+            },
+        );
     }
     for tag in &tags {
-        nodes.push(GraphNodeView::Tag {
-            id: format!("#{}", tag.name),
-            label: format!("#{}", tag.name),
-        });
+        let id = format!("#{}", tag.name);
+        nodes.insert(
+            id.clone(),
+            GraphNodeView::Tag {
+                id: id.clone(),
+                label: id,
+            },
+        );
     }
     let mut mention_set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut ghost_set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -681,22 +965,29 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
         }
     }
     for m in &mention_set {
-        nodes.push(GraphNodeView::Mention {
-            id: m.clone(),
-            label: m.clone(),
-        });
+        nodes.insert(
+            m.clone(),
+            GraphNodeView::Mention {
+                id: m.clone(),
+                label: m.clone(),
+            },
+        );
     }
     for ghost in &ghost_set {
-        nodes.push(GraphNodeView::File {
-            id: ghost.clone(),
-            label: file_label(ghost),
-            path: ghost.clone(),
-            node_kind: None,
-            missing: true,
-        });
+        nodes.insert(
+            ghost.clone(),
+            GraphNodeView::File {
+                id: ghost.clone(),
+                label: file_label(ghost),
+                path: ghost.clone(),
+                path_class: None,
+                node_kind: None,
+                missing: true,
+            },
+        );
     }
 
-    let edges: Vec<GraphEdgeView> = all_edges
+    let mut edges: Vec<GraphEdgeView> = all_edges
         .iter()
         // Same defensive guard as the node-set above: an edge with
         // an empty endpoint would point at a node we never created
@@ -720,10 +1011,24 @@ pub async fn api_graph(State(state): State<Arc<AppState>>) -> Response {
                 EdgeKind::Link => Some(!present_file_set.contains(e.dst.as_str())),
                 _ => None,
             },
+            rank: None,
+            files: None,
+            code: None,
         })
         .collect();
 
-    Json(GraphViewResponse { nodes, edges }).into_response()
+    if let Err(e) = merge_filesystem_layer(&drive, &p, &mut nodes, &mut edges) {
+        return e.into_response();
+    }
+    if let Err(e) = merge_language_layer(&drive, &p, &mut nodes, &mut edges) {
+        return err_from(&e);
+    }
+
+    Json(GraphViewResponse {
+        nodes: nodes.into_values().collect(),
+        edges,
+    })
+    .into_response()
 }
 
 /// Incoming link edges for one file. The frontend uses this for
@@ -812,6 +1117,108 @@ mod tests {
             bytes: 0,
             mtime: None,
         }
+    }
+
+    fn open_drive() -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        std::sync::Arc<chan_drive::Drive>,
+    ) {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path(), Some("graph-test".into()))
+            .unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        (cfg, root, drive)
+    }
+
+    fn put(root: &std::path::Path, rel: &str, body: &[u8]) {
+        let path = root.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, body).unwrap();
+    }
+
+    fn has_node_kind(
+        nodes: &std::collections::BTreeMap<String, GraphNodeView>,
+        kind: &str,
+    ) -> bool {
+        nodes.values().any(|node| {
+            matches!(
+                (kind, node),
+                ("directory", GraphNodeView::Directory { .. })
+                    | ("file", GraphNodeView::File { .. })
+                    | ("media", GraphNodeView::Media { .. })
+                    | ("language", GraphNodeView::Language { .. })
+                    | ("tag", GraphNodeView::Tag { .. })
+                    | ("mention", GraphNodeView::Mention { .. })
+            )
+        })
+    }
+
+    #[test]
+    fn merged_graph_layers_emit_filesystem_media_and_language_nodes() {
+        let (_cfg, root, drive) = open_drive();
+        put(root.path(), "notes/a.md", b"# A\n\n[[notes/b.md]]\n#tag\n");
+        put(root.path(), "notes/b.md", b"# B\n");
+        put(root.path(), "src/lib.rs", b"pub fn answer() -> u8 { 42 }\n");
+        put(root.path(), "assets/logo.png", &[0, 1, 2, 3]);
+        drive.index_file("notes/a.md").unwrap();
+        drive.index_file("notes/b.md").unwrap();
+
+        let params = GraphParams {
+            scope: GraphScope::Drive,
+            path: String::new(),
+            depth: 6,
+        };
+        let mut nodes = std::collections::BTreeMap::new();
+        let mut edges = Vec::new();
+        merge_filesystem_layer(&drive, &params, &mut nodes, &mut edges).unwrap();
+        merge_language_layer(&drive, &params, &mut nodes, &mut edges).unwrap();
+
+        assert!(has_node_kind(&nodes, "directory"));
+        assert!(has_node_kind(&nodes, "file"));
+        assert!(has_node_kind(&nodes, "media"));
+        assert!(has_node_kind(&nodes, "language"));
+        assert!(edges.iter().any(|edge| edge.kind == "contains"));
+        assert!(edges.iter().any(|edge| edge.kind == "language"));
+        assert!(nodes.values().any(
+            |node| matches!(node, GraphNodeView::Directory { id, .. } if id == "directory:src")
+        ));
+        assert!(nodes.values().any(
+            |node| matches!(node, GraphNodeView::Language { language, .. } if language == "Rust")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn merged_graph_keeps_read_only_directories_as_dead_ends() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_cfg, root, drive) = open_drive();
+        put(root.path(), "locked/hidden.md", b"# Hidden\n");
+        std::fs::set_permissions(
+            root.path().join("locked"),
+            std::fs::Permissions::from_mode(0o555),
+        )
+        .unwrap();
+
+        let params = GraphParams {
+            scope: GraphScope::Drive,
+            path: String::new(),
+            depth: 6,
+        };
+        let mut nodes = std::collections::BTreeMap::new();
+        let mut edges = Vec::new();
+        merge_filesystem_layer(&drive, &params, &mut nodes, &mut edges).unwrap();
+
+        assert!(nodes.contains_key("directory:locked"));
+        assert!(!nodes.contains_key("locked/hidden.md"));
+        assert!(!edges.iter().any(|edge| {
+            edge.source == "directory:locked" && edge.target == "locked/hidden.md"
+        }));
     }
 
     #[test]
@@ -945,7 +1352,7 @@ mod tests {
     }
 
     #[test]
-    fn language_graph_ranks_folders_per_language() {
+    fn language_graph_ranks_directories_per_language() {
         let graph = build_language_graph(
             &[
                 report_file("crates/a/src/lib.rs", "Rust", 100),
@@ -965,8 +1372,8 @@ mod tests {
             files: 3,
             code: 540,
         }));
-        assert!(graph.nodes.contains(&LanguageGraphNode::Folder {
-            id: "folder:crates/a/src".to_string(),
+        assert!(graph.nodes.contains(&LanguageGraphNode::Directory {
+            id: "directory:crates/a/src".to_string(),
             label: "src".to_string(),
             path: "crates/a/src".to_string(),
             files: 2,
@@ -974,7 +1381,7 @@ mod tests {
         }));
         assert!(graph.edges.contains(&LanguageGraphEdge {
             source: "language:Rust".to_string(),
-            target: "folder:crates/a/src".to_string(),
+            target: "directory:crates/a/src".to_string(),
             kind: "language",
             rank: 1,
             files: 2,
@@ -982,7 +1389,7 @@ mod tests {
         }));
         assert!(graph.edges.contains(&LanguageGraphEdge {
             source: "language:Rust".to_string(),
-            target: "folder:crates/b".to_string(),
+            target: "directory:crates/b".to_string(),
             kind: "language",
             rank: 2,
             files: 1,
@@ -1031,7 +1438,7 @@ mod tests {
             .iter()
             .map(|edge| edge.target.as_str())
             .collect();
-        assert_eq!(targets, ["folder:a", "folder:b", "folder:z"]);
+        assert_eq!(targets, ["directory:a", "directory:b", "directory:z"]);
         assert_eq!(
             graph.edges.iter().map(|edge| edge.rank).collect::<Vec<_>>(),
             [1, 2, 3]
@@ -1039,11 +1446,11 @@ mod tests {
     }
 
     #[test]
-    fn language_graph_renders_root_folder_with_slash_label() {
+    fn language_graph_renders_root_directory_with_slash_label() {
         let graph = build_language_graph(&[report_file("lib.rs", "Rust", 12)], 0, None);
 
-        assert!(graph.nodes.contains(&LanguageGraphNode::Folder {
-            id: "folder:".to_string(),
+        assert!(graph.nodes.contains(&LanguageGraphNode::Directory {
+            id: "directory:".to_string(),
             label: "/".to_string(),
             path: "".to_string(),
             files: 1,
@@ -1051,7 +1458,7 @@ mod tests {
         }));
         assert!(graph.edges.contains(&LanguageGraphEdge {
             source: "language:Rust".to_string(),
-            target: "folder:".to_string(),
+            target: "directory:".to_string(),
             kind: "language",
             rank: 1,
             files: 1,

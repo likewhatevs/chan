@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chan_drive::{
     Drive, ProgressCallback, ProgressEvent, ProgressStage, SearchAggression, VcsKind, WatchEvent,
@@ -56,10 +56,43 @@ pub enum IndexStatus {
     Error { message: String },
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexerHealthStatus {
+    Idle,
+    Settling,
+    Rebuilding,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct IndexerHealth {
+    pub status: IndexerHealthStatus,
+    pub queue_depth: usize,
+    pub last_event_at: Option<i64>,
+    pub last_settled_at: Option<i64>,
+    pub coalesced_rebuild: bool,
+}
+
+#[derive(Debug)]
+struct IndexerTelemetry {
+    queue_depth: usize,
+    last_event_at: Option<i64>,
+    last_settled_at: Option<i64>,
+    coalesced_rebuild: bool,
+}
+
+#[derive(Clone)]
+struct IndexerShared {
+    status: Arc<Mutex<IndexStatus>>,
+    telemetry: Arc<Mutex<IndexerTelemetry>>,
+}
+
 /// Handle to the background indexer. Drop it (or call `shutdown`)
 /// to stop both the watcher loop and the in-flight initial build.
 pub struct Indexer {
     status: Arc<Mutex<IndexStatus>>,
+    telemetry: Arc<Mutex<IndexerTelemetry>>,
     rebuild_tx: mpsc::UnboundedSender<()>,
     /// Set to true on shutdown so the in-flight `Drive::reindex`
     /// blocking task bails at its next per-file check. Without this
@@ -109,6 +142,12 @@ impl Indexer {
             indexed_vectors: stats.indexed_vectors,
             model: stats.model.clone(),
         }));
+        let telemetry = Arc::new(Mutex::new(IndexerTelemetry {
+            queue_depth: 0,
+            last_event_at: None,
+            last_settled_at: Some(now_unix()),
+            coalesced_rebuild: false,
+        }));
         let watch_context = WatchContext {
             vcs_kind: chan_drive::detect_drive_vcs(drive.root()),
         };
@@ -124,6 +163,7 @@ impl Indexer {
         let coordinator_task = spawn_coordinator(
             drive.clone(),
             status.clone(),
+            telemetry.clone(),
             rebuild_rx,
             cancel.clone(),
             search_aggression,
@@ -152,7 +192,10 @@ impl Indexer {
 
         let watcher_task = spawn_watcher_loop(
             drive,
-            status.clone(),
+            IndexerShared {
+                status: status.clone(),
+                telemetry: telemetry.clone(),
+            },
             watch_events,
             rebuild_tx.clone(),
             cancel.clone(),
@@ -162,6 +205,7 @@ impl Indexer {
 
         Self {
             status,
+            telemetry,
             rebuild_tx,
             cancel,
             _watcher_task: watcher_task,
@@ -179,6 +223,13 @@ impl Indexer {
     /// Snapshot the current status. Cheap.
     pub fn snapshot(&self) -> IndexStatus {
         self.status.lock().unwrap().clone()
+    }
+
+    /// Snapshot the lightweight health view used by `/api/health`.
+    pub fn health_snapshot(&self) -> IndexerHealth {
+        let status = self.status.lock().unwrap().clone();
+        let telemetry = self.telemetry.lock().unwrap();
+        health_from(&status, &telemetry)
     }
 
     /// Ask the indexer to run a full rebuild. Returns immediately;
@@ -201,6 +252,7 @@ impl Indexer {
 fn spawn_coordinator(
     drive: Arc<Drive>,
     status: Arc<Mutex<IndexStatus>>,
+    telemetry: Arc<Mutex<IndexerTelemetry>>,
     mut rx: mpsc::UnboundedReceiver<()>,
     cancel: Arc<AtomicBool>,
     search_aggression: SearchAggression,
@@ -233,7 +285,7 @@ fn spawn_coordinator(
             })
             .await;
             match result {
-                Ok(Ok(_summary)) => set_idle(&drive, &status),
+                Ok(Ok(_summary)) => set_idle(&drive, &status, &telemetry),
                 Ok(Err(chan_drive::ChanError::Cancelled)) => {
                     // Shutdown path: don't surface a user-visible
                     // error; the next boot will pick up the empty
@@ -260,7 +312,7 @@ fn spawn_coordinator(
 /// into one re-index.
 fn spawn_watcher_loop(
     drive: Arc<Drive>,
-    status: Arc<Mutex<IndexStatus>>,
+    shared: IndexerShared,
     mut rx: broadcast::Receiver<WatchEvent>,
     rebuild_tx: mpsc::UnboundedSender<()>,
     cancel: Arc<AtomicBool>,
@@ -272,7 +324,8 @@ fn spawn_watcher_loop(
             Arc::new(Mutex::new(HashMap::new()));
         let pending_w = pending.clone();
         let drive_w = drive.clone();
-        let status_w = status.clone();
+        let status_w = shared.status.clone();
+        let telemetry_w = shared.telemetry.clone();
         let cancel_w = cancel.clone();
 
         // Worker: every 200 ms, drain paths whose last event is at
@@ -287,6 +340,7 @@ fn spawn_watcher_loop(
                     return;
                 }
                 let due = collect_due(&pending_w, debounce);
+                update_queue_depth(&pending_w, &telemetry_w);
                 for change in due {
                     *status_w.lock().unwrap() = IndexStatus::Reindexing {
                         file: change.path.clone(),
@@ -299,8 +353,12 @@ fn spawn_watcher_loop(
                     })
                     .await;
                     match result {
-                        Ok(Ok(ApplyOutcome::Indexed)) => set_idle(&drive_w, &status_w),
-                        Ok(Ok(ApplyOutcome::Forgotten)) => set_idle(&drive_w, &status_w),
+                        Ok(Ok(ApplyOutcome::Indexed)) => {
+                            set_idle(&drive_w, &status_w, &telemetry_w)
+                        }
+                        Ok(Ok(ApplyOutcome::Forgotten)) => {
+                            set_idle(&drive_w, &status_w, &telemetry_w)
+                        }
                         Ok(Ok(ApplyOutcome::SkippedSpecial))
                         | Ok(Ok(ApplyOutcome::SkippedMissing)) => {
                             // Symlinks/FIFOs/sockets/devices and "the
@@ -309,7 +367,7 @@ fn spawn_watcher_loop(
                             // back to Idle so the dashboard does
                             // not flash "search is broken" on a
                             // legitimate watcher event.
-                            set_idle(&drive_w, &status_w);
+                            set_idle(&drive_w, &status_w, &telemetry_w);
                         }
                         Ok(Err(e)) => {
                             tracing::warn!(
@@ -334,43 +392,52 @@ fn spawn_watcher_loop(
         // Listener: feed `pending` from the watcher channel.
         loop {
             match rx.recv().await {
-                Ok(event) => match classify_watch_event(&event, watch_context) {
-                    WatchAction::Changes(changes) => {
-                        let mut p = pending.lock().unwrap();
-                        for change in changes {
-                            let entry = p
-                                .entry(change.path.clone())
-                                .or_insert_with(|| change.clone());
-                            // Latest event wins on the deleted flag:
-                            // a create-then-delete burst should end
-                            // as a delete.
-                            entry.deleted = change.deleted;
-                            entry.last_seen = change.last_seen;
-                        }
-                        if should_rebuild_for_vcs_burst(watch_context, p.len()) {
-                            p.clear();
-                            tracing::warn!(
+                Ok(event) => {
+                    record_watcher_event(&shared.telemetry);
+                    match classify_watch_event(&event, watch_context) {
+                        WatchAction::Changes(changes) => {
+                            let mut p = pending.lock().unwrap();
+                            for change in changes {
+                                let entry = p
+                                    .entry(change.path.clone())
+                                    .or_insert_with(|| change.clone());
+                                // Latest event wins on the deleted flag:
+                                // a create-then-delete burst should end
+                                // as a delete.
+                                entry.deleted = change.deleted;
+                                entry.last_seen = change.last_seen;
+                            }
+                            if should_rebuild_for_vcs_burst(watch_context, p.len()) {
+                                p.clear();
+                                mark_coalesced_rebuild(&shared.telemetry);
+                                tracing::warn!(
                                 threshold = VCS_BURST_REBUILD_THRESHOLD,
                                 "indexer: VCS-aware watcher burst exceeded threshold; requesting rebuild"
                             );
+                                let _ = rebuild_tx.send(());
+                            }
+                            drop(p);
+                            update_queue_depth(&pending, &shared.telemetry);
+                        }
+                        WatchAction::Rebuild { reason } => {
+                            pending.lock().unwrap().clear();
+                            mark_coalesced_rebuild(&shared.telemetry);
+                            update_queue_depth(&pending, &shared.telemetry);
+                            tracing::warn!(
+                                reason,
+                                "indexer: watcher event stream lost scope; requesting rebuild"
+                            );
                             let _ = rebuild_tx.send(());
                         }
+                        WatchAction::Ignore => {}
                     }
-                    WatchAction::Rebuild { reason } => {
-                        pending.lock().unwrap().clear();
-                        tracing::warn!(
-                            reason,
-                            "indexer: watcher event stream lost scope; requesting rebuild"
-                        );
-                        let _ = rebuild_tx.send(());
-                    }
-                    WatchAction::Ignore => {}
-                },
+                }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     // Dropped events; we've missed `n` of them. The
                     // safest catch-up is a full rebuild request,
                     // which the coordinator coalesces with anything
                     // already queued.
+                    mark_coalesced_rebuild(&shared.telemetry);
                     tracing::warn!(
                         "indexer: watcher channel lagged ({n} events); requesting rebuild"
                     );
@@ -573,6 +640,49 @@ fn collect_due(
     out
 }
 
+fn now_unix() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+fn health_from(status: &IndexStatus, telemetry: &IndexerTelemetry) -> IndexerHealth {
+    let status = match status {
+        IndexStatus::Error { .. } => IndexerHealthStatus::Error,
+        IndexStatus::Building { .. } | IndexStatus::Reindexing { .. } => {
+            IndexerHealthStatus::Rebuilding
+        }
+        IndexStatus::Idle { .. } if telemetry.queue_depth > 0 => IndexerHealthStatus::Settling,
+        IndexStatus::Idle { .. } if telemetry.coalesced_rebuild => IndexerHealthStatus::Rebuilding,
+        IndexStatus::Idle { .. } => IndexerHealthStatus::Idle,
+    };
+    IndexerHealth {
+        status,
+        queue_depth: telemetry.queue_depth,
+        last_event_at: telemetry.last_event_at,
+        last_settled_at: telemetry.last_settled_at,
+        coalesced_rebuild: telemetry.coalesced_rebuild,
+    }
+}
+
+fn record_watcher_event(telemetry: &Mutex<IndexerTelemetry>) {
+    telemetry.lock().unwrap().last_event_at = Some(now_unix());
+}
+
+fn mark_coalesced_rebuild(telemetry: &Mutex<IndexerTelemetry>) {
+    let mut telemetry = telemetry.lock().unwrap();
+    telemetry.coalesced_rebuild = true;
+    telemetry.queue_depth = 0;
+}
+
+fn update_queue_depth(
+    pending: &Mutex<HashMap<String, PendingChange>>,
+    telemetry: &Mutex<IndexerTelemetry>,
+) {
+    telemetry.lock().unwrap().queue_depth = pending.lock().unwrap().len();
+}
+
 /// `ProgressCallback` wrapper that mirrors progress events into two
 /// places: the local `IndexStatus` mutex (so `/api/index/status`
 /// reflects the in-flight build for clients that poll instead of
@@ -613,7 +723,7 @@ impl ProgressCallback for StatusUpdater {
     }
 }
 
-fn set_idle(drive: &Drive, status: &Mutex<IndexStatus>) {
+fn set_idle(drive: &Drive, status: &Mutex<IndexStatus>, telemetry: &Mutex<IndexerTelemetry>) {
     match drive.index_stats() {
         Ok(s) => {
             *status.lock().unwrap() = IndexStatus::Idle {
@@ -621,6 +731,9 @@ fn set_idle(drive: &Drive, status: &Mutex<IndexStatus>) {
                 indexed_vectors: s.indexed_vectors,
                 model: s.model,
             };
+            let mut telemetry = telemetry.lock().unwrap();
+            telemetry.last_settled_at = Some(now_unix());
+            telemetry.coalesced_rebuild = false;
         }
         Err(e) => {
             *status.lock().unwrap() = IndexStatus::Error {
@@ -787,6 +900,55 @@ mod tests {
         assert!(due[0].deleted);
         assert_eq!(due[1].path, "new.md");
         assert!(!due[1].deleted);
+    }
+
+    #[test]
+    fn health_snapshot_reports_settling_and_rebuilding_transitions() {
+        let idle = IndexStatus::Idle {
+            indexed_docs: 3,
+            indexed_vectors: 0,
+            model: "bm25".to_string(),
+        };
+        let mut telemetry = IndexerTelemetry {
+            queue_depth: 0,
+            last_event_at: None,
+            last_settled_at: Some(10),
+            coalesced_rebuild: false,
+        };
+        assert_eq!(
+            health_from(&idle, &telemetry).status,
+            IndexerHealthStatus::Idle
+        );
+
+        telemetry.queue_depth = 2;
+        telemetry.last_event_at = Some(11);
+        assert_eq!(
+            health_from(&idle, &telemetry),
+            IndexerHealth {
+                status: IndexerHealthStatus::Settling,
+                queue_depth: 2,
+                last_event_at: Some(11),
+                last_settled_at: Some(10),
+                coalesced_rebuild: false,
+            }
+        );
+
+        telemetry.queue_depth = 0;
+        telemetry.coalesced_rebuild = true;
+        assert_eq!(
+            health_from(&idle, &telemetry).status,
+            IndexerHealthStatus::Rebuilding
+        );
+        assert_eq!(
+            health_from(
+                &IndexStatus::Reindexing {
+                    file: "note.md".to_string()
+                },
+                &telemetry
+            )
+            .status,
+            IndexerHealthStatus::Rebuilding
+        );
     }
 
     #[test]

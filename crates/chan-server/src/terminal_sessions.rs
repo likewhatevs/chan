@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -19,6 +19,9 @@ use tokio::task::JoinHandle;
 
 use crate::config::TerminalConfig;
 use crate::signal::now_unix_secs;
+
+#[cfg(target_os = "macos")]
+use std::process::Command;
 
 const BROADCAST_CAP: usize = 1024;
 const ALT_SCREEN_ENTER: &[u8] = b"\x1b[?1049h";
@@ -46,6 +49,7 @@ pub struct CreateOptions {
     pub size: PtySize,
     pub tab_name: Option<String>,
     pub mcp_env: bool,
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -122,6 +126,10 @@ impl AttachHandle {
 
     pub fn request_redraw(&self) {
         self.session.request_redraw();
+    }
+
+    pub fn cwd(&self) -> Option<PathBuf> {
+        self.session.cwd()
     }
 }
 
@@ -289,6 +297,8 @@ impl Drop for Registry {
 #[derive(Debug)]
 struct Session {
     id: String,
+    drive_root: PathBuf,
+    child_pid: Option<u32>,
     command_tx: std::sync::mpsc::Sender<PtyCommand>,
     output_tx: broadcast::Sender<SessionEvent>,
     ring: Mutex<RingBuffer>,
@@ -306,7 +316,8 @@ impl Session {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(opts.size)?;
         let mut cmd = CommandBuilder::new_default_prog();
-        cmd.cwd(config.drive_root);
+        let cwd = opts.cwd.unwrap_or_else(|| config.drive_root.clone());
+        cmd.cwd(cwd);
         if let Some(home) = terminal_home_dir() {
             cmd.env("HOME", &home);
             #[cfg(windows)]
@@ -318,6 +329,7 @@ impl Session {
         cmd.env("CLICOLOR_FORCE", "1");
         cmd.env("FORCE_COLOR", "3");
         cmd.env("CHAN", "1");
+        clear_mcp_env(&mut cmd);
         if opts.mcp_env {
             if let Some(socket_path) = config.mcp_socket_path.as_deref() {
                 set_mcp_env(&mut cmd, socket_path);
@@ -331,6 +343,7 @@ impl Session {
         cmd.env_remove("CODEX_CI");
 
         let mut child = pair.slave.spawn_command(cmd)?;
+        let child_pid = child.process_id();
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader()?;
@@ -340,6 +353,8 @@ impl Session {
         let (output_tx, _) = broadcast::channel::<SessionEvent>(BROADCAST_CAP);
         let session = Arc::new(Self {
             id,
+            drive_root: config.drive_root.clone(),
+            child_pid,
             command_tx,
             output_tx,
             ring: Mutex::new(RingBuffer::new(config.terminal.ring_bytes)),
@@ -480,6 +495,11 @@ impl Session {
         let _ = self.command_tx.send(PtyCommand::Redraw);
     }
 
+    fn cwd(&self) -> Option<PathBuf> {
+        let cwd = process_cwd(self.child_pid?)?;
+        path_inside_root(&cwd, &self.drive_root).then_some(cwd)
+    }
+
     fn close(&self, reason: CloseReason) {
         if self.closed.swap(true, Ordering::Relaxed) {
             return;
@@ -540,6 +560,38 @@ impl Session {
             tail.extend_from_slice(&scan[scan.len() - keep..]);
         }
     }
+}
+
+fn path_inside_root(path: &Path, root: &Path) -> bool {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    path == root || path.starts_with(root)
+}
+
+#[cfg(target_os = "linux")]
+fn process_cwd(pid: u32) -> Option<PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn process_cwd(pid: u32) -> Option<PathBuf> {
+    let output = Command::new("/usr/sbin/lsof")
+        .args(["-a", "-d", "cwd", "-Fn", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix('n'))
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn process_cwd(_pid: u32) -> Option<PathBuf> {
+    None
 }
 
 enum PtyCommand {
@@ -675,6 +727,18 @@ pub(crate) fn set_mcp_env(cmd: &mut CommandBuilder, socket_path: &std::path::Pat
     cmd.env("CHAN_MCP_SERVER_JSON", server_json);
 }
 
+fn clear_mcp_env(cmd: &mut CommandBuilder) {
+    for key in [
+        "CHAN_MCP_SERVER_NAME",
+        "CHAN_MCP_SOCKET",
+        "CHAN_MCP_COMMAND",
+        "CHAN_MCP_COMMAND_JSON",
+        "CHAN_MCP_SERVER_JSON",
+    ] {
+        cmd.env_remove(key);
+    }
+}
+
 pub(crate) fn terminal_home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -714,6 +778,8 @@ mod tests {
         let (output_tx, _) = broadcast::channel(BROADCAST_CAP);
         Arc::new(Session {
             id: "test-session".to_string(),
+            drive_root: PathBuf::from("/"),
+            child_pid: None,
             command_tx,
             output_tx,
             ring: Mutex::new(RingBuffer::new(ring_bytes)),
@@ -835,6 +901,7 @@ mod tests {
                 size: test_size(),
                 tab_name: None,
                 mcp_env: true,
+                cwd: None,
             })
             .unwrap();
         let id = handle.id().to_string();
@@ -853,6 +920,7 @@ mod tests {
                 size: test_size(),
                 tab_name: None,
                 mcp_env: true,
+                cwd: None,
             })
             .unwrap();
         let err = registry
@@ -860,6 +928,7 @@ mod tests {
                 size: test_size(),
                 tab_name: None,
                 mcp_env: true,
+                cwd: None,
             })
             .unwrap_err();
         assert!(matches!(err, CreateError::Capped));
@@ -873,6 +942,7 @@ mod tests {
                 size: test_size(),
                 tab_name: None,
                 mcp_env: true,
+                cwd: None,
             })
             .unwrap();
         let id = handle.id().to_string();
@@ -894,6 +964,7 @@ mod tests {
                 },
                 tab_name: None,
                 mcp_env: true,
+                cwd: None,
             })
             .unwrap();
         let mut second = registry.attach(first.id(), Some(first.seq)).unwrap();
@@ -925,6 +996,7 @@ mod tests {
                 size: test_size(),
                 tab_name: None,
                 mcp_env: true,
+                cwd: None,
             })
             .unwrap();
         let mut second = registry.attach(first.id(), Some(first.seq)).unwrap();

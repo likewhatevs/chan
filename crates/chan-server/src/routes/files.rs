@@ -39,6 +39,8 @@ struct TreeEntryView {
     mtime: Option<i64>,
     size: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    path_class: Option<chan_drive::PathClass>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     kind: Option<&'static str>,
 }
 
@@ -101,6 +103,7 @@ pub async fn api_list_files(
         .into_iter()
         .map(|e| TreeEntryView {
             kind: project_kind(&e.path, e.is_dir, contact_paths.contains(&e.path)),
+            path_class: path_class_for_wire(&drive, &e.path),
             path: e.path,
             is_dir: e.is_dir,
             mtime: e.mtime,
@@ -161,6 +164,8 @@ struct FileResponse {
     path: String,
     content: String,
     mtime: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path_class: Option<chan_drive::PathClass>,
     /// Filesystem-level writability. False when the path lacks the
     /// user-write bit (e.g. `chmod -w`); the editor uses this to
     /// lock the per-tab read mode regardless of user choice. Sourced
@@ -168,6 +173,16 @@ struct FileResponse {
     /// drive-internal path so symlink escapes are still refused
     /// upstream by chan-drive.
     writable: bool,
+}
+
+fn path_class_for_wire(drive: &chan_drive::Drive, rel: &str) -> Option<chan_drive::PathClass> {
+    match chan_drive::fs_ops::classify_path(drive.root(), rel) {
+        Ok(class) => Some(class),
+        Err(e) => {
+            tracing::warn!(%rel, ?e, "path classification failed");
+            None
+        }
+    }
 }
 
 /// Check the user-write bit on a drive-relative path. Returns true
@@ -203,6 +218,7 @@ pub async fn api_read_file(
         let mtime = state.drive().stat(&path).ok().and_then(|s| s.mtime);
         let writable = fs_writable(&state, &path);
         return Json(FileResponse {
+            path_class: path_class_for_wire(state.drive().as_ref(), &path),
             path,
             content,
             mtime,
@@ -397,4 +413,74 @@ struct MoveResponse {
     renamed: Vec<(String, String)>,
     rewritten: Vec<String>,
     conflicts: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_response_serializes_path_class_for_inspector_payload() {
+        let response = FileResponse {
+            path: "notes/a.md".to_string(),
+            content: "hello".to_string(),
+            mtime: Some(1),
+            path_class: Some(chan_drive::PathClass {
+                kind: chan_drive::PathKind::RegularFile,
+                permission: chan_drive::PathPermission::ReadWrite,
+                link_count: 2,
+                target: None,
+                target_escapes_drive: false,
+            }),
+            writable: true,
+        };
+
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(value["path_class"]["kind"], "regular_file");
+        assert_eq!(value["path_class"]["permission"], "read_write");
+        assert_eq!(value["path_class"]["link_count"], 2);
+    }
+
+    #[test]
+    fn tree_entry_serializes_path_class_for_file_browser_inspector() {
+        let entry = TreeEntryView {
+            path: "alias.md".to_string(),
+            is_dir: false,
+            mtime: None,
+            size: 0,
+            path_class: Some(chan_drive::PathClass {
+                kind: chan_drive::PathKind::Symlink,
+                permission: chan_drive::PathPermission::ReadWrite,
+                link_count: 1,
+                target: Some(std::path::PathBuf::from("/etc/hosts")),
+                target_escapes_drive: true,
+            }),
+            kind: Some("binary"),
+        };
+
+        let value = serde_json::to_value(entry).unwrap();
+        assert_eq!(value["path_class"]["kind"], "symlink");
+        assert_eq!(value["path_class"]["target"], "/etc/hosts");
+        assert_eq!(value["path_class"]["target_escapes_drive"], true);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_listing_keeps_symlink_with_path_class() {
+        use std::os::unix::fs::symlink;
+
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path(), Some("files-test".into()))
+            .unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        std::fs::write(root.path().join("note.md"), "hi").unwrap();
+        symlink("note.md", root.path().join("alias.md")).unwrap();
+
+        let entries = list_dir_entries(&drive, "").unwrap();
+        assert!(entries.iter().any(|entry| entry.path == "alias.md"));
+        let class = path_class_for_wire(&drive, "alias.md").expect("symlink path class");
+        assert_eq!(class.kind, chan_drive::PathKind::Symlink);
+    }
 }

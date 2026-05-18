@@ -1,7 +1,7 @@
 // build.rs
 //
 // rust-embed bakes `web/dist/` into the binary at compile time, but
-// Cargo doesn't track changes inside the embedded folder. Without
+// Cargo doesn't track changes inside the embedded directory. Without
 // this script, `npm run build` followed by `cargo build --release`
 // produces a binary with the OLD bundle because Cargo decides
 // nothing has changed and skips compilation.
@@ -11,7 +11,7 @@
 // bundle is rebuilt.
 //
 // We also `create_dir_all` web/dist on first build because rust-
-// embed errors if the folder doesn't exist. A fresh clone has no
+// embed errors if the directory doesn't exist. A fresh clone has no
 // dist (it's gitignored as a build artifact); the empty dir lets
 // the macro succeed and the binary just serves nothing useful
 // until the user runs `cd web && npm install && npm run build`.

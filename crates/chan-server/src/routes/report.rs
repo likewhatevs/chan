@@ -7,9 +7,9 @@
 //!   - `GET /api/report/file?path=<rel>` returns the single
 //!     `FileStats` row for one file, or 404 if the path is not in the
 //!     index (binary, gitignored, language unknown to tokei).
-//!   - `GET /api/report/prefix?path=<rel>` returns the per-folder
+//!   - `GET /api/report/prefix?path=<rel>` returns the per-directory
 //!     roll-up: totals, by_language, cocomo. The per-file `files`
-//!     array is dropped from the response since folders can fan out
+//!     array is dropped from the response since directories can fan out
 //!     to thousands of rows; the inspector only needs the summary.
 //!     Empty `path` means the entire drive.
 //!
@@ -65,8 +65,8 @@ pub async fn api_report_file(
     }
 }
 
-/// Folder roll-up: totals + per-language + COCOMO. The per-file
-/// `files` array is dropped since folders can fan out to thousands of
+/// Directory roll-up: totals + per-language + COCOMO. The per-file
+/// `files` array is dropped since directories can fan out to thousands of
 /// rows and the inspector renders only the summary. Empty `path`
 /// returns the whole-drive roll-up.
 pub async fn api_report_prefix(
