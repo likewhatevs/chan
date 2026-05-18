@@ -36,10 +36,9 @@
     GraphViewNode,
     LanguageGraphResponse,
   } from "../api/types";
-  import { openInActivePane } from "../state/tabs.svelte";
+  import { openInActivePane, type GraphTab } from "../state/tabs.svelte";
   import {
     availableGraphScopes,
-    browserOverlay,
     graphReloadSignal,
     graphOverlay,
     openBrowser,
@@ -64,17 +63,23 @@
   import { chordFor } from "../state/shortcuts";
   import { FS_GRAPH_DEPTH_MAX, graphDepthCap } from "../graph/depth";
 
-  // Visibility of the details aside lives on `graphOverlay.inspectorOpen`
-  // (module state) so it round-trips through the URL hash.
+  let {
+    tab,
+    onClose,
+  }: {
+    tab?: GraphTab;
+    onClose?: () => void;
+  } = $props();
 
-  const visible = $derived(graphOverlay.open);
+  const graphState = $derived(tab ?? graphOverlay);
+  const visible = $derived(tab ? true : graphOverlay.open);
 
   /// Dropdown options derived from the live layout; relabels
   /// "drive" as "Whole drive".
   const scopeOptions = $derived<ScopeOption[]>(availableGraphScopes());
 
   const currentScope = $derived<ScopeOption | null>(
-    scopeOptions.find((o) => o.id === graphOverlay.scopeId) ?? null,
+    scopeOptions.find((o) => o.id === graphState.scopeId) ?? null,
   );
 
   /// Snap to a sensible scope on open if the saved scopeId no longer
@@ -83,11 +88,12 @@
   /// rewrite saved graph state.
   $effect(() => {
     if (!visible) return;
-    if (!currentScope) graphOverlay.scopeId = defaultScopeId();
+    if (!currentScope) graphState.scopeId = defaultScopeId();
   });
 
   function close(): void {
-    graphOverlay.open = false;
+    if (onClose) onClose();
+    else graphOverlay.open = false;
   }
 
   // ---- types -------------------------------------------------------------
@@ -133,18 +139,18 @@
   let watchReloadTimer: ReturnType<typeof setTimeout> | null = null;
   let seenGraphReloadNonce = graphReloadSignal.nonce;
 
-  /// Chip toggles live on `graphOverlay.filters` (module state) so
+  /// Chip toggles live on `graphState.filters` (module state) so
   /// they round-trip through the URL hash. Local proxy aliases keep
   /// the existing read sites compact.
-  const show = graphOverlay.filters;
+  const show = $derived(graphState.filters);
   const filesystemMode = $derived(
-    graphOverlay.mode === "filesystem" &&
+    graphState.mode === "filesystem" &&
       (currentScope?.kind === "file" ||
         currentScope?.kind === "dir" ||
         currentScope?.kind === "drive" ||
         currentScope?.kind === "global"),
   );
-  const languageMode = $derived(graphOverlay.mode === "language");
+  const languageMode = $derived(graphState.mode === "language");
   const depthCap = $derived.by(() => {
     if (languageMode) return Math.max(1, languageMaxDepth);
     if (loading && currentScope?.kind === "dir" && nodes.length === 0) {
@@ -202,7 +208,7 @@
   }
 
   function toggleInspector(): void {
-    graphOverlay.inspectorOpen = !graphOverlay.inspectorOpen;
+    graphState.inspectorOpen = !graphState.inspectorOpen;
     menu?.close();
   }
 
@@ -256,7 +262,7 @@
   //
   //   (1) the SCOPE picker in the header (file / group / drive).
   //       For file and group, BFS out from the seed paths up to
-  //       graphOverlay.depth hops. Drive = no filter.
+  //       graphState.depth hops. Drive = no filter.
   //   (2) the per-edge-kind chips (link / tag). Edges whose kind
   //       is filtered out are dropped, and any non-file node
   //       attached only via filtered edges drops too.
@@ -284,7 +290,7 @@
       const seedIds = new Set<string>([currentScope.nodeId]);
       const visited = new Set(seedIds);
       let frontier = new Set(seedIds);
-      for (let i = 0; i < graphOverlay.depth; i++) {
+      for (let i = 0; i < graphState.depth; i++) {
         const next = new Set<string>();
         for (const e of edges) {
           if (frontier.has(e.source) && !visited.has(e.target)) {
@@ -326,7 +332,7 @@
     if (seedIds.size === 0) return seedIds;
     const visited = new Set(seedIds);
     let frontier = new Set(seedIds);
-    for (let i = 0; i < graphOverlay.depth; i++) {
+    for (let i = 0; i < graphState.depth; i++) {
       const next = new Set<string>();
       for (const e of edges) {
         if (frontier.has(e.source) && !visited.has(e.target)) {
@@ -498,7 +504,7 @@
 
   $effect(() => {
     if (
-      !graphOverlay.open ||
+      !visible ||
       !isFileGhost ||
       selectedNode?.kind !== "file" ||
       selectedNode.missing
@@ -591,8 +597,7 @@
   function revealSelectedFile(): void {
     if (selectedNode && selectedNode.kind === "file" && !selectedNode.missing) {
       revealAndSelect(selectedNode.path);
-      openBrowser();
-      browserOverlay.inspectorOpen = true;
+      openBrowser().inspectorOpen = true;
       close();
     }
   }
@@ -611,8 +616,7 @@
       selectedFsNode.path !== undefined
     ) {
       revealAndSelect(selectedFsNode.path);
-      openBrowser();
-      browserOverlay.inspectorOpen = true;
+      openBrowser().inspectorOpen = true;
       close();
     }
   }
@@ -622,7 +626,7 @@
     // selection ring + first-degree label reveal itself, so all
     // this surface has to do is mirror the id.
     selectedId = n.id;
-    graphOverlay.inspectorOpen = true;
+    graphState.inspectorOpen = true;
   }
 
   /// Click handler for link / backlink / tag-doc entries surfaced by
@@ -757,27 +761,27 @@
         const fs = await api.fsGraph({
           scope: fsScope,
           path: fsPath,
-          depth: graphOverlay.depth,
+          depth: graphState.depth,
         });
         fsNodes = fs.nodes;
         fsTruncated = fs.truncated;
         nodes = mapFsNodes(fs);
         edges = mapFsEdges(fs);
-        const pending = graphOverlay.pendingSelectId;
+        const pending = graphState.pendingSelectId;
         if (pending && fs.nodes.some((n) => n.id === pending)) {
           selectedId = pending;
-          graphOverlay.inspectorOpen = true;
+          graphState.inspectorOpen = true;
         } else if (!selectedId || !fs.nodes.some((n) => n.id === selectedId)) {
           selectedId = fs.path;
         }
-        graphOverlay.pendingSelectId = null;
+        graphState.pendingSelectId = null;
         return;
       }
       fsNodes = [];
       fsTruncated = false;
       if (languageMode) {
         const g: LanguageGraphResponse = await api.languageGraph({
-          depth: graphOverlay.depth,
+          depth: graphState.depth,
         });
         languageMaxDepth = g.max_depth;
         nodes = mapLanguageNodes(g.nodes);
@@ -785,7 +789,7 @@
         selectedId = selectedId && g.nodes.some((n) => n.id === selectedId)
           ? selectedId
           : null;
-        graphOverlay.pendingSelectId = null;
+        graphState.pendingSelectId = null;
         return;
       }
       languageMaxDepth = 0;
@@ -797,7 +801,7 @@
             : { scope: "drive" as const, path: "" };
       const g = await api.graph({
         ...graphScope,
-        depth: Math.max(graphOverlay.depth, 1),
+        depth: Math.max(graphState.depth, 1),
       });
       const seenIds = new Set<string>();
       const renderedNodes: RenderedNode[] = [];
@@ -826,12 +830,12 @@
       edges = renderedEdges;
       // Honour any selection openGraphAtNode pre-loaded into the
       // overlay state so the inspector opens on the right node.
-      const pending = graphOverlay.pendingSelectId;
+      const pending = graphState.pendingSelectId;
       if (pending !== null && renderedNodes.some((n) => n.id === pending)) {
         selectedId = pending;
-        graphOverlay.inspectorOpen = true;
+        graphState.inspectorOpen = true;
       }
-      graphOverlay.pendingSelectId = null;
+      graphState.pendingSelectId = null;
     } catch (e) {
       error = (e as Error).message;
     } finally {
@@ -957,10 +961,10 @@
   $effect(() => {
     if (languageMode) return;
     const max = depthCap;
-    if (graphOverlay.depth < 1) {
-      graphOverlay.depth = 1;
-    } else if (graphOverlay.depth > max) {
-      graphOverlay.depth = max;
+    if (graphState.depth < 1) {
+      graphState.depth = 1;
+    } else if (graphState.depth > max) {
+      graphState.depth = max;
     }
   });
 
@@ -993,16 +997,24 @@
   /// flips the inspector open; background tap clears.
   function setSelected(id: string | null): void {
     selectedId = id;
-    if (id !== null) graphOverlay.inspectorOpen = true;
+    if (id !== null) graphState.inspectorOpen = true;
   }
 </script>
 
-<OverlayShell
-  id="graph"
-  open={visible}
-  onClose={close}
-  onBackdropContextMenu={onGraphContextMenu}
->
+{#if tab}
+  {@render graphContent()}
+{:else}
+  <OverlayShell
+    id="graph"
+    open={visible}
+    onClose={close}
+    onBackdropContextMenu={onGraphContextMenu}
+  >
+    {@render graphContent()}
+  </OverlayShell>
+{/if}
+
+{#snippet graphContent()}
   <div class="graph-tab" oncontextmenu={onGraphContextMenu} role="presentation">
   <div class="bar">
     <button
@@ -1021,9 +1033,9 @@
     <span class="scope-label">Scope</span>
     <select
       class="scope-select"
-      value={graphOverlay.scopeId}
+      value={graphState.scopeId}
       onchange={(e) =>
-        (graphOverlay.scopeId = (e.currentTarget as HTMLSelectElement).value)}
+        (graphState.scopeId = (e.currentTarget as HTMLSelectElement).value)}
       title="graph scope"
     >
       {#each scopeOptions as opt (opt.id)}
@@ -1103,12 +1115,12 @@
     </div>
   </div>
 
-  {#if graphOverlay.inspectorOpen}
+  {#if graphState.inspectorOpen}
     <Inspector
       title="Details"
       bind:width={paneWidths.graph}
       onResize={persistPaneWidths}
-      onClose={() => (graphOverlay.inspectorOpen = false)}
+      onClose={() => (graphState.inspectorOpen = false)}
     >
       {#if (selectedFsNode && isFsDirectory(selectedFsNode) && selectedFsNode.id === "") || (selectedNode?.kind === "folder" && selectedNode.id === "")}
         <!-- Drive root: same body the file browser hamburger
@@ -1149,7 +1161,7 @@
             const peer = fsNodes.find((n) => n.path === p);
             if (peer) {
               selectedId = peer.id;
-              graphOverlay.inspectorOpen = true;
+              graphState.inspectorOpen = true;
             }
           }}
         />
@@ -1235,30 +1247,30 @@
                   // pinned as the focal node. Depth resets to 1 so
                   // a freshly-scoped graph always starts tight; the
                   // user can widen it back via the slider.
-                  graphOverlay.depth = 1;
+                  graphState.depth = 1;
                   if (selectedNode?.kind === "tag") {
-                    graphOverlay.scopeId = `tag:${selectedNode.id}`;
-                    graphOverlay.pendingSelectId = selectedNode.id;
+                    graphState.scopeId = `tag:${selectedNode.id}`;
+                    graphState.pendingSelectId = selectedNode.id;
                   } else if (
                     selectedNode?.kind === "mention" &&
                     selectedContactPath
                   ) {
-                    graphOverlay.scopeId = `file:${selectedContactPath}`;
+                    graphState.scopeId = `file:${selectedContactPath}`;
                     const fileNode = nodes.find(
                       (n) =>
                         n.kind === "file" &&
                         n.path === selectedContactPath,
                     );
                     if (fileNode) {
-                      graphOverlay.pendingSelectId = fileNode.id;
+                      graphState.pendingSelectId = fileNode.id;
                       selectedId = fileNode.id;
                     }
                   } else if (
                     selectedNode?.kind === "file" &&
                     !selectedNode.missing
                   ) {
-                    graphOverlay.scopeId = `file:${selectedNode.path}`;
-                    graphOverlay.pendingSelectId = selectedNode.id;
+                    graphState.scopeId = `file:${selectedNode.path}`;
+                    graphState.pendingSelectId = selectedNode.id;
                     selectedId = selectedNode.id;
                   }
                 }
@@ -1280,18 +1292,18 @@
     </span>
   </div>
   </div>
-</OverlayShell>
+{/snippet}
 
 {#snippet menuItems()}
   <li>
     <button role="menuitem" onclick={toggleInspector}>
-      {#if graphOverlay.inspectorOpen}
+      {#if graphState.inspectorOpen}
         <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
       {:else}
         <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
       {/if}
       <span class="menu-row-label">
-        {graphOverlay.inspectorOpen ? "Hide Details" : "Show Details"}
+        {graphState.inspectorOpen ? "Hide Details" : "Show Details"}
       </span>
       <span class="menu-row-chord"></span>
     </button>
@@ -1314,12 +1326,12 @@
         min={languageMode ? "0" : "1"}
         max={depthCap}
         step="1"
-        bind:value={graphOverlay.depth}
+        bind:value={graphState.depth}
         disabled={depthDisabled}
         onmousedown={(e) => e.stopPropagation()}
         aria-label="depth"
       />
-      <span class="menu-slider-value">{languageMode && graphOverlay.depth === 0 ? "max" : graphOverlay.depth}</span>
+      <span class="menu-slider-value">{languageMode && graphState.depth === 0 ? "max" : graphState.depth}</span>
     </div>
   </li>
   <li class="sep" role="separator"></li>

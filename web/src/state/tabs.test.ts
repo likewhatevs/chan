@@ -16,6 +16,8 @@ import {
   hydrateTerminalSessionsFromLayout,
   isMissingFileError,
   layout,
+  openBrowserInActivePane,
+  openGraphInActivePane,
   openInPane,
   openFind,
   openTerminalInPane,
@@ -208,6 +210,54 @@ describe("pane state", () => {
     expect(layout.nodes[root.a]?.kind).toBe("leaf");
     expect(root.b).toBe(pane.id);
     expect(layout.activePaneId).toBe(root.a);
+  });
+
+  test("opens graph and file browser as first-class tabs", () => {
+    const pane = resetLayout([]);
+
+    const graph = openGraphInActivePane({
+      mode: "filesystem",
+      scopeId: "dir:notes",
+      pendingSelectId: "notes/today.md",
+    });
+    const browser = openBrowserInActivePane();
+
+    expect(activePane().tabs.map((tab) => tab.kind)).toEqual(["graph", "browser"]);
+    expect(graph.scopeId).toBe("dir:notes");
+    expect(graph.pendingSelectId).toBe("notes/today.md");
+    expect(browser.inspectorOpen).toBeTypeOf("boolean");
+    expect(activePane().activeTabId).toBe(browser.id);
+  });
+
+  test("round-trips graph and file browser tab state", async () => {
+    resetLayout([]);
+    const graph = openGraphInActivePane({
+      mode: "language",
+      scopeId: "drive",
+      depth: 0,
+    });
+    graph.inspectorOpen = true;
+    graph.filters.img = false;
+    const browser = openBrowserInActivePane();
+    browser.inspectorOpen = true;
+
+    const snapshot = serializeLayout();
+    await restoreLayout(snapshot!);
+
+    const tabs = activePane().tabs;
+    expect(tabs.map((tab) => tab.kind)).toEqual(["graph", "browser"]);
+    const restoredGraph = tabs[0];
+    expect(restoredGraph?.kind).toBe("graph");
+    if (restoredGraph?.kind !== "graph") return;
+    expect(restoredGraph.mode).toBe("language");
+    expect(restoredGraph.depth).toBe(0);
+    expect(restoredGraph.inspectorOpen).toBe(true);
+    expect(restoredGraph.filters.img).toBe(false);
+
+    const restoredBrowser = tabs[1];
+    expect(restoredBrowser?.kind).toBe("browser");
+    if (restoredBrowser?.kind !== "browser") return;
+    expect(restoredBrowser.inspectorOpen).toBe(true);
   });
 });
 

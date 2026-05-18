@@ -232,6 +232,34 @@ export type TerminalTab = {
   watcher?: TerminalWatcherState;
 };
 
+export type GraphFilters = {
+  link: boolean;
+  tag: boolean;
+  mention: boolean;
+  language: boolean;
+  img: boolean;
+  folder: boolean;
+};
+
+export type GraphTab = {
+  kind: "graph";
+  id: string;
+  title: string;
+  mode: "semantic" | "filesystem" | "language";
+  scopeId: string;
+  depth: number;
+  filters: GraphFilters;
+  inspectorOpen: boolean;
+  pendingSelectId: string | null;
+};
+
+export type BrowserTab = {
+  kind: "browser";
+  id: string;
+  title: string;
+  inspectorOpen: boolean;
+};
+
 export type ScopeGrant = "one-shot" | "topic-session" | "topic-phase";
 
 export type SurveyOption = {
@@ -278,7 +306,7 @@ export type TerminalRichPromptState = {
   styleToolbarOpen?: boolean;
 };
 
-export type Tab = FileTab | TerminalTab;
+export type Tab = FileTab | TerminalTab | GraphTab | BrowserTab;
 
 type ClosedTab = {
   paneId: string;
@@ -290,6 +318,7 @@ type ClosedTab = {
 /// full path is reachable via `tabTooltip` for disambiguation.
 export function tabLabel(t: Tab): string {
   if (t.kind === "terminal") return terminalTabName(t);
+  if (t.kind === "graph" || t.kind === "browser") return t.title;
   const p = t.path;
   if (!p) return p;
   const slash = p.lastIndexOf("/");
@@ -352,6 +381,8 @@ function commonSuffixLength(groups: string[][]): number {
 /// told apart on hover.
 export function tabTooltip(t: Tab): string {
   if (t.kind === "terminal") return terminalTabName(t);
+  if (t.kind === "graph") return `Graph: ${t.scopeId}`;
+  if (t.kind === "browser") return "File Browser";
   return t.path;
 }
 
@@ -603,6 +634,92 @@ export function openTerminalInPane(
   layout.activePaneId = p.id;
 }
 
+export type OpenGraphOptions = Partial<
+  Pick<GraphTab, "mode" | "scopeId" | "depth" | "pendingSelectId" | "title">
+>;
+
+const DEFAULT_GRAPH_FILTERS: GraphFilters = {
+  link: true,
+  tag: true,
+  mention: true,
+  language: true,
+  img: true,
+  folder: true,
+};
+
+export function openGraphInActivePane(opts: OpenGraphOptions = {}): GraphTab {
+  return openGraphInPane(layout.activePaneId, opts);
+}
+
+export function openGraphInPane(paneId: string, opts: OpenGraphOptions = {}): GraphTab {
+  const p = pane(paneId);
+  const mode = opts.mode ?? "semantic";
+  const scopeId = opts.scopeId ?? "drive";
+  const existing = p.tabs.find(
+    (tab): tab is GraphTab =>
+      tab.kind === "graph" &&
+      tab.mode === mode &&
+      tab.scopeId === scopeId,
+  );
+  if (existing) {
+    existing.depth = opts.depth ?? existing.depth;
+    existing.pendingSelectId = opts.pendingSelectId ?? existing.pendingSelectId;
+    existing.title = opts.title ?? graphTitle(mode, scopeId);
+    p.activeTabId = existing.id;
+    layout.activePaneId = p.id;
+    return existing;
+  }
+  const tab: GraphTab = {
+    kind: "graph",
+    id: id("graph"),
+    title: opts.title ?? graphTitle(mode, scopeId),
+    mode,
+    scopeId,
+    depth: opts.depth ?? 1,
+    filters: { ...DEFAULT_GRAPH_FILTERS },
+    inspectorOpen: false,
+    pendingSelectId: opts.pendingSelectId ?? null,
+  };
+  p.tabs.push(tab);
+  p.activeTabId = tab.id;
+  layout.activePaneId = p.id;
+  return tab;
+}
+
+export function openBrowserInActivePane(): BrowserTab {
+  const p = activePane();
+  const existing = p.tabs.find((tab): tab is BrowserTab => tab.kind === "browser");
+  if (existing) {
+    p.activeTabId = existing.id;
+    layout.activePaneId = p.id;
+    return existing;
+  }
+  const tab: BrowserTab = {
+    kind: "browser",
+    id: id("browser"),
+    title: "Files",
+    inspectorOpen: defaultBrowserInspectorOpen(),
+  };
+  p.tabs.push(tab);
+  p.activeTabId = tab.id;
+  layout.activePaneId = p.id;
+  return tab;
+}
+
+function defaultBrowserInspectorOpen(): boolean {
+  if (typeof window === "undefined") return true;
+  return window.innerWidth >= 768;
+}
+
+function graphTitle(mode: GraphTab["mode"], scopeId: string): string {
+  if (mode === "filesystem") return "FS Graph";
+  if (mode === "language") return "Languages";
+  if (scopeId.startsWith("tag:")) return "Tag Graph";
+  if (scopeId.startsWith("file:")) return "File Graph";
+  if (scopeId.startsWith("dir:")) return "Dir Graph";
+  return "Graph";
+}
+
 export function renameTerminalTab(tab: TerminalTab, title: string): void {
   tab.title = title;
   if (terminalEnvTabNameStale(tab)) tab.terminalEnvNamePromptDismissed = false;
@@ -742,6 +859,18 @@ export function allTerminalTabs(): TerminalTab[] {
     }
   }
   return out;
+}
+
+export function hasGraphTab(): boolean {
+  return Object.values(layout.nodes).some(
+    (node) => node.kind === "leaf" && node.tabs.some((tab) => tab.kind === "graph"),
+  );
+}
+
+export function hasBrowserTab(): boolean {
+  return Object.values(layout.nodes).some(
+    (node) => node.kind === "leaf" && node.tabs.some((tab) => tab.kind === "browser"),
+  );
 }
 
 type TerminalInputSink = (data: string) => void;
@@ -1182,6 +1311,27 @@ function cloneTab(src: Tab): Tab {
             trayExpanded: src.watcher.trayExpanded,
           }
         : undefined,
+    };
+  }
+  if (src.kind === "graph") {
+    return {
+      kind: "graph",
+      id: src.id,
+      title: src.title,
+      mode: src.mode,
+      scopeId: src.scopeId,
+      depth: src.depth,
+      filters: { ...src.filters },
+      inspectorOpen: src.inspectorOpen,
+      pendingSelectId: src.pendingSelectId,
+    };
+  }
+  if (src.kind === "browser") {
+    return {
+      kind: "browser",
+      id: src.id,
+      title: src.title,
+      inspectorOpen: src.inspectorOpen,
     };
   }
   return {
@@ -1665,6 +1815,15 @@ type SerTab = {
   /// terminal id; the server owns the real watcher lifecycle.
   twp?: string;
   twu?: 1;
+  /// Graph tab state.
+  gm?: "s" | "f" | "l";
+  gs?: string;
+  gd?: number;
+  gi?: 1;
+  gf?: string;
+  gp?: string;
+  /// Browser tab state.
+  bi?: 1;
 };
 type SerLeaf = { k: "l"; t: SerTab[]; f?: 1 };
 type SerLeafColor = "g" | "p";
@@ -1682,6 +1841,35 @@ function restorePaneColor(color: SerLeafColor | undefined): PaneFocusColor {
   if (color === "g") return "green";
   if (color === "p") return "pink";
   return "blue";
+}
+
+function encodeGraphTabFilters(f: GraphFilters): string {
+  return [
+    f.link ? "l" : "",
+    f.tag ? "t" : "",
+    f.mention ? "m" : "",
+    f.language ? "a" : "",
+    f.img ? "i" : "",
+    f.folder ? "f" : "",
+  ].join("");
+}
+
+function decodeGraphTabFilters(s: string | undefined): GraphFilters {
+  const src = s ?? "ltmaif";
+  return {
+    link: src.includes("l"),
+    tag: src.includes("t"),
+    mention: src.includes("m"),
+    language: src.includes("a"),
+    img: src.includes("i"),
+    folder: src.includes("f"),
+  };
+}
+
+function restoreGraphMode(mode: SerTab["gm"]): GraphTab["mode"] {
+  if (mode === "f") return "filesystem";
+  if (mode === "l") return "language";
+  return "semantic";
 }
 
 /// Walk the layout starting at `nodeId`, producing a serializable tree.
@@ -1721,6 +1909,25 @@ function serializeNode(
                 ...(t.watcher.unread ? { twu: 1 as const } : {}),
               }
             : {}),
+          ...active,
+        };
+      }
+      if (t.kind === "graph") {
+        return {
+          k: "g",
+          gm: t.mode === "filesystem" ? "f" : t.mode === "language" ? "l" : "s",
+          gs: t.scopeId,
+          ...(t.depth !== 1 ? { gd: t.depth } : {}),
+          ...(t.inspectorOpen ? { gi: 1 as const } : {}),
+          gf: encodeGraphTabFilters(t.filters),
+          ...(t.pendingSelectId ? { gp: t.pendingSelectId } : {}),
+          ...active,
+        };
+      }
+      if (t.kind === "browser") {
+        return {
+          k: "b",
+          ...(t.inspectorOpen ? { bi: 1 as const } : {}),
           ...active,
         };
       }
@@ -1806,11 +2013,38 @@ export async function restoreLayout(
       };
       for (const sertab of node.t) {
         const kind = sertab.k ?? "f";
-        // Browser ("b"), graph ("g"), settings ("s"), and health
-        // ("h") used to be tab kinds that round-tripped through the
-        // session. All four are overlays now; silently drop any
-        // saved entries from older session.json files instead of
-        // leaving the user with unrecoverable orphans.
+        if (kind === "g") {
+          const mode = restoreGraphMode(sertab.gm);
+          const scopeId = sertab.gs || "drive";
+          const tab: GraphTab = {
+            kind: "graph",
+            id: id("graph"),
+            title: graphTitle(mode, scopeId),
+            mode,
+            scopeId,
+            depth: Number.isFinite(sertab.gd) ? Math.max(0, Number(sertab.gd)) : 1,
+            filters: decodeGraphTabFilters(sertab.gf),
+            inspectorOpen: sertab.gi === 1,
+            pendingSelectId: sertab.gp ?? null,
+          };
+          p.tabs.push(tab);
+          if (sertab.a) p.activeTabId = tab.id;
+          continue;
+        }
+        if (kind === "b") {
+          const tab: BrowserTab = {
+            kind: "browser",
+            id: id("browser"),
+            title: "Files",
+            inspectorOpen: sertab.bi === 1,
+          };
+          p.tabs.push(tab);
+          if (sertab.a) p.activeTabId = tab.id;
+          continue;
+        }
+        // Settings ("s") and health ("h") used to be tab kinds
+        // that round-tripped through the session. Both are overlays
+        // now; silently drop saved entries from older sessions.
         if (kind === "t") {
           const savedTerm = savedTerms[termIndex++];
           const terminalSessionId = sertab.tsid ?? savedTerm?.tsid;

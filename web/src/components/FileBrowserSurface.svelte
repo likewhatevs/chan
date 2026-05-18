@@ -36,10 +36,10 @@
     collapseAllFolders,
     expandAllFolders,
     fileOps,
-    graphOverlay,
     isFullyExpanded,
     openFsGraphForDirectory,
     openFsGraphForFile,
+    openGraphForDrive,
     openSettings,
     paneWidths,
     persistPaneWidths,
@@ -50,23 +50,29 @@
     tree,
     drive,
   } from "../state/store.svelte";
-  import { openInActivePane } from "../state/tabs.svelte";
+  import { openBrowserInActivePane, openInActivePane } from "../state/tabs.svelte";
+  import type { BrowserTab } from "../state/tabs.svelte";
   import { fileBrowserTitlePath } from "../terminal/fromHere";
 
-  type Variant = "overlay" | "dock";
+  type Variant = "overlay" | "dock" | "tab";
   type Side = "left" | "right";
 
   let {
     variant = "overlay",
     side,
+    tab,
     onClose,
   }: {
     variant?: Variant;
     side?: Side;
+    tab?: BrowserTab;
     onClose?: () => void;
   } = $props();
 
   const isOverlay = $derived(variant === "overlay");
+  const isTab = $derived(variant === "tab");
+  const isWideSurface = $derived(isOverlay || isTab);
+  const browserState = $derived(tab ?? browserOverlay);
   const browserTitle = $derived(
     fileBrowserTitlePath(browserSelection.path, drive.info?.root ?? drive.info?.name ?? "drive"),
   );
@@ -95,7 +101,7 @@
   const POPOVER_WIDTH = 240;
 
   $effect(() => {
-    if (isOverlay && browserOverlay.open) {
+    if ((isOverlay && browserOverlay.open) || isTab) {
       void tick().then(() => treeRef?.focusTree());
     }
   });
@@ -183,7 +189,7 @@
   }
 
   function toggleInspector(): void {
-    browserOverlay.inspectorOpen = !browserOverlay.inspectorOpen;
+    browserState.inspectorOpen = !browserState.inspectorOpen;
     menu?.close();
   }
 
@@ -203,7 +209,7 @@
   }
 
   function openOverlay(): void {
-    browserOverlay.open = true;
+    openBrowserInActivePane();
     menu?.close();
   }
 
@@ -224,11 +230,7 @@
 
   function graphDrive(): void {
     menu?.close();
-    graphOverlay.mode = "semantic";
-    graphOverlay.scopeId = "drive";
-    graphOverlay.depth = 1;
-    graphOverlay.pendingSelectId = null;
-    graphOverlay.open = true;
+    openGraphForDrive();
   }
 
   function searchDrive(): void {
@@ -251,7 +253,7 @@
     menu?.close();
     browserSelection.path = null;
     browserSelection.showDrive = true;
-    browserOverlay.inspectorOpen = true;
+    browserState.inspectorOpen = true;
   }
 
   function openImportContacts(): void {
@@ -293,7 +295,7 @@
           <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
         {/if}
       </button>
-    {:else}
+    {:else if variant === "dock"}
       <button
         type="button"
         class="chrome-btn"
@@ -317,7 +319,7 @@
     >
       {@render menuItems()}
     </HamburgerMenu>
-    {#if isOverlay}
+    {#if isWideSurface}
       <button
         type="button"
         class="chrome-btn close"
@@ -381,12 +383,12 @@
       {/if}
       <FileTree bind:this={treeRef} />
     </div>
-    {#if isOverlay && browserOverlay.inspectorOpen}
+    {#if isWideSurface && browserState.inspectorOpen}
       <Inspector
         title="Details"
         bind:width={paneWidths.browser}
         onResize={persistPaneWidths}
-        onClose={() => (browserOverlay.inspectorOpen = false)}
+        onClose={() => (browserState.inspectorOpen = false)}
       >
         {#if browserSelection.showDrive && !browserSelection.path}
           <DriveInfoBody />
@@ -437,16 +439,16 @@
     </button>
   </li>
   <li class="sep" role="separator"></li>
-  {#if isOverlay}
+  {#if isWideSurface}
     <li>
       <button role="menuitem" onclick={toggleInspector}>
-        {#if browserOverlay.inspectorOpen}
+        {#if browserState.inspectorOpen}
           <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
         {:else}
           <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
         {/if}
         <span class="menu-row-label">
-          {browserOverlay.inspectorOpen ? "Hide Details" : "Show Details"}
+          {browserState.inspectorOpen ? "Hide Details" : "Show Details"}
         </span>
         <span class="menu-row-chord"></span>
       </button>

@@ -18,7 +18,7 @@ import {
   tree,
   treeExpanded,
 } from "./store.svelte";
-import { layout, type LeafNode, type TerminalTab } from "./tabs.svelte";
+import { activePane, layout, type GraphTab, type LeafNode, type TerminalTab } from "./tabs.svelte";
 
 function setTerminalLayout(tab: Partial<TerminalTab> = {}): void {
   const terminal: TerminalTab = {
@@ -239,36 +239,46 @@ describe("graph overlay hash persistence", () => {
 });
 
 describe("filesystem graph entrypoints", () => {
+  function activeGraphTab(): GraphTab {
+    const tab = activePane().tabs.find((candidate) => candidate.id === activePane().activeTabId);
+    expect(tab?.kind).toBe("graph");
+    return tab as GraphTab;
+  }
+
   test("file browser graph entrypoints open drive-scope fs graph with a preselection", () => {
     openFsGraphForFile("notes/a.md");
 
-    expect(graphOverlay.open).toBe(true);
-    expect(graphOverlay.mode).toBe("filesystem");
-    expect(graphOverlay.scopeId).toBe("drive");
-    expect(graphOverlay.pendingSelectId).toBe("notes/a.md");
+    let graph = activeGraphTab();
+    expect(graphOverlay.open).toBe(false);
+    expect(graph.mode).toBe("filesystem");
+    expect(graph.scopeId).toBe("drive");
+    expect(graph.pendingSelectId).toBe("notes/a.md");
 
     openFsGraphForDirectory("notes");
 
-    expect(graphOverlay.open).toBe(true);
-    expect(graphOverlay.mode).toBe("filesystem");
-    expect(graphOverlay.scopeId).toBe("drive");
-    expect(graphOverlay.pendingSelectId).toBe("notes");
+    graph = activeGraphTab();
+    expect(graphOverlay.open).toBe(false);
+    expect(graph.mode).toBe("filesystem");
+    expect(graph.scopeId).toBe("drive");
+    expect(graph.pendingSelectId).toBe("notes");
   });
 
   test("filesystem graph scope action pivots to files and directories", () => {
     scopeFsGraphFromHere("notes", true);
 
-    expect(graphOverlay.open).toBe(true);
-    expect(graphOverlay.mode).toBe("filesystem");
-    expect(graphOverlay.scopeId).toBe("dir:notes");
-    expect(graphOverlay.depth).toBe(1);
-    expect(graphOverlay.pendingSelectId).toBe("notes");
+    let graph = activeGraphTab();
+    expect(graphOverlay.open).toBe(false);
+    expect(graph.mode).toBe("filesystem");
+    expect(graph.scopeId).toBe("dir:notes");
+    expect(graph.depth).toBe(1);
+    expect(graph.pendingSelectId).toBe("notes");
 
     scopeFsGraphFromHere("notes/a.md", false);
 
-    expect(graphOverlay.mode).toBe("filesystem");
-    expect(graphOverlay.scopeId).toBe("file:notes/a.md");
-    expect(graphOverlay.depth).toBe(1);
-    expect(graphOverlay.pendingSelectId).toBe("notes/a.md");
+    graph = activeGraphTab();
+    expect(graph.mode).toBe("filesystem");
+    expect(graph.scopeId).toBe("file:notes/a.md");
+    expect(graph.depth).toBe(1);
+    expect(graph.pendingSelectId).toBe("notes/a.md");
   });
 });

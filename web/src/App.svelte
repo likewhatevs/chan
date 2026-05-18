@@ -4,9 +4,7 @@
   import ConfirmModal from "./components/ConfirmModal.svelte";
   import ConflictModal from "./components/ConflictModal.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
-  import FileBrowserOverlay from "./components/FileBrowserOverlay.svelte";
   import FileBrowserSidePane from "./components/FileBrowserSidePane.svelte";
-  import GraphPanel from "./components/GraphPanel.svelte";
   import MissingTokenOverlay from "./components/MissingTokenOverlay.svelte";
   import PathPromptModal from "./components/PathPromptModal.svelte";
   import PromptModal from "./components/PromptModal.svelte";
@@ -90,6 +88,24 @@
           void t.title;
           void t.broadcastEnabled;
           void t.broadcastTargetIds.length;
+          continue;
+        }
+        if (t.kind !== "file") {
+          if (t.kind === "graph") {
+            void t.mode;
+            void t.scopeId;
+            void t.depth;
+            void t.inspectorOpen;
+            void t.pendingSelectId;
+            void t.filters.link;
+            void t.filters.tag;
+            void t.filters.mention;
+            void t.filters.language;
+            void t.filters.img;
+            void t.filters.folder;
+          } else {
+            void t.inspectorOpen;
+          }
           continue;
         }
         void t.path;
@@ -290,8 +306,7 @@
     }
     if (meta && !e.shiftKey && !e.altKey && e.code === "KeyP") {
       e.preventDefault();
-      browserOverlay.open = !browserOverlay.open;
-      if (browserOverlay.open) openBrowser();
+      openBrowser();
       return;
     }
     if (meta && e.shiftKey && !e.altKey && e.code === "KeyF") {
@@ -301,11 +316,7 @@
     }
     if (meta && e.shiftKey && !e.altKey && e.code === "KeyM") {
       e.preventDefault();
-      if (graphOverlay.open) {
-        graphOverlay.open = false;
-      } else {
-        openGraph();
-      }
+      openGraph();
       return;
     }
     if (meta && e.shiftKey && !e.altKey && e.code === "KeyI") {
@@ -389,15 +400,13 @@
         else openSettings();
         return;
       case "app.files.toggle":
-        if (browserOverlay.open) closeOverlay("browser");
-        else openBrowser();
+        openBrowser();
         return;
       case "app.search.toggle":
         searchPanel.open = !searchPanel.open;
         return;
       case "app.graph.toggle":
-        if (graphOverlay.open) closeOverlay("graph");
-        else openGraph();
+        openGraph();
         return;
       case "app.terminal.toggle":
         openTerminalInActivePane();
@@ -503,9 +512,7 @@
 <ConfirmModal />
 <SearchPanel />
 <SearchStatusOverlay />
-<GraphPanel />
 <SettingsPanel />
-<FileBrowserOverlay />
 <!-- CAS conflict prompt: surfaces when a save returns 409. Mounted
      once per window so any pane can trigger it; the dialog itself
      keys off `conflictDialog.tabId`. -->

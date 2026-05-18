@@ -17,11 +17,16 @@ import {
 } from "../api/client";
 import {
   closeTab,
+  hasBrowserTab,
+  hasGraphTab,
   layout,
   markTabFileMissing,
+  openBrowserInActivePane,
+  openGraphInActivePane,
   openInActivePane,
   restoreLayout,
   serializeLayout,
+  type BrowserTab,
 } from "./tabs.svelte";
 import { isEditableText } from "./fileTypes";
 import {
@@ -272,10 +277,10 @@ export function onWatchEvent(e: unknown): void {
   // updates without re-clicking. The fetch is idempotent and
   // de-duped via `ensureGraphLoaded`.
   invalidateGraph();
-  if (browserOverlay.open || graphOverlay.open) {
+  if (browserOverlay.open || graphOverlay.open || hasBrowserTab() || hasGraphTab()) {
     void ensureGraphLoaded();
   }
-  if (graphOverlay.open) {
+  if (graphOverlay.open || hasGraphTab()) {
     graphReloadSignal.nonce += 1;
   }
   const inner = (e as { event?: { kind?: string; path?: string; to?: string } } | null)?.event;
@@ -1230,31 +1235,38 @@ export const graphReloadSignal = $state<{ nonce: number }>({ nonce: 0 });
 /** Open the graph overlay, snapping the scope to the active file
  *  when applicable. Idempotent. */
 export function openGraph(): void {
-  graphOverlay.mode = "semantic";
-  graphOverlay.scopeId = defaultScopeId();
-  graphOverlay.pendingSelectId = null;
-  graphOverlay.open = true;
+  const tab = openGraphInActivePane({
+    mode: "semantic",
+    scopeId: defaultScopeId(),
+    pendingSelectId: null,
+  });
+  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
 }
 
 /** Open the semantic graph for the whole drive. Drive scope renders
  *  the full graph, so the depth knob is reset to its neutral value. */
 export function openGraphForDrive(): void {
-  graphOverlay.mode = "semantic";
-  graphOverlay.scopeId = "drive";
-  graphOverlay.depth = 1;
-  graphOverlay.pendingSelectId = null;
-  graphOverlay.open = true;
+  const tab = openGraphInActivePane({
+    mode: "semantic",
+    scopeId: "drive",
+    depth: 1,
+    pendingSelectId: null,
+  });
+  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
 }
 
 export function openLanguageGraphForDrive(): void {
-  graphOverlay.mode = "language";
-  graphOverlay.scopeId = "drive";
-  graphOverlay.depth = 0;
-  graphOverlay.pendingSelectId = null;
-  graphOverlay.filters.language = true;
-  graphOverlay.open = true;
+  const tab = openGraphInActivePane({
+    mode: "language",
+    scopeId: "drive",
+    depth: 0,
+    pendingSelectId: null,
+    title: "Languages",
+  });
+  tab.filters.language = true;
+  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
 }
 
@@ -1265,11 +1277,13 @@ export function openLanguageGraphForDrive(): void {
  *  scope guarantees the node is in the rendered set regardless of
  *  the previously-saved scope. */
 export function openGraphAtNode(nodeId: string): void {
-  graphOverlay.mode = "semantic";
-  graphOverlay.scopeId = "drive";
-  graphOverlay.depth = 1;
-  graphOverlay.pendingSelectId = nodeId;
-  graphOverlay.open = true;
+  const tab = openGraphInActivePane({
+    mode: "semantic",
+    scopeId: "drive",
+    depth: 1,
+    pendingSelectId: nodeId,
+  });
+  mirrorGraphTabToOverlay(tab);
   // Stack on top of whatever overlay invoked us (typically the
   // file browser via a tag chip). OverlayShell's z-index follows
   // `overlayStack.ids`, so the graph paints above and Escape
@@ -1285,20 +1299,24 @@ export function openGraphAtNode(nodeId: string): void {
  *  invoking the graph FROM a file means "show me what's around
  *  THIS file". */
 export function openGraphForFile(path: string): void {
-  graphOverlay.mode = "semantic";
-  graphOverlay.scopeId = `file:${path}`;
-  graphOverlay.depth = 1;
-  graphOverlay.pendingSelectId = path;
-  graphOverlay.open = true;
+  const tab = openGraphInActivePane({
+    mode: "semantic",
+    scopeId: `file:${path}`,
+    depth: 1,
+    pendingSelectId: path,
+  });
+  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
 }
 
 export function openFsGraphForFile(path: string): void {
-  graphOverlay.mode = "filesystem";
-  graphOverlay.scopeId = "drive";
-  graphOverlay.depth = 1;
-  graphOverlay.pendingSelectId = path;
-  graphOverlay.open = true;
+  const tab = openGraphInActivePane({
+    mode: "filesystem",
+    scopeId: "drive",
+    depth: 1,
+    pendingSelectId: path,
+  });
+  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
 }
 
@@ -1307,29 +1325,35 @@ export function openFsGraphForFile(path: string): void {
  *  The dropdown keeps this directory, and its parent when available, as
  *  explicit options through availableGraphScopes(). */
 export function openGraphForDirectory(path: string): void {
-  graphOverlay.mode = "semantic";
-  graphOverlay.scopeId = `dir:${path}`;
-  graphOverlay.depth = 1;
-  graphOverlay.pendingSelectId = null;
-  graphOverlay.open = true;
+  const tab = openGraphInActivePane({
+    mode: "semantic",
+    scopeId: `dir:${path}`,
+    depth: 1,
+    pendingSelectId: null,
+  });
+  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
 }
 
 export function openFsGraphForDirectory(path: string): void {
-  graphOverlay.mode = "filesystem";
-  graphOverlay.scopeId = "drive";
-  graphOverlay.depth = 1;
-  graphOverlay.pendingSelectId = path;
-  graphOverlay.open = true;
+  const tab = openGraphInActivePane({
+    mode: "filesystem",
+    scopeId: "drive",
+    depth: 1,
+    pendingSelectId: path,
+  });
+  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
 }
 
 export function scopeFsGraphFromHere(path: string, isDir: boolean): void {
-  graphOverlay.mode = "filesystem";
-  graphOverlay.scopeId = isDir ? `dir:${path}` : `file:${path}`;
-  graphOverlay.depth = 1;
-  graphOverlay.pendingSelectId = path;
-  graphOverlay.open = true;
+  const tab = openGraphInActivePane({
+    mode: "filesystem",
+    scopeId: isDir ? `dir:${path}` : `file:${path}`,
+    depth: 1,
+    pendingSelectId: path,
+  });
+  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
 }
 
@@ -1340,12 +1364,37 @@ export function scopeFsGraphFromHere(path: string, isDir: boolean): void {
  *  editor tag pills, FileInfoBody's tag list, search overlay tag
  *  hits, TagInfoBody's Open-in-Graph button. */
 export function openGraphForTag(nodeId: string, _label: string): void {
-  graphOverlay.mode = "semantic";
-  graphOverlay.scopeId = `tag:${nodeId}`;
-  graphOverlay.depth = 1;
-  graphOverlay.pendingSelectId = nodeId;
-  graphOverlay.open = true;
+  const tab = openGraphInActivePane({
+    mode: "semantic",
+    scopeId: `tag:${nodeId}`,
+    depth: 1,
+    pendingSelectId: nodeId,
+    title: "Tag Graph",
+  });
+  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
+}
+
+function mirrorGraphTabToOverlay(tab: {
+  mode: "semantic" | "filesystem" | "language";
+  scopeId: string;
+  depth: number;
+  pendingSelectId: string | null;
+  filters: GraphFilters;
+  inspectorOpen: boolean;
+}): void {
+  graphOverlay.mode = tab.mode;
+  graphOverlay.scopeId = tab.scopeId;
+  graphOverlay.depth = tab.depth;
+  graphOverlay.pendingSelectId = tab.pendingSelectId;
+  graphOverlay.filters.link = tab.filters.link;
+  graphOverlay.filters.tag = tab.filters.tag;
+  graphOverlay.filters.mention = tab.filters.mention;
+  graphOverlay.filters.language = tab.filters.language;
+  graphOverlay.filters.img = tab.filters.img;
+  graphOverlay.filters.folder = tab.filters.folder;
+  graphOverlay.inspectorOpen = tab.inspectorOpen;
+  graphOverlay.open = false;
 }
 
 // ---- settings overlay --------------------------------------------------
@@ -1391,9 +1440,11 @@ export const browserOverlay = $state<{
   inspectorOpen: boolean;
 }>({ open: false, inspectorOpen: defaultInspectorOpen() });
 
-export function openBrowser(): void {
-  browserOverlay.open = true;
+export function openBrowser(): BrowserTab {
+  const tab = openBrowserInActivePane();
+  browserOverlay.open = false;
   scheduleSessionSave();
+  return tab;
 }
 
 // ---- overlay z-order stack ----------------------------------------------

@@ -12,6 +12,7 @@
     markLocalTabDrop,
     moveTab,
     openInPane,
+    openBrowserInActivePane,
     openTerminalInPane,
     reorderTab,
     reopenClosedTab,
@@ -50,13 +51,13 @@
     X,
   } from "lucide-svelte";
   import FileEditorTab from "./FileEditorTab.svelte";
+  import FileBrowserSurface from "./FileBrowserSurface.svelte";
+  import GraphPanel from "./GraphPanel.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import TerminalTab from "./TerminalTab.svelte";
   import {
-    browserOverlay,
     drive,
     indexStatus,
-    openBrowser,
     refreshTree,
     tree,
   } from "../state/store.svelte";
@@ -293,8 +294,15 @@
 
   function doToggleInspector(): void {
     closePaneMenus();
-    browserOverlay.inspectorOpen = !browserOverlay.inspectorOpen;
-    if (!browserOverlay.open) openBrowser();
+    if (active?.kind === "file") {
+      active.inspectorOpen = !active.inspectorOpen;
+    } else if (active?.kind === "graph") {
+      active.inspectorOpen = !active.inspectorOpen;
+    } else if (active?.kind === "browser") {
+      active.inspectorOpen = !active.inspectorOpen;
+    } else {
+      openBrowserInActivePane();
+    }
   }
 
   function doSelectPrevPane(): void {
@@ -328,8 +336,7 @@
       return;
     }
     if (id === "pane.inspector.toggle") {
-      browserOverlay.inspectorOpen = !browserOverlay.inspectorOpen;
-      if (!browserOverlay.open) openBrowser();
+      doToggleInspector();
       return;
     }
     if (id === "app.tab.reopenClosed" && !canReopenClosedTab()) return;
@@ -774,12 +781,20 @@
               <Radio size={13} strokeWidth={1.9} aria-hidden="true" />
             </span>
           {/if}
+        {:else if t.kind === "graph"}
+          <span class="tab-icon" aria-hidden="true">
+            <Network size={14} strokeWidth={1.75} />
+          </span>
+        {:else if t.kind === "browser"}
+          <span class="tab-icon" aria-hidden="true">
+            <Folder size={14} strokeWidth={1.75} />
+          </span>
         {/if}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <span
           class="path"
-          aria-haspopup={t.kind === "file" || t.kind === "terminal" ? "menu" : undefined}
-          aria-expanded={(t.kind === "file" || t.kind === "terminal") && tabMenu.openForTabId === t.id}
+          aria-haspopup="menu"
+          aria-expanded={tabMenu.openForTabId === t.id}
           onclick={(e) => {
             e.stopPropagation();
             tabMouseDownPrevActive = null;
@@ -924,6 +939,21 @@
   <div class="editor-wrap" bind:this={editorWrapEl}>
     {#if active?.kind === "file"}
       <FileEditorTab tab={active} />
+    {:else if active?.kind === "graph"}
+      <GraphPanel
+        tab={active}
+        onClose={() => {
+          void closeTab(pane.id, active.id);
+        }}
+      />
+    {:else if active?.kind === "browser"}
+      <FileBrowserSurface
+        variant="tab"
+        tab={active}
+        onClose={() => {
+          void closeTab(pane.id, active.id);
+        }}
+      />
     {:else if !active}
       <div
         class="placeholder"
