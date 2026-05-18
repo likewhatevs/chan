@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Query, State};
+use axum::extract::{Json, Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use portable_pty::PtySize;
@@ -33,6 +33,11 @@ pub struct TerminalQuery {
     window_id: Option<String>,
     mcp_env: Option<TerminalMcpEnv>,
     cwd: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WatcherBody {
+    path: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -129,6 +134,43 @@ pub async fn api_terminal_ws(
     };
     ws.on_upgrade(move |socket| terminal_ws(socket, state, opts))
         .into_response()
+}
+
+pub async fn api_set_terminal_watcher(
+    State(state): State<Arc<AppState>>,
+    AxumPath(session): AxumPath<String>,
+    Json(body): Json<WatcherBody>,
+) -> Response {
+    if state.tunnel_public {
+        return err_tunnel_public_locked();
+    }
+    let dir = match resolve_watcher_dir(&state.drive_root, &body.path) {
+        Ok(dir) => dir,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    match state.terminal_sessions.set_watcher(&session, dir) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "terminal session not found").into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            format!("failed to start terminal watcher: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn api_unset_terminal_watcher(
+    State(state): State<Arc<AppState>>,
+    AxumPath(session): AxumPath<String>,
+) -> Response {
+    if state.tunnel_public {
+        return err_tunnel_public_locked();
+    }
+    if state.terminal_sessions.clear_watcher(&session) {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        (StatusCode::NOT_FOUND, "terminal watcher not found").into_response()
+    }
 }
 
 struct TerminalWsOptions {
@@ -375,6 +417,25 @@ fn resolve_terminal_cwd(drive_root: &Path, cwd: Option<&str>) -> Result<Option<P
     Ok(Some(abs))
 }
 
+fn resolve_watcher_dir(drive_root: &Path, raw: &str) -> Result<PathBuf, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("watcher path is required".into());
+    }
+    let path = Path::new(trimmed);
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        chan_drive::fs_ops::resolve_safe_strict(drive_root, trimmed)
+            .map_err(|e| format!("invalid watcher path: {e}"))?
+    };
+    let meta = std::fs::metadata(&abs).map_err(|e| format!("invalid watcher path: {e}"))?;
+    if !meta.is_dir() {
+        return Err("invalid watcher path: path is not a directory".into());
+    }
+    Ok(abs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,6 +518,33 @@ mod tests {
 
         assert!(resolve_terminal_cwd(tmp.path(), Some("../outside")).is_err());
         assert!(resolve_terminal_cwd(tmp.path(), Some("notes/today.md")).is_err());
+    }
+
+    #[test]
+    fn resolve_watcher_dir_allows_absolute_and_drive_relative_directories() {
+        let tmp = tempfile::tempdir().expect("temp drive");
+        fs::create_dir_all(tmp.path().join("events")).expect("create dir");
+
+        assert_eq!(
+            resolve_watcher_dir(tmp.path(), "events").expect("relative dir"),
+            tmp.path().join("events")
+        );
+        assert_eq!(
+            resolve_watcher_dir(tmp.path(), &tmp.path().join("events").display().to_string())
+                .expect("absolute dir"),
+            tmp.path().join("events")
+        );
+    }
+
+    #[test]
+    fn resolve_watcher_dir_rejects_empty_escape_and_files() {
+        let tmp = tempfile::tempdir().expect("temp drive");
+        fs::create_dir_all(tmp.path().join("events")).expect("create dir");
+        fs::write(tmp.path().join("events/event.json"), "{}").expect("create file");
+
+        assert!(resolve_watcher_dir(tmp.path(), "").is_err());
+        assert!(resolve_watcher_dir(tmp.path(), "../outside").is_err());
+        assert!(resolve_watcher_dir(tmp.path(), "events/event.json").is_err());
     }
 
     async fn collect_until(session: &mut AttachHandle, needle: &str, timeout: Duration) -> String {

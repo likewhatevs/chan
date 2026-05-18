@@ -128,3 +128,40 @@ Standard. Pre-push gate green. Coordinate with @@FullStack
 on the HTTP API shape (they need to call the watcher-set
 endpoint from the bubble dialog). Ping via
 `alex/event-systacean-architect.md` when ready for review.
+
+## 2026-05-18 19:35 BST - ready to land
+
+Implemented the backend watcher substrate.
+
+API shape for @@FullStack:
+
+* `POST /api/terminal/:session/watcher`
+* JSON body: `{"path":"<drive-relative-or-absolute-directory>"}`
+* `DELETE /api/terminal/:session/watcher`
+* Success: `204 No Content`
+* Missing terminal: `404`
+* Bad/missing path or notify setup failure: `400`
+
+Patch summary:
+
+* Added `crates/chan-server/src/event_watcher.rs` using `notify`.
+* Event schema derives `serde` against the locked survey /
+  survey-reply shape; required fields are `id`, `type`, `from`,
+  `to`; unknown `type` values warn and are ignored.
+* Watchers are terminal-session owned. Setting a new watcher
+  replaces the previous one; close / restart / exit drops it with
+  the session.
+* Watcher handles `Create` and rename final paths, ignores dot-temp
+  files, reads the final file once, and dispatches `poke\n` to the
+  matching terminal tab by normalized tab name.
+* No self-loop writes: dispatch path writes only to the PTY.
+* `/api/health` now includes
+  `terminal_event_watcher.dropped_events`.
+
+Verification:
+
+* `cargo test -p chan-server watcher --no-default-features`
+* `cargo test -p chan-server dispatch_agent_event --no-default-features`
+* `cargo test -p chan-server --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `scripts/pre-push`

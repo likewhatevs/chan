@@ -14,12 +14,21 @@ use crate::state::AppState;
 struct HealthResponse {
     status: &'static str,
     indexer: IndexerHealth,
+    terminal_event_watcher: TerminalEventWatcherHealth,
+}
+
+#[derive(Debug, Serialize)]
+struct TerminalEventWatcherHealth {
+    dropped_events: u64,
 }
 
 pub async fn api_health(State(state): State<Arc<AppState>>) -> Response {
     Json(HealthResponse {
         status: "ok",
         indexer: state.indexer().health_snapshot(),
+        terminal_event_watcher: TerminalEventWatcherHealth {
+            dropped_events: state.terminal_sessions.watcher_dropped_events(),
+        },
     })
     .into_response()
 }
@@ -40,6 +49,7 @@ mod tests {
                 last_settled_at: Some(1_699_999_999),
                 coalesced_rebuild: false,
             },
+            terminal_event_watcher: TerminalEventWatcherHealth { dropped_events: 3 },
         })
         .unwrap();
 
@@ -49,5 +59,6 @@ mod tests {
         assert_eq!(value["indexer"]["last_event_at"], 1_700_000_000);
         assert_eq!(value["indexer"]["last_settled_at"], 1_699_999_999);
         assert_eq!(value["indexer"]["coalesced_rebuild"], false);
+        assert_eq!(value["terminal_event_watcher"]["dropped_events"], 3);
     }
 }

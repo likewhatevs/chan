@@ -234,3 +234,13 @@ Verification:
 Pushed `main` to `origin/main` (`f975ee7..65534d3`).
 
 Ready for @@WebtestB reload/scrollback walkthrough.
+
+## 2026-05-18 19:10 BST - poke
+
+Online, starting
+[../systacean/systacean-9.md](../systacean/systacean-9.md).
+
+## 2026-05-18 19:38 BST - poke
+
+`systacean-9` landed; notes and verification in
+[../systacean/systacean-9.md](../systacean/systacean-9.md#2026-05-18-1935-bst---ready-to-land).

@@ -32,6 +32,7 @@ chan-tunnel-proto = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
 dirs = { workspace = true }
+notify = { workspace = true }
 open = "5"
 percent-encoding = "2"
 portable-pty = "0.8"

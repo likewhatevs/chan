@@ -8,7 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
@@ -18,6 +18,7 @@ use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 
 use crate::config::TerminalConfig;
+use crate::event_watcher::{AgentEvent, EventWatcherHandle};
 use crate::signal::now_unix_secs;
 
 #[cfg(target_os = "macos")]
@@ -43,6 +44,7 @@ pub struct RegistryConfig {
 pub struct Registry {
     config: RegistryConfig,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
+    watcher_dropped_events: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone)]
@@ -146,6 +148,7 @@ impl Registry {
         Self {
             config,
             sessions: Mutex::new(HashMap::new()),
+            watcher_dropped_events: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -223,6 +226,51 @@ impl Registry {
         }
     }
 
+    pub fn set_watcher(self: &Arc<Self>, id: &str, dir: PathBuf) -> anyhow::Result<bool> {
+        let session = self
+            .sessions
+            .lock()
+            .expect("terminal registry poisoned")
+            .get(id)
+            .cloned();
+        let Some(session) = session else {
+            return Ok(false);
+        };
+        let weak = Arc::downgrade(self);
+        let dispatch = Arc::new(move |event: AgentEvent| {
+            if let Some(registry) = Weak::upgrade(&weak) {
+                registry.dispatch_agent_event(event);
+            }
+        });
+        let watcher =
+            EventWatcherHandle::start(dir, dispatch, self.watcher_dropped_events.clone())?;
+        *session.watcher.lock().expect("terminal watcher poisoned") = Some(watcher);
+        Ok(true)
+    }
+
+    pub fn clear_watcher(&self, id: &str) -> bool {
+        let session = self
+            .sessions
+            .lock()
+            .expect("terminal registry poisoned")
+            .get(id)
+            .cloned();
+        if let Some(session) = session {
+            session
+                .watcher
+                .lock()
+                .expect("terminal watcher poisoned")
+                .take()
+                .is_some()
+        } else {
+            false
+        }
+    }
+
+    pub fn watcher_dropped_events(&self) -> u64 {
+        self.watcher_dropped_events.load(Ordering::Relaxed)
+    }
+
     pub fn prune_idle(&self) -> usize {
         self.prune_idle_at(now_unix_secs() as i64)
     }
@@ -284,6 +332,38 @@ impl Registry {
             .expect("terminal registry poisoned")
             .len()
     }
+
+    fn dispatch_agent_event(&self, event: AgentEvent) {
+        let Some(session) = self.find_agent_session(&event.to) else {
+            self.watcher_dropped_events.fetch_add(1, Ordering::Relaxed);
+            tracing::warn!(
+                id = %event.id,
+                from = %event.from,
+                to = %event.to,
+                "dropping agent event with no matching terminal session"
+            );
+            return;
+        };
+        // TODO: wire /clear, /effort, and /fast automation here once
+        // @@Alex's richer control commands are cut for a later task.
+        session.send_input(b"poke\n");
+    }
+
+    fn find_agent_session(&self, target: &str) -> Option<Arc<Session>> {
+        let normalized_target = normalize_agent_target(target)?;
+        let sessions = self.sessions.lock().expect("terminal registry poisoned");
+        sessions
+            .values()
+            .find(|session| {
+                session
+                    .tab_name
+                    .as_deref()
+                    .and_then(normalize_agent_target)
+                    .as_deref()
+                    == Some(normalized_target.as_str())
+            })
+            .cloned()
+    }
 }
 
 impl Drop for Registry {
@@ -299,6 +379,7 @@ impl Drop for Registry {
 #[derive(Debug)]
 struct Session {
     id: String,
+    tab_name: Option<String>,
     drive_root: PathBuf,
     child_pid: Option<u32>,
     command_tx: std::sync::mpsc::Sender<PtyCommand>,
@@ -310,6 +391,7 @@ struct Session {
     winsize: Mutex<PtySize>,
     in_alt_screen: AtomicBool,
     alt_screen_tail: Mutex<Vec<u8>>,
+    watcher: Mutex<Option<EventWatcherHandle>>,
     closed: AtomicBool,
 }
 
@@ -337,7 +419,8 @@ impl Session {
                 set_mcp_env(&mut cmd, socket_path);
             }
         }
-        if let Some(tab_name) = opts.tab_name {
+        let tab_name = opts.tab_name;
+        if let Some(tab_name) = tab_name.as_deref() {
             cmd.env("CHAN_TAB_NAME", tab_name);
         }
         if let Some(window_id) = opts.window_id {
@@ -363,6 +446,7 @@ impl Session {
         let (output_tx, _) = broadcast::channel::<SessionEvent>(BROADCAST_CAP);
         let session = Arc::new(Self {
             id,
+            tab_name,
             drive_root: config.drive_root.clone(),
             child_pid,
             command_tx,
@@ -374,6 +458,7 @@ impl Session {
             winsize: Mutex::new(opts.size),
             in_alt_screen: AtomicBool::new(false),
             alt_screen_tail: Mutex::new(Vec::new()),
+            watcher: Mutex::new(None),
             closed: AtomicBool::new(false),
         });
 
@@ -514,6 +599,10 @@ impl Session {
         if self.closed.swap(true, Ordering::Relaxed) {
             return;
         }
+        self.watcher
+            .lock()
+            .expect("terminal watcher poisoned")
+            .take();
         self.broadcast(SessionEvent::Closed(reason));
         let _ = self.command_tx.send(PtyCommand::Kill);
     }
@@ -570,6 +659,23 @@ impl Session {
             tail.extend_from_slice(&scan[scan.len() - keep..]);
         }
     }
+}
+
+fn normalize_agent_target(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let bare = trimmed.strip_prefix("@@").unwrap_or(trimmed).trim();
+    if bare.is_empty() {
+        return None;
+    }
+    Some(
+        bare.chars()
+            .filter(|c| !c.is_ascii_whitespace() && *c != '-' && *c != '_')
+            .flat_map(char::to_lowercase)
+            .collect(),
+    )
 }
 
 fn path_inside_root(path: &Path, root: &Path) -> bool {
@@ -791,6 +897,7 @@ mod tests {
         let (output_tx, _) = broadcast::channel(BROADCAST_CAP);
         Arc::new(Session {
             id: "test-session".to_string(),
+            tab_name: None,
             drive_root: PathBuf::from("/"),
             child_pid: None,
             command_tx,
@@ -802,8 +909,25 @@ mod tests {
             winsize: Mutex::new(test_size()),
             in_alt_screen: AtomicBool::new(false),
             alt_screen_tail: Mutex::new(Vec::new()),
+            watcher: Mutex::new(None),
             closed: AtomicBool::new(false),
         })
+    }
+
+    async fn collect_until(session: &mut AttachHandle, needle: &str, timeout: Duration) -> String {
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut out = String::new();
+        loop {
+            if out.contains(needle) || tokio::time::Instant::now() >= deadline {
+                return out;
+            }
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, session.rx.recv()).await {
+                Ok(Ok(SessionEvent::Output(data))) => out.push_str(&String::from_utf8_lossy(&data)),
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) | Err(_) => return out,
+            }
+        }
     }
 
     #[test]
@@ -948,6 +1072,63 @@ mod tests {
             })
             .unwrap_err();
         assert!(matches!(err, CreateError::Capped));
+    }
+
+    #[tokio::test]
+    async fn dispatch_agent_event_writes_poke_to_matching_tab() {
+        let registry = Arc::new(Registry::new(test_config(4096, 4, 60)));
+        let mut handle = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: Some("Systacean".into()),
+                window_id: None,
+                mcp_env: true,
+                cwd: None,
+            })
+            .unwrap();
+
+        registry.dispatch_agent_event(AgentEvent {
+            id: "event-1".into(),
+            event_type: crate::event_watcher::AgentEventType::Poke,
+            from: "@@Architect".into(),
+            to: "@@Systacean".into(),
+            topic: None,
+            questions: None,
+            standing_options: None,
+            scope: None,
+            answers: None,
+            scope_grant: None,
+            note: None,
+        });
+
+        let out = collect_until(&mut handle, "poke", Duration::from_secs(5)).await;
+        assert!(
+            out.contains("poke"),
+            "target terminal did not receive poke: {out:?}"
+        );
+        assert_eq!(registry.watcher_dropped_events(), 0);
+        registry.close(handle.id(), CloseReason::Explicit);
+    }
+
+    #[test]
+    fn dispatch_agent_event_counts_unmatched_targets() {
+        let registry = Registry::new(test_config(4096, 4, 60));
+
+        registry.dispatch_agent_event(AgentEvent {
+            id: "event-1".into(),
+            event_type: crate::event_watcher::AgentEventType::Poke,
+            from: "@@Architect".into(),
+            to: "@@Missing".into(),
+            topic: None,
+            questions: None,
+            standing_options: None,
+            scope: None,
+            answers: None,
+            scope_grant: None,
+            note: None,
+        });
+
+        assert_eq!(registry.watcher_dropped_events(), 1);
     }
 
     #[test]

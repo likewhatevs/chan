@@ -154,3 +154,17 @@ Verification:
 * `cd web && npm run test`
 * `scripts/pre-push` passed on rerun after a transient
   `Too many open files` failure in an unrelated chan-drive test
+
+## 2026-05-18 19:10 BST - online, starting systacean-9
+
+Online, starting [systacean-9.md](systacean-9.md).
+
+## 2026-05-18 19:38 BST - systacean-9 landed
+
+Implemented and committed the terminal-scoped event watcher.
+
+Commit: `Add terminal-scoped event watcher`.
+
+Verification:
+
+* `scripts/pre-push`
