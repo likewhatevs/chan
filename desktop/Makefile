@@ -101,7 +101,12 @@ APPLE_SIGNING_IDENTITY := $(shell security find-identity -v -p codesigning 2>/de
     | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p')
 endif
 endif
+# Do not export an empty signing identity: Tauri treats a present-but-empty
+# APPLE_SIGNING_IDENTITY as an explicit codesign identity and fails with
+# "no identity found" instead of using its unsigned/ad-hoc local build path.
+ifneq ($(APPLE_SIGNING_IDENTITY),)
 export APPLE_SIGNING_IDENTITY
+endif
 
 # Auto-derive APPLE_TEAM_ID from the trailing "(TEAMID)" in the
 # signing identity. Skipped when the identity is unset (the
@@ -112,7 +117,9 @@ APPLE_TEAM_ID := $(shell echo "$(APPLE_SIGNING_IDENTITY)" \
     | sed -n 's/.*(\([A-Z0-9]\{10\}\))$$/\1/p')
 endif
 endif
+ifneq ($(APPLE_TEAM_ID),)
 export APPLE_TEAM_ID
+endif
 
 sign-prereqs:
 	@if [ -z "$$APPLE_SIGNING_IDENTITY" ]; then \

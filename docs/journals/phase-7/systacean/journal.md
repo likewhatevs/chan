@@ -122,3 +122,19 @@ Verification:
 * `cd web && npm run check`
 * `cd web && npm run test`
 * `scripts/pre-push`
+
+## 2026-05-18 18:34 BST - systacean-7 ready to gate
+
+Fixed the desktop Makefile signing environment so empty
+`APPLE_SIGNING_IDENTITY` / `APPLE_TEAM_ID` values are not exported
+into default Tauri builds.
+
+Verification so far:
+
+* `make -C desktop build` outside sandbox
+* `cargo tauri build --bundles app`
+* mounted `target/release/bundle/dmg/Chan_0.10.1_aarch64.dmg`
+  and verified the standard `Chan.app` plus `Applications`
+  symlink layout
+* `scripts/pre-push` in a clean temporary worktree with only
+  the `systacean-7` Makefile patch applied
