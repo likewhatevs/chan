@@ -72,25 +72,19 @@ export async function readWatcherEvents(dir: string): Promise<WatcherEvent[]> {
 }
 
 export async function writeSurveyReply(
-  dir: string,
+  sessionId: string,
   event: WatcherEvent,
   answers: Array<{ question_index: number; key: string }>,
   scopeGrant: ScopeGrant,
-): Promise<string> {
-  const base = `event-reply-${safeName(event.id)}.md`;
-  const finalPath = joinPath(dir, base);
-  const tmpPath = joinPath(dir, `.event-reply-${safeName(event.id)}-${Date.now().toString(36)}.tmp`);
-  const reply = {
+): Promise<void> {
+  await api.writeTerminalEventReply(sessionId, {
     id: event.id,
     type: "survey-reply",
     from: REPLY_FROM,
     to: event.from,
     answers,
     scope_grant: scopeGrant,
-  };
-  await api.create(tmpPath, false, `${JSON.stringify(reply, null, 2)}\n`);
-  await api.move(tmpPath, finalPath);
-  return finalPath;
+  });
 }
 
 function eventFilename(path: string): boolean {
@@ -119,12 +113,4 @@ function parseScope(value: unknown): ScopeGrant | undefined {
   return value === "topic-session" || value === "topic-phase" || value === "one-shot"
     ? value
     : undefined;
-}
-
-function joinPath(dir: string, name: string): string {
-  return dir.replace(/\/+$/, "") ? `${dir.replace(/\/+$/, "")}/${name}` : name;
-}
-
-function safeName(value: string): string {
-  return value.replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "") || "survey";
 }

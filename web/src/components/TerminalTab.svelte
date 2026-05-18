@@ -1117,7 +1117,11 @@
   {/if}
   {#if tab.richPrompt?.open}
     {#if tab.watcher}
-      <BubbleOverlay watcher={tab.watcher} onRefresh={refreshWatcherEvents} />
+      <BubbleOverlay
+        watcher={tab.watcher}
+        sessionId={tab.terminalSessionId}
+        onRefresh={refreshWatcherEvents}
+      />
     {/if}
     <TerminalRichPrompt
       prompt={tab.richPrompt}

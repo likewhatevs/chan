@@ -8,9 +8,11 @@
 
   let {
     watcher,
+    sessionId,
     onRefresh,
   }: {
     watcher: TerminalWatcherState;
+    sessionId?: string;
     onRefresh: () => Promise<void> | void;
   } = $props();
 
@@ -80,6 +82,10 @@
 
   async function commit(event: WatcherEvent, byQuestion: Record<number, string>): Promise<void> {
     if (busyReply) return;
+    if (!sessionId) {
+      watcher.error = "reply failed: terminal session is not ready";
+      return;
+    }
     busyReply = event.id;
     watcher.error = undefined;
     try {
@@ -87,13 +93,24 @@
         question_index: Number(idx),
         key,
       }));
-      await writeSurveyReply(watcher.path, event, replyAnswers, "one-shot");
+      await writeSurveyReply(sessionId, event, replyAnswers, "one-shot");
       watcher.events = watcher.events.filter((candidate) => candidate.id !== event.id);
     } catch (err) {
-      watcher.error = `reply failed: ${(err as Error).message}`;
+      watcher.error = replyError(err);
     } finally {
       busyReply = null;
     }
+  }
+
+  function replyError(err: unknown): string {
+    const raw = (err as Error).message || "unknown error";
+    if (/409|watcher|not attached|conflict/i.test(raw)) {
+      return "reply failed: watcher is no longer attached";
+    }
+    if (/400|invalid|bad request|schema/i.test(raw)) {
+      return "reply failed: invalid survey reply";
+    }
+    return `reply failed: ${raw}`;
   }
 
   function nextUnanswered(

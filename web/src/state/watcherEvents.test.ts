@@ -45,17 +45,11 @@ describe("watcher event helpers", () => {
     });
   });
 
-  test("writes survey replies by temp create plus rename into the watch dir", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(1234);
-    const create = vi.spyOn(api, "create").mockResolvedValue(undefined);
-    const move = vi.spyOn(api, "move").mockResolvedValue({
-      renamed: [],
-      rewritten: [],
-      conflicts: [],
-    });
+  test("writes survey replies through the terminal event-reply endpoint", async () => {
+    const writeReply = vi.spyOn(api, "writeTerminalEventReply").mockResolvedValue(undefined);
 
-    const path = await writeSurveyReply(
-      "events",
+    await writeSurveyReply(
+      "term_123",
       {
         id: "survey/alpha",
         type: "survey",
@@ -67,9 +61,7 @@ describe("watcher event helpers", () => {
       "one-shot",
     );
 
-    expect(path).toBe("events/event-reply-survey-alpha.md");
-    expect(create.mock.calls[0]?.[0]).toBe("events/.event-reply-survey-alpha-ya.tmp");
-    expect(JSON.parse(String(create.mock.calls[0]?.[2]))).toMatchObject({
+    expect(writeReply).toHaveBeenCalledWith("term_123", {
       id: "survey/alpha",
       type: "survey-reply",
       from: "@@Alex",
@@ -77,9 +69,5 @@ describe("watcher event helpers", () => {
       answers: [{ question_index: 0, key: "1" }],
       scope_grant: "one-shot",
     });
-    expect(move).toHaveBeenCalledWith(
-      "events/.event-reply-survey-alpha-ya.tmp",
-      "events/event-reply-survey-alpha.md",
-    );
   });
 });

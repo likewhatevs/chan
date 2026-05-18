@@ -378,6 +378,23 @@ export const api = {
     req<void>("POST", `/api/terminal/${encodeURIComponent(sessionId)}/watcher`, { path }),
   clearTerminalWatcher: (sessionId: string) =>
     req<void>("DELETE", `/api/terminal/${encodeURIComponent(sessionId)}/watcher`),
+  writeTerminalEventReply: (
+    sessionId: string,
+    body: {
+      id: string;
+      type: "survey-reply";
+      from: string;
+      to: string;
+      answers: Array<{ question_index: number; key: string }>;
+      scope_grant: "one-shot" | "topic-session" | "topic-phase";
+      note?: string;
+    },
+  ) =>
+    req<void>(
+      "POST",
+      `/api/terminal/${encodeURIComponent(sessionId)}/event-reply`,
+      body,
+    ),
   setBubbleOverlayMode: async (mode: BubbleOverlayMode): Promise<void> => {
     const cfg = await req<GlobalConfig>("GET", "/api/config");
     if (cfg.preferences.bubble_overlay_mode === mode) return;

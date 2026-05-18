@@ -27,7 +27,7 @@ async function renderOverlay(watcher: TerminalWatcherState) {
   document.body.append(target);
   const component = mount(BubbleOverlay, {
     target,
-    props: { watcher, onRefresh: vi.fn() },
+    props: { watcher, sessionId: "term_123", onRefresh: vi.fn() },
   });
   mounted.push(component);
   await tick();
@@ -51,18 +51,13 @@ async function waitFor(condition: () => boolean): Promise<void> {
 }
 
 function installReplySpies() {
-  const create = vi.spyOn(api, "create").mockResolvedValue(undefined);
-  const move = vi.spyOn(api, "move").mockResolvedValue({
-    renamed: [],
-    rewritten: [],
-    conflicts: [],
-  });
-  return { create, move };
+  const writeReply = vi.spyOn(api, "writeTerminalEventReply").mockResolvedValue(undefined);
+  return { writeReply };
 }
 
 describe("BubbleOverlay", () => {
   test("single-topic numbered click replies immediately with one-shot scope", async () => {
-    const { create } = installReplySpies();
+    const { writeReply } = installReplySpies();
     const watcher: TerminalWatcherState = {
       path: "events",
       seenIds: ["s1"],
@@ -90,17 +85,18 @@ describe("BubbleOverlay", () => {
     buttonText(target, "Fast").click();
     await waitFor(() => watcher.events.length === 0);
 
-    const reply = JSON.parse(String(create.mock.calls[0]?.[2]));
-    expect(reply).toMatchObject({
+    expect(writeReply).toHaveBeenCalledWith("term_123", {
       id: "s1",
       type: "survey-reply",
+      from: "@@Alex",
+      to: "@@Architect",
       answers: [{ question_index: 0, key: "1" }],
       scope_grant: "one-shot",
     });
   });
 
   test("number key answers the focused multi-topic tab and auto-commits when complete", async () => {
-    const { create } = installReplySpies();
+    const { writeReply } = installReplySpies();
     const watcher: TerminalWatcherState = {
       path: "events",
       seenIds: ["s2"],
@@ -136,8 +132,7 @@ describe("BubbleOverlay", () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "1" }));
     await waitFor(() => watcher.events.length === 0);
 
-    const reply = JSON.parse(String(create.mock.calls[0]?.[2]));
-    expect(reply.answers).toEqual([
+    expect(writeReply.mock.calls[0]?.[1].answers).toEqual([
       { question_index: 0, key: "1" },
       { question_index: 1, key: "2" },
     ]);
