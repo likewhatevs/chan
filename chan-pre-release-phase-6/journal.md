@@ -479,4 +479,13 @@ and the journal checklist entry where applicable.
 
 ## Completion notes
 
-(populated at phase close)
+* 2026-05-18 Phase 6 closed FINAL. Six area-grouped commits
+  landed (chan-drive / chan-report / chan-server / web /
+  release / chore) per [architect-3](./architect-3.md);
+  workspace + desktop bundle both at 0.10.0;
+  `Chan_0.10.0_aarch64.dmg` signed + ready for Alex to
+  install; pre-push gate green throughout. Phase 6.1 manifest
+  (broad codemod sweep, chip counter fix, scope breadcrumb)
+  recorded in [summary.md](./summary.md). The final commit
+  `release: phase 6 wrap + 0.10.0 notes` lands the summary
+  alongside this closing note. Push on Alex's go.

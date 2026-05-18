@@ -284,4 +284,14 @@ graph + color + permission semantics so the @@Backsystacean and
 
 ## Completion notes
 
-(populated as phase 6 closes)
+* 2026-05-18 Phase 6 closed by Alex's "yes" to wrap. Commits
+  1-6 landed (chan-drive, chan-report, chan-server, web,
+  release: close phase 6 tasks + open phase 7 scaffold, chore:
+  bump version to 0.10.0). Workspace + desktop bundle both at
+  0.10.0; Chan_0.10.0_aarch64.dmg signed + ready for Alex to
+  install. Pre-push gate green on the final HEAD before the
+  wrap commit. [summary.md](./summary.md) carries the full
+  outcome + highlights + lowlights + bug fix trail + coverage
+  + 6.1 manifest + agent rankings. Final
+  `release: phase 6 wrap + 0.10.0 notes` commit lands the
+  summary + this closing note. Push on Alex's explicit go.
