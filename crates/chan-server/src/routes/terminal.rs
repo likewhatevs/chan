@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use axum::extract::rejection::JsonRejection;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Json, Path as AxumPath, Query, State};
 use axum::http::StatusCode;
@@ -12,6 +13,7 @@ use portable_pty::PtySize;
 use serde::{Deserialize, Serialize};
 
 use crate::error::err_tunnel_public_locked;
+use crate::event_watcher::{SurveyAnswer, SurveyScope};
 use crate::signal::now_unix_secs;
 use crate::state::AppState;
 use crate::terminal_sessions::{
@@ -38,6 +40,25 @@ pub struct TerminalQuery {
 #[derive(Debug, Deserialize)]
 pub struct WatcherBody {
     path: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct EventReplyBody {
+    id: String,
+    #[serde(rename = "type")]
+    event_type: EventReplyType,
+    from: String,
+    to: String,
+    answers: Vec<SurveyAnswer>,
+    scope_grant: SurveyScope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum EventReplyType {
+    SurveyReply,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -173,6 +194,40 @@ pub async fn api_unset_terminal_watcher(
     }
 }
 
+pub async fn api_terminal_event_reply(
+    State(state): State<Arc<AppState>>,
+    AxumPath(session): AxumPath<String>,
+    body: Result<Json<EventReplyBody>, JsonRejection>,
+) -> Response {
+    if state.tunnel_public {
+        return err_tunnel_public_locked();
+    }
+    let Json(body) = match body {
+        Ok(body) => body,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("invalid event reply: {e}")).into_response()
+        }
+    };
+    if let Err(message) = validate_event_reply(&body) {
+        return (StatusCode::BAD_REQUEST, message).into_response();
+    }
+    let Some(dir) = state.terminal_sessions.watcher_dir(&session) else {
+        return (
+            StatusCode::CONFLICT,
+            "terminal watcher is not attached".to_string(),
+        )
+            .into_response();
+    };
+    match write_event_reply_atomic(&dir, &body).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            format!("failed to write event reply: {e}"),
+        )
+            .into_response(),
+    }
+}
+
 struct TerminalWsOptions {
     session_id: Option<String>,
     since: Option<u64>,
@@ -181,6 +236,53 @@ struct TerminalWsOptions {
     window_id: Option<String>,
     mcp_env: bool,
     cwd: Option<PathBuf>,
+}
+
+fn validate_event_reply(body: &EventReplyBody) -> Result<(), String> {
+    if body.id.trim().is_empty() {
+        return Err("event reply id is required".into());
+    }
+    if body.from.trim().is_empty() {
+        return Err("event reply from is required".into());
+    }
+    if body.to.trim().is_empty() {
+        return Err("event reply to is required".into());
+    }
+    Ok(())
+}
+
+async fn write_event_reply_atomic(dir: &Path, body: &EventReplyBody) -> std::io::Result<()> {
+    let file_id = event_reply_file_id(&body.id);
+    let final_path = dir.join(format!("event-reply-{file_id}.md"));
+    let tmp_path = dir.join(format!(
+        ".event-reply-{file_id}-{:016x}.tmp",
+        rand::random::<u64>()
+    ));
+    let bytes = serde_json::to_vec(body)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+    let result = async {
+        tokio::fs::write(&tmp_path, bytes).await?;
+        tokio::fs::rename(&tmp_path, &final_path).await
+    }
+    .await;
+    let _ = tokio::fs::remove_file(&tmp_path).await;
+    result
+}
+
+fn event_reply_file_id(id: &str) -> String {
+    let mut out = String::with_capacity(id.len());
+    for ch in id.trim().chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+            out.push(ch);
+        } else {
+            out.push('-');
+        }
+    }
+    if out.is_empty() {
+        "reply".into()
+    } else {
+        out
+    }
 }
 
 async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: TerminalWsOptions) {
@@ -441,9 +543,14 @@ mod tests {
     use super::*;
     use crate::config::TerminalConfig;
     use crate::terminal_sessions::{AttachHandle, Registry, RegistryConfig};
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::routing::post;
+    use axum::Router;
     use std::fs;
     use std::process::Command;
     use std::time::{Duration, Instant};
+    use tower::ServiceExt;
 
     struct TestTerminal {
         _registry: Registry,
@@ -545,6 +652,133 @@ mod tests {
         assert!(resolve_watcher_dir(tmp.path(), "").is_err());
         assert!(resolve_watcher_dir(tmp.path(), "../outside").is_err());
         assert!(resolve_watcher_dir(tmp.path(), "events/event.json").is_err());
+    }
+
+    fn reply_body(id: &str, note: &str) -> EventReplyBody {
+        EventReplyBody {
+            id: id.into(),
+            event_type: EventReplyType::SurveyReply,
+            from: "@@Alex".into(),
+            to: "@@Systacean".into(),
+            answers: vec![SurveyAnswer {
+                question_index: 0,
+                key: "1".into(),
+            }],
+            scope_grant: SurveyScope::OneShot,
+            note: Some(note.into()),
+        }
+    }
+
+    fn tmp_reply_files(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .expect("read event dir")
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                name.starts_with(".event-reply-").then_some(name)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn write_event_reply_atomic_writes_json_and_cleans_tmp() {
+        let dir = tempfile::tempdir().expect("event dir");
+
+        write_event_reply_atomic(dir.path(), &reply_body("survey-alpha", "go"))
+            .await
+            .expect("write reply");
+
+        let path = dir.path().join("event-reply-survey-alpha.md");
+        let text = tokio::fs::read_to_string(path).await.expect("read reply");
+        assert!(text.contains(r#""type":"survey-reply""#));
+        assert!(text.contains(r#""note":"go""#));
+        assert!(tmp_reply_files(dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn write_event_reply_atomic_concurrent_calls_leave_valid_destination() {
+        let dir = tempfile::tempdir().expect("event dir");
+        let body_a = reply_body("survey-alpha", "a");
+        let body_b = reply_body("survey-alpha", "b");
+        let a = write_event_reply_atomic(dir.path(), &body_a);
+        let b = write_event_reply_atomic(dir.path(), &body_b);
+
+        let (ra, rb) = tokio::join!(a, b);
+        ra.expect("write a");
+        rb.expect("write b");
+
+        let path = dir.path().join("event-reply-survey-alpha.md");
+        let text = tokio::fs::read_to_string(path).await.expect("read reply");
+        let parsed: EventReplyBody = serde_json::from_str(&text).expect("valid reply json");
+        assert_eq!(parsed.id, "survey-alpha");
+        assert!(matches!(parsed.note.as_deref(), Some("a" | "b")));
+        assert!(tmp_reply_files(dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn write_event_reply_atomic_cleans_tmp_on_failure() {
+        let dir = tempfile::tempdir().expect("event dir");
+        std::fs::create_dir(dir.path().join("event-reply-survey-alpha.md"))
+            .expect("block final path with dir");
+
+        let err = write_event_reply_atomic(dir.path(), &reply_body("survey-alpha", "go"))
+            .await
+            .expect_err("rename over dir should fail");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::IsADirectory);
+        assert!(tmp_reply_files(dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn api_terminal_event_reply_refuses_without_attached_watcher() {
+        let state = crate::state::test_support::make_test_state(false, false);
+
+        let response = api_terminal_event_reply(
+            State(state),
+            AxumPath("missing-session".into()),
+            Ok(Json(reply_body("survey-alpha", "go"))),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn api_terminal_event_reply_maps_schema_rejection_to_bad_request() {
+        let state = crate::state::test_support::make_test_state(false, false);
+        let app = Router::new()
+            .route(
+                "/api/terminal/:session/event-reply",
+                post(api_terminal_event_reply),
+            )
+            .with_state(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/terminal/session-a/event-reply")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{
+                  "id": "survey-alpha",
+                  "type": "survey",
+                  "from": "@@Alex",
+                  "to": "@@Systacean",
+                  "answers": [{"question_index": 0, "key": "1"}],
+                  "scope_grant": "one-shot"
+                }"#,
+            ))
+            .expect("request");
+
+        let response = app.oneshot(req).await.expect("response");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn validate_event_reply_rejects_missing_required_text() {
+        let mut body = reply_body("survey-alpha", "go");
+        assert!(validate_event_reply(&body).is_ok());
+        body.id = " ".into();
+        assert!(validate_event_reply(&body).is_err());
     }
 
     async fn collect_until(session: &mut AttachHandle, needle: &str, timeout: Duration) -> String {

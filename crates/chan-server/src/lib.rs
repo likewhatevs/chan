@@ -53,8 +53,8 @@ use routes::{
     api_list_files, api_list_sessions, api_move, api_patch_config, api_patch_drive,
     api_patch_server_config, api_post_attachment, api_post_contacts_import, api_put_session,
     api_read_file, api_report_file, api_report_prefix, api_resolve_link, api_search_content,
-    api_search_files, api_set_terminal_watcher, api_storage_reset, api_terminal_ws,
-    api_unset_terminal_watcher, api_write_file, ws_upgrade,
+    api_search_files, api_set_terminal_watcher, api_storage_reset, api_terminal_event_reply,
+    api_terminal_ws, api_unset_terminal_watcher, api_write_file, ws_upgrade,
 };
 use signal::{now_unix_secs, print_qr_if_tty, spawn_idle_watcher, spawn_signal_watcher};
 use state::{AppState, DriveCell};
@@ -835,6 +835,10 @@ fn router(state: Arc<AppState>) -> Router {
         .route(
             "/api/terminal/:session/watcher",
             post(api_set_terminal_watcher).delete(api_unset_terminal_watcher),
+        )
+        .route(
+            "/api/terminal/:session/event-reply",
+            post(api_terminal_event_reply),
         )
         .route("/ws", get(ws_upgrade))
         .merge(settings_writes);

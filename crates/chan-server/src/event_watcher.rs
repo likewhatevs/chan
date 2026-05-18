@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const SEEN_EVENT_IDS_CAP: usize = 1024;
 
@@ -47,7 +47,7 @@ pub(crate) enum AgentEventType {
     Unknown,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct SurveyQuestion {
     pub header: String,
     #[serde(rename = "text")]
@@ -55,13 +55,13 @@ pub(crate) struct SurveyQuestion {
     pub options: Vec<SurveyOption>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct SurveyOption {
     pub key: String,
     pub label: String,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum SurveyScope {
     OneShot,
@@ -69,7 +69,7 @@ pub(crate) enum SurveyScope {
     TopicPhase,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct SurveyAnswer {
     pub question_index: usize,
     pub key: String,

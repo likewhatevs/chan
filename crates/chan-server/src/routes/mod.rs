@@ -43,5 +43,7 @@ pub use report::{api_report_file, api_report_prefix};
 pub use search::{api_index_rebuild, api_index_status, api_search_content, api_search_files};
 pub use sessions::{api_delete_session, api_get_session, api_list_sessions, api_put_session};
 pub use storage::api_storage_reset;
-pub use terminal::{api_set_terminal_watcher, api_terminal_ws, api_unset_terminal_watcher};
+pub use terminal::{
+    api_set_terminal_watcher, api_terminal_event_reply, api_terminal_ws, api_unset_terminal_watcher,
+};
 pub use ws::ws_upgrade;

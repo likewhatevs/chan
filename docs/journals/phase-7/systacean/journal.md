@@ -179,3 +179,31 @@ Notes:
 
 * [systacean-8.md](systacean-8.md#systacean-follow-up--2026-05-18-2018-bst)
 * Verification on candidate patch: `scripts/pre-push`
+
+## 2026-05-18 20:31 BST - systacean-8 B19 follow-up pushed
+
+Committed and pushed the B19 reattach follow-up.
+
+Commit:
+
+* `1cd4ef2` - Reattach terminal PTY by window and tab
+
+Verification:
+
+* `scripts/pre-push`
+
+## 2026-05-18 20:46 BST - systacean-11 ready
+
+Implemented the chan-server survey-reply atomic-write seam and
+passed the gate.
+
+Notes:
+
+* [systacean-11.md](systacean-11.md#2026-05-18-2046-bst---ready-to-land)
+
+Verification:
+
+* `cargo test -p chan-server event_reply --no-default-features`
+* `cargo test -p chan-server --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `scripts/pre-push`

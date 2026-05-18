@@ -280,7 +280,11 @@ impl Registry {
             }
         });
         let watcher =
-            EventWatcherHandle::start(dir, dispatch, self.watcher_dropped_events.clone())?;
+            EventWatcherHandle::start(dir.clone(), dispatch, self.watcher_dropped_events.clone())?;
+        *session
+            .watcher_dir
+            .lock()
+            .expect("terminal watcher dir poisoned") = Some(dir);
         *session.watcher.lock().expect("terminal watcher poisoned") = Some(watcher);
         Ok(true)
     }
@@ -293,15 +297,44 @@ impl Registry {
             .get(id)
             .cloned();
         if let Some(session) = session {
-            session
+            let had_watcher = session
                 .watcher
                 .lock()
                 .expect("terminal watcher poisoned")
                 .take()
-                .is_some()
+                .is_some();
+            session
+                .watcher_dir
+                .lock()
+                .expect("terminal watcher dir poisoned")
+                .take();
+            had_watcher
         } else {
             false
         }
+    }
+
+    pub fn watcher_dir(&self, id: &str) -> Option<PathBuf> {
+        let session = self
+            .sessions
+            .lock()
+            .expect("terminal registry poisoned")
+            .get(id)
+            .cloned()?;
+        if session
+            .watcher
+            .lock()
+            .expect("terminal watcher poisoned")
+            .is_none()
+        {
+            return None;
+        }
+        let dir = session
+            .watcher_dir
+            .lock()
+            .expect("terminal watcher dir poisoned")
+            .clone();
+        dir
     }
 
     pub fn watcher_dropped_events(&self) -> u64 {
@@ -430,6 +463,7 @@ struct Session {
     in_alt_screen: AtomicBool,
     alt_screen_tail: Mutex<Vec<u8>>,
     watcher: Mutex<Option<EventWatcherHandle>>,
+    watcher_dir: Mutex<Option<PathBuf>>,
     closed: AtomicBool,
 }
 
@@ -499,6 +533,7 @@ impl Session {
             in_alt_screen: AtomicBool::new(false),
             alt_screen_tail: Mutex::new(Vec::new()),
             watcher: Mutex::new(None),
+            watcher_dir: Mutex::new(None),
             closed: AtomicBool::new(false),
         });
 
@@ -642,6 +677,10 @@ impl Session {
         self.watcher
             .lock()
             .expect("terminal watcher poisoned")
+            .take();
+        self.watcher_dir
+            .lock()
+            .expect("terminal watcher dir poisoned")
             .take();
         self.broadcast(SessionEvent::Closed(reason));
         let _ = self.command_tx.send(PtyCommand::Kill);
@@ -951,6 +990,7 @@ mod tests {
             in_alt_screen: AtomicBool::new(false),
             alt_screen_tail: Mutex::new(Vec::new()),
             watcher: Mutex::new(None),
+            watcher_dir: Mutex::new(None),
             closed: AtomicBool::new(false),
         })
     }
@@ -1190,6 +1230,31 @@ mod tests {
         registry.close(first.id(), CloseReason::Explicit);
         registry.close(second.id(), CloseReason::Explicit);
         registry.close(third.id(), CloseReason::Explicit);
+    }
+
+    #[test]
+    fn watcher_dir_tracks_active_watcher_lifecycle() {
+        let registry = Arc::new(Registry::new(test_config(1024, 4, 10)));
+        let handle = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: Some("watch".into()),
+                window_id: Some("window-a".into()),
+                mcp_env: true,
+                cwd: None,
+            })
+            .unwrap();
+        let id = handle.id().to_string();
+        let dir = tempfile::tempdir().expect("watch dir");
+
+        assert!(registry.watcher_dir(&id).is_none());
+        assert!(registry
+            .set_watcher(&id, dir.path().to_path_buf())
+            .expect("set watcher"));
+        assert_eq!(registry.watcher_dir(&id), Some(dir.path().to_path_buf()));
+        assert!(registry.clear_watcher(&id));
+        assert!(registry.watcher_dir(&id).is_none());
+        registry.close(&id, CloseReason::Explicit);
     }
 
     #[tokio::test]

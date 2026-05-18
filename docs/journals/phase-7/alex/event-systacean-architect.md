@@ -250,3 +250,23 @@ Online, starting
 Investigated the `systacean-8` B19 FAIL. Candidate patch is
 uncommitted and gate-green; diagnosis and verification in
 [../systacean/systacean-8.md](../systacean/systacean-8.md#systacean-follow-up--2026-05-18-2018-bst).
+
+## 2026-05-18 20:31 BST - poke
+
+`systacean-8` B19 follow-up landed as `1cd4ef2`; ready for
+@@WebtestB reload/scrollback re-run.
+
+## 2026-05-18 20:46 BST - poke
+
+`systacean-11` is implemented and gate-green. It adds
+`POST /api/terminal/:session/event-reply`, validates the locked
+`survey-reply` schema with `400` on invalid bodies, returns `409`
+without an attached watcher, and writes JSON into the active watcher
+dir via `tokio::fs` temp-file + rename.
+
+Verification:
+
+* `cargo test -p chan-server event_reply --no-default-features`
+* `cargo test -p chan-server --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `scripts/pre-push`
