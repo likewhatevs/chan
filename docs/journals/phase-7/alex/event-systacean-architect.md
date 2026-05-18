@@ -297,3 +297,10 @@ Verification:
 * `npm run build`
 * `cargo test -p chan-server static_cache_headers --no-default-features`
 * `cargo fmt --check`
+
+## 2026-05-18 21:02 BST - poke
+
+`systacean-10` landed as `4ca7dc4` (`Revert SPA storage key scoping`).
+FullStack's dirty `web/src/api/client.ts` endpoint addition was left
+unstaged; only the `storageScopeKey` removal was committed from that
+file.

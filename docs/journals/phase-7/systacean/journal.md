@@ -233,3 +233,11 @@ Verification:
 * `npm run build`
 * `cargo test -p chan-server static_cache_headers --no-default-features`
 * `cargo fmt --check`
+
+## 2026-05-18 21:02 BST - systacean-10 pushed
+
+Committed and pushed the storage scoping revert.
+
+Commit:
+
+* `4ca7dc4` - Revert SPA storage key scoping
