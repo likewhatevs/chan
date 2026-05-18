@@ -179,11 +179,35 @@
     const bg = styles.getPropertyValue("--bg").trim() || "#1c1c1e";
     const text = styles.getPropertyValue("--text").trim() || "#ebebf0";
     const cursor = styles.getPropertyValue("--link").trim() || "#58a6ff";
-    return {
+    const base = {
       background: bg,
       foreground: text,
       cursor,
       selectionBackground: "rgba(88, 166, 255, 0.35)",
+    };
+    if (ui.theme === "light") {
+      return {
+        ...base,
+        black: "#24292f",
+        red: "#cf222e",
+        green: "#1a7f37",
+        yellow: "#8a6300",
+        blue: "#0969da",
+        magenta: "#8250df",
+        cyan: "#1b7c83",
+        white: "#6e7781",
+        brightBlack: "#57606a",
+        brightRed: "#a40e26",
+        brightGreen: "#116329",
+        brightYellow: "#6f4e00",
+        brightBlue: "#0550ae",
+        brightMagenta: "#6639ba",
+        brightCyan: "#0a6b73",
+        brightWhite: "#24292f",
+      };
+    }
+    return {
+      ...base,
       black: "#0c0c0d",
       red: "#ff6b6b",
       green: "#6cd07a",

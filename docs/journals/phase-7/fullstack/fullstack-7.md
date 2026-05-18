@@ -54,3 +54,35 @@ Wave 1.5. Concrete repro provided by @@WebtestB.
 ## Hand-off
 
 Standard. Small task — likely one PR-shape commit.
+
+## 2026-05-18 17:38 BST — implementation
+
+Implemented the light-mode terminal contrast bump in
+`web/src/components/TerminalTab.svelte`.
+
+What changed:
+
+* Split the xterm ANSI palette by resolved app theme.
+* Left the existing dark-mode ANSI values unchanged.
+* Added a light-mode palette with darker foreground colors for ANSI white,
+  green, yellow, cyan, and the other standard/bright entries.
+* Normal white is now `#6e7781` instead of near-white on the light terminal
+  background; bright white is `#24292f`, so `\e[37m` and `\e[1;37m` remain
+  distinguishable.
+
+Contrast check against white background:
+
+* green `#1a7f37`: 5.08:1
+* yellow `#8a6300`: 5.43:1
+* cyan `#1b7c83`: 4.93:1
+* white `#6e7781`: 4.55:1
+
+Verification:
+
+* `npm run check` from `web/`
+* `npm run build` from `web/`
+* `scripts/pre-push`
+
+Notes:
+
+* No manual browser screenshot pass performed in this lane.

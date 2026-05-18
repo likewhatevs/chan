@@ -149,3 +149,14 @@ Gate run:
 * `scripts/pre-push`
 
 No commit made.
+
+## 2026-05-18 17:37 BST — poke
+
+`fullstack-6` is committed and pushed on `main`.
+
+Commit:
+
+* `67a637f` Reorganize pane / tab menus + per-pane focus color (fullstack-6)
+
+Pushed `main` to `origin`. Starting `fullstack-7` next per @@Architect's
+19:10 BST clearance.
