@@ -11,6 +11,7 @@ import {
   canReopenClosedTab,
   clearRecentlyClosedTabsForTest,
   closeTab,
+  detachTabToPaneEdge,
   dismissTerminalEnvNamePrompt,
   focusColorForPane,
   hydrateTerminalSessionsFromLayout,
@@ -210,6 +211,58 @@ describe("pane state", () => {
     expect(layout.nodes[root.a]?.kind).toBe("leaf");
     expect(root.b).toBe(pane.id);
     expect(layout.activePaneId).toBe(root.a);
+  });
+
+  test("detaches a tab into a new pane at the target edge", () => {
+    const first = fileTab({ id: "file-a", path: "notes/a.md" });
+    const second = fileTab({ id: "file-b", path: "notes/b.md" });
+    const pane = resetLayout([first, second]);
+
+    detachTabToPaneEdge(pane.id, second.id, pane.id, "right");
+
+    const root = layout.nodes[layout.rootId];
+    expect(root?.kind).toBe("split");
+    if (root?.kind !== "split") return;
+    expect(root.direction).toBe("row");
+    const left = layout.nodes[root.a];
+    const right = layout.nodes[root.b];
+    expect(left?.kind).toBe("leaf");
+    expect(right?.kind).toBe("leaf");
+    if (left?.kind !== "leaf" || right?.kind !== "leaf") return;
+    expect(left.tabs.map((tab) => tab.id)).toEqual([first.id]);
+    expect(right.tabs.map((tab) => tab.id)).toEqual([second.id]);
+    expect(layout.activePaneId).toBe(right.id);
+  });
+
+  test("collapses the source pane after detaching its last tab", () => {
+    const left = fileTab({ id: "left", path: "notes/left.md" });
+    const right = fileTab({ id: "right", path: "notes/right.md" });
+    const leftPane = resetLayout([left]);
+    splitPane(leftPane.id, "row", "after");
+    const rootBefore = layout.nodes[layout.rootId];
+    expect(rootBefore?.kind).toBe("split");
+    if (rootBefore?.kind !== "split") return;
+    const rightPaneId = rootBefore.b;
+    const rightPane = layout.nodes[rightPaneId];
+    expect(rightPane?.kind).toBe("leaf");
+    if (rightPane?.kind !== "leaf") return;
+    rightPane.tabs.push(right);
+    rightPane.activeTabId = right.id;
+
+    detachTabToPaneEdge(leftPane.id, left.id, rightPane.id, "bottom");
+
+    const root = layout.nodes[layout.rootId];
+    expect(root?.kind).toBe("split");
+    if (root?.kind !== "split") return;
+    expect(root.direction).toBe("column");
+    const top = layout.nodes[root.a];
+    const bottom = layout.nodes[root.b];
+    expect(top?.kind).toBe("leaf");
+    expect(bottom?.kind).toBe("leaf");
+    if (top?.kind !== "leaf" || bottom?.kind !== "leaf") return;
+    expect(top.tabs.map((tab) => tab.id)).toEqual([right.id]);
+    expect(bottom.tabs.map((tab) => tab.id)).toEqual([left.id]);
+    expect(layout.nodes[leftPane.id]).toBeUndefined();
   });
 
   test("opens graph and file browser as first-class tabs", () => {

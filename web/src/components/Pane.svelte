@@ -8,6 +8,7 @@
     closeTab,
     focusColorForPane,
     isDirty,
+    detachTabToPaneEdge,
     layout,
     markLocalTabDrop,
     moveTab,
@@ -24,6 +25,7 @@
     shouldCloseTabAfterDragEnd,
     splitPane,
     type LeafNode,
+    type PaneDropEdge,
     type PaneFocusColor,
   } from "../state/tabs.svelte";
 
@@ -364,6 +366,7 @@
   // dragged over it. Keyed by pane id so we don't bleed state between
   // panes that share this Svelte 5 component instance.
   let dropActive = $state(false);
+  let bodyDropEdge: PaneDropEdge | null = $state(null);
   // Index where a per-tab drop indicator (a thin vertical bar) is
   // currently shown. -1 means no indicator. We render a visual bar
   // before tab[idx]; idx === pane.tabs.length means "after the last
@@ -532,6 +535,59 @@
       dropActive = false;
       dropIndicator = -1;
     }
+  }
+
+  function tabDragPayload(e: DragEvent): { fromPaneId: string; tabId: string } | null {
+    const raw = e.dataTransfer?.getData(TAB_DRAG_MIME);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as { fromPaneId?: string; tabId?: string };
+      if (!parsed.fromPaneId || !parsed.tabId) return null;
+      return { fromPaneId: parsed.fromPaneId, tabId: parsed.tabId };
+    } catch {
+      return null;
+    }
+  }
+
+  function edgeForBodyDrop(e: DragEvent): PaneDropEdge {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const distances: Array<[PaneDropEdge, number]> = [
+      ["left", x],
+      ["right", rect.width - x],
+      ["top", y],
+      ["bottom", rect.height - y],
+    ];
+    distances.sort((a, b) => a[1] - b[1]);
+    return distances[0]![0];
+  }
+
+  function onBodyDragOver(e: DragEvent): void {
+    const payload = tabDragPayload(e);
+    if (!payload || !paneInThisWindow(payload.fromPaneId)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    bodyDropEdge = edgeForBodyDrop(e);
+  }
+
+  function onBodyDragLeave(e: DragEvent): void {
+    const related = e.relatedTarget as Node | null;
+    if (!related || !(e.currentTarget as Node).contains(related)) {
+      bodyDropEdge = null;
+    }
+  }
+
+  function onBodyDrop(e: DragEvent): void {
+    const payload = tabDragPayload(e);
+    const edge = bodyDropEdge ?? edgeForBodyDrop(e);
+    bodyDropEdge = null;
+    if (!payload || !paneInThisWindow(payload.fromPaneId)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    markLocalTabDrop(payload.fromPaneId, payload.tabId);
+    detachTabToPaneEdge(payload.fromPaneId, payload.tabId, pane.id, edge);
   }
 
   /// Compute the insertion index for a drop with cursor position `clientX`
@@ -936,7 +992,19 @@
     </div>
   </div>
 
-  <div class="editor-wrap" bind:this={editorWrapEl}>
+  <div
+    class="editor-wrap"
+    class:body-drop-left={bodyDropEdge === "left"}
+    class:body-drop-right={bodyDropEdge === "right"}
+    class:body-drop-top={bodyDropEdge === "top"}
+    class:body-drop-bottom={bodyDropEdge === "bottom"}
+    bind:this={editorWrapEl}
+    ondragover={onBodyDragOver}
+    ondragleave={onBodyDragLeave}
+    ondrop={onBodyDrop}
+    role="group"
+    aria-label="pane content"
+  >
     {#if active?.kind === "file"}
       <FileEditorTab tab={active} />
     {:else if active?.kind === "graph"}
@@ -1261,6 +1329,37 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+  }
+  .editor-wrap::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 80ms ease;
+    z-index: 20;
+  }
+  .editor-wrap.body-drop-left::after,
+  .editor-wrap.body-drop-right::after,
+  .editor-wrap.body-drop-top::after,
+  .editor-wrap.body-drop-bottom::after {
+    opacity: 1;
+  }
+  .editor-wrap.body-drop-left::after {
+    border-left: 4px solid var(--pane-focus);
+    background: linear-gradient(90deg, color-mix(in srgb, var(--pane-focus) 14%, transparent), transparent 34%);
+  }
+  .editor-wrap.body-drop-right::after {
+    border-right: 4px solid var(--pane-focus);
+    background: linear-gradient(270deg, color-mix(in srgb, var(--pane-focus) 14%, transparent), transparent 34%);
+  }
+  .editor-wrap.body-drop-top::after {
+    border-top: 4px solid var(--pane-focus);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--pane-focus) 14%, transparent), transparent 34%);
+  }
+  .editor-wrap.body-drop-bottom::after {
+    border-bottom: 4px solid var(--pane-focus);
+    background: linear-gradient(0deg, color-mix(in srgb, var(--pane-focus) 14%, transparent), transparent 34%);
   }
   /* Empty pane: muted chan logo watermark above the keyboard-
      shortcut table, both centered. CSS mask paints the silhouette

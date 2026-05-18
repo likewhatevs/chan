@@ -1399,6 +1399,53 @@ export function moveTab(
   }
 }
 
+export type PaneDropEdge = "left" | "right" | "top" | "bottom";
+
+/// Detach a tab into a new sibling pane at the requested edge of the
+/// target leaf. This is the body-drop counterpart to `moveTab`:
+/// tab-bar drops merge tab lists, body-edge drops split the target
+/// pane and make the moved tab the new sibling content.
+export function detachTabToPaneEdge(
+  fromPaneId: string,
+  tabId: string,
+  targetPaneId: string,
+  edge: PaneDropEdge,
+): void {
+  const fromNode = layout.nodes[fromPaneId];
+  const targetNode = layout.nodes[targetPaneId];
+  if (!fromNode || fromNode.kind !== "leaf") return;
+  if (!targetNode || targetNode.kind !== "leaf") return;
+
+  const idx = fromNode.tabs.findIndex((t) => t.id === tabId);
+  if (idx < 0) return;
+  if (fromPaneId === targetPaneId && fromNode.tabs.length <= 1) return;
+
+  const moved = cloneTab(fromNode.tabs[idx]!);
+  fromNode.tabs.splice(idx, 1);
+  if (fromNode.activeTabId === tabId) {
+    fromNode.activeTabId = fromNode.tabs[Math.max(0, idx - 1)]?.id ?? null;
+  }
+  if (fromNode.tabs.length === 0 && fromNode.id !== targetNode.id && layout.rootId !== fromNode.id) {
+    collapseEmptyPane(fromNode.id);
+  }
+
+  const target = layout.nodes[targetPaneId];
+  if (!target || target.kind !== "leaf") return;
+  const newPane: LeafNode = {
+    kind: "leaf",
+    id: id("pane"),
+    tabs: [moved],
+    activeTabId: moved.id,
+    focusColor: "blue",
+  };
+  const direction: SplitNode["direction"] =
+    edge === "left" || edge === "right" ? "row" : "column";
+  const placement: "before" | "after" =
+    edge === "left" || edge === "top" ? "before" : "after";
+  insertSiblingPane(target.id, newPane, direction, placement);
+  layout.activePaneId = newPane.id;
+}
+
 function collapseEmptyPane(emptyId: string): void {
   // Find the parent split.
   const entries = Object.values(layout.nodes);
@@ -1450,6 +1497,17 @@ export function splitPane(
     activeTabId: null,
     focusColor: "blue",
   };
+  insertSiblingPane(original.id, newPane, direction, placement);
+  layout.activePaneId = newPane.id;
+}
+
+function insertSiblingPane(
+  originalId: string,
+  newPane: LeafNode,
+  direction: SplitNode["direction"],
+  placement: "before" | "after",
+): void {
+  const original = pane(originalId);
   // Find parent of original so we can replace original with a new split.
   const entries = Object.values(layout.nodes);
   const parent = entries.find(
@@ -1471,7 +1529,6 @@ export function splitPane(
   } else {
     layout.rootId = split.id;
   }
-  layout.activePaneId = newPane.id;
 }
 
 export function setActivePane(paneId: string): void {
