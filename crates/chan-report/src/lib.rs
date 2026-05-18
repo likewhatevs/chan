@@ -299,18 +299,25 @@ fn roll_up(files: &[FileStats]) -> (Vec<LanguageStats>, Totals) {
                 ..Default::default()
             });
         entry.files += 1;
+        entry.bytes += f.bytes;
         entry.code += f.code;
         entry.comments += f.comments;
         entry.blanks += f.blanks;
         entry.complexity += f.complexity;
 
         totals.files += 1;
+        totals.bytes += f.bytes;
         totals.code += f.code;
         totals.comments += f.comments;
         totals.blanks += f.blanks;
         totals.complexity += f.complexity;
     }
     let mut by_language: Vec<LanguageStats> = by_lang.into_values().collect();
-    by_language.sort_by(|a, b| b.code.cmp(&a.code).then_with(|| a.name.cmp(&b.name)));
+    by_language.sort_by(|a, b| {
+        b.bytes
+            .cmp(&a.bytes)
+            .then_with(|| b.files.cmp(&a.files))
+            .then_with(|| a.name.cmp(&b.name))
+    });
     (by_language, totals)
 }

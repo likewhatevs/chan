@@ -115,9 +115,11 @@ fn scope_prefix_restricts_rollups() {
     assert_eq!(scoped.files.len(), 2);
     assert!(scoped.files.iter().all(|f| f.path.starts_with("src/")));
     assert_eq!(scoped.totals.files, 2);
+    assert!(scoped.totals.bytes > 0);
     // by_language for the scope contains Rust only.
     assert_eq!(scoped.by_language.len(), 1);
     assert_eq!(scoped.by_language[0].name, "Rust");
+    assert!(scoped.by_language[0].bytes > 0);
 }
 
 #[test]

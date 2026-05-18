@@ -29,6 +29,8 @@ pub struct FileStats {
 pub struct LanguageStats {
     pub name: String,
     pub files: u64,
+    #[serde(default)]
+    pub bytes: u64,
     pub code: u64,
     pub comments: u64,
     pub blanks: u64,
@@ -39,6 +41,8 @@ pub struct LanguageStats {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct Totals {
     pub files: u64,
+    #[serde(default)]
+    pub bytes: u64,
     pub code: u64,
     pub comments: u64,
     pub blanks: u64,
