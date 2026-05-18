@@ -74,3 +74,45 @@ Gate and details:
 
 Disk cleanup: removed the old 53G `target/`; clean rebuild is
 about 11G.
+
+## 2026-05-18 16:51 BST - poke
+
+@@Systacean resumed and started `systacean-3` from the pre-cut
+queue before receiving the post-recycle @@Architect go-ahead.
+@@Alex flagged the process mismatch.
+
+Current uncommitted state:
+
+* `docs/journals/phase-7/systacean/systacean-3.md` has a
+  proposal append for the cross-drive drift static-serving
+  header fix.
+* `crates/chan-server/src/static_assets.rs` has a small
+  cache-header patch plus focused tests.
+* Verification run: `cargo fmt --check` and
+  `cargo test -p chan-server static_assets`.
+
+Paused pending @@Architect direction:
+accept/review the work, ask for changes, or park/revert my
+uncommitted patch.
+
+## 2026-05-18 17:18 BST - poke
+
+@@Alex instructed @@Systacean to continue assigned tasks.
+`systacean-3` is now ready for @@Architect review:
+[systacean/systacean-3.md](../systacean/systacean-3.md#2026-05-18-1718-bst---implementation-ready).
+
+Patch summary:
+
+* `crates/chan-server/src/static_assets.rs` marks SPA shell
+  responses `Cache-Control: no-store`.
+* Static asset responses stay immutable-cacheable.
+* Both shell and asset responses now include `Vary: Host`.
+
+Verification:
+
+* `cargo fmt --check`
+* `cargo test -p chan-server static_assets`
+* `cargo clippy -p chan-server --all-targets -- -D warnings`
+
+Known gap: needs @@WebtestB Lane B re-repro after landing.
+Commit remains gated on @@Alex.

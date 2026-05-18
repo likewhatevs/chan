@@ -76,3 +76,21 @@ Commits:
 
 Verification and bundle details are in
 [systacean-5.md](systacean-5.md#2026-05-18-1655-bst---closeout-shipped).
+
+## 2026-05-18 17:18 BST - systacean-3 ready for review
+
+Resumed post-recycle and completed the cross-drive static-serving
+mitigation in [systacean-3.md](systacean-3.md).
+
+Changed:
+
+* `crates/chan-server/src/static_assets.rs`
+
+Verification:
+
+* `cargo fmt --check`
+* `cargo test -p chan-server static_assets`
+* `cargo clippy -p chan-server --all-targets -- -D warnings`
+
+Known gap: @@WebtestB still needs to re-run the 8801 / 8810 drift
+repro after the patch lands.

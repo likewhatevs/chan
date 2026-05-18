@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use axum::extract::State;
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use rust_embed::RustEmbed;
 
@@ -28,6 +28,11 @@ use crate::state::AppState;
 #[derive(RustEmbed)]
 #[folder = "../../web/dist/"]
 struct WebAssets;
+
+const SPA_CACHE_CONTROL: HeaderValue = HeaderValue::from_static("no-store");
+const ASSET_CACHE_CONTROL: HeaderValue =
+    HeaderValue::from_static("public, max-age=31536000, immutable");
+const HOST_VARY: HeaderValue = HeaderValue::from_static("Host");
 
 /// Single-page-app fallback: any path that doesn't match an /api or
 /// /ws route, and doesn't correspond to a baked asset, returns
@@ -56,12 +61,18 @@ pub async fn serve_static(State(state): State<Arc<AppState>>, uri: axum::http::U
         } else {
             file.data.into_owned()
         };
-        return ([(header::CONTENT_TYPE, content_type_for(candidate))], body).into_response();
+        return with_static_cache_headers(
+            ([(header::CONTENT_TYPE, content_type_for(candidate))], body).into_response(),
+            is_index,
+        );
     }
     // SPA fallback: route paths the frontend handles client-side.
     if let Some(file) = WebAssets::get("index.html") {
         let body = inject_chan_meta(&file.data, &prefix, settings_disabled);
-        return ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response();
+        return with_static_cache_headers(
+            ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response(),
+            true,
+        );
     }
     // No bundle baked / on disk yet (fresh clone, npm not run).
     (
@@ -69,6 +80,20 @@ pub async fn serve_static(State(state): State<Arc<AppState>>, uri: axum::http::U
         "frontend bundle not built; run `cd web && npm install && npm run build`",
     )
         .into_response()
+}
+
+fn with_static_cache_headers(mut response: Response, spa_shell: bool) -> Response {
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CACHE_CONTROL,
+        if spa_shell {
+            SPA_CACHE_CONTROL
+        } else {
+            ASSET_CACHE_CONTROL
+        },
+    );
+    headers.insert(header::VARY, HOST_VARY);
+    response
 }
 
 /// Inject the SPA's runtime hints as `<meta>` tags right after the
@@ -187,5 +212,25 @@ mod tests {
         let html = b"<html></html>";
         let out = inject_chan_meta(html, "/foo", true);
         assert_eq!(out, html);
+    }
+
+    #[test]
+    fn static_cache_headers_do_not_store_spa_shell() {
+        let response = with_static_cache_headers("ok".into_response(), true);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&SPA_CACHE_CONTROL)
+        );
+        assert_eq!(response.headers().get(header::VARY), Some(&HOST_VARY));
+    }
+
+    #[test]
+    fn static_cache_headers_allow_immutable_assets() {
+        let response = with_static_cache_headers("ok".into_response(), false);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&ASSET_CACHE_CONTROL)
+        );
+        assert_eq!(response.headers().get(header::VARY), Some(&HOST_VARY));
     }
 }

@@ -133,3 +133,74 @@ Remaining uncertainty:
   needs a Lane B re-repro after landing; if drift survives with the
   new headers, the next fix belongs in the welcome-menu Files action
   rather than static serving.
+
+## 2026-05-18 17:18 BST - implementation ready
+
+Implemented the static-serving mitigation.
+
+Changed:
+
+* `crates/chan-server/src/static_assets.rs`
+  * `index.html` and SPA fallback responses now carry
+    `Cache-Control: no-store`.
+  * Static asset responses now carry
+    `Cache-Control: public, max-age=31536000, immutable`.
+  * Both shell and asset responses carry `Vary: Host`.
+  * Added focused tests for the cache-header helper.
+
+Root-cause assessment:
+
+* No service worker registration exists in `web/src`.
+* No frontend cross-origin navigation path showed up in the
+  location grep; explicit websocket/fetch paths use the current
+  `window.location.host`.
+* The static asset route was the confirmed server-side gap:
+  SPA shell and assets had no cache headers and no host-varying
+  marker, while the shell is per-instance runtime content.
+
+Verification:
+
+* `cargo fmt --check`
+* `cargo test -p chan-server static_assets`
+* `cargo clippy -p chan-server --all-targets -- -D warnings`
+  is running at the time of this append.
+
+Known gap:
+
+* I did not spin fresh 8801 / 8810 servers for browser re-repro
+  in this pass. @@WebtestB should re-run the drift repro once this
+  lands. If the drift remains, the next suspect is the welcome-state
+  pane menu / Files action opening global drive state, not the
+  static-serving layer.
+
+Proposed commit message:
+
+```text
+Scope SPA cache headers per host
+
+Mark the runtime SPA shell as no-store and vary static responses by
+Host so same-host different-port chan instances cannot reuse stale
+shell state across drives. Keep bundled hashed assets cacheable with
+immutable caching, and add focused cache-header tests.
+```
+
+## 2026-05-18 17:18 BST - verification complete
+
+`cargo clippy -p chan-server --all-targets -- -D warnings`
+completed clean.
+
+Ready for @@Architect review. Commit remains gated on @@Alex.
+
+## 2026-05-18 17:45 BST - commit authorized
+
+Read @@Architect's inbound event:
+[../alex/event-architect-systacean.md](../alex/event-architect-systacean.md#2026-05-18-1835-bst--poke-commit-authorized-for-systacean-3).
+
+@@Alex granted commit clearance verbally in chat, transcribed by
+@@Architect.
+
+Pre-push gate:
+
+* `scripts/pre-push` - passed
+
+Proceeding to commit and push only the `systacean-3` code/docs.
