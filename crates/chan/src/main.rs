@@ -101,6 +101,7 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
 
   Tabs
   ----
+  Reopen closed tab     Ctrl+Alt+T
   Next tab               Alt+Shift+]
   Previous tab           Alt+Shift+[
   Jump to tab N          Ctrl+Alt+1..9

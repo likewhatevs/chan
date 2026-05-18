@@ -21,6 +21,7 @@
     Copy,
     FilePlus,
     Folder,
+    History,
     Highlighter,
     Network,
     Pencil,
@@ -48,6 +49,8 @@
   import { clampMenu } from "./menuClamp";
   import {
     layout,
+    canReopenClosedTab,
+    reopenClosedTab,
     setMode,
     setTabCaret,
     setTabInspectorOpen,
@@ -206,6 +209,11 @@
   function doNewFile(): void {
     closeTabMenu();
     void fileOps.createFile(parentPath(tab.path));
+  }
+
+  function doReopenClosedTab(): void {
+    closeTabMenu();
+    reopenClosedTab();
   }
 
   function parentPath(path: string): string {
@@ -507,6 +515,17 @@
           </span>
           <span class="mbtn-label">New File</span>
           <span class="mbtn-chord">{chordLabel("app.file.new")}</span>
+        </button>
+        <button
+          class="mbtn"
+          disabled={!canReopenClosedTab()}
+          onclick={doReopenClosedTab}
+        >
+          <span class="mbtn-icon">
+            <History size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Reopen Closed Tab</span>
+          <span class="mbtn-chord">{chordLabel("app.tab.reopenClosed")}</span>
         </button>
         <button class="mbtn" onclick={doDuplicate}>
           <span class="mbtn-icon">

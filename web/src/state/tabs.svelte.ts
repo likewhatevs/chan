@@ -218,6 +218,11 @@ export type TerminalRichPromptState = {
 
 export type Tab = FileTab | TerminalTab;
 
+type ClosedTab = {
+  paneId: string;
+  tab: Tab;
+};
+
 /// Short display label for a tab — the file's basename so the tab
 /// strip stays scannable even when paths are deeply nested. The
 /// full path is reachable via `tabTooltip` for disambiguation.
@@ -355,6 +360,81 @@ function pane(id: string): LeafNode {
 
 export function activePane(): LeafNode {
   return pane(layout.activePaneId);
+}
+
+const CLOSED_TAB_LIMIT = 20;
+const recentlyClosedTabs = $state<ClosedTab[]>([]);
+const localTabDrops = new Set<string>();
+
+function tabDropKey(paneId: string, tabId: string): string {
+  return `${paneId}:${tabId}`;
+}
+
+export function markLocalTabDrop(fromPaneId: string, tabId: string): void {
+  localTabDrops.add(tabDropKey(fromPaneId, tabId));
+}
+
+export function shouldCloseTabAfterDragEnd(
+  paneId: string,
+  tabId: string,
+  dropEffect: string | undefined,
+): boolean {
+  if (dropEffect !== "move") return false;
+  const localDrop = localTabDrops.delete(tabDropKey(paneId, tabId));
+  const n = layout.nodes[paneId];
+  if (!n || n.kind !== "leaf") return false;
+  const stillHere = n.tabs.some((t) => t.id === tabId);
+  return stillHere && !localDrop;
+}
+
+export function canReopenClosedTab(): boolean {
+  return recentlyClosedTabs.length > 0;
+}
+
+export function clearRecentlyClosedTabsForTest(): void {
+  recentlyClosedTabs.length = 0;
+  localTabDrops.clear();
+}
+
+function rememberClosedTab(paneId: string, tab: Tab): void {
+  recentlyClosedTabs.push({ paneId, tab: cloneTab(tab) });
+  if (recentlyClosedTabs.length > CLOSED_TAB_LIMIT) {
+    recentlyClosedTabs.splice(0, recentlyClosedTabs.length - CLOSED_TAB_LIMIT);
+  }
+}
+
+export function reopenClosedTab(): boolean {
+  const entry = recentlyClosedTabs.pop();
+  if (!entry) return false;
+  const targetNode = layout.nodes[entry.paneId];
+  const target =
+    targetNode && targetNode.kind === "leaf" ? targetNode : activePane();
+  const tab = tabForReopen(entry.tab);
+  if (tabIdExists(tab.id)) {
+    tab.id = id(tab.kind === "terminal" ? "term" : "tab");
+  }
+  target.tabs.push(tab);
+  target.activeTabId = tab.id;
+  layout.activePaneId = target.id;
+  return true;
+}
+
+function tabIdExists(tabId: string): boolean {
+  return Object.values(layout.nodes).some(
+    (node) => node.kind === "leaf" && node.tabs.some((tab) => tab.id === tabId),
+  );
+}
+
+function tabForReopen(src: Tab): Tab {
+  const tab = cloneTab(src);
+  if (tab.kind === "terminal") {
+    tab.terminalSessionId = undefined;
+    tab.lastSeq = undefined;
+    tab.sessionMcpEnv = undefined;
+    tab.terminalEnvTabName = undefined;
+    tab.terminalEnvNamePromptDismissed = undefined;
+  }
+  return tab;
 }
 
 /// Ensure the named tab has a FindState attached and open it.
@@ -838,6 +918,7 @@ async function closeTabAsync(
   if (tab.kind === "terminal") {
     terminalCloseSinks.get(tab.id)?.();
   }
+  rememberClosedTab(paneId, tab);
   p.tabs.splice(idx, 1);
   if (p.activeTabId === tabId) {
     p.activeTabId = p.tabs[Math.max(0, idx - 1)]?.id ?? null;
@@ -853,10 +934,11 @@ async function closeTabAsync(
 /// after the user wipes the drive. Pane structure is left
 /// alone (the workspace's split tree survives), only the tabs go.
 export async function closeAllTabs(opts?: CloseTabsOptions): Promise<void> {
-  const tabs = Object.values(layout.nodes).flatMap((node) =>
-    node.kind === "leaf" ? node.tabs : [],
+  const entries = Object.values(layout.nodes).flatMap((node) =>
+    node.kind === "leaf" ? node.tabs.map((tab) => ({ paneId: node.id, tab })) : [],
   );
-  if (!(await confirmCloseTabs(tabs, opts))) return;
+  if (!(await confirmCloseTabs(entries.map((entry) => entry.tab), opts))) return;
+  for (const entry of entries) rememberClosedTab(entry.paneId, entry.tab);
   for (const node of Object.values(layout.nodes)) {
     if (node.kind !== "leaf") continue;
     node.tabs.length = 0;
@@ -875,6 +957,7 @@ export async function closePane(
 ): Promise<void> {
   const p = pane(paneId);
   if (!(await confirmCloseTabs(p.tabs, opts))) return;
+  for (const tab of p.tabs) rememberClosedTab(paneId, tab);
   p.tabs.length = 0;
   p.activeTabId = null;
   if (paneId !== layout.rootId) {
@@ -948,6 +1031,7 @@ function cloneTab(src: Tab): Tab {
     fsWritable: src.fsWritable,
     styleToolbarOpen: src.styleToolbarOpen,
     syntaxHighlight: src.syntaxHighlight,
+    caret: src.caret ? { ...src.caret } : undefined,
     // Find state is per-tab UI state; drop it when the tab moves
     // panes so the destination opens fresh without a half-mounted
     // bar pointing at a now-defunct adapter.
@@ -1099,6 +1183,8 @@ export function isDirty(t: Tab): boolean {
 // hammer the disk + watcher.
 const AUTOSAVE_DEBOUNCE_MS = 800;
 const autosaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const savingTabs = new Set<string>();
+const saveAgainAfterCurrent = new Set<string>();
 
 /// Conflict dialog state. Populated when a save returns 409 (an
 /// external edit landed since we last read this tab). Mounted by
@@ -1173,6 +1259,23 @@ export async function overwriteConflictedTab(): Promise<void> {
 /// which is too late to recover the user's typo. Refusing the
 /// write at the editor boundary keeps the file system honest.
 async function performSave(t: FileTab): Promise<void> {
+  if (savingTabs.has(t.id)) {
+    saveAgainAfterCurrent.add(t.id);
+    return;
+  }
+  savingTabs.add(t.id);
+  try {
+    do {
+      saveAgainAfterCurrent.delete(t.id);
+      await performSaveOnce(t);
+    } while (saveAgainAfterCurrent.has(t.id) && t.content !== t.saved);
+  } finally {
+    savingTabs.delete(t.id);
+    saveAgainAfterCurrent.delete(t.id);
+  }
+}
+
+async function performSaveOnce(t: FileTab): Promise<void> {
   if (isJson(t.path)) {
     const reason = validateJsonBuffer(t.content);
     if (reason !== null) {
@@ -1180,12 +1283,15 @@ async function performSave(t: FileTab): Promise<void> {
       return;
     }
   }
+  const path = t.path;
+  const content = t.content;
+  const expectedMtime = t.savedMtime;
   try {
-    const r = await api.write(t.path, t.content, t.savedMtime);
-    t.saved = t.content;
+    const r = await api.write(path, content, expectedMtime);
+    t.saved = content;
     t.savedMtime = r.mtime ?? null;
     t.error = null;
-    mirrorToSiblings(t.path, t.content, t.id);
+    mirrorToSiblings(path, content, t.id);
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) {
       const data = e.data as { current_mtime?: number | null } | null;

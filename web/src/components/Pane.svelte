@@ -3,16 +3,20 @@
 
   import {
     canSplit,
+    canReopenClosedTab,
     closePane,
     closeTab,
     isDirty,
     layout,
+    markLocalTabDrop,
     moveTab,
     openInPane,
     openTerminalInPane,
     reorderTab,
+    reopenClosedTab,
     saveTab,
     setActivePane,
+    shouldCloseTabAfterDragEnd,
     splitActive,
     type LeafNode,
   } from "../state/tabs.svelte";
@@ -21,6 +25,7 @@
     FilePlus,
     FileText,
     Folder,
+    History,
     Network,
     PanelRight,
     RefreshCw,
@@ -52,7 +57,7 @@
     renderTable,
   } from "../state/shortcuts";
   import { openTabMenu, tabMenu, toggleTabMenu } from "../state/tabMenu.svelte";
-  import { onDestroy } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { applyPageWidthToElement, pageWidth } from "../state/pageWidth.svelte";
 
   let { pane }: { pane: LeafNode } = $props();
@@ -144,6 +149,12 @@
       icon: FilePlus,
       command: "app.file.new",
       chordId: "app.file.new",
+    },
+    {
+      label: "Reopen Closed Tab",
+      icon: History,
+      command: "app.tab.reopenClosed",
+      chordId: "app.tab.reopenClosed",
     },
   ];
   const emptyPaneNavigation: EmptyMenuRow[] = [
@@ -261,6 +272,7 @@
       if (!browserOverlay.open) openBrowser();
       return;
     }
+    if (id === "app.tab.reopenClosed" && !canReopenClosedTab()) return;
     window.dispatchEvent(
       new CustomEvent("chan:command", { detail: { name: id } }),
     );
@@ -313,8 +325,29 @@
     if (meta && !e.shiftKey && !e.altKey && e.key === "s") {
       e.preventDefault();
       void onSave();
+      return;
+    }
+    if (
+      layout.activePaneId === pane.id &&
+      e.ctrlKey &&
+      e.altKey &&
+      !e.shiftKey &&
+      !e.metaKey &&
+      e.code === "KeyT"
+    ) {
+      e.preventDefault();
+      reopenClosedTab();
     }
   }
+
+  function onChanCommand(e: Event): void {
+    if (layout.activePaneId !== pane.id) return;
+    const detail = (e as CustomEvent<{ name?: string }>).detail;
+    if (detail?.name !== "app.tab.reopenClosed") return;
+    reopenClosedTab();
+  }
+  onMount(() => window.addEventListener("chan:command", onChanCommand));
+  onDestroy(() => window.removeEventListener("chan:command", onChanCommand));
 
   // ----- drag & drop ------------------------------------------------------
 
@@ -376,9 +409,7 @@
   /// landed in another window — close it locally so the visual
   /// matches the cross-window result.
   function onDragEnd(e: DragEvent, tabId: string): void {
-    if (e.dataTransfer?.dropEffect !== "move") return;
-    const stillHere = pane.tabs.some((t) => t.id === tabId);
-    if (stillHere) {
+    if (shouldCloseTabAfterDragEnd(pane.id, tabId, e.dataTransfer?.dropEffect)) {
       closeTab(pane.id, tabId);
     }
   }
@@ -502,6 +533,7 @@
         if (paneInThisWindow(fromPaneId)) {
           e.preventDefault();
           e.stopPropagation();
+          markLocalTabDrop(fromPaneId, tabId);
           if (fromPaneId === pane.id) {
             // Same-pane reorder: drop on tab T means source lands at
             // position T in the final array. No half-tab logic; drops
@@ -552,6 +584,7 @@
         };
         if (paneInThisWindow(fromPaneId)) {
           e.preventDefault();
+          markLocalTabDrop(fromPaneId, tabId);
           if (fromPaneId === pane.id) {
             // Strip-level drop in the same pane (i.e., dropped on the
             // background or actions area, not directly on a tab). Treat
@@ -834,7 +867,11 @@
           {#each emptyPaneContent as row (row.command)}
             {@const Icon = row.icon}
             <li>
-              <button role="menuitem" onclick={() => dispatchCommand(row.command)}>
+              <button
+                role="menuitem"
+                disabled={row.command === "app.tab.reopenClosed" && !canReopenClosedTab()}
+                onclick={() => dispatchCommand(row.command)}
+              >
                 <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
                 <span class="menu-row-label">{row.label}</span>
                 <span class="menu-row-chord">{chordLabel(row.chordId)}</span>

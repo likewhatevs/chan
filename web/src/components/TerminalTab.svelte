@@ -6,6 +6,7 @@
     ClipboardPaste,
     FilePlus,
     FolderOpen,
+    History,
     Info,
     MessageSquareText,
     Network,
@@ -30,6 +31,7 @@
     advanceTerminalSeq,
     allTerminalTabs,
     broadcastTerminalInput,
+    canReopenClosedTab,
     canSplit,
     closeTab,
     clearTerminalSession,
@@ -40,6 +42,7 @@
     registerTerminalInputSink,
     renameTerminalTab,
     removeTerminalFromBroadcastGroup,
+    reopenClosedTab,
     setTerminalBroadcastEnabled,
     setTerminalBroadcastMuted,
     setTerminalBroadcastTarget,
@@ -487,6 +490,11 @@
     void fileOps.createFile(cwd);
   }
 
+  function doReopenClosedTab(): void {
+    closeTabMenu();
+    reopenClosedTab();
+  }
+
   function requestTerminalCwd(): void {
     send({ type: "cwd" });
   }
@@ -884,6 +892,17 @@
           </span>
           <span class="mbtn-label">New File</span>
           <span class="mbtn-chord">{chordFor("app.file.new") ?? ""}</span>
+        </button>
+        <button
+          class="mbtn"
+          disabled={!canReopenClosedTab()}
+          onclick={doReopenClosedTab}
+        >
+          <span class="mbtn-icon">
+            <History size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Reopen Closed Tab</span>
+          <span class="mbtn-chord">{chordFor("app.tab.reopenClosed") ?? ""}</span>
         </button>
         {#if splitsAllowed}
           <button class="mbtn" onclick={() => splitPane("row")}>

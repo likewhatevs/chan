@@ -6,6 +6,8 @@ import { confirmState, resolveConfirm } from "./confirm.svelte";
 import {
   activePane,
   broadcastTerminalInput,
+  canReopenClosedTab,
+  clearRecentlyClosedTabsForTest,
   closeTab,
   dismissTerminalEnvNamePrompt,
   hydrateTerminalSessionsFromLayout,
@@ -14,12 +16,18 @@ import {
   openTerminalInPane,
   removeTerminalFromBroadcastGroup,
   registerTerminalInputSink,
+  markLocalTabDrop,
   renameTerminalTab,
+  reopenClosedTab,
+  reorderTab,
   restoreLayout,
+  saveTab,
+  scheduleAutosave,
   serializeLayout,
   setTerminalBroadcastMuted,
   setTerminalBroadcastTarget,
   setTerminalSession,
+  shouldCloseTabAfterDragEnd,
   tabLabelInPane,
   terminalBroadcastMemberIds,
   terminalEnvTabNameStale,
@@ -78,8 +86,10 @@ function terminalTab(partial: Partial<TerminalTab> = {}): TerminalTab {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
   resolveConfirm(false);
   resetLayout([]);
+  clearRecentlyClosedTabsForTest();
 });
 
 describe("tab close confirmation", () => {
@@ -121,6 +131,42 @@ describe("tab close confirmation", () => {
 
     unregister();
     expect(activePane().tabs).toHaveLength(1);
+  });
+
+  test("reopens a closed dirty file tab with its in-memory buffer", async () => {
+    const tab = fileTab({ content: "unsaved", saved: "saved", caret: { from: 3, to: 3 } });
+    const pane = resetLayout([tab]);
+
+    await closeTab(pane.id, tab.id, { force: true });
+    expect(activePane().tabs).toHaveLength(0);
+    expect(canReopenClosedTab()).toBe(true);
+
+    expect(reopenClosedTab()).toBe(true);
+    expect(activePane().tabs).toHaveLength(1);
+    const reopened = activePane().tabs[0];
+    expect(reopened?.kind).toBe("file");
+    if (reopened?.kind !== "file") return;
+    expect(reopened.content).toBe("unsaved");
+    expect(reopened.saved).toBe("saved");
+    expect(reopened.caret).toEqual({ from: 3, to: 3 });
+    expect(activePane().activeTabId).toBe(reopened.id);
+  });
+});
+
+describe("tab drag and drop", () => {
+  test("same-pane drag onto adjacent inactive tab reorders without closing source", () => {
+    const active = fileTab({ id: "file-active", path: "notes/active.md" });
+    const inactive = fileTab({ id: "file-inactive", path: "notes/inactive.md" });
+    const pane = resetLayout([active, inactive]);
+    pane.activeTabId = active.id;
+
+    markLocalTabDrop(pane.id, active.id);
+    reorderTab(pane.id, active.id, 1);
+
+    expect(activePane().tabs.map((tab) => tab.id)).toEqual([inactive.id, active.id]);
+    expect(activePane().activeTabId).toBe(active.id);
+    expect(shouldCloseTabAfterDragEnd(pane.id, active.id, "move")).toBe(false);
+    expect(activePane().tabs.map((tab) => tab.id)).toEqual([inactive.id, active.id]);
   });
 });
 
@@ -411,6 +457,37 @@ describe("terminal tab naming", () => {
     setTerminalSession(tab, "term_new", 0, true);
     expect(tab.terminalEnvTabName).toBe("ship");
     expect(terminalEnvTabNameStale(tab)).toBe(false);
+  });
+});
+
+describe("autosave", () => {
+  test("serializes overlapping saves and keeps edits after an in-flight save dirty", async () => {
+    vi.useFakeTimers();
+    const tab = fileTab({ content: "v1", saved: "base", savedMtime: 1 });
+    const pane = resetLayout([tab]);
+    const calls: string[] = [];
+    const pending: Array<(value: { mtime: number }) => void> = [];
+    vi.spyOn(api, "write").mockImplementation(async (_path, content) => {
+      calls.push(content);
+      return new Promise((resolve) => pending.push(resolve));
+    });
+
+    const firstSave = saveTab(tab);
+    await Promise.resolve();
+    expect(calls).toEqual(["v1"]);
+
+    tab.content = "v2";
+    scheduleAutosave(pane.id, tab.id);
+    await vi.advanceTimersByTimeAsync(800);
+    expect(calls).toEqual(["v1"]);
+
+    pending.shift()!({ mtime: 2 });
+    await vi.waitFor(() => expect(calls).toEqual(["v1", "v2"]));
+
+    pending.shift()!({ mtime: 3 });
+    await firstSave;
+    expect(tab.saved).toBe("v2");
+    expect(tab.savedMtime).toBe(3);
   });
 });
 

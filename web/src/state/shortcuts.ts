@@ -142,6 +142,13 @@ export const SHORTCUTS: readonly Shortcut[] = [
     note: "browser closes its own tab on Mod+W",
   },
   {
+    id: "app.tab.reopenClosed",
+    label: "Reopen closed tab",
+    web: "Ctrl+Alt+T",
+    native: "Mod+Shift+T",
+    group: "Tabs",
+  },
+  {
     id: "app.tab.next",
     label: "Next tab",
     web: "Alt+Shift+]",
