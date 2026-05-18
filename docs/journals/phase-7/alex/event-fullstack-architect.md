@@ -1,0 +1,95 @@
+# event-fullstack-architect.md
+
+From: @@FullStack
+To: @@Architect
+Date: 2026-05-18
+
+## 2026-05-18 11:29 — poke
+
+Layout proposal for docked file-browser panes is ready for sign-off:
+[fullstack/fullstack-1.md](../fullstack/fullstack-1.md).
+
+## 2026-05-18 11:38 — poke
+
+`fullstack-1` implementation is ready for review:
+[fullstack/fullstack-1.md](../fullstack/fullstack-1.md).
+
+## 2026-05-18 12:11 — poke
+
+`fullstack-2` icon and behavior audit is ready for sign-off:
+[fullstack/fullstack-2.md](../fullstack/fullstack-2.md).
+
+## 2026-05-18 12:48 BST — poke
+
+`fullstack-2` implementation is ready for review:
+[fullstack/fullstack-2.md](../fullstack/fullstack-2.md).
+
+## 2026-05-18 13:45 BST — poke
+
+`fullstack-5` implementation is ready for review:
+[fullstack/fullstack-5.md](../fullstack/fullstack-5.md).
+
+## 2026-05-18 13:59 BST — poke
+
+`fullstack-1` and `fullstack-5` are both committed on `main`.
+
+Commits:
+- `87a9a36` Add docked file-browser side panes
+- `c03d6f2` Fix tab drag reorder and reopen closed tabs
+
+`fullstack-2` remains uncommitted pending the @@WebtestA external-link walkthrough gate.
+
+## 2026-05-18 14:10 BST — poke
+
+Partial `fullstack-3` slice is implemented and locally checked: Cmd+F re-focus plus explicit Find / `[[` / `![` empty-indexing-no-match states.
+
+Details in [fullstack/fullstack-3.md](../fullstack/fullstack-3.md). Remaining acceptance is the Find menu tooling + persisted auto-strip-on-save preference.
+
+## 2026-05-18 14:21 BST — poke
+
+`fullstack-3` implementation is ready for review. The earlier Find / bubble state slice is now joined by the menu tooling and persisted auto-strip-on-save preference.
+
+Details and verification are in [fullstack/fullstack-3.md](../fullstack/fullstack-3.md).
+
+No commit made. `fullstack-2` remains uncommitted pending the @@WebtestA external-link walkthrough gate.
+
+## 2026-05-18 14:25 BST — poke
+
+`fullstack-2` external-link revision is ready after the Chan.app no-op finding.
+The opener now uses local `window.__TAURI__.opener.openUrl` in desktop, keeps
+an invoke fallback, and uses `window.open` only in browser-served chan.
+
+Details and verification are in [fullstack/fullstack-2.md](../fullstack/fullstack-2.md).
+No commit made. Ready for @@WebtestA `webtest-a-3` browser / desktop /
+tunnel-loop walkthrough.
+
+## 2026-05-18 14:51 BST — poke
+
+`fullstack-3` is committed on `main` as `064d3e7` (`Tighten Find / link-bubble UX with explicit state ladders`).
+
+`fullstack-2` Tauri opener revision remains uncommitted and ready for @@WebtestA `webtest-a-3` desktop / tunnel-loop walkthrough.
+
+## 2026-05-18 14:59 BST — poke
+
+@@WebtestA completed `webtest-a-3` wave 2 and says `fullstack-2` is good
+to commit from Lane A's view. The uncommitted `fullstack-2` revision remains
+ready in the tree; awaiting explicit closeout commit authorization from
+@@Architect / @@Alex.
+
+## 2026-05-18 15:16 BST — poke
+
+`fullstack-2` is committed on `main` as `3ab0aac` (`Route external links through the desktop shell`).
+
+Pre-commit gate was green:
+- `npm run test -- StyleToolbar external_links`
+- `npm run check`
+- `npm run build`
+- `scripts/pre-push`
+
+FullStack closeout is complete; standing by for recycle.
+
+## 2026-05-18 15:19 BST — poke
+
+Poke ack. No newer incoming event after the `fullstack-2` commit authorization. `fullstack-2` is committed as `3ab0aac`; FullStack remains in closeout standby.
+
+Not starting `fullstack-4`, `fullstack-6`, or `fullstack-7` in this session because the incoming handoff explicitly reserves them for the fresh post-recycle FullStack session.
