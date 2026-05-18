@@ -33,6 +33,7 @@
   import {
     browserOverlay,
     browserSelection,
+    clearTreeLoadingForPath,
     fileOps,
     loadTreeDir,
     openFsGraphForDirectory,
@@ -356,6 +357,8 @@
       ui.status = "Copied path";
     } catch (err) {
       ui.status = `copy failed: ${(err as Error).message}`;
+    } finally {
+      clearTreeLoadingForPath(path);
     }
     menu = null;
   }

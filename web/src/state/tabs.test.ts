@@ -11,6 +11,7 @@ import {
   clearRecentlyClosedTabsForTest,
   closeTab,
   dismissTerminalEnvNamePrompt,
+  focusColorForPane,
   hydrateTerminalSessionsFromLayout,
   layout,
   openInPane,
@@ -28,8 +29,10 @@ import {
   serializeLayout,
   setTerminalBroadcastMuted,
   setTerminalBroadcastTarget,
+  setPaneFocusColor,
   setTerminalSession,
   shouldCloseTabAfterDragEnd,
+  splitPane,
   tabLabelInPane,
   terminalBroadcastMemberIds,
   terminalEnvTabNameStale,
@@ -44,6 +47,7 @@ function resetLayout(tabs: Array<FileTab | TerminalTab>): LeafNode {
     id: "pane-test",
     tabs,
     activeTabId: tabs[0]?.id ?? null,
+    focusColor: "blue",
   };
   layout.rootId = pane.id;
   layout.activePaneId = pane.id;
@@ -172,6 +176,34 @@ describe("tab drag and drop", () => {
     expect(activePane().activeTabId).toBe(active.id);
     expect(shouldCloseTabAfterDragEnd(pane.id, active.id, "move")).toBe(false);
     expect(activePane().tabs.map((tab) => tab.id)).toEqual([inactive.id, active.id]);
+  });
+});
+
+describe("pane state", () => {
+  test("serializes per-pane focus color with layout state", async () => {
+    const pane = resetLayout([terminalTab()]);
+    setPaneFocusColor(pane.id, "pink");
+
+    const snapshot = serializeLayout();
+    expect(JSON.stringify(snapshot)).toContain("\"pc\":\"p\"");
+
+    await restoreLayout(snapshot!);
+
+    expect(focusColorForPane(activePane().id)).toBe("pink");
+  });
+
+  test("can split before the active pane for left/up menu actions", () => {
+    const pane = resetLayout([fileTab()]);
+
+    splitPane(pane.id, "row", "before");
+
+    const root = layout.nodes[layout.rootId];
+    expect(root?.kind).toBe("split");
+    if (root?.kind !== "split") return;
+    expect(root.direction).toBe("row");
+    expect(layout.nodes[root.a]?.kind).toBe("leaf");
+    expect(root.b).toBe(pane.id);
+    expect(layout.activePaneId).toBe(root.a);
   });
 });
 

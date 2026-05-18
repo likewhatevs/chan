@@ -108,8 +108,8 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
 
   Panes
   -----
-  Previous pane          Cmd+[
-  Next pane              Cmd+]
+  Previous pane          Cmd+Alt+[
+  Next pane              Cmd+Alt+]
 
 Handled by the browser:
 

@@ -6,6 +6,7 @@
     canReopenClosedTab,
     closePane,
     closeTab,
+    focusColorForPane,
     isDirty,
     layout,
     markLocalTabDrop,
@@ -15,19 +16,29 @@
     reorderTab,
     reopenClosedTab,
     saveTab,
+    selectNextPane,
+    selectPrevPane,
     setActivePane,
+    setPaneFocusColor,
     shouldCloseTabAfterDragEnd,
-    splitActive,
+    splitPane,
     type LeafNode,
+    type PaneFocusColor,
   } from "../state/tabs.svelte";
 
   import {
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    ArrowUp,
+    Check,
     FilePlus,
     FileText,
     Folder,
     History,
     Network,
     PanelRight,
+    Palette,
     RefreshCw,
     Search,
     Settings,
@@ -56,7 +67,7 @@
     formatChord,
     renderTable,
   } from "../state/shortcuts";
-  import { openTabMenu, tabMenu, toggleTabMenu } from "../state/tabMenu.svelte";
+  import { openTabMenu, tabMenu } from "../state/tabMenu.svelte";
   import { onDestroy, onMount } from "svelte";
   import { applyPageWidthToElement, pageWidth } from "../state/pageWidth.svelte";
 
@@ -115,6 +126,7 @@
   const platform = currentPlatform();
   const os = currentOS();
   const shortcutTable = renderTable(platform, os);
+  const paneFocusColors: PaneFocusColor[] = ["blue", "green", "pink"];
 
   /// Empty-pane right-click menu, arranged into the canonical
   /// sections shared by every chan menu: content actions, then
@@ -211,6 +223,8 @@
   /// per-button split / close controls.
   let paneMenu: HamburgerMenu | undefined = $state();
   let paneMenuOpen = $state(false);
+  let paneContextMenu: HamburgerMenu | undefined = $state();
+  let paneContextMenuOpen = $state(false);
 
   /// Per-pane page-width cap. The ratio (state/pageWidth) is
   /// global, but the px cap is pane-relative so splitting one
@@ -246,16 +260,61 @@
   onDestroy(() => resizeObs?.disconnect());
 
   function onSplitRight(): void {
-    paneMenu?.close();
-    splitActive("row");
+    closePaneMenus();
+    splitPane(pane.id, "row", "after");
+  }
+  function onSplitLeft(): void {
+    closePaneMenus();
+    splitPane(pane.id, "row", "before");
   }
   function onSplitDown(): void {
-    paneMenu?.close();
-    splitActive("column");
+    closePaneMenus();
+    splitPane(pane.id, "column", "after");
+  }
+  function onSplitUp(): void {
+    closePaneMenus();
+    splitPane(pane.id, "column", "before");
   }
   function onClosePane(): void {
-    paneMenu?.close();
+    closePaneMenus();
     closePane(pane.id);
+  }
+
+  function closePaneMenus(): void {
+    paneMenu?.close();
+    paneContextMenu?.close();
+  }
+
+  function doReloadPane(): void {
+    closePaneMenus();
+    void refreshTree();
+  }
+
+  function doToggleInspector(): void {
+    closePaneMenus();
+    browserOverlay.inspectorOpen = !browserOverlay.inspectorOpen;
+    if (!browserOverlay.open) openBrowser();
+  }
+
+  function doSelectPrevPane(): void {
+    closePaneMenus();
+    selectPrevPane();
+  }
+
+  function doSelectNextPane(): void {
+    closePaneMenus();
+    selectNextPane();
+  }
+
+  function doSetFocusColor(color: PaneFocusColor): void {
+    closePaneMenus();
+    setPaneFocusColor(pane.id, color);
+  }
+
+  function openPaneContextAt(e: MouseEvent): void {
+    e.preventDefault();
+    setActivePane(pane.id);
+    paneContextMenu?.openAtCursor(e.clientX, e.clientY);
   }
 
   /// Fire the same `chan:command` event the keymap layer uses so
@@ -627,6 +686,7 @@
 <div
   class="pane"
   class:focused={isFocused}
+  data-focus-color={focusColorForPane(pane.id)}
   onmousedown={() => setActivePane(pane.id)}
   role="region"
   aria-label="editor pane"
@@ -639,6 +699,10 @@
     ondragover={onDragOver}
     ondragleave={onDragLeave}
     ondrop={onDrop}
+    oncontextmenu={(e) => {
+      if ((e.target as Element | null)?.closest(".tab, .actions")) return;
+      openPaneContextAt(e);
+    }}
   >
     {#each pane.tabs as t, i (t.id)}
       {#if dropIndicator === i}
@@ -658,24 +722,19 @@
           tabMouseDownPrevActive = pane.activeTabId;
           pane.activeTabId = t.id;
         }}
-        onclick={(e) => {
-          // Click on the filename (anywhere on the tab body that
-          // isn't the × close button) toggles the menu — but only
-          // when the tab was already active. A click on an inactive
-          // tab is a tab-switch (the onmousedown above set
-          // activeTabId); popping the menu there feels like the user
-          // committed to an action they didn't take. The next click
-          // on the now-active tab pops the menu as expected.
-          const wasActive = tabMouseDownPrevActive === t.id;
+        onclick={() => {
           tabMouseDownPrevActive = null;
-          if (t.kind !== "file" || !wasActive) return;
-          const row = e.currentTarget as HTMLElement;
-          const r = row.getBoundingClientRect();
-          toggleTabMenu(t.id, {
-            left: r.left,
-            top: r.top,
-            right: r.right,
-            bottom: r.bottom,
+        }}
+        oncontextmenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          pane.activeTabId = t.id;
+          layout.activePaneId = pane.id;
+          openTabMenu(t.id, {
+            left: e.clientX,
+            top: e.clientY,
+            right: e.clientX,
+            bottom: e.clientY,
           });
         }}
         role="tab"
@@ -719,32 +778,19 @@
           aria-haspopup={t.kind === "file" || t.kind === "terminal" ? "menu" : undefined}
           aria-expanded={(t.kind === "file" || t.kind === "terminal") && tabMenu.openForTabId === t.id}
           onclick={(e) => {
-            if (t.kind !== "terminal") return;
             e.stopPropagation();
-            const wasActive = tabMouseDownPrevActive === t.id;
             tabMouseDownPrevActive = null;
-            if (!wasActive) return;
-            const row = (e.currentTarget as HTMLElement).closest(".tab") as HTMLElement | null;
-            const r = (row ?? (e.currentTarget as HTMLElement)).getBoundingClientRect();
-            toggleTabMenu(t.id, {
-              left: r.left,
-              top: r.top,
-              right: r.right,
-              bottom: r.bottom,
-            });
           }}
           oncontextmenu={(e) => {
-            if (t.kind !== "terminal") return;
             e.preventDefault();
             e.stopPropagation();
             pane.activeTabId = t.id;
             layout.activePaneId = pane.id;
-            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
             openTabMenu(t.id, {
-              left: r.left,
-              top: r.top,
-              right: r.right,
-              bottom: r.bottom,
+              left: e.clientX,
+              top: e.clientY,
+              right: e.clientX,
+              bottom: e.clientY,
             });
           }}
         >{tabLabelInPane(t, pane.tabs)}</span>
@@ -774,23 +820,86 @@
         bind:this={paneMenu}
         bind:open={paneMenuOpen}
         width={220}
-        height={140}
+        height={110}
+      >
+        <li>
+          <button role="menuitem" onclick={doReloadPane}>
+            <RefreshCw size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span>Reload</span>
+          </button>
+        </li>
+        <li>
+          <button role="menuitem" onclick={doToggleInspector}>
+            <PanelRight size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span>Toggle Web Inspector</span>
+          </button>
+        </li>
+      </HamburgerMenu>
+      <HamburgerMenu
+        bind:this={paneContextMenu}
+        bind:open={paneContextMenuOpen}
+        showTrigger={false}
+        width={250}
+        height={320}
       >
         {#if splitsAllowed}
           <li>
+            <button role="menuitem" onclick={onSplitLeft}>
+              <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
+              <span>Split left</span>
+            </button>
+          </li>
+          <li>
             <button role="menuitem" onclick={onSplitRight}>
-              <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
+              <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
               <span>Split right</span>
             </button>
           </li>
           <li>
+            <button role="menuitem" onclick={onSplitUp}>
+              <ArrowUp size={16} strokeWidth={1.75} aria-hidden="true" />
+              <span>Split up</span>
+            </button>
+          </li>
+          <li>
             <button role="menuitem" onclick={onSplitDown}>
-              <SquareSplitVertical size={16} strokeWidth={1.75} aria-hidden="true" />
+              <ArrowDown size={16} strokeWidth={1.75} aria-hidden="true" />
               <span>Split down</span>
             </button>
           </li>
           <li class="sep" role="separator"></li>
         {/if}
+        <li>
+          <button role="menuitem" onclick={doSelectNextPane}>
+            <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span class="menu-row-label">Next pane</span>
+            <span class="menu-row-chord">{chordLabel("app.pane.next")}</span>
+          </button>
+        </li>
+        <li>
+          <button role="menuitem" onclick={doSelectPrevPane}>
+            <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span class="menu-row-label">Previous pane</span>
+            <span class="menu-row-chord">{chordLabel("app.pane.prev")}</span>
+          </button>
+        </li>
+        <li class="sep" role="separator"></li>
+        <li class="menu-label">
+          <Palette size={16} strokeWidth={1.75} aria-hidden="true" />
+          <span>Focus border color</span>
+        </li>
+        {#each paneFocusColors as color}
+          <li>
+            <button role="menuitem" onclick={() => doSetFocusColor(color)}>
+              <span class={`color-dot ${color}`} aria-hidden="true"></span>
+              <span>{color}</span>
+              {#if focusColorForPane(pane.id) === color}
+                <Check size={14} strokeWidth={2} aria-hidden="true" />
+              {/if}
+            </button>
+          </li>
+        {/each}
+        <li class="sep" role="separator"></li>
         <li>
           <button role="menuitem" onclick={onClosePane}>
             <X size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -808,8 +917,8 @@
       <div
         class="placeholder"
         aria-label="no tab open"
-        onclick={openEmptyPaneMenuAt}
-        oncontextmenu={onEmptyPaneContextMenu}
+        onclick={() => setActivePane(pane.id)}
+        oncontextmenu={openPaneContextAt}
         role="presentation"
       >
         <div class="placeholder-stack">
@@ -896,7 +1005,7 @@
                 role="menuitem"
                 onclick={() => {
                   emptyPaneMenu?.close();
-                  splitActive("row");
+                  splitPane(pane.id, "row", "after");
                 }}
               >
                 <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -909,7 +1018,7 @@
                 role="menuitem"
                 onclick={() => {
                   emptyPaneMenu?.close();
-                  splitActive("column");
+                  splitPane(pane.id, "column", "after");
                 }}
               >
                 <SquareSplitVertical size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -949,6 +1058,9 @@
     background: var(--bg);
     color: var(--text);
   }
+  .pane[data-focus-color="blue"] { --pane-active-focus: var(--pane-focus); }
+  .pane[data-focus-color="green"] { --pane-active-focus: #22c55e; }
+  .pane[data-focus-color="pink"] { --pane-active-focus: #ff5fb7; }
   /* Inset glow rather than just a border-color swap: 2px reads
      clearly on both light and dark canvases, and the inset stays
      inside the pane's own box so the surrounding layout doesn't
@@ -956,8 +1068,8 @@
      `.pane` keeps the box dimensions stable; this shadow paints
      over the inside edge. */
   .pane.focused {
-    border-color: var(--pane-focus);
-    box-shadow: inset 0 0 0 2px var(--pane-focus);
+    border-color: var(--pane-active-focus);
+    box-shadow: inset 0 0 0 2px var(--pane-active-focus);
   }
   /* iTerm-style strip: a dark bar with no per-tab dividers. The
      active tab is a rounded pill sitting on the bar rather than a
@@ -1076,6 +1188,23 @@
     flex-shrink: 0;
   }
   .actions { margin-left: auto; display: flex; align-items: center; padding-left: 4px; }
+  :global(.hamburger-menu .menu-label) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+  :global(.hamburger-menu .color-dot) {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px var(--border);
+  }
+  :global(.hamburger-menu .color-dot.blue) { background: var(--pane-focus); }
+  :global(.hamburger-menu .color-dot.green) { background: #22c55e; }
+  :global(.hamburger-menu .color-dot.pink) { background: #ff5fb7; }
   .editor-wrap {
     position: relative;
     flex: 1;

@@ -105,3 +105,52 @@ The five pieces share machinery. Suggested order:
 
 Standard. Pre-push gate green before commit-readiness append.
 Fire `alex/event-fullstack-architect.md` (type `poke`).
+
+## 2026-05-18 17:28 BST — specialist review requested
+
+Implemented the pane/menu pass for `fullstack-6`.
+
+Changed files:
+
+* `crates/chan/src/main.rs`
+* `web/src/App.svelte`
+* `web/src/components/FileEditorTab.svelte`
+* `web/src/components/FileTree.svelte`
+* `web/src/components/Pane.svelte`
+* `web/src/components/TerminalRichPrompt.svelte`
+* `web/src/state/shortcuts.ts`
+* `web/src/state/store.svelte.ts`
+* `web/src/state/tabs.svelte.ts`
+* `web/src/state/tabs.test.ts`
+
+What changed:
+
+* B15 click semantics: left-click selects only; right-click opens pane/tab menus.
+* Pane context menu now owns structural actions: split left/right/up/down,
+  close pane, next/previous pane, and focus-border color.
+* Pane hamburger now owns reload and web-inspector toggle.
+* Doc tab right-click menu now includes close, close others, close all, copy
+  path, show in file browser, and reopen closed tab.
+* Per-pane focus-border color is stored with the pane layout state and restored
+  with the serialized layout.
+* Web next/previous pane shortcuts moved to `Cmd+Alt+[` / `Cmd+Alt+]`; native
+  remains `Cmd+[` / `Cmd+]`.
+* Rich prompt right-click menu can toggle rendered/source mode and the style
+  toolbar.
+* B22 defensive cleanup clears stale directory loading state after Copy Path.
+
+Verification:
+
+* `npm run check` from `web/`
+* `npm run test -- tabs TerminalRichPrompt` from `web/`
+* `npm run build` from `web/`
+* `cargo check -p chan`
+* `scripts/pre-push`
+
+Notes:
+
+* No manual desktop walkthrough performed in this lane.
+* Focus color persists with the serialized pane layout/session state. If
+  Architect requires this specifically in global server preferences rather than
+  pane layout state, that needs a follow-up design call because pane ids are
+  session-local.

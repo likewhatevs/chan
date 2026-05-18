@@ -53,6 +53,9 @@
   import {
     layout,
     canReopenClosedTab,
+    closeOtherTabsInPane,
+    closeTab,
+    closeTabsInPane,
     reopenClosedTab,
     setMode,
     setTabCaret,
@@ -224,6 +227,33 @@
   function doReopenClosedTab(): void {
     closeTabMenu();
     reopenClosedTab();
+  }
+
+  function paneIdForTab(): string | null {
+    for (const [paneId, node] of Object.entries(layout.nodes)) {
+      if (node.kind === "leaf" && node.tabs.some((candidate) => candidate.id === tab.id)) {
+        return paneId;
+      }
+    }
+    return null;
+  }
+
+  function doCloseTab(): void {
+    closeTabMenu();
+    const paneId = paneIdForTab();
+    if (paneId) void closeTab(paneId, tab.id);
+  }
+
+  function doCloseOthers(): void {
+    closeTabMenu();
+    const paneId = paneIdForTab();
+    if (paneId) void closeOtherTabsInPane(paneId, tab.id);
+  }
+
+  function doCloseAll(): void {
+    closeTabMenu();
+    const paneId = paneIdForTab();
+    if (paneId) void closeTabsInPane(paneId);
   }
 
   function parentPath(path: string): string {
@@ -609,6 +639,27 @@
           </span>
           <span class="mbtn-label">New File</span>
           <span class="mbtn-chord">{chordLabel("app.file.new")}</span>
+        </button>
+        <button class="mbtn" onclick={doCloseTab}>
+          <span class="mbtn-icon">
+            <Square size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Close</span>
+          <span class="mbtn-chord">{chordLabel("app.tab.close")}</span>
+        </button>
+        <button class="mbtn" onclick={doCloseOthers}>
+          <span class="mbtn-icon">
+            <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Close others</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <button class="mbtn" onclick={doCloseAll}>
+          <span class="mbtn-icon">
+            <SquareSplitVertical size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Close all</span>
+          <span class="mbtn-chord"></span>
         </button>
         <button
           class="mbtn"

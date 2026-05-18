@@ -227,6 +227,7 @@ export type TerminalRichPromptState = {
   heightPx?: number;
   open?: boolean;
   mode?: "wysiwyg" | "source";
+  styleToolbarOpen?: boolean;
 };
 
 export type Tab = FileTab | TerminalTab;
@@ -326,7 +327,10 @@ export type Pane = {
   id: string;
   tabs: Tab[];
   activeTabId: string | null;
+  focusColor?: PaneFocusColor;
 };
+
+export type PaneFocusColor = "blue" | "green" | "pink";
 
 export type Split = {
   id: string;
@@ -356,6 +360,7 @@ export const layout = $state<{
       id: id("pane"),
       tabs: [],
       activeTabId: null,
+      focusColor: "blue",
     };
     return {
       rootId: pane.id,
@@ -913,6 +918,18 @@ export function selectNextPane(): void {
   layout.activePaneId = panes[(idx + 1) % panes.length]!;
 }
 
+export function focusColorForPane(paneId: string): PaneFocusColor {
+  const n = layout.nodes[paneId];
+  if (!n || n.kind !== "leaf") return "blue";
+  return n.focusColor ?? "blue";
+}
+
+export function setPaneFocusColor(paneId: string, color: PaneFocusColor): void {
+  const n = layout.nodes[paneId];
+  if (!n || n.kind !== "leaf") return;
+  n.focusColor = color;
+}
+
 export function closeTab(
   paneId: string,
   tabId: string,
@@ -960,6 +977,38 @@ export async function closeAllTabs(opts?: CloseTabsOptions): Promise<void> {
     node.tabs.length = 0;
     node.activeTabId = null;
   }
+}
+
+export async function closeOtherTabsInPane(
+  paneId: string,
+  keepTabId: string,
+  opts?: CloseTabsOptions,
+): Promise<void> {
+  const p = pane(paneId);
+  const closing = p.tabs.filter((t) => t.id !== keepTabId);
+  if (closing.length === 0) return;
+  if (!(await confirmCloseTabs(closing, opts))) return;
+  for (const tab of closing) {
+    if (tab.kind === "terminal") terminalCloseSinks.get(tab.id)?.();
+    rememberClosedTab(paneId, tab);
+  }
+  p.tabs = p.tabs.filter((t) => t.id === keepTabId);
+  p.activeTabId = p.tabs[0]?.id ?? null;
+}
+
+export async function closeTabsInPane(
+  paneId: string,
+  opts?: CloseTabsOptions,
+): Promise<void> {
+  const p = pane(paneId);
+  if (!(await confirmCloseTabs(p.tabs, opts))) return;
+  for (const tab of p.tabs) {
+    if (tab.kind === "terminal") terminalCloseSinks.get(tab.id)?.();
+    rememberClosedTab(paneId, tab);
+  }
+  p.tabs.length = 0;
+  p.activeTabId = null;
+  if (paneId !== layout.rootId) collapseEmptyPane(paneId);
 }
 
 /// "Close pane" button. Two cases:
@@ -1025,6 +1074,7 @@ function cloneTab(src: Tab): Tab {
             heightPx: src.richPrompt.heightPx,
             open: src.richPrompt.open,
             mode: src.richPrompt.mode,
+            styleToolbarOpen: src.richPrompt.styleToolbarOpen,
           }
         : undefined,
     };
@@ -1127,13 +1177,22 @@ export function canSplit(): boolean {
 }
 
 export function splitActive(direction: "row" | "column"): void {
+  splitPane(layout.activePaneId, direction, "after");
+}
+
+export function splitPane(
+  paneId: string,
+  direction: "row" | "column",
+  placement: "before" | "after" = "after",
+): void {
   if (!canSplit()) return;
-  const original = activePane();
+  const original = pane(paneId);
   const newPane: LeafNode = {
     kind: "leaf",
     id: id("pane"),
     tabs: [],
     activeTabId: null,
+    focusColor: "blue",
   };
   // Find parent of original so we can replace original with a new split.
   const entries = Object.values(layout.nodes);
@@ -1144,8 +1203,8 @@ export function splitActive(direction: "row" | "column"): void {
     kind: "split",
     id: id("split"),
     direction,
-    a: original.id,
-    b: newPane.id,
+    a: placement === "before" ? newPane.id : original.id,
+    b: placement === "before" ? original.id : newPane.id,
     ratio: 0.5,
   };
   layout.nodes[newPane.id] = newPane;
@@ -1463,8 +1522,22 @@ type SerTab = {
   rpm?: "w" | "s";
 };
 type SerLeaf = { k: "l"; t: SerTab[]; f?: 1 };
+type SerLeafColor = "g" | "p";
+type SerLeafWithColor = SerLeaf & { pc?: SerLeafColor };
 type SerSplit = { k: "s"; d: "r" | "c"; a: SerNode; b: SerNode; r?: number };
-type SerNode = SerLeaf | SerSplit;
+type SerNode = SerLeafWithColor | SerSplit;
+
+function serializePaneColor(color: PaneFocusColor | undefined): { pc?: SerLeafColor } {
+  if (color === "green") return { pc: "g" };
+  if (color === "pink") return { pc: "p" };
+  return {};
+}
+
+function restorePaneColor(color: SerLeafColor | undefined): PaneFocusColor {
+  if (color === "g") return "green";
+  if (color === "p") return "pink";
+  return "blue";
+}
 
 /// Walk the layout starting at `nodeId`, producing a serializable tree.
 function serializeNode(
@@ -1526,6 +1599,7 @@ function serializeNode(
       k: "l",
       t: tabs,
       ...(n.id === layout.activePaneId ? { f: 1 as const } : {}),
+      ...serializePaneColor(n.focusColor),
     };
   }
   const a = serializeNode(n.a, opts);
@@ -1578,6 +1652,7 @@ export async function restoreLayout(
         id: id("pane"),
         tabs: [],
         activeTabId: null,
+        focusColor: restorePaneColor(node.pc),
       };
       for (const sertab of node.t) {
         const kind = sertab.k ?? "f";

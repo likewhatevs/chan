@@ -450,6 +450,12 @@ export async function loadTreeDir(dir: string): Promise<void> {
   }
 }
 
+export function clearTreeLoadingForPath(path: string): void {
+  const { [path]: _done, ...rest } = tree.loadingDirs;
+  tree.loadingDirs = rest;
+  if (Object.keys(rest).length === 0) tree.loading = false;
+}
+
 function sortTreeEntries(entries: TreeEntry[]): TreeEntry[] {
   return [...entries].sort((a, b) => {
     if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;

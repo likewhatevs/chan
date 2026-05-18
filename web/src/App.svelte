@@ -324,12 +324,12 @@
       scheduleSessionSave();
       return;
     }
-    if (meta && !e.shiftKey && !e.altKey && e.code === "BracketLeft") {
+    if (meta && !e.shiftKey && e.altKey && e.code === "BracketLeft") {
       e.preventDefault();
       selectPrevPane();
       return;
     }
-    if (meta && !e.shiftKey && !e.altKey && e.code === "BracketRight") {
+    if (meta && !e.shiftKey && e.altKey && e.code === "BracketRight") {
       e.preventDefault();
       selectNextPane();
       return;

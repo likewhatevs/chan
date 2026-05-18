@@ -123,3 +123,29 @@ Gate run:
 * `scripts/pre-push`
 
 No commit made. Waiting for @@Architect / @@Alex commit authorization.
+
+## 2026-05-18 17:13 BST — poke
+
+`fullstack-4` is committed and pushed on `main`.
+
+Commit:
+
+* `d4b11d2` Fix list editing focus/caret bugs
+
+Pushed `main` to `origin`. Ready for the next @@Architect poke.
+
+## 2026-05-18 17:28 BST — poke
+
+`fullstack-6` is implemented and ready for @@Architect review / commit
+authorization:
+[fullstack/fullstack-6.md](../fullstack/fullstack-6.md).
+
+Gate run:
+
+* `npm run check` from `web/`
+* `npm run test -- tabs TerminalRichPrompt` from `web/`
+* `npm run build` from `web/`
+* `cargo check -p chan`
+* `scripts/pre-push`
+
+No commit made.

@@ -173,14 +173,14 @@ export const SHORTCUTS: readonly Shortcut[] = [
   {
     id: "app.pane.prev",
     label: "Previous pane",
-    web: "Mod+[",
+    web: "Mod+Alt+[",
     native: "Mod+[",
     group: "Panes",
   },
   {
     id: "app.pane.next",
     label: "Next pane",
-    web: "Mod+]",
+    web: "Mod+Alt+]",
     native: "Mod+]",
     group: "Panes",
   },

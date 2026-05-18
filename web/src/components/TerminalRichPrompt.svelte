@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FilePlus, GripHorizontal, Send, X } from "lucide-svelte";
+  import { Code2, FilePlus, GripHorizontal, Pilcrow, Send, Type, X } from "lucide-svelte";
   import Source from "../editor/Source.svelte";
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import StyleToolbar from "./StyleToolbar.svelte";
@@ -38,6 +38,20 @@
 
   function setMode(next: "wysiwyg" | "source"): void {
     prompt.mode = next;
+  }
+
+  function toolbarOpen(): boolean {
+    return prompt.styleToolbarOpen !== false;
+  }
+
+  function toggleMode(): void {
+    prompt.mode = mode() === "source" ? "wysiwyg" : "source";
+    menu = null;
+  }
+
+  function toggleToolbar(): void {
+    prompt.styleToolbarOpen = !toolbarOpen();
+    menu = null;
   }
 
   function submit(): void {
@@ -83,9 +97,7 @@
   }
 
   function onContextMenu(e: MouseEvent): void {
-    const target = e.target as HTMLElement | null;
     e.stopPropagation();
-    if (target?.closest(".composer-editor")) return;
     e.preventDefault();
     menu = { x: e.clientX, y: e.clientY };
   }
@@ -147,14 +159,16 @@
     <GripHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
   </button>
   <header>
-    <StyleToolbar
-      wysiwyg={wysiwygRef}
-      {selVer}
-      disabled={mode() === "source"}
-      floating={false}
-      mode={mode()}
-      onModeToggle={setMode}
-    />
+    {#if toolbarOpen()}
+      <StyleToolbar
+        wysiwyg={wysiwygRef}
+        {selVer}
+        disabled={mode() === "source"}
+        floating={false}
+        mode={mode()}
+        onModeToggle={setMode}
+      />
+    {/if}
     <div class="spacer"></div>
     <button type="button" class="icon-btn" onclick={newFileFromHere} title="New file from here" aria-label="New file from here">
       <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -186,6 +200,19 @@
   </div>
   {#if menu}
     <div class="ctx" style:left={`${menu.x}px`} style:top={`${menu.y}px`}>
+      <button type="button" onclick={toggleMode}>
+        {#if mode() === "source"}
+          <Pilcrow size={15} strokeWidth={1.75} aria-hidden="true" />
+          <span>Show rendered</span>
+        {:else}
+          <Code2 size={15} strokeWidth={1.75} aria-hidden="true" />
+          <span>Show source code</span>
+        {/if}
+      </button>
+      <button type="button" onclick={toggleToolbar}>
+        <Type size={15} strokeWidth={1.75} aria-hidden="true" />
+        <span>{toolbarOpen() ? "Hide style toolbar" : "Show style toolbar"}</span>
+      </button>
       <button type="button" onclick={newFileFromHere}>
         <FilePlus size={15} strokeWidth={1.75} aria-hidden="true" />
         <span>New File from here</span>
