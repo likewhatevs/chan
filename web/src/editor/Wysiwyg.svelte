@@ -67,6 +67,7 @@
   import type { FindAdapter } from "./find";
   import { breathingRoom } from "./breathing_room";
   import { listGuideVisibility } from "./extensions/list_guide_visibility";
+  import { externalLinkClickHandler } from "./external_links";
   import {
     removeTrailingWhitespace,
     toggleCodeBlocks,
@@ -343,7 +344,7 @@
         // tracks the editor's selection state directly and clears
         // on every selection change, which fixes the
         // image/list-block residuals reported in
-        // [frontend-2.md](../../chan-pre-release-phase-3/frontend-2.md).
+        // [frontend-2.md](../../docs/journals/phase-3/frontend-2.md).
         drawSelection(),
         breathingRoom(),
         listGuideVisibility(),
@@ -352,6 +353,7 @@
         tagDecorations({ onTagClick }),
         mentionDecorations({ onMentionClick }),
         dateDecorations(),
+        externalLinkClickHandler(),
         wikiLinkDecorations({
           onWikiClick,
           getCurrentPath: () => currentPath,

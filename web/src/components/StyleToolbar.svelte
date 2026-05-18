@@ -25,6 +25,18 @@
   // up. Owner re-emits selVer from the editor's selectionChange
   // callback so this toolbar reflects the live cursor position.
 
+  import {
+    Bold,
+    Code2,
+    Image,
+    Italic,
+    Link,
+    List,
+    ListOrdered,
+    ListTodo,
+    Minus,
+    Strikethrough,
+  } from "lucide-svelte";
   import type Wysiwyg from "../editor/Wysiwyg.svelte";
   import type { BlockKind } from "../editor/commands/format";
 
@@ -282,7 +294,7 @@
       onmousedown={onMouseDownPin}
       onmouseup={onMouseUpUnpin}
       onclick={() => wysiwyg?.toggleBold()}
-    ><b>B</b></button>
+    ><Bold size={15} strokeWidth={1.9} aria-hidden="true" /></button>
     <button
       class="fbtn"
       class:on={isItalic}
@@ -292,7 +304,7 @@
       onmousedown={onMouseDownPin}
       onmouseup={onMouseUpUnpin}
       onclick={() => wysiwyg?.toggleItalic()}
-    ><i>I</i></button>
+    ><Italic size={15} strokeWidth={1.9} aria-hidden="true" /></button>
     <button
       class="fbtn"
       class:on={isStrike}
@@ -302,7 +314,7 @@
       onmousedown={onMouseDownPin}
       onmouseup={onMouseUpUnpin}
       onclick={() => wysiwyg?.toggleStrike()}
-    ><s>S</s></button>
+    ><Strikethrough size={15} strokeWidth={1.9} aria-hidden="true" /></button>
     <button
       class="fbtn"
       class:on={isInlineCode}
@@ -312,7 +324,7 @@
       onmousedown={onMouseDownPin}
       onmouseup={onMouseUpUnpin}
       onclick={() => wysiwyg?.toggleInlineCode()}
-    ><code>{`<>`}</code></button>
+    ><Code2 size={15} strokeWidth={1.9} aria-hidden="true" /></button>
     <button
       class="fbtn"
       class:on={isLink}
@@ -322,7 +334,7 @@
       onmousedown={onMouseDownPin}
       onmouseup={onMouseUpUnpin}
       onclick={() => wysiwyg?.toggleLink()}
-    >🔗</button>
+    ><Link size={15} strokeWidth={1.9} aria-hidden="true" /></button>
     <button
       class="fbtn"
       class:on={isBulletList}
@@ -332,7 +344,7 @@
       onmousedown={onMouseDownPin}
       onmouseup={onMouseUpUnpin}
       onclick={() => wysiwyg?.toggleBulletList()}
-    >•</button>
+    ><List size={15} strokeWidth={1.9} aria-hidden="true" /></button>
     <button
       class="fbtn"
       class:on={isOrderedList}
@@ -342,7 +354,7 @@
       onmousedown={onMouseDownPin}
       onmouseup={onMouseUpUnpin}
       onclick={() => wysiwyg?.toggleOrderedList()}
-    >1.</button>
+    ><ListOrdered size={15} strokeWidth={1.9} aria-hidden="true" /></button>
     <button
       class="fbtn"
       class:on={isTaskList}
@@ -352,7 +364,7 @@
       onmousedown={onMouseDownPin}
       onmouseup={onMouseUpUnpin}
       onclick={() => wysiwyg?.toggleTaskList()}
-    >☐</button>
+    ><ListTodo size={15} strokeWidth={1.9} aria-hidden="true" /></button>
     <button
       class="fbtn"
       title="horizontal rule (insert ---)"
@@ -361,7 +373,7 @@
       onmousedown={onMouseDownPin}
       onmouseup={onMouseUpUnpin}
       onclick={() => wysiwyg?.insertHorizontalRule()}
-    >―</button>
+    ><Minus size={15} strokeWidth={1.9} aria-hidden="true" /></button>
     {#if showImage}
       <button
         class="fbtn"
@@ -371,7 +383,7 @@
         onmousedown={onMouseDownPin}
         onmouseup={onMouseUpUnpin}
         onclick={() => wysiwyg?.insertImage()}
-      >🖼</button>
+      ><Image size={15} strokeWidth={1.9} aria-hidden="true" /></button>
     {/if}
     </div>
   {/if}
@@ -558,13 +570,14 @@
     border-color: var(--btn-hover);
     color: var(--text);
   }
+  .fbtn :global(svg) {
+    flex: 0 0 auto;
+  }
   .block-kind:disabled,
   .fbtn:disabled {
     cursor: default;
     opacity: 0.55;
   }
-  .fbtn b, .fbtn i, .fbtn s, .fbtn code { font-size: 13px; }
-  .fbtn code { font-family: ui-monospace, monospace; }
 
   @media (prefers-reduced-motion: reduce) {
     .style-toolbar,
