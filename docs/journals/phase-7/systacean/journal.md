@@ -94,3 +94,31 @@ Verification:
 
 Known gap: @@WebtestB still needs to re-run the 8801 / 8810 drift
 repro after the patch lands.
+
+## 2026-05-18 17:46 BST - systacean-3 pushed
+
+Committed and pushed `systacean-3`.
+
+Commit:
+
+* `f94c4b5` - Scope SPA shell and asset caching per
+  chan-serve instance
+
+Gate:
+
+* `scripts/pre-push` - passed
+
+Pushed `main` to `origin/main`.
+
+## 2026-05-18 18:11 BST - systacean-6 ready to land
+
+Scoped the SPA bearer token and per-tab session window id storage
+keys by `window.location.origin` plus injected chan prefix, and
+documented the scheme in the static-assets module and design doc.
+
+Verification:
+
+* `cd web && npm run test -- src/api/client.test.ts`
+* `cd web && npm run check`
+* `cd web && npm run test`
+* `scripts/pre-push`

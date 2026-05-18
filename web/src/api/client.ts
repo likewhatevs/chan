@@ -33,6 +33,7 @@ import {
   authToken as transportAuthToken,
   openWatch,
   request,
+  storageScopeKey,
   withTokenQuery as transportWithTokenQuery,
 } from "./transport";
 
@@ -70,11 +71,12 @@ function randomBrowserSessionId(): string {
 
 function browserSessionWindowId(): string | null {
   if (typeof window === "undefined") return null;
+  const key = storageScopeKey(BROWSER_SESSION_WINDOW_KEY);
   try {
-    const existing = window.sessionStorage.getItem(BROWSER_SESSION_WINDOW_KEY);
+    const existing = window.sessionStorage.getItem(key);
     if (existing?.trim()) return existing.trim();
     const generated = randomBrowserSessionId();
-    window.sessionStorage.setItem(BROWSER_SESSION_WINDOW_KEY, generated);
+    window.sessionStorage.setItem(key, generated);
     return generated;
   } catch {
     if (!sessionStorageWarningShown) {

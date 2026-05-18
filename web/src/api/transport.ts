@@ -26,13 +26,13 @@ import { ApiError } from "./errors";
 
 export type WsStatus = "connecting" | "open" | "reconnecting" | "closed";
 
-const TOKEN_KEY = "chan.token";
-
 /// Server URL prefix when `chan serve --prefix=/foo` mounts the
 /// API under a path. Read once at module load from the
 /// `<meta name="chan-prefix">` tag the server injects into the SPA
 /// shell. Empty string when no prefix.
 const PREFIX = readPrefix();
+
+const TOKEN_KEY = storageScopeKey("chan.token");
 
 function readPrefix(): string {
   const m = document.querySelector('meta[name="chan-prefix"]');
@@ -53,6 +53,18 @@ export const SETTINGS_DISABLED = readBoolMeta("chan-settings-disabled");
 function readBoolMeta(name: string): boolean {
   const m = document.querySelector(`meta[name="${name}"]`);
   return m?.getAttribute("content")?.trim() === "1";
+}
+
+/// Browser storage should already be per-origin, but the Chrome
+/// automation path used by our multi-port tests has shown same-host
+/// ports bleeding through a reused tab. Include the current origin
+/// and server prefix in every chan storage key so a leaked storage
+/// bucket cannot hand one chan-serve instance another instance's
+/// token or window id.
+export function storageScopeKey(base: string): string {
+  if (typeof window === "undefined") return `${base}:server`;
+  const origin = window.location.origin || "unknown-origin";
+  return `${base}:${origin}${PREFIX || "/"}`;
 }
 
 /// Prepend the server URL prefix to an in-app path. Pass paths with
