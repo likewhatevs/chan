@@ -215,3 +215,21 @@ Committed and pushed the survey-reply atomic-write seam.
 Commit:
 
 * `530e30f` - Add terminal event-reply writer
+
+## 2026-05-18 20:56 BST - systacean-10 ready
+
+Verified `systacean-6` storage scoping is not load-bearing for the
+documented warm-cache drift once `systacean-3` cache headers are in
+place. Reverted the storage key namespacing and docs.
+
+Notes:
+
+* [systacean-10.md](systacean-10.md#2026-05-18-2056-bst---verification-and-decision)
+
+Verification:
+
+* `npm run test -- src/api/client.test.ts`
+* `npm run check`
+* `npm run build`
+* `cargo test -p chan-server static_cache_headers --no-default-features`
+* `cargo fmt --check`

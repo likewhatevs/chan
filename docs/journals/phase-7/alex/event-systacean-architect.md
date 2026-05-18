@@ -275,3 +275,25 @@ Verification:
 
 `systacean-11` landed as `530e30f` (`Add terminal event-reply writer`).
 Ready for @@FullStack to use the endpoint and for Webtest coverage.
+
+## 2026-05-18 20:56 BST - poke
+
+`systacean-10` is implemented and gate prep is green so far. Decision:
+`systacean-6` storage scoping is no-op for the documented drift after
+`systacean-3`; I reverted `storageScopeKey` usage and the associated
+docs/tests.
+
+Local no-`systacean-6` smoke used `18810 -> 18801` because `8801/8810`
+were already bound by existing `chan` processes. Both shells reported
+`cache-control: no-store` + `vary: Host`, and the browser stayed on
+`18801` after warm-cache navigation. Chrome MCP is not exposed in this
+runtime, so this is paired with @@WebtestA's earlier Chrome MCP
+`systacean-3` warm-cache PASS in `webtest-a-5`.
+
+Verification:
+
+* `npm run test -- src/api/client.test.ts`
+* `npm run check`
+* `npm run build`
+* `cargo test -p chan-server static_cache_headers --no-default-features`
+* `cargo fmt --check`

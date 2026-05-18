@@ -2,7 +2,6 @@
 
 import { afterEach, describe, expect, test } from "vitest";
 import { sessionPath, sessionWindowId } from "./client";
-import { storageScopeKey } from "./transport";
 
 afterEach(() => {
   window.history.replaceState(null, "", "/");
@@ -13,28 +12,10 @@ describe("sessionWindowId", () => {
   test("uses per-tab sessionStorage without a window id", () => {
     window.history.replaceState(null, "", "/?t=token");
 
-    window.sessionStorage.setItem(
-      storageScopeKey("chan.session.window"),
-      "tab-a1b2c3d4",
-    );
+    window.sessionStorage.setItem("chan.session.window", "tab-a1b2c3d4");
 
     expect(sessionWindowId()).toBe("tab-a1b2c3d4");
     expect(sessionPath()).toBe("/api/session?w=tab-a1b2c3d4");
-  });
-
-  test("keeps browser session ids separate from another origin's key", () => {
-    window.history.replaceState(null, "", "/?t=token-a");
-    window.sessionStorage.setItem(
-      storageScopeKey("chan.session.window"),
-      "tab-lane-a",
-    );
-    window.sessionStorage.setItem(
-      "chan.session.window:http://127.0.0.1:8810/",
-      "tab-lane-b",
-    );
-
-    expect(sessionWindowId()).toBe("tab-lane-a");
-    expect(sessionPath()).toBe("/api/session?w=tab-lane-a");
   });
 
   test("generates and reuses a per-tab sessionStorage id", () => {

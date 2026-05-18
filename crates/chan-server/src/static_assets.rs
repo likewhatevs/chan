@@ -8,11 +8,7 @@
 //! and (when set) `<meta name="chan-settings-disabled">` tags
 //! injected so the frontend transport layer prepends the prefix to
 //! fetch and WebSocket URLs and the Settings entry point can grey
-//! itself out. The frontend also folds `window.location.origin` and
-//! this injected prefix into its browser-storage keys for bearer
-//! tokens and per-tab window ids, so independent `chan serve`
-//! instances on the same host cannot reuse each other's session
-//! routing state.
+//! itself out.
 
 use std::sync::Arc;
 

@@ -1270,15 +1270,6 @@ traversal, link autocomplete, and trash management; a WebSocket
 channel for `WatchEvent`s; and session blob endpoints that proxy
 directly to `put_session`.
 
-The embedded frontend receives its mount prefix through the injected
-`<meta name="chan-prefix">` tag. Browser storage used for request
-bearer tokens and per-tab session window ids is keyed as
-`<base>:<window.location.origin><prefix-or-/>`; it deliberately does
-not use the old global `chan.token` / `chan.session.window` names.
-This keeps two `chan serve` instances on the same host but different
-ports from reusing each other's token or session routing state if a
-browser automation path reuses a storage bucket or cloned tab state.
-
 It depends on `chan-drive` with `default-features = false` and
 forwards `embeddings`, `metal`, `cuda` through its own feature
 gates. `chan-server`'s "embeddings on" UI badge reflects the
