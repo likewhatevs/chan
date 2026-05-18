@@ -4,6 +4,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   __testSetBootstrapHydrated,
   __testApplyOverlaysFromHash,
+  browserOverlay,
+  browserSelection,
   graphOverlay,
   graphReloadSignal,
   onWatchEvent,
@@ -13,6 +15,8 @@ import {
   scheduleSessionSave,
   scopeFsGraphFromHere,
   settingsOverlay,
+  tree,
+  treeExpanded,
 } from "./store.svelte";
 import { layout, type LeafNode, type TerminalTab } from "./tabs.svelte";
 
@@ -62,6 +66,13 @@ afterEach(() => {
   graphOverlay.pendingSelectId = null;
   settingsOverlay.open = false;
   graphReloadSignal.nonce = 0;
+  browserOverlay.open = false;
+  browserSelection.path = null;
+  browserSelection.showDrive = false;
+  tree.loadedDirs = {};
+  tree.loadingDirs = {};
+  tree.dirErrors = {};
+  treeExpanded.map = { "": true };
   window.history.replaceState(null, "", "/");
 });
 
@@ -132,6 +143,44 @@ describe("graph watcher reload signal", () => {
     vi.clearAllTimers();
     fetchSpy.mockRestore();
     vi.useRealTimers();
+  });
+});
+
+describe("window commands", () => {
+  test("open_browser enter expands the target directory", () => {
+    window.history.replaceState(null, "", "/?w=window-a");
+    tree.loadedDirs = { "notes/sub": true };
+
+    onWatchEvent({
+      type: "window_command",
+      window_id: "window-a",
+      command: "open_browser",
+      path: "notes/sub",
+      enter: true,
+    });
+
+    expect(browserOverlay.open).toBe(true);
+    expect(browserSelection.path).toBe("notes/sub");
+    expect(treeExpanded.map[""]).toBe(true);
+    expect(treeExpanded.map["notes"]).toBe(true);
+    expect(treeExpanded.map["notes/sub"]).toBe(true);
+  });
+
+  test("open_browser select keeps file selection behavior", () => {
+    window.history.replaceState(null, "", "/?w=window-a");
+
+    onWatchEvent({
+      type: "window_command",
+      window_id: "window-a",
+      command: "open_browser",
+      path: "notes",
+      select: "notes/photo.png",
+    });
+
+    expect(browserOverlay.open).toBe(true);
+    expect(browserSelection.path).toBe("notes/photo.png");
+    expect(treeExpanded.map[""]).toBe(true);
+    expect(treeExpanded.map["notes"]).toBe(true);
   });
 });
 

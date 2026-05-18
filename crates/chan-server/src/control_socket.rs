@@ -43,7 +43,13 @@ enum WindowCommand {
         path: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         select: Option<String>,
+        #[serde(skip_serializing_if = "is_false")]
+        enter: bool,
     },
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Serialize)]
@@ -197,6 +203,7 @@ fn open_path(
             command: WindowCommand::OpenBrowser {
                 path: String::new(),
                 select: None,
+                enter: true,
             },
         };
         let raw =
@@ -210,6 +217,7 @@ fn open_path(
             WindowCommand::OpenBrowser {
                 path: rel.clone(),
                 select: None,
+                enter: true,
             }
         } else if rel.ends_with(".md") {
             WindowCommand::OpenFile { path: rel.clone() }
@@ -218,6 +226,7 @@ fn open_path(
             WindowCommand::OpenBrowser {
                 path: parent,
                 select: Some(rel.clone()),
+                enter: false,
             }
         }
     } else if rel.ends_with(".md") {
@@ -331,5 +340,37 @@ mod tests {
         assert_eq!(frame["window_id"], "window-a");
         assert_eq!(frame["command"], "open_file");
         assert_eq!(frame["path"], "notes/new.md");
+    }
+
+    #[test]
+    fn open_path_enters_existing_directory() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("drive root");
+        std::fs::create_dir_all(root.path().join("notes/sub")).expect("sub dir");
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_drive(root.path(), Some("test".into()))
+            .expect("register drive");
+        let drive = lib.open_drive(root.path()).expect("open drive");
+        let self_writes = crate::self_writes::SelfWrites::new();
+        let (tx, mut rx) = broadcast::channel(4);
+
+        let message = open_path(
+            &drive,
+            &self_writes,
+            "window-a",
+            &root.path().join("notes/sub"),
+            &tx,
+        )
+        .expect("open path");
+
+        assert!(message.contains("notes/sub"));
+        let frame: Value = serde_json::from_str(&rx.try_recv().expect("window command"))
+            .expect("window command json");
+        assert_eq!(frame["type"], "window_command");
+        assert_eq!(frame["window_id"], "window-a");
+        assert_eq!(frame["command"], "open_browser");
+        assert_eq!(frame["path"], "notes/sub");
+        assert_eq!(frame["select"], Value::Null);
+        assert_eq!(frame["enter"], true);
     }
 }

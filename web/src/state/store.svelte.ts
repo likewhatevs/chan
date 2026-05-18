@@ -300,6 +300,7 @@ type WindowCommandFrame =
       command: "open_browser";
       path: string;
       select?: string | null;
+      enter?: boolean | null;
     };
 
 async function handleWindowCommand(raw: unknown): Promise<void> {
@@ -312,7 +313,11 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
   }
   if (frame.command === "open_browser" && typeof frame.path === "string") {
     browserOverlay.open = true;
-    revealAndSelect(typeof frame.select === "string" ? frame.select : frame.path);
+    if (frame.enter === true) {
+      revealAndEnterDirectory(frame.path);
+    } else {
+      revealAndSelect(typeof frame.select === "string" ? frame.select : frame.path);
+    }
     ui.status = frame.select ? `selected ${frame.select}` : `opened ${frame.path || "/"}`;
     scheduleSessionSave();
   }
@@ -1711,6 +1716,23 @@ export function revealAndSelect(path: string): void {
   browserSelection.showDrive = false;
   // The expansion change counts as a user action — persist it so
   // the next launch keeps the new entry in view.
+  persistTreeExpanded();
+}
+
+/// Enter a directory from an external window command. This expands the
+/// target directory itself so lazy child loading reveals that directory's
+/// contents, not just the parent chain that makes the directory row visible.
+export function revealAndEnterDirectory(path: string): void {
+  const parts = path.split("/").filter(Boolean);
+  let acc = "";
+  treeExpanded.map[""] = true;
+  for (const part of parts) {
+    acc = acc ? `${acc}/${part}` : part;
+    treeExpanded.map[acc] = true;
+  }
+  browserSelection.path = path || null;
+  browserSelection.showDrive = false;
+  if (path) void loadTreeDir(path);
   persistTreeExpanded();
 }
 
