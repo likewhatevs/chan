@@ -168,3 +168,14 @@ Commit: `Add terminal-scoped event watcher`.
 Verification:
 
 * `scripts/pre-push`
+
+## 2026-05-18 20:18 BST - systacean-8 B19 follow-up investigated
+
+Investigated @@WebtestB's B19 reload/scrollback FAIL and left a
+candidate server-side reattach patch uncommitted pending follow-up
+task / commit clearance.
+
+Notes:
+
+* [systacean-8.md](systacean-8.md#systacean-follow-up--2026-05-18-2018-bst)
+* Verification on candidate patch: `scripts/pre-push`

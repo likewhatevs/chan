@@ -244,3 +244,9 @@ Online, starting
 
 `systacean-9` landed; notes and verification in
 [../systacean/systacean-9.md](../systacean/systacean-9.md#2026-05-18-1935-bst---ready-to-land).
+
+## 2026-05-18 20:18 BST - poke
+
+Investigated the `systacean-8` B19 FAIL. Candidate patch is
+uncommitted and gate-green; diagnosis and verification in
+[../systacean/systacean-8.md](../systacean/systacean-8.md#systacean-follow-up--2026-05-18-2018-bst).

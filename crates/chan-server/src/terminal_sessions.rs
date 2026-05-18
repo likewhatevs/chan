@@ -188,7 +188,44 @@ impl Registry {
                 return Ok(handle);
             }
         }
+        if let Some(handle) =
+            self.attach_by_identity(opts.window_id.as_deref(), opts.tab_name.as_deref(), since)
+        {
+            return Ok(handle);
+        }
         self.create(opts)
+    }
+
+    fn attach_by_identity(
+        &self,
+        window_id: Option<&str>,
+        tab_name: Option<&str>,
+        since: Option<u64>,
+    ) -> Option<AttachHandle> {
+        let window_id = window_id?.trim();
+        let tab_name = tab_name?.trim();
+        if window_id.is_empty() || tab_name.is_empty() {
+            return None;
+        }
+        let session = {
+            let sessions = self.sessions.lock().expect("terminal registry poisoned");
+            let mut matches = sessions.values().filter(|session| {
+                !session.closed.load(Ordering::Relaxed)
+                    && session.window_id.as_deref() == Some(window_id)
+                    && session.tab_name.as_deref() == Some(tab_name)
+            });
+            let first = matches.next()?.clone();
+            if matches.next().is_some() {
+                tracing::warn!(
+                    window_id,
+                    tab_name,
+                    "refusing terminal reattach by ambiguous window/tab identity"
+                );
+                return None;
+            }
+            first
+        };
+        Some(session.attach(since))
     }
 
     pub fn close(&self, id: &str, reason: CloseReason) -> bool {
@@ -380,6 +417,7 @@ impl Drop for Registry {
 struct Session {
     id: String,
     tab_name: Option<String>,
+    window_id: Option<String>,
     drive_root: PathBuf,
     child_pid: Option<u32>,
     command_tx: std::sync::mpsc::Sender<PtyCommand>,
@@ -423,7 +461,8 @@ impl Session {
         if let Some(tab_name) = tab_name.as_deref() {
             cmd.env("CHAN_TAB_NAME", tab_name);
         }
-        if let Some(window_id) = opts.window_id {
+        let window_id = opts.window_id;
+        if let Some(window_id) = window_id.as_deref() {
             cmd.env("CHAN_WINDOW_ID", window_id);
         }
         if let Some(socket_path) = config.control_socket_path.as_deref() {
@@ -447,6 +486,7 @@ impl Session {
         let session = Arc::new(Self {
             id,
             tab_name,
+            window_id,
             drive_root: config.drive_root.clone(),
             child_pid,
             command_tx,
@@ -898,6 +938,7 @@ mod tests {
         Arc::new(Session {
             id: "test-session".to_string(),
             tab_name: None,
+            window_id: None,
             drive_root: PathBuf::from("/"),
             child_pid: None,
             command_tx,
@@ -1072,6 +1113,83 @@ mod tests {
             })
             .unwrap_err();
         assert!(matches!(err, CreateError::Capped));
+    }
+
+    #[test]
+    fn get_or_create_reattaches_by_window_and_tab_name_when_session_id_missing() {
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let first = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: Some("B19v2".into()),
+                window_id: Some("window-a".into()),
+                mcp_env: true,
+                cwd: None,
+            })
+            .unwrap();
+        let first_id = first.id().to_string();
+
+        let second = registry
+            .get_or_create(
+                None,
+                Some(0),
+                CreateOptions {
+                    size: test_size(),
+                    tab_name: Some("B19v2".into()),
+                    window_id: Some("window-a".into()),
+                    mcp_env: true,
+                    cwd: None,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(second.id(), first_id);
+        assert_eq!(registry.len(), 1);
+        registry.close(&first_id, CloseReason::Explicit);
+    }
+
+    #[test]
+    fn get_or_create_does_not_reattach_ambiguous_window_tab_identity() {
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let first = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: Some("dup".into()),
+                window_id: Some("window-a".into()),
+                mcp_env: true,
+                cwd: None,
+            })
+            .unwrap();
+        let second = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: Some("dup".into()),
+                window_id: Some("window-a".into()),
+                mcp_env: true,
+                cwd: None,
+            })
+            .unwrap();
+
+        let third = registry
+            .get_or_create(
+                None,
+                Some(0),
+                CreateOptions {
+                    size: test_size(),
+                    tab_name: Some("dup".into()),
+                    window_id: Some("window-a".into()),
+                    mcp_env: true,
+                    cwd: None,
+                },
+            )
+            .unwrap();
+
+        assert_ne!(third.id(), first.id());
+        assert_ne!(third.id(), second.id());
+        assert_eq!(registry.len(), 3);
+        registry.close(first.id(), CloseReason::Explicit);
+        registry.close(second.id(), CloseReason::Explicit);
+        registry.close(third.id(), CloseReason::Explicit);
     }
 
     #[tokio::test]

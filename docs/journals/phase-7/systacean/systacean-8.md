@@ -122,3 +122,35 @@ Verification:
 * `cd web && npm run test` — passed, 25 files / 228 tests
 * `scripts/pre-push` — first run hit an unrelated transient
   `Too many open files` in a chan-drive test; immediate rerun passed
+
+## @@Systacean follow-up — 2026-05-18 20:18 BST
+
+Investigated @@WebtestB's B19 FAIL from
+[../webtest-b/webtest-b-4.md](../webtest-b/webtest-b-4.md).
+
+Diagnosis:
+
+* The server replay path is still sound: when a WebSocket attach has
+  `session=<id>` and no restored `lastSeq`, `terminalWsPath` sends
+  `since=0`, and chan-server replays the retained ring.
+* The failure class is the reload path that restores the terminal tab
+  from URL hash state but misses the per-window `terminalSessionId`
+  before the terminal component mounts. In that case the browser still
+  has the same `window_id` and tab title, but chan-server treats the
+  WebSocket as a fresh PTY because there is no `session=<id>`.
+
+Candidate patch is uncommitted pending a follow-up task / commit
+clearance:
+
+* Store `window_id` alongside `tab_name` in each terminal session.
+* On `get_or_create`, if the explicit session id is missing/stale,
+  reattach by unique `(window_id, tab_name)` before creating a new PTY.
+* Refuse ambiguous matches, so duplicate names in one window do not
+  attach to the wrong PTY.
+
+Verification on the candidate patch:
+
+* `cargo test -p chan-server terminal_sessions::tests::get_or_create --no-default-features`
+* `cargo test -p chan-server --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `scripts/pre-push`
