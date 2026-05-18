@@ -1,5 +1,5 @@
 // End-to-end import: parse a Google CSV blob, write per-contact
-// markdown files into a chosen drive folder, verify the on-disk
+// markdown files into a chosen drive directory, verify the on-disk
 // shape, then re-run with overwrite vs. skip semantics.
 //
 // Mirrors the smoke.rs pattern: isolated config dir via Library::open_at

@@ -20,13 +20,13 @@ fn file_type_policy_end_to_end() {
         .write_text(
             "notes/intro.md",
             "# Intro\n\nSee ![diagram](../media/diagram.png) and \
-             [whitepaper](../docs/spec.pdf).\n\nMore in notes/notes.txt.\n\n#phase2\n",
+             [whitepaper](../docs/spec.pdf).\n\nMore in notes/notes.txt.\n\n#phase2 @@teammate\n",
         )
         .unwrap();
     drive
         .write_text(
             "notes/notes.txt",
-            "shopping list: bread, milk, walnuts, sourdough #plain-text\n",
+            "shopping list: bread, milk, walnuts, sourdough #plain-text @@ignored\n",
         )
         .unwrap();
 
@@ -187,6 +187,19 @@ fn file_type_policy_end_to_end() {
             .iter()
             .any(|e| e.kind == EdgeKind::Tag && e.dst == "#phase2"),
         "Markdown #tag edge missing; neighbors = {neighbors:?}",
+    );
+    assert!(
+        neighbors
+            .iter()
+            .any(|e| e.kind == EdgeKind::Mention && e.dst == "@@teammate"),
+        "Markdown @@mention edge missing; neighbors = {neighbors:?}",
+    );
+    assert!(
+        !g.neighbors("notes/notes.txt")
+            .unwrap()
+            .iter()
+            .any(|e| e.kind == EdgeKind::Mention && e.dst == "@@ignored"),
+        ".txt @@mention should not be indexed as a graph mention",
     );
 
     let tags = g.tags().unwrap();

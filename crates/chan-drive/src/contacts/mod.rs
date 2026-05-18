@@ -1,7 +1,7 @@
 // Contacts: import third-party contact dumps as markdown notes.
 //
 // One file per contact, written into a caller-chosen directory in
-// the drive. Frontmatter (`chan.kind: contact`) classifies the file
+// the drive. Nested `chan: { kind: contact }` frontmatter classifies the file
 // for downstream consumers (graph builder, editor `@` picker).
 //
 // The on-disk file is fully user-owned the moment it lands. chan

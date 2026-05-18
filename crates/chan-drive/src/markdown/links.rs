@@ -767,8 +767,8 @@ mod tests {
 
     #[test]
     fn rewrite_wiki_target_no_label() {
-        let out = rewrite_one("see [[old]] now", "old", "new/folder");
-        assert_eq!(out.as_deref(), Some("see [[new/folder]] now"));
+        let out = rewrite_one("see [[old]] now", "old", "new/directory");
+        assert_eq!(out.as_deref(), Some("see [[new/directory]] now"));
     }
 
     #[test]

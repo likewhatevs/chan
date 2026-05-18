@@ -238,6 +238,27 @@ Behaviour by class:
 links to rewrite); the graph edge `dst` gets updated regardless
 of target class.
 
+Typed markdown frontmatter is resolved through a `chan.kind`
+registry. In YAML, that means a nested `chan:` map with `kind:`
+inside it:
+
+```yaml
+---
+chan:
+  kind: contact
+---
+```
+
+The dotted `chan.kind` form is the documented path, not a flat
+top-level `kind: chan.contact` key. The only supported entry today
+is `contact`, which stamps a graph node as `Contact` and gives
+server/web callers the `contact` renderer hint; unknown kinds stay
+ordinary markdown files. Semantic reference tokens are markdown-
+only: `#tag` and `@@mention` graph edges are extracted from `.md`
+files and intentionally ignored in `.txt`, so plain notes remain
+searchable/editable without turning incidental prose into graph
+entities.
+
 Extension matching is ASCII case-insensitive. Files whose
 extension is unknown fall back to a basename check against
 well-known textual filenames (Makefile, Dockerfile, LICENSE,
@@ -544,13 +565,13 @@ drive directory, so any `.chan/` activity is foreign noise.
 Imports a third-party contact dump (Google Contacts CSV today,
 vCard / Outlook later) as one markdown note per contact.
 
-On-disk shape: slim YAML frontmatter holding only the chan-
-internal classifier (`kind: contact`, `provider`, `imported_at`,
-`frontmatter_version`, optional `remote_id`); contact data
-(emails, phones, organizations, labels) lives in the body as
-bullet items so a chan editor that doesn't strip frontmatter
-shows a friendly note rather than a YAML dump. Notes from the
-import follow.
+On-disk shape: slim YAML frontmatter holding only top-level
+`aliases` plus the chan-internal `chan:` block (`kind: contact`,
+`provider`, `imported_at`, `frontmatter_version`, optional
+`remote_id`); contact data (emails, phones, organizations, labels)
+lives in the body as bullet items so a chan editor that doesn't
+strip frontmatter shows a friendly note rather than a YAML dump.
+Notes from the import follow.
 
 Indexer reads the frontmatter in `parse_for_graph` to tag the
 corresponding `nodes` row as `kind = 'contact'`. Same row,
@@ -598,12 +619,12 @@ instead of O(N). `GraphView::contacts()` is a convenience wrapper
 for callers that want the full list.
 
 Discovery is content-driven, not directory-driven. Any `.md` file
-whose frontmatter has `chan.kind: contact` (under the `chan:`
-namespace) is classified as `NodeKind::Contact` regardless of
-where it sits in the drive. A user who hand-rolls a contact note
-in their own folder and drops it in is picked up by the next
-indexer pass; the `Contacts/` directory is just the importer's
-default destination, not a discovery requirement.
+whose frontmatter has nested `chan: { kind: contact }` is classified
+as `NodeKind::Contact` regardless of where it sits in the drive. A
+user who hand-rolls a contact note in their own directory and drops
+it in is picked up by the next indexer pass; the `Contacts/`
+directory is just the importer's default destination, not a
+discovery requirement.
 
 Email-aware `@` picker matching is pushed down at v3. The graph
 schema gains a `nodes.emails TEXT` column populated at index time:
@@ -625,10 +646,11 @@ every contact-kind file, and per-file edits update it through
 The chan-llm tool sandbox (and the MCP server it backs) does not
 expose a contacts-aware tool, by design. Agents reach contacts
 through the existing `read_file` / `list_files` / `search_content`
-tools: contact files carry `chan.kind: contact` in frontmatter
-plus the contact's data as readable bullets in the body, and any
-note that wiki-links to a contact creates a graph edge the agent
-can follow via `read_file` on the linked path. Adding a dedicated
+tools: contact files carry nested `chan: { kind: contact }`
+frontmatter plus the contact's data as readable bullets in the
+body, and any note that wiki-links to a contact creates a graph
+edge the agent can follow via `read_file` on the linked path.
+Adding a dedicated
 `list_contacts` / `find_contact` tool would just duplicate
 `Drive::contacts_filtered` over a wire the model already has the
 primitives to traverse.
@@ -1073,7 +1095,7 @@ lets concurrent readers proceed alongside the writer.
 chan-drive stores ZERO files inside the user's drive directory.
 The drive is purely user content (markdown, attachments). This
 makes it safe to drop a drive inside an existing git repo, an
-iCloud / Google Drive / Dropbox folder, or anywhere else. A stray
+iCloud / Google Drive / Dropbox directory, or anywhere else. A stray
 `.chan/` left over from an older install or created by a third-
 party tool is filtered out by `walk_drive` and `watch::dispatch`;
 chan-drive never emits events for it or includes it in
@@ -1133,7 +1155,7 @@ alongside the rest of the per-app state.
 
 User content only: markdown, attachments, whatever the user puts
 there. chan-drive never writes inside the drive root. This is a
-load-bearing invariant for the "drive a git repo / sync folder"
+load-bearing invariant for the "drive a git repo / sync directory"
 story.
 
 ## 7. Error model

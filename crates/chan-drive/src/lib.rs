@@ -56,7 +56,9 @@ pub use drive::{
     BYTES_WRITE_LIMIT, TEXT_WRITE_LIMIT,
 };
 pub use error::{ChanError, Result};
-pub use fs_ops::{classify, FileClass, WalkFilter};
+pub use fs_ops::{
+    classify, classify_path, FileClass, PathClass, PathKind, PathPermission, WalkFilter,
+};
 pub use graph::{
     ContactNode, Edge, EdgeKind, GraphView, HeadingRow, LinkTarget, LinkTargetKind, NodeKind, Tag,
 };

@@ -214,7 +214,7 @@ pub fn drive_subsystem_dirs() -> Vec<PathBuf> {
 /// suggest as a chan drive location. The `suggested_root` is the
 /// concrete directory chan would land its drive in (provider root
 /// joined with "Chan" by convention so iOS / Android Files-app
-/// users see a recognizable folder name across devices).
+/// users see a recognizable directory name across devices).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetectedCloud {
     /// User-facing label for the picker (e.g. "iCloud Drive",

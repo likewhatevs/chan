@@ -1,6 +1,6 @@
 // Persistent vector store. v1 layout: one bincode-serialized file
 // per source file under the per-drive index dir's `embeddings/`
-// subfolder (resolved by `crate::paths::drive_paths`). Filename is
+// subdirectory (resolved by `crate::paths::drive_paths`). Filename is
 // `sha256(rel_path)[..16]` to avoid path-character escaping on
 // disk (Windows in particular).
 //

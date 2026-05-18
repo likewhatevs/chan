@@ -235,7 +235,7 @@ impl Library {
 
     /// Open a drive handle. The drive must already be registered;
     /// callers do `register_drive` first if needed (CLI does both
-    /// in one shot for the "point at a folder and go" path).
+    /// in one shot for the "point at a directory and go" path).
     pub fn open_drive(&self, root: &Path) -> Result<Arc<Drive>> {
         let reg = self.inner.registry.lock().unwrap();
         let entry = reg

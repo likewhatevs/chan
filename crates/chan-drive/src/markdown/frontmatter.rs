@@ -15,6 +15,8 @@ use gray_matter::engine::YAML;
 use gray_matter::Matter;
 use serde::{Deserialize, Serialize};
 
+use crate::graph::NodeKind;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Frontmatter {
     /// Parsed key/value data. `null` if the document had no frontmatter.
@@ -37,6 +39,37 @@ pub fn parse(source: &str) -> Frontmatter {
         find_body_offset(source).unwrap_or(0)
     };
     Frontmatter { data, body_offset }
+}
+
+/// One supported `chan.kind` frontmatter value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChanKindSpec {
+    /// Canonical lowercase `chan.kind` value.
+    pub name: &'static str,
+    /// Graph node kind stamped by the indexer.
+    pub node_kind: NodeKind,
+    /// Renderer hint surfaced to HTTP/web consumers.
+    pub renderer: &'static str,
+}
+
+/// Registry of supported `chan.kind` values. Adding a new kind should
+/// be a table entry first; callers consume the returned spec rather
+/// than branching directly on frontmatter strings.
+pub const CHAN_KIND_REGISTRY: &[ChanKindSpec] = &[ChanKindSpec {
+    name: "contact",
+    node_kind: NodeKind::Contact,
+    renderer: "contact",
+}];
+
+pub fn chan_kind(data: &serde_json::Value) -> Option<ChanKindSpec> {
+    let raw = data
+        .get("chan")
+        .and_then(|v| v.get("kind"))
+        .and_then(|v| v.as_str())?;
+    CHAN_KIND_REGISTRY
+        .iter()
+        .copied()
+        .find(|spec| spec.name.eq_ignore_ascii_case(raw.trim()))
 }
 
 fn find_body_offset(source: &str) -> Option<usize> {
@@ -84,5 +117,22 @@ mod tests {
         let fm = parse(src);
         assert_eq!(fm.data["tags"][0], "a");
         assert_eq!(fm.data["tags"][1], "b");
+    }
+
+    #[test]
+    fn chan_kind_registry_resolves_contact_case_insensitively() {
+        let src = "---\nchan:\n  kind: Contact\n---\n# Alice\n";
+        let fm = parse(src);
+        let spec = chan_kind(&fm.data).expect("contact kind");
+        assert_eq!(spec.name, "contact");
+        assert_eq!(spec.node_kind, NodeKind::Contact);
+        assert_eq!(spec.renderer, "contact");
+    }
+
+    #[test]
+    fn chan_kind_registry_ignores_unknown_kinds() {
+        let src = "---\nchan:\n  kind: task\n---\n# Todo\n";
+        let fm = parse(src);
+        assert!(chan_kind(&fm.data).is_none());
     }
 }

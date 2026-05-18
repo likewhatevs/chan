@@ -657,8 +657,9 @@ impl Drive {
 
     /// One-level directory listing. Use `list_tree` for the
     /// recursive variant. Skips drive-internal noise (`.chan/`,
-    /// `.git/`) at the top level and drops non-regular non-dir
-    /// entries (symlinks, FIFOs, sockets, devices) at every level.
+    /// `.git/`) at the top level and drops special entries (FIFOs,
+    /// sockets, devices) at every level. Symlinks stay visible to
+    /// the browser and are classified by the server-side wire view.
     /// Errors with `ListingTooLarge` past `LIST_DIR_LIMIT`.
     ///
     /// Per-entry errors (a vanished entry mid-iteration, a
@@ -709,7 +710,7 @@ impl Drive {
                     continue;
                 }
             };
-            if !(ft.is_dir() || (ft.is_file() && !ft.is_symlink())) {
+            if !(ft.is_dir() || ft.is_symlink() || ft.is_file()) {
                 continue;
             }
             out.push(DirEntry {
@@ -988,8 +989,8 @@ impl Drive {
     }
 
     /// Write one markdown note per `Contact` into `dir` (drive-
-    /// relative; created if missing). Each note carries a
-    /// `chan.kind: contact` frontmatter so downstream consumers
+    /// relative; created if missing). Each note carries nested
+    /// `chan: { kind: contact }` frontmatter so downstream consumers
     /// (graph builder, editor `@` picker) can classify it without a
     /// separate index. Path collisions are handled per `opts`:
     /// either skipped or overwritten.
@@ -2408,22 +2409,22 @@ fn parse_for_graph(
                 .find(|h| h.level == 1)
                 .map(|h| h.text.clone())
         });
-    // Contact-kind tag lives under the chan namespace so user
-    // frontmatter (which may already carry a `kind:` of its own
-    // for app-specific reasons) can't accidentally tip a regular
-    // note into the contacts surface.
-    let node_kind = fm
-        .data
-        .get("chan")
-        .and_then(|v| v.get("kind"))
-        .and_then(|v| v.as_str())
-        .filter(|s| s.eq_ignore_ascii_case("contact"))
-        .map(|_| crate::graph::NodeKind::Contact)
+    // `chan.kind` lives under the chan namespace so user frontmatter
+    // (which may already carry a `kind:` of its own for app-specific
+    // reasons) cannot accidentally tip a regular note into a typed
+    // surface. The registry is the extension point for future kinds.
+    let node_kind = markdown::chan_kind(&fm.data)
+        .map(|spec| spec.node_kind)
         .unwrap_or(crate::graph::NodeKind::File);
     let links = markdown::extract_links(body_src);
     let mut tokens = markdown::extract_tokens(body_src);
     if !fs_ops::is_markdown_file(rel) {
-        tokens.retain(|token| !matches!(token, markdown::Token::Tag { .. }));
+        tokens.retain(|token| {
+            !matches!(
+                token,
+                markdown::Token::Tag { .. } | markdown::Token::Mention { .. }
+            )
+        });
     }
     let edges = build_edges(rel, &links, &tokens);
     // Email extraction runs only for contact-kind files: a regular
@@ -2476,12 +2477,12 @@ fn parse_for_graph(
 /// separators on both sides; ASCII case-insensitive comparison.
 ///
 /// Why case-insensitive: scope filters live in the search/UI layer
-/// and reflect the user's mental model of folders, not the
+/// and reflect the user's mental model of directories, not the
 /// filesystem's strict casing. APFS (default) and NTFS are
 /// case-insensitive, so a scope of `"Notes"` matching a stored path
 /// of `"notes/foo.md"` is what the user wants. ext4 is technically
 /// case-sensitive, so the over-match here is theoretical: a user
-/// would have to maintain `Notes/` and `notes/` as distinct folders
+/// would have to maintain `Notes/` and `notes/` as distinct directories
 /// AND ask the search to scope into one without bleeding the other.
 /// We accept that minor risk in exchange for predictable UX across
 /// platforms. ASCII-only fold (no Unicode) matches the rest of the
@@ -2828,7 +2829,7 @@ mod path_under_tests {
 
     #[test]
     fn does_not_panic_on_multibyte_paths() {
-        // Real-world: a folder named with non-ASCII. The byte-level
+        // Real-world: a directory named with non-ASCII. The byte-level
         // boundary check shouldn't trip.
         assert!(path_under("Café/a.md", "Café"));
         assert!(!path_under("Other/a.md", "Café"));
@@ -4406,6 +4407,23 @@ mod tests {
         assert!(paths.contains(&"note.md".to_string()));
         assert!(!paths.iter().any(|p| p == "alias.md"));
         assert!(!paths.iter().any(|p| p == "sock"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_keeps_symlink_entries_visible() {
+        use std::os::unix::fs::symlink;
+        use std::os::unix::net::UnixListener;
+        let (_cfg, root, drive) = fixture();
+        std::fs::write(root.path().join("note.md"), "hi").unwrap();
+        symlink("note.md", root.path().join("alias.md")).unwrap();
+        let _l = UnixListener::bind(root.path().join("sock")).unwrap();
+
+        let entries = drive.list("").unwrap();
+        let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"note.md"));
+        assert!(names.contains(&"alias.md"));
+        assert!(!names.contains(&"sock"));
     }
 
     #[test]

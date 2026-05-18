@@ -25,6 +25,7 @@
 // follower-mode could relax this once we've thought through the
 // editor UX.
 
+use std::fs::Metadata;
 use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
@@ -124,6 +125,186 @@ pub enum FileClass {
     /// unknown extension and no known basename). Walkable, byte-
     /// readable, renameable. Not indexed, not editable as text.
     Other,
+}
+
+/// Filesystem-level classification for a drive-relative path.
+///
+/// This is the read/inspector-side twin of the write path's
+/// `ensure_regular_file` guard: it uses lstat semantics, never opens
+/// the path, and keeps symlinks visible as symlinks instead of
+/// resolving them into their targets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PathClass {
+    pub kind: PathKind,
+    pub permission: PathPermission,
+    /// `nlink` for regular files on Unix, otherwise 1.
+    pub link_count: u64,
+    /// Raw `readlink` target for symlinks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<PathBuf>,
+    /// True when a symlink target resolves outside the drive root.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub target_escapes_drive: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathKind {
+    Directory,
+    Symlink,
+    RegularFile,
+    Fifo,
+    Socket,
+    BlockDevice,
+    CharDevice,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathPermission {
+    ReadWrite,
+    ReadOnly,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Classify a drive-relative path without opening it. The path may be
+/// the empty string, which classifies the drive root itself.
+pub fn classify_path(root: &Path, rel: &str) -> Result<PathClass> {
+    let abs = if rel.is_empty() {
+        root.to_path_buf()
+    } else {
+        let joined = resolve_safe(root, rel)?;
+        ensure_parent_inside_root(root, &joined)?;
+        joined
+    };
+    classify_abs(root, &abs)
+}
+
+/// Classify an already-resolved absolute path under `root`.
+pub fn classify_abs(root: &Path, abs: &Path) -> Result<PathClass> {
+    let meta = std::fs::symlink_metadata(abs)?;
+    let ft = meta.file_type();
+    let kind = path_kind(&ft);
+    let permission = if meta.permissions().readonly() {
+        PathPermission::ReadOnly
+    } else {
+        PathPermission::ReadWrite
+    };
+    let target = if ft.is_symlink() {
+        std::fs::read_link(abs).ok()
+    } else {
+        None
+    };
+    let target_escapes_drive = target
+        .as_deref()
+        .is_some_and(|target| symlink_target_escapes_drive(root, abs, target));
+    Ok(PathClass {
+        kind,
+        permission,
+        link_count: if ft.is_file() && !ft.is_symlink() {
+            nlink(&meta)
+        } else {
+            1
+        },
+        target,
+        target_escapes_drive,
+    })
+}
+
+fn path_kind(ft: &std::fs::FileType) -> PathKind {
+    if ft.is_dir() {
+        return PathKind::Directory;
+    }
+    if ft.is_symlink() {
+        return PathKind::Symlink;
+    }
+    if ft.is_file() {
+        return PathKind::RegularFile;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        if ft.is_fifo() {
+            return PathKind::Fifo;
+        }
+        if ft.is_socket() {
+            return PathKind::Socket;
+        }
+        if ft.is_block_device() {
+            return PathKind::BlockDevice;
+        }
+        if ft.is_char_device() {
+            return PathKind::CharDevice;
+        }
+    }
+    PathKind::Other
+}
+
+#[cfg(unix)]
+fn nlink(meta: &Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink()
+}
+
+#[cfg(not(unix))]
+fn nlink(_meta: &Metadata) -> u64 {
+    1
+}
+
+fn ensure_parent_inside_root(root: &Path, abs: &Path) -> Result<()> {
+    let Some(parent) = abs.parent() else {
+        return Ok(());
+    };
+    let root_canon = root
+        .canonicalize()
+        .map_err(|e| ChanError::Io(format!("canonicalize drive root: {e}")))?;
+    if parent == root || parent == root_canon {
+        return Ok(());
+    }
+    if let Ok(parent_canon) = parent.canonicalize() {
+        if !parent_canon.starts_with(&root_canon) {
+            return Err(ChanError::SymlinkEscape(abs.to_path_buf()));
+        }
+    }
+    Ok(())
+}
+
+fn symlink_target_escapes_drive(root: &Path, link_abs: &Path, target: &Path) -> bool {
+    let target_abs = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        link_abs.parent().unwrap_or(root).join(target)
+    };
+    !target_inside_root(root, &target_abs)
+}
+
+fn target_inside_root(root: &Path, path: &Path) -> bool {
+    let Ok(root_canon) = root.canonicalize() else {
+        return lexical_path_inside_root(root, path);
+    };
+    let mut probe = path;
+    loop {
+        match probe.canonicalize() {
+            Ok(canon) => return canon.starts_with(&root_canon),
+            Err(_) => match probe.parent() {
+                Some(parent) => probe = parent,
+                None => return false,
+            },
+        }
+    }
+}
+
+fn lexical_path_inside_root(root: &Path, path: &Path) -> bool {
+    let Ok(stripped) = path.strip_prefix(root) else {
+        return false;
+    };
+    stripped
+        .components()
+        .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
 }
 
 /// Classify a relative path by extension first, then by basename
@@ -1122,6 +1303,106 @@ fn list_tree_inner(
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn classify_path_reports_directory_and_regular_file() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join("notes")).unwrap();
+        std::fs::write(tmp.path().join("notes/a.md"), "hello").unwrap();
+
+        let dir = classify_path(tmp.path(), "notes").unwrap();
+        assert_eq!(dir.kind, PathKind::Directory);
+        assert_eq!(dir.permission, PathPermission::ReadWrite);
+        assert_eq!(dir.link_count, 1);
+
+        let file = classify_path(tmp.path(), "notes/a.md").unwrap();
+        assert_eq!(file.kind, PathKind::RegularFile);
+        assert_eq!(file.permission, PathPermission::ReadWrite);
+        assert_eq!(file.link_count, 1);
+        assert_eq!(file.target, None);
+        assert!(!file.target_escapes_drive);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classify_path_reports_read_only_permission() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("locked");
+        std::fs::create_dir(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let class = classify_path(tmp.path(), "locked").unwrap();
+        assert_eq!(class.kind, PathKind::Directory);
+        assert_eq!(class.permission, PathPermission::ReadOnly);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classify_path_reports_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.md"), "hello").unwrap();
+        symlink("a.md", tmp.path().join("alias.md")).unwrap();
+        symlink("/etc/hosts", tmp.path().join("outside.md")).unwrap();
+
+        let inside = classify_path(tmp.path(), "alias.md").unwrap();
+        assert_eq!(inside.kind, PathKind::Symlink);
+        assert_eq!(inside.target.as_deref(), Some(Path::new("a.md")));
+        assert!(!inside.target_escapes_drive);
+
+        let outside = classify_path(tmp.path(), "outside.md").unwrap();
+        assert_eq!(outside.kind, PathKind::Symlink);
+        assert!(outside.target_escapes_drive);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classify_path_reports_hardlink_count() {
+        let tmp = TempDir::new().unwrap();
+        let original = tmp.path().join("a.md");
+        let twin = tmp.path().join("b.md");
+        std::fs::write(&original, "hello").unwrap();
+        std::fs::hard_link(&original, &twin).unwrap();
+
+        let class = classify_path(tmp.path(), "a.md").unwrap();
+        assert_eq!(class.kind, PathKind::RegularFile);
+        assert!(
+            class.link_count > 1,
+            "expected hardlink count, got {class:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classify_path_reports_fifo_and_socket() {
+        use std::os::unix::net::UnixListener;
+
+        let tmp = TempDir::new().unwrap();
+        let fifo = tmp.path().join("pipe");
+        let status = std::process::Command::new("mkfifo").arg(&fifo).status();
+        if matches!(status, Ok(s) if s.success()) {
+            let class = classify_path(tmp.path(), "pipe").unwrap();
+            assert_eq!(class.kind, PathKind::Fifo);
+        }
+
+        let socket = tmp.path().join("sock");
+        let _listener = UnixListener::bind(&socket).unwrap();
+        let class = classify_path(tmp.path(), "sock").unwrap();
+        assert_eq!(class.kind, PathKind::Socket);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classify_abs_reports_device_when_available() {
+        let null = Path::new("/dev/null");
+        if null.exists() {
+            let class = classify_abs(Path::new("/"), null).unwrap();
+            assert!(matches!(class.kind, PathKind::CharDevice | PathKind::Other));
+        }
+    }
 
     #[test]
     fn atomic_write_creates_dirs() {

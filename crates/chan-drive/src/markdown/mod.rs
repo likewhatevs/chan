@@ -15,7 +15,9 @@ pub mod headings;
 pub mod links;
 pub mod tokens;
 
-pub use frontmatter::{parse as parse_frontmatter, Frontmatter};
+pub use frontmatter::{
+    chan_kind, parse as parse_frontmatter, ChanKindSpec, Frontmatter, CHAN_KIND_REGISTRY,
+};
 pub use headings::{parse as parse_headings, Heading};
 pub use links::{extract_links, normalize_href, rewrite_link_targets, Link, LinkRef, LinkRefKind};
 pub use tokens::{extract_tokens, Token};
