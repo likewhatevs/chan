@@ -10,9 +10,11 @@ import { describe, expect, test, beforeEach, afterEach } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
+  clampListCaretPosition,
   continueListOnEnter,
   indentListItem,
   outdentListItem,
+  stripUnusedInlineImageSpaceOnEnter,
 } from "./list";
 
 let host: HTMLDivElement;
@@ -136,10 +138,22 @@ describe("indentListItem / outdentListItem", () => {
     expect(snapshot().doc).toBe("  - a");
   });
 
-  test("Shift-Tab on a top-level list item is a no-op", () => {
+  test("Shift-Tab on a top-level list item exits the list", () => {
     mount("- a", 3);
-    expect(outdentListItem(view)).toBe(false);
-    expect(snapshot().doc).toBe("- a");
+    expect(outdentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("a");
+  });
+
+  test("Shift-Tab on a top-level task item exits the list", () => {
+    mount("- [x] done", 10);
+    expect(outdentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("done");
+  });
+
+  test("Shift-Tab on a non-list line is an editor-local no-op", () => {
+    mount("plain", 5);
+    expect(outdentListItem(view)).toBe(true);
+    expect(snapshot().doc).toBe("plain");
   });
 
   test("Shift-Tab strips only 1 space when only 1 space of indent", () => {
@@ -160,5 +174,39 @@ describe("indentListItem / outdentListItem", () => {
     view.dispatch({ selection: { anchor: 0, head: 13 } });
     expect(indentListItem(view)).toBe(true);
     expect(snapshot().doc).toBe("  - a\nplain\n  - c");
+  });
+});
+
+describe("list caret and inline image paste helpers", () => {
+  test("clamps caret positions inside a bullet prefix to content start", () => {
+    mount("- item", 0);
+    expect(clampListCaretPosition(view.state, 0)).toBe(2);
+    expect(clampListCaretPosition(view.state, 1)).toBe(2);
+    expect(clampListCaretPosition(view.state, 2)).toBe(2);
+    expect(clampListCaretPosition(view.state, 4)).toBe(4);
+  });
+
+  test("clamps caret positions inside an ordered prefix to content start", () => {
+    mount("12. item", 0);
+    expect(clampListCaretPosition(view.state, 0)).toBe(4);
+    expect(clampListCaretPosition(view.state, 2)).toBe(4);
+    expect(clampListCaretPosition(view.state, 4)).toBe(4);
+  });
+
+  test("retracts one unused pasted-image space before list continuation", () => {
+    const doc = "- ![](photo.png#w=250) ";
+    mount(doc, doc.length);
+    expect(stripUnusedInlineImageSpaceOnEnter(view)).toBe(false);
+    expect(snapshot()).toEqual({
+      doc: "- ![](photo.png#w=250)",
+      head: doc.length - 1,
+    });
+  });
+
+  test("keeps normal trailing spaces outside pasted image markers", () => {
+    const doc = "- words ";
+    mount(doc, doc.length);
+    expect(stripUnusedInlineImageSpaceOnEnter(view)).toBe(false);
+    expect(snapshot()).toEqual({ doc, head: doc.length });
   });
 });

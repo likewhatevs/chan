@@ -62,7 +62,9 @@
   import {
     continueListOnEnter,
     indentListItem,
+    listCaretGuard,
     outdentListItem,
+    stripUnusedInlineImageSpaceOnEnter,
   } from "./commands/list";
   import type { FindAdapter } from "./find";
   import { breathingRoom } from "./breathing_room";
@@ -348,6 +350,7 @@
         drawSelection(),
         breathingRoom(),
         listGuideVisibility(),
+        listCaretGuard(),
         findField,
         chanDecorations(),
         tagDecorations({ onTagClick }),
@@ -438,6 +441,7 @@
               run: (view) => fmt.escapeFenceOnEnterAtCloser(view),
             },
             { key: "Enter", run: (view) => expandDateMacro(view) },
+            { key: "Enter", run: (view) => stripUnusedInlineImageSpaceOnEnter(view) },
             // List continuation: at end of a `- ` / `1. ` / `- [ ] `
             // line, Enter inserts a fresh marker on the next line;
             // on an empty bullet, Enter strips the prefix to exit

@@ -15,6 +15,7 @@ import { notify } from "../../state/notify.svelte";
 import { convertHeicForUpload, isHeicFile } from "./heic";
 import { invalidateImageCatalog } from "./image";
 import { relativizePath } from "../links";
+import { listLineAt } from "../commands/list";
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const DEFAULT_INSERT_WIDTH_PX = 250;
@@ -131,7 +132,10 @@ function uploadAndInsertAll(
         // user can drag the corner handle to resize. Dropped /
         // pasted images are almost always too big at intrinsic
         // size on a notes page, hence the small default.
-        const insert = `![](${pathArg}#w=${DEFAULT_INSERT_WIDTH_PX})\n`;
+        const onListLine = listLineAt(view.state, cursor) !== null;
+        const insert = onListLine
+          ? `![](${pathArg}#w=${DEFAULT_INSERT_WIDTH_PX}) `
+          : `![](${pathArg}#w=${DEFAULT_INSERT_WIDTH_PX})\n`;
         view.dispatch({
           changes: { from: cursor, to: cursor, insert },
           selection: { anchor: cursor + insert.length },

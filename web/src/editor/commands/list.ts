@@ -11,7 +11,8 @@
 // any run of digits followed by `.` or `)`. Task lists are detected
 // as a bullet item whose content starts with `[ ]` / `[x]` / `[X]`.
 
-import type { EditorView } from "@codemirror/view";
+import type { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 
 /// Anchored at line start. Captures:
 ///   1: leading whitespace (indent)
@@ -37,7 +38,7 @@ interface ListPrefix {
   number: number | null;
 }
 
-function parseListPrefix(text: string): ListPrefix | null {
+export function parseListPrefix(text: string): ListPrefix | null {
   const m = LIST_PREFIX_RE.exec(text);
   if (!m) return null;
   const [whole, indent, marker, markerSpace, taskBox, taskSpace] = m;
@@ -118,7 +119,10 @@ export function indentListItem(view: EditorView): boolean {
 /// indentListItem. Returns false when nothing changed (so the
 /// keypress can route to its default).
 export function outdentListItem(view: EditorView): boolean {
-  return shiftListLines(view, -1);
+  const changed = shiftListLines(view, -1);
+  // Shift-Tab must never escape the editor into surrounding chrome.
+  // If there was nothing to outdent, consume it as an editor-local no-op.
+  return changed || true;
 }
 
 function shiftListLines(view: EditorView, dir: 1 | -1): boolean {
@@ -145,11 +149,67 @@ function shiftListLines(view: EditorView, dir: 1 | -1): boolean {
       // count as one char each — we don't try to expand them.
       let strip = 0;
       while (strip < INDENT_UNIT.length && line.text[strip] === " ") strip++;
-      if (strip === 0) continue;
-      changes.push({ from: line.from, to: line.from + strip, insert: "" });
+      if (strip > 0) {
+        changes.push({ from: line.from, to: line.from + strip, insert: "" });
+        continue;
+      }
+      const prefix = parseListPrefix(line.text);
+      if (!prefix) continue;
+      changes.push({
+        from: line.from,
+        to: line.from + prefix.length,
+        insert: "",
+      });
     }
   }
   if (changes.length === 0) return false;
   view.dispatch({ changes });
   return true;
+}
+
+export function listLineAt(state: EditorState, pos: number): {
+  from: number;
+  to: number;
+  prefix: ListPrefix;
+} | null {
+  const line = state.doc.lineAt(pos);
+  const prefix = parseListPrefix(line.text);
+  return prefix ? { from: line.from, to: line.to, prefix } : null;
+}
+
+export function clampListCaretPosition(state: EditorState, pos: number): number {
+  const info = listLineAt(state, pos);
+  if (!info) return pos;
+  const min = info.from + info.prefix.length;
+  if (pos >= info.from && pos < min) return min;
+  return pos;
+}
+
+export function stripUnusedInlineImageSpaceOnEnter(view: EditorView): boolean {
+  const sel = view.state.selection.main;
+  if (!sel.empty) return false;
+  const line = view.state.doc.lineAt(sel.head);
+  if (sel.head !== line.to || !parseListPrefix(line.text)) return false;
+  if (!/!\[[^\]\n]*\]\([^)]+#w=\d+\)[ \t]$/.test(line.text)) return false;
+  view.dispatch({
+    changes: { from: sel.head - 1, to: sel.head, insert: "" },
+    selection: { anchor: sel.head - 1 },
+  });
+  return false;
+}
+
+export function listCaretGuard(): ReturnType<typeof EditorView.domEventHandlers> {
+  return EditorView.domEventHandlers({
+    mousedown(event, view) {
+      if (event.button !== 0) return false;
+      const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      if (pos === null) return false;
+      const clamped = clampListCaretPosition(view.state, pos);
+      if (clamped === pos) return false;
+      event.preventDefault();
+      view.dispatch({ selection: { anchor: clamped } });
+      view.focus();
+      return true;
+    },
+  });
 }

@@ -71,3 +71,39 @@ landing on every author every day.
 ## Hand-off
 
 Same as fullstack-1.
+
+## 2026-05-18 17:05 BST — Specialist review requested
+
+Implemented the `fullstack-4` list + image interaction fixes.
+
+Files changed:
+
+* `web/src/editor/Wysiwyg.svelte`
+* `web/src/editor/bubbles/image_drop.ts`
+* `web/src/editor/commands/list.ts`
+* `web/src/editor/commands/list.test.ts`
+
+Behavior:
+
+* Shift+Tab is now editor-local: indented list items outdent one level,
+  top-level list items lose their marker and become plain paragraphs, and
+  non-list lines consume Shift+Tab as a no-op instead of moving focus to pane
+  chrome.
+* Pasted / dropped images on list lines insert inline with one trailing space
+  instead of forcing a newline.
+* Pressing Enter immediately after an inline pasted image retracts that unused
+  trailing space before list continuation runs.
+* Left-clicks that land inside a list marker prefix clamp the caret to the
+  start of list content, preventing typing before the marker.
+
+Verification:
+
+* `npm run test -- list` from `web/`
+* `npm run check` from `web/`
+* `npm run build` from `web/` (passes with existing chunk-size /
+  ineffective-dynamic-import warnings)
+* `scripts/pre-push`
+
+Known gaps:
+
+* No manual browser / Chan.app walkthrough yet.
