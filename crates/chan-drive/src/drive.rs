@@ -3341,6 +3341,37 @@ mod tests {
     }
 
     #[test]
+    fn write_text_does_not_wait_for_indexer_serial_lock() {
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(drive_dir.path(), None).unwrap();
+        let drive = lib.open_drive(drive_dir.path()).unwrap();
+
+        let guard = drive.write_serial.lock().unwrap();
+        let drive_for_write = drive.clone();
+        let start = std::time::Instant::now();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            drive_for_write
+                .write_text("fast.md", "# fast\nbody\n")
+                .unwrap();
+            tx.send(()).unwrap();
+        });
+
+        let completed = rx.recv_timeout(std::time::Duration::from_millis(150));
+        drop(guard);
+        writer.join().unwrap();
+        completed.unwrap_or_else(|_| {
+            panic!(
+                "small write waited behind indexer serialization: {:?}",
+                start.elapsed()
+            )
+        });
+        assert_eq!(drive.read_text("fast.md").unwrap(), "# fast\nbody\n");
+    }
+
+    #[test]
     fn pending_writes_journal_replay_converges_after_simulated_crash() {
         // Simulate the crash window: a journal entry is left behind
         // as if index_file had committed graph but died before the

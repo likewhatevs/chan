@@ -269,6 +269,39 @@ pub async fn api_write_file(
     AxumPath(path): AxumPath<String>,
     Json(body): Json<WriteBody>,
 ) -> Response {
+    let drive = state.drive().clone();
+    let path_for_write = path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        write_file_sync(&drive, &path_for_write, body.expected_mtime, &body.content)
+    })
+    .await;
+
+    let mtime = match result {
+        Ok(Ok(mtime)) => mtime,
+        Ok(Err(e)) => {
+            if let chan_drive::ChanError::WriteConflict { current_mtime_ns } = e {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(WriteConflictBody {
+                        current_mtime: current_mtime_ns.map(|ns| ns / 1_000_000_000),
+                    }),
+                )
+                    .into_response();
+            }
+            return err_from(&e);
+        }
+        Err(join) => return err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+    };
+    state.self_writes.note(&path);
+    Json(WriteResponse { mtime }).into_response()
+}
+
+fn write_file_sync(
+    drive: &chan_drive::Drive,
+    path: &str,
+    expected_mtime: Option<i64>,
+    content: &str,
+) -> chan_drive::Result<Option<i64>> {
     // chan-drive moved the CAS check to nanosecond precision
     // (`expected_mtime_ns`) to catch sub-second races between two
     // writers. Our wire format still surfaces seconds-precision
@@ -280,40 +313,20 @@ pub async fn api_write_file(
     // Sub-second race protection is therefore a TODO until the
     // wire moves to ns-as-string; document the regression here so
     // the next reader knows it's a known gap, not a bug.
-    let result = if body.expected_mtime.is_some() {
-        let pre = state.drive().stat(&path).ok();
+    if expected_mtime.is_some() {
+        let pre = drive.stat(path).ok();
         let cur_secs = pre.as_ref().and_then(|s| s.mtime);
         let cur_ns = pre.as_ref().and_then(|s| s.mtime_ns);
-        if body.expected_mtime != cur_secs {
-            return (
-                StatusCode::CONFLICT,
-                Json(WriteConflictBody {
-                    current_mtime: cur_secs,
-                }),
-            )
-                .into_response();
+        if expected_mtime != cur_secs {
+            return Err(chan_drive::ChanError::WriteConflict {
+                current_mtime_ns: cur_ns,
+            });
         }
-        state
-            .drive()
-            .write_text_if_unchanged(&path, cur_ns, &body.content)
+        drive.write_text_if_unchanged(path, cur_ns, content)?;
     } else {
-        state.drive().write_text(&path, &body.content)
-    };
-    if let Err(e) = result {
-        if let chan_drive::ChanError::WriteConflict { current_mtime_ns } = e {
-            return (
-                StatusCode::CONFLICT,
-                Json(WriteConflictBody {
-                    current_mtime: current_mtime_ns.map(|ns| ns / 1_000_000_000),
-                }),
-            )
-                .into_response();
-        }
-        return err_from(&e);
+        drive.write_text(path, content)?;
     }
-    state.self_writes.note(&path);
-    let mtime = state.drive().stat(&path).ok().and_then(|s| s.mtime);
-    Json(WriteResponse { mtime }).into_response()
+    Ok(drive.stat(path).ok().and_then(|s| s.mtime))
 }
 
 #[derive(Deserialize)]
@@ -341,13 +354,58 @@ pub async fn api_create_file(
         }
     } else {
         let content = body.content.unwrap_or_default();
-        match state.drive().write_text(&body.path, &content) {
-            Ok(()) => {
+        let drive = state.drive().clone();
+        let path = body.path.clone();
+        let result = tokio::task::spawn_blocking(move || drive.write_text(&path, &content)).await;
+        match result {
+            Ok(Ok(())) => {
                 state.self_writes.note(&body.path);
                 StatusCode::CREATED.into_response()
             }
-            Err(e) => err_from(&e),
+            Ok(Err(e)) => err_from(&e),
+            Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod write_tests {
+    use super::*;
+
+    #[test]
+    fn write_file_sync_reports_seconds_conflict() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path(), Some("files-write-test".into()))
+            .unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        drive.write_text("note.md", "v1").unwrap();
+
+        let err = write_file_sync(&drive, "note.md", Some(0), "v2").unwrap_err();
+
+        assert!(matches!(
+            err,
+            chan_drive::ChanError::WriteConflict {
+                current_mtime_ns: Some(_)
+            }
+        ));
+        assert_eq!(drive.read_text("note.md").unwrap(), "v1");
+    }
+
+    #[test]
+    fn write_file_sync_returns_new_mtime() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path(), Some("files-write-test".into()))
+            .unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+
+        let mtime = write_file_sync(&drive, "note.md", None, "v1").unwrap();
+
+        assert!(mtime.is_some());
+        assert_eq!(drive.read_text("note.md").unwrap(), "v1");
     }
 }
 
