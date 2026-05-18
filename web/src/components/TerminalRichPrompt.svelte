@@ -152,6 +152,8 @@
       {selVer}
       disabled={mode() === "source"}
       floating={false}
+      mode={mode()}
+      onModeToggle={setMode}
     />
     <div class="spacer"></div>
     <button type="button" class="icon-btn" onclick={newFileFromHere} title="New file from here" aria-label="New file from here">
