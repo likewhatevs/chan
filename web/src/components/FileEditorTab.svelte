@@ -37,6 +37,7 @@
     Table2,
     Terminal as TerminalIcon,
     Type,
+    X,
   } from "lucide-svelte";
   import {
     SHORTCUTS,
@@ -52,6 +53,7 @@
   import { clampMenu } from "./menuClamp";
   import {
     layout,
+    beginMissingFileReopen,
     canReopenClosedTab,
     closeOtherTabsInPane,
     closeTab,
@@ -396,6 +398,20 @@
     // fills `searchPanel.query` when the user had text highlighted.
     // Same flow as the Mod+Shift+F chord — no extra wiring needed
     // beyond setting the open bit here.
+    searchPanel.open = true;
+  }
+
+  function doReopenMissing(): void {
+    const parent = parentPath(tab.path);
+    beginMissingFileReopen(tab.id);
+    revealAndSelect(parent || tab.path);
+    openBrowser();
+    ui.status = "Choose the moved file in Files to re-open this tab";
+  }
+
+  function doFindMissing(): void {
+    const fragment = tab.fileMissing?.fragment;
+    if (fragment) searchPanel.query = fragment;
     searchPanel.open = true;
   }
 
@@ -770,7 +786,11 @@
     </div>
   {/if}
 
-  {#if tab.error}
+  {#if tab.fileMissing}
+    <div class="editor-toolbar missing-toolbar">
+      <span>File moved or deleted</span>
+    </div>
+  {:else if tab.error}
     <div class="editor-toolbar">
       <span class="error">{tab.error}</span>
     </div>
@@ -778,6 +798,25 @@
   {#key tab.id}
     {#if tab.loading}
       <div class="placeholder">loading…</div>
+    {:else if tab.fileMissing}
+      <div class="missing-file-state">
+        <div class="missing-title">File moved or deleted</div>
+        <div class="missing-path">{tab.fileMissing.path}</div>
+        <div class="missing-actions">
+          <button type="button" onclick={doReopenMissing}>
+            <Folder size={15} strokeWidth={1.75} aria-hidden="true" />
+            <span>Re-open</span>
+          </button>
+          <button type="button" onclick={doFindMissing}>
+            <SearchIcon size={15} strokeWidth={1.75} aria-hidden="true" />
+            <span>Find</span>
+          </button>
+          <button type="button" onclick={doCloseTab}>
+            <X size={15} strokeWidth={1.75} aria-hidden="true" />
+            <span>Close</span>
+          </button>
+        </div>
+      </div>
     {:else if tab.error}
       <div class="placeholder error-placeholder">{tab.error}</div>
     {:else}
@@ -1084,6 +1123,10 @@
     font-size: 14px;
     color: #d33;
   }
+  .missing-toolbar {
+    color: var(--text-primary);
+    font-weight: 600;
+  }
   .placeholder {
     flex: 1;
     display: flex;
@@ -1096,6 +1139,51 @@
     color: var(--danger-text, #d33);
     padding: 1rem;
     text-align: center;
+  }
+  .missing-file-state {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 1.25rem;
+    text-align: center;
+    color: var(--text-secondary);
+  }
+  .missing-title {
+    color: var(--text-primary);
+    font-size: 1rem;
+    font-weight: 650;
+  }
+  .missing-path {
+    max-width: min(42rem, 90%);
+    overflow-wrap: anywhere;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+  }
+  .missing-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+  .missing-actions button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    height: 2rem;
+    padding: 0 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-card);
+    color: var(--text-primary);
+    font: inherit;
+    cursor: pointer;
+  }
+  .missing-actions button:hover {
+    background: var(--bg-hover, var(--bg-card));
   }
   /* Row that holds the editor + (optional) inspector. The Inspector
      component renders a ResizeHandle as its previous sibling so

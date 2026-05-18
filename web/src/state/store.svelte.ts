@@ -18,6 +18,7 @@ import {
 import {
   closeTab,
   layout,
+  markTabFileMissing,
   openInActivePane,
   restoreLayout,
   serializeLayout,
@@ -277,7 +278,7 @@ export function onWatchEvent(e: unknown): void {
   if (graphOverlay.open) {
     graphReloadSignal.nonce += 1;
   }
-  const inner = (e as { event?: { path?: string; to?: string } } | null)?.event;
+  const inner = (e as { event?: { kind?: string; path?: string; to?: string } } | null)?.event;
   const paths = [inner?.path, inner?.to].filter(
     (p): p is string => typeof p === "string" && p.length > 0,
   );
@@ -287,6 +288,13 @@ export function onWatchEvent(e: unknown): void {
     // refresh would read a vanished file and stamp a stale error.
     if (movingPaths.has(p)) continue;
     for (const { tabId } of tabsForPath(p)) {
+      if (
+        (inner?.kind === "Removed" || inner?.kind === "Renamed") &&
+        p === inner.path
+      ) {
+        markTabFileMissing(tabId);
+        continue;
+      }
       void refreshTabFromDisk(tabId);
     }
   }

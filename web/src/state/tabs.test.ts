@@ -6,6 +6,7 @@ import { confirmState, resolveConfirm } from "./confirm.svelte";
 import { editorToolsPrefs } from "./editorTools.svelte";
 import {
   activePane,
+  beginMissingFileReopen,
   broadcastTerminalInput,
   canReopenClosedTab,
   clearRecentlyClosedTabsForTest,
@@ -13,6 +14,7 @@ import {
   dismissTerminalEnvNamePrompt,
   focusColorForPane,
   hydrateTerminalSessionsFromLayout,
+  isMissingFileError,
   layout,
   openInPane,
   openFind,
@@ -68,6 +70,7 @@ function fileTab(partial: Partial<FileTab> = {}): FileTab {
     mode: "wysiwyg",
     loading: false,
     error: null,
+    fileMissing: null,
     inspectorOpen: false,
     outlineOpen: false,
     repoRoot: null,
@@ -471,6 +474,61 @@ describe("file tab loading", () => {
     expect(pane.activeTabId).toBe(tab.id);
     expect(tab.loading).toBe(false);
     expect(tab.error).toBe("read failed");
+    expect(tab.fileMissing).toBeNull();
+  });
+
+  test("classifies missing files as a recovery state", async () => {
+    resetLayout([]);
+    vi.spyOn(api, "read").mockRejectedValue(
+      new Error("io error: No such file or directory (os error 2)"),
+    );
+
+    await openInPane(activePane().id, "notes/moved.md");
+    const pane = activePane();
+    const [tab] = pane.tabs;
+
+    expect(tab?.kind).toBe("file");
+    if (tab?.kind !== "file") return;
+    expect(tab.loading).toBe(false);
+    expect(tab.error).toBeNull();
+    expect(tab.fileMissing).toEqual({ path: "notes/moved.md", fragment: null });
+  });
+
+  test("recognizes common missing-file error strings", () => {
+    expect(isMissingFileError(new Error("ENOENT: no such file or directory"))).toBe(
+      true,
+    );
+    expect(isMissingFileError(new Error("permission denied"))).toBe(false);
+  });
+
+  test("rebinds a missing tab to the next opened file after re-open starts", async () => {
+    const tab = fileTab({
+      id: "missing",
+      path: "notes/old.md",
+      content: "old content",
+      saved: "old content",
+      fileMissing: { path: "notes/old.md", fragment: "old content" },
+    });
+    resetLayout([tab]);
+    vi.spyOn(api, "read").mockResolvedValue({
+      path: "notes/new.md",
+      content: "new content",
+      mtime: 22,
+      writable: true,
+    });
+
+    beginMissingFileReopen(tab.id);
+    await openInPane(activePane().id, "notes/new.md");
+
+    expect(activePane().tabs).toHaveLength(1);
+    const [reopened] = activePane().tabs;
+    expect(reopened?.kind).toBe("file");
+    if (reopened?.kind !== "file") return;
+    expect(reopened.path).toBe("notes/new.md");
+    expect(reopened.content).toBe("new content");
+    expect(reopened.saved).toBe("new content");
+    expect(reopened.fileMissing).toBeNull();
+    expect(reopened.error).toBeNull();
   });
 });
 

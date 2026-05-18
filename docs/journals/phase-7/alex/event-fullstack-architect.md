@@ -237,3 +237,26 @@ Gate run:
 * `npm run check` from `web/`
 * `npm run build` from `web/`
 * `scripts/pre-push`
+
+## 2026-05-18 18:15 BST — poke
+
+`fullstack-10` is committed and pushed on `main`.
+
+Commit:
+
+* `8ae2d44` Tighten editor caret mapping and EOF scrolling (fullstack-10)
+
+Pushed `main` to `origin`. Next queued task is `fullstack-11`.
+
+## 2026-05-18 18:30 BST — poke
+
+`fullstack-11` is implemented and ready to commit under the wave-2 standing
+clearance:
+[fullstack/fullstack-11.md](../fullstack/fullstack-11.md).
+
+Gate run:
+
+* `npm run test -- tabs` from `web/`
+* `npm run check` from `web/`
+* `npm run build` from `web/`
+* `scripts/pre-push`

@@ -143,6 +143,10 @@ export type FileTab = {
   mode: Mode;
   loading: boolean;
   error: string | null;
+  /// Structured recovery state for an open file whose backing path
+  /// disappeared. Kept separate from `error` so the UI can offer
+  /// Re-open / Find / Close instead of showing a raw OS error.
+  fileMissing: FileMissingState | null;
   /// Whether the right-side inspector panel (file info: tags,
   /// backlinks, refs) is shown alongside the editor. Toggleable
   /// per tab; persisted in the URL hash.
@@ -201,6 +205,11 @@ export type FileTab = {
   /// on every selection change; the editor that mounts next reads
   /// it once on first content apply to restore the caret.
   caret?: { from: number; to: number };
+};
+
+export type FileMissingState = {
+  path: string;
+  fragment: string | null;
 };
 
 export type TerminalTab = {
@@ -799,13 +808,22 @@ async function loadTabContent(
       t.saved = r.content;
       t.savedMtime = r.mtime ?? null;
       t.repoRoot = r.repo_root ?? null;
+      t.error = null;
+      t.fileMissing = null;
       // Older servers omit `writable`; treat absent as writable so
       // the lamp behaves the way it did before this field existed.
       t.fsWritable = r.writable ?? true;
     }
   } catch (e) {
     const t = live();
-    if (t) t.error = (e as Error).message;
+    if (t) {
+      if (isMissingFileError(e)) {
+        markFileMissing(t);
+      } else {
+        t.error = (e as Error).message;
+        t.fileMissing = null;
+      }
+    }
   } finally {
     const t = live();
     if (t) t.loading = false;
@@ -819,6 +837,35 @@ export async function openInPane(paneId: string, path: string): Promise<void> {
     return;
   }
   const p = pane(paneId);
+  const pendingReopen =
+    pendingMissingFileReopenTabId === null
+      ? undefined
+      : p.tabs.find(
+          (t): t is FileTab =>
+            t.kind === "file" &&
+            t.id === pendingMissingFileReopenTabId &&
+            t.fileMissing !== null,
+        );
+  if (pendingReopen) {
+    pendingMissingFileReopenTabId = null;
+    const pathKind = classifyPath(path);
+    pendingReopen.fileKind =
+      pathKind === "document" || pathKind === "text" ? pathKind : "document";
+    pendingReopen.path = path;
+    pendingReopen.content = "";
+    pendingReopen.saved = "";
+    pendingReopen.savedMtime = null;
+    pendingReopen.mode = defaultModeForPath(path, pendingReopen.fileKind);
+    pendingReopen.loading = true;
+    pendingReopen.error = null;
+    pendingReopen.fileMissing = null;
+    pendingReopen.repoRoot = null;
+    pendingReopen.fsWritable = true;
+    p.activeTabId = pendingReopen.id;
+    layout.activePaneId = paneId;
+    await loadTabContent(paneId, pendingReopen.id, path);
+    return;
+  }
   const existing = p.tabs.find((t) => t.kind === "file" && t.path === path);
   if (existing) {
     p.activeTabId = existing.id;
@@ -844,6 +891,7 @@ export async function openInPane(paneId: string, path: string): Promise<void> {
     mode: defaultModeForPath(path, fileKind),
     loading: true,
     error: null,
+    fileMissing: null,
     inspectorOpen: false,
     outlineOpen: false,
     repoRoot: null,
@@ -1096,6 +1144,7 @@ function cloneTab(src: Tab): Tab {
     mode: src.mode,
     loading: src.loading,
     error: src.error,
+    fileMissing: src.fileMissing ? { ...src.fileMissing } : null,
     inspectorOpen: src.inspectorOpen,
     outlineOpen: src.outlineOpen,
     repoRoot: src.repoRoot,
@@ -1274,6 +1323,7 @@ const AUTOSAVE_DEBOUNCE_MS = 800;
 const autosaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const savingTabs = new Set<string>();
 const saveAgainAfterCurrent = new Set<string>();
+let pendingMissingFileReopenTabId: string | null = null;
 
 /// Conflict dialog state. Populated when a save returns 409 (an
 /// external edit landed since we last read this tab). Mounted by
@@ -1387,6 +1437,7 @@ async function performSaveOnce(t: FileTab): Promise<void> {
     t.saved = content;
     t.savedMtime = r.mtime ?? null;
     t.error = null;
+    t.fileMissing = null;
     mirrorToSiblings(path, content, t.id);
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) {
@@ -1454,8 +1505,38 @@ function mirrorToSiblings(path: string, content: string, originId: string): void
       sib.content = content;
       sib.saved = content;
       sib.error = null;
+      sib.fileMissing = null;
     }
   }
+}
+
+export function isMissingFileError(e: unknown): boolean {
+  if (e instanceof ApiError && e.status === 404) return true;
+  const msg = String((e as Error | null)?.message ?? e).toLowerCase();
+  return (
+    msg.includes("no such file") ||
+    msg.includes("not found") ||
+    msg.includes("os error 2") ||
+    msg.includes("enoent")
+  );
+}
+
+function missingFragment(content: string): string | null {
+  const normalized = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length >= 8);
+  if (!normalized) return null;
+  return normalized.length > 80 ? normalized.slice(0, 80) : normalized;
+}
+
+function markFileMissing(t: FileTab): void {
+  t.error = null;
+  t.loading = false;
+  t.fileMissing = {
+    path: t.path,
+    fragment: missingFragment(t.content || t.saved),
+  };
 }
 
 /// Set of paths with unsaved changes across all panes. Used by the
@@ -1730,6 +1811,7 @@ export async function restoreLayout(
           mode: validateRestoredMode(sertab.m, restoredPath, restoredFileKind),
           loading: true,
           error: null,
+          fileMissing: null,
           inspectorOpen: !!sertab.o,
           outlineOpen: !!sertab.ol,
           // repoRoot is filled in by loadTabContent on first read;
@@ -1877,6 +1959,22 @@ export function clearTabError(tabId: string): void {
   const found = findFileTabById(tabId);
   if (!found) return;
   if (found.tab.error) found.tab.error = null;
+  if (found.tab.fileMissing) found.tab.fileMissing = null;
+}
+
+export function markTabFileMissing(tabId: string): void {
+  const found = findFileTabById(tabId);
+  if (!found) return;
+  markFileMissing(found.tab);
+}
+
+export function beginMissingFileReopen(tabId: string): void {
+  const found = findFileTabById(tabId);
+  if (!found || found.tab.fileMissing === null) return;
+  pendingMissingFileReopenTabId = tabId;
+  const node = layout.nodes[found.paneId];
+  if (node?.kind === "leaf") node.activeTabId = tabId;
+  layout.activePaneId = found.paneId;
 }
 
 /// Refresh a non-dirty tab's content from disk. Called when the
