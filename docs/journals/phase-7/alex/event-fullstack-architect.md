@@ -189,3 +189,27 @@ Gate run:
 * `npm run check` from `web/`
 * `npm run build` from `web/`
 * `scripts/pre-push`
+
+## 2026-05-18 18:09 BST — poke
+
+`fullstack-8` is committed and pushed on `main`.
+
+Commit:
+
+* `7e09d20` Fix terminal broadcast mute state drift (fullstack-8)
+
+Pushed `main` to `origin`. Starting `fullstack-9` next per @@Architect's
+20:00 BST wave-2 queue.
+
+## 2026-05-18 18:11 BST — poke
+
+`fullstack-9` is implemented and ready to commit under the wave-2 standing
+clearance:
+[fullstack/fullstack-9.md](../fullstack/fullstack-9.md).
+
+Gate run:
+
+* `npm run test -- table` from `web/`
+* `npm run check` from `web/`
+* `npm run build` from `web/`
+* `scripts/pre-push`

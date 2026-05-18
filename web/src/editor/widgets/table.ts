@@ -16,12 +16,10 @@ import {
   Decoration,
   type DecorationSet,
   EditorView,
-  ViewPlugin,
-  type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
-import { type Extension } from "@codemirror/state";
+import { StateField, type Extension } from "@codemirror/state";
 import { selectionInRange } from "../decorations/selection";
 
 interface TableData {
@@ -89,40 +87,28 @@ class TableWidget extends WidgetType {
 }
 
 export function tableDecorations(): Extension {
-  const plugin = ViewPlugin.fromClass(
-    class {
-      decorations: DecorationSet;
-
-      constructor(view: EditorView) {
-        this.decorations = scanTables(view);
-      }
-
-      update(u: ViewUpdate): void {
-        if (u.docChanged || u.viewportChanged || u.selectionSet) {
-          this.decorations = scanTables(u.view);
-        }
-      }
+  const field = StateField.define<DecorationSet>({
+    create(state) {
+      return scanTables(state);
     },
-    {
-      decorations: (v) => v.decorations,
+    update(decorations, tr) {
+      if (!tr.docChanged && !tr.selection) return decorations;
+      return scanTables(tr.state);
     },
-  );
+    provide: (f) => EditorView.decorations.from(f),
+  });
   return [
-    plugin,
+    field,
     EditorView.atomicRanges.of(
-      (view) => view.plugin(plugin)?.decorations ?? Decoration.none,
+      (view) => view.state.field(field, false) ?? Decoration.none,
     ),
   ];
 }
 
-function scanTables(view: EditorView): DecorationSet {
-  const { state } = view;
+function scanTables(state: EditorView["state"]): DecorationSet {
   const sel = state.selection;
-  const { from, to } = view.viewport;
   const decos: Array<{ from: number; to: number; deco: Decoration }> = [];
   syntaxTree(state).iterate({
-    from,
-    to,
     enter(node) {
       if (node.name !== "Table") return;
       if (selectionInRange(sel, node.from, node.to)) return;
