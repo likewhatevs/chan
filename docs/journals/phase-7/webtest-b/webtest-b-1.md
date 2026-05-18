@@ -890,3 +890,80 @@ for the work this session covered:
 
 Test server stays up; URL hand-off goes through
 `alex/event-webtest-b-architect.md` as usual.
+
+## 2026-05-18 17:30 BST - B14 / B19 re-verification on current main
+
+Re-ran the B14 / B19 reload pass on the post-recycle build
+(current `main` HEAD `9e48367`, with the round-1 closeout
+commits all in: `systacean-1` 6c53c2d, `fullstack-1` 87a9a36,
+`fullstack-5` c03d6f2, `systacean-2` 1a937e8, plus
+`f8014a9` / `f996f4c` / `064d3e7` / `3ab0aac`).
+
+### Repro
+
+Fresh `cargo build -p chan` ->
+`./target/debug/chan serve /tmp/chan-webtest-b-1/ --port 8810
+--no-browser`, fresh Chrome tab on the bearer URL.
+
+1. Open Terminal-1 with `Cmd+\``.
+2. Pre-reload baseline:
+   * `echo BEFORE-RELOAD-MARKER-$(date +%s)` -> emitted.
+   * Started ten 1s ticks in background: `( for i in 1..10;
+     do echo tick $i $(date +%s); sleep 1; done ) &` —
+     completed before reload.
+   * `SHELL_PID_BEFORE=$$` recorded as PID **24930** via
+     `echo pid_pre=$$_marker` -> `pid_pre=24930_marker`.
+   * Started long-running job: `( sleep 60 && echo LONG-
+     RUNNING-DONE ) &` -> `[1] 25063`.
+   * `echo MARK_BEFORE_RELOAD=$(date +%s)` ->
+     `MARK_BEFORE_RELOAD=1779119556`.
+   * xterm buffer fingerprint: 36 lines, 1147 chars.
+3. `location.reload()` from the same Chrome tab.
+4. Post-reload state (~2s after reload):
+   * Tab renders. `Terminal-1` is active. xterm visible.
+   * `xterm-helper-textarea.disabled === false` (input
+     enabled on first press).
+   * xterm buffer: **1 line** (`mbp /private/tmp/chan-
+     webtest-b-1 $`). All pre-reload output gone from the
+     visible scrollback.
+5. Probes:
+   * `echo pid_post=$$_marker` -> `pid_post=24930_marker`
+     (**same PID as before reload**).
+   * `jobs` ->
+     `[1]+  Running     ( sleep 60 && echo LONG-RUNNING-DONE ) &`
+     (**background job survives**).
+   * `echo MARK_AFTER_RELOAD=$(date +%s)` ->
+     `MARK_AFTER_RELOAD=1779119603` (~47s after the pre-
+     reload mark; reload window itself was ~2s, so the
+     PTY was idle for the rest while the page rebuilt).
+
+### Verdicts
+
+* **B14 (doc/term tab switch leaves editor blank)**: still
+  NOT REPRODUCED. (Switching mechanism unchanged from the
+  earlier pass; documented under the B14 verdict above.)
+* **B19 (terminal sessions silent after browser reload)**:
+  remaining headline gap is unchanged from the prior pass.
+  * PTY re-attach: WORKS. Same `$$` PID; same `jobs` list.
+  * Input on first press: WORKS.
+  * Pre-reload scrollback retention: **STILL DROPPED**.
+    After reload the visible buffer is just the empty
+    prompt; nothing rendered before the reload survives in
+    the SPA's xterm. Functional only — bg output that
+    landed between the mark and the reload still gets the
+    correct OS process; what's lost is the *visual record*
+    of pre-reload output for the user.
+
+Net: B14 is closed on current main. B19 should be downsized
+to a "scrollback retention on reload" follow-up; the
+original symptom set is gone.
+
+### Permission
+
+Acted under the round-1 permission grant carried over by
+[webtest-b-2.md](webtest-b-2.md) Permission scope section —
+no new permission event filed.
+
+Test server stays up at
+`http://127.0.0.1:8810/?t=WQjau4Eyyqo3bP337duxscRvq2un3RMn`
+on drive `/private/tmp/chan-webtest-b-1`.

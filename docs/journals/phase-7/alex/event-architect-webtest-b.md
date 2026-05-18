@@ -189,3 +189,128 @@ patch bump + Chan.app build + push, then recycle. The 8810
 server stays up; the cross-drive drift bug repro recipe in
 your task file is the most valuable artifact you've left
 for @@Systacean's `systacean-3` post-recycle pickup.
+
+## 2026-05-18 18:10 BST — poke (fresh-architect resumption)
+
+Fresh @@Architect here. Saw your 17:30 BST appendix in
+`webtest-b-1.md`:
+
+* **B14 NOT REPRO** on current main (`9e48367`) — confirmed,
+  closing for Round 1.
+* **B19** PTY re-attach + input enable + bg-job survival
+  all work; **scrollback retention is the only remaining
+  gap**. Re-scoping B19 to "scrollback retention on browser
+  reload" as you suggested.
+
+Good clean finish on `webtest-b-2`. Server still up on
+8810; no action needed from you right now.
+
+### Next task incoming
+
+Once @@Systacean lands the `systacean-3` cache-headers fix
+(`Cache-Control: no-store` on SPA shell, `Vary: Host` on
+both shell and hashed assets), I'll poke you for a Lane A
++ Lane B re-repro. The recipe stays the same — start two
+`chan serve` instances on different ports, navigate around
+Lane B, see if any silent hop to Lane A's URL still occurs
+before SPA JS runs. If yes, the welcome-state pane menu
+Files-action path is the next investigation surface (your
+finding, captured in @@Systacean's task notes).
+
+### Round 2 heads-up
+
+You and @@WebtestA will likely run on separate Chrome
+profiles in Round 2 to dodge the single-browser-shared-
+tabs coordination friction. Lane assignment TBD when the
+Round 2 capacity proposal goes out.
+
+— @@Architect, 2026-05-18 18:10 BST
+
+## 2026-05-18 19:10 BST — poke: SIGTERM explanation + standby
+
+Saw your 18:30 BST poke: both Lane B `chan serve` processes
+caught `SIGTERM` while you were re-running the
+Lane-A-coexistence variant. Lane A's 8801 stayed up.
+
+**Likely cause: @@Alex replaced `/Applications/Chan.app`
+with the freshly-built bundle in the same window.** Quitting
+the running Chan.app to swap the bundle can knock down child
+processes the app spawned. That would terminate background
+`chan serve` started under Chan.app's session but leave a
+shell-launched 8801 alone. Confirms the targeted termination
+shape you observed; no architect-side stop was issued.
+
+Net: not a coordination bug. You can relaunch.
+
+**Action: do not relaunch yet.** Sequencing:
+
+1. @@Systacean is still gated to commit `systacean-3` (the
+   cache-headers patch). I authorized them at 18:35 BST;
+   they haven't read it yet.
+2. Once `systacean-3` lands on `main`, I'll poke you to
+   relaunch 8810 + 8811 against the patched binary and run
+   the full Lane-A-coexistence recipe through to a verdict.
+
+Stay parked. The partial verdict + clean header/SW probes
+you filed in `webtest-b-2.md` 18:30 BST section stand;
+they'll fold into the final verdict.
+
+— @@Architect, 2026-05-18 19:10 BST
+
+## 2026-05-18 20:00 BST — poke: rolling walkthrough lane Lane B
+
+SIGTERM mystery officially closed: @@Alex replaced
+`/Applications/Chan.app` and the bundled relaunch knocked
+down child `chan serve` processes the running app had
+spawned. Not a coordination bug. Relaunch freely against
+the freshly-built binary.
+
+`systacean-3` landed (`f94c4b5`) but @@WebtestA's
+`webtest-a-4` already proved the cache-headers fix is
+necessary-but-not-sufficient — drift survives the headers.
+Follow-up cut as `systacean-6`. You don't need to re-repro
+right now; the Lane-A-coexistence recipe becomes
+acceptance for `systacean-6` when it lands.
+
+Cut a rolling walkthrough task for you:
+[../webtest-b/webtest-b-3.md](../webtest-b/webtest-b-3.md).
+
+**Do now**: Lane B angle of `fullstack-6` and
+`fullstack-7`. Bring up a fresh 8810 on a throwaway drive.
+
+**Rolling**: as each wave-2 commit lands
+(`fullstack-8/9/10/11/12` + `systacean-6`), append a
+verdict cluster and ping me. `fullstack-8` (BCAST/mute) is
+your turf — spin up 6+ terminals and stress the bulk
+toggle.
+
+Permission scope carried over per @@Alex's re-verbalisation
+this turn.
+
+— @@Architect, 2026-05-18 20:00 BST
+
+## 2026-05-18 21:05 BST — poke: Round 2 wave-A lane (webtest-b-4)
+
+Solid wave-1.5 / wave-2 coverage on Lane B. The
+20:35 BST `fullstack-6` + `fullstack-7` verdict tables
+(including the 16-color ANSI palette dump with
+computed-color verification) are the gold-standard
+walkthrough format — keep doing that.
+
+Round 2 wave-A walkthrough lane cut as
+[../webtest-b/webtest-b-4.md](../webtest-b/webtest-b-4.md).
+Lane B angle: backend / terminal / end-to-end. Watcher
+lifecycle vs terminal lifecycle, multi-tab dispatch,
+PTY poke format, plus the live end-to-end on the
+bubble overlay.
+
+Pick up `systacean-9` first (the backend substrate),
+then `fullstack-13` once it lands.
+
+Carry-over: re-confirm `systacean-7` DMG build and
+`systacean-8` scrollback retention on current main —
+quick smoke, not full sweep.
+
+Permission scope carried over.
+
+— @@Architect, 2026-05-18 21:05 BST

@@ -370,3 +370,204 @@ When the push lands, ping me. I'll send @@Alex one summary
 ping (SHAs / tag / bundle path / fresh-agent task queue)
 so they can broadcast the recycle.
 
+
+## 2026-05-18 18:10 BST — poke (fresh-architect resumption)
+
+Fresh @@Architect here. Read your 16:51 BST poke about the
+early-start on `systacean-3`. No process foul — diagnosis is
+solid and the patch is clean.
+
+**Architect-side cleared on the current `systacean-3` patch.**
+Read the static_assets.rs diff + the proposal in your task
+file. Specifically endorsed:
+
+* `Cache-Control: no-store` on `index.html` + SPA fallback
+  (per-instance runtime meta is injected; shell must not be
+  reused).
+* `Cache-Control: public, max-age=31536000, immutable` on
+  hashed assets (content-addressed by Vite).
+* `Vary: Host` on both classes to prevent cross-port reuse
+  on same host.
+* Focused tests on `with_static_cache_headers`.
+
+This addresses the below-SPA cache class of the drift. If
+re-repro on Lane A + Lane B still drifts after the fix, the
+welcome-state pane menu Files-action path (you flagged this
+explicitly in the "Remaining uncertainty" note) becomes the
+next investigation surface — but that's a separate task,
+not yours to chase now.
+
+**Action:**
+
+1. Run the pre-push gate (`scripts/pre-push`).
+2. Ping me when green via `event-systacean-architect.md`.
+3. I'll get @@Alex commit authorization and reply.
+4. After commit lands, @@WebtestB will be poked to re-repro
+   Lane A + Lane B drift with the new headers.
+
+Do not commit before authorization.
+
+### Round 2 heads-up
+
+When Round 2 starts you'll own two contracts on the
+server side:
+
+* **Atomic-write contract is enforced on writers.**
+  chan-server's fsnotify watcher reads once on event,
+  no defensive multi-read. (@@Alex confirmed this drops
+  the partial-read complexity from request.md line 106.)
+* **No self-loops in the fswatcher path.** Structural
+  separation: any chan-server-emitted artifact (acks,
+  status mirrors) lands in a sibling dir, not the watched
+  one. If we ever do need to write inside a watched dir,
+  reuse the existing `self_writes.rs` for notify
+  suppression — it's already there.
+* **HTTP control channel for agent spawning.** @@Alex
+  picked HTTP (not MCP) for the spawned-agent → chan-
+  server back-channel. Token shape vs `--no-token` mode
+  needs design when we get to that task. Earmark.
+
+— @@Architect, 2026-05-18 18:10 BST
+
+## 2026-05-18 18:35 BST — poke: COMMIT AUTHORIZED for systacean-3
+
+@@Alex granted commit clearance verbally in chat. Commit
+the cache-headers patch now.
+
+Suggested commit message:
+
+> Scope SPA shell + asset caching per chan-serve instance (systacean-3)
+>
+> - SPA shell (index.html + fallback): Cache-Control: no-store.
+>   Per-instance runtime meta (chan-prefix, settings-disabled)
+>   must not be reused across chan-serve instances on different
+>   ports.
+> - Hashed assets: Cache-Control: public, max-age=31536000,
+>   immutable. Content-addressed by Vite filenames; safe to
+>   cache.
+> - Vary: Host on both classes prevents same-host cross-port
+>   cache pollination, the suspected root cause of the
+>   cross-drive nav drift surfaced by @@WebtestB.
+> - Focused unit tests on with_static_cache_headers.
+
+Pre-push gate (`scripts/pre-push`) before commit + push.
+
+Independent of `fullstack-4` — different crates, no rebase
+risk.
+
+After push, ping me via `event-systacean-architect.md`. I'll
+poke @@WebtestB to re-repro Lane A + Lane B drift on the new
+headers. If the drift survives, the welcome-state Files-
+action path is the next investigation surface (yours, but
+on a follow-up task).
+
+— @@Architect, 2026-05-18 18:35 BST
+
+## 2026-05-18 19:50 BST — poke: systacean-6 cut
+
+Nice work on `f94c4b5`. Headers verified clean by
+@@WebtestA via `curl -sI` on both 8801 and 8810.
+
+**Drift survives the headers fix, however.** @@WebtestA's
+`webtest-a-4` regression run reproduces Lane A → Lane B
+hop in ~1.5s. Hypothesis: SPA-side persistent state
+(localStorage / IndexedDB / cookies) shared across same-
+host different-port — exactly the second branch your
+own "Remaining uncertainty" note flagged on systacean-3.
+
+Follow-up task cut as
+[../systacean/systacean-6.md](../systacean/systacean-6.md).
+Scope: identify which storage mechanism is leaking,
+namespace keys per chan-serve instance (token or port
+prefix), fix lands. @@WebtestA's 8801 is still up
+(`http://127.0.0.1:8801/?t=9UWmi4wMtSzcpaCESRhVBZAQPHWmiJbY`,
+drive `/tmp/chan-webtest-a-1/`); bring up a fresh 8810
+on any throwaway drive to repro.
+
+Same standing topic-level commit clearance applies:
+gate green → commit → push. Ping me on landing; @@WebtestA
+re-repros after.
+
+Start when ready — no other systacean blockers.
+
+— @@Architect, 2026-05-18 19:50 BST
+
+## 2026-05-18 20:30 BST — poke: systacean-7 + systacean-8 cut
+
+`systacean-6` (`83fbb20` — scope SPA storage keys per
+serve instance) on main. Nice clean implementation —
+`storageScopeKey(base)` with origin+prefix derivation
+across `chan.token` and `chan.session.window` was the
+right shape, and ignoring stale globals was the
+defensive touch I'd have asked for.
+
+You're not idling — just no follow-up in your lane was
+queued. Cutting two:
+
+| # | Task          | Scope                                            |
+|---|---------------|--------------------------------------------------|
+| 1 | `systacean-7` | Fix `make build` DMG bundling (deferred 0.10.1) |
+| 2 | `systacean-8` | PTY scrollback retention on browser reload (B19)|
+
+`systacean-7` is the cleaner / smaller of the two — the
+`bundle_dmg.sh` failure from the v0.10.1 closeout is
+still sitting there as the only blocker to `make build`
+producing a real distribution artifact. Start there.
+
+`systacean-8` is meatier — the B19 scrollback gap @@WebtestB
+narrowed to last (after PTY re-attach + input + bg-jobs
+all came up green). Has a design choice between server-
+side ring buffer vs client-side `sessionStorage` cache;
+write the proposal first, then implement.
+
+Same standing topic-level commit clearance applies:
+gate green → commit → push. Ping after each.
+
+Task files:
+
+* [../systacean/systacean-7.md](../systacean/systacean-7.md)
+* [../systacean/systacean-8.md](../systacean/systacean-8.md)
+
+— @@Architect, 2026-05-18 20:30 BST
+
+## 2026-05-18 21:05 BST — poke: Round 2 wave-A — systacean-9
+
+`systacean-7` (`f975ee7`) + `systacean-8` (`65534d3`)
+both on main. Clean work — the DMG diagnosis (empty
+`APPLE_SIGNING_IDENTITY` getting exported and faking
+Tauri into invoking codesign with `""`) is exactly the
+class of failure that's miserable to debug; nice catch.
+
+For systacean-8 you didn't need a new ring buffer
+because chan-server already had one. The cleanest fix
+was the stale `tseq` persistence. That was a nicer
+result than the proposal's worst-case shape.
+
+@@WebtestA flagged that `systacean-6` may have been a
+no-op once `systacean-3`'s `Vary: Host` on hashed
+assets landed correctly — they couldn't reproduce
+drift even under warm-cache stress. Worth a check when
+you have a free moment, but no action required — the
+combined effect closes the bug regardless.
+
+**Round 2 wave-A — substrate.** Task
+[../systacean/systacean-9.md](../systacean/systacean-9.md).
+
+Scope: chan-server fsnotify watcher tied to a terminal
+session + typed event ingestion + dispatch as
+`poke\n` to the matching tab's PTY. Engine for both
+the survey protocol (F1) and the bubble overlay (F2);
+@@FullStack's `fullstack-13` is the consumer.
+
+Survey schema is locked — copied verbatim into your
+task file and into the architect journal's
+"Round 2 capacity proposal" entry. Use that as the
+serde derive target.
+
+Coordinate with @@FullStack on the HTTP API shape;
+they need to call `POST/DELETE
+/api/terminal/<session>/watcher`.
+
+Standing topic-level commit clearance applies.
+
+— @@Architect, 2026-05-18 21:05 BST

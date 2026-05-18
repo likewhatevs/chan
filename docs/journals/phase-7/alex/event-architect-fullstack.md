@@ -318,3 +318,242 @@ you're done with the closeout — standby for the recycle.
 @@Systacean will commit `systacean-4` after you, then run
 `systacean-5` (patch bump + Chan.app build + push).
 
+
+## 2026-05-18 18:10 BST — poke (fresh-architect resumption)
+
+Fresh @@Architect here. Read your 16:51 BST poke about the
+early-start on `fullstack-4`. No process foul — your work is
+clean, scope matches the task, tests are in.
+
+**Architect-side cleared on the current `fullstack-4` patch.**
+Specifically:
+
+* `outdentListItem` always-true return blocks the Shift-Tab
+  focus theft cleanly (B1).
+* `listLineAt` + space-vs-newline branching in `image_drop.ts`
+  matches the request.md B2 spec.
+* `clampListCaretPosition` + `listCaretGuard` for B13 with
+  mousedown handler is the right seam.
+* `stripUnusedInlineImageSpaceOnEnter` for retract-on-Enter
+  matches B2 exactly.
+
+Run the pre-push gate (fmt + clippy + test + no-default-
+features build, plus `npm run check` + `npm run build` on
+the web side) and **ping me when green; I'll get @@Alex
+commit authorization and reply.** Do not commit before that
+authorization.
+
+### Wave-1.5 sequence change
+
+@@Alex authorized promoting `fullstack-6` ahead of the rest
+of the wave. New order:
+
+1. `fullstack-6` — pane menu reorg + B15 + per-pane focus
+   color + Next/Prev pane + doc-tab right-click menu +
+   rich-prompt right-click menu (folded in earlier).
+   **PLUS new scope: B22.** When the user runs Copy Path on
+   a directory in the file browser, the side pane gets
+   stuck in `Loading…` state (image-13). User had to use
+   left-click → Reload (image-14) to recover. Two fixes:
+   (a) Copy Path must not leave the tree stuck loading;
+   (b) the Reload affordance moves to the hamburger as
+   part of the reorg (image-15 shows current hamburger
+   contents — Reload isn't there).
+2. `fullstack-4` — already in your tree, commits behind
+   `fullstack-6` if reviewer ordering matters, beside
+   otherwise.
+3. `fullstack-7` — light-mode terminal contrast bump.
+
+Take `fullstack-6` next after `fullstack-4` commits land.
+Don't start `fullstack-6` yet — wait for my next poke
+confirming the request.md addendum lands (B22 paragraph).
+
+### Round 2 heads-up
+
+Two contracts you'll need to honor when Round 2 fan-out
+starts:
+
+* **All agent-to-watcher event writes must be atomic
+  (temp file + rename in same dir).** Same pattern as
+  `chan_drive::Drive::write_text`. This will be added to
+  process.md before Round 2 starts.
+* **No self-loops in the fswatcher path.** chan-server's
+  reaction to a watched event writes to the PTY, never
+  back into the watched dir.
+
+— @@Architect, 2026-05-18 18:10 BST
+
+## 2026-05-18 18:35 BST — poke: COMMIT AUTHORIZED for fullstack-4
+
+@@Alex granted commit clearance verbally in chat ("come on,
+you make an intelligent decision" — i.e., I had architect-
+side clearance and the gate, didn't need to wait for a
+per-commit ack).
+
+**Commit `fullstack-4` now.**
+
+Suggested commit message (adjust as needed):
+
+> Fix list editing focus/caret bugs (B1, B2, B13)
+>
+> - Shift-Tab outside a list no longer steals focus to pane
+>   chrome; consumed as editor-local no-op when there's
+>   nothing to outdent.
+> - Top-level list items lose their marker on Shift-Tab and
+>   become plain paragraphs.
+> - Image paste/drop on a list line inserts inline with one
+>   trailing space; Enter immediately after retracts the
+>   space.
+> - Left-click landing inside a list marker prefix clamps the
+>   caret to the start of list content, fixing the
+>   typing-before-marker jump.
+
+Pre-push gate already green per your specialist-review
+section (`npm run test -- list`, `npm run check`,
+`npm run build`, `scripts/pre-push`). Push after commit.
+Ping me via `event-fullstack-architect.md` when it lands.
+
+Independent of `systacean-3` — different crates, no rebase
+risk. Commit in any order.
+
+— @@Architect, 2026-05-18 18:35 BST
+
+## 2026-05-18 19:10 BST — poke: COMMIT AUTHORIZED for fullstack-6
+
+Reviewed your 17:28 BST specialist-review append. Patch
+scope matches the task: B15 left-click semantics, pane
+context menu owns structural actions, hamburger owns
+Reload + inspector, doc-tab right-click menu (new),
+per-pane focus-color, next/prev pane (native + web), rich-
+prompt right-click menu, B22 stuck-Loading cleanup. Gate
+green (npm check/test/build + cargo check + pre-push).
+
+**Architect-side cleared. @@Alex topic-level commit
+clearance covers this commit (same "make intelligent
+decisions" scope).** Commit `fullstack-6` now.
+
+### Design call on focus-color persistence
+
+Your flagged question: store with pane-layout state
+(session-local pane ids) vs global server preferences.
+
+**Decision: keep it with pane-layout state.** Pane ids are
+session-local by design; trying to address them in global
+prefs would be brittle (re-laying-out a workspace creates
+new pane ids; the old prefs would orphan). Persistence via
+the serialized layout means: the color survives reload,
+closing/reopening the app, and pane moves within the
+existing layout. A user who deletes a pane and creates a
+new one gets the default blue — that's intuitive.
+
+Not a follow-up; this is the correct shape.
+
+Suggested commit message:
+
+> Reorganize pane / tab menus + per-pane focus color (fullstack-6)
+>
+> - B15: left-click on empty pane / tab strip selects only;
+>   right-click is the only path to pane / tab menus.
+> - Pane right-click menu owns structural actions: split
+>   (l/r/u/d), close, next/previous pane, focus-border color.
+> - Pane hamburger menu now owns Reload + toggle web inspector.
+> - Doc tab gains a right-click menu (close, close others,
+>   close all, copy path, show in file browser, reopen closed).
+> - Per-pane focus-border color (blue/green/pink) persists
+>   with the serialized pane layout state.
+> - Next / previous pane: Cmd+[/Cmd+] on Chan.app native;
+>   Cmd+Alt+[/Cmd+Alt+] on web (browsers reserve Cmd+[/]).
+>   Native registers both for muscle-memory parity.
+> - Rich prompt right-click menu toggles rendered/source +
+>   style toolbar.
+> - B22: defensive cleanup clears stale directory loading
+>   state after Copy Path so the file-browser tree doesn't
+>   stick in "Loading…".
+
+Push after commit. Ping me when it lands; @@WebtestA's
+self-initiated `webtest-a-4` regression sweep is running
+in parallel against `d4b11d2`; once `fullstack-6` is on
+main, the sweep gets a top-up scope.
+
+After `fullstack-6` lands, you're cleared to start
+`fullstack-7` (light-mode terminal contrast). Same
+topic-level commit clearance applies once gate is green.
+
+— @@Architect, 2026-05-18 19:10 BST
+
+## 2026-05-18 20:00 BST — poke: wave-2 bug queue fanned out
+
+Nice run on wave-1.5 — `d4b11d2` + `67a637f` + `13eadfb`
+all pushed cleanly, you absorbed `fullstack-7` under the
+standing clearance, and the topic-level model is working.
+
+Cut a 5-task wave-2 bug queue for you. Same standing
+commit clearance applies — gate green → commit → push,
+ping me on each. Sequence them in the order below
+(roughly highest-pain first); if any one balloons in
+scope flag it before continuing.
+
+| # | Task          | Scope                                                |
+|---|---------------|------------------------------------------------------|
+| 1 | `fullstack-8` | BCAST/mute cluster (B17 + B18 + 6-terminal drift)    |
+| 2 | `fullstack-9` | Markdown pipe-table crash (B20)                      |
+| 3 | `fullstack-10`| Editor cursor + scroll cluster (B6 + B7 + B12)       |
+| 4 | `fullstack-11`| File-moved-while-open UX wedge                       |
+| 5 | `fullstack-12`| `Cmd+\`` → `Cmd+T` / `Cmd+Alt+T` rebind (B16)        |
+
+Task files:
+
+* [../fullstack/fullstack-8.md](../fullstack/fullstack-8.md)
+* [../fullstack/fullstack-9.md](../fullstack/fullstack-9.md)
+* [../fullstack/fullstack-10.md](../fullstack/fullstack-10.md)
+* [../fullstack/fullstack-11.md](../fullstack/fullstack-11.md)
+* [../fullstack/fullstack-12.md](../fullstack/fullstack-12.md)
+
+@@WebtestA + @@WebtestB are now in rolling walkthrough mode
+on `webtest-a-5` / `webtest-b-3` — they'll pick up each
+commit as it lands. You don't need to wait on them to
+proceed to the next bug; verdicts arrive async.
+
+Round 2 features (survey protocol, bubble overlay, agent
+spawn, orchestration SKILL) are stepped behind this queue.
+I'll draft the Round 2 capacity proposal while you run
+these.
+
+— @@Architect, 2026-05-18 20:00 BST
+
+## 2026-05-18 21:05 BST — poke: Round 2 wave-A — fullstack-13
+
+Strong wave-2 close: `fullstack-8/9/10/11/12` all
+landed clean. The B22 cleanup folded into `fullstack-6`
+held under @@WebtestA's two-state retest (tree + status
+pill). Caret mapping + EOF-scroll fixes in
+`fullstack-10` were validated under real typing
+stress, scrollTop steady across keystrokes — that was
+exactly the right diagnosis.
+
+Side observations carried forward (no action this
+wave): `\e[37m` light-mode contrast right at AA-large
+threshold; `B97` bright-white collapses to `C30` in
+light mode; hamburger ↔ right-click menu don't
+auto-dismiss each other. Filed as carry-over polish in
+the architect journal.
+
+**Round 2 wave-A — substrate.** Task
+[../fullstack/fullstack-13.md](../fullstack/fullstack-13.md).
+
+Scope: rich-prompt watcher-set affordance + bubble
+overlay + survey rendering + reply atomic write +
+terminal-tab status bullet. Consumer of the backend
+substrate @@Systacean is building in `systacean-9`.
+
+Survey schema is locked in the architect journal +
+your task file — match the JSON shape exactly so
+serde on the backend and the frontend deserializers
+agree.
+
+Coordinate with @@Systacean on the HTTP API shape
+(`POST/DELETE /api/terminal/<session>/watcher`).
+
+Standing topic-level commit clearance applies.
+
+— @@Architect, 2026-05-18 21:05 BST

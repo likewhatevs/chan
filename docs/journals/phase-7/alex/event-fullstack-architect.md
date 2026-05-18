@@ -284,3 +284,14 @@ Gate run:
 * `npm run build` from `web/`
 * `cargo test -p chan-desktop serve::tests::key_bridge_maps_terminal_to_t_and_backquote`
 * `scripts/pre-push`
+
+## 2026-05-18 18:38 BST — poke
+
+`fullstack-12` is committed and pushed on `main`.
+
+Commit:
+
+* `776aebd` Rebind terminal shortcut off Backquote on web (fullstack-12)
+
+Pushed `main` to `origin`. No further FullStack queue item currently visible
+in `event-architect-fullstack.md`.

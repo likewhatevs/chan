@@ -122,3 +122,124 @@ memory: ask first about drive choice + seed).
 
 @@Alex / @@Architect: when you cut my next task, ping
 [../alex/event-architect-webtest-a.md](../alex/event-architect-webtest-a.md).
+
+## 2026-05-18 (resume) BST - webtest-a-4 regression sweep done
+
+Self-initiated `webtest-a-4` under @@Alex's go-do-them
+authorization. Built head `d4b11d2` + unstaged `systacean-3`
+patch, ran 8801 against `/tmp/chan-webtest-a-1/`.
+
+* Lane A headliners from `webtest-a-1` re-verified against the
+  `fullstack-4` commit: B1 (Shift+Tab focus theft), B2 (image
+  paste in list), B13 (typing before marker) — **all PASS**
+  for both numbered and bullet lists.
+* B20 (table-crash) **still open** with the same
+  `RangeError: Block decorations may not be specified via
+  plugins` stack — not in `fullstack-4`'s scope, carries
+  forward.
+* **New Round-2 data point**: `systacean-3` cross-drive drift
+  still reproduces with the patch in. Tab jumps from 8801 →
+  8810 within 1.5s of every navigation, even on a fresh chrome
+  MCP tab whose first navigation is to 8801. Both servers
+  serve the patched binary (`Cache-Control: no-store` +
+  `Vary: Host` confirmed). Workaround: killing the stale Lane B
+  servers (8810 + 8811 from @@WebtestB's pre-recycle session).
+  Hypothesis hand-off to @@Systacean — something in the SPA
+  bundle is reading cross-port persistent state. Full write-up
+  in [webtest-a-4.md](webtest-a-4.md) "Drift status".
+* Adjacent sweep: wikilink renders + isolates correctly; the
+  rest of the area smoke clean.
+
+Poking architect via
+[../alex/event-webtest-a-architect.md](../alex/event-webtest-a-architect.md).
+
+## 2026-05-18 (resume) BST - webtest-a-5 wave-1.5 cluster done
+
+Took up `webtest-a-5` after architect's 20:00 BST poke.
+Rebuilt against head `f94c4b5`, restarted 8801.
+
+* **All wave-1.5 items PASS**: B15 click semantics, pane
+  right-click menu (Split/Next-Prev/Focus-color/Close), pane
+  hamburger (Reload + Web Inspector), doc tab right-click (6
+  spec items + bonus), per-pane focus color persisting across
+  reload, Cmd+Alt+]/[ web pane nav, B22 Copy Path no-stuck-
+  Loading, fullstack-7 light-mode terminal ANSI palette
+  (verified by CSS colors matching patch exactly + visual
+  white-bg render).
+* **Bonus: systacean-3 drift re-tested — PASS this round**.
+  The `f94c4b5` commit (adding `Vary: Host` on hashed assets,
+  on top of the SPA shell `no-store`) appears to close the
+  cross-port drift I repro'd in `webtest-a-4`. Tested both
+  cold-tab and warm-cache (visit 8810 first, then 8801)
+  scenarios. systacean-6 may not be needed; flagged to
+  @@Systacean to confirm.
+* Minor cosmetic finding: opening the pane hamburger menu
+  while a prior pane right-click menu is still open shows both
+  menus simultaneously (Escape doesn't dismiss the first).
+  Not blocking.
+
+Server stays on 8801; tab left in light theme + Terminal-1 in
+left pane + green-bordered empty right pane. Full per-item
+verdicts at [webtest-a-5.md](webtest-a-5.md).
+
+Standing by for the next wave-2 commits.
+
+## 2026-05-18 (resume) BST - webtest-a-5 wave-2 cluster done
+
+Picked up after @@Alex's `ping`. Rebuilt against head
+`8ae2d44`, bounced 8801.
+
+* **fullstack-9 B20 pipe-table render — PASS**. note-a.md
+  fully renders now: heading + lists + actual `<table>` with
+  three data rows + the post-table paragraph. No new
+  RangeError (buffered errors are pre-rebuild timestamps).
+  The StateField path for block decorations matches the patch.
+* **fullstack-10 B12 source/rendered caret round-trip —
+  PASS**. Source pos 42 (inside `./img/photo-1.png` URL) →
+  wysiwyg (image renders, source revealed under cursor as
+  expected, no crash) → back to source: cursor lands at
+  exact same offset (10 within the URL text node).
+* **fullstack-10 B6 EOF typing scroll — PASS**. Cursor at
+  end-of-doc with viewport at bottom: typed A/B/C one at a
+  time, scrollTop stayed at 7218 across all three. No
+  per-character thrash.
+* **systacean-6 cross-drive drift — PASS** under the
+  warm-cache stress (visit 8810 first → navigate to 8801 →
+  hold). Drift fully closed. Note: 8810 was running the older
+  binary; fix on the 8801 side alone was sufficient — each
+  SPA scopes its own keys.
+
+Skipped fullstack-8 (BCAST/mute) — @@WebtestB is actively
+stress-testing it on 8810 (T1-T6 visible), no point doubling
+up. fullstack-11 / fullstack-12 not yet landed.
+
+Server stays on 8801. Standing by for the next wave-2
+landings.
+
+## 2026-05-18 (resume) BST - webtest-a-5 wave-2b cluster done
+
+After @@Alex's next `poke`. Rebuilt against head `65534d3`,
+bounced 8801.
+
+* **fullstack-12 B16 Cmd+Alt+T — PASS** for both halves.
+  Cmd+Alt+T spawns Terminal-1 in the focused pane. Legacy
+  Cmd+` no longer creates a terminal (count stayed at 1).
+* **fullstack-11 fs-move/delete UX — PASS** for both mv and
+  rm cases. Beautiful empty-state surface with header banner
+  "File moved or deleted", filename subtitle, and Re-open /
+  Find / Close affordances. No raw I/O error.
+* **systacean-8 scrollback after reload — FAIL** in live
+  test. PTY survival works (same PID + bash history after
+  reload, B14 path intact), but the visual scrollback isn't
+  replayed: 30 SCROLLBACK-LINE-* lines disappear post-reload,
+  only the fresh prompt shows; mouse-wheel scroll reveals
+  nothing in the xterm buffer. Server-side ring + WS replay
+  loop are in place per code inspection. Most likely failure
+  modes are timing-race or session-id mismatch on reconnect;
+  full hypotheses + repro detail in
+  [webtest-a-5.md](webtest-a-5.md) wave-2b section. Hand-off
+  for @@Systacean.
+
+Server stays on 8801. Drive has list.md (test artifact) +
+the persisted move/delete-target empty states in the tab.
+Standing by for the next batch.

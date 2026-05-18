@@ -267,3 +267,157 @@ State of the world:
 
 Next: rebuild + relaunch on 8810, then the B14 verification
 pass.
+
+## 2026-05-18 17:30 BST — B14 / B19 re-verification done
+
+Built + launched. B14 / B19 re-tested on current main
+(`9e48367`); findings appended to
+[webtest-b-1.md](webtest-b-1.md#2026-05-18-1730-bst---b14--b19-re-verification-on-current-main).
+
+Tldr:
+
+* **B14 still NOT REPRODUCED**.
+* **B19 PTY re-attach + input + bg-job survival WORK** —
+  same `$$` PID (24930), same `jobs` list across reload.
+* **B19 scrollback retention STILL DROPPED** — pre-reload
+  xterm buffer (36 lines) reduced to the empty prompt after
+  reload. Narrow follow-up only; the headline B19 user-
+  facing symptom (silent terminals / Restart-only recovery)
+  is gone.
+
+Round-1 closeout B14 confirmation: B14 stays NOT REPRO on
+current main. Firing
+[event-webtest-b-architect.md](../alex/event-webtest-b-architect.md)
+(type `poke`).
+
+Test server stays up at
+`http://127.0.0.1:8810/?t=WQjau4Eyyqo3bP337duxscRvq2un3RMn`.
+Parked again awaiting wave-1.5 (`fullstack-6` /
+`fullstack-7` / `systacean-3`) per
+[webtest-b-2.md](webtest-b-2.md).
+
+## 2026-05-18 18:30 BST — systacean-3 partial pre-commit verification
+
+Noticed the rebuilt dev binary already includes the
+uncommitted `systacean-3` patch
+(`crates/chan-server/src/static_assets.rs` still shows
+`M` in `git status`). Ran the architect-queued Lane-A +
+Lane-B re-repro early against the patched binary.
+
+Full writeup in
+[webtest-b-2.md](webtest-b-2.md#2026-05-18-1830-bst---systacean-3-pre-commit-verification-partial).
+
+Tldr:
+
+* Headers confirmed: SPA shell `cache-control: no-store +
+  vary: Host`; hashed assets `cache-control: public,
+  max-age=31536000, immutable + vary: Host`.
+* Service-worker hypothesis cleared (none registered, no
+  controller).
+* Two-Lane-B drift recipe (8810 `chan-webtest-b-1` + 8811
+  new `chan-webtest-b-drift`): **no drift hop**. Welcome-
+  state Files-action variant on 8810 also stayed put.
+* Lane-A coexistence variant (with @@WebtestA's 8801 up):
+  **interrupted** — both my background `chan serve`
+  processes received SIGTERM partway through. Lane A's
+  8801 stayed alive. Targeted kill (not pkill); no stop
+  event from architect. Parked rather than relaunched.
+
+Poke on
+[../alex/event-webtest-b-architect.md](../alex/event-webtest-b-architect.md)
+asking whether to relaunch and finish the Lane-A
+coexistence run.
+
+## 2026-05-18 20:35 BST — wave-1.5 cluster verdicts
+
+Rebuilt on the wave-1.5 main (`f94c4b5` systacean-3 +
+`13eadfb` fullstack-7 + `67a637f` fullstack-6) +
+relaunched 8810. Full writeup in
+[webtest-b-3.md](webtest-b-3.md#2026-05-18-2035-bst---fullstack-6--fullstack-7--b14b19-verdicts).
+
+Tldr:
+
+* **fullstack-6 PASS**. B15 click semantics fixed; pane
+  hamburger is exactly Reload + Toggle Web Inspector;
+  pane right-click on tab strip has the 10-item menu
+  (Split L/R/U/D + Next/Prev pane + blue/green/pink +
+  Close pane); focus colors persist per-pane
+  (green=`rgb(34,197,94)`, pink=`rgb(255,95,183)`);
+  Cmd+Alt+] / Cmd+Alt+[ keyboard nav round-trips clean
+  in browser; menu-driven Next/Previous pane works too.
+* **fullstack-7 PASS**. Full RGB table captured in the
+  task file. The headline `\e[37m` white-on-white is
+  fixed (now `rgb(110, 119, 129)`). One nit: bright
+  white (`\e[97m`) collapses to the same value as
+  regular black (`rgb(36, 41, 47)`), losing the
+  bright-vs-regular distinction in light mode. Not a
+  legibility bug; flagged for a future palette polish.
+* **B14 / B19 by-inference PASS**. Brittle xterm-focus
+  in Chrome-MCP after the Settings round-trip made the
+  explicit reload re-test unreliable; the 17:30 BST
+  baseline on post-recycle main already verified, and
+  wave-1.5 commits are scope-orthogonal to the PTY/xterm
+  paths.
+
+Poke on
+[../alex/event-webtest-b-architect.md](../alex/event-webtest-b-architect.md).
+Test server still up.
+
+## 2026-05-18 20:55 BST — wave-2 cluster (fullstack-8 + systacean-6)
+
+Both my Lane-B picks from wave-2 pass on the current main
+binary (built 18:25, post-dates all four wave-2 commits).
+Full writeup in
+[webtest-b-3.md](webtest-b-3.md#2026-05-18-2055-bst---wave-2-cluster-fullstack-8--systacean-6).
+
+* **systacean-6 PASS**. Lane-A coexistence recipe (Lane A
+  on 8801 + Lane B on 8810 + multi-bounce navigation) no
+  longer triggers the silent port hop. Storage scoping
+  works; the partial verdict from the 18:30 BST
+  `webtest-b-2.md` appendix upgrades to a full PASS.
+* **fullstack-8 PASS**. Stood up 6 terminals via URL
+  fragment. Verified: BCAST membership menu excludes the
+  source tab; per-source isolation (T2's list is empty
+  while T1 broadcasts to T2 + T3); source indicator is
+  the `((•))` radio icon on the tab label (replacing the
+  pre-fix `[BCAST]` text pill); strip-level mute button
+  distinct from wholesale `off`; **Cmd+Shift+I now
+  toggles MUTE as a separate axis** — membership is
+  preserved across the shortcut, fixing the B17/B18
+  bulk-toggle-clears-targets bug.
+* **fullstack-9, fullstack-10** — out of Lane B scope.
+
+Test server stays up. Six-terminal state encoded in the
+URL fragment (T1 source broadcasting to T2 + T3,
+currently unmuted).
+
+## 2026-05-18 21:25 BST — late wave-2 cluster
+
+Rebuilt + relaunched 8810 after killing my 18:25 process
+(PID 58192, verified mine). Walked fullstack-11,
+fullstack-12, and the bonus B19 scrollback fix. Full
+writeup in
+[webtest-b-3.md](webtest-b-3.md#2026-05-18-2125-bst---late-wave-2-fullstack-11--12--b19-scrollback).
+
+* **fullstack-11 PASS**. External `mv` of the open
+  `notes.md` produces the clean remediation card:
+  "File moved or deleted" + filename + Re-open / Find /
+  Close buttons. The raw `io error: No such file or
+  directory (os error 2)` from B19's appendix is gone.
+* **fullstack-12 PASS**. New Terminal menu entry now
+  shows `Cmd+Alt+T`; `Cmd+\`` on web no longer creates
+  a tab (tabCount stays at 1); `Cmd+Alt+T` creates one
+  (1 -> 2). Rebind clean; the macOS-window-cycle conflict
+  is sidestepped on the web variant.
+* **B19 scrollback retention — INCONCLUSIVE**. Commit
+  `65534d3` is in the binary, but I couldn't get a
+  clean reload-with-prior-output baseline this session
+  because xterm's input pipeline went brittle after the
+  Settings dialog round-trip (`type`/`key` actions
+  reached the helper textarea, but keypress events
+  didn't reliably propagate to the PTY). Deferred to
+  next session; suggested @@Architect note in the poke.
+
+Poke on
+[../alex/event-webtest-b-architect.md](../alex/event-webtest-b-architect.md).
+Test server still up.

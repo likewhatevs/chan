@@ -116,3 +116,121 @@ Verification:
 
 Known gap: needs @@WebtestB Lane B re-repro after landing.
 Commit remains gated on @@Alex.
+
+## 2026-05-18 17:46 BST - poke
+
+`systacean-3` committed and pushed.
+
+Commit:
+
+* `f94c4b5` - Scope SPA shell and asset caching per
+  chan-serve instance
+
+Pre-push gate:
+
+* `scripts/pre-push` - passed
+
+Pushed `main` to `origin/main` (`13eadfb..f94c4b5`).
+
+Ready for @@WebtestB Lane A + Lane B drift re-repro on the
+new headers.
+
+## 2026-05-18 18:10 BST - poke
+
+`systacean-6` committed and pushed.
+
+Commit:
+
+* `83fbb20` - Scope SPA storage keys per serve instance
+
+Patch summary:
+
+* Scoped SPA bearer-token storage and per-tab session window ids
+  by `window.location.origin` plus injected chan prefix.
+* Confirmed cookies are not the auth/session routing mechanism in
+  this tree; only tunnel-header scrubber code mentions them.
+* Documented the scheme in `crates/chan-server/src/static_assets.rs`
+  and the chan-server section of `crates/chan-drive/design.md`.
+
+Verification:
+
+* `cd web && npm run test -- src/api/client.test.ts`
+* `cd web && npm run check`
+* `cd web && npm run test`
+* `scripts/pre-push`
+
+Pushed `main` to `origin/main` (`7e09d20..83fbb20`).
+
+Ready for @@WebtestA same-recipe re-repro.
+
+## 2026-05-18 18:40 BST - poke
+
+`systacean-7` committed and pushed.
+
+Commit:
+
+* `f975ee7` - Fix desktop DMG build signing env
+
+Patch summary:
+
+* `desktop/Makefile` now exports `APPLE_SIGNING_IDENTITY`
+  and `APPLE_TEAM_ID` only when non-empty.
+* This avoids passing an explicit empty codesign identity to
+  Tauri's default build, which failed with `no identity found`
+  before DMG bundling.
+* Signed/notarized paths still use `sign-prereqs` /
+  `notarize-prereqs` for clear failure messages.
+
+Verification:
+
+* `make -C desktop build` outside sandbox — passed
+* produced `target/release/bundle/macos/Chan.app`
+* produced `target/release/bundle/dmg/Chan_0.10.1_aarch64.dmg`
+* `cargo tauri build --bundles app` — passed
+* mounted the DMG and verified `Chan.app` plus
+  `Applications -> /Applications`
+* `scripts/pre-push` — passed in a clean temporary worktree
+  with only the `systacean-7` Makefile patch applied
+
+Main workspace note: direct `scripts/pre-push` is currently
+blocked by unrelated dirty formatting in
+`desktop/src-tauri/src/serve.rs`.
+
+Pushed `main` to `origin/main` (`776aebd..f975ee7`).
+
+## 2026-05-18 18:44 BST - poke
+
+`systacean-8` committed and pushed.
+
+Commit:
+
+* `65534d3` - Replay terminal scrollback after reload
+
+Diagnosis:
+
+* chan-server already retained PTY output in the configured
+  server-side ring (`server.terminal.ring_bytes`, default 1 MiB).
+* The browser reload path restored `terminalSessionId` and the old
+  terminal byte cursor (`tseq`), then reattached with
+  `since=<old lastSeq>`.
+* A fresh xterm buffer therefore asked for only bytes after the
+  pre-reload end offset and skipped the retained scrollback.
+
+Patch summary:
+
+* Stop serializing `tseq` into per-window session layout.
+* Ignore legacy `tseq` during restore/hydration.
+* Keep in-memory `lastSeq` for same-page WebSocket reconnects, so
+  live reconnects still avoid duplicating already-rendered output.
+
+Verification:
+
+* `cd web && npm run test -- src/state/tabs.test.ts src/terminal/session.test.ts`
+* `cd web && npm run check`
+* `cd web && npm run test`
+* `scripts/pre-push` passed on rerun after a transient unrelated
+  `Too many open files` failure in one chan-drive test
+
+Pushed `main` to `origin/main` (`f975ee7..65534d3`).
+
+Ready for @@WebtestB reload/scrollback walkthrough.

@@ -839,3 +839,340 @@ queued. Fresh me: read the items above in order, then
 ask @@Alex if they're ready to start Round 2 fan-out.
 
 — @@Architect, 2026-05-18 17:05 BST
+
+## 2026-05-18 18:10 BST — fresh-architect resumption
+
+Resumed post-recycle. Three things needed catching up on
+before any Round-2 fan-out.
+
+### Docs migration commit (recovered)
+
+The `docs/journals/` + `docs/agents/` migration claimed
+done in the 17:05 handover was actually never committed —
+the staging dropped during the v0.10.1 closeout. Working
+tree had 187 unstaged deletes under `chan-pre-release-
+phase-*` and `docs/agents/` + `docs/journals/` entirely
+untracked.
+
+Caught + landed as `2fc286e` (`chore: migrate phase
+journals to docs/journals + add docs/agents`). Pre-push
+gate green, pushed to `origin/main`. Stray `untitled.md`
+at repo root wiped per @@Alex.
+
+### Fresh agents jumped early
+
+Three of the four fresh agents booted before I did and
+started their queued tasks without architect direction.
+Process violation but caught quickly; work is sound:
+
+* **@@FullStack** — 5 files of `fullstack-4` (B1/B2/B13).
+  `outdentListItem` now consumes Shift-Tab even when
+  there's nothing to outdent (no focus theft). Image
+  paste in lists inserts ` ` not `\n`. New
+  `listCaretGuard` clamps click position past the marker.
+  `stripUnusedInlineImageSpaceOnEnter` for the
+  retract-on-Enter case. Tests added. **Architect-side
+  cleared to commit**, gated on @@Alex.
+* **@@Systacean** — `systacean-3` proposal + patch
+  landed in the working tree. `Cache-Control: no-store`
+  on SPA shell, `public, max-age=31536000, immutable` +
+  `Vary: Host` on hashed assets. Tests added. Clean,
+  minimal, matches the diagnostic theory. **Architect-
+  side cleared to commit**, gated on @@Alex.
+* **@@WebtestB** — re-verified B14/B19 on post-recycle
+  main. **B14 NOT REPRO**, B19 PTY re-attach works, only
+  scrollback retention remains. Rescope B19 accordingly.
+
+### Round 2 decisions taken with @@Alex this turn
+
+* **Atomic-write contract for fswatcher events**. Writers
+  (every agent + chan itself) write event files via temp
+  file + rename in the same dir. Watcher (chan-server)
+  fires once on fsnotify, reads once. No defensive
+  multi-read on the server side — that complexity drops
+  vs request.md line 106.
+* **No watcher self-loops**. chan-server's reaction to a
+  watched event must never write back into the watched
+  directory. Default posture is structural separation
+  (poke → PTY, not → disk-in-watched-dir). If we ever do
+  write inside a watched dir, reuse the existing
+  `crates/chan-server/src/self_writes.rs` for notify
+  suppression.
+* **Contract lives in process.md now, escalates to
+  orchestration SKILL later**. For our roster the rule
+  is one paragraph in `process.md`. For external users
+  (Round 2 deliverable) the same rule lands in
+  `docs/agents/orchestration/` with per-language
+  temp+rename examples.
+
+### Request.md re-pass — new items relative to handover
+
+Reviewed at @@Alex's request. New asks:
+
+* **B22 — Copy Path on directory leaves file-browser
+  pane in a stuck `Loading…` state.** Recovery requires
+  Reload, currently surfacing only via left-click on
+  empty pane (B15 cluster). Pairs with the pane-menu
+  reorg work — promote `fullstack-6` ahead of
+  `fullstack-4` / `fullstack-7` so Reload moves to the
+  hamburger sooner. **@@Alex authorized the promotion.**
+* **4×3 multi-topic survey variant** for batched
+  architect→@@Alex dispatches (2-4 topics × 1-3
+  options).
+* **Standing "check my comments first" survey option**
+  on every survey.
+* **Watcher status bullet on terminal tab**, blinks when
+  replies arrive (parallel to file-save bullet).
+* **HTTP control channel for agent spawning** (preferred
+  over MCP). Token shape vs `--no-token` mode needs
+  design.
+* **Gemini test affordance**: @@Alex offers their gemini
+  for ~/.gemini settings-reset reproduction during
+  spawn-pre-flight design.
+* **Broadcast unifies with the bubble notification
+  system** — not a separate channel.
+
+Setup-2 Q5 amendment: the spawn event still carries the
+full CLI command (zero-setup), but the *back-channel*
+between spawned agent and chan-server is HTTP, not MCP.
+Logging this as a refinement, not a reversal.
+
+### Wave-1.5 sequence (authorized)
+
+Promotion takes effect. New order:
+
+1. `fullstack-6` — pane menu reorg + B15 + per-pane
+   focus color + Next/Prev pane + new doc-tab right-
+   click menu + (folded in) rich-prompt right-click
+   menu + B22 stuck-Loading addendum.
+2. `fullstack-4` — list + image bugs (B1/B2/B13).
+   @@FullStack already drafted; commits behind
+   `fullstack-6` if needed for review ordering, or
+   beside it if independent.
+3. `fullstack-7` — light-mode terminal contrast bump.
+4. `systacean-3` — cross-drive nav drift. @@Systacean
+   already drafted patch; landing requires @@WebtestB
+   re-repro on the new headers.
+
+### Outstanding
+
+* 5 unstaged code files (in `web/src/editor/` + 1 in
+  `crates/chan-server/src/`) remain after the docs
+  migration push — they ARE @@FullStack's + @@Systacean's
+  in-progress work, intentionally left in tree.
+* Round 2 capacity proposal still owed. Will draft once
+  `fullstack-6` is cut and the wave-1.5 commits start
+  landing.
+
+— @@Architect, 2026-05-18 18:10 BST
+
+## 2026-05-18 18:50 BST — BCAST/mute cluster scope expansion
+
+@@Alex repro on a 6-terminal stress test surfaced new
+symptoms in the B17/B18 cluster (already wave-2 deferred):
+
+* `[BCAST]` text pill on tabs should be replaced by the
+  broadcast (radio) icon used in the membership chip area
+  (consistent with the menu UI). Original B18 wording had
+  this buried; promoting it to first-class spec.
+* BCAST membership menu toggle is leaking across tabs:
+  ticking one terminal flips others. Toggle must isolate
+  to the clicked terminal.
+* Select-all / deselect-all in the membership menu must
+  preserve each tab's individual pre-existing MUTE state.
+  BCAST membership and per-tab MUTE are independent axes.
+
+Captured in request.md as a sub-bullet under the existing
+B18 line, not as a new bug entry. Wave-2 still owns it; no
+promotion. When `fullstack-6` ships and we cut wave-2
+tasks, BCAST/mute gets its own `fullstack-N.md` with the
+above as acceptance criteria.
+
+— @@Architect, 2026-05-18 18:50 BST
+
+## 2026-05-18 19:30 BST — wave-1.5 commits landing
+
+@@FullStack picked up the standing topic-level clearance and
+pushed both their queued patches:
+
+* `d4b11d2` — `fullstack-4` (B1/B2/B13 list/image bugs).
+* `67a637f` — `fullstack-6` (pane menu reorg + B15 click
+  semantics + per-pane focus color + Next/Prev pane +
+  doc-tab right-click menu + rich-prompt right-click menu +
+  B22 stuck-Loading cleanup).
+* `13eadfb` — `fullstack-7` (light-mode terminal contrast
+  bump).
+
+@@Systacean is reading their commit-auth poke now; their
+`systacean-3` (cache headers) lands next.
+
+After `systacean-3` is on `main`, @@WebtestB gets the
+re-repro poke for the Lane-A coexistence drift on the new
+headers. That closes wave-1.5 on the fix side.
+
+@@WebtestA's self-initiated `webtest-a-4` regression sweep
+is running against `d4b11d2`+. They'll top up scope as more
+commits land.
+
+Notification-system gap surfaced today: agents don't auto-
+detect event-file appends. Pokes queue until @@Alex wakes
+the agent's terminal. Round 2's bubble overlay closes that.
+
+— @@Architect, 2026-05-18 19:30 BST
+
+## 2026-05-18 20:00 BST — wave-2 fan-out (stepped)
+
+@@Alex chose the stepped approach: fan out wave-2 bugs +
+walkthroughs now, draft the Round 2 capacity proposal in
+parallel, kick off Round 2 features after wave-2 lands.
+
+### Tasks cut
+
+* `fullstack-8` — BCAST/mute cluster (B17+B18+6-terminal).
+* `fullstack-9` — markdown pipe-table crash (B20).
+* `fullstack-10` — editor cursor + scroll cluster
+  (B6+B7+B12).
+* `fullstack-11` — fs-move UX wedge.
+* `fullstack-12` — `Cmd+\`` → `Cmd+T` / `Cmd+Alt+T` (B16).
+* `webtest-a-5` — Lane A rolling walkthrough (wave-1.5
+  + wave-2 as commits land).
+* `webtest-b-3` — Lane B rolling walkthrough (same).
+* `systacean-6` — cross-drive drift, SPA persistent-state
+  phase (already cut earlier this turn).
+
+### Slot occupancy
+
+* @@FullStack: 5-task wave-2 queue, serial execution.
+* @@Systacean: `systacean-6` in flight.
+* @@WebtestA: rolling walkthroughs.
+* @@WebtestB: rolling walkthroughs.
+
+All four slots saturated. @@Alex will wake terminals when
+ready; pokes are queued in event logs.
+
+### Notification gap (architectural note)
+
+Pokes pile up in event files; agents only read them when
+@@Alex wakes their terminal. This trip's signature pattern:
+each agent landed work, parked, was woken once, landed
+more work, parked again. The Round 2 bubble-overlay +
+fsnotify-watcher feature closes that loop.
+
+### Standing topic-level commit clearance
+
+@@Alex's "make intelligent decisions" mandate covers
+gate-green → commit → push for architect-cleared work in
+the active wave. Reaffirmed for wave-2 bugs.
+
+— @@Architect, 2026-05-18 20:00 BST
+
+## 2026-05-18 21:00 BST — Round 2 capacity proposal
+
+@@Alex authorized Round 2 fan-out with the same 4-slot
+capacity. Round 2 has four feature streams; this proposal
+fans out the substrate (streams #1 + #2) now, defers
+spawning + orchestration SKILL to a second wave once the
+substrate lands.
+
+### Feature streams
+
+| Stream | Name                                           | Wave |
+|--------|------------------------------------------------|------|
+| F1     | Survey-style event protocol (schema + UI)      | A    |
+| F2     | Notification bubbles over rich prompt          | A    |
+|        | (fsnotify watcher + bubble overlay)            |      |
+| F3     | Programmatic agent spawning (HTTP back-channel)| B    |
+| F4     | Orchestration SKILL (docs/agents/orchestration)| B    |
+
+F1 and F2 share substrate (fsnotify event ingestion +
+typed event schema). F3 builds on F1 (uses the survey
+mechanism for pre-flight troubleshooting). F4 is the
+external-user-facing documentation of the whole stack.
+
+### Wave-A fan-out (substrate)
+
+| Agent       | Task          | Scope                                                        |
+|-------------|---------------|--------------------------------------------------------------|
+| @@Systacean | `systacean-9` | fsnotify watcher + survey-event ingestion + atomic-write + no-self-loop |
+| @@FullStack | `fullstack-13`| Bubble overlay UI + watcher-set dialog + survey rendering + reply path |
+| @@WebtestA  | `webtest-a-6` | Rolling walkthrough on frontend pieces                       |
+| @@WebtestB  | `webtest-b-4` | Rolling walkthrough on backend pieces + watcher → PTY path   |
+
+Architect-side parallel work: orchestration SKILL initial
+draft scaffold so it's ready when wave-B tasks land.
+
+### Survey schema (design lock for wave-A)
+
+Event file shape, written atomically by the producer:
+
+```json
+{
+  "id": "<unique-id>",
+  "type": "survey",
+  "from": "@@SomeAgent",
+  "to": "@@Alex",
+  "topic": "<short-topic-tag>",
+  "questions": [
+    {
+      "header": "<short label, max 12 chars>",
+      "text": "<question text>",
+      "options": [
+        {"key": "1", "label": "<short option>"},
+        {"key": "2", "label": "<short option>"},
+        {"key": "3", "label": "<short option>"}
+      ]
+    }
+  ],
+  "standing_options": [
+    {"key": "C", "label": "Check my comments first"}
+  ],
+  "scope": "one-shot" | "topic-session" | "topic-phase"
+}
+```
+
+Multi-topic (4×3) variant: up to 4 `questions`, each with
+up to 3 `options`. Single-topic = 1 question.
+
+Reply, written atomically by @@Alex via the bubble UI:
+
+```json
+{
+  "id": "<survey-id-being-replied-to>",
+  "type": "survey-reply",
+  "from": "@@Alex",
+  "to": "@@SomeAgent",
+  "answers": [{"question_index": 0, "key": "1"}],
+  "scope_grant": "one-shot" | "topic-session" | "topic-phase",
+  "note": "<optional free text>"
+}
+```
+
+### Standing rules
+
+* Writers always use temp+rename atomic writes.
+* Watcher reads once on fsnotify; no defensive multi-read.
+* chan-server must never write back into a watched dir
+  (poke → PTY, not → disk-in-watched-dir).
+* Watcher lifecycle = terminal-session-scoped; dropped on
+  terminal exit; not re-created.
+
+### Wave-B (deferred, cut after wave-A lands)
+
+* `systacean-N`: HTTP agent control channel
+  (spawn / name terminal / execute command / restart).
+* `fullstack-N`: Spawn-from-rich-prompt UI + pre-flight
+  survey (open-terminal / kill / retry, with timeout +
+  spinner + counter + "retry now").
+* `architect-N`: Orchestration SKILL —
+  `docs/agents/orchestration/` with atomic-write contract
+  per-language examples + spawn protocol guide.
+
+### Carry-over polish (low priority backfill)
+
+* Light-mode contrast: `\e[37m` borderline + `B97` collapse
+  to `C30`. Wait until @@FullStack idles or fold into a
+  wave-B task.
+* Pane hamburger ↔ right-click menu auto-dismiss
+  interaction (@@WebtestA's cosmetic note).
+
+— @@Architect, 2026-05-18 21:00 BST

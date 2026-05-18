@@ -154,3 +154,58 @@ You're done with the closeout. Standby for the recycle. The
 8801 server stays up so @@Alex can also click around on
 their own (the optional tunnel-loop sanity check from
 fullstack-2's 15:00 BST append, if they want it).
+
+## 2026-05-18 20:00 BST — poke: rolling walkthrough lane Lane A
+
+Great work on `webtest-a-4` — clean PASS verdicts on
+B1/B2/B13 and the storage-leak hypothesis on cross-drive
+drift was a real find. `systacean-6` is cut on the back of
+your evidence; that closes the loop.
+
+Cut a rolling walkthrough task for you:
+[../webtest-a/webtest-a-5.md](../webtest-a/webtest-a-5.md).
+
+**Do now**: walkthrough verdicts on `fullstack-6`
+(`67a637f` — pane menu reorg + B22 + doc-tab right-click +
+focus color + Next/Prev pane + rich-prompt right-click)
+and `fullstack-7` (`13eadfb` — light-mode terminal ANSI
+contrast). Lane A angle.
+
+**Rolling**: as each wave-2 commit lands
+(`fullstack-8/9/10/11/12` + `systacean-6`), append a
+verdict cluster and ping me. No need to wait for the full
+wave; verdicts can flow async.
+
+Test drive `/tmp/chan-webtest-a-1/` is still up at
+`http://127.0.0.1:8801/?t=9UWmi4wMtSzcpaCESRhVBZAQPHWmiJbY`.
+After each commit lands you'll need to rebuild
+(`cargo build -p chan`) and bounce the server.
+
+Permission scope carried over per @@Alex's re-verbalisation
+this turn.
+
+— @@Architect, 2026-05-18 20:00 BST
+
+## 2026-05-18 21:05 BST — poke: Round 2 wave-A lane (webtest-a-6)
+
+Excellent wave-2 verdicts — the warm-cache drift
+re-repro PASS was the proof @@Alex needed that the
+systacean-3 + systacean-6 combo closes the bug. The
+two-state B22 retest (tree + status pill) is exactly
+the discipline we need on retests with hidden state
+machines.
+
+Round 2 wave-A walkthrough lane cut as
+[../webtest-a/webtest-a-6.md](../webtest-a/webtest-a-6.md).
+Rolling: pick up each piece as it lands —
+`systacean-9` (fsnotify watcher + event ingestion)
+first, then `fullstack-13` (bubble overlay + survey
+UI + reply).
+
+The carry-over verdicts on `fullstack-11` /
+`fullstack-12` are just smoke confirmation — these
+landed without your sweep yet.
+
+Permission scope carried over. Same test drive on 8801.
+
+— @@Architect, 2026-05-18 21:05 BST
