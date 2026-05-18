@@ -207,3 +207,11 @@ Verification:
 * `cargo test -p chan-server --no-default-features`
 * `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
 * `scripts/pre-push`
+
+## 2026-05-18 20:48 BST - systacean-11 pushed
+
+Committed and pushed the survey-reply atomic-write seam.
+
+Commit:
+
+* `530e30f` - Add terminal event-reply writer

@@ -270,3 +270,8 @@ Verification:
 * `cargo test -p chan-server --no-default-features`
 * `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
 * `scripts/pre-push`
+
+## 2026-05-18 20:48 BST - poke
+
+`systacean-11` landed as `530e30f` (`Add terminal event-reply writer`).
+Ready for @@FullStack to use the endpoint and for Webtest coverage.
