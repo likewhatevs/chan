@@ -242,7 +242,7 @@ describe("terminal session serialization", () => {
     expect(JSON.stringify(layoutSnapshot)).not.toContain("99");
   });
 
-  test("round-trips terminal session ids through session layout payloads", async () => {
+  test("round-trips terminal session ids without reload cursors", async () => {
     resetLayout([
       terminalTab({
         title: "build",
@@ -251,6 +251,8 @@ describe("terminal session serialization", () => {
       }),
     ]);
     const layoutSnapshot = serializeLayout({ terminalSessions: true });
+    expect(JSON.stringify(layoutSnapshot)).toContain("term_123");
+    expect(JSON.stringify(layoutSnapshot)).not.toContain("99");
 
     await restoreLayout(layoutSnapshot!);
 
@@ -261,7 +263,21 @@ describe("terminal session serialization", () => {
     expect(tab.mcpEnv).toBe(true);
     expect(tab.sessionMcpEnv).toBe(true);
     expect(tab.terminalSessionId).toBe("term_123");
-    expect(tab.lastSeq).toBe(99);
+    expect(tab.lastSeq).toBeUndefined();
+  });
+
+  test("ignores legacy terminal sequence cursors on reload", async () => {
+    await restoreLayout({
+      k: "l",
+      t: [{ k: "t", n: "build", tsid: "term_legacy", tseq: 99, a: 1 }],
+      f: 1,
+    });
+
+    const [tab] = activePane().tabs;
+    expect(tab?.kind).toBe("terminal");
+    if (tab?.kind !== "terminal") return;
+    expect(tab.terminalSessionId).toBe("term_legacy");
+    expect(tab.lastSeq).toBeUndefined();
   });
 
   test("persists terminal MCP env opt-out only in session layouts", async () => {
@@ -347,7 +363,7 @@ describe("terminal session serialization", () => {
     if (tab?.kind !== "terminal") return;
     expect(tab.title).toBe("build");
     expect(tab.terminalSessionId).toBe("term_abc");
-    expect(tab.lastSeq).toBe(42);
+    expect(tab.lastSeq).toBeUndefined();
   });
 
   test("hydrates terminal session ids during restore before mount-time reads", async () => {
@@ -366,7 +382,7 @@ describe("terminal session serialization", () => {
     expect(tab?.kind).toBe("terminal");
     if (tab?.kind !== "terminal") return;
     expect(tab.terminalSessionId).toBe("term_pre_mount");
-    expect(tab.lastSeq).toBe(77);
+    expect(tab.lastSeq).toBeUndefined();
 
     await restored;
   });

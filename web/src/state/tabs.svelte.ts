@@ -1595,7 +1595,10 @@ type SerTab = {
   /// Terminal PTY session id. Only emitted in the per-window
   /// session payload, never in the shareable URL hash.
   tsid?: string;
-  /// Last byte-sequence offset processed from the terminal session.
+  /// Legacy byte-sequence offset once persisted in session payloads.
+  /// Restore ignores this so a browser reload replays the server
+  /// ring into a fresh xterm buffer instead of asking for only bytes
+  /// after the pre-reload cursor.
   tseq?: number;
   /// Desired MCP env injection for fresh terminal sessions. Default on.
   me?: 0;
@@ -1644,7 +1647,6 @@ function serializeNode(
           ...(opts.terminalSessions && t.terminalSessionId
             ? {
                 tsid: t.terminalSessionId,
-                tseq: Math.max(0, Math.floor(t.lastSeq ?? 0)),
                 ...(t.sessionMcpEnv === false ? { sme: 0 as const } : {}),
               }
             : {}),
@@ -1759,10 +1761,6 @@ export async function restoreLayout(
               : terminalSessionId
                 ? true
                 : undefined;
-          const rawSeq =
-            typeof sertab.tseq === "number" && Number.isFinite(sertab.tseq)
-              ? sertab.tseq
-              : savedTerm?.tseq;
           const richPrompt = richPromptFromSer(sertab, savedTerm);
           const tab: TerminalTab = {
             kind: "terminal",
@@ -1774,10 +1772,7 @@ export async function restoreLayout(
             mcpEnv,
             sessionMcpEnv,
             terminalSessionId,
-            lastSeq:
-              typeof rawSeq === "number" && Number.isFinite(rawSeq)
-                ? Math.max(0, Math.floor(rawSeq))
-                : undefined,
+            lastSeq: undefined,
             richPrompt,
           };
           p.tabs.push(tab);
@@ -1929,10 +1924,7 @@ export function hydrateTerminalSessionsFromLayout(sessionLayout: SerNode | null)
         liveTerms[j]!.terminalSessionId = savedTerm.tsid;
         liveTerms[j]!.mcpEnv = savedTerm.me === 0 ? false : true;
         liveTerms[j]!.sessionMcpEnv = savedTerm.sme === 0 ? false : true;
-        liveTerms[j]!.lastSeq =
-          typeof savedTerm.tseq === "number" && Number.isFinite(savedTerm.tseq)
-            ? Math.max(0, Math.floor(savedTerm.tseq))
-            : undefined;
+        liveTerms[j]!.lastSeq = undefined;
       }
       const richPrompt = richPromptFromSer(savedTerm);
       if (richPrompt) liveTerms[j]!.richPrompt = richPrompt;

@@ -138,3 +138,19 @@ Verification so far:
   symlink layout
 * `scripts/pre-push` in a clean temporary worktree with only
   the `systacean-7` Makefile patch applied
+
+## 2026-05-18 18:43 BST - systacean-8 ready to land
+
+Fixed terminal scrollback loss on browser reload by no longer
+persisting/restoring the terminal replay cursor (`tseq`) in
+per-window session layout. Reloaded terminal tabs keep the
+server PTY session id but reconnect from the start of the
+server-side ring, so the fresh xterm buffer is repopulated.
+
+Verification:
+
+* `cd web && npm run test -- src/state/tabs.test.ts src/terminal/session.test.ts`
+* `cd web && npm run check`
+* `cd web && npm run test`
+* `scripts/pre-push` passed on rerun after a transient
+  `Too many open files` failure in an unrelated chan-drive test
