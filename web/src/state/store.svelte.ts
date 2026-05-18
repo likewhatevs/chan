@@ -22,7 +22,11 @@ import {
   serializeLayout,
 } from "./tabs.svelte";
 import { isEditableText } from "./fileTypes";
-import { appendDefaultMd, preserveExtension } from "./pathValidate";
+import {
+  appendDefaultMd,
+  preserveExtension,
+  proposeDefaultFilename,
+} from "./pathValidate";
 import { setNotifyHandler } from "./notify.svelte";
 import {
   availableScopeOptions,
@@ -322,7 +326,7 @@ export async function bootstrap(): Promise<void> {
         // tabs verbatim), but personal UI prefs like tree expansion
         // still come from session.json. The hash deliberately doesn't
         // carry these so a shared link doesn't leak the recipient's
-        // folder state into the sender's session.
+        // directory state into the sender's session.
         const sessionLayout = remote
           ? isLegacyLayoutPayload(remote)
             ? remote
@@ -696,7 +700,7 @@ export const __testApplyOverlaysFromHash = applyOverlaysFromHash;
 //
 // PUT/GET hit `<state>/sessions/<drive-key>/<window-id>.json`. The
 // payload is the layout shape from `serializeLayout()` plus a
-// `treeExpanded` map (file browser folder state) and an `overlays`
+// `treeExpanded` map (file browser directory state) and an `overlays`
 // block (legacy settings/search plus graph scope). Debounced more
 // than the URL-hash write since this hits the disk.
 const SESSION_DEBOUNCE_MS = 750;
@@ -774,7 +778,7 @@ async function restoreSession(p: SessionPayload): Promise<void> {
 /// tree-expansion + per-overlay scope/context. Pulled out of
 /// `restoreSession` so the URL-hash bootstrap path (which owns the
 /// layout but not the personal UI prefs) can still load these from
-/// session.json. The hash is meant to be shareable; folder
+/// session.json. The hash is meant to be shareable; directory
 /// open/closed state stays in session.json regardless of where the
 /// layout came from.
 function applySessionSidecars(p: SessionPayload): void {
@@ -833,7 +837,7 @@ export function __testSetBootstrapHydrated(value: boolean): void {
 
 /// Fire any pending session save synchronously via `fetch({ keepalive:
 /// true })` so the request survives the page unload. Without this,
-/// quick "expand folder; Cmd-R" cycles lose the toggle: the 750 ms
+/// quick "expand directory; Cmd-R" cycles lose the toggle: the 750 ms
 /// debounce hasn't elapsed, the page reloads, the in-flight payload
 /// is discarded. Registered on `pagehide` (which also fires on bfcache
 /// suspends, unlike `beforeunload`).
@@ -1019,7 +1023,7 @@ export function availableGraphScopes(): ScopeOption[] {
     }
   }
   // Same trick for file scopes entered via openGraphForFile or the
-  // inspector's "Graph this" button on a file/image/contact node.
+  // inspector's "Graph from here" button on a file/image/contact node.
   // The file may not be open in any pane (so availableScopeOptions
   // didn't include it), but the user just asked for it to be the
   // scope — surfacing it in the dropdown lets them switch away and
@@ -1037,17 +1041,17 @@ export function availableGraphScopes(): ScopeOption[] {
       });
     }
     const parent = parentDir(path);
-    if (parent) addDirScope(parent, "folder");
+    if (parent) addDirScope(parent, "directory");
   }
-  // Folder scopes can be entered directly from the file browser
+  // Directory scopes can be entered directly from the file browser
   // context menu, so preserve the exact `dir:<path>` selection even
-  // when the browser overlay is closed. Also offer the parent folder
+  // when the browser overlay is closed. Also offer the parent directory
   // as a one-hop broadening shortcut for deep directories.
   if (graphOverlay.scopeId.startsWith("dir:")) {
     const path = graphOverlay.scopeId.slice("dir:".length);
-    addDirScope(path, "folder");
+    addDirScope(path, "directory");
     const parent = parentDir(path);
-    if (parent) addDirScope(parent, "parent folder");
+    if (parent) addDirScope(parent, "parent directory");
   }
   return out;
 }
@@ -1055,7 +1059,7 @@ export function availableGraphScopes(): ScopeOption[] {
 /** Build the dropdown options for the search overlay. Server-side
  *  content search is still drive-wide, so SearchPanel applies these
  *  scopes as a client-side result filter. File Browser "Search this"
- *  can inject direct file/folder scopes even when the item is not
+ *  can inject direct file/directory scopes even when the item is not
  *  open in a pane. */
 export function availableSearchScopes(): ScopeOption[] {
   const out = availableScopeOptions({
@@ -1063,7 +1067,7 @@ export function availableSearchScopes(): ScopeOption[] {
     global: { label: "All drives (cross-drive, coming soon)", enabled: false },
   });
 
-  function addDirScope(path: string, labelPrefix = "folder"): void {
+  function addDirScope(path: string, labelPrefix = "directory"): void {
     if (!path || out.some((o) => o.id === `dir:${path}`)) return;
     const slash = path.lastIndexOf("/");
     const name = slash >= 0 ? path.slice(slash + 1) : path;
@@ -1115,10 +1119,10 @@ export type GraphFilters = {
   mention: boolean;
   language: boolean;
   img: boolean;
-  /// Folder NODE filter, applicable to filesystem graph mode where
-  /// folder nodes are emitted by the backend. Frontend-only toggle
-  /// — hides folder nodes (and edges touching them) without
-  /// changing the backend request. Per request.md, folders as
+  /// Directory NODE filter, applicable to filesystem graph mode where
+  /// directory nodes are emitted by the backend. Frontend-only toggle
+  /// — hides directory nodes (and edges touching them) without
+  /// changing the backend request. Per request.md, directories as
   /// nodes often crowd a whole-drive graph; the toggle lets the
   /// user collapse them for a cleaner view.
   folder: boolean;
@@ -1235,7 +1239,7 @@ export function openGraphForFile(path: string): void {
 
 export function openFsGraphForFile(path: string): void {
   graphOverlay.mode = "filesystem";
-  graphOverlay.scopeId = `file:${path}`;
+  graphOverlay.scopeId = "drive";
   graphOverlay.depth = 1;
   graphOverlay.pendingSelectId = path;
   graphOverlay.open = true;
@@ -1243,8 +1247,8 @@ export function openFsGraphForFile(path: string): void {
 }
 
 /** Open the graph overlay scoped to a directory. Depth starts at 1:
- *  all files under the folder plus their immediate graph neighbours.
- *  The dropdown keeps this folder, and its parent when available, as
+ *  all files under the directory plus their immediate graph neighbours.
+ *  The dropdown keeps this directory, and its parent when available, as
  *  explicit options through availableGraphScopes(). */
 export function openGraphForDirectory(path: string): void {
   graphOverlay.mode = "semantic";
@@ -1257,7 +1261,16 @@ export function openGraphForDirectory(path: string): void {
 
 export function openFsGraphForDirectory(path: string): void {
   graphOverlay.mode = "filesystem";
-  graphOverlay.scopeId = `dir:${path}`;
+  graphOverlay.scopeId = "drive";
+  graphOverlay.depth = 1;
+  graphOverlay.pendingSelectId = path;
+  graphOverlay.open = true;
+  scheduleSessionSave();
+}
+
+export function scopeFsGraphFromHere(path: string, isDir: boolean): void {
+  graphOverlay.mode = "filesystem";
+  graphOverlay.scopeId = isDir ? `dir:${path}` : `file:${path}`;
   graphOverlay.depth = 1;
   graphOverlay.pendingSelectId = path;
   graphOverlay.open = true;
@@ -1535,11 +1548,11 @@ export function persistDateFormat(formatId: string): void {
     });
 }
 
-/// Expanded-folder map for the file browser tree. Lifted out of
+/// Expanded-directory map for the file browser tree. Lifted out of
 /// `FileTree.svelte` so the state survives tab switches (the
 /// component unmounts every time the active tab changes). Shared
 /// across all browser tabs in the window; per-window because two
-/// windows on the same drive may be navigating different folders.
+/// windows on the same drive may be navigating different directories.
 ///
 /// Lives inside the per-window `session.json` payload (round-tripped
 /// through `serializeLayout` / `restoreLayout`) so it survives
@@ -1571,17 +1584,13 @@ export function markTreeExpansionRestored(): void {
   treeExpansionSeeded = true;
 }
 
-/// First-paint default: expand every directory so a new user
-/// doesn't land on a single collapsed root. Idempotent; only seeds
-/// when no prior state exists. Called from `refreshTree` after
-/// entries arrive.
+/// First-paint default: keep only the drive root expanded. A restored
+/// session still wins through `markTreeExpansionRestored`; fresh
+/// browser opens should not explode the whole tree.
 function seedTreeExpansionIfFresh(): void {
   if (treeExpansionSeeded) return;
   treeExpansionSeeded = true;
   treeExpanded.map[""] = true;
-  for (const e of tree.entries) {
-    if (e.is_dir) treeExpanded.map[e.path] = true;
-  }
 }
 
 /// Expand every directory in the current tree. Wired to the file
@@ -1611,7 +1620,7 @@ export function collapseAllFolders(): void {
 }
 
 /// Reveal a path in the file browser tree: expand every ancestor
-/// folder so the row is visible, then set the browser selection to
+/// directory so the row is visible, then set the browser selection to
 /// it. FileTree's selection-change effect scrolls the row into
 /// view. Called after a successful create / move so the user lands
 /// next to whatever they just produced instead of having to hunt
@@ -1685,7 +1694,7 @@ async function pollIndexStatusOnce(): Promise<void> {
 // ---- in-page prompt -----------------------------------------------------
 //
 // `window.prompt()` is not implemented by macOS WKWebView; Tauri silently
-// drops it. We replace the few prompt-driven flows (new file / folder /
+// drops it. We replace the few prompt-driven flows (new file / directory /
 // rename) with a small in-page modal driven by this state. Same code path
 // works in regular browsers too, so there's only one prompt UX to design.
 
@@ -1729,7 +1738,7 @@ export function resolvePrompt(value: string | null): void {
 
 // ---- in-page path prompt ------------------------------------------------
 //
-// Richer cousin of uiPrompt for typing relative paths: live folder
+// Richer cousin of uiPrompt for typing relative paths: live directory
 // autocomplete from the loaded tree, parent-creation hints, overwrite
 // warnings, and client-side validation. Used by file create / move /
 // rename. The plain uiPrompt stays around for label-only inputs (drive
@@ -1737,7 +1746,7 @@ export function resolvePrompt(value: string | null): void {
 //
 // `kind` distinguishes the two entity classes the user can be naming:
 // a file (default `.md` will be appended on submit if no extension) or
-// a folder. The modal uses it to label the status row and to decide
+// a directory. The modal uses it to label the status row and to decide
 // what the autocomplete should suggest.
 //
 // `mode` controls how an existing target at the typed path is treated:
@@ -1845,7 +1854,7 @@ async function performMove(path: string, target: string): Promise<void> {
   if (target === path) return;
   const existing = tree.entries.find((e) => e.path === target);
   if (existing) {
-    const what = existing.is_dir ? "folder" : "file";
+    const what = existing.is_dir ? "directory" : "file";
     const confirmed = await uiConfirm({
       title: `Overwrite existing ${what}?`,
       message: `'${target}' already exists. The current ${what} will be replaced.`,
@@ -1909,10 +1918,10 @@ async function performMove(path: string, target: string): Promise<void> {
 
 export const fileOps = {
   async createFile(parentPath: string): Promise<void> {
-    // Pre-populate the input with the parent prefix so the user
-    // only types the basename. Folder autocomplete still kicks in
-    // once they touch any other folder under the same prefix.
-    const defaultValue = parentPath ? `${parentPath}/` : "";
+    // Start directly on a concrete editable target. The modal
+    // selects only the stem, so typing replaces "untitled" while
+    // Enter accepts the proposed Markdown file immediately.
+    const defaultValue = proposeDefaultFilename(parentPath);
     const name = await uiPathPrompt({
       title: "new file (relative path; .md added if no extension)",
       defaultValue,
@@ -1950,7 +1959,7 @@ export const fileOps = {
   async createDir(parentPath: string): Promise<void> {
     const defaultValue = parentPath ? `${parentPath}/` : "";
     const path = await uiPathPrompt({
-      title: "new folder",
+      title: "new directory",
       defaultValue,
       kind: "folder",
       mode: "create",
@@ -1959,10 +1968,10 @@ export const fileOps = {
     try {
       await api.create(path, true);
       await refreshTree();
-      // Folder creation leaves the user inside the file browser
+      // Directory creation leaves the user inside the file browser
       // (unlike file creation, which jumps straight into an editor
-      // tab), so reveal the new folder and select it. Expands every
-      // ancestor along the way so a `a/b/new-folder` create lands
+      // tab), so reveal the new directory and select it. Expands every
+      // ancestor along the way so a `a/b/new-directory` create lands
       // visible even if `a` and `b` were collapsed.
       revealAndSelect(path);
     } catch (e) {
@@ -2037,8 +2046,8 @@ export const fileOps = {
       ).length;
       message =
         descendants === 0
-          ? `Delete folder "${name}"?`
-          : `Delete folder "${name}" and its ${descendants} item${descendants === 1 ? "" : "s"}?`;
+          ? `Delete directory "${name}"?`
+          : `Delete directory "${name}" and its ${descendants} item${descendants === 1 ? "" : "s"}?`;
     } else {
       message = `Delete "${name}"?`;
     }

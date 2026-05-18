@@ -44,7 +44,7 @@ export function validatePath(raw: string): PathCheck {
   }
   if (trimmed.endsWith("/")) {
     // Path ends with the directory separator: the user picked a
-    // folder via autocomplete and hasn't typed the basename yet, or
+    // directory via autocomplete and hasn't typed the basename yet, or
     // typed `foo/` literally. Either way, submitting now would create
     // an entity with an empty basename (and for files, a stray .md
     // would land as `foo/.md`). Reject pre-flight with a clearer

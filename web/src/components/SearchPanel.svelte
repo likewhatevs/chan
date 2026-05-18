@@ -11,7 +11,16 @@
 
   import { onDestroy } from "svelte";
   import { untrack } from "svelte";
-  import { ArrowLeft, ArrowRight, Database, Maximize2, Minimize2, Settings, X } from "lucide-svelte";
+  import {
+    ArrowLeft,
+    ArrowRight,
+    Database,
+    Maximize2,
+    Minimize2,
+    RotateCw,
+    Settings,
+    X,
+  } from "lucide-svelte";
   import {
     overlayMaximized,
     setOverlayMaximized,
@@ -178,7 +187,7 @@
   );
 
   /// If a saved/direct scope no longer resolves, snap back to the
-  /// whole drive. Direct file/folder scopes opened from the File
+  /// whole drive. Direct file/directory scopes opened from the File
   /// Browser are injected by `availableSearchScopes()` so they remain
   /// valid even when the item is not open in a pane.
   $effect(() => {
@@ -332,8 +341,8 @@
   }
 
   async function loadSearchTree(): Promise<void> {
-    // The file tree is normally loaded on demand as folders open.
-    // `language:<name>` is a drive-wide query, so hydrate folder
+    // The file tree is normally loaded on demand as directories open.
+    // `language:<name>` is a drive-wide query, so hydrate directory
     // listings before scanning per-file report rows.
     for (let i = 0; i < 1000; i += 1) {
       const pending = tree.entries
@@ -346,7 +355,7 @@
 
 
   /// Per-kind caps so a query like "n" doesn't drown the chunk
-  /// hits under hundreds of folder / image / file / contact rows.
+  /// hits under hundreds of directory / image / file / contact rows.
   /// Chunks come from the server already capped at 25.
   const TAG_LIMIT = 8;
   const IMAGE_LIMIT = 8;
@@ -376,7 +385,7 @@
   /// distinct row kind so a search for "alex" lands on the contact
   /// file in addition to any markdown that mentions them. Substring
   /// match across the full path (not just basename) so contacts
-  /// nested in subfolders still surface.
+  /// nested in subdirectories still surface.
   const contactRows = $derived.by<SearchRow[]>(() => {
     const q = searchPanel.query.trim().toLowerCase();
     if (!q) return [];
@@ -415,7 +424,7 @@
   });
 
   /// Helper: format a contact entry's display name from its path.
-  /// Strips the .md extension and leaves whatever folder structure
+  /// Strips the .md extension and leaves whatever directory structure
   /// the user has (e.g. `Contacts/Alex Park.md` -> `Alex Park`).
   /// Mirrors what FileInfoBody does for the contact name pill.
   function contactDisplayName(path: string): string {
@@ -670,6 +679,19 @@
     openSettings();
   }
 
+  function reloadSearch(): void {
+    menu?.close();
+    queryToken += 1;
+    if (searchPanel.query.trim()) {
+      scheduleSearch();
+    } else {
+      chunkHits = [];
+      languageHits = [];
+      active = 0;
+      loading = false;
+    }
+  }
+
   function openSearchStatus(): void {
     searchStatusOverlay.open = true;
   }
@@ -684,7 +706,12 @@
   }
 </script>
 
-<OverlayShell id="search" open={searchPanel.open} onClose={close}>
+<OverlayShell
+  id="search"
+  open={searchPanel.open}
+  onClose={close}
+  onBackdropContextMenu={onSearchContextMenu}
+>
   <div class="search" oncontextmenu={onSearchContextMenu} role="presentation">
     <header>
       <button
@@ -934,6 +961,14 @@
       <span class="menu-row-label">
         {searchPanel.inspectorOpen ? "Hide Details" : "Show Details"}
       </span>
+      <span class="menu-row-chord"></span>
+    </button>
+  </li>
+  <li class="sep" role="separator"></li>
+  <li>
+    <button role="menuitem" onclick={reloadSearch}>
+      <RotateCw size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span class="menu-row-label">Reload</span>
       <span class="menu-row-chord"></span>
     </button>
   </li>

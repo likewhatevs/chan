@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Inspector body that renders metadata for a single file or folder.
+  // Inspector body that renders metadata for a single file or directory.
   // Looks the entry up from the global tree by path; renders nothing
   // until a path is supplied (callers that want a placeholder pass
   // their own empty state outside this component, or pass `null`
@@ -14,7 +14,7 @@
   //   - FileEditorTab: shown inside a "show info" disclosure for the
   //     currently-edited file; lean layout (no Open/Close, no refs).
   //
-  // Folder mode walks the flat tree to compute aggregate counts +
+  // Directory mode walks the flat tree to compute aggregate counts +
   // size + most-recent mtime. The walk is O(N) in tree size and only
   // re-runs when the selected path changes ($derived dependency
   // tracking does the gating).
@@ -23,6 +23,8 @@
   import { ApiError } from "../api/errors";
   import type {
     GraphEdge,
+    InspectorPayload,
+    PathClass,
     ReportFileStats,
     ReportPrefix,
     TreeEntry,
@@ -76,9 +78,9 @@
   }: {
     path: string | null;
     onOpen?: () => void;
-    /// Image / folder counterpart to `onOpen`. Renders a
+    /// Image / directory counterpart to `onOpen`. Renders a
     /// "Show in file browser" button on image entries and a
-    /// "Show Folder" button on directory entries; the host reveals
+    /// "Show Directory" button on directory entries; the host reveals
     /// the path in its tree and closes itself. Absent = no button
     /// (e.g. when the inspector already lives inside the file
     /// browser).
@@ -101,7 +103,7 @@
     /// not destinations" behavior the file browser and search
     /// overlays still want).
     onContactNavigate?: (path: string) => void;
-    /// "Graph this" button for file selections. Graph overlay binds
+    /// "Graph from here" button for file selections. Graph overlay binds
     /// this to scope the current graph to the selected file (and
     /// re-pin it as the focal node). Other hosts leave it absent so
     /// the button doesn't render outside the graph.
@@ -116,8 +118,8 @@
     if (path === null || path === undefined) return null;
     if (path === "") {
       // Drive root: no entry exists in tree.entries (the listing only
-      // contains children). Synthesize a folder-shaped record so the
-      // folder branch renders aggregate stats over the whole drive.
+      // contains children). Synthesize a directory-shaped record so the
+      // directory branch renders aggregate stats over the whole drive.
       // The mtime field stays null because the drive root has no
       // intrinsic timestamp; dirStats picks up the latest mtime
       // across descendants instead.
@@ -166,6 +168,45 @@
       }
     }
     return { files, dirs, bytes, latest };
+  });
+
+  let inspectorPayload = $state<InspectorPayload | null>(null);
+  let inspectorReq = 0;
+
+  $effect(() => {
+    inspectorPayload = null;
+    if (path === null || path === undefined) return;
+    const req = ++inspectorReq;
+    void api.inspector(path)
+      .then((payload) => {
+        if (req === inspectorReq) inspectorPayload = payload;
+      })
+      .catch(() => {
+        if (req === inspectorReq) inspectorPayload = null;
+      });
+  });
+
+  const pathClass = $derived<PathClass | null>(
+    inspectorPayload?.path_class ?? entry?.path_class ?? null,
+  );
+  const subtree = $derived(inspectorPayload?.subtree ?? null);
+  const fileKindCounts = $derived.by(() => {
+    if (!subtree) return [];
+    return Object.entries(subtree.file_kinds)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 6);
+  });
+  const specialBadges = $derived.by(() => {
+    if (!pathClass) return [];
+    const out: string[] = [];
+    if (pathClass.permission === "read_only") out.push("read-only");
+    if (pathClass.kind === "symlink") out.push("symlink");
+    else if (pathClass.kind !== "regular_file" && pathClass.kind !== "directory") {
+      out.push(pathClass.kind.replace(/_/g, " "));
+    }
+    if (pathClass.link_count > 1) out.push(`${pathClass.link_count} links`);
+    if (pathClass.target_escapes_drive) out.push("outside drive");
+    return out;
   });
 
   /// Outgoing edges (tags / mentions / dates / links) come straight
@@ -306,7 +347,7 @@
   }
 
   /// chan-report integration. The "Code" section shows language /
-  /// SLOC / complexity for files, and the per-folder roll-up
+  /// SLOC / complexity for files, and the per-directory roll-up
   /// (totals + top languages + COCOMO) for directories. Fetched
   /// lazily whenever the selected path changes; a request-id guard
   /// drops stale responses if the user clicks through several
@@ -322,10 +363,10 @@
   let reportError = $state<string | null>(null);
   let reportReq = 0;
 
-  /// "Top N + see more" toggle for the per-language list in folder
+  /// "Top N + see more" toggle for the per-language list in directory
   /// mode. Default of 5 matches the inspector's appetite for compact
   /// sections; the full list is one click away. Resets to collapsed
-  /// whenever the selection changes so a new folder doesn't inherit
+  /// whenever the selection changes so a new directory doesn't inherit
   /// the previous one's expand state.
   const LANG_PREVIEW = 5;
   let langExpanded = $state(false);
@@ -399,7 +440,7 @@
 {#if !entry}
   <div class="empty">
     <div class="empty-title">Details</div>
-    <div class="empty-hint">click a file or folder to inspect</div>
+    <div class="empty-hint">click a file or directory to inspect</div>
   </div>
 {:else if entry.is_dir}
   <div class="info">
@@ -409,17 +450,38 @@
     <h3 class="title" title={entry.path || "/"}>
       {basename(entry.path) || drive.info?.name || "(root)"}
     </h3>
+    {#if specialBadges.length > 0}
+      <div class="badge-row">
+        {#each specialBadges as badge}
+          <span class="flag-badge">{badge}</span>
+        {/each}
+      </div>
+    {/if}
     {#if dirStats}
       <div class="meta-grid">
         <span class="k">files</span>
-        <span class="v">{dirStats.files}</span>
-        <span class="k">subfolders</span>
-        <span class="v">{dirStats.dirs}</span>
+        <span class="v">{subtree?.files ?? dirStats.files}</span>
+        <span class="k">subdirectories</span>
+        <span class="v">{subtree?.directories ?? dirStats.dirs}</span>
         <span class="k">size</span>
-        <span class="v">{formatSize(dirStats.bytes)}</span>
+        <span class="v">{formatSize(subtree?.bytes ?? dirStats.bytes)}</span>
         <span class="k">last change</span>
         <span class="v">{formatMtime(dirStats.latest)}</span>
+        {#if pathClass?.target}
+          <span class="k">target</span>
+          <span class="v mono" title={pathClass.target}>{pathClass.target}</span>
+        {/if}
       </div>
+    {/if}
+    {#if fileKindCounts.length > 0}
+      <section class="refs compact-section">
+        <h4>File Kinds</h4>
+        <div class="kind-counts">
+          {#each fileKindCounts as [kind, count]}
+            <span class="kind-count"><span>{kind}</span><strong>{count}</strong></span>
+          {/each}
+        </div>
+      </section>
     {/if}
     {#if prefixReport && prefixReport.totals.files > 0}
       <section class="refs">
@@ -478,15 +540,15 @@
       <div class="refs-error">report unavailable: {reportError}</div>
     {/if}
     {#if onReveal}
-      <!-- "Show Folder": jump to the file browser with this folder
+      <!-- "Show Directory": jump to the file browser with this directory
            selected. Hosted by surfaces that don't already live inside
            the browser (graph fs-mode inspector). The file browser
            itself leaves this prop unbound so the button doesn't
            render twice on its own surface. -->
-      <button class="open" onclick={onReveal}>Show Folder</button>
+      <button class="open" onclick={onReveal}>Show Directory</button>
     {/if}
     {#if onSetAsScope}
-      <button class="open" onclick={onSetAsScope}>Graph this</button>
+      <button class="open" onclick={onSetAsScope}>Graph from here</button>
     {/if}
   </div>
 {:else}
@@ -499,6 +561,13 @@
       <KindChip kind={fileKind} block />
     </header>
     <h3 class="title" title={entry.path}>{basename(entry.path)}</h3>
+    {#if specialBadges.length > 0}
+      <div class="badge-row">
+        {#each specialBadges as badge}
+          <span class="flag-badge">{badge}</span>
+        {/each}
+      </div>
+    {/if}
     {#if image}
       <!-- Inline preview. Bytes come from /api/files with the
            per-launch bearer token appended as a query param so the
@@ -526,6 +595,10 @@
       <span class="v">{formatSize(entry.size)}</span>
       <span class="k">modified</span>
       <span class="v">{formatMtime(entry.mtime)}</span>
+      {#if pathClass?.target}
+        <span class="k">target</span>
+        <span class="v mono" title={pathClass.target}>{pathClass.target}</span>
+      {/if}
       {#if showRefs && !image && !pdf}
         <span class="k">tags</span>
         <span class="v">{refs ? refs.tags.length : "…"}</span>
@@ -597,10 +670,10 @@
       <button class="open" onclick={onReveal}>Show File</button>
     {/if}
     {#if onSetAsScope}
-      <!-- "Graph this" re-scopes the current graph to this file (or
+      <!-- "Graph from here" re-scopes the current graph to this file (or
            image) and re-pins it as the focal node. Only rendered
            when the host wires it up (today: the graph overlay). -->
-      <button class="open" onclick={onSetAsScope}>Graph this</button>
+      <button class="open" onclick={onSetAsScope}>Graph from here</button>
     {/if}
     {#if showRefs}
       {#if !graphData.view && graphData.loading}
@@ -795,6 +868,21 @@
     font-weight: 600;
     word-break: break-word;
   }
+  .badge-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: -0.15rem 0 0.45rem 0;
+  }
+  .flag-badge {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: var(--text-secondary);
+    background: var(--bg-card);
+    font-size: 11px;
+    line-height: 1.4;
+  }
   .meta-grid {
     display: grid;
     grid-template-columns: 6.5em 1fr;
@@ -807,6 +895,12 @@
     color: var(--text);
     font-variant-numeric: tabular-nums;
   }
+  .meta-grid .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .open {
     width: 100%;
     background: var(--btn-bg);
@@ -818,7 +912,7 @@
     font: inherit;
     /* Own the spacing above the button so it doesn't matter whether
        the preceding element has a bottom margin (file: standalone
-       .meta-grid keeps 0.6rem; folder: the cocomo grid zeroes its
+       .meta-grid keeps 0.6rem; directory: the cocomo grid zeroes its
        margin and used to leave the button flush against
        "developers"). Adjacent buttons collapse to a tighter gap so
        a group of actions reads as a single block. */
@@ -831,6 +925,9 @@
      inspectors feel like one feature. */
   .refs {
     margin: 0.6rem 0 0 0;
+  }
+  .compact-section {
+    margin-top: 0.35rem;
   }
   .refs h4 {
     font-size: 12px;
@@ -849,6 +946,25 @@
     gap: 4px;
   }
   .refs li { margin: 0; }
+  .kind-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .kind-count {
+    display: inline-flex;
+    gap: 5px;
+    align-items: center;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 5px;
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+  .kind-count strong {
+    color: var(--text);
+    font-weight: 600;
+  }
   .ref {
     display: block;
     width: 100%;

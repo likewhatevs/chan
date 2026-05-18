@@ -197,10 +197,23 @@ export type TerminalTab = {
   createdAt: number;
   broadcastEnabled: boolean;
   broadcastTargetIds: string[];
+  broadcastMuted?: boolean;
   mcpEnv?: boolean;
   sessionMcpEnv?: boolean;
+  terminalEnvTabName?: string;
+  terminalEnvNamePromptDismissed?: boolean;
   terminalSessionId?: string;
   lastSeq?: number;
+  cwd?: string;
+  seedInput?: string;
+  richPrompt?: TerminalRichPromptState;
+};
+
+export type TerminalRichPromptState = {
+  buffer: string;
+  heightPx?: number;
+  open?: boolean;
+  mode?: "wysiwyg" | "source";
 };
 
 export type Tab = FileTab | TerminalTab;
@@ -216,8 +229,59 @@ export function tabLabel(t: Tab): string {
   return slash < 0 ? p : p.slice(slash + 1);
 }
 
+/// Pane-local display label. Most tabs keep the basename. Duplicate
+/// basenames collapse the group's shared prefix/suffix directories
+/// and show only the shortest divergent ancestor; deeper divergent
+/// tails render as `x/[...]/foo.md` to preserve tab-strip width.
+export function tabLabelInPane(t: Tab, siblings: Tab[]): string {
+  if (t.kind !== "file") return tabLabel(t);
+  const base = tabLabel(t);
+  const duplicates = siblings.filter(
+    (candidate): candidate is FileTab =>
+      candidate.kind === "file" && tabLabel(candidate) === base,
+  );
+  if (duplicates.length <= 1) return base;
+
+  const dirsById = new Map(
+    duplicates.map((d) => [d.id, d.path.split("/").slice(0, -1)]),
+  );
+  const dirGroups = [...dirsById.values()];
+  const prefixLen = commonPrefixLength(dirGroups);
+  const suffixLen = commonSuffixLength(
+    dirGroups.map((dirs) => dirs.slice(prefixLen)),
+  );
+  const targetDirs = dirsById.get(t.id) ?? [];
+  const end = suffixLen > 0 ? targetDirs.length - suffixLen : targetDirs.length;
+  const unique = targetDirs.slice(prefixLen, end);
+  if (unique.length === 0) return t.path;
+  if (unique.length === 1) return `${unique[0]}/${base}`;
+  return `${unique[0]}/[...]/${base}`;
+}
+
+function commonPrefixLength(groups: string[][]): number {
+  if (groups.length === 0) return 0;
+  const max = Math.min(...groups.map((g) => g.length));
+  let i = 0;
+  for (; i < max; i++) {
+    const value = groups[0]![i];
+    if (!groups.every((g) => g[i] === value)) break;
+  }
+  return i;
+}
+
+function commonSuffixLength(groups: string[][]): number {
+  if (groups.length === 0) return 0;
+  const max = Math.min(...groups.map((g) => g.length));
+  let i = 0;
+  for (; i < max; i++) {
+    const value = groups[0]![groups[0]!.length - 1 - i];
+    if (!groups.every((g) => g[g.length - 1 - i] === value)) break;
+  }
+  return i;
+}
+
 /// Full path for a tab. Used as the tab's title attribute so two
-/// files with the same basename in different folders can still be
+/// files with the same basename in different directories can still be
 /// told apart on hover.
 export function tabTooltip(t: Tab): string {
   if (t.kind === "terminal") return terminalTabName(t);
@@ -226,6 +290,18 @@ export function tabTooltip(t: Tab): string {
 
 export function terminalTabName(t: TerminalTab): string {
   return t.title.trim() || "Terminal";
+}
+
+function nextTerminalTitle(): string {
+  let max = 0;
+  for (const tab of allTerminalTabs()) {
+    const title = terminalTabName(tab);
+    const match = /^Terminal(?:-(\d+))?$/.exec(title);
+    if (!match) continue;
+    const n = match[1] ? Number(match[1]) : 1;
+    if (Number.isInteger(n) && n > max) max = n;
+  }
+  return `Terminal-${max + 1}`;
 }
 
 export type Pane = {
@@ -326,17 +402,43 @@ export function activeTerminalTab(): TerminalTab | null {
   return t;
 }
 
-export function openTerminalInActivePane(): void {
-  openTerminalInPane(activePane().id);
+export function openActiveTerminalRichPrompt(): void {
+  const tab = activeTerminalTab();
+  if (!tab) return;
+  if (!tab.richPrompt) {
+    tab.richPrompt = {
+      buffer: "",
+      heightPx: 320,
+      open: true,
+      mode: "wysiwyg",
+    };
+  } else {
+    tab.richPrompt.open = true;
+    tab.richPrompt.mode ??= "wysiwyg";
+  }
 }
 
-export function openTerminalInPane(paneId: string): void {
+export type OpenTerminalOptions = {
+  cwd?: string;
+  seedInput?: string;
+};
+
+export function openTerminalInActivePane(opts: OpenTerminalOptions = {}): void {
+  openTerminalInPane(activePane().id, opts);
+}
+
+export function openTerminalInPane(
+  paneId: string,
+  opts: OpenTerminalOptions = {},
+): void {
   const p = layout.nodes[paneId];
   if (!p || p.kind !== "leaf") return;
+  const cwd = opts.cwd?.trim();
+  const seedInput = opts.seedInput?.trim();
   const tab: TerminalTab = {
     kind: "terminal",
     id: id("term"),
-    title: "Terminal",
+    title: nextTerminalTitle(),
     createdAt: Date.now(),
     broadcastEnabled: false,
     broadcastTargetIds: [],
@@ -344,6 +446,9 @@ export function openTerminalInPane(paneId: string): void {
     sessionMcpEnv: undefined,
     terminalSessionId: undefined,
     lastSeq: undefined,
+    cwd: cwd || undefined,
+    seedInput: seedInput || undefined,
+    richPrompt: undefined,
   };
   p.tabs.push(tab);
   p.activeTabId = tab.id;
@@ -352,16 +457,35 @@ export function openTerminalInPane(paneId: string): void {
 
 export function renameTerminalTab(tab: TerminalTab, title: string): void {
   tab.title = title;
+  if (terminalEnvTabNameStale(tab)) tab.terminalEnvNamePromptDismissed = false;
+}
+
+export function terminalEnvTabNameStale(tab: TerminalTab): boolean {
+  return Boolean(
+    tab.terminalSessionId &&
+      tab.terminalEnvTabName !== undefined &&
+      terminalTabName(tab) !== tab.terminalEnvTabName,
+  );
+}
+
+export function dismissTerminalEnvNamePrompt(tab: TerminalTab): void {
+  tab.terminalEnvNamePromptDismissed = true;
 }
 
 export function setTerminalBroadcastEnabled(tab: TerminalTab, enabled: boolean): void {
-  tab.broadcastEnabled = enabled;
+  if (enabled) {
+    const members = new Set(tab.broadcastTargetIds);
+    members.add(tab.id);
+    applyTerminalBroadcastMembers(tab, members);
+  } else {
+    removeTerminalFromBroadcastGroup(tab, tab.id);
+  }
 }
 
 export function toggleActiveTerminalBroadcast(): void {
   const tab = activeTerminalTab();
   if (!tab) return;
-  tab.broadcastEnabled = !tab.broadcastEnabled;
+  setTerminalBroadcastEnabled(tab, !tab.broadcastEnabled);
 }
 
 export function setTerminalBroadcastTarget(
@@ -369,10 +493,53 @@ export function setTerminalBroadcastTarget(
   targetId: string,
   enabled: boolean,
 ): void {
-  const next = new Set(tab.broadcastTargetIds);
+  const next = new Set(terminalBroadcastMemberIds(tab));
+  next.add(tab.id);
   if (enabled) next.add(targetId);
   else next.delete(targetId);
-  tab.broadcastTargetIds = [...next];
+  applyTerminalBroadcastMembers(tab, next);
+}
+
+export function terminalBroadcastMembers(tab: TerminalTab): TerminalTab[] {
+  const ids = new Set(terminalBroadcastMemberIds(tab));
+  return allTerminalTabs().filter((candidate) => ids.has(candidate.id));
+}
+
+export function terminalBroadcastMemberIds(tab: TerminalTab): string[] {
+  if (!tab.broadcastEnabled) return [];
+  const ids = new Set(tab.broadcastTargetIds);
+  ids.add(tab.id);
+  return [...ids];
+}
+
+export function removeTerminalFromBroadcastGroup(tab: TerminalTab, memberId: string): void {
+  const next = new Set(terminalBroadcastMemberIds(tab));
+  next.delete(memberId);
+  applyTerminalBroadcastMembers(tab, next);
+}
+
+export function setTerminalBroadcastMuted(tab: TerminalTab, muted: boolean): void {
+  tab.broadcastMuted = muted || undefined;
+}
+
+function applyTerminalBroadcastMembers(anchor: TerminalTab, members: Set<string>): void {
+  const existing = new Set(terminalBroadcastMemberIds(anchor));
+  for (const id of members) existing.add(id);
+  const all = allTerminalTabs();
+  if (!all.some((tab) => tab.id === anchor.id)) all.push(anchor);
+  const next = new Set(members);
+  if (next.size <= 1) next.clear();
+  for (const candidate of all) {
+    if (!existing.has(candidate.id) && !next.has(candidate.id)) continue;
+    if (next.has(candidate.id)) {
+      candidate.broadcastEnabled = true;
+      candidate.broadcastTargetIds = [...next];
+    } else {
+      candidate.broadcastEnabled = false;
+      candidate.broadcastTargetIds = [];
+      candidate.broadcastMuted = undefined;
+    }
+  }
 }
 
 export function terminalMcpEnvEnabled(tab: TerminalTab): boolean {
@@ -392,7 +559,11 @@ export function setTerminalSession(
   const wasFresh = !tab.terminalSessionId || tab.terminalSessionId !== sessionId;
   tab.terminalSessionId = sessionId;
   tab.lastSeq = Math.max(0, Math.floor(lastSeq));
-  if (wasFresh) tab.sessionMcpEnv = sessionMcpEnv ?? terminalMcpEnvEnabled(tab);
+  if (wasFresh) {
+    tab.sessionMcpEnv = sessionMcpEnv ?? terminalMcpEnvEnabled(tab);
+    tab.terminalEnvTabName = terminalTabName(tab);
+    tab.terminalEnvNamePromptDismissed = false;
+  }
 }
 
 export function advanceTerminalSeq(tab: TerminalTab, bytes: number): void {
@@ -404,6 +575,8 @@ export function clearTerminalSession(tab: TerminalTab): void {
   tab.terminalSessionId = undefined;
   tab.lastSeq = undefined;
   tab.sessionMcpEnv = undefined;
+  tab.terminalEnvTabName = undefined;
+  tab.terminalEnvNamePromptDismissed = false;
 }
 
 export function allTerminalTabs(): TerminalTab[] {
@@ -436,12 +609,21 @@ export function registerTerminalCloseSink(tabId: string, sink: TerminalCloseSink
   };
 }
 
+/// Broadcast input is deliberately window-scoped. The target ids in
+/// `broadcastTargetIds` are resolved only through this JS window's
+/// `layout` registry (`allTerminalTabs()`), even though terminal
+/// session data is persisted per `w=<window-label>` and multiple
+/// windows can share a chan-server. A sink whose id is not present
+/// in the current layout is skipped silently; do not fan out by sink
+/// id alone or via a server-side bus without preserving this boundary.
 export function broadcastTerminalInput(sourceTab: TerminalTab, data: string): void {
   if (!sourceTab.broadcastEnabled) return;
-  const targets = new Set(sourceTab.broadcastTargetIds);
+  if (sourceTab.broadcastMuted) return;
+  const targets = new Set(terminalBroadcastMemberIds(sourceTab));
   if (targets.size === 0) return;
   for (const tab of allTerminalTabs()) {
     if (tab.id === sourceTab.id || !targets.has(tab.id)) continue;
+    if (tab.broadcastMuted) continue;
     terminalInputSinks.get(tab.id)?.(data);
   }
 }
@@ -732,8 +914,20 @@ function cloneTab(src: Tab): Tab {
       broadcastTargetIds: [...src.broadcastTargetIds],
       mcpEnv: src.mcpEnv,
       sessionMcpEnv: src.sessionMcpEnv,
+      terminalEnvTabName: src.terminalEnvTabName,
+      terminalEnvNamePromptDismissed: src.terminalEnvNamePromptDismissed,
       terminalSessionId: src.terminalSessionId,
       lastSeq: src.lastSeq,
+      cwd: src.cwd,
+      seedInput: src.seedInput,
+      richPrompt: src.richPrompt
+        ? {
+            buffer: src.richPrompt.buffer,
+            heightPx: src.richPrompt.heightPx,
+            open: src.richPrompt.open,
+            mode: src.richPrompt.mode,
+          }
+        : undefined,
     };
   }
   return {
@@ -1124,6 +1318,12 @@ type SerTab = {
   me?: 0;
   /// MCP env mode used by the persisted PTY session. Default on.
   sme?: 0;
+  /// Rich-prompt draft state. Only emitted in per-window session
+  /// payloads, never in shareable URL hashes.
+  rpb?: string;
+  rph?: number;
+  rpo?: 1;
+  rpm?: "w" | "s";
 };
 type SerLeaf = { k: "l"; t: SerTab[]; f?: 1 };
 type SerSplit = { k: "s"; d: "r" | "c"; a: SerNode; b: SerNode; r?: number };
@@ -1149,6 +1349,16 @@ function serializeNode(
                 tsid: t.terminalSessionId,
                 tseq: Math.max(0, Math.floor(t.lastSeq ?? 0)),
                 ...(t.sessionMcpEnv === false ? { sme: 0 as const } : {}),
+              }
+            : {}),
+          ...(opts.terminalSessions && t.richPrompt
+            ? {
+                rpb: t.richPrompt.buffer,
+                ...(t.richPrompt.heightPx
+                  ? { rph: Math.max(1, Math.floor(t.richPrompt.heightPx)) }
+                  : {}),
+                ...(t.richPrompt.open ? { rpo: 1 as const } : {}),
+                ...(t.richPrompt.mode === "source" ? { rpm: "s" as const } : {}),
               }
             : {}),
           ...active,
@@ -1254,6 +1464,7 @@ export async function restoreLayout(
             typeof sertab.tseq === "number" && Number.isFinite(sertab.tseq)
               ? sertab.tseq
               : savedTerm?.tseq;
+          const richPrompt = richPromptFromSer(sertab, savedTerm);
           const tab: TerminalTab = {
             kind: "terminal",
             id: id("term"),
@@ -1268,6 +1479,7 @@ export async function restoreLayout(
               typeof rawSeq === "number" && Number.isFinite(rawSeq)
                 ? Math.max(0, Math.floor(rawSeq))
                 : undefined,
+            richPrompt,
           };
           p.tabs.push(tab);
           if (sertab.a) p.activeTabId = tab.id;
@@ -1371,6 +1583,29 @@ function serializedLeaves(node: SerNode | null, out: SerLeaf[] = []): SerLeaf[] 
   return out;
 }
 
+function richPromptFromSer(
+  tab: SerTab | undefined,
+  fallback?: SerTab,
+): TerminalRichPromptState | undefined {
+  const src =
+    tab?.rpb !== undefined || tab?.rph !== undefined || tab?.rpo || tab?.rpm
+      ? tab
+      : fallback;
+  if (!src) return undefined;
+  if (src.rpb === undefined && src.rph === undefined && !src.rpo && !src.rpm) {
+    return undefined;
+  }
+  return {
+    buffer: src.rpb ?? "",
+    heightPx:
+      typeof src.rph === "number" && Number.isFinite(src.rph)
+        ? Math.max(1, Math.floor(src.rph))
+        : undefined,
+    open: src.rpo === 1,
+    mode: src.rpm === "s" ? "source" : "wysiwyg",
+  };
+}
+
 /// Copy terminal PTY session metadata from a per-window session layout
 /// onto the live layout after a shareable URL-hash layout restore.
 /// The hash deliberately omits `tsid`/`tseq`; this graft keeps reloads
@@ -1387,14 +1622,18 @@ export function hydrateTerminalSessionsFromLayout(sessionLayout: SerNode | null)
     const savedTerms = saved.t.filter((t) => (t.k ?? "f") === "t");
     for (let j = 0; j < liveTerms.length; j++) {
       const savedTerm = savedTerms[j];
-      if (!savedTerm?.tsid) continue;
-      liveTerms[j]!.terminalSessionId = savedTerm.tsid;
-      liveTerms[j]!.mcpEnv = savedTerm.me === 0 ? false : true;
-      liveTerms[j]!.sessionMcpEnv = savedTerm.sme === 0 ? false : true;
-      liveTerms[j]!.lastSeq =
-        typeof savedTerm.tseq === "number" && Number.isFinite(savedTerm.tseq)
-          ? Math.max(0, Math.floor(savedTerm.tseq))
-          : undefined;
+      if (!savedTerm) continue;
+      if (savedTerm.tsid) {
+        liveTerms[j]!.terminalSessionId = savedTerm.tsid;
+        liveTerms[j]!.mcpEnv = savedTerm.me === 0 ? false : true;
+        liveTerms[j]!.sessionMcpEnv = savedTerm.sme === 0 ? false : true;
+        liveTerms[j]!.lastSeq =
+          typeof savedTerm.tseq === "number" && Number.isFinite(savedTerm.tseq)
+            ? Math.max(0, Math.floor(savedTerm.tseq))
+            : undefined;
+      }
+      const richPrompt = richPromptFromSer(savedTerm);
+      if (richPrompt) liveTerms[j]!.richPrompt = richPrompt;
     }
   }
 }

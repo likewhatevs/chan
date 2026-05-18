@@ -1,8 +1,8 @@
 <script lang="ts">
-  // Path-input modal for create / move / rename. Adds folder
+  // Path-input modal for create / move / rename. Adds directory
   // autocomplete (from the loaded tree), live status row showing
-  // what the typed path will do (move to existing folder, create a
-  // new folder, overwrite, etc.), and pre-flight validation that
+  // what the typed path will do (move to existing directory, create a
+  // new directory, overwrite, etc.), and pre-flight validation that
   // mirrors what chan-drive will accept. Driven by pathPromptState
   // in the store; resolves the same Promise<string|null> shape as
   // uiPrompt.
@@ -39,7 +39,19 @@
       highlightIdx = -1;
       void tick().then(() => {
         inputEl?.focus();
-        inputEl?.select();
+        if (
+          pathPromptState.kind === "file" &&
+          pathPromptState.mode === "create" &&
+          pathPromptState.defaultValue.endsWith(`${DEFAULT_NEW_FILENAME_STEM}.md`)
+        ) {
+          const stemStart = pathPromptState.defaultValue.lastIndexOf("/") + 1;
+          inputEl?.setSelectionRange(
+            stemStart,
+            stemStart + DEFAULT_NEW_FILENAME_STEM.length,
+          );
+        } else {
+          inputEl?.select();
+        }
       });
     }
   });
@@ -103,7 +115,7 @@
     return { ok: true as const };
   });
 
-  /// Folder index from the loaded tree. Built once per tree change
+  /// Directory index from the loaded tree. Built once per tree change
   /// and reused for both autocomplete and the parent-exists check.
   const folderSet = $derived.by(() => {
     const s = new Set<string>();
@@ -133,7 +145,7 @@
   /// never paint a thousand-row dropdown on a fresh drive that
   /// has only directories yet. The placeholder filename suggestion
   /// (`new-file` kind) is appended at the end so it always sits
-  /// below the folder list and isn't subject to the cap.
+  /// below the directory list and isn't subject to the cap.
   const SUGGESTION_LIMIT = 8;
   const suggestions = $derived.by<Suggestion[]>(() => {
     const q = value.trim();
@@ -177,7 +189,7 @@
   );
 
   /// Walk every ancestor of `path` and return the ones that don't
-  /// exist as folders yet. Used so the status row can announce both
+  /// exist as directories yet. Used so the status row can announce both
   /// the implicit ancestors AND the target instead of mentioning
   /// only the immediate parent (which used to hide multi-segment
   /// chains like `a/b/c/d` from the user).
@@ -196,8 +208,8 @@
 
   /// Status hint for the action row underneath the input. The
   /// "creates" branch carries both the missing ancestors AND the
-  /// target so the row can surface, e.g., "creates folders foo/,
-  /// foo/bar/" for a `foo/bar` folder when neither exists yet,
+  /// target so the row can surface, e.g., "creates directories foo/,
+  /// foo/bar/" for a `foo/bar` directory when neither exists yet,
   /// rather than only mentioning the implicit parent.
   type Status =
     | { kind: "empty" }
@@ -207,10 +219,10 @@
     | { kind: "overwrites"; path: string; isFolder: boolean }
     | {
         kind: "creates";
-        /// Ancestor folders that need to be created. Empty when
+        /// Ancestor directories that need to be created. Empty when
         /// the parent already exists.
         newAncestors: string[];
-        /// The new file or folder at the typed path.
+        /// The new file or directory at the typed path.
         target: { path: string; isFolder: boolean };
         mode: PathPromptMode;
       };
@@ -221,14 +233,14 @@
     if (!validation.ok) return { kind: "invalid", reason: validation.reason };
 
     // Existing entry at the exact typed path: overwrite (move) or
-    // kind-mismatch (target is a file but we're creating a folder,
+    // kind-mismatch (target is a file but we're creating a directory,
     // or vice versa).
     const targetEntry = entryByPath.get(path);
     const wantDir = pathPromptState.kind === "folder";
     if (targetEntry) {
       if (targetEntry.is_dir !== wantDir) {
-        const have = targetEntry.is_dir ? "folder" : "file";
-        const want = wantDir ? "folder" : "file";
+        const have = targetEntry.is_dir ? "directory" : "file";
+        const want = wantDir ? "directory" : "file";
         return {
           kind: "kind-mismatch",
           reason: `'${path}' is an existing ${have}, can't ${
@@ -265,7 +277,7 @@
   );
 
   /// Per-segment breakdown for the colored path render. Existing
-  /// folders render in muted grey, segments that need to be created
+  /// directories render in muted grey, segments that need to be created
   /// render in mint-green. When we auto-resolved an extension (the
   /// `.md` for a new file or the preserved extension on rename),
   /// that suffix is split into its own `auto` chunk so the template
@@ -282,7 +294,7 @@
     }
     // Final segment is the target itself; always "new" in this
     // branch (the existing-target case routes through `overwrites`
-    // / `kind-mismatch` instead). Add the trailing `/` for folders.
+    // / `kind-mismatch` instead). Add the trailing `/` for directories.
     const tail = parts[parts.length - 1];
     if (autoSuffix && tail.endsWith(autoSuffix)) {
       // Show the user-typed stem as the "new" piece, then the
@@ -314,7 +326,7 @@
   function applySuggestion(s: Suggestion): void {
     if (s.kind === "dir") {
       // Append `/` so the user's next keystroke extends the path
-      // *into* the chosen folder rather than rewriting its name.
+      // *into* the chosen directory rather than rewriting its name.
       // Validation rejects a path that ends in `/` (so Enter on the
       // bare "Recipes/" doesn't submit and create a stray .md),
       // which makes the trailing slash a free affordance: visible
@@ -414,7 +426,7 @@
         spellcheck="false"
         autocomplete="off"
         placeholder={pathPromptState.kind === "folder"
-          ? "folder/path"
+          ? "directory/path"
           : "file/path"}
       />
 
@@ -453,7 +465,7 @@
         {:else if status.kind === "kind-mismatch"}
           ✗ {status.reason}
         {:else if status.kind === "overwrites"}
-          ⚠ overwrites existing {status.isFolder ? "folder" : "file"}
+          ⚠ overwrites existing {status.isFolder ? "directory" : "file"}
           <span class="mono">{status.path}{status.isFolder ? "/" : ""}</span>
         {:else if status.kind === "no-op"}
           <span class="muted">unchanged</span>
@@ -464,7 +476,7 @@
           {#if status.mode === "move"}
             moves to
           {:else}
-            new {status.target.isFolder ? "folder" : "file"}
+            new {status.target.isFolder ? "directory" : "file"}
           {/if}
           <span class="mono path-render">
             {#each segs as seg, i (i)}
@@ -546,7 +558,7 @@
     background: var(--hover-bg);
     color: var(--text);
   }
-  /* Placeholder filename row sits visually adjacent to the folder
+  /* Placeholder filename row sits visually adjacent to the directory
      suggestions but reads as a proposal rather than a real file:
      muted italic text, a light separator above it, and an inline
      hint that points the user at Tab. */

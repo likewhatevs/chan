@@ -9,7 +9,7 @@
 //     (group scope; same key for the same set so a re-arrange
 //     doesn't fragment state),
 //   - a "directory" entry when the active browser tab has a
-//     folder selected (dir scope; a subtree of the drive narrower
+//     directory selected (dir scope; a subtree of the drive narrower
 //     than the drive but broader than a single file),
 //   - a "git repo" entry per repo covering visible files (git_repo
 //     scope; a project subset of the drive),
@@ -27,7 +27,7 @@
 import { layout } from "./tabs.svelte";
 // The `dir` scope reads the file browser overlay's current
 // selection and looks the entry up in the tree to distinguish
-// folder from file. store.svelte imports from this module too, so
+// directory from file. store.svelte imports from this module too, so
 // the cycle is real; both reads happen lazily inside functions
 // (not at module init), which Vite resolves cleanly.
 import { browserOverlay, browserSelection, tree } from "./store.svelte";
@@ -97,7 +97,7 @@ export function scopeKey(paths: readonly string[]): string {
 }
 
 /// Drive-relative parent directory of `path`. Returns "" for paths
-/// at the drive root (no parent) and for the empty string. Folders
+/// at the drive root (no parent) and for the empty string. Directories
 /// follow the same rule as files; the caller decides whether to
 /// treat the empty parent as "drive scope" or skip.
 export function parentDir(path: string): string {
@@ -107,7 +107,7 @@ export function parentDir(path: string): string {
 
 /// Longest common parent directory across `paths`. Drives the
 /// auto-added "common ancestor" scope option per request.md when
-/// multiple files share an enclosing folder. Returns "" when the
+/// multiple files share an enclosing directory. Returns "" when the
 /// paths have no shared ancestor below the drive root.
 export function commonAncestor(paths: readonly string[]): string {
   if (paths.length === 0) return "";
@@ -155,14 +155,14 @@ function pathIsReadOnly(path: string): boolean {
 
 /// Path of the directory the file browser overlay has selected,
 /// or `null` if the overlay is closed, has no selection, or the
-/// selection is a file rather than a folder. Drives the
+/// selection is a file rather than a directory. Drives the
 /// `dir:<path>` scope option and `defaultScopeId`'s browser-aware
 /// branch.
 export function selectedDirPath(): string | null {
   if (!browserOverlay.open) return null;
   const path = browserSelection.path;
   if (!path) return null;
-  // The tree entry tells us whether the selection is a folder.
+  // The tree entry tells us whether the selection is a directory.
   // Missing entry: drop the option rather than mis-categorize.
   const entry = tree.entries.find((e) => e.path === path);
   if (!entry || !entry.is_dir) return null;
@@ -173,7 +173,7 @@ export function selectedDirPath(): string | null {
 /// Each entry is a relative path under the drive root. Drives the
 /// "git repo: <name>" entry in the overlay scope picker: a file
 /// that lives inside a git repo (Sentinel-only file when the user
-/// has chosen the drive's chan-marked folder, or git-repo files
+/// has chosen the drive's chan-marked directory, or git-repo files
 /// when nested) gets a project-bound scope option. Files outside
 /// any repo contribute nothing here.
 export function visibleRepoRoots(): string[] {
@@ -238,7 +238,7 @@ export function availableScopeOptions(opts: {
     });
   }
   // Auto-derived dir scopes — per request.md, when the scope is a
-  // single .md file include its parent folder, and when multiple
+  // single .md file include its parent directory, and when multiple
   // files share the scope (group) include their first common
   // ancestor. Both surface as `dir:<path>` so the consumer doesn't
   // care how the option got into the list.
@@ -288,7 +288,7 @@ export function availableScopeOptions(opts: {
 
 /// Pick a default scope id matching what's "in front of" the user
 /// right now: the active pane's active file when it's a file tab,
-/// the selected file or folder when the active tab is a browser,
+/// the selected file or directory when the active tab is a browser,
 /// else "drive" (always present). Shared between every overlay's
 /// open-from-toolbar entry point and global keybinding so both
 /// snap to the same pick.

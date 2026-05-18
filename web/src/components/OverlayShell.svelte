@@ -37,12 +37,14 @@
     id,
     open,
     onClose,
+    onBackdropContextMenu,
     width,
     children,
   }: {
     id: OverlayId;
     open: boolean;
     onClose: () => void;
+    onBackdropContextMenu?: (e: MouseEvent) => void;
     width?: string;
     children: Snippet;
   } = $props();
@@ -66,12 +68,24 @@
         ? "calc(100vw - 88px)"
         : "min(1200px, calc(100vw - 48px))"),
   );
+
+  function onContextMenu(e: MouseEvent): void {
+    if (!onBackdropContextMenu) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onBackdropContextMenu(e);
+  }
 </script>
 
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="overlay" style="z-index: {zIndex};" onclick={onClose}>
+  <div
+    class="overlay"
+    style="z-index: {zIndex};"
+    onclick={onClose}
+    oncontextmenu={onContextMenu}
+  >
     <div
       class="panel"
       style="width: {resolvedWidth};"

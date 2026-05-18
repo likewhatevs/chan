@@ -1,7 +1,7 @@
 <script lang="ts">
   // Drive inspector body. Shown in the file browser's Inspector pane
-  // when the user clicks the FOLDER row in the hamburger menu. Houses
-  // the global Notes Folders config (default root + recent drives list).
+  // when the user clicks the Directory row in the hamburger menu. Houses
+  // the global Notes Directories config (default root + recent drives list).
   // Search index status lives in the Search Status overlay.
 
   import { onMount } from "svelte";
@@ -105,14 +105,14 @@
     {drive.info?.name ?? "(unnamed)"}
   </h3>
   <div class="meta-grid">
-    <span class="k">folder</span>
+    <span class="k">directory</span>
     <span class="v mono path" title={drive.info?.root}>{drive.info?.root ?? ""}</span>
   </div>
 
   <section class="refs">
-    <h4>Notes folders</h4>
+    <h4>Notes directories</h4>
     <p class="hint">
-      Your default notes folder is where chan opens when launched
+      Your default notes directory is where chan opens when launched
       without a specific one in mind. Leave empty to use the platform
       default (<code>~/Documents/Chan</code> on macOS,
       <code>$XDG_DATA_HOME/chan/default</code> on Linux,
@@ -145,8 +145,8 @@
         {/each}
       </ul>
       <p class="hint">
-        Updated every time you open a folder. In-app open-from-list
-        lands in a follow-up; for now use the menu's Open Folder.
+        Updated every time you open a directory. In-app open-from-list
+        lands in a follow-up; for now use the menu's Open Directory.
       </p>
     {/if}
   </section>

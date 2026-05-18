@@ -46,6 +46,7 @@
     isWindowFullyReadOnly,
     layout,
     openFind,
+    openActiveTerminalRichPrompt,
     openInActivePane,
     saveTab,
     scheduleAutosave,
@@ -125,7 +126,7 @@
     void searchPanel.query;
     // search_scope= sibling key in the hash captures this; bumping
     // it here ensures the persistence effect reruns when the user
-    // narrows the search to a folder / file / repo.
+    // narrows the search to a directory / file / repo.
     void searchPanel.scopeId;
     void searchPanel.inspectorOpen;
     void browserOverlay.open;
@@ -313,6 +314,12 @@
       openTerminalInActivePane();
       return;
     }
+    if (e.altKey && !meta && !e.shiftKey && e.code === "Space") {
+      e.preventDefault();
+      openActiveTerminalRichPrompt();
+      scheduleSessionSave();
+      return;
+    }
     if (meta && !e.shiftKey && !e.altKey && e.code === "BracketLeft") {
       e.preventDefault();
       selectPrevPane();
@@ -392,6 +399,10 @@
         return;
       case "app.terminal.broadcast.toggle":
         toggleActiveTerminalBroadcast();
+        return;
+      case "app.terminal.richPrompt":
+        openActiveTerminalRichPrompt();
+        scheduleSessionSave();
         return;
       case "app.pane.next":
         selectNextPane();
@@ -562,9 +573,12 @@
     --g-doc: #ff8a3d;
     --g-img: #b07dff;
     --g-tag: #6cd07a;
+    --chan-color-language: #ff4db8;
+    --chan-color-code: var(--chan-color-language);
+    --g-language: var(--chan-color-language);
     /* Binary file kind (zip, tarballs, executables, fonts, PDFs) and
-       folder kind. Binary tracks the inspector FILE-chip blue so the
-       same hue reads as "file" everywhere it surfaces. Folder pulls
+       directory kind. Binary tracks the inspector FILE-chip blue so the
+       same hue reads as "file" everywhere it surfaces. Directory pulls
        toward --text-secondary so directory rows recede next to the
        per-file kind chips — per request.md. */
     --g-binary: #58a6ff;
@@ -632,6 +646,9 @@
     --g-doc: #c25a1f;
     --g-img: #7a4cd8;
     --g-tag: #2f9444;
+    --chan-color-language: #c71585;
+    --chan-color-code: var(--chan-color-language);
+    --g-language: var(--chan-color-language);
     --g-binary: #0969da;
     --g-folder: #6c6c70;
     /* Light-mode pill palette. Same canonical mapping as dark

@@ -1,6 +1,23 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { Check, Clipboard, Info, Pencil, Radio, RotateCcw, Search } from "lucide-svelte";
+  import {
+    Check,
+    Clipboard,
+    ClipboardPaste,
+    FilePlus,
+    FolderOpen,
+    Info,
+    MessageSquareText,
+    Network,
+    Pencil,
+    Radio,
+    RotateCcw,
+    Search,
+    Settings,
+    SquareSplitHorizontal,
+    SquareSplitVertical,
+    Terminal as TerminalIcon,
+  } from "lucide-svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import { SearchAddon } from "@xterm/addon-search";
@@ -13,39 +30,64 @@
     advanceTerminalSeq,
     allTerminalTabs,
     broadcastTerminalInput,
+    canSplit,
+    closeTab,
     clearTerminalSession,
+    dismissTerminalEnvNamePrompt,
+    layout,
+    openTerminalInPane,
     registerTerminalCloseSink,
     registerTerminalInputSink,
     renameTerminalTab,
+    removeTerminalFromBroadcastGroup,
     setTerminalBroadcastEnabled,
+    setTerminalBroadcastMuted,
     setTerminalBroadcastTarget,
     setTerminalMcpEnv,
     setTerminalSession,
+    splitActive,
+    terminalBroadcastMembers,
+    terminalEnvTabNameStale,
     terminalMcpEnvEnabled,
     terminalTabName,
     type TerminalTab as TerminalTabState,
   } from "../state/tabs.svelte";
-  import { scheduleSessionSave } from "../state/store.svelte";
+  import {
+    browserOverlay,
+    drive,
+    fileOps,
+    openFsGraphForDirectory,
+    openSettings,
+    revealAndSelect,
+    scheduleSessionSave,
+    searchPanel,
+    ui,
+  } from "../state/store.svelte";
   import { terminalWsPath } from "../terminal/session";
   import { handleTerminalMetaKey } from "../terminal/keymap";
   import { injectShowMcpEnvCommand } from "../terminal/mcpEnv";
   import { clampMenu } from "./menuClamp";
   import {
     closeTabMenu,
+    openTabMenu,
     tabMenu,
   } from "../state/tabMenu.svelte";
+  import TerminalRichPrompt from "./TerminalRichPrompt.svelte";
 
   let {
     tab,
+    paneId,
     active,
   }: {
     tab: TerminalTabState;
+    paneId: string;
     active: boolean;
   } = $props();
 
   type ServerFrame =
-    | { type: "ready"; cols: number; rows: number }
+    | { type: "ready"; cols: number; rows: number; cwd?: string | null }
     | { type: "session"; id: string; seq: number; missed_bytes?: number }
+    | { type: "cwd"; cwd?: string | null }
     | { type: "resize_other"; cols: number; rows: number }
     | { type: "closed"; reason: CloseReason }
     | { type: "exit"; code: number }
@@ -69,6 +111,9 @@
   let findQuery = $state("");
   let mcpInfoOpen = $state(false);
   let sawSessionControl = false;
+  let pendingPromptSeed = "";
+  let promptSeedSent = false;
+  let terminalCwdAbs: string | null = $state(null);
   let lastSessionSave = 0;
   let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null;
   const menuOpen = $derived(tabMenu.openForTabId === tab.id);
@@ -77,13 +122,28 @@
     if (!a) return { x: 0, y: 0 };
     return { x: Math.round(a.left), y: Math.round(a.bottom + 4) };
   });
-  const otherTerminalTabs = $derived(
-    allTerminalTabs().filter((candidate) => candidate.id !== tab.id),
+  const broadcastTargets = $derived(allTerminalTabs());
+  const broadcastMembers = $derived(terminalBroadcastMembers(tab));
+  const otherBroadcastMembers = $derived(
+    broadcastMembers.filter((member) => member.id !== tab.id),
   );
   const selectedBroadcastTargets = $derived(new Set(tab.broadcastTargetIds));
+  const allBroadcastTargetsSelected = $derived(
+    broadcastTargets.length > 0 &&
+      broadcastTargets.every((target) => selectedBroadcastTargets.has(target.id)),
+  );
   const broadcastChord = chordFor("app.terminal.broadcast.toggle") ?? "";
   const mcpEnvOn = $derived(terminalMcpEnvEnabled(tab));
   const showMcpEnvDisabled = $derived(tab.sessionMcpEnv === false);
+  const staleEnvName = $derived(terminalEnvTabNameStale(tab));
+  const showStaleEnvPrompt = $derived(
+    staleEnvName && !tab.terminalEnvNamePromptDismissed,
+  );
+  const splitsAllowed = $derived.by(() => {
+    void layout.rootId;
+    void Object.keys(layout.nodes).length;
+    return canSplit();
+  });
 
   $effect(() => {
     if (!host || term) return;
@@ -106,12 +166,47 @@
     queueMicrotask(() => term?.focus());
   });
 
-  function start(): void {
-    if (!host || term) return;
+  $effect(() => {
+    ui.theme;
+    applyTerminalTheme();
+  });
+
+  function terminalTheme() {
     const styles = getComputedStyle(document.documentElement);
     const bg = styles.getPropertyValue("--bg").trim() || "#1c1c1e";
     const text = styles.getPropertyValue("--text").trim() || "#ebebf0";
     const cursor = styles.getPropertyValue("--link").trim() || "#58a6ff";
+    return {
+      background: bg,
+      foreground: text,
+      cursor,
+      selectionBackground: "rgba(88, 166, 255, 0.35)",
+      black: "#0c0c0d",
+      red: "#ff6b6b",
+      green: "#6cd07a",
+      yellow: "#e3b341",
+      blue: "#58a6ff",
+      magenta: "#b07dff",
+      cyan: "#5dd8d8",
+      white: "#d8d8de",
+      brightBlack: "#6c6c70",
+      brightRed: "#ff8585",
+      brightGreen: "#8be89a",
+      brightYellow: "#f2d16b",
+      brightBlue: "#7dbdff",
+      brightMagenta: "#c8a6ff",
+      brightCyan: "#7df0f0",
+      brightWhite: "#ffffff",
+    };
+  }
+
+  function applyTerminalTheme(): void {
+    if (!term) return;
+    term.options.theme = terminalTheme();
+  }
+
+  function start(): void {
+    if (!host || term) return;
     term = new Terminal({
       allowTransparency: false,
       cursorBlink: true,
@@ -123,28 +218,7 @@
       macOptionIsMeta: true,
       scrollback: 20_000,
       tabStopWidth: 8,
-      theme: {
-        background: bg,
-        foreground: text,
-        cursor,
-        selectionBackground: "rgba(88, 166, 255, 0.35)",
-        black: "#0c0c0d",
-        red: "#ff6b6b",
-        green: "#6cd07a",
-        yellow: "#e3b341",
-        blue: "#58a6ff",
-        magenta: "#b07dff",
-        cyan: "#5dd8d8",
-        white: "#d8d8de",
-        brightBlack: "#6c6c70",
-        brightRed: "#ff8585",
-        brightGreen: "#8be89a",
-        brightYellow: "#f2d16b",
-        brightBlue: "#7dbdff",
-        brightMagenta: "#c8a6ff",
-        brightCyan: "#7df0f0",
-        brightWhite: "#ffffff",
-      },
+      theme: terminalTheme(),
     });
     fit = new FitAddon();
     search = new SearchAddon({ highlightLimit: 1000 });
@@ -154,7 +228,7 @@
     term.loadAddon(serialize);
     term.loadAddon(new WebLinksAddon());
     term.open(host);
-    term.attachCustomKeyEventHandler((ev) => handleTerminalMetaKey(ev, sendUserInput));
+    term.attachCustomKeyEventHandler(handleTerminalKeyEvent);
     term.onData(sendUserInput);
     term.onResize(({ cols, rows }) => send({ type: "resize", cols, rows }));
     resizeObserver = new ResizeObserver(queueFit);
@@ -172,6 +246,9 @@
     missedBytes = 0;
     sessionClosedReason = null;
     sawSessionControl = false;
+    const reattaching = Boolean(tab.terminalSessionId);
+    pendingPromptSeed = reattaching ? "" : (tab.seedInput ?? "");
+    promptSeedSent = false;
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const path = withTokenQuery(
       terminalWsPath({
@@ -181,6 +258,7 @@
         sessionId: tab.terminalSessionId,
         lastSeq: tab.lastSeq,
         mcpEnv: mcpEnvOn,
+        cwd: reattaching ? undefined : tab.cwd,
       }),
     );
     ws = new WebSocket(`${proto}//${window.location.host}${path}`);
@@ -195,12 +273,14 @@
         const bytes = new Uint8Array(event.data);
         term?.write(bytes);
         recordOutputBytes(bytes.byteLength);
+        maybeSeedPrompt();
         return;
       }
       if (event.data instanceof Blob) {
         const bytes = new Uint8Array(await event.data.arrayBuffer());
         term?.write(bytes);
         recordOutputBytes(bytes.byteLength);
+        maybeSeedPrompt();
         return;
       }
       let frame: ServerFrame;
@@ -211,6 +291,7 @@
       }
       if (frame.type === "ready") {
         statusDetail = `${frame.cols}x${frame.rows}`;
+        terminalCwdAbs = frame.cwd ?? null;
       } else if (frame.type === "session") {
         sawSessionControl = true;
         setTerminalSession(tab, frame.id, frame.seq, mcpEnvOn);
@@ -224,6 +305,8 @@
       } else if (frame.type === "resize_other") {
         term?.resize(frame.cols, frame.rows);
         statusDetail = `${frame.cols}x${frame.rows}`;
+      } else if (frame.type === "cwd") {
+        terminalCwdAbs = frame.cwd ?? null;
       } else if (frame.type === "closed") {
         sessionClosedReason = frame.reason;
         status = "exited";
@@ -236,6 +319,7 @@
         statusDetail = `exit ${frame.code}`;
         clearTerminalSession(tab);
         scheduleTerminalSessionSave();
+        term?.writeln(`\r\nprocess exited (${frame.code}); press Ctrl+D to close this tab`);
       } else if (frame.type === "error") {
         const detail = frame.message ?? frame.reason ?? "unknown error";
         statusDetail = detail;
@@ -261,6 +345,18 @@
   function recordOutputBytes(bytes: number): void {
     advanceTerminalSeq(tab, bytes);
     scheduleTerminalSessionSave();
+  }
+
+  function maybeSeedPrompt(): void {
+    if (!pendingPromptSeed || promptSeedSent) return;
+    promptSeedSent = true;
+    const seed = ` ${pendingPromptSeed}\x01`;
+    tab.seedInput = undefined;
+    setTimeout(() => {
+      sendInput(seed);
+      term?.focus();
+      scheduleTerminalSessionSave();
+    }, 150);
   }
 
   function scheduleTerminalSessionSave(): void {
@@ -335,6 +431,7 @@
   }
 
   function restart(): void {
+    closeTabMenu();
     explicitCloseSession();
     teardown();
     void tick().then(start);
@@ -349,15 +446,142 @@
   }
 
   async function copyScrollback(): Promise<void> {
+    closeTabMenu();
     const text = serialize?.serialize({ scrollback: 20_000 }) ?? "";
     if (!text) return;
     await navigator.clipboard?.writeText(text);
     term?.focus();
   }
 
+  async function copySelectionOrScrollback(): Promise<void> {
+    closeTabMenu();
+    const text = term?.getSelection() || serialize?.serialize({ scrollback: 20_000 }) || "";
+    if (!text) return;
+    await navigator.clipboard?.writeText(text);
+    term?.focus();
+  }
+
+  async function pasteClipboard(): Promise<void> {
+    closeTabMenu();
+    const text = await navigator.clipboard?.readText();
+    if (text) sendUserInput(text);
+    term?.focus();
+  }
+
   function openFind(): void {
+    closeTabMenu();
     findOpen = true;
     void tick().then(() => searchInput?.focus());
+  }
+
+  function openSearch(): void {
+    closeTabMenu();
+    searchPanel.open = true;
+  }
+
+  function openNewFile(): void {
+    const cwd = terminalCwdRel();
+    if (cwd === null) return terminalCwdUnavailable();
+    closeTabMenu();
+    void fileOps.createFile(cwd);
+  }
+
+  function requestTerminalCwd(): void {
+    send({ type: "cwd" });
+  }
+
+  function terminalCwdRel(): string | null {
+    const abs = terminalCwdAbs;
+    const root = drive.info?.root;
+    if (!abs || !root) return null;
+    const normAbs = abs.replace(/\\/g, "/").replace(/\/+$/, "");
+    const normRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (normAbs === normRoot) return "";
+    const prefix = `${normRoot}/`;
+    if (!normAbs.startsWith(prefix)) return null;
+    return normAbs.slice(prefix.length);
+  }
+
+  function terminalCwdUnavailable(): void {
+    closeTabMenu();
+    requestTerminalCwd();
+    ui.status = "PTY did not report CWD";
+    term?.focus();
+  }
+
+  async function copyTerminalCwd(): Promise<void> {
+    const cwd = terminalCwdRel();
+    if (cwd === null) return terminalCwdUnavailable();
+    closeTabMenu();
+    await navigator.clipboard?.writeText(cwd);
+    term?.focus();
+  }
+
+  function showTerminalCwd(): void {
+    const cwd = terminalCwdRel();
+    if (cwd === null) return terminalCwdUnavailable();
+    closeTabMenu();
+    revealAndSelect(cwd);
+    browserOverlay.open = true;
+    term?.focus();
+  }
+
+  function graphTerminalCwd(): void {
+    const cwd = terminalCwdRel();
+    if (cwd === null) return terminalCwdUnavailable();
+    closeTabMenu();
+    openFsGraphForDirectory(cwd);
+    term?.focus();
+  }
+
+  function openSettingsFromMenu(): void {
+    closeTabMenu();
+    openSettings();
+  }
+
+  function openNewTerminal(): void {
+    closeTabMenu();
+    openTerminalInPane(paneId);
+  }
+
+  function ensureRichPrompt(): NonNullable<TerminalTabState["richPrompt"]> {
+    if (!tab.richPrompt) {
+      tab.richPrompt = {
+        buffer: "",
+        heightPx: Math.max(220, Math.round((host?.clientHeight ?? 640) / 2)),
+        open: false,
+        mode: "wysiwyg",
+      };
+    }
+    if (!tab.richPrompt.heightPx) {
+      tab.richPrompt.heightPx = Math.max(220, Math.round((host?.clientHeight ?? 640) / 2));
+    }
+    if (!tab.richPrompt.mode) tab.richPrompt.mode = "wysiwyg";
+    return tab.richPrompt;
+  }
+
+  function openRichPrompt(): void {
+    closeTabMenu();
+    ensureRichPrompt().open = true;
+    scheduleTerminalSessionSave();
+  }
+
+  function closeRichPrompt(): void {
+    ensureRichPrompt().open = false;
+    scheduleTerminalSessionSave();
+    term?.focus();
+  }
+
+  function submitRichPrompt(source: string): void {
+    sendUserInput(source);
+    scheduleTerminalSessionSave();
+    term?.focus();
+  }
+
+  function splitPane(direction: "row" | "column"): void {
+    closeTabMenu();
+    layout.activePaneId = paneId;
+    splitActive(direction);
   }
 
   function runFind(next: boolean): void {
@@ -391,7 +615,50 @@
     }
   }
 
+  function isCloseExitedTabKey(e: KeyboardEvent): boolean {
+    return (
+      e.type === "keydown" &&
+      status === "exited" &&
+      e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      e.key.toLowerCase() === "d"
+    );
+  }
+
+  function closeExitedTabFromKey(e: KeyboardEvent): boolean {
+    if (!isCloseExitedTabKey(e)) return false;
+    e.preventDefault();
+    void closeTab(paneId, tab.id, { force: true });
+    return true;
+  }
+
+  function handleTerminalKeyEvent(e: KeyboardEvent): boolean {
+    if (closeExitedTabFromKey(e)) return false;
+    if (
+      e.type === "keydown" &&
+      e.altKey &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.shiftKey &&
+      e.code === "Space"
+    ) {
+      e.preventDefault();
+      openRichPrompt();
+      return false;
+    }
+    return handleTerminalMetaKey(e, sendUserInput);
+  }
+
   function onShellKeydown(e: KeyboardEvent): void {
+    if (closeExitedTabFromKey(e)) {
+      return;
+    }
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === "Space") {
+      e.preventDefault();
+      openRichPrompt();
+      return;
+    }
     if (
       (e.metaKey || e.ctrlKey) &&
       !e.shiftKey &&
@@ -423,6 +690,32 @@
     setTerminalBroadcastEnabled(tab, !tab.broadcastEnabled);
   }
 
+  function focusTerminalTab(tabId: string): void {
+    for (const node of Object.values(layout.nodes)) {
+      if (node.kind !== "leaf") continue;
+      if (!node.tabs.some((candidate) => candidate.id === tabId)) continue;
+      node.activeTabId = tabId;
+      layout.activePaneId = node.id;
+      closeTabMenu();
+      return;
+    }
+  }
+
+  function removeBroadcastMember(memberId: string): void {
+    removeTerminalFromBroadcastGroup(tab, memberId);
+  }
+
+  function toggleBroadcastMute(): void {
+    setTerminalBroadcastMuted(tab, !tab.broadcastMuted);
+  }
+
+  function toggleAllBroadcastTargets(): void {
+    const select = !allBroadcastTargetsSelected;
+    for (const target of broadcastTargets) {
+      setTerminalBroadcastTarget(tab, target.id, select);
+    }
+  }
+
   function toggleMcpEnv(): void {
     setTerminalMcpEnv(tab, !mcpEnvOn);
     scheduleTerminalSessionSave();
@@ -432,6 +725,17 @@
     if (showMcpEnvDisabled) return;
     injectShowMcpEnvCommand(sendUserInput);
     term?.focus();
+  }
+
+  function onTerminalContextMenu(e: MouseEvent): void {
+    e.preventDefault();
+    requestTerminalCwd();
+    openTabMenu(tab.id, {
+      left: e.clientX,
+      top: e.clientY,
+      right: e.clientX,
+      bottom: e.clientY,
+    });
   }
 </script>
 
@@ -444,6 +748,7 @@
   role="tabpanel"
   aria-hidden={!active}
   onkeydown={onShellKeydown}
+  oncontextmenu={onTerminalContextMenu}
 >
   {#if menuOpen}
     <div
@@ -473,16 +778,143 @@
           }}
         />
       </label>
+      <div class="terminal-status-row">
+        <span class:connected={status === "connected"} class="terminal-status">
+          {status}{statusDetail ? ` - ${statusDetail}` : ""}
+        </span>
+        {#if missedBytes > 0}
+          <span class="session-note">missed {missedBytes} bytes</span>
+        {/if}
+        {#if staleEnvName}
+          <span class="session-note">stale env</span>
+        {/if}
+      </div>
+      {#if showStaleEnvPrompt}
+        <div class="env-stale-row">
+          <span>Tab name changed. $CHAN_TAB_NAME will stay at {tab.terminalEnvTabName} until restart.</span>
+          <button type="button" onclick={restart}>Restart now</button>
+          <button type="button" onclick={() => dismissTerminalEnvNamePrompt(tab)}>Later</button>
+        </div>
+      {/if}
       <div class="action-list">
-        <button class="mbtn" class:on={tab.broadcastEnabled} onclick={toggleBroadcast}>
+        {#if sessionClosedReason}
+          <button class="mbtn" onclick={restart}>
+            <span class="mbtn-icon">
+              <RotateCcw size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">Start New Session</span>
+            <span class="mbtn-chord"></span>
+          </button>
+        {/if}
+        <button class="mbtn" onclick={copySelectionOrScrollback}>
           <span class="mbtn-icon">
-            <Radio size={16} strokeWidth={1.75} aria-hidden="true" />
+            <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
-          <span class="mbtn-label">
-            {tab.broadcastEnabled ? "Broadcast Input On" : "Broadcast Input Off"}
-          </span>
-          <span class="mbtn-chord">{broadcastChord}</span>
+          <span class="mbtn-label">Copy</span>
+          <span class="mbtn-chord"></span>
         </button>
+        <button class="mbtn" onclick={pasteClipboard}>
+          <span class="mbtn-icon">
+            <ClipboardPaste size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Paste</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <button class="mbtn" onclick={openRichPrompt}>
+          <span class="mbtn-icon">
+            <MessageSquareText size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Rich prompt</span>
+          <span class="mbtn-chord">Alt+Space</span>
+        </button>
+        <button class="mbtn" onclick={copyTerminalCwd}>
+          <span class="mbtn-icon">
+            <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Copy path to CWD</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <button class="mbtn" onclick={showTerminalCwd}>
+          <span class="mbtn-icon">
+            <FolderOpen size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Show Dir</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <button class="mbtn" onclick={graphTerminalCwd}>
+          <span class="mbtn-icon">
+            <Network size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Graph dir</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <div class="msep" role="separator"></div>
+        <button class="mbtn" onclick={openFind}>
+          <span class="mbtn-icon">
+            <Search size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Find</span>
+          <span class="mbtn-chord">{chordFor("app.find.open") ?? ""}</span>
+        </button>
+        <button class="mbtn" onclick={copyScrollback}>
+          <span class="mbtn-icon">
+            <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Copy Scrollback</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <button class="mbtn" onclick={restart}>
+          <span class="mbtn-icon">
+            <RotateCcw size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Restart</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <button class="mbtn" onclick={openNewTerminal}>
+          <span class="mbtn-icon">
+            <TerminalIcon size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">New Terminal</span>
+          <span class="mbtn-chord">{chordFor("app.terminal.toggle") ?? ""}</span>
+        </button>
+        <button class="mbtn" onclick={openNewFile}>
+          <span class="mbtn-icon">
+            <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">New File</span>
+          <span class="mbtn-chord">{chordFor("app.file.new") ?? ""}</span>
+        </button>
+        {#if splitsAllowed}
+          <button class="mbtn" onclick={() => splitPane("row")}>
+            <span class="mbtn-icon">
+              <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">Split Right</span>
+            <span class="mbtn-chord"></span>
+          </button>
+          <button class="mbtn" onclick={() => splitPane("column")}>
+            <span class="mbtn-icon">
+              <SquareSplitVertical size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">Split Down</span>
+            <span class="mbtn-chord"></span>
+          </button>
+        {/if}
+        <button class="mbtn" onclick={openSearch}>
+          <span class="mbtn-icon">
+            <Search size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Search</span>
+          <span class="mbtn-chord">{chordFor("app.search.toggle") ?? ""}</span>
+        </button>
+        <button class="mbtn" onclick={openSettingsFromMenu}>
+          <span class="mbtn-icon">
+            <Settings size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Settings</span>
+          <span class="mbtn-chord">{chordFor("app.settings.toggle") ?? ""}</span>
+        </button>
+        <div class="msep" role="separator"></div>
         <div class="mcp-env-row">
           <button class="mbtn" class:on={mcpEnvOn} onclick={toggleMcpEnv}>
             <span class="mbtn-icon">
@@ -515,10 +947,26 @@
           <span class="mbtn-label">Show MCP env in terminal</span>
         </button>
         <div class="msep" role="separator"></div>
-        {#if otherTerminalTabs.length === 0}
-          <div class="empty-targets">No other terminal tabs</div>
+        <button class="mbtn" class:on={tab.broadcastEnabled} onclick={toggleBroadcast}>
+          <span class="mbtn-icon">
+            <Radio size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">
+            {tab.broadcastEnabled ? "Broadcast Input On" : "Broadcast Input Off"}
+          </span>
+          <span class="mbtn-chord">{broadcastChord}</span>
+        </button>
+        <button class="mbtn" onclick={toggleAllBroadcastTargets}>
+          <span class="mbtn-icon"></span>
+          <span class="mbtn-label">
+            {allBroadcastTargetsSelected ? "Deselect All" : "Select All"}
+          </span>
+          <span class="mbtn-chord"></span>
+        </button>
+        {#if broadcastTargets.length === 0}
+          <div class="empty-targets">No terminal tabs</div>
         {:else}
-          {#each otherTerminalTabs as target (target.id)}
+          {#each broadcastTargets as target (target.id)}
             <label class="target-row">
               <span class="target-check">
                 <input
@@ -542,17 +990,8 @@
       </div>
     </div>
   {/if}
-  <header>
-    <span class:connected={status === "connected"} class="status">
-      {status}{statusDetail ? ` - ${statusDetail}` : ""}
-    </span>
-    {#if missedBytes > 0}
-      <span class="session-note">missed {missedBytes} bytes</span>
-    {/if}
-    {#if sessionClosedReason}
-      <button type="button" class="resume-btn" onclick={restart}>Start new session</button>
-    {/if}
-    {#if findOpen}
+  {#if findOpen}
+    <div class="terminal-find" role="search" aria-label="find in terminal">
       <input
         bind:this={searchInput}
         class="find"
@@ -565,23 +1004,58 @@
         }}
         onkeydown={onFindKeydown}
       />
-    {/if}
-    <button type="button" class="tool-btn" onclick={openFind} title="Find" aria-label="Find">
-      <Search size={14} strokeWidth={1.75} aria-hidden="true" />
-    </button>
-    <button
-      type="button"
-      class="tool-btn"
-      onclick={copyScrollback}
-      title="Copy scrollback"
-      aria-label="Copy scrollback"
+    </div>
+  {/if}
+  {#if tab.richPrompt?.open}
+    <TerminalRichPrompt
+      prompt={tab.richPrompt}
+      onSubmit={submitRichPrompt}
+      onClose={closeRichPrompt}
+    />
+  {/if}
+  {#if broadcastMembers.length > 1}
+    <div
+      class="broadcast-strip"
+      class:muted={tab.broadcastMuted}
+      role="status"
+      aria-label="broadcast input group"
     >
-      <Clipboard size={14} strokeWidth={1.75} aria-hidden="true" />
-    </button>
-    <button type="button" class="tool-btn" onclick={restart} title="Restart" aria-label="Restart">
-      <RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />
-    </button>
-  </header>
+      <button
+        type="button"
+        class="broadcast-mute"
+        class:muted={tab.broadcastMuted}
+        onclick={toggleBroadcastMute}
+        title={tab.broadcastMuted ? "Unmute broadcast input" : "Mute broadcast input"}
+        aria-label={tab.broadcastMuted ? "Unmute broadcast input" : "Mute broadcast input"}
+      >
+        <Radio size={15} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+      <div class="broadcast-members">
+        {#each otherBroadcastMembers as member (member.id)}
+          <span class="broadcast-member">
+            <button
+              type="button"
+              class="broadcast-member-focus"
+              onclick={() => focusTerminalTab(member.id)}
+              title={`Focus ${terminalTabName(member)}`}
+            >{terminalTabName(member)}</button>
+            <button
+              type="button"
+              class="broadcast-member-remove"
+              onclick={() => removeBroadcastMember(member.id)}
+              title={`Remove ${terminalTabName(member)} from broadcast`}
+              aria-label={`Remove ${terminalTabName(member)} from broadcast`}
+            >×</button>
+          </span>
+        {/each}
+      </div>
+      <button
+        type="button"
+        class="broadcast-off"
+        onclick={() => removeBroadcastMember(tab.id)}
+      >off</button>
+    </div>
+  {/if}
   <div class="terminal-host" bind:this={host}></div>
 </div>
 
@@ -602,43 +1076,21 @@
     visibility: visible;
     pointer-events: auto;
   }
-  header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 8px;
-    border-bottom: 1px solid var(--border);
+  .terminal-find {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    z-index: 2;
     background: var(--bg-card);
-    flex-shrink: 0;
-  }
-  .status {
-    color: var(--text-secondary);
-    font-size: 12px;
-    margin-right: auto;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-  }
-  .status.connected {
-    color: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
+    padding: 5px;
   }
   .session-note {
     color: var(--warn-text);
     font-size: 12px;
     white-space: nowrap;
-  }
-  .resume-btn {
-    border: 1px solid var(--border);
-    background: var(--btn-bg);
-    color: var(--text);
-    border-radius: 4px;
-    padding: 3px 8px;
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .resume-btn:hover {
-    border-color: var(--btn-hover);
   }
   .find {
     width: min(220px, 28vw);
@@ -655,30 +1107,98 @@
   .find:focus {
     border-color: var(--link);
   }
-  .tool-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 24px;
-    padding: 0;
-    background: var(--bg);
-    color: var(--text-secondary);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    cursor: pointer;
-    flex-shrink: 0;
-  }
-  .tool-btn:hover {
-    color: var(--text);
-    border-color: var(--btn-hover);
-  }
   .terminal-host {
     flex: 1;
     min-height: 0;
     padding: 8px;
     background: var(--bg);
     overflow: hidden;
+  }
+  .broadcast-strip {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-card);
+    color: var(--warn-text);
+    min-height: 31px;
+    flex-shrink: 0;
+  }
+  .broadcast-strip.muted {
+    color: var(--text-secondary);
+  }
+  .broadcast-mute {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .broadcast-mute:hover,
+  .broadcast-mute.muted {
+    border-color: color-mix(in srgb, currentColor 45%, transparent);
+    background: color-mix(in srgb, currentColor 12%, transparent);
+  }
+  .broadcast-members {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+  }
+  .broadcast-member {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 150px;
+    border: 1px solid color-mix(in srgb, var(--warn-text) 55%, var(--border));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--warn-text) 11%, transparent);
+    overflow: hidden;
+    flex-shrink: 1;
+  }
+  .broadcast-member-focus,
+  .broadcast-member-remove,
+  .broadcast-off {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .broadcast-member-focus {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 4px 6px 4px 8px;
+  }
+  .broadcast-member-remove {
+    width: 20px;
+    align-self: stretch;
+    border-left: 1px solid color-mix(in srgb, var(--warn-text) 45%, transparent);
+  }
+  .broadcast-member-focus:hover,
+  .broadcast-member-remove:hover,
+  .broadcast-off:hover {
+    background: color-mix(in srgb, var(--warn-text) 18%, transparent);
+  }
+  .broadcast-off {
+    border: 1px solid color-mix(in srgb, var(--warn-text) 55%, var(--border));
+    border-radius: 4px;
+    padding: 4px 7px;
+    flex-shrink: 0;
   }
   .terminal-host :global(.xterm) {
     height: 100%;
@@ -737,6 +1257,52 @@
   }
   .rename-input:focus {
     border-color: var(--link);
+  }
+  .terminal-status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 8px 4px;
+    min-width: 0;
+  }
+  .terminal-status {
+    color: var(--text-secondary);
+    font-size: 12px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .terminal-status.connected {
+    color: var(--accent);
+  }
+  .env-stale-row {
+    margin: 2px 8px 6px;
+    padding: 7px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.35;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 6px;
+    align-items: center;
+  }
+  .env-stale-row button {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--btn-bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    padding: 3px 6px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .env-stale-row button:hover {
+    border-color: var(--btn-hover);
   }
   .action-list {
     display: flex;
@@ -861,10 +1427,7 @@
     background: var(--bg);
   }
   @media (max-width: 640px) {
-    header {
-      gap: 6px;
-      padding: 6px;
-    }
+    .terminal-find { right: 6px; }
     .find {
       width: 112px;
     }

@@ -14,6 +14,8 @@ import type {
   GraphSnapshot,
   GraphView,
   HeadingRow,
+  HealthResponse,
+  InspectorPayload,
   IndexStatus,
   LanguageGraphResponse,
   MoveResponse,
@@ -290,10 +292,10 @@ export const api = {
       "GET",
       `/api/report/file?path=${encodeURIComponent(path)}`,
     ),
-  /// chan-report folder roll-up: totals, by-language, and COCOMO.
+  /// chan-report directory roll-up: totals, by-language, and COCOMO.
   /// Empty `path` returns the whole-drive roll-up. The per-file
   /// array is dropped server-side; only the summary fields come
-  /// back so big folders stay cheap to fetch.
+  /// back so big directories stay cheap to fetch.
   reportPrefix: (path: string) =>
     req<ReportPrefix>(
       "GET",
@@ -314,6 +316,12 @@ export const api = {
       `/api/resolve-link?target=${encodeURIComponent(target)}`,
     ),
   indexStatus: () => req<IndexStatus>("GET", "/api/index/status"),
+  health: () => req<HealthResponse>("GET", "/api/health"),
+  inspector: (path: string) =>
+    req<InspectorPayload>(
+      "GET",
+      `/api/inspector?path=${encodeURIComponent(path)}`,
+    ),
   /// Wipe and rebuild the search index from scratch. Returns when
   /// the rebuild has been kicked off; status moves through
   /// "building" via /api/index/status as files are reprocessed.
@@ -342,8 +350,15 @@ export const api = {
     req<void>("PUT", sessionPath(), body),
   links: () => req<GraphSnapshot>("GET", "/api/links"),
   /// Typed graph payload powering the graph view tab.
-  graph: () => req<GraphView>("GET", "/api/graph"),
-  /// Language graph payload: language nodes connected to folder nodes.
+  graph: (opts: { scope?: "drive" | "directory" | "file"; path?: string; depth?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.scope) params.set("scope", opts.scope);
+    if (opts.path) params.set("path", opts.path);
+    if (opts.depth !== undefined) params.set("depth", String(opts.depth));
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return req<GraphView>("GET", `/api/graph${suffix}`);
+  },
+  /// Language graph payload: language nodes connected to directory nodes.
   languageGraph: (opts: { depth?: number; language?: string } = {}) => {
     const params = new URLSearchParams();
     if (opts.depth !== undefined) params.set("depth", String(opts.depth));
@@ -351,9 +366,9 @@ export const api = {
     const suffix = params.size > 0 ? `?${params.toString()}` : "";
     return req<LanguageGraphResponse>("GET", `/api/graph/languages${suffix}`);
   },
-  /// Filesystem graph payload: folders, files, symlinks, hardlinks,
+  /// Filesystem graph payload: directories, files, symlinks, hardlinks,
   /// and ghost nodes. Distinct from the semantic markdown graph.
-  fsGraph: (opts: { scope: "file" | "folder"; path: string; depth?: number }) =>
+  fsGraph: (opts: { scope: "file" | "directory"; path: string; depth?: number }) =>
     req<FsGraphResponse>(
       "GET",
       `/api/fs-graph?scope=${encodeURIComponent(opts.scope)}&path=${encodeURIComponent(opts.path)}&depth=${encodeURIComponent(String(opts.depth ?? 1))}`,

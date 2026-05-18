@@ -105,6 +105,13 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "App",
   },
   {
+    id: "app.terminal.richPrompt",
+    label: "Terminal rich prompt",
+    web: "Alt+Space",
+    native: "Alt+Space",
+    group: "App",
+  },
+  {
     id: "ui.overlay.dismiss",
     label: "Dismiss overlay",
     web: "Esc",

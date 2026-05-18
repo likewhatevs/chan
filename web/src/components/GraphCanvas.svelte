@@ -40,7 +40,7 @@
   } from "d3-force";
   import type { GraphViewEdge, GraphViewNode } from "../api/types";
 
-  type RenderedEdgeKind = "link" | "tag" | "mention" | "language" | "group";
+  type RenderedEdgeKind = "link" | "tag" | "mention" | "contains" | "language" | "group";
   type RenderedEdge = GraphViewEdge & { kind: RenderedEdgeKind };
   type RenderedNode = Extract<
     GraphViewNode,
@@ -198,7 +198,7 @@
   const PATH_FOLDER =
     `<path d='M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/>`;
   /// Lucide HardDrive — used as the drive-root glyph so the node
-  /// reads as the storage anchor, distinct from any other folder.
+  /// reads as the storage anchor, distinct from any other directory.
   const PATH_DRIVE =
     `<line x1='22' y1='12' x2='2' y2='12'/>` +
     `<path d='M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z'/>` +
@@ -279,9 +279,10 @@
     img: string;
     tag: string;
     mention: string;
+    language: string;
     accent: string;
-    /// Folder node fill (filesystem graph mode). Per request.md
-    /// folders render in grey across every surface.
+    /// Directory node fill (filesystem graph mode). Per request.md
+    /// directories render in grey across every surface.
     folder: string;
     /// Binary file fill, paired with the inspector FILE blue per
     /// request.md so binary files read the same hue in the graph
@@ -301,6 +302,7 @@
       img: v("--g-img", "#b07dff"),
       tag: v("--g-tag", "#6cd07a"),
       mention: v("--warn-text", "#e3b341"),
+      language: v("--g-language", "#ff4db8"),
       accent: v("--accent", "#3fb950"),
       folder: v("--g-folder", "#8e8e93"),
       binary: v("--g-binary", "#58a6ff"),
@@ -310,7 +312,7 @@
   let theme: ThemeColors = $state({
     bg: "#1c1c1e", bgCard: "#232325", text: "#ebebf0", textSec: "#8e8e93",
     doc: "#ff8a3d", img: "#b07dff", tag: "#6cd07a", mention: "#e3b341",
-    accent: "#3fb950", folder: "#8e8e93", binary: "#58a6ff",
+    language: "#ff4db8", accent: "#3fb950", folder: "#8e8e93", binary: "#58a6ff",
   });
 
   function refreshTheme(): void {
@@ -359,7 +361,7 @@
   function renderRadius(kind: DKind, id: string): number {
     // Drive root is the structural anchor of the whole graph — size
     // it like the doc nodes so it reads as a primary hub instead of
-    // a leaf folder.
+    // a leaf directory.
     const base = kind === "doc" || kind === "drive" ? RADIUS_DOC : RADIUS_BASE;
     if (maxBacklinks <= 0) return base;
     const bl = backlinks.get(id) ?? 0;
@@ -439,7 +441,7 @@
       }
     }
     // Pin focal nodes. Single-focus scopes stay centered at origin;
-    // multi-file/folder scopes fan their seeds around a small ring so
+    // multi-file/directory scopes fan their seeds around a small ring so
     // they repel from distinct starting points instead of stacking.
     const focalPositions = new Map<string, { x: number; y: number }>();
     if (focalIds.length === 1) {
@@ -613,10 +615,10 @@
     // change strokeStyle once per kind.
     ctx.lineWidth = 1 / Math.max(0.5, transform.k);
     const edgesByKind: Record<RenderedEdgeKind, DEdge[]> = {
-      link: [], tag: [], mention: [], language: [], group: [],
+      link: [], tag: [], mention: [], contains: [], language: [], group: [],
     };
     for (const e of visibleEdgeRefs) edgesByKind[e.kind].push(e);
-    for (const kind of ["link", "tag", "mention", "language", "group"] as const) {
+    for (const kind of ["link", "tag", "mention", "contains", "language", "group"] as const) {
       const list = edgesByKind[kind];
       if (list.length === 0) continue;
       ctx.globalAlpha = 0.18;
@@ -624,7 +626,8 @@
         kind === "link" ? theme.text
         : kind === "tag" ? theme.tag
         : kind === "mention" ? theme.mention
-        : kind === "language" ? theme.accent
+        : kind === "contains" ? theme.folder
+        : kind === "language" ? theme.language
         : theme.accent;
       ctx.beginPath();
       for (const e of list) {
@@ -677,7 +680,7 @@
         : n.kind === "img" ? theme.img
         : n.kind === "contact" ? theme.mention
         : n.kind === "mention" ? theme.mention
-        : n.kind === "language" ? theme.accent
+        : n.kind === "language" ? theme.language
         : n.kind === "drive" ? theme.bgCard
         : n.kind === "folder" ? theme.folder
         : theme.tag;

@@ -103,6 +103,7 @@ export type TreeEntry = {
   is_dir: boolean;
   mtime: number | null;
   size: number;
+  path_class?: PathClass;
   /// File-kind discriminator from the server. Present for every
   /// regular file; absent on directory entries (frontends key off
   /// `is_dir` for those). Values mirror the unified taxonomy in
@@ -117,6 +118,26 @@ export type TreeEntry = {
   ///   - `binary`: PDFs, archives, audio/video, and everything else
   ///     opaque to the editor.
   kind?: "document" | "contact" | "text" | "media" | "binary";
+};
+
+export type PathKind =
+  | "directory"
+  | "symlink"
+  | "regular_file"
+  | "fifo"
+  | "socket"
+  | "block_device"
+  | "char_device"
+  | "other";
+
+export type PathPermission = "read_write" | "read_only";
+
+export type PathClass = {
+  kind: PathKind;
+  permission: PathPermission;
+  link_count: number;
+  target?: string | null;
+  target_escapes_drive?: boolean;
 };
 
 /// Response from POST /api/move. The rename itself always succeeds
@@ -138,6 +159,7 @@ export type FileResponse = {
   path: string;
   content: string;
   mtime: number | null;
+  path_class?: PathClass;
   /// Path of the enclosing git repo, relative to the drive root.
   /// Absent when the file is not inside a git repo (or when the
   /// repo coincides with the drive root). Drives the per-file
@@ -186,6 +208,7 @@ export type GraphViewNode =
       id: string;
       label: string;
       path: string;
+      path_class?: PathClass | null;
       /// `chan.kind` discriminator from the indexer. "contact" for
       /// notes flagged with `chan.kind: contact` frontmatter; absent
       /// for regular markdown so the canvas falls back to the doc
@@ -195,6 +218,14 @@ export type GraphViewNode =
       /// True for ghost nodes synthesized as the target of a broken
       /// link. Rendered muted; clicking is a no-op (the file doesn't
       /// exist yet).
+      missing?: boolean;
+    }
+  | {
+      kind: "media";
+      id: string;
+      label: string;
+      path: string;
+      path_class?: PathClass | null;
       missing?: boolean;
     }
   | { kind: "tag"; id: string; label: string }
@@ -212,12 +243,27 @@ export type GraphViewNode =
       id: string;
       label: string;
       path: string;
+      path_class?: PathClass | null;
+      files: number;
+      code: number;
+    }
+  | {
+      kind: "directory";
+      id: string;
+      label: string;
+      path: string;
       files: number;
       code: number;
     }
   | { kind: "date"; id: string; label: string };
 
-export type GraphViewEdgeKind = "link" | "tag" | "mention" | "language" | "date";
+export type GraphViewEdgeKind =
+  | "link"
+  | "tag"
+  | "mention"
+  | "contains"
+  | "language"
+  | "date";
 
 export type GraphViewEdge = {
   source: string;
@@ -225,6 +271,9 @@ export type GraphViewEdge = {
   kind: GraphViewEdgeKind;
   /// Only meaningful for `link` edges; missing/false for the others.
   broken?: boolean;
+  rank?: number;
+  files?: number;
+  code?: number;
 };
 
 export type GraphView = {
@@ -241,12 +290,12 @@ export type LanguageGraphEdge = GraphViewEdge & {
 
 export type LanguageGraphResponse = {
   max_depth: number;
-  nodes: Array<Extract<GraphViewNode, { kind: "language" | "folder" }>>;
+  nodes: Array<Extract<GraphViewNode, { kind: "language" | "folder" | "directory" }>>;
   edges: LanguageGraphEdge[];
 };
 
-export type FsGraphScope = "file" | "folder";
-export type FsGraphNodeKind = "folder" | "file" | "symlink" | "ghost";
+export type FsGraphScope = "file" | "directory";
+export type FsGraphNodeKind = "directory" | "file" | "symlink" | "ghost";
 export type FsGraphEdgeKind = "contains" | "symlink" | "hardlink";
 
 export type FsGraphNode = {
@@ -255,10 +304,14 @@ export type FsGraphNode = {
   name: string;
   path: string;
   size: number;
+  path_class?: PathClass | null;
+  permission?: PathPermission | null;
+  link_count?: number;
   mtime?: number | null;
   target?: string | null;
   outside?: boolean;
   broken?: boolean;
+  target_escapes_drive?: boolean;
 };
 
 export type FsGraphEdge = {
@@ -275,6 +328,40 @@ export type FsGraphResponse = {
   nodes: FsGraphNode[];
   edges: FsGraphEdge[];
   truncated: boolean;
+};
+
+export type InspectorKind =
+  | "drive"
+  | "directory"
+  | "markdown"
+  | "text"
+  | "media"
+  | "binary"
+  | "special";
+
+export type InspectorReportSummary = {
+  totals: ReportTotals;
+  by_language: ReportLanguageStats[];
+};
+
+export type InspectorSubtree = {
+  files: number;
+  directories: number;
+  bytes: number;
+  file_kinds: Record<string, number>;
+};
+
+export type InspectorPayload = {
+  path: string;
+  kind: InspectorKind;
+  is_dir: boolean;
+  size: number;
+  mtime: number | null;
+  path_class: PathClass;
+  frontmatter_kind: string | null;
+  report_file?: ReportFileStats | null;
+  report_summary?: InspectorReportSummary | null;
+  subtree?: InspectorSubtree | null;
 };
 
 export type WatchEvent =
@@ -299,6 +386,18 @@ export type IndexStatus =
   | { state: "building"; current: number; total: number; file: string }
   | { state: "reindexing"; file: string }
   | { state: "error"; message: string };
+
+export type HealthIndexerStatus = "idle" | "settling" | "rebuilding" | "error";
+
+export type HealthResponse = {
+  indexer?: {
+    status: HealthIndexerStatus;
+    queue_depth: number;
+    last_event_at?: string | null;
+    last_settled_at?: string | null;
+    coalesced_rebuild?: boolean;
+  } | null;
+};
 
 /// Hybrid / BM25 / semantic content search hit.
 export type ContentHit = {
@@ -336,7 +435,7 @@ export type ResetResponse = {
 
 /// chan-report shapes. Mirror `crates/chan-core/crates/chan-report/src/summary.rs`
 /// and the server's `routes::report::PrefixReport`. The file
-/// inspector renders the per-file row; the folder inspector renders
+/// inspector renders the per-file row; the directory inspector renders
 /// the prefix roll-up (totals + by_language + COCOMO).
 
 export type ReportFileStats = {
@@ -353,6 +452,7 @@ export type ReportFileStats = {
 export type ReportLanguageStats = {
   name: string;
   files: number;
+  bytes?: number;
   code: number;
   comments: number;
   blanks: number;
@@ -361,6 +461,7 @@ export type ReportLanguageStats = {
 
 export type ReportTotals = {
   files: number;
+  bytes?: number;
   code: number;
   comments: number;
   blanks: number;

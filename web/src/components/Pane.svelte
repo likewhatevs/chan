@@ -22,6 +22,8 @@
     FileText,
     Folder,
     Network,
+    PanelRight,
+    RefreshCw,
     Search,
     Settings,
     SquareSplitHorizontal,
@@ -34,11 +36,14 @@
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import TerminalTab from "./TerminalTab.svelte";
   import {
+    browserOverlay,
     drive,
     indexStatus,
+    openBrowser,
+    refreshTree,
     tree,
   } from "../state/store.svelte";
-  import { tabLabel, tabTooltip } from "../state/tabs.svelte";
+  import { tabLabelInPane, tabTooltip } from "../state/tabs.svelte";
   import {
     SHORTCUTS,
     currentOS,
@@ -125,6 +130,16 @@
   };
   const emptyPaneContent: EmptyMenuRow[] = [
     {
+      label: "Reload",
+      icon: RefreshCw,
+      command: "pane.reload",
+    },
+    {
+      label: "Toggle Inspector",
+      icon: PanelRight,
+      command: "pane.inspector.toggle",
+    },
+    {
       label: "New File",
       icon: FilePlus,
       command: "app.file.new",
@@ -172,9 +187,13 @@
   let emptyPaneMenu: HamburgerMenu | undefined = $state();
   let emptyPaneMenuOpen = $state(false);
 
+  function openEmptyPaneMenuAt(e: MouseEvent): void {
+    emptyPaneMenu?.openAtCursor(e.clientX, e.clientY);
+  }
+
   function onEmptyPaneContextMenu(e: MouseEvent): void {
     e.preventDefault();
-    emptyPaneMenu?.openAtCursor(e.clientX, e.clientY);
+    openEmptyPaneMenuAt(e);
   }
 
   /// Pane chrome menu: the ⋮ in the tab strip that replaces the
@@ -233,6 +252,15 @@
   /// App.svelte. Avoids re-implementing the actions here.
   function dispatchCommand(id: string): void {
     emptyPaneMenu?.close();
+    if (id === "pane.reload") {
+      void refreshTree();
+      return;
+    }
+    if (id === "pane.inspector.toggle") {
+      browserOverlay.inspectorOpen = !browserOverlay.inspectorOpen;
+      if (!browserOverlay.open) openBrowser();
+      return;
+    }
     window.dispatchEvent(
       new CustomEvent("chan:command", { detail: { name: id } }),
     );
@@ -644,6 +672,13 @@
           <span class="tab-icon" aria-hidden="true">
             <Terminal size={14} strokeWidth={1.75} />
           </span>
+          {#if t.broadcastEnabled}
+            <span
+              class="broadcast-marker"
+              title={`Broadcasting to ${Math.max(0, t.broadcastTargetIds.length - 1)} tab(s)`}
+              aria-label={`Broadcasting to ${Math.max(0, t.broadcastTargetIds.length - 1)} tab(s)`}
+            >BCAST</span>
+          {/if}
         {/if}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <span
@@ -679,7 +714,7 @@
               bottom: r.bottom,
             });
           }}
-        >{tabLabel(t)}</span>
+        >{tabLabelInPane(t, pane.tabs)}</span>
         {#if isDirty(t)}
           <span class="dirty unsaved" title="unsaved changes">●</span>
         {/if}
@@ -740,6 +775,7 @@
       <div
         class="placeholder"
         aria-label="no tab open"
+        onclick={openEmptyPaneMenuAt}
         oncontextmenu={onEmptyPaneContextMenu}
         role="presentation"
       >
@@ -763,7 +799,7 @@
                 <div class="dashboard-stats">
                   <span>{driveSummary.files} files</span>
                   <span class="sep" aria-hidden="true">·</span>
-                  <span>{driveSummary.folders} folders</span>
+                  <span>{driveSummary.folders} directories</span>
                   {#if driveSummary.contacts > 0}
                     <span class="sep" aria-hidden="true">·</span>
                     <span>{driveSummary.contacts} contacts</span>
@@ -860,7 +896,7 @@
       </div>
     {/if}
     {#each pane.tabs.filter((t) => t.kind === "terminal") as t (t.id)}
-      <TerminalTab tab={t} active={t.id === pane.activeTabId} />
+      <TerminalTab tab={t} paneId={pane.id} active={t.id === pane.activeTabId} />
     {/each}
   </div>
 </div>
@@ -992,6 +1028,16 @@
     flex-shrink: 0;
   }
   .tab.active .tab-icon { color: var(--text); }
+  .broadcast-marker {
+    color: #ff5fb7;
+    border: 1px solid color-mix(in srgb, #ff5fb7 60%, transparent);
+    border-radius: 4px;
+    padding: 0 3px;
+    font-size: 9px;
+    line-height: 13px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
   .actions { margin-left: auto; display: flex; align-items: center; padding-left: 4px; }
   .editor-wrap {
     position: relative;

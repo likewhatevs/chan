@@ -57,4 +57,24 @@ describe("terminalWsPath", () => {
       }),
     ).not.toContain("mcp_env");
   });
+
+  test("adds cwd only for fresh terminal sessions", () => {
+    expect(
+      terminalWsPath({
+        cols: 80,
+        rows: 24,
+        tabName: "from here",
+        cwd: "notes/work",
+      }),
+    ).toBe("/api/terminal/ws?cols=80&rows=24&tab_name=from+here&cwd=notes%2Fwork");
+    expect(
+      terminalWsPath({
+        cols: 80,
+        rows: 24,
+        tabName: "reattach",
+        sessionId: "term_abc",
+        cwd: "notes/work",
+      }),
+    ).not.toContain("cwd");
+  });
 });

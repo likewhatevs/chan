@@ -56,6 +56,7 @@ export function classifyFile(
 /// Human label used in kind chips. Lowercased; chip CSS handles
 /// uppercasing so callers can compose strings with the label.
 export function labelFor(kind: Kind): string {
+  if (kind === "folder") return "directory";
   return kind;
 }
 

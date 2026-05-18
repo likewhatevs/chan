@@ -1,6 +1,6 @@
 <script lang="ts">
   // File browser overlay. The recursive tree on the left, the
-  // shared Inspector on the right (file/folder metadata for the
+  // shared Inspector on the right (file/directory metadata for the
   // current selection), wrapped in OverlayShell so it floats over
   // the workspace pane tree on every platform (web, native desktop,
   // mobile). Replaces the previous `BrowserTab` tab kind and the
@@ -54,12 +54,16 @@
     drive,
   } from "../state/store.svelte";
   import { openInActivePane } from "../state/tabs.svelte";
+  import { fileBrowserTitlePath } from "../terminal/fromHere";
 
   const visible = $derived(browserOverlay.open);
+  const browserTitle = $derived(
+    fileBrowserTitlePath(browserSelection.path, drive.info?.root ?? drive.info?.name ?? "drive"),
+  );
 
   /// Drives the expand-all / collapse-all glyph + title. Reads
   /// reactive state directly so the button label flips as soon as
-  /// the user toggles a single folder twirl.
+  /// the user toggles a single directory twirl.
   const fullyExpanded = $derived.by(() => {
     void tree.entries;
     return isFullyExpanded();
@@ -159,9 +163,9 @@
     browserSelection.path = null;
   }
 
-  /// "Graph this" from the inspector mirrors the file-tree row's
+  /// "Graph from here" from the inspector mirrors the file-tree row's
   /// right-click action: open the filesystem graph scoped to the
-  /// selected entry. The file browser surfaces fs links (folders,
+  /// selected entry. The file browser surfaces fs links (directories,
   /// symlinks, hardlinks) by default; semantic-graph entry points
   /// live on the editor and the per-tag chips.
   function graphSelection(): void {
@@ -192,9 +196,9 @@
   }
 
   /// Sensible default destination for the import wizard. If the
-  /// user has a folder selected in the tree, suggest that.
+  /// user has a directory selected in the tree, suggest that.
   /// Otherwise default to "Contacts" so the typical first-run lands
-  /// in a single, named folder rather than scattering at the drive
+  /// in a single, named directory rather than scattering at the drive
   /// root.
   function pickInitialFolder(sel: string | null): string {
     if (!sel) return "Contacts";
@@ -279,7 +283,12 @@
 
 </script>
 
-<OverlayShell id="browser" open={visible} onClose={close}>
+<OverlayShell
+  id="browser"
+  open={visible}
+  onClose={close}
+  onBackdropContextMenu={onBrowserContextMenu}
+>
   <div
     class="browser"
     oncontextmenu={onBrowserContextMenu}
@@ -300,8 +309,8 @@
           <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
         {/if}
       </button>
-      <span class="name" title={drive.info?.root}>
-        {drive.info?.name ?? "(unnamed)"}
+      <span class="name" title={browserTitle}>
+        {browserTitle}
       </span>
       <HamburgerMenu
         bind:this={menu}
@@ -433,7 +442,7 @@
   <li>
     <button role="menuitem" onclick={newDirHere}>
       <FolderPlus size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">New folder</span>
+      <span class="menu-row-label">New directory</span>
       <span class="menu-row-chord"></span>
     </button>
   </li>
@@ -447,7 +456,7 @@
   <li>
     <button role="menuitem" onclick={graphDrive}>
       <Network size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">Graph this</span>
+      <span class="menu-row-label">Graph from here</span>
       <span class="menu-row-chord"></span>
     </button>
   </li>
@@ -463,7 +472,7 @@
     <button role="menuitem" onclick={toggleAll}>
       <span class="glyph" aria-hidden="true">⇅</span>
       <span class="menu-row-label">
-        {fullyExpanded ? "Collapse all folders" : "Expand all folders"}
+        {fullyExpanded ? "Collapse all directories" : "Expand all directories"}
       </span>
       <span class="menu-row-chord"></span>
     </button>
@@ -484,9 +493,9 @@
     </button>
   </li>
   <li>
-    <!-- Folder readout doubles as the disclosure ("where on disk
+    <!-- Directory readout doubles as the disclosure ("where on disk
          is this drive?") and the entry point into the drive
-         inspector (search index status, notes folders config). -->
+         inspector (search index status, notes directories config). -->
     <button
       role="menuitem"
       class="folder-row"
@@ -496,7 +505,7 @@
     >
       <FolderOpen size={16} strokeWidth={1.75} aria-hidden="true" />
       <span class="folder-text">
-        <span class="folder-label">Folder</span>
+        <span class="folder-label">Directory</span>
         <span class="folder-path mono">{drive.info?.root ?? ""}</span>
       </span>
     </button>
@@ -562,7 +571,7 @@
     color: var(--text);
     border-color: var(--btn-hover);
   }
-  /* Folder readout row: two-line inside the menu's standard <li>.
+  /* Directory readout row: two-line inside the menu's standard <li>.
      The shared HamburgerMenu owns the rest of the popover chrome. */
   :global(.hamburger-menu .folder-row) { align-items: flex-start; }
   .folder-text {

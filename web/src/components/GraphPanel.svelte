@@ -47,6 +47,7 @@
     paneWidths,
     persistPaneWidths,
     revealAndSelect,
+    scopeFsGraphFromHere,
     tree,
   } from "../state/store.svelte";
   import { onDestroy } from "svelte";
@@ -101,7 +102,7 @@
   /// synthetic hub node (id `SCOPE_HUB_ID`, kind `scope`) to every
   /// file in a multi-file scope (`currentScope.kind === "group"`) so
   /// the canvas shows which files the user has pinned together.
-  type RenderedEdgeKind = "link" | "tag" | "mention" | "language" | "group";
+  type RenderedEdgeKind = "link" | "tag" | "mention" | "contains" | "language" | "group";
   /// Stable id for the synthetic scope hub node. Prefixed with `__`
   /// so it can't collide with a real file path.
   const SCOPE_HUB_ID = "__scope_hub__";
@@ -114,7 +115,7 @@
   /// (the visual element they govern is the edge plus any node only
   /// reachable through edges of that kind). `img` and `folder` are
   /// node filters: flipping them off hides every file node whose
-  /// path classifies as image / folder, along with any edge
+  /// path classifies as image / directory, along with any edge
   /// touching one.
   type FilterKind = "link" | "tag" | "mention" | "language" | "img" | "folder";
 
@@ -138,7 +139,10 @@
   const show = graphOverlay.filters;
   const filesystemMode = $derived(
     graphOverlay.mode === "filesystem" &&
-      (currentScope?.kind === "file" || currentScope?.kind === "dir"),
+      (currentScope?.kind === "file" ||
+        currentScope?.kind === "dir" ||
+        currentScope?.kind === "drive" ||
+        currentScope?.kind === "global"),
   );
   const languageMode = $derived(graphOverlay.mode === "language");
   const depthCap = $derived.by(() => {
@@ -221,7 +225,7 @@
     driveDepthProbeLoading = true;
     try {
       driveDepthProbe = await api.fsGraph({
-        scope: "folder",
+        scope: "directory",
         path: "",
         depth: FS_GRAPH_DEPTH_MAX,
       });
@@ -366,9 +370,9 @@
     return ids;
   });
 
-  /// Folder node ids hidden when the folder chip is off. Only meaningful
-  /// in filesystem mode where folder-kind nodes are emitted; in
-  /// markdown / language modes there are no folder nodes so the set
+  /// Directory node ids hidden when the folder chip is off. Only meaningful
+  /// in filesystem mode where directory-kind nodes are emitted; in
+  /// markdown / language modes there are no directory nodes so the set
   /// stays empty and the toggle is a no-op.
   const hiddenFolderIds = $derived.by(() => {
     const ids = new Set<string>();
@@ -379,10 +383,16 @@
     return ids;
   });
 
+  function edgeVisibleByChip(kind: RenderedEdgeKind): boolean {
+    if (kind === "contains") return show.folder;
+    if (kind === "group") return true;
+    return show[kind];
+  }
+
   const visibleEdges = $derived(
     edges.filter(
       (e) =>
-        show[e.kind] &&
+        edgeVisibleByChip(e.kind) &&
         !hiddenImageIds.has(e.source) &&
         !hiddenImageIds.has(e.target) &&
         !hiddenContactIds.has(e.source) &&
@@ -425,7 +435,10 @@
       img: 0,
       folder: 0,
     };
-    for (const e of edges) c[e.kind]++;
+    for (const e of edges) {
+      if (e.kind === "contains") c.folder++;
+      else c[e.kind]++;
+    }
     for (const n of nodes) {
       if (n.kind === "folder") {
         c.folder++;
@@ -451,7 +464,7 @@
   );
   const fsNodeById = $derived(new Map(fsNodes.map((n) => [n.id, n])));
   const selectedFsNode = $derived<FsGraphNode | null>(
-    // The drive-root folder has id="" (empty path = drive root), so
+    // The drive-root directory has id="" (empty path = drive root), so
     // `selectedId` is checked with `!== null` rather than a truthy
     // test — otherwise clicking the root node silently no-op's the
     // inspector.
@@ -472,6 +485,48 @@
       selectedNode.kind === "file" &&
       (selectedNode.missing || !treeHasPath.has(selectedNode.path)),
   );
+  let ghostIndexerHint = $state<string | null>(null);
+
+  function indexerGhostHint(status: string | undefined, queueDepth: number | undefined): string | null {
+    if (status === "settling") {
+      const n = Math.max(0, Math.floor(queueDepth ?? 0));
+      return `indexer is catching up (${n} event(s) pending)`;
+    }
+    if (status === "rebuilding") return "indexer is rebuilding (full pass)";
+    return null;
+  }
+
+  $effect(() => {
+    if (
+      !graphOverlay.open ||
+      !isFileGhost ||
+      selectedNode?.kind !== "file" ||
+      selectedNode.missing
+    ) {
+      ghostIndexerHint = null;
+      return;
+    }
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    async function poll(): Promise<void> {
+      try {
+        const health = await api.health();
+        if (cancelled) return;
+        ghostIndexerHint = indexerGhostHint(
+          health.indexer?.status,
+          health.indexer?.queue_depth,
+        );
+      } catch {
+        if (!cancelled) ghostIndexerHint = null;
+      }
+    }
+    void poll();
+    timer = setInterval(() => void poll(), 1000);
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  });
 
   /// Documents that reference the currently-selected tag or mention
   /// node, restricted to nodes drawn in the current subgraph. Passed
@@ -542,9 +597,9 @@
     }
   }
 
-  /// "Show File" / "Show Folder" handler for fs-mode nodes. Same
+  /// "Show File" / "Show Directory" handler for fs-mode nodes. Same
   /// pattern as revealSelectedFile but pulls the path off the
-  /// FsGraphNode so it works for folders (which have no semantic-
+  /// FsGraphNode so it works for directories (which have no semantic-
   /// graph counterpart in selectedNode) and for files surfaced
   /// only via the fs-graph. path === "" is the drive root;
   /// revealAndSelect handles it by clearing the tree selection
@@ -552,7 +607,7 @@
   function revealSelectedFsEntry(): void {
     if (
       selectedFsNode &&
-      (selectedFsNode.kind === "folder" || selectedFsNode.kind === "file") &&
+      (isFsDirectory(selectedFsNode) || selectedFsNode.kind === "file") &&
       selectedFsNode.path !== undefined
     ) {
       revealAndSelect(selectedFsNode.path);
@@ -611,7 +666,8 @@
     link: "var(--text-secondary)",
     tag: "var(--g-tag)",
     mention: "var(--warn-text)",
-    language: "var(--accent)",
+    contains: "var(--g-folder)",
+    language: "var(--g-language)",
     // Group-scope edges read as the accent so they pop against the
     // document edges without looking like another link kind.
     group: "var(--accent)",
@@ -628,6 +684,15 @@
     folder: "var(--g-folder)",
   };
 
+  function isFsDirectory(node: FsGraphNode): boolean {
+    return node.kind === "directory";
+  }
+
+  function stripDirectoryPrefix(id: string): string {
+    if (id.startsWith("directory:")) return id.slice("directory:".length);
+    if (id.startsWith("folder:")) return id.slice("folder:".length);
+    return id;
+  }
 
   // ---- canvas glue -------------------------------------------------------
   //
@@ -683,7 +748,8 @@
     try {
       if (filesystemMode && currentScope) {
         languageMaxDepth = 0;
-        const fsScope = currentScope.kind === "dir" ? "folder" : "file";
+        const fsScope =
+          currentScope.kind === "file" ? "file" : "directory";
         const fsPath =
           currentScope.kind === "dir" || currentScope.kind === "file"
             ? currentScope.path
@@ -714,8 +780,8 @@
           depth: graphOverlay.depth,
         });
         languageMaxDepth = g.max_depth;
-        nodes = g.nodes;
-        edges = g.edges;
+        nodes = mapLanguageNodes(g.nodes);
+        edges = mapLanguageEdges(g.edges);
         selectedId = selectedId && g.nodes.some((n) => n.id === selectedId)
           ? selectedId
           : null;
@@ -723,89 +789,37 @@
         return;
       }
       languageMaxDepth = 0;
-      // Drive- and global-scope graphs are the user's overview of
-      // the whole library. Merge the semantic graph (files / tags /
-      // mentions / link / tag / mention edges) with the filesystem
-      // graph (folders + "contains" edges) and the language graph
-      // (language nodes + language edges) so a glance shows every
-      // structural axis at once. Tighter scopes (file / dir / tag /
-      // group) stick to a single source so the canvas stays focused.
-      const driveLike =
-        currentScope?.kind === "drive" || currentScope?.kind === "global";
-      const [g, fs, lg] = await Promise.all([
-        api.graph(),
-        driveLike
-          ? api.fsGraph({
-              scope: "folder",
-              path: "",
-              depth: Math.max(graphOverlay.depth, 1),
-            }).catch(() => null)
-          : Promise.resolve(null),
-        driveLike
-          ? api.languageGraph({ depth: graphOverlay.depth }).catch(() => null)
-          : Promise.resolve(null),
-      ]);
+      const graphScope =
+        currentScope?.kind === "file"
+          ? { scope: "file" as const, path: currentScope.path }
+          : currentScope?.kind === "dir"
+            ? { scope: "directory" as const, path: currentScope.path }
+            : { scope: "drive" as const, path: "" };
+      const g = await api.graph({
+        ...graphScope,
+        depth: Math.max(graphOverlay.depth, 1),
+      });
       const seenIds = new Set<string>();
       const renderedNodes: RenderedNode[] = [];
       const renderedEdges: RenderedEdge[] = [];
+      fsNodes = [];
+      fsTruncated = false;
       for (const n of g.nodes) {
-        if (
-          (n.kind === "file" || n.kind === "tag" || n.kind === "mention") &&
-          !seenIds.has(n.id)
-        ) {
-          renderedNodes.push(n);
-          seenIds.add(n.id);
+        const mapped = mapGraphNode(n);
+        if (mapped && !seenIds.has(mapped.id)) {
+          renderedNodes.push(mapped);
+          seenIds.add(mapped.id);
         }
       }
       for (const e of g.edges) {
-        if (e.kind === "link" || e.kind === "tag" || e.kind === "mention") {
+        if (
+          e.kind === "link" ||
+          e.kind === "tag" ||
+          e.kind === "mention" ||
+          e.kind === "contains" ||
+          e.kind === "language"
+        ) {
           renderedEdges.push(e as RenderedEdge);
-        }
-      }
-      if (fs) {
-        fsNodes = fs.nodes;
-        fsTruncated = fs.truncated;
-        for (const n of mapFsNodes(fs)) {
-          if (n.kind === "folder" && !seenIds.has(n.id)) {
-            renderedNodes.push(n);
-            seenIds.add(n.id);
-          }
-        }
-        for (const e of mapFsEdges(fs)) {
-          // Drop edges that reference a node we didn't keep (file
-          // nodes in fs-graph collide with the semantic graph's
-          // ids; we trust those over fs-graph's lighter file
-          // records, but the edges themselves still want to land
-          // when both endpoints are present).
-          if (seenIds.has(e.source) && seenIds.has(e.target)) {
-            renderedEdges.push(e);
-          }
-        }
-      }
-      if (lg) {
-        // Language graph emits Folder nodes with id "folder:<path>"
-        // while fs-graph keys folders by plain "<path>". Strip the
-        // prefix on edge targets so the language→folder edges land
-        // on the same nodes the user already sees. Folder nodes from
-        // the language graph itself are dropped (fs-graph version
-        // wins).
-        for (const n of lg.nodes) {
-          if (n.kind === "language" && !seenIds.has(n.id)) {
-            renderedNodes.push(n);
-            seenIds.add(n.id);
-          }
-        }
-        for (const e of lg.edges) {
-          const target = e.target.startsWith("folder:")
-            ? e.target.slice("folder:".length)
-            : e.target;
-          if (seenIds.has(e.source) && seenIds.has(target)) {
-            renderedEdges.push({
-              source: e.source,
-              target,
-              kind: "language",
-            });
-          }
         }
       }
       nodes = renderedNodes;
@@ -823,6 +837,23 @@
     } finally {
       loading = false;
     }
+  }
+
+  function mapLanguageNodes(input: LanguageGraphResponse["nodes"]): RenderedNode[] {
+    return input.map((n): RenderedNode => {
+      if (n.kind === "directory") {
+        return { ...n, kind: "folder" };
+      }
+      return n;
+    });
+  }
+
+  function mapLanguageEdges(input: LanguageGraphResponse["edges"]): RenderedEdge[] {
+    return input.map((e) => ({
+      source: e.source,
+      target: stripDirectoryPrefix(e.target),
+      kind: "language",
+    }));
   }
 
   function mapFsNodes(fs: FsGraphResponse): RenderedNode[] {
@@ -845,7 +876,7 @@
           missing: true,
         };
       }
-      if (n.kind === "folder") {
+      if (isFsDirectory(n)) {
         return {
           kind: "folder",
           id: n.id,
@@ -869,7 +900,7 @@
       target: e.target,
       kind:
         e.kind === "contains"
-          ? "link"
+          ? "contains"
           : e.kind === "symlink"
             ? "tag"
             : "mention",
@@ -877,6 +908,32 @@
         e.kind === "symlink" &&
         Boolean(fs.nodes.find((n) => n.id === e.target)?.broken),
     }));
+  }
+
+  function mapGraphNode(n: GraphViewNode): RenderedNode | null {
+    if (n.kind === "file" || n.kind === "tag" || n.kind === "mention" || n.kind === "language") {
+      return n as RenderedNode;
+    }
+    if (n.kind === "media") {
+      return {
+        kind: "file",
+        id: n.id,
+        label: n.label,
+        path: n.path,
+        missing: n.missing,
+      };
+    }
+    if (n.kind === "directory") {
+      return {
+        kind: "folder",
+        id: n.id,
+        label: `${n.label || "drive"}/`,
+        path: n.path,
+        files: n.files,
+        code: n.code,
+      };
+    }
+    return null;
   }
 
   /// Refetch the graph whenever the overlay opens, plus once on
@@ -940,7 +997,12 @@
   }
 </script>
 
-<OverlayShell id="graph" open={visible} onClose={close}>
+<OverlayShell
+  id="graph"
+  open={visible}
+  onClose={close}
+  onBackdropContextMenu={onGraphContextMenu}
+>
   <div class="graph-tab" oncontextmenu={onGraphContextMenu} role="presentation">
   <div class="bar">
     <button
@@ -985,7 +1047,7 @@
                   ? "symlink"
                   : kind === "mention"
                     ? "hardlink"
-                    : "folder"}
+                    : "directory"}
             {:else}
               {kind === "mention" ? "contact" : kind === "img" ? "media" : kind}
             {/if}
@@ -1048,24 +1110,23 @@
       onResize={persistPaneWidths}
       onClose={() => (graphOverlay.inspectorOpen = false)}
     >
-      {#if (selectedFsNode?.kind === "folder" && selectedFsNode.id === "") || (selectedNode?.kind === "folder" && selectedNode.id === "")}
+      {#if (selectedFsNode && isFsDirectory(selectedFsNode) && selectedFsNode.id === "") || (selectedNode?.kind === "folder" && selectedNode.id === "")}
         <!-- Drive root: same body the file browser hamburger
-             menu's Folder row pops (DriveInfoBody) so the
+             menu's Directory row pops (DriveInfoBody) so the
              whole-drive config lives in one place across surfaces.
              Differentiated visually by GraphCanvas painting the
              "drive" sub-kind in a darker fill with the HardDrive
              glyph. -->
         <DriveInfoBody />
-      {:else if selectedFsNode && (selectedFsNode.kind === "folder" || selectedFsNode.kind === "file") && selectedFsNode.path !== undefined && !selectedFsNode.broken}
-        <!-- Real fs-mode file or folder: render the same body as the
+      {:else if selectedFsNode && (isFsDirectory(selectedFsNode) || selectedFsNode.kind === "file") && selectedFsNode.path !== undefined && !selectedFsNode.broken}
+        <!-- Real fs-mode file or directory: render the same body as the
              file browser / editor inspector (counts, size, code
              report; tags / refs / backlinks for files) by routing
              through InspectorBody. FileInfoBody dispatches on
              entry.is_dir so the "file" selection variant covers both
-             shapes. Folder gets "Show Folder" instead of "Graph
-             this" (user is already inside the graph); file keeps
-             "Open in this pane" + "Graph this" so the file inspector
-             reads identically across surfaces. -->
+             shapes. Both file and directory nodes can re-scope the
+             filesystem graph from here; file keeps "Open in this pane"
+             as the extra editor action. -->
         {@const fsPath = selectedFsNode.path}
         {@const fsKind = selectedFsNode.kind}
         <InspectorBody
@@ -1075,15 +1136,12 @@
             ? () => { void openInActivePane(fsPath); close(); }
             : undefined}
           onReveal={revealSelectedFsEntry}
-          onSetAsScope={fsKind === "file"
+          onSetAsScope={fsKind === "file" || isFsDirectory(selectedFsNode)
             ? () => {
-                // Re-scope the current fs graph to this file's
-                // neighbourhood; mode stays "filesystem" so folders
-                // remain in the plot. Depth resets to 1 — caller
-                // can widen via the slider.
-                graphOverlay.depth = 1;
-                graphOverlay.scopeId = `file:${fsPath}`;
-                graphOverlay.pendingSelectId = selectedFsNode!.id;
+                // Re-scope the current fs graph to this node's
+                // neighbourhood. Depth resets to 1; the caller can
+                // widen via the slider.
+                scopeFsGraphFromHere(fsPath, isFsDirectory(selectedFsNode!));
                 selectedId = selectedFsNode!.id;
               }
             : undefined}
@@ -1099,7 +1157,7 @@
         <div class="ghost-body">
           <header class="head">
             <KindChip
-              kind={selectedFsNode.kind === "folder" ? "folder" : selectedFsNode.kind === "file" ? "document" : "binary"}
+              kind={isFsDirectory(selectedFsNode) ? "folder" : selectedFsNode.kind === "file" ? "document" : "binary"}
               block
               ghost={selectedFsNode.kind === "ghost" || selectedFsNode.broken === true}
             />
@@ -1134,7 +1192,7 @@
         ) as FileKind}
         {@const hint = selectedNode.missing
           ? "file does not exist (broken-link target)"
-          : "not in the current file listing (try Reload / chan index)"}
+          : ghostIndexerHint ?? "not in the current file listing (try Reload / chan index)"}
         <div class="ghost-body">
           <header class="head">
             <KindChip kind={ghostKind} block ghost />
@@ -1168,7 +1226,7 @@
             (selectedNode?.kind === "mention" && selectedContactPath) ||
             (selectedNode?.kind === "file" && !selectedNode.missing)
               ? () => {
-                  // "Graph this" inside the graph re-scopes the
+                  // "Graph from here" inside the graph re-scopes the
                   // current graph. Tag: to the tag's neighbourhood.
                   // Mention: to the resolved contact's file so the
                   // user can use a contact as a graph anchor without

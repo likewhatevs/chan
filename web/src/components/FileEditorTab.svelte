@@ -31,6 +31,7 @@
     SquareSplitHorizontal,
     SquareSplitVertical,
     Table2,
+    Terminal as TerminalIcon,
     Type,
   } from "lucide-svelte";
   import {
@@ -69,8 +70,15 @@
     paneWidths,
     persistPaneWidths,
     revealAndSelect,
+    ui,
   } from "../state/store.svelte";
-  import { canSplit, openInActivePane, splitActive } from "../state/tabs.svelte";
+  import {
+    canSplit,
+    openInActivePane,
+    openTerminalInPane,
+    splitActive,
+  } from "../state/tabs.svelte";
+  import { terminalFromHereTarget } from "../terminal/fromHere";
   import { csvDelimiter, isCsv, isJson } from "../state/fileTypes";
   import { api } from "../api/client";
   import {
@@ -136,7 +144,7 @@
   );
 
   /// Reveal the open file in the File Browser overlay. Expand every
-  /// ancestor folder so the row is visible, set the browser
+  /// ancestor directory so the row is visible, set the browser
   /// selection to this file, then open the overlay. Mirrors the
   /// post-create/move "land next to the thing you just produced"
   /// flow in `revealAndSelect`.
@@ -197,7 +205,22 @@
 
   function doNewFile(): void {
     closeTabMenu();
-    void fileOps.createFile("");
+    void fileOps.createFile(parentPath(tab.path));
+  }
+
+  function parentPath(path: string): string {
+    const slash = path.lastIndexOf("/");
+    return slash < 0 ? "" : path.slice(0, slash);
+  }
+
+  async function doCopyPath(): Promise<void> {
+    closeTabMenu();
+    try {
+      await navigator.clipboard?.writeText(tab.path);
+      ui.status = "Copied file path";
+    } catch (err) {
+      ui.status = `copy failed: ${(err as Error).message}`;
+    }
   }
 
   function doDuplicate(): void {
@@ -240,7 +263,7 @@
   // Re-uses the existing tab menu bubble (the same one that opens
   // from the tab dot). The bubble carries Duplicate / Rename /
   // mode-toggle / outline / style-toolbar plus our three new
-  // actions (Reload / Search / Graph this). Anchored at
+  // actions (Reload / Search / Graph from here). Anchored at
   // the click coords by synthesizing a zero-size rect.
 
   function onEditorContext(e: MouseEvent): void {
@@ -283,10 +306,15 @@
 
   function doOpenGraph(): void {
     closeTabMenu();
-    // "Graph this" from a file's menu scopes the graph to that
+    // "Graph from here" from a file's menu scopes the graph to that
     // file (file:<path>), not the whole drive. Hashtags etc. still
     // route through openGraphAtNode at drive scope.
     openGraphForFile(tab.path);
+  }
+
+  function doTerminalFromHere(): void {
+    closeTabMenu();
+    openTerminalInPane(layout.activePaneId, terminalFromHereTarget(tab.path, false));
   }
 
   function doToggleOutline(): void {
@@ -487,6 +515,13 @@
           <span class="mbtn-label">Duplicate File</span>
           <span class="mbtn-chord"></span>
         </button>
+        <button class="mbtn" onclick={doCopyPath}>
+          <span class="mbtn-icon">
+            <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Copy File Path</span>
+          <span class="mbtn-chord"></span>
+        </button>
         <button class="mbtn" onclick={doRename}>
           <span class="mbtn-icon">
             <Pencil size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -520,8 +555,15 @@
           <span class="mbtn-icon">
             <Network size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
-          <span class="mbtn-label">Graph this</span>
+          <span class="mbtn-label">Graph from here</span>
           <span class="mbtn-chord">{chordLabel("app.graph.toggle")}</span>
+        </button>
+        <button class="mbtn" onclick={doTerminalFromHere}>
+          <span class="mbtn-icon">
+            <TerminalIcon size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Terminal from here</span>
+          <span class="mbtn-chord"></span>
         </button>
         <div class="msep" role="separator"></div>
         {#if splitsAllowed}
@@ -557,10 +599,13 @@
       <span class="error">{tab.error}</span>
     </div>
   {/if}
-  {#if tab.loading}
-    <div class="placeholder">loading…</div>
-  {:else}
-    <div class="editor-inspector-row">
+  {#key tab.id}
+    {#if tab.loading}
+      <div class="placeholder">loading…</div>
+    {:else if tab.error}
+      <div class="placeholder error-placeholder">{tab.error}</div>
+    {:else}
+      <div class="editor-inspector-row">
       {#if tab.outlineOpen}
         <Inspector
           title="Outline"
@@ -698,16 +743,17 @@
           />
         </Inspector>
       {/if}
-    </div>
-    {#if tab.mode === "wysiwyg"}
-      <WikiStatusBar
-        path={tab.path}
-        content={tab.content}
-        fsWritable={tab.fsWritable}
-        bind:readMode={tab.readMode}
-      />
+      </div>
+      {#if tab.mode === "wysiwyg"}
+        <WikiStatusBar
+          path={tab.path}
+          content={tab.content}
+          fsWritable={tab.fsWritable}
+          bind:readMode={tab.readMode}
+        />
+      {/if}
     {/if}
-  {/if}
+  {/key}
 </div>
 
 
@@ -867,6 +913,11 @@
     justify-content: center;
     color: var(--text-secondary);
     font-style: italic;
+  }
+  .error-placeholder {
+    color: var(--danger-text, #d33);
+    padding: 1rem;
+    text-align: center;
   }
   /* Row that holds the editor + (optional) inspector. The Inspector
      component renders a ResizeHandle as its previous sibling so

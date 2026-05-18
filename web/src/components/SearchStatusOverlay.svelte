@@ -185,11 +185,11 @@
               type="button"
               class="inline-action"
               onclick={graphCodeReport}
-              title="Graph this code report"
-              aria-label="Graph this code report"
+              title="Graph from here code report"
+              aria-label="Graph from here code report"
             >
               <Network size={14} strokeWidth={1.75} aria-hidden="true" />
-              <span>Graph this</span>
+              <span>Graph from here</span>
             </button>
           {/if}
         </div>

@@ -1,13 +1,14 @@
 <script lang="ts">
   // Recursive tree view of the drive.
   //
-  // Builds a nested folder structure from the flat tree the API returns,
+  // Builds a nested directory structure from the flat tree the API returns,
   // then renders rows with expand/collapse, click-to-open, and a context
   // menu for create/rename/delete.
 
   import {
     ChevronDown,
     ChevronRight,
+    Copy,
     FilePlus,
     Folder,
     FolderOpen,
@@ -15,13 +16,20 @@
     Network,
     Pencil,
     Search,
+    Terminal as TerminalIcon,
     Trash2,
   } from "lucide-svelte";
   import { clampMenu } from "./menuClamp";
   import type { TreeEntry } from "../api/types";
   import { isEditableText } from "../state/fileTypes";
   import { classifyFile, iconFor } from "../state/kinds";
-  import { dirtyPaths, openInActivePane } from "../state/tabs.svelte";
+  import {
+    dirtyPaths,
+    layout,
+    openInActivePane,
+    openTerminalInPane,
+  } from "../state/tabs.svelte";
+  import { terminalFromHereTarget } from "../terminal/fromHere";
   import {
     browserOverlay,
     browserSelection,
@@ -34,12 +42,13 @@
     persistTreeExpanded,
     tree,
     treeExpanded,
+    ui,
   } from "../state/store.svelte";
 
   // Mime type recognized by Pane.onDrop. Keep in sync with Pane.svelte.
   const FILE_DRAG_MIME = "application/x-md-file";
   // Mime type used for intra-tree moves. Separate from FILE_DRAG_MIME
-  // so Pane.onDrop (open-in-pane) does not pick up folder drags, and
+  // so Pane.onDrop (open-in-pane) does not pick up directory drags, and
   // so tree drops only react to drags that originated in the tree.
   const TREE_MOVE_MIME = "application/x-chan-tree-move";
 
@@ -59,7 +68,7 @@
     e.dataTransfer.setData(TREE_MOVE_MIME, payload);
     if (!isDir) {
       // Files are also droppable into editor panes (open in tab).
-      // Folders are not, so they only carry the tree-move mime.
+      // Directories are not, so they only carry the tree-move mime.
       e.dataTransfer.setData(FILE_DRAG_MIME, JSON.stringify({ path }));
     }
     // A plain-text fallback is friendly to other drop targets (e.g.
@@ -82,7 +91,7 @@
   }
 
   /// True when dropping `src` into `destDir` is a no-op or invalid:
-  /// same parent already, dropping a folder into itself or a
+  /// same parent already, dropping a directory into itself or a
   /// descendant, or dropping at the same location.
   function isInvalidDrop(src: { path: string; isDir: boolean }, destDir: string): boolean {
     if (src.path === destDir) return true;
@@ -194,7 +203,7 @@
   });
 
   /// Visible row index by path, in display order. Walked the same
-  /// way the renderer walks (pre-order, recursing into folders that
+  /// way the renderer walks (pre-order, recursing into directories that
   /// are currently expanded). Drives zebra striping: even rows get
   /// the default background, odd rows pick up `--zebra-bg`. The map
   /// rebuilds whenever the tree or the expansion set changes; for
@@ -297,8 +306,8 @@
     if (value) void loadTreeDir(path);
   }
 
-  async function onOpen(path: string): Promise<void> {
-    await openInActivePane(path);
+  function onOpen(path: string): void {
+    void openInActivePane(path);
     // The user wanted to read or edit the file, not keep the picker
     // hovering over the editor. Mirrors the inspector's "Open"
     // button behaviour in FileBrowserOverlay.openSelected().
@@ -341,6 +350,15 @@
     await fileOps.rename(path, isDir);
     menu = null;
   }
+  async function copyPath(path: string): Promise<void> {
+    try {
+      await navigator.clipboard?.writeText(path);
+      ui.status = "Copied path";
+    } catch (err) {
+      ui.status = `copy failed: ${(err as Error).message}`;
+    }
+    menu = null;
+  }
   async function remove(path: string, isDir: boolean): Promise<void> {
     await fileOps.remove(path, isDir);
     menu = null;
@@ -356,6 +374,13 @@
     menu = null;
     if (isDir) openSearchForDirectory(path);
     else openSearchForFile(path);
+  }
+
+  function terminalFromHere(path: string, isDir: boolean): void {
+    const target = terminalFromHereTarget(path, isDir);
+    openTerminalInPane(layout.activePaneId, target);
+    menu = null;
+    if (browserOverlay.open) browserOverlay.open = false;
   }
 
   /// Move the selection by one row in the visible list. Wraps
@@ -402,12 +427,12 @@
   }
 
   /// Auto-scroll when the selection changes from outside (e.g.
-  /// store.revealAndSelect after a successful folder create).
+  /// store.revealAndSelect after a successful directory create).
   /// Keyboard nav already calls queueScrollIntoView directly, so
   /// re-scrolling here is benign — the second rAF resolves on the
   /// same frame without flicker. Wait one more rAF than usual to
   /// give Svelte a chance to expand any newly-uncollapsed ancestor
-  /// folders so the row's DOM element exists.
+  /// directories so the row's DOM element exists.
   $effect(() => {
     const path = browserSelection.path;
     if (!path) return;
@@ -417,7 +442,7 @@
     });
   });
 
-  /// Walk to the parent folder of `path`. Returns "" for top-level
+  /// Walk to the parent directory of `path`. Returns "" for top-level
   /// rows; the caller decides whether to act on root selection.
   function parentOf(path: string): string {
     const i = path.lastIndexOf("/");
@@ -543,7 +568,7 @@
   /// Non-reactive cache of the query string the cursor was last
   /// seeded to. Lets the cursor-management effect distinguish a
   /// fresh query (reset to first match) from a same-query match set
-  /// update (e.g. user expanded a sibling folder mid-search) where
+  /// update (e.g. user expanded a sibling directory mid-search) where
   /// the cursor should stay where the user left it.
   let lastSeededQuery: string | null = null;
 
@@ -565,7 +590,7 @@
   ///      reset cursor to the first match, scroll it into view, and
   ///      record the new query in `lastSeededQuery`. Empty query
   ///      drops the cursor to -1.
-  ///   2. Same query, match set updated (folder expanded / collapsed
+  ///   2. Same query, match set updated (directory expanded / collapsed
   ///      while find was open): clamp cursor into range, but DO NOT
   ///      reset to 0 — that would fight findStep, which moves the
   ///      cursor and triggers this effect via the findCurrentIndex
@@ -707,7 +732,7 @@
       <div class="empty-title">No files</div>
       <div class="empty-actions">
         <button onclick={() => fileOps.createFile("")}>Create new file</button>
-        <button onclick={() => fileOps.createDir("")}>Create new folder</button>
+        <button onclick={() => fileOps.createDir("")}>Create new directory</button>
       </div>
     </li>
   {/if}
@@ -746,7 +771,7 @@
             <ChevronRight size={14} strokeWidth={1.75} aria-hidden="true" />
           {/if}
         </button>
-        <!-- GitHub-style folder glyph (open chevron + folder mirror the
+        <!-- GitHub-style directory glyph (open chevron + directory mirror the
              dark file-tree styling from request.md). The icon swaps
              between open / closed so a glance over the column reads
              expand state without parsing chevrons. -->
@@ -757,7 +782,7 @@
             <Folder size={14} strokeWidth={1.75} />
           {/if}
         </span>
-        <!-- Click on folder name: toggle expand AND select. Selecting
+        <!-- Click on directory name: toggle expand AND select. Selecting
              keeps the side panel synced with what the user is
              investigating; toggling preserves the existing browse
              affordance. -->
@@ -842,16 +867,24 @@
       </button>
       <button onclick={() => newDir(menu!.path)}>
         <FolderPlus size={16} strokeWidth={1.75} aria-hidden="true" />
-        <span>New folder</span>
+        <span>New directory</span>
       </button>
     {/if}
     <button onclick={() => graphThis(menu!.path, menu!.isDir)}>
       <Network size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span>Graph this</span>
+      <span>Graph from here</span>
     </button>
     <button onclick={() => searchThis(menu!.path, menu!.isDir)}>
       <Search size={16} strokeWidth={1.75} aria-hidden="true" />
       <span>Search this</span>
+    </button>
+    <button onclick={() => terminalFromHere(menu!.path, menu!.isDir)}>
+      <TerminalIcon size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span>Terminal from here</span>
+    </button>
+    <button onclick={() => copyPath(menu!.path)}>
+      <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span>Copy Path</span>
     </button>
     <button onclick={() => rename(menu!.path, menu!.isDir)}>
       <Pencil size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -890,7 +923,7 @@
   .row.zebra { background: var(--zebra-bg); }
   .row:hover { background: var(--hover-bg); }
   /* Drop highlight during drag-and-drop move. Boxed outline + accent
-     tint so the user sees exactly which folder will receive the drop,
+     tint so the user sees exactly which directory will receive the drop,
      without disturbing the row height. */
   .row.drop-target {
     background: var(--accent-bg, var(--hover-bg));
@@ -914,9 +947,9 @@
     justify-content: center;
     color: var(--text-secondary);
   }
-  /* Folder glyph: pulls toward --accent so the folder column reads
+  /* Directory glyph: pulls toward --accent so the directory column reads
      as the navigational scaffold separate from the per-file kind
-     icons. Sits beside the chevron and before the folder name. */
+     icons. Sits beside the chevron and before the directory name. */
   .row.dir .dir-icon {
     color: var(--g-folder);
     margin-right: 2px;

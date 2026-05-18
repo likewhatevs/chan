@@ -4,7 +4,7 @@
   //
   //   1. Provider     pick the source format
   //   2. File         show export instructions + accept the .csv
-  //   3. Folder       drive-relative folder picker (or root)
+  //   3. Directory    drive-relative directory picker (or root)
   //   4. Confirm      kick off the multipart POST + show outcome
   //
   // The actual import call lives in api.importContacts; this
@@ -68,7 +68,7 @@
     }
   });
 
-  // Folders only, deduped from tree.entries plus an explicit root.
+  // Directories only, deduped from tree.entries plus an explicit root.
   // tree.entries is the same source the file tree renders from, so
   // the picker stays in sync with whatever the user just created.
   const folderPaths = $derived.by(() => {
@@ -77,7 +77,7 @@
     set.add(""); // drive root
     for (const e of tree.entries) {
       if (e.is_dir) set.add(e.path);
-      // A file deep in a/b/c.md implies a, a/b are folders even if
+      // A file deep in a/b/c.md implies a, a/b are directories even if
       // tree.entries doesn't carry explicit dir entries for them.
       const parts = e.path.split("/");
       parts.pop();
@@ -117,7 +117,7 @@
       result = r;
       step = "done";
       // Refresh the file tree so the new notes show up under the
-      // chosen folder without the user having to reopen the
+      // chosen directory without the user having to reopen the
       // browser.
       await refreshTree();
       onImported?.(destDir);
@@ -153,12 +153,12 @@
     }
   }
 
-  // Pretty-print a folder path for the picker. Empty path = root.
+  // Pretty-print a directory path for the picker. Empty path = root.
   function fmtFolder(p: string): string {
     return p === "" ? "/ (drive root)" : p;
   }
 
-  // Indent depth for the flat folder list. v1: one ridiculously
+  // Indent depth for the flat directory list. v1: one ridiculously
   // simple tree-shape signal; a real tree picker can replace this.
   function depth(p: string): number {
     return p === "" ? 0 : p.split("/").length;
@@ -212,7 +212,7 @@
       {:else if step === "folder"}
         <div class="body">
           <div class="hint">
-            Where should the contact notes land? Type a folder
+            Where should the contact notes land? Type a directory
             name (it will be created if missing) or pick from
             below. Empty = drive root.
           </div>
@@ -243,7 +243,7 @@
           {/if}
           <label class="ow">
             <input type="checkbox" bind:checked={overwrite} />
-            Replace existing files in this folder
+            Replace existing files in this directory
           </label>
         </div>
       {:else if step === "confirm"}

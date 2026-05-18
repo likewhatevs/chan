@@ -84,7 +84,7 @@ Token              Dark         Light       Concept
 --g-img            #b07dff      #7a4cd8     Media hue
 --g-tag            #6cd07a      #2f9444     Tag hue
 --g-binary         #58a6ff      #0969da     Binary file hue (FILE blue)
---g-folder         #8e8e93      #6c6c70     Folder hue (neutral grey)
+--g-folder         #8e8e93      #6c6c70     Directory hue (neutral grey)
 --warn-text        #e3b341      #9a6700     Contact / warning
 --pill-wiki-fg     #ff8a3d      #c25a1f     Document pill
 --pill-image-fg    #b07dff      #7a4cd8     Media pill
@@ -136,7 +136,7 @@ binary      binary      --g-binary          File
 tag         tag         --g-tag             Hash
 mention     mention     --warn-text         User
 date        date        --text-secondary    Calendar
-folder      folder      --g-folder          Folder
+folder      folder      --g-folder          Directory
 ```
 
 *Reserved. `classifyFile` does not emit `text` until chan-drive

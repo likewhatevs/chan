@@ -27,6 +27,18 @@ describe("terminal meta key mapping", () => {
     expect(terminalMetaKeyBytes(keyEvent({ type: "keyup", key: "ArrowLeft", altKey: true }))).toBeNull();
   });
 
+  test("maps Shift+Enter to enhanced keyboard protocol bytes", () => {
+    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }))).toBe("\x1b[13;2u");
+    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true, ctrlKey: true }))).toBeNull();
+  });
+
+  test("maps Ctrl+Enter and Cmd+Enter to enhanced keyboard protocol bytes", () => {
+    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", ctrlKey: true }))).toBe("\x1b[13;5u");
+    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", metaKey: true }))).toBe("\x1b[13;9u");
+    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", ctrlKey: true, metaKey: true }))).toBeNull();
+    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", altKey: true }))).toBeNull();
+  });
+
   test("sends matched bytes and suppresses xterm default handling", () => {
     const sendInput = vi.fn();
     const ev = keyEvent({ key: "Backspace", altKey: true });

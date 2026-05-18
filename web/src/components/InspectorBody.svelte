@@ -48,7 +48,7 @@
     /// contact's node on the canvas instead of opening a new
     /// graph scoped to the contact.
     onContactNavigate?: (path: string) => void;
-    /// "Graph this" handler. Forwarded to FileInfoBody (files /
+    /// "Graph from here" handler. Forwarded to FileInfoBody (files /
     /// images) and TagInfoBody (tag / mention). GraphPanel uses it
     /// to re-scope the current graph to the clicked entity; search
     /// overlay closes itself and opens a tag-scoped graph (file

@@ -5,6 +5,7 @@ export type TerminalWsPathOpts = {
   sessionId?: string | null;
   lastSeq?: number | null;
   mcpEnv?: boolean | null;
+  cwd?: string | null;
 };
 
 export function terminalWsPath(opts: TerminalWsPathOpts): string {
@@ -17,8 +18,10 @@ export function terminalWsPath(opts: TerminalWsPathOpts): string {
   if (sessionId) {
     params.set("session", sessionId);
     params.set("since", String(Math.max(0, Math.floor(opts.lastSeq ?? 0))));
-  } else if (opts.mcpEnv === false) {
-    params.set("mcp_env", "off");
+  } else {
+    const cwd = opts.cwd?.trim();
+    if (cwd) params.set("cwd", cwd);
+    if (opts.mcpEnv === false) params.set("mcp_env", "off");
   }
   return `/api/terminal/ws?${params.toString()}`;
 }

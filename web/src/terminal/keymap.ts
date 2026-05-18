@@ -1,5 +1,10 @@
 export function terminalMetaKeyBytes(ev: KeyboardEvent): string | null {
   if (ev.type !== "keydown") return null;
+  if (ev.key === "Enter" && !ev.altKey) {
+    if (ev.shiftKey && !ev.ctrlKey && !ev.metaKey) return "\x1b[13;2u";
+    if (ev.ctrlKey && !ev.shiftKey && !ev.metaKey) return "\x1b[13;5u";
+    if (ev.metaKey && !ev.shiftKey && !ev.ctrlKey) return "\x1b[13;9u";
+  }
   if (!ev.altKey || ev.ctrlKey || ev.metaKey) return null;
   switch (ev.key) {
     case "ArrowLeft":

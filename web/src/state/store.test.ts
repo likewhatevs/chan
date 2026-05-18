@@ -7,8 +7,11 @@ import {
   graphOverlay,
   graphReloadSignal,
   onWatchEvent,
+  openFsGraphForDirectory,
+  openFsGraphForFile,
   persistStateToHash,
   scheduleSessionSave,
+  scopeFsGraphFromHere,
   settingsOverlay,
 } from "./store.svelte";
 import { layout, type LeafNode, type TerminalTab } from "./tabs.svelte";
@@ -183,5 +186,40 @@ describe("graph overlay hash persistence", () => {
     persistStateToHash();
 
     expect(window.location.hash).toBe("#settings=1");
+  });
+});
+
+describe("filesystem graph entrypoints", () => {
+  test("file browser graph entrypoints open drive-scope fs graph with a preselection", () => {
+    openFsGraphForFile("notes/a.md");
+
+    expect(graphOverlay.open).toBe(true);
+    expect(graphOverlay.mode).toBe("filesystem");
+    expect(graphOverlay.scopeId).toBe("drive");
+    expect(graphOverlay.pendingSelectId).toBe("notes/a.md");
+
+    openFsGraphForDirectory("notes");
+
+    expect(graphOverlay.open).toBe(true);
+    expect(graphOverlay.mode).toBe("filesystem");
+    expect(graphOverlay.scopeId).toBe("drive");
+    expect(graphOverlay.pendingSelectId).toBe("notes");
+  });
+
+  test("filesystem graph scope action pivots to files and directories", () => {
+    scopeFsGraphFromHere("notes", true);
+
+    expect(graphOverlay.open).toBe(true);
+    expect(graphOverlay.mode).toBe("filesystem");
+    expect(graphOverlay.scopeId).toBe("dir:notes");
+    expect(graphOverlay.depth).toBe(1);
+    expect(graphOverlay.pendingSelectId).toBe("notes");
+
+    scopeFsGraphFromHere("notes/a.md", false);
+
+    expect(graphOverlay.mode).toBe("filesystem");
+    expect(graphOverlay.scopeId).toBe("file:notes/a.md");
+    expect(graphOverlay.depth).toBe(1);
+    expect(graphOverlay.pendingSelectId).toBe("notes/a.md");
   });
 });
