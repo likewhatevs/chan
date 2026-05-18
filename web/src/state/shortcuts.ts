@@ -99,7 +99,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   },
   {
     id: "app.terminal.broadcast.toggle",
-    label: "Terminal broadcast",
+    label: "Mute all terminals",
     web: "Mod+Shift+I",
     native: "Mod+Shift+I",
     group: "App",

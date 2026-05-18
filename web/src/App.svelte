@@ -58,7 +58,7 @@
     selectPrevTabInActivePane,
     selectTabAtIndexInActivePane,
     openTerminalInActivePane,
-    toggleActiveTerminalBroadcast,
+    toggleAllTerminalBroadcastMuted,
   } from "./state/tabs.svelte";
   import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
   import {
@@ -310,7 +310,7 @@
     }
     if (meta && e.shiftKey && !e.altKey && e.code === "KeyI") {
       e.preventDefault();
-      toggleActiveTerminalBroadcast();
+      toggleAllTerminalBroadcastMuted();
       return;
     }
     if (meta && !e.shiftKey && !e.altKey && e.code === "Backquote") {
@@ -403,7 +403,7 @@
         openTerminalInActivePane();
         return;
       case "app.terminal.broadcast.toggle":
-        toggleActiveTerminalBroadcast();
+        toggleAllTerminalBroadcastMuted();
         return;
       case "app.terminal.richPrompt":
         openActiveTerminalRichPrompt();

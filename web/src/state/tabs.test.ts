@@ -36,6 +36,7 @@ import {
   tabLabelInPane,
   terminalBroadcastMemberIds,
   terminalEnvTabNameStale,
+  toggleAllTerminalBroadcastMuted,
   type FileTab,
   type LeafNode,
   type TerminalTab,
@@ -562,7 +563,7 @@ describe("autosave", () => {
 });
 
 describe("terminal broadcast groups", () => {
-  test("target selection synchronizes every group member", () => {
+  test("target selection is isolated to the source terminal", () => {
     const a = terminalTab({ id: "term-a", title: "A" });
     const b = terminalTab({ id: "term-b", title: "B" });
     const c = terminalTab({ id: "term-c", title: "C" });
@@ -573,17 +574,17 @@ describe("terminal broadcast groups", () => {
     setTerminalBroadcastTarget(tab("term-a"), "term-b", true);
 
     expect(terminalBroadcastMemberIds(tab("term-a")).sort()).toEqual(["term-a", "term-b"]);
-    expect(terminalBroadcastMemberIds(tab("term-b")).sort()).toEqual(["term-a", "term-b"]);
+    expect(terminalBroadcastMemberIds(tab("term-b"))).toEqual([]);
     expect(tab("term-c").broadcastEnabled).toBe(false);
 
     setTerminalBroadcastTarget(tab("term-b"), "term-c", true);
 
-    expect(terminalBroadcastMemberIds(tab("term-a")).sort()).toEqual(["term-a", "term-b", "term-c"]);
-    expect(terminalBroadcastMemberIds(tab("term-b")).sort()).toEqual(["term-a", "term-b", "term-c"]);
-    expect(terminalBroadcastMemberIds(tab("term-c")).sort()).toEqual(["term-a", "term-b", "term-c"]);
+    expect(terminalBroadcastMemberIds(tab("term-a")).sort()).toEqual(["term-a", "term-b"]);
+    expect(terminalBroadcastMemberIds(tab("term-b")).sort()).toEqual(["term-b", "term-c"]);
+    expect(terminalBroadcastMemberIds(tab("term-c"))).toEqual([]);
   });
 
-  test("peer removal updates the group and dissolves when one member remains", () => {
+  test("peer removal updates only the source and keeps mute independent", () => {
     const a = terminalTab({ id: "term-a", title: "A" });
     const b = terminalTab({ id: "term-b", title: "B" });
     const c = terminalTab({ id: "term-c", title: "C" });
@@ -593,18 +594,20 @@ describe("terminal broadcast groups", () => {
 
     setTerminalBroadcastTarget(tab("term-a"), "term-b", true);
     setTerminalBroadcastTarget(tab("term-a"), "term-c", true);
+    setTerminalBroadcastMuted(tab("term-c"), true);
 
-    removeTerminalFromBroadcastGroup(tab("term-b"), "term-c");
+    removeTerminalFromBroadcastGroup(tab("term-a"), "term-c");
 
     expect(terminalBroadcastMemberIds(tab("term-a")).sort()).toEqual(["term-a", "term-b"]);
-    expect(terminalBroadcastMemberIds(tab("term-b")).sort()).toEqual(["term-a", "term-b"]);
-    expect(tab("term-c").broadcastEnabled).toBe(false);
+    expect(terminalBroadcastMemberIds(tab("term-b"))).toEqual([]);
+    expect(tab("term-c").broadcastMuted).toBe(true);
 
     removeTerminalFromBroadcastGroup(tab("term-a"), "term-b");
 
     expect(tab("term-a").broadcastEnabled).toBe(false);
     expect(tab("term-b").broadcastEnabled).toBe(false);
     expect(tab("term-c").broadcastEnabled).toBe(false);
+    expect(tab("term-c").broadcastMuted).toBe(true);
   });
 
   test("muted broadcast members stay in the group but skip input flow", () => {
@@ -625,11 +628,7 @@ describe("terminal broadcast groups", () => {
 
     broadcastTerminalInput(tab("term-a"), "one");
     expect(received).toEqual(["b:one"]);
-    expect(terminalBroadcastMemberIds(tab("term-c")).sort()).toEqual([
-      "term-a",
-      "term-b",
-      "term-c",
-    ]);
+    expect(terminalBroadcastMemberIds(tab("term-c"))).toEqual([]);
 
     setTerminalBroadcastMuted(tab("term-a"), true);
     broadcastTerminalInput(tab("term-a"), "two");
@@ -638,6 +637,40 @@ describe("terminal broadcast groups", () => {
     unregisterA();
     unregisterB();
     unregisterC();
+  });
+
+  test("bulk mute shortcut always toggles every terminal without changing membership", () => {
+    const a = terminalTab({ id: "term-a", title: "A" });
+    const b = terminalTab({ id: "term-b", title: "B" });
+    const c = terminalTab({ id: "term-c", title: "C" });
+    resetLayout([a, b, c]);
+    const tab = (id: string) =>
+      activePane().tabs.find((candidate) => candidate.id === id) as TerminalTab;
+
+    setTerminalBroadcastTarget(tab("term-a"), "term-b", true);
+    setTerminalBroadcastMuted(tab("term-b"), true);
+
+    toggleAllTerminalBroadcastMuted();
+    expect(tab("term-a").broadcastMuted).toBe(true);
+    expect(tab("term-b").broadcastMuted).toBe(true);
+    expect(tab("term-c").broadcastMuted).toBe(true);
+    expect(terminalBroadcastMemberIds(tab("term-a")).sort()).toEqual(["term-a", "term-b"]);
+
+    setTerminalBroadcastMuted(tab("term-b"), false);
+    expect(tab("term-a").broadcastMuted).toBe(true);
+    expect(tab("term-b").broadcastMuted).toBeUndefined();
+    expect(tab("term-c").broadcastMuted).toBe(true);
+
+    toggleAllTerminalBroadcastMuted();
+    expect(tab("term-a").broadcastMuted).toBe(true);
+    expect(tab("term-b").broadcastMuted).toBe(true);
+    expect(tab("term-c").broadcastMuted).toBe(true);
+
+    toggleAllTerminalBroadcastMuted();
+    expect(tab("term-a").broadcastMuted).toBeUndefined();
+    expect(tab("term-b").broadcastMuted).toBeUndefined();
+    expect(tab("term-c").broadcastMuted).toBeUndefined();
+    expect(terminalBroadcastMemberIds(tab("term-a")).sort()).toEqual(["term-a", "term-b"]);
   });
 
   test("broadcast skips target ids outside this window layout", () => {

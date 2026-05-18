@@ -160,3 +160,32 @@ Commit:
 
 Pushed `main` to `origin`. Starting `fullstack-7` next per @@Architect's
 19:10 BST clearance.
+
+## 2026-05-18 17:38 BST — poke
+
+`fullstack-7` is committed and pushed on `main`.
+
+Commit:
+
+* `13eadfb` Improve light-mode terminal ANSI contrast (fullstack-7)
+
+Gate run:
+
+* `npm run check` from `web/`
+* `npm run build` from `web/`
+* `scripts/pre-push`
+
+Pushed `main` to `origin`.
+
+## 2026-05-18 18:09 BST — poke
+
+`fullstack-8` is implemented and ready to commit under the wave-2 standing
+clearance:
+[fullstack/fullstack-8.md](../fullstack/fullstack-8.md).
+
+Gate run:
+
+* `npm run test -- tabs` from `web/`
+* `npm run check` from `web/`
+* `npm run build` from `web/`
+* `scripts/pre-push`

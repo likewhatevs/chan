@@ -39,6 +39,7 @@
     Network,
     PanelRight,
     Palette,
+    Radio,
     RefreshCw,
     Search,
     Settings,
@@ -767,9 +768,11 @@
           {#if t.broadcastEnabled}
             <span
               class="broadcast-marker"
-              title={`Broadcasting to ${Math.max(0, t.broadcastTargetIds.length - 1)} tab(s)`}
-              aria-label={`Broadcasting to ${Math.max(0, t.broadcastTargetIds.length - 1)} tab(s)`}
-            >BCAST</span>
+              title={`Broadcasting to ${t.broadcastTargetIds.length} tab(s)`}
+              aria-label={`Broadcasting to ${t.broadcastTargetIds.length} tab(s)`}
+            >
+              <Radio size={13} strokeWidth={1.9} aria-hidden="true" />
+            </span>
           {/if}
         {/if}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -1178,12 +1181,12 @@
   }
   .tab.active .tab-icon { color: var(--text); }
   .broadcast-marker {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     color: #ff5fb7;
-    border: 1px solid color-mix(in srgb, #ff5fb7 60%, transparent);
-    border-radius: 4px;
-    padding: 0 3px;
-    font-size: 9px;
-    line-height: 13px;
+    width: 15px;
+    height: 15px;
     font-weight: 700;
     flex-shrink: 0;
   }

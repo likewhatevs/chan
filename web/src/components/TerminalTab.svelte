@@ -49,6 +49,7 @@
     setTerminalMcpEnv,
     setTerminalSession,
     splitActive,
+    terminalBroadcastMemberIds,
     terminalBroadcastMembers,
     terminalEnvTabNameStale,
     terminalMcpEnvEnabled,
@@ -125,17 +126,16 @@
     if (!a) return { x: 0, y: 0 };
     return { x: Math.round(a.left), y: Math.round(a.bottom + 4) };
   });
-  const broadcastTargets = $derived(allTerminalTabs());
+  const broadcastTargets = $derived(allTerminalTabs().filter((candidate) => candidate.id !== tab.id));
   const broadcastMembers = $derived(terminalBroadcastMembers(tab));
   const otherBroadcastMembers = $derived(
     broadcastMembers.filter((member) => member.id !== tab.id),
   );
-  const selectedBroadcastTargets = $derived(new Set(tab.broadcastTargetIds));
+  const selectedBroadcastTargets = $derived(new Set(terminalBroadcastMemberIds(tab)));
   const allBroadcastTargetsSelected = $derived(
     broadcastTargets.length > 0 &&
       broadcastTargets.every((target) => selectedBroadcastTargets.has(target.id)),
   );
-  const broadcastChord = chordFor("app.terminal.broadcast.toggle") ?? "";
   const mcpEnvOn = $derived(terminalMcpEnvEnabled(tab));
   const showMcpEnvDisabled = $derived(tab.sessionMcpEnv === false);
   const staleEnvName = $derived(terminalEnvTabNameStale(tab));
@@ -998,7 +998,7 @@
           <span class="mbtn-label">
             {tab.broadcastEnabled ? "Broadcast Input On" : "Broadcast Input Off"}
           </span>
-          <span class="mbtn-chord">{broadcastChord}</span>
+          <span class="mbtn-chord"></span>
         </button>
         <button class="mbtn" onclick={toggleAllBroadcastTargets}>
           <span class="mbtn-icon"></span>
@@ -1008,7 +1008,7 @@
           <span class="mbtn-chord"></span>
         </button>
         {#if broadcastTargets.length === 0}
-          <div class="empty-targets">No terminal tabs</div>
+          <div class="empty-targets">No other terminal tabs</div>
         {:else}
           {#each broadcastTargets as target (target.id)}
             <label class="target-row">

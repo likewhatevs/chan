@@ -574,10 +574,15 @@ export function dismissTerminalEnvNamePrompt(tab: TerminalTab): void {
 export function setTerminalBroadcastEnabled(tab: TerminalTab, enabled: boolean): void {
   if (enabled) {
     const members = new Set(tab.broadcastTargetIds);
-    members.add(tab.id);
+    if (members.size === 0) {
+      for (const candidate of allTerminalTabs()) {
+        if (candidate.id !== tab.id) members.add(candidate.id);
+      }
+    }
     applyTerminalBroadcastMembers(tab, members);
   } else {
-    removeTerminalFromBroadcastGroup(tab, tab.id);
+    tab.broadcastEnabled = false;
+    tab.broadcastTargetIds = [];
   }
 }
 
@@ -585,6 +590,15 @@ export function toggleActiveTerminalBroadcast(): void {
   const tab = activeTerminalTab();
   if (!tab) return;
   setTerminalBroadcastEnabled(tab, !tab.broadcastEnabled);
+}
+
+export function toggleAllTerminalBroadcastMuted(): void {
+  const tabs = allTerminalTabs();
+  if (tabs.length === 0) return;
+  const muted = tabs.some((tab) => !tab.broadcastMuted);
+  for (const tab of tabs) {
+    setTerminalBroadcastMuted(tab, muted);
+  }
 }
 
 export function setTerminalBroadcastTarget(
@@ -612,6 +626,11 @@ export function terminalBroadcastMemberIds(tab: TerminalTab): string[] {
 }
 
 export function removeTerminalFromBroadcastGroup(tab: TerminalTab, memberId: string): void {
+  if (memberId === tab.id) {
+    tab.broadcastEnabled = false;
+    tab.broadcastTargetIds = [];
+    return;
+  }
   const next = new Set(terminalBroadcastMemberIds(tab));
   next.delete(memberId);
   applyTerminalBroadcastMembers(tab, next);
@@ -622,23 +641,10 @@ export function setTerminalBroadcastMuted(tab: TerminalTab, muted: boolean): voi
 }
 
 function applyTerminalBroadcastMembers(anchor: TerminalTab, members: Set<string>): void {
-  const existing = new Set(terminalBroadcastMemberIds(anchor));
-  for (const id of members) existing.add(id);
-  const all = allTerminalTabs();
-  if (!all.some((tab) => tab.id === anchor.id)) all.push(anchor);
   const next = new Set(members);
-  if (next.size <= 1) next.clear();
-  for (const candidate of all) {
-    if (!existing.has(candidate.id) && !next.has(candidate.id)) continue;
-    if (next.has(candidate.id)) {
-      candidate.broadcastEnabled = true;
-      candidate.broadcastTargetIds = [...next];
-    } else {
-      candidate.broadcastEnabled = false;
-      candidate.broadcastTargetIds = [];
-      candidate.broadcastMuted = undefined;
-    }
-  }
+  next.delete(anchor.id);
+  anchor.broadcastEnabled = next.size > 0;
+  anchor.broadcastTargetIds = anchor.broadcastEnabled ? [...next] : [];
 }
 
 export function terminalMcpEnvEnabled(tab: TerminalTab): boolean {
