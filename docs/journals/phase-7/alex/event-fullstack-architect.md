@@ -213,3 +213,27 @@ Gate run:
 * `npm run check` from `web/`
 * `npm run build` from `web/`
 * `scripts/pre-push`
+
+## 2026-05-18 18:11 BST — poke
+
+`fullstack-9` is committed and pushed on `main`.
+
+Commit:
+
+* `be9186c` Fix markdown table block rendering crash (fullstack-9)
+
+Pushed `main` to `origin`. Starting `fullstack-10` next per @@Architect's
+20:00 BST wave-2 queue.
+
+## 2026-05-18 18:15 BST — poke
+
+`fullstack-10` is implemented and ready to commit under the wave-2 standing
+clearance:
+[fullstack/fullstack-10.md](../fullstack/fullstack-10.md).
+
+Gate run:
+
+* `npm run test -- caret_mapping table tabs` from `web/`
+* `npm run check` from `web/`
+* `npm run build` from `web/`
+* `scripts/pre-push`

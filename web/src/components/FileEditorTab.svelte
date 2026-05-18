@@ -72,6 +72,10 @@
     editorToolsPrefs,
     persistStripTrailingWhitespaceOnSave,
   } from "../state/editorTools.svelte";
+  import {
+    renderedCaretForSourceCaret,
+    sourceCaretForRenderedCaret,
+  } from "../editor/caret_mapping";
   import { stripTrailingWhitespaceText } from "../editor/tools";
 
   import {
@@ -298,7 +302,15 @@
   function doToggleMode(): void {
     if (!hasRenderedMode) return;
     const rendered = renderedModeForTab;
-    setMode(tab, tab.mode === "source" ? rendered : "source");
+    const next = tab.mode === "source" ? rendered : "source";
+    if (tab.caret && rendered === "wysiwyg") {
+      const mapped =
+        next === "wysiwyg"
+          ? renderedCaretForSourceCaret(tab.content, tab.caret)
+          : sourceCaretForRenderedCaret(tab.content, tab.caret);
+      setTabCaret(tab, mapped.from, mapped.to);
+    }
+    setMode(tab, next);
     closeTabMenu();
   }
 
