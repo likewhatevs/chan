@@ -11,6 +11,8 @@
 // Chord grammar: a `+`-separated list of modifier tokens followed by
 // a single key. Modifier tokens:
 //   - `Mod`   → Cmd on macOS, Ctrl on Linux / Windows.
+//   - `Cmd`   → literal Command / Meta (used for browser fallbacks
+//               where Ctrl would collide with an existing chord).
 //   - `Ctrl`  → literal Ctrl (used for the `Ctrl+Alt+…` web fallbacks
 //               that mean the actual Control key on every platform).
 //   - `Alt`   → Alt / Option.
@@ -93,8 +95,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   {
     id: "app.terminal.toggle",
     label: "Terminal",
-    web: "Mod+`",
-    native: "Mod+`",
+    web: "Cmd+Alt+T",
+    native: "Mod+T",
     group: "App",
   },
   {

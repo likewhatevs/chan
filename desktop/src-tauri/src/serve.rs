@@ -560,6 +560,7 @@ const KEY_BRIDGE_JS: &str = r#"
         case 'KeyW': fire(e, 'app.tab.close');        return;
         case 'KeyF': fire(e, 'app.find.open');        return;
         case 'KeyG': fire(e, 'app.find.next');        return;
+        case 'KeyT': fire(e, 'app.terminal.toggle');  return;
         case 'Backquote': fire(e, 'app.terminal.toggle'); return;
         case 'BracketLeft': fire(e, 'app.pane.prev'); return;
         case 'BracketRight': fire(e, 'app.pane.next'); return;
@@ -623,6 +624,12 @@ mod tests {
         assert!(normal_termination(None, Some(nix::libc::SIGTERM)));
         assert!(normal_termination(None, Some(nix::libc::SIGINT)));
         assert!(!normal_termination(None, Some(nix::libc::SIGKILL)));
+    }
+
+    #[test]
+    fn key_bridge_maps_terminal_to_t_and_backquote() {
+        assert!(KEY_BRIDGE_JS.contains("case 'KeyT': fire(e, 'app.terminal.toggle');"));
+        assert!(KEY_BRIDGE_JS.contains("case 'Backquote': fire(e, 'app.terminal.toggle');"));
     }
 
     #[cfg(unix)]

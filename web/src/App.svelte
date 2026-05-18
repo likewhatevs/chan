@@ -243,13 +243,13 @@
   ///   Cmd/Ctrl+P             -> Files (toggle)            [VS Code Quick Open]
   ///   Cmd/Ctrl+Shift+F       -> Search across files       [VS Code Find in Files]
   ///   Cmd/Ctrl+Shift+M       -> Graph (toggle)
-  ///   Cmd/Ctrl+`             -> Terminal (toggle)
+  ///   Cmd+Alt+T              -> Terminal (toggle, web)
   ///   Alt+Shift+[ / ]        -> previous / next tab       (web fallback)
   ///   Ctrl+Alt+1..9          -> jump to tab N             (web fallback)
   ///   Ctrl+Alt+N             -> new file                  (web fallback)
   ///
   /// Native (chan-desktop) layers VS Code's browser-reserved chords
-  /// on top via its init script: Cmd+W (close tab), Cmd+N (new),
+  /// on top via its init script: Cmd+T / Cmd+` (terminal), Cmd+W (close tab), Cmd+N (new),
   /// Cmd+Shift+[/] (tab nav), Cmd+1..9 (jump), Cmd+F/G/Shift+G
   /// (find / next / prev — find-on-page lives in chan but no chord
   /// is bound in the browser; users have the browser's native find).
@@ -313,7 +313,7 @@
       toggleAllTerminalBroadcastMuted();
       return;
     }
-    if (meta && !e.shiftKey && !e.altKey && e.code === "Backquote") {
+    if (e.metaKey && e.altKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyT") {
       e.preventDefault();
       openTerminalInActivePane();
       return;

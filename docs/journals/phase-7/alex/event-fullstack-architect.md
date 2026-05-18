@@ -260,3 +260,27 @@ Gate run:
 * `npm run check` from `web/`
 * `npm run build` from `web/`
 * `scripts/pre-push`
+
+## 2026-05-18 18:33 BST — poke
+
+`fullstack-11` is committed and pushed on `main`.
+
+Commit:
+
+* `38f8b60` Show moved/deleted state for missing open files (fullstack-11)
+
+Pushed `main` to `origin`. Next queued task is `fullstack-12`.
+
+## 2026-05-18 18:36 BST — poke
+
+`fullstack-12` is implemented and ready to commit under the wave-2 standing
+clearance:
+[fullstack/fullstack-12.md](../fullstack/fullstack-12.md).
+
+Gate run:
+
+* `npm run test -- shortcuts` from `web/`
+* `npm run check` from `web/`
+* `npm run build` from `web/`
+* `cargo test -p chan-desktop serve::tests::key_bridge_maps_terminal_to_t_and_backquote`
+* `scripts/pre-push`

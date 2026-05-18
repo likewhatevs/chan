@@ -86,30 +86,31 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
 
   App
   ---
-  Settings               Cmd+,
-  Files                  Cmd+P
-  Search across files    Cmd+Shift+F
-  Graph                  Cmd+Shift+M
-  Terminal               Cmd+`
-  Terminal broadcast     Cmd+Shift+I
-  Dismiss overlay        Esc
+  Settings                Cmd+,
+  Files                   Cmd+P
+  Search across files     Cmd+Shift+F
+  Graph                   Cmd+Shift+M
+  Terminal                Cmd+Alt+T
+  Mute all terminals      Cmd+Shift+I
+  Terminal rich prompt    Alt+Space
+  Dismiss overlay         Esc
 
   File
   ----
-  Save                   Cmd+S
-  New file               Ctrl+Alt+N
+  Save                    Cmd+S
+  New file                Ctrl+Alt+N
 
   Tabs
   ----
-  Reopen closed tab     Ctrl+Alt+T
-  Next tab               Alt+Shift+]
-  Previous tab           Alt+Shift+[
-  Jump to tab N          Ctrl+Alt+1..9
+  Reopen closed tab       Ctrl+Alt+T
+  Next tab                Alt+Shift+]
+  Previous tab            Alt+Shift+[
+  Jump to tab N           Ctrl+Alt+1..9
 
   Panes
   -----
-  Previous pane          Cmd+Alt+[
-  Next pane              Cmd+Alt+]
+  Previous pane           Cmd+Alt+[
+  Next pane               Cmd+Alt+]
 
 Handled by the browser:
 
