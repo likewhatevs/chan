@@ -26,6 +26,7 @@ import type {
   SearchHit,
   TreeEntry,
   DriveInfo,
+  BubbleOverlayMode,
 } from "./types";
 import { ApiError } from "./errors";
 import {
@@ -375,6 +376,18 @@ export const api = {
       "GET",
       `/api/fs-graph?scope=${encodeURIComponent(opts.scope)}&path=${encodeURIComponent(opts.path)}&depth=${encodeURIComponent(String(opts.depth ?? 1))}`,
     ),
+  setTerminalWatcher: (sessionId: string, path: string) =>
+    req<void>("POST", `/api/terminal/${encodeURIComponent(sessionId)}/watcher`, { path }),
+  clearTerminalWatcher: (sessionId: string) =>
+    req<void>("DELETE", `/api/terminal/${encodeURIComponent(sessionId)}/watcher`),
+  setBubbleOverlayMode: async (mode: BubbleOverlayMode): Promise<void> => {
+    const cfg = await req<GlobalConfig>("GET", "/api/config");
+    if (cfg.preferences.bubble_overlay_mode === mode) return;
+    await req<GlobalConfig>("PATCH", "/api/config", {
+      ...cfg,
+      preferences: { ...cfg.preferences, bubble_overlay_mode: mode },
+    });
+  },
 };
 
 /// Encode a path as a sequence of percent-encoded segments. We keep `/`

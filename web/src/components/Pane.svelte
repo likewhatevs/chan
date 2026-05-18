@@ -800,6 +800,14 @@
         {#if isDirty(t)}
           <span class="dirty unsaved" title="unsaved changes">●</span>
         {/if}
+        {#if t.kind === "terminal" && t.watcher}
+          <span
+            class="dirty watcher"
+            class:blink={t.watcher.unread}
+            title="watcher active"
+            aria-label="watcher active"
+          >●</span>
+        {/if}
         <button
           class="close"
           onclick={(e) => {
@@ -1168,6 +1176,15 @@
     font-size: 10px;
     line-height: 1;
     color: var(--info-text);
+  }
+  .dirty.watcher {
+    color: var(--success-text, var(--link));
+  }
+  .dirty.watcher.blink {
+    animation: watcher-blink 850ms steps(2, start) infinite;
+  }
+  @keyframes watcher-blink {
+    50% { opacity: .25; }
   }
   .path { white-space: nowrap; }
   /* Per-tab kind icon: User for contact-kind files, FileText

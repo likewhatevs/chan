@@ -126,3 +126,34 @@ path that writes the reply JSON atomically.
 Standard. Pre-push gate green. Coordinate with @@Systacean
 on the API contract; with @@WebtestA for walkthrough; with
 @@WebtestB for end-to-end terminal-side validation.
+
+## 2026-05-18 19:19 BST — implementation ready
+
+Implemented the frontend substrate:
+
+* Rich prompt now has Watch directory / Stop watching controls, using
+  `POST` / `DELETE /api/terminal/<session>/watcher` with the locked
+  body shape `{ "path": "..." }`.
+* Terminal tabs store watcher state, poll/read event files from the
+  chosen watch dir, refresh immediately when PTY output includes
+  `poke\n`, and show a watcher bullet that blinks for unread events
+  while the rich prompt is hidden.
+* `BubbleOverlay.svelte` renders stack/tray modes, plain text links via
+  the existing external-link opener, survey questions/options,
+  standing "Check my comments first", scope grants, Submit, and
+  Skip / not now.
+* Survey replies write via temp create + same-dir rename to
+  `event-reply-<survey-id>.md`.
+* Added persisted `bubble_overlay_mode` preference plumbing.
+
+Verification:
+
+* `npm run test -- TerminalRichPrompt watcherEvents`
+* `npm run check`
+* `npm run build`
+* `cargo check -p chan-server`
+* `scripts/pre-push`
+
+Note: @@Systacean's `systacean-9` backend files are also dirty in the
+shared worktree; this FullStack commit should stage only the files in
+this implementation plus the small preference plumbing above.

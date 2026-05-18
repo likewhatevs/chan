@@ -265,4 +265,43 @@ describe("TerminalRichPrompt", () => {
     if (pane?.kind !== "leaf") return;
     expect(pane.tabs.some((tab) => tab.kind === "file" && tab.path === "saved-prompt.md")).toBe(true);
   });
+
+  test("Watch directory uses the path prompt and terminal watcher endpoint", async () => {
+    const setWatcher = vi.spyOn(api, "setTerminalWatcher").mockResolvedValue(undefined);
+    const prompt: TerminalRichPromptState = {
+      buffer: "",
+      heightPx: 320,
+      open: true,
+      mode: "source",
+    };
+    const onWatcherStarted = vi.fn();
+    installPointerCaptureStubs();
+    const target = document.createElement("div");
+    Object.assign(target.style, { position: "relative", height: "500px" });
+    document.body.append(target);
+    const component = mount(TerminalRichPrompt, {
+      target,
+      props: {
+        prompt,
+        onSubmit: vi.fn(),
+        onClose: vi.fn(),
+        terminalSessionId: "term_123",
+        watcherPath: null,
+        onWatcherStarted,
+      },
+    });
+    mounted.push(component);
+    await tick();
+
+    button(target, "Watch directory").click();
+    await tick();
+    expect(pathPromptState.open).toBe(true);
+    expect(pathPromptState.kind).toBe("folder");
+
+    resolvePathPrompt("events");
+    await waitFor(() => onWatcherStarted.mock.calls.length === 1);
+
+    expect(setWatcher).toHaveBeenCalledWith("term_123", "events");
+    expect(onWatcherStarted).toHaveBeenCalledWith("events");
+  });
 });

@@ -229,6 +229,45 @@ export type TerminalTab = {
   cwd?: string;
   seedInput?: string;
   richPrompt?: TerminalRichPromptState;
+  watcher?: TerminalWatcherState;
+};
+
+export type ScopeGrant = "one-shot" | "topic-session" | "topic-phase";
+
+export type SurveyOption = {
+  key: string;
+  label: string;
+};
+
+export type SurveyQuestion = {
+  header: string;
+  text: string;
+  options: SurveyOption[];
+};
+
+export type WatcherEvent = {
+  id: string;
+  type: "survey" | "survey-reply" | "poke" | string;
+  from: string;
+  to: string;
+  topic?: string;
+  questions?: SurveyQuestion[];
+  standing_options?: SurveyOption[];
+  scope?: ScopeGrant;
+  answers?: Array<{ question_index: number; key: string }>;
+  scope_grant?: ScopeGrant;
+  note?: string;
+  path: string;
+};
+
+export type TerminalWatcherState = {
+  path: string;
+  events: WatcherEvent[];
+  seenIds: string[];
+  unread: boolean;
+  loading?: boolean;
+  error?: string;
+  trayExpanded?: boolean;
 };
 
 export type TerminalRichPromptState = {
@@ -460,6 +499,7 @@ function tabForReopen(src: Tab): Tab {
     tab.sessionMcpEnv = undefined;
     tab.terminalEnvTabName = undefined;
     tab.terminalEnvNamePromptDismissed = undefined;
+    tab.watcher = undefined;
   }
   return tab;
 }
@@ -1131,6 +1171,17 @@ function cloneTab(src: Tab): Tab {
             styleToolbarOpen: src.richPrompt.styleToolbarOpen,
           }
         : undefined,
+      watcher: src.watcher
+        ? {
+            path: src.watcher.path,
+            events: [...src.watcher.events],
+            seenIds: [...src.watcher.seenIds],
+            unread: src.watcher.unread,
+            loading: src.watcher.loading,
+            error: src.watcher.error,
+            trayExpanded: src.watcher.trayExpanded,
+          }
+        : undefined,
     };
   }
   return {
@@ -1610,6 +1661,10 @@ type SerTab = {
   rph?: number;
   rpo?: 1;
   rpm?: "w" | "s";
+  /// Terminal watcher path + unread bit. Session-scoped like the
+  /// terminal id; the server owns the real watcher lifecycle.
+  twp?: string;
+  twu?: 1;
 };
 type SerLeaf = { k: "l"; t: SerTab[]; f?: 1 };
 type SerLeafColor = "g" | "p";
@@ -1658,6 +1713,12 @@ function serializeNode(
                   : {}),
                 ...(t.richPrompt.open ? { rpo: 1 as const } : {}),
                 ...(t.richPrompt.mode === "source" ? { rpm: "s" as const } : {}),
+              }
+            : {}),
+          ...(opts.terminalSessions && t.watcher
+            ? {
+                twp: t.watcher.path,
+                ...(t.watcher.unread ? { twu: 1 as const } : {}),
               }
             : {}),
           ...active,
@@ -1774,6 +1835,14 @@ export async function restoreLayout(
             terminalSessionId,
             lastSeq: undefined,
             richPrompt,
+            watcher: terminalSessionId && (sertab.twp ?? savedTerm?.twp)
+              ? {
+                  path: sertab.twp ?? savedTerm?.twp ?? "",
+                  events: [],
+                  seenIds: [],
+                  unread: sertab.twu === 1 || savedTerm?.twu === 1,
+                }
+              : undefined,
           };
           p.tabs.push(tab);
           if (sertab.a) p.activeTabId = tab.id;
@@ -1928,6 +1997,14 @@ export function hydrateTerminalSessionsFromLayout(sessionLayout: SerNode | null)
       }
       const richPrompt = richPromptFromSer(savedTerm);
       if (richPrompt) liveTerms[j]!.richPrompt = richPrompt;
+      if (savedTerm.twp) {
+        liveTerms[j]!.watcher = {
+          path: savedTerm.twp,
+          events: [],
+          seenIds: [],
+          unread: savedTerm.twu === 1,
+        };
+      }
     }
   }
 }

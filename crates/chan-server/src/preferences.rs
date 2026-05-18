@@ -18,6 +18,7 @@
 //!     compact)
 //!   - date_format (id; UI-side mapping in dateFormats.ts)
 //!   - strip_trailing_whitespace_on_save
+//!   - bubble_overlay_mode (stack / tray for watcher notifications)
 //!
 //! The Preferences view returned over /api/drive and /api/config is
 //! assembled in lib.rs by joining EditorPrefs with ServerConfig.
@@ -50,6 +51,8 @@ pub struct EditorPrefs {
     pub date_format: String,
     #[serde(default)]
     pub strip_trailing_whitespace_on_save: bool,
+    #[serde(default)]
+    pub bubble_overlay_mode: BubbleOverlayMode,
 }
 
 impl Default for EditorPrefs {
@@ -62,6 +65,7 @@ impl Default for EditorPrefs {
             line_spacing: LineSpacing::default(),
             date_format: default_date_format(),
             strip_trailing_whitespace_on_save: false,
+            bubble_overlay_mode: BubbleOverlayMode::default(),
         }
     }
 }
@@ -130,6 +134,14 @@ fn default_outline_width() -> u32 {
 pub struct BrowserSidePanes {
     pub left: bool,
     pub right: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BubbleOverlayMode {
+    #[default]
+    Stack,
+    Tray,
 }
 
 /// Editor density. `Standard` is the roomier default Google Docs /

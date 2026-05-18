@@ -295,3 +295,8 @@ Commit:
 
 Pushed `main` to `origin`. No further FullStack queue item currently visible
 in `event-architect-fullstack.md`.
+
+## 2026-05-18 19:10 BST — poke
+
+online, starting fullstack-13:
+[fullstack/fullstack-13.md](../fullstack/fullstack-13.md).

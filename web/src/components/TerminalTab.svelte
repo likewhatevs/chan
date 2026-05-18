@@ -76,7 +76,9 @@
     openTabMenu,
     tabMenu,
   } from "../state/tabMenu.svelte";
+  import BubbleOverlay from "./BubbleOverlay.svelte";
   import TerminalRichPrompt from "./TerminalRichPrompt.svelte";
+  import { readWatcherEvents } from "../state/watcherEvents";
 
   let {
     tab,
@@ -118,6 +120,8 @@
   let pendingPromptSeed = "";
   let promptSeedSent = false;
   let terminalCwdAbs: string | null = $state(null);
+  let watcherPollTimer: ReturnType<typeof setInterval> | null = null;
+  const outputDecoder = new TextDecoder();
   let lastSessionSave = 0;
   let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null;
   const menuOpen = $derived(tabMenu.openForTabId === tab.id);
@@ -137,6 +141,7 @@
       broadcastTargets.every((target) => selectedBroadcastTargets.has(target.id)),
   );
   const mcpEnvOn = $derived(terminalMcpEnvEnabled(tab));
+  const watcherPath = $derived(tab.watcher?.path ?? null);
   const showMcpEnvDisabled = $derived(tab.sessionMcpEnv === false);
   const staleEnvName = $derived(terminalEnvTabNameStale(tab));
   const showStaleEnvPrompt = $derived(
@@ -167,6 +172,20 @@
     if (!active) return;
     queueFit();
     queueMicrotask(() => term?.focus());
+  });
+
+  $effect(() => {
+    if (!watcherPath) {
+      if (watcherPollTimer) clearInterval(watcherPollTimer);
+      watcherPollTimer = null;
+      return;
+    }
+    void refreshWatcherEvents();
+    watcherPollTimer = setInterval(() => void refreshWatcherEvents(), 5000);
+    return () => {
+      if (watcherPollTimer) clearInterval(watcherPollTimer);
+      watcherPollTimer = null;
+    };
   });
 
   $effect(() => {
@@ -301,6 +320,7 @@
         const bytes = new Uint8Array(event.data);
         term?.write(bytes);
         recordOutputBytes(bytes.byteLength);
+        maybeRefreshWatcher(bytes);
         maybeSeedPrompt();
         return;
       }
@@ -308,6 +328,7 @@
         const bytes = new Uint8Array(await event.data.arrayBuffer());
         term?.write(bytes);
         recordOutputBytes(bytes.byteLength);
+        maybeRefreshWatcher(bytes);
         maybeSeedPrompt();
         return;
       }
@@ -596,7 +617,9 @@
   function openRichPrompt(): void {
     closeTabMenu();
     ensureRichPrompt().open = true;
+    if (tab.watcher) tab.watcher.unread = false;
     scheduleTerminalSessionSave();
+    void refreshWatcherEvents();
   }
 
   function closeRichPrompt(): void {
@@ -609,6 +632,48 @@
     sendUserInput(source);
     scheduleTerminalSessionSave();
     term?.focus();
+  }
+
+  function watcherStarted(path: string): void {
+    tab.watcher = {
+      path,
+      events: [],
+      seenIds: [],
+      unread: false,
+      trayExpanded: false,
+    };
+    scheduleTerminalSessionSave();
+    void refreshWatcherEvents();
+  }
+
+  function watcherStopped(): void {
+    tab.watcher = undefined;
+    scheduleTerminalSessionSave();
+  }
+
+  async function refreshWatcherEvents(): Promise<void> {
+    if (!tab.watcher) return;
+    tab.watcher.loading = true;
+    try {
+      const events = await readWatcherEvents(tab.watcher.path);
+      const prior = new Set(tab.watcher.seenIds);
+      const ids = events.map((event) => event.id);
+      const hasNew = ids.some((id) => !prior.has(id));
+      tab.watcher.events = events;
+      tab.watcher.seenIds = ids;
+      tab.watcher.error = undefined;
+      if (hasNew && !tab.richPrompt?.open) tab.watcher.unread = true;
+    } catch (err) {
+      tab.watcher.error = `watch read failed: ${(err as Error).message}`;
+    } finally {
+      if (tab.watcher) tab.watcher.loading = false;
+    }
+  }
+
+  function maybeRefreshWatcher(bytes: Uint8Array): void {
+    if (!tab.watcher) return;
+    const text = outputDecoder.decode(bytes, { stream: true });
+    if (/\bpoke\r?\n/.test(text)) void refreshWatcherEvents();
   }
 
   function splitPane(direction: "row" | "column"): void {
@@ -1051,10 +1116,17 @@
     </div>
   {/if}
   {#if tab.richPrompt?.open}
+    {#if tab.watcher}
+      <BubbleOverlay watcher={tab.watcher} onRefresh={refreshWatcherEvents} />
+    {/if}
     <TerminalRichPrompt
       prompt={tab.richPrompt}
       onSubmit={submitRichPrompt}
       onClose={closeRichPrompt}
+      terminalSessionId={tab.terminalSessionId}
+      watcherPath={tab.watcher?.path ?? null}
+      onWatcherStarted={watcherStarted}
+      onWatcherStopped={watcherStopped}
     />
   {/if}
   {#if broadcastMembers.length > 1}

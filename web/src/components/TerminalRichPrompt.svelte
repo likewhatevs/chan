@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Code2, FilePlus, GripHorizontal, Pilcrow, Send, Type, X } from "lucide-svelte";
+  import { Code2, FilePlus, FolderSearch, GripHorizontal, Pilcrow, Send, Type, X } from "lucide-svelte";
   import Source from "../editor/Source.svelte";
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import StyleToolbar from "./StyleToolbar.svelte";
@@ -18,10 +18,18 @@
     prompt,
     onSubmit,
     onClose,
+    terminalSessionId,
+    watcherPath,
+    onWatcherStarted,
+    onWatcherStopped,
   }: {
     prompt: TerminalRichPromptState;
     onSubmit: (source: string) => void;
     onClose: () => void;
+    terminalSessionId?: string;
+    watcherPath?: string | null;
+    onWatcherStarted?: (path: string) => void;
+    onWatcherStopped?: () => void;
   } = $props();
 
   const MIN_HEIGHT = 150;
@@ -30,6 +38,8 @@
   let wysiwygRef: Wysiwyg | undefined = $state();
   let selVer = $state(0);
   let menu = $state<{ x: number; y: number } | null>(null);
+  let watcherError = $state("");
+  let watcherBusy = $state(false);
   let dragging = false;
 
   function mode(): "wysiwyg" | "source" {
@@ -132,6 +142,49 @@
       ui.status = `create failed: ${(err as Error).message}`;
     }
   }
+
+  async function watchDirectory(): Promise<void> {
+    menu = null;
+    watcherError = "";
+    if (!terminalSessionId) {
+      watcherError = "terminal session is not ready";
+      return;
+    }
+    const path = await uiPathPrompt({
+      title: "watch directory",
+      defaultValue: watcherPath ?? "",
+      kind: "folder",
+      mode: "move",
+    });
+    if (!path) return;
+    watcherBusy = true;
+    try {
+      await api.setTerminalWatcher(terminalSessionId, path);
+      onWatcherStarted?.(path);
+    } catch (err) {
+      watcherError = `watch failed: ${(err as Error).message}`;
+    } finally {
+      watcherBusy = false;
+    }
+  }
+
+  async function stopWatching(): Promise<void> {
+    menu = null;
+    watcherError = "";
+    if (!terminalSessionId) {
+      onWatcherStopped?.();
+      return;
+    }
+    watcherBusy = true;
+    try {
+      await api.clearTerminalWatcher(terminalSessionId);
+      onWatcherStopped?.();
+    } catch (err) {
+      watcherError = `stop failed: ${(err as Error).message}`;
+    } finally {
+      watcherBusy = false;
+    }
+  }
 </script>
 
 <svelte:window onpointerdown={onWindowPointerDown} />
@@ -173,6 +226,17 @@
     <button type="button" class="icon-btn" onclick={newFileFromHere} title="New file from here" aria-label="New file from here">
       <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
     </button>
+    <button
+      type="button"
+      class="icon-btn"
+      class:on={Boolean(watcherPath)}
+      onclick={watchDirectory}
+      disabled={watcherBusy}
+      title="Watch directory"
+      aria-label="Watch directory"
+    >
+      <FolderSearch size={16} strokeWidth={1.75} aria-hidden="true" />
+    </button>
     <button type="button" class="icon-btn" onclick={submit} title="Send prompt" aria-label="Send prompt">
       <Send size={16} strokeWidth={1.75} aria-hidden="true" />
     </button>
@@ -180,6 +244,14 @@
       <X size={16} strokeWidth={1.75} aria-hidden="true" />
     </button>
   </header>
+  {#if watcherPath || watcherError}
+    <div class="watcher-row" class:error={Boolean(watcherError)}>
+      <span>{watcherError || `watching ${watcherPath}`}</span>
+      {#if watcherPath}
+        <button type="button" onclick={stopWatching} disabled={watcherBusy}>Stop watching</button>
+      {/if}
+    </div>
+  {/if}
   <div class="composer-editor">
     {#key mode()}
       {#if mode() === "wysiwyg"}
@@ -217,6 +289,16 @@
         <FilePlus size={15} strokeWidth={1.75} aria-hidden="true" />
         <span>New File from here</span>
       </button>
+      <button type="button" onclick={watchDirectory}>
+        <FolderSearch size={15} strokeWidth={1.75} aria-hidden="true" />
+        <span>Watch directory</span>
+      </button>
+      {#if watcherPath}
+        <button type="button" onclick={stopWatching}>
+          <FolderSearch size={15} strokeWidth={1.75} aria-hidden="true" />
+          <span>Stop watching</span>
+        </button>
+      {/if}
     </div>
   {/if}
 </div>
@@ -284,6 +366,42 @@
   .icon-btn:hover {
     color: var(--text);
     border-color: var(--btn-hover);
+  }
+  .icon-btn.on {
+    color: var(--link);
+    border-color: var(--link);
+  }
+  .icon-btn:disabled {
+    cursor: default;
+    opacity: .55;
+  }
+  .watcher-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 28px;
+    padding: 0 10px 7px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+  }
+  .watcher-row.error {
+    color: var(--danger-text);
+  }
+  .watcher-row span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .watcher-row button {
+    flex-shrink: 0;
+    min-height: 24px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--btn-bg);
+    color: var(--text);
   }
   .composer-editor {
     flex: 1;

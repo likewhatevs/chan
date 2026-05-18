@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::TerminalConfig;
 use crate::error::{err, Error};
+use crate::preferences::BubbleOverlayMode;
 use crate::state::AppState;
 use crate::{BrowserSidePanes, EditorTheme, LineSpacing, PaneWidths, ThemeChoice};
 
@@ -34,6 +35,8 @@ pub struct PreferencesView {
     pub strip_trailing_whitespace_on_save: bool,
     pub search_aggression: SearchAggression,
     pub terminal: TerminalConfig,
+    #[serde(default)]
+    pub bubble_overlay_mode: BubbleOverlayMode,
 }
 
 pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
@@ -50,6 +53,7 @@ pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
         strip_trailing_whitespace_on_save: editor.strip_trailing_whitespace_on_save,
         search_aggression: server.search.aggression,
         terminal: server.terminal.clone(),
+        bubble_overlay_mode: editor.bubble_overlay_mode,
     }
 }
 
@@ -208,6 +212,7 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
         editor.line_spacing = view.line_spacing;
         editor.date_format = view.date_format;
         editor.strip_trailing_whitespace_on_save = view.strip_trailing_whitespace_on_save;
+        editor.bubble_overlay_mode = view.bubble_overlay_mode;
         editor.save()?;
     }
     {

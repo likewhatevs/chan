@@ -75,6 +75,8 @@ export type TerminalPreferences = {
   ring_bytes: number;
 };
 
+export type BubbleOverlayMode = "stack" | "tray";
+
 export type Preferences = {
   editor_theme: EditorTheme;
   /// Where image uploads land (relative to drive root). Default
@@ -106,6 +108,9 @@ export type Preferences = {
   /// Terminal PTY session retention settings. Not surfaced in
   /// Settings yet; round-tripped for config preservation.
   terminal: TerminalPreferences;
+  /// Round-2 watcher bubbles: show all bubbles inline, or collapse
+  /// them into a count tray until expanded.
+  bubble_overlay_mode: BubbleOverlayMode;
 };
 
 export type TreeEntry = {
