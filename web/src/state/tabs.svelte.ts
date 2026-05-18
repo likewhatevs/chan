@@ -449,6 +449,20 @@ export const layout = $state<{
   })(),
 );
 
+export type LayoutState = typeof layout;
+
+export const paneMode = $state<{
+  active: boolean;
+  draft: LayoutState | null;
+}>({
+  active: false,
+  draft: null,
+});
+
+export function activeLayout(): LayoutState {
+  return paneMode.active && paneMode.draft ? paneMode.draft : layout;
+}
+
 function pane(id: string): LeafNode {
   const n = layout.nodes[id];
   if (!n || n.kind !== "leaf") throw new Error(`not a pane: ${id}`);
@@ -456,7 +470,10 @@ function pane(id: string): LeafNode {
 }
 
 export function activePane(): LeafNode {
-  return pane(layout.activePaneId);
+  const current = activeLayout();
+  const n = current.nodes[current.activePaneId];
+  if (!n || n.kind !== "leaf") throw new Error(`not a pane: ${current.activePaneId}`);
+  return n;
 }
 
 const CLOSED_TAB_LIMIT = 20;
@@ -1113,36 +1130,42 @@ export function selectTabAtIndexInActivePane(index: number): void {
   p.activeTabId = p.tabs[index].id;
 }
 
-function leafIdsInOrder(nodeId: string, out: string[] = []): string[] {
-  const n = layout.nodes[nodeId];
+function leafIdsInOrder(
+  nodeId: string,
+  out: string[] = [],
+  state: LayoutState = activeLayout(),
+): string[] {
+  const n = state.nodes[nodeId];
   if (!n) return out;
   if (n.kind === "leaf") {
     out.push(n.id);
     return out;
   }
-  leafIdsInOrder(n.a, out);
-  leafIdsInOrder(n.b, out);
+  leafIdsInOrder(n.a, out, state);
+  leafIdsInOrder(n.b, out, state);
   return out;
 }
 
 export function selectPrevPane(): void {
-  const panes = leafIdsInOrder(layout.rootId);
+  const current = activeLayout();
+  const panes = leafIdsInOrder(current.rootId, [], current);
   if (panes.length < 2) return;
-  const idx = panes.indexOf(layout.activePaneId);
+  const idx = panes.indexOf(current.activePaneId);
   if (idx < 0) return;
-  layout.activePaneId = panes[(idx - 1 + panes.length) % panes.length]!;
+  current.activePaneId = panes[(idx - 1 + panes.length) % panes.length]!;
 }
 
 export function selectNextPane(): void {
-  const panes = leafIdsInOrder(layout.rootId);
+  const current = activeLayout();
+  const panes = leafIdsInOrder(current.rootId, [], current);
   if (panes.length < 2) return;
-  const idx = panes.indexOf(layout.activePaneId);
+  const idx = panes.indexOf(current.activePaneId);
   if (idx < 0) return;
-  layout.activePaneId = panes[(idx + 1) % panes.length]!;
+  current.activePaneId = panes[(idx + 1) % panes.length]!;
 }
 
 export function focusColorForPane(paneId: string): PaneFocusColor {
-  const n = layout.nodes[paneId];
+  const n = activeLayout().nodes[paneId];
   if (!n || n.kind !== "leaf") return "blue";
   return n.focusColor ?? "blue";
 }
@@ -1362,6 +1385,174 @@ function cloneTab(src: Tab): Tab {
   };
 }
 
+function cloneNode(src: Node): Node {
+  if (src.kind === "split") {
+    return {
+      kind: "split",
+      id: src.id,
+      direction: src.direction,
+      a: src.a,
+      b: src.b,
+      ratio: src.ratio,
+    };
+  }
+  return {
+    kind: "leaf",
+    id: src.id,
+    tabs: src.tabs.map((tab) => cloneTab(tab)),
+    activeTabId: src.activeTabId,
+    focusColor: src.focusColor,
+  };
+}
+
+function cloneLayoutState(src: LayoutState): LayoutState {
+  const nodes: Record<string, Node> = {};
+  for (const [id, node] of Object.entries(src.nodes)) {
+    nodes[id] = cloneNode(node);
+  }
+  return {
+    rootId: src.rootId,
+    nodes,
+    activePaneId: src.activePaneId,
+  } as LayoutState;
+}
+
+export function enterPaneMode(): void {
+  if (paneMode.active) return;
+  paneMode.draft = cloneLayoutState(layout);
+  paneMode.active = true;
+}
+
+export function commitPaneMode(): void {
+  if (!paneMode.active || !paneMode.draft) return;
+  const next = cloneLayoutState(paneMode.draft);
+  layout.rootId = next.rootId;
+  layout.nodes = next.nodes;
+  layout.activePaneId = next.activePaneId;
+  paneMode.active = false;
+  paneMode.draft = null;
+}
+
+export function cancelPaneMode(): void {
+  paneMode.active = false;
+  paneMode.draft = null;
+}
+
+type Direction = "left" | "right" | "up" | "down";
+
+function draftLayout(): LayoutState | null {
+  return paneMode.active ? paneMode.draft : null;
+}
+
+function parentOf(state: LayoutState, childId: string): SplitNode | null {
+  for (const node of Object.values(state.nodes)) {
+    if (node.kind === "split" && (node.a === childId || node.b === childId)) {
+      return node;
+    }
+  }
+  return null;
+}
+
+function containsLeaf(state: LayoutState, nodeId: string, leafId: string): boolean {
+  const node = state.nodes[nodeId];
+  if (!node) return false;
+  if (node.kind === "leaf") return node.id === leafId;
+  return containsLeaf(state, node.a, leafId) || containsLeaf(state, node.b, leafId);
+}
+
+function extremeLeaf(state: LayoutState, nodeId: string, direction: Direction): string | null {
+  const node = state.nodes[nodeId];
+  if (!node) return null;
+  if (node.kind === "leaf") return node.id;
+  if (direction === "left") return extremeLeaf(state, node.b, direction);
+  if (direction === "right") return extremeLeaf(state, node.a, direction);
+  if (direction === "up") return extremeLeaf(state, node.b, direction);
+  return extremeLeaf(state, node.a, direction);
+}
+
+function neighbourLeaf(state: LayoutState, leafId: string, direction: Direction): string | null {
+  const wantAxis: SplitNode["direction"] =
+    direction === "left" || direction === "right" ? "row" : "column";
+  let current = leafId;
+  let parent = parentOf(state, current);
+  while (parent) {
+    const inA = containsLeaf(state, parent.a, leafId);
+    if (parent.direction === wantAxis) {
+      if ((direction === "left" || direction === "up") && !inA) {
+        return extremeLeaf(state, parent.a, direction);
+      }
+      if ((direction === "right" || direction === "down") && inA) {
+        return extremeLeaf(state, parent.b, direction);
+      }
+    }
+    current = parent.id;
+    parent = parentOf(state, current);
+  }
+  return null;
+}
+
+export function paneModeMoveFocus(direction: Direction): void {
+  const draft = draftLayout();
+  if (!draft) return;
+  const next = neighbourLeaf(draft, draft.activePaneId, direction);
+  if (next) draft.activePaneId = next;
+}
+
+export function paneModeSwap(direction: Direction): void {
+  const draft = draftLayout();
+  if (!draft) return;
+  const nextId = neighbourLeaf(draft, draft.activePaneId, direction);
+  if (!nextId) return;
+  const current = draft.nodes[draft.activePaneId];
+  const next = draft.nodes[nextId];
+  if (!current || current.kind !== "leaf" || !next || next.kind !== "leaf") return;
+  const currentTabs = current.tabs;
+  const currentActive = current.activeTabId;
+  const nextTabs = next.tabs;
+  const nextActive = next.activeTabId;
+  current.tabs = nextTabs;
+  current.activeTabId = nextActive;
+  next.tabs = currentTabs;
+  next.activeTabId = currentActive;
+  draft.activePaneId = next.id;
+}
+
+function nearestAncestorSplit(
+  state: LayoutState,
+  leafId: string,
+  axis: SplitNode["direction"],
+): SplitNode | null {
+  let current = leafId;
+  let parent = parentOf(state, current);
+  while (parent) {
+    if (parent.direction === axis) return parent;
+    current = parent.id;
+    parent = parentOf(state, current);
+  }
+  return null;
+}
+
+export function paneModeResize(
+  axis: SplitNode["direction"],
+  grow: boolean,
+  amount: number,
+): void {
+  const draft = draftLayout();
+  if (!draft) return;
+  const split = nearestAncestorSplit(draft, draft.activePaneId, axis);
+  if (!split) return;
+  const inA = containsLeaf(draft, split.a, draft.activePaneId);
+  const delta = grow === inA ? amount : -amount;
+  split.ratio = Math.max(0.05, Math.min(0.95, split.ratio + delta));
+}
+
+export function paneModeEqualize(): void {
+  const draft = draftLayout();
+  if (!draft) return;
+  const parent = parentOf(draft, draft.activePaneId);
+  if (parent) parent.ratio = 0.5;
+}
+
 /// Move a tab from one pane to another. If `toIndex` is omitted the tab
 /// is appended. Source pane collapses if it becomes empty.
 export function moveTab(
@@ -1532,7 +1723,8 @@ function insertSiblingPane(
 }
 
 export function setActivePane(paneId: string): void {
-  if (layout.nodes[paneId]?.kind === "leaf") layout.activePaneId = paneId;
+  const current = activeLayout();
+  if (current.nodes[paneId]?.kind === "leaf") current.activePaneId = paneId;
 }
 
 export function setMode(tab: Tab, mode: Mode): void {

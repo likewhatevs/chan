@@ -43,6 +43,9 @@
     activePane,
     closeFind,
     closeTab,
+    cancelPaneMode,
+    commitPaneMode,
+    enterPaneMode,
     isWindowFullyReadOnly,
     layout,
     openFind,
@@ -56,6 +59,11 @@
     selectPrevTabInActivePane,
     selectTabAtIndexInActivePane,
     openTerminalInActivePane,
+    paneMode,
+    paneModeEqualize,
+    paneModeMoveFocus,
+    paneModeResize,
+    paneModeSwap,
     toggleAllTerminalBroadcastMuted,
   } from "./state/tabs.svelte";
   import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
@@ -287,6 +295,17 @@
   ///     the VS Code-shaped chords directly.
   function onWindowKey(e: KeyboardEvent): void {
     const meta = e.metaKey || e.ctrlKey;
+    if (paneMode.active) {
+      e.preventDefault();
+      e.stopPropagation();
+      handlePaneModeKey(e);
+      return;
+    }
+    if (meta && !e.shiftKey && !e.altKey && e.code === "KeyK") {
+      e.preventDefault();
+      enterPaneMode();
+      return;
+    }
     // Escape: pop just the topmost overlay so a stack of open
     // surfaces unwinds one at a time. Previously each OverlayShell
     // owned its own window keydown listener and they all fired in
@@ -296,9 +315,65 @@
       if (top) {
         e.preventDefault();
         closeOverlay(top);
-        return;
-      }
+      return;
     }
+  }
+
+  function handlePaneModeKey(e: KeyboardEvent): void {
+    const large = e.shiftKey ? 0.1 : 0.02;
+    switch (e.key) {
+      case "Enter":
+        commitPaneMode();
+        scheduleSessionSave();
+        return;
+      case "Escape":
+        cancelPaneMode();
+        return;
+      case "w":
+      case "W":
+        paneModeMoveFocus("up");
+        return;
+      case "a":
+      case "A":
+        paneModeMoveFocus("left");
+        return;
+      case "s":
+      case "S":
+        paneModeMoveFocus("down");
+        return;
+      case "d":
+      case "D":
+        paneModeMoveFocus("right");
+        return;
+      case "ArrowUp":
+        paneModeSwap("up");
+        return;
+      case "ArrowLeft":
+        paneModeSwap("left");
+        return;
+      case "ArrowDown":
+        paneModeSwap("down");
+        return;
+      case "ArrowRight":
+        paneModeSwap("right");
+        return;
+      case "[":
+        paneModeResize("row", false, large);
+        return;
+      case "]":
+        paneModeResize("row", true, large);
+        return;
+      case "-":
+        paneModeResize("column", false, large);
+        return;
+      case "=":
+        paneModeResize("column", true, large);
+        return;
+      case "0":
+        paneModeEqualize();
+        return;
+    }
+  }
     if (meta && !e.shiftKey && !e.altKey && e.key === ",") {
       e.preventDefault();
       openSettings();
@@ -490,7 +565,7 @@
   onDestroy(() => window.removeEventListener("chan:command", onChanCommand));
 </script>
 
-<div class="app">
+<div class="app" class:pane-mode={paneMode.active}>
   {#if browserSidePanes.left}
     <FileBrowserSidePane side="left" />
   {/if}
@@ -738,6 +813,22 @@
     display: flex;
     height: 100vh;
     width: 100vw;
+  }
+  .app.pane-mode :global(.pane) {
+    position: relative;
+    transition:
+      opacity 90ms ease,
+      box-shadow 90ms ease,
+      filter 90ms ease;
+  }
+  .app.pane-mode :global(.pane:not(.focused)) {
+    opacity: 0.72;
+    filter: saturate(0.8);
+  }
+  .app.pane-mode :global(.pane.focused) {
+    box-shadow:
+      inset 0 0 0 2px var(--pane-active-focus),
+      0 0 0 1px color-mix(in srgb, var(--pane-active-focus) 40%, transparent);
   }
   main {
     flex: 1;

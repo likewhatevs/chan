@@ -11,8 +11,11 @@ import {
   canReopenClosedTab,
   clearRecentlyClosedTabsForTest,
   closeTab,
+  cancelPaneMode,
+  commitPaneMode,
   detachTabToPaneEdge,
   dismissTerminalEnvNamePrompt,
+  enterPaneMode,
   focusColorForPane,
   hydrateTerminalSessionsFromLayout,
   isMissingFileError,
@@ -22,6 +25,11 @@ import {
   openInPane,
   openFind,
   openTerminalInPane,
+  paneMode,
+  paneModeEqualize,
+  paneModeMoveFocus,
+  paneModeResize,
+  paneModeSwap,
   removeTerminalFromBroadcastGroup,
   registerTerminalInputSink,
   markLocalTabDrop,
@@ -104,6 +112,7 @@ afterEach(() => {
   vi.useRealTimers();
   resolveConfirm(false);
   resetLayout([]);
+  cancelPaneMode();
   clearRecentlyClosedTabsForTest();
   editorToolsPrefs.stripTrailingWhitespaceOnSave = false;
 });
@@ -311,6 +320,70 @@ describe("pane state", () => {
     expect(restoredBrowser?.kind).toBe("browser");
     if (restoredBrowser?.kind !== "browser") return;
     expect(restoredBrowser.inspectorOpen).toBe(true);
+  });
+
+  test("pane mode discards draft changes on cancel", () => {
+    const left = fileTab({ id: "left", path: "notes/left.md" });
+    const right = fileTab({ id: "right", path: "notes/right.md" });
+    const leftPane = resetLayout([left]);
+    splitPane(leftPane.id, "row", "after");
+    const root = layout.nodes[layout.rootId];
+    expect(root?.kind).toBe("split");
+    if (root?.kind !== "split") return;
+    const rightPane = layout.nodes[root.b];
+    expect(rightPane?.kind).toBe("leaf");
+    if (rightPane?.kind !== "leaf") return;
+    rightPane.tabs.push(right);
+    rightPane.activeTabId = right.id;
+    layout.activePaneId = leftPane.id;
+
+    enterPaneMode();
+    paneModeMoveFocus("right");
+    paneModeResize("row", true, 0.1);
+    expect(paneMode.draft?.activePaneId).toBe(rightPane.id);
+    expect(root.ratio).toBe(0.5);
+
+    cancelPaneMode();
+
+    expect(paneMode.active).toBe(false);
+    expect(layout.activePaneId).toBe(leftPane.id);
+    expect(root.ratio).toBe(0.5);
+  });
+
+  test("pane mode commits draft focus resize equalize and swaps", () => {
+    const left = fileTab({ id: "left", path: "notes/left.md" });
+    const right = fileTab({ id: "right", path: "notes/right.md" });
+    const leftPane = resetLayout([left]);
+    splitPane(leftPane.id, "row", "after");
+    const root = layout.nodes[layout.rootId];
+    expect(root?.kind).toBe("split");
+    if (root?.kind !== "split") return;
+    const rightPane = layout.nodes[root.b];
+    expect(rightPane?.kind).toBe("leaf");
+    if (rightPane?.kind !== "leaf") return;
+    rightPane.tabs.push(right);
+    rightPane.activeTabId = right.id;
+    layout.activePaneId = leftPane.id;
+
+    enterPaneMode();
+    paneModeResize("row", true, 0.1);
+    paneModeMoveFocus("right");
+    paneModeSwap("left");
+    paneModeEqualize();
+    commitPaneMode();
+
+    const committedRoot = layout.nodes[layout.rootId];
+    expect(committedRoot?.kind).toBe("split");
+    if (committedRoot?.kind !== "split") return;
+    expect(committedRoot.ratio).toBe(0.5);
+    const committedLeft = layout.nodes[committedRoot.a];
+    const committedRight = layout.nodes[committedRoot.b];
+    expect(committedLeft?.kind).toBe("leaf");
+    expect(committedRight?.kind).toBe("leaf");
+    if (committedLeft?.kind !== "leaf" || committedRight?.kind !== "leaf") return;
+    expect(committedLeft.tabs[0]?.id).toBe("right");
+    expect(committedRight.tabs[0]?.id).toBe("left");
+    expect(layout.activePaneId).toBe(committedLeft.id);
   });
 });
 

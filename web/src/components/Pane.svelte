@@ -2,6 +2,7 @@
   // One pane: a horizontal tab strip on top, an editor below.
 
   import {
+    activeLayout,
     canSplit,
     canReopenClosedTab,
     closePane,
@@ -15,6 +16,7 @@
     openInPane,
     openBrowserInActivePane,
     openTerminalInPane,
+    paneMode,
     reorderTab,
     reopenClosedTab,
     saveTab,
@@ -63,7 +65,7 @@
     refreshTree,
     tree,
   } from "../state/store.svelte";
-  import { tabLabelInPane, tabTooltip } from "../state/tabs.svelte";
+  import { tabLabel, tabLabelInPane, tabTooltip } from "../state/tabs.svelte";
   import {
     SHORTCUTS,
     currentOS,
@@ -350,16 +352,17 @@
   // when there's more than one pane to disambiguate. Re-derives on
   // every layout mutation so the highlight reappears the moment a
   // split is added and disappears the moment the second pane closes.
+  const viewLayout = $derived(activeLayout());
   const multiPane = $derived.by(() => {
-    void layout.rootId;
-    return Object.values(layout.nodes).some((n) => n.kind === "split");
+    void viewLayout.rootId;
+    return Object.values(viewLayout.nodes).some((n) => n.kind === "split");
   });
-  const isFocused = $derived(multiPane && layout.activePaneId === pane.id);
+  const isFocused = $derived(multiPane && viewLayout.activePaneId === pane.id);
   // Re-derive on every layout mutation so the split buttons grey
   // out the instant a tablet user adds their one allowed split.
   const splitsAllowed = $derived.by(() => {
-    void layout.rootId;
-    void Object.keys(layout.nodes).length;
+    void viewLayout.rootId;
+    void Object.keys(viewLayout.nodes).length;
     return canSplit();
   });
   // Drag state: highlight the tab strip while another pane's tab is being
@@ -411,7 +414,7 @@
   }
 
   function onChanCommand(e: Event): void {
-    if (layout.activePaneId !== pane.id) return;
+    if (viewLayout.activePaneId !== pane.id) return;
     const detail = (e as CustomEvent<{ name?: string }>).detail;
     if (detail?.name !== "app.tab.reopenClosed") return;
     reopenClosedTab();
@@ -1005,7 +1008,22 @@
     role="group"
     aria-label="pane content"
   >
-    {#if active?.kind === "file"}
+    {#if paneMode.active}
+      <div class="pane-mode-preview" aria-label="pane mode preview">
+        <div class="pane-mode-title">{active ? tabLabel(active) : "Empty pane"}</div>
+        <div class="pane-mode-subtitle">
+          {active?.kind === "file"
+            ? active.path
+            : active?.kind === "terminal"
+              ? "terminal"
+              : active?.kind === "graph"
+                ? active.scopeId
+                : active?.kind === "browser"
+                  ? "file browser"
+                  : "no active tab"}
+        </div>
+      </div>
+    {:else if active?.kind === "file"}
       <FileEditorTab tab={active} />
     {:else if active?.kind === "graph"}
       <GraphPanel
@@ -1150,9 +1168,11 @@
         </HamburgerMenu>
       </div>
     {/if}
-    {#each pane.tabs.filter((t) => t.kind === "terminal") as t (t.id)}
-      <TerminalTab tab={t} paneId={pane.id} active={t.id === pane.activeTabId} />
-    {/each}
+    {#if !paneMode.active}
+      {#each pane.tabs.filter((t) => t.kind === "terminal") as t (t.id)}
+        <TerminalTab tab={t} paneId={pane.id} active={t.id === pane.activeTabId} />
+      {/each}
+    {/if}
   </div>
 </div>
 
@@ -1360,6 +1380,35 @@
   .editor-wrap.body-drop-bottom::after {
     border-bottom: 4px solid var(--pane-focus);
     background: linear-gradient(0deg, color-mix(in srgb, var(--pane-focus) 14%, transparent), transparent 34%);
+  }
+  .pane-mode-preview {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 6px;
+    padding: 20px;
+    text-align: center;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--bg-card) 36%, transparent);
+  }
+  .pane-mode-title {
+    max-width: 100%;
+    color: var(--text);
+    font-size: 16px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pane-mode-subtitle {
+    max-width: 100%;
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   /* Empty pane: muted chan logo watermark above the keyboard-
      shortcut table, both centered. CSS mask paints the silhouette

@@ -27,6 +27,7 @@
     openSettings,
     ui,
   } from "../state/store.svelte";
+  import { paneMode } from "../state/tabs.svelte";
 
   let collapsed = $state(false);
 
@@ -63,8 +64,9 @@
   );
   const importVisible = $derived(importStatus.value !== null);
   const statusVisible = $derived(!!ui.status);
+  const paneModeVisible = $derived(paneMode.active);
   const anyVisible = $derived(
-    indexVisible || importVisible || statusVisible,
+    indexVisible || importVisible || statusVisible || paneModeVisible,
   );
 
   function toggleCollapse(): void {
@@ -134,6 +136,16 @@
             title="dismiss"
             aria-label="dismiss status message"
           >{ui.status}</button>
+        {/if}
+        {#if (indexVisible || importVisible || statusVisible) && paneModeVisible}
+          <span class="sep">·</span>
+        {/if}
+        {#if paneModeVisible}
+          <span class="section pane-mode-pill">
+            <span class="dot working"></span>
+            pane mode
+            <span class="muted">Enter commit · Esc discard</span>
+          </span>
         {/if}
       </div>
     {/if}

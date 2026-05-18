@@ -13,13 +13,14 @@
   // the parent so column splits don't starve their children's
   // cross-axis space.
 
-  import { layout, type LeafNode, type SplitNode } from "../state/tabs.svelte";
+  import { activeLayout, type LeafNode, type SplitNode } from "../state/tabs.svelte";
   import Pane from "./Pane.svelte";
   import Self from "./Workspace.svelte";
 
   let { nodeId }: { nodeId?: string } = $props();
-  const effectiveId = $derived(nodeId ?? layout.rootId);
-  const node = $derived(layout.nodes[effectiveId]);
+  const viewLayout = $derived(activeLayout());
+  const effectiveId = $derived(nodeId ?? viewLayout.rootId);
+  const node = $derived(viewLayout.nodes[effectiveId]);
 
   let dividerEl: HTMLDivElement | undefined = $state();
 
