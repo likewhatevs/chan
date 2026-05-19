@@ -1253,3 +1253,27 @@ Updated A-lane queue:
 Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 06:45 BST
+
+## 2026-05-19 12:00 BST — poke: fullstack-39 cut (Cmd+K spawn/split/kill + invisible divider)
+
+Two bounded Phase-2 refinements from @@Alex's click-
+around:
+
+1. **Cmd+K mode keybinds** — extend the transactional
+   pane mode (`fullstack-16`) with 8 new single-keys
+   for spawn / split / close inside the mode:
+   * `1` Terminal / `2` File Browser / `3` Search
+     overlay / `4` Graph (all spawn in focused pane)
+   * `/` Split right / `\\` Split down
+   * `x` Close all tabs (terminal prompt preserved)
+   * `k` Kill pane (terminal prompt preserved)
+2. **Invisible pane divider** — drop the visible bar
+   between panes; drag-to-resize hit area + cursor
+   stay. The `fullstack-34` chrome (margin + shadow)
+   already gives visual separation.
+
+Task: [../fullstack-a/fullstack-39.md](../fullstack-a/fullstack-39.md).
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 12:00 BST
