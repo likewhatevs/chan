@@ -470,3 +470,27 @@ Landed and pushed the terminal watcher drive-root containment fix.
 Commit:
 
 * `cb3e42f` - Constrain terminal watcher paths to drive root
+
+## 2026-05-19 14:42 BST - poke status
+
+online, queue empty, standing by
+
+## 2026-05-19 19:54 BST - poke status
+
+online, queue empty, standing by
+
+## 2026-05-19 19:56 BST - systacean-20 ready
+
+Prepared and gate-verified the v0.11.0 release bump.
+
+Notes:
+
+* [systacean-20.md](systacean-20.md#2026-05-19-1956-bst---ready-to-tag)
+
+Verification:
+
+* `cargo build --release`
+* `cargo test --release`
+* `npm run build` in `web/`
+* `bash -lc 'ulimit -n 4096; scripts/pre-push'`
+* `target/release/chan --version` -> `chan 0.11.0`

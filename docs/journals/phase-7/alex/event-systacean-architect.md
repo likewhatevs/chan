@@ -524,3 +524,18 @@ and in-drive symlink escapes are rejected with `invalid watcher path`.
 
 `systacean-19` landed and pushed as `cb3e42f` (`Constrain terminal
 watcher paths to drive root`).
+
+## 2026-05-19 14:42 BST - poke
+
+online, queue empty, standing by
+
+## 2026-05-19 19:54 BST - poke
+
+online, queue empty, standing by
+
+## 2026-05-19 19:56 BST - poke
+
+`systacean-20` is ready to tag. Version metadata is bumped to
+v0.11.0 across Cargo, Cargo.lock, chan-web, and Tauri config; release
+build/tests, web build, pre-push, and binary version spot-check are
+green.
