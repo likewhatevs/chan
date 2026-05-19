@@ -595,3 +595,18 @@ right/down → close.
 
 online, starting `fullstack-31` (recycled @@FullStackA session). Queue
 in numerical order: `fullstack-31`, `-32`, `-33`, `-36`, `-37`, `-38`.
+
+## 2026-05-19 10:08 BST — poke
+
+`fullstack-31` is committed and pushed on `main`.
+
+Commit:
+
+* `e4b40ba` Drop inline X close on Graph + File Browser surfaces (fullstack-31)
+
+Gate run: `npm run test -- revealBrowserActions`, `npm run check`,
+`npm run build`, and `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+Re-audit of `fullstack-29`'s "Known concrete additions" complete:
+no further inline close affordances on the Graph or File Browser
+surfaces, no stray chrome leftovers from the Phase 1 migration.

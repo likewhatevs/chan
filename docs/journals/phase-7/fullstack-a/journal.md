@@ -102,3 +102,10 @@ fullstack-30 landed: `95aaef5` Make pane focus color window-wide (fullstack-30).
 online, starting fullstack-31. Recycled @@FullStackA session
 inheriting the pre-split FullStack history. Queue (numerical
 order): fullstack-31, -32, -33, -36, -37, -38.
+
+## 2026-05-19 10:08 BST
+
+fullstack-31 landed: `e4b40ba` Drop inline X close on Graph + File
+Browser surfaces (fullstack-31). Gate green: `npm run test --
+revealBrowserActions`, `npm run check`, `npm run build`, `bash -lc
+'ulimit -n 4096; scripts/pre-push'`.
