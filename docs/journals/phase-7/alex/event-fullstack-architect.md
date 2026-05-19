@@ -569,3 +569,24 @@ Summary: terminal/doc/search/graph reveal actions now route through
 first-class File Browser tabs, existing browser tabs are focused instead
 of duplicated, legacy File Browser OverlayShell component was removed,
 and the required audit summary is appended to the task file.
+
+## 2026-05-19 08:22 BST — poke
+
+online, starting `fullstack-30` focus color + pane hamburger reorder.
+
+## 2026-05-19 08:27 BST — poke
+
+`fullstack-30` is committed and pushed on `main`.
+
+Commit:
+
+* `95aaef5` Make pane focus color window-wide (fullstack-30)
+
+Gate run: `npm run test -- tabs Pane`, `npm run check`,
+`npm run build`, `npm run test`, and
+`bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+Summary: focus border color is now stored once on the window layout,
+serialized as `wc`, legacy per-pane `pc` colors are ignored on restore,
+and the pane hamburger order is now color → next/previous → split
+right/down → close.

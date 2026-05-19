@@ -88,3 +88,11 @@ online, starting fullstack-29 audit after reframed architect cut.
 ## 2026-05-19 08:19 BST
 
 fullstack-29 landed: `e995575` Route file reveals to browser tabs (fullstack-29). Gate green: `npm run test -- store revealBrowserActions`, `npm run check`, `npm run build`, `npm run test`, and `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+## 2026-05-19 08:22 BST
+
+online, starting fullstack-30 focus color + pane hamburger reorder.
+
+## 2026-05-19 08:27 BST
+
+fullstack-30 landed: `95aaef5` Make pane focus color window-wide (fullstack-30). Gate green: `npm run test -- tabs Pane`, `npm run check`, `npm run build`, `npm run test`, and `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
