@@ -96,13 +96,14 @@ describe("no inline close affordance on first-class surfaces", () => {
   test("GraphPanel renders a tab-menu-bubble with mbtn rows + vertical filter rows", () => {
     // `fullstack-68` introduced the bubble; `fullstack-75` aligned
     // it with the standard hamburger-menu row shape (`.mbtn`) and
-    // moved the filter chips to vertical rows. The bubble inlines
-    // `<button class="mbtn">` for actions (Show Details, Reload,
-    // Settings) + a `.depth-row` + per-filter rows; toggles still
-    // mutate `graphState.filters` so `gf:` round-trip is intact.
+    // moved the filter chips to vertical rows. `fullstack-80`
+    // dropped the Show Details / Settings actions from the bubble
+    // (Cmd+, owns Settings; click-to-inspector covers the auto-open
+    // case for the FB analogue; Graph keeps the Depth slider +
+    // Reload + per-filter rows).
     expect(graph).toMatch(/\{#if tab && tabMenuOpen\}[\s\S]*?class="tab-menu-bubble"/);
     expect(graph).toMatch(
-      /class="tab-menu-bubble"[\s\S]*?<button class="mbtn" onclick=\{toggleInspector\}/,
+      /class="tab-menu-bubble"[\s\S]*?class="mbtn depth-row"/,
     );
     expect(graph).toMatch(
       /class="tab-menu-bubble"[\s\S]*?class="mbtn filter-row"[\s\S]*?show\[kind\] = !show\[kind\]/,
@@ -111,6 +112,13 @@ describe("no inline close affordance on first-class surfaces", () => {
     // overlay variant's bar only; the bubble must NOT carry it.
     expect(graph).not.toMatch(
       /class="tab-menu-bubble"[\s\S]*?<div class="bubble-filters">/,
+    );
+    // `fullstack-80`: dropped from the bubble.
+    expect(graph).not.toMatch(
+      /class="tab-menu-bubble"[\s\S]*?onclick=\{toggleInspector\}/,
+    );
+    expect(graph).not.toMatch(
+      /class="tab-menu-bubble"[\s\S]*?onclick=\{doOpenSettings\}/,
     );
   });
 

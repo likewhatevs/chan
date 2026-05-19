@@ -1234,3 +1234,79 @@ fullstack-79`. Logged here so the audit trail
 documents what happened.
 
 Lane B queue continues: `-80`, `-82`.
+
+## 2026-05-19 23:25 BST — poke: -80 + -82 ready to commit (bundled)
+
+Bundled `-80` and `-82` into one commit since
+they're tightly coupled (both trim the FB
+shared menu; -82 depends on -80).
+
+**Terminal trims:** Search + Settings rows
+dropped, handlers (`openSearch`,
+`openSettingsFromMenu`) dropped, imports
+(`Settings` icon, `openSettings`, `searchPanel`)
+cleaned.
+
+**FB trims** (shared menu reaches tab + dock by
+`-71`'s impl): Search this + Settings + Show /
+Hide Details rows dropped, handlers
+(`searchDrive`, `doOpenSettings`,
+`toggleInspector`) dropped, imports cleaned.
+
+**Graph trims**: BOTH the inline tab-menu-bubble
+AND the menuItems hamburger snippet got the
+Show Details + Settings drops, plus handler
+drops + import cleanup (`ArrowLeft`,
+`ArrowRight`, `Settings`, `openSettings`).
+
+**FB click-to-inspector** wired via a new
+`onClickRow` prop on FileTree. selectPath
+emits the click; FileBrowserSurface's
+`onRowClicked(path)` opens the inspector for
+tab + overlay variants only (dock ignored).
+Keyboard nav writes `browserSelection.path`
+directly without firing the hook —
+click vs keyboard remains distinguishable.
+
+**-82 in same commit**: dropped the
+`Open overlay` dock-variant `{#if variant ===
+"dock"}` block + the `openOverlay` helper +
+the `openBrowserInActivePane` import (function
+stays in `tabs.svelte` for other consumers like
+Pane Mode `2`; just the surface's import is
+gone).
+
+**Tests** (new `menuTrims.test.ts`, 18
+sentinels): each trim + the click-to-inspector
+wiring + the Open overlay drop. The existing
+`revealBrowserActions.test.ts` GraphPanel
+bubble-shape assertion flipped from the
+toggleInspector check to the depth-row check
+(depth slider is the bubble's canonical first
+row post-trim).
+
+Also extended `raw.d.ts` with `*.ts?raw` so
+the `-79` sentinel compiles cleanly — TypeScript
+needed the type decl that svelte-check missed
+on the cached run.
+
+Gate green: svelte-check 0/0, vitest 42/433
+(was 41/417; +13 = 5 menuTrims FB + 5 menuTrims
+Graph + 5 menuTrims Terminal + click-wire FB
++ -82 sentinel + the flipped bubble test + 2
+unrelated parallel-lane work), build clean,
+scripts/pre-push green.
+
+Visual eyeball skipped — mechanical drops +
+single-function click-wire gated on variant.
+Re-walk per task note is appropriate; Lane A's
+8801 can spot-check all four changes (Terminal,
+FB, Graph, click-to-inspector, -82 Open overlay
+drop) in one pass.
+
+Committing + pushing under standing topic-
+level clearance (no HOLD pokes since the
+22:40 BST cut).
+
+**Lane B queue empty.** All four queued
+items (-78, -79, -80, -82) on origin/main.

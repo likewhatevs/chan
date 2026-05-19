@@ -13,7 +13,6 @@
     Radio,
     RotateCcw,
     Search,
-    Settings,
   } from "lucide-svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
@@ -54,10 +53,8 @@
     drive,
     fileOps,
     openFsGraphForDirectory,
-    openSettings,
     revealPathInBrowser,
     scheduleSessionSave,
-    searchPanel,
     ui,
   } from "../state/store.svelte";
   import { terminalWsPath } from "../terminal/session";
@@ -573,11 +570,6 @@
     void tick().then(() => searchInput?.focus());
   }
 
-  function openSearch(): void {
-    closeTabMenu();
-    searchPanel.open = true;
-  }
-
   function openNewFile(): void {
     const cwd = terminalCwdRel();
     if (cwd === null) return terminalCwdUnavailable();
@@ -626,11 +618,6 @@
   // `graphTerminalCwd`) lived here; they came back as dead code so
   // the section is gone. `fullstack-43`'s context-aware spawn will
   // re-read the terminal's CWD through a centralised helper.
-
-  function openSettingsFromMenu(): void {
-    closeTabMenu();
-    openSettings();
-  }
 
   function ensureRichPrompt(): NonNullable<TerminalTabState["richPrompt"]> {
     if (!tab.richPrompt) {
@@ -1020,20 +1007,6 @@
           </span>
           <span class="mbtn-label">Reopen Closed Tab</span>
           <span class="mbtn-chord">{chordFor("app.tab.reopenClosed") ?? ""}</span>
-        </button>
-        <button class="mbtn" onclick={openSearch}>
-          <span class="mbtn-icon">
-            <Search size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Search</span>
-          <span class="mbtn-chord">{chordFor("app.search.toggle") ?? ""}</span>
-        </button>
-        <button class="mbtn" onclick={openSettingsFromMenu}>
-          <span class="mbtn-icon">
-            <Settings size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Settings</span>
-          <span class="mbtn-chord">{chordFor("app.settings.toggle") ?? ""}</span>
         </button>
         <div class="msep" role="separator"></div>
         <div class="mcp-env-row">

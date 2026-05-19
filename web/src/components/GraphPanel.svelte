@@ -14,12 +14,6 @@
   // it for multi-seed) and locked, then a gentle fcose pass relaxes
   // neighbours. Drive / global scope leaves all nodes free.
 
-  import {
-    ArrowLeft,
-    ArrowRight,
-    Settings,
-  } from "lucide-svelte";
-
   import { api } from "../api/client";
   import type {
     FsGraphNode,
@@ -34,7 +28,6 @@
     availableGraphScopes,
     graphReloadSignal,
     graphOverlay,
-    openSettings,
     paneWidths,
     persistPaneWidths,
     revealPathInBrowser,
@@ -267,11 +260,6 @@
     return "doc";
   }
 
-  function toggleInspector(): void {
-    graphState.inspectorOpen = !graphState.inspectorOpen;
-    menu?.close();
-  }
-
   // `fullstack-64`: the overlay-maximize toggle helper was removed
   // alongside its button. The maximize state machinery stays in
   // `pageWidth.svelte` for any future consumer; this panel is no
@@ -300,11 +288,6 @@
     } finally {
       driveDepthProbeLoading = false;
     }
-  }
-
-  function doOpenSettings(): void {
-    menu?.close();
-    openSettings();
   }
 
   function onGraphContextMenu(e: MouseEvent): void {
@@ -1141,20 +1124,6 @@
       use:clampMenu={tabMenuPos}
       onmousedown={(e) => e.stopPropagation()}
     >
-      <button class="mbtn" onclick={toggleInspector}>
-        <span class="mbtn-icon" aria-hidden="true">
-          {#if graphState.inspectorOpen}
-            <ArrowRight size={16} strokeWidth={1.75} />
-          {:else}
-            <ArrowLeft size={16} strokeWidth={1.75} />
-          {/if}
-        </span>
-        <span class="mbtn-label">
-          {graphState.inspectorOpen ? "Hide Details" : "Show Details"}
-        </span>
-        <span class="mbtn-chord"></span>
-      </button>
-      <div class="msep" role="separator"></div>
       <div class="mbtn depth-row" class:disabled={depthDisabled}>
         <span class="mbtn-icon" aria-hidden="true"></span>
         <span class="mbtn-label">Depth</span>
@@ -1175,13 +1144,6 @@
         <span class="mbtn-icon" aria-hidden="true">↻</span>
         <span class="mbtn-label">Reload</span>
         <span class="mbtn-chord"></span>
-      </button>
-      <button class="mbtn" onclick={doOpenSettings}>
-        <span class="mbtn-icon" aria-hidden="true">
-          <Settings size={14} strokeWidth={1.75} />
-        </span>
-        <span class="mbtn-label">Settings</span>
-        <span class="mbtn-chord">{chordFor("app.settings.toggle") ?? ""}</span>
       </button>
       <div class="msep" role="separator"></div>
       {#each ["link", "tag", "mention", "language", "img", "folder"] as const as kind (kind)}
@@ -1470,20 +1432,6 @@
 {/snippet}
 
 {#snippet menuItems()}
-  <li>
-    <button role="menuitem" onclick={toggleInspector}>
-      {#if graphState.inspectorOpen}
-        <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
-      {:else}
-        <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
-      {/if}
-      <span class="menu-row-label">
-        {graphState.inspectorOpen ? "Hide Details" : "Show Details"}
-      </span>
-      <span class="menu-row-chord"></span>
-    </button>
-  </li>
-  <li class="sep" role="separator"></li>
   <!-- Depth slider is always in the menu so it doesn't disappear
        under the user when the scope toggles. Disabled on
        drive / global scopes (those always render everything
@@ -1515,14 +1463,6 @@
       <span class="glyph" aria-hidden="true">↻</span>
       <span class="menu-row-label">Reload</span>
       <span class="menu-row-chord"></span>
-    </button>
-  </li>
-  <li class="sep" role="separator"></li>
-  <li>
-    <button role="menuitem" onclick={doOpenSettings}>
-      <Settings size={14} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">Settings</span>
-      <span class="menu-row-chord">{chordFor("app.settings.toggle") ?? ""}</span>
     </button>
   </li>
 {/snippet}

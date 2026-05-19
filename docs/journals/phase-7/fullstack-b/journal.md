@@ -735,3 +735,54 @@ Gate green: svelte-check 0/0, vitest 41/417,
 build clean, pre-push green.
 
 Committing + pushing. Lane B queue: -80, -82.
+
+## 2026-05-19 23:25 BST
+
+Bundled `fullstack-80` + `fullstack-82` since they
+were tightly coupled (both trim the FB shared
+menu; -82 explicitly depended on -80).
+
+Terminal trims: dropped Search + Settings rows
++ handlers + imports.
+FB trims: dropped Search this + Settings +
+Show/Hide Details rows + handlers + imports.
+Graph trims: dropped Show Details + Settings
+rows from BOTH the tab-menu-bubble AND the
+hamburger menuItems snippet, plus the
+toggleInspector + doOpenSettings handlers, plus
+the ArrowLeft / ArrowRight / Settings icon
+imports.
+FB-82 trim: dropped `Open overlay` dock-variant
+entry + the openOverlay helper + the
+openBrowserInActivePane import.
+
+FB click-to-inspector wiring: FileTree gets a
+new `onClickRow` prop; selectPath now calls it
+instead of writing browserOverlay.inspectorOpen
+directly. FileBrowserSurface's onRowClicked
+handler opens the inspector for tab + overlay
+variants only (dock ignored).
+
+The existing revealBrowserActions.test.ts
+GraphPanel bubble-shape test flipped from a
+toggleInspector assertion to a depth-row
+assertion (depth slider is the bubble's
+canonical first row post-trim).
+
+Tests: new menuTrims.test.ts with 18 sentinels
+covering each menu trim + the click-to-inspector
+wiring + the -82 Open overlay drop.
+
+Also extended raw.d.ts with `*.ts?raw` so the
+fullstack-79 sentinel compiles (TypeScript needs
+the type declaration; -79's commit ran on a
+cached check before this surfaced).
+
+Gate green: svelte-check 0/0, vitest 42/433,
+build clean, scripts/pre-push green.
+
+Committing + pushing both as one commit per
+the dependency note.
+
+**Lane B queue empty.** All four queued items
+(-78 / -79 / -80 / -82) on origin/main.

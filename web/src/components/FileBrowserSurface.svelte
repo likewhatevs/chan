@@ -12,8 +12,6 @@
     PanelLeftOpen,
     PanelRightOpen,
     Pencil,
-    Search,
-    Settings,
     Users,
   } from "lucide-svelte";
   import {
@@ -40,17 +38,15 @@
     openFsGraphForDirectory,
     openFsGraphForFile,
     openGraphForDrive,
-    openSettings,
     paneWidths,
     persistPaneWidths,
     refreshTree,
-    searchPanel,
     toggleBrowserSidePane,
     tree,
     treeExpanded,
     drive,
   } from "../state/store.svelte";
-  import { openBrowserInActivePane, openInActivePane } from "../state/tabs.svelte";
+  import { openInActivePane } from "../state/tabs.svelte";
   import type { BrowserTab } from "../state/tabs.svelte";
 
   type Variant = "overlay" | "dock" | "tab";
@@ -265,9 +261,11 @@
     menu?.openAtCursor(x, y);
   }
 
-  function toggleInspector(): void {
-    browserState.inspectorOpen = !browserState.inspectorOpen;
-    menu?.close();
+  // `fullstack-80`: tab + overlay variants auto-open the DETAILS
+  // inspector on row click; dock variants do not (the dock has no
+  // inspector pane anyway, and `isWideSurface` is false there).
+  function onRowClicked(_path: string): void {
+    if (isTab || isOverlay) browserState.inspectorOpen = true;
   }
 
   function doToggleOverlayMaximized(): void {
@@ -277,11 +275,6 @@
 
   function toggleStick(target: Side): void {
     toggleBrowserSidePane(target);
-    menu?.close();
-  }
-
-  function openOverlay(): void {
-    openBrowserInActivePane();
     menu?.close();
   }
 
@@ -305,20 +298,9 @@
     openGraphForDrive();
   }
 
-  function searchDrive(): void {
-    menu?.close();
-    searchPanel.scopeId = "drive";
-    searchPanel.open = true;
-  }
-
   async function renameDrive(): Promise<void> {
     menu?.close();
     await fileOps.renameDrive();
-  }
-
-  function doOpenSettings(): void {
-    menu?.close();
-    openSettings();
   }
 
   function showDriveInfo(): void {
@@ -449,6 +431,7 @@
       <FileTree
         bind:this={treeRef}
         dockSide={variant === "dock" ? side : undefined}
+        onClickRow={onRowClicked}
       />
     </div>
     {#if isWideSurface && browserState.inspectorOpen}
@@ -485,15 +468,6 @@
 </div>
 
 {#snippet menuItems()}
-  {#if variant === "dock"}
-    <li>
-      <button role="menuitem" onclick={openOverlay}>
-        <Maximize2 size={16} strokeWidth={1.75} aria-hidden="true" />
-        <span class="menu-row-label">Open overlay</span>
-        <span class="menu-row-chord">{chordFor("app.files.toggle") ?? ""}</span>
-      </button>
-    </li>
-  {/if}
   <li>
     <button role="menuitem" onclick={() => toggleStick("left")}>
       <PanelLeftOpen size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -513,22 +487,6 @@
     </button>
   </li>
   <li class="sep" role="separator"></li>
-  {#if isWideSurface}
-    <li>
-      <button role="menuitem" onclick={toggleInspector}>
-        {#if browserState.inspectorOpen}
-          <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
-        {:else}
-          <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
-        {/if}
-        <span class="menu-row-label">
-          {browserState.inspectorOpen ? "Hide Details" : "Show Details"}
-        </span>
-        <span class="menu-row-chord"></span>
-      </button>
-    </li>
-    <li class="sep" role="separator"></li>
-  {/if}
   <li>
     <button role="menuitem" onclick={newFileHere}>
       <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -553,13 +511,6 @@
   <!-- `fullstack-42`: dropped "Graph from here" — Pane Mode covers
        it via Cmd+K 3 with the current browser scope / selection as
        context (`fullstack-43`). -->
-  <li>
-    <button role="menuitem" onclick={searchDrive}>
-      <Search size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">Search this</span>
-      <span class="menu-row-chord"></span>
-    </button>
-  </li>
   <li class="sep" role="separator"></li>
   <li>
     <button role="menuitem" onclick={toggleAll}>
@@ -598,14 +549,6 @@
         <span class="folder-label">Directory</span>
         <span class="folder-path mono">{drive.info?.root ?? ""}</span>
       </span>
-    </button>
-  </li>
-  <li class="sep" role="separator"></li>
-  <li>
-    <button role="menuitem" onclick={doOpenSettings}>
-      <Settings size={14} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">Settings</span>
-      <span class="menu-row-chord">{chordFor("app.settings.toggle") ?? ""}</span>
     </button>
   </li>
 {/snippet}

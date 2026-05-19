@@ -53,7 +53,18 @@
   // edge, text right-aligned, indent guide growing right-to-left) so
   // the tree anchors against whichever viewport edge it's pinned to.
   // Overlay and tab variants leave this undefined.
-  let { dockSide }: { dockSide?: "left" | "right" } = $props();
+  let {
+    dockSide,
+    onClickRow,
+  }: {
+    dockSide?: "left" | "right";
+    /// `fullstack-80`: surface-owned hook fired when the user clicks
+    /// a row. Lets the surface decide whether to auto-open the
+    /// DETAILS inspector (tab + overlay variants do; dock variants
+    /// don't). Keyboard navigation writes to `browserSelection`
+    /// directly without firing this hook.
+    onClickRow?: (path: string) => void;
+  } = $props();
   const rightDock = $derived(dockSide === "right");
 
   // Mime type recognized by Pane.onDrop. Keep in sync with Pane.svelte.
@@ -333,10 +344,12 @@
   /// metadata pane to surface the selection. If they explicitly
   /// closed the inspector earlier and then click another row, the
   /// click takes precedence (and reopens it on next reload via the
-  /// URL hash).
+  /// URL hash). `fullstack-80`: the inspector-open call moved
+  /// behind `onClickRow` so the surface can gate it per variant
+  /// (tab + overlay auto-open; dock doesn't).
   function selectPath(path: string): void {
     browserSelection.path = path;
-    browserOverlay.inspectorOpen = true;
+    onClickRow?.(path);
   }
 
   function showMenu(ev: MouseEvent, path: string, isDir: boolean): void {
