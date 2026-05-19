@@ -307,3 +307,54 @@ Verification:
 
 Commit message proposed:
 `Hybrid flip UI + Cmd+K Tab binding (fullstack-48 phase B)`.
+
+## 2026-05-19 13:35 BST — Phase C landed (@@FullStackB)
+
+Phase C scope: the back-side-attention indicator from the
+13:25 BST addendum. Small flashing dot on the pane's
+chrome (in the `.actions` area, just left of the
+hamburger) when the hidden side has unread / active
+content. Designed as a generic "the other side wants
+attention" signal — terminal `watcher.unread` and
+`terminalActivity` are wired today; future sources
+(language-server diagnostics, etc.) plug into the same
+derived check without re-spec.
+
+Files:
+
+* `web/src/components/Pane.svelte`:
+  * New `backHasAttention` derived. Returns `true`
+    when `pane.back` contains a terminal with
+    `watcher.unread` or `terminalActivity`. Symmetric:
+    since the flip swaps `pane.tabs` ↔ `pane.back.tabs`,
+    flipping to the side that has the unread surface
+    naturally drops the indicator (its sources are now
+    in the visible tabs).
+  * Inline `<span class="back-attention">` rendered in
+    `.actions` when the derived is true. Carries an
+    `aria-label` + `title` so accessibility + hover
+    both surface the hint to flip.
+  * `back-attention-pulse` keyframe — 1.5 s opacity
+    cycle (1 → 0.35 → 1) matching the addendum's
+    "low-amplitude alpha pulse". `--warn-text` reuses
+    the colour family of the existing terminal-
+    activity marker so users learn one chrome
+    vocabulary. `prefers-reduced-motion` reverts to a
+    static dot.
+* `web/src/components/Pane.test.ts` — two assertions:
+  * Indicator surfaces when `pane.back` holds a
+    terminal tab with `watcher.unread: true`.
+  * Indicator stays clear when the back is idle.
+
+Verification:
+
+* `npx vitest run Pane EmptyPaneCarousel tabs` →
+  73 / 73 pass.
+* `npm run test` → 32 files / 319 tests.
+* `npm run check` → 0 errors / 0 warnings.
+* `npm run build` → clean.
+* `bash -lc 'ulimit -n 4096; scripts/pre-push'` →
+  green.
+
+Commit message proposed:
+`Back-side-attention indicator (fullstack-48 phase C)`.

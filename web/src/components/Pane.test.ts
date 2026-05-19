@@ -215,4 +215,38 @@ describe("Pane right-click menus", () => {
 
     expect(menuLabels()).toEqual(["Reload", "Toggle Web Inspector"]);
   }, 15000);
+
+  test("back-side-attention indicator surfaces when back has unread (fullstack-48 phase C)", async () => {
+    const front = terminalTab({ id: "front-term", title: "front" });
+    const backTerm = terminalTab({
+      id: "back-term",
+      title: "back",
+      watcher: { path: "/tmp/w", events: [], seenIds: [], unread: true },
+    });
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-attn",
+      tabs: [front],
+      activeTabId: front.id,
+      back: { tabs: [backTerm], activeTabId: backTerm.id },
+    };
+    const target = await renderPane(pane, { paneMode: false });
+
+    expect(target.querySelector(".back-attention")).not.toBeNull();
+  }, 15000);
+
+  test("back-side-attention indicator stays clear when back is idle (fullstack-48 phase C)", async () => {
+    const front = terminalTab({ id: "front-term", title: "front" });
+    const backTerm = terminalTab({ id: "back-term", title: "back" });
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-idle-back",
+      tabs: [front],
+      activeTabId: front.id,
+      back: { tabs: [backTerm], activeTabId: backTerm.id },
+    };
+    const target = await renderPane(pane, { paneMode: false });
+
+    expect(target.querySelector(".back-attention")).toBeNull();
+  }, 15000);
 });

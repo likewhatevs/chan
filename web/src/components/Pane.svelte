@@ -254,6 +254,29 @@
     });
   });
 
+  /// `fullstack-48` Phase C: small flashing dot on the pane chrome
+  /// when the OTHER side of the Hybrid has something unread /
+  /// active. Designed as a generic signal so future attention
+  /// sources (terminal activity per `fullstack-25`, etc.) plug in
+  /// here without re-spec. Today the wired sources are:
+  ///   - any terminal tab on the hidden side with
+  ///     `watcher.unread === true`
+  ///   - any terminal tab on the hidden side with
+  ///     `terminalActivity === true`
+  /// The check is symmetric: the indicator shows on whichever side
+  /// is currently visible whenever the hidden side has attention,
+  /// and clears the moment the user flips to that side (since
+  /// flipping moves those tabs into `pane.tabs`).
+  const backHasAttention = $derived.by<boolean>(() => {
+    if (!pane.back) return false;
+    for (const tab of pane.back.tabs) {
+      if (tab.kind !== "terminal") continue;
+      if (tab.watcher?.unread) return true;
+      if (tab.terminalActivity) return true;
+    }
+    return false;
+  });
+
   function closePaneMenus(): void {
     paneMenu?.close();
     paneContextMenu?.close();
@@ -886,6 +909,18 @@
       <div class="drop-bar" aria-hidden="true"></div>
     {/if}
     <div class="actions">
+      {#if backHasAttention}
+        <!-- fullstack-48 Phase C: back-side-attention indicator.
+             Sits just left of the hamburger so it's adjacent to
+             the chrome the user is already scanning. Cleared
+             automatically when the user flips because the
+             attention sources move into the visible-side tabs. -->
+        <span
+          class="back-attention"
+          aria-label="back side has unread activity"
+          title="back side has unread activity (Cmd+K Tab to flip)"
+        ></span>
+      {/if}
       <!-- Pane-only controls live inside a single hamburger menu
            to match the file browser / search / graph overlays.
            Split rows hide when the platform doesn't allow any splits
@@ -1289,7 +1324,28 @@
     font-weight: 700;
     flex-shrink: 0;
   }
-  .actions { margin-left: auto; display: flex; align-items: center; padding-left: 4px; }
+  .actions { margin-left: auto; display: flex; align-items: center; gap: 6px; padding-left: 4px; }
+  /* fullstack-48 Phase C — back-side-attention indicator. Same
+     warn-text family as the terminal activity marker so a user
+     learns one colour-language across the chrome. The 1.5s alpha
+     cycle is gentle enough to read as "pulsing" without becoming
+     a strobe at the corner of vision. prefers-reduced-motion
+     replaces the pulse with a static dot. */
+  .back-attention {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--warn-text, #d29922);
+    flex-shrink: 0;
+    animation: back-attention-pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes back-attention-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .back-attention { animation: none; }
+  }
   :global(.hamburger-menu .menu-label) {
     display: flex;
     align-items: center;
