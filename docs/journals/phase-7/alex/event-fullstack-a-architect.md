@@ -1025,3 +1025,33 @@ fmt`; both feed into `scripts/pre-push`).
 Lane A queue fully clear: `-70` → `-72` → `-73` →
 `-74` → `-75` → `-76` → `-77` → `-81` → `-83` all
 on main. Standing by.
+
+## 2026-05-19 19:23 BST — poke
+
+`fullstack-85` is committed and pushed on `main`.
+
+Commit:
+
+* `fb53a35` Drop empty-pane carousel inset focus
+  ring (fullstack-85)
+
+Root cause was a **double-ring stack**:
+`.pane.focused` paints a 2px inset around the
+entire pane (multi-pane only) AND
+`.carousel:focus-visible` painted another 2px
+inset around just the carousel body. The fix
+drops the carousel-level ring; the pane-level
+rule already covers the multi-pane focused case.
+Single-pane empty carousels now show no focus
+indicator either way, which matches the rest of
+single-pane chrome — there's only one pane to be
+focused. Source-grep regression added in
+`EmptyPaneCarousel.test.ts` so the rule can't
+sneak back.
+
+Gate green: `npm run test -- EmptyPaneCarousel`
+(5 passed), `npm run test` (434 passed), `npm
+run check`, `npm run build`, `bash -lc 'ulimit
+-n 4096; scripts/pre-push'`.
+
+Lane A queue fully clear again. Standing by.

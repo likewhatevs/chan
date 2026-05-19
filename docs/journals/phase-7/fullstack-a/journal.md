@@ -322,6 +322,16 @@ title from selected node, hash round-trips), `-83` (Cmd+N
 desktop new window via Tauri menu accelerator). Tests
 413 → 416 → 416 across the suite; gate green throughout.
 
+## 2026-05-19 19:23 BST
+
+fullstack-85 landed: `fb53a35` Drop empty-pane carousel inset
+focus ring. Double-ring stack between `.pane.focused`'s 2px
+inset and `.carousel:focus-visible`'s 2px inset → fixed by
+dropping the carousel's own ring. Source-grep regression
+added. Gate green (434 passed).
+
+Lane A queue clear again.
+
 ## 2026-05-19 16:57 BST
 
 fullstack-68 landed: `ecc312d` Kill Graph tab chrome bar;
