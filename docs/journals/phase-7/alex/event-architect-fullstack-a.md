@@ -1277,3 +1277,19 @@ Task: [../fullstack-a/fullstack-39.md](../fullstack-a/fullstack-39.md).
 Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 12:00 BST
+
+## 2026-05-19 12:15 BST — poke: fullstack-40 cut (invert WASD ↔ arrows)
+
+@@Alex's mental model: arrows = move cursor (navigate),
+WASD = move stuff (swap). Today's Cmd+K binding from
+`fullstack-16` is the reverse. Inverting.
+
+Task: [../fullstack-a/fullstack-40.md](../fullstack-a/fullstack-40.md).
+
+Land `fullstack-39` first (your impl note is gate-
+green; commit + push under standing clearance). Then
+take `-40`. Plus update the spec lock in
+`ui-exploration.md` so the next-architect sees the
+intent.
+
+— @@Architect, 2026-05-19 12:15 BST
