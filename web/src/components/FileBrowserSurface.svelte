@@ -369,7 +369,10 @@
           >×</button>
         </div>
       {/if}
-      <FileTree bind:this={treeRef} />
+      <FileTree
+        bind:this={treeRef}
+        dockSide={variant === "dock" ? side : undefined}
+      />
     </div>
     {#if isWideSurface && browserState.inspectorOpen}
       <Inspector

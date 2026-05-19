@@ -64,3 +64,101 @@ viewport edge. @@Alex flagged 2026-05-19 06:45 BST.
 Standard. Pre-push gate green. Coordinate with
 @@WebtestA for the dock-flip walkthrough. Ping via
 `alex/event-fullstack-a-architect.md`.
+
+## 2026-05-19 10:39 BST — @@FullStackA specialist review
+
+### Plumbing
+
+* `web/src/components/FileBrowserSurface.svelte` — passes
+  `dockSide={variant === "dock" ? side : undefined}` to the
+  inner `<FileTree>`. Overlay and first-class tab variants
+  keep the default left-aligned layout (no dock side).
+* `web/src/components/FileTree.svelte` — adds the `dockSide`
+  prop. A `$derived` `rightDock` flag drives both the inline
+  padding swap and the `class:right-dock` class hook on the
+  root `<ul>`.
+
+### Row layout flip
+
+* Dir, file, and child-empty rows now render
+  `padding-right: <indent>px` instead of `padding-left:
+  <indent>px` when right-docked. The 16 px chevron-column
+  offset on file rows mirrors with the same flip.
+* CSS in `FileTree.svelte`:
+  * `.tree.right-dock .row { flex-direction: row-reverse; }`
+    flips chevron / icon / name visual order; the chevron
+    rides the row's right edge again, icon next-inward,
+    text left of that.
+  * `.tree.right-dock .name { text-align: right; }` so
+    long names anchor on the right edge.
+  * `.tree.right-dock .empty { text-align: right; }` for
+    the loading / empty / error rows.
+  * `.tree.right-dock .row.dir .dir-icon` swaps
+    `margin-right: 2px` → `margin-left: 2px` so the
+    chevron-to-icon gap still lands on the correct visual
+    side after row-reverse.
+  * `.tree.right-dock .dirty-dot` similarly swaps
+    `margin-left: 4px` → `margin-right: 4px` so the dot
+    sits visually trailing the name in reading order.
+
+### What stays unchanged
+
+* The first-class File Browser tab (`fullstack-14`) and the
+  overlay variant inherit `dockSide=undefined` and render
+  left-aligned as before.
+* Drag-to-resize (`ResizeHandle` in
+  `FileBrowserSidePane.svelte`) is unaffected.
+* The Graph pane has no docked variant.
+
+### Tests
+
+* `web/src/components/revealBrowserActions.test.ts` — added
+  a `right-docked file browser mirrors text alignment`
+  describe with four raw-source assertions:
+  1. FileBrowserSurface forwards the right `dockSide` value
+     to FileTree.
+  2. FileTree declares the prop and toggles the class.
+  3. Both row variants render `padding-right` rather than
+     `padding-left` under right-dock.
+  4. The CSS contains the `row-reverse` + `text-align:
+     right` rules.
+
+Raw-source assertions match the existing pattern in this
+test file. They guard the contract without spinning up a
+full layout pass under jsdom (which can't measure flex
+positions reliably).
+
+### Gate
+
+* `npm run test -- revealBrowserActions` — 8 passed (was 4;
+  +4 new).
+* `npm run test` — 32 files / 281 tests, all pass.
+* `npm run check` — 0 errors / 0 warnings.
+* `npm run build` — clean.
+* `bash -lc 'ulimit -n 4096; scripts/pre-push'` — green.
+
+### What needs a manual walkthrough
+
+@@WebtestA should:
+
+1. Pin the file browser to the right side.
+2. Confirm row layout: chevron at the right edge, icon
+   inboard of it, file name text right-aligned, indent
+   column visibly on the right side (grows leftward as
+   depth increases).
+3. Toggle between left and right dock mid-session;
+   alignment should swap immediately without a reload.
+4. Left-docked + overlay + first-class tab variants
+   unchanged.
+
+### Proposed commit message
+
+> Mirror file-browser row layout when docked on the right (fullstack-38)
+>
+> Pass dockSide through FileBrowserSurface to FileTree; the right
+> variant flips row flex direction, right-aligns names, swaps the
+> indent column to the right edge, and mirrors the dir-icon /
+> dirty-dot margins. Overlay and first-class tab variants stay
+> left-aligned.
+
+Ready for commit + push under standing topic-level clearance.

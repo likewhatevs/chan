@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import terminal from "./TerminalTab.svelte?raw";
 import graph from "./GraphPanel.svelte?raw";
 import fileBrowserSurface from "./FileBrowserSurface.svelte?raw";
+import fileTree from "./FileTree.svelte?raw";
 
 describe("file-browser reveal actions", () => {
   test("terminal Show Dir reveals in a browser tab, not the legacy overlay", () => {
@@ -29,5 +30,36 @@ describe("no inline close affordance on first-class surfaces", () => {
 
   test("FileBrowserSurface chrome has no chrome-btn.close button", () => {
     expect(fileBrowserSurface).not.toContain('class="chrome-btn close"');
+  });
+});
+
+// fullstack-38: right-docked file browser mirrors row layout so the
+// tree visually anchors against whichever viewport edge it sits on.
+describe("right-docked file browser mirrors text alignment", () => {
+  test("FileBrowserSurface forwards dockSide=right to FileTree only in dock variant", () => {
+    expect(fileBrowserSurface).toContain(
+      'dockSide={variant === "dock" ? side : undefined}',
+    );
+  });
+
+  test("FileTree accepts a dockSide prop and toggles the right-dock class", () => {
+    expect(fileTree).toContain('dockSide?: "left" | "right"');
+    expect(fileTree).toContain("class:right-dock={rightDock}");
+  });
+
+  test("FileTree swaps inline padding from left to right under right-dock", () => {
+    // The dir / file / empty rows must conditionally render
+    // padding-right (right-dock) vs padding-left (default) so the
+    // indent column lands on the side opposite the chevron.
+    expect(fileTree).toContain("rightDock");
+    expect(fileTree).toContain("padding-right: ${depth * 12}px");
+    expect(fileTree).toContain("padding-right: ${depth * 12 + 16}px");
+  });
+
+  test("FileTree CSS reverses row order and right-aligns the name under right-dock", () => {
+    expect(fileTree).toContain(".tree.right-dock .row");
+    expect(fileTree).toContain("flex-direction: row-reverse");
+    expect(fileTree).toContain(".tree.right-dock .name");
+    expect(fileTree).toContain("text-align: right");
   });
 });

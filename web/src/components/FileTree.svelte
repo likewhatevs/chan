@@ -46,6 +46,15 @@
     ui,
   } from "../state/store.svelte";
 
+  // `dockSide` is set by FileBrowserSidePane / FileBrowserSurface when
+  // the tree renders inside a right-docked side pane. The right-dock
+  // variant mirrors the row layout (icons + chevrons on the right
+  // edge, text right-aligned, indent guide growing right-to-left) so
+  // the tree anchors against whichever viewport edge it's pinned to.
+  // Overlay and tab variants leave this undefined.
+  let { dockSide }: { dockSide?: "left" | "right" } = $props();
+  const rightDock = $derived(dockSide === "right");
+
   // Mime type recognized by Pane.onDrop. Keep in sync with Pane.svelte.
   const FILE_DRAG_MIME = "application/x-md-file";
   // Mime type used for intra-tree moves. Separate from FILE_DRAG_MIME
@@ -708,6 +717,7 @@
 <ul
   class="tree"
   class:drop-root={dropTarget === ""}
+  class:right-dock={rightDock}
   role="tree"
   tabindex="0"
   bind:this={treeRootEl}
@@ -748,7 +758,9 @@
         class:selected={browserSelection.path === node.path}
         class:zebra={rowIndex % 2 === 1}
         class:drop-target={dropTarget === node.path}
-        style="padding-left: {depth * 12}px"
+        style={rightDock
+          ? `padding-right: ${depth * 12}px`
+          : `padding-left: ${depth * 12}px`}
         oncontextmenu={(e) => showMenu(e, node.path, true)}
         role="treeitem"
         tabindex="-1"
@@ -801,11 +813,21 @@
             {@render renderNode(child, depth + 1)}
           {/each}
           {#if node.children.length === 0 && tree.loadingDirs[node.path]}
-            <li class="empty child-empty" style="padding-left: {(depth + 1) * 12}px">
+            <li
+              class="empty child-empty"
+              style={rightDock
+                ? `padding-right: ${(depth + 1) * 12}px`
+                : `padding-left: ${(depth + 1) * 12}px`}
+            >
               Loading...
             </li>
           {:else if node.children.length === 0 && tree.dirErrors[node.path]}
-            <li class="empty child-empty" style="padding-left: {(depth + 1) * 12}px">
+            <li
+              class="empty child-empty"
+              style={rightDock
+                ? `padding-right: ${(depth + 1) * 12}px`
+                : `padding-left: ${(depth + 1) * 12}px`}
+            >
               {tree.dirErrors[node.path]}
             </li>
           {/if}
@@ -822,7 +844,9 @@
         class:non-editable={!editable}
         class:contact
         class:zebra={rowIndex % 2 === 1}
-        style="padding-left: {depth * 12 + 16}px"
+        style={rightDock
+          ? `padding-right: ${depth * 12 + 16}px`
+          : `padding-left: ${depth * 12 + 16}px`}
         oncontextmenu={(e) => showMenu(e, node.path, false)}
         role="treeitem"
         tabindex="-1"
@@ -987,6 +1011,40 @@
     flex: 1;
     color: inherit;
     font: inherit;
+  }
+  /* Right-docked mirror: rows lay out chevron / icon / text from the
+     right edge inward, the name right-aligns, and the inline padding
+     switch (handled in the row template) puts the indent column on
+     the right so the tree visually anchors against the viewport's
+     right edge. Left-docked + overlay variants keep the default
+     left-to-right layout. */
+  .tree.right-dock .row {
+    flex-direction: row-reverse;
+  }
+  .tree.right-dock .name {
+    text-align: right;
+  }
+  /* Empty-state rows in right-dock mirror the text alignment too so
+     "Loading..." / "No files" / dir errors don't drift to the left
+     edge while every other row aligns right. */
+  .tree.right-dock .empty {
+    text-align: right;
+  }
+  /* Directory icon margin: in left-dock it sits between the chevron
+     (on its left) and the name (on its right) with margin-right: 2px.
+     Under row-reverse the visual order flips, so swap to margin-left
+     so the same 2px gap lands on the correct side. */
+  .tree.right-dock .row.dir .dir-icon {
+    margin-right: 0;
+    margin-left: 2px;
+  }
+  /* Dirty-dot sits trailing the file name in left-dock (margin-left:
+     4px). With row-reverse it lands visually on the LEFT of the row,
+     after the right-aligned name. Push the gap to the opposite side
+     so it still reads as "after the name" in reading order. */
+  .tree.right-dock .dirty-dot {
+    margin-left: 0;
+    margin-right: 4px;
   }
   /* View-only files (PNG, etc.): dim and italicize so the user can
      tell at a glance that these won't open in the editor. The future
