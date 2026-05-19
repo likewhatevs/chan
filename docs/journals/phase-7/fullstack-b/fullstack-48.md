@@ -248,3 +248,62 @@ Verification:
 
 Commit message proposed:
 `Hybrid back-side data model + flipHybrid action (fullstack-48 phase A)`.
+
+## 2026-05-19 13:25 BST — Phase B landed (@@FullStackB)
+
+Phase B scope: surface the flip via the hamburger menu + the Cmd+K
+Tab binding. The visible-side swap happens via Phase A's
+`flipHybrid` action; the pane chrome reuses the `fullstack-34`
+wobble bus for the landing animation. The full CSS 3D `rotateY`
+animation is deferred to a follow-up — the minimal "swap +
+wobble" flow gives @@Alex something to feel on a walkthrough
+without overspending on chrome.
+
+Files:
+
+* `web/src/state/shortcuts.ts` — new `app.pane.flip` entry
+  (`Mod+K Tab` on both web and native) so the cheatsheet
+  + the hamburger chord column resolve through the same
+  SHORTCUTS registry.
+* `web/src/App.svelte` — `handlePaneModeKey` gains `case
+  "Tab":` calling `flipHybrid(draft.activePaneId ??
+  layout.activePaneId)`. The flip happens inside the
+  pane-mode transaction so Esc rolls it back along with
+  any other draft edits.
+* `web/src/components/Pane.svelte` — `flipHybrid` import,
+  `onFlipHybrid` handler, new "Flip Hybrid" hamburger
+  item between Split right/down and Close all tabs, with
+  the `app.pane.flip` chord hint. `FlipHorizontal2` icon
+  from lucide.
+* `web/src/components/Pane.test.ts` — expected hamburger
+  labels gain "Flip Hybrid" between Split down and Close
+  all tabs.
+
+Out of scope (cuttable follow-ups, only if @@Alex flags
+during walkthrough):
+
+* CSS 3D `rotateY` flip animation (currently the swap
+  is instantaneous + wobble fires). Phase A's data
+  model already supports it; would require wrapping
+  pane content in a `transform-style: preserve-3d`
+  container with the back face pre-rotated 180deg.
+* Theme sub-menu in the hamburger (Dark / Light /
+  Follow global). Phase A's `pane.theme` slot is
+  already wired through the data model and would just
+  need menu wiring + a CSS variable override on the
+  pane root.
+* Per-side terminal session restore (session-format
+  change in chan-server).
+
+Verification:
+
+* `npx vitest run Pane EmptyPaneCarousel tabs
+  paneModeKeymap` → 71 / 71 pass.
+* `npm run test` → 32 files / 317 tests.
+* `npm run check` → 0 errors / 0 warnings.
+* `npm run build` → clean.
+* `bash -lc 'ulimit -n 4096; scripts/pre-push'` →
+  green.
+
+Commit message proposed:
+`Hybrid flip UI + Cmd+K Tab binding (fullstack-48 phase B)`.

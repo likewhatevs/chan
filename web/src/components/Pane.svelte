@@ -8,6 +8,7 @@
     closeTab,
     closeTabsInPane,
     enterPaneMode,
+    flipHybrid,
     focusColorForWindow,
     isDirty,
     detachTabToPaneEdge,
@@ -39,6 +40,7 @@
     ArrowRight,
     Check,
     FileText,
+    FlipHorizontal2,
     Folder,
     LayoutGrid,
     ListX,
@@ -226,6 +228,10 @@
   function onEnterPaneMode(): void {
     closePaneMenus();
     enterPaneMode();
+  }
+  function onFlipHybrid(): void {
+    closePaneMenus();
+    flipHybrid(pane.id);
   }
 
   /// Subscribe to the structural-wobble bus. Each splitPane /
@@ -945,6 +951,13 @@
             </button>
           </li>
         {/if}
+        <li>
+          <button role="menuitem" onclick={onFlipHybrid}>
+            <FlipHorizontal2 size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span class="menu-row-label">Flip Hybrid</span>
+            <span class="menu-row-chord">{chordLabel("app.pane.flip")}</span>
+          </button>
+        </li>
         <li>
           <button role="menuitem" onclick={onCloseAllTabs}>
             <ListX size={16} strokeWidth={1.75} aria-hidden="true" />

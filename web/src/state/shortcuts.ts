@@ -102,6 +102,13 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "Panes",
   },
   {
+    id: "app.pane.flip",
+    label: "Flip Hybrid",
+    web: "Mod+K Tab",
+    native: "Mod+K Tab",
+    group: "Panes",
+  },
+  {
     id: "ui.overlay.dismiss",
     label: "Dismiss overlay",
     web: "Esc",

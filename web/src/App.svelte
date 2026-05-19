@@ -59,6 +59,7 @@
     openInActivePane,
     saveTab,
     scheduleAutosave,
+    flipHybrid,
     selectNextPane,
     selectNextTabInActivePane,
     selectPrevPane,
@@ -433,6 +434,14 @@
       case "h":
       case "H":
         paneModeHelpVisible = !paneModeHelpVisible;
+        return;
+      // `fullstack-48`: Tab flips the focused Hybrid. Stays inside
+      // the pane-mode transaction so Esc can roll the flip back if
+      // the user changes their mind. The flipHybrid action targets
+      // whichever side is currently visible on the focused pane;
+      // calling it twice toggles back to where the user started.
+      case "Tab":
+        flipHybrid(paneMode.draft?.activePaneId ?? layout.activePaneId);
         return;
       // Split keybinds reuse the right/down constraint from
       // `fullstack-21`'s hamburger menu. New pane lands as the focus

@@ -125,6 +125,7 @@ describe("Pane right-click menus", () => {
       "Previous pane",
       "Split right",
       "Split down",
+      "Flip Hybrid",
       "Close all tabs",
       "Close pane",
     ]);
