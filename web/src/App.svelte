@@ -100,37 +100,11 @@
   // App.svelte because Pane Mode itself is global (one transaction
   // per Cmd+K press) — no per-pane scoping needed.
   let paneModeHelpVisible = $state(false);
-  // `fullstack-61`: short "H for help" flash that fires on every
-  // Pane Mode entry (null → set transition of `paneMode.draft`).
-  // `paneModeFlashKey` is bumped on each entry so consecutive
-  // entries re-trigger the CSS keyframe via `{#key}` even when
-  // the flash is still up from the previous entry.
-  let paneModeFlashVisible = $state(false);
-  let paneModeFlashKey = $state(0);
-  let paneModeWasActive = false;
-  let paneModeFlashTimer: ReturnType<typeof setTimeout> | null = null;
-  // `fullstack-76`: bumped from 700ms — 0.7s read too quick for
-  // @@Alex to register the hint. CSS keyframe duration below
-  // (`paneModeFlashFade` + the reduced-motion variant) is pinned
-  // to the same total; rebalance the in / hold / out split if you
-  // tune this.
-  const PANE_MODE_FLASH_MS = 2000;
-  $effect(() => {
-    const active = paneMode.active;
-    if (active && !paneModeWasActive) {
-      paneModeFlashKey += 1;
-      paneModeFlashVisible = true;
-      if (paneModeFlashTimer) clearTimeout(paneModeFlashTimer);
-      paneModeFlashTimer = setTimeout(() => {
-        paneModeFlashVisible = false;
-        paneModeFlashTimer = null;
-      }, PANE_MODE_FLASH_MS);
-    }
-    paneModeWasActive = active;
-  });
-  onDestroy(() => {
-    if (paneModeFlashTimer) clearTimeout(paneModeFlashTimer);
-  });
+  // `fullstack-a-3`: the centre-window "H for help" flash that
+  // landed in `fullstack-61` is gone. The status-bar Hybrid
+  // label already telegraphs `H help`, and the PaneModeHelp
+  // cheatsheet covers discovery — the mid-screen flash was
+  // visual noise on every Cmd+K entry.
   $effect(() => {
     // Touch enough of the layout to trip reactivity on common
     // mutations (URL persistence) AND watch every file tab's content
@@ -441,28 +415,42 @@
       case "0":
         paneModeEqualize();
         return;
-      // Hybrid NAV spawn keys: stage the intent and wait for
-      // Enter to commit it (alongside any other draft edits). Esc
-      // discards the intent. Pressing a different staging key
-      // replaces the intent — only the most recent one fires on
-      // commit. Matches Tab's draft/commit pattern so the pill's
-      // "Enter commit · Esc discard" promise holds for every key
-      // per `fullstack-72`. `fullstack-43`: context still resolves
-      // from the focused tab at staging time so the spawned tab
-      // anchors on the source's directory / file when the user
-      // confirms.
-      case "1":
+      // `fullstack-a-3`: Hybrid NAV spawn keys commit immediately.
+      // Previously 1/2/3 staged the intent and waited for Enter to
+      // seal it (per `fullstack-72`), but the number rows are the
+      // common-action shortcuts — pressing `1`/`2`/`3` is the user
+      // saying "do this now". We stage the intent and commit in the
+      // same step. `revealAndSelect` still primes the module-level
+      // browser selection for browser spawns so the new tab's tree
+      // lands already expanded. `fullstack-43`: context resolves
+      // from the focused tab at the moment of the keypress.
+      case "1": {
         paneModeStageSpawn("terminal", resolveSpawnContext());
+        commitPaneMode();
+        scheduleSessionSave();
+        paneModeHelpVisible = false;
         return;
-      case "2":
-        paneModeStageSpawn("browser", resolveSpawnContext());
+      }
+      case "2": {
+        const ctx = resolveSpawnContext();
+        paneModeStageSpawn("browser", ctx);
+        if (ctx.file) revealAndSelect(ctx.file);
+        else if (ctx.dir) revealAndSelect(ctx.dir);
+        commitPaneMode();
+        scheduleSessionSave();
+        paneModeHelpVisible = false;
         return;
+      }
       // `3` opened the Search overlay in `fullstack-39`; `fullstack-42`
       // reassigns it to Graph since Graph is a real tab type, while
       // Search remains an OverlayShell. Search now lives on `s`.
-      case "3":
+      case "3": {
         paneModeStageSpawn("graph", resolveSpawnContext());
+        commitPaneMode();
+        scheduleSessionSave();
+        paneModeHelpVisible = false;
         return;
+      }
       // `4` was vacated in -39 + -40; -42 wires it to the existing
       // new-file flow. Modal owns the keyboard, so commit the draft
       // first; any pending layout edits are sealed before the dialog
@@ -766,20 +754,6 @@
 {#if paneMode.active && paneModeHelpVisible}
   <PaneModeHelp />
 {/if}
-<!-- `fullstack-61`: short "H for help" flash on every Pane Mode
-     entry. `{#key}` ensures consecutive entries re-trigger the CSS
-     keyframe even when the previous flash is still mid-animation.
-     pointer-events:none in the CSS so the flash never intercepts
-     keystrokes — `H` (open help) and Enter / Esc (commit / discard)
-     keep flowing to the existing handlers. -->
-{#if paneModeFlashVisible}
-  {#key paneModeFlashKey}
-    <div class="pane-mode-flash" role="status" aria-hidden="true">
-      <span class="pane-mode-flash-key">H</span>
-      <span class="pane-mode-flash-text">for help</span>
-    </div>
-  {/key}
-{/if}
 <!-- Window-level overlays. Mounted once. -->
 <PromptModal />
 <PathPromptModal />
@@ -1057,62 +1031,4 @@
     background: var(--bg-card);
   }
 
-  /* `fullstack-61`: centre-window "H for help" flash on Pane Mode
-     entry. position:fixed + flexbox centres on the window (NOT the
-     focused pane). pointer-events:none keeps it passive so H / Enter
-     / Esc still flow to the existing handlers. z-index sits above
-     overlays (25000+) and panes but below modals (26000) so a
-     simultaneous modal still preempts. */
-  .pane-mode-flash {
-    position: fixed;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    z-index: 25500;
-    pointer-events: none;
-    animation: paneModeFlashFade 2s ease-out both;
-  }
-  .pane-mode-flash-key {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 1.8em;
-    padding: 4px 10px;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.24);
-    color: var(--text);
-    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-    font-size: 20px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-  }
-  .pane-mode-flash-text {
-    color: var(--text-secondary);
-    font-size: 16px;
-    letter-spacing: 0.02em;
-  }
-  /* `fullstack-76`: rebalanced for the 2s total. 7.5 % fade-in
-     (~150ms) / 80 % hold (~1600ms) / 12.5 % fade-out (~250ms).
-     The reduced-motion variant follows the same proportions. */
-  @keyframes paneModeFlashFade {
-    0%    { opacity: 0; transform: translateY(-6px) scale(0.96); }
-    7.5%  { opacity: 1; transform: translateY(0) scale(1); }
-    87.5% { opacity: 1; transform: translateY(0) scale(1); }
-    100%  { opacity: 0; transform: translateY(4px) scale(0.98); }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .pane-mode-flash {
-      animation: paneModeFlashFadeReduced 2s linear both;
-    }
-    @keyframes paneModeFlashFadeReduced {
-      0%    { opacity: 0; }
-      7.5%  { opacity: 1; }
-      87.5% { opacity: 1; }
-      100%  { opacity: 0; }
-    }
-  }
 </style>

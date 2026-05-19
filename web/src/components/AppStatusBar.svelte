@@ -106,18 +106,17 @@
           <span class="sep">·</span>
         {/if}
         {#if paneModeVisible}
-          <span class="section pane-mode-pill">
+          <!-- `fullstack-a-3`: status-bar label for Hybrid NAV
+               (Cmd+K). Per the phase-8 bug list the wording is
+               `Hybrid ☯ Enter commit, Esc discard, H help`; the
+               spawn-intent chip stays because 1/2/3 still stage
+               a tab spawn before commit. -->
+          <span class="section pane-mode-pill" aria-label="Hybrid NAV active">
             <span class="dot working"></span>
-            pane mode
+            Hybrid ☯ Enter commit, Esc discard, H help
             {#if paneMode.spawnIntent}
-              <!-- `fullstack-72`: visible chip when a tab spawn is
-                   staged (Cmd+K 1/2/3). Telegraphs that Enter will
-                   actually create the tab and Esc will drop the
-                   intent; without this chip the "Enter commit"
-                   wording read as a no-op for the number keys. -->
               <span class="muted">→ stage {paneMode.spawnIntent.kind}</span>
             {/if}
-            <span class="muted">Enter commit · Esc discard</span>
           </span>
         {/if}
       </div>

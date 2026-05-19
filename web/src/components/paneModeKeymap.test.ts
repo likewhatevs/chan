@@ -27,15 +27,15 @@ describe("Cmd+K pane mode keymap (fullstack-40 inversion)", () => {
 });
 
 describe("Cmd+K pane mode keymap (fullstack-42 — search / graph / new file / help)", () => {
-  test("3 stages a Graph spawn; lowercase f opens the Search overlay", () => {
-    // `fullstack-72`: spawn keys stage an intent into
-    // `paneMode.spawnIntent` instead of pushing a tab into the
-    // draft on keystroke. `commitPaneMode()` applies the intent
-    // when the user confirms with Enter. `fullstack-74` moved
-    // Search from `s` (which now rejoins WASD swap-down) to
-    // `f` / `F` so WASD can fully own swap-tile.
-    expect(app).toContain(
-      'case "3":\n        paneModeStageSpawn("graph", resolveSpawnContext());',
+  test("3 commits a Graph spawn immediately; lowercase f opens the Search overlay", () => {
+    // `fullstack-a-3`: 1/2/3 commit on keypress rather than wait
+    // for Enter. The stage call is followed by commitPaneMode()
+    // in the same case so the spawn lands on the same press.
+    // `fullstack-74` moved Search from `s` (which now rejoins
+    // WASD swap-down) to `f` / `F` so WASD can fully own
+    // swap-tile.
+    expect(app).toMatch(
+      /case "3": \{[\s\S]*?paneModeStageSpawn\("graph", resolveSpawnContext\(\)\);[\s\S]*?commitPaneMode\(\);/,
     );
     expect(app).toMatch(
       /case "f":[\s\S]*?case "F":[\s\S]*?commitPaneMode\(\);[\s\S]*?searchPanel\.open = true;/,
@@ -61,24 +61,30 @@ describe("Cmd+K pane mode keymap (fullstack-42 — search / graph / new file / h
   });
 });
 
-describe("Cmd+K pane mode spawn staging (fullstack-72)", () => {
-  test("1 stages a terminal spawn with the resolved context", () => {
-    expect(app).toContain(
-      'case "1":\n        paneModeStageSpawn("terminal", resolveSpawnContext());',
+describe("Cmd+K pane mode spawn commit (fullstack-a-3)", () => {
+  test("1 commits a terminal spawn immediately", () => {
+    // `fullstack-a-3`: pressing `1` stages + commits the terminal
+    // spawn in the same case so the new tab lands without the user
+    // having to press Enter afterwards.
+    expect(app).toMatch(
+      /case "1": \{[\s\S]*?paneModeStageSpawn\("terminal", resolveSpawnContext\(\)\);[\s\S]*?commitPaneMode\(\);/,
     );
   });
 
-  test("2 stages a browser spawn with the resolved context", () => {
-    expect(app).toContain(
-      'case "2":\n        paneModeStageSpawn("browser", resolveSpawnContext());',
+  test("2 commits a browser spawn immediately + primes browserSelection", () => {
+    // Browser case must call `revealAndSelect` BEFORE
+    // `commitPaneMode()` so the new tab's tree lands already
+    // expanded to + selecting the contextual node.
+    expect(app).toMatch(
+      /case "2": \{[\s\S]*?const ctx = resolveSpawnContext\(\);[\s\S]*?paneModeStageSpawn\("browser", ctx\);[\s\S]*?revealAndSelect\(ctx\.file\);[\s\S]*?revealAndSelect\(ctx\.dir\);[\s\S]*?commitPaneMode\(\);/,
     );
   });
 
-  test("Enter primes browserSelection only when a browser intent is staged", () => {
-    // Peek the staged intent before commit so a browser spawn's
-    // tree lands expanded to + selecting the contextual node. The
-    // peek must read `paneMode.spawnIntent` *before*
-    // commitPaneMode() clears it.
+  test("Enter still peeks a staged intent before commit (defensive)", () => {
+    // 1/2/3 commit on the keypress now, so the Enter path rarely
+    // sees a staged intent in practice. The peek stays as
+    // defensive code: if a future affordance stages without
+    // committing, Enter still primes `browserSelection`.
     expect(app).toMatch(
       /case "Enter": \{[\s\S]*?const intent = paneMode\.spawnIntent;[\s\S]*?if \(intent && intent\.kind === "browser"\)[\s\S]*?revealAndSelect\(intent\.ctx\.file\);[\s\S]*?revealAndSelect\(intent\.ctx\.dir\);[\s\S]*?commitPaneMode\(\);/,
     );
@@ -127,23 +133,14 @@ describe("Cmd+K dock toggles (fullstack-69)", () => {
   });
 });
 
-describe("Pane Mode entry flash (fullstack-61)", () => {
-  test("Pane Mode active transition triggers a one-shot flash overlay", () => {
-    // The `$effect` watches `paneMode.active`; on false → true it
-    // bumps `paneModeFlashKey` (so `{#key}` re-triggers the CSS
-    // animation) and schedules the auto-dismiss timer. False on
-    // exit is intentionally a no-op — only entry triggers.
-    expect(app).toMatch(
-      /active && !paneModeWasActive[\s\S]*?paneModeFlashKey \+= 1[\s\S]*?paneModeFlashVisible = true[\s\S]*?setTimeout\(\(\) => \{[\s\S]*?paneModeFlashVisible = false/,
-    );
-  });
-
-  test("flash renders an H key chip plus 'for help' text, non-blocking", () => {
-    expect(app).toMatch(
-      /\{#if paneModeFlashVisible\}[\s\S]*?\{#key paneModeFlashKey\}[\s\S]*?class="pane-mode-flash"[\s\S]*?<span class="pane-mode-flash-key">H<\/span>[\s\S]*?for help/,
-    );
-    // pointer-events:none in the CSS so keystrokes (including H,
-    // Enter, Esc) flow straight to the existing Pane Mode handlers.
-    expect(app).toContain("pointer-events: none");
+describe("Pane Mode entry flash removed (fullstack-a-3)", () => {
+  test("no centre-window 'H for help' flash on Pane Mode entry", () => {
+    // `fullstack-61` introduced the flash; `fullstack-a-3` removes
+    // it as visual noise — the status-bar Hybrid pill already
+    // telegraphs `H help` and PaneModeHelp covers discovery.
+    expect(app).not.toContain("pane-mode-flash");
+    expect(app).not.toContain("paneModeFlashVisible");
+    expect(app).not.toContain("paneModeFlashKey");
+    expect(app).not.toContain("PANE_MODE_FLASH_MS");
   });
 });
