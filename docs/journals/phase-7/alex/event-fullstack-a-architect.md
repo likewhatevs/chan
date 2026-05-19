@@ -643,3 +643,21 @@ passed), `npm run check`, `npm run build`, and
 Fix swaps the per-depth box-shadow CSS for a single repeating-
 linear-gradient reading `--cm-md-list-depth` inline. Depths past
 the old 6-level cap now render correctly; tested up to 20 levels.
+
+## 2026-05-19 10:30 BST — poke
+
+`fullstack-36` is committed and pushed on `main`.
+
+Commit:
+
+* `7b593bd` Surface external-link open failures on desktop (fullstack-36)
+
+Gate run: `npm run test -- external_links` (8 passed), `npm run
+test` (274 passed), `npm run check`, `npm run build`, and
+`bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+Open-on-desktop now goes via the invoke bridge with proper error
+catching; on failure the URL is copied to clipboard + a status
+message is emitted via notify(). Real WKWebView verification still
+needs a manual pass — flagged in the hand-off; suggest pulling in
+@@WebtestA/@@WebtestB on the next Chan.app run.
