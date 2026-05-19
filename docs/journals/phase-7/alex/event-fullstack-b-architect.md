@@ -545,3 +545,67 @@ cut). Next on the queue: `-59` (per-Hybrid theme
 render). I'll watch `node.theme` derivation from
 the `ht` / `hb` hash fields per your 18:00 BST
 direction, not a parallel `ui.themeChoice`.
+
+## 2026-05-19 19:20 BST — poke: audit-trail correction on dc1ff46
+
+Cross-lane absorption flag (the very risk the
+14:30 BST `feedback_redistribution_queue_head.md`
+memory hinted at). When I pushed `dc1ff46`
+(`Per-tab BrowserTab view state with hash round-
+trip`), `git log --stat` showed only 4 files in
+the commit:
+
+* `docs/journals/phase-7/alex/event-fullstack-b-architect.md`
+* `docs/journals/phase-7/fullstack-b/fullstack-58.md`
+* `docs/journals/phase-7/fullstack-b/journal.md`
+* `web/src/components/FileBrowserSurface.svelte`
+
+The `web/src/state/tabs.svelte.ts` `BrowserTab` +
+`SerTab` field additions AND the three new
+`tabs.test.ts` round-trip tests are **NOT** in
+this commit. They had already been absorbed into
+`d8ee2e8` (`Trim Graph chrome + basename-derived
+title (fullstack-64)`, authored 16:50:16 BST, one
+minute before my -58 commit at 16:51:00 BST).
+
+Functional impact: zero. The fullstack-58 feature
+ships on `origin/main` exactly as designed —
+`BrowserTab.selected/showDrive/expanded/scroll`
+fields are present (in HEAD via -64), the SerTab
+fields round-trip (in HEAD via -64), the three
+new vitest blocks pass (in HEAD via -64), and the
+consumer wiring in `FileBrowserSurface.svelte` is
+my -58 commit on top.
+
+Audit-trail impact: `git blame BrowserTab.selected`
+will point to `d8ee2e8 fullstack-64`, not
+`dc1ff46 fullstack-58`. The fullstack-64 commit
+message is about Graph chrome and doesn't mention
+BrowserTab, so a future reader walking history by
+commit messages would miss the cross-lane carry.
+
+Likely cause: parallel lane A working tree had
+my `tabs.svelte.ts` / `tabs.test.ts` edits
+present when they ran `git add` (probably with a
+broader glob or `git commit -am`) for fullstack-64.
+Their commit absorbed my edits silently. I
+detected it post-push via `git log --stat` and
+`git show d8ee2e8 -- web/src/state/tabs.svelte.ts`
+showing the `fullstack-58:` comments and field
+additions inside fullstack-64's diff.
+
+Not amending (`dc1ff46` is already on
+origin/main). Recording here so the audit trail
+documents what happened.
+
+Process suggestion for @@Architect to consider:
+when two FullStack lanes are both touching
+`web/src/state/tabs.svelte.ts` in flight, the
+second-to-commit will absorb the first's unstaged
+edits if they use `git add -A` or `commit -am`.
+Either land such overlapping work serially or
+have agents `git add` specific files only. I've
+been doing the latter; lane A apparently was not.
+Saved to memory as `feedback_lane_a_glob_add`
+deferred until I confirm the pattern across
+multiple cases.
