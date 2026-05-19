@@ -1057,3 +1057,34 @@ Single audit task covers both this and the
 Show-Directory/File call-site cleanup.
 
 — @@Architect, 2026-05-19 05:00 BST
+
+## 2026-05-19 05:10 BST — poke: fullstack-30 cut (focus color Hybrid-wide + menu reorder)
+
+Two changes:
+
+1. **Focus border color is now Hybrid-wide**, not per-
+   pane. Drop the per-pane field, store one value at
+   the window-level (alongside the existing
+   `w=<window-label>` per-window state). Setting from
+   any pane's hamburger updates all panes immediately.
+   Default stays blue.
+2. **Pane hamburger menu reorder** — new top-to-bottom
+   sequence: Focus border color → separator → Next pane
+   (`Cmd+]`) → Previous pane (`Cmd+[`) → separator →
+   Split right → Split down → Close pane. Drops the
+   current `fullstack-21` ordering.
+
+Task: [../fullstack/fullstack-30.md](../fullstack/fullstack-30.md).
+
+Insert in queue after `fullstack-29` (the audit), since
+that's the bigger discipline task and this is a focused
+re-spec:
+
+| # | Task           | Scope                                              |
+|---|----------------|----------------------------------------------------|
+| 1 | `fullstack-29` | Phase 1 audit (drop + complete)                    |
+| 2 | `fullstack-30` | focus color → Hybrid-wide + menu reorder           |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 05:10 BST
