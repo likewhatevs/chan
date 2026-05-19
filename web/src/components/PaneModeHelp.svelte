@@ -106,6 +106,10 @@
       ],
     },
     {
+      // `fullstack-a-9`: `[` / `]` shift the divider in the
+      // direction the bracket points (regardless of which side
+      // of the split the focused pane sits on). `-` / `=`
+      // mirror it on the vertical axis.
       title: "Resize",
       rows: [
         {
@@ -113,14 +117,14 @@
             { label: "[", key: "[" },
             { label: "]", key: "]" },
           ],
-          action: "Shrink / grow horizontally",
+          action: "Move divider left / right",
         },
         {
           caps: [
             { label: "-", key: "-" },
             { label: "=", key: "=" },
           ],
-          action: "Shrink / grow vertically",
+          action: "Move divider up / down",
         },
         {
           // Shift modifier can't be expressed as a single key click;

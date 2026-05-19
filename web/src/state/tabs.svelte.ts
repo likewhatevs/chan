@@ -1838,17 +1838,26 @@ function nearestAncestorSplit(
   return null;
 }
 
+/// Hybrid NAV resize. `positive=true` shifts the divider toward
+/// the right (row axis) or the bottom (column axis); `positive=false`
+/// shifts it toward the left / top. This is the
+/// `fullstack-a-9` convention: bracket-direction == divider-
+/// direction, independent of which side of the split the active
+/// pane sits on. Pre-`-a-9` the dispatch flipped sign based on the
+/// active leaf's side, which read as inverted when focus was on the
+/// right / bottom child. ratio is A's share of the split (A is the
+/// left / top child), so `positive` maps directly to the ratio
+/// delta sign.
 export function paneModeResize(
   axis: SplitNode["direction"],
-  grow: boolean,
+  positive: boolean,
   amount: number,
 ): void {
   const draft = draftLayout();
   if (!draft) return;
   const split = nearestAncestorSplit(draft, draft.activePaneId, axis);
   if (!split) return;
-  const inA = containsLeaf(draft, split.a, draft.activePaneId);
-  const delta = grow === inA ? amount : -amount;
+  const delta = positive ? amount : -amount;
   split.ratio = Math.max(0.05, Math.min(0.95, split.ratio + delta));
 }
 
