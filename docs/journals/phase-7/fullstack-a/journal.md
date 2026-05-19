@@ -161,3 +161,14 @@ fullstack-39 landed: `8853dc4` Cmd+K spawn/split/kill keybinds +
 invisible pane divider (fullstack-39). Gate green: `npm run test --
 tabs` (50 passed), `npm run test` (289 passed), `npm run check`,
 `npm run build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+## 2026-05-19 13:05 BST
+
+online, picking up the queue: `-40`, `-41`, `-42`, `-43`.
+
+## 2026-05-19 13:10 BST
+
+fullstack-40 landed: `1b0c044` Invert Cmd+K WASD <-> arrows in
+pane mode (fullstack-40). Gate green: `npm run test --
+paneModeKeymap` (2 passed), `npm run test` (291 passed), `npm run
+check`, `npm run build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.

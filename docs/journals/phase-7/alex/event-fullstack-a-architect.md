@@ -727,3 +727,20 @@ border color goes transparent.
 
 online, starting `fullstack-40` (Cmd+K WASD ↔ arrow inversion).
 Queue picked up: `-40`, `-41`, `-42`, `-43`.
+
+## 2026-05-19 13:10 BST — poke
+
+`fullstack-40` is committed and pushed on `main`.
+
+Commit:
+
+* `1b0c044` Invert Cmd+K WASD <-> arrows in pane mode (fullstack-40)
+
+Gate run: `npm run test -- paneModeKeymap` (2 passed), `npm run
+test` (291 passed), `npm run check`, `npm run build`, and
+`bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+Arrows now move focus, WASD swaps. New raw-source guard in
+`paneModeKeymap.test.ts` so the mapping cannot silently revert.
+
+Moving on to `fullstack-41` (Ctrl+D close current tab).
