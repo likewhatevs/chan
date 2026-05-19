@@ -16,7 +16,7 @@ use tauri::menu::{Menu, MenuItemBuilder, MenuItemKind, PredefinedMenuItem, WINDO
 use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tokio::process::Command;
 
-use config::{Config, ConfigStore};
+use config::{Config, ConfigStore, WindowConfig};
 use serve::ServeHandle;
 use tunnel::TunnelState;
 
@@ -106,6 +106,44 @@ impl AppState {
         let mut cfg = store.get()?;
         cfg.sidecar.entry(key.to_string()).or_default().last_port = Some(port);
         store.save(&cfg)
+    }
+
+    /// Push a closing window's layout onto the LRU stack. Best
+    /// effort: any I/O error is logged and dropped so a flaky
+    /// config disk doesn't leak through the WindowEvent handler.
+    pub fn push_window_config(&self, entry: WindowConfig) {
+        let mut store = self.store.lock().unwrap();
+        let mut cfg = match store.get() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "loading config to push window state failed");
+                return;
+            }
+        };
+        config::push_window_config(&mut cfg, entry);
+        if let Err(e) = store.save(&cfg) {
+            tracing::warn!(error = %e, "persisting window config stack failed");
+        }
+    }
+
+    /// Pop the most-recent WindowConfig matching `key`, removing
+    /// it from the stack on disk. Returns `None` when no entry
+    /// exists or the config file can't be read. Same best-effort
+    /// posture as `push_window_config`.
+    pub fn pop_window_config(&self, key: &str) -> Option<WindowConfig> {
+        let mut store = self.store.lock().unwrap();
+        let mut cfg = match store.get() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "loading config to pop window state failed");
+                return None;
+            }
+        };
+        let popped = config::pop_window_config(&mut cfg, key)?;
+        if let Err(e) = store.save(&cfg) {
+            tracing::warn!(error = %e, "persisting window config stack failed");
+        }
+        Some(popped)
     }
 }
 

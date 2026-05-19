@@ -42,8 +42,9 @@ fn next_window_seq() -> u64 {
     WINDOW_SEQ.fetch_add(1, Ordering::Relaxed)
 }
 
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
+use crate::config::{self, WindowConfig};
 use crate::AppState;
 
 /// Tauri event emitted when any serve's state changes (started,
@@ -389,19 +390,30 @@ pub fn new_tunnel_window_label(tenant_label: &str, drive: &str) -> String {
 
 /// Spawn a new local-drive webview window pointing at `url`. Each
 /// call opens an independent window; multiple windows per drive are
-/// supported. The Tauri close handler is a no-op — closing the
-/// window does NOT stop the underlying `chan serve`. The On toggle
-/// (and `close_local_drive_windows` from the reader thread on EOF)
-/// is the single authority on drive lifecycle.
+/// supported. Pops the most-recent WindowConfig for this drive (if
+/// any) so the new window reuses the previous `?w=<label>` and URL
+/// hash, restoring panes / tabs (via `session.json`) and overlay
+/// state across the close/reopen cycle. A user-initiated close
+/// pushes the closing window's state back to the stack so the next
+/// open repeats the restore. The Tauri close handler does NOT stop
+/// the underlying `chan serve`; the On toggle (plus
+/// `close_local_drive_windows` on serve EOF) remains the single
+/// authority on drive lifecycle.
 pub fn spawn_local_drive_window(app: &AppHandle, key: &str, url: &str) -> Result<(), String> {
     ensure_window_capacity(app, &drive_window_prefix(key))?;
-    let label = new_drive_window_label(key);
+    let config_key = config::local_window_key(key);
+    let restore = pop_compatible_config(app, &config_key, &drive_window_prefix(key));
+    let label = match restore.as_ref() {
+        Some(c) => c.window_label.clone(),
+        None => new_drive_window_label(key),
+    };
+    let url_hash = restore.map(|c| c.url_hash).unwrap_or_default();
     let title = drive_title(key);
-    build_drive_window(app, &label, &title, url)
+    build_drive_window(app, &label, &title, url, &url_hash, config_key)
 }
 
 /// Spawn a new tunneled-drive webview window. Same multi-window
-/// semantics as the local variant; same no-op close handler.
+/// semantics and config-stack restore as the local variant.
 pub fn spawn_tunneled_drive_window(
     app: &AppHandle,
     tenant_label: &str,
@@ -409,9 +421,50 @@ pub fn spawn_tunneled_drive_window(
     url: &str,
 ) -> Result<(), String> {
     ensure_window_capacity(app, &tunnel_window_prefix(tenant_label, drive))?;
-    let label = new_tunnel_window_label(tenant_label, drive);
+    let config_key = config::tunnel_window_key(tenant_label, drive);
+    let prefix = tunnel_window_prefix(tenant_label, drive);
+    let restore = pop_compatible_config(app, &config_key, &prefix);
+    let label = match restore.as_ref() {
+        Some(c) => c.window_label.clone(),
+        None => new_tunnel_window_label(tenant_label, drive),
+    };
+    let url_hash = restore.map(|c| c.url_hash).unwrap_or_default();
     let title = format!("chan drive: {tenant_label} \u{00b7} {drive}");
-    build_drive_window(app, &label, &title, url)
+    build_drive_window(app, &label, &title, url, &url_hash, config_key)
+}
+
+/// Pop the top-of-stack window config for `config_key` only if the
+/// stored label is safe to reuse. The label must still match the
+/// drive's current hash prefix (defends against the drive key
+/// changing canonicalisation under us) and must not already be
+/// live in this process (Tauri requires unique labels per
+/// process). When the popped entry fails either check, it gets
+/// dropped on the floor; we don't keep cycling through stale
+/// stack entries trying to find a usable one, since the next
+/// close will push a fresh entry anyway.
+fn pop_compatible_config(
+    app: &AppHandle,
+    config_key: &str,
+    expected_prefix: &str,
+) -> Option<WindowConfig> {
+    let state = app.state::<Arc<AppState>>();
+    let entry = state.pop_window_config(config_key)?;
+    if !entry.window_label.starts_with(expected_prefix) {
+        tracing::debug!(
+            label = %entry.window_label,
+            prefix = %expected_prefix,
+            "discarding window config with stale prefix",
+        );
+        return None;
+    }
+    if app.get_webview_window(&entry.window_label).is_some() {
+        tracing::debug!(
+            label = %entry.window_label,
+            "discarding window config; label still live",
+        );
+        return None;
+    }
+    Some(entry)
 }
 
 /// Build and show a chan-style drive webview window on the main
@@ -420,16 +473,32 @@ pub fn spawn_tunneled_drive_window(
 /// key-bridge JS, the size defaults, the zoom-hotkey polyfill, and
 /// the drag-drop handler off in one place means drive UX changes
 /// don't fork between the local and tunneled paths.
+///
+/// `url_hash_seed` carries any popped URL hash from the
+/// window-config stack: applied verbatim to the URL fragment so
+/// overlay state (file browser path, search query, graph scope)
+/// restores alongside the panes/tabs that come back from
+/// `session.json`. Empty when there's nothing to restore.
+///
+/// `config_key` is the WindowConfig identity key (`local_window_key`
+/// or `tunnel_window_key`). Stamped onto the close handler so a
+/// user-initiated close pushes the window's final URL hash back
+/// into the LRU stack.
 fn build_drive_window(
     app: &AppHandle,
     window_label: &str,
     title: &str,
     url: &str,
+    url_hash_seed: &str,
+    config_key: String,
 ) -> Result<(), String> {
     let Ok(mut parsed) = url.parse::<tauri::Url>() else {
         return Err(format!("bad chan URL for {window_label}: {url}"));
     };
     parsed.query_pairs_mut().append_pair("w", window_label);
+    if !url_hash_seed.is_empty() {
+        parsed.set_fragment(Some(url_hash_seed));
+    }
     let app_owned = app.clone();
     let label_owned = window_label.to_string();
     let title_owned = title.to_string();
@@ -459,13 +528,57 @@ fn build_drive_window(
             .disable_drag_drop_handler()
             .build()
         {
-            Ok(_) => {}
+            Ok(window) => {
+                let app_for_close = app_owned.clone();
+                let label_for_close = label_owned.clone();
+                let key_for_close = config_key.clone();
+                window.on_window_event(move |event| {
+                    if matches!(event, WindowEvent::CloseRequested { .. }) {
+                        capture_window_config_on_close(
+                            &app_for_close,
+                            &label_for_close,
+                            &key_for_close,
+                        );
+                    }
+                });
+            }
             Err(e) => {
                 tracing::warn!(label = %label_owned, error = %e, "opening drive window failed")
             }
         }
     });
     res.map_err(|e| format!("scheduling drive window for {window_label}: {e}"))
+}
+
+/// Snapshot the closing window's URL hash and push the resulting
+/// WindowConfig onto the LRU stack. Best-effort: a webview that's
+/// already torn down reports no URL and we skip the push. The
+/// hash is read from `WebviewWindow::url()` because the webview
+/// SPA writes the latest state to `location.hash` via
+/// `persistStateToHash`, and Tauri's URL reflection picks that up
+/// on platforms with the WKWebView / WebView2 backends.
+fn capture_window_config_on_close(app: &AppHandle, window_label: &str, config_key: &str) {
+    let Some(window) = app.get_webview_window(window_label) else {
+        return;
+    };
+    let url_hash = match window.url() {
+        Ok(u) => u.fragment().unwrap_or("").to_string(),
+        Err(e) => {
+            tracing::debug!(
+                label = %window_label,
+                error = %e,
+                "could not read url for closing window; pushing empty hash",
+            );
+            String::new()
+        }
+    };
+    let state = app.state::<Arc<AppState>>();
+    state.push_window_config(WindowConfig {
+        key: config_key.to_string(),
+        window_label: window_label.to_string(),
+        url_hash,
+        saved_at: 0,
+    });
 }
 
 fn ensure_window_capacity(app: &AppHandle, prefix: &str) -> Result<(), String> {
