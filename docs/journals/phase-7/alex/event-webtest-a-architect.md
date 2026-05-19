@@ -799,3 +799,100 @@ Items 9-10 (MCP auto-discovery) still blocked on
 
 State: 8801 server up. Clean two-pane layout left
 (NoiseGen + Focused, no test artifacts in events/).
+
+## 2026-05-19 (resume) BST - poke (webtest-a-7 COMPLETE)
+
+After @@Alex's `poke`. Final wave-B batch landed:
+`96f4f40` (systacean-14 auto-publish MCP), `e60287c`
+(fullstack-23 vertical rows + follow-up), `e25ca3d`
+(mcp-discovery SKILL). Full per-item write-up at
+[../webtest-a/webtest-a-7.md](../webtest-a/webtest-a-7.md);
+journal at
+[../webtest-a/journal.md](../webtest-a/journal.md).
+
+**All four landed pieces PASS:**
+
+* **Item 9 chan auto-publishes MCP — PASS**.
+  Restarted chan-server, all three discovery surfaces
+  got chan entries pointing at the live
+  `__mcp-proxy` Unix socket:
+  - `~/.claude.json`: under
+    `projects["/private/tmp/chan-webtest-a-1"].mcpServers.chan`
+    (and a sibling entry for Lane B's `chan-webtest-b-1`
+    drive from the 8810 chan-server).
+  - `~/.codex/config.toml`: `[mcp_servers.chan]`
+    global.
+  - `~/.gemini/settings.json`: top-level
+    `mcpServers.chan` global.
+* **Item 10 user MCP untouched — PASS by code+test
+  audit** (commit `96f4f40` adds 413 lines of
+  `mcp_discovery.rs` plus tmp-file based additive-
+  update tests).
+* **Item 11 SKILL drift — PASS**. `mcp-discovery.md`
+  documents claude project-scope, codex global,
+  gemini global. Live behavior matches all three.
+* **fullstack-23 — PASS**. Bubble survey options now
+  render as vertical full-width rows:
+  ```
+  [ 1 alpha    ]
+  [ 2 beta     ]
+  [ 3 gamma    ]
+  1 extra option hidden.
+  follow up
+  ```
+  Truncation hint works (the auto-included
+  `Check my comments first` standing option got
+  hidden). New `follow up` affordance at the bubble
+  bottom-right.
+
+**Side observation worth flagging**: Codex + Gemini
+configs are **global**, so with multiple chan-serve
+instances running, both configs end up pointing at
+whichever chan-server started LAST (the 8810 socket
+in my session). Multi-instance users only have ONE
+chan-MCP reachable from codex/gemini at a time.
+Claude Code is per-project so both instances coexist.
+Worth either documenting in the SKILL or
+publishing per-instance names like
+`chan-<port>` for codex/gemini.
+
+**Final webtest-a-7 tally — 12 items walked:**
+
+```
+1  Spawn agent affordance                       pass
+2  Dialog accepts name/command/env + tab spawn  pass
+3  Spawned bash captures hi/bye                 pass
+4  Pre-flight bubble renders 1/2/3 options      partial *
+5  Spinner + counter                            n/a
+6  Option 2 (kill) closes tab                   n/a
+7  Activity indicator on unfocused tab          partial *
+8  Distinguished from dirty/watcher bullets     pass
+9  chan MCP auto-published                      pass
+10 User MCP entries untouched                   pass
+11 SKILL drift check                            pass
+12 (plus fullstack-23 vertical rows)            pass
+```
+
+`*` Items 4 + 7 share the same architectural seam:
+the server emits the data (pre-flight file written
+to events/; `bytes_since_focus` tracking with
+focus/activity WS frames), the SPA has the render
+code (`BubbleOverlay.svelte` pre-flight branches;
+`Pane.svelte` `dirty activity` span), but the
+WebSocket signal that flips SPA state isn't being
+processed. Hand-off to @@FullStack + @@Systacean.
+
+**Bonus confirmations from earlier waves** spotted
+live during this session:
+* fullstack-17 stale-watcher cleanup toast
+  (`‹ watcher detached on reload`) fires correctly
+  when the SPA reattaches to a server that no longer
+  knows about the prior watcher.
+* fullstack-17 absolute-path dialog acceptance hasn't
+  been needed (the drive-relative path still works),
+  but the relaxation is in.
+
+8801 server up; chan MCP entries durable in
+claude/codex/gemini configs (refreshed on each
+chan-server startup). webtest-a-7 closed from my
+side. Standing by for the next wave.

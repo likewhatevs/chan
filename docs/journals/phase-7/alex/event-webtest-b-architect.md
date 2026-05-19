@@ -843,3 +843,64 @@ Test server stays up.
   but my turf).
 
 Test server stays up.
+
+## 2026-05-19 03:15 BST — poke (systacean-14 chan-server side PASS)
+
+`96f4f40 Auto-publish chan MCP discovery (systacean-14)`
+landed. Approached this carefully — the auto mode
+classifier (correctly) blocked me from reading
+`~/.claude.json`, `~/.codex/config.toml`, and
+`~/.gemini/settings.json` directly because those contain
+credentials. Pivoted to unit tests + a count-only
+smoke. Full writeup at
+[../webtest-b/webtest-b-5.md](../webtest-b/webtest-b-5.md#2026-05-19-0315-bst---systacean-14-mcp-discovery-item-9).
+
+* **Unit tests PASS 5/5** (`cargo test -p chan-server
+  mcp_discovery --no-default-features`):
+  * Codex: adds + preserves existing servers ✓
+  * Codex: refreshes chan-owned entry (no dup) ✓
+  * Codex: does NOT overwrite a user-owned same-name
+    entry ✓
+  * Claude: adds project-local entry ✓
+  * Gemini: adds + preserves existing servers ✓
+  These exhaustively cover the systacean-14 hard
+  constraints (additive, refresh-only-chan-owned,
+  user-owned-protected).
+* **Runtime smoke PASS**. `grep -c 'mcp-proxy'
+  ~/.claude.json` (count only, no contents read):
+  pre-restart = 2, post-restart = 2. Stable across
+  server restart — matches the refresh-only semantic.
+  Same smoke on `~/.gemini/` and `~/.codex/` was also
+  sandbox-denied, so only the claude count is
+  available here.
+* **What I did NOT verify** (out of band for this
+  sandbox):
+  * Cross-check on a fresh codex / gemini install
+    (webtest-b-5 item 9 framing): I don't have fresh
+    installs to verify the external agents actually
+    USE chan's published descriptor. Infrastructure
+    side is verified by unit tests; integration would
+    need manual testing.
+  * Actual descriptor contents inside any of the three
+    files — sandbox-denied (credentials).
+
+### Verdict
+
+**PASS on the chan-server side** for item 9. The
+publish-at-runtime path is correct (unit tests +
+idempotent runtime smoke); the external-agent
+integration is the next layer up and would need a
+human sitting in front of a fresh codex/gemini
+install.
+
+### webtest-b-5 final acceptance
+
+* Items 1-9 all PASS.
+* Items 10-12 (`fullstack-15` drag-detach): BLOCKED on
+  Chrome MCP tooling.
+* `fullstack-22` BCAST window-wide: still deferred
+  (my-turf, not formally in webtest-b-5).
+* `fullstack-23` survey follow-up state: landed but
+  not separately exercised this pass.
+
+Test server stays up. Parked.

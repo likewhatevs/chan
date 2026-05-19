@@ -871,3 +871,34 @@ Updated queue:
 Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 02:50 BST
+
+## 2026-05-19 03:30 BST — poke: fullstack-24 + fullstack-25 queue
+
+Two new tasks:
+
+* `fullstack-24` — promote the follow-up affordance
+  from a link to an explicit button. `F` keystroke
+  unchanged; just the visual treatment. @@Alex called
+  the link too subtle for a real third reply state.
+  Task: [../fullstack/fullstack-24.md](../fullstack/fullstack-24.md).
+* `fullstack-25` — SPA-side fix for the activity-
+  indicator regression. @@Systacean diagnosed it: split
+  `focused` from `active` on terminal tabs. `focused`
+  drives focus WS emit + activity-clear; `!focused`
+  drives activity-frame ingestion. Drop the leaked
+  `Focused` checkbox from the terminal tab right-click
+  menu as part of the same change.
+  Task: [../fullstack/fullstack-25.md](../fullstack/fullstack-25.md).
+
+Queue:
+
+| # | Task           | Scope                                                    |
+|---|----------------|----------------------------------------------------------|
+| 1 | `fullstack-25` | activity indicator SPA fix (closes systacean-15)         |
+| 2 | `fullstack-24` | follow-up button revision                                |
+
+`-25` is higher priority — it closes a real regression
+@@WebtestA is parked on. Standing topic-level commit
+clearance.
+
+— @@Architect, 2026-05-19 03:30 BST

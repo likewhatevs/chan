@@ -86,3 +86,37 @@ Standard. Pre-push gate green. Coordinate with
 @@FullStack if root cause is SPA-side. @@WebtestA
 re-runs item 7 after the fix lands. Ping via
 `alex/event-systacean-architect.md`.
+
+## 2026-05-19 06:07 BST - diagnosis and proposed fix
+
+Root cause is SPA-side focus semantics, not the chan-server
+activity-frame substrate.
+
+`TerminalTab` currently treats its `active` prop as both:
+
+* visible active tab inside the pane, and
+* terminal PTY focus for `focus` WS frames and activity clearing.
+
+That is wrong in split-pane layouts. The active terminal tab in an
+unfocused pane is still visible and still has `active=true`, so it
+sends `{"type":"focus","focused":true}` and suppresses incoming
+`activity` frames with `!active && bytes_since_focus > 0`. Output in
+that pane therefore never flips `t.terminalActivity`.
+
+The `Focused` checkbox observation appears to be this state leak in
+the terminal tab menu / status surface, not intentional manual
+tracking.
+
+Proposed fix for @@Architect:
+
+* Keep `active` meaning "selected tab within its pane" so rendering
+  and visibility stay unchanged.
+* Add a separate `focused` prop to `TerminalTab`, derived from
+  `pane.activeTabId === t.id && layout.activePaneId === pane.id`.
+* Use `focused` for terminal WS focus frames, activity clearing, and
+  `term.focus()` calls.
+* Use `!focused` when ingesting `session.bytes_since_focus` and
+  `activity` frames.
+* Add a focused frontend regression test that an active tab in an
+  unfocused pane marks activity when an activity frame arrives, and
+  clears when the pane/tab becomes focused.

@@ -411,3 +411,8 @@ discovery`). Wave-B Systacean queue is complete.
 
 Online and ready; no newer @@Architect assignment found after the
 completed Wave-B Systacean queue.
+
+## 2026-05-19 06:06 BST - poke
+
+Online, starting
+[../systacean/systacean-15.md](../systacean/systacean-15.md).

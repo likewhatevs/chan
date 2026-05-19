@@ -561,3 +561,70 @@ Items 9-10 (MCP discovery) still blocked on
 `systacean-14`.
 
 8801 server up; clean two-pane layout left.
+
+## 2026-05-19 (resume) BST - webtest-a-7 wave-B complete
+
+After @@Alex's `poke`. Final wave-B batch landed:
+`96f4f40` (systacean-14 auto-publish chan MCP),
+`e60287c` (fullstack-23 vertical numbered rows +
+follow-up), `e25ca3d` (mcp-discovery SKILL).
+
+**All four newly-landed items PASS:**
+
+* **Item 9 systacean-14**: chan-server publishes its
+  `__mcp-proxy` descriptor into all three discovery
+  surfaces (`~/.claude.json` per-project,
+  `~/.codex/config.toml` global, `~/.gemini/settings.json`
+  global). Each entry points at the live chan-mcp
+  Unix socket. Per-instance behavior: each chan-serve
+  publishes its own socket; Claude is per-project so
+  multiple instances coexist, Codex + Gemini are
+  global so the latest startup wins.
+* **Item 10 user MCP untouched**: PASS by code+test
+  audit. Commit explicitly adds tmp-file tests for
+  additive config updates.
+* **Item 11 SKILL drift**: `mcp-discovery.md` matches
+  the live behavior across all three agents.
+* **fullstack-23**: rich-prompt survey options now
+  render as vertical full-width rows. Truncation hint
+  `1 extra option hidden.` works (auto-included
+  standing option got hidden). `follow up` affordance
+  visible at bubble bottom-right.
+
+**Side observation**: Codex + Gemini configs are
+global, so multi-instance users only see the LATEST
+chan-serve's MCP socket. Worth a per-instance
+published name like `chan-<port>` or doc note. Flag
+for @@Systacean + @@Architect.
+
+**Final webtest-a-7 tally (12 items):**
+- 9 PASS (1, 2, 3, 8, 9, 10, 11, plus all fullstack-21
+  + fullstack-23 sub-items).
+- 2 PARTIAL (4 pre-flight bubble, 7 activity indicator)
+  — same architectural seam, SPA-side WebSocket signal
+  ingestion is the gap.
+- 2 N/A (5, 6) — gated on item 4 rendering.
+
+Full per-item write-up at
+[webtest-a-7.md](webtest-a-7.md).
+
+State: 8801 server up; chan MCP entries published into
+claude/codex/gemini configs (durable across restarts;
+chan refreshes only its own entries).
+
+## 2026-05-19 (resume) BST - systacean-15 cut from my item-7 repro
+
+After @@Alex's `poke`. New commit `e91d8a4` cuts
+`systacean-15` from my webtest-a-7 item 7 PARTIAL —
+"backend wire fires, SPA render code exists, but
+`t.terminalActivity` never flips". @@Systacean leads the
+investigation; @@FullStack if root cause is SPA-side.
+The cut even captured my Focused-checkbox side
+observation as a possible lead.
+
+systacean-15 (the fix) hasn't landed yet — just the
+task file. No new actionable work for me right now.
+
+8801 server stays up. Standing by for the systacean-15
+fix to re-test item 7, or the pre-flight bubble seam to
+re-test item 4, or a new task cut.

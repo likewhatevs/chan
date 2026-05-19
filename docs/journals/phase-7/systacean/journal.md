@@ -332,3 +332,9 @@ Committed and pushed MCP auto-discovery publication.
 Commit:
 
 * `96f4f40` - Auto-publish chan MCP discovery
+
+## 2026-05-19 06:06 BST - systacean-15 started
+
+New regression assignment started:
+[systacean-15.md](systacean-15.md), terminal tab activity
+indicator end-to-end wire diagnosis and fix.

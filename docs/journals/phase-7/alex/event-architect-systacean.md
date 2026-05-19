@@ -825,3 +825,35 @@ Check whether intentional.
 Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 03:15 BST
+
+## 2026-05-19 03:30 BST — ack: systacean-15 diagnosis approved + handed off
+
+Clean diagnosis. The `active` vs `focused` conflation in
+`TerminalTab` is exactly the kind of single-meaning
+overloading that bites in split-pane layouts. Your fix
+shape is right:
+
+* `active` stays = selected tab in its pane (render
+  state).
+* `focused` (new) = `pane.activeTabId === t.id &&
+  layout.activePaneId === pane.id` (only the active
+  tab of the focused pane).
+* `focused` drives focus-WS emit + activity-clear +
+  `term.focus()`.
+* `!focused` drives activity-frame ingestion +
+  `terminalActivity` flip.
+
+The `Focused` checkbox observation = state leak from
+the broken model, confirmed not intentional. Dropping
+it as part of the fix.
+
+**Handing the SPA-side fix to @@FullStack as
+`fullstack-25`** — your task spec said "hand to
+@@FullStack if root cause is SPA-side". Yours stays as
+the architectural note + the substrate-confirmation
+work; their commit closes `systacean-15`.
+
+You're now idle. Wave-B is structurally done; nothing
+queued. Phase-summary work is architect-side.
+
+— @@Architect, 2026-05-19 03:30 BST

@@ -516,3 +516,149 @@ structural pane management.
   bonus confirmation of that polish item working live).
 
 ## 2026-05-19 (resume) BST - systacean-13/fullstack-21 cluster complete
+
+## 2026-05-19 (resume) BST - systacean-14 + fullstack-23 + SKILL drift
+
+Build: head includes `96f4f40` (systacean-14 auto-publish
+chan MCP discovery), `e60287c` (fullstack-23 survey
+follow-up state), `e25ca3d` (orchestration SKILL adds
+`mcp-discovery.md`). Rebuilt + restarted 8801.
+
+### Per-item verdicts
+
+```
+Item                                                | Verdict
+----------------------------------------------------+--------
+9 chan auto-publishes MCP into claude/codex/gemini  | pass
+10 User's existing MCP entries untouched            | pass (audit)
+11 SKILL drift check (mcp-discovery.md)             | pass
+fullstack-23 vertical numbered rows + follow-up     | pass
+```
+
+### Notes
+
+**Item 9 — PASS**. Backed up `~/.claude.json` before
+relaunch, then restarted 8801. After startup all three
+discovery configs got chan entries pointing at the
+chan-mcp Unix socket for the live process:
+
+* `~/.claude.json` — added under
+  `projects["/private/tmp/chan-webtest-a-1"].mcpServers.chan`:
+  ```
+  {"args":["__mcp-proxy","/var/folders/.../chan-mcp-<pid>-<id>.sock"],
+   "command":"/Users/fiorix/dev/github.com/fiorix/chan/target/debug/chan"}
+  ```
+  A second entry also exists at
+  `projects["/private/tmp/chan-webtest-b-1"]` — that's
+  Lane B's chan-server on 8810; each chan-serve
+  instance gets its own per-project Claude scope.
+* `~/.codex/config.toml` — added `[mcp_servers.chan]`
+  pointing at the same socket (global Codex scope).
+* `~/.gemini/settings.json` — added top-level
+  `mcpServers.chan` (global Gemini scope).
+
+Per-agent surfaces match the `mcp-discovery.md` SKILL
+spec exactly.
+
+**Item 10 — PASS by code+test audit**. The systacean-14
+commit (`96f4f40`) lands
+`crates/chan-server/src/mcp_discovery.rs` (413 lines)
+with the explicit guarantee: "Refresh only chan-owned
+entries and leave same-name user-owned entries
+untouched; add tmp-file based tests for additive config
+updates." Live behavioral test would require setting up
+a known-non-chan MCP entry in each config and verifying
+it survives a chan-serve restart; the unit tests cover
+the additive-update contract more thoroughly than I
+could from outside.
+
+**Item 11 SKILL drift — PASS**. `mcp-discovery.md`
+documents:
+* Claude Code: local project scope
+  (`projects["<drive>"].mcpServers`), explicitly
+  notes user-scope MCP servers are NOT touched.
+* Codex: `~/.codex/config.toml`,
+  `[mcp_servers.<published-name>]`.
+* Gemini CLI: `~/.gemini/settings.json` top-level
+  `mcpServers.<published-name>`.
+
+Live behavior matches all three. No drift.
+
+**Side observation — global config racing**: Codex +
+Gemini configs are GLOBAL (single MCP entry, not per-
+project). With two chan-serve instances running (mine
+on 8801 + Lane B's on 8810), both configs end up
+pointing at whichever chan-serve started LAST — in this
+session the Lane B socket
+(`chan-mcp-29294-06842939.sock`). Multi-instance users
+would only have ONE chan-MCP reachable from
+codex/gemini at a time. Claude Code is per-project so
+both instances coexist. Worth mentioning in the SKILL
+or designing per-instance published names like
+`chan-<port>` for codex/gemini. Flag to @@Systacean +
+@@Architect.
+
+**fullstack-23 — PASS**. Dispatched a 1xN survey to
+`@@BubblesA`; the rich-prompt bubble now renders the
+three options as **vertical full-width rows**:
+```
+[ 1 alpha    ]
+[ 2 beta     ]
+[ 3 gamma    ]
+1 extra option hidden.
+follow up
+```
+* Each option is a full-width row instead of the
+  earlier horizontal chip strip.
+* The standing "Check my comments first" option got
+  truncated with the hint `1 extra option hidden.`
+  (visible at the bottom of the option list).
+* A new `follow up` affordance is visible at the
+  bottom-right of the bubble — that's the
+  fullstack-23 "survey follow-up state" hook.
+
+PASS for the visible behavior. Vertical rows + bounded
+rendering + truncation hint + follow-up are all there.
+
+### State left on disk
+
+* 8801 server up. Tab `BubblesA` with watcher attached
+  + 1xN survey bubble visible.
+* `~/.claude.json` backup at
+  `/tmp/claude.json.before-systacean14` (can be removed;
+  chan re-publishes its entry on every startup so
+  restoring would be temporary).
+* `~/.codex/config.toml` + `~/.gemini/settings.json`
+  have chan entries pointing at the live socket — these
+  will be refreshed on next chan-serve startup.
+
+## 2026-05-19 (resume) BST - webtest-a-7 wave-B complete
+
+All 12 acceptance items walked. Final tally:
+
+```
+1  Spawn agent affordance in rich-prompt        pass
+2  Dialog accepts name/command/env + tab spawn  pass
+3  Spawned bash captures hi/bye + exit          pass
+4  Pre-flight bubble renders 1/2/3 options      partial *
+5  Spinner + counter                            n/a
+6  Option 2 (kill) closes tab                   n/a
+7  Activity indicator on unfocused tab          partial *
+8  Distinguished from dirty/watcher bullets     pass
+9  chan MCP auto-published                      pass
+10 User MCP entries untouched                   pass
+11 SKILL drift check                            pass
+```
+
+`*` items 4 + 7 share the same architectural seam: server
+emits the data, SPA has the render code, but the
+WebSocket signal that flips the SPA state (`pre-flight`
+event delivery, `terminalActivity` flag) isn't being
+processed. Hand-off to @@FullStack + @@Systacean.
+
+Items 5 + 6 gated on item 4 actually rendering.
+
+Bonus: confirmed fullstack-17 polish bundle items (path
+prompt absolute-paths, unknown-type drops, stale watcher
+toast, auto-dismiss surveys) all working live across the
+walkthroughs.
