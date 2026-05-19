@@ -357,3 +357,61 @@ Out of scope (documented in task file):
 Committing + pushing under standing topic-level
 clearance. Next: `-59` (per-Hybrid theme render
 + hash round-trip per 18:00 BST directive).
+
+## 2026-05-19 19:45 BST
+
+Picked up `fullstack-59` (per-Hybrid theme render).
+UX fork: went with option **(2)** — global toggle
+in Settings stays as "default for new panes",
+per-side override sits on the Hybrid chrome next
+to the back-attention dot. Single icon button that
+cycles `pane.theme` between `undefined` (follow
+global) and the inverse-of-global override.
+
+Render wiring is two minimal changes:
+* `data-theme={pane.theme}` on the pane root
+  `<div>` (renders no attribute when undefined).
+* App.svelte's existing token blocks gain
+  `.pane[data-theme="dark"]` / `.pane[data-theme="light"]`
+  via selector grouping — no token duplication.
+
+Toggle button:
+* `Sun` icon when effective theme is dark (click
+  switches to light).
+* `Moon` icon when effective theme is light
+  (click switches to dark).
+* When override active, button borders + icon
+  paint with `--link` so it's visible at a glance
+  that this pane diverges.
+
+Hash round-trip: confirmed by inspection. The
+existing `ht`/`hb` serialization from -48 phase A
+is what the render now consumes. No new hash
+fields needed. `togglePaneTheme()` writes
+`pane.theme` and calls `scheduleSessionSave()`;
+the next serialize sees current state.
+
+Tests: new source-grep sentinel in
+`perHybridTheme.test.ts` (4 assertions) covering
+the four invariants the wiring depends on. Same
+pattern as `revealBrowserActions.test.ts`. Model-
+layer tests (flip + round-trip) already exist
+from -48 phase A; no need to duplicate.
+
+Gate green: svelte-check 0/0 (the GraphPanel
+warnings from earlier today cleared in -64's
+revision), vitest 36/378, build clean, pre-push
+green.
+
+Visual eyeball: skipped. The source-grep tests
+pin the wiring; the model-layer tests already pass
+the walker's table. If @@Alex flags pixel issues
+on the next walkthrough, I'll follow up.
+
+Re-walk flag: `webtest-b-6` item 11 should
+re-walk. Architect to coordinate; Lane A's
+`webtest-a-11` may absorb it.
+
+Committing + pushing under standing topic-level
+clearance. Lane B queue remaining: -60, -62, -63,
+-67.

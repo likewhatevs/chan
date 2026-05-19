@@ -43,6 +43,7 @@
     Folder,
     LayoutGrid,
     ListX,
+    Moon,
     Network,
     PanelRight,
     Palette,
@@ -51,6 +52,7 @@
     Search,
     Settings,
     SquareSplitHorizontal,
+    Sun,
     Terminal,
     User,
     X,
@@ -61,7 +63,12 @@
   import GraphPanel from "./GraphPanel.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import TerminalTab from "./TerminalTab.svelte";
-  import { refreshTree, tree } from "../state/store.svelte";
+  import {
+    refreshTree,
+    scheduleSessionSave,
+    tree,
+    ui,
+  } from "../state/store.svelte";
   import {
     tabLabel,
     tabLabelInPane,
@@ -236,6 +243,33 @@
   function onFlipHybrid(): void {
     closePaneMenus();
     flipHybrid(pane.id);
+  }
+
+  /// `fullstack-59`: per-Hybrid theme override. Click on the
+  /// Hybrid chrome's theme button cycles between "follow global"
+  /// (no override) and "override to the opposite of global". One
+  /// override slot per side; `flipHybrid()` already swaps the
+  /// stored override with the back-side override. The data-theme
+  /// attribute on the pane root drives the CSS cascade via the
+  /// `:global(.pane[data-theme="..."])` rules in App.svelte.
+  function paneEffectiveTheme(): "dark" | "light" {
+    return pane.theme ?? ui.theme;
+  }
+
+  function paneThemeTooltip(): string {
+    if (pane.theme === undefined) {
+      return `Theme: follow global (${ui.theme}). Click to override.`;
+    }
+    return `Theme: ${pane.theme} (per-Hybrid). Click to follow global.`;
+  }
+
+  function togglePaneTheme(): void {
+    if (pane.theme === undefined) {
+      pane.theme = ui.theme === "dark" ? "light" : "dark";
+    } else {
+      pane.theme = undefined;
+    }
+    scheduleSessionSave();
   }
 
   /// Subscribe to the structural-wobble bus. Each splitPane /
@@ -746,6 +780,7 @@
   class:focused={isFocused}
   class:wobble={wobbleActive}
   data-focus-color={focusColorForWindow()}
+  data-theme={pane.theme}
   onmousedown={() => setActivePane(pane.id)}
   onanimationend={(e) => {
     if (e.animationName === "pane-wobble-once") wobbleActive = false;
@@ -914,6 +949,25 @@
           title="back side has unread activity (Cmd+K Tab to flip)"
         ></span>
       {/if}
+      <!-- fullstack-59: per-Hybrid theme override toggle. Icon
+           shows the theme the click WILL apply (Sun in dark mode
+           offers a switch to light; Moon in light mode offers a
+           switch to dark). When the pane already has an override,
+           a second click clears it back to "follow global". -->
+      <button
+        type="button"
+        class="pane-theme-toggle"
+        class:overridden={pane.theme !== undefined}
+        title={paneThemeTooltip()}
+        aria-label={paneThemeTooltip()}
+        onclick={togglePaneTheme}
+      >
+        {#if paneEffectiveTheme() === "dark"}
+          <Sun size={14} strokeWidth={1.75} aria-hidden="true" />
+        {:else}
+          <Moon size={14} strokeWidth={1.75} aria-hidden="true" />
+        {/if}
+      </button>
       <!-- Pane-only controls live inside a single hamburger menu
            to match the file browser / search / graph overlays.
            Split rows hide when the platform doesn't allow any splits
@@ -1338,6 +1392,32 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .back-attention { animation: none; }
+  }
+  /* fullstack-59: per-Hybrid theme toggle. Same chrome footprint
+     as the hamburger so the two read as a pair; coloured swatch
+     ring when the override is active so it's visible at a glance
+     that this pane diverges from the global theme. */
+  .pane-theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .pane-theme-toggle:hover {
+    background: var(--hover-bg);
+    color: var(--text);
+  }
+  .pane-theme-toggle.overridden {
+    color: var(--link);
+    border-color: var(--link);
   }
   :global(.hamburger-menu .menu-label) {
     display: flex;

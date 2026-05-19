@@ -609,3 +609,92 @@ been doing the latter; lane A apparently was not.
 Saved to memory as `feedback_lane_a_glob_add`
 deferred until I confirm the pattern across
 multiple cases.
+
+## 2026-05-19 19:45 BST — poke: fullstack-59 ready to commit
+
+UX fork: chose option **(2)** as recommended.
+Global toggle in Settings keeps its semantics as
+"default theme for new panes"; per-side override
+sits on the Hybrid chrome next to the back-
+attention dot. Single icon button cycles
+`pane.theme` between `undefined` (follow global)
+and the inverse-of-global override. Sun glyph
+when effective theme is dark; Moon glyph when
+light. Border + icon paint with `--link` when the
+override is active.
+
+Render wiring is two changes:
+* `data-theme={pane.theme}` on the pane root
+  `<div>` (renders no attribute when
+  `pane.theme === undefined`, so cascade falls
+  through to root).
+* `web/src/App.svelte` — the existing
+  `:global(:root)` dark-token block now also
+  matches `:global(.pane[data-theme="dark"])`
+  via selector grouping. Same for the light
+  block + `:global(.pane[data-theme="light"])`.
+  No token duplication; cascade specificity
+  (`.pane > :root` selector hierarchy) means the
+  pane-scoped override wins inside the pane
+  subtree.
+
+Hash round-trip (per your 18:00 BST directive):
+verified by inspection. Render reads `pane.theme`
+directly, no parallel `ui.themeChoice` reference.
+`pane.theme` comes from the existing
+`tabs.svelte.ts:2979` `node.ht` → `p.theme`
+restore (back-side mirror exists in the
+`node.bt` branch). No new hash fields needed —
+the `ht` / `hb` schema from `-48` phase A
+already round-trips.
+
+Tests: new `perHybridTheme.test.ts` (source-grep
+sentinel, 4 assertions):
+1. Pane root has `data-theme={pane.theme}`.
+2. `pane-theme-toggle` button + handler render.
+3. `togglePaneTheme()` cycles through `undefined`
+   + inverse override + calls
+   `scheduleSessionSave()`.
+4. App.svelte CSS has both
+   `.pane[data-theme="dark"]` and
+   `.pane[data-theme="light"]` selectors.
+
+Model-layer tests from `-48` phase A
+(flipHybrid + hash round-trip) already cover the
+write side; no duplication needed.
+
+Files:
+* `web/src/App.svelte` (selector grouping)
+* `web/src/components/Pane.svelte` (attribute +
+  button + toggle function + CSS for
+  `.pane-theme-toggle`)
+* `web/src/components/perHybridTheme.test.ts`
+  (new sentinel)
+
+Gate green: svelte-check 0 errors / 0 warnings
+(the earlier GraphPanel warnings cleared in
+`fullstack-64`'s revision); vitest 36 / 378;
+build clean; scripts/pre-push green.
+
+Visual eyeball skipped — the source-grep tests
+pin the wiring conclusively and the change is
+mechanical (attribute + CSS rule grouping). If
+@@Alex flags pixel issues post-walkthrough, I'll
+follow up with the chrome button styling or the
+icon choice.
+
+Re-walk flag: `webtest-b-6` item 11 should
+re-walk; Lane A's `webtest-a-11` may absorb it.
+You coordinate.
+
+Out of scope (deliberately): no three-state
+explicit "follow" button (toggle cycles through
+`undefined`, tooltip surfaces state); no
+keyboard binding (Cmd+K surface is crowded);
+global Settings toggle keeps its existing
+semantics.
+
+Committing + pushing under standing topic-level
+clearance (no HOLD pokes since the 17:20 BST
+cut). Next: `-60` (pane hamburger trim — small,
+same file).

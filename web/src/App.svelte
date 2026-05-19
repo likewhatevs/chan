@@ -790,7 +790,12 @@
      as "the markdown notes app" rather than "GitHub Dark with our
      stuff in it"; functional colors (link blue, accent green, warn
      amber, pane focus) are kept distinct. */
-  :global(:root) {
+  /* `fullstack-59`: pane-scoped theme overrides re-apply the same
+     token block at `.pane[data-theme="..."]` so a per-Hybrid theme
+     pick cascades to the pane's subtree without touching the root.
+     A pane with no `data-theme` attribute inherits from the root. */
+  :global(:root),
+  :global(.pane[data-theme="dark"]) {
     --bg: #1c1c1e;
     --bg-card: #232325;
     --bg-elev: #2a2a2c;
@@ -889,7 +894,8 @@
        into the background). */
     --pane-shadow: 0 1px 6px rgba(255, 255, 255, 0.08);
   }
-  :global([data-theme="light"]) {
+  :global([data-theme="light"]),
+  :global(.pane[data-theme="light"]) {
     --bg: #ffffff;
     --bg-card: #f5f5f7;
     --bg-elev: #ffffff;
