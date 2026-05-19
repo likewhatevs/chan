@@ -178,6 +178,37 @@ describe("BubbleOverlay", () => {
     });
   });
 
+  test("follow-up affordance renders as an explicit button with F marker", async () => {
+    const watcher: TerminalWatcherState = {
+      path: "events",
+      seenIds: ["follow-button"],
+      unread: false,
+      events: [
+        {
+          id: "follow-button",
+          type: "survey",
+          from: "@@Architect",
+          to: "@@Alex",
+          path: "events/event-follow-button.md",
+          questions: [
+            {
+              header: "Mode",
+              text: "Pick mode",
+              options: [{ key: "1", label: "Fast" }],
+            },
+          ],
+        },
+      ],
+    };
+    const { target } = await renderOverlay(watcher);
+
+    const followButton = target.querySelector(".follow-button");
+    expect(followButton).toBeInstanceOf(HTMLButtonElement);
+    expect(target.querySelector(".follow-link")).toBeNull();
+    expect(followButton?.querySelector("kbd")?.textContent).toBe("F");
+    expect(followButton?.textContent).toContain("follow up");
+  });
+
   test("F marks the focused survey as follow-up and a later answer supersedes it", async () => {
     vi.useFakeTimers();
     const { writeReply } = installReplySpies();

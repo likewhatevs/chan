@@ -480,3 +480,7 @@ worktree with only the `fullstack-23` patch applied.
 ## 2026-05-19 06:11 BST — poke
 
 online, starting `fullstack-25` after architect go-ahead.
+
+## 2026-05-19 06:13 BST — poke
+
+online, starting `fullstack-24` after `fullstack-25` landed on main.

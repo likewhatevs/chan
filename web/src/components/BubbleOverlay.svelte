@@ -397,10 +397,13 @@
                 {/if}
                 <button
                   type="button"
-                  class="follow-link"
+                  class="follow-button"
                   disabled={busyReply === event.id}
                   onclick={() => void markFollowUp(event)}
-                >follow up</button>
+                >
+                  <kbd>F</kbd>
+                  <span>follow up</span>
+                </button>
               </div>
             {:else}
               <p class="bubble-text">
@@ -572,19 +575,29 @@
     color: var(--text);
     font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
   }
-  .follow-link {
+  .follow-button {
     margin-top: 7px;
-    border: 0;
-    background: transparent;
+    min-height: 28px;
+    display: inline-grid;
+    grid-template-columns: 24px auto;
+    align-items: center;
+    gap: 7px;
+    width: fit-content;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--bg-card) 70%, transparent);
     color: var(--text-secondary);
-    padding: 0;
+    padding: 4px 8px;
     font: inherit;
     font-size: 12px;
-    text-decoration: underline;
   }
-  .follow-link:hover,
-  .follow-link:focus-visible {
+  .follow-button:hover,
+  .follow-button:focus-visible {
+    border-color: var(--link);
     color: var(--link);
+  }
+  .follow-button:disabled {
+    opacity: 0.65;
   }
   .follow-badge {
     min-height: 18px;
