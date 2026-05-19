@@ -15,6 +15,7 @@ import {
   resolvePathPrompt,
   ui,
 } from "../state/store.svelte";
+import { closeSpawnDialog } from "../state/spawnDialog.svelte";
 
 const mounted: Array<Record<string, any>> = [];
 
@@ -24,6 +25,7 @@ afterEach(() => {
   resolvePathPrompt(null);
   ui.status = null;
   resetLayout();
+  closeSpawnDialog();
   vi.restoreAllMocks();
 });
 
@@ -333,6 +335,16 @@ describe("TerminalRichPrompt", () => {
       },
     });
     mounted.push(component);
+    await tick();
+
+    // `fullstack-a-4`: SpawnDialog mounts at the App root in
+    // real life; in this test we mount it as a sibling so the
+    // global state singleton drives it through to render.
+    const SpawnDialog = (await import("./SpawnDialog.svelte")).default;
+    const dialogHost = document.createElement("div");
+    document.body.append(dialogHost);
+    const dialogComponent = mount(SpawnDialog, { target: dialogHost, props: {} });
+    mounted.push(dialogComponent);
     await tick();
 
     button(target, "Spawn agent").click();

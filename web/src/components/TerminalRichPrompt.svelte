@@ -16,7 +16,7 @@
   } from "../state/store.svelte";
   import { openInActivePane } from "../state/tabs.svelte";
   import type { TerminalSpawnResponse } from "../api/types";
-  import SpawnDialog from "./SpawnDialog.svelte";
+  import { openSpawnDialog as openGlobalSpawnDialog } from "../state/spawnDialog.svelte";
 
   let {
     prompt,
@@ -27,6 +27,7 @@
     onWatcherStarted,
     onWatcherStopped,
     onSpawned,
+    bubbleCount = 0,
   }: {
     prompt: TerminalRichPromptState;
     onSubmit: (source: string) => void;
@@ -36,6 +37,12 @@
     onWatcherStarted?: (path: string) => void;
     onWatcherStopped?: () => void;
     onSpawned?: (response: TerminalSpawnResponse, name: string) => void;
+    /// `fullstack-a-4`: number of unanswered survey bubbles
+    /// currently rendered above the prompt. When > 0, the prompt
+    /// does NOT auto-focus its input so numbered keystrokes flow
+    /// to the BubbleOverlay's window keydown handler. When the
+    /// count drops to 0, focus returns to the prompt input.
+    bubbleCount?: number;
   } = $props();
 
   const MIN_HEIGHT = 150;
@@ -47,7 +54,6 @@
   let menu = $state<{ x: number; y: number } | null>(null);
   let watcherError = $state("");
   let watcherBusy = $state(false);
-  let spawnOpen = $state(false);
   let dragging = false;
 
   // `fullstack-79`: auto-focus the input on every `openActiveTerminalRichPrompt`
@@ -56,8 +62,16 @@
   // even if the user had clicked away. `tick()` waits for the editor child's
   // `bind:this` to settle on first mount, and for the `{#key mode()}` block
   // to remount when the user toggles between wysiwyg and source.
+  //
+  // `fullstack-a-4`: when survey bubbles are present we leave focus
+  // alone so the BubbleOverlay's window keydown handler receives
+  // the numbered-reply keystrokes (its `editableTarget` guard
+  // would otherwise swallow them if the editor stole focus first).
+  // Once `bubbleCount` drops to 0, the effect re-runs and snaps
+  // focus back to the prompt input.
   $effect(() => {
     void prompt.focusNonce;
+    if (bubbleCount > 0) return;
     const inSource = mode() === "source";
     void tick().then(() => {
       if (inSource) {
@@ -197,7 +211,10 @@
 
   function openSpawnDialog(): void {
     menu = null;
-    spawnOpen = true;
+    openGlobalSpawnDialog({
+      orchestratorSessionId: terminalSessionId,
+      onSpawned: (response, agentName) => onSpawned?.(response, agentName),
+    });
   }
 
   async function stopWatching(): Promise<void> {
@@ -375,11 +392,6 @@
       </button>
     </div>
   {/if}
-  <SpawnDialog
-    bind:open={spawnOpen}
-    orchestratorSessionId={terminalSessionId}
-    onSpawned={(response, name) => onSpawned?.(response, name)}
-  />
 </div>
 
 <style>

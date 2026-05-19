@@ -138,6 +138,15 @@
   );
   const mcpEnvOn = $derived(terminalMcpEnvEnabled(tab));
   const watcherPath = $derived(tab.watcher?.path ?? null);
+  /// `fullstack-a-4`: count of survey/poke bubbles currently
+  /// visible in the BubbleOverlay (replies are siblings that
+  /// don't render). Passed to `TerminalRichPrompt` so the rich
+  /// prompt skips auto-focusing its input when bubbles are
+  /// waiting — numbered keystrokes then flow to BubbleOverlay's
+  /// window keydown handler. Re-derives on every watcher refresh.
+  const bubbleCount = $derived(
+    (tab.watcher?.events ?? []).filter((event) => event.type !== "survey-reply").length,
+  );
   const showMcpEnvDisabled = $derived(tab.sessionMcpEnv === false);
   const staleEnvName = $derived(terminalEnvTabNameStale(tab));
   const showStaleEnvPrompt = $derived(
@@ -267,6 +276,12 @@
 
   function start(): void {
     if (!host || term) return;
+    // `fullstack-b-2`: lineHeight bumped from 1.0 to 1.2 so
+    // multi-row ASCII glyphs (e.g. the Claude Code splash cube,
+    // figlet output, nethack tiles) render with the row separation
+    // a user gets from iTerm. xterm.js's 1.0 default packs ascender
+    // glyphs against the next row's descenders; visible regression
+    // captured in `docs/journals/phase-8/attachments/image-{3,4}.png`.
     term = new Terminal({
       allowTransparency: false,
       cursorBlink: true,
@@ -274,7 +289,7 @@
       fontFamily:
         'SFMono-Regular, ui-monospace, Menlo, Consolas, "Liberation Mono", monospace',
       fontSize: 13,
-      lineHeight: 1.0,
+      lineHeight: 1.2,
       macOptionIsMeta: true,
       scrollback: 20_000,
       tabStopWidth: 8,
@@ -652,7 +667,11 @@
   function submitRichPrompt(source: string): void {
     sendUserInput(source);
     scheduleTerminalSessionSave();
-    term?.focus();
+    // `fullstack-a-4`: caret stays in the rich prompt after
+    // Cmd+Enter so consecutive prompts are fluid. Previously we
+    // refocused the terminal here, which forced the user to
+    // click back into the prompt for every entry.
+    if (tab.richPrompt) tab.richPrompt.focusNonce = (tab.richPrompt.focusNonce ?? 0) + 1;
   }
 
   function watcherStarted(path: string): void {
@@ -1122,9 +1141,22 @@
       onWatcherStarted={watcherStarted}
       onWatcherStopped={watcherStopped}
       onSpawned={spawnCreated}
+      {bubbleCount}
     />
   {/if}
-  <div class="terminal-host" bind:this={host}></div>
+  <!-- `fullstack-a-4`: when the rich prompt is open we reserve
+       space at the bottom of the terminal-host equal to the
+       prompt's current height (heightPx) plus the resize-handle
+       gap. The xterm ResizeObserver picks the new size up and
+       calls `fit()`, so the bottom-most rendered line stays
+       visible above the prompt instead of being painted over. -->
+  <div
+    class="terminal-host"
+    bind:this={host}
+    style:margin-bottom={tab.richPrompt?.open
+      ? `${(tab.richPrompt.heightPx ?? 320) + 12}px`
+      : null}
+  ></div>
 </div>
 
 <style>

@@ -1,21 +1,20 @@
 <script lang="ts">
   import { Bot, Loader2, X } from "lucide-svelte";
   import { api } from "../api/client";
-  import type { TerminalSpawnResponse } from "../api/types";
+  import { closeSpawnDialog, spawnDialogState } from "../state/spawnDialog.svelte";
 
-  let {
-    open = $bindable(false),
-    defaultName = "@@Agent",
-    defaultCommand = "",
-    orchestratorSessionId,
-    onSpawned,
-  }: {
-    open?: boolean;
-    defaultName?: string;
-    defaultCommand?: string;
-    orchestratorSessionId?: string;
-    onSpawned: (response: TerminalSpawnResponse, name: string) => void;
-  } = $props();
+  // `fullstack-a-4`: SpawnDialog is now state-driven. It mounts
+  // once at the App root and renders whenever
+  // `spawnDialogState.request` is non-null. Callers (rich
+  // prompt's "Spawn agent" button, etc.) open it via
+  // `openSpawnDialog({ ...props })`. This keeps the dialog out
+  // of every ancestor stacking context that used to clip its
+  // `position: fixed` backdrop in practice.
+  const request = $derived(spawnDialogState.request);
+  const open = $derived(request !== null);
+  const defaultName = $derived(request?.defaultName ?? "@@Agent");
+  const defaultCommand = $derived(request?.defaultCommand ?? "");
+  const orchestratorSessionId = $derived(request?.orchestratorSessionId);
 
   let name = $state("");
   let command = $state("");
@@ -55,7 +54,7 @@
   }
 
   async function submit(): Promise<void> {
-    if (!canSubmit) return;
+    if (!canSubmit || !request) return;
     error = "";
     let env: Record<string, string> | undefined;
     try {
@@ -72,8 +71,8 @@
         ...(env ? { env } : {}),
         ...(orchestratorSessionId ? { orchestrator_session: orchestratorSessionId } : {}),
       });
-      onSpawned(response, name.trim());
-      open = false;
+      request.onSpawned(response, name.trim());
+      closeSpawnDialog();
     } catch (err) {
       error = `spawn failed: ${(err as Error).message}`;
     } finally {
@@ -83,7 +82,7 @@
 
   function close(): void {
     if (busy) return;
-    open = false;
+    closeSpawnDialog();
   }
 
   function onKey(e: KeyboardEvent): void {

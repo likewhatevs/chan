@@ -4,6 +4,7 @@
   import ConfirmModal from "./components/ConfirmModal.svelte";
   import ConflictModal from "./components/ConflictModal.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
+  import SpawnDialog from "./components/SpawnDialog.svelte";
   import FileBrowserSidePane from "./components/FileBrowserSidePane.svelte";
   import MissingTokenOverlay from "./components/MissingTokenOverlay.svelte";
   import PathPromptModal from "./components/PathPromptModal.svelte";
@@ -765,6 +766,13 @@
      once per window so any pane can trigger it; the dialog itself
      keys off `conflictDialog.tabId`. -->
 <ConflictModal />
+<!-- `fullstack-a-4`: Spawn agent dialog. Mounted at the App
+     root rather than inside the rich prompt so its `position:
+     fixed` backdrop is never clipped by an ancestor's stacking
+     context (the pane has `overflow: hidden`; Hybrid NAV adds
+     a `filter` to unfocused panes; the rich prompt itself is a
+     positioned z-index: 20 stacking context). -->
+<SpawnDialog />
 <!-- Disconnect overlay applies in every mode: any window is just
      as broken when the watcher dies, regardless of layout. -->
 <DisconnectOverlay />
