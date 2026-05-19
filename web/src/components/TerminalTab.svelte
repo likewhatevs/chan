@@ -57,12 +57,11 @@
     type TerminalTab as TerminalTabState,
   } from "../state/tabs.svelte";
   import {
-    browserOverlay,
     drive,
     fileOps,
     openFsGraphForDirectory,
     openSettings,
-    revealAndSelect,
+    revealPathInBrowser,
     scheduleSessionSave,
     searchPanel,
     ui,
@@ -616,8 +615,7 @@
     const cwd = terminalCwdRel();
     if (cwd === null) return terminalCwdUnavailable();
     closeTabMenu();
-    revealAndSelect(cwd);
-    browserOverlay.open = true;
+    revealPathInBrowser(cwd, { inspectorOpen: true });
     term?.focus();
   }
 

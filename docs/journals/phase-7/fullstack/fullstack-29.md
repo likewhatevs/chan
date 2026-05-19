@@ -141,3 +141,50 @@ how to handle scope drift cleanly.
 Standard. Pre-push gate green. The audit summary append
 is part of the hand-off — don't skip it. Ping via
 `alex/event-fullstack-architect.md`.
+
+## 2026-05-19 — audit summary
+
+Call sites checked:
+
+* `TerminalTab.svelte` right-click `Show Dir`: fixed.
+  It now calls `revealPathInBrowser(cwd, { inspectorOpen:
+  true })`, which focuses/creates a first-class File
+  Browser tab and never opens the legacy overlay.
+* `GraphPanel.svelte` inspector `Show File` /
+  `Show Directory`: fixed. Both semantic-file and
+  filesystem-node reveal handlers now call
+  `revealPathInBrowser(..., { inspectorOpen: true })`.
+* `FileEditorTab.svelte` tab-menu `Show File` and
+  missing-file re-open chooser: fixed to use
+  `revealPathInBrowser`, so doc-tab reveal lands in a
+  File Browser tab.
+* `SearchPanel.svelte` inspector `Show in file browser`:
+  fixed to use `revealPathInBrowser`; this is the same
+  shared `FileInfoBody` button path used by non-browser
+  inspector hosts.
+* `FileBrowserSurface.svelte` / `FileInfoBody.svelte`
+  File Browser tab inspector: audited. The File Browser
+  surface does not bind `onReveal`, so it does not render
+  a redundant `Show File` / `Show Directory` button for
+  a path already visible in the browser.
+* External `open_browser` window command and legacy
+  `#browser=` hash restore: fixed to translate into a
+  File Browser tab instead of setting `browserOverlay.open`
+  true.
+
+Menu/UI elements reviewed:
+
+* File Browser OverlayShell (`FileBrowserOverlay.svelte`):
+  removed. No File Browser OverlayShell component remains.
+* Terminal `Show Dir`: in spec; fixed as above.
+* Graph inspector `Show File` / `Show Directory`: in spec;
+  fixed as above.
+* Doc-tab `Show File`: in spec via doc-tab reveal; fixed as
+  above.
+* Search inspector `Show in file browser`: kept because it
+  is the shared file-inspector reveal action and now follows
+  the same tab behavior.
+* File Browser tab inspector reveal button: not rendered;
+  no extra UI to drop.
+
+Follow-up flags for @@Architect: none from this pass.

@@ -87,11 +87,10 @@
     openGraphForTag,
     openSettings,
     searchPanel,
-    openBrowser,
     openGraphAtNode,
     paneWidths,
     persistPaneWidths,
-    revealAndSelect,
+    revealPathInBrowser,
     ui,
   } from "../state/store.svelte";
   import {
@@ -165,14 +164,13 @@
     tab.mode === "wysiwyg" ? wysiwygRef?.findAdapter : sourceRef?.findAdapter,
   );
 
-  /// Reveal the open file in the File Browser overlay. Expand every
+  /// Reveal the open file in a File Browser tab. Expand every
   /// ancestor directory so the row is visible, set the browser
-  /// selection to this file, then open the overlay. Mirrors the
+  /// selection to this file, then focus/create the tab. Mirrors the
   /// post-create/move "land next to the thing you just produced"
   /// flow in `revealAndSelect`.
   function revealInBrowser(): void {
-    revealAndSelect(tab.path);
-    openBrowser();
+    revealPathInBrowser(tab.path, { inspectorOpen: true });
     closeTabMenu();
   }
 
@@ -404,8 +402,7 @@
   function doReopenMissing(): void {
     const parent = parentPath(tab.path);
     beginMissingFileReopen(tab.id);
-    revealAndSelect(parent || tab.path);
-    openBrowser();
+    revealPathInBrowser(parent || tab.path, { inspectorOpen: true });
     ui.status = "Choose the moved file in Files to re-open this tab";
   }
 

@@ -36,15 +36,13 @@
   import { openInActivePane } from "../state/tabs.svelte";
   import {
     availableSearchScopes,
-    browserOverlay,
     loadTreeDir,
-    openBrowser,
     openFsGraphForFile,
     openGraphForTag,
     openSettings,
     paneWidths,
     persistPaneWidths,
-    revealAndSelect,
+    revealPathInBrowser,
     searchPanel,
     searchStatusOverlay,
     tree,
@@ -921,9 +919,7 @@
             onReveal={() => {
               const sel = selection;
               if (sel?.kind === "file") {
-                revealAndSelect(sel.path);
-                openBrowser();
-                browserOverlay.inspectorOpen = true;
+                revealPathInBrowser(sel.path, { inspectorOpen: true });
                 close();
               }
             }}

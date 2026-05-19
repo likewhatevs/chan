@@ -6,7 +6,7 @@
   // and the host's body slot stays empty).
   //
   // Used by:
-  //   - FileBrowserOverlay: shows the current selection
+  //   - File Browser tab/dock: shows the current selection
   //     (browserSelection.path) plus an Open / × pair so the panel
   //     doubles as the action surface for the tree. References
   //     section (tags / mentions / dates / links / backlinks) is
@@ -540,7 +540,7 @@
       <div class="refs-error">report unavailable: {reportError}</div>
     {/if}
     {#if onReveal}
-      <!-- "Show Directory": jump to the file browser with this directory
+      <!-- "Show Directory": jump to a file browser tab with this directory
            selected. Hosted by surfaces that don't already live inside
            the browser (graph fs-mode inspector). The file browser
            itself leaves this prop unbound so the button doesn't
@@ -672,7 +672,7 @@
     {#if onSetAsScope}
       <!-- "Graph from here" re-scopes the current graph to this file (or
            image) and re-pins it as the focal node. Only rendered
-           when the host wires it up (today: the graph overlay). -->
+           when the host wires it up (today: the graph surface). -->
       <button class="open" onclick={onSetAsScope}>Graph from here</button>
     {/if}
     {#if showRefs}

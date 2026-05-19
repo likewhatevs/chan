@@ -12,13 +12,21 @@ import {
   openFsGraphForDirectory,
   openFsGraphForFile,
   persistStateToHash,
+  revealPathInBrowser,
   scheduleSessionSave,
   scopeFsGraphFromHere,
   settingsOverlay,
   tree,
   treeExpanded,
 } from "./store.svelte";
-import { activePane, layout, type GraphTab, type LeafNode, type TerminalTab } from "./tabs.svelte";
+import {
+  activePane,
+  layout,
+  type BrowserTab,
+  type GraphTab,
+  type LeafNode,
+  type TerminalTab,
+} from "./tabs.svelte";
 
 function setTerminalLayout(tab: Partial<TerminalTab> = {}): void {
   const terminal: TerminalTab = {
@@ -159,8 +167,9 @@ describe("window commands", () => {
       enter: true,
     });
 
-    expect(browserOverlay.open).toBe(true);
+    expect(browserOverlay.open).toBe(false);
     expect(browserSelection.path).toBe("notes/sub");
+    expect(activePane().tabs.some((tab) => tab.kind === "browser")).toBe(true);
     expect(treeExpanded.map[""]).toBe(true);
     expect(treeExpanded.map["notes"]).toBe(true);
     expect(treeExpanded.map["notes/sub"]).toBe(true);
@@ -177,10 +186,56 @@ describe("window commands", () => {
       select: "notes/photo.png",
     });
 
-    expect(browserOverlay.open).toBe(true);
+    expect(browserOverlay.open).toBe(false);
     expect(browserSelection.path).toBe("notes/photo.png");
+    expect(activePane().tabs.some((tab) => tab.kind === "browser")).toBe(true);
     expect(treeExpanded.map[""]).toBe(true);
     expect(treeExpanded.map["notes"]).toBe(true);
+  });
+
+  test("revealPathInBrowser focuses an existing browser tab instead of duplicating it", () => {
+    const leftBrowser: BrowserTab = {
+      kind: "browser",
+      id: "browser-left",
+      title: "Files",
+      inspectorOpen: false,
+    };
+    const left: LeafNode = {
+      kind: "leaf",
+      id: "pane-left",
+      tabs: [leftBrowser],
+      activeTabId: leftBrowser.id,
+    };
+    const rightTerminal: TerminalTab = {
+      kind: "terminal",
+      id: "term-right",
+      title: "Terminal",
+      createdAt: 1,
+      broadcastEnabled: false,
+      broadcastTargetIds: [],
+    };
+    const right: LeafNode = {
+      kind: "leaf",
+      id: "pane-right",
+      tabs: [rightTerminal],
+      activeTabId: rightTerminal.id,
+    };
+    layout.rootId = "root";
+    layout.activePaneId = right.id;
+    layout.nodes = {
+      root: { kind: "split", id: "root", direction: "row", a: left.id, b: right.id, ratio: 0.5 },
+      [left.id]: left,
+      [right.id]: right,
+    };
+
+    const tab = revealPathInBrowser("notes/today.md", { inspectorOpen: true });
+
+    expect(tab.id).toBe(leftBrowser.id);
+    expect(layout.activePaneId).toBe(left.id);
+    expect(left.tabs).toHaveLength(1);
+    expect(right.tabs).toHaveLength(1);
+    expect(browserSelection.path).toBe("notes/today.md");
+    expect(tab.inspectorOpen).toBe(true);
   });
 });
 

@@ -309,9 +309,8 @@
 
   function onOpen(path: string): void {
     void openInActivePane(path);
-    // The user wanted to read or edit the file, not keep the picker
-    // hovering over the editor. Mirrors the inspector's "Open"
-    // button behaviour in FileBrowserOverlay.openSelected().
+    // The user wanted to read or edit the file, not keep the legacy
+    // picker hovering over the editor.
     if (browserOverlay.open) browserOverlay.open = false;
   }
 
@@ -332,9 +331,8 @@
 
   function showMenu(ev: MouseEvent, path: string, isDir: boolean): void {
     ev.preventDefault();
-    // Stop the FileBrowserOverlay's drive-actions context menu from
-    // also firing — row right-click stays row-scoped (rename, delete,
-    // new under here); only empty-area right-clicks reach the parent.
+    // Row right-click stays row-scoped (rename, delete, new under
+    // here); only empty-area right-clicks reach the parent surface.
     ev.stopPropagation();
     menu = { x: ev.clientX, y: ev.clientY, path, isDir };
   }
@@ -958,7 +956,7 @@
     margin-right: 2px;
   }
   /* Cmd+F highlight on rows whose filename matches the active find
-     query (FileBrowserOverlay drives setFindQuery). The current
+     query (FileBrowserSurface drives setFindQuery). The current
      match gets a stronger ring so step-through (Enter / Shift+Enter)
      is visually obvious. Uses --warn-text so the highlight reads as
      "attention" without colliding with selection or hover bands. */

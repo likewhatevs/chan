@@ -41,11 +41,10 @@
     availableGraphScopes,
     graphReloadSignal,
     graphOverlay,
-    openBrowser,
     openSettings,
     paneWidths,
     persistPaneWidths,
-    revealAndSelect,
+    revealPathInBrowser,
     scopeFsGraphFromHere,
     tree,
   } from "../state/store.svelte";
@@ -596,8 +595,7 @@
   /// selection is an image, so it's safe to bind for every file.
   function revealSelectedFile(): void {
     if (selectedNode && selectedNode.kind === "file" && !selectedNode.missing) {
-      revealAndSelect(selectedNode.path);
-      openBrowser().inspectorOpen = true;
+      revealPathInBrowser(selectedNode.path, { inspectorOpen: true });
       close();
     }
   }
@@ -615,8 +613,7 @@
       (isFsDirectory(selectedFsNode) || selectedFsNode.kind === "file") &&
       selectedFsNode.path !== undefined
     ) {
-      revealAndSelect(selectedFsNode.path);
-      openBrowser().inspectorOpen = true;
+      revealPathInBrowser(selectedFsNode.path, { inspectorOpen: true });
       close();
     }
   }

@@ -325,11 +325,12 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
     return;
   }
   if (frame.command === "open_browser" && typeof frame.path === "string") {
-    browserOverlay.open = true;
     if (frame.enter === true) {
-      revealAndEnterDirectory(frame.path);
+      revealPathInBrowser(frame.path, { enter: true, inspectorOpen: true });
     } else {
-      revealAndSelect(typeof frame.select === "string" ? frame.select : frame.path);
+      revealPathInBrowser(typeof frame.select === "string" ? frame.select : frame.path, {
+        inspectorOpen: true,
+      });
     }
     ui.status = frame.select ? `selected ${frame.select}` : `opened ${frame.path || "/"}`;
     scheduleSessionSave();
@@ -631,7 +632,8 @@ function applyOverlaysFromHash(): void {
     // row isn't visible because an ancestor is collapsed, opening
     // that ancestor reveals it — the saved collapse wins.
     browserSelection.path = path || null;
-    browserOverlay.open = true;
+    const tab = openBrowser();
+    if (ins !== null) tab.inspectorOpen = ins;
   }
   if (params.has(HASH_SEARCH)) {
     // Encoding: `<inspectorBit>:<query>`. Both fields optional.
@@ -1441,9 +1443,40 @@ export const browserOverlay = $state<{
 }>({ open: false, inspectorOpen: defaultInspectorOpen() });
 
 export function openBrowser(): BrowserTab {
-  const tab = openBrowserInActivePane();
+  const tab = focusExistingBrowserTab() ?? openBrowserInActivePane();
   browserOverlay.open = false;
   scheduleSessionSave();
+  return tab;
+}
+
+function focusExistingBrowserTab(): BrowserTab | null {
+  for (const node of Object.values(layout.nodes)) {
+    if (node.kind !== "leaf") continue;
+    const tab = node.tabs.find(
+      (candidate): candidate is BrowserTab => candidate.kind === "browser",
+    );
+    if (!tab) continue;
+    node.activeTabId = tab.id;
+    layout.activePaneId = node.id;
+    return tab;
+  }
+  return null;
+}
+
+export function revealPathInBrowser(
+  path: string,
+  opts: { enter?: boolean; inspectorOpen?: boolean } = {},
+): BrowserTab {
+  if (opts.enter) {
+    revealAndEnterDirectory(path);
+  } else {
+    revealAndSelect(path);
+  }
+  const tab = openBrowser();
+  if (opts.inspectorOpen ?? true) {
+    tab.inspectorOpen = true;
+    browserOverlay.inspectorOpen = true;
+  }
   return tab;
 }
 
