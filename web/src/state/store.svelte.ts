@@ -290,7 +290,27 @@ export function onWatchEvent(e: unknown): void {
   //      path so the editor view doesn't drift behind disk. Dirty
   //      buffers are left alone; the next save's CAS check surfaces
   //      the conflict via ConflictModal.
-  void refreshTree();
+  // `fullstack-b-6`: scope the FB tree refresh to the path that
+  // changed instead of re-fetching the root listing on every
+  // event. The previous unconditional `refreshTree()` reassigned
+  // `tree.entries` for activity anywhere on the drive, which
+  // re-rendered every open File Browser even when the user's
+  // selection was in an unrelated subtree. Each FB instance now
+  // contributes a scope (from its selection); we touch the tree
+  // only when an event lands inside at least one active scope,
+  // and we touch only the affected dir.
+  const innerForScope = (e as { event?: { kind?: string; path?: string; to?: string } } | null)
+    ?.event;
+  const watchedPaths = [innerForScope?.path, innerForScope?.to].filter(
+    (p): p is string => typeof p === "string" && p.length > 0,
+  );
+  const scopes = activeFbScopes();
+  const inScope = watchedPaths.some((p) => pathInAnyScope(p, scopes));
+  if (inScope) {
+    for (const p of watchedPaths) {
+      void refreshTreeForPath(p);
+    }
+  }
   scheduleDriveRefresh();
   // Tags / wiki-links / mentions may have changed. Invalidate the
   // cached graph so the next inspector view sees fresh data, and if
@@ -513,6 +533,81 @@ function mergeDirEntries(
   const byPath = new Map(next.map((e) => [e.path, e]));
   for (const e of entries) byPath.set(e.path, e);
   return [...byPath.values()];
+}
+
+// ---- FB watcher scope (fullstack-b-6) -----------------------------------
+//
+// The chan-server WS stream is single-channel and unscoped (every
+// fs event for the drive arrives at every connected SPA). Per the
+// phase-8 spec we narrow the FB's reaction to events that land
+// inside its current scope so unrelated drive activity (e.g. an
+// indexer pass over `crates/`) stops shaking the tree when the
+// user is only looking at `tasks/`.
+//
+// "Scope" is derived from the FB instance's selection:
+//   * no selection (drive root)   → "" (watch everything)
+//   * selection is a directory    → that directory
+//   * selection is a file         → its parent directory
+//
+// One FB overlay + N per-pane browser tabs contribute their scopes
+// to the union. An event refreshes the tree iff at least one
+// scope contains its path. Per-FB rerender isolation is bounded by
+// the shared `tree.entries` state (a true per-FB tree would be a
+// much larger refactor); the immediate win is "no flicker when
+// the FB scope and the event path don't intersect".
+
+function fbScopeForSelection(selected: string | null | undefined): string {
+  if (!selected) return "";
+  const entry = tree.entries.find((e) => e.path === selected);
+  if (entry?.is_dir) return selected;
+  const slash = selected.lastIndexOf("/");
+  return slash > 0 ? selected.slice(0, slash) : "";
+}
+
+/// Snapshot every open FB's current scope: the global overlay (if
+/// open) plus every browser-kind tab in any pane. Closed tabs drop
+/// out of the snapshot naturally; no per-tab subscribe/unsubscribe
+/// state to leak.
+export function activeFbScopes(): string[] {
+  const scopes: string[] = [];
+  if (browserOverlay.open) {
+    scopes.push(fbScopeForSelection(browserSelection.path));
+  }
+  for (const node of Object.values(layout.nodes)) {
+    if (node.kind !== "leaf") continue;
+    for (const tab of node.tabs) {
+      if (tab.kind === "browser") {
+        scopes.push(fbScopeForSelection(tab.selected));
+      }
+    }
+  }
+  return scopes;
+}
+
+export function pathInAnyScope(path: string, scopes: string[]): boolean {
+  for (const s of scopes) {
+    if (s === "" || path === s || path.startsWith(`${s}/`)) return true;
+  }
+  return false;
+}
+
+/// Re-fetch the listing for the parent dir of `path` and merge it
+/// into `tree.entries`. No-op when the parent dir isn't currently
+/// loaded (nothing visible would change). Replaces the previous
+/// "always refresh the root listing" behaviour from before
+/// `fullstack-b-6`; that path lives on as `refreshTree` for
+/// callers that genuinely need a full re-fetch.
+export async function refreshTreeForPath(path: string): Promise<void> {
+  const slash = path.lastIndexOf("/");
+  const parent = slash > 0 ? path.slice(0, slash) : "";
+  if (!tree.loadedDirs[parent]) return;
+  try {
+    const entries = await api.list(parent);
+    tree.entries = sortTreeEntries(mergeDirEntries(tree.entries, parent, entries));
+  } catch {
+    // Best-effort: a transient list error doesn't surface as toast;
+    // the user retries on next interaction.
+  }
 }
 
 export async function refreshDrive(): Promise<void> {
@@ -2054,7 +2149,15 @@ export function resolvePrompt(value: string | null): void {
 //     action.
 
 export type PathPromptKind = "file" | "folder";
-export type PathPromptMode = "create" | "move";
+/// `attach` (added per `fullstack-b-3`) is the watcher-dialog mode:
+/// the user picks a path to attach a long-running watcher to,
+/// which is neither "create the entity" nor "move into it". The
+/// modal status row treats an existing directory as a normal
+/// attach (no overwrite warning) and a missing path as "create
+/// + attach" (silent backend create). Absolute paths outside the
+/// drive root are first-class — watcher event files are infra
+/// traffic, not user content, so the drive sandbox doesn't apply.
+export type PathPromptMode = "create" | "move" | "attach";
 
 type PathPromptState = {
   open: boolean;

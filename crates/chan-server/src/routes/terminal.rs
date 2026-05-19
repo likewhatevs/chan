@@ -718,6 +718,25 @@ fn resolve_terminal_cwd(drive_root: &Path, cwd: Option<&str>) -> Result<Option<P
     Ok(Some(abs))
 }
 
+/// Resolve the user-supplied watcher path to an absolute directory,
+/// creating it if missing.
+///
+/// `fullstack-b-3` relaxed the previous "must live under
+/// `drive_root`" gate. Watcher event files are infrastructure
+/// traffic (per the phase-7 event protocol they go straight through
+/// `tokio::fs` in the event-reply endpoint, bypassing
+/// `chan_drive::Drive::write_text`), so the drive-sandbox guard
+/// that exists for user content does not apply here. The watcher
+/// dialog now accepts arbitrary filesystem paths subject to OS
+/// permissions. Drive-relative inputs still resolve through
+/// `resolve_safe_strict` so the common in-drive case keeps its
+/// symlink-escape protection; absolute inputs go straight to the
+/// filesystem.
+///
+/// Missing paths are created silently (`create_dir_all`). The bug
+/// repro asked for "missing → create silently or with a single
+/// confirm"; the modal previews the create intent in the status
+/// row before submit, so the silent variant suffices.
 fn resolve_watcher_dir(drive_root: &Path, raw: &str) -> Result<PathBuf, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -725,20 +744,20 @@ fn resolve_watcher_dir(drive_root: &Path, raw: &str) -> Result<PathBuf, String> 
     }
     let path = Path::new(trimmed);
     let abs = if path.is_absolute() {
-        let root_canon = drive_root
-            .canonicalize()
-            .map_err(|e| format!("invalid watcher path: {e}"))?;
-        let path_canon = path
-            .canonicalize()
-            .map_err(|e| format!("invalid watcher path: {e}"))?;
-        if !path_canon.starts_with(root_canon) {
-            return Err("invalid watcher path: path escapes drive root".into());
-        }
         path.to_path_buf()
     } else {
+        // Drive-relative input: keep the strict resolver so an
+        // in-drive watcher still benefits from the symlink-escape
+        // check. A user who wants a watcher OUTSIDE the drive
+        // types an absolute path and lands on the branch above.
         chan_drive::fs_ops::resolve_safe_strict(drive_root, trimmed)
             .map_err(|e| format!("invalid watcher path: {e}"))?
     };
+    // Create the directory on demand. `create_dir_all` is a no-op
+    // when the path already exists as a directory; it errors when
+    // it exists as a file or symlink-to-file, which we want to
+    // surface verbatim.
+    std::fs::create_dir_all(&abs).map_err(|e| format!("invalid watcher path: {e}"))?;
     let meta = std::fs::metadata(&abs).map_err(|e| format!("invalid watcher path: {e}"))?;
     if !meta.is_dir() {
         return Err("invalid watcher path: path is not a directory".into());
@@ -854,35 +873,82 @@ mod tests {
         );
     }
 
+    /// `fullstack-b-3` relaxed the drive-root gate on absolute
+    /// watcher paths: event files are infra traffic, not user
+    /// content, and the chan-drive sandbox doesn't apply. A path
+    /// pointing at a real directory outside the drive is now
+    /// accepted; the in-drive sandbox via
+    /// `resolve_safe_strict` still applies to relative inputs.
+    #[test]
+    fn resolve_watcher_dir_allows_absolute_outside_drive_root() {
+        let tmp = tempfile::tempdir().expect("temp drive");
+        let outside = tempfile::tempdir().expect("outside drive");
+
+        let abs_outside = outside.path().display().to_string();
+        let resolved = resolve_watcher_dir(tmp.path(), &abs_outside).expect("outside dir attaches");
+        assert_eq!(resolved, outside.path());
+    }
+
+    /// `fullstack-b-3` also has the resolver create the watcher
+    /// directory on demand. Missing path → create silently
+    /// (`create_dir_all` is a no-op if the path already exists).
+    #[test]
+    fn resolve_watcher_dir_creates_missing_path() {
+        let tmp = tempfile::tempdir().expect("temp drive");
+        // Drive-relative path that doesn't exist yet.
+        let relative = "events/inbound";
+        let resolved = resolve_watcher_dir(tmp.path(), relative).expect("relative dir created");
+        assert!(resolved.is_dir(), "watcher dir should now exist on disk");
+        assert_eq!(resolved, tmp.path().join("events/inbound"));
+
+        // Absolute path that doesn't exist yet, well outside the
+        // drive root.
+        let outside_parent = tempfile::tempdir().expect("outside parent");
+        let abs_missing = outside_parent.path().join("watcher-inbox");
+        assert!(!abs_missing.exists());
+        let resolved = resolve_watcher_dir(tmp.path(), &abs_missing.display().to_string())
+            .expect("absolute dir created");
+        assert!(resolved.is_dir(), "watcher dir should now exist on disk");
+        assert_eq!(resolved, abs_missing);
+    }
+
     #[test]
     fn resolve_watcher_dir_rejects_empty_escape_and_files() {
         let tmp = tempfile::tempdir().expect("temp drive");
-        let outside = tempfile::tempdir().expect("outside drive");
         fs::create_dir_all(tmp.path().join("events")).expect("create dir");
         fs::write(tmp.path().join("events/event.json"), "{}").expect("create file");
 
+        // Empty path is still required.
         assert!(resolve_watcher_dir(tmp.path(), "").is_err());
+        // Drive-relative `..` escape still bounces through the
+        // strict resolver, which rejects it; the relaxation only
+        // applies to absolute inputs.
         assert!(resolve_watcher_dir(tmp.path(), "../outside").is_err());
-        assert!(resolve_watcher_dir(tmp.path(), &outside.path().display().to_string()).is_err());
+        // Existing file (not a directory) is still an error;
+        // create_dir_all errors out when the path resolves to a
+        // file, and the metadata check catches anything else.
         assert!(resolve_watcher_dir(tmp.path(), "events/event.json").is_err());
     }
 
     #[cfg(unix)]
     #[test]
-    fn resolve_watcher_dir_rejects_absolute_symlink_escape() {
+    fn resolve_watcher_dir_absolute_symlink_accepts_target() {
+        // `fullstack-b-3`: an absolute path that happens to traverse
+        // a symlink out of the drive is now accepted — the watcher
+        // is intentionally allowed to live outside the drive. We
+        // still require the resolved target to be a directory.
         let tmp = tempfile::tempdir().expect("temp drive");
         let outside = tempfile::tempdir().expect("outside drive");
         fs::create_dir_all(tmp.path().join("events")).expect("create dir");
         std::os::unix::fs::symlink(outside.path(), tmp.path().join("events/outside"))
             .expect("symlink escape");
 
-        let err = resolve_watcher_dir(
+        let resolved = resolve_watcher_dir(
             tmp.path(),
             &tmp.path().join("events/outside").display().to_string(),
         )
-        .expect_err("symlink escape rejected");
-
-        assert!(err.contains("invalid watcher path:"));
+        .expect("absolute symlink target accepted");
+        assert!(resolved.is_dir());
     }
 
     fn reply_body(id: &str, note: &str) -> EventReplyBody {

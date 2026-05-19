@@ -244,11 +244,15 @@
       if (targetEntry.is_dir !== wantDir) {
         const have = targetEntry.is_dir ? "directory" : "file";
         const want = wantDir ? "directory" : "file";
+        const verb =
+          pathPromptState.mode === "move"
+            ? "rename onto"
+            : pathPromptState.mode === "attach"
+              ? "attach a watcher to"
+              : "create";
         return {
           kind: "kind-mismatch",
-          reason: `'${path}' is an existing ${have}, can't ${
-            pathPromptState.mode === "move" ? "rename onto" : "create"
-          } a ${want}`,
+          reason: `'${path}' is an existing ${have}, can't ${verb} a ${want}`,
         };
       }
       if (pathPromptState.mode === "move") {
@@ -257,6 +261,17 @@
         }
         return { kind: "overwrites", path, isFolder: wantDir };
       }
+      if (pathPromptState.mode === "attach") {
+        // `fullstack-b-3`: attaching a watcher to a directory that
+        // already exists is the common case; no overwrite warning,
+        // no ancestor preamble — just confirm the target.
+        return {
+          kind: "creates",
+          newAncestors: [],
+          target: { path, isFolder: wantDir },
+          mode: pathPromptState.mode,
+        };
+      }
       // Create mode + existing target = error.
       return {
         kind: "kind-mismatch",
@@ -264,9 +279,20 @@
       };
     }
 
+    // `fullstack-b-3`: absolute paths bypass the drive-side tree
+    // view entirely (tree.entries only carries drive-relative
+    // paths), so we can't tell from the SPA whether the path
+    // exists on disk. Show the attach intent without manufacturing
+    // a "creates ancestors a/, b/, c/" preamble that wouldn't
+    // match anything chan-drive ever sees. The backend creates
+    // the watcher dir silently if missing.
+    const newAncestors =
+      pathPromptState.mode === "attach" && path.startsWith("/")
+        ? []
+        : missingAncestors(path);
     return {
       kind: "creates",
-      newAncestors: missingAncestors(path),
+      newAncestors,
       target: { path, isFolder: wantDir },
       mode: pathPromptState.mode,
     };
@@ -300,20 +326,25 @@
       acc = acc ? `${acc}/${parts[i]}` : parts[i];
       out.push({ text: `${parts[i]}/`, isNew: !folderSet.has(acc) });
     }
-    // Final segment is the target itself; always "new" in this
-    // branch (the existing-target case routes through `overwrites`
-    // / `kind-mismatch` instead). Add the trailing `/` for directories.
+    // Final segment: in attach mode it may point at an existing
+    // directory (then we don't want the mint-green "new" colour;
+    // it lies about what's happening). In create / move modes the
+    // existing-target path bails out earlier via `overwrites` /
+    // `kind-mismatch`, so the final segment always renders as new
+    // there. Add the trailing `/` for directories.
     const tail = parts[parts.length - 1];
+    const tailIsExisting =
+      s.mode === "attach" && entryByPath.has(s.target.path) && s.target.isFolder;
     if (autoSuffix && tail.endsWith(autoSuffix)) {
       // Show the user-typed stem as the "new" piece, then the
       // auto-resolved suffix as its own italicized chunk.
       const stem = tail.slice(0, -autoSuffix.length);
-      if (stem) out.push({ text: stem, isNew: true });
-      out.push({ text: autoSuffix, isNew: true, auto: true });
+      if (stem) out.push({ text: stem, isNew: !tailIsExisting });
+      out.push({ text: autoSuffix, isNew: !tailIsExisting, auto: true });
     } else {
       out.push({
         text: s.target.isFolder ? `${tail}/` : tail,
-        isNew: true,
+        isNew: !tailIsExisting,
       });
     }
     return out;
@@ -483,6 +514,8 @@
           {arrow}
           {#if status.mode === "move"}
             moves to
+          {:else if status.mode === "attach"}
+            attach watcher to
           {:else}
             new {status.target.isFolder ? "directory" : "file"}
           {/if}
