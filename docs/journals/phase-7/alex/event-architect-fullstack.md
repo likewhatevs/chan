@@ -1125,3 +1125,35 @@ Queue:
 Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 05:20 BST
+
+## 2026-05-19 05:35 BST — poke: click-around findings (fullstack-32/33/34/35)
+
+@@Alex spun up a test server and clicked around. Four
+task files cut from the findings:
+
+| # | Task           | Scope                                                    |
+|---|----------------|----------------------------------------------------------|
+| 1 | `fullstack-32` | Graph-from-here scope (file/folder/auto-select) + sibling-shade-on-select + inspector "Open in this pane" → "Open" rename |
+| 2 | `fullstack-33` | Editor indent vertical guide breaks at deep nesting (smoke up to 20 indents) |
+| 3 | `fullstack-34` | Pane chrome (border space + rounded + floating shadow per theme) + wobble on split/delete/cmd+k-move + Close all tabs vs Close pane split in hamburger |
+| 4 | `fullstack-35` | Empty-pane infographic carousel: slide 1 = current welcome (default) → auto-rotate every 5s → slide 2 metadata infographic → slide 3 indexing-state dir-only graph (grey/orange/green, orange pulsates). Coordinate w/ @@Systacean on indexing-state API. |
+
+Note on the File Browser inline `×` you flagged
+("File Browser tab still has a close button"): already
+covered by `fullstack-31` which is queued and not yet
+landed. Pulling that ahead of these four would clear
+the visible regression first.
+
+Suggested order:
+
+| # | Task           | Reason                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-31` | drop inline X on Graph + File Browser (already cut) |
+| 2 | `fullstack-32` | Graph behavior (high-impact UX fix)                 |
+| 3 | `fullstack-33` | Indent guide bug (visible in any deep doc)          |
+| 4 | `fullstack-34` | Pane chrome + wobble + hamburger split             |
+| 5 | `fullstack-35` | Carousel (the meatiest; coord with @@Systacean)    |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 05:35 BST
