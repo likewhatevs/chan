@@ -88,10 +88,12 @@
     tab,
     paneId,
     active,
+    focused,
   }: {
     tab: TerminalTabState;
     paneId: string;
     active: boolean;
+    focused: boolean;
   } = $props();
 
   type ServerFrame =
@@ -180,7 +182,7 @@
   });
 
   $effect(() => {
-    if (!active) return;
+    if (!focused) return;
     queueFit();
     setTerminalActivity(tab, false);
     sendFocusState();
@@ -188,7 +190,7 @@
   });
 
   $effect(() => {
-    if (active) return;
+    if (focused) return;
     sendFocusState();
   });
 
@@ -299,7 +301,7 @@
     resizeObserver.observe(host);
     queueFit();
     connect();
-    if (active) queueMicrotask(() => term?.focus());
+    if (focused) queueMicrotask(() => term?.focus());
   }
 
   function connect(): void {
@@ -363,7 +365,7 @@
       } else if (frame.type === "session") {
         sawSessionControl = true;
         setTerminalSession(tab, frame.id, frame.seq, mcpEnvOn);
-        setTerminalActivity(tab, !active && (frame.bytes_since_focus ?? 0) > 0);
+        setTerminalActivity(tab, !focused && (frame.bytes_since_focus ?? 0) > 0);
         scheduleTerminalSessionSave();
         missedBytes = Math.max(0, Math.floor(frame.missed_bytes ?? 0));
         status = "connected";
@@ -377,7 +379,7 @@
       } else if (frame.type === "cwd") {
         terminalCwdAbs = frame.cwd ?? null;
       } else if (frame.type === "activity") {
-        setTerminalActivity(tab, !active && frame.bytes_since_focus > 0);
+        setTerminalActivity(tab, !focused && frame.bytes_since_focus > 0);
       } else if (frame.type === "closed") {
         sessionClosedReason = frame.reason;
         status = "exited";
@@ -420,7 +422,7 @@
 
   function sendFocusState(): void {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    send({ type: "focus", focused: active });
+    send({ type: "focus", focused });
   }
 
   function maybeSeedPrompt(): void {

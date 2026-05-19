@@ -120,3 +120,39 @@ Proposed fix for @@Architect:
 * Add a focused frontend regression test that an active tab in an
   unfocused pane marks activity when an activity frame arrives, and
   clears when the pane/tab becomes focused.
+
+## 2026-05-19 06:10 BST - ready to land
+
+Implemented the SPA-side fix.
+
+Changed:
+
+* `web/src/components/Pane.svelte`
+* `web/src/components/TerminalTab.svelte`
+* `web/src/components/TerminalTab.test.ts`
+
+Summary:
+
+* `TerminalTab.active` now only means the selected tab within a pane.
+* New `TerminalTab.focused` prop represents selected tab plus focused
+  pane.
+* Terminal WS `focus` frames, activity clearing, `term.focus()`, and
+  activity-frame ingestion use `focused`.
+* Regression coverage exercises the actual TerminalTab WebSocket
+  handler with an active terminal in an unfocused pane.
+
+Verification:
+
+* `npm run test -- src/components/TerminalTab.test.ts src/components/Pane.test.ts src/state/tabs.test.ts`
+* `npm run check`
+* `npm run build`
+* `scripts/pre-push`
+
+Known risk: not manually re-run against @@WebtestA's 8801 browser
+session from this terminal. The component-level WebSocket regression
+covers the diagnosed wire break; @@WebtestA should re-run item 7 after
+the commit lands.
+
+Proposed commit message:
+
+`Fix terminal activity focus tracking`

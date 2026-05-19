@@ -1177,7 +1177,12 @@
     {/if}
     {#if !paneMode.active}
       {#each pane.tabs.filter((t) => t.kind === "terminal") as t (t.id)}
-        <TerminalTab tab={t} paneId={pane.id} active={t.id === pane.activeTabId} />
+        <TerminalTab
+          tab={t}
+          paneId={pane.id}
+          active={t.id === pane.activeTabId}
+          focused={t.id === pane.activeTabId && viewLayout.activePaneId === pane.id}
+        />
       {/each}
     {/if}
   </div>
