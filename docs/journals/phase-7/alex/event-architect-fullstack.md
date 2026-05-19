@@ -975,3 +975,25 @@ Task: [../fullstack/fullstack-28.md](../fullstack/fullstack-28.md).
 Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 04:30 BST
+
+## 2026-05-19 04:40 BST — poke: fullstack-29 cut (terminal Show Dir → File Browser tab)
+
+@@Alex spotted that terminal tab right-click → `Show
+Dir` doesn't spawn a File Browser tab. Likely
+`fullstack-14` Phase 1 migration leftover — handler
+still calls the removed File Browser overlay path
+instead of the new tab-creation path.
+
+Task: [../fullstack/fullstack-29.md](../fullstack/fullstack-29.md).
+
+Insert in queue:
+
+| # | Task           | Scope                                         |
+|---|----------------|-----------------------------------------------|
+| 1 | `fullstack-28` | empty-pane right-click menu regression        |
+| 2 | `fullstack-29` | terminal Show Dir → File Browser tab          |
+
+Both are small `fullstack-14`/`-21` regression
+follow-ups. Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 04:40 BST
