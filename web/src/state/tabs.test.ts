@@ -19,6 +19,7 @@ import {
   enterPaneMode,
   flipHybrid,
   focusColorForWindow,
+  graphTitle,
   hydrateTerminalSessionsFromLayout,
   isMissingFileError,
   layout,
@@ -382,6 +383,78 @@ describe("pane state", () => {
     expect(restoredBrowser?.kind).toBe("browser");
     if (restoredBrowser?.kind !== "browser") return;
     expect(restoredBrowser.inspectorOpen).toBe(true);
+  });
+
+  test("round-trips per-tab BrowserTab view state (fullstack-58)", async () => {
+    resetLayout([]);
+    const browser = openBrowserInActivePane();
+    browser.selected = "notes/today.md";
+    browser.showDrive = false;
+    browser.expanded = ["notes", "notes/2026"];
+    browser.scroll = 320;
+
+    const snapshot = serializeLayout();
+    await restoreLayout(snapshot!);
+
+    const tabs = activePane().tabs;
+    expect(tabs.map((tab) => tab.kind)).toEqual(["browser"]);
+    const restored = tabs[0];
+    if (restored?.kind !== "browser") throw new Error("expected browser tab");
+    expect(restored.selected).toBe("notes/today.md");
+    expect(restored.expanded).toEqual(["notes", "notes/2026"]);
+    expect(restored.scroll).toBe(320);
+    // showDrive=false is the default; we omit `bd` in the hash so it
+    // restores as undefined rather than `false`. Either is fine.
+    expect(restored.showDrive ?? false).toBe(false);
+  });
+
+  test("two BrowserTab records carry independent state without leakage (fullstack-58)", () => {
+    resetLayout([]);
+    const tab1 = openBrowserInActivePane();
+    const tab2 = openBrowserInActivePane();
+    expect(tab1.id).not.toBe(tab2.id);
+
+    tab1.selected = "index.md";
+    tab1.expanded = ["docs"];
+    tab1.scroll = 80;
+    tab1.showDrive = false;
+
+    tab2.selected = "notes/scratch.md";
+    tab2.expanded = ["notes"];
+    tab2.scroll = 240;
+    tab2.showDrive = true;
+
+    expect(tab1.selected).toBe("index.md");
+    expect(tab2.selected).toBe("notes/scratch.md");
+    expect(tab1.expanded).toEqual(["docs"]);
+    expect(tab2.expanded).toEqual(["notes"]);
+    expect(tab1.scroll).toBe(80);
+    expect(tab2.scroll).toBe(240);
+    expect(tab1.showDrive).toBe(false);
+    expect(tab2.showDrive).toBe(true);
+  });
+
+  test("hash round-trips both BrowserTab records' per-tab state (fullstack-58)", async () => {
+    resetLayout([]);
+    const tab1 = openBrowserInActivePane();
+    const tab2 = openBrowserInActivePane();
+    tab1.selected = "a.md";
+    tab1.expanded = ["dir-a"];
+    tab2.selected = "b.md";
+    tab2.expanded = ["dir-b"];
+    tab2.scroll = 100;
+
+    const snapshot = serializeLayout();
+    await restoreLayout(snapshot!);
+
+    const tabs = activePane().tabs.filter((t) => t.kind === "browser");
+    expect(tabs.length).toBe(2);
+    if (tabs[0]?.kind !== "browser" || tabs[1]?.kind !== "browser") return;
+    expect(tabs[0].selected).toBe("a.md");
+    expect(tabs[0].expanded).toEqual(["dir-a"]);
+    expect(tabs[1].selected).toBe("b.md");
+    expect(tabs[1].expanded).toEqual(["dir-b"]);
+    expect(tabs[1].scroll).toBe(100);
   });
 
   test("pane mode discards draft changes on cancel", () => {
@@ -1504,5 +1577,52 @@ describe("truncateTabTitle (fullstack-66)", () => {
     expect(Array.from(out)).toHaveLength(TAB_TITLE_MAX_LENGTH);
     expect(out.startsWith("🌟abcde")).toBe(true);
     expect(out.endsWith("lmnop")).toBe(true);
+  });
+});
+
+describe("graphTitle (fullstack-64)", () => {
+  test("drive scope reads as 'drive'", () => {
+    expect(graphTitle("semantic", "drive")).toBe("drive");
+    expect(graphTitle("filesystem", "drive")).toBe("drive");
+    expect(graphTitle("semantic", "global")).toBe("drive");
+  });
+
+  test("file: scope reads as the file basename", () => {
+    expect(graphTitle("semantic", "file:notes/sub/foo.md")).toBe("foo.md");
+    expect(graphTitle("semantic", "file:README.md")).toBe("README.md");
+    // File at the drive root with no path falls back to 'drive'.
+    expect(graphTitle("semantic", "file:")).toBe("drive");
+  });
+
+  test("dir: scope reads as the dir basename with a trailing slash", () => {
+    expect(graphTitle("semantic", "dir:notes/sub")).toBe("sub/");
+    expect(graphTitle("semantic", "dir:notes")).toBe("notes/");
+    // dir: with no path is treated as the drive root.
+    expect(graphTitle("semantic", "dir:")).toBe("drive");
+  });
+
+  test("tag: scope keeps the # prefix", () => {
+    expect(graphTitle("semantic", "tag:#search")).toBe("#search");
+    // Tag without the leading # gets one prepended.
+    expect(graphTitle("semantic", "tag:foo")).toBe("#foo");
+  });
+
+  test("contact: scope renders the contact name", () => {
+    expect(graphTitle("semantic", "contact:alice")).toBe("alice");
+  });
+
+  test("git_repo: scope renders the repo basename", () => {
+    expect(graphTitle("semantic", "git_repo:project/chan")).toBe("chan");
+  });
+
+  test("language mode keeps its dedicated label regardless of scope", () => {
+    expect(graphTitle("language", "drive")).toBe("Languages");
+    expect(graphTitle("language", "file:foo.md")).toBe("Languages");
+  });
+
+  test("unknown prefix peels the payload after the first colon", () => {
+    expect(graphTitle("semantic", "weird:abc")).toBe("abc");
+    // Truly unknown shape (no colon) falls through to the raw value.
+    expect(graphTitle("semantic", "raw-thing")).toBe("raw-thing");
   });
 });

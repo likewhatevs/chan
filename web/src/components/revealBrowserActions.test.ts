@@ -32,6 +32,31 @@ describe("no inline close affordance on first-class surfaces", () => {
     expect(graph).not.toContain('class="chrome-btn close"');
   });
 
+  // fullstack-64: drop the overlay-era maximize button + the scope
+  // selector dropdown. Cmd+K 3 + "Graph from here" are the canonical
+  // scope-setting paths now. The snap-back $effect that reset
+  // scopeId to defaultScopeId() also goes (was the fullstack-57
+  // bug surface).
+  test("GraphPanel chrome has no Maximize2 / Minimize2 button", () => {
+    expect(graph).not.toContain("<Maximize2");
+    expect(graph).not.toContain("<Minimize2");
+    expect(graph).not.toContain("doToggleOverlayMaximized");
+  });
+
+  test("GraphPanel has no scope-selector dropdown", () => {
+    expect(graph).not.toContain('class="scope-select"');
+    expect(graph).not.toContain('class="scope-label"');
+  });
+
+  test("GraphPanel no longer snaps scopeId back to defaultScopeId on mount", () => {
+    // The fullstack-57 bug surface: `if (!currentScope)
+    // graphState.scopeId = defaultScopeId()` clobbered a freshly-
+    // spawned file:/dir: scope. Synthesizing the ScopeOption from
+    // the scopeId prefix replaces the snap-back.
+    expect(graph).not.toContain("graphState.scopeId = defaultScopeId()");
+    expect(graph).toContain("synthesizeScope(graphState.scopeId)");
+  });
+
   test("FileBrowserSurface chrome has no chrome-btn.close button", () => {
     expect(fileBrowserSurface).not.toContain('class="chrome-btn close"');
   });

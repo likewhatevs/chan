@@ -259,6 +259,15 @@ export type BrowserTab = {
   id: string;
   title: string;
   inspectorOpen: boolean;
+  /// `fullstack-58`: per-tab view state so two File Browser tabs in
+  /// the same pane don't share selection / scroll / expansion via
+  /// the module-level `browserSelection` + `treeExpanded` singletons.
+  /// Populated by `FileBrowserSurface.svelte` on tab activate (mount /
+  /// `tab.id` swap) and snapshot-back on deactivate.
+  selected?: string | null;
+  showDrive?: boolean;
+  expanded?: string[];
+  scroll?: number;
 };
 
 export type ScopeGrant = "one-shot" | "topic-session" | "topic-phase";
@@ -823,13 +832,47 @@ function defaultBrowserInspectorOpen(): boolean {
   return window.innerWidth >= 768;
 }
 
-function graphTitle(mode: GraphTab["mode"], scopeId: string): string {
-  if (mode === "filesystem") return "FS Graph";
+/// `fullstack-64`: title for a Graph tab. Per @@Alex, the tab name
+/// reads as the basename of whatever the user scoped the graph to
+/// — file basename, dir name, contact name, `#tag` — so the tab
+/// strip identifies the subject directly instead of re-labelling
+/// every graph as a generic "File Graph" / "Tag Graph". The chrome
+/// icon already conveys "this is a graph", so no extra suffix.
+///
+/// `mode === "language"` is a top-level lens (not a per-scope
+/// view) and keeps its dedicated `Languages` label. Drive / global
+/// scope read as `drive`; the underlying `scopeId` is unchanged —
+/// only the rendered title shape moves.
+export function graphTitle(mode: GraphTab["mode"], scopeId: string): string {
   if (mode === "language") return "Languages";
-  if (scopeId.startsWith("tag:")) return "Tag Graph";
-  if (scopeId.startsWith("file:")) return "File Graph";
-  if (scopeId.startsWith("dir:")) return "Dir Graph";
-  return "Graph";
+  if (scopeId === "drive" || scopeId === "global") return "drive";
+  if (scopeId.startsWith("file:")) {
+    return graphScopeBasename(scopeId.slice("file:".length)) || "drive";
+  }
+  if (scopeId.startsWith("dir:")) {
+    const name = graphScopeBasename(scopeId.slice("dir:".length));
+    return name ? `${name}/` : "drive";
+  }
+  if (scopeId.startsWith("tag:")) {
+    const tag = scopeId.slice("tag:".length);
+    return tag.startsWith("#") ? tag : `#${tag}`;
+  }
+  if (scopeId.startsWith("contact:")) {
+    return scopeId.slice("contact:".length);
+  }
+  if (scopeId.startsWith("git_repo:")) {
+    return graphScopeBasename(scopeId.slice("git_repo:".length));
+  }
+  // Unknown prefix shape: peel anything before the first colon
+  // so the user at least sees the payload.
+  const colon = scopeId.indexOf(":");
+  if (colon > 0) return scopeId.slice(colon + 1);
+  return scopeId;
+}
+
+function graphScopeBasename(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i < 0 ? path : path.slice(i + 1);
 }
 
 export function renameTerminalTab(tab: TerminalTab, title: string): void {
@@ -2397,6 +2440,15 @@ type SerTab = {
   gp?: string;
   /// Browser tab state.
   bi?: 1;
+  /// `fullstack-58`: per-tab File Browser view state. Selection (`bs`),
+  /// drive-info-showing flag (`bd`), expanded directory paths (`be`),
+  /// and scroll offset (`bsc`). All optional; absence means "default
+  /// (no selection, drive info hidden, only the implicit root
+  /// expanded, scroll at top)".
+  bs?: string;
+  bd?: 1;
+  be?: string[];
+  bsc?: number;
 };
 type SerFocusColor = "g" | "p";
 type SerHybridTheme = "d" | "l";
@@ -2522,9 +2574,14 @@ function serializeTab(
     };
   }
   if (t.kind === "browser") {
+    const expanded = t.expanded?.filter((p) => p.length > 0) ?? [];
     return {
       k: "b",
       ...(t.inspectorOpen ? { bi: 1 as const } : {}),
+      ...(t.selected ? { bs: t.selected } : {}),
+      ...(t.showDrive ? { bd: 1 as const } : {}),
+      ...(expanded.length > 0 ? { be: expanded } : {}),
+      ...(t.scroll && t.scroll > 0 ? { bsc: Math.round(t.scroll) } : {}),
       ...active,
     };
   }
@@ -2670,6 +2727,14 @@ export async function restoreLayout(
             id: id("browser"),
             title: "Files",
             inspectorOpen: sertab.bi === 1,
+            ...(typeof sertab.bs === "string" ? { selected: sertab.bs } : {}),
+            ...(sertab.bd === 1 ? { showDrive: true } : {}),
+            ...(Array.isArray(sertab.be) && sertab.be.length > 0
+              ? { expanded: sertab.be.filter((p) => typeof p === "string") }
+              : {}),
+            ...(typeof sertab.bsc === "number" && sertab.bsc > 0
+              ? { scroll: sertab.bsc }
+              : {}),
           };
           p.tabs.push(tab);
           if (sertab.a) p.activeTabId = tab.id;
@@ -2819,6 +2884,14 @@ export async function restoreLayout(
               id: id("browser"),
               title: "Files",
               inspectorOpen: sertab.bi === 1,
+              ...(typeof sertab.bs === "string" ? { selected: sertab.bs } : {}),
+              ...(sertab.bd === 1 ? { showDrive: true } : {}),
+              ...(Array.isArray(sertab.be) && sertab.be.length > 0
+                ? { expanded: sertab.be.filter((p) => typeof p === "string") }
+                : {}),
+              ...(typeof sertab.bsc === "number" && sertab.bsc > 0
+                ? { scroll: sertab.bsc }
+                : {}),
             };
             backTabs.push(tab);
             if (sertab.a) backActiveId = tab.id;

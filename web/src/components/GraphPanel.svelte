@@ -17,14 +17,8 @@
   import {
     ArrowLeft,
     ArrowRight,
-    Maximize2,
-    Minimize2,
     Settings,
   } from "lucide-svelte";
-  import {
-    overlayMaximized,
-    setOverlayMaximized,
-  } from "../state/pageWidth.svelte";
 
   import { api } from "../api/client";
   import type {
@@ -48,7 +42,7 @@
     tree,
   } from "../state/store.svelte";
   import { onDestroy } from "svelte";
-  import { type ScopeOption, defaultScopeId } from "../state/scope.svelte";
+  import { type ScopeOption } from "../state/scope.svelte";
   import ResizeHandle from "./ResizeHandle.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import DriveInfoBody from "./DriveInfoBody.svelte";
@@ -72,22 +66,53 @@
   const graphState = $derived(tab ?? graphOverlay);
   const visible = $derived(tab ? true : graphOverlay.open);
 
-  /// Dropdown options derived from the live layout; relabels
-  /// "drive" as "Whole drive".
+  /// `fullstack-64`: the scope-selector dropdown is gone (Cmd+K 3
+  /// + "Graph from here" + inspector reveal are the canonical
+  /// scope-setting paths). The `scopeOptions` listing is still
+  /// useful here for its rich labels when the active scope is one
+  /// the layout knows about, but a context-aware spawn can land
+  /// the user on a `file:`/`dir:` scope that isn't in any tab.
+  /// Synthesize a matching ScopeOption from `scopeId` in that
+  /// case so the rest of the panel (`filesystemMode`,
+  /// `seedIds`, BFS shape, etc.) still has a `currentScope.kind`
+  /// to branch on.
+  ///
+  /// The synthesis also removes the `fullstack-57` snap-back bug —
+  /// the old effect resetted `scopeId` to `defaultScopeId()`
+  /// whenever the lookup missed, clobbering the spawn's
+  /// `file:` scope before the user saw it.
   const scopeOptions = $derived<ScopeOption[]>(availableGraphScopes());
 
   const currentScope = $derived<ScopeOption | null>(
-    scopeOptions.find((o) => o.id === graphState.scopeId) ?? null,
+    scopeOptions.find((o) => o.id === graphState.scopeId)
+      ?? synthesizeScope(graphState.scopeId),
   );
 
-  /// Snap to a sensible scope on open if the saved scopeId no longer
-  /// resolves (file closed since last open, group set changed). Skip
-  /// while the overlay is closed so background layout changes do not
-  /// rewrite saved graph state.
-  $effect(() => {
-    if (!visible) return;
-    if (!currentScope) graphState.scopeId = defaultScopeId();
-  });
+  function synthesizeScope(scopeId: string): ScopeOption | null {
+    if (scopeId === "drive") return { id: "drive", kind: "drive", label: "drive" };
+    if (scopeId === "global") return { id: "global", kind: "global", label: "global" };
+    if (scopeId.startsWith("file:")) {
+      const path = scopeId.slice("file:".length);
+      if (!path) return null;
+      return { id: scopeId, kind: "file", label: path, path };
+    }
+    if (scopeId.startsWith("dir:")) {
+      const path = scopeId.slice("dir:".length);
+      if (!path) return null;
+      return { id: scopeId, kind: "dir", label: path, path };
+    }
+    if (scopeId.startsWith("tag:")) {
+      const nodeId = scopeId.slice("tag:".length);
+      if (!nodeId) return null;
+      return { id: scopeId, kind: "tag", label: nodeId, nodeId };
+    }
+    if (scopeId.startsWith("git_repo:")) {
+      const root = scopeId.slice("git_repo:".length);
+      if (!root) return null;
+      return { id: scopeId, kind: "git_repo", label: root, root };
+    }
+    return null;
+  }
 
   function close(): void {
     if (onClose) onClose();
@@ -210,10 +235,10 @@
     menu?.close();
   }
 
-  function doToggleOverlayMaximized(): void {
-    setOverlayMaximized(!overlayMaximized.on);
-    menu?.close();
-  }
+  // `fullstack-64`: the overlay-maximize toggle helper was removed
+  // alongside its button. The maximize state machinery stays in
+  // `pageWidth.svelte` for any future consumer; this panel is no
+  // longer one.
 
   async function reloadGraph(): Promise<void> {
     menu?.close();
@@ -247,9 +272,11 @@
 
   function onGraphContextMenu(e: MouseEvent): void {
     const t = e.target as HTMLElement | null;
-    // Don't hijack right-click on the scope select or input controls
-    // in the bar; let the browser's native UI fire there.
-    if (t?.closest("select, input, .scope-select, .filters")) return;
+    // Don't hijack right-click on inputs / native select / filter
+    // chips so the browser's native UI fires there. The scope-select
+    // is gone (`fullstack-64`); `select, input` covers any other
+    // native control that lands in the bar later.
+    if (t?.closest("select, input, .filters")) return;
     e.preventDefault();
     menu?.openAtCursor(e.clientX, e.clientY);
   }
@@ -1013,33 +1040,11 @@
 {#snippet graphContent()}
   <div class="graph-tab" oncontextmenu={onGraphContextMenu} role="presentation">
   <div class="bar">
-    <button
-      type="button"
-      class="chrome-btn"
-      onclick={doToggleOverlayMaximized}
-      title={overlayMaximized.on ? "Restore size" : "Maximize"}
-      aria-label={overlayMaximized.on ? "Restore size" : "Maximize"}
-    >
-      {#if overlayMaximized.on}
-        <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-      {:else}
-        <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-      {/if}
-    </button>
-    <span class="scope-label">Scope</span>
-    <select
-      class="scope-select"
-      value={graphState.scopeId}
-      onchange={(e) =>
-        (graphState.scopeId = (e.currentTarget as HTMLSelectElement).value)}
-      title="graph scope"
-    >
-      {#each scopeOptions as opt (opt.id)}
-        <option value={opt.id} disabled={opt.enabled === false}>
-          {opt.label}
-        </option>
-      {/each}
-    </select>
+    <!-- `fullstack-64`: dropped the maximize button (overlay-era
+         leftover; meaningless when Graph is a first-class tab) and
+         the scope-selector dropdown (Cmd+K 3 + Graph-from-here is
+         the canonical scope-setting path). The chrome now starts
+         with the filter chips and ends with the hamburger menu. -->
     <div class="filters">
       {#each ["link", "tag", "mention", "language", "img", "folder"] as const as kind (kind)}
         {@const driveLike =
@@ -1359,45 +1364,10 @@
     color: var(--text-secondary);
     flex-shrink: 0;
   }
-  .scope-label {
-    color: var(--text-secondary);
-    font-size: 13px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-  .scope-select {
-    background: var(--bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 2px 6px;
-    font: inherit;
-    font-size: 14px;
-    max-width: 280px;
-    cursor: pointer;
-  }
-  .scope-select:focus { outline: none; border-color: var(--link); }
-  /* Window-manager chrome: maximize/restore on the far left of the
-     bar, close on the far right. */
-  .chrome-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 24px;
-    padding: 0;
-    background: var(--bg);
-    color: var(--text-secondary);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    cursor: pointer;
-    transition: color 0.15s ease, border-color 0.15s ease;
-    flex-shrink: 0;
-  }
-  .chrome-btn:hover {
-    color: var(--text);
-    border-color: var(--btn-hover);
-  }
+  /* `fullstack-64`: `.scope-label`, `.scope-select`, and the
+     `.chrome-btn` rules dropped alongside the scope-selector +
+     maximize-button DOM elements. The bar's hamburger menu lives
+     inside `<HamburgerMenu>` so it brings its own chrome. */
   /* Slider row used inside the hamburger menu. Mirrors the file
      tab menu's page-width row so all in-menu sliders read alike. */
   :global(.menu-slider-row) {
