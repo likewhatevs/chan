@@ -2017,11 +2017,21 @@ export function splitPane(
 ): void {
   if (!canSplit()) return;
   const original = pane(paneId);
+  // Preserve which side of the Hybrid is showing across the split.
+  // Splitting from the back keeps the new pane on its back too so
+  // the user doesn't lose orientation. The new pane gets an empty
+  // back materialised on demand; theme overrides stay per-pane.
   const newPane: LeafNode = {
     kind: "leaf",
     id: id("pane"),
     tabs: [],
     activeTabId: null,
+    ...(original.showingBack
+      ? {
+          showingBack: true,
+          back: { tabs: [], activeTabId: null },
+        }
+      : {}),
   };
   insertSiblingPane(original.id, newPane, direction, placement);
   layout.activePaneId = newPane.id;

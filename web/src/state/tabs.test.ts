@@ -794,6 +794,43 @@ describe("pane state", () => {
   });
 });
 
+describe("splitPane side preservation", () => {
+  test("splitting from the front side leaves the new pane on the front", () => {
+    const seed = resetLayout([fileTab({ id: "f", path: "a.md" })]);
+    splitPane(seed.id, "row", "after");
+    const root = layout.nodes[layout.rootId];
+    if (root?.kind !== "split") throw new Error("expected split");
+    const newPane = layout.nodes[root.b];
+    if (newPane?.kind !== "leaf") throw new Error("expected leaf");
+    expect(newPane.showingBack).toBeFalsy();
+    expect(newPane.back).toBeUndefined();
+  });
+
+  test("splitting from the back side puts the new pane on its back too", () => {
+    const seed = resetLayout([fileTab({ id: "f", path: "a.md" })]);
+    flipHybrid(seed.id);
+    const live = layout.nodes[seed.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    expect(live.showingBack).toBe(true);
+
+    splitPane(seed.id, "row", "after");
+    const root = layout.nodes[layout.rootId];
+    if (root?.kind !== "split") throw new Error("expected split");
+    const newPane = layout.nodes[root.b];
+    if (newPane?.kind !== "leaf") throw new Error("expected leaf");
+    expect(newPane.showingBack).toBe(true);
+    // New pane starts with an empty back so the visible side renders
+    // cleanly; no theme is inherited (overrides stay per-pane).
+    expect(newPane.back?.tabs).toEqual([]);
+    expect(newPane.back?.activeTabId).toBeNull();
+    expect(newPane.back?.theme).toBeUndefined();
+    // Original pane's hybrid state is intact.
+    const original = layout.nodes[seed.id];
+    if (original?.kind !== "leaf") throw new Error("expected leaf");
+    expect(original.showingBack).toBe(true);
+  });
+});
+
 describe("Hybrid flip (fullstack-48 phase A)", () => {
   test("first flip lazy-initializes back with inverted theme and swaps slots", () => {
     const front = fileTab({ id: "front", path: "notes/front.md" });
