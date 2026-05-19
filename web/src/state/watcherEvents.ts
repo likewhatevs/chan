@@ -101,7 +101,7 @@ export async function writeSurveyReply(
 
 function eventFilename(path: string): boolean {
   const name = path.split("/").pop() ?? path;
-  return /^event-.+\.(md|json)$/.test(name);
+  return /^(event|pre-flight)-.+\.(md|json)$/.test(name);
 }
 
 function parseQuestion(value: unknown): SurveyQuestion | null {

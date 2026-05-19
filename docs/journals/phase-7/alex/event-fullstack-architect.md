@@ -514,3 +514,7 @@ Gate run: `npm run test -- tabs`, `npm run check`,
 
 BCAST is now binary in/out only; pink tab-strip indicator is the only
 visible state. Ready for @@WebtestB formal walkthrough.
+
+## 2026-05-19 06:37 BST — poke
+
+online, starting `fullstack-27` after `fullstack-26` handoff.

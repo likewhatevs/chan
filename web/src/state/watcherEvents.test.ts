@@ -1,13 +1,18 @@
 // @vitest-environment jsdom
 
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { api } from "../api/client";
 import {
   normalizeStandingOptions,
   parseWatcherEvent,
+  readWatcherEvents,
   writeSurveyReply,
 } from "./watcherEvents";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("watcher event helpers", () => {
   test("parses the locked survey shape and injects the standing comment option", () => {
@@ -106,5 +111,45 @@ describe("watcher event helpers", () => {
       session: "spawn_session",
       tab_label: "@@Pair",
     });
+  });
+
+  test("reads pre-flight event files emitted by chan-server", async () => {
+    vi.spyOn(api, "list").mockResolvedValue([
+      {
+        path: "events/pre-flight-f90ed024a46dc89a.md",
+        is_dir: false,
+        mtime: 1,
+        size: 130,
+      },
+      {
+        path: "events/not-an-event.md",
+        is_dir: false,
+        mtime: 1,
+        size: 2,
+      },
+    ]);
+    vi.spyOn(api, "read").mockImplementation(async (path) => ({
+      path,
+      content: JSON.stringify({
+        id: "pre-flight-f90ed024a46dc89a",
+        type: "pre-flight",
+        from: "@@AuthNeeded",
+        to: "HostA",
+        note: "please log in",
+      }),
+      mtime: 1,
+    }));
+
+    const events = await readWatcherEvents("events");
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      id: "pre-flight-f90ed024a46dc89a",
+      type: "pre-flight",
+      path: "events/pre-flight-f90ed024a46dc89a.md",
+      note: "please log in",
+    });
+    expect(api.read).toHaveBeenCalledWith("events/pre-flight-f90ed024a46dc89a.md");
+    expect(api.read).not.toHaveBeenCalledWith("events/not-an-event.md");
   });
 });
