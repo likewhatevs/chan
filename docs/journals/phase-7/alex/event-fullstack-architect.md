@@ -533,3 +533,7 @@ Gate run: `npm run test -- watcherEvents BubbleOverlay`,
 
 Ready for @@WebtestA item-4 re-test: the SPA watcher reader now loads
 `pre-flight-*.md/json` event files emitted by chan-server.
+
+## 2026-05-19 07:40 BST — poke
+
+online, starting `fullstack-28` after architect poke.

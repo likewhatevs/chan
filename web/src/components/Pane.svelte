@@ -4,7 +4,6 @@
   import {
     activeLayout,
     canSplit,
-    canReopenClosedTab,
     closePane,
     closeTab,
     focusColorForPane,
@@ -36,10 +35,8 @@
     ArrowDown,
     ArrowRight,
     Check,
-    FilePlus,
     FileText,
     Folder,
-    History,
     Network,
     PanelRight,
     Palette,
@@ -150,31 +147,7 @@
     command: string;
     chordId?: string;
   };
-  const emptyPaneContent: EmptyMenuRow[] = [
-    {
-      label: "Reload",
-      icon: RefreshCw,
-      command: "pane.reload",
-    },
-    {
-      label: "Toggle Inspector",
-      icon: PanelRight,
-      command: "pane.inspector.toggle",
-    },
-    {
-      label: "New File",
-      icon: FilePlus,
-      command: "app.file.new",
-      chordId: "app.file.new",
-    },
-    {
-      label: "Reopen Closed Tab",
-      icon: History,
-      command: "app.tab.reopenClosed",
-      chordId: "app.tab.reopenClosed",
-    },
-  ];
-  const emptyPaneNavigation: EmptyMenuRow[] = [
+  const emptyPaneActions: EmptyMenuRow[] = [
     {
       label: "Files",
       icon: Folder,
@@ -216,11 +189,13 @@
   let emptyPaneMenuOpen = $state(false);
 
   function openEmptyPaneMenuAt(e: MouseEvent): void {
+    e.preventDefault();
+    setActivePane(pane.id);
+    closePaneHamburgerMenu();
     emptyPaneMenu?.openAtCursor(e.clientX, e.clientY);
   }
 
   function onEmptyPaneContextMenu(e: MouseEvent): void {
-    e.preventDefault();
     openEmptyPaneMenuAt(e);
   }
 
@@ -337,15 +312,6 @@
   /// App.svelte. Avoids re-implementing the actions here.
   function dispatchCommand(id: string): void {
     emptyPaneMenu?.close();
-    if (id === "pane.reload") {
-      void refreshTree();
-      return;
-    }
-    if (id === "pane.inspector.toggle") {
-      doToggleInspector();
-      return;
-    }
-    if (id === "app.tab.reopenClosed" && !canReopenClosedTab()) return;
     window.dispatchEvent(
       new CustomEvent("chan:command", { detail: { name: id } }),
     );
@@ -775,7 +741,8 @@
     ondrop={onDrop}
     oncontextmenu={(e) => {
       if ((e.target as Element | null)?.closest(".tab, .actions")) return;
-      openPaneContextAt(e);
+      if (pane.tabs.length === 0) openEmptyPaneMenuAt(e);
+      else openPaneContextAt(e);
     }}
   >
     {#each pane.tabs as t, i (t.id)}
@@ -1051,7 +1018,7 @@
         class="placeholder"
         aria-label="no tab open"
         onclick={() => setActivePane(pane.id)}
-        oncontextmenu={openPaneContextAt}
+        oncontextmenu={onEmptyPaneContextMenu}
         role="presentation"
       >
         <div class="placeholder-stack">
@@ -1104,25 +1071,7 @@
           height={260}
           onBeforeOpen={closePaneHamburgerMenu}
         >
-          <!-- Canonical section order shared with the file-tab and
-               overlay menus: content actions, navigation, pane
-               controls, Settings footer. -->
-          {#each emptyPaneContent as row (row.command)}
-            {@const Icon = row.icon}
-            <li>
-              <button
-                role="menuitem"
-                disabled={row.command === "app.tab.reopenClosed" && !canReopenClosedTab()}
-                onclick={() => dispatchCommand(row.command)}
-              >
-                <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
-                <span class="menu-row-label">{row.label}</span>
-                <span class="menu-row-chord">{chordLabel(row.chordId)}</span>
-              </button>
-            </li>
-          {/each}
-          <li class="sep" role="separator"></li>
-          {#each emptyPaneNavigation as row (row.command)}
+          {#each emptyPaneActions as row (row.command)}
             {@const Icon = row.icon}
             <li>
               <button role="menuitem" onclick={() => dispatchCommand(row.command)}>

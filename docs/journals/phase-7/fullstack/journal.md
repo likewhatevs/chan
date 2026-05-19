@@ -72,3 +72,7 @@ online, starting fullstack-27 after fullstack-26 handoff.
 ## 2026-05-19 06:39 BST
 
 fullstack-27 landed: `ebb347b` Read pre-flight watcher files (fullstack-27). Gate green: `npm run test -- watcherEvents BubbleOverlay`, `npm run check`, `npm run build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+## 2026-05-19 07:40 BST
+
+online, starting fullstack-28 after architect poke.
