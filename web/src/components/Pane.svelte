@@ -1257,11 +1257,15 @@
     line-height: 1;
     color: var(--info-text);
   }
+  /* `fullstack-a-2`: watcher dot uses the same yellow attention
+     family as `.back-attention` and `.dirty.activity`. Blue read
+     as info/idle and the dot is specifically a "needs your
+     attention" cue, so unify on the warn-text token. */
   .dirty.watcher {
-    color: var(--success-text, var(--link));
+    color: var(--warn-text, #d29922);
   }
   .dirty.activity {
-    color: var(--warning-text, #d29922);
+    color: var(--warn-text, #d29922);
   }
   .dirty.watcher.blink {
     animation: watcher-blink 850ms steps(2, start) infinite;
