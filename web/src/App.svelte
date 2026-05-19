@@ -410,9 +410,10 @@
       case "A":
         paneModeSwap("left");
         return;
-      // Lowercase `s` is the Search-overlay shortcut now (handled in
-      // a case higher up); only `Shift+s` (uppercase S) keeps the
-      // WASD swap-down meaning. Per `fullstack-42`.
+      // `fullstack-74`: `s` / `S` rejoin the WASD swap-tile group
+      // (previously case-sensitive: lowercase opened Search,
+      // uppercase swapped). Search moved to `f` / `F` below.
+      case "s":
       case "S":
         paneModeSwap("down");
         return;
@@ -473,10 +474,11 @@
       // Search lives in an OverlayShell, not a tab type. Open the
       // overlay outside the transaction so it can capture keyboard
       // input cleanly; commit the draft first so any layout edits
-      // the user already made don't get dropped. Reassigned from
-      // `3` to lowercase `s` per `fullstack-42`; uppercase `S`
-      // (Shift+s) stays bound to swap-down as part of WASD.
-      case "s":
+      // the user already made don't get dropped. `fullstack-74`:
+      // moved from `s` to `f` so WASD (any case) can fully own
+      // the swap-tile group; `s` / `S` now both swap-down.
+      case "f":
+      case "F":
         commitPaneMode();
         scheduleSessionSave();
         searchPanel.open = true;

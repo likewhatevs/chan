@@ -17,27 +17,28 @@ describe("Cmd+K pane mode keymap (fullstack-40 inversion)", () => {
     expect(app).toContain('case "ArrowRight":\n        paneModeMoveFocus("right");');
   });
 
-  test("WASD swaps tiles (lowercase + uppercase, except 's')", () => {
+  test("WASD swaps tiles (lowercase + uppercase, including 's')", () => {
     expect(app).toContain('case "w":\n      case "W":\n        paneModeSwap("up");');
     expect(app).toContain('case "a":\n      case "A":\n        paneModeSwap("left");');
     expect(app).toContain('case "d":\n      case "D":\n        paneModeSwap("right");');
-    // `fullstack-42` reassigned lowercase `s` to Search overlay,
-    // so only the Shift-modified `S` keeps the swap-down meaning.
-    expect(app).toContain('case "S":\n        paneModeSwap("down");');
+    // `fullstack-74`: `s` rejoins WASD. Search moved to `f`.
+    expect(app).toContain('case "s":\n      case "S":\n        paneModeSwap("down");');
   });
 });
 
 describe("Cmd+K pane mode keymap (fullstack-42 — search / graph / new file / help)", () => {
-  test("3 stages a Graph spawn; lowercase s opens the Search overlay", () => {
+  test("3 stages a Graph spawn; lowercase f opens the Search overlay", () => {
     // `fullstack-72`: spawn keys stage an intent into
     // `paneMode.spawnIntent` instead of pushing a tab into the
     // draft on keystroke. `commitPaneMode()` applies the intent
-    // when the user confirms with Enter.
+    // when the user confirms with Enter. `fullstack-74` moved
+    // Search from `s` (which now rejoins WASD swap-down) to
+    // `f` / `F` so WASD can fully own swap-tile.
     expect(app).toContain(
       'case "3":\n        paneModeStageSpawn("graph", resolveSpawnContext());',
     );
     expect(app).toMatch(
-      /case "s":[\s\S]*commitPaneMode\(\);[\s\S]*searchPanel\.open = true;/,
+      /case "f":[\s\S]*?case "F":[\s\S]*?commitPaneMode\(\);[\s\S]*?searchPanel\.open = true;/,
     );
   });
 

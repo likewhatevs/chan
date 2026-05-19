@@ -75,7 +75,7 @@
         { caps: [{ label: "3", key: "3" }], action: "Stage: Graph" },
         { caps: [{ label: "4", key: "4" }], action: "New file" },
         { caps: [{ label: "p", key: "p" }], action: "Rich prompt (terminal)" },
-        { caps: [{ label: "s", key: "s" }], action: "Search overlay" },
+        { caps: [{ label: "f", key: "f" }], action: "Search overlay" },
       ],
     },
     {

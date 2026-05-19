@@ -68,7 +68,10 @@ export type Shortcut = {
 /// shipping two shortcuts for the same action. Removed:
 ///
 ///   app.files.toggle    (was Mod+P)              → Cmd+K 2
-///   app.search.toggle   (was Mod+Shift+F)        → Cmd+K s
+///   app.search.toggle   (was Mod+Shift+F)        → Cmd+K f
+///                                                  (was `Cmd+K s` post-fullstack-42;
+///                                                   moved to `f` per fullstack-74 so
+///                                                   WASD can fully own swap-tile)
 ///   app.graph.toggle    (was Mod+Shift+M)        → Cmd+K 3
 ///   app.terminal.toggle (was Cmd+Alt+T / Mod+T)  → Cmd+K 1
 ///   app.file.new        (was Ctrl+Alt+N / Mod+N) → Cmd+K 4
