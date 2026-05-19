@@ -77,3 +77,20 @@ for some reason. Diagnose + fix.
 Standard. Pre-push gate green. Ping @@WebtestA when
 landed for item-4 re-test. Ping via
 `alex/event-fullstack-architect.md`.
+
+## 2026-05-19 06:39 BST — hand-off
+
+`fullstack-27` is committed and pushed on `main`.
+
+Commit:
+
+* `ebb347b` Read pre-flight watcher files (fullstack-27)
+
+Gate run: `npm run test -- watcherEvents BubbleOverlay`,
+`npm run check`, `npm run build`, and
+`bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+Notes: SPA watcher ingestion now accepts chan-server
+`pre-flight-*.md/json` files as well as `event-*`, so the existing
+pre-flight parser and BubbleOverlay render path receive the emitted spawn
+pre-flight events.

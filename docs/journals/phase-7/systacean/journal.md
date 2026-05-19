@@ -359,3 +359,18 @@ Verification:
 New regression assignment started:
 [systacean-16.md](systacean-16.md), terminal activity counter
 sensitivity for ANSI/control-only PTY writes.
+
+## 2026-05-19 06:39 BST - systacean-16 pushed
+
+Committed the terminal activity byte-counting tune.
+
+Commit:
+
+* `538eeb8` - Tune terminal activity byte counting
+
+Verification:
+
+* `cargo test -p chan-server activity_counter --no-default-features`
+* `cargo test -p chan-server --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `scripts/pre-push`

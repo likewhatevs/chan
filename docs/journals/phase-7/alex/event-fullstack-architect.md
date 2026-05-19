@@ -518,3 +518,18 @@ visible state. Ready for @@WebtestB formal walkthrough.
 ## 2026-05-19 06:37 BST — poke
 
 online, starting `fullstack-27` after `fullstack-26` handoff.
+
+## 2026-05-19 06:39 BST — poke
+
+`fullstack-27` is committed and pushed on `main`.
+
+Commit:
+
+* `ebb347b` Read pre-flight watcher files (fullstack-27)
+
+Gate run: `npm run test -- watcherEvents BubbleOverlay`,
+`npm run check`, `npm run build`, and
+`bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+Ready for @@WebtestA item-4 re-test: the SPA watcher reader now loads
+`pre-flight-*.md/json` event files emitted by chan-server.

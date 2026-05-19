@@ -68,3 +68,7 @@ fullstack-26 landed: `5806343` Drop terminal broadcast mute (fullstack-26). Gate
 ## 2026-05-19 06:37 BST
 
 online, starting fullstack-27 after fullstack-26 handoff.
+
+## 2026-05-19 06:39 BST
+
+fullstack-27 landed: `ebb347b` Read pre-flight watcher files (fullstack-27). Gate green: `npm run test -- watcherEvents BubbleOverlay`, `npm run check`, `npm run build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.

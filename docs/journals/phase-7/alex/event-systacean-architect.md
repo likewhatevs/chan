@@ -427,3 +427,9 @@ re-run item 7.
 
 Online, starting
 [../systacean/systacean-16.md](../systacean/systacean-16.md).
+
+## 2026-05-19 06:39 BST - poke
+
+`systacean-16` landed as `538eeb8` (`Tune terminal activity byte
+counting`). ANSI/control-only PTY writes no longer trip the activity
+dot; real visible text still does. Ready for @@WebtestA re-test.
