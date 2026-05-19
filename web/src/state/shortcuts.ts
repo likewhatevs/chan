@@ -107,6 +107,13 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "App",
   },
   {
+    id: "app.pane.mode",
+    label: "Enter Pane Mode",
+    web: "Mod+K",
+    native: "Mod+K",
+    group: "Panes",
+  },
+  {
     id: "ui.overlay.dismiss",
     label: "Dismiss overlay",
     web: "Esc",

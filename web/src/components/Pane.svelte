@@ -7,6 +7,7 @@
     closePane,
     closeTab,
     closeTabsInPane,
+    enterPaneMode,
     focusColorForWindow,
     isDirty,
     detachTabToPaneEdge,
@@ -39,6 +40,7 @@
     Check,
     FileText,
     Folder,
+    LayoutGrid,
     ListX,
     Network,
     PanelRight,
@@ -220,6 +222,10 @@
   function onClosePane(): void {
     closePaneMenus();
     closePane(pane.id);
+  }
+  function onEnterPaneMode(): void {
+    closePaneMenus();
+    enterPaneMode();
   }
 
   /// Subscribe to the structural-wobble bus. Each splitPane /
@@ -883,12 +889,20 @@
         bind:this={paneMenu}
         bind:open={paneMenuOpen}
         width={250}
-        height={320}
+        height={360}
         onBeforeOpen={closePaneContextMenus}
       >
+        <li>
+          <button role="menuitem" onclick={onEnterPaneMode}>
+            <LayoutGrid size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span class="menu-row-label">Enter Pane Mode</span>
+            <span class="menu-row-chord">{chordLabel("app.pane.mode")}</span>
+          </button>
+        </li>
+        <li class="sep" role="separator"></li>
         <li class="menu-label">
           <Palette size={16} strokeWidth={1.75} aria-hidden="true" />
-          <span>Focus border color</span>
+          <span>Focus border colour</span>
         </li>
         {#each paneFocusColors as color}
           <li>

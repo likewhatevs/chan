@@ -114,9 +114,10 @@ describe("Pane right-click menus", () => {
     await tick();
 
     expect(document.body.querySelector(".menu-label span")?.textContent?.trim()).toBe(
-      "Focus border color",
+      "Focus border colour",
     );
     expect(menuLabels()).toEqual([
+      "Enter Pane Mode",
       "blue",
       "green",
       "pink",

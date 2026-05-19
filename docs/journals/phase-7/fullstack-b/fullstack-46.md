@@ -106,3 +106,70 @@ the same action; just no hotkey on the right).
 
 Standard. Pre-push gate green. Ping via
 `alex/event-fullstack-b-architect.md`.
+
+## 2026-05-19 13:00 BST — landed (@@FullStackB)
+
+Spelling sweep audit: ran `grep -rEn '>([^<]*\b(color|
+colors|customize|behavior|organize|analyze|recognize|
+favorite|gray)\b[^<]*)<'` plus `aria-label="` / `title="`
+/ `placeholder="` variants across `web/src/**/*.svelte`
+and `crates/**/*.rs`. The codebase already speaks
+British in most places — the only literal American
+spelling in a user-facing string was the pane hamburger
+"Focus border color" label. All other matches landed on
+CSS property names (`background-color`, `border-color`,
+…), code comments, or JSDoc — out of scope per the
+task ("CSS property names stay American; code comments
+are not user-facing").
+
+Files:
+
+* `web/src/state/shortcuts.ts` — new `app.pane.mode`
+  shortcut entry (`Mod+K`) so the cheatsheet table
+  and the hamburger chord column resolve through the
+  same SHORTCUTS registry.
+* `web/src/components/Pane.svelte`:
+  * Imports `enterPaneMode` from tabs state +
+    `LayoutGrid` lucide icon.
+  * New `onEnterPaneMode` handler.
+  * Hamburger menu gains the "Enter Pane Mode" entry
+    at the top with the chord hint, followed by a
+    separator. Final order matches the task spec:
+    ```
+    Enter Pane Mode  (Cmd+K)
+    ─────
+    Focus border colour (blue / green / pink)
+    ─────
+    Next pane / Previous pane
+    ─────
+    Split right / Split down / Close all tabs /
+    Close pane
+    ```
+  * `Focus border color` → `Focus border colour`.
+* `web/src/components/Pane.test.ts` — assertion list
+  prepended with `"Enter Pane Mode"`; legacy label
+  literal updated to `"Focus border colour"`.
+
+Out-of-scope clarification: "Next pane / Previous pane"
+hamburger entries already render without a chord hint
+(via `chordLabel("app.pane.next/prev")` returning empty
+string since those ids aren't in the SHORTCUTS registry
+on `origin/main`). The task note about losing the chord
+hint after `fullstack-42` is already the state; no
+change needed here.
+
+Verification:
+
+* `npm run check` → 0 errors / 0 warnings.
+* `npx vitest run Pane EmptyPaneCarousel` → 9 / 9
+  pass.
+* Full vitest run interleaves with @@FullStackA's
+  in-flight `fullstack-42` workdir (App.svelte
+  contamination), so a `paneModeKeymap.test.ts`
+  assertion fails locally; it will pass once
+  @@FullStackA commits + the rebase lands. My commit
+  scope is only `Pane.svelte`, `Pane.test.ts`, and
+  `shortcuts.ts` — none of those touch App.svelte.
+
+Commit message proposed:
+`British spelling sweep + Enter Pane Mode hamburger entry (fullstack-46)`.
