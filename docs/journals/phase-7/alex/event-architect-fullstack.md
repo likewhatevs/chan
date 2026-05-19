@@ -902,3 +902,33 @@ Queue:
 clearance.
 
 — @@Architect, 2026-05-19 03:30 BST
+
+## 2026-05-19 04:00 BST — poke: fullstack-26 cut (drop MUTE entirely)
+
+`fullstack-24` (`a8b52a0`) landed cleanly — follow-up
+button is the explicit primary action it deserves.
+
+@@Alex revised BCAST one more time, in the
+simplification direction. The MUTE concept is gone:
+
+* One BCAST group per Hybrid (unchanged).
+* Each tab in or out, binary (unchanged).
+* No per-tab MUTE. No `Cmd+Shift+I`. No mute /
+  off-button bar.
+* Pink indicator on the tab strip is the only feedback.
+
+Test sequence is the spec: select-all → deselect-a-few
+→ deselect-all → select-a-few. Pink indicator on the
+right tabs at each step, nothing else to verify.
+
+Task: [../fullstack/fullstack-26.md](../fullstack/fullstack-26.md).
+Supersedes the MUTE-related portions of `fullstack-8`
+and `fullstack-22`; the window-wide + per-tab-toggle
++ no-self-entry semantics from `-22` stay.
+
+Standing topic-level commit clearance.
+
+After this lands, @@WebtestB's deferred BCAST formal
+walkthrough is the validation pass.
+
+— @@Architect, 2026-05-19 04:00 BST

@@ -662,3 +662,113 @@ Bonus: confirmed fullstack-17 polish bundle items (path
 prompt absolute-paths, unknown-type drops, stale watcher
 toast, auto-dismiss surveys) all working live across the
 walkthroughs.
+
+## 2026-05-19 (resume) BST - Item 7 re-test (GREEN) + item 4 re-test (still PARTIAL, separate seam)
+
+Build: head includes `21d6fe5` (fullstack-25 fix terminal
+activity focus tracking — the systacean-15 fix
+@@Systacean diagnosed as SPA-side conflation of `active`
+vs `focused` in `TerminalTab`). Rebuilt + restarted 8801.
+
+### Item 7 re-test — GREEN
+
+Recipe: two panes, `BgTerm` (left pane-a) +
+`FgTerm` (right pane-b). With pane-b focused, ran
+`sleep 1; echo BG-OUT-1; sleep 1; echo BG-OUT-2` in
+BgTerm and immediately clicked into FgTerm.
+
+* **At 1.5s after defocus**:
+  - `BgTerm  ● ● ×` — activity dot (orange) + watcher
+    dot (blue), visually distinct.
+  - `FgTerm    ×` — no dots.
+  - DOM: BgTerm `activity: true, watcher: true`.
+  PASS for appearance-on-output.
+* **Then clicked BgTerm tab to focus it**:
+  - `BgTerm   ● ×` — activity dot cleared, watcher
+    still there.
+  - `FgTerm    ×` — unchanged.
+  - DOM: BgTerm `activity: false`.
+  PASS for clear-on-focus.
+
+Marker color contrast against the watcher bullet is fine
+in-DOM: `<span class="dirty activity">` is orange (warn
+text), `<span class="dirty watcher">` is blue. Item 8
+(distinguished from other markers) also confirmed live
+in addition to the prior code audit.
+
+Side observation (minor): later, while exercising the
+spawn flow, the FgTerm tab also picked up a transient
+activity dot even though I didn't intentionally produce
+output in it — likely the cursor blink / prompt redraw
+on the bash PTY counted as bytes_since_focus. Won't
+mis-fire often in real use but worth checking with
+@@Systacean whether terminal control sequences should
+be excluded from the activity accounting.
+
+### Item 4 re-test — still PARTIAL, separate seam
+
+Set up watcher on `events/` in BgTerm; spawned
+`@@LoginRetry` with command
+`bash -c 'echo please log in; sleep 30'` from the rich
+prompt context menu.
+
+* Spawned PTY printed `please log in`; chan-server
+  wrote
+  `events/pre-flight-35922f6b8d22b9a3.md`:
+  ```json
+  {"id":"pre-flight-35922f6b8d22b9a3",
+   "type":"pre-flight","from":"@@LoginRetry",
+   "to":"BgTerm","note":"...please log in"}
+  ```
+* Switched back to the BgTerm tab. `articleCount: 0`,
+  `trayPills: []`, no `please log in` text anywhere in
+  the rich prompt area. No bubble rendered.
+
+**Confirms architect's hypothesis** that items 4 + 7 are
+SEPARATE seams. fullstack-25 fixed the WS-frame /
+focus-state path (item 7); the pre-flight bubble path is
+about the **event-file → SPA bubble list** ingestion
+(item 4). That separate fix needs to land for item 4 to
+go green.
+
+The pre-flight event ingestion likely needs:
+* The SPA's watcher event subscription path to pick up
+  files written by chan-server itself (not silenced by
+  `self_writes`), OR
+* A direct WS push from chan-server to the SPA when it
+  fires a pre-flight event (sidestep the file-watcher
+  loop entirely).
+
+Hand-off detail: with item 7 closed, the architectural
+pattern for item 4 is more clearly "server file write
+→ no SPA pickup" rather than "WS state flag never
+flipped". @@FullStack / @@Systacean might find that
+narrower framing useful.
+
+### Updated final tally
+
+```
+1  Spawn agent affordance                       pass
+2  Dialog accepts name/command/env + tab spawn  pass
+3  Spawned bash captures hi/bye                 pass
+4  Pre-flight bubble renders 1/2/3 options      partial (event-file→bubble seam)
+5  Spinner + counter                            n/a (gated on 4)
+6  Option 2 (kill) closes tab                   n/a (gated on 4)
+7  Activity indicator on unfocused tab          pass (after fullstack-25)
+8  Distinguished from dirty/watcher bullets     pass (live + code audit)
+9  chan MCP auto-published                      pass
+10 User MCP entries untouched                   pass
+11 SKILL drift check                            pass
++  fullstack-23 vertical rows + follow-up       pass
+```
+
+10 PASS / 1 PARTIAL / 2 N/A.
+
+### State left on disk
+
+* 8801 server up. Layout: `BgTerm | @@LoginRetry`
+  (pane-a) + `FgTerm` (pane-b). BgTerm watcher
+  attached. Pre-flight event file still in
+  `events/` for inspection.
+
+## 2026-05-19 (resume) BST - Item 7 closed, item 4 narrowed

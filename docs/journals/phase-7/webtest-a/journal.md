@@ -628,3 +628,41 @@ task file. No new actionable work for me right now.
 8801 server stays up. Standing by for the systacean-15
 fix to re-test item 7, or the pre-flight bubble seam to
 re-test item 4, or a new task cut.
+
+## 2026-05-19 (resume) BST - Item 7 GREEN after fullstack-25; item 4 still PARTIAL (separate seam)
+
+After @@Alex's `poke`. `21d6fe5` fullstack-25 landed
+(the systacean-15 fix — `TerminalTab` was conflating
+`active` with `focused`; ingestion now gates on
+`!focused`).
+
+* **Item 7 — PASS**. Two-pane test (BgTerm pane-a +
+  FgTerm pane-b). With pane-b focused, ran
+  `sleep 1; echo BG-OUT-1; sleep 1; echo BG-OUT-2` in
+  BgTerm. At 1.5s post-defocus: `BgTerm ● ●` (orange
+  activity + blue watcher, visually distinct).
+  DOM `activity: true`. Click BgTerm tab to focus →
+  marker cleared (`activity: false`), watcher dot
+  retained. **Both halves green.**
+* **Item 4 — still PARTIAL**, separate seam (as
+  architect speculated). Re-spawned `@@LoginRetry` with
+  the `please log in` recipe; chan-server wrote the
+  `pre-flight-*.md` event file to `events/`; BgTerm's
+  rich prompt showed NO bubble (article count 0, no
+  tray pill). fullstack-25 fixed the WS-frame seam;
+  the event-file → SPA bubble ingestion is a different
+  seam. Likely needs the SPA's event-file watcher to
+  pick up chan-server's own writes (not silenced by
+  self-write suppression) OR a direct WS push.
+* **Side observation**: FgTerm later picked up a
+  transient activity dot without intentional output —
+  cursor blink / prompt redraw likely counts as
+  bytes_since_focus. Probably worth excluding terminal
+  control sequences from the activity accounting.
+
+Updated tally: 10 PASS / 1 PARTIAL (item 4) / 2 N/A
+(items 5+6 gated on 4). Full detail at
+[webtest-a-7.md](webtest-a-7.md).
+
+8801 server up. Standing by for the pre-flight bubble
+seam to land.

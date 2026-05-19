@@ -896,3 +896,98 @@ live during this session:
 claude/codex/gemini configs (refreshed on each
 chan-server startup). webtest-a-7 closed from my
 side. Standing by for the next wave.
+
+## 2026-05-19 (resume) BST - poke (item 7 GREEN after fullstack-25; item 4 narrowed)
+
+After @@Alex's `poke`. `21d6fe5` fullstack-25 landed —
+@@Systacean's diagnosis confirmed SPA-side
+(`TerminalTab` was conflating `active` with `focused`;
+ingestion now gates on `!focused`). Rebuilt + restarted
+8801.
+
+**Item 7 — PASS** (re-tested per architect's poke):
+
+Two-pane setup (BgTerm pane-a + FgTerm pane-b). With
+pane-b focused, ran `sleep 1; echo BG-OUT-1; sleep 1;
+echo BG-OUT-2` in BgTerm.
+
+* At 1.5s post-defocus: BgTerm shows
+  `BgTerm ● ● ×` — **orange activity dot + blue
+  watcher dot, visually distinct**.
+  DOM: `activity: true, watcher: true`.
+* Click BgTerm tab to focus → activity dot cleared,
+  watcher retained. DOM: `activity: false`.
+
+Both halves green. Item 8 (visual distinction)
+incidentally re-confirmed live: orange vs blue, no
+collision.
+
+**Item 4 — still PARTIAL** (re-tested
+opportunistically; confirms architect's hypothesis
+that 4 + 7 are SEPARATE seams):
+
+Re-spawned `@@LoginRetry` with `bash -c 'echo please
+log in; sleep 30'` from the rich prompt context menu.
+chan-server wrote the pre-flight event file
+`events/pre-flight-35922f6b8d22b9a3.md` correctly:
+```json
+{"id":"pre-flight-35922f6b8d22b9a3",
+ "type":"pre-flight","from":"@@LoginRetry",
+ "to":"BgTerm","note":"...please log in"}
+```
+But BgTerm's rich prompt shows **no bubble**
+(`articleCount: 0`, `trayPills: []`).
+
+fullstack-25 fixed the **WS-frame → SPA state-flag**
+seam (item 7). Item 4 is a different path: the
+**server-written event-file → SPA bubble list**
+ingestion. Likely needs either:
+
+* the SPA's event-file watcher to pick up
+  chan-server's own writes (not silenced by
+  `self_writes` suppression), OR
+* a direct WS push from chan-server when it fires a
+  pre-flight event (sidestep the file-watcher loop
+  entirely).
+
+With item 7 closed, the architectural pattern for
+item 4 is more clearly "server file write → no SPA
+pickup" rather than "WS state flag never flipped".
+Worth cutting a follow-up.
+
+**Side observation worth flagging**: While exercising
+the spawn flow, FgTerm later picked up a transient
+activity dot even though I didn't intentionally
+produce output in it. Cursor blink / prompt redraw
+likely count as `bytes_since_focus`. Won't mis-fire
+often in real use but worth checking whether
+terminal control sequences (cursor blink, ANSI
+state) should be excluded from the activity
+accounting.
+
+**Updated final tally (10 PASS / 1 PARTIAL / 2 N/A)**:
+
+```
+1  Spawn agent affordance                       pass
+2  Dialog + tab spawn                           pass
+3  Spawned bash captures hi/bye                 pass
+4  Pre-flight bubble renders                    partial *
+5  Spinner + counter                            n/a
+6  Option 2 (kill) closes tab                   n/a
+7  Activity indicator on unfocused tab          pass (post-fs25)
+8  Distinguished from dirty/watcher bullets     pass
+9  chan MCP auto-published                      pass
+10 User MCP entries untouched                   pass
+11 SKILL drift check                            pass
++  fullstack-23 vertical rows + follow-up       pass
+```
+
+`*` Item 4 separate seam from item 7. Items 5 + 6
+gated on 4.
+
+State: 8801 server up. Layout: `BgTerm | @@LoginRetry`
+in pane-a, `FgTerm` in pane-b. BgTerm watcher
+attached. Pre-flight event file still in `events/`
+for inspection.
+
+Standing by for the item 4 seam fix or the next wave.
