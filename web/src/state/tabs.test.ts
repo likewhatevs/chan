@@ -194,6 +194,35 @@ describe("tab close confirmation", () => {
     expect(activePane().activeTabId).toBe(reopened.id);
   });
 
+  test("closing the last tab on the back side keeps showingBack=true (fullstack-a-11)", async () => {
+    // Sibling fix to `fullstack-a-5`. Closing should never change
+    // a Hybrid's flip orientation — only the explicit flip chord
+    // does. Pre-`fullstack-a-11`, the back side appeared to
+    // auto-flip to the front when the user closed the last
+    // back-side tab. Today closeTabAsync mutates p.tabs (which IS
+    // the back side's tabs when showingBack=true) and leaves the
+    // flip state alone; pin that behaviour so a regression here
+    // gets caught.
+    const front = fileTab({ id: "front", path: "notes/front.md" });
+    const seed = resetLayout([front]);
+    flipHybrid(seed.id);
+    let live = layout.nodes[seed.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    expect(live.showingBack).toBe(true);
+    live.tabs.push(fileTab({ id: "back", path: "notes/back.md" }));
+    live.activeTabId = "back";
+
+    await closeTab(seed.id, "back", { force: true });
+
+    live = layout.nodes[seed.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    expect(live.showingBack).toBe(true);
+    expect(live.tabs).toHaveLength(0);
+    expect(live.activeTabId).toBeNull();
+    // Front tabs parked on the back slot are untouched.
+    expect(live.back?.tabs.map((t) => t.id)).toEqual(["front"]);
+  });
+
   test("closing the last tab in a Hybrid pane leaves the pane in place (fullstack-a-5)", async () => {
     // Pre-`fullstack-a-5`, an empty non-root pane auto-collapsed
     // into its sibling: the Hybrid structure disappeared on the
