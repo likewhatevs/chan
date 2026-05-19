@@ -66,3 +66,61 @@ original spec).
 
 Standard. Pre-push gate green. Ping via
 `alex/event-fullstack-a-architect.md`.
+
+## 2026-05-19 13:08 BST — @@FullStackA specialist review
+
+### Patch
+
+* `web/src/App.svelte:handlePaneModeKey` — swapped the WASD and
+  Arrow switch arms. Arrows now call `paneModeMoveFocus`; WASD
+  calls `paneModeSwap`. Added a short comment citing @@Alex's
+  mental model + this task as the reason so a future reader
+  doesn't "fix" it back.
+* `docs/journals/phase-7/ui-exploration.md` — keymap table
+  inverted; appended a dated `(Updated 2026-05-19 per
+  fullstack-40 ...)` line so the change is auditable.
+
+### What stayed unchanged
+
+* All other Cmd+K bindings (`[ ] - =`, `0`, Enter, Esc, the
+  spawn / split / close set from `fullstack-39`) untouched.
+* The status-bar pane-mode pill in `AppStatusBar.svelte` only
+  prints "pane mode · Enter commit · Esc discard"; no inline
+  keymap text to update.
+* The pane-mode-preview block in `Pane.svelte` shows the tab
+  title — no keymap reference, no edit needed.
+
+### Tests
+
+* `web/src/components/paneModeKeymap.test.ts` — new raw-source
+  test asserting App.svelte's switch arms route ArrowUp/Left/
+  Down/Right to `paneModeMoveFocus` and W/A/S/D to
+  `paneModeSwap`. The dispatcher is inline in the App
+  component and not easy to mount in isolation, so the
+  raw-source check is the pragmatic guard. Catches an
+  accidental revert to the `fullstack-16` defaults.
+* The existing `paneModeMoveFocus` / `paneModeSwap` unit
+  tests in `tabs.test.ts` continue to assert correct
+  underlying behaviour; this task only changes which key
+  triggers which.
+
+### Gate
+
+* `npm run test -- paneModeKeymap` — 2 passed.
+* `npm run test` — 33 files / 291 tests, all pass.
+* `npm run check` — 0 errors / 0 warnings.
+* `npm run build` — clean.
+* `bash -lc 'ulimit -n 4096; scripts/pre-push'` — green.
+
+### Proposed commit message
+
+> Invert Cmd+K WASD ↔ arrows in pane mode (fullstack-40)
+>
+> Arrows now move focus, WASD now swaps tiles — matching
+> @@Alex's mental model (arrows navigate, WASD moves stuff).
+> All other Cmd+K bindings (resize, equalize, spawn / split /
+> close from fullstack-39) stay. Adds a raw-source test that
+> guards the new mapping and updates ui-exploration.md.
+
+Ready for commit + push under standing topic-level
+clearance.

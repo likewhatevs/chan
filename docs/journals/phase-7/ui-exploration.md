@@ -31,8 +31,8 @@ Entering the mode flips the chrome with a slight overlay fx: thin tint on unfocu
 After Cmd+K, Cmd is released and the keys below are unprefixed:
 
 ```
-W A S D              move focus (up / left / down / right)
-↑ ← ↓ →              swap focused tile with neighbour in that direction
+↑ ← ↓ →              move focus (up / left / down / right)
+W A S D              swap focused tile with neighbour in that direction
 [                    shrink focused tile horizontally
 ]                    grow focused tile horizontally
 -                    shrink focused tile vertically
@@ -42,6 +42,10 @@ Shift + [ ] - =      larger nudge (e.g. 10% vs 2%)
 Enter                commit transaction and exit
 Esc                  discard transaction and exit
 ```
+
+(Updated 2026-05-19 per `fullstack-40`: @@Alex's mental model is
+arrows = navigate, WASD = move stuff. The original mapping had
+them reversed.)
 
 Semantics:
 - Focus moves and swaps are no-ops when there is no neighbour in that direction.

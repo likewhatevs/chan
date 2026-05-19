@@ -334,32 +334,35 @@
       case "Escape":
         cancelPaneMode();
         return;
+      // @@Alex's mental model: arrows navigate (move focus),
+      // WASD moves stuff (swap tiles). `fullstack-40` swapped
+      // these from the `fullstack-16` defaults.
+      case "ArrowUp":
+        paneModeMoveFocus("up");
+        return;
+      case "ArrowLeft":
+        paneModeMoveFocus("left");
+        return;
+      case "ArrowDown":
+        paneModeMoveFocus("down");
+        return;
+      case "ArrowRight":
+        paneModeMoveFocus("right");
+        return;
       case "w":
       case "W":
-        paneModeMoveFocus("up");
+        paneModeSwap("up");
         return;
       case "a":
       case "A":
-        paneModeMoveFocus("left");
+        paneModeSwap("left");
         return;
       case "s":
       case "S":
-        paneModeMoveFocus("down");
+        paneModeSwap("down");
         return;
       case "d":
       case "D":
-        paneModeMoveFocus("right");
-        return;
-      case "ArrowUp":
-        paneModeSwap("up");
-        return;
-      case "ArrowLeft":
-        paneModeSwap("left");
-        return;
-      case "ArrowDown":
-        paneModeSwap("down");
-        return;
-      case "ArrowRight":
         paneModeSwap("right");
         return;
       case "[":
