@@ -170,3 +170,125 @@ task, the full map inside Cmd+K mode is:
 
 Standard. Pre-push gate green. Ping via
 `alex/event-fullstack-a-architect.md`.
+
+## 2026-05-19 13:25 BST — @@FullStackA specialist review
+
+Three-way patch: Cmd+K key map revision, redundant
+menu/shortcut cleanup, help overlay.
+
+### Cmd+K key map updates
+
+`web/src/App.svelte:handlePaneModeKey`:
+
+* `3` → `paneModeOpenGraph()` (was Search overlay).
+* `4` → commits the draft then `void fileOps.createFile("")`
+  (was vacant). Modal needs the normal keyboard context, so
+  draft is sealed before the prompt opens.
+* `s` (lowercase) → commits the draft then opens the Search
+  overlay. `S` (Shift+s) keeps the WASD swap-down meaning.
+* `h` / `H` → toggles `paneModeHelpVisible`. Read-only;
+  doesn't commit. Enter / Esc also clear it.
+
+### Help overlay (`PaneModeHelp.svelte`)
+
+New component, mounted on `paneMode.active && paneModeHelpVisible`
+so it auto-hides when the transaction commits / discards.
+TUI-dense responsive grid (Move / Spawn / Split / Close /
+Resize / Commit) with `<kbd>`-styled chips.
+
+### Redundant menu items dropped
+
+| Surface                                                    | Item dropped                                              |
+|------------------------------------------------------------|-----------------------------------------------------------|
+| `FileEditorTab.svelte` doc-tab hamburger                   | "Show File", "Graph from here"                            |
+| `TerminalTab.svelte` hamburger                             | "Show Dir", "Graph dir"                                   |
+| `FileTree.svelte` right-click context menu                 | "Graph from here"                                         |
+| `FileBrowserSurface.svelte` browser hamburger              | "Graph from here"                                         |
+| `TagInfoBody.svelte` tag / mention inspector               | "Graph from here"                                         |
+| `FileInfoBody.svelte` directory inspector                  | "Show Directory", "Graph from here"                       |
+| `FileInfoBody.svelte` file/image/pdf inspector             | "Show File", "Show in file browser", "Graph from here"    |
+
+The terminal-tab `showTerminalCwd()` / `graphTerminalCwd()`
+click handlers became dead code with the menu items gone and
+were deleted. `fullstack-43`'s context-aware spawn will read
+the terminal CWD via a centralised helper.
+
+`SearchStatusOverlay.svelte`'s "Graph from here code report"
+button stays — it's a specialised "graph the report's call
+graph" affordance, not a duplicate of "graph this file/dir".
+
+### Redundant standalone shortcuts dropped
+
+`web/src/state/shortcuts.ts` removed:
+
+* `app.files.toggle` (Cmd+P)
+* `app.search.toggle` (Cmd+Shift+F)
+* `app.graph.toggle` (Cmd+Shift+M)
+* `app.terminal.toggle` (Cmd+Alt+T / Mod+T)
+* `app.file.new` (Ctrl+Alt+N / Mod+N)
+* `app.pane.prev` / `app.pane.next` (Mod+Alt+[ / ])
+
+`app.tab.close` now lists `Ctrl+D` on both web and native;
+the `Mod+W` native fallback still fires through
+`KEY_BRIDGE_JS`. Added `app.pane.mode` advertising `Cmd+K`.
+
+`web/src/App.svelte:onWindowKey` pruned in lockstep — removed
+the matching `meta + KeyP / KeyN / KeyT / Shift+KeyM /
+Shift+KeyF / Alt+BracketLeft / Alt+BracketRight` branches and
+the `Ctrl+Alt+KeyN` new-file branch. The runCommand
+host-bridge cases stay so native menus can still dispatch
+those names if a future build wires them.
+
+`desktop/src-tauri/src/serve.rs:KEY_BRIDGE_JS` was rewritten
+to drop the chords whose actions now route through Pane Mode
+(KeyP, KeyN, KeyT, Backquote, BracketLeft, BracketRight,
+Shift+KeyM, Shift+KeyF). The `KeyT`/`Backquote` test was
+replaced with two new tests
+(`key_bridge_drops_chords_covered_by_pane_mode` and
+`key_bridge_keeps_independent_chords`).
+
+`crates/chan/src/main.rs:SERVE_LONG_ABOUT` regenerated;
+`docs/journals/phase-7/ui-exploration.md` Pane Mode section
+expanded with the full keymap + history.
+
+### Tests
+
+* `paneModeKeymap.test.ts` — three new describe-block tests
+  asserting `3 → Graph`, `s → Search`, `4 → new file`,
+  `h → help toggle`. The WASD-swap test was tightened to
+  drop lowercase `s` and keep uppercase `S`.
+* `revealBrowserActions.test.ts` — terminal assertion
+  flipped from "showTerminalCwd reveals in a browser tab"
+  to "TerminalTab no longer ships `showTerminalCwd` /
+  `graphTerminalCwd`".
+* `desktop/src-tauri/src/serve.rs` — two new Rust tests
+  guard the pruned and kept chord sets.
+
+### Gate
+
+* `npm run test -- paneModeKeymap` — 5 passed (was 2; +3 new).
+* `npm run test` — 35 files / 308 tests, all pass.
+* `npm run check` — 0 errors / 0 warnings.
+* `npm run build` — clean.
+* `bash -lc 'ulimit -n 4096; scripts/pre-push'` — green
+  (fmt + clippy + tests + no-default-features build).
+
+### Proposed commit message
+
+> Cmd+K key map revision + redundant menu / shortcut cleanup (fullstack-42)
+>
+> Pane Mode now spawns Graph on `3`, opens Search on `s`,
+> creates a new file on `4`, and shows a help cheatsheet on
+> `h`. Swap-down uses uppercase `S` only. The matching
+> standalone shortcuts (Cmd+P, Cmd+N, Cmd+Alt+T,
+> Cmd+Shift+M, Cmd+Shift+F, Cmd+Alt+[/]) and the redundant
+> "Graph from here" / "Show Dir" / "Show File" /
+> "Show Directory" / "Show in file browser" menu items were
+> dropped — fullstack-43's context-aware Pane Mode spawn is
+> the canonical surface. Updated the central shortcut
+> registry, the native KEY_BRIDGE_JS, chan serve --help, and
+> ui-exploration.md. New PaneModeHelp.svelte overlay; tests
+> + Rust key-bridge tests added.
+
+Ready for commit + push under standing topic-level
+clearance.

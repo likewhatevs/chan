@@ -33,19 +33,35 @@ After Cmd+K, Cmd is released and the keys below are unprefixed:
 ```
 ↑ ← ↓ →              move focus (up / left / down / right)
 W A S D              swap focused tile with neighbour in that direction
-[                    shrink focused tile horizontally
-]                    grow focused tile horizontally
--                    shrink focused tile vertically
-=                    grow focused tile vertically
+1                    spawn Terminal in focused pane
+2                    spawn File Browser in focused pane
+3                    spawn Graph in focused pane
+4                    new file (under the contextual directory)
+s                    open Search overlay (commits the draft)
+h                    toggle the Pane Mode help cheatsheet
+/                    split focused pane right
+\                    split focused pane down
+[ ]                  shrink / grow focused tile horizontally
+- =                  shrink / grow focused tile vertically
 Shift + [ ] - =      larger nudge (e.g. 10% vs 2%)
 0                    equalise siblings at the current split level
+x                    close all tabs in focused pane
+k                    kill (close) the focused pane
 Enter                commit transaction and exit
 Esc                  discard transaction and exit
 ```
 
-(Updated 2026-05-19 per `fullstack-40`: @@Alex's mental model is
-arrows = navigate, WASD = move stuff. The original mapping had
-them reversed.)
+History:
+
+* `fullstack-39` introduced the spawn / split / close keys
+  (1/2/3/4, /, \, x, k).
+* `fullstack-40` swapped WASD ↔ arrows so arrows navigate
+  and WASD moves tiles (matches @@Alex's mental model).
+* `fullstack-42` reassigned `3` to Graph, `4` to new file,
+  added `s` for Search and `h` for the help overlay; the
+  redundant standalone shortcuts (Cmd+P / Cmd+Shift+F /
+  Cmd+Shift+M / Cmd+Alt+T / Cmd+N / Cmd+Alt+[ / Cmd+Alt+])
+  were dropped because Pane Mode covers them.
 
 Semantics:
 - Focus moves and swaps are no-ops when there is no neighbour in that direction.

@@ -1437,3 +1437,35 @@ surface, menus = no redundant copies, Cmd+K =
 keyboard equivalent.
 
 — @@Architect, 2026-05-19 13:40 BST
+
+## 2026-05-19 14:00 BST — poke: fullstack-50 cut (Cmd+K p — rich prompt)
+
+@@Alex adds another Pane Mode binding: `p` shows the
+rich prompt. Behavior:
+* Focused pane has a terminal → show prompt on it.
+* No terminal → spawn one + show prompt.
+
+Plus: close button on the rich prompt itself + drop
+"Show rich prompt" / similar from all menus (Cmd+K p
+is canonical entry).
+
+Task: [../fullstack-a/fullstack-50.md](../fullstack-a/fullstack-50.md).
+
+Cut as a new task (not folded into `fullstack-42`)
+since -42 is in flight per @@Alex's "append-only in
+coordination" rule we just locked.
+
+Lane-A queue:
+
+| # | Task           | Scope                                              |
+|---|----------------|----------------------------------------------------|
+| 1 | `fullstack-40` | invert WASD ↔ arrows                               |
+| 2 | `fullstack-41` | Ctrl+D close current tab                           |
+| 3 | `fullstack-42` | Cmd+K keymap + help overlay + menu cleanup (inspectors keep) + drop redundant shortcuts |
+| 4 | `fullstack-43` | context-aware Cmd+K spawn                          |
+| 5 | `fullstack-49` | right-dock chevron direction                       |
+| 6 | `fullstack-50` | Cmd+K p — rich prompt show/spawn + close button    |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 14:00 BST
