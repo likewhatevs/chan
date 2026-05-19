@@ -96,7 +96,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   },
   {
     id: "app.pane.mode",
-    label: "Enter Pane Mode",
+    label: "Enter Hybrid NAV",
     web: "Mod+K",
     native: "Mod+K",
     group: "Panes",

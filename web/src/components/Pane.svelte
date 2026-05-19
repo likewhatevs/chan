@@ -933,7 +933,7 @@
         <li>
           <button role="menuitem" onclick={onEnterPaneMode}>
             <LayoutGrid size={16} strokeWidth={1.75} aria-hidden="true" />
-            <span class="menu-row-label">Enter Pane Mode</span>
+            <span class="menu-row-label">Enter Hybrid NAV</span>
             <span class="menu-row-chord">{chordLabel("app.pane.mode")}</span>
           </button>
         </li>
@@ -992,7 +992,7 @@
     aria-label="pane content"
   >
     {#if paneMode.active}
-      <div class="pane-mode-preview" aria-label="pane mode preview">
+      <div class="pane-mode-preview" aria-label="Hybrid NAV preview">
         <div class="pane-mode-title">{active ? truncateTabTitle(tabLabel(active)) : "Empty pane"}</div>
         <div class="pane-mode-subtitle">
           {active?.kind === "file"

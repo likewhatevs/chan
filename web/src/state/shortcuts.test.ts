@@ -22,11 +22,11 @@ describe("shortcut table", () => {
     expect(table).not.toMatch(/^Terminal +Cmd\+Alt\+T\b/m);
   });
 
-  test("advertises Pane Mode (Cmd+K) as the canonical spawn surface", () => {
+  test("advertises Hybrid NAV (Cmd+K) as the canonical spawn surface", () => {
     const web = renderTable("web", "mac");
     const native = renderTable("native", "mac");
-    expect(web).toMatch(/^Enter Pane Mode\s+Cmd\+K$/m);
-    expect(native).toMatch(/^Enter Pane Mode\s+Cmd\+K$/m);
+    expect(web).toMatch(/^Enter Hybrid NAV\s+Cmd\+K$/m);
+    expect(native).toMatch(/^Enter Hybrid NAV\s+Cmd\+K$/m);
   });
 
   test("close-tab chord is Ctrl+D on both platforms (per fullstack-41)", () => {

@@ -753,3 +753,68 @@ Committing + pushing under standing topic-level
 clearance (no HOLD pokes since the 17:20 BST
 cut). Next on the queue: `-62` (Pane Mode →
 Hybrid NAV rename — user-facing copy only).
+
+## 2026-05-19 20:35 BST — poke: fullstack-62 ready to commit
+
+Visible-text rename only — internal symbols
+(`paneMode`, `paneModeKeymap`, `paneMode.active`,
+`.pane-mode-*` CSS classes) all stay per the
+task spec.
+
+Three source edits + two test flips + one new
+sentinel:
+
+* `Pane.svelte` — hamburger row label "Enter
+  Pane Mode" → "Enter Hybrid NAV"; preview
+  aria-label "pane mode preview" → "Hybrid NAV
+  preview".
+* `PaneModeHelp.svelte` — dialog aria-label
+  and title both flipped to "Hybrid NAV".
+* `state/shortcuts.ts` — `app.pane.mode` entry
+  `label: "Enter Pane Mode"` → `"Enter Hybrid
+  NAV"`. Feeds the web/native shortcut tables
+  AND the hamburger chord column via
+  `chordLabel("app.pane.mode")`.
+
+Existing assertions flipped:
+* `state/shortcuts.test.ts` — regex
+  `/^Enter Hybrid NAV\s+Cmd\+K$/m`.
+* `components/Pane.test.ts` — menuLabels()
+  array starts with `"Enter Hybrid NAV"`.
+
+New sentinel `hybridNavRename.test.ts` (5
+assertions):
+* Positive: `>Enter Hybrid NAV<` and
+  `aria-label="Hybrid NAV preview"` in
+  Pane.svelte; `aria-label="Hybrid NAV help"`
+  and `>Hybrid NAV<` in PaneModeHelp.svelte.
+* Negative: no `>Pane Mode<` or
+  `aria-label="…Pane Mode…"` /
+  `title="…Pane Mode…"` in either file
+  (after a strip-comments-and-style helper so
+  internal variables / comments / CSS class
+  names don't trip the match).
+
+Audit: grep `web/src` for `/Pane Mode/i`
+after the change → remaining matches are all
+comments, internal test names, CSS class
+names, or variable identifier references.
+None render to the user.
+
+Gate green: svelte-check 0/0, vitest 37/384
+(was 36/379; +5 from the new sentinel + flipped
+existing assertions), build clean, scripts/
+pre-push green.
+
+`fullstack-61` flash overlay (if it lands)
+shows just "H for help" — no Pane Mode string,
+no coupling. Phase-8 backlog items (container
+refactor + minimal empty pane) stay deferred
+per the task note.
+
+Committing + pushing under standing topic-level
+clearance (no HOLD pokes since the 17:30 BST
+cut). Next on the queue: `-63` (clickable help
+command buttons). After that: `-67` (drop FB
+header in tab variant + items to tab right-
+click).

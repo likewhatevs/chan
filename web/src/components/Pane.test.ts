@@ -119,8 +119,10 @@ describe("Pane right-click menus", () => {
     // fullstack-60: pane hamburger trimmed to just Enter Pane Mode +
     // the colour swatches. Pane Mode keystrokes carry every other
     // action (next/prev pane, split, flip, close, close all).
+    // fullstack-62: user-facing label flipped from "Pane Mode" to
+    // "Hybrid NAV"; the internal `paneMode*` symbols stay.
     expect(menuLabels()).toEqual([
-      "Enter Pane Mode",
+      "Enter Hybrid NAV",
       "blue",
       "green",
       "pink",

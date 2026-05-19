@@ -445,3 +445,41 @@ build clean, pre-push green.
 
 Committing + pushing. Lane B queue remaining:
 -62, -63, -67.
+
+## 2026-05-19 20:35 BST
+
+Picked up `fullstack-62` (Pane Mode → Hybrid NAV
+rename, user-facing copy only). Locked wording:
+`Enter Hybrid NAV` (NAV uppercase).
+
+Edits:
+* `Pane.svelte` — hamburger label "Enter Pane
+  Mode" → "Enter Hybrid NAV". Pane Mode preview
+  aria-label "pane mode preview" → "Hybrid NAV
+  preview".
+* `PaneModeHelp.svelte` — dialog aria-label +
+  title both flipped.
+* `state/shortcuts.ts` — `app.pane.mode`
+  label flipped (feeds shortcut tables AND the
+  hamburger chord column).
+
+Tests: flipped the two existing assertions that
+referenced "Enter Pane Mode" (shortcuts.test.ts
+regex, Pane.test.ts menuLabels). Added new
+`hybridNavRename.test.ts` sentinel with five
+assertions — positive on the new copy and
+negative on the old, using a strip-comments-
+and-style helper so internal references
+(variables, comments, CSS classes) don't trip
+the negative match.
+
+Internal symbols untouched: `paneMode`,
+`paneModeKeymap`, `paneMode.active`, the
+`.pane-mode-*` CSS classes — all stay per the
+task spec.
+
+Gate green: svelte-check 0/0, vitest 37/384,
+build clean, pre-push green.
+
+Committing + pushing. Lane B queue remaining:
+-63, -67.

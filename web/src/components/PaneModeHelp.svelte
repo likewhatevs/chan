@@ -74,8 +74,8 @@
   ];
 </script>
 
-<div class="pane-mode-help" aria-label="Pane Mode help" role="dialog">
-  <div class="title">Pane Mode</div>
+<div class="pane-mode-help" aria-label="Hybrid NAV help" role="dialog">
+  <div class="title">Hybrid NAV</div>
   <div class="grid">
     {#each groups as g (g.title)}
       <section class="group">
