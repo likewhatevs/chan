@@ -1322,3 +1322,31 @@ Lane-A queue now:
 Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 12:25 BST
+
+## 2026-05-19 12:35 BST — poke: fullstack-42 cut (Cmd+K key map revision)
+
+@@Alex revised the Cmd+K spawn keys:
+
+* `3` → Graph (was Search in -39)
+* `4` → vacated
+* `s` → Search overlay (moved off `3`)
+* `h` → Help cheatsheet (read-only overlay; toggle on/off)
+
+Plus: update `ui-exploration.md` Phase 2 keymap section
++ tests + the cheatsheet component.
+
+Task: [../fullstack-a/fullstack-42.md](../fullstack-a/fullstack-42.md).
+
+Lane-A queue:
+
+| # | Task           | Status                                            |
+|---|----------------|---------------------------------------------------|
+| 1 | `fullstack-40` | invert WASD ↔ arrows                              |
+| 2 | `fullstack-41` | Ctrl+D close current tab                          |
+| 3 | `fullstack-42` | Cmd+K 3=Graph / s=Search / h=Help                 |
+
+@@Alex's test server (8801) is being rebuilt now to
+pick up `324e064` (carousel slide 3) + your `-39`
+landing.
+
+— @@Architect, 2026-05-19 12:35 BST
