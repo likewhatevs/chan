@@ -84,3 +84,24 @@ describe("Cmd+K pane mode rich-prompt binding (fullstack-50)", () => {
     );
   });
 });
+
+describe("Pane Mode entry flash (fullstack-61)", () => {
+  test("Pane Mode active transition triggers a one-shot flash overlay", () => {
+    // The `$effect` watches `paneMode.active`; on false → true it
+    // bumps `paneModeFlashKey` (so `{#key}` re-triggers the CSS
+    // animation) and schedules the auto-dismiss timer. False on
+    // exit is intentionally a no-op — only entry triggers.
+    expect(app).toMatch(
+      /active && !paneModeWasActive[\s\S]*?paneModeFlashKey \+= 1[\s\S]*?paneModeFlashVisible = true[\s\S]*?setTimeout\(\(\) => \{[\s\S]*?paneModeFlashVisible = false/,
+    );
+  });
+
+  test("flash renders an H key chip plus 'for help' text, non-blocking", () => {
+    expect(app).toMatch(
+      /\{#if paneModeFlashVisible\}[\s\S]*?\{#key paneModeFlashKey\}[\s\S]*?class="pane-mode-flash"[\s\S]*?<span class="pane-mode-flash-key">H<\/span>[\s\S]*?for help/,
+    );
+    // pointer-events:none in the CSS so keystrokes (including H,
+    // Enter, Esc) flow straight to the existing Pane Mode handlers.
+    expect(app).toContain("pointer-events: none");
+  });
+});

@@ -98,6 +98,32 @@
   // App.svelte because Pane Mode itself is global (one transaction
   // per Cmd+K press) — no per-pane scoping needed.
   let paneModeHelpVisible = $state(false);
+  // `fullstack-61`: short "H for help" flash that fires on every
+  // Pane Mode entry (null → set transition of `paneMode.draft`).
+  // `paneModeFlashKey` is bumped on each entry so consecutive
+  // entries re-trigger the CSS keyframe via `{#key}` even when
+  // the flash is still up from the previous entry.
+  let paneModeFlashVisible = $state(false);
+  let paneModeFlashKey = $state(0);
+  let paneModeWasActive = false;
+  let paneModeFlashTimer: ReturnType<typeof setTimeout> | null = null;
+  const PANE_MODE_FLASH_MS = 700;
+  $effect(() => {
+    const active = paneMode.active;
+    if (active && !paneModeWasActive) {
+      paneModeFlashKey += 1;
+      paneModeFlashVisible = true;
+      if (paneModeFlashTimer) clearTimeout(paneModeFlashTimer);
+      paneModeFlashTimer = setTimeout(() => {
+        paneModeFlashVisible = false;
+        paneModeFlashTimer = null;
+      }, PANE_MODE_FLASH_MS);
+    }
+    paneModeWasActive = active;
+  });
+  onDestroy(() => {
+    if (paneModeFlashTimer) clearTimeout(paneModeFlashTimer);
+  });
   $effect(() => {
     // Touch enough of the layout to trip reactivity on common
     // mutations (URL persistence) AND watch every file tab's content
@@ -708,6 +734,20 @@
 {#if paneMode.active && paneModeHelpVisible}
   <PaneModeHelp />
 {/if}
+<!-- `fullstack-61`: short "H for help" flash on every Pane Mode
+     entry. `{#key}` ensures consecutive entries re-trigger the CSS
+     keyframe even when the previous flash is still mid-animation.
+     pointer-events:none in the CSS so the flash never intercepts
+     keystrokes — `H` (open help) and Enter / Esc (commit / discard)
+     keep flowing to the existing handlers. -->
+{#if paneModeFlashVisible}
+  {#key paneModeFlashKey}
+    <div class="pane-mode-flash" role="status" aria-hidden="true">
+      <span class="pane-mode-flash-key">H</span>
+      <span class="pane-mode-flash-text">for help</span>
+    </div>
+  {/key}
+{/if}
 <!-- Window-level overlays. Mounted once. -->
 <PromptModal />
 <PathPromptModal />
@@ -977,5 +1017,61 @@
        to fall onto and the rounded corners hug the same color on
        both sides. */
     background: var(--bg-card);
+  }
+
+  /* `fullstack-61`: centre-window "H for help" flash on Pane Mode
+     entry. position:fixed + flexbox centres on the window (NOT the
+     focused pane). pointer-events:none keeps it passive so H / Enter
+     / Esc still flow to the existing handlers. z-index sits above
+     overlays (25000+) and panes but below modals (26000) so a
+     simultaneous modal still preempts. */
+  .pane-mode-flash {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    z-index: 25500;
+    pointer-events: none;
+    animation: paneModeFlashFade 0.7s ease-out both;
+  }
+  .pane-mode-flash-key {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.8em;
+    padding: 4px 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.24);
+    color: var(--text);
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+  .pane-mode-flash-text {
+    color: var(--text-secondary);
+    font-size: 16px;
+    letter-spacing: 0.02em;
+  }
+  @keyframes paneModeFlashFade {
+    0%   { opacity: 0; transform: translateY(-6px) scale(0.96); }
+    20%  { opacity: 1; transform: translateY(0) scale(1); }
+    70%  { opacity: 1; transform: translateY(0) scale(1); }
+    100% { opacity: 0; transform: translateY(4px) scale(0.98); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pane-mode-flash {
+      animation: paneModeFlashFadeReduced 0.7s linear both;
+    }
+    @keyframes paneModeFlashFadeReduced {
+      0%   { opacity: 0; }
+      15%  { opacity: 1; }
+      85%  { opacity: 1; }
+      100% { opacity: 0; }
+    }
   }
 </style>
