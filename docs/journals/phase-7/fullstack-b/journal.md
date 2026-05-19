@@ -100,3 +100,21 @@ adjusting.
 
 Coordination ping with @@Systacean stays queued via
 @@Architect for `GET /api/indexing/state`. Standing by.
+
+## 2026-05-19 11:35 BST
+
+`systacean-18` landed faster than expected (`8ab850c`)
+so slide 3 is wired now. The carousel slide-3 stub is
+replaced by a radial directory-only SVG graph fed by
+`api.indexingState()` with 3 s polling while visible.
+States map to green / orange (pulsing) / grey per the
+architect's note; same selected+1 label rule as the
+main graph (`fullstack-32`).
+
+Only `EmptyPaneCarousel.svelte` changes for the wiring
+— the carousel was deliberately built to absorb this
+swap-in with no Pane.svelte touch. Gate green (32
+files / 285 tests, svelte-check clean, build clean,
+pre-push green).
+
+Committing + pushing.

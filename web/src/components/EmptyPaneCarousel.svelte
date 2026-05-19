@@ -17,10 +17,14 @@
   // verbatim: chan-mark, drive dashboard header, "scope-for-graph"
   // hint, and the shortcut table. Slide 2 surfaces drive metadata
   // (file kind breakdown + total bytes on disk) from the existing
-  // tree listing. Slide 3 (Indexing graph) is a stub until
-  // chan-server ships GET /api/indexing/state — wired separately.
+  // tree listing. Slide 3 (Indexing graph) is a directory-only
+  // radial layout fed by `GET /api/indexing/state` — colors track
+  // per-dir state (green = indexed, orange = indexing with a slow
+  // pulse, grey = pending).
 
   import { onDestroy } from "svelte";
+  import { api } from "../api/client";
+  import type { IndexingStateNode, IndexingStateResponse } from "../api/types";
   import { drive, indexStatus, tree } from "../state/store.svelte";
   import {
     SHORTCUTS,
@@ -168,6 +172,170 @@
     return `${n.toFixed(n >= 10 ? 0 : 1)} ${units[u]}`;
   }
 
+  // ---- slide 3 — indexing graph ------------------------------------------
+
+  /// Indexing state response cache. Re-fetched whenever slide 3
+  /// becomes active and again every 3 s while it stays active so
+  /// orange (in-flight) nodes can flip to green as the indexer
+  /// makes progress. Polling stops the moment slide 3 hides; the
+  /// effect cleanup clears the timer.
+  let indexing = $state<IndexingStateResponse | null>(null);
+  let indexingError = $state<string | null>(null);
+  let indexingLoading = $state(false);
+
+  async function refreshIndexing(): Promise<void> {
+    indexingLoading = true;
+    try {
+      indexing = await api.indexingState();
+      indexingError = null;
+    } catch (e) {
+      indexingError = (e as Error).message;
+    } finally {
+      indexingLoading = false;
+    }
+  }
+
+  /// Build a parent → children adjacency map from the flat node
+  /// list. The endpoint returns drive-relative paths; we keep the
+  /// root sentinel ("" for the drive root) separate so the layout
+  /// can anchor on it. Path separation is purely string-based to
+  /// stay decoupled from the server's filesystem convention.
+  type Hierarchy = {
+    rootPath: string;
+    byPath: Map<string, IndexingStateNode>;
+    children: Map<string, string[]>;
+  };
+  const hierarchy = $derived.by<Hierarchy | null>(() => {
+    const data = indexing;
+    if (!data) return null;
+    const byPath = new Map<string, IndexingStateNode>();
+    const children = new Map<string, string[]>();
+    for (const n of data.nodes) byPath.set(n.path, n);
+    for (const n of data.nodes) {
+      const parent = parentOf(n.path);
+      if (parent === n.path) continue; // root
+      const arr = children.get(parent) ?? [];
+      arr.push(n.path);
+      children.set(parent, arr);
+    }
+    return { rootPath: data.root, byPath, children };
+  });
+
+  function parentOf(path: string): string {
+    const slash = path.lastIndexOf("/");
+    if (slash <= 0) return "";
+    return path.slice(0, slash);
+  }
+  function basename(path: string): string {
+    if (path === "") return "/";
+    const slash = path.lastIndexOf("/");
+    return slash < 0 ? path : path.slice(slash + 1);
+  }
+
+  /// Per-node position in the SVG viewport. Depth-tiered radial
+  /// layout: root sits at center, depth-N descendants are spread
+  /// evenly around a circle of radius `BASE_R * depth`. Within a
+  /// tier, children of the same parent share an arc proportional
+  /// to the parent's slot so siblings stay clustered.
+  type Placed = {
+    path: string;
+    depth: number;
+    x: number;
+    y: number;
+  };
+  const VIEW_SIZE = 280;
+  const BASE_R = 56;
+
+  const placed = $derived.by<Placed[]>(() => {
+    const h = hierarchy;
+    if (!h) return [];
+    const cx = VIEW_SIZE / 2;
+    const cy = VIEW_SIZE / 2;
+    const out: Placed[] = [{ path: h.rootPath, depth: 0, x: cx, y: cy }];
+    type Slot = { angleStart: number; angleEnd: number };
+    const slots = new Map<string, Slot>();
+    slots.set(h.rootPath, { angleStart: -Math.PI / 2, angleEnd: -Math.PI / 2 + Math.PI * 2 });
+    const queue: Array<{ path: string; depth: number }> = [
+      { path: h.rootPath, depth: 0 },
+    ];
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      const kids = h.children.get(cur.path) ?? [];
+      if (kids.length === 0) continue;
+      const slot = slots.get(cur.path)!;
+      const span = slot.angleEnd - slot.angleStart;
+      const step = span / kids.length;
+      for (let i = 0; i < kids.length; i++) {
+        const kid = kids[i]!;
+        const childSpanStart = slot.angleStart + step * i;
+        const childSpanEnd = childSpanStart + step;
+        const angle = (childSpanStart + childSpanEnd) / 2;
+        const r = BASE_R * (cur.depth + 1);
+        out.push({
+          path: kid,
+          depth: cur.depth + 1,
+          x: cx + Math.cos(angle) * r,
+          y: cy + Math.sin(angle) * r,
+        });
+        slots.set(kid, { angleStart: childSpanStart, angleEnd: childSpanEnd });
+        queue.push({ path: kid, depth: cur.depth + 1 });
+      }
+    }
+    return out;
+  });
+
+  /// Edges between each placed node and its parent. Pre-computed
+  /// so the SVG draws lines first (under the circles) without
+  /// repeating the parent lookup.
+  type Edge = { fromX: number; fromY: number; toX: number; toY: number };
+  const edges = $derived.by<Edge[]>(() => {
+    const positions = placed;
+    if (positions.length === 0) return [];
+    const byPath = new Map(positions.map((p) => [p.path, p] as const));
+    const out: Edge[] = [];
+    for (const p of positions) {
+      if (p.depth === 0) continue;
+      const parent = byPath.get(parentOf(p.path));
+      if (!parent) continue;
+      out.push({ fromX: parent.x, fromY: parent.y, toX: p.x, toY: p.y });
+    }
+    return out;
+  });
+
+  let selectedPath = $state<string | null>(null);
+
+  /// Same label rule as the main graph (fullstack-32): paint
+  /// labels for the selected node plus its immediate neighbors
+  /// (parent + direct children). Without a selection we label
+  /// the root only so the user can see they're at the drive
+  /// origin.
+  const labeledPaths = $derived.by<Set<string>>(() => {
+    const h = hierarchy;
+    const out = new Set<string>();
+    if (!h) return out;
+    if (selectedPath === null) {
+      out.add(h.rootPath);
+      return out;
+    }
+    out.add(selectedPath);
+    const parent = parentOf(selectedPath);
+    if (h.byPath.has(parent) || parent === h.rootPath) out.add(parent);
+    for (const kid of h.children.get(selectedPath) ?? []) out.add(kid);
+    return out;
+  });
+
+  function nodeFill(state: IndexingStateNode["state"]): string {
+    switch (state) {
+      case "indexed":
+        return "var(--accent)";
+      case "indexing":
+        return "var(--g-doc)";
+      case "pending":
+      default:
+        return "var(--text-secondary)";
+    }
+  }
+
   // ---- carousel state ----------------------------------------------------
 
   const slideCount = 3;
@@ -208,6 +376,20 @@
       next();
     }
   }
+
+  /// Re-fetch indexing state when slide 3 becomes active, and
+  /// poll every 3 s while it stays visible so orange (in-flight)
+  /// nodes can flip to green as the indexer makes progress. The
+  /// cleanup clears the timer on slide change / unmount so we
+  /// never hammer the server in the background.
+  $effect(() => {
+    if (slideIndex !== 2) return;
+    void refreshIndexing();
+    const handle = window.setInterval(() => {
+      void refreshIndexing();
+    }, 3000);
+    return () => window.clearInterval(handle);
+  });
 
   onDestroy(() => {
     // The $effect cleanup already clears the interval, but if the
@@ -301,21 +483,102 @@
         </div>
       </div>
     {:else}
-      <!-- Slide 3 — Indexing graph (stub). Waiting on the
-           GET /api/indexing/state endpoint from @@Systacean; once
-           that lands the dir-only graph with grey/orange/green
-           node states replaces this placeholder. -->
+      <!-- Slide 3 — Indexing graph. Directory-only radial layout
+           fed by `GET /api/indexing/state`. Colors track per-dir
+           state (green = indexed, orange = indexing with a slow
+           pulse, grey = pending). Labels render for the selected
+           node plus its immediate parent + children (same rule
+           as the main graph). -->
       <div class="slide slide-indexing" aria-label="Indexing graph">
         <div class="slide-title">Indexing</div>
-        <div class="indexing-stub">
-          <p>Directory-only indexing graph lands once chan-server
-          ships the per-directory state stream.</p>
-          {#if indexLabel}
-            <p class="indexing-state">currently {indexLabel}</p>
-          {:else}
-            <p class="indexing-state">idle</p>
-          {/if}
-        </div>
+        {#if indexingError}
+          <div class="indexing-stub">
+            <p>Couldn't load indexing state.</p>
+            <p class="indexing-state">{indexingError}</p>
+          </div>
+        {:else if !indexing && indexingLoading}
+          <div class="indexing-stub">
+            <p>Loading indexing state…</p>
+          </div>
+        {:else if !indexing}
+          <div class="indexing-stub">
+            <p>Indexing state unavailable.</p>
+          </div>
+        {:else if placed.length === 0}
+          <div class="indexing-stub">
+            <p>No directories to graph yet.</p>
+            {#if indexLabel}
+              <p class="indexing-state">currently {indexLabel}</p>
+            {/if}
+          </div>
+        {:else}
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <svg
+            class="indexing-graph"
+            viewBox={`0 0 ${VIEW_SIZE} ${VIEW_SIZE}`}
+            role="img"
+            aria-label="directory indexing graph"
+          >
+            <g class="edges">
+              {#each edges as e, i (i)}
+                <line
+                  x1={e.fromX}
+                  y1={e.fromY}
+                  x2={e.toX}
+                  y2={e.toY}
+                  stroke="var(--border)"
+                  stroke-width="1"
+                  opacity="0.6"
+                />
+              {/each}
+            </g>
+            <g class="nodes">
+              {#each placed as p (p.path)}
+                {@const node = hierarchy?.byPath.get(p.path)}
+                {#if node}
+                  <g
+                    class="node"
+                    class:pulsate={node.state === "indexing"}
+                    class:selected={selectedPath === p.path}
+                    transform={`translate(${p.x} ${p.y})`}
+                    onclick={() =>
+                      (selectedPath = selectedPath === p.path ? null : p.path)}
+                  >
+                    <circle
+                      r={p.depth === 0 ? 8 : 5}
+                      fill={nodeFill(node.state)}
+                      stroke="var(--bg)"
+                      stroke-width="1.5"
+                    />
+                    {#if labeledPaths.has(p.path)}
+                      <text
+                        x={0}
+                        y={(p.depth === 0 ? -14 : -10)}
+                        text-anchor="middle"
+                        class="node-label"
+                      >{basename(p.path) || "/"}</text>
+                    {/if}
+                  </g>
+                {/if}
+              {/each}
+            </g>
+          </svg>
+          <div class="indexing-legend" aria-hidden="true">
+            <span class="legend-pair">
+              <span class="dot" style="background: var(--accent);"></span>
+              indexed
+            </span>
+            <span class="legend-pair">
+              <span class="dot pulse" style="background: var(--g-doc);"></span>
+              indexing
+            </span>
+            <span class="legend-pair">
+              <span class="dot" style="background: var(--text-secondary);"></span>
+              pending
+            </span>
+          </div>
+        {/if}
       </div>
     {/if}
   </div>
@@ -506,7 +769,7 @@
   .metadata-footer .sep {
     opacity: 0.5;
   }
-  /* --- Slide 3 (Indexing stub) --- */
+  /* --- Slide 3 (Indexing graph) --- */
   .indexing-stub {
     text-align: center;
     max-width: 360px;
@@ -520,6 +783,62 @@
   .indexing-state {
     color: var(--warn-text);
     font-size: 12px;
+  }
+  .indexing-graph {
+    width: min(100%, 320px);
+    height: auto;
+    aspect-ratio: 1 / 1;
+  }
+  .indexing-graph .node {
+    cursor: pointer;
+  }
+  .indexing-graph .node-label {
+    font-size: 10px;
+    fill: var(--text);
+    opacity: 0.85;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    pointer-events: none;
+  }
+  .indexing-graph .node.selected circle {
+    stroke: var(--pane-focus);
+    stroke-width: 2;
+  }
+  /* Pulsate orange (indexing) nodes so in-flight work stands out
+     against static greys + greens. Pure CSS — no JS animation
+     state. Slow 2.4 s cycle keeps the motion calm; opacity-only
+     so the layout never shifts. */
+  .indexing-graph .node.pulsate circle {
+    animation: indexing-pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes indexing-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.4; }
+  }
+  .indexing-legend {
+    display: flex;
+    gap: 14px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+  }
+  .indexing-legend .legend-pair {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .indexing-legend .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+  .indexing-legend .dot.pulse {
+    animation: indexing-pulse 2.4s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .indexing-graph .node.pulsate circle,
+    .indexing-legend .dot.pulse {
+      animation: none;
+    }
   }
   /* --- Controls --- */
   .carousel-controls {

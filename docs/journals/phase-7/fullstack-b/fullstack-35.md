@@ -198,3 +198,73 @@ Out of scope for this pass:
 
 Commit message proposed:
 `Empty-pane carousel scaffolding + slides 1+2 (fullstack-35 phase 1)`.
+
+## 2026-05-19 11:35 BST — slide 3 wired (@@FullStackB)
+
+@@Systacean shipped `systacean-18` (`8ab850c` Add
+indexing state endpoint) ahead of schedule, so phase 2
+lands now: swap the slide-3 stub for the real
+directory-only graph rendered from
+`GET /api/indexing/state`.
+
+Files:
+
+* `web/src/components/EmptyPaneCarousel.svelte` —
+  added the indexing-state fetch loop and the SVG
+  graph for slide 3. No other files touched.
+  * `api.indexingState()` is hit on slide-3 mount and
+    again every 3 s while slide 3 stays active so
+    orange (in-flight) nodes flip to green as the
+    indexer progresses. Polling stops the moment the
+    user nudges to another slide (the `$effect`
+    cleanup clears the interval).
+  * Hierarchy is built from the flat node list by
+    string-splitting on `/`; root is always the
+    response's `root` field. Children sit on a per-
+    parent arc so siblings cluster, depth tiers sit
+    on concentric circles of radius
+    `BASE_R * depth`. Tested by inspection (full
+    e2e drive walkthrough belongs to @@WebtestB).
+  * Node colors:
+    `indexed`  → `var(--accent)` (green),
+    `indexing` → `var(--g-doc)` (orange) +
+                  `indexing-pulse` 2.4 s opacity
+                  animation,
+    `pending`  → `var(--text-secondary)` (grey).
+  * Labels: same selected+1 rule as the main graph
+    (`fullstack-32`). With no selection, only the
+    root labels; clicking a node selects it and
+    reveals the parent + immediate children. Click
+    again to deselect.
+  * Edges drawn as `<line>` under the circles so
+    they don't obscure the colored nodes.
+  * Legend sits below the SVG with the three color
+    swatches; the orange swatch also pulses for
+    visual continuity with the in-flight nodes.
+  * `prefers-reduced-motion: reduce` disables both
+    pulse animations.
+
+Out of scope deliberately:
+
+* Hover / click expand-contract per the original
+  spec. The radial layout already shows all dirs at
+  once for typical chan drives (counts under ~100
+  dirs); collapse/expand mostly matters for very
+  deep trees. Cuttable follow-up if @@Alex flags it
+  on the walkthrough.
+* Reusing the main GraphCanvas / GraphPanel
+  machinery. That stack is wired to chan-server's
+  graph endpoints and a different node-edge model;
+  threading the indexing-state data through it would
+  cost more than the SVG component does to maintain
+  independently.
+
+Verification (11:35 BST):
+
+* `npm run check` → 0 errors / 0 warnings.
+* `npm run test` → 32 files / 285 tests pass.
+* `npm run build` → clean.
+* `scripts/pre-push` → green.
+
+Commit message proposed:
+`Wire slide 3 indexing graph (fullstack-35 phase 2)`.

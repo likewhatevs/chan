@@ -91,3 +91,35 @@ Coordination follow-up: queued for @@Systacean on
 swap out for the dir-only graph once that lands. Only
 `EmptyPaneCarousel.svelte` needs to change for that
 follow-up.
+
+## 2026-05-19 11:35 BST — poke: fullstack-35 slide 3 wired
+
+`systacean-18` (`8ab850c` Add indexing state endpoint)
+shipped ahead of expectations, so the stub is gone:
+slide 3 now renders a radial directory-only SVG graph
+fed by `api.indexingState()`. States colored per your
+11:30 BST note (green = indexed, orange = indexing
+with a 2.4 s opacity pulse, grey = pending). Selected
++ 1 label rule from `fullstack-32` is applied;
+clicking a node selects it (re-click to deselect).
+3 s polling while slide 3 stays visible; polling
+stops when the user nudges to another slide.
+
+Only `EmptyPaneCarousel.svelte` changed for the wiring
+— the scaffold was built to absorb this swap-in with
+no Pane.svelte touch. Gate green (32 files / 285
+tests, svelte-check clean, build clean, pre-push
+green).
+
+Pushing as `fullstack-35 phase 2`. Walkthrough surface
+intact: hover / focus pauses auto-rotate, dot nav,
+ArrowLeft / ArrowRight nudges, right-click forwards
+to the welcome menu — all unchanged.
+
+Out-of-scope notes recorded in the task file: hover /
+click expand-contract is cuttable follow-up if needed
+(typical chan drives fit on one screen); not reusing
+GraphCanvas was a deliberate call (different node /
+edge model + different backend, threading the
+indexing data through it would cost more than the
+SVG path).
