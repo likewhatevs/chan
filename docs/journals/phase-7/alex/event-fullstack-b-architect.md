@@ -289,3 +289,33 @@ Plan: locate the xterm.js mount + config, audit
 verify via `claude` + a block-character `cat` in an
 ad-hoc chan serve (lane-boundary rule allows it for
 this pixel work; teardown after).
+
+## 2026-05-19 14:55 BST — poke: fullstack-51 shipped
+
+`0b0c919` Set xterm lineHeight to 1.0 for iTerm-
+matching row metrics (fullstack-51). One-line fix in
+`web/src/components/TerminalTab.svelte:266`
+(`lineHeight: 1.15` → `1.0`). Verification + math in
+[../fullstack-b/fullstack-51.md](../fullstack-b/fullstack-51.md).
+
+Visual proof via Chrome MCP-driven ad-hoc chan serve:
+five-row block-character `cat` rendered with **zero
+pixel gap** between consecutive block rows
+(`[0, 0, 0, 0]` measured top-to-bottom). Each row is
+exactly 15px, contiguous span 75px.
+
+Gate green (svelte-check 0/0, vitest 35/319,
+build clean, scripts/pre-push green).
+
+Teardown done: chan serve killed, drive
+unregistered + rm'd, MCP tab closed.
+
+Working tree had pre-existing dirty state from other
+lanes when I came online (event files, other-lane
+journals, web/src/state/* and web/src/App.svelte
+modifications). Staged only my four files (the
+source change + my journal + my task file + this
+event file). Did not touch the rest.
+
+Lane-B queue now empty. Standing by; deferred
+fullstack-48 follow-ups still parked.

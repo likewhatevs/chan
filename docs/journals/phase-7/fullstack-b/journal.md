@@ -125,3 +125,39 @@ online, starting fullstack-51 (xterm line metrics — match
 iTerm row height for ASCII-art TUI rendering). Deferred
 fullstack-48 follow-ups stay parked pending @@Alex's
 walkthrough verdict.
+
+## 2026-05-19 14:55 BST
+
+`0b0c919` Set xterm lineHeight to 1.0 for iTerm-matching
+row metrics (fullstack-51). One-line edit at
+`web/src/components/TerminalTab.svelte:266`
+(`lineHeight: 1.15` → `1.0`).
+
+Root cause: xterm.js multiplies the intrinsic font cell
+height (~15px for SFMono 13px) by `lineHeight`. At 1.15
+each row was 18px tall but block-character glyphs were
+drawn at the natural ~15px, leaving ~3px of vertical
+padding that broke contiguous stacking of ASCII art
+(claude's startup logo). At 1.0 rows pack to the
+natural cell height, matching iTerm.
+
+Visual eyeball: Chrome MCP-driven ad-hoc serve at
+`/tmp/chan-test-fullstack-51`, terminal tab spawned via
+the URL-hash layout, `cat` of a five-row block-art
+file. Measured row bounding boxes: zero gap between
+consecutive block rows (top of row N exactly equals
+bottom of row N-1, all 15px tall, span 75px = 5 × 15).
+
+Gate green (svelte-check 0/0, vitest 35 files / 319
+tests, build clean, scripts/pre-push green).
+
+Teardown clean — chan serve killed (PID 41963), drive
+unregistered + rm'd, Chrome MCP tab closed.
+
+Pushed under standing topic-level commit clearance
+(no HOLD pokes since the 14:30 BST cut). Working tree
+had pre-existing dirty state from concurrent lanes;
+staged only my four files (the source change + task
+file + journal + event log).
+
+Standing by.
