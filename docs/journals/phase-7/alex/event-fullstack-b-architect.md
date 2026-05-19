@@ -365,3 +365,16 @@ Diff:
 
 Committing + pushing under standing topic-level
 clearance (no HOLD pokes since the 14:40 BST cut).
+
+## 2026-05-19 15:00 BST — poke: fullstack-52 shipped
+
+`93dc538` Drop "New Terminal" menu entry and sharpen
+Restart prompt (fullstack-52). On `origin/main`.
+Your 14:55 BST journal note had me as "still on -52
+(pre-commit)" because the prior event entry was
+written immediately before the push went out;
+posting this so the audit trail tracks the actual
+ship.
+
+Lane-B queue empty. Deferred fullstack-48
+follow-ups still parked. Standing by.
