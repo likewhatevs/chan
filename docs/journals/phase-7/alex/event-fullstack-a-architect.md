@@ -917,3 +917,70 @@ A-lane queue clear. Standing by.
 
 online, picking up the new queue cuts (`-55` → `-56` → `-66`
 → `-64` → `-61` → `-65`). Starting `fullstack-55`.
+
+## 2026-05-19 16:48 BST — poke
+
+Four ships in sequence on `main`:
+
+* `beb3479` `-55` carousel dashboard-stats drop.
+* `dbbba84` `-56` Cmd+S + app.save drop (option (1):
+  no `preventDefault` swallower in the SPA-browser
+  path).
+* `44ecd9c` `-66` shared `truncateTabTitle` utility + sweep
+  at the two Pane.svelte display call sites.
+  Surrogate-pair guard via `Array.from`. Tooltip
+  keeps the full untruncated name.
+* `d8ee2e8` `-64` Graph chrome trim + basename-derived
+  title. Drops the maximize button + scope-selector
+  dropdown; `graphTitle()` rewritten per the
+  title-resolution map. New `synthesizeScope()`
+  fallback in GraphPanel replaces the snap-back
+  `$effect` — supersedes `fullstack-57`.
+
+Gate green on each (`npm run check / test / build` +
+`scripts/pre-push`).
+
+**Workspace absorption note** on `d8ee2e8`: my
+`git commit` for `-64` pulled in Lane B's in-flight
+`fullstack-58` BrowserTab type additions (`selected?`,
+`showDrive?`, `expanded?`, `scroll?`) + 3 supporting
+tests. They were staged in the shared `.git/index`
+when my `git add` ran. Functionally additive (all
+new fields optional); Lane B's planned `-58`
+implementation commit will rebase cleanly — only
+the FileBrowserSurface populate/snapshot logic
+remains for them.
+
+Next on Lane A: `-68` (kill Graph bar entirely; chips
++ hamburger items → tab right-click) per your 18:50
+BST cut, then `-61` (Pane Mode entry flash), then
+`-65` (Files title from selection, gated on `-58`).
+Starting `-68` now.
+
+## 2026-05-19 17:10 BST — poke
+
+Lane A wave complete. Four more ships on `main`:
+
+* `ecc312d` `-68` Kill Graph tab chrome bar; chips +
+  hamburger items relocate to a tab-menu-bubble.
+  Overlay variant keeps the bar (no tab-strip
+  right-click). `gf:` filter persistence unchanged.
+* `86c729c` `-61` Flash "H for help" on Pane Mode
+  entry. 0.7s centre-window flash; non-blocking;
+  `{#key}` re-trigger on consecutive entries;
+  reduced-motion variant fades opacity-only.
+* `9ffbeaa` `-65` Files tab title from selection.
+  New `browserTabLabel(tab)` returns the basename
+  of `tab.selected` (via `-58`'s per-tab state).
+  `tabLabel` + `tabTooltip` routed through it.
+  No-selection falls back to `Files`.
+* `ad49cf5` `-69` Cmd+K `<` / `>` dock toggles.
+  Verbatim mapping per @@Alex (arrow opposite to
+  dock side). New `Dock` group in PaneModeHelp.
+
+Gate green on each (`npm check / test / build` +
+`scripts/pre-push`).
+
+Lane A queue fully clear: `-55` → `-56` → `-66` →
+`-64` → `-68` → `-61` → `-65` → `-69` all on
+main. Standing by.

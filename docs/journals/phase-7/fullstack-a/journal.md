@@ -263,3 +263,94 @@ fullstack-55 landed: dropped the dashboard-stats row on
 EmptyPaneCarousel slide 1; `driveSummary` derived +
 `.dashboard-stats*` CSS removed. Test regression
 assertion added. Gate green.
+
+## 2026-05-19 16:35 BST
+
+fullstack-56 landed: `dbbba84` Drop Cmd+S and the Save action
+(fullstack-56). Removed `app.save` from SHORTCUTS, the matching
+App.svelte case, Pane.svelte's `onSave()` + plain Cmd+S
+keystroke interception, plus now-unused `saveTab` imports.
+Cmd+Shift+S strikethrough (editor-owned) unaffected. Gate
+green. Browser-SPA Cmd+S will now invoke "Save Page As"
+per option (1) in the task spec; Tauri shell swallows that
+gesture so desktop UX stays clean.
+
+Moving on to fullstack-66 (shared tab-title truncation
+utility + sweep).
+
+## 2026-05-19 16:40 BST
+
+fullstack-66 landed: `44ecd9c` Shared tab-title truncation
+utility (fullstack-66). `truncateTabTitle()` in tabs.svelte.ts
++ wrappers at the two display call sites in Pane.svelte. 6
+new unit tests including the surrogate-pair guard. Gate
+green.
+
+## 2026-05-19 16:48 BST
+
+fullstack-64 landed: `d8ee2e8` Trim Graph chrome + basename-
+derived title (fullstack-64). Maximize button + scope-selector
+dropdown dropped from the Graph chrome; `graphTitle()`
+rewritten to derive the basename of the scope target.
+`synthesizeScope()` fallback in GraphPanel replaces the
+fullstack-57 snap-back $effect, so context-aware spawn's
+`file:`/`dir:` scope survives mount.
+
+**Workspace absorption note**: my commit pulled in Lane B's
+in-flight `fullstack-58` BrowserTab type additions (selected
+/ showDrive / expanded / scroll fields) + 3 new tests
+covering them. They were sitting staged in the shared
+`.git/index` when my `git add` ran. Functionally additive
+(all new fields are optional); Lane B's planned `-58`
+implementation commit will rebase cleanly on top — only the
+FileBrowserSurface populate/snapshot logic remains for them.
+
+Moving on to fullstack-68 (kill Graph bar entirely; chips +
+hamburger items → tab right-click).
+
+## 2026-05-19 16:57 BST
+
+fullstack-68 landed: `ecc312d` Kill Graph tab chrome bar;
+chips + menu items move to tab right-click (fullstack-68).
+Bar gated on `!tab`; new tab-menu-bubble carries menuItems
++ filterChips snippets via existing tabMenu state. Overlay
+variant keeps the bar. Per-tab `gf:` filter persistence
+unchanged (chip checkboxes still bind into
+`graphState.filters`). Gate green.
+
+Moving on to fullstack-61 (flash H-for-help centre on
+Pane Mode entry).
+
+## 2026-05-19 17:01 BST
+
+fullstack-61 landed: `86c729c` Flash "H for help" on Pane Mode
+entry (fullstack-61). $effect watches paneMode.active; on
+false → true bumps key + sets visible + 700ms setTimeout to
+auto-dismiss. `{#key}` re-triggers the keyframe. Centre-of-
+window (not pane); pointer-events:none. Reduced-motion variant
+fades opacity-only.
+
+Moving on to fullstack-65 (Files tab title from selection,
+gated on Lane B's `-58`).
+
+## 2026-05-19 17:05 BST
+
+fullstack-65 landed: `9ffbeaa` Files tab title from selection
+(fullstack-65). New `browserTabLabel()` returns the basename
+of `tab.selected`; `tabLabel` + `tabTooltip` route the browser
+branch through it. Selection-aware tab strip. Gate green.
+
+Lane B's `-58` was on `dc1ff46` so the dependency was met.
+
+Moving on to fullstack-69 (Cmd+K < / > dock toggles).
+
+## 2026-05-19 17:09 BST
+
+fullstack-69 landed: `ad49cf5` Cmd+K < / > toggle the docked
+file browsers. `<` → right dock, `>` → left dock (verbatim per
+@@Alex). Wires into the existing `toggleBrowserSidePane`
+helper; both exit Pane Mode after commit. PaneModeHelp gains
+a Dock section. Gate green.
+
+Lane A queue fully clear: `-55` → `-56` → `-66` → `-64` →
+`-68` → `-61` → `-65` → `-69` all on main. Standing by.
