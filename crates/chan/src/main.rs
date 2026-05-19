@@ -91,7 +91,6 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   Search across files     Cmd+Shift+F
   Graph                   Cmd+Shift+M
   Terminal                Cmd+Alt+T
-  Mute all terminals      Cmd+Shift+I
   Terminal rich prompt    Alt+Space
   Dismiss overlay         Esc
 

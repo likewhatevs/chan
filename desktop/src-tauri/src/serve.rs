@@ -574,7 +574,6 @@ const KEY_BRIDGE_JS: &str = r#"
       switch (code) {
         case 'KeyF':         fire(e, 'app.search.toggle'); return;
         case 'KeyG':         fire(e, 'app.find.prev');     return;
-        case 'KeyI':         fire(e, 'app.terminal.broadcast.toggle'); return;
         case 'KeyM':         fire(e, 'app.graph.toggle');  return;
         case 'KeyT':         fire(e, 'app.tab.reopenClosed'); return;
         case 'BracketLeft':  fire(e, 'app.tab.prev');      return;

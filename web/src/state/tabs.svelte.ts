@@ -219,7 +219,6 @@ export type TerminalTab = {
   createdAt: number;
   broadcastEnabled: boolean;
   broadcastTargetIds: string[];
-  broadcastMuted?: boolean;
   mcpEnv?: boolean;
   sessionMcpEnv?: boolean;
   terminalEnvTabName?: string;
@@ -781,15 +780,6 @@ export function toggleActiveTerminalBroadcast(): void {
   setTerminalBroadcastEnabled(tab, !tab.broadcastEnabled);
 }
 
-export function toggleAllTerminalBroadcastMuted(): void {
-  const tabs = allTerminalTabs();
-  if (tabs.length === 0) return;
-  const muted = tabs.some((tab) => !tab.broadcastMuted);
-  for (const tab of tabs) {
-    setTerminalBroadcastMuted(tab, muted);
-  }
-}
-
 export function setTerminalBroadcastTarget(
   tab: TerminalTab,
   targetId: string,
@@ -802,12 +792,6 @@ export function setTerminalBroadcastTarget(
   applyTerminalBroadcastMembers(next);
 }
 
-export function terminalBroadcastMembers(tab: TerminalTab): TerminalTab[] {
-  void tab;
-  const ids = new Set(terminalBroadcastMemberIds(tab));
-  return allTerminalTabs().filter((candidate) => ids.has(candidate.id));
-}
-
 export function terminalBroadcastMemberIds(tab: TerminalTab): string[] {
   void tab;
   return [...terminalBroadcastGroupIds()];
@@ -818,10 +802,6 @@ export function removeTerminalFromBroadcastGroup(tab: TerminalTab, memberId: str
   const next = terminalBroadcastGroupIds();
   next.delete(memberId);
   applyTerminalBroadcastMembers(next);
-}
-
-export function setTerminalBroadcastMuted(tab: TerminalTab, muted: boolean): void {
-  tab.broadcastMuted = muted || undefined;
 }
 
 function terminalBroadcastGroupIds(): Set<string> {
@@ -940,12 +920,10 @@ export function registerTerminalCloseSink(tabId: string, sink: TerminalCloseSink
 /// id alone or via a server-side bus without preserving this boundary.
 export function broadcastTerminalInput(sourceTab: TerminalTab, data: string): void {
   if (!sourceTab.broadcastEnabled) return;
-  if (sourceTab.broadcastMuted) return;
   const targets = new Set(terminalBroadcastMemberIds(sourceTab));
   if (targets.size === 0) return;
   for (const tab of allTerminalTabs()) {
     if (tab.id === sourceTab.id || !targets.has(tab.id)) continue;
-    if (tab.broadcastMuted) continue;
     terminalInputSinks.get(tab.id)?.(data);
   }
 }

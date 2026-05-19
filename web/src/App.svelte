@@ -64,7 +64,6 @@
     paneModeMoveFocus,
     paneModeResize,
     paneModeSwap,
-    toggleAllTerminalBroadcastMuted,
   } from "./state/tabs.svelte";
   import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
   import {
@@ -394,11 +393,6 @@
       openGraph();
       return;
     }
-    if (meta && e.shiftKey && !e.altKey && e.code === "KeyI") {
-      e.preventDefault();
-      toggleAllTerminalBroadcastMuted();
-      return;
-    }
     if (e.metaKey && e.altKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyT") {
       e.preventDefault();
       openTerminalInActivePane();
@@ -485,9 +479,6 @@
         return;
       case "app.terminal.toggle":
         openTerminalInActivePane();
-        return;
-      case "app.terminal.broadcast.toggle":
-        toggleAllTerminalBroadcastMuted();
         return;
       case "app.terminal.richPrompt":
         openActiveTerminalRichPrompt();

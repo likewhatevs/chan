@@ -43,17 +43,14 @@
     registerTerminalCloseSink,
     registerTerminalInputSink,
     renameTerminalTab,
-    removeTerminalFromBroadcastGroup,
     reopenClosedTab,
     setTerminalBroadcastEnabled,
-    setTerminalBroadcastMuted,
     setTerminalBroadcastTarget,
     setTerminalActivity,
     setTerminalMcpEnv,
     setTerminalSession,
     splitActive,
     terminalBroadcastMemberIds,
-    terminalBroadcastMembers,
     terminalEnvTabNameStale,
     terminalMcpEnvEnabled,
     terminalTabName,
@@ -144,10 +141,6 @@
     return { x: Math.round(a.left), y: Math.round(a.bottom + 4) };
   });
   const broadcastTargets = $derived(allTerminalTabs().filter((candidate) => candidate.id !== tab.id));
-  const broadcastMembers = $derived(terminalBroadcastMembers(tab));
-  const otherBroadcastMembers = $derived(
-    broadcastMembers.filter((member) => member.id !== tab.id),
-  );
   const selectedBroadcastTargets = $derived(new Set(terminalBroadcastMemberIds(tab)));
   const allBroadcastTargetsSelected = $derived(
     broadcastTargets.length > 0 &&
@@ -875,14 +868,6 @@
     scheduleTerminalSessionSave();
   }
 
-  function removeBroadcastMember(memberId: string): void {
-    removeTerminalFromBroadcastGroup(tab, memberId);
-  }
-
-  function toggleBroadcastMute(): void {
-    setTerminalBroadcastMuted(tab, !tab.broadcastMuted);
-  }
-
   function toggleAllBroadcastTargets(): void {
     const select = !allBroadcastTargetsSelected;
     for (const target of broadcastTargets) {
@@ -1214,51 +1199,6 @@
       onSpawned={spawnCreated}
     />
   {/if}
-  {#if broadcastMembers.length > 1}
-    <div
-      class="broadcast-strip"
-      class:muted={tab.broadcastMuted}
-      role="status"
-      aria-label="broadcast input group"
-    >
-      <button
-        type="button"
-        class="broadcast-mute"
-        class:muted={tab.broadcastMuted}
-        onclick={toggleBroadcastMute}
-        title={tab.broadcastMuted ? "Unmute broadcast input" : "Mute broadcast input"}
-        aria-label={tab.broadcastMuted ? "Unmute broadcast input" : "Mute broadcast input"}
-      >
-        <Radio size={15} strokeWidth={1.75} aria-hidden="true" />
-      </button>
-      <div class="broadcast-members">
-        {#each otherBroadcastMembers as member (member.id)}
-          <span class="broadcast-member">
-            <button
-              type="button"
-              class="broadcast-member-focus"
-              onclick={() => focusTerminalTab(member.id)}
-              title={`Focus ${terminalTabName(member)}`}
-            >{terminalTabName(member)}</button>
-            <button
-              type="button"
-              class="broadcast-member-remove"
-              onclick={() => removeBroadcastMember(member.id)}
-              title={`Remove ${terminalTabName(member)} from broadcast`}
-              aria-label={`Remove ${terminalTabName(member)} from broadcast`}
-            >×</button>
-          </span>
-        {/each}
-      </div>
-      {#if tab.broadcastEnabled}
-        <button
-          type="button"
-          class="broadcast-off"
-          onclick={() => removeBroadcastMember(tab.id)}
-        >off</button>
-      {/if}
-    </div>
-  {/if}
   <div class="terminal-host" bind:this={host}></div>
 </div>
 
@@ -1316,92 +1256,6 @@
     padding: 8px;
     background: var(--bg);
     overflow: hidden;
-  }
-  .broadcast-strip {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 5px 8px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-card);
-    color: var(--warn-text);
-    min-height: 31px;
-    flex-shrink: 0;
-  }
-  .broadcast-strip.muted {
-    color: var(--text-secondary);
-  }
-  .broadcast-mute {
-    width: 24px;
-    height: 24px;
-    padding: 0;
-    border: 1px solid transparent;
-    border-radius: 4px;
-    background: transparent;
-    color: inherit;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    flex-shrink: 0;
-  }
-  .broadcast-mute:hover,
-  .broadcast-mute.muted {
-    border-color: color-mix(in srgb, currentColor 45%, transparent);
-    background: color-mix(in srgb, currentColor 12%, transparent);
-  }
-  .broadcast-members {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    min-width: 0;
-    flex: 1;
-    overflow: hidden;
-  }
-  .broadcast-member {
-    display: inline-flex;
-    align-items: center;
-    min-width: 0;
-    max-width: 150px;
-    border: 1px solid color-mix(in srgb, var(--warn-text) 55%, var(--border));
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--warn-text) 11%, transparent);
-    overflow: hidden;
-    flex-shrink: 1;
-  }
-  .broadcast-member-focus,
-  .broadcast-member-remove,
-  .broadcast-off {
-    border: 0;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    font-size: 12px;
-    line-height: 1;
-    cursor: pointer;
-  }
-  .broadcast-member-focus {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    padding: 4px 6px 4px 8px;
-  }
-  .broadcast-member-remove {
-    width: 20px;
-    align-self: stretch;
-    border-left: 1px solid color-mix(in srgb, var(--warn-text) 45%, transparent);
-  }
-  .broadcast-member-focus:hover,
-  .broadcast-member-remove:hover,
-  .broadcast-off:hover {
-    background: color-mix(in srgb, var(--warn-text) 18%, transparent);
-  }
-  .broadcast-off {
-    border: 1px solid color-mix(in srgb, var(--warn-text) 55%, var(--border));
-    border-radius: 4px;
-    padding: 4px 7px;
-    flex-shrink: 0;
   }
   .terminal-host :global(.xterm) {
     height: 100%;

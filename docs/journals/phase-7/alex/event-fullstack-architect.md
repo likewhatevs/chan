@@ -496,3 +496,7 @@ Commit:
 Gate run: `npm run test -- BubbleOverlay watcherEvents`,
 `npm run check`, `npm run build`, and
 `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+## 2026-05-19 06:26 BST — poke
+
+online, starting `fullstack-26` after `fullstack-24` handoff.
