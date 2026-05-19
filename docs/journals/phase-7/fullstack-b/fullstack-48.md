@@ -177,3 +177,74 @@ expected — pixel-tune the timing + the wobble entry
 ease per the lane-boundary rule (teardown after,
 webtest verdict still canonical). Ping via
 `alex/event-fullstack-b-architect.md`.
+
+## 2026-05-19 13:20 BST — Phase A landed (@@FullStackB)
+
+Scope: data model + `flipHybrid()` action + URL hash /
+session payload round-trip + tests. **No UI surface
+change** in this commit. The back side exists in
+state but no code path makes it visible yet; Phase B
+adds the CSS 3D flip, the hamburger items, and the
+Cmd+K Tab binding.
+
+Files:
+
+* `web/src/state/tabs.svelte.ts`:
+  * New exported types `HybridTheme` and
+    `HybridSide`.
+  * `Pane` gains optional `theme`, `back`,
+    `showingBack`. Comments lock in the contract
+    that `pane.tabs` / `pane.activeTabId` /
+    `pane.theme` always describe the **currently-
+    visible** side; the hidden side parks in
+    `back`. Existing consumers stay agnostic to
+    the front/back split.
+  * `flipHybrid(paneId)` lazily materialises `back`
+    with an inverted theme default on first flip,
+    then swaps tabs / activeTabId / theme between
+    the visible side and the back, toggles
+    `showingBack`, and fires the `fullstack-34`
+    wobble bus so the pane chrome can react when
+    Phase B wires the CSS 3D animation.
+  * `serializeNode` factored: `serializeTab(t,
+    isActive, opts)` extracted so both `t` (front)
+    and `bt` (back) share one encoder.
+  * `SerLeaf` gains optional `bt` / `ht` / `hb` /
+    `sb`. All omitted on legacy single-side panes,
+    so existing URL hashes deserialize unchanged.
+  * `restoreLayout` reads the new fields. Back-side
+    terminal tabs are dropped on restore (Phase A
+    limitation): per-window session payloads index
+    terminals by pane, not by side, so back-side
+    terminal session restore needs a session-format
+    change. File / browser / graph kinds round-trip
+    end-to-end on the back.
+  * `cloneNode` carries forward `theme` / `back` /
+    `showingBack` so paneMode (Cmd+K) drafts
+    include Hybrid state.
+
+* `web/src/state/tabs.test.ts` — five assertions in a
+  new `Hybrid flip (fullstack-48 phase A)` describe.
+
+Out of scope for Phase A (next commit):
+
+* CSS 3D `rotateY` wrapper + per-side
+  `backface-visibility: hidden` in `Pane.svelte`.
+* Hamburger items (Theme sub-menu + Flip Hybrid).
+* `Cmd+K Tab` binding in `App.svelte`. Waits for
+  `fullstack-42` to land on `origin/main`.
+* Per-side theme application via CSS variables.
+* Back-side terminal restore (session-format
+  change).
+
+Verification:
+
+* `npx vitest run tabs` → 57 / 57 pass.
+* `npm run test` → 32 files / 317 tests pass.
+* `npm run check` → 0 errors / 0 warnings.
+* `npm run build` → clean.
+* `bash -lc 'ulimit -n 4096; scripts/pre-push'` →
+  green.
+
+Commit message proposed:
+`Hybrid back-side data model + flipHybrid action (fullstack-48 phase A)`.

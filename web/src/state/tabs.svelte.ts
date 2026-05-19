@@ -405,10 +405,38 @@ function nextTerminalTitle(): string {
   return `Terminal-${max + 1}`;
 }
 
+/// `fullstack-48`: each pane (Hybrid in user-facing copy) holds an
+/// optional back-side slot mirroring the front (tabs + active-tab id
+/// + per-side theme override). `pane.tabs` / `pane.activeTabId` /
+/// `pane.theme` always describe the **currently-visible** side so
+/// existing consumers stay agnostic to the front/back split; the
+/// hidden side parks in `back`. `flipHybrid()` swaps the slots and
+/// toggles `showingBack`. Both fields are optional so legacy panes
+/// (no `back`, no `theme`) load cleanly.
+export type HybridTheme = "dark" | "light";
+
+export type HybridSide = {
+  tabs: Tab[];
+  activeTabId: string | null;
+  /// Per-side theme override. `undefined` means "follow global".
+  theme?: HybridTheme;
+};
+
 export type Pane = {
   id: string;
   tabs: Tab[];
   activeTabId: string | null;
+  /// Visible-side theme override (`undefined` = follow global).
+  theme?: HybridTheme;
+  /// Hidden side. `undefined` for never-flipped panes; the first
+  /// `flipHybrid()` call lazily materialises it with an inverted
+  /// default theme so the back reads as the obvious mirror.
+  back?: HybridSide;
+  /// User-visible flag for "this Hybrid is currently on its back".
+  /// Independent of whether `back` exists: a pane that has been
+  /// flipped twice has `back !== undefined` but `showingBack === false`
+  /// again. Defaults to false.
+  showingBack?: boolean;
 };
 
 export type FocusColor = "blue" | "green" | "pink";
@@ -1408,6 +1436,17 @@ function cloneNode(src: Node): Node {
     id: src.id,
     tabs: src.tabs.map((tab) => cloneTab(tab)),
     activeTabId: src.activeTabId,
+    ...(src.theme ? { theme: src.theme } : {}),
+    ...(src.back
+      ? {
+          back: {
+            tabs: src.back.tabs.map((tab) => cloneTab(tab)),
+            activeTabId: src.back.activeTabId,
+            ...(src.back.theme ? { theme: src.back.theme } : {}),
+          },
+        }
+      : {}),
+    ...(src.showingBack ? { showingBack: true } : {}),
   };
 }
 
@@ -1871,6 +1910,55 @@ export function setActivePane(paneId: string): void {
   if (current.nodes[paneId]?.kind === "leaf") current.activePaneId = paneId;
 }
 
+/// `fullstack-48`: swap the visible side of a Hybrid (pane) with
+/// its back. The back is lazily materialised on first flip with an
+/// inverted theme default so the user has an immediate visual cue
+/// that they've turned the pane over; subsequent flips toggle
+/// existing state, preserving any per-side theme override the user
+/// set explicitly. The wobble bus fires after the swap so
+/// Pane.svelte's existing pane-wobble keyframe can act as the
+/// flip-landing animation until Phase B lands the dedicated CSS 3D
+/// rotateY.
+export function flipHybrid(paneId: string): void {
+  const node = activeLayout().nodes[paneId];
+  if (!node || node.kind !== "leaf") return;
+  if (!node.back) {
+    // Lazy init: back inherits an inverted theme so a default-dark
+    // chan shows a light back on first flip and vice-versa. If the
+    // user later sets the visible side's theme explicitly the back
+    // keeps its current value — we only seed at materialisation.
+    node.back = {
+      tabs: [],
+      activeTabId: null,
+      theme: inverseTheme(node.theme),
+    };
+  }
+  const back = node.back;
+  // Swap tabs + activeTabId.
+  const tmpTabs = node.tabs;
+  const tmpActive = node.activeTabId;
+  node.tabs = back.tabs;
+  node.activeTabId = back.activeTabId;
+  back.tabs = tmpTabs;
+  back.activeTabId = tmpActive;
+  // Swap per-side theme override.
+  const tmpTheme = node.theme;
+  node.theme = back.theme;
+  back.theme = tmpTheme;
+  node.showingBack = !node.showingBack;
+  requestPaneWobble(node.id);
+}
+
+/// `null` / `undefined` (no override → follow global) inverts to
+/// the canonical "looks like the opposite of the system default"
+/// choice. We pick `light` as the inverse of "no override" because
+/// the chan default is dark; that gives the user a visible flip
+/// even when neither side has an explicit theme set. Once the user
+/// picks an override explicitly, future flips just preserve it.
+function inverseTheme(theme: HybridTheme | undefined): HybridTheme {
+  return theme === "light" ? "dark" : "light";
+}
+
 export function setMode(tab: Tab, mode: Mode): void {
   if (tab.kind === "file") tab.mode = mode;
 }
@@ -2222,7 +2310,27 @@ type SerTab = {
   bi?: 1;
 };
 type SerFocusColor = "g" | "p";
-type SerLeaf = { k: "l"; t: SerTab[]; f?: 1; wc?: SerFocusColor; pc?: SerFocusColor };
+type SerHybridTheme = "d" | "l";
+type SerLeaf = {
+  k: "l";
+  t: SerTab[];
+  f?: 1;
+  wc?: SerFocusColor;
+  pc?: SerFocusColor;
+  /// `fullstack-48`: per-pane Hybrid back-side state.
+  /// `bt`: back-side tabs (omitted when the pane has no back yet).
+  /// `ht`: visible-side theme override.
+  /// `hb`: back-side theme override.
+  /// `sb`: `1` when the user is currently viewing the back side;
+  /// `t` / `bt` always describe whatever's in the live `pane.tabs`
+  /// / `pane.back.tabs` slots on save, so the flag round-trips the
+  /// user's last-viewed side without us re-deriving which slot is
+  /// "really" front.
+  bt?: SerTab[];
+  ht?: SerHybridTheme;
+  hb?: SerHybridTheme;
+  sb?: 1;
+};
 type SerSplit = {
   k: "s";
   d: "r" | "c";
@@ -2275,6 +2383,91 @@ function restoreGraphMode(mode: SerTab["gm"]): GraphTab["mode"] {
 }
 
 /// Walk the layout starting at `nodeId`, producing a serializable tree.
+function serializeTab(
+  t: Tab,
+  isActive: boolean,
+  opts: SerializeLayoutOptions,
+): SerTab {
+  const active = isActive ? { a: 1 as const } : {};
+  if (t.kind === "terminal") {
+    return {
+      k: "t",
+      n: t.title,
+      ...(opts.terminalSessions && t.mcpEnv === false ? { me: 0 as const } : {}),
+      ...(opts.terminalSessions && t.terminalSessionId
+        ? {
+            tsid: t.terminalSessionId,
+            ...(t.sessionMcpEnv === false ? { sme: 0 as const } : {}),
+            ...(t.controlledTerminal ? { tc: 1 as const } : {}),
+          }
+        : {}),
+      ...(opts.terminalSessions && t.richPrompt
+        ? {
+            rpb: t.richPrompt.buffer,
+            ...(t.richPrompt.heightPx
+              ? { rph: Math.max(1, Math.floor(t.richPrompt.heightPx)) }
+              : {}),
+            ...(t.richPrompt.open ? { rpo: 1 as const } : {}),
+            ...(t.richPrompt.mode === "source" ? { rpm: "s" as const } : {}),
+          }
+        : {}),
+      ...(opts.terminalSessions && t.watcher
+        ? {
+            twp: t.watcher.path,
+            ...(t.watcher.unread ? { twu: 1 as const } : {}),
+          }
+        : {}),
+      ...active,
+    };
+  }
+  if (t.kind === "graph") {
+    return {
+      k: "g",
+      gm: t.mode === "filesystem" ? "f" : t.mode === "language" ? "l" : "s",
+      gs: t.scopeId,
+      ...(t.depth !== 1 ? { gd: t.depth } : {}),
+      ...(t.inspectorOpen ? { gi: 1 as const } : {}),
+      gf: encodeGraphTabFilters(t.filters),
+      ...(t.pendingSelectId ? { gp: t.pendingSelectId } : {}),
+      ...active,
+    };
+  }
+  if (t.kind === "browser") {
+    return {
+      k: "b",
+      ...(t.inspectorOpen ? { bi: 1 as const } : {}),
+      ...active,
+    };
+  }
+  // Only file tabs left; omit `k:"f"` since `"f"` is the default.
+  // Skip the caret field when it sits at the doc start. New tabs
+  // (and never-focused restored tabs) have caret==undefined; only
+  // emit it when the user has moved off offset 0.
+  const c =
+    t.caret && (t.caret.from !== 0 || t.caret.to !== 0)
+      ? { c: [t.caret.from, t.caret.to] as [number, number] }
+      : {};
+  return {
+    p: t.path,
+    m: t.mode,
+    ...active,
+    ...(t.inspectorOpen ? { o: 1 as const } : {}),
+    ...(t.outlineOpen ? { ol: 1 as const } : {}),
+    ...(t.styleToolbarOpen ? { s: 1 as const } : {}),
+    ...(t.readMode ? { r: 1 as const } : {}),
+    ...(t.syntaxHighlight ? {} : { h: 0 as const }),
+    ...c,
+  };
+}
+
+function serializeHybridTheme(
+  theme: HybridTheme | undefined,
+): SerHybridTheme | undefined {
+  if (theme === "dark") return "d";
+  if (theme === "light") return "l";
+  return undefined;
+}
+
 function serializeNode(
   nodeId: string,
   opts: SerializeLayoutOptions,
@@ -2282,84 +2475,29 @@ function serializeNode(
   const n = layout.nodes[nodeId];
   if (!n) return null;
   if (n.kind === "leaf") {
-    const tabs: SerTab[] = n.tabs.map((t) => {
-      const active = t.id === n.activeTabId ? { a: 1 as const } : {};
-      if (t.kind === "terminal") {
-        return {
-          k: "t",
-          n: t.title,
-          ...(opts.terminalSessions && t.mcpEnv === false ? { me: 0 as const } : {}),
-          ...(opts.terminalSessions && t.terminalSessionId
-            ? {
-                tsid: t.terminalSessionId,
-                ...(t.sessionMcpEnv === false ? { sme: 0 as const } : {}),
-                ...(t.controlledTerminal ? { tc: 1 as const } : {}),
-              }
-            : {}),
-          ...(opts.terminalSessions && t.richPrompt
-            ? {
-                rpb: t.richPrompt.buffer,
-                ...(t.richPrompt.heightPx
-                  ? { rph: Math.max(1, Math.floor(t.richPrompt.heightPx)) }
-                  : {}),
-                ...(t.richPrompt.open ? { rpo: 1 as const } : {}),
-                ...(t.richPrompt.mode === "source" ? { rpm: "s" as const } : {}),
-              }
-            : {}),
-          ...(opts.terminalSessions && t.watcher
-            ? {
-                twp: t.watcher.path,
-                ...(t.watcher.unread ? { twu: 1 as const } : {}),
-              }
-            : {}),
-          ...active,
-        };
-      }
-      if (t.kind === "graph") {
-        return {
-          k: "g",
-          gm: t.mode === "filesystem" ? "f" : t.mode === "language" ? "l" : "s",
-          gs: t.scopeId,
-          ...(t.depth !== 1 ? { gd: t.depth } : {}),
-          ...(t.inspectorOpen ? { gi: 1 as const } : {}),
-          gf: encodeGraphTabFilters(t.filters),
-          ...(t.pendingSelectId ? { gp: t.pendingSelectId } : {}),
-          ...active,
-        };
-      }
-      if (t.kind === "browser") {
-        return {
-          k: "b",
-          ...(t.inspectorOpen ? { bi: 1 as const } : {}),
-          ...active,
-        };
-      }
-      // Only file tabs exist; omit `k:"f"` since "f" is the default
-      // (smaller hash).
-      // Skip the caret field when it sits at the doc start. New tabs
-      // (and never-focused restored tabs) have caret==undefined; only
-      // emit it when the user has moved off offset 0.
-      const c =
-        t.caret && (t.caret.from !== 0 || t.caret.to !== 0)
-          ? { c: [t.caret.from, t.caret.to] as [number, number] }
-          : {};
-      return {
-        p: t.path,
-        m: t.mode,
-        ...active,
-        ...(t.inspectorOpen ? { o: 1 as const } : {}),
-        ...(t.outlineOpen ? { ol: 1 as const } : {}),
-        ...(t.styleToolbarOpen ? { s: 1 as const } : {}),
-        ...(t.readMode ? { r: 1 as const } : {}),
-        ...(t.syntaxHighlight ? {} : { h: 0 as const }),
-        ...c,
-      };
-    });
-    return {
+    const tabs: SerTab[] = n.tabs.map((t) =>
+      serializeTab(t, t.id === n.activeTabId, opts),
+    );
+    const out: SerLeaf = {
       k: "l",
       t: tabs,
       ...(n.id === layout.activePaneId ? { f: 1 as const } : {}),
     };
+    // Hybrid back-side state lives inside the same SerLeaf so the
+    // URL hash + per-window session round-trip the flip-aware
+    // layout. Empty / never-flipped panes emit nothing extra so
+    // the hash stays as short as before for the common case.
+    if (n.back && (n.back.tabs.length > 0 || n.back.theme)) {
+      out.bt = n.back.tabs.map((t) =>
+        serializeTab(t, t.id === n.back!.activeTabId, opts),
+      );
+      const bk = serializeHybridTheme(n.back.theme);
+      if (bk) out.hb = bk;
+    }
+    const ht = serializeHybridTheme(n.theme);
+    if (ht) out.ht = ht;
+    if (n.showingBack) out.sb = 1;
+    return out;
   }
   const a = serializeNode(n.a, opts);
   const b = serializeNode(n.b, opts);
@@ -2554,6 +2692,108 @@ export async function restoreLayout(
       }
       // If no tab was marked active but there are tabs, focus the first.
       if (!p.activeTabId && p.tabs.length > 0) p.activeTabId = p.tabs[0]!.id;
+      // `fullstack-48` Phase A: back-side restore. Reuses the
+      // same file / browser / graph paths as the front loop but
+      // SKIPS terminals — session restore is pane-keyed today,
+      // so back-side terminals would need a session-format
+      // change. Phase B can wire that when the UI starts
+      // exposing back terminals.
+      if (node.bt && node.bt.length > 0) {
+        const backTabs: Tab[] = [];
+        let backActiveId: string | null = null;
+        for (const sertab of node.bt) {
+          const kind = sertab.k ?? "f";
+          if (kind === "t" || kind === "s" || kind === "h") continue;
+          if (kind === "g") {
+            const mode = restoreGraphMode(sertab.gm);
+            const scopeId = sertab.gs || "drive";
+            const tab: GraphTab = {
+              kind: "graph",
+              id: id("graph"),
+              title: graphTitle(mode, scopeId),
+              mode,
+              scopeId,
+              depth: Number.isFinite(sertab.gd)
+                ? Math.max(0, Number(sertab.gd))
+                : 1,
+              filters: decodeGraphTabFilters(sertab.gf),
+              inspectorOpen: sertab.gi === 1,
+              pendingSelectId: sertab.gp ?? null,
+            };
+            backTabs.push(tab);
+            if (sertab.a) backActiveId = tab.id;
+            continue;
+          }
+          if (kind === "b") {
+            const tab: BrowserTab = {
+              kind: "browser",
+              id: id("browser"),
+              title: "Files",
+              inspectorOpen: sertab.bi === 1,
+            };
+            backTabs.push(tab);
+            if (sertab.a) backActiveId = tab.id;
+            continue;
+          }
+          if (kind !== "f") continue;
+          const restoredPath = sertab.p ?? "";
+          const restoredPathKind = classifyPath(restoredPath);
+          const restoredFileKind: FileKind =
+            restoredPathKind === "document" || restoredPathKind === "text"
+              ? restoredPathKind
+              : "document";
+          const tab: FileTab = {
+            kind: "file",
+            fileKind: restoredFileKind,
+            id: id("tab"),
+            path: restoredPath,
+            content: "",
+            saved: "",
+            savedMtime: null,
+            mode: validateRestoredMode(sertab.m, restoredPath, restoredFileKind),
+            loading: true,
+            error: null,
+            fileMissing: null,
+            inspectorOpen: !!sertab.o,
+            outlineOpen: !!sertab.ol,
+            repoRoot: null,
+            readMode: sertab.r === 1,
+            fsWritable: true,
+            styleToolbarOpen: sertab.s === 1,
+            syntaxHighlight: sertab.h !== 0,
+            highlightTrailingWhitespace: false,
+            codeBlocksCollapsed: false,
+            caret:
+              Array.isArray(sertab.c) && sertab.c.length === 2
+                ? { from: sertab.c[0], to: sertab.c[1] }
+                : undefined,
+          };
+          backTabs.push(tab);
+          if (sertab.a) backActiveId = tab.id;
+          if (tab.path) {
+            tabsToLoad.push({ paneId: p.id, tabId: tab.id, path: tab.path });
+          }
+        }
+        if (!backActiveId && backTabs.length > 0) {
+          backActiveId = backTabs[0]!.id;
+        }
+        p.back = {
+          tabs: backTabs,
+          activeTabId: backActiveId,
+          ...(node.hb ? { theme: node.hb === "d" ? "dark" : "light" } : {}),
+        };
+      } else if (node.hb) {
+        // Back-side theme override without back tabs is valid:
+        // the user picked a theme for the back before populating
+        // it. Materialise an empty back so the override survives.
+        p.back = {
+          tabs: [],
+          activeTabId: null,
+          theme: node.hb === "d" ? "dark" : "light",
+        };
+      }
+      if (node.ht) p.theme = node.ht === "d" ? "dark" : "light";
+      if (node.sb) p.showingBack = true;
       layout.nodes[p.id] = p;
       if (node.f) activePaneId = p.id;
       return p.id;

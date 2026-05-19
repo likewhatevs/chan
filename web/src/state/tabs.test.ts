@@ -17,6 +17,7 @@ import {
   detachTabToPaneEdge,
   dismissTerminalEnvNamePrompt,
   enterPaneMode,
+  flipHybrid,
   focusColorForWindow,
   hydrateTerminalSessionsFromLayout,
   isMissingFileError,
@@ -579,6 +580,112 @@ describe("pane state", () => {
     expect(committedLeft.tabs[0]?.id).toBe("right");
     expect(committedRight.tabs[0]?.id).toBe("left");
     expect(layout.activePaneId).toBe(committedLeft.id);
+  });
+});
+
+describe("Hybrid flip (fullstack-48 phase A)", () => {
+  test("first flip lazy-initializes back with inverted theme and swaps slots", () => {
+    const front = fileTab({ id: "front", path: "notes/front.md" });
+    const seed = resetLayout([front]);
+    expect(seed.back).toBeUndefined();
+
+    flipHybrid(seed.id);
+
+    // Read the live pane through layout.nodes — $state proxies live
+    // there, and the plain `seed` returned by resetLayout isn't the
+    // reactive view.
+    const live = layout.nodes[seed.id];
+    expect(live?.kind).toBe("leaf");
+    if (live?.kind !== "leaf") return;
+    expect(live.showingBack).toBe(true);
+    expect(live.tabs).toHaveLength(0);
+    expect(live.activeTabId).toBeNull();
+    expect(live.back?.tabs.map((t) => t.id)).toEqual(["front"]);
+    expect(live.back?.activeTabId).toBe("front");
+    // Visible side inherits the inverted seed (light); back drops
+    // back to undefined (the previous front had no explicit theme).
+    expect(live.theme).toBe("light");
+    expect(live.back?.theme).toBeUndefined();
+  });
+
+  test("flipping back restores the original front + preserves user themes", () => {
+    const front = fileTab({ id: "f1", path: "a.md" });
+    const seed = resetLayout([front]);
+
+    flipHybrid(seed.id);
+    let live = layout.nodes[seed.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    expect(live.showingBack).toBe(true);
+    // User opens a tab on the back side and picks dark.
+    live.tabs.push(fileTab({ id: "b1", path: "b.md" }));
+    live.activeTabId = "b1";
+    live.theme = "dark";
+
+    flipHybrid(seed.id);
+    live = layout.nodes[seed.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    expect(live.showingBack).toBe(false);
+    expect(live.tabs.map((t) => t.id)).toEqual(["f1"]);
+    expect(live.back?.tabs.map((t) => t.id)).toEqual(["b1"]);
+    // Front had no explicit theme; back kept dark.
+    expect(live.theme).toBeUndefined();
+    expect(live.back?.theme).toBe("dark");
+
+    flipHybrid(seed.id);
+    live = layout.nodes[seed.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    expect(live.showingBack).toBe(true);
+    expect(live.tabs.map((t) => t.id)).toEqual(["b1"]);
+    expect(live.theme).toBe("dark");
+  });
+
+  test("flipHybrid bumps the wobble bus", async () => {
+    const front = fileTab({ id: "fw", path: "wobble.md" });
+    const seed = resetLayout([front]);
+    const { paneWobble } = await import("./tabs.svelte");
+    const before = paneWobble.versions[seed.id] ?? 0;
+
+    flipHybrid(seed.id);
+
+    expect(paneWobble.versions[seed.id]).toBe(before + 1);
+  });
+
+  test("flipHybrid no-ops when the pane id doesn't resolve to a leaf", () => {
+    const seed = resetLayout([fileTab({ id: "x", path: "x.md" })]);
+    flipHybrid("does-not-exist");
+    const live = layout.nodes[seed.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    expect(live.showingBack).toBeFalsy();
+    expect(live.back).toBeUndefined();
+  });
+
+  test("serialize / restore round-trips back tabs + themes + showingBack", async () => {
+    const front = fileTab({ id: "front", path: "front.md" });
+    const seed = resetLayout([front]);
+
+    flipHybrid(seed.id);
+    // Visible side is the seeded empty back; add a browser tab and
+    // pick dark explicitly on the visible side. The hidden side
+    // keeps the original front file tab.
+    openBrowserInActivePane();
+    const live = layout.nodes[seed.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    live.theme = "dark";
+
+    const snapshot = serializeLayout();
+    expect(snapshot).not.toBeNull();
+    if (!snapshot) return;
+    const json = JSON.stringify(snapshot);
+    expect(json).toContain("\"sb\":1");
+    expect(json).toContain("\"ht\":\"d\"");
+
+    await restoreLayout(snapshot);
+
+    const restored = activePane();
+    expect(restored.showingBack).toBe(true);
+    expect(restored.theme).toBe("dark");
+    expect(restored.tabs.map((t) => t.kind)).toEqual(["browser"]);
+    expect(restored.back?.tabs.map((t) => t.kind)).toEqual(["file"]);
   });
 });
 

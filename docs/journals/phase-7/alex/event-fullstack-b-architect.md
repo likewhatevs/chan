@@ -123,3 +123,72 @@ GraphCanvas was a deliberate call (different node /
 edge model + different backend, threading the
 indexing data through it would cost more than the
 SVG path).
+
+## 2026-05-19 13:10 BST — poke: lane-B 44/45/46/47 shipped + planning 48
+
+Landed:
+
+* `209c34f` Carousel cycle/stop toggle (fullstack-44).
+* `5e4ad92` List-mode trigger audit (fullstack-45) —
+  no programmed delay; lezer-markdown emits the list
+  node on the first trailing whitespace. Added a
+  parser-level lock-in test (7 cases). If @@Alex
+  still feels lag on large docs, the next move is an
+  `ensureSyntaxTree` call around list-marker typing
+  (separate task).
+* `1f756bb` British spelling sweep + Enter Pane Mode
+  hamburger entry (fullstack-46) — only one user-
+  facing American label was found in the audit
+  ("Focus border color"); everything else was CSS
+  property names / code comments / variable names
+  the spec excluded.
+* `da2d718` Drop FB/Graph spawn dedup + regression
+  coverage (fullstack-47) — four spawn paths
+  re-pointed to "always new tab"; the navigation
+  helper `openBrowser` keeps its
+  `focusExistingBrowserTab` priority (explicit
+  navigation, not a spawn).
+
+Gate green on each commit. Pushed.
+
+**fullstack-48 (flippable Hybrids) planning** — this
+one is the marquee piece and bigger than the four
+above combined. To avoid a half-working mid-feature
+state on `origin/main`, I'd like to ship it in two
+commits:
+
+1. **Phase A: data model + flipHybrid action +
+   round-trip tests.** Each leaf gains `back: {
+   tabs, activeTabId, theme }`, `theme`,
+   `showingBack`; `flipHybrid(paneId)` swaps the
+   relevant slots and triggers the `fullstack-34`
+   wobble bus. serializeLayout / restoreLayout
+   round-trip the new fields. **No visible UI
+   change** in this commit — the back side stays
+   hidden because no UI calls `flipHybrid` yet.
+
+2. **Phase B: UI surfacing.** CSS 3D rotateY
+   wrapper + per-side `backface-visibility: hidden`
+   in Pane.svelte, hamburger menu items (Theme
+   sub-menu + Flip Hybrid), Cmd+K Tab binding in
+   App.svelte, per-side theme application via CSS
+   variables on the pane root, wobble-on-land
+   sequencing.
+
+The phase boundary keeps Phase A's diff bounded
+(state + tests + serialization, no Pane.svelte
+touch) and lets the data model bake on `origin/main`
+before the cosmetic flip lands. It also reduces the
+collision footprint with @@FullStackA's in-flight
+Cmd+K work (their `fullstack-42` keymap touches
+`handlePaneModeKey` in App.svelte; Phase A doesn't
+touch that file at all).
+
+Coordination note on Phase B's Cmd+K Tab binding:
+I'll add it after `fullstack-42` lands on
+`origin/main` so my diff sits on top of @@FullStackA's
+keymap revisions cleanly. I'll watch their event log
+for the merge.
+
+Proceeding with Phase A unless you'd rather I wait
+or merge the two phases.
