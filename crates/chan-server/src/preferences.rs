@@ -19,6 +19,8 @@
 //!   - date_format (id; UI-side mapping in dateFormats.ts)
 //!   - strip_trailing_whitespace_on_save
 //!   - bubble_overlay_mode (stack / tray for watcher notifications)
+//!   - empty_pane_carousel_cycling (auto-rotate the empty-pane
+//!     carousel; per-user toggle, default true)
 //!
 //! The Preferences view returned over /api/drive and /api/config is
 //! assembled in lib.rs by joining EditorPrefs with ServerConfig.
@@ -53,6 +55,17 @@ pub struct EditorPrefs {
     pub strip_trailing_whitespace_on_save: bool,
     #[serde(default)]
     pub bubble_overlay_mode: BubbleOverlayMode,
+    /// Auto-rotate the empty-pane carousel introduced in
+    /// `fullstack-35`. Default true so first-launch behaviour matches
+    /// the original implementation; users who want a stationary
+    /// welcome state toggle it off and the choice persists. Pointer-
+    /// hover-pause remains independent of this flag.
+    #[serde(default = "default_empty_pane_carousel_cycling")]
+    pub empty_pane_carousel_cycling: bool,
+}
+
+fn default_empty_pane_carousel_cycling() -> bool {
+    true
 }
 
 impl Default for EditorPrefs {
@@ -66,6 +79,7 @@ impl Default for EditorPrefs {
             date_format: default_date_format(),
             strip_trailing_whitespace_on_save: false,
             bubble_overlay_mode: BubbleOverlayMode::default(),
+            empty_pane_carousel_cycling: default_empty_pane_carousel_cycling(),
         }
     }
 }
@@ -327,5 +341,35 @@ mod tests {
         std::fs::write(&p, "line_spacing = \"compact\"\n").unwrap();
         let prefs = EditorPrefs::load_from(&p).unwrap();
         assert_eq!(prefs.line_spacing, LineSpacing::Compact);
+    }
+
+    #[test]
+    fn empty_pane_carousel_cycling_defaults_true_and_round_trips() {
+        // Fresh install defaults to true so the carousel auto-rotates
+        // the way fullstack-35 originally shipped; older preferences
+        // files that predate fullstack-44 don't carry the field, and
+        // serde's default fills it in on load. Re-saving promotes the
+        // default into the file.
+        let prefs = EditorPrefs::default();
+        assert!(prefs.empty_pane_carousel_cycling);
+
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("preferences.toml");
+        std::fs::write(&p, "theme = \"dark\"\n").unwrap();
+        let loaded = EditorPrefs::load_from(&p).unwrap();
+        assert!(loaded.empty_pane_carousel_cycling);
+
+        let stopped = EditorPrefs {
+            empty_pane_carousel_cycling: false,
+            ..Default::default()
+        };
+        stopped.save_to(&p).unwrap();
+        let saved = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            saved.contains("empty_pane_carousel_cycling = false"),
+            "got: {saved}"
+        );
+        let reloaded = EditorPrefs::load_from(&p).unwrap();
+        assert!(!reloaded.empty_pane_carousel_cycling);
     }
 }

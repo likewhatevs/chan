@@ -128,6 +128,11 @@ export type Preferences = {
   /// Round-2 watcher bubbles: show all bubbles inline, or collapse
   /// them into a count tray until expanded.
   bubble_overlay_mode: BubbleOverlayMode;
+  /// Auto-rotate the empty-pane carousel (fullstack-35). Optional in
+  /// the wire form so older servers that don't ship the field don't
+  /// trip the type contract; the UI treats `undefined` as the
+  /// default-true.
+  empty_pane_carousel_cycling?: boolean;
 };
 
 export type TreeEntry = {

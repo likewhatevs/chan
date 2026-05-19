@@ -415,6 +415,14 @@ export const api = {
       preferences: { ...cfg.preferences, bubble_overlay_mode: mode },
     });
   },
+  setEmptyPaneCarouselCycling: async (cycling: boolean): Promise<void> => {
+    const cfg = await req<GlobalConfig>("GET", "/api/config");
+    if (cfg.preferences.empty_pane_carousel_cycling === cycling) return;
+    await req<GlobalConfig>("PATCH", "/api/config", {
+      ...cfg,
+      preferences: { ...cfg.preferences, empty_pane_carousel_cycling: cycling },
+    });
+  },
 };
 
 /// Encode a path as a sequence of percent-encoded segments. We keep `/`

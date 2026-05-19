@@ -25,7 +25,7 @@
   import { onDestroy } from "svelte";
   import { api } from "../api/client";
   import type { IndexingStateNode, IndexingStateResponse } from "../api/types";
-  import { drive, indexStatus, tree } from "../state/store.svelte";
+  import { drive, indexStatus, tree, ui } from "../state/store.svelte";
   import {
     SHORTCUTS,
     currentOS,
@@ -33,7 +33,7 @@
     formatChord,
     renderTable,
   } from "../state/shortcuts";
-  import { ChevronLeft, ChevronRight } from "lucide-svelte";
+  import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-svelte";
 
   type Props = {
     /// Right-click forwarder. Same handler the empty pane uses to
@@ -342,13 +342,23 @@
   let slideIndex = $state(0);
   let hovering = $state(false);
   let focused = $state(false);
-  const paused = $derived(hovering || focused);
+  /// `cycling` is the explicit, persisted preference from
+  /// `fullstack-44`. `hovering` / `focused` form the transient
+  /// pause that lets users finish reading a slide; both axes
+  /// independently suppress the timer. Server-default true so
+  /// `undefined` (older servers without the field) reads as
+  /// "auto-rotate on".
+  const cycling = $derived<boolean>(
+    drive.info?.preferences?.empty_pane_carousel_cycling ?? true,
+  );
+  const paused = $derived(hovering || focused || !cycling);
   let containerEl: HTMLDivElement | undefined = $state();
 
-  /// Auto-rotate while neither hovered nor focused. Reset the
-  /// interval on every dependency change (slideIndex bumped by
-  /// keyboard nudges, paused toggled by hover/focus) so manual
-  /// nav doesn't lose the next-tick budget.
+  /// Auto-rotate while neither hovered nor focused AND the user
+  /// hasn't explicitly stopped the cycle. Reset the interval on
+  /// every dependency change (slideIndex bumped by keyboard
+  /// nudges, paused toggled by hover/focus/cycling) so manual nav
+  /// doesn't lose the next-tick budget.
   $effect(() => {
     void slideIndex;
     if (paused) return;
@@ -357,6 +367,24 @@
     }, 5000);
     return () => window.clearInterval(handle);
   });
+
+  async function toggleCycling(): Promise<void> {
+    const next = !cycling;
+    if (drive.info) {
+      drive.info = {
+        ...drive.info,
+        preferences: {
+          ...drive.info.preferences,
+          empty_pane_carousel_cycling: next,
+        },
+      };
+    }
+    try {
+      await api.setEmptyPaneCarouselCycling(next);
+    } catch (err) {
+      ui.status = `carousel toggle failed: ${(err as Error).message}`;
+    }
+  }
 
   function prev(): void {
     slideIndex = (slideIndex - 1 + slideCount) % slideCount;
@@ -583,7 +611,7 @@
     {/if}
   </div>
 
-  <div class="carousel-controls" aria-hidden="true">
+  <div class="carousel-controls">
     <button
       class="nav-arrow"
       type="button"
@@ -612,6 +640,25 @@
       aria-label="next slide"
     >
       <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+    <!-- Persisted cycle toggle (fullstack-44). Sits to the right
+         of the dots so it doesn't compete with the navigation
+         affordances; the icon mirrors the standard
+         play/pause-while-cycling convention. Pointer-hover-pause
+         and focus-pause stay independent — those are transient,
+         this one is the explicit user choice. -->
+    <button
+      class="cycle-toggle"
+      type="button"
+      onclick={toggleCycling}
+      aria-label={cycling ? "stop carousel cycle" : "resume carousel cycle"}
+      title={cycling ? "Stop cycling" : "Resume cycling"}
+    >
+      {#if cycling}
+        <Pause size={14} strokeWidth={1.75} aria-hidden="true" />
+      {:else}
+        <Play size={14} strokeWidth={1.75} aria-hidden="true" />
+      {/if}
     </button>
   </div>
 </div>
@@ -847,7 +894,8 @@
     gap: 8px;
     padding-top: 0.25rem;
   }
-  .nav-arrow {
+  .nav-arrow,
+  .cycle-toggle {
     background: none;
     border: 0;
     padding: 4px;
@@ -860,9 +908,18 @@
     opacity: 0.5;
     transition: opacity 120ms ease, background 120ms ease;
   }
-  .nav-arrow:hover {
+  .nav-arrow:hover,
+  .cycle-toggle:hover {
     opacity: 1;
     background: var(--hover-bg);
+  }
+  /* Soft separator between the navigation cluster and the
+     cycle toggle so they read as two control groups. */
+  .cycle-toggle {
+    margin-left: 6px;
+    border-left: 1px solid var(--border);
+    border-radius: 0 4px 4px 0;
+    padding-left: 8px;
   }
   .dots {
     display: inline-flex;
