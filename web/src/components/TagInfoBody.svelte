@@ -40,7 +40,7 @@
     /// `alice` scopes the graph to `Contacts/Alice Chen.md`); when
     /// no file resolves, the action is unavailable.
     onSetAsScope?: () => void;
-    /// "Open in this pane" action. Set on mention/contact nodes when
+    /// "Open" action. Set on mention/contact nodes when
     /// the host can resolve the mention to a real .md file; absent
     /// for tags / dates / unresolved mentions.
     onOpen?: () => void;
@@ -94,7 +94,7 @@
     <div class="actions">
       {#if onOpen}
         <button class="set-as-scope" onclick={onOpen} type="button">
-          Open in this pane
+          Open
         </button>
       {/if}
       {#if onSetAsScope && (kind === "tag" || kind === "mention")}

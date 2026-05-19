@@ -34,7 +34,7 @@
     documentsOverride,
   }: {
     selection: InspectorSelection;
-    /// Forwarded to FileInfoBody as the "Open in this pane" handler.
+    /// Forwarded to FileInfoBody as the "Open" handler.
     /// Tag bodies don't take an open action.
     onOpen?: () => void;
     /// Forwarded to FileInfoBody as the "Show in file browser"

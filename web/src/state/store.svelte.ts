@@ -1312,9 +1312,15 @@ export function openGraphForFile(path: string): void {
 }
 
 export function openFsGraphForFile(path: string): void {
+  // "Graph from here" on a file opens the parent directory's tree so
+  // the focal file lives in a meaningful neighbourhood (its cohort)
+  // rather than getting lost in the whole-drive view. Files at the
+  // drive root fall back to drive scope.
+  const slash = path.lastIndexOf("/");
+  const parent = slash > 0 ? path.slice(0, slash) : "";
   const tab = openGraphInActivePane({
     mode: "filesystem",
-    scopeId: "drive",
+    scopeId: parent ? `dir:${parent}` : "drive",
     depth: 1,
     pendingSelectId: path,
   });
@@ -1338,11 +1344,14 @@ export function openGraphForDirectory(path: string): void {
 }
 
 export function openFsGraphForDirectory(path: string): void {
+  // "Graph from here" on a directory scopes to that subtree directly.
+  // Empty path is the drive root, so use the "drive" alias instead of
+  // a sentinel `dir:` scope.
   const tab = openGraphInActivePane({
     mode: "filesystem",
-    scopeId: "drive",
+    scopeId: path ? `dir:${path}` : "drive",
     depth: 1,
-    pendingSelectId: path,
+    pendingSelectId: path || null,
   });
   mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();

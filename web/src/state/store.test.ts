@@ -300,13 +300,15 @@ describe("filesystem graph entrypoints", () => {
     return tab as GraphTab;
   }
 
-  test("file browser graph entrypoints open drive-scope fs graph with a preselection", () => {
+  test("file browser graph entrypoints scope to the file's parent or the directory itself", () => {
     openFsGraphForFile("notes/a.md");
 
     let graph = activeGraphTab();
     expect(graphOverlay.open).toBe(false);
     expect(graph.mode).toBe("filesystem");
-    expect(graph.scopeId).toBe("drive");
+    // File trigger scopes to the parent directory, with the
+    // originating file auto-selected so its inspector pops.
+    expect(graph.scopeId).toBe("dir:notes");
     expect(graph.pendingSelectId).toBe("notes/a.md");
 
     openFsGraphForDirectory("notes");
@@ -314,8 +316,26 @@ describe("filesystem graph entrypoints", () => {
     graph = activeGraphTab();
     expect(graphOverlay.open).toBe(false);
     expect(graph.mode).toBe("filesystem");
-    expect(graph.scopeId).toBe("drive");
+    // Directory trigger scopes to that subtree directly.
+    expect(graph.scopeId).toBe("dir:notes");
     expect(graph.pendingSelectId).toBe("notes");
+  });
+
+  test("file at drive root falls back to drive scope; drive root directory likewise", () => {
+    openFsGraphForFile("README.md");
+
+    let graph = activeGraphTab();
+    expect(graph.mode).toBe("filesystem");
+    // No parent directory above a root-level file: drive scope is
+    // the meaningful neighbourhood.
+    expect(graph.scopeId).toBe("drive");
+    expect(graph.pendingSelectId).toBe("README.md");
+
+    openFsGraphForDirectory("");
+
+    graph = activeGraphTab();
+    expect(graph.mode).toBe("filesystem");
+    expect(graph.scopeId).toBe("drive");
   });
 
   test("filesystem graph scope action pivots to files and directories", () => {

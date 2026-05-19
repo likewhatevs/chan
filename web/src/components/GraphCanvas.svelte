@@ -611,6 +611,31 @@
 
     const adj = selectedId !== null ? adjacency.get(selectedId) : null;
 
+    // Sibling dim: when a file node is selected, other file nodes
+    // that share the same parent directory render with a lower alpha
+    // so the cohort visually frames the selection without competing
+    // for attention. File covers both regular docs and images (the
+    // canvas re-classifies file kind via classifyFile in DKind), so
+    // narrowing on "file" catches everything in scope.
+    let siblingDim: Set<string> | null = null;
+    if (selectedId !== null) {
+      const sel = nodes.find((n) => n.id === selectedId);
+      const selPath = sel && sel.kind === "file" ? sel.path : null;
+      if (selPath !== null) {
+        const slash = selPath.lastIndexOf("/");
+        const parent = slash >= 0 ? selPath.slice(0, slash) : "";
+        siblingDim = new Set();
+        for (const n of nodes) {
+          if (n.id === selectedId) continue;
+          if (n.kind !== "file") continue;
+          const np = n.path;
+          const s2 = np.lastIndexOf("/");
+          const npParent = s2 >= 0 ? np.slice(0, s2) : "";
+          if (npParent === parent) siblingDim.add(n.id);
+        }
+      }
+    }
+
     // Edges first so nodes paint on top. Group by kind so we only
     // change strokeStyle once per kind.
     ctx.lineWidth = 1 / Math.max(0.5, transform.k);
@@ -665,6 +690,7 @@
       const isSel = n.id === selectedId;
       const isAdj = adj?.has(n.id) === true;
       const isHover = n.id === hoverId;
+      const isSiblingDim = siblingDim?.has(n.id) === true;
       // Ghost styling fires only for broken-link targets — files
       // that another doc points at but don't exist on disk. A
       // `@@name` mention is free-form by design (the indexer
@@ -672,7 +698,7 @@
       // required), so unresolved mentions are not ghosts; they
       // render as normal contact-coloured nodes. Whether a
       // mention happens to fuzzy-match a contact file shows up
-      // in the inspector ("Open in this pane"), not the graph.
+      // in the inspector ("Open"), not the graph.
       const isGhost = n.missing;
       const fill = isGhost
         ? theme.bgCard
@@ -684,6 +710,8 @@
         : n.kind === "drive" ? theme.bgCard
         : n.kind === "folder" ? theme.folder
         : theme.tag;
+      const baseAlpha = isSiblingDim ? 0.45 : 1;
+      ctx.globalAlpha = baseAlpha;
       ctx.beginPath();
       ctx.arc(n.x, n.y, n.radius, 0, Math.PI * 2);
       ctx.fillStyle = fill;
@@ -717,10 +745,11 @@
         : iconImages[n.kind];
       if (icon && icon.complete && icon.naturalWidth > 0) {
         const w = n.radius * 2 * ICON_FRACTION;
-        ctx.globalAlpha = isGhost ? 0.75 : 1;
+        ctx.globalAlpha = baseAlpha * (isGhost ? 0.75 : 1);
         ctx.drawImage(icon, n.x - w / 2, n.y - w / 2, w, w);
         ctx.globalAlpha = 1;
       }
+      ctx.globalAlpha = 1;
       // Label: only for the selected node + first-degree
       // neighbours, so the canvas stays uncluttered at rest.
       if (isSel || isAdj) {

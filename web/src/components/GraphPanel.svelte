@@ -630,7 +630,7 @@
   /// search) treat onNavigate as "open in the editor", but here the
   /// user is exploring the graph: route to a select-in-canvas instead
   /// so the inspector keeps following the user as they hop along
-  /// references. The "Open in this pane" button (onOpen) is still
+  /// references. The "Open" button (onOpen) is still
   /// the path to the editor.
   function selectByPath(path: string): void {
     const n = nodeById.get(path);
@@ -1124,7 +1124,7 @@
              through InspectorBody. FileInfoBody dispatches on
              entry.is_dir so the "file" selection variant covers both
              shapes. Both file and directory nodes can re-scope the
-             filesystem graph from here; file keeps "Open in this pane"
+             filesystem graph from here; file keeps the "Open"
              as the extra editor action. -->
         {@const fsPath = selectedFsNode.path}
         {@const fsKind = selectedFsNode.kind}
@@ -1175,7 +1175,7 @@
           {/if}
           {#if selectedFsNode.kind === "file" && selectedFsNode.path}
             <button class="open-fs" onclick={() => { void openInActivePane(selectedFsNode!.path); close(); }}>
-              Open in this pane
+              Open
             </button>
           {/if}
         </div>
@@ -1208,7 +1208,7 @@
               ? openSelectedFile
               : inspectorSelection?.kind === "mention" && selectedContactPath
                 ? () => {
-                    // Mention/contact "Open in this pane": route the
+                    // Mention/contact "Open": route the
                     // resolved contact file (looked up via
                     // tree.kind === "contact") through the active
                     // pane and close the graph.

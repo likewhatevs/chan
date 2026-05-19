@@ -655,7 +655,7 @@
       {/if}
     {:else if onOpen}
       {#if editable}
-        <button class="open" onclick={onOpen}>Open in this pane</button>
+        <button class="open" onclick={onOpen}>Open</button>
       {:else}
         <p class="view-only-hint">
           Not an editable file.
