@@ -1095,16 +1095,26 @@
         </HamburgerMenu>
       </div>
     {/if}
-    {#if !paneMode.active}
-      {#each pane.tabs.filter((t) => t.kind === "terminal") as t (t.id)}
-        <TerminalTab
-          tab={t}
-          paneId={pane.id}
-          active={t.id === pane.activeTabId}
-          focused={t.id === pane.activeTabId && viewLayout.activePaneId === pane.id}
-        />
-      {/each}
-    {/if}
+    <!--
+      `fullstack-b-2`: keep terminal tabs mounted across Hybrid NAV
+      (pane mode) toggles so xterm.js's 20k-line scrollback buffer
+      survives. Previously the outer `{#if !paneMode.active}` wrapper
+      unmounted every terminal on Cmd+K entry, disposing the
+      EditorView and dropping the buffer; re-entering pane mode
+      after a long session lost every line that had scrolled off
+      screen. Now the active terminal is hidden by `class:active`
+      flipping to false during pane mode (the existing
+      `visibility: hidden; pointer-events: none` rule does the
+      hiding), and the pane-mode-preview above renders unimpeded.
+    -->
+    {#each pane.tabs.filter((t) => t.kind === "terminal") as t (t.id)}
+      <TerminalTab
+        tab={t}
+        paneId={pane.id}
+        active={!paneMode.active && t.id === pane.activeTabId}
+        focused={!paneMode.active && t.id === pane.activeTabId && viewLayout.activePaneId === pane.id}
+      />
+    {/each}
   </div>
 </div>
 

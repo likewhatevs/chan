@@ -662,11 +662,14 @@ const KEY_BRIDGE_JS: &str = r#"
       { detail: Object.assign({ name: name }, detail || {}) }));
   }
   // `fullstack-42` pruned every native chord whose action is now
-  // covered by Pane Mode (Cmd+K). Dropped: Cmd+P, Cmd+N, Cmd+T,
-  // Cmd+`, Cmd+[/Cmd+], Cmd+Shift+M, Cmd+Shift+F. Kept: Cmd+W (close
+  // covered by Pane Mode (Cmd+K). Dropped: Cmd+P, Cmd+N, Cmd+`,
+  // Cmd+[/Cmd+], Cmd+Shift+M, Cmd+Shift+F. Kept: Cmd+W (close
   // tab; pairs with Ctrl+D from fullstack-41), Cmd+F/G (find on page),
   // Cmd+1..9 (jump to tab), Cmd+Shift+T (reopen closed),
   // Cmd+Shift+[/] (tab nav), Cmd+Shift+G (find prev).
+  // `fullstack-b-2`: Cmd+T comes back as a direct chord for
+  // "new terminal in active pane"; Pane Mode (Cmd+K 1) still works
+  // unchanged as the menu-driven equivalent.
   function onKey(e) {
     const meta = e.metaKey || e.ctrlKey;
     if (!meta || e.altKey) return;
@@ -674,6 +677,7 @@ const KEY_BRIDGE_JS: &str = r#"
     const code = e.code;
     if (!shift) {
       switch (code) {
+        case 'KeyT': fire(e, 'app.terminal.toggle'); return;
         case 'KeyW': fire(e, 'app.tab.close');        return;
         case 'KeyF': fire(e, 'app.find.open');        return;
         case 'KeyG': fire(e, 'app.find.next');        return;
@@ -741,7 +745,11 @@ mod tests {
         // `fullstack-42` pruned every native chord that now has a
         // Pane Mode (Cmd+K …) equivalent. Asserting the absence of
         // each one catches an accidental revert.
-        assert!(!KEY_BRIDGE_JS.contains("app.terminal.toggle"));
+        // `fullstack-b-2` re-introduced `app.terminal.toggle` as a
+        // direct Cmd+T chord on top of the Pane Mode equivalent; the
+        // assertion on it is therefore intentionally removed here
+        // and the positive case is covered by
+        // `key_bridge_keeps_independent_chords`.
         assert!(!KEY_BRIDGE_JS.contains("app.files.toggle"));
         assert!(!KEY_BRIDGE_JS.contains("app.graph.toggle"));
         assert!(!KEY_BRIDGE_JS.contains("app.search.toggle"));
@@ -755,7 +763,9 @@ mod tests {
     fn key_bridge_keeps_independent_chords() {
         // Tab close + reopen + Find on page + tab nav + tab jump
         // are NOT duplicated by Pane Mode and must stay reachable
-        // through the native bridge.
+        // through the native bridge. Cmd+T (new terminal) is
+        // re-bound per `fullstack-b-2`.
+        assert!(KEY_BRIDGE_JS.contains("app.terminal.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.close"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.reopenClosed"));
         assert!(KEY_BRIDGE_JS.contains("app.find.open"));

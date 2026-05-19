@@ -575,6 +575,18 @@
       scheduleSessionSave();
       return;
     }
+    // `fullstack-b-2`: Cmd+Alt+T web → new terminal in active pane.
+    // Mac-only: require metaKey explicitly (not the meta shorthand)
+    // so Ctrl+Alt+T on Win/Linux stays exclusively bound to
+    // `app.tab.reopenClosed` via Pane.svelte. Native chan-desktop
+    // uses `Cmd+T` (Ctrl+T on Win/Linux) through
+    // `KEY_BRIDGE_JS` in `desktop/src-tauri/src/serve.rs`.
+    if (e.metaKey && e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyT") {
+      e.preventDefault();
+      openTerminalInActivePane();
+      scheduleSessionSave();
+      return;
+    }
     if (e.altKey && e.shiftKey && !meta) {
       // e.code is layout-and-modifier-independent, so this branch
       // matches even though Option mangles e.key into `«` / `»` on

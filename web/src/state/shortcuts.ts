@@ -97,6 +97,20 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Alt+Space",
     group: "App",
   },
+  // `fullstack-b-2`: Cmd+T comes back for "new terminal in active
+  // pane" (the action behind Pane Mode's `Cmd+K 1`) as a direct
+  // chord. Browsers reserve `Cmd+T` at the OS level so the web
+  // variant uses `Cmd+Alt+T` — Mac-only; `Ctrl+Alt+T` on
+  // Win/Linux web is already owned by `app.tab.reopenClosed` and
+  // we'd rather leave Pane Mode as the fallback than collide.
+  {
+    id: "app.terminal.toggle",
+    label: "New terminal",
+    web: "Cmd+Alt+T",
+    native: "Mod+T",
+    group: "App",
+    note: "macOS only on web; native everywhere",
+  },
   // `fullstack-a-7`: Hybrid NAV chord swapped from Mod+K to
   // Mod+. so Mod+, can own Settings (macOS preferences
   // convention; `app.settings.toggle` above). Mod+. is not
