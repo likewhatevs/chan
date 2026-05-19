@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItemBuilder, MenuItemKind, PredefinedMenuItem, WINDOW_SUBMENU_ID};
-use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tokio::process::Command;
 
 use config::{Config, ConfigStore};
@@ -868,6 +868,16 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     // bridge script in serve.rs). The menu entry still surfaces the
     // window by name.
     let drive_manager = MenuItemBuilder::with_id("win-main", "Drives").build(app)?;
+    // `fullstack-83`: Cmd+N spawns a fresh launcher window. The
+    // existing "main" window stays untouched (singleton label);
+    // additional launchers land on `main-<N>` so each carries its
+    // own state independently. Convention for future chan-desktop
+    // shortcuts: declare a MenuItemBuilder here with the
+    // `CmdOrCtrl+<key>` accelerator, prepend into the Window
+    // submenu below, and add a matching `on_menu_event` branch.
+    let new_window = MenuItemBuilder::with_id("app-new-window", "New Window")
+        .accelerator("CmdOrCtrl+N")
+        .build(app)?;
     let settings = MenuItemBuilder::with_id("chan-settings", "Settings…")
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
@@ -877,7 +887,7 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         .and_then(|k| k.as_submenu().cloned())
     {
         let sep = PredefinedMenuItem::separator(app)?;
-        window_submenu.prepend_items(&[&drive_manager, &settings, &sep])?;
+        window_submenu.prepend_items(&[&drive_manager, &new_window, &settings, &sep])?;
         // Strip the default "Close Window" item so Cmd+W reaches the
         // drive webview's key bridge (which dispatches `app.tab.close`
         // to chan). The trade-off: non-drive windows (main, console)
@@ -902,12 +912,72 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         "win-main" => {
             let _ = show_window(app, "main");
         }
+        "app-new-window" => {
+            if let Err(e) = open_new_launcher_window(app) {
+                tracing::warn!(error = %e, "open new launcher window failed");
+            }
+        }
         "chan-settings" => {
             dispatch_to_focused_drive(app, "app.settings.toggle");
         }
         _ => {}
     });
     Ok(())
+}
+
+/// `fullstack-83`: spawn a fresh launcher (drive-picker) window via
+/// `WebviewWindowBuilder`. The label is picked from the next free
+/// `main-N` slot so each launcher carries its own per-window state
+/// (mirrors the `drive-N` / `tunnel-N` convention). New windows use
+/// the same `index.html` entry as the singleton `main`, so the
+/// SPA's `boot()` path runs and the user lands on the drive
+/// picker — never inheriting any existing launcher's runtime
+/// state.
+fn open_new_launcher_window(app: &tauri::AppHandle) -> Result<(), String> {
+    let label = next_launcher_label(app);
+    if app.get_webview_window(&label).is_some() {
+        // Defensive: the slot picker scans existing windows so a
+        // collision shouldn't happen. If it ever does, surface a
+        // clear error rather than panicking on `build`.
+        return Err(format!("launcher label {label} already exists"));
+    }
+    WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
+        .title("Chan Desktop")
+        .inner_size(960.0, 600.0)
+        .min_inner_size(720.0, 400.0)
+        .resizable(true)
+        .build()
+        .map_err(|e| format!("building launcher window {label}: {e}"))?;
+    Ok(())
+}
+
+/// Pick the next free `main-N` label. Launchers spawn from the
+/// File → New Window menu item; the singleton `main` from
+/// tauri.conf.json keeps its bare label so existing
+/// `show_window(app, "main")` callers and the `Drives` menu
+/// entry keep working.
+fn next_launcher_label(app: &tauri::AppHandle) -> String {
+    let existing: std::collections::HashSet<String> = app
+        .webview_windows()
+        .into_keys()
+        .filter(|l| l == "main" || l.starts_with("main-"))
+        .collect();
+    for n in 2u32..u32::MAX {
+        let candidate = format!("main-{n}");
+        if !existing.contains(&candidate) {
+            return candidate;
+        }
+    }
+    // Practically unreachable; falls back to a UUID-ish suffix so
+    // the menu action still does *something* if a hostile loop
+    // saturates the integer range.
+    format!(
+        "main-{:x}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    )
 }
 
 /// Eval a `chan:command` dispatch on the currently-focused drive
