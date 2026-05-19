@@ -14,7 +14,6 @@
     RotateCcw,
     Search,
     Settings,
-    Terminal as TerminalIcon,
   } from "lucide-svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
@@ -36,7 +35,6 @@
     layout,
     markTerminalEnvNameRestarted,
     openTerminalInActivePane,
-    openTerminalInPane,
     registerTerminalCloseSink,
     registerTerminalInputSink,
     renameTerminalTab,
@@ -495,7 +493,8 @@
     if (tab.terminalSessionId) {
       const confirmed = await uiConfirm({
         title: "Restart terminal?",
-        message: "The current terminal session will be closed and replaced.",
+        message:
+          "The shell in this terminal will be killed and a fresh one started in its place. Any running command will be terminated.",
         confirmLabel: "Restart",
         destructive: true,
       });
@@ -614,11 +613,6 @@
   function openSettingsFromMenu(): void {
     closeTabMenu();
     openSettings();
-  }
-
-  function openNewTerminal(): void {
-    closeTabMenu();
-    openTerminalInPane(paneId);
   }
 
   function ensureRichPrompt(): NonNullable<TerminalTabState["richPrompt"]> {
@@ -991,13 +985,6 @@
           </span>
           <span class="mbtn-label">Restart</span>
           <span class="mbtn-chord"></span>
-        </button>
-        <button class="mbtn" onclick={openNewTerminal}>
-          <span class="mbtn-icon">
-            <TerminalIcon size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">New Terminal</span>
-          <span class="mbtn-chord">{chordFor("app.terminal.toggle") ?? ""}</span>
         </button>
         <button class="mbtn" onclick={openNewFile}>
           <span class="mbtn-icon">

@@ -161,3 +161,40 @@ staged only my four files (the source change + task
 file + journal + event log).
 
 Standing by.
+
+## 2026-05-19 14:50 BST
+
+Picked up `fullstack-52` (drop "New Terminal" menu
+entry + sharpen Restart prompt) after spotting the
+14:40 BST cut further down in
+`event-architect-fullstack-b.md` (initial tail
+missed it). Lesson: tail farther on the first read.
+
+Audit-then-edit: grep `web/src` for `"New Terminal"`
+and `openNewTerminal` — single call site at
+`TerminalTab.svelte:995` plus the matching handler.
+Dropped the button, the handler, `TerminalIcon`
+import (only consumer was the removed button), and
+the `openTerminalInPane` import (only consumer was
+the removed handler).
+
+Restart confirm message: from soft "session will be
+closed and replaced" to explicit "shell will be
+killed and a fresh one started in its place. Any
+running command will be terminated." Both
+load-bearing phrases land per the acceptance
+criteria.
+
+New unit test
+`TerminalTab menu > kebab menu no longer renders a
+New Terminal entry`: opens the tab menu programmat-
+ically and asserts `.mbtn-label` text nodes contain
+`"Restart"` but not `"New Terminal"`. The Restart
+assertion is the canary for a future refactor that
+drops both rows.
+
+Gate green: svelte-check 0/0, vitest 35 / 343,
+build clean, scripts/pre-push green.
+
+Committing + pushing under standing topic-level
+clearance.

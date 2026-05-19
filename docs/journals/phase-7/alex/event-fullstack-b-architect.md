@@ -319,3 +319,49 @@ event file). Did not touch the rest.
 
 Lane-B queue now empty. Standing by; deferred
 fullstack-48 follow-ups still parked.
+
+## 2026-05-19 14:50 BST — poke: picked up fullstack-52
+
+Caught the 14:40 BST cut on a second read (initial
+tail of `event-architect-fullstack-b.md` missed it
+— that's on me). Picking up now.
+
+## 2026-05-19 14:55 BST — poke: fullstack-52 ready to commit
+
+Audit (`web/src` grep for `"New Terminal"` +
+`openNewTerminal`): one button + one handler, both in
+`TerminalTab.svelte`. No British-spelling variants.
+Dropped the button, the handler, the `TerminalIcon`
+import (only used by the removed button), and the
+`openTerminalInPane` import (only used by the
+removed handler).
+
+Restart confirm `message` sharpened from "session
+will be closed and replaced" to "shell in this
+terminal will be killed and a fresh one started in
+its place. Any running command will be terminated."
+Both load-bearing phrases land per the acceptance
+criteria. `confirmLabel`, `destructive: true`
+unchanged. Three `restart()` call sites (menu,
+rename-pending banner, sessionClosed) all route
+through the same prompt — the sessionClosed path
+correctly skips the confirm since there's no live
+session to kill.
+
+New unit test
+`TerminalTab menu > kebab menu no longer renders a
+New Terminal entry`: opens the tab menu via
+`openTabMenu(...)`, scrapes `.mbtn-label` text,
+asserts `"New Terminal"` absent + `"Restart"`
+present (canary for a future refactor dropping both
+rows).
+
+Gate green (svelte-check 0/0, vitest 35 / 343,
+build clean, scripts/pre-push green).
+
+Diff:
+* `web/src/components/TerminalTab.svelte` (+2 / -15)
+* `web/src/components/TerminalTab.test.ts` (+27 / 0)
+
+Committing + pushing under standing topic-level
+clearance (no HOLD pokes since the 14:40 BST cut).

@@ -4,6 +4,7 @@ import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { TerminalTab as TerminalTabState } from "../state/tabs.svelte";
+import { closeTabMenu, openTabMenu } from "../state/tabMenu.svelte";
 
 const mounted: Array<Record<string, any>> = [];
 const sockets: TestWebSocket[] = [];
@@ -101,6 +102,7 @@ afterEach(() => {
   sockets.splice(0);
   terminalFocuses.splice(0);
   document.body.innerHTML = "";
+  closeTabMenu();
 });
 
 function terminalTab(partial: Partial<TerminalTabState> = {}): TerminalTabState {
@@ -175,6 +177,31 @@ describe("TerminalTab activity frames", () => {
       expect(tab.terminalActivity).toBeUndefined();
       expect(socket.sent).toContain(JSON.stringify({ type: "focus", focused: true }));
       expect(terminalFocuses.length).toBeGreaterThan(0);
+    },
+    15000,
+  );
+});
+
+describe("TerminalTab menu", () => {
+  test(
+    "kebab menu no longer renders a New Terminal entry",
+    async () => {
+      const tab = terminalTab({ terminalSessionId: "term-session-1" });
+      const { target } = await renderTerminal(tab, true);
+
+      openTabMenu(tab.id, { left: 0, top: 0, right: 0, bottom: 0 });
+      await tick();
+      await tick();
+
+      const labels = Array.from(target.querySelectorAll(".mbtn-label")).map(
+        (el) => (el.textContent || "").trim(),
+      );
+      // Sanity check: the menu actually rendered.
+      expect(labels.length).toBeGreaterThan(0);
+      expect(labels).not.toContain("New Terminal");
+      // Restart is the canonical neighbour; keep it covered so a future
+      // refactor that drops both rows together is loud.
+      expect(labels).toContain("Restart");
     },
     15000,
   );
