@@ -205,6 +205,12 @@ export type FileTab = {
   /// on every selection change; the editor that mounts next reads
   /// it once on first content apply to restore the caret.
   caret?: { from: number; to: number };
+  /// `fullstack-84`: per-tab inspector + outline widths so two file
+  /// tabs side by side carry independent inspector/outline sizes.
+  /// Fall back to `paneWidths.inspector` / `paneWidths.outline`
+  /// when unset.
+  inspectorWidth?: number;
+  outlineWidth?: number;
 };
 
 export type FileMissingState = {
@@ -261,6 +267,9 @@ export type GraphTab = {
   /// reloading on restore.
   selectedNodeId?: string | null;
   selectedNodeLabel?: string | null;
+  /// `fullstack-84`: per-tab inspector width. Falls back to
+  /// `paneWidths.graph` when unset.
+  inspectorWidth?: number;
 };
 
 export type BrowserTab = {
@@ -277,6 +286,10 @@ export type BrowserTab = {
   showDrive?: boolean;
   expanded?: string[];
   scroll?: number;
+  /// `fullstack-84`: per-tab inspector width so two FB tabs can
+  /// carry different inspector sizes. Falls back to
+  /// `paneWidths.browser` for backwards compatibility when unset.
+  inspectorWidth?: number;
 };
 
 export type ScopeGrant = "one-shot" | "topic-session" | "topic-phase";
@@ -2579,6 +2592,13 @@ type SerTab = {
   bd?: 1;
   be?: string[];
   bsc?: number;
+  /// `fullstack-84`: per-tab inspector / outline widths.
+  /// `iw` covers BrowserTab + GraphTab + FileTab; `ow` is FileTab
+  /// only (outline pane). Emitted only when set so single-tab
+  /// hashes stay clean. Restored back onto the corresponding
+  /// `inspectorWidth` / `outlineWidth` tab fields.
+  iw?: number;
+  ow?: number;
 };
 type SerFocusColor = "g" | "p";
 type SerHybridTheme = "d" | "l";
@@ -2706,6 +2726,9 @@ function serializeTab(
       // data to reload.
       ...(t.selectedNodeId ? { gn: t.selectedNodeId } : {}),
       ...(t.selectedNodeLabel ? { gnl: t.selectedNodeLabel } : {}),
+      ...(t.inspectorWidth && t.inspectorWidth > 0
+        ? { iw: Math.round(t.inspectorWidth) }
+        : {}),
       ...active,
     };
   }
@@ -2718,6 +2741,9 @@ function serializeTab(
       ...(t.showDrive ? { bd: 1 as const } : {}),
       ...(expanded.length > 0 ? { be: expanded } : {}),
       ...(t.scroll && t.scroll > 0 ? { bsc: Math.round(t.scroll) } : {}),
+      ...(t.inspectorWidth && t.inspectorWidth > 0
+        ? { iw: Math.round(t.inspectorWidth) }
+        : {}),
       ...active,
     };
   }
@@ -2738,6 +2764,12 @@ function serializeTab(
     ...(t.styleToolbarOpen ? { s: 1 as const } : {}),
     ...(t.readMode ? { r: 1 as const } : {}),
     ...(t.syntaxHighlight ? {} : { h: 0 as const }),
+    ...(t.inspectorWidth && t.inspectorWidth > 0
+      ? { iw: Math.round(t.inspectorWidth) }
+      : {}),
+    ...(t.outlineWidth && t.outlineWidth > 0
+      ? { ow: Math.round(t.outlineWidth) }
+      : {}),
     ...c,
   };
 }
@@ -2864,6 +2896,9 @@ export async function restoreLayout(
             pendingSelectId: sertab.gp ?? selectedNodeId,
             selectedNodeId,
             selectedNodeLabel,
+            ...(typeof sertab.iw === "number" && sertab.iw > 0
+              ? { inspectorWidth: sertab.iw }
+              : {}),
           };
           p.tabs.push(tab);
           if (sertab.a) p.activeTabId = tab.id;
@@ -2882,6 +2917,9 @@ export async function restoreLayout(
               : {}),
             ...(typeof sertab.bsc === "number" && sertab.bsc > 0
               ? { scroll: sertab.bsc }
+              : {}),
+            ...(typeof sertab.iw === "number" && sertab.iw > 0
+              ? { inspectorWidth: sertab.iw }
               : {}),
           };
           p.tabs.push(tab);
@@ -2985,6 +3023,12 @@ export async function restoreLayout(
             Array.isArray(sertab.c) && sertab.c.length === 2
               ? { from: sertab.c[0], to: sertab.c[1] }
               : undefined,
+          ...(typeof sertab.iw === "number" && sertab.iw > 0
+            ? { inspectorWidth: sertab.iw }
+            : {}),
+          ...(typeof sertab.ow === "number" && sertab.ow > 0
+            ? { outlineWidth: sertab.ow }
+            : {}),
         };
         p.tabs.push(tab);
         if (sertab.a) p.activeTabId = tab.id;
@@ -3027,6 +3071,9 @@ export async function restoreLayout(
               pendingSelectId: sertab.gp ?? selectedNodeId,
               selectedNodeId,
               selectedNodeLabel,
+              ...(typeof sertab.iw === "number" && sertab.iw > 0
+                ? { inspectorWidth: sertab.iw }
+                : {}),
             };
             backTabs.push(tab);
             if (sertab.a) backActiveId = tab.id;
@@ -3045,6 +3092,9 @@ export async function restoreLayout(
                 : {}),
               ...(typeof sertab.bsc === "number" && sertab.bsc > 0
                 ? { scroll: sertab.bsc }
+                : {}),
+              ...(typeof sertab.iw === "number" && sertab.iw > 0
+                ? { inspectorWidth: sertab.iw }
                 : {}),
             };
             backTabs.push(tab);
@@ -3083,6 +3133,12 @@ export async function restoreLayout(
               Array.isArray(sertab.c) && sertab.c.length === 2
                 ? { from: sertab.c[0], to: sertab.c[1] }
                 : undefined,
+            ...(typeof sertab.iw === "number" && sertab.iw > 0
+              ? { inspectorWidth: sertab.iw }
+              : {}),
+            ...(typeof sertab.ow === "number" && sertab.ow > 0
+              ? { outlineWidth: sertab.ow }
+              : {}),
           };
           backTabs.push(tab);
           if (sertab.a) backActiveId = tab.id;

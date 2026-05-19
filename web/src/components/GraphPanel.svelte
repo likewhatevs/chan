@@ -1213,7 +1213,10 @@
   {#if graphState.inspectorOpen}
     <Inspector
       title="Details"
-      bind:width={paneWidths.graph}
+      bind:width={
+        () => graphState.inspectorWidth ?? paneWidths.graph,
+        (v) => (graphState.inspectorWidth = v)
+      }
       onResize={persistPaneWidths}
       onClose={() => (graphState.inspectorOpen = false)}
     >

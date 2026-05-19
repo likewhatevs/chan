@@ -775,7 +775,10 @@
         <Inspector
           title="Outline"
           side="left"
-          bind:width={paneWidths.outline}
+          bind:width={
+            () => tab.outlineWidth ?? paneWidths.outline,
+            (v) => (tab.outlineWidth = v)
+          }
           onResize={persistPaneWidths}
           onClose={() => setTabOutlineOpen(tab, false)}
         >
@@ -897,7 +900,10 @@
       {#if tab.inspectorOpen}
         <Inspector
           title="Details"
-          bind:width={paneWidths.inspector}
+          bind:width={
+            () => tab.inspectorWidth ?? paneWidths.inspector,
+            (v) => (tab.inspectorWidth = v)
+          }
           onResize={persistPaneWidths}
           onClose={() => setTabInspectorOpen(tab, false)}
         >

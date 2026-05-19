@@ -786,3 +786,37 @@ the dependency note.
 
 **Lane B queue empty.** All four queued items
 (-78 / -79 / -80 / -82) on origin/main.
+
+## 2026-05-19 23:55 BST
+
+Picked up `fullstack-84` (per-tab inspector
+width). Same shape as `-58`'s schema gap, but
+for inspector-width state instead of selection.
+
+Schema additions: `inspectorWidth?: number` on
+BrowserTab / GraphTab / FileTab + `outlineWidth?: number`
+on FileTab. Mirror fields on browserOverlay +
+graphOverlay so the overlay variants don't
+share with the dock singleton.
+
+SerTab fields `iw?` + `ow?` (FileTab only).
+Conditional emission matching -58 pattern.
+All four restore sites updated (front + back ×
+browser + graph + file).
+
+Two-way bind uses Svelte 5's function-pair
+syntax: `bind:width={getter, setter}` where
+getter returns `state.inspectorWidth ??
+paneWidths.<kind>` and setter writes the tab
+slot. New tabs paint at the singleton's
+default; drag writes per-tab; no ping-pong.
+
+Tests: 2 new in `tabs.test.ts` (independence
++ hash round-trip), 9 source-grep assertions
+in new `perTabInspectorWidth.test.ts`.
+
+Gate green: svelte-check 0/0, vitest 43/443
+(was 42/433; +11 net new), build clean,
+pre-push green.
+
+Committing + pushing. Lane B queue empty.

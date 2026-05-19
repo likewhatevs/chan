@@ -437,7 +437,10 @@
     {#if isWideSurface && browserState.inspectorOpen}
       <Inspector
         title="Details"
-        bind:width={paneWidths.browser}
+        bind:width={
+          () => browserState.inspectorWidth ?? paneWidths.browser,
+          (v) => (browserState.inspectorWidth = v)
+        }
         onResize={persistPaneWidths}
         onClose={() => (browserState.inspectorOpen = false)}
       >

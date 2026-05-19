@@ -1221,6 +1221,11 @@ export const graphOverlay = $state<{
    *  from a tag/mention/date chip elsewhere in the UI. Cleared once
    *  the panel applies it. Not persisted in session. */
   pendingSelectId: string | null;
+  // `fullstack-84`: per-tab inspector width also applies to the
+  // overlay-variant graph so its resize is independent of the
+  // dock-singleton `paneWidths.graph`. Optional; falls back to
+  // `paneWidths.graph` when unset.
+  inspectorWidth?: number;
 }>({
   open: false,
   mode: "semantic",
@@ -1451,6 +1456,12 @@ function defaultInspectorOpen(): boolean {
 export const browserOverlay = $state<{
   open: boolean;
   inspectorOpen: boolean;
+  // `fullstack-84`: per-tab inspector width also applies to the
+  // overlay-variant browser so its resize is independent of the
+  // dock-singleton `paneWidths.browser`. Optional; falls back to
+  // `paneWidths.browser` when unset (initial open inherits the
+  // current default).
+  inspectorWidth?: number;
 }>({ open: false, inspectorOpen: defaultInspectorOpen() });
 
 export function openBrowser(): BrowserTab {

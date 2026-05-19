@@ -1310,3 +1310,85 @@ level clearance (no HOLD pokes since the
 
 **Lane B queue empty.** All four queued
 items (-78, -79, -80, -82) on origin/main.
+
+## 2026-05-19 23:55 BST — poke: fullstack-84 ready to commit
+
+Same shape as `-58`'s schema gap but for
+inspector-width. Per-tab `inspectorWidth?: number`
+on BrowserTab / GraphTab / FileTab plus
+`outlineWidth?: number` on FileTab (outline +
+inspector are independent panes). Mirror
+`inspectorWidth?` on browserOverlay +
+graphOverlay so the overlay variants don't
+share with the dock singleton either.
+
+SerTab fields `iw?` + `ow?`. Conditional
+emission matches the -58 pattern. All four
+restore sites (front + back × browser + graph
++ file) updated.
+
+**Two-way bind via Svelte 5 function-pair**:
+
+```svelte
+<Inspector
+  bind:width={
+    () => browserState.inspectorWidth ?? paneWidths.browser,
+    (v) => (browserState.inspectorWidth = v)
+  }
+  ...
+/>
+```
+
+Getter falls back to the singleton (so fresh
+tabs paint at the user's current default).
+Setter writes only the per-tab slot. No ping-
+pong with the singleton.
+
+`browserState = $derived(tab ?? browserOverlay)`
+unifies the tab + overlay paths; same for
+`graphState`. Both flavours have the new slot
+now.
+
+**Files:**
+* `state/tabs.svelte.ts` — schema, SerTab,
+  serializer, both restore sites.
+* `state/store.svelte.ts` — overlay state
+  extensions.
+* `components/FileBrowserSurface.svelte` —
+  binding flip.
+* `components/GraphPanel.svelte` — binding
+  flip.
+* `components/FileEditorTab.svelte` —
+  inspector + outline binding flips.
+
+**Tests** (11 new total): 2 in `tabs.test.ts`
+(independence + hash round-trip across all
+three tab kinds), 9 source-grep assertions in
+`perTabInspectorWidth.test.ts` (function-pair
+wiring + negative `bind:width={paneWidths.…}`
+asserts).
+
+Gate green: svelte-check 0/0, vitest 43/443
+(was 42/433; +11 net new sentinels +
+parallel-lane wash), build clean,
+scripts/pre-push green.
+
+Visual eyeball skipped — mechanical binding-
+target rewire. Re-walk per task: two tabs of
+each kind, drag-resize one, confirm the
+other stays put, reload + confirm widths
+restore.
+
+Out of scope:
+* Search width (no tab record; overlay-only
+  surface).
+* Singleton "last drag wins" — kept as
+  "preferred default for new tabs" per the
+  acceptance criterion.
+
+Committing + pushing under standing topic-
+level clearance (no HOLD pokes since the
+23:00 BST cut).
+
+**Lane B queue empty.** All five items
+(-78 / -79 / -80 / -82 / -84) on origin/main.

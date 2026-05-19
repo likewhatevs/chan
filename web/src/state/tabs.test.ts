@@ -463,6 +463,55 @@ describe("pane state", () => {
     expect(tabs[1].scroll).toBe(100);
   });
 
+  test("two BrowserTab records carry independent inspectorWidth (fullstack-84)", () => {
+    resetLayout([]);
+    const tab1 = openBrowserInActivePane();
+    const tab2 = openBrowserInActivePane();
+    tab1.inspectorWidth = 280;
+    tab2.inspectorWidth = 420;
+    expect(tab1.inspectorWidth).toBe(280);
+    expect(tab2.inspectorWidth).toBe(420);
+  });
+
+  test("hash round-trips per-tab inspectorWidth on browser + graph + file (fullstack-84)", async () => {
+    resetLayout([]);
+    const browser1 = openBrowserInActivePane();
+    const browser2 = openBrowserInActivePane();
+    const graph1 = openGraphInActivePane({
+      mode: "semantic",
+      scopeId: "drive",
+      depth: 1,
+    });
+    const file1 = fileTab({ id: "f1", path: "notes/a.md" });
+    file1.inspectorWidth = 510;
+    file1.outlineWidth = 240;
+    activePane().tabs.push(file1);
+    browser1.inspectorWidth = 250;
+    browser2.inspectorWidth = 400;
+    graph1.inspectorWidth = 360;
+
+    const snapshot = serializeLayout();
+    await restoreLayout(snapshot!);
+
+    const tabs = activePane().tabs;
+    const browsers = tabs.filter((t) => t.kind === "browser");
+    expect(browsers.length).toBe(2);
+    if (browsers[0]?.kind !== "browser" || browsers[1]?.kind !== "browser") return;
+    expect(browsers[0].inspectorWidth).toBe(250);
+    expect(browsers[1].inspectorWidth).toBe(400);
+
+    const graphs = tabs.filter((t) => t.kind === "graph");
+    expect(graphs.length).toBe(1);
+    if (graphs[0]?.kind !== "graph") return;
+    expect(graphs[0].inspectorWidth).toBe(360);
+
+    const files = tabs.filter((t) => t.kind === "file");
+    expect(files.length).toBe(1);
+    if (files[0]?.kind !== "file") return;
+    expect(files[0].inspectorWidth).toBe(510);
+    expect(files[0].outlineWidth).toBe(240);
+  });
+
   test("pane mode discards draft changes on cancel", () => {
     const left = fileTab({ id: "left", path: "notes/left.md" });
     const right = fileTab({ id: "right", path: "notes/right.md" });
