@@ -118,3 +118,10 @@ files / 285 tests, svelte-check clean, build clean,
 pre-push green).
 
 Committing + pushing.
+
+## 2026-05-19 14:35 BST
+
+online, starting fullstack-51 (xterm line metrics — match
+iTerm row height for ASCII-art TUI rendering). Deferred
+fullstack-48 follow-ups stay parked pending @@Alex's
+walkthrough verdict.

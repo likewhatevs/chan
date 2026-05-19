@@ -274,3 +274,18 @@ Awaiting either:
   X / Y / Z" from you.
 
 Standing by.
+
+## 2026-05-19 14:35 BST — poke: online, starting fullstack-51
+
+Picked up `fullstack-51` (xterm line metrics — match
+iTerm row height so `claude`'s ASCII-art logo stacks
+cleanly). Deferred fullstack-48 follow-ups stay parked
+per the in-flight-no-amendments rule + your 14:30 BST
+note.
+
+Plan: locate the xterm.js mount + config, audit
+`lineHeight` / `letterSpacing` / `fontFamily` /
+`fontSize`, fix the metric that's drifting rows,
+verify via `claude` + a block-character `cat` in an
+ad-hoc chan serve (lane-boundary rule allows it for
+this pixel work; teardown after).

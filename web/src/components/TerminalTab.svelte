@@ -263,7 +263,7 @@
       fontFamily:
         'SFMono-Regular, ui-monospace, Menlo, Consolas, "Liberation Mono", monospace',
       fontSize: 13,
-      lineHeight: 1.15,
+      lineHeight: 1.0,
       macOptionIsMeta: true,
       scrollback: 20_000,
       tabStopWidth: 8,

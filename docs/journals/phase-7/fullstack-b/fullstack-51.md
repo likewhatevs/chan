@@ -97,3 +97,86 @@ Standard. Pre-push gate green. Visual eyeball
 required — the lane-boundary rule allows an ad-hoc
 chan serve + browser tab for this (teardown after).
 Ping via `alex/event-fullstack-b-architect.md`.
+
+## 2026-05-19 14:55 BST — implementation + visual verification
+
+**Root cause:** `web/src/components/TerminalTab.svelte:266`
+set `lineHeight: 1.15` in xterm.js' `new Terminal({ ... })`
+options. xterm.js applies that as a multiplier to the
+intrinsic font cell height; with SFMono 13px the
+intrinsic cell is ~15px, and `ceil(15 × 1.15) = 18px`,
+so each row was 18px tall while character glyphs
+(including full-block `█` U+2588) were drawn at the
+font's natural ~15px. That left ~3px of vertical
+padding per row, producing the visible inter-row gap
+in `claude`'s ASCII-art logo.
+
+**Fix:** change `lineHeight: 1.15` → `lineHeight: 1.0`.
+One-line diff. iTerm's default line height is also 1.0
+for system monospace fonts, so this matches the
+reference Alex compared against.
+
+**Visual verification** (ad-hoc chan serve on a throw-
+away drive at `/tmp/chan-test-fullstack-51`, browser
+tab driven via Chrome MCP):
+
+* Spawned a terminal tab with a connected bash PTY.
+* `cat`-ed a five-line block-character ASCII art file.
+* Measured the bounding boxes of the five rendered
+  block-character rows:
+
+```
+row 0: top 76,  bottom 91,  height 15
+row 1: top 91,  bottom 106, height 15
+row 2: top 106, bottom 121, height 15
+row 3: top 121, bottom 136, height 15
+row 4: top 136, bottom 151, height 15
+```
+
+  Gap between consecutive block rows: `[0, 0, 0, 0]`
+  (each row's top is exactly the previous row's
+  bottom). Total span 75px = 5 × 15. Contiguous,
+  matches iTerm.
+
+* Confirmed the inline row style is
+  `height: 15px; line-height: 15px;` (down from 18px
+  on the old build), and the rendered font is
+  SFMono-Regular 13px per `getComputedStyle` on the
+  `.xterm-rows` element.
+
+* Plain text rendering unchanged — bash prompt
+  renders at the same 15px row height with no
+  perceptible difference in prose readability (this is
+  the iTerm default; the change brings us in line).
+
+* Light + dark mode both unaffected — the
+  `lineHeight` option lives at the xterm constructor
+  call and doesn't branch on theme; my change is
+  theme-agnostic by construction.
+
+**Gate:**
+
+* `npm run check` → 0 errors / 0 warnings.
+* `npm run test` → 35 files / 319 tests passed.
+* `npm run build` → clean.
+* `scripts/pre-push` → green (clippy, cargo test all
+  crates, cargo build with `--no-default-features`).
+
+**Teardown:** chan serve killed (PID 41963),
+`/tmp/chan-test-fullstack-51` drive unregistered +
+directory removed, Chrome MCP tab closed.
+
+**Out of scope reaffirmed:** didn't touch font family,
+font size, letter spacing, theme tokens, or the
+chan-server side.
+
+**Commit readiness:**
+
+* File: `web/src/components/TerminalTab.svelte` (1
+  line change).
+* Proposed message:
+  ```
+  Set xterm lineHeight to 1.0 for iTerm-matching row metrics (fullstack-51)
+  ```
+* Standing topic-level commit clearance applies.
+  No HOLD pokes since the 14:30 BST cut.
