@@ -911,7 +911,12 @@
     opacity: 0.9;
     transform: scale(1.2);
   }
-  .carousel:focus-visible {
-    box-shadow: inset 0 0 0 2px var(--pane-active-focus, var(--pane-focus));
-  }
+  /* `fullstack-85`: dropped the inset focus ring here. The
+     surrounding `.pane.focused` style (Pane.svelte) already draws
+     the focus indicator around the entire pane in the multi-pane
+     case; stacking a second 2px ring around just the carousel
+     body painted the empty pane with a visibly thicker border on
+     the body than along the top-bar chrome. Single-pane empty
+     carousels have no indicator either way — there's only one
+     pane to be focused. */
 </style>

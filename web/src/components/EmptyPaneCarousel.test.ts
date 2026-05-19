@@ -99,4 +99,16 @@ describe("EmptyPaneCarousel", () => {
     await tick();
     expect(target.querySelector(".placeholder-mark")).not.toBeNull();
   }, 15000);
+
+  // `fullstack-85`: the carousel's own `:focus-visible` inset ring
+  // was painting on top of `.pane.focused`'s inset ring, making the
+  // empty-pane body look like it had a thicker border than the top
+  // bar. Source-grep sentinel: the rule must be gone.
+  test("does not paint its own inset focus ring (fullstack-85)", async () => {
+    const raw = (await import("./EmptyPaneCarousel.svelte?raw"))
+      .default as string;
+    expect(raw).not.toMatch(
+      /\.carousel:focus-visible\s*\{[\s\S]*?inset 0 0 0 2px/,
+    );
+  }, 15000);
 });
