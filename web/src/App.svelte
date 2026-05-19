@@ -109,7 +109,12 @@
   let paneModeFlashKey = $state(0);
   let paneModeWasActive = false;
   let paneModeFlashTimer: ReturnType<typeof setTimeout> | null = null;
-  const PANE_MODE_FLASH_MS = 700;
+  // `fullstack-76`: bumped from 700ms — 0.7s read too quick for
+  // @@Alex to register the hint. CSS keyframe duration below
+  // (`paneModeFlashFade` + the reduced-motion variant) is pinned
+  // to the same total; rebalance the in / hold / out split if you
+  // tune this.
+  const PANE_MODE_FLASH_MS = 2000;
   $effect(() => {
     const active = paneMode.active;
     if (active && !paneModeWasActive) {
@@ -1065,7 +1070,7 @@
     gap: 10px;
     z-index: 25500;
     pointer-events: none;
-    animation: paneModeFlashFade 0.7s ease-out both;
+    animation: paneModeFlashFade 2s ease-out both;
   }
   .pane-mode-flash-key {
     display: inline-flex;
@@ -1088,21 +1093,24 @@
     font-size: 16px;
     letter-spacing: 0.02em;
   }
+  /* `fullstack-76`: rebalanced for the 2s total. 7.5 % fade-in
+     (~150ms) / 80 % hold (~1600ms) / 12.5 % fade-out (~250ms).
+     The reduced-motion variant follows the same proportions. */
   @keyframes paneModeFlashFade {
-    0%   { opacity: 0; transform: translateY(-6px) scale(0.96); }
-    20%  { opacity: 1; transform: translateY(0) scale(1); }
-    70%  { opacity: 1; transform: translateY(0) scale(1); }
-    100% { opacity: 0; transform: translateY(4px) scale(0.98); }
+    0%    { opacity: 0; transform: translateY(-6px) scale(0.96); }
+    7.5%  { opacity: 1; transform: translateY(0) scale(1); }
+    87.5% { opacity: 1; transform: translateY(0) scale(1); }
+    100%  { opacity: 0; transform: translateY(4px) scale(0.98); }
   }
   @media (prefers-reduced-motion: reduce) {
     .pane-mode-flash {
-      animation: paneModeFlashFadeReduced 0.7s linear both;
+      animation: paneModeFlashFadeReduced 2s linear both;
     }
     @keyframes paneModeFlashFadeReduced {
-      0%   { opacity: 0; }
-      15%  { opacity: 1; }
-      85%  { opacity: 1; }
-      100% { opacity: 0; }
+      0%    { opacity: 0; }
+      7.5%  { opacity: 1; }
+      87.5% { opacity: 1; }
+      100%  { opacity: 0; }
     }
   }
 </style>
