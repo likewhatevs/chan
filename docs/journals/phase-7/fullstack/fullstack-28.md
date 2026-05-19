@@ -84,3 +84,16 @@ Inspector`. No change.
 
 Standard. Pre-push gate green. Ping via
 `alex/event-fullstack-architect.md`.
+
+## 2026-05-19 07:44 BST — hand-off
+
+`fullstack-28` is committed and pushed on `main`.
+
+Commit:
+
+* `06739a9` Restore empty pane context menu (fullstack-28)
+
+Gate run: `npm run test -- Pane`, `npm run check`,
+`npm run build`, and `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+Notes: empty panes now right-click to the welcome menu in spec order; loaded panes still right-click to Reload / Toggle Web Inspector.
