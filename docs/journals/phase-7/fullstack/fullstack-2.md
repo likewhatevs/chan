@@ -18,7 +18,7 @@ explicitly). Ensure external links open in the system browser.
   + sub-bullets near "We must ensure to always open external
   links in the default system browser").
 * Reference target toolbar shape: `../image-6.png#w=250`.
-* [../../agents/fullstack/contact.md](../../agents/fullstack/contact.md).
+* [../../agents/fullstack.md](../../agents/fullstack.md).
 
 ## Acceptance criteria
 

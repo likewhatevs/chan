@@ -12,7 +12,7 @@ primitives (PTYs, sockets, signal handling).
 
 ## Active successor
 
-[@@Systacean](../systacean/contact.md). @@Systacean merges
+[@@Systacean](../systacean.md). @@Systacean merges
 @@Syseng with @@Rustacean.
 
 ## Where their work lives

@@ -32,9 +32,10 @@ This process replaces the phase-6 process in three main ways:
 | @@WebtestB      | Test-server + manual web walkthrough lane B.  |
 
 Agent skill anchors and contacts live under
-[`../../agents/`](../../agents/). Each agent has `contact.md`
-(handle, profile, skill links) and a `skills/` subdirectory
-copied from the contributor's skill library.
+[`../../agents/`](../../agents/). Each agent has a top-
+level `<name>.md` card (handle, profile, skill links) and,
+for active rosters, a `<name>/skills/` subdirectory copied
+from the contributor's skill library.
 
 ## Directory layout
 

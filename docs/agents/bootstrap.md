@@ -18,7 +18,7 @@ is on the `main` branch. Phase 7's working directory is
 Bootstrap in this order, then begin work.
 
 1. Read your contact card and skill guides:
-   - `docs/agents/<agent-tag>/contact.md`
+   - `docs/agents/<agent-tag>.md`
    - the files under `docs/agents/<agent-tag>/skills/`
    The contact card lists your profile, your predecessors
    (older slot names that rolled into this one), and links to

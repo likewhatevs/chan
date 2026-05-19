@@ -18,7 +18,7 @@ file-browser stays available.
   Enhancements list).
 * Visual reference (GitHub-style left tree):
   `../image.png#w=250` in the request thread.
-* [../../agents/fullstack/contact.md](../../agents/fullstack/contact.md)
+* [../../agents/fullstack.md](../../agents/fullstack.md)
   for skill context.
 
 ## Acceptance criteria

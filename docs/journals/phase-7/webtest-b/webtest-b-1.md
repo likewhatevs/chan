@@ -21,7 +21,7 @@ so the two lanes don't trip over each other.
   broadcast / pane / shortcut cluster).
 * [../architect/journal.md](../architect/journal.md) Round 1
   bugfix checklist.
-* [../../agents/webtest-b/contact.md](../../agents/webtest-b/contact.md)
+* [../../agents/webtest-b.md](../../agents/webtest-b.md)
   for browser-driving skill links.
 * CLAUDE.md "Test Server Workflow" section.
 

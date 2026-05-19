@@ -8,11 +8,11 @@ the phase journals (`docs/journals/phase-*/`).
 
 | Tag           | Contact                                  | Profile                              |
 |---------------|------------------------------------------|--------------------------------------|
-| @@Architect   | [architect/contact.md](architect/contact.md) | Plan, dispatch, decisions.       |
-| @@FullStack   | [fullstack/contact.md](fullstack/contact.md) | Backend + Frontend merged.       |
-| @@Systacean   | [systacean/contact.md](systacean/contact.md) | Syseng + Rustacean.              |
-| @@WebtestA    | [webtest-a/contact.md](webtest-a/contact.md) | Web test lane A.                 |
-| @@WebtestB    | [webtest-b/contact.md](webtest-b/contact.md) | Web test lane B.                 |
+| @@Architect   | [architect.md](architect.md) | Plan, dispatch, decisions.       |
+| @@FullStack   | [fullstack.md](fullstack.md) | Backend + Frontend merged.       |
+| @@Systacean   | [systacean.md](systacean.md) | Syseng + Rustacean.              |
+| @@WebtestA    | [webtest-a.md](webtest-a.md) | Web test lane A.                 |
+| @@WebtestB    | [webtest-b.md](webtest-b.md) | Web test lane B.                 |
 
 ## Historical handles
 
@@ -24,13 +24,13 @@ the predecessor list on the active card.
 
 | Tag             | Active successor                | Contact                                                       |
 |-----------------|---------------------------------|---------------------------------------------------------------|
-| @@Backend       | @@FullStack                     | [backend/contact.md](backend/contact.md)                       |
-| @@Frontend      | @@FullStack                     | [frontend/contact.md](frontend/contact.md)                     |
-| @@Webdev        | @@FullStack                     | [webdev/contact.md](webdev/contact.md)                         |
-| @@Syseng        | @@Systacean                     | [syseng/contact.md](syseng/contact.md)                         |
-| @@Rustacean     | @@Systacean                     | [rustacean/contact.md](rustacean/contact.md)                   |
-| @@Backsystacean | @@FullStack + @@Systacean       | [backsystacean/contact.md](backsystacean/contact.md)           |
-| @@Webtest       | @@WebtestA + @@WebtestB         | [webtest/contact.md](webtest/contact.md)                       |
+| @@Backend       | @@FullStack                     | [backend.md](backend.md)                       |
+| @@Frontend      | @@FullStack                     | [frontend.md](frontend.md)                     |
+| @@Webdev        | @@FullStack                     | [webdev.md](webdev.md)                         |
+| @@Syseng        | @@Systacean                     | [syseng.md](syseng.md)                         |
+| @@Rustacean     | @@Systacean                     | [rustacean.md](rustacean.md)                   |
+| @@Backsystacean | @@FullStack + @@Systacean       | [backsystacean.md](backsystacean.md)           |
+| @@Webtest       | @@WebtestA + @@WebtestB         | [webtest.md](webtest.md)                       |
 
 ## Skills
 

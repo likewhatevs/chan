@@ -394,11 +394,11 @@ JSON.
   `frontend/` dropped, `fullstack/` created. Journals carry
   `@@{name}` + Date: 2026-05-18 headers.
 * `docs/agents/` stood up with active-roster contact cards
-  ([architect](../../../agents/architect/contact.md),
-  [fullstack](../../../agents/fullstack/contact.md),
-  [systacean](../../../agents/systacean/contact.md),
-  [webtest-a](../../../agents/webtest-a/contact.md),
-  [webtest-b](../../../agents/webtest-b/contact.md)) plus
+  ([architect](../../../agents/architect.md),
+  [fullstack](../../../agents/fullstack.md),
+  [systacean](../../../agents/systacean.md),
+  [webtest-a](../../../agents/webtest-a.md),
+  [webtest-b](../../../agents/webtest-b.md)) plus
   skill copies under each `skills/` subdirectory.
 * `docs/journals/` migration executed (`git mv` x 180 file
   paths); the only ascending link inside phase 7

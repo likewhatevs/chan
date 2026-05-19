@@ -15,10 +15,10 @@ Rust code-quality / systems-engineering layer.
 
 The phase-7 split moves the work to two slots:
 
-* [@@FullStack](../fullstack/contact.md) absorbs the
+* [@@FullStack](../fullstack.md) absorbs the
   Backend half (axum routes, chan-server frontend-facing
   seams).
-* [@@Systacean](../systacean/contact.md) keeps the Syseng +
+* [@@Systacean](../systacean.md) keeps the Syseng +
   Rustacean half.
 
 The merge was experimental — phase 7 found that the merged

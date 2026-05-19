@@ -99,7 +99,7 @@ Fresh session resuming Phase 7. Read in this order:
 * [../architect/journal.md](../architect/journal.md) handover
   section at 17:05 BST — confirms "@@WebtestA has no queued
   task; Round 2 fan-out is where they get work."
-* [../../../agents/webtest-a/contact.md](../../../agents/webtest-a/contact.md).
+* [../../../agents/webtest-a.md](../../../agents/webtest-a.md).
 
 ### State on disk
 

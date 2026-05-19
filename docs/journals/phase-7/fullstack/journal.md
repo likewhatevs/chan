@@ -28,3 +28,7 @@ online, starting fullstack-16 after fullstack-15 landed.
 ## 2026-05-19 04:31 BST
 
 online, starting fullstack-17 after fullstack-16 landed.
+
+## 2026-05-19 04:49 BST
+
+online, starting fullstack-20 after fullstack-17 landed.

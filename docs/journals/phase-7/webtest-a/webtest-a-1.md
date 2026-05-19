@@ -19,7 +19,7 @@ image rendering, list interactions, markdown table render.
 * [../request.md](../request.md) Bugfixes.
 * [../architect/journal.md](../architect/journal.md) Round 1
   bugfix checklist.
-* [../../agents/webtest-a/contact.md](../../agents/webtest-a/contact.md)
+* [../../agents/webtest-a.md](../../agents/webtest-a.md)
   for browser-driving skill links.
 * CLAUDE.md "Test Server Workflow" section.
 

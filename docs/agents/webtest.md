@@ -13,8 +13,8 @@ manual-walkthrough findings against the running app.
 
 ## Active successors
 
-* [@@WebtestA](../webtest-a/contact.md) — Lane A.
-* [@@WebtestB](../webtest-b/contact.md) — Lane B (parallel
+* [@@WebtestA](../webtest-a.md) — Lane A.
+* [@@WebtestB](../webtest-b.md) — Lane B (parallel
   coverage).
 
 The split happened because phase 6 grew enough surface area

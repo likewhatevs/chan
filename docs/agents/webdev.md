@@ -14,7 +14,7 @@ client-server protocol.
 
 ## Active successor
 
-[@@FullStack](../fullstack/contact.md). The @@Webdev skill
+[@@FullStack](../fullstack.md). The @@Webdev skill
 guide (`docs/agents/fullstack/skills/webdev.md`) is the
 ongoing reference.
 

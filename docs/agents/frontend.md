@@ -12,7 +12,7 @@ state model.
 
 ## Active successor
 
-[@@FullStack](../fullstack/contact.md). @@FullStack merges
+[@@FullStack](../fullstack.md). @@FullStack merges
 @@Frontend with @@Backend into a single end-to-end UI lane.
 
 ## Where their work lives

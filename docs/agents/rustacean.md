@@ -12,7 +12,7 @@ and Cargo dependency hygiene.
 
 ## Active successor
 
-[@@Systacean](../systacean/contact.md). @@Systacean merges
+[@@Systacean](../systacean.md). @@Systacean merges
 @@Rustacean with @@Syseng.
 
 ## Where their work lives

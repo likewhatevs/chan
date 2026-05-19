@@ -15,7 +15,7 @@ Bootstrapped @@Systacean in the phase 7 tree.
 
 Read:
 
-* `docs/agents/systacean/contact.md`
+* `docs/agents/systacean.md`
 * `docs/agents/systacean/skills/syseng.md`
 * `docs/agents/systacean/skills/rustacean.md`
 * `docs/journals/phase-7/process.md`
@@ -241,3 +241,9 @@ Committed and pushed the storage scoping revert.
 Commit:
 
 * `4ca7dc4` - Revert SPA storage key scoping
+
+## 2026-05-19 04:49 BST - systacean-12 started
+
+New Wave-B assignment received. Starting
+[systacean-12.md](systacean-12.md): HTTP agent control
+channel for terminal spawn / restart / close.
