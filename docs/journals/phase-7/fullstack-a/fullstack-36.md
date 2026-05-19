@@ -141,3 +141,99 @@ desktop testing** — DevTools console while clicking
 links in Chan.app, since Chrome MCP can't reach
 WKWebView. Ping via
 `alex/event-fullstack-a-architect.md`.
+
+## 2026-05-19 10:28 BST — @@FullStackA specialist review
+
+### Root cause
+
+`openExternalUrl` had two compounding problems on Chan.app:
+
+1. The detection branch ordering tried
+   `w.__TAURI__?.opener?.openUrl` first, but Tauri 2.x doesn't
+   inject the opener as a global — the call should go through
+   `__TAURI_INTERNALS__.invoke("plugin:opener|open_url", { url })`.
+   That branch DID exist as a fallback but the failing path
+   threw uncaught when nothing handled the URL (no default
+   browser, no app registered for the scheme, capability
+   denied).
+2. Callers (`BubbleOverlay.svelte:412`, the editor click
+   handler) do `void openExternalUrl(...)`. Any rejection
+   from the `await invoke(...)` was swallowed, so the user
+   saw "nothing happens" with no console surface unless
+   DevTools was already open.
+
+### Fix
+
+* `web/src/editor/external_links.ts` — split the Tauri path
+  into `tryTauriOpen(w, url)` that swallows + logs the
+  rejection and returns `false`. `openExternalUrl` now
+  detects the Tauri webview by either runtime global,
+  calls `tryTauriOpen`, and on failure calls
+  `copyAndNotifyFailure(url)`.
+* `copyAndNotifyFailure` copies the URL to the clipboard
+  via `navigator.clipboard.writeText` (if available), then
+  surfaces a plain-English status via `notify(...)`.
+  Strings: "Couldn't open link in browser — URL copied to
+  clipboard" on clipboard success, "Couldn't open link in
+  browser — <url>" on clipboard failure.
+* Inside the Tauri webview the function NEVER falls back
+  to `window.open` — that would route the URL through
+  Chan.app's WKWebView, defeating "external" and
+  polluting the SPA's session cookies. Web build retains
+  the `window.open` path.
+* The Tauri error string is logged to `console.warn` for
+  debugging; the user-facing toast stays clean.
+
+### Tests
+
+* `external_links.test.ts` — kept the original three
+  tests (opener-bridge, invoke-bridge, web window.open),
+  added a new `openExternalUrl no-default-browser
+  fallback` describe with three tests:
+  * Opener throws → status message asserts "URL copied
+    to clipboard" string + clipboard call asserted.
+  * Both opener and clipboard throw → status string
+    includes the raw URL.
+  * Tauri webview never falls back to `window.open`.
+* `setNotifyHandler` from `notify.svelte` is exposed so
+  the test can capture emitted strings without going
+  through the store.
+
+### Gate
+
+* `npm run test -- external_links` — 8 passed.
+* `npm run test` — 30 files / 274 tests, all pass.
+* `npm run check` — 0 errors / 0 warnings.
+* `npm run build` — clean.
+* `bash -lc 'ulimit -n 4096; scripts/pre-push'` — green.
+
+### What still needs real desktop verification
+
+DevTools-on-WKWebView confirmation that:
+
+1. A markdown link in a file editor opens in the system
+   browser when the user clicks it.
+2. A link inside a bubble overlay does the same.
+3. The fallback toast renders + URL is on the clipboard
+   when the opener can't dispatch (e.g. testable by
+   temporarily configuring no default browser).
+
+Cannot drive WKWebView from Chrome MCP, so this depends
+on @@WebtestA / @@WebtestB picking up a manual pass on
+Chan.app, or on @@Alex spot-checking the live app.
+Flagged in the hand-off.
+
+### Proposed commit message
+
+> Surface external-link open failures on desktop (fullstack-36)
+>
+> Wrap the Tauri opener call so its rejection no longer gets
+> swallowed by the `void openExternalUrl(...)` callers. When
+> the opener can't dispatch the URL (no default browser, no
+> app for the scheme, capability denied), copy the URL to
+> the clipboard and surface a plain-English status message
+> via notify(); never silently fall back to window.open
+> inside the Tauri webview.
+
+Ready for commit + push under standing topic-level
+clearance.

@@ -1,5 +1,5 @@
 import { EditorState } from "@codemirror/state";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   externalUrlAtPos,
@@ -7,6 +7,7 @@ import {
   openExternalUrl,
 } from "./external_links";
 import { chanMarkdown } from "./markdown/grammar";
+import { setNotifyHandler } from "../state/notify.svelte";
 
 function state(doc: string): EditorState {
   return EditorState.create({ doc, extensions: [chanMarkdown()] });
@@ -73,5 +74,76 @@ describe("external link helpers", () => {
       "_blank",
       "noopener,noreferrer",
     );
+  });
+});
+
+describe("openExternalUrl no-default-browser fallback", () => {
+  afterEach(() => {
+    delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+    delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    setNotifyHandler((msg) => console.warn(msg));
+  });
+
+  test("surfaces a status message and copies URL when the Tauri opener throws", async () => {
+    const openUrl = vi.fn().mockRejectedValue(new Error("no app found"));
+    Object.defineProperty(window, "__TAURI__", {
+      configurable: true,
+      value: { opener: { openUrl } },
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const notifications: string[] = [];
+    setNotifyHandler((msg) => notifications.push(msg));
+
+    await expect(openExternalUrl("https://example.com")).resolves.toBe(false);
+
+    expect(openUrl).toHaveBeenCalledWith("https://example.com");
+    expect(writeText).toHaveBeenCalledWith("https://example.com");
+    expect(notifications).toEqual([
+      "Couldn't open link in browser — URL copied to clipboard",
+    ]);
+  });
+
+  test("falls back to including the raw URL when clipboard also fails", async () => {
+    const openUrl = vi.fn().mockRejectedValue(new Error("opener denied"));
+    Object.defineProperty(window, "__TAURI__", {
+      configurable: true,
+      value: { opener: { openUrl } },
+    });
+    const writeText = vi.fn().mockRejectedValue(new Error("clipboard denied"));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const notifications: string[] = [];
+    setNotifyHandler((msg) => notifications.push(msg));
+
+    await expect(openExternalUrl("https://example.com")).resolves.toBe(false);
+
+    expect(notifications).toEqual([
+      "Couldn't open link in browser — https://example.com",
+    ]);
+  });
+
+  test("does not fall back to window.open inside the Tauri webview", async () => {
+    const openUrl = vi.fn().mockRejectedValue(new Error("no app found"));
+    Object.defineProperty(window, "__TAURI__", {
+      configurable: true,
+      value: { opener: { openUrl } },
+    });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+    setNotifyHandler(() => {});
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    open.mockClear();
+
+    await openExternalUrl("https://example.com");
+
+    expect(open).not.toHaveBeenCalled();
   });
 });

@@ -2,6 +2,8 @@ import { syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
+import { notify } from "../state/notify.svelte";
+
 type SyntaxNode = ReturnType<ReturnType<typeof syntaxTree>["resolveInner"]>;
 
 const OPENABLE_SCHEMES = new Set(["http", "https", "mailto", "tel"]);
@@ -21,24 +23,68 @@ export function isOpenableExternalUrl(url: string): boolean {
   return scheme ? OPENABLE_SCHEMES.has(scheme) : false;
 }
 
+/// Best-effort handoff to the desktop opener. Returns true when the
+/// call resolved; false when neither bridge was present or the call
+/// threw (capability denied, no default browser, no app handler for
+/// the scheme). Errors are logged to the console for debugging — the
+/// caller decides what the user sees.
+async function tryTauriOpen(w: TauriWindow, url: string): Promise<boolean> {
+  try {
+    if (typeof w.__TAURI__?.opener?.openUrl === "function") {
+      await w.__TAURI__.opener.openUrl(url);
+      return true;
+    }
+    const invoke =
+      w.__TAURI_INTERNALS__?.invoke ??
+      w.__TAURI__?.core?.invoke ??
+      w.__TAURI__?.invoke;
+    if (invoke) {
+      await invoke("plugin:opener|open_url", { url });
+      return true;
+    }
+  } catch (err) {
+    console.warn("openExternalUrl: Tauri opener failed", err);
+  }
+  return false;
+}
+
+/// Fallback after a desktop opener failure: copy the URL to the
+/// clipboard so the user can paste it manually, then surface a plain-
+/// English status message. Never falls back to window.open inside a
+/// Tauri webview — that would open the URL inside Chan.app's own
+/// shell, pollute its session, and defeat "external".
+async function copyAndNotifyFailure(url: string): Promise<void> {
+  let copied = false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(url);
+      copied = true;
+    }
+  } catch (err) {
+    console.warn("openExternalUrl: clipboard write failed", err);
+  }
+  notify(
+    copied
+      ? "Couldn't open link in browser — URL copied to clipboard"
+      : `Couldn't open link in browser — ${url}`,
+  );
+}
+
 export async function openExternalUrl(url: string): Promise<boolean> {
   if (!isOpenableExternalUrl(url)) return false;
   const w = window as TauriWindow;
-  // Chan.app ships tauri-plugin-opener. That call happens in the
-  // local desktop process, which keeps tunnel/remote chan-server
-  // sessions opening links in the user's local OS browser.
-  if (w.__TAURI__?.opener?.openUrl) {
-    await w.__TAURI__.opener.openUrl(url);
-    return true;
+  // Detect the Tauri webview by either of the runtime globals.
+  // Chan.app ships tauri-plugin-opener; the local desktop process
+  // is the one that should call out to the OS browser so tunnelled
+  // sessions still open links on the user's machine.
+  const inTauri = Boolean(w.__TAURI__ || w.__TAURI_INTERNALS__);
+  if (inTauri) {
+    const ok = await tryTauriOpen(w, url);
+    if (!ok) await copyAndNotifyFailure(url);
+    return ok;
   }
-  const invoke =
-    w.__TAURI_INTERNALS__?.invoke ??
-    w.__TAURI__?.core?.invoke ??
-    w.__TAURI__?.invoke;
-  if (invoke) {
-    await invoke("plugin:opener|open_url", { url });
-    return true;
-  }
+  // Web build: open a new browser tab. The browser handles popup-
+  // blocking on its end; nothing to fall back to here.
   window.open(url, "_blank", "noopener,noreferrer");
   return true;
 }
