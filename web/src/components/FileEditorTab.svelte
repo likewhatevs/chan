@@ -94,10 +94,8 @@
     ui,
   } from "../state/store.svelte";
   import {
-    canSplit,
     openInActivePane,
     openTerminalInPane,
-    splitActive,
   } from "../state/tabs.svelte";
   import { terminalFromHereTarget } from "../terminal/fromHere";
   import { csvDelimiter, isCsv, isJson } from "../state/fileTypes";
@@ -440,26 +438,6 @@
     closeTabMenu();
   }
 
-  /// Right-click menu split actions. Mirror the per-pane hamburger
-  /// menu but live here too so the tab/editor context menu can fan
-  /// out the current file into a side-by-side view without making
-  /// the user reach for the pane chrome. `splitsAllowed` re-derives
-  /// on every layout mutation so the row greys out the moment the
-  /// platform's split cap is hit (iPad after one split).
-  const splitsAllowed = $derived.by(() => {
-    void layout.rootId;
-    void Object.keys(layout.nodes).length;
-    return canSplit();
-  });
-  function doSplitRight(): void {
-    closeTabMenu();
-    splitActive("row");
-  }
-  function doSplitDown(): void {
-    closeTabMenu();
-    splitActive("column");
-  }
-
   /// Chord lookup mirrors the empty-pane menu in Pane.svelte: SHORTCUTS
   /// is keyed by command id; render the platform-specific chord and
   /// format it for the current OS. Rows without a registered chord
@@ -755,23 +733,6 @@
           <span class="mbtn-chord"></span>
         </button>
         <div class="msep" role="separator"></div>
-        {#if splitsAllowed}
-          <button class="mbtn" onclick={doSplitRight}>
-            <span class="mbtn-icon">
-              <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
-            </span>
-            <span class="mbtn-label">Split right</span>
-            <span class="mbtn-chord"></span>
-          </button>
-          <button class="mbtn" onclick={doSplitDown}>
-            <span class="mbtn-icon">
-              <SquareSplitVertical size={16} strokeWidth={1.75} aria-hidden="true" />
-            </span>
-            <span class="mbtn-label">Split down</span>
-            <span class="mbtn-chord"></span>
-          </button>
-          <div class="msep" role="separator"></div>
-        {/if}
         <button class="mbtn" onclick={doOpenSettings}>
           <span class="mbtn-icon">
             <SettingsIcon size={16} strokeWidth={1.75} aria-hidden="true" />

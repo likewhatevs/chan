@@ -15,8 +15,6 @@
     RotateCcw,
     Search,
     Settings,
-    SquareSplitHorizontal,
-    SquareSplitVertical,
     Terminal as TerminalIcon,
   } from "lucide-svelte";
   import { Terminal } from "@xterm/xterm";
@@ -33,7 +31,6 @@
     allTerminalTabs,
     broadcastTerminalInput,
     canReopenClosedTab,
-    canSplit,
     closeTab,
     clearTerminalSession,
     dismissTerminalEnvNamePrompt,
@@ -50,7 +47,6 @@
     setTerminalActivity,
     setTerminalMcpEnv,
     setTerminalSession,
-    splitActive,
     terminalBroadcastMemberIds,
     terminalEnvTabNameStale,
     terminalMcpEnvEnabled,
@@ -153,12 +149,6 @@
   const showStaleEnvPrompt = $derived(
     staleEnvName && !tab.terminalEnvNamePromptDismissed,
   );
-  const splitsAllowed = $derived.by(() => {
-    void layout.rootId;
-    void Object.keys(layout.nodes).length;
-    return canSplit();
-  });
-
   $effect(() => {
     if (!host || term) return;
     void tick().then(start);
@@ -726,12 +716,6 @@
     if (/\bpoke\r?\n/.test(text)) void refreshWatcherEvents();
   }
 
-  function splitPane(direction: "row" | "column"): void {
-    closeTabMenu();
-    layout.activePaneId = paneId;
-    splitActive(direction);
-  }
-
   function runFind(next: boolean): void {
     if (!findQuery.trim()) {
       search?.clearDecorations();
@@ -1056,22 +1040,6 @@
           <span class="mbtn-label">Reopen Closed Tab</span>
           <span class="mbtn-chord">{chordFor("app.tab.reopenClosed") ?? ""}</span>
         </button>
-        {#if splitsAllowed}
-          <button class="mbtn" onclick={() => splitPane("row")}>
-            <span class="mbtn-icon">
-              <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
-            </span>
-            <span class="mbtn-label">Split Right</span>
-            <span class="mbtn-chord"></span>
-          </button>
-          <button class="mbtn" onclick={() => splitPane("column")}>
-            <span class="mbtn-icon">
-              <SquareSplitVertical size={16} strokeWidth={1.75} aria-hidden="true" />
-            </span>
-            <span class="mbtn-label">Split Down</span>
-            <span class="mbtn-chord"></span>
-          </button>
-        {/if}
         <button class="mbtn" onclick={openSearch}>
           <span class="mbtn-icon">
             <Search size={16} strokeWidth={1.75} aria-hidden="true" />

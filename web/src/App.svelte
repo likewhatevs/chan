@@ -690,6 +690,11 @@
     --pill-date-bg: rgba(152, 152, 157, 0.15);
     --pill-broken-fg: var(--text);
     --pill-broken-bg: rgba(255, 80, 75, 0.20);
+    /* Floating-pane drop shadow. Dark mode reads against a
+       near-black canvas, so the shadow is a subtle white-ish
+       glow rather than a darker tone (which would disappear
+       into the background). */
+    --pane-shadow: 0 1px 6px rgba(255, 255, 255, 0.08);
   }
   :global([data-theme="light"]) {
     --bg: #ffffff;
@@ -754,6 +759,8 @@
     --pill-date-bg: rgba(108, 108, 112, 0.10);
     --pill-broken-fg: #c93232;
     --pill-broken-bg: rgba(255, 59, 48, 0.12);
+    /* Standard soft drop-shadow against the light canvas. */
+    --pane-shadow: 0 1px 6px rgba(0, 0, 0, 0.14);
   }
 
   :global(html), :global(body), :global(#app) {
@@ -828,5 +835,11 @@
     min-width: 0;
     min-height: 0;
     position: relative;
+    /* Workspace backdrop sits one step off the pane background so
+       the pane chrome (rounded corners + drop shadow) reads as a
+       floating card. Without this contrast the shadow has nothing
+       to fall onto and the rounded corners hug the same color on
+       both sides. */
+    background: var(--bg-card);
   }
 </style>

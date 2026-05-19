@@ -124,6 +124,7 @@ describe("Pane right-click menus", () => {
       "Previous pane",
       "Split right",
       "Split down",
+      "Close all tabs",
       "Close pane",
     ]);
 
@@ -159,10 +160,36 @@ describe("Pane right-click menus", () => {
       "Search",
       "Graph",
       "Terminal",
-      "Split right",
-      "Split down",
       "Settings",
     ]);
+  }, 15000);
+
+  test("empty pane left-click leaves the welcome menu closed", async () => {
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-empty-leftclick",
+      tabs: [],
+      activeTabId: null,
+    };
+    const target = await renderPane(pane, { paneMode: false });
+
+    target.querySelector(".placeholder")?.dispatchEvent(
+      new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 20,
+        clientY: 20,
+        button: 0,
+      }),
+    );
+    await tick();
+
+    // No menu should be open after a plain left-click on the
+    // empty-pane background — the welcome menu is right-click only.
+    // The hamburger trigger (in the tabs strip) renders its own
+    // button without opening a popover, so any `.hamburger-menu`
+    // node in the DOM means the welcome popover actually opened.
+    expect(document.body.querySelector(".hamburger-menu")).toBeNull();
   }, 15000);
 
   test("loaded pane right-click keeps reload and inspector menu", async () => {

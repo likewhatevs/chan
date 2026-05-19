@@ -6,6 +6,7 @@
     canSplit,
     closePane,
     closeTab,
+    closeTabsInPane,
     focusColorForWindow,
     isDirty,
     detachTabToPaneEdge,
@@ -16,6 +17,7 @@
     openBrowserInActivePane,
     openTerminalInPane,
     paneMode,
+    paneWobble,
     reorderTab,
     reopenClosedTab,
     saveTab,
@@ -37,6 +39,7 @@
     Check,
     FileText,
     Folder,
+    ListX,
     Network,
     PanelRight,
     Palette,
@@ -45,7 +48,6 @@
     Search,
     Settings,
     SquareSplitHorizontal,
-    SquareSplitVertical,
     Terminal,
     User,
     X,
@@ -247,10 +249,34 @@
     closePaneMenus();
     splitPane(pane.id, "column", "after");
   }
+  function onCloseAllTabs(): void {
+    closePaneMenus();
+    void closeTabsInPane(pane.id);
+  }
   function onClosePane(): void {
     closePaneMenus();
     closePane(pane.id);
   }
+
+  /// Subscribe to the structural-wobble bus. Each splitPane /
+  /// closePane / paneModeSwap bumps `paneWobble.versions[pane.id]`;
+  /// we mirror that into a class toggle so the CSS animation
+  /// re-fires (CSS animations don't replay on a static class —
+  /// we briefly drop the class, then re-add it on rAF). The
+  /// `onanimationend` handler clears the class so the next event
+  /// can re-trigger cleanly.
+  const wobbleVersion = $derived(paneWobble.versions[pane.id] ?? 0);
+  let wobbleActive = $state(false);
+  let lastWobbleVersion = 0;
+  $effect(() => {
+    if (wobbleVersion === lastWobbleVersion) return;
+    lastWobbleVersion = wobbleVersion;
+    if (wobbleVersion === 0) return;
+    wobbleActive = false;
+    requestAnimationFrame(() => {
+      wobbleActive = true;
+    });
+  });
 
   function closePaneMenus(): void {
     paneMenu?.close();
@@ -726,8 +752,12 @@
 <div
   class="pane"
   class:focused={isFocused}
+  class:wobble={wobbleActive}
   data-focus-color={focusColorForWindow()}
   onmousedown={() => setActivePane(pane.id)}
+  onanimationend={(e) => {
+    if (e.animationName === "pane-wobble-once") wobbleActive = false;
+  }}
   role="region"
   aria-label="editor pane"
 >
@@ -938,6 +968,12 @@
           </li>
         {/if}
         <li>
+          <button role="menuitem" onclick={onCloseAllTabs}>
+            <ListX size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span>Close all tabs</span>
+          </button>
+        </li>
+        <li>
           <button role="menuitem" onclick={onClosePane}>
             <X size={16} strokeWidth={1.75} aria-hidden="true" />
             <span>Close pane</span>
@@ -1017,7 +1053,6 @@
       <div
         class="placeholder"
         aria-label="no tab open"
-        onclick={() => setActivePane(pane.id)}
         oncontextmenu={onEmptyPaneContextMenu}
         role="presentation"
       >
@@ -1081,35 +1116,6 @@
               </button>
             </li>
           {/each}
-          {#if splitsAllowed}
-            <li class="sep" role="separator"></li>
-            <li>
-              <button
-                role="menuitem"
-                onclick={() => {
-                  emptyPaneMenu?.close();
-                  splitPane(pane.id, "row", "after");
-                }}
-              >
-                <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
-                <span class="menu-row-label">Split right</span>
-                <span class="menu-row-chord"></span>
-              </button>
-            </li>
-            <li>
-              <button
-                role="menuitem"
-                onclick={() => {
-                  emptyPaneMenu?.close();
-                  splitPane(pane.id, "column", "after");
-                }}
-              >
-                <SquareSplitVertical size={16} strokeWidth={1.75} aria-hidden="true" />
-                <span class="menu-row-label">Split down</span>
-                <span class="menu-row-chord"></span>
-              </button>
-            </li>
-          {/if}
           <li class="sep" role="separator"></li>
           <li>
             <button
@@ -1147,6 +1153,17 @@
     border: 1px solid transparent;
     background: var(--bg);
     color: var(--text);
+    /* Pane chrome — floating shade. Margin keeps panes off the
+       workspace edge and off each other (the split divider is
+       4px; with 4px margin on each side the inter-pane gap reads
+       as one clean 12px channel). Overflow:hidden lets the
+       rounded corners clip the tabs strip + editor body; the
+       drop shadow paints inside the margin space (well outside
+       the rounded box) so it isn't clipped by the .half wrapper. */
+    margin: 4px;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: var(--pane-shadow);
   }
   .pane[data-focus-color="blue"] { --pane-active-focus: var(--pane-focus); }
   .pane[data-focus-color="green"] { --pane-active-focus: #22c55e; }
@@ -1156,10 +1173,29 @@
      inside the pane's own box so the surrounding layout doesn't
      shift when focus moves between panes. The transparent border on
      `.pane` keeps the box dimensions stable; this shadow paints
-     over the inside edge. */
+     over the inside edge. Composes with the chrome shadow so the
+     focused pane keeps both its floating shadow and its focus ring. */
   .pane.focused {
     border-color: var(--pane-active-focus);
-    box-shadow: inset 0 0 0 2px var(--pane-active-focus);
+    box-shadow:
+      inset 0 0 0 2px var(--pane-active-focus),
+      var(--pane-shadow);
+  }
+  /* Single-fire structural wobble. Triggered by tabs.svelte's
+     paneWobble bus on split / close / pane-move; the .wobble
+     class is toggled off in onanimationend so subsequent events
+     can re-fire. Same easeOutBack curve as the tab/style-toolbar
+     hover wobble so the motion language stays consistent — just
+     a one-shot bounce instead of a hover transition. The 1.012
+     scale is deliberately gentler than the tab's 1.04 because
+     the pane is several hundred px across. */
+  .pane.wobble {
+    animation: pane-wobble-once 360ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  @keyframes pane-wobble-once {
+    0%   { transform: scale(1); }
+    40%  { transform: scale(1.012); }
+    100% { transform: scale(1); }
   }
   /* iTerm-style strip: a dark bar with no per-tab dividers. The
      active tab is a rounded pill sitting on the bar rather than a

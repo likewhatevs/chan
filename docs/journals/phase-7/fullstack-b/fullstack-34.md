@@ -124,3 +124,79 @@ background is a no-op (or selects the pane).
 
 Standard. Pre-push gate green. Ping via
 `alex/event-fullstack-architect.md`.
+
+## 2026-05-19 10:20 BST — implementation note (@@FullStackB)
+
+Landed. Files touched:
+
+* `web/src/App.svelte` — added `--pane-shadow` theme vars
+  (dark = subtle white glow, light = soft black drop) and
+  set `main { background: var(--bg-card) }` so the new
+  pane chrome reads as a card floating on the workspace.
+  Without the backdrop step the shadow had nothing to
+  fall on (both pane and `main` shared `--bg`).
+* `web/src/state/tabs.svelte.ts` — added the
+  `paneWobble` bus + `requestPaneWobble()`. Wired into
+  `splitPane` (both source + sibling), `collapseEmptyPane`
+  (whichever leaf absorbs the freed space), and
+  `paneModeSwap` (both panes). `paneModeMoveFocus` does
+  NOT wobble — that's a focus highlight move, not a
+  structural change.
+* `web/src/components/Pane.svelte`:
+  * chrome on `.pane`: `margin: 4px`, `border-radius:
+    6px`, `overflow: hidden`, `box-shadow: var(--pane-
+    shadow)`. `.focused` composes the inset focus ring
+    with the chrome shadow.
+  * `pane-wobble-once` keyframe (0% → 40% scale 1.012 →
+    100%, easeOutBack cubic-bezier). Class toggled via
+    bus version + rAF retrigger; cleared in
+    `onanimationend`.
+  * Hamburger menu: new "Close all tabs" item (ListX
+    icon) between "Split down" and "Close pane". Calls
+    `closeTabsInPane(pane.id)` which clears tabs but
+    keeps the pane (vs `closePane` which also collapses
+    the pane node).
+  * Empty-pane welcome menu: stripped the `Split right`
+    and `Split down` entries.
+  * `.placeholder` lost its `onclick={() =>
+    setActivePane(pane.id)}`. The parent `.pane`
+    `onmousedown` already activates the pane on any
+    mouse press, so left-click on the empty background
+    is now a no-op visually. Right-click still opens the
+    welcome menu via `oncontextmenu`.
+* `web/src/components/FileEditorTab.svelte` — dropped
+  `Split right` / `Split down` from the tab right-click
+  menu. Removed now-unused `canSplit` / `splitActive`
+  imports and `splitsAllowed` derivation.
+* `web/src/components/TerminalTab.svelte` — same strip
+  on the terminal tab right-click menu.
+* `web/src/components/Pane.test.ts`:
+  * Updated the hamburger menu labels test to include
+    "Close all tabs" between "Split down" and "Close
+    pane".
+  * Updated the empty-pane welcome menu labels test to
+    drop "Split right" / "Split down".
+  * Added a regression test: left-click on `.placeholder`
+    leaves the welcome menu closed (assert no
+    `.hamburger-menu` portal node in the body).
+
+Verification (BST 10:20):
+
+* `npm run test -- Pane tabs` → 2 files, 51 tests pass.
+* `npm run test` → 30 files, 268 tests pass.
+* `npm run check` → 0 errors / 0 warnings.
+* `npm run build` → clean (existing chunk-size + dynamic
+  import warnings unchanged).
+* `bash -lc 'ulimit -n 4096; scripts/pre-push'` → green
+  (fmt + clippy + cargo test + no-default-features build).
+
+Visual sanity (one screenshot in light mode before
+backing off per the new lane boundary): the
+`--bg-card` backdrop fix was necessary — without it the
+pane edges and shadow had no contrast against the
+workspace. With the fix applied, the pane chrome reads
+correctly. Going forward, end-to-end visual passes route
+through @@Webtest via @@Architect.
+
+Commit message proposed: `Pane chrome + structural
+wobble + Close all tabs (fullstack-34)`.

@@ -462,6 +462,21 @@ export const paneMode = $state<{
   draft: null,
 });
 
+/// Single-fire wobble bus. Each pane's entry holds a monotonic
+/// counter; bumping it on a structural event (split / close /
+/// pane-move) lets the Pane component re-trigger its CSS
+/// animation by toggling the wobble class. Counters never reset
+/// because the consumer only cares about the change, not the
+/// value.
+export const paneWobble = $state<{ versions: Record<string, number> }>({
+  versions: {},
+});
+
+export function requestPaneWobble(paneId: string): void {
+  if (!paneId) return;
+  paneWobble.versions[paneId] = (paneWobble.versions[paneId] ?? 0) + 1;
+}
+
 export function activeLayout(): LayoutState {
   return paneMode.active && paneMode.draft ? paneMode.draft : layout;
 }
@@ -1518,6 +1533,11 @@ export function paneModeSwap(direction: Direction): void {
   next.tabs = currentTabs;
   next.activeTabId = currentActive;
   draft.activePaneId = next.id;
+  // Both panes had their content swapped, so both should
+  // wobble so the user's eye tracks where their content
+  // landed and which slot now holds whatever was displaced.
+  requestPaneWobble(current.id);
+  requestPaneWobble(next.id);
 }
 
 function nearestAncestorSplit(
@@ -1661,6 +1681,13 @@ function collapseEmptyPane(emptyId: string): void {
   delete layout.nodes[emptyId];
   // If the active pane was the emptied one, fall back to the sibling.
   if (layout.activePaneId === emptyId) layout.activePaneId = firstLeafId(siblingId);
+  // Wobble the leaf that just absorbed the freed space so the
+  // user has a visual anchor on where their attention should
+  // land. If the sibling was a split, wobble its first leaf;
+  // the rest of the subtree just inherits the new dimensions
+  // without wobble (cheaper, and the focal point is enough).
+  const absorber = firstLeafId(siblingId);
+  if (absorber) requestPaneWobble(absorber);
 }
 
 
@@ -1691,6 +1718,8 @@ export function splitPane(
   };
   insertSiblingPane(original.id, newPane, direction, placement);
   layout.activePaneId = newPane.id;
+  requestPaneWobble(original.id);
+  requestPaneWobble(newPane.id);
 }
 
 function insertSiblingPane(

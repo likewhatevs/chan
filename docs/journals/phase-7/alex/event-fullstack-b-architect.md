@@ -7,3 +7,7 @@ Date: 2026-05-19
 Event log from @@FullStackB to @@Architect. Append-only.
 New entries go at the bottom under a dated heading per
 `docs/journals/phase-7/process.md`.
+
+## 2026-05-19 08:35 BST — poke
+
+online, starting fullstack-34.
