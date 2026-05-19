@@ -59,20 +59,11 @@
   }
 
   // ---- drive summary -----------------------------------------------------
-
-  const driveSummary = $derived.by(() => {
-    let files = 0;
-    let folders = 0;
-    let contacts = 0;
-    for (const e of tree.entries) {
-      if (e.is_dir) folders++;
-      else {
-        files++;
-        if (e.kind === "contact") contacts++;
-      }
-    }
-    return { files, folders, contacts };
-  });
+  //
+  // `fullstack-55` dropped the stats row under the brand mark on
+  // slide 1, taking the `driveSummary` derived with it. Slide 2's
+  // `metadata` derived keeps its own per-kind tallies for the bar
+  // chart, so there's no other consumer to feed from here.
 
   const indexLabel = $derived.by<string | null>(() => {
     const s = indexStatus.value;
@@ -452,21 +443,12 @@
       <div class="slide slide-welcome" aria-label="Welcome">
         <div class="placeholder-mark"></div>
         {#if drive.info}
+          <!-- `fullstack-55`: the files / dirs / contacts / index
+               row was dropped from under the brand mark — that
+               information lives on slide 2 (metadata). Only the
+               drive name remains under the logo. -->
           <div class="dashboard-header" aria-label="drive summary">
             <div class="dashboard-name">{drive.info.name ?? "(unnamed)"}</div>
-            <div class="dashboard-stats">
-              <span>{driveSummary.files} files</span>
-              <span class="sep" aria-hidden="true">·</span>
-              <span>{driveSummary.folders} directories</span>
-              {#if driveSummary.contacts > 0}
-                <span class="sep" aria-hidden="true">·</span>
-                <span>{driveSummary.contacts} contacts</span>
-              {/if}
-              {#if indexLabel}
-                <span class="sep" aria-hidden="true">·</span>
-                <span class="dashboard-index">{indexLabel}</span>
-              {/if}
-            </div>
           </div>
         {/if}
         <p class="placeholder-hint">
@@ -741,20 +723,6 @@
     color: var(--text);
     opacity: 0.85;
     letter-spacing: 0.01em;
-  }
-  .dashboard-stats {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 0.4rem;
-    color: var(--text-secondary);
-    font-size: 12px;
-  }
-  .dashboard-stats .sep {
-    opacity: 0.5;
-  }
-  .dashboard-index {
-    color: var(--warn-text);
   }
   /* --- Slide 2 (Metadata) --- */
   .metadata-bar {

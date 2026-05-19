@@ -251,3 +251,15 @@ button order LTR, Name column gone, outside-home paths show
 the computer glyph.
 
 A-lane queue clear. Standing by.
+
+## 2026-05-19 16:30 BST
+
+online, picking up the new Lane A queue (in order):
+`-55` → `-56` → `-66` → `-64` → `-61` → `-65`.
+
+## 2026-05-19 16:35 BST
+
+fullstack-55 landed: dropped the dashboard-stats row on
+EmptyPaneCarousel slide 1; `driveSummary` derived +
+`.dashboard-stats*` CSS removed. Test regression
+assertion added. Gate green.

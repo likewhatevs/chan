@@ -912,3 +912,8 @@ left-to-right, Name column gone, outside-home paths
 prefixed with the computer glyph.
 
 A-lane queue clear. Standing by.
+
+## 2026-05-19 16:30 BST — poke
+
+online, picking up the new queue cuts (`-55` → `-56` → `-66`
+→ `-64` → `-61` → `-65`). Starting `fullstack-55`.

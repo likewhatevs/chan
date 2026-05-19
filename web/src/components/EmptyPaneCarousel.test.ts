@@ -30,6 +30,13 @@ describe("EmptyPaneCarousel", () => {
     expect(target.querySelector(".placeholder-mark")).not.toBeNull();
     expect(target.querySelector(".slide-metadata")).toBeNull();
     expect(target.querySelector(".slide-indexing")).toBeNull();
+    // `fullstack-55`: the files / dirs / contacts / index stats row
+    // under the brand mark was dropped — slide 2 owns those tallies
+    // now. Regression check: no .dashboard-stats and no "N files"
+    // text on slide 1.
+    expect(target.querySelector(".dashboard-stats")).toBeNull();
+    expect(target.textContent ?? "").not.toMatch(/\d+\s+files/);
+    expect(target.textContent ?? "").not.toMatch(/\d+\s+directories/);
   }, 15000);
 
   test("clicking a dot navigates to that slide", async () => {
