@@ -9,7 +9,7 @@
   // Q&A used to live here as a second tab; that surface has been
   // removed, so this file is search-only now.
 
-  import { onDestroy } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import { untrack } from "svelte";
   import {
     ArrowLeft,
@@ -138,7 +138,12 @@
       // Make sure the graph is loaded so tag hits work on the
       // first query of the session.
       void ensureGraphLoaded();
-      queueMicrotask(() => {
+      // `fullstack-a-6`: wait a Svelte tick before focusing so
+      // the OverlayShell child block has mounted and `inputEl`
+      // is bound. A bare `queueMicrotask` ran before Svelte
+      // flushed the open-transition DOM updates, leaving
+      // `inputEl` undefined and the focus call a silent no-op.
+      void tick().then(() => {
         inputEl?.focus();
         if (seed || restored) inputEl?.select();
       });
