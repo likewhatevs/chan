@@ -261,3 +261,11 @@ Verification:
 * `cargo test -p chan-server --no-default-features`
 * `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
 * `scripts/pre-push`
+
+## 2026-05-19 04:58 BST - systacean-12 pushed
+
+Committed and pushed the HTTP terminal control channel.
+
+Commit:
+
+* `314a68b` - Add HTTP terminal control channel

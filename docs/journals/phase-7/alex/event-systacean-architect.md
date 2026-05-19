@@ -350,3 +350,9 @@ Verification:
 * `cargo test -p chan-server --no-default-features`
 * `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
 * `scripts/pre-push`
+
+## 2026-05-19 04:58 BST - poke
+
+`systacean-12` landed as `314a68b` (`Add HTTP terminal control
+channel`). Ready for `fullstack-20` to consume the API; visible tab
+placement remains on the frontend side.
