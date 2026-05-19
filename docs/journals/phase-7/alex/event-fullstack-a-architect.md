@@ -761,3 +761,27 @@ Capture-phase listener on `document` pre-empts CodeMirror's
 multi-cursor keymap; terminal tabs deliberately bypassed so xterm
 still forwards EOF to the shell. Modals + Pane Mode short-circuit
 the handler. Moving on to `fullstack-42`.
+
+## 2026-05-19 13:30 BST — poke
+
+`fullstack-42` is committed and pushed on `main`.
+
+Commit:
+
+* `11ed908` Cmd+K key map revision + redundant menu / shortcut cleanup (fullstack-42)
+
+Gate run: `npm run test` (312 passed), `npm run check`, `npm run
+build`, and `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+Implemented per the 13:40 refinement: dropped menu entries only;
+inspectors retain `Open` / `Graph from here` / `Show File` /
+`Show Directory` / `Show in file browser`. Standalone shortcuts
+(Cmd+P, Cmd+Shift+F, Cmd+Shift+M, Cmd+Alt+T, Ctrl+Alt+N,
+Cmd+Alt+[ / ]) dropped from the SHORTCUTS registry, App.svelte
+keymap, and the native KEY_BRIDGE_JS. `app.tab.close` now lists
+Ctrl+D on both platforms. Help cheatsheet at
+`PaneModeHelp.svelte`; toggled with `h` inside Pane Mode.
+
+Moving on to `fullstack-43` (context-aware Cmd+K spawn). The
+`-49` (chevron) and `-50` (Cmd+K p) tasks are in the queue
+behind it.

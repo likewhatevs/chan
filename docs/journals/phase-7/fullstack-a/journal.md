@@ -179,3 +179,11 @@ fullstack-41 landed: `9e75a06` Ctrl+D closes the focused non-
 terminal tab (fullstack-41). Gate green: `npm run test --
 ctrlDCloseTab` (7 passed), `npm run test` (298 passed), `npm run
 check`, `npm run build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+## 2026-05-19 13:30 BST
+
+fullstack-42 landed: `11ed908` Cmd+K key map revision + redundant
+menu / shortcut cleanup (fullstack-42). Gate green: `npm run test`
+(312 passed), `npm run check`, `npm run build`, `bash -lc 'ulimit
+-n 4096; scripts/pre-push'`. Inspector buttons preserved per
+@@Architect's 13:40 refinement; only menu duplicates dropped.
