@@ -1806,7 +1806,7 @@ describe("graphTitle (fullstack-64)", () => {
   });
 });
 
-describe("browserTabLabel (fullstack-65)", () => {
+describe("browserTabLabel (fullstack-a-1)", () => {
   function browserTab(overrides: Partial<BrowserTab> = {}): BrowserTab {
     return {
       kind: "browser",
@@ -1817,33 +1817,76 @@ describe("browserTabLabel (fullstack-65)", () => {
     };
   }
 
-  test("no selection falls back to the tab's own title (default 'Files')", () => {
-    expect(browserTabLabel(browserTab({ selected: null }))).toBe("Files");
-    expect(browserTabLabel(browserTab({ selected: undefined }))).toBe("Files");
-    expect(browserTabLabel(browserTab({ selected: "" }))).toBe("Files");
-    expect(browserTabLabel(browserTab({ selected: "   " }))).toBe("Files");
+  test("no selection renders drive name + trailing slash", () => {
+    expect(browserTabLabel(browserTab({ selected: null }), { driveName: "chan" })).toBe("chan/");
+    expect(browserTabLabel(browserTab({ selected: undefined }), { driveName: "chan" })).toBe("chan/");
+    expect(browserTabLabel(browserTab({ selected: "" }), { driveName: "chan" })).toBe("chan/");
+    expect(browserTabLabel(browserTab({ selected: "   " }), { driveName: "chan" })).toBe("chan/");
   });
 
-  test("file selection renders the basename", () => {
-    expect(browserTabLabel(browserTab({ selected: "foo/bar/baz.md" }))).toBe("baz.md");
-    expect(browserTabLabel(browserTab({ selected: "README.md" }))).toBe("README.md");
+  test("no selection without drive name falls back to tab title + slash", () => {
+    expect(browserTabLabel(browserTab({ selected: null }))).toBe("Files/");
+    expect(browserTabLabel(browserTab({ selected: "" }))).toBe("Files/");
   });
 
-  test("dir selection renders the basename (trailing slash tolerated)", () => {
-    expect(browserTabLabel(browserTab({ selected: "notes/sub" }))).toBe("sub");
-    expect(browserTabLabel(browserTab({ selected: "notes/sub/" }))).toBe("sub");
+  test("file at drive root renders drive name + slash", () => {
+    expect(
+      browserTabLabel(browserTab({ selected: "README.md" }), {
+        driveName: "notes",
+        selectedIsDir: false,
+      }),
+    ).toBe("notes/");
+  });
+
+  test("file inside a subdir renders the parent dir + slash", () => {
+    expect(
+      browserTabLabel(browserTab({ selected: "foo/bar/baz.md" }), {
+        driveName: "notes",
+        selectedIsDir: false,
+      }),
+    ).toBe("bar/");
+    expect(
+      browserTabLabel(browserTab({ selected: "notes/today.md" }), {
+        driveName: "drive",
+        selectedIsDir: false,
+      }),
+    ).toBe("notes/");
+  });
+
+  test("directory selection renders that dir + slash", () => {
+    expect(
+      browserTabLabel(browserTab({ selected: "notes/sub" }), {
+        driveName: "drive",
+        selectedIsDir: true,
+      }),
+    ).toBe("sub/");
+    expect(
+      browserTabLabel(browserTab({ selected: "notes/sub/" }), {
+        driveName: "drive",
+        selectedIsDir: true,
+      }),
+    ).toBe("sub/");
+  });
+
+  test("trailing slash without explicit isDir falls back to dir semantics", () => {
+    expect(browserTabLabel(browserTab({ selected: "notes/sub/" }))).toBe("sub/");
   });
 
   test("two browser tabs with different selections produce different labels", () => {
     const a = browserTab({ id: "br-a", selected: "a.md" });
     const b = browserTab({ id: "br-b", selected: "notes/b.md" });
-    expect(browserTabLabel(a)).toBe("a.md");
-    expect(browserTabLabel(b)).toBe("b.md");
+    expect(browserTabLabel(a, { driveName: "drive", selectedIsDir: false })).toBe("drive/");
+    expect(browserTabLabel(b, { driveName: "drive", selectedIsDir: false })).toBe("notes/");
   });
 
   test("tabLabel routes browser tabs through browserTabLabel", () => {
-    expect(tabLabel(browserTab({ selected: "notes/today.md" }))).toBe("today.md");
-    expect(tabLabel(browserTab({ selected: null }))).toBe("Files");
+    expect(
+      tabLabel(browserTab({ selected: "notes/today.md" }), {
+        driveName: "drive",
+        selectedIsDir: false,
+      }),
+    ).toBe("notes/");
+    expect(tabLabel(browserTab({ selected: null }), { driveName: "drive" })).toBe("drive/");
   });
 });
 

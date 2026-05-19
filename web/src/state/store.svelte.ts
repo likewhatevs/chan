@@ -54,6 +54,25 @@ import { uiConfirm } from "./confirm.svelte";
 import { applyEditorToolPreferences } from "./editorTools.svelte";
 export const drive = $state<{ info: DriveInfo | null }>({ info: null });
 
+/// Display name for the active drive. Prefers the registry's explicit
+/// `name` field; falls back to the basename of `root` so a drive
+/// registered without an explicit name still reads as
+/// `~/dev/foo/bar` → `bar` in the file-browser tab title and other
+/// drive-root labels. Returns an empty string only when drive.info
+/// is itself null.
+export function driveDisplayName(): string {
+  const info = drive.info;
+  if (!info) return "";
+  const explicit = info.name?.trim();
+  if (explicit) return explicit;
+  const root = info.root ?? "";
+  if (!root) return "";
+  const stripped = root.replace(/[/\\]+$/, "");
+  if (!stripped) return "";
+  const slash = Math.max(stripped.lastIndexOf("/"), stripped.lastIndexOf("\\"));
+  return slash < 0 ? stripped : stripped.slice(slash + 1);
+}
+
 export const tree = $state<{
   entries: TreeEntry[];
   loading: boolean;

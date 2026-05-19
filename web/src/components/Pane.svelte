@@ -25,6 +25,7 @@
     type FocusColor,
     type LeafNode,
     type PaneDropEdge,
+    type Tab,
   } from "../state/tabs.svelte";
 
   import {
@@ -51,6 +52,7 @@
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import TerminalTab from "./TerminalTab.svelte";
   import {
+    driveDisplayName,
     refreshTree,
     scheduleSessionSave,
     tree,
@@ -62,6 +64,7 @@
     tabTooltip,
     truncateTabTitle,
   } from "../state/tabs.svelte";
+  import type { BrowserLabelCtx } from "../state/tabs.svelte";
   import {
     SHORTCUTS,
     currentOS,
@@ -75,6 +78,21 @@
   let { pane }: { pane: LeafNode } = $props();
 
   const active = $derived(pane.tabs.find((t) => t.id === pane.activeTabId) ?? null);
+
+  /// Per-row is_dir lookup for the active tree, keyed by path. Drives
+  /// the File-Browser tab title which needs to render "the parent
+  /// dir of the selected file" or "the selected directory" — and
+  /// the only way to disambiguate file vs dir on a `selected` path
+  /// is to consult the tree. Re-derives whenever the tree refreshes.
+  const treeIsDir = $derived<Map<string, boolean>>(
+    new Map(tree.entries.map((e) => [e.path, e.is_dir])),
+  );
+  function browserCtxFor(tab: Tab): BrowserLabelCtx {
+    if (tab.kind !== "browser") return {};
+    const sel = tab.selected ?? undefined;
+    const selectedIsDir = sel ? treeIsDir.get(sel) : undefined;
+    return { driveName: driveDisplayName(), selectedIsDir };
+  }
 
   /// Per-path "is this file a contact?" lookup. Drives the tab-strip
   /// icon (User glyph for contacts, FileText otherwise) so a row of
@@ -854,7 +872,7 @@
               bottom: e.clientY,
             });
           }}
-        >{truncateTabTitle(tabLabelInPane(t, pane.tabs))}</span>
+        >{truncateTabTitle(tabLabelInPane(t, pane.tabs, browserCtxFor(t)))}</span>
         {#if isDirty(t)}
           <span class="dirty unsaved" title="unsaved changes">●</span>
         {/if}
@@ -993,7 +1011,7 @@
   >
     {#if paneMode.active}
       <div class="pane-mode-preview" aria-label="Hybrid NAV preview">
-        <div class="pane-mode-title">{active ? truncateTabTitle(tabLabel(active)) : "Empty pane"}</div>
+        <div class="pane-mode-title">{active ? truncateTabTitle(tabLabel(active, browserCtxFor(active))) : "Empty pane"}</div>
         <div class="pane-mode-subtitle">
           {active?.kind === "file"
             ? active.path

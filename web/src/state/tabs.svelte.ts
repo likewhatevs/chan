@@ -390,40 +390,70 @@ export function graphTabLabel(t: GraphTab): string {
   return t.title;
 }
 
+/// Optional context for `browserTabLabel`. `driveName` is the
+/// display name to render when the tab points at the drive root
+/// (no selection, or a file directly under root). `selectedIsDir`
+/// disambiguates "the user clicked a directory row" vs "the user
+/// clicked a file row" when the path string alone is ambiguous;
+/// when omitted, a trailing slash on `selected` is the fallback
+/// signal.
+export type BrowserLabelCtx = {
+  driveName?: string;
+  selectedIsDir?: boolean;
+};
+
 /// Short display label for a tab — the file's basename so the tab
 /// strip stays scannable even when paths are deeply nested. The
 /// full path is reachable via `tabTooltip` for disambiguation.
-export function tabLabel(t: Tab): string {
+export function tabLabel(t: Tab, ctx?: BrowserLabelCtx): string {
   if (t.kind === "terminal") return terminalTabName(t);
   if (t.kind === "graph") return graphTabLabel(t);
-  if (t.kind === "browser") return browserTabLabel(t);
+  if (t.kind === "browser") return browserTabLabel(t, ctx);
   const p = t.path;
   if (!p) return p;
   const slash = p.lastIndexOf("/");
   return slash < 0 ? p : p.slice(slash + 1);
 }
 
-/// `fullstack-65`: Files tab title derives from the per-tab
-/// `selected` path (added by `fullstack-58`) so the tab strip
-/// reads as "the thing you're looking at" — file basename when a
-/// file is selected, dir basename when a directory is selected.
-/// Falls back to the literal `Files` string (the tab's default
-/// `title`) when no selection. Trailing slashes are stripped so
-/// `notes/` and `notes` render identically.
-export function browserTabLabel(t: BrowserTab): string {
+/// `fullstack-a-1`: Files tab title is always a directory. File
+/// selection → parent dir; directory selection → that dir; no
+/// selection or selection at drive root → drive's display name.
+/// Trailing slash is always rendered so the tab strip reads as a
+/// directory unambiguously. `ctx.driveName` is the display name
+/// for the drive root case; when absent, falls back to the tab's
+/// own `title` (default `Files`) for backwards compat in unit
+/// tests where the drive context isn't wired.
+export function browserTabLabel(t: BrowserTab, ctx?: BrowserLabelCtx): string {
+  const driveName = ctx?.driveName?.trim();
+  const rootName = driveName || t.title;
   const selected = t.selected?.trim();
-  if (!selected) return t.title;
-  const parts = selected.split("/").filter(Boolean);
-  const base = parts.pop();
-  return base || t.title;
+  if (!selected) return `${rootName}/`;
+  const trailing = selected.endsWith("/");
+  const cleaned = selected.replace(/\/+$/, "");
+  if (!cleaned) return `${rootName}/`;
+  const isDir = ctx?.selectedIsDir ?? trailing;
+  const lastSlash = cleaned.lastIndexOf("/");
+  if (isDir) {
+    const dirName = lastSlash < 0 ? cleaned : cleaned.slice(lastSlash + 1);
+    return `${dirName}/`;
+  }
+  if (lastSlash < 0) return `${rootName}/`;
+  const parent = cleaned.slice(0, lastSlash);
+  const parentSlash = parent.lastIndexOf("/");
+  const parentName = parentSlash < 0 ? parent : parent.slice(parentSlash + 1);
+  return `${parentName}/`;
 }
 
 /// Pane-local display label. Most tabs keep the basename. Duplicate
 /// basenames collapse the group's shared prefix/suffix directories
 /// and show only the shortest divergent ancestor; deeper divergent
 /// tails render as `x/[...]/foo.md` to preserve tab-strip width.
-export function tabLabelInPane(t: Tab, siblings: Tab[]): string {
-  if (t.kind !== "file") return tabLabel(t);
+export function tabLabelInPane(
+  t: Tab,
+  siblings: Tab[],
+  ctx?: BrowserLabelCtx,
+): string {
+  if (t.kind !== "file") return tabLabel(t, ctx);
   const base = tabLabel(t);
   const duplicates = siblings.filter(
     (candidate): candidate is FileTab =>
