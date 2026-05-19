@@ -1289,3 +1289,180 @@ each event log (~22:30-00:30 BST appendices) are the
 authoritative dispatch.
 
 — @@Architect, 2026-05-19 00:45 BST
+
+## 2026-05-19 11:50 BST — day-2 milestone + session wrap prep
+
+**106 commits on top of `v0.10.1` since the recycle.**
+Phase 7 Round 2 + Phase 1 (overlays→tabs) + Phase 2
+(Hybrid pane model + Cmd+K) + a polish wave + a
+discipline-audit (`fullstack-29`) + a mid-phase roster
+split (`@@FullStack` → `@@FullStackA` + `@@FullStackB`)
+all shipped today on top of yesterday's `v0.10.1`.
+
+### What landed today (representative)
+
+Wave-A substrate: `systacean-9` watcher + `fullstack-13`
+bubble overlay + `systacean-11` event-reply seam +
+`fullstack-18` TUI density + `fullstack-19` SPA reply
+switch.
+
+Wave-B substrate: `systacean-12` HTTP control channel
++ `systacean-13` activity indicator + `systacean-14`
+MCP auto-discovery + `fullstack-20` spawn UI +
+`architect-1` orchestration SKILL (all 4 files).
+
+Phase 1: `fullstack-14` overlays → first-class tabs.
+
+Phase 2: `fullstack-15` substrate + `fullstack-16`
+Cmd+K transactional pane mode.
+
+Polish + revisions cluster: `fullstack-17` (7-item
+polish bundle), `-21` (pane menu swap-back), `-22`
+(BCAST window-wide + stuck-toggle), `-23` (TUI vertical
++ async follow-up), `-24` (follow-up button), `-25`
+(activity-indicator focus fix), `-26` (drop MUTE
+entirely), `-27` (pre-flight watcher file pattern),
+`-28` (empty-pane welcome menu), `-29` (Phase 1 audit
++ scope drift), `-30` (focus-color Hybrid-wide), `-31`
+(inline X drop), `-32` (Graph behavior), `-33` (indent
+guide deep nesting), `-34` (pane chrome + wobble +
+close split + B15 + non-hamburger split strip — by
+@@FullStackB after the split), `-35` phase 1 (carousel
+scaffold + slides 1+2; slide 3 stubbed pending
+`systacean-18`), `-36` (desktop link silent-failure +
+no-browser fallback), `-37` (last `window.prompt` +
+native-dialog guard), `-38` (right-dock file browser
+mirror).
+
+Backend follow-ups: `systacean-7` (DMG fix), `-8` (B19
+reattach), `-10` (revert `systacean-6` after no-op
+proof), `-11` reply-seam, `-15` activity-indicator
+diagnosis, `-16` activity counter ANSI filter.
+`systacean-17` cut for rename+restart env staleness
+(still resolving as of wrap).
+
+Roster split (mid-phase, 2026-05-19): `@@FullStack` →
+`@@FullStackA` (smaller-fast cluster) + `@@FullStackB`
+(bigger / cross-stack). `@@Systacean` stays single-
+lane (release runway). `docs/agents/fullstack/` →
+`fullstack-a/`, new `fullstack-b/`; same for journals;
+sed sweep of ~150 references in journals + event logs.
+
+### Patterns that shaped the day
+
+* **Standing topic-level commit clearance** carried over
+  from yesterday. Once @@Alex said "make intelligent
+  decisions", I authorized commits inline and most of
+  the 106 commits flowed without per-commit gating.
+* **Push ≠ commit**: a real corner case landed today.
+  `@@FullStackB`'s `fullstack-34` push prompt fired
+  before they read a HOLD poke I'd queued for visual
+  verification. `d13010e` hit `origin/main` without the
+  visual pass. New memory `feedback_check_events_before_push`
+  + an updated process.md rule: standing commit
+  clearance ≠ standing push clearance for chrome-class
+  changes.
+* **Lane boundaries softened**: my first pass at
+  "FullStack/Systacean don't touch test servers" was
+  too strict. @@Alex caught the over-correction.
+  Final rule: code lanes MAY bring up ad-hoc servers +
+  browser tabs for pixel tuning, but teardown is
+  required (kill server + close chrome tabs); webtest
+  verdicts remain canonical.
+* **Audit-task discipline**: `fullstack-29` was cut
+  specifically to catch "things added that weren't
+  asked + things asked that didn't land". The audit
+  initially missed the inline-X close buttons it had
+  explicitly listed — cut as `fullstack-31` follow-up
+  with a discipline note. This is the model for how
+  scope drift gets handled cleanly going forward.
+
+### Subtle / non-obvious (preserve for next-me)
+
+* **`active` vs `focused` on terminal tabs** (`fullstack-25`).
+  `active` = selected tab in its pane; `focused` =
+  active tab AND its pane is the focused pane.
+  Activity-frame ingestion gates on `!focused`, not
+  `!active`. Conflating them breaks split-pane focus
+  tracking.
+* **Survey-reply path bypasses chan-drive**
+  (`systacean-11`). Event files are infra traffic, not
+  user content; they go through `tokio::fs` directly,
+  NOT through `Drive::write_text`. The drive's
+  editable-text gate would reject `.tmp` staging files.
+* **`systacean-6` was a no-op** in retrospect:
+  `systacean-3`'s `Vary: Host` on hashed assets was
+  sufficient to close cross-drive drift. `systacean-10`
+  reverted -6 with a regression test proving -3 alone
+  holds. Keep -3, don't reintroduce -6.
+* **fsnotify watcher reads once**. Watcher trusts
+  writer-side atomic temp+rename; no defensive multi-
+  read on the server. Anyone touching the watcher
+  must preserve this.
+* **No watcher self-loops**. chan-server's reaction
+  is always a PTY write, never a disk write back into
+  the watched dir.
+* **Phase 2 was easier than expected**: existing
+  layout was already a binary tree with URL/session
+  persistence. `fullstack-15` was just drag-detach
+  addition; `-16` was Cmd+K + keybinds on top.
+* **TUI density survey UI** (`fullstack-18` then
+  refined in `-23` + `-24`): vertical numbered rows,
+  click-to-answer, F to defer (`follow_up: true`
+  async reply, bubble stays as reminder), Esc to
+  hard-skip. No Submit anywhere.
+* **MUTE was dropped entirely** in `fullstack-26`.
+  BCAST is binary: in or out. Don't reintroduce mute
+  as a concept.
+* **Empty-pane left-click is a no-op** (not a
+  selection trigger that opens menus). B15 class
+  bug re-emerged in `fullstack-28`'s welcome menu;
+  fixed in `-34`. Watch for this if anyone re-touches
+  empty-pane handlers.
+
+### Open at wrap
+
+* **`systacean-17`** (rename+restart env staleness):
+  impl note posted at 10:00 BST but no commit landed
+  by wrap. @@Alex re-poked. Resolution TBD.
+* **`fullstack-35` phase 1** (carousel) on
+  `origin/main` as `eb8fe59`; awaiting @@Alex's
+  visual-pass verdict. Slide 3 still stubbed pending
+  `systacean-18`.
+* **`systacean-18`** (`GET /api/indexing/state`) cut +
+  queued; @@FullStackB ready to wire slide 3 when it
+  lands.
+* **Tauri manual verification** for `fullstack-36` +
+  `-37`: @@Alex offered to do this manually since
+  Chrome MCP can't drive WKWebView. Deferred; needs
+  a fresh `Chan.app` bundle which can't be built
+  while @@Alex is using the running one.
+* **Release tag** (`v0.10.2` or `v0.11.0`): deferred.
+  Today's 106 commits include real feature-class
+  changes (wave-B substrate, Phase 1, Phase 2, MUTE
+  removal); plausibly a minor bump.
+
+### Recycle-ready agents at wrap
+
+* `@@FullStackA`: queue empty, recycle-clean.
+* `@@FullStackB`: parked at the visual-pass verdict
+  on `eb8fe59` + `systacean-18` dependency for
+  slide 3. Recycle-clean (their work is on
+  `origin/main`).
+* `@@Systacean`: state unclear; needs to surface
+  whether they actually have uncommitted impl for
+  `systacean-17` or were just reporting plan.
+* `@@WebtestA` / `@@WebtestB`: idle.
+
+### Recycle-prep note for the next architect (if I get recycled too)
+
+Read this entry, then the prior "2026-05-19 00:45 BST
+— Round 2 substrate + Phase 1 + Phase 2 shipped, Wave-B
+queued" entry for the morning context. Together they
+cover today's run. `process.md` was amended twice
+today — the lane-boundaries section is the most recent
+change and the spirit (webtests own audit-trail
+verdicts, code lanes can eyeball with teardown) is
+load-bearing for how the floor operates.
+
+— @@Architect, 2026-05-19 11:50 BST
