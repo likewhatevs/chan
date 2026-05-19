@@ -744,3 +744,20 @@ Arrows now move focus, WASD swaps. New raw-source guard in
 `paneModeKeymap.test.ts` so the mapping cannot silently revert.
 
 Moving on to `fullstack-41` (Ctrl+D close current tab).
+
+## 2026-05-19 13:18 BST — poke
+
+`fullstack-41` is committed and pushed on `main`.
+
+Commit:
+
+* `9e75a06` Ctrl+D closes the focused non-terminal tab (fullstack-41)
+
+Gate run: `npm run test -- ctrlDCloseTab` (7 passed), `npm run
+test` (298 passed), `npm run check`, `npm run build`, and
+`bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+Capture-phase listener on `document` pre-empts CodeMirror's
+multi-cursor keymap; terminal tabs deliberately bypassed so xterm
+still forwards EOF to the shell. Modals + Pane Mode short-circuit
+the handler. Moving on to `fullstack-42`.

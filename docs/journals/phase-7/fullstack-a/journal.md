@@ -172,3 +172,10 @@ fullstack-40 landed: `1b0c044` Invert Cmd+K WASD <-> arrows in
 pane mode (fullstack-40). Gate green: `npm run test --
 paneModeKeymap` (2 passed), `npm run test` (291 passed), `npm run
 check`, `npm run build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+## 2026-05-19 13:18 BST
+
+fullstack-41 landed: `9e75a06` Ctrl+D closes the focused non-
+terminal tab (fullstack-41). Gate green: `npm run test --
+ctrlDCloseTab` (7 passed), `npm run test` (298 passed), `npm run
+check`, `npm run build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
