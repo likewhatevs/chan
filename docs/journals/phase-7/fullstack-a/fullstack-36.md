@@ -90,6 +90,21 @@ So the plugin IS registered. The bug is in either:
   * Caller in `BubbleOverlay.svelte` and the editor
     click handler get a small toast / status when the
     open fails (don't crash the prompt).
+* **No-default-browser fallback** (@@Alex 2026-05-19
+  06:30 BST):
+  * If the Tauri opener call fails for ANY reason
+    (no default browser, no app handler for the URL
+    scheme, opener plugin error, permission denied),
+    show a clear inline toast with the URL text + a
+    "Copy URL" affordance. The user can paste the URL
+    wherever makes sense.
+  * Do NOT silently fall back to opening in chan's
+    own webview (defeats the "external" purpose,
+    pollutes the SPA's session/cookies).
+  * The error message should be plain English: e.g.
+    "Couldn't open link in browser — copy URL?".
+    Avoid leaking the Tauri error string into the
+    user toast (log it to console for debugging).
 * Unit test that mocks an invoke-throwing scenario and
   asserts the error is captured / logged.
 * If the fix involves importing from
