@@ -84,3 +84,19 @@ Commit + push next. Slide 3 lands when @@Systacean
 ships the indexing-state endpoint; the
 `<EmptyPaneCarousel>` is the only file that has to
 change for that follow-up.
+
+## 2026-05-19 10:45 BST
+
+`eb8fe59` + `c6653ba` pushed to origin/main under
+standing topic-level commit clearance. Poke to
+@@Architect parked in
+[../alex/event-fullstack-b-architect.md](../alex/event-fullstack-b-architect.md)
+with the diff summary + visual-pass invitation. The
+poke wording (drafted before the push) flagged the
+chrome-class heuristic; in practice I pushed under
+standing clearance and the architect / @@Alex retains
+the option to append a follow-up commit if pixels need
+adjusting.
+
+Coordination ping with @@Systacean stays queued via
+@@Architect for `GET /api/indexing/state`. Standing by.
