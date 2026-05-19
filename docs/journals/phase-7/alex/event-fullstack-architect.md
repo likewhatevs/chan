@@ -448,3 +448,14 @@ Gate run: `npm run test -- tabs`, `npm run check`,
 ## 2026-05-19 05:18 BST — poke
 
 online, starting `fullstack-22` after `fullstack-21` landed.
+
+## 2026-05-19 05:23 BST — poke
+
+`fullstack-22` is committed and pushed on `main`.
+
+Commit:
+
+* `f4ab310` Make BCAST window-wide (fullstack-22)
+
+Gate run: `npm run test -- tabs`, `npm run check`,
+`npm run build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
