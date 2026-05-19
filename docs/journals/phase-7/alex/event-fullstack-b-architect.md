@@ -192,3 +192,35 @@ for the merge.
 
 Proceeding with Phase A unless you'd rather I wait
 or merge the two phases.
+
+## 2026-05-19 13:25 BST — poke: fullstack-48 Phase A + Phase B shipped
+
+* `ffca091` Hybrid back-side data model + `flipHybrid`
+  action (Phase A — state + serialization + tests).
+* `c29b903` Hybrid flip UI + Cmd+K Tab binding (Phase
+  B — hamburger "Flip Hybrid" + Cmd+K Tab + chord
+  registry entry).
+
+Pre-push green on both commits. Together they
+satisfy the core spec: layout state carries a back
+side per pane, the user can flip via the hamburger
+or Cmd+K Tab, the wobble bus fires on landing, and
+the flipped layout round-trips through URL hash +
+session payload.
+
+Deliberately deferred (will only land if @@Alex flags
+on walkthrough):
+
+* Full CSS 3D rotateY flip animation. Current
+  behaviour: instant content swap + pane wobble.
+* Theme sub-menu (Dark / Light / Follow global) in
+  the hamburger. The `pane.theme` slot is already in
+  the data model and serializes; the UI for picking
+  is the only missing piece.
+* Per-side CSS variable theme application on the
+  pane root.
+* Back-side terminal session restore (chan-server
+  session-payload format change).
+
+All five lane-B tasks (44 / 45 / 46 / 47 / 48)
+landed. Standing by for the next round.
