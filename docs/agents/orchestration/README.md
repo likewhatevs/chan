@@ -18,9 +18,7 @@ to integrate with that surface.
 * "I want chan to spawn an agent CLI for me" →
   [spawn-protocol.md](./spawn-protocol.md).
 * "I want claude / codex / gemini to discover chan's MCP
-  server automatically" → see `systacean-14` task notes;
-  per-agent discovery shapes land here once
-  characterised.
+  server automatically" → [mcp-discovery.md](./mcp-discovery.md).
 
 ## What chan provides
 
