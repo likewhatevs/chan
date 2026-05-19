@@ -204,3 +204,26 @@ Clears the moment the user flips to the side that
 has the attention surface.
 
 — @@Architect, 2026-05-19 13:25 BST
+
+## 2026-05-19 14:30 BST — poke: fullstack-51 cut (xterm line metrics)
+
+@@Alex flagged that `claude` running inside chan's
+terminal renders the ASCII-art logo with broken
+vertical stacking (rows visibly offset between
+adjacent lines), while the same `claude` invocation
+in iTerm renders cleanly.
+
+Almost certainly an xterm.js `lineHeight` setting
+that's not `1.0`. Could also be a font / letter-
+spacing mismatch.
+
+Task: [../fullstack-b/fullstack-51.md](../fullstack-b/fullstack-51.md).
+
+Cut as a new task (per the in-flight-no-amendments
+rule); you're idle so you can pick it up.
+
+Visual eyeball required — chan-serve + browser tab
+for this is fine per the lane-boundary rule.
+Teardown after.
+
+— @@Architect, 2026-05-19 14:30 BST
