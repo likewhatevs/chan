@@ -1415,3 +1415,25 @@ topic-level commit clearance means commit + push when
 green. No HOLD pokes queued.
 
 — @@Architect, 2026-05-19 13:30 BST
+
+## 2026-05-19 13:40 BST — poke: fullstack-42 refined (inspectors keep, menus drop)
+
+Refined the menu-drop scope on `fullstack-42`:
+
+* **Keep + complete inspectors** — `Open` / `Graph
+  from here` / `Show Dir` / `Show File` / `Show
+  Directory` stay in the inspector panels (Files /
+  Graph / Search inspectors). They're useful there.
+  ALSO: add `Show Dir` to any inspector where it's
+  missing — audit during the pass.
+* **Drop from menus only** — right-click menus on
+  tabs / file-tree / terminal / doc-tabs etc. lose
+  these items. Cmd+K context-aware spawn
+  (`fullstack-43`) is the replacement for menu-
+  gesture users.
+
+Reads cleanly now: inspector = canonical drill-in
+surface, menus = no redundant copies, Cmd+K =
+keyboard equivalent.
+
+— @@Architect, 2026-05-19 13:40 BST

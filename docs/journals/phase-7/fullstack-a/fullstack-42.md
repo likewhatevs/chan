@@ -19,24 +19,46 @@ Revise the Cmd+K mode key map from `fullstack-39` per
   Commit), responsive layout for large + small
   screens.
 
-### Drop redundant menu items
+### Drop redundant menu items (menus only — NOT inspectors)
 
-Since Pane Mode (`Cmd+K`) covers spawn/split/close
-with context-aware behavior (see `fullstack-43`),
-remove these from all menus:
+@@Alex 2026-05-19 13:40 BST clarified: keep the
+"open in another tab type" buttons inside the
+**inspectors** (they're genuinely useful there);
+drop them from the **menus** (right-click on tabs,
+right-click on tab content, terminal right-click,
+etc.).
 
-* `Graph from here` (file-tree right-click, doc-tab
-  right-click, etc.)
-* `Show Dir` (terminal tab right-click)
-* `Show Directory` / `Show File` (inspectors —
-  already fixed in `fullstack-29` to spawn the right
-  tab; now drop the buttons entirely since `Cmd+K 2`
-  + context covers it)
-* `Show in file browser` (doc-tab right-click)
+**Drop from menus**:
 
-Audit and drop. The Cmd+K + context spawn (`fullstack-43`)
-is the replacement; the buttons just create choice
-paralysis.
+* `Graph from here` — wherever it appears in any
+  right-click menu (file-tree, doc-tab, terminal
+  right-click, etc.).
+* `Show Dir` — terminal tab right-click.
+* `Show in file browser` — doc-tab right-click.
+* `Show Directory` / `Show File` — any right-click
+  menu that surfaces these (NOT the inspector
+  versions).
+
+**Keep + complete the inspectors**:
+
+* Inspectors on Files / Graph / Search tabs keep
+  their `Open` / `Graph from here` / `Show Dir` /
+  `Show File` / `Show Directory` affordances. They
+  were fixed in `fullstack-29` to spawn the new
+  first-class tab types correctly; they stay.
+* **Add `Show Dir` to any inspector that's missing
+  it** — audit during this pass. Specifically: the
+  Search inspector, the Graph inspector when the
+  focused node is a directory, etc. Ensure every
+  inspector that surfaces a path has an "open this
+  in a Files tab" affordance.
+
+Rationale: the inspector is the canonical "drill-
+into-this-node" surface; redundant copies in
+right-click menus create choice paralysis. Cmd+K
+context-aware spawn (`fullstack-43`) covers menu-
+gesture use; the inspector buttons cover panel-
+gesture use.
 
 ### Drop redundant standalone keyboard shortcuts
 
