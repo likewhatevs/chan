@@ -316,6 +316,33 @@ type ClosedTab = {
   tab: Tab;
 };
 
+/// `fullstack-66`: middle-elision for tab strip titles. Targets a
+/// 15-code-point cap as `head[..]tail` (6 + 4 + 5). The bias toward
+/// the tail keeps extensions visible for the common cases
+/// (`.md`, `.ts`, `.svelte`, `.json`).
+///
+/// Counts code points via `Array.from` so a surrogate pair never
+/// splits in the middle (emoji, CJK supplementary, etc.). Strings
+/// ≤ 15 code points render as-is; the dirty marker (`●`) lives
+/// outside the label string in the tab strip render so the rule
+/// applies cleanly to the visible name only.
+///
+/// Callers that present the truncated label should keep the full
+/// untruncated value in the surrounding `title="..."` HTML
+/// attribute (typically via `tabTooltip()`) so hover reveals it.
+export const TAB_TITLE_MAX_LENGTH = 15;
+const TAB_TITLE_HEAD = 6;
+const TAB_TITLE_TAIL = 5;
+const TAB_TITLE_ELLIPSIS = "[..]";
+
+export function truncateTabTitle(label: string): string {
+  const chars = Array.from(label);
+  if (chars.length <= TAB_TITLE_MAX_LENGTH) return label;
+  const head = chars.slice(0, TAB_TITLE_HEAD).join("");
+  const tail = chars.slice(-TAB_TITLE_TAIL).join("");
+  return `${head}${TAB_TITLE_ELLIPSIS}${tail}`;
+}
+
 /// Short display label for a tab — the file's basename so the tab
 /// strip stays scannable even when paths are deeply nested. The
 /// full path is reachable via `tabTooltip` for disambiguation.

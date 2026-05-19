@@ -56,8 +56,10 @@ import {
   showOrSpawnRichPromptInFocusedPane,
   splitPane,
   tabLabelInPane,
+  TAB_TITLE_MAX_LENGTH,
   terminalBroadcastMemberIds,
   terminalEnvTabNameStale,
+  truncateTabTitle,
   type FileTab,
   type LeafNode,
   type TerminalTab,
@@ -1457,5 +1459,50 @@ describe("terminal broadcast groups", () => {
 
     unregisterA();
     unregisterB();
+  });
+});
+
+describe("truncateTabTitle (fullstack-66)", () => {
+  test("empty string passes through", () => {
+    expect(truncateTabTitle("")).toBe("");
+  });
+
+  test("short names render as-is", () => {
+    expect(truncateTabTitle("short.md")).toBe("short.md");
+  });
+
+  test("name at the cap renders as-is (no elision)", () => {
+    const at = "exactly15chars.";
+    expect(at.length).toBe(TAB_TITLE_MAX_LENGTH);
+    expect(truncateTabTitle(at)).toBe(at);
+  });
+
+  test("16-char name triggers elision and lands at exactly 15", () => {
+    const src = "sixteen-chars-md"; // 16 chars
+    const out = truncateTabTitle(src);
+    expect(out).toBe("sixtee[..]rs-md");
+    expect(out.length).toBe(TAB_TITLE_MAX_LENGTH);
+  });
+
+  test("long filename preserves the extension via the tail bias", () => {
+    // `.svelte` is the marquee long-extension case.
+    const src = "verylongfilename.svelte"; // 23 chars
+    const out = truncateTabTitle(src);
+    expect(out).toBe("verylo[..]velte");
+    expect(out.length).toBe(TAB_TITLE_MAX_LENGTH);
+  });
+
+  test("multi-codepoint characters survive without splitting", () => {
+    // Star emoji (`⭐`) is BMP, but `🌟` (glowing star) is supplementary
+    // and needs a surrogate pair. We seed the head + tail with one
+    // so a naive `slice` on code units would split it.
+    const src = "🌟abcdefghij🌟klmnop";
+    const out = truncateTabTitle(src);
+    // 6 head code points + `[..]` + 5 tail code points = 15
+    // visible characters, with the surrogate pairs preserved
+    // intact.
+    expect(Array.from(out)).toHaveLength(TAB_TITLE_MAX_LENGTH);
+    expect(out.startsWith("🌟abcde")).toBe(true);
+    expect(out.endsWith("lmnop")).toBe(true);
   });
 });

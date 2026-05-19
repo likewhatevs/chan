@@ -62,7 +62,12 @@
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import TerminalTab from "./TerminalTab.svelte";
   import { refreshTree, tree } from "../state/store.svelte";
-  import { tabLabel, tabLabelInPane, tabTooltip } from "../state/tabs.svelte";
+  import {
+    tabLabel,
+    tabLabelInPane,
+    tabTooltip,
+    truncateTabTitle,
+  } from "../state/tabs.svelte";
   import {
     SHORTCUTS,
     currentOS,
@@ -864,7 +869,7 @@
               bottom: e.clientY,
             });
           }}
-        >{tabLabelInPane(t, pane.tabs)}</span>
+        >{truncateTabTitle(tabLabelInPane(t, pane.tabs))}</span>
         {#if isDirty(t)}
           <span class="dirty unsaved" title="unsaved changes">●</span>
         {/if}
@@ -1033,7 +1038,7 @@
   >
     {#if paneMode.active}
       <div class="pane-mode-preview" aria-label="pane mode preview">
-        <div class="pane-mode-title">{active ? tabLabel(active) : "Empty pane"}</div>
+        <div class="pane-mode-title">{active ? truncateTabTitle(tabLabel(active)) : "Empty pane"}</div>
         <div class="pane-mode-subtitle">
           {active?.kind === "file"
             ? active.path
