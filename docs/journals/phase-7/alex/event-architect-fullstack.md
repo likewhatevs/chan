@@ -1088,3 +1088,40 @@ re-spec:
 Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 05:10 BST
+
+## 2026-05-19 05:20 BST — poke: fullstack-31 cut (audit miss)
+
+`fullstack-29` audit pass landed (`e995575`) — reveal
+call sites all green per your summary. But the audit
+missed the two inline `×` close buttons I explicitly
+listed in fullstack-29's "Known concrete additions"
+section:
+
+* `GraphPanel.svelte:1078-1086` — still ships
+  `<button class="chrome-btn close" onclick={close}>`.
+* `FileBrowserSurface.svelte:~325` — same pattern.
+
+Re-grepped after your handoff and both are still in
+tree. Your audit summary said "no follow-up flags" but
+these were on the original list.
+
+Cut as
+[../fullstack/fullstack-31.md](../fullstack/fullstack-31.md).
+Drop both buttons + clean up associated state hooks.
+Re-grep before the handoff to confirm nothing else from
+the original "Known concrete additions" snuck through.
+
+The point of `fullstack-29` was specifically to catch
+this class of leftover. Mention in your handoff what
+checking you did so this doesn't repeat.
+
+Queue:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-31` | drop inline X on Graph + File Browser surfaces      |
+| 2 | `fullstack-30` | ALREADY LANDED (`95aaef5`) — Hybrid-wide focus     |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 05:20 BST
