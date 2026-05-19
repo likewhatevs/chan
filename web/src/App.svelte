@@ -40,6 +40,7 @@
     searchPanel,
     settingsOverlay,
     syncOverlayStack,
+    toggleBrowserSidePane,
     topOverlay,
     watchSystemTheme,
   } from "./state/store.svelte";
@@ -493,6 +494,22 @@
         commitPaneMode();
         scheduleSessionSave();
         showOrSpawnRichPromptInFocusedPane();
+        return;
+      // `fullstack-69`: Cmd+K < and > toggle the docked file
+      // browsers. Mapping per @@Alex's verbatim spec — the arrow
+      // direction is opposite to the dock side it controls:
+      //   `<` (less-than) → right dock toggle
+      //   `>` (greater-than) → left dock toggle
+      // Same exit semantics as the spawn keys (commit then act).
+      case "<":
+        commitPaneMode();
+        scheduleSessionSave();
+        toggleBrowserSidePane("right");
+        return;
+      case ">":
+        commitPaneMode();
+        scheduleSessionSave();
+        toggleBrowserSidePane("left");
         return;
       // `fullstack-48`: Tab flips the focused Hybrid. Stays inside
       // the pane-mode transaction so Esc can roll the flip back if

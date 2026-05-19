@@ -85,6 +85,22 @@ describe("Cmd+K pane mode rich-prompt binding (fullstack-50)", () => {
   });
 });
 
+describe("Cmd+K dock toggles (fullstack-69)", () => {
+  test("< toggles the right-side file browser dock", () => {
+    // Mapping per @@Alex's verbatim spec: less-than (right-facing
+    // arrow when read as an opening tag) toggles the right dock.
+    expect(app).toMatch(
+      /case "<":[\s\S]*?commitPaneMode\(\);[\s\S]*?toggleBrowserSidePane\("right"\);/,
+    );
+  });
+
+  test("> toggles the left-side file browser dock", () => {
+    expect(app).toMatch(
+      /case ">":[\s\S]*?commitPaneMode\(\);[\s\S]*?toggleBrowserSidePane\("left"\);/,
+    );
+  });
+});
+
 describe("Pane Mode entry flash (fullstack-61)", () => {
   test("Pane Mode active transition triggers a one-shot flash overlay", () => {
     // The `$effect` watches `paneMode.active`; on false → true it

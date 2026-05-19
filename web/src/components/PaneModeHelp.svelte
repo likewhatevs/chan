@@ -38,6 +38,16 @@
       ],
     },
     {
+      // `fullstack-69`: arrow direction is opposite to the dock
+      // side it toggles, per @@Alex's verbatim spec — `<` opens
+      // the dock on the right, `>` opens the dock on the left.
+      title: "Dock",
+      rows: [
+        { keys: "<", action: "Toggle right-side file browser dock" },
+        { keys: ">", action: "Toggle left-side file browser dock" },
+      ],
+    },
+    {
       title: "Close",
       rows: [
         { keys: "x", action: "Close all tabs in pane" },
