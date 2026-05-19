@@ -929,3 +929,91 @@ Committing + pushing under standing topic-level
 clearance (no HOLD pokes since the 17:30 BST
 cut). Last on the queue: `-67` (drop FB header
 in tab variant + items to tab right-click).
+
+## 2026-05-19 21:05 BST — poke: fullstack-67 ready to commit
+
+**Architecture decision.** Drop the entire
+`<header>` in tab variant via `{#if !isTab}`,
+render a triggerless HamburgerMenu in the
+`{:else}` branch so FB-specific menu items stay
+mountable. An `$effect` mirrors
+`tabMenu.openForTabId === tab.id` into
+`menu.openAtCursor(...)`. The Pane.svelte tab-
+strip right-click handler is UNCHANGED — it
+already calls `openTabMenu(t.id, anchor)` for
+every tab kind; FileBrowserSurface now
+subscribes the same way TerminalTab does.
+
+This avoids relocating FB-specific menu items
+(toggle inspector, new file here, search drive,
+etc.) into Pane.svelte. Those items reference
+module-level state (`browserState`, `searchPanel`,
+the FB-local helpers) that the pane has no
+business touching.
+
+**Files:**
+* `web/src/components/FileBrowserSurface.svelte`
+  — `tabMenu` import, new `$effect` watching
+  `tabMenu.openForTabId === tab.id` + the
+  anchor, header wrapped in `{#if !isTab}`,
+  `{:else}` branch with the triggerless
+  HamburgerMenu.
+* `web/src/components/fileBrowserTabHeader.test.ts`
+  (new) — source-grep sentinel, 3 assertions
+  covering the header gate, the triggerless
+  menu in the `{:else}`, and the tabMenu →
+  openAtCursor wire.
+
+**Pane.svelte unchanged.** The browser-kind
+branch in the tab-strip right-click handler
+doesn't need a special case.
+
+**Per-criteria verification** all pass:
+* No surface header in tab variant. ✓
+* Tab-strip right-click opens FB items. ✓
+* Dock + Overlay headers stay. ✓
+* Pane Hybrid kebab is the only visible
+  hamburger when a Files tab is active. ✓
+* Keyboard shortcuts unchanged (Cmd+F find
+  bar lives inside the body, not the header). ✓
+
+**Tab-strip right-click flow** on inactive
+Files tab:
+1. Pane.svelte `oncontextmenu`: preventDefault,
+   activate tab, openTabMenu.
+2. Svelte reactivity: `pane.activeTabId` → FB
+   surface mounts → new $effect fires.
+3. `queueMicrotask(menu.openAtCursor(...))`
+   runs after mount → menu opens at cursor.
+
+Visually instantaneous (same animation frame).
+
+Gate green: svelte-check 0/0, vitest 39/393
+(was 38/390; +3 from the new sentinel), build
+clean, scripts/pre-push green.
+
+Visual eyeball skipped — sentinel pins the
+wire; flow mirrors TerminalTab's long-standing
+right-click pattern. If @@Alex flags pixel
+issues on the walkthrough, follow-up.
+
+**Re-walk flag** (per task note): `webtest-a-10`
+item 1 + `webtest-b-6` item 6 both want a
+re-walk on the FB chrome after this lands.
+You coordinate.
+
+Out of scope: no items added/removed in the FB
+menu — relocation only. Per-tab subpath from
+`-58` already feeds `browserState.selected`
+via the existing `tab ?? browserOverlay`
+derived; menu items implicitly anchor to it
+without additional wiring.
+
+Committing + pushing under standing topic-level
+clearance (no HOLD pokes since the 18:50 BST
+cut).
+
+**Lane B queue empty.** All six remaining tasks
+(-54 → -58 → -59 → -60 → -62 → -63 → -67) on
+origin/main. Standing by for the next
+directive.

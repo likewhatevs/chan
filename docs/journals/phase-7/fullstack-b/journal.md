@@ -558,3 +558,52 @@ pins the wire.
 Committing + pushing. Lane B queue remaining:
 -67 (drop FB header in tab variant + items to
 tab right-click).
+
+## 2026-05-19 21:05 BST
+
+Picked up `fullstack-67` (drop FB surface header
+in tab variant + items to tab right-click).
+
+Architecture: drop the entire `<header>` in tab
+variant via `{#if !isTab}`. Render a triggerless
+HamburgerMenu in the `{:else}` branch so FB-
+specific menu items stay mountable. An `$effect`
+watches `tabMenu.openForTabId === tab.id` (tab
+variant only) and mirrors the anchor into
+`menu.openAtCursor(...)`. Tab-strip right-click
+handler in Pane.svelte is UNCHANGED — it already
+calls `openTabMenu(t.id, anchor)` for every kind;
+the FB surface now subscribes to that signal the
+same way TerminalTab does.
+
+This avoids moving FB-specific menu items
+(toggle inspector, new file here, search drive,
+etc.) into Pane.svelte. Those items live in
+FileBrowserSurface and reference module-level
+state (`browserState`, `searchPanel`, etc.) that
+the pane has no business touching.
+
+Timing flow on inactive-Files-tab right-click:
+1. Pane.svelte handler: preventDefault, activate
+   tab, openTabMenu.
+2. Svelte reactivity: pane.activeTabId → FB
+   surface mounts → my new $effect fires.
+3. Microtask: menu.openAtCursor(...) opens at
+   cursor.
+
+Visually instantaneous (same animation frame).
+
+Tests: new `fileBrowserTabHeader.test.ts`
+(source-grep sentinel, 3 assertions).
+
+Gate green: svelte-check 0/0, vitest 39/393,
+build clean, pre-push green.
+
+Visual eyeball skipped — sentinel pins the wire;
+flow mirrors the long-standing TerminalTab
+right-click pattern.
+
+Committing + pushing. **Lane B queue empty.**
+All six remaining tasks shipped this session
+(-54 through -67). Standing by for the next
+directive.

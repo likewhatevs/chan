@@ -26,6 +26,7 @@
   import DriveInfoBody from "./DriveInfoBody.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import ImportContactsModal from "./ImportContactsModal.svelte";
+  import { tabMenu } from "../state/tabMenu.svelte";
   import { chordFor } from "../state/shortcuts";
   import { isEditableText } from "../state/fileTypes";
   import {
@@ -158,6 +159,21 @@
     const top = (ev.currentTarget as HTMLElement).scrollTop;
     tab.scroll = top > 0 ? Math.round(top) : undefined;
   }
+
+  // `fullstack-67`: in tab variant the on-surface header is gone, so
+  // the FB hamburger has no visible trigger. Tab-strip right-click in
+  // `Pane.svelte` sets `tabMenu.openForTabId` + `tabMenu.anchor`;
+  // this effect mirrors that signal back into `menu.openAtCursor()`
+  // so the FB-specific menu items still render at the cursor for
+  // active Files tabs. Dock + overlay variants ignore the effect
+  // (they have on-surface headers per `-54`).
+  $effect(() => {
+    if (!isTab || !tab) return;
+    const open = tabMenu.openForTabId;
+    const anchor = tabMenu.anchor;
+    if (open !== tab.id || !anchor) return;
+    queueMicrotask(() => menu?.openAtCursor(anchor.left, anchor.top));
+  });
 
   const POPOVER_HEIGHT = 420;
   const POPOVER_WIDTH = 240;
@@ -342,46 +358,63 @@
   onkeydown={onBrowserKeydown}
   role="presentation"
 >
-  <header>
-    {#if isOverlay}
-      <button
-        type="button"
-        class="chrome-btn"
-        onclick={doToggleOverlayMaximized}
-        title={overlayMaximized.on ? "Restore size" : "Maximize"}
-        aria-label={overlayMaximized.on ? "Restore size" : "Maximize"}
+  {#if !isTab}
+    <header>
+      {#if isOverlay}
+        <button
+          type="button"
+          class="chrome-btn"
+          onclick={doToggleOverlayMaximized}
+          title={overlayMaximized.on ? "Restore size" : "Maximize"}
+          aria-label={overlayMaximized.on ? "Restore size" : "Maximize"}
+        >
+          {#if overlayMaximized.on}
+            <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+          {:else}
+            <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+          {/if}
+        </button>
+      {:else if variant === "dock"}
+        <button
+          type="button"
+          class="chrome-btn"
+          onclick={unstick}
+          title={side === "right" ? "Unstick right" : "Unstick left"}
+          aria-label={side === "right" ? "Unstick right" : "Unstick left"}
+        >
+          {#if side === "right"}
+            <ArrowRight size={14} strokeWidth={1.75} aria-hidden="true" />
+          {:else}
+            <ArrowLeft size={14} strokeWidth={1.75} aria-hidden="true" />
+          {/if}
+        </button>
+      {/if}
+      <span class="header-spacer" aria-hidden="true"></span>
+      <HamburgerMenu
+        bind:this={menu}
+        bind:open={menuOpen}
+        width={POPOVER_WIDTH}
+        height={POPOVER_HEIGHT}
       >
-        {#if overlayMaximized.on}
-          <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        {:else}
-          <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-        {/if}
-      </button>
-    {:else if variant === "dock"}
-      <button
-        type="button"
-        class="chrome-btn"
-        onclick={unstick}
-        title={side === "right" ? "Unstick right" : "Unstick left"}
-        aria-label={side === "right" ? "Unstick right" : "Unstick left"}
-      >
-        {#if side === "right"}
-          <ArrowRight size={14} strokeWidth={1.75} aria-hidden="true" />
-        {:else}
-          <ArrowLeft size={14} strokeWidth={1.75} aria-hidden="true" />
-        {/if}
-      </button>
-    {/if}
-    <span class="header-spacer" aria-hidden="true"></span>
+        {@render menuItems()}
+      </HamburgerMenu>
+    </header>
+  {:else}
+    <!-- `fullstack-67`: tab variant drops the on-surface header so
+         the pane Hybrid kebab is the only visible hamburger. The
+         FB hamburger items live on a hidden HamburgerMenu opened
+         at-cursor by the tab-strip right-click handler in
+         Pane.svelte (via tabMenu state + the $effect above). -->
     <HamburgerMenu
       bind:this={menu}
       bind:open={menuOpen}
+      showTrigger={false}
       width={POPOVER_WIDTH}
       height={POPOVER_HEIGHT}
     >
       {@render menuItems()}
     </HamburgerMenu>
-  </header>
+  {/if}
   <div class="body">
     <div class="tree-wrap" bind:this={treeWrapEl} onscroll={onTreeWrapScroll}>
       {#if findOpen}
