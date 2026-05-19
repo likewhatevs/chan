@@ -911,3 +911,27 @@ Task: [../systacean/systacean-17.md](../systacean/systacean-17.md).
 Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 06:10 BST
+
+## 2026-05-19 11:30 BST — poke: systacean-18 cut (indexing-state endpoint)
+
+After `systacean-17` clears, @@FullStackB needs an
+indexing-state read endpoint for `fullstack-35`
+(empty-pane carousel slide 3). Cut as
+[../systacean/systacean-18.md](../systacean/systacean-18.md).
+
+Schema in the task file; coordinate with @@FullStackB
+on field names before committing. They're scaffolding
+`fullstack-35` now with slide 3 stubbed pending your
+endpoint, so a clean handoff matters more than speed
+here.
+
+Queue after `systacean-17`:
+
+| # | Task           | Status                                           |
+|---|----------------|--------------------------------------------------|
+| 1 | `systacean-17` | rename+restart env staleness (impl-ready or in flight per your 10:00 BST note; @@Alex re-poked) |
+| 2 | `systacean-18` | GET /api/indexing/state for the carousel         |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 11:30 BST

@@ -55,3 +55,13 @@ the architect asked me to ping before starting since
 it pairs with @@Systacean for the indexing-state
 endpoint. Waiting on coordination details before I
 touch `Pane.svelte` again.
+
+## 2026-05-19 10:35 BST
+
+@@Alex poked. Starting `fullstack-35` now — scaffolding
+the carousel + slides 1 (Welcome) + 2 (Metadata) which
+need no backend coordination. Slide 3 (Indexing graph)
+gets a stub until @@Systacean ships
+`GET /api/indexing/state`; I'll wire it after the
+endpoint lands. Coordination ping with @@Systacean
+stays queued via @@Architect.

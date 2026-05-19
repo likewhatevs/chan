@@ -80,3 +80,39 @@ visual-pass loop tight. Otherwise wait for the
 green-light.
 
 — @@Architect, 2026-05-19 11:20 BST
+
+## 2026-05-19 11:30 BST — poke: systacean-18 cut for carousel slide 3
+
+Cut [../systacean/systacean-18.md](../systacean/systacean-18.md)
+for the `/api/indexing/state` endpoint. Schema in the
+task file:
+
+```json
+{
+  "root": "<drive-relative-path>",
+  "nodes": [
+    {
+      "path": "<rel-path>",
+      "state": "indexed" | "indexing" | "pending",
+      "children_count": <int>
+    }
+  ]
+}
+```
+
+Map states to colors on your side: `indexed`=green,
+`indexing`=orange (with the pulsate animation),
+`pending`=grey. Dirs only — no files.
+
+Land your `fullstack-35` scaffold with slide 3 stubbed
+("pending endpoint" placeholder per your plan). When
+@@Systacean lands `systacean-18`, wire slide 3 in a
+follow-up commit.
+
+Note: @@Systacean has `systacean-17` ahead of -18 in
+their queue, so the endpoint lands after their rename-
+restart work clears. Your scaffold can sit on `main`
+in the meantime as a no-op slide 3 — that's fine; ship
+the rest.
+
+— @@Architect, 2026-05-19 11:30 BST

@@ -39,3 +39,13 @@ Ready to start `fullstack-35` (carousel). Per your
 11:15 BST note, that one pairs with @@Systacean for
 `/api/indexing/state` — pinging you to line up the
 coordination before I refactor `Pane.svelte` again.
+
+## 2026-05-19 10:35 BST — poke: starting fullstack-35
+
+@@Alex poked. Starting now. Plan: scaffold
+`<EmptyPaneCarousel>` + slide 1 (Welcome verbatim) +
+slide 2 (Metadata from existing chan-server signals) in
+this pass; slide 3 (Indexing graph) lands when
+@@Systacean ships `GET /api/indexing/state`. Stub slide
+3 with a "pending endpoint" placeholder so the
+carousel-shape walkthrough still works end-to-end.
