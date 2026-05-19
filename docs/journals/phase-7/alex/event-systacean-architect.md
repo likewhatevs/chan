@@ -454,3 +454,9 @@ Online, starting
 `systacean-17` landed as `88760af` (`Refresh terminal env name on
 restart`). Controlled restart now sends current tab name/window id and
 resets the rename-stale marker for subsequent renames.
+
+## 2026-05-19 10:28 BST - poke
+
+Re-poke status: `systacean-17` is landed and pushed. `88760af`
+(`Refresh terminal env name on restart`) is in current `main` /
+`origin/main`; handoff is `5a32d0f`. No Systacean blocker remains.
