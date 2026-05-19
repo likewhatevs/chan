@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import { Bot, Code2, FilePlus, FolderSearch, GripHorizontal, Pilcrow, Send, Type, X } from "lucide-svelte";
   import Source from "../editor/Source.svelte";
   import Wysiwyg from "../editor/Wysiwyg.svelte";
@@ -41,12 +42,31 @@
   const TOP_GAP = 36;
   let rootEl: HTMLDivElement | undefined = $state();
   let wysiwygRef: Wysiwyg | undefined = $state();
+  let sourceRef: Source | undefined = $state();
   let selVer = $state(0);
   let menu = $state<{ x: number; y: number } | null>(null);
   let watcherError = $state("");
   let watcherBusy = $state(false);
   let spawnOpen = $state(false);
   let dragging = false;
+
+  // `fullstack-79`: auto-focus the input on every `openActiveTerminalRichPrompt`
+  // call. The `focusNonce` is bumped by the open helper even when the prompt
+  // is already open, so re-show via Cmd+K p / Alt+Space steals focus back
+  // even if the user had clicked away. `tick()` waits for the editor child's
+  // `bind:this` to settle on first mount, and for the `{#key mode()}` block
+  // to remount when the user toggles between wysiwyg and source.
+  $effect(() => {
+    void prompt.focusNonce;
+    const inSource = mode() === "source";
+    void tick().then(() => {
+      if (inSource) {
+        sourceRef?.focusAt(prompt.buffer.length);
+      } else {
+        wysiwygRef?.focusEnd();
+      }
+    });
+  });
 
   function mode(): "wysiwyg" | "source" {
     return prompt.mode ?? "wysiwyg";
@@ -304,6 +324,7 @@
         />
       {:else}
         <Source
+          bind:this={sourceRef}
           bind:value={prompt.buffer}
           path="prompt.md"
           syntaxHighlight

@@ -704,3 +704,34 @@ build clean, pre-push green.
 
 Committing + pushing. Lane B queue: -79, -80,
 -82.
+
+## 2026-05-19 23:05 BST
+
+Picked up `fullstack-79` (auto-focus rich prompt).
+
+Focus-nonce pattern: added `focusNonce?: number`
+to `TerminalRichPromptState` (mirroring the find-
+bar's nonce at line 95). `openActiveTerminalRichPrompt`
+bumps it on every call so the prompt component
+detects "show again" even when `open` was already
+true. Reactive `$effect` in TerminalRichPrompt
+reads the nonce and dispatches to the wysiwyg or
+source editor child after a `tick()` (the tick
+covers both first mount and the `{#key mode()}`
+remount on wysiwyg ↔ source toggle).
+
+Source mode gets a parallel `bind:this={sourceRef}`
+and focuses via `sourceRef.focusAt(prompt.buffer
+.length)` to land the caret at the end of the
+current buffer.
+
+Tests: new `richPromptAutoFocus.test.ts` (source-
+grep sentinel, 4 assertions covering the
+focusNonce declaration, the bump-on-every-call
+behaviour, the reactive effect's editor
+dispatch, and the source-mode `bind:this`).
+
+Gate green: svelte-check 0/0, vitest 41/417,
+build clean, pre-push green.
+
+Committing + pushing. Lane B queue: -80, -82.

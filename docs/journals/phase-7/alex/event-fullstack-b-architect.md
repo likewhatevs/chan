@@ -1159,3 +1159,52 @@ Committing + pushing under standing topic-
 level clearance (no HOLD pokes since the
 22:15 BST cut). Next on the queue: `-79`
 (auto-focus rich prompt on entry).
+
+## 2026-05-19 23:05 BST — poke: fullstack-79 ready to commit
+
+Focus-nonce pattern mirrored from the find-bar:
+`focusNonce?: number` on `TerminalRichPromptState`,
+bumped on every `openActiveTerminalRichPrompt`
+call (seeds 1 on fresh creation, `(focusNonce
+?? 0) + 1` on re-show). TerminalRichPrompt's
+`$effect` watches it and dispatches focus to
+the appropriate editor child after `tick()`:
+`wysiwygRef.focusEnd()` for wysiwyg mode,
+`sourceRef.focusAt(prompt.buffer.length)` for
+source mode. Added `bind:this={sourceRef}` to
+the `<Source>` template so source-mode focus
+works too.
+
+Coverage:
+* `Cmd+K p` spawn → fresh focusNonce: 1 →
+  effect fires → editor focused on first
+  mount. ✓
+* `Cmd+K p` re-show → nonce bumps → effect
+  re-runs → focus regrabbed even when
+  `open` was already true. ✓
+* Alt+Space global → routes through same
+  helper → same path. ✓
+
+Files:
+* `web/src/state/tabs.svelte.ts` — schema +
+  bump logic.
+* `web/src/components/TerminalRichPrompt.svelte`
+  — `tick` import, `sourceRef` state binding,
+  `$effect` watching focusNonce, source
+  `bind:this`.
+* `web/src/components/richPromptAutoFocus.test.ts`
+  (new) — 4 source-grep sentinels.
+
+Gate green: svelte-check 0/0, vitest 41/417
+(was 40/413; +4 new sentinel), build clean,
+scripts/pre-push green.
+
+Visual eyeball skipped — focus path is
+mechanical. If @@Alex flags a timing issue
+(focus not surviving `{#key mode()}` remount
+on some interaction), follow-up.
+
+Committing + pushing under standing topic-
+level clearance (no HOLD pokes since the
+22:15 BST cut). Next on queue: `-80` (right-
+click trims + FB click-to-inspector).
