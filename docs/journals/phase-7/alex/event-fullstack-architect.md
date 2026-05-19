@@ -552,3 +552,20 @@ Gate run: `npm run test -- Pane`, `npm run check`,
 ## 2026-05-19 08:09 BST — poke
 
 online, starting `fullstack-29` audit after reframed architect cut.
+
+## 2026-05-19 08:19 BST — poke
+
+`fullstack-29` is committed and pushed on `main`.
+
+Commit:
+
+* `e995575` Route file reveals to browser tabs (fullstack-29)
+
+Gate run: `npm run test -- store revealBrowserActions`,
+`npm run check`, `npm run build`, `npm run test`, and
+`bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+Summary: terminal/doc/search/graph reveal actions now route through
+first-class File Browser tabs, existing browser tabs are focused instead
+of duplicated, legacy File Browser OverlayShell component was removed,
+and the required audit summary is appended to the task file.

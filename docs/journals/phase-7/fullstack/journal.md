@@ -84,3 +84,7 @@ fullstack-28 landed: `06739a9` Restore empty pane context menu (fullstack-28). G
 ## 2026-05-19 08:09 BST
 
 online, starting fullstack-29 audit after reframed architect cut.
+
+## 2026-05-19 08:19 BST
+
+fullstack-29 landed: `e995575` Route file reveals to browser tabs (fullstack-29). Gate green: `npm run test -- store revealBrowserActions`, `npm run check`, `npm run build`, `npm run test`, and `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
