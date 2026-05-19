@@ -252,6 +252,15 @@ export type GraphTab = {
   filters: GraphFilters;
   inspectorOpen: boolean;
   pendingSelectId: string | null;
+  /// `fullstack-81`: live selection state. `selectedNodeId` is the
+  /// graph node id the user clicked (kept here, not just in
+  /// `GraphPanel.svelte`'s component state, so the tab title can
+  /// peek it from outside the panel). `selectedNodeLabel` is the
+  /// human-readable label cached at click time so the tab strip
+  /// can render the title before the graph data has finished
+  /// reloading on restore.
+  selectedNodeId?: string | null;
+  selectedNodeLabel?: string | null;
 };
 
 export type BrowserTab = {
@@ -316,6 +325,11 @@ export type TerminalRichPromptState = {
   open?: boolean;
   mode?: "wysiwyg" | "source";
   styleToolbarOpen?: boolean;
+  /// `fullstack-79`: bumped on every `openActiveTerminalRichPrompt`
+  /// call so the prompt component re-focuses its input even when
+  /// `open` was already true. Mirrors the find-bar `focusNonce`
+  /// pattern at line 95.
+  focusNonce?: number;
 };
 
 export type Tab = FileTab | TerminalTab | GraphTab | BrowserTab;
@@ -352,12 +366,23 @@ export function truncateTabTitle(label: string): string {
   return `${head}${TAB_TITLE_ELLIPSIS}${tail}`;
 }
 
+/// `fullstack-81`: title for a Graph tab. Selection wins over
+/// scope — when the user has tapped a node, the tab strip
+/// reads as the node's label (basename for files / dirs, `#tag`
+/// for tags, contact name, etc.). No selection → fall back to
+/// the scope-derived title from `-64` cached on `tab.title`.
+export function graphTabLabel(t: GraphTab): string {
+  const label = t.selectedNodeLabel?.trim();
+  if (label) return label;
+  return t.title;
+}
+
 /// Short display label for a tab — the file's basename so the tab
 /// strip stays scannable even when paths are deeply nested. The
 /// full path is reachable via `tabTooltip` for disambiguation.
 export function tabLabel(t: Tab): string {
   if (t.kind === "terminal") return terminalTabName(t);
-  if (t.kind === "graph") return t.title;
+  if (t.kind === "graph") return graphTabLabel(t);
   if (t.kind === "browser") return browserTabLabel(t);
   const p = t.path;
   if (!p) return p;
@@ -436,7 +461,16 @@ function commonSuffixLength(groups: string[][]): number {
 /// told apart on hover.
 export function tabTooltip(t: Tab): string {
   if (t.kind === "terminal") return terminalTabName(t);
-  if (t.kind === "graph") return `Graph: ${t.scopeId}`;
+  if (t.kind === "graph") {
+    // `fullstack-81`: surface selection + scope so hover
+    // disambiguates two Graph tabs viewing the same scope with
+    // different focal nodes — or two with the same selection
+    // under different scopes.
+    if (t.selectedNodeId) {
+      return `Graph: ${t.scopeId} · ${t.selectedNodeId}`;
+    }
+    return `Graph: ${t.scopeId}`;
+  }
   if (t.kind === "browser") {
     // `fullstack-65`: surface the per-tab selection so hover
     // disambiguates two Files tabs whose basenames collide
@@ -732,10 +766,15 @@ export function openActiveTerminalRichPrompt(): void {
       heightPx: 320,
       open: true,
       mode: "wysiwyg",
+      focusNonce: 1,
     };
   } else {
     tab.richPrompt.open = true;
     tab.richPrompt.mode ??= "wysiwyg";
+    // `fullstack-79`: bump every call (including when the prompt
+    // is already open) so the input re-focuses even if the user
+    // had clicked away.
+    tab.richPrompt.focusNonce = (tab.richPrompt.focusNonce ?? 0) + 1;
   }
 }
 
@@ -1520,6 +1559,8 @@ function cloneTab(src: Tab): Tab {
       filters: { ...src.filters },
       inspectorOpen: src.inspectorOpen,
       pendingSelectId: src.pendingSelectId,
+      selectedNodeId: src.selectedNodeId,
+      selectedNodeLabel: src.selectedNodeLabel,
     };
   }
   if (src.kind === "browser") {
@@ -2521,6 +2562,12 @@ type SerTab = {
   gi?: 1;
   gf?: string;
   gp?: string;
+  /// `fullstack-81`: persisted live selection — `gn` is the graph
+  /// node id last tapped by the user, `gnl` is the human-readable
+  /// label cached so the tab title can render before the graph
+  /// data finishes reloading.
+  gn?: string;
+  gnl?: string;
   /// Browser tab state.
   bi?: 1;
   /// `fullstack-58`: per-tab File Browser view state. Selection (`bs`),
@@ -2653,6 +2700,12 @@ function serializeTab(
       ...(t.inspectorOpen ? { gi: 1 as const } : {}),
       gf: encodeGraphTabFilters(t.filters),
       ...(t.pendingSelectId ? { gp: t.pendingSelectId } : {}),
+      // `fullstack-81`: persist the live selection so reload
+      // restores both the selected node AND the
+      // selection-driven tab title without waiting for the graph
+      // data to reload.
+      ...(t.selectedNodeId ? { gn: t.selectedNodeId } : {}),
+      ...(t.selectedNodeLabel ? { gnl: t.selectedNodeLabel } : {}),
       ...active,
     };
   }
@@ -2789,6 +2842,16 @@ export async function restoreLayout(
         if (kind === "g") {
           const mode = restoreGraphMode(sertab.gm);
           const scopeId = sertab.gs || "drive";
+          // `fullstack-81`: prefer `gn` (the persisted live
+          // selection) as the post-restore selection seed so the
+          // user lands back on the same focal node. The graph
+          // load consumes `pendingSelectId` once and clears it;
+          // `selectedNodeId` stays so the tab title stays
+          // selection-driven.
+          const selectedNodeId =
+            typeof sertab.gn === "string" ? sertab.gn : null;
+          const selectedNodeLabel =
+            typeof sertab.gnl === "string" ? sertab.gnl : null;
           const tab: GraphTab = {
             kind: "graph",
             id: id("graph"),
@@ -2798,7 +2861,9 @@ export async function restoreLayout(
             depth: Number.isFinite(sertab.gd) ? Math.max(0, Number(sertab.gd)) : 1,
             filters: decodeGraphTabFilters(sertab.gf),
             inspectorOpen: sertab.gi === 1,
-            pendingSelectId: sertab.gp ?? null,
+            pendingSelectId: sertab.gp ?? selectedNodeId,
+            selectedNodeId,
+            selectedNodeLabel,
           };
           p.tabs.push(tab);
           if (sertab.a) p.activeTabId = tab.id;
@@ -2944,6 +3009,10 @@ export async function restoreLayout(
           if (kind === "g") {
             const mode = restoreGraphMode(sertab.gm);
             const scopeId = sertab.gs || "drive";
+            const selectedNodeId =
+              typeof sertab.gn === "string" ? sertab.gn : null;
+            const selectedNodeLabel =
+              typeof sertab.gnl === "string" ? sertab.gnl : null;
             const tab: GraphTab = {
               kind: "graph",
               id: id("graph"),
@@ -2955,7 +3024,9 @@ export async function restoreLayout(
                 : 1,
               filters: decodeGraphTabFilters(sertab.gf),
               inspectorOpen: sertab.gi === 1,
-              pendingSelectId: sertab.gp ?? null,
+              pendingSelectId: sertab.gp ?? selectedNodeId,
+              selectedNodeId,
+              selectedNodeLabel,
             };
             backTabs.push(tab);
             if (sertab.a) backActiveId = tab.id;

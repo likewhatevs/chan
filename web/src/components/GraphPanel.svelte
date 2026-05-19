@@ -1058,6 +1058,26 @@
   function setSelected(id: string | null): void {
     selectedId = id;
     if (id !== null) graphState.inspectorOpen = true;
+    // `fullstack-81`: surface the selection to the tab so the
+    // tab strip can derive the title from the selected node's
+    // label. We cache the label too so the title renders before
+    // the graph data finishes reloading (e.g. after a hard
+    // reload that round-trips the selection via URL hash).
+    if (tab) {
+      tab.selectedNodeId = id;
+      tab.selectedNodeLabel = id === null ? null : graphSelectionLabel(id);
+    }
+  }
+
+  function graphSelectionLabel(id: string): string | null {
+    // FsGraphNode carries `name` directly — drive root has
+    // name="" (empty path), so fall through to the semantic node
+    // lookup before declaring no label.
+    const fs = fsNodeById.get(id);
+    if (fs && fs.name) return fs.name;
+    const node = nodeById.get(id);
+    if (node) return node.label ?? null;
+    return null;
   }
 </script>
 

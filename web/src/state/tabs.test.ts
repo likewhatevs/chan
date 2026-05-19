@@ -20,6 +20,7 @@ import {
   flipHybrid,
   focusColorForWindow,
   browserTabLabel,
+  graphTabLabel,
   graphTitle,
   hydrateTerminalSessionsFromLayout,
   isMissingFileError,
@@ -66,6 +67,7 @@ import {
   truncateTabTitle,
   type BrowserTab,
   type FileTab,
+  type GraphTab,
   type LeafNode,
   type TerminalTab,
 } from "./tabs.svelte";
@@ -1793,5 +1795,64 @@ describe("browserTabLabel (fullstack-65)", () => {
   test("tabLabel routes browser tabs through browserTabLabel", () => {
     expect(tabLabel(browserTab({ selected: "notes/today.md" }))).toBe("today.md");
     expect(tabLabel(browserTab({ selected: null }))).toBe("Files");
+  });
+});
+
+describe("graphTabLabel (fullstack-81)", () => {
+  function graphTab(overrides: Partial<GraphTab> = {}): GraphTab {
+    return {
+      kind: "graph",
+      id: "g-1",
+      title: "drive",
+      mode: "semantic",
+      scopeId: "drive",
+      depth: 1,
+      filters: {
+        link: true,
+        tag: true,
+        mention: true,
+        language: true,
+        img: true,
+        folder: true,
+      },
+      inspectorOpen: false,
+      pendingSelectId: null,
+      ...overrides,
+    };
+  }
+
+  test("no selection falls back to the scope-derived title", () => {
+    expect(graphTabLabel(graphTab({ title: "drive" }))).toBe("drive");
+    expect(graphTabLabel(graphTab({ title: "foo.md" }))).toBe("foo.md");
+    expect(graphTabLabel(graphTab({ selectedNodeLabel: null }))).toBe("drive");
+    expect(graphTabLabel(graphTab({ selectedNodeLabel: "   " }))).toBe("drive");
+  });
+
+  test("selection label wins over the scope title", () => {
+    expect(
+      graphTabLabel(
+        graphTab({
+          title: "drive",
+          selectedNodeId: "notes/foo.md",
+          selectedNodeLabel: "foo.md",
+        }),
+      ),
+    ).toBe("foo.md");
+    expect(
+      graphTabLabel(
+        graphTab({
+          title: "drive",
+          selectedNodeId: "#search",
+          selectedNodeLabel: "#search",
+        }),
+      ),
+    ).toBe("#search");
+  });
+
+  test("tabLabel routes graph tabs through graphTabLabel", () => {
+    expect(
+      tabLabel(graphTab({ title: "drive", selectedNodeLabel: "Miguel" })),
+    ).toBe("Miguel");
+    expect(tabLabel(graphTab({ title: "foo.md" }))).toBe("foo.md");
   });
 });
