@@ -261,6 +261,37 @@ class ImageWidget extends WidgetType {
       queueMicrotask(showBroken);
     } else {
       img.addEventListener("error", showBroken, { once: true });
+      // Inline atom widgets have unknown height until the resource
+      // loads; when the bytes arrive the containing line can grow by
+      // hundreds (or thousands, for unbounded images) of pixels. CM's
+      // own caret-tracking only runs on transactions, so an async load
+      // that happens after the user typed `![](path)` leaves the
+      // caret stranded far below the viewport with no follow-up
+      // scroll. Re-anchor the scroll once the image lands, but only
+      // when the caret is on or next to THIS image's source line —
+      // anywhere else means the user is editing elsewhere while a
+      // distant image streams in, and re-scrolling would fight their
+      // deliberate position.
+      img.addEventListener(
+        "load",
+        () => {
+          if (!wrap.isConnected) return;
+          const head = view.state.selection.main.head;
+          const docLen = view.state.doc.length;
+          const here = Math.min(this.nodePos, docLen);
+          const imgLine = view.state.doc.lineAt(here).number;
+          const headLine = view.state.doc.lineAt(head).number;
+          if (Math.abs(headLine - imgLine) > 1) return;
+          const cb = view.coordsAtPos(head);
+          if (!cb) return;
+          const sb = view.scrollDOM.getBoundingClientRect();
+          if (cb.top >= sb.top && cb.bottom <= sb.bottom) return;
+          view.dispatch({
+            effects: EditorView.scrollIntoView(head, { y: "nearest" }),
+          });
+        },
+        { once: true },
+      );
     }
     img.addEventListener("mousedown", (e) => {
       if (e.button !== 0) return;
