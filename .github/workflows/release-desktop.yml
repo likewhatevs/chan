@@ -1,0 +1,148 @@
+name: Release (chan-desktop)
+
+# Triggered on `chan-v*` tag pushes. Builds the chan-desktop
+# (Tauri) installers unsigned, uploads them as workflow artifacts.
+# Intentionally separate trigger pattern from release.yml's `v*`
+# tags so the chan CLI release flow stays untouched.
+#
+# Build path mirrors `desktop/Makefile`:
+#   1. `npm ci` + `npm run build` (web bundle) — implicit via
+#      `make build` -> `chan-bin`.
+#   2. `cargo build --release --bin chan` (sidecar) — implicit via
+#      `make build` -> `chan-bin`.
+#   3. `cargo tauri build` (chan-desktop + installers) — implicit
+#      via `make build`.
+# `cargo run --release -p fetch-models` runs explicitly before
+# `make build` so the BGE-small bundle bakes into the sidecar
+# chan binary.
+#
+# Round-2 follow-ups (NOT in scope here, intentionally deferred):
+#
+#   macOS notarization:
+#     APPLE_SIGNING_IDENTITY       Developer ID Application cert
+#     APPLE_TEAM_ID                10-char team id (auto-derived)
+#     APPLE_ID                     developer account email
+#     APPLE_PASSWORD               app-specific password
+#     Switch `make build` -> `make app-notarized` on macOS.
+#
+#   Tauri updater bundle signing (per desktop/CLAUDE.md):
+#     TAURI_SIGNING_PRIVATE_KEY    NEW production key contents
+#     TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+#     Gated on the bridge release that ships the new pubkey.
+#
+#   Windows Authenticode:
+#     WINDOWS_PFX_BASE64           cert blob, base64-encoded
+#     WINDOWS_PFX_PASSWORD         cert password
+#     signtool.exe step after `cargo tauri build`.
+#
+#   Linux package signing:
+#     GPG_PRIVATE_KEY              GPG key for .deb / .rpm signing
+#     GPG_PASSPHRASE
+#
+#   GitHub Release upload:
+#     Switch the `upload-artifact` step to `softprops/action-gh-release`
+#     once signing lands. Requires `permissions: contents: write`.
+#
+# Until those secrets are provisioned by @@Alex via repo settings,
+# this workflow produces unsigned artifacts only. Drag from the
+# workflow-run page; not for public distribution.
+
+on:
+  push:
+    tags:
+      - 'chan-v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: linux-x86_64
+          - os: macos-latest
+            artifact_name: macos-aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: chan
+
+      # rust-toolchain.toml lives at the repo root. CI runs from
+      # the parent of `chan/`, so copy the pin to the workspace
+      # root before setup-rust-toolchain looks for it. Mirrors the
+      # pattern in ci.yml + release.yml.
+      - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: chan
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: chan/web/package-lock.json
+
+      # Tauri Linux build needs webkit2gtk + GTK glue. Apt names
+      # follow Tauri 2's documented Ubuntu 22.04 list. Skip on
+      # macOS (system frameworks).
+      - if: matrix.os == 'ubuntu-latest'
+        name: Install Linux Tauri build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            patchelf
+
+      # `cargo tauri build` requires tauri-cli as a cargo subcommand.
+      # Pin to v2.x to match the workspace `tauri = "2"` deps.
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --locked --version "^2"
+
+      # The Makefile's `chan-bin` target runs `npm run build` but
+      # not `npm ci`. Install the deps explicitly so a clean runner
+      # has node_modules before the make target reaches in.
+      - name: npm ci (web)
+        working-directory: chan/web
+        run: npm ci
+
+      # Pre-fetch the BGE-small embedding model so chan-server's
+      # rust-embed bakes it into the sidecar chan binary. Adds
+      # ~140 MB to the artifact but matches release.yml's chan
+      # CLI behaviour: end users get hybrid search with no
+      # network round-trip on first launch.
+      - name: Pre-fetch embedded model
+        working-directory: chan
+        run: cargo run --release -p fetch-models
+
+      # `make build` chain (in desktop/Makefile):
+      #   chan-bin:
+      #     (cd ../web && npm run build)
+      #     (cd .. && cargo build --release --bin chan)
+      #     cp ../target/release/chan src-tauri/binaries/chan-<triple>
+      #   build:
+      #     (cd src-tauri && cargo tauri build)
+      - name: Build chan-desktop installers
+        working-directory: chan/desktop
+        run: make build
+
+      # desktop/src-tauri is a workspace member of the chan
+      # Cargo workspace, so `cargo tauri build` writes the bundle
+      # under the workspace target dir at chan/target/, NOT under
+      # chan/desktop/src-tauri/target/. (The Makefile's `app-*`
+      # echo lines reference the pre-merge layout and are stale.)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chan-desktop-${{ matrix.artifact_name }}-unsigned
+          path: |
+            chan/target/release/bundle/**/*
+          if-no-files-found: error
