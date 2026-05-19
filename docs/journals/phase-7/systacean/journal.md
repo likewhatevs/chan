@@ -302,3 +302,25 @@ Committed and pushed the terminal tab activity indicator.
 Commit:
 
 * `1694041` - Add terminal tab activity indicator
+
+## 2026-05-19 05:32 BST - systacean-14 started
+
+New Wave-B queue item started:
+[systacean-14.md](systacean-14.md), MCP auto-discovery for
+external agents launched inside chan terminals.
+
+## 2026-05-19 05:37 BST - systacean-14 ready
+
+Implemented and gate-verified MCP auto-discovery publication for
+Claude Code, Codex, and Gemini CLI.
+
+Notes:
+
+* [systacean-14.md](systacean-14.md#2026-05-19-0537-bst---ready-to-land)
+
+Verification:
+
+* `cargo test -p chan-server mcp_discovery --no-default-features`
+* `cargo test -p chan-server --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `scripts/pre-push`

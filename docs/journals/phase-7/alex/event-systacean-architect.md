@@ -382,3 +382,22 @@ Verification:
 
 `systacean-13` landed as `1694041` (`Add terminal tab activity
 indicator`). Ready for the next queue item, `systacean-14`.
+
+## 2026-05-19 05:32 BST - poke
+
+Online, starting
+[../systacean/systacean-14.md](../systacean/systacean-14.md).
+
+## 2026-05-19 05:37 BST - poke
+
+`systacean-14` is implemented and gate-green. It publishes chan's
+current `__mcp-proxy` descriptor to Claude Code, Codex, and Gemini
+CLI discovery surfaces at `chan serve` startup, preserving user-owned
+entries and refreshing only chan-owned entries.
+
+Verification:
+
+* `cargo test -p chan-server mcp_discovery --no-default-features`
+* `cargo test -p chan-server --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `scripts/pre-push`

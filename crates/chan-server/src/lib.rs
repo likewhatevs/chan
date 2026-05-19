@@ -24,6 +24,7 @@ mod error;
 mod event_watcher;
 mod indexer;
 mod mcp_bridge;
+mod mcp_discovery;
 mod preferences;
 mod qr;
 mod routes;
@@ -375,6 +376,9 @@ async fn build_app(
             (None, None)
         }
     };
+    if let Some(socket_path) = mcp_socket_path.as_deref() {
+        mcp_discovery::publish_for_agents(&drive_root, socket_path);
+    }
     let control_socket_path = control_socket::pick_socket_path();
     let control = control_socket::start(
         control_socket_path.clone(),
