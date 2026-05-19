@@ -703,27 +703,19 @@
           <span class="mbtn-label">Reload from Disk</span>
           <span class="mbtn-chord"></span>
         </button>
+        <!-- `fullstack-42`: dropped "Show File" and "Graph from
+             here" because Pane Mode + context-aware spawn
+             (`fullstack-43`) replaces them. The remaining "Search"
+             and "Terminal from here" stay; Search has no other tab
+             affordance and Terminal-from-here is not yet covered
+             by Pane Mode's spawn keys. -->
         <div class="msep" role="separator"></div>
-        <button class="mbtn" onclick={revealInBrowser}>
-          <span class="mbtn-icon">
-            <Folder size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Show File</span>
-          <span class="mbtn-chord">{chordLabel("app.files.toggle")}</span>
-        </button>
         <button class="mbtn" onclick={doOpenSearch}>
           <span class="mbtn-icon">
             <SearchIcon size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
           <span class="mbtn-label">Search</span>
-          <span class="mbtn-chord">{chordLabel("app.search.toggle")}</span>
-        </button>
-        <button class="mbtn" onclick={doOpenGraph}>
-          <span class="mbtn-icon">
-            <Network size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Graph from here</span>
-          <span class="mbtn-chord">{chordLabel("app.graph.toggle")}</span>
+          <span class="mbtn-chord"></span>
         </button>
         <button class="mbtn" onclick={doTerminalFromHere}>
           <span class="mbtn-icon">

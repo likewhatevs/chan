@@ -17,10 +17,39 @@ describe("Cmd+K pane mode keymap (fullstack-40 inversion)", () => {
     expect(app).toContain('case "ArrowRight":\n        paneModeMoveFocus("right");');
   });
 
-  test("WASD swaps tiles", () => {
+  test("WASD swaps tiles (lowercase + uppercase, except 's')", () => {
     expect(app).toContain('case "w":\n      case "W":\n        paneModeSwap("up");');
     expect(app).toContain('case "a":\n      case "A":\n        paneModeSwap("left");');
-    expect(app).toContain('case "s":\n      case "S":\n        paneModeSwap("down");');
     expect(app).toContain('case "d":\n      case "D":\n        paneModeSwap("right");');
+    // `fullstack-42` reassigned lowercase `s` to Search overlay,
+    // so only the Shift-modified `S` keeps the swap-down meaning.
+    expect(app).toContain('case "S":\n        paneModeSwap("down");');
+  });
+});
+
+describe("Cmd+K pane mode keymap (fullstack-42 — search / graph / new file / help)", () => {
+  test("3 spawns Graph; lowercase s opens the Search overlay", () => {
+    expect(app).toContain('case "3":\n        paneModeOpenGraph();');
+    expect(app).toMatch(
+      /case "s":[\s\S]*commitPaneMode\(\);[\s\S]*searchPanel\.open = true;/,
+    );
+  });
+
+  test("4 commits the draft and opens the new-file dialog", () => {
+    expect(app).toMatch(
+      /case "4":[\s\S]*commitPaneMode\(\);[\s\S]*fileOps\.createFile\(""\);/,
+    );
+  });
+
+  test("h toggles the Pane Mode help overlay without committing", () => {
+    expect(app).toContain(
+      'case "h":\n      case "H":\n        paneModeHelpVisible = !paneModeHelpVisible;',
+    );
+    // The help block must not call commitPaneMode or
+    // scheduleSessionSave near its own case — it's a read-only
+    // affordance on top of the live draft.
+    expect(app).toMatch(
+      /case "h":[\s\S]*?case "H":[\s\S]*?paneModeHelpVisible = !paneModeHelpVisible;\s*\n\s*return;/,
+    );
   });
 });

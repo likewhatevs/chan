@@ -467,13 +467,9 @@
       <span class="menu-row-chord"></span>
     </button>
   </li>
-  <li>
-    <button role="menuitem" onclick={graphDrive}>
-      <Network size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">Graph from here</span>
-      <span class="menu-row-chord"></span>
-    </button>
-  </li>
+  <!-- `fullstack-42`: dropped "Graph from here" — Pane Mode covers
+       it via Cmd+K 3 with the current browser scope / selection as
+       context (`fullstack-43`). -->
   <li>
     <button role="menuitem" onclick={searchDrive}>
       <Search size={16} strokeWidth={1.75} aria-hidden="true" />

@@ -606,21 +606,11 @@
     term?.focus();
   }
 
-  function showTerminalCwd(): void {
-    const cwd = terminalCwdRel();
-    if (cwd === null) return terminalCwdUnavailable();
-    closeTabMenu();
-    revealPathInBrowser(cwd, { inspectorOpen: true });
-    term?.focus();
-  }
-
-  function graphTerminalCwd(): void {
-    const cwd = terminalCwdRel();
-    if (cwd === null) return terminalCwdUnavailable();
-    closeTabMenu();
-    openFsGraphForDirectory(cwd);
-    term?.focus();
-  }
+  // `fullstack-42` dropped the "Show Dir" and "Graph dir" menu
+  // entries. Their click handlers (`showTerminalCwd` /
+  // `graphTerminalCwd`) lived here; they came back as dead code so
+  // the section is gone. `fullstack-43`'s context-aware spawn will
+  // re-read the terminal's CWD through a centralised helper.
 
   function openSettingsFromMenu(): void {
     closeTabMenu();
@@ -979,20 +969,11 @@
           <span class="mbtn-label">Copy path to CWD</span>
           <span class="mbtn-chord"></span>
         </button>
-        <button class="mbtn" onclick={showTerminalCwd}>
-          <span class="mbtn-icon">
-            <FolderOpen size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Show Dir</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <button class="mbtn" onclick={graphTerminalCwd}>
-          <span class="mbtn-icon">
-            <Network size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Graph dir</span>
-          <span class="mbtn-chord"></span>
-        </button>
+        <!-- `fullstack-42`: dropped "Show Dir" and "Graph dir";
+             Pane Mode + context-aware spawn (`fullstack-43`) covers
+             both via Cmd+K 2 and Cmd+K 3, with the terminal's CWD
+             as the context. -->
+
         <div class="msep" role="separator"></div>
         <button class="mbtn" onclick={openFind}>
           <span class="mbtn-icon">

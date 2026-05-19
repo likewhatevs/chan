@@ -548,6 +548,12 @@ const KEY_BRIDGE_JS: &str = r#"
     window.dispatchEvent(new CustomEvent('chan:command',
       { detail: Object.assign({ name: name }, detail || {}) }));
   }
+  // `fullstack-42` pruned every native chord whose action is now
+  // covered by Pane Mode (Cmd+K). Dropped: Cmd+P, Cmd+N, Cmd+T,
+  // Cmd+`, Cmd+[/Cmd+], Cmd+Shift+M, Cmd+Shift+F. Kept: Cmd+W (close
+  // tab; pairs with Ctrl+D from fullstack-41), Cmd+F/G (find on page),
+  // Cmd+1..9 (jump to tab), Cmd+Shift+T (reopen closed),
+  // Cmd+Shift+[/] (tab nav), Cmd+Shift+G (find prev).
   function onKey(e) {
     const meta = e.metaKey || e.ctrlKey;
     if (!meta || e.altKey) return;
@@ -555,15 +561,9 @@ const KEY_BRIDGE_JS: &str = r#"
     const code = e.code;
     if (!shift) {
       switch (code) {
-        case 'KeyP': fire(e, 'app.files.toggle');     return;
-        case 'KeyN': fire(e, 'app.file.new');         return;
         case 'KeyW': fire(e, 'app.tab.close');        return;
         case 'KeyF': fire(e, 'app.find.open');        return;
         case 'KeyG': fire(e, 'app.find.next');        return;
-        case 'KeyT': fire(e, 'app.terminal.toggle');  return;
-        case 'Backquote': fire(e, 'app.terminal.toggle'); return;
-        case 'BracketLeft': fire(e, 'app.pane.prev'); return;
-        case 'BracketRight': fire(e, 'app.pane.next'); return;
       }
       const m = code.match(/^Digit([1-9])$/);
       if (m) {
@@ -572,9 +572,7 @@ const KEY_BRIDGE_JS: &str = r#"
       }
     } else {
       switch (code) {
-        case 'KeyF':         fire(e, 'app.search.toggle'); return;
         case 'KeyG':         fire(e, 'app.find.prev');     return;
-        case 'KeyM':         fire(e, 'app.graph.toggle');  return;
         case 'KeyT':         fire(e, 'app.tab.reopenClosed'); return;
         case 'BracketLeft':  fire(e, 'app.tab.prev');      return;
         case 'BracketRight': fire(e, 'app.tab.next');      return;
@@ -626,9 +624,31 @@ mod tests {
     }
 
     #[test]
-    fn key_bridge_maps_terminal_to_t_and_backquote() {
-        assert!(KEY_BRIDGE_JS.contains("case 'KeyT': fire(e, 'app.terminal.toggle');"));
-        assert!(KEY_BRIDGE_JS.contains("case 'Backquote': fire(e, 'app.terminal.toggle');"));
+    fn key_bridge_drops_chords_covered_by_pane_mode() {
+        // `fullstack-42` pruned every native chord that now has a
+        // Pane Mode (Cmd+K …) equivalent. Asserting the absence of
+        // each one catches an accidental revert.
+        assert!(!KEY_BRIDGE_JS.contains("app.terminal.toggle"));
+        assert!(!KEY_BRIDGE_JS.contains("app.files.toggle"));
+        assert!(!KEY_BRIDGE_JS.contains("app.graph.toggle"));
+        assert!(!KEY_BRIDGE_JS.contains("app.search.toggle"));
+        assert!(!KEY_BRIDGE_JS.contains("app.file.new"));
+        assert!(!KEY_BRIDGE_JS.contains("app.pane.prev"));
+        assert!(!KEY_BRIDGE_JS.contains("app.pane.next"));
+        assert!(!KEY_BRIDGE_JS.contains("Backquote"));
+    }
+
+    #[test]
+    fn key_bridge_keeps_independent_chords() {
+        // Tab close + reopen + Find on page + tab nav + tab jump
+        // are NOT duplicated by Pane Mode and must stay reachable
+        // through the native bridge.
+        assert!(KEY_BRIDGE_JS.contains("app.tab.close"));
+        assert!(KEY_BRIDGE_JS.contains("app.tab.reopenClosed"));
+        assert!(KEY_BRIDGE_JS.contains("app.find.open"));
+        assert!(KEY_BRIDGE_JS.contains("app.tab.jump"));
+        assert!(KEY_BRIDGE_JS.contains("app.tab.next"));
+        assert!(KEY_BRIDGE_JS.contains("app.tab.prev"));
     }
 
     #[cfg(unix)]

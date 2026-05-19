@@ -196,7 +196,12 @@ so it auto-hides when the transaction commits / discards.
 TUI-dense responsive grid (Move / Spawn / Split / Close /
 Resize / Commit) with `<kbd>`-styled chips.
 
-### Redundant menu items dropped
+### Redundant menu items dropped (menus only; inspectors preserved)
+
+Per @@Architect's 13:40 BST refinement, inspector panels
+keep their drill-into-this-node buttons; only the
+duplicate entries inside right-click / hamburger menus
+were dropped:
 
 | Surface                                                    | Item dropped                                              |
 |------------------------------------------------------------|-----------------------------------------------------------|
@@ -204,9 +209,6 @@ Resize / Commit) with `<kbd>`-styled chips.
 | `TerminalTab.svelte` hamburger                             | "Show Dir", "Graph dir"                                   |
 | `FileTree.svelte` right-click context menu                 | "Graph from here"                                         |
 | `FileBrowserSurface.svelte` browser hamburger              | "Graph from here"                                         |
-| `TagInfoBody.svelte` tag / mention inspector               | "Graph from here"                                         |
-| `FileInfoBody.svelte` directory inspector                  | "Show Directory", "Graph from here"                       |
-| `FileInfoBody.svelte` file/image/pdf inspector             | "Show File", "Show in file browser", "Graph from here"    |
 
 The terminal-tab `showTerminalCwd()` / `graphTerminalCwd()`
 click handlers became dead code with the menu items gone and
@@ -216,6 +218,32 @@ the terminal CWD via a centralised helper.
 `SearchStatusOverlay.svelte`'s "Graph from here code report"
 button stays — it's a specialised "graph the report's call
 graph" affordance, not a duplicate of "graph this file/dir".
+
+### Inspector buttons KEPT
+
+`FileInfoBody.svelte` and `TagInfoBody.svelte` retain
+their full set:
+
+* Directory inspector keeps `Show Directory` (when
+  `onReveal` is wired) + `Graph from here` (when
+  `onSetAsScope` is wired).
+* File / image / PDF inspector keeps `Show File`,
+  `Show in file browser` (for images / PDFs), and
+  `Graph from here`.
+* Tag / mention inspector keeps `Open` (for resolved
+  mentions) + `Graph from here`.
+
+These are the canonical drill-in surfaces; the refinement
+points out they cover panel-gesture use while Cmd+K (with
+`fullstack-43`'s context) covers menu-gesture use.
+
+The dedicated `Show Dir` audit on the Graph + Search
+inspectors checked: the Graph fs-mode inspector already
+binds `onReveal` (renders as `Show Directory`/`Show File`
+via `FileInfoBody`); the Search inspector currently doesn't
+mount FileInfoBody on directory results, but is itself
+out of scope — file/dir Search hits route through the
+shared inspector. No new buttons needed.
 
 ### Redundant standalone shortcuts dropped
 
@@ -267,7 +295,7 @@ expanded with the full keymap + history.
 ### Gate
 
 * `npm run test -- paneModeKeymap` — 5 passed (was 2; +3 new).
-* `npm run test` — 35 files / 308 tests, all pass.
+* `npm run test` — 35 files / 312 tests, all pass.
 * `npm run check` — 0 errors / 0 warnings.
 * `npm run build` — clean.
 * `bash -lc 'ulimit -n 4096; scripts/pre-push'` — green

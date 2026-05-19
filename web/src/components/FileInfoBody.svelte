@@ -550,6 +550,10 @@
     {#if onSetAsScope}
       <button class="open" onclick={onSetAsScope}>Graph from here</button>
     {/if}
+    <!-- `fullstack-42` refined: inspector buttons stay; the menu-
+         level duplicates were dropped instead. Pane Mode's Cmd+K 2
+         / 3 (with `fullstack-43`'s context) is the keyboard
+         equivalent of these affordances. -->
   </div>
 {:else}
   {@const editable = isEditableText(entry.path)}
@@ -675,6 +679,9 @@
            when the host wires it up (today: the graph surface). -->
       <button class="open" onclick={onSetAsScope}>Graph from here</button>
     {/if}
+    <!-- `fullstack-42` refined: inspector buttons stay; the menu-
+         level duplicates (doc-tab right-click "Show File", terminal
+         right-click "Show Dir", etc.) were dropped instead. -->
     {#if showRefs}
       {#if !graphData.view && graphData.loading}
         <div class="refs-loading">loading references…</div>

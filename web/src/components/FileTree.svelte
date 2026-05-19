@@ -895,10 +895,9 @@
         <span>New directory</span>
       </button>
     {/if}
-    <button onclick={() => graphThis(menu!.path, menu!.isDir)}>
-      <Network size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span>Graph from here</span>
-    </button>
+    <!-- `fullstack-42`: dropped "Graph from here"; Pane Mode
+         + context-aware spawn (`fullstack-43`) covers it via
+         Cmd+K 3 with the selected node as context. -->
     <button onclick={() => searchThis(menu!.path, menu!.isDir)}>
       <Search size={16} strokeWidth={1.75} aria-hidden="true" />
       <span>Search this</span>

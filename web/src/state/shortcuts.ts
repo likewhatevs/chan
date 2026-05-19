@@ -62,6 +62,22 @@ export type Shortcut = {
 
 /// The complete chord registry. Order in this list is the order the
 /// table renders rows within each group.
+///
+/// `fullstack-42` (2026-05-19) pruned every chord whose action is
+/// now covered by Pane Mode (`Cmd+K` …) so the keymap stops
+/// shipping two shortcuts for the same action. Removed:
+///
+///   app.files.toggle    (was Mod+P)              → Cmd+K 2
+///   app.search.toggle   (was Mod+Shift+F)        → Cmd+K s
+///   app.graph.toggle    (was Mod+Shift+M)        → Cmd+K 3
+///   app.terminal.toggle (was Cmd+Alt+T / Mod+T)  → Cmd+K 1
+///   app.file.new        (was Ctrl+Alt+N / Mod+N) → Cmd+K 4
+///   app.pane.prev/next  (was Mod+Alt+[ / ])      → Cmd+K ← / →
+///
+/// `app.tab.close` was rewired to `Ctrl+D` on both web and native
+/// (a different action than Pane Mode's `x` / `k`, per
+/// `fullstack-41`); the native `Mod+W` fallback still fires through
+/// `KEY_BRIDGE_JS` in `desktop/src-tauri/src/serve.rs`.
 export const SHORTCUTS: readonly Shortcut[] = [
   // App-level navigation
   {
@@ -69,34 +85,6 @@ export const SHORTCUTS: readonly Shortcut[] = [
     label: "Settings",
     web: "Mod+,",
     native: "Mod+,",
-    group: "App",
-  },
-  {
-    id: "app.files.toggle",
-    label: "Files",
-    web: "Mod+P",
-    native: "Mod+P",
-    group: "App",
-  },
-  {
-    id: "app.search.toggle",
-    label: "Search across files",
-    web: "Mod+Shift+F",
-    native: "Mod+Shift+F",
-    group: "App",
-  },
-  {
-    id: "app.graph.toggle",
-    label: "Graph",
-    web: "Mod+Shift+M",
-    native: "Mod+Shift+M",
-    group: "App",
-  },
-  {
-    id: "app.terminal.toggle",
-    label: "Terminal",
-    web: "Cmd+Alt+T",
-    native: "Mod+T",
     group: "App",
   },
   {
@@ -128,20 +116,14 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Mod+S",
     group: "File",
   },
-  {
-    id: "app.file.new",
-    label: "New file",
-    web: "Ctrl+Alt+N",
-    native: "Mod+N",
-    group: "File",
-  },
   // Tab navigation
   {
     id: "app.tab.close",
     label: "Close tab",
-    native: "Mod+W",
+    web: "Ctrl+D",
+    native: "Ctrl+D",
     group: "Tabs",
-    note: "browser closes its own tab on Mod+W",
+    note: "Cmd+W also closes the tab on native",
   },
   {
     id: "app.tab.reopenClosed",
@@ -170,21 +152,6 @@ export const SHORTCUTS: readonly Shortcut[] = [
     web: "Ctrl+Alt+1..9",
     native: "Mod+1..9",
     group: "Tabs",
-  },
-  // Pane navigation
-  {
-    id: "app.pane.prev",
-    label: "Previous pane",
-    web: "Mod+Alt+[",
-    native: "Mod+[",
-    group: "Panes",
-  },
-  {
-    id: "app.pane.next",
-    label: "Next pane",
-    web: "Mod+Alt+]",
-    native: "Mod+]",
-    group: "Panes",
   },
   // Find on page — browser owns Cmd+F/G/Shift+G in the web build.
   {

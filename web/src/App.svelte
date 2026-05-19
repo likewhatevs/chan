@@ -7,6 +7,7 @@
   import FileBrowserSidePane from "./components/FileBrowserSidePane.svelte";
   import MissingTokenOverlay from "./components/MissingTokenOverlay.svelte";
   import PathPromptModal from "./components/PathPromptModal.svelte";
+  import PaneModeHelp from "./components/PaneModeHelp.svelte";
   import PromptModal from "./components/PromptModal.svelte";
   import SearchPanel from "./components/SearchPanel.svelte";
   import SearchStatusOverlay from "./components/SearchStatusOverlay.svelte";
@@ -89,6 +90,11 @@
   // synchronously, and Svelte only tracks reads that happen *during*
   // the effect's run.
   let bootstrapped = $state(false);
+  // `fullstack-42`: `h` inside Pane Mode toggles a cheatsheet
+  // overlay that lists every Cmd+K binding. The flag stays inside
+  // App.svelte because Pane Mode itself is global (one transaction
+  // per Cmd+K press) — no per-pane scoping needed.
+  let paneModeHelpVisible = $state(false);
   $effect(() => {
     // Touch enough of the layout to trip reactivity on common
     // mutations (URL persistence) AND watch every file tab's content
@@ -333,9 +339,11 @@
       case "Enter":
         commitPaneMode();
         scheduleSessionSave();
+        paneModeHelpVisible = false;
         return;
       case "Escape":
         cancelPaneMode();
+        paneModeHelpVisible = false;
         return;
       // @@Alex's mental model: arrows navigate (move focus),
       // WASD moves stuff (swap tiles). `fullstack-40` swapped
@@ -360,7 +368,9 @@
       case "A":
         paneModeSwap("left");
         return;
-      case "s":
+      // Lowercase `s` is the Search-overlay shortcut now (handled in
+      // a case higher up); only `Shift+s` (uppercase S) keeps the
+      // WASD swap-down meaning. Per `fullstack-42`.
       case "S":
         paneModeSwap("down");
         return;
@@ -391,17 +401,38 @@
       case "2":
         paneModeOpenBrowser();
         return;
-      case "4":
+      // `3` opened the Search overlay in `fullstack-39`; `fullstack-42`
+      // reassigns it to Graph since Graph is a real tab type, while
+      // Search remains an OverlayShell. Search now lives on `s`.
+      case "3":
         paneModeOpenGraph();
+        return;
+      // `4` was vacated in -39 + -40; -42 wires it to the existing
+      // new-file flow. Modal owns the keyboard, so commit the draft
+      // first; any pending layout edits are sealed before the dialog
+      // pops.
+      case "4":
+        commitPaneMode();
+        scheduleSessionSave();
+        void fileOps.createFile("");
         return;
       // Search lives in an OverlayShell, not a tab type. Open the
       // overlay outside the transaction so it can capture keyboard
       // input cleanly; commit the draft first so any layout edits
-      // the user already made don't get dropped.
-      case "3":
+      // the user already made don't get dropped. Reassigned from
+      // `3` to lowercase `s` per `fullstack-42`; uppercase `S`
+      // (Shift+s) stays bound to swap-down as part of WASD.
+      case "s":
         commitPaneMode();
         scheduleSessionSave();
         searchPanel.open = true;
+        return;
+      // `h` toggles the Cmd+K help cheatsheet. It does NOT commit
+      // the draft — the user is still shaping their layout; the
+      // overlay just describes the available keys.
+      case "h":
+      case "H":
+        paneModeHelpVisible = !paneModeHelpVisible;
         return;
       // Split keybinds reuse the right/down constraint from
       // `fullstack-21`'s hamburger menu. New pane lands as the focus
@@ -430,45 +461,22 @@
         return;
     }
   }
+    // `fullstack-42` pruned every standalone shortcut now covered by
+    // Pane Mode (`Cmd+K`): Cmd+P (Files), Cmd+Shift+F (Search),
+    // Cmd+Shift+M (Graph), Cmd+Alt+T (Terminal), Cmd+Alt+[ / ]
+    // (Prev/Next pane), and Ctrl+Alt+N (New file). Each is reachable
+    // via Pane Mode now — the keymap stops shipping two chords for
+    // the same action. The native shell's `KEY_BRIDGE_JS` was
+    // updated in lockstep.
     if (meta && !e.shiftKey && !e.altKey && e.key === ",") {
       e.preventDefault();
       openSettings();
-      return;
-    }
-    if (meta && !e.shiftKey && !e.altKey && e.code === "KeyP") {
-      e.preventDefault();
-      openBrowser();
-      return;
-    }
-    if (meta && e.shiftKey && !e.altKey && e.code === "KeyF") {
-      e.preventDefault();
-      searchPanel.open = !searchPanel.open;
-      return;
-    }
-    if (meta && e.shiftKey && !e.altKey && e.code === "KeyM") {
-      e.preventDefault();
-      openGraph();
-      return;
-    }
-    if (e.metaKey && e.altKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyT") {
-      e.preventDefault();
-      openTerminalInActivePane();
       return;
     }
     if (e.altKey && !meta && !e.shiftKey && e.code === "Space") {
       e.preventDefault();
       openActiveTerminalRichPrompt();
       scheduleSessionSave();
-      return;
-    }
-    if (meta && !e.shiftKey && e.altKey && e.code === "BracketLeft") {
-      e.preventDefault();
-      selectPrevPane();
-      return;
-    }
-    if (meta && !e.shiftKey && e.altKey && e.code === "BracketRight") {
-      e.preventDefault();
-      selectNextPane();
       return;
     }
     if (e.altKey && e.shiftKey && !meta) {
@@ -497,15 +505,6 @@
       if (m) {
         e.preventDefault();
         selectTabAtIndexInActivePane(Number(m[1]) - 1);
-        return;
-      }
-      // Ctrl+Alt+N: open the same "new file" prompt the file
-      // browser menu uses. `fileOps.createFile` runs the path
-      // dialog, creates the file, and opens it in the active pane.
-      // e.code so Option mangling on macOS doesn't bury the chord.
-      if (e.code === "KeyN") {
-        e.preventDefault();
-        void fileOps.createFile("");
         return;
       }
     }
@@ -665,6 +664,12 @@
      lifted above every overlay so users keep visibility on
      long-running work no matter which panel they're in. -->
 <AppStatusBar />
+<!-- Pane Mode (Cmd+K) cheatsheet, toggled with `h` while pane mode
+     is active. Gated on the live `paneMode.active` so it auto-hides
+     the moment the transaction commits / discards. -->
+{#if paneMode.active && paneModeHelpVisible}
+  <PaneModeHelp />
+{/if}
 <!-- Window-level overlays. Mounted once. -->
 <PromptModal />
 <PathPromptModal />

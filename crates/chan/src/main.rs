@@ -87,36 +87,46 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   App
   ---
   Settings                Cmd+,
-  Files                   Cmd+P
-  Search across files     Cmd+Shift+F
-  Graph                   Cmd+Shift+M
-  Terminal                Cmd+Alt+T
   Terminal rich prompt    Alt+Space
   Dismiss overlay         Esc
+
+  Panes
+  -----
+  Enter Pane Mode         Cmd+K
 
   File
   ----
   Save                    Cmd+S
-  New file                Ctrl+Alt+N
 
   Tabs
   ----
+  Close tab               Ctrl+D   (Cmd+W also closes the tab on native)
   Reopen closed tab       Ctrl+Alt+T
   Next tab                Alt+Shift+]
   Previous tab            Alt+Shift+[
   Jump to tab N           Ctrl+Alt+1..9
 
-  Panes
-  -----
-  Previous pane           Cmd+Alt+[
-  Next pane               Cmd+Alt+]
+Pane Mode (Cmd+K), keys are unprefixed:
+
+  Arrows                  Move focus
+  W A S D                 Swap with neighbour
+  1 / 2 / 3 / 4           Spawn Terminal / Files / Graph / New file
+  s                       Search overlay
+  h                       Help (this list, in-app overlay)
+  /                       Split focused pane right
+  \\                       Split focused pane down
+  [ ] - =                 Resize focused pane (Shift = larger nudge)
+  0                       Equalize siblings
+  x                       Close all tabs in focused pane
+  k                       Close (kill) focused pane
+  Enter                   Commit draft
+  Esc                     Discard draft
 
 Handled by the browser:
 
   Find on page           Cmd+F
   Find next              Cmd+G
   Find previous          Cmd+Shift+G
-  Close tab              Cmd+W
   Zoom in / out / reset  Cmd+= / Cmd+- / Cmd+0
 ";
 

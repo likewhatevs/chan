@@ -5,10 +5,14 @@ import fileBrowserSurface from "./FileBrowserSurface.svelte?raw";
 import fileTree from "./FileTree.svelte?raw";
 
 describe("file-browser reveal actions", () => {
-  test("terminal Show Dir reveals in a browser tab, not the legacy overlay", () => {
-    expect(terminal).toContain("function showTerminalCwd()");
-    expect(terminal).toContain("revealPathInBrowser(cwd, { inspectorOpen: true });");
+  test("terminal tab does not leak to the legacy file-browser overlay", () => {
+    // `fullstack-42` dropped the "Show Dir" / "Graph dir" entries
+    // from the terminal hamburger menu (Pane Mode + context covers
+    // them). Their click handlers were removed too; what stays is
+    // the rule that NOTHING in TerminalTab opens the old overlay.
     expect(terminal).not.toContain("browserOverlay.open = true");
+    expect(terminal).not.toContain("function showTerminalCwd()");
+    expect(terminal).not.toContain("function graphTerminalCwd()");
   });
 
   test("graph inspector reveal buttons reveal in a browser tab", () => {
