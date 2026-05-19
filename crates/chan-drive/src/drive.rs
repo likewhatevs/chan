@@ -1667,6 +1667,12 @@ impl Drive {
         Ok(self.index()?.stats())
     }
 
+    /// Sorted drive-relative file paths currently known to the
+    /// persisted full-text index.
+    pub fn indexed_paths(&self) -> Result<Vec<String>> {
+        Ok(self.index()?.known_paths()?)
+    }
+
     /// Re-index a single file. Reads, parses, updates the search
     /// index and graph for just this path. Used by the watcher
     /// consumer when a file changes.

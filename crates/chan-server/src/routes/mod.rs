@@ -40,7 +40,9 @@ pub use preferences::{
     api_get_config, api_get_server_config, api_patch_config, api_patch_server_config,
 };
 pub use report::{api_report_file, api_report_prefix};
-pub use search::{api_index_rebuild, api_index_status, api_search_content, api_search_files};
+pub use search::{
+    api_index_rebuild, api_index_status, api_indexing_state, api_search_content, api_search_files,
+};
 pub use sessions::{api_delete_session, api_get_session, api_list_sessions, api_put_session};
 pub use storage::api_storage_reset;
 pub use terminal::{

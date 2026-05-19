@@ -245,6 +245,12 @@ impl Index {
         self.config.lock().unwrap().clone()
     }
 
+    /// Sorted drive-relative paths currently known to the persisted
+    /// full-text index.
+    pub fn known_paths(&self) -> Result<Vec<String>, IndexError> {
+        Ok(self.bm25.known_paths()?)
+    }
+
     /// Persist a (possibly mutated) config. Used by the CLI when
     /// the user passes `--model X`. Switching model invalidates the
     /// existing vectors (different dim / different semantics) so

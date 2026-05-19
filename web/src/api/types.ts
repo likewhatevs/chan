@@ -419,6 +419,19 @@ export type IndexStatus =
   | { state: "reindexing"; file: string }
   | { state: "error"; message: string };
 
+export type IndexingDirectoryState = "indexed" | "indexing" | "pending";
+
+export type IndexingStateNode = {
+  path: string;
+  state: IndexingDirectoryState;
+  children_count: number;
+};
+
+export type IndexingStateResponse = {
+  root: string;
+  nodes: IndexingStateNode[];
+};
+
 export type HealthIndexerStatus = "idle" | "settling" | "rebuilding" | "error";
 
 export type HealthResponse = {

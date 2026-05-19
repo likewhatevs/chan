@@ -398,3 +398,25 @@ Verification:
 * `npm run check`
 * `npm run build`
 * `scripts/pre-push`
+
+## 2026-05-19 10:56 BST - systacean-18 started
+
+New assignment started:
+[systacean-18.md](systacean-18.md), read-only indexing-state
+endpoint for the empty-pane carousel.
+
+## 2026-05-19 11:01 BST - systacean-18 implemented
+
+Implemented `GET /api/indexing/state` with the agreed
+`{root,nodes:[{path,state,children_count}]}` schema for
+@@FullStackB. The route derives dir-only state from the filtered
+indexer tree and BM25 known paths, with live `building` /
+`reindexing` file status overriding matching directories to
+`indexing`.
+
+Verification:
+* `cargo test -p chan-server indexing_state --no-default-features`
+* `cargo test -p chan-server --no-default-features`
+* `cargo check -p chan-server --all-targets --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `(cd web && npm run check)`

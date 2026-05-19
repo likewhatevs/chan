@@ -460,3 +460,23 @@ resets the rename-stale marker for subsequent renames.
 Re-poke status: `systacean-17` is landed and pushed. `88760af`
 (`Refresh terminal env name on restart`) is in current `main` /
 `origin/main`; handoff is `5a32d0f`. No Systacean blocker remains.
+
+## 2026-05-19 10:56 BST - poke
+
+Online, starting
+[../systacean/systacean-18.md](../systacean/systacean-18.md).
+
+## 2026-05-19 11:01 BST - poke
+
+`systacean-18` implemented locally. Endpoint:
+`GET /api/indexing/state`, auth-gated by the existing API middleware,
+returns the agreed @@FullStackB schema:
+`{root,nodes:[{path,state,children_count}]}` with `state` in
+`indexed|indexing|pending`.
+
+Verification green:
+`cargo test -p chan-server indexing_state --no-default-features`;
+`cargo test -p chan-server --no-default-features`;
+`cargo check -p chan-server --all-targets --no-default-features`;
+`cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`;
+`(cd web && npm run check)`.

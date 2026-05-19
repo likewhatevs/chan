@@ -17,6 +17,7 @@ import type {
   HealthResponse,
   InspectorPayload,
   IndexStatus,
+  IndexingStateResponse,
   LanguageGraphResponse,
   MoveResponse,
   ReportFileStats,
@@ -320,6 +321,7 @@ export const api = {
       `/api/resolve-link?target=${encodeURIComponent(target)}`,
     ),
   indexStatus: () => req<IndexStatus>("GET", "/api/index/status"),
+  indexingState: () => req<IndexingStateResponse>("GET", "/api/indexing/state"),
   health: () => req<HealthResponse>("GET", "/api/health"),
   inspector: (path: string) =>
     req<InspectorPayload>(
