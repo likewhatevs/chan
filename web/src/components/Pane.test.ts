@@ -116,18 +116,14 @@ describe("Pane right-click menus", () => {
     expect(document.body.querySelector(".menu-label span")?.textContent?.trim()).toBe(
       "Focus border colour",
     );
+    // fullstack-60: pane hamburger trimmed to just Enter Pane Mode +
+    // the colour swatches. Pane Mode keystrokes carry every other
+    // action (next/prev pane, split, flip, close, close all).
     expect(menuLabels()).toEqual([
       "Enter Pane Mode",
       "blue",
       "green",
       "pink",
-      "Next pane",
-      "Previous pane",
-      "Split right",
-      "Split down",
-      "Flip Hybrid",
-      "Close all tabs",
-      "Close pane",
     ]);
 
     const pink = [...document.body.querySelectorAll<HTMLButtonElement>(".hamburger-menu button")]
@@ -136,6 +132,28 @@ describe("Pane right-click menus", () => {
     await tick();
 
     expect(target.querySelector(".pane")?.getAttribute("data-focus-color")).toBe("pink");
+  }, 15000);
+
+  test("pane hamburger no longer renders Cmd+K-canonical entries (fullstack-60)", async () => {
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-trim",
+      tabs: [terminalTab()],
+      activeTabId: "term-1",
+    };
+    const target = await renderPane(pane, { paneMode: false });
+
+    target.querySelector<HTMLButtonElement>(".hamburger-trigger")?.click();
+    await tick();
+
+    const labels = menuLabels();
+    expect(labels).not.toContain("Next pane");
+    expect(labels).not.toContain("Previous pane");
+    expect(labels).not.toContain("Split right");
+    expect(labels).not.toContain("Split down");
+    expect(labels).not.toContain("Flip Hybrid");
+    expect(labels).not.toContain("Close all tabs");
+    expect(labels).not.toContain("Close pane");
   }, 15000);
 
   test("empty pane right-click shows the welcome menu", async () => {

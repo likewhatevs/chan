@@ -698,3 +698,58 @@ Committing + pushing under standing topic-level
 clearance (no HOLD pokes since the 17:20 BST
 cut). Next: `-60` (pane hamburger trim — small,
 same file).
+
+## 2026-05-19 19:55 BST — poke: fullstack-60 ready to commit
+
+Dropped 51 JSX lines + the post-swatch separator
+from the pane hamburger; menu now reads exactly
+the desired shape (Enter Pane Mode + the three
+colour swatches, nothing else). Plus the
+hygiene sweep matching `fullstack-52`'s pattern:
+* Removed 7 handlers: `onSplitRight`,
+  `onSplitDown`, `onCloseAllTabs`, `onClosePane`,
+  `onFlipHybrid`, `doSelectNextPane`,
+  `doSelectPrevPane`.
+* Removed `splitsAllowed` derived.
+* Removed 7 unused `state/tabs.svelte` imports
+  (canSplit, closePane, closeTabsInPane,
+  flipHybrid, selectNextPane, selectPrevPane,
+  splitPane) and 6 unused icon imports
+  (ArrowDown, ArrowRight, FlipHorizontal2,
+  ListX, SquareSplitHorizontal, X).
+
+All seven dropped actions remain reachable via
+Pane Mode (`Cmd+K` + the appropriate binding).
+The keymap dispatches `chan:command` events
+that route directly to `tabs.svelte` exports;
+the wrappers in Pane.svelte were menu-only
+adapters. `svelte-check` 0 errors confirms no
+dangling references.
+
+Test updates:
+* Existing `hamburger uses window-wide focus
+  color` test asserted the OLD 11-item shape;
+  flipped to the 4-item shape.
+* New sentinel `pane hamburger no longer
+  renders Cmd+K-canonical entries (fullstack-60)`
+  with negative assertions on each dropped
+  label (the task's "Negative assertions"
+  requirement).
+
+Files:
+* `web/src/components/Pane.svelte` (-99 lines)
+* `web/src/components/Pane.test.ts` (+25 / -7)
+
+Gate green: svelte-check 0/0, vitest 36/379
+(was 378; +1 from new sentinel), build clean,
+scripts/pre-push green.
+
+Right-click context menu (`paneContextMenu`)
+untouched — it carries Reload + toggle inspector
+which are pane-level dev actions, not in the
+trim's spec.
+
+Committing + pushing under standing topic-level
+clearance (no HOLD pokes since the 17:20 BST
+cut). Next on the queue: `-62` (Pane Mode →
+Hybrid NAV rename — user-facing copy only).

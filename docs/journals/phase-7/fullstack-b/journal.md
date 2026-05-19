@@ -415,3 +415,33 @@ re-walk. Architect to coordinate; Lane A's
 Committing + pushing under standing topic-level
 clearance. Lane B queue remaining: -60, -62, -63,
 -67.
+
+## 2026-05-19 19:55 BST
+
+Picked up `fullstack-60` (pane hamburger trim).
+Same file (`Pane.svelte`) as -59, context-switch
+zero. Dropped 51 JSX lines from the menu
+(everything past the colour swatches) plus the
+post-swatch separator. Hygiene sweep: removed 7
+unused handlers (onSplitRight/Down,
+onCloseAllTabs, onClosePane, onFlipHybrid,
+doSelectNext/PrevPane), 1 unused derived
+(splitsAllowed), 7 unused state imports, 6
+unused icon imports. All dropped actions remain
+reachable via Cmd+K Pane Mode (the keymap
+dispatches `chan:command` events that route
+directly to `tabs.svelte` exports, not through
+Pane.svelte wrappers).
+
+Test updates: existing focus-color hamburger
+test asserted the OLD 11-item menu shape;
+flipped to the new 4-item shape. Added a new
+sentinel `pane hamburger no longer renders
+Cmd+K-canonical entries (fullstack-60)` with
+negative assertions on each removed label.
+
+Gate green: svelte-check 0/0, vitest 36/379,
+build clean, pre-push green.
+
+Committing + pushing. Lane B queue remaining:
+-62, -63, -67.

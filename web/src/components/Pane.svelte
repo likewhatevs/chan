@@ -3,12 +3,8 @@
 
   import {
     activeLayout,
-    canSplit,
-    closePane,
     closeTab,
-    closeTabsInPane,
     enterPaneMode,
-    flipHybrid,
     focusColorForWindow,
     isDirty,
     detachTabToPaneEdge,
@@ -22,27 +18,20 @@
     paneWobble,
     reorderTab,
     reopenClosedTab,
-    selectNextPane,
-    selectPrevPane,
     setActivePane,
     setWindowFocusColor,
     setTerminalActivity,
     shouldCloseTabAfterDragEnd,
-    splitPane,
     type FocusColor,
     type LeafNode,
     type PaneDropEdge,
   } from "../state/tabs.svelte";
 
   import {
-    ArrowDown,
-    ArrowRight,
     Check,
     FileText,
-    FlipHorizontal2,
     Folder,
     LayoutGrid,
-    ListX,
     Moon,
     Network,
     PanelRight,
@@ -51,11 +40,9 @@
     RefreshCw,
     Search,
     Settings,
-    SquareSplitHorizontal,
     Sun,
     Terminal,
     User,
-    X,
   } from "lucide-svelte";
   import EmptyPaneCarousel from "./EmptyPaneCarousel.svelte";
   import FileEditorTab from "./FileEditorTab.svelte";
@@ -220,29 +207,9 @@
   });
   onDestroy(() => resizeObs?.disconnect());
 
-  function onSplitRight(): void {
-    closePaneMenus();
-    splitPane(pane.id, "row", "after");
-  }
-  function onSplitDown(): void {
-    closePaneMenus();
-    splitPane(pane.id, "column", "after");
-  }
-  function onCloseAllTabs(): void {
-    closePaneMenus();
-    void closeTabsInPane(pane.id);
-  }
-  function onClosePane(): void {
-    closePaneMenus();
-    closePane(pane.id);
-  }
   function onEnterPaneMode(): void {
     closePaneMenus();
     enterPaneMode();
-  }
-  function onFlipHybrid(): void {
-    closePaneMenus();
-    flipHybrid(pane.id);
   }
 
   /// `fullstack-59`: per-Hybrid theme override. Click on the
@@ -348,16 +315,6 @@
     }
   }
 
-  function doSelectPrevPane(): void {
-    closePaneMenus();
-    selectPrevPane();
-  }
-
-  function doSelectNextPane(): void {
-    closePaneMenus();
-    selectNextPane();
-  }
-
   function doSetFocusColor(color: FocusColor): void {
     closePaneMenus();
     setWindowFocusColor(color);
@@ -389,13 +346,6 @@
     return Object.values(viewLayout.nodes).some((n) => n.kind === "split");
   });
   const isFocused = $derived(multiPane && viewLayout.activePaneId === pane.id);
-  // Re-derive on every layout mutation so the split buttons grey
-  // out the instant a tablet user adds their one allowed split.
-  const splitsAllowed = $derived.by(() => {
-    void viewLayout.rootId;
-    void Object.keys(viewLayout.nodes).length;
-    return canSplit();
-  });
   // Drag state: highlight the tab strip while another pane's tab is being
   // dragged over it. Keyed by pane id so we don't bleed state between
   // panes that share this Svelte 5 component instance.
@@ -1003,55 +953,6 @@
             </button>
           </li>
         {/each}
-        <li class="sep" role="separator"></li>
-        <li>
-          <button role="menuitem" onclick={doSelectNextPane}>
-            <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
-            <span class="menu-row-label">Next pane</span>
-            <span class="menu-row-chord">{chordLabel("app.pane.next")}</span>
-          </button>
-        </li>
-        <li>
-          <button role="menuitem" onclick={doSelectPrevPane}>
-            <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
-            <span class="menu-row-label">Previous pane</span>
-            <span class="menu-row-chord">{chordLabel("app.pane.prev")}</span>
-          </button>
-        </li>
-        <li class="sep" role="separator"></li>
-        {#if splitsAllowed}
-          <li>
-            <button role="menuitem" onclick={onSplitRight}>
-              <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
-              <span>Split right</span>
-            </button>
-          </li>
-          <li>
-            <button role="menuitem" onclick={onSplitDown}>
-              <ArrowDown size={16} strokeWidth={1.75} aria-hidden="true" />
-              <span>Split down</span>
-            </button>
-          </li>
-        {/if}
-        <li>
-          <button role="menuitem" onclick={onFlipHybrid}>
-            <FlipHorizontal2 size={16} strokeWidth={1.75} aria-hidden="true" />
-            <span class="menu-row-label">Flip Hybrid</span>
-            <span class="menu-row-chord">{chordLabel("app.pane.flip")}</span>
-          </button>
-        </li>
-        <li>
-          <button role="menuitem" onclick={onCloseAllTabs}>
-            <ListX size={16} strokeWidth={1.75} aria-hidden="true" />
-            <span>Close all tabs</span>
-          </button>
-        </li>
-        <li>
-          <button role="menuitem" onclick={onClosePane}>
-            <X size={16} strokeWidth={1.75} aria-hidden="true" />
-            <span>Close pane</span>
-          </button>
-        </li>
       </HamburgerMenu>
       <HamburgerMenu
         bind:this={paneContextMenu}
