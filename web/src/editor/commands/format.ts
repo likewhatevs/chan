@@ -12,6 +12,8 @@
 import { syntaxTree } from "@codemirror/language";
 import type { EditorView } from "@codemirror/view";
 
+import { uiPrompt } from "../../state/store.svelte";
+
 // ---- mark toggles --------------------------------------------------------
 
 interface MarkSpec {
@@ -468,14 +470,23 @@ export function insertImage(view: EditorView): void {
   });
 }
 
-/// Apply a Link mark. Without an explicit URL, prompts the user (the
-/// legacy editor's behavior). Returns early if the user cancels.
-export function toggleLink(view: EditorView, url?: string): void {
+/// Apply a Link mark. Without an explicit URL, asks the user through
+/// the in-house PromptModal (uiPrompt) — never a `window.prompt`,
+/// which fails silently inside Chan.app's WKWebView. Returns early if
+/// the user cancels.
+export async function toggleLink(view: EditorView, url?: string): Promise<void> {
   let target = url;
   if (target === undefined) {
-    target = window.prompt("URL")?.trim() ?? "";
+    const answer = await uiPrompt("URL");
+    target = answer?.trim() ?? "";
     if (!target) return;
   }
+  // Re-read the selection AFTER the await: the modal is async, so the
+  // user's selection (or even the editor mount) might have shifted.
+  // Bail safely if the view has gone away. CM6's `destroyed` field is
+  // marked private on EditorView; route through `unknown` so the type
+  // system stays out of the way of this defensive runtime check.
+  if ((view as unknown as { destroyed?: boolean }).destroyed) return;
   const sel = view.state.selection.main;
   if (sel.empty) {
     const insert = `[](${target})`;

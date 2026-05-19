@@ -7,12 +7,13 @@
 // fence, so the user can never get out — every keypress just grows
 // the file with no escape.
 
-import { describe, expect, test, afterEach } from "vitest";
+import { describe, expect, test, afterEach, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { forceParsing } from "@codemirror/language";
 import { chanMarkdown } from "../markdown/grammar";
-import { escapeFenceAtDocEnd, exitFenceAnywhere } from "./format";
+import { escapeFenceAtDocEnd, exitFenceAnywhere, toggleLink } from "./format";
+import * as store from "../../state/store.svelte";
 
 let host: HTMLDivElement;
 let view: EditorView;
@@ -141,5 +142,43 @@ describe("exitFenceAnywhere (Mod-Enter from inside any fenced block)", () => {
     mount(doc, 4);
     view.dispatch({ selection: { anchor: 4, head: 7 } });
     expect(exitFenceAnywhere(view)).toBe(false);
+  });
+});
+
+describe("toggleLink prompts via the in-house modal, never window.prompt", () => {
+  test("inserts the URL the in-house prompt resolves with", async () => {
+    const doc = "hello world";
+    mount(doc, 0);
+    view.dispatch({ selection: { anchor: 0, head: 5 } }); // select "hello"
+    const promptSpy = vi.spyOn(window, "prompt");
+    const uiPromptSpy = vi
+      .spyOn(store, "uiPrompt")
+      .mockResolvedValue("https://example.com");
+
+    await toggleLink(view);
+
+    expect(promptSpy).not.toHaveBeenCalled();
+    expect(uiPromptSpy).toHaveBeenCalledWith("URL");
+    expect(view.state.doc.toString()).toBe("[hello](https://example.com) world");
+
+    uiPromptSpy.mockRestore();
+    promptSpy.mockRestore();
+  });
+
+  test("no-ops cleanly when the user cancels the in-house prompt", async () => {
+    const doc = "hello";
+    mount(doc, doc.length);
+    const promptSpy = vi.spyOn(window, "prompt");
+    const uiPromptSpy = vi.spyOn(store, "uiPrompt").mockResolvedValue(null);
+
+    await toggleLink(view);
+
+    expect(promptSpy).not.toHaveBeenCalled();
+    expect(uiPromptSpy).toHaveBeenCalled();
+    // Doc unchanged on cancel.
+    expect(view.state.doc.toString()).toBe("hello");
+
+    uiPromptSpy.mockRestore();
+    promptSpy.mockRestore();
   });
 });

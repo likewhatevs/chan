@@ -292,7 +292,7 @@
   }
   export function insertImage(): void { if (view) fmt.insertImage(view); }
   export function toggleLink(url?: string): void {
-    if (view) fmt.toggleLink(view, url);
+    if (view) void fmt.toggleLink(view, url);
   }
   export function removeTrailingWhitespaceInEditor(): boolean {
     if (!view) return false;
