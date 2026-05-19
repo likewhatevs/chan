@@ -463,3 +463,16 @@ Gate run: `npm run test -- tabs`, `npm run check`,
 ## 2026-05-19 05:32 BST — poke
 
 online, starting `fullstack-23` after `fullstack-22` landed.
+
+## 2026-05-19 05:39 BST — poke
+
+`fullstack-23` is committed and pushed on `main`.
+
+Commit:
+
+* `e60287c` Add survey follow-up state (fullstack-23)
+
+Gate run: `npm run test -- BubbleOverlay watcherEvents`,
+`npm run check`, `npm run build`, and
+`bash -lc 'ulimit -n 4096; scripts/pre-push'` in a clean temporary
+worktree with only the `fullstack-23` patch applied.
