@@ -525,16 +525,17 @@
   );
 
   /// True when the graph claims the node is a real file but the
-  /// current tree listing doesn't have its path. This happens when
-  /// the search index hasn't been rebuilt after a bulk drive change
-  /// (drive switch, mass delete). Treat these as ghosts so the
-  /// inspector renders an inline summary instead of FileInfoBody's
-  /// "click a file" empty state.
-  const treeHasPath = $derived(new Set(tree.entries.map((e) => e.path)));
+  /// server's resolver couldn't find it on disk — i.e. a genuine
+  /// broken-link / deleted-file ghost. The server is the source of
+  /// truth: post-`systacean-2` its resolver covers all on-disk files
+  /// (markdown + non-markdown), so the previous SPA-side fallback of
+  /// also checking the lazy-loaded FB tree's `tree.entries` was
+  /// flagging every real file under an un-expanded subtree as a
+  /// false ghost. Drop the lazy-tree check; trust the server flag.
   const isFileGhost = $derived<boolean>(
     selectedNode != null &&
       selectedNode.kind === "file" &&
-      (selectedNode.missing || !treeHasPath.has(selectedNode.path)),
+      selectedNode.missing === true,
   );
   let ghostIndexerHint = $state<string | null>(null);
 
