@@ -308,6 +308,20 @@ FileBrowserSurface populate/snapshot logic remains for them.
 Moving on to fullstack-68 (kill Graph bar entirely; chips +
 hamburger items → tab right-click).
 
+## 2026-05-19 19:08 BST
+
+Closeout of the second long wave on Lane A. Eight tasks
+landed in sequence after the earlier `-55/-56/-66/-64/-68/
+-61/-65/-69` cluster: `-70` (preserve back-side on split),
+`-72` (spawn keys → stage/commit + pill chip), `-73` (Graph
+from here on DriveInfoBody), `-74` (Search to Cmd+K f, `s`
+rejoins WASD), `-75` (Graph right-click → mbtn rows +
+vertical filters), `-76` (flash 700 → 2000 ms), `-77`
+(kill-pane → Cmd+K Backspace; `k` unbound), `-81` (Graph
+title from selected node, hash round-trips), `-83` (Cmd+N
+desktop new window via Tauri menu accelerator). Tests
+413 → 416 → 416 across the suite; gate green throughout.
+
 ## 2026-05-19 16:57 BST
 
 fullstack-68 landed: `ecc312d` Kill Graph tab chrome bar;

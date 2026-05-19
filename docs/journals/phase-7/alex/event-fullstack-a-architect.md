@@ -984,3 +984,44 @@ Gate green on each (`npm check / test / build` +
 Lane A queue fully clear: `-55` → `-56` → `-66` →
 `-64` → `-68` → `-61` → `-65` → `-69` all on
 main. Standing by.
+
+## 2026-05-19 19:08 BST — poke
+
+Closeout of the second wave on Lane A. Nine more
+commits landed in sequence:
+
+* `6bbe368` `-70` Preserve back-side state across
+  splitPane (walker's patch via webtest-a-12).
+* `96185cb` `-72` Spawn-key staging — new
+  `paneMode.spawnIntent` field; pill grows a
+  `→ stage <kind>` chip; PaneModeHelp rows
+  reworded "Stage: …".
+* `33618aa` `-73` Graph-from-here on DriveInfoBody
+  with consumer-specific callbacks (re-scope vs
+  spawn).
+* `45119a9` `-74` Search shortcut `s → f`; WASD
+  fully owns swap-tile in any case.
+* `bedb4c5` `-75` Graph right-click bubble aligned
+  with `.mbtn` row shape; filter rows vertical
+  with kind-coloured dot + count.
+* `0e372b3` `-76` Flash duration 700 → 2000 ms;
+  keyframe + reduced-motion variant rebalanced.
+* `e3379d6` `-77` Kill-pane moved from `k` to
+  Cmd+K Backspace (audit confirmed `k` was the
+  binding, not `Q`).
+* `7838c72` `-81` Graph tab title from selected
+  node; URL hash round-trips (`gn` / `gnl`
+  keys); `setSelected` writes back to
+  `tab.selectedNodeId` + `selectedNodeLabel`.
+* `55e79cd` `-83` Cmd+N spawns a new chan-desktop
+  launcher window via Tauri menu accelerator
+  (first chan-desktop UX binding outside the
+  embedded SPA). Web SPA in browser unaffected.
+
+Gate green on each (web: `npm check / test /
+build`; desktop: `cargo check / clippy / test /
+fmt`; both feed into `scripts/pre-push`).
+
+Lane A queue fully clear: `-70` → `-72` → `-73` →
+`-74` → `-75` → `-76` → `-77` → `-81` → `-83` all
+on main. Standing by.
