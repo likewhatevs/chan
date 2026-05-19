@@ -1456,10 +1456,12 @@ async function closeTabAsync(
   if (p.activeTabId === tabId) {
     p.activeTabId = p.tabs[Math.max(0, idx - 1)]?.id ?? null;
   }
-  // Collapse empty pane if it has a sibling: replace parent split with sibling.
-  if (p.tabs.length === 0 && layout.rootId !== p.id) {
-    collapseEmptyPane(p.id);
-  }
+  // `fullstack-a-5`: do NOT auto-collapse an empty Hybrid pane.
+  // Per the phase-8 bug list, closing the last tab in a Hybrid
+  // pane should leave the pane in place rendering the empty
+  // landing (chan logo + Cmd+K hint) so the Hybrid structure
+  // survives a transient empty state. Use the explicit
+  // `closePane` action to dismiss the pane.
 }
 
 /// Drop every tab in every pane. Used by the M4-D mobile reset

@@ -139,6 +139,12 @@ function uploadAndInsertAll(
         view.dispatch({
           changes: { from: cursor, to: cursor, insert },
           selection: { anchor: cursor + insert.length },
+          // `fullstack-a-5`: scroll the doc so the new caret stays
+          // in view. Pasting / dropping at the bottom previously
+          // pushed the cursor off-screen and the editor refused to
+          // roll until the next keystroke — `scrollIntoView: true`
+          // tells CM6 to do that work now.
+          scrollIntoView: true,
         });
         cursor += insert.length;
       } catch (err) {

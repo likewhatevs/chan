@@ -25,7 +25,20 @@
   const mode = $derived<BubbleOverlayMode>(
     drive.info?.preferences.bubble_overlay_mode === "tray" ? "tray" : "stack",
   );
-  const visibleEvents = $derived(watcher.events.filter((event) => event.type !== "survey-reply"));
+  // `fullstack-a-5`: surveys with a sibling `survey-reply` event
+  // sharing the same `id` are already answered. The watcher dir
+  // keeps both the original survey JSON and the reply file as
+  // sibling tombstones (audit trail), but the bubble queue must
+  // hide the original on the next refresh so the bubble does not
+  // re-pop on every poll.
+  const visibleEvents = $derived.by(() => {
+    const repliedIds = new Set(
+      watcher.events.filter((event) => event.type === "survey-reply").map((event) => event.id),
+    );
+    return watcher.events.filter(
+      (event) => event.type !== "survey-reply" && !repliedIds.has(event.id),
+    );
+  });
   const orderedEvents = $derived([...visibleEvents].reverse());
   const collapsed = $derived(mode === "tray" && !watcher.trayExpanded);
   let answers = $state<Record<string, Record<number, string>>>({});

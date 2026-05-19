@@ -368,6 +368,60 @@ describe("BubbleOverlay", () => {
     expect(watcher.error).toBe("reply failed: watcher is no longer attached");
   });
 
+  test("survey paired with a sibling survey-reply is filtered out of the bubble queue (fullstack-a-5)", async () => {
+    const watcher: TerminalWatcherState = {
+      path: "events",
+      seenIds: ["already-answered", "fresh-1"],
+      unread: false,
+      events: [
+        {
+          id: "already-answered",
+          type: "survey",
+          from: "@@Architect",
+          to: "@@Alex",
+          path: "events/event-already-answered.md",
+          questions: [
+            {
+              header: "Mode",
+              text: "Pick mode",
+              options: [{ key: "1", label: "Fast" }],
+            },
+          ],
+        },
+        {
+          id: "already-answered",
+          type: "survey-reply",
+          from: "@@Alex",
+          to: "@@Architect",
+          path: "events/event-reply-already-answered.md",
+        },
+        {
+          id: "fresh-1",
+          type: "survey",
+          from: "@@Architect",
+          to: "@@Alex",
+          path: "events/event-fresh-1.md",
+          questions: [
+            {
+              header: "Topic",
+              text: "Pick something",
+              options: [{ key: "1", label: "OK" }],
+            },
+          ],
+        },
+      ],
+    };
+    const { target } = await renderOverlay(watcher);
+
+    // The replied survey must not render at all; the fresh one
+    // still does. The reply itself never had a body (type ===
+    // "survey-reply"); ensure both originals don't both surface.
+    expect(target.textContent).not.toContain("Pick mode");
+    expect(target.textContent).toContain("Pick something");
+    const bubbles = target.querySelectorAll(".bubble");
+    expect(bubbles).toHaveLength(1);
+  });
+
   test("pre-flight events render numbered spawn actions", async () => {
     vi.useFakeTimers();
     const { writeReply } = installReplySpies();

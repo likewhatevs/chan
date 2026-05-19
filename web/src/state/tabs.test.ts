@@ -193,6 +193,39 @@ describe("tab close confirmation", () => {
     expect(reopened.caret).toEqual({ from: 3, to: 3 });
     expect(activePane().activeTabId).toBe(reopened.id);
   });
+
+  test("closing the last tab in a Hybrid pane leaves the pane in place (fullstack-a-5)", async () => {
+    // Pre-`fullstack-a-5`, an empty non-root pane auto-collapsed
+    // into its sibling: the Hybrid structure disappeared on the
+    // close. Per @@Alex's phase-8 ask, closing the last tab in a
+    // Hybrid pane should leave the pane standing with the
+    // empty-pane landing instead.
+    const left = fileTab({ id: "left", path: "notes/left.md" });
+    const right = fileTab({ id: "right", path: "notes/right.md" });
+    const leftPane = resetLayout([left]);
+    splitPane(leftPane.id, "row", "after");
+    const rootBefore = layout.nodes[layout.rootId];
+    expect(rootBefore?.kind).toBe("split");
+    if (rootBefore?.kind !== "split") return;
+    const rightPaneId = rootBefore.b;
+    const rightPane = layout.nodes[rightPaneId];
+    expect(rightPane?.kind).toBe("leaf");
+    if (rightPane?.kind !== "leaf") return;
+    rightPane.tabs.push(right);
+    rightPane.activeTabId = right.id;
+
+    await closeTab(rightPaneId, right.id, { force: true });
+
+    // Hybrid structure survives: still a split with two leaves.
+    const root = layout.nodes[layout.rootId];
+    expect(root?.kind).toBe("split");
+    if (root?.kind !== "split") return;
+    const survivor = layout.nodes[rightPaneId];
+    expect(survivor?.kind).toBe("leaf");
+    if (survivor?.kind !== "leaf") return;
+    expect(survivor.tabs).toHaveLength(0);
+    expect(survivor.activeTabId).toBeNull();
+  });
 });
 
 describe("tab drag and drop", () => {

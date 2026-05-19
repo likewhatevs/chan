@@ -65,3 +65,80 @@ Bubble re-pop: see `web/src/state/watcherEvents.ts:65` for the
 listing path; option (a) needs an edit in
 `crates/chan-server/src/routes/terminal.rs::write_event_reply_atomic`
 to also rename the original survey file.
+
+## 2026-05-19 — implementation note
+
+Three independent edits, all SPA-side:
+
+1. **Image+EOL scroll rollover** — the paste / drop handlers in
+   `web/src/editor/bubbles/image_drop.ts` dispatched the insert
+   without a `scrollIntoView: true` flag, so pasting at the
+   bottom moved the caret off-screen until the next keystroke.
+   Added `scrollIntoView: true` to the dispatch so CodeMirror
+   scrolls the new selection into view immediately on insert.
+   Affects both the `paste` and `drop` paths (they share
+   `uploadAndInsertAll`).
+
+2. **Hybrid empty-pane preservation** — `closeTabAsync` in
+   `web/src/state/tabs.svelte.ts` auto-called
+   `collapseEmptyPane(p.id)` when a non-root pane went to zero
+   tabs. Dropped that block: the pane now stays standing and
+   renders the empty-pane landing (chan logo + Cmd+K hint).
+   Explicit `closePane` is still the way to dismiss a Hybrid
+   pane on purpose. Test: new `tab close confirmation > closing
+   the last tab in a Hybrid pane leaves the pane in place`
+   asserts the survivor leaf still exists with `tabs.length: 0`
+   and `activeTabId: null` after closing the last tab.
+
+3. **Survey bubble re-pop after reply** — picked option (b)
+   from the task spec (SPA-only) since the chan-server reply
+   endpoint already writes a sibling `event-reply-{id}.md` with
+   `type: "survey-reply"` and `id` matching the original
+   survey. `BubbleOverlay`'s `visibleEvents` derive now builds a
+   `Set` of replied ids from the survey-reply rows and filters
+   the original surveys against it. The original survey JSON
+   stays on disk (audit trail), but the bubble queue stops
+   re-rendering it on each watcher poll. Test:
+   `BubbleOverlay > survey paired with a sibling survey-reply
+   is filtered out of the bubble queue` mounts a watcher with
+   one answered + one fresh survey and confirms only the fresh
+   one renders.
+   Chose (b) over (a) because the server endpoint already
+   leaves a clean pair-by-id record and (b) is purely SPA — no
+   coordination needed with @@FullStackB or chan-server side.
+
+Files touched:
+
+* `web/src/editor/bubbles/image_drop.ts` — `scrollIntoView`.
+* `web/src/state/tabs.svelte.ts` — drop auto-collapse on last
+  tab close.
+* `web/src/state/tabs.test.ts` — new last-tab-stay test.
+* `web/src/components/BubbleOverlay.svelte` — `visibleEvents`
+  filters surveys with matching replies.
+* `web/src/components/BubbleOverlay.test.ts` — new
+  reply-pairing test.
+
+Pre-push gate (SPA portion): vitest 452/452 green
+(+2 new tests over the prior 450); `npm run check` 0 errors /
+0 warnings; `npm run build` clean.
+
+## 2026-05-19 — @@Architect: approved + commit clearance
+
+Reviewer: @@Architect.
+
+Three independent fixes, all small and well-targeted. Option (b)
+for the bubble re-pop (SPA-only Set-of-replied-ids filter) is
+the right call — the server already leaves a clean pair-by-id
+record on disk so audit trail stays intact and no cross-lane
+coordination needed. The auto-collapse drop on last-tab close
+matches the spec; phase-8 backlog item 4's empty-pane landing
+will paint into that survivor leaf.
+
+**Commit clearance**: approved. Suggested subject:
+
+```
+Editor: image+EOL scroll, empty Hybrid pane preserved, bubble re-pop filter (fullstack-a-5)
+```
+
+Push waits for Round-1 close. Pick up `fullstack-a-6` next
+(Cmd+K F search focus).
