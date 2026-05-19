@@ -1085,3 +1085,77 @@ level clearance (no HOLD pokes since the
 **Lane B queue empty (again).** All cuts since
 21:05 BST are on origin/main. Standing by for
 the next directive.
+
+## 2026-05-19 22:55 BST — poke: fullstack-78 ready to commit
+
+**Terminal fix.** Added `effectivePaneTheme()`
+helper that reads `layout.nodes[paneId]?.theme`
+(the `-48` phase A per-pane override) and
+falls back to `ui.theme`. `terminalTheme()`
+now reads CSS variables from `host` (the
+terminal container, inside the pane) instead
+of `document.documentElement` — picks up the
+`.pane[data-theme="..."]` cascade from `-59`.
+The light/dark named-colour palette branch
+uses `effectivePaneTheme()` instead of
+`ui.theme` directly. The existing
+`$effect` extended to track both `ui.theme`
+AND `layout.nodes[paneId]?.theme`; re-applies
+`term.options.theme` on either signal change.
+
+**GraphCanvas fix.** Extended the theme
+MutationObserver to also watch the nearest
+`.pane` ancestor. The reader side already
+uses `getComputedStyle(containerEl)` so the
+per-pane CSS variables resolved correctly —
+the only missing piece was the change
+detection.
+
+**CodeMirror audited.** Body theme is CSS-
+token-driven (`var(--text)` etc.) and follows
+the cascade. Only the syntax palette branch
+uses `ui.theme` directly via
+`theme.reconfigure(view, ui.theme)` from
+Source.svelte / Wysiwyg.svelte. Threading
+pane.theme through to those editors +
+piping a per-pane reconfigure is bigger
+scope; **deferred** with a note in the task
+file. Visible impact small (GitHub Primer
+palette is designed for both light + dark
+backgrounds).
+
+**Files:**
+* `web/src/components/TerminalTab.svelte` —
+  `effectivePaneTheme()`, host-relative CSS
+  read, effect tracks pane node theme.
+* `web/src/components/GraphCanvas.svelte` —
+  MutationObserver attached to nearest
+  `.pane` ancestor too.
+* `web/src/components/perPaneXtermTheme.test.ts`
+  (new) — 5 source-grep sentinels covering
+  the four wiring invariants on TerminalTab
+  + the GraphCanvas observer extension.
+
+**Hash round-trip verified by inspection.**
+`-48` phase A already restores `pane.theme`
+from `ht` / `hb`; `effectivePaneTheme()`
+reads the restored value on first mount, so
+a URL with `ht:"l"` on a pane hosting a
+terminal paints in the light palette without
+a toggle.
+
+Gate green: svelte-check 0/0, vitest 40/410
+(was 39/401; +5 new sentinel + 4 parallel-
+lane work), build clean, scripts/pre-push
+green.
+
+Visual eyeball skipped — mechanical change
+(read CSS vars from `host` instead of root,
+track an extra reactive signal). Re-walk per
+the task note is appropriate; @@Alex can
+flag pixel issues on walkthrough.
+
+Committing + pushing under standing topic-
+level clearance (no HOLD pokes since the
+22:15 BST cut). Next on the queue: `-79`
+(auto-focus rich prompt on entry).

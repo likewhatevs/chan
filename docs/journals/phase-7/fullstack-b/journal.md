@@ -644,3 +644,63 @@ Gate green: svelte-check 0/0, vitest 39/401,
 build clean, pre-push green.
 
 Committing + pushing. Lane B queue empty (again).
+
+## 2026-05-19 22:55 BST
+
+Picked up `fullstack-78` (propagate per-pane
+theme to JS-themed surfaces). Loud `-59` bug:
+xterm.js renders to its own canvas with theme
+set at construction; the `data-theme`
+attribute on `.pane` only affects CSS-themed
+surfaces.
+
+**Terminal fix.** Added `effectivePaneTheme()`
+that reads `layout.nodes[paneId]?.theme` and
+falls back to `ui.theme`. `terminalTheme()`
+now (a) reads CSS variables from `host` (the
+terminal container, inside the pane) instead
+of `document.documentElement`, so the
+`.pane[data-theme=...]` cascade reaches it,
+and (b) branches the named-colour palette on
+the effective theme, not the global. The
+existing `$effect` extended to track
+`layout.nodes[paneId]?.theme` alongside
+`ui.theme` — re-applies on either signal
+change.
+
+**GraphCanvas fix.** Extended its theme
+MutationObserver to also watch the nearest
+`.pane` ancestor's `data-theme`. The reader
+already uses `getComputedStyle(containerEl)`
+so the per-pane CSS variables resolved
+correctly — the only missing piece was the
+change detection.
+
+**CodeMirror.** Audited: theme is CSS-token-
+driven (`var(--text)` etc.), the cascade
+already reaches it. Only the syntax palette
+branch uses `ui.theme` directly via
+`theme.reconfigure(view, ui.theme)` from
+Source.svelte / Wysiwyg.svelte. Threading
+pane.theme through is bigger scope; deferred
+with a note in the task file. Visible impact
+is small (GitHub Primer palette is designed
+for both light + dark backgrounds).
+
+Tests: new `perPaneXtermTheme.test.ts` (5
+source-grep assertions covering the four
+wiring invariants on TerminalTab + the
+GraphCanvas observer extension).
+
+Hash round-trip verified by inspection: -48
+phase A already restores `pane.theme` from
+`ht` / `hb`; effectivePaneTheme() reads the
+restored value on first mount → terminal
+paints in the right palette without a toggle.
+
+Gate green: svelte-check 0/0, vitest 40/410
+(was 39/401; +5 sentinel + 4 parallel-lane),
+build clean, pre-push green.
+
+Committing + pushing. Lane B queue: -79, -80,
+-82.

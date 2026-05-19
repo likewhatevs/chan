@@ -188,13 +188,29 @@
     };
   });
 
+  // `fullstack-78`: track both the global theme AND the pane-local
+  // override so xterm.js' theme (rendered to its own canvas — CSS
+  // cascade doesn't reach inside) re-applies on per-pane flip.
   $effect(() => {
     ui.theme;
+    const node = layout.nodes[paneId];
+    if (node?.kind === "leaf") {
+      void node.theme;
+    }
     applyTerminalTheme();
   });
 
+  function effectivePaneTheme(): "dark" | "light" {
+    const node = layout.nodes[paneId];
+    if (node?.kind === "leaf" && node.theme) return node.theme;
+    return ui.theme;
+  }
+
   function terminalTheme() {
-    const styles = getComputedStyle(document.documentElement);
+    // Read CSS variables from `host` (inside the pane) rather than
+    // `document.documentElement` so the `.pane[data-theme="..."]`
+    // cascade from `-59` resolves to per-pane overrides.
+    const styles = getComputedStyle(host ?? document.documentElement);
     const bg = styles.getPropertyValue("--bg").trim() || "#1c1c1e";
     const text = styles.getPropertyValue("--text").trim() || "#ebebf0";
     const cursor = styles.getPropertyValue("--link").trim() || "#58a6ff";
@@ -204,7 +220,8 @@
       cursor,
       selectionBackground: "rgba(88, 166, 255, 0.35)",
     };
-    if (ui.theme === "light") {
+    const effective = effectivePaneTheme();
+    if (effective === "light") {
       return {
         ...base,
         black: "#24292f",
