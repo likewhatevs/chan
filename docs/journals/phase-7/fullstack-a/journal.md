@@ -239,3 +239,15 @@ online, starting fullstack-53 (desktop launcher refresh —
 drop Name column, italic tagline, reorder header buttons,
 computer-glyph for outside-home paths). Tauri shell
 (`desktop/src/`), not the embedded Svelte editor.
+
+## 2026-05-19 15:05 BST
+
+fullstack-53 landed: `639b98a` Desktop launcher refresh
+(fullstack-53). Gate green: `npm run check` (0 errors / 0
+warnings), `cargo check -p chan-desktop` (clean), `bash -lc
+'ulimit -n 4096; scripts/pre-push'`. Visual eyeball deferred
+to webtest / @@Alex; four checks are tagline italic visible,
+button order LTR, Name column gone, outside-home paths show
+the computer glyph.
+
+A-lane queue clear. Standing by.

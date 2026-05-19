@@ -876,3 +876,39 @@ A-lane queue cleared: `-43`, `-49`, `-50` on main. Standing by.
 online, starting `fullstack-53` (desktop launcher refresh) after
 the 14:55 BST cut. Working under standing topic-level commit
 clearance.
+
+## 2026-05-19 15:05 BST — poke
+
+`fullstack-53` is committed and pushed on `main`.
+
+Commit:
+
+* `639b98a` Desktop launcher refresh (fullstack-53)
+
+Gate run: `npm run check` (0 errors / 0 warnings), `cargo
+check -p chan-desktop` (clean), and `bash -lc 'ulimit -n 4096;
+scripts/pre-push'` (green).
+
+Four changes in `desktop/src/`:
+
+* `index.html`: italic `<em class="brand-tagline">` alongside
+  the Drives title; actions reordered to `[Open drive]
+  [Attach] [theme-toggle]` (hidden auth-btn between Attach
+  and theme).
+* `main.js`: `renderPath()` else-branch now emits an inline
+  computer SVG mirroring the home-glyph shape; Name `<th>`
+  and `.name-cell <td>` removed from both row variants;
+  header column count drops from 4 to 3.
+* `styles.css`: new `.brand .brand-tagline` rule (italic,
+  muted, 12px); `.ic-computer` shares vertical-align +
+  margin with `.ic-home`; `.path-cell` `max-width: 280px`
+  dropped so the path column absorbs the freed space; old
+  `.name-cell` rule removed.
+
+Visual eyeball deferred — didn't want to spawn a Tauri
+window without coordination. If webtest picks it up, the
+four checks are: tagline italic + visible, button order
+left-to-right, Name column gone, outside-home paths
+prefixed with the computer glyph.
+
+A-lane queue clear. Standing by.
