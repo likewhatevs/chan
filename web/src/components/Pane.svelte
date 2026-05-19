@@ -62,7 +62,6 @@
     tabLabel,
     tabLabelInPane,
     tabTooltip,
-    truncateTabTitle,
   } from "../state/tabs.svelte";
   import type { BrowserLabelCtx } from "../state/tabs.svelte";
   import {
@@ -872,7 +871,7 @@
               bottom: e.clientY,
             });
           }}
-        >{truncateTabTitle(tabLabelInPane(t, pane.tabs, browserCtxFor(t)))}</span>
+        >{tabLabelInPane(t, pane.tabs, browserCtxFor(t))}</span>
         {#if isDirty(t)}
           <span class="dirty unsaved" title="unsaved changes">●</span>
         {/if}
@@ -1011,7 +1010,7 @@
   >
     {#if paneMode.active}
       <div class="pane-mode-preview" aria-label="Hybrid NAV preview">
-        <div class="pane-mode-title">{active ? truncateTabTitle(tabLabel(active, browserCtxFor(active))) : "Empty pane"}</div>
+        <div class="pane-mode-title">{active ? tabLabel(active, browserCtxFor(active)) : "Empty pane"}</div>
         <div class="pane-mode-subtitle">
           {active?.kind === "file"
             ? active.path
@@ -1283,7 +1282,25 @@
   @keyframes watcher-blink {
     50% { opacity: .25; }
   }
-  .path { white-space: nowrap; }
+  /* `fullstack-a-10`: Chrome-style tab-name fade. Replace the
+     phase-7 `fullstack-66` middle-elision (`head[..]tail`) with
+     a CSS mask gradient at the right edge — the visible text
+     fades into transparency when it overflows, no `[..]` /
+     ellipsis character. The tooltip on the parent `<button>`
+     (`title={tabTooltip(t)}`) still surfaces the full path on
+     hover so truncation never costs the user disambiguation.
+     `max-width` caps the visible width without forcing a hard
+     box around shorter titles; `white-space: nowrap` keeps the
+     mask edge straight; `overflow: hidden` is what makes the
+     mask actually clip when the text is wider than the cap. */
+  .path {
+    display: inline-block;
+    max-width: 22ch;
+    overflow: hidden;
+    white-space: nowrap;
+    mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
+    -webkit-mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
+  }
   /* Per-tab kind icon: User for contact-kind files, FileText
      otherwise. Sized to the tab font and stroked with text-secondary
      so it sits one step below the label. */

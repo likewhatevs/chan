@@ -35,6 +35,7 @@
     browserOverlay,
     browserSelection,
     clearTreeLoadingForPath,
+    drive,
     fileOps,
     loadTreeDir,
     openFsGraphForDirectory,
@@ -46,6 +47,16 @@
     treeExpanded,
     ui,
   } from "../state/store.svelte";
+
+  // `fullstack-a-10`: full filesystem path for a tree entry,
+  // for the row hover tooltip. Falls back to the drive-relative
+  // path when the server hasn't surfaced a root (tunnel-public
+  // mode) so the title is never empty.
+  function fullPath(relPath: string): string {
+    const root = drive.info?.root?.replace(/\/+$/, "") ?? "";
+    if (!root) return relPath;
+    return `${root}/${relPath}`;
+  }
 
   // `dockSide` is set by FileBrowserSidePane / FileBrowserSurface when
   // the tree renders inside a right-docked side pane. The right-dock
@@ -785,6 +796,7 @@
         ondragover={(e) => onRowDragOver(e, node.path)}
         ondragleave={() => onRowDragLeave(node.path)}
         ondrop={(e) => onRowDrop(e, node.path)}
+        title={fullPath(node.path)}
         use:trackRow={node.path}
       >
         <button
@@ -876,7 +888,7 @@
         aria-selected={browserSelection.path === node.path}
         draggable="true"
         ondragstart={(e) => onFileDragStart(e, node.path, false)}
-        title={contact ? "contact" : editable ? undefined : "view-only (not an editable text file)"}
+        title={fullPath(node.path) + (contact ? " (contact)" : editable ? "" : " (view-only)")}
         use:trackRow={node.path}
       >
         <!-- Per-kind glyph leading the row. Same icon set used by
