@@ -627,3 +627,19 @@ FileInfoBody so the file-browser inspector picks up "Open" as
 well. Judgment call documented in the task hand-off; revert that
 one site if you prefer to keep "Open in this pane" for non-graph
 inspectors.
+
+## 2026-05-19 10:25 BST — poke
+
+`fullstack-33` is committed and pushed on `main`.
+
+Commit:
+
+* `f1c43bd` Render list indent guides at any depth (fullstack-33)
+
+Gate run: `npm run test -- blocks` (9 passed), `npm run test` (271
+passed), `npm run check`, `npm run build`, and
+`bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+Fix swaps the per-depth box-shadow CSS for a single repeating-
+linear-gradient reading `--cm-md-list-depth` inline. Depths past
+the old 6-level cap now render correctly; tested up to 20 levels.

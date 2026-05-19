@@ -116,3 +116,10 @@ fullstack-32 landed: `a2c3a2d` Scope Graph-from-here to the trigger
 + dim siblings + shorten Open label (fullstack-32). Gate green:
 `npm run test` (30 files / 268 tests), `npm run check`, `npm run
 build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+## 2026-05-19 10:25 BST
+
+fullstack-33 landed: `f1c43bd` Render list indent guides at any
+depth (fullstack-33). Gate green: `npm run test -- blocks` (9
+passed), `npm run test` (271 passed), `npm run check`, `npm run
+build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
