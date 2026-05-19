@@ -46,6 +46,17 @@ the wider audit; do not stop at fixing just these.
   right-click menu — already removed in `fullstack-25`
   (confirmed not intentional, surface of the broken
   state model).
+* **Inline `×` close button on the Graph surface's
+  SCOPE bar** (top right, next to the kebab inspector
+  toggle). This is the old OverlayShell internal-close
+  affordance; now that Graph is a first-class tab with
+  its own tab-strip `×`, the inline one is redundant.
+  Drop it.
+* **Same inline `×` on the File Browser surface** if
+  it exists (per @@Alex's note 2026-05-19 05:00 BST:
+  "i havent seen the file browser yet but if it does
+  have the same X button we can remove it"). Audit
+  and drop.
 * Audit the rest of the menus you added or modified in
   `fullstack-6`/`-14`/`-21` for anything similar:
   controls that aren't called for in `request.md` or in

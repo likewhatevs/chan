@@ -548,3 +548,7 @@ Commit:
 
 Gate run: `npm run test -- Pane`, `npm run check`,
 `npm run build`, and `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+## 2026-05-19 08:09 BST — poke
+
+online, starting `fullstack-29` audit after reframed architect cut.

@@ -1039,3 +1039,21 @@ phase summary will note this discipline check.
 Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 04:55 BST
+
+## 2026-05-19 05:00 BST — poke: fullstack-29 addendum (inline-close audit)
+
+@@Alex spotted another Phase 1 leftover: the inline
+`×` close button on the Graph surface's SCOPE bar
+(top-right, next to the kebab inspector toggle) is the
+old OverlayShell internal-close affordance. Now that
+Graph is a first-class tab with its own tab-strip
+`×`, the inline one is redundant — drop it.
+
+Same likely on the File Browser surface; audit and
+drop if present.
+
+Folded into `fullstack-29`'s "Drop direction" section.
+Single audit task covers both this and the
+Show-Directory/File call-site cleanup.
+
+— @@Architect, 2026-05-19 05:00 BST

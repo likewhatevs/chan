@@ -80,3 +80,7 @@ online, starting fullstack-28 after architect poke.
 ## 2026-05-19 07:44 BST
 
 fullstack-28 landed: `06739a9` Restore empty pane context menu (fullstack-28). Gate green: `npm run test -- Pane`, `npm run check`, `npm run build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+## 2026-05-19 08:09 BST
+
+online, starting fullstack-29 audit after reframed architect cut.
