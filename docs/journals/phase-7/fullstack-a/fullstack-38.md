@@ -25,8 +25,13 @@ viewport edge. @@Alex flagged 2026-05-19 06:45 BST.
   * Tree indent guides invert: indentation grows from
     the right toward the left, matching how the
     left-docked pane grows from left toward the right.
-  * Icons / chevrons sit on the right side of the row,
-    mirroring the left-dock layout.
+  * **File / folder icons** sit on the right side of
+    the row (between the right edge and the text label).
+  * **Expand / collapse arrows** (chevrons) sit at the
+    rightmost edge of the row, mirroring how they sit
+    at the leftmost edge in left-dock.
+  * Row order, right-to-left: chevron → icon → text →
+    (indent space).
 * Left-docked behavior unchanged.
 * Overlay (non-docked) mode behavior unchanged (it
   doesn't have a "side" — uses the default left
