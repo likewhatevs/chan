@@ -409,10 +409,9 @@ export type Pane = {
   id: string;
   tabs: Tab[];
   activeTabId: string | null;
-  focusColor?: PaneFocusColor;
 };
 
-export type PaneFocusColor = "blue" | "green" | "pink";
+export type FocusColor = "blue" | "green" | "pink";
 
 export type Split = {
   id: string;
@@ -435,6 +434,7 @@ export const layout = $state<{
   rootId: string;
   nodes: Record<string, Node>;
   activePaneId: string;
+  focusColor: FocusColor;
 }>(
   (() => {
     const pane: LeafNode = {
@@ -442,12 +442,12 @@ export const layout = $state<{
       id: id("pane"),
       tabs: [],
       activeTabId: null,
-      focusColor: "blue",
     };
     return {
       rootId: pane.id,
       nodes: { [pane.id]: pane },
       activePaneId: pane.id,
+      focusColor: "blue",
     };
   })(),
 );
@@ -1164,16 +1164,13 @@ export function selectNextPane(): void {
   current.activePaneId = panes[(idx + 1) % panes.length]!;
 }
 
-export function focusColorForPane(paneId: string): PaneFocusColor {
-  const n = activeLayout().nodes[paneId];
-  if (!n || n.kind !== "leaf") return "blue";
-  return n.focusColor ?? "blue";
+export function focusColorForWindow(): FocusColor {
+  return layout.focusColor ?? "blue";
 }
 
-export function setPaneFocusColor(paneId: string, color: PaneFocusColor): void {
-  const n = layout.nodes[paneId];
-  if (!n || n.kind !== "leaf") return;
-  n.focusColor = color;
+export function setWindowFocusColor(color: FocusColor): void {
+  layout.focusColor = color;
+  if (paneMode.draft) paneMode.draft.focusColor = color;
 }
 
 export function closeTab(
@@ -1402,7 +1399,6 @@ function cloneNode(src: Node): Node {
     id: src.id,
     tabs: src.tabs.map((tab) => cloneTab(tab)),
     activeTabId: src.activeTabId,
-    focusColor: src.focusColor,
   };
 }
 
@@ -1415,6 +1411,7 @@ function cloneLayoutState(src: LayoutState): LayoutState {
     rootId: src.rootId,
     nodes,
     activePaneId: src.activePaneId,
+    focusColor: src.focusColor,
   } as LayoutState;
 }
 
@@ -1628,7 +1625,6 @@ export function detachTabToPaneEdge(
     id: id("pane"),
     tabs: [moved],
     activeTabId: moved.id,
-    focusColor: "blue",
   };
   const direction: SplitNode["direction"] =
     edge === "left" || edge === "right" ? "row" : "column";
@@ -1687,7 +1683,6 @@ export function splitPane(
     id: id("pane"),
     tabs: [],
     activeTabId: null,
-    focusColor: "blue",
   };
   insertSiblingPane(original.id, newPane, direction, placement);
   layout.activePaneId = newPane.id;
@@ -2078,19 +2073,25 @@ type SerTab = {
   /// Browser tab state.
   bi?: 1;
 };
-type SerLeaf = { k: "l"; t: SerTab[]; f?: 1 };
-type SerLeafColor = "g" | "p";
-type SerLeafWithColor = SerLeaf & { pc?: SerLeafColor };
-type SerSplit = { k: "s"; d: "r" | "c"; a: SerNode; b: SerNode; r?: number };
-type SerNode = SerLeafWithColor | SerSplit;
+type SerFocusColor = "g" | "p";
+type SerLeaf = { k: "l"; t: SerTab[]; f?: 1; wc?: SerFocusColor; pc?: SerFocusColor };
+type SerSplit = {
+  k: "s";
+  d: "r" | "c";
+  a: SerNode;
+  b: SerNode;
+  r?: number;
+  wc?: SerFocusColor;
+};
+type SerNode = SerLeaf | SerSplit;
 
-function serializePaneColor(color: PaneFocusColor | undefined): { pc?: SerLeafColor } {
-  if (color === "green") return { pc: "g" };
-  if (color === "pink") return { pc: "p" };
+function serializeFocusColor(color: FocusColor | undefined): { wc?: SerFocusColor } {
+  if (color === "green") return { wc: "g" };
+  if (color === "pink") return { wc: "p" };
   return {};
 }
 
-function restorePaneColor(color: SerLeafColor | undefined): PaneFocusColor {
+function restoreFocusColor(color: SerFocusColor | undefined): FocusColor {
   if (color === "g") return "green";
   if (color === "p") return "pink";
   return "blue";
@@ -2210,7 +2211,6 @@ function serializeNode(
       k: "l",
       t: tabs,
       ...(n.id === layout.activePaneId ? { f: 1 as const } : {}),
-      ...serializePaneColor(n.focusColor),
     };
   }
   const a = serializeNode(n.a, opts);
@@ -2233,8 +2233,12 @@ type SerializeLayoutOptions = {
 export function serializeLayout(opts: SerializeLayoutOptions = {}): SerNode | null {
   const tree = serializeNode(layout.rootId, opts);
   if (!tree) return null;
-  if (tree.k === "l" && tree.t.length === 0) return null;
-  return tree;
+  const serialized = {
+    ...tree,
+    ...serializeFocusColor(layout.focusColor),
+  };
+  if (serialized.k === "l" && serialized.t.length === 0 && !serialized.wc) return null;
+  return serialized;
 }
 
 /// Replace the live layout with the deserialized tree, then kick off a
@@ -2246,6 +2250,7 @@ export async function restoreLayout(
 ): Promise<void> {
   // Clear current state.
   for (const k of Object.keys(layout.nodes)) delete layout.nodes[k];
+  layout.focusColor = restoreFocusColor(s.wc ?? sessionLayout?.wc);
 
   let activePaneId: string | null = null;
   const tabsToLoad: { paneId: string; tabId: string; path: string }[] = [];
@@ -2263,7 +2268,6 @@ export async function restoreLayout(
         id: id("pane"),
         tabs: [],
         activeTabId: null,
-        focusColor: restorePaneColor(node.pc),
       };
       for (const sertab of node.t) {
         const kind = sertab.k ?? "f";

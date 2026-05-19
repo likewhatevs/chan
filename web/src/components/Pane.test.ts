@@ -53,6 +53,7 @@ async function renderPane(pane: LeafNode, options: { paneMode?: boolean } = {}) 
   layout.rootId = pane.id;
   layout.activePaneId = pane.id;
   layout.nodes = { [pane.id]: pane };
+  layout.focusColor = "blue";
   if (options.paneMode ?? true) enterPaneMode();
   else cancelPaneMode();
   const target = document.createElement("div");
@@ -89,7 +90,6 @@ describe("Pane terminal tab activity marker", () => {
       id: "pane-test",
       tabs: [active, inactive],
       activeTabId: active.id,
-      focusColor: "blue",
     };
 
     const target = await renderPane(pane);
@@ -101,13 +101,46 @@ describe("Pane terminal tab activity marker", () => {
 });
 
 describe("Pane right-click menus", () => {
+  test("hamburger uses window-wide focus color before navigation and split actions", async () => {
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-menu",
+      tabs: [terminalTab()],
+      activeTabId: "term-1",
+    };
+    const target = await renderPane(pane, { paneMode: false });
+
+    target.querySelector<HTMLButtonElement>(".hamburger-trigger")?.click();
+    await tick();
+
+    expect(document.body.querySelector(".menu-label span")?.textContent?.trim()).toBe(
+      "Focus border color",
+    );
+    expect(menuLabels()).toEqual([
+      "blue",
+      "green",
+      "pink",
+      "Next pane",
+      "Previous pane",
+      "Split right",
+      "Split down",
+      "Close pane",
+    ]);
+
+    const pink = [...document.body.querySelectorAll<HTMLButtonElement>(".hamburger-menu button")]
+      .find((button) => button.textContent?.includes("pink"));
+    pink?.click();
+    await tick();
+
+    expect(target.querySelector(".pane")?.getAttribute("data-focus-color")).toBe("pink");
+  }, 15000);
+
   test("empty pane right-click shows the welcome menu", async () => {
     const pane: LeafNode = {
       kind: "leaf",
       id: "pane-empty",
       tabs: [],
       activeTabId: null,
-      focusColor: "blue",
     };
     const target = await renderPane(pane, { paneMode: false });
 
@@ -138,7 +171,6 @@ describe("Pane right-click menus", () => {
       id: "pane-loaded",
       tabs: [terminalTab()],
       activeTabId: "term-1",
-      focusColor: "blue",
     };
     const target = await renderPane(pane, { paneMode: false });
 

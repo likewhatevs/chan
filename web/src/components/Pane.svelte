@@ -6,7 +6,7 @@
     canSplit,
     closePane,
     closeTab,
-    focusColorForPane,
+    focusColorForWindow,
     isDirty,
     detachTabToPaneEdge,
     layout,
@@ -22,13 +22,13 @@
     selectNextPane,
     selectPrevPane,
     setActivePane,
-    setPaneFocusColor,
+    setWindowFocusColor,
     setTerminalActivity,
     shouldCloseTabAfterDragEnd,
     splitPane,
+    type FocusColor,
     type LeafNode,
     type PaneDropEdge,
-    type PaneFocusColor,
   } from "../state/tabs.svelte";
 
   import {
@@ -128,7 +128,7 @@
   const platform = currentPlatform();
   const os = currentOS();
   const shortcutTable = renderTable(platform, os);
-  const paneFocusColors: PaneFocusColor[] = ["blue", "green", "pink"];
+  const paneFocusColors: FocusColor[] = ["blue", "green", "pink"];
 
   /// Empty-pane right-click menu, arranged into the canonical
   /// sections shared by every chan menu: content actions, then
@@ -295,9 +295,9 @@
     selectNextPane();
   }
 
-  function doSetFocusColor(color: PaneFocusColor): void {
+  function doSetFocusColor(color: FocusColor): void {
     closePaneMenus();
-    setPaneFocusColor(pane.id, color);
+    setWindowFocusColor(color);
   }
 
   function openPaneContextAt(e: MouseEvent): void {
@@ -726,7 +726,7 @@
 <div
   class="pane"
   class:focused={isFocused}
-  data-focus-color={focusColorForPane(pane.id)}
+  data-focus-color={focusColorForWindow()}
   onmousedown={() => setActivePane(pane.id)}
   role="region"
   aria-label="editor pane"
@@ -892,6 +892,37 @@
         height={320}
         onBeforeOpen={closePaneContextMenus}
       >
+        <li class="menu-label">
+          <Palette size={16} strokeWidth={1.75} aria-hidden="true" />
+          <span>Focus border color</span>
+        </li>
+        {#each paneFocusColors as color}
+          <li>
+            <button role="menuitem" onclick={() => doSetFocusColor(color)}>
+              <span class={`color-dot ${color}`} aria-hidden="true"></span>
+              <span>{color}</span>
+              {#if focusColorForWindow() === color}
+                <Check size={14} strokeWidth={2} aria-hidden="true" />
+              {/if}
+            </button>
+          </li>
+        {/each}
+        <li class="sep" role="separator"></li>
+        <li>
+          <button role="menuitem" onclick={doSelectNextPane}>
+            <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span class="menu-row-label">Next pane</span>
+            <span class="menu-row-chord">{chordLabel("app.pane.next")}</span>
+          </button>
+        </li>
+        <li>
+          <button role="menuitem" onclick={doSelectPrevPane}>
+            <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span class="menu-row-label">Previous pane</span>
+            <span class="menu-row-chord">{chordLabel("app.pane.prev")}</span>
+          </button>
+        </li>
+        <li class="sep" role="separator"></li>
         {#if splitsAllowed}
           <li>
             <button role="menuitem" onclick={onSplitRight}>
@@ -912,37 +943,6 @@
             <span>Close pane</span>
           </button>
         </li>
-        <li class="sep" role="separator"></li>
-        <li>
-          <button role="menuitem" onclick={doSelectNextPane}>
-            <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
-            <span class="menu-row-label">Next pane</span>
-            <span class="menu-row-chord">{chordLabel("app.pane.next")}</span>
-          </button>
-        </li>
-        <li>
-          <button role="menuitem" onclick={doSelectPrevPane}>
-            <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
-            <span class="menu-row-label">Previous pane</span>
-            <span class="menu-row-chord">{chordLabel("app.pane.prev")}</span>
-          </button>
-        </li>
-        <li class="sep" role="separator"></li>
-        <li class="menu-label">
-          <Palette size={16} strokeWidth={1.75} aria-hidden="true" />
-          <span>Focus border color</span>
-        </li>
-        {#each paneFocusColors as color}
-          <li>
-            <button role="menuitem" onclick={() => doSetFocusColor(color)}>
-              <span class={`color-dot ${color}`} aria-hidden="true"></span>
-              <span>{color}</span>
-              {#if focusColorForPane(pane.id) === color}
-                <Check size={14} strokeWidth={2} aria-hidden="true" />
-              {/if}
-            </button>
-          </li>
-        {/each}
       </HamburgerMenu>
       <HamburgerMenu
         bind:this={paneContextMenu}

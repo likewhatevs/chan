@@ -17,7 +17,7 @@ import {
   detachTabToPaneEdge,
   dismissTerminalEnvNamePrompt,
   enterPaneMode,
-  focusColorForPane,
+  focusColorForWindow,
   hydrateTerminalSessionsFromLayout,
   isMissingFileError,
   layout,
@@ -44,7 +44,7 @@ import {
   setTerminalActivity,
   setTerminalBroadcastEnabled,
   setTerminalBroadcastTarget,
-  setPaneFocusColor,
+  setWindowFocusColor,
   setTerminalSession,
   shouldCloseTabAfterDragEnd,
   splitPane,
@@ -62,11 +62,11 @@ function resetLayout(tabs: Array<FileTab | TerminalTab>): LeafNode {
     id: "pane-test",
     tabs,
     activeTabId: tabs[0]?.id ?? null,
-    focusColor: "blue",
   };
   layout.rootId = pane.id;
   layout.activePaneId = pane.id;
   layout.nodes = { [pane.id]: pane };
+  layout.focusColor = "blue";
   return pane;
 }
 
@@ -197,16 +197,24 @@ describe("tab drag and drop", () => {
 });
 
 describe("pane state", () => {
-  test("serializes per-pane focus color with layout state", async () => {
+  test("serializes window focus color with layout state", async () => {
     const pane = resetLayout([terminalTab()]);
-    setPaneFocusColor(pane.id, "pink");
+    setWindowFocusColor("pink");
 
     const snapshot = serializeLayout();
-    expect(JSON.stringify(snapshot)).toContain("\"pc\":\"p\"");
+    expect(JSON.stringify(snapshot)).toContain("\"wc\":\"p\"");
 
     await restoreLayout(snapshot!);
 
-    expect(focusColorForPane(activePane().id)).toBe("pink");
+    expect(focusColorForWindow()).toBe("pink");
+  });
+
+  test("drops legacy per-pane focus color on restore", async () => {
+    resetLayout([terminalTab()]);
+
+    await restoreLayout({ k: "l", t: [{ k: "t", n: "Terminal", a: 1 }], pc: "p" });
+
+    expect(focusColorForWindow()).toBe("blue");
   });
 
   test("can split before the active pane for left/up menu actions", () => {
