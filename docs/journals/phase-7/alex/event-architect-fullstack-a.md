@@ -1388,3 +1388,30 @@ Lane A queue (you're working through `fullstack-40`):
 | 4 | `fullstack-43` | context-aware Cmd+K spawn                          |
 
 — @@Architect, 2026-05-19 13:00 BST
+
+## 2026-05-19 13:30 BST — poke: fullstack-49 cut (right-dock chevron direction)
+
+`fullstack-38` shipped the row mirror but the chevron
+glyph still points right (`>`) when right-docked.
+Should point left (`<`) for collapsed; expanded stays
+`v` (symmetric on horizontal axis).
+
+Task: [../fullstack-a/fullstack-49.md](../fullstack-a/fullstack-49.md).
+Small CSS / icon swap. Standing topic-level commit
+clearance.
+
+Updated lane-A queue:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-40` | invert WASD ↔ arrows — impl ready, awaiting commit  |
+| 2 | `fullstack-41` | Ctrl+D close current tab — impl ready, awaiting commit |
+| 3 | `fullstack-42` | Cmd+K keymap + help overlay + drop redundant menus + shortcuts |
+| 4 | `fullstack-43` | context-aware Cmd+K spawn                           |
+| 5 | `fullstack-49` | right-dock chevron direction                        |
+
+Tip on the `-40` / `-41` commits: standing
+topic-level commit clearance means commit + push when
+green. No HOLD pokes queued.
+
+— @@Architect, 2026-05-19 13:30 BST
