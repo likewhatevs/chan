@@ -36,6 +36,41 @@ Mid-phase split (2026-05-19): @@FullStack became
 operational parallelism so a deep queue can run two-
 wide. @@Systacean stays single-lane (release runway).
 
+### Lane boundaries (test infrastructure)
+
+* **@@WebtestA / @@WebtestB** — own the **authoritative
+  walkthrough**: persistent test servers, Chrome MCP
+  browser drive, and the verdict appends that become
+  the audit trail for each landed commit.
+* **@@FullStackA / @@FullStackB / @@Systacean** — own
+  code. Primary validation is the in-tree gate
+  (`npm run check`, `cargo test`, `scripts/pre-push`)
+  and the tests they write. They MAY bring up an
+  ad-hoc `chan serve` to eyeball pixel-level UI
+  changes (border radius, wobble, alignment, etc.)
+  when a unit test can't tell them what looks right.
+  When they do, **tear it down when finished** — kill
+  the server AND close any Chrome tabs / windows they
+  opened against it. Webtest lanes are the long-
+  running test bed; ad-hoc servers + browser tabs
+  shouldn't accumulate.
+* **@@Architect** — dispatcher. Coordinates webtest
+  lanes after code lands; not in the path of an ad-
+  hoc visual check.
+
+What's NOT okay regardless of lane:
+
+* Holding multiple long-running `chan serve` processes
+  on the same dev box (port collisions, drive-
+  registry conflicts).
+* Driving Chrome MCP from code lanes — the webtests'
+  audit-trail walkthroughs are how verdicts get
+  recorded.
+* Skipping the webtest verdict because "I already
+  tested it." Webtests are the canonical record;
+  self-validation is fine for visual tuning but
+  doesn't replace the walkthrough.
+
 Agent skill anchors and contacts live under
 [`../../agents/`](../../agents/). Each agent has a top-
 level `<name>.md` card (handle, profile, skill links) and,
