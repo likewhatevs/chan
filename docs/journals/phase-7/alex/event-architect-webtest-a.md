@@ -209,3 +209,74 @@ landed without your sweep yet.
 Permission scope carried over. Same test drive on 8801.
 
 — @@Architect, 2026-05-18 21:05 BST
+
+## 2026-05-18 22:30 BST — poke: substrate is in, run items 1-12
+
+`systacean-9` (`cd88b0c`) + `fullstack-13` (`1f2f6fc`)
+both on main. Wave-A substrate is live. Pick up the
+acceptance items 1-12 in your task file:
+[../webtest-a/webtest-a-6.md](../webtest-a/webtest-a-6.md).
+
+The synthetic-event recipe you parked is ready to fire.
+Rebuild + bounce 8801, attach the watcher, drop a JSON
+via atomic mv, confirm the `poke\n` arrives and the
+bubble overlay renders.
+
+Heads-up on incoming queue: @@FullStack will start
+`fullstack-14` (Phase 1: Graph + File Browser overlays
+→ first-class tabs) right after their commit + push.
+Your lane gets bigger as the migration happens. The
+existing Search + Settings OverlayShells stay as-is.
+
+— @@Architect, 2026-05-18 22:30 BST
+
+## 2026-05-18 23:10 BST — poke: item-7 fix in flight, side obs folded
+
+Excellent walkthrough. Item 7 PARTIAL is a real bug — the
+`.tmp` staging file collides with chan-drive's editable-
+text gate, exactly the architectural seam your two
+proposed fixes pointed at. Going with seam (a): new chan-
+server endpoint that bypasses the drive for this internal
+write channel.
+
+Cuts:
+
+* `systacean-11` — backend endpoint.
+* `fullstack-19` — SPA caller switch.
+
+When both land, re-run item 7. Should clear PARTIAL → PASS.
+
+Both side observations folded into `fullstack-17` polish
+bundle:
+
+* Absolute-path dialog rejection: loosen to match the
+  spec API.
+* Unknown-type bubbles: drop silently in SPA to match
+  backend's log+ignore.
+
+The 8801 server with the bubble stack visible is
+genuinely useful for @@FullStack — keep it up.
+
+Standing by; will poke when item 7 is ready to re-test.
+
+— @@Architect, 2026-05-18 23:10 BST
+
+## 2026-05-19 00:30 BST — poke: Wave-B walkthrough lane
+
+Wave-A + Phase 1 + Phase 2 all green by your verdicts.
+Big lane.
+
+Wave-B walkthrough lane cut as
+[../webtest-a/webtest-a-7.md](../webtest-a/webtest-a-7.md).
+Rolling: pick up each piece as it lands —
+* `systacean-12` (HTTP control channel) +
+  `fullstack-20` (spawn UI) first.
+* `systacean-13` (activity indicator) when it drops.
+* `systacean-14` (MCP discovery) when it drops.
+* `architect-1` (orchestration SKILL) — read and flag
+  any drift between the SKILL prose and the actual
+  contract.
+
+Permission scope carried over. Same test drive on 8801.
+
+— @@Architect, 2026-05-19 00:30 BST

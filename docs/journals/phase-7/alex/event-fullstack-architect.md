@@ -300,3 +300,105 @@ in `event-architect-fullstack.md`.
 
 online, starting fullstack-13:
 [fullstack/fullstack-13.md](../fullstack/fullstack-13.md).
+
+## 2026-05-18 19:20 BST — poke
+
+`fullstack-13` is committed and pushed on `main`.
+
+Commit:
+
+* `1f2f6fc` Add watcher bubble substrate (fullstack-13)
+
+Gate run: `npm run test -- TerminalRichPrompt watcherEvents`, `npm run check`,
+`npm run build`, `cargo check -p chan-server`, `scripts/pre-push`.
+
+## 2026-05-18 19:59 BST — poke
+
+`fullstack-18` is committed and pushed on `main`.
+
+Commit:
+
+* `2d1c719` Simplify bubble survey UI (fullstack-18)
+
+Gate run: `npm run test -- BubbleOverlay watcherEvents TerminalRichPrompt`,
+`npm run check`, `npm run build`, `scripts/pre-push`.
+
+## 2026-05-18 20:14 BST — poke
+
+`fullstack-19` SPA switch is implemented locally but blocked on the backend
+lane: `systacean-11` endpoint is not on `main` yet, and `scripts/pre-push`
+currently fails in dirty `crates/chan-server/src/terminal_sessions.rs`
+with `E0597: session does not live long enough`.
+
+Details: [fullstack/fullstack-19.md](../fullstack/fullstack-19.md).
+
+## 2026-05-18 20:33 BST — poke
+
+`fullstack-19` is committed and pushed on `main`.
+
+Commit:
+
+* `7bc2897` Route survey replies through terminal endpoint (fullstack-19)
+
+Gate run: `npm run test -- BubbleOverlay watcherEvents`, `npm run check`,
+`npm run build`, `scripts/pre-push`.
+
+## 2026-05-18 20:37 BST — poke
+
+online, starting `fullstack-14` after `fullstack-19` landed.
+
+## 2026-05-18 20:45 BST — poke
+
+`fullstack-14` is committed and pushed on `main`.
+
+Commit:
+
+* `a2fb205` Migrate graph and file browser into tabs (fullstack-14)
+
+Gate run: `npm run test -- store tabs`, `npm run check`,
+`npm run build`, `scripts/pre-push`.
+
+## 2026-05-18 20:54 BST — poke
+
+online, starting `fullstack-15` after `fullstack-14` landed.
+
+## 2026-05-18 20:59 BST — poke
+
+`fullstack-15` is committed and pushed on `main`.
+
+Commit:
+
+* `e4f9d28` Add pane body tab detach substrate (fullstack-15)
+
+Gate run: `npm run test -- tabs`, `npm run check`,
+`npm run build`, `scripts/pre-push`.
+
+## 2026-05-19 04:31 BST — poke
+
+online, starting `fullstack-17` after `fullstack-16` landed.
+
+## 2026-05-19 04:37 BST — poke
+
+`fullstack-17` is committed and pushed on `main`.
+
+Commit:
+
+* `0c2faa7` Polish watcher and terminal UX (fullstack-17)
+
+Gate run: `npm run test -- BubbleOverlay TerminalRichPrompt watcherEvents pathValidate`,
+`npm run check`, `npm run build`, `scripts/pre-push`.
+
+## 2026-05-18 21:01 BST — poke
+
+online, starting `fullstack-16` after `fullstack-15` landed.
+
+## 2026-05-18 21:06 BST — poke
+
+`fullstack-16` is committed and pushed on `main`.
+
+Commit:
+
+* `44d9749` Add transactional pane mode (fullstack-16)
+
+Gate run: `npm run test -- tabs`, `npm run check`,
+`npm run build`, `scripts/pre-push`.

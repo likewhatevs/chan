@@ -243,3 +243,176 @@ bounced 8801.
 Server stays on 8801. Drive has list.md (test artifact) +
 the persisted move/delete-target empty states in the tab.
 Standing by for the next batch.
+
+## 2026-05-18 (resume) BST - webtest-a-6 received, standby
+
+New Round 2 wave-A walkthrough task cut at
+[webtest-a-6.md](webtest-a-6.md). Lane A angle: bubble
+overlay + watcher-set dialog + survey rendering + terminal
+status bullet.
+
+Items 1-12 are blocked on `systacean-9` (backend fsnotify
+watcher) and `fullstack-13` (frontend bubble UI / survey
+renderer). Neither has landed yet — head is `9653e6b`
+(chore-only since wave-2b). My binary on 8801 is current.
+
+Item 13 (carry-over smokes on fullstack-11 / fullstack-12)
+is already verdicted in [webtest-a-5.md](webtest-a-5.md)
+wave-2b — both PASS, and no code changes in the window
+between then and now, so verdicts hold.
+
+Pre-flight synthetic-event recipe parked in
+[webtest-a-6.md](webtest-a-6.md). Ready to fire the moment
+systacean-9 / fullstack-13 land.
+
+Standing by.
+
+## 2026-05-18 (resume) BST - webtest-a-6 wave-A cluster done
+
+After @@Alex's `poke`. Rebuilt against head with
+`d08ed3d` (systacean-9 watcher) + `1f2f6fc` (fullstack-13
+bubble substrate); bounced 8801. Renamed terminal to
+`WebtestA` so events `to:@@WebtestA` resolve via
+`normalize_agent_target`.
+
+**Verdicts (11 of 12 PASS, 1 PARTIAL):**
+
+* systacean-9 items 1-4: all PASS. POST returns 204,
+  atomic event drops `poke\n` to the PTY, malformed JSON
+  increments `dropped_events` without crashing, unknown
+  types are warn+ignore (no PTY write).
+* fullstack-13 items 5, 6, 8-12: all PASS. Watch
+  directory dialog flow, bubble-over-terminal, 4×3
+  multi-question (all 4 in one bubble), standing
+  "Check my comments first", scope defaults one-shot
+  with the spec'd 3 options, stack ↔ tray toggle
+  (4 bubbles collapsed to one pill), status bullet
+  (visible / dirty / blink / clears blink on prompt
+  reopen).
+* fullstack-13 item 7: **PARTIAL**. Survey renders + Submit
+  fires but reply atomic-write fails:
+  `reply failed: path is not editable text:
+  events/.event-reply-s1-mpbk3dio.tmp` — chan-drive
+  editable-text gate rejects the `.tmp` staging file.
+  Hand-off to @@FullStack / @@Systacean.
+
+Two minor side observations called out inline (not
+blocking): (a) the Watch directory dialog rejects absolute
+paths with `× absolute paths are not allowed`, but the
+systacean-9 API spec says both drive-relative and absolute
+are supported — UX vs API surface mismatch worth a note;
+(b) unknown-type events still render a bubble showing the
+type name (`futuristic-thing from @@TestAgent`) rather
+than being silently dropped — confirm intent.
+
+State left: 8801 server up, rich prompt open with the full
+bubble stack visible (including the red reply-failed
+banner from item 7) for live inspection.
+
+Standing by for fix on item 7 + the next wave.
+
+## 2026-05-18 (resume) BST - webtest-a-6 revision cluster done
+
+After @@Alex's `poke`. Rebuilt against head with
+`1cd4ef2` (PTY reattach by window+tab — systacean-8
+follow-up) + `2d1c719` (fullstack-18 simplified bubble
+survey UI).
+
+**Three previously open items are now closed:**
+
+* **systacean-8 scrollback retention — now PASSES**. 25
+  `RETAIN-LINE-N` lines re-appear after page reload. The
+  `1cd4ef2` commit message confirms my prior hypothesis
+  verbatim ("attach without session id treated as a fresh
+  PTY"). Reattach by `(window_id, tab_name)` closes the
+  loop.
+* **Item 7 survey reply — now PASSES**. fullstack-18
+  rewrote the reply path with a `.md` extension, side-
+  effect-fixing the `.tmp` / editable-text gate issue.
+  Reply file `event-reply-v2-1xn.md` lands with the
+  correct schema. Likely makes `systacean-11` /
+  `fullstack-19` unnecessary — worth confirming with
+  @@Architect.
+* **Item 8 4×3 (revised UX) — PASSES**. Now uses topic
+  tabs `Q1 Q2 Q3 Q4` with auto-advance on each keystroke
+  and auto-commit when the last tab is answered. Single
+  reply file with all 4 answers, scope_grant locked to
+  `one-shot`. Answered tabs gain a `*` annotation.
+* **Item 11 stack/tray (revised location) — PASSES**.
+  Toggle moved from the bubble stack top to the rich-
+  prompt right-click context menu (`Bubble stack` /
+  `Bubble tray`). Toolbar surface cleaner.
+
+Two minor follow-up nits called out inline:
+* Watcher state staleness on session reload (SPA shows
+  "Stop watching" but server returns "watcher is no
+  longer attached" on reply attempt). Workaround: toggle
+  stop/start. Worth either auto-reattach or stale-state
+  cleanup.
+* Answered survey bubbles stay visible (with `*`) rather
+  than dismissing — confirm intentional vs nit.
+
+State left: 8801 server up, ScrollbackA terminal has both
+answered surveys visible, watcher attached. Reply files
+intact in `events/` as evidence.
+
+Standing by for next wave / @@Alex direction on
+`systacean-11`/`fullstack-19` necessity.
+
+## 2026-05-18 (resume) BST - webtest-a-6 wave-B cluster done
+
+After @@Alex's `poke`. Rebuilt against head with the new
+batch: `530e30f` (systacean-11 server-side event-reply
+writer), `7bc2897` (fullstack-19 SPA route through
+terminal endpoint), `4ca7dc4` (revert of systacean-6 SPA
+storage scoping — confirms my drift verdict), `a2fb205`
+(fullstack-14 Phase 1 Graph + File Browser as first-class
+tabs).
+
+**All five wave-B items PASS:**
+
+* **fullstack-19 + systacean-11**: keystroke reply now
+  POSTs to
+  `/api/terminal/<session>/event-reply` (204), server
+  writes the `.md` reply file atomically. Reply schema
+  unchanged; only the write path crossed the boundary.
+* **fullstack-14 File Browser**: Cmd+P opens a `Files`
+  tab next to the terminal (was OverlayShell). Hash kind
+  `b`. Tab carries DETAILS inspector on the right.
+* **fullstack-14 Graph**: Cmd+Shift+M opens a `Graph` tab
+  with SCOPE selector + filter chips inspector. Hash
+  kind `g`. Rendered semantic graph (13/13 nodes).
+* **Drift after 4ca7dc4 revert**: warm-cache repro held
+  on 8801 across 3 s. The f94c4b5 `Vary: Host` patch
+  alone IS sufficient — the systacean-6 revert is safe.
+
+Server stays on 8801. Tab 503725098 has the three tabs
+(WaveB terminal + Files + Graph) live. Reply file in
+`events/` as evidence.
+
+Standing by for the next wave.
+
+## 2026-05-19 (resume) BST - webtest-a-6 wave-C pane cluster done
+
+After @@Alex's `poke`. Rebuilt against head with the new
+pane-system batch: `e4f9d28` (fullstack-15 pane body tab
+detach substrate) + `44d9749` (fullstack-16 transactional
+pane mode via Cmd+K).
+
+* **fullstack-16 — PASS**. Cmd+K snapshots layout into a
+  draft. Both panes render lightweight previews (tab name
+  + filename, no editor body). Status pill
+  `‹ • pane mode  Enter commit · Esc discard` visible.
+  Arrow keys move focus correctly. Esc exits cleanly,
+  layout intact.
+* **fullstack-15 — PASS by code audit + unit tests**.
+  Wiring confirmed in `Pane.svelte` (`onBodyDragOver`,
+  `edgeForBodyDrop`, `onBodyDrop`) + the
+  `detachTabToPaneEdge` helper in `tabs.svelte.ts` with
+  53 lines of new test coverage. Live drag from MCP
+  doesn't carry the `TAB_DRAG_MIME` payload so the body-
+  drop handler short-circuits; same tooling limit as the
+  earlier Cmd-modifier paths. Needs a hand test from
+  @@Alex with a real mouse drag.
+
+Server stays on 8801. Standing by for the next wave.

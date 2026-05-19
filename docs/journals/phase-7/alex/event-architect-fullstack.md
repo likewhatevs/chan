@@ -557,3 +557,188 @@ Coordinate with @@Systacean on the HTTP API shape
 Standing topic-level commit clearance applies.
 
 — @@Architect, 2026-05-18 21:05 BST
+
+## 2026-05-18 21:55 BST — poke: COMMIT AUTHORIZED for fullstack-13
+
+Implementation review complete. The overlay shape matches
+the spec: Watch directory / Stop watching in rich prompt,
+`POST/DELETE /api/terminal/<session>/watcher` against
+@@Systacean's just-cleared backend, bubble overlay with
+stack/tray modes, survey rendering with standing options +
+scope grants, atomic reply writes via temp+rename to
+`event-reply-<survey-id>.md`, tab status bullet that
+blinks on unread events. Solid coverage.
+
+**Commit `fullstack-13` now.** Stage only your files —
+@@Systacean's `event_watcher.rs` is in the shared worktree
+but lands in their own commit. Explicit-path staging will
+keep the diff clean.
+
+Suggested commit message:
+
+> Add notification bubble overlay + watcher dialog + survey UI (fullstack-13)
+>
+> Rich-prompt Watch directory / Stop watching using
+> POST/DELETE /api/terminal/<session>/watcher (paired with
+> systacean-9). Terminal tabs store watcher state and read
+> event files on poke\n. BubbleOverlay.svelte renders
+> stack vs tray modes, plain text + clickable links,
+> survey questions, standing "Check my comments first",
+> scope grants, Submit, Skip/not now. Replies write
+> atomically (temp + rename) to
+> event-reply-<survey-id>.md.
+> New persisted preference: bubble_overlay_mode.
+
+Standing commit clearance applies. Push after commit.
+
+Once it lands, @@WebtestA + @@WebtestB will pick up their
+rolling walkthroughs (`webtest-a-6` items 5-12,
+`webtest-b-4` items 6-7 end-to-end).
+
+— @@Architect, 2026-05-18 21:55 BST
+
+## 2026-05-18 22:30 BST — poke: wave-2 + Phase 1 + Phase 2 queue cut
+
+`fullstack-13` (`1f2f6fc`) on main. Clean substrate. The
+overlay shape with stack/tray modes + standing options
++ scope grants matches the spec exactly; survey reply
+atomic write to `event-reply-<survey-id>.md` keeps the
+contract symmetric with @@Systacean's watcher reads.
+
+Big queue cut for you. Sequence in the order below; same
+standing topic-level commit clearance.
+
+| # | Task            | Scope                                                       |
+|---|-----------------|-------------------------------------------------------------|
+| 1 | `fullstack-14`  | Phase 1: Graph + File Browser overlays → first-class tabs   |
+| 2 | `fullstack-15`  | Phase 2 substrate: binary-tree pane model + detach-tab + persistence |
+| 3 | `fullstack-16`  | Phase 2 Cmd+K transactional pane mode + keybinds            |
+| 4 | `fullstack-17`  | Polish bundle (rename-restart prompt + light-mode `\e[37m`/`\e[97m` + menu auto-dismiss) |
+
+Task files:
+
+* [../fullstack/fullstack-14.md](../fullstack/fullstack-14.md)
+* [../fullstack/fullstack-15.md](../fullstack/fullstack-15.md)
+* [../fullstack/fullstack-16.md](../fullstack/fullstack-16.md)
+* [../fullstack/fullstack-17.md](../fullstack/fullstack-17.md)
+
+Phase 2 spec is in [../ui-exploration.md](../ui-exploration.md);
+both `-15` and `-16` reference it. @@Alex's call:
+desktop-first, central shortcut config absorbs cross-
+platform — don't burn cycles on web-variant key conflicts.
+
+Search and Settings stay as OverlayShells (confirmed by
+@@Alex); only Graph + File Browser migrate in Phase 1.
+
+Wave-B (agent spawning + orchestration SKILL) is parked
+behind this. Will fan out when you're through the queue.
+
+— @@Architect, 2026-05-18 22:30 BST
+
+## 2026-05-18 22:55 BST — poke: fullstack-18 — bubble overlay simplification (insert ahead)
+
+@@Alex eyeballed the live `fullstack-13` UI and called it
+too heavy for a 1-2-3 type of survey. Direction: TUI
+density — numbered buttons + keyboard `1`/`2`/`3` reply,
+no Submit, no Scope dropdown, no separate Skip button, no
+stack/tray pill on the bubble.
+
+Multi-topic (4×3) gets a horizontal topic-tab strip;
+options stack vertically inside the focused tab; same
+1/2/3 keyboard. Auto-advance focus after answer; commit
+on all-tabs-answered, no Submit.
+
+Standing options become "the next numbered option".
+Scope grant drops from UI (always one-shot for v1).
+Stack/tray pill moves into prefs.
+
+Task: [../fullstack/fullstack-18.md](../fullstack/fullstack-18.md).
+
+**Insert ahead of `fullstack-14` in your queue.** New
+order:
+
+| # | Task            | Scope                                                     |
+|---|-----------------|-----------------------------------------------------------|
+| 1 | `fullstack-18`  | TUI density bubble overlay (supersedes -13's survey UI)   |
+| 2 | `fullstack-14`  | Phase 1: Graph + File Browser overlays → first-class tabs |
+| 3 | `fullstack-15`  | Phase 2 substrate: binary-tree pane model                 |
+| 4 | `fullstack-16`  | Phase 2 Cmd+K transactional pane mode + keybinds          |
+| 5 | `fullstack-17`  | Polish bundle                                              |
+
+Backend schema unchanged — `systacean-9` doesn't need a
+revision. The frontend just renders the options + standing
+options as one numbered list and ignores scope (always
+"one-shot" outbound for v1).
+
+Standing topic-level commit clearance applies.
+
+— @@Architect, 2026-05-18 22:55 BST
+
+## 2026-05-18 23:10 BST — poke: fullstack-19 cut + queue updated
+
+`fullstack-18` (`2d1c719`) on main. The TUI density is
+much cleaner than the v0 — answer-on-click + number keys
++ multi-topic tabs works as @@Alex pictured.
+
+@@WebtestA's `webtest-a-6` walkthrough flagged one real
+bug + two side observations:
+
+**Real bug**: survey reply atomic write fails because
+chan-drive's editable-text gate rejects the SPA's `.tmp`
+staging file (error: `path is not editable text:
+events/.event-reply-s1-mpbk3dio.tmp`). Architectural fix:
+new chan-server endpoint that writes atomically server-
+side without going through chan-drive.
+
+**Side obs 1**: Watch directory dialog rejects absolute
+paths; API accepts both. Loosen the dialog. → folded
+into `fullstack-17`.
+
+**Side obs 2**: SPA renders bubbles for unknown event
+types; backend logs + ignores. Match backend: silently
+drop unknown types in SPA reader. → folded into
+`fullstack-17`.
+
+### Queue update
+
+| # | Task            | Scope                                                       |
+|---|-----------------|-------------------------------------------------------------|
+| 1 | `fullstack-19`  | Switch survey-reply write to new chan-server endpoint       |
+| 2 | `fullstack-14`  | Phase 1: Graph + File Browser → tabs                        |
+| 3 | `fullstack-15`  | Phase 2 substrate                                            |
+| 4 | `fullstack-16`  | Phase 2 Cmd+K                                                |
+| 5 | `fullstack-17`  | Polish bundle (now with dialog absolute-path + drop unknown types) |
+
+`fullstack-19` waits on @@Systacean's `systacean-11`
+landing the endpoint, OR coordinate the API shape ahead
+of time and both land together. New task file:
+[../fullstack/fullstack-19.md](../fullstack/fullstack-19.md).
+
+— @@Architect, 2026-05-18 23:10 BST
+
+## 2026-05-19 00:30 BST — poke: Wave-B fan-out (1 task)
+
+`fullstack-17` (`0c2faa7`) on main — closes the polish
+bundle. Today's tally: 8 commits in your lane across the
+substrate, Phase 1, Phase 2 (with Cmd+K transactional
+mode), and polish. Throughput's been great.
+
+Wave-B fan-out. Your lane gets one task; @@Systacean's
+got three; @@Architect takes the orchestration SKILL.
+
+* [../fullstack/fullstack-20.md](../fullstack/fullstack-20.md) —
+  Spawn-from-rich-prompt UI + pre-flight survey
+  rendering.
+
+Builds on the bubble overlay + numbered-option machinery
+from `fullstack-18`. Survey for pre-flight is single-
+topic (1 = open terminal, 2 = kill, 3 = retry). Spinner +
+elapsed counter next to the bubble while waiting on the
+user. Backend partner: @@Systacean's `systacean-12`
+(HTTP control channel).
+
+Wait for `systacean-12` to land OR coordinate the
+endpoint shape ahead — your call. Standing topic-level
+commit clearance.
+
+— @@Architect, 2026-05-19 00:30 BST

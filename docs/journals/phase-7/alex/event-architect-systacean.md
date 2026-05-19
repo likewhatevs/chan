@@ -571,3 +571,167 @@ they need to call `POST/DELETE
 Standing topic-level commit clearance applies.
 
 — @@Architect, 2026-05-18 21:05 BST
+
+## 2026-05-18 21:55 BST — poke: COMMIT AUTHORIZED for systacean-9
+
+Implementation review complete. Wire shape is clean:
+
+* `POST/DELETE /api/terminal/:session/watcher` with
+  `{"path":"..."}` body matches what @@FullStack built
+  against in `fullstack-13`.
+* Schema serde derives match the locked design.
+* Dispatch by normalized tab name; missing tab logs + drops;
+  dropped-events counter on `/health`. Good telemetry.
+* No-self-loop guard in the dispatch path.
+* All four gate steps + `scripts/pre-push` green.
+
+**Commit `systacean-9` now.** Stage only the files you
+implemented (your task file said "Note: @@FullStack's
+files are also dirty in the worktree" — they made the
+same note. Stage by explicit path).
+
+Suggested commit message:
+
+> chan-server: fsnotify watcher + event ingestion (systacean-9)
+>
+> Per-terminal-session fsnotify watcher tied to lifecycle
+> (drops on close/restart, replaceable). HTTP API:
+> POST/DELETE /api/terminal/<session>/watcher with
+> {"path":"..."}.
+> Reads Create + rename-final events once, serde-parses the
+> locked survey schema, dispatches `poke\n` to the target
+> tab's PTY. Unknown types log + ignore for forward-compat;
+> dropped-events counter on /api/health. No-self-loop: the
+> reaction path writes only to the PTY.
+
+**@@WebtestB is currently blocked on `cargo check` against
+the shared worktree** because `event_watcher.rs` is still
+`??` to them. Your commit unblocks them immediately.
+
+**Second item: `systacean-8` FAIL.** @@WebtestB ran the
+B19 scrollback repro on the wave-2 binary and observed:
+pre-reload buffer contains `SCROLL_TEST_VISIBLE_OUTPUT_AAAA`,
+post-reload (`location.reload()`) buffer is empty. Their
+diagnostic suggests checking whether the WS reconnect path
+on a full page reload actually triggers the drop-stale-tseq
+hydrate code, or whether it goes through a different code
+path. Full repro recipe + xterm focus seat trick is in
+[../webtest-b/webtest-b-4.md](../webtest-b/webtest-b-4.md)
+("systacean-8 - B19 scrollback retention - FAIL").
+
+After `systacean-9` lands, take a look. If it's a real
+regression I'll cut a `systacean-11` for the deeper fix.
+For now, treat it as "investigate post-commit".
+
+— @@Architect, 2026-05-18 21:55 BST
+
+## 2026-05-18 22:30 BST — poke: B19 reattach commit AUTHORIZED + systacean-10 queued
+
+`systacean-9` (`cd88b0c`) on main. Solid.
+
+Your B19 diagnosis is the clean kind: server replay path
+sound; the reload tab restored from URL hash misses
+`terminalSessionId`, so chan-server saw a new attach as a
+fresh PTY. `(window_id, tab_name)` reattach is the right
+seam. 120 lines, gate green.
+
+**Commit the B19 reattach patch now.** This closes
+`systacean-8` properly — same task, follow-up commit.
+Suggested commit message:
+
+> Reattach terminal PTY by (window_id, tab_name) on reload (systacean-8 follow-up)
+>
+> The systacean-8 SPA-side fix removed stale tseq from
+> session.json so the server could replay the retained
+> ring on reconnect. The reload path however restores the
+> tab from URL hash before terminalSessionId is back in
+> place, so the WS attach arrives without a session id —
+> the server treated it as a fresh PTY and skipped replay.
+> This patch lets get_or_create reattach by unique
+> (window_id, tab_name) before creating a new PTY,
+> refusing ambiguous matches.
+
+Push after commit. @@WebtestB will re-run their reload
+recipe.
+
+### Next queue
+
+[../systacean/systacean-10.md](../systacean/systacean-10.md) —
+verify `systacean-6` effectiveness, revert if no-op given
+`systacean-3`'s `Vary: Host`. @@Alex preference: clean +
+no tech debt. Small task; can be done after the B19
+commit or in parallel since they touch different files.
+
+— @@Architect, 2026-05-18 22:30 BST
+
+## 2026-05-18 23:10 BST — poke: B19 reattach still queued + systacean-11 cut
+
+Two items in your queue:
+
+**1. Commit the B19 reattach patch.** Auth queued at 22:30
+BST; you haven't been awake since. `crates/chan-server/src/
+terminal_sessions.rs` is still dirty in your tree.
+Standing clearance — gate green → commit → push.
+
+**2. New: `systacean-11`** — chan-server seam for survey-
+reply atomic writes.
+[../systacean/systacean-11.md](../systacean/systacean-11.md).
+
+@@WebtestA hit a real bug walking through `webtest-a-6`
+item 7: SPA's reply atomic-write goes through chan-drive,
+which rejects the `.tmp` staging file on the editable-text
+gate. Real architectural seam — these are machine-internal
+event files, not user content; chan-drive shouldn't be in
+this path.
+
+Solution shape: new endpoint `POST /api/terminal/<session>
+/event-reply` that writes atomically server-side via
+`tokio::fs` temp+rename, bypassing the drive entirely.
+@@FullStack's `fullstack-19` will switch the SPA to call it.
+
+Sequence:
+
+| # | Task                  | Status                         |
+|---|-----------------------|--------------------------------|
+| 1 | B19 reattach commit   | Auth'd, dirty in tree          |
+| 2 | `systacean-11`        | Cut, see linked task           |
+| 3 | `systacean-10`        | Still queued — verify -6 no-op |
+
+— @@Architect, 2026-05-18 23:10 BST
+
+## 2026-05-19 00:30 BST — poke: Wave-B fan-out (3 tasks)
+
+@@Alex authorized Wave-B fan-out. Wave-A is fully shipped
++ validated; Phase 1 + Phase 2 also fully shipped. Your
+lane gets three tasks; @@FullStack gets one; I'm taking
+the orchestration SKILL myself.
+
+| # | Task           | Scope                                                       |
+|---|----------------|-------------------------------------------------------------|
+| 1 | `systacean-12` | HTTP agent control channel (spawn / name / execute / restart) |
+| 2 | `systacean-13` | Activity indicator on terminal tabs (PTY output-since-focus) |
+| 3 | `systacean-14` | MCP auto-discovery for claude / codex / gemini             |
+
+Sequence in that order:
+
+* `-12` is the substrate for spawning; @@FullStack's
+  `fullstack-20` UI depends on it.
+* `-13` is small + independent; do whenever.
+* `-14` is the meatiest investigation (per-agent
+  discovery shapes); feeds into the orchestration SKILL
+  (`architect-1`) so coordinate with me on what you
+  find.
+
+Task files:
+
+* [../systacean/systacean-12.md](../systacean/systacean-12.md)
+* [../systacean/systacean-13.md](../systacean/systacean-13.md)
+* [../systacean/systacean-14.md](../systacean/systacean-14.md)
+
+@@Alex picked HTTP (not MCP) for the spawning back-
+channel — already in setup-2 Q5. Bearer-token auth
+reuses the existing per-launch token.
+
+Standing topic-level commit clearance applies.
+
+— @@Architect, 2026-05-19 00:30 BST

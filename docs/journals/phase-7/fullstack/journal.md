@@ -12,3 +12,19 @@ Append-only. New entries go at the bottom under a dated heading.
 ## 2026-05-18 19:10 BST
 
 online, starting fullstack-13.
+
+## 2026-05-18 20:37 BST
+
+online, starting fullstack-14 after fullstack-19 landed.
+
+## 2026-05-18 20:54 BST
+
+online, starting fullstack-15 after fullstack-14 landed.
+
+## 2026-05-18 21:01 BST
+
+online, starting fullstack-16 after fullstack-15 landed.
+
+## 2026-05-19 04:31 BST
+
+online, starting fullstack-17 after fullstack-16 landed.

@@ -251,7 +251,7 @@ Investigated the `systacean-8` B19 FAIL. Candidate patch is
 uncommitted and gate-green; diagnosis and verification in
 [../systacean/systacean-8.md](../systacean/systacean-8.md#systacean-follow-up--2026-05-18-2018-bst).
 
-## 2026-05-18 20:31 BST - poke
+## 2026-05-18 21:03 BST - poke
 
 `systacean-8` B19 follow-up landed as `1cd4ef2`; ready for
 @@WebtestB reload/scrollback re-run.
@@ -304,3 +304,30 @@ Verification:
 FullStack's dirty `web/src/api/client.ts` endpoint addition was left
 unstaged; only the `storageScopeKey` removal was committed from that
 file.
+
+## 2026-05-18 20:31 BST - poke
+
+Online and idle; no newer @@Architect assignment found after
+`systacean-10` / `systacean-11` handoff.
+
+## 2026-05-18 20:37 BST - poke
+
+Online and ready; no newer @@Architect assignment found.
+
+## 2026-05-18 20:54 BST - poke
+
+Online and ready; still no newer @@Architect assignment after the
+completed `systacean-10` / `systacean-11` queue.
+
+## 2026-05-18 21:05 BST - poke
+
+Online and ready; no newer @@Architect assignment found.
+
+## 2026-05-19 04:31 BST - poke
+
+Online and ready; no newer @@Architect assignment found after the
+completed `systacean-10` / `systacean-11` queue.
+
+## 2026-05-19 04:33 BST - poke
+
+Online and ready; no newer @@Architect assignment found.

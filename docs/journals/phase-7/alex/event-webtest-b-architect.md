@@ -371,3 +371,266 @@ Test server stays up on 8810. Will pick up the B19
 scrollback re-verify in a fresh session — if you have a
 suggestion for a more deterministic way to seed
 pre-reload PTY output, happy to take it.
+
+## 2026-05-18 21:50 BST — poke (Round 2 wave-A carry-over smoke)
+
+Picked up `webtest-b-4` while `systacean-9` +
+`fullstack-13` are still pre-implementation. Did the
+two carry-over smoke items. Full writeup in
+[../webtest-b/webtest-b-4.md](../webtest-b/webtest-b-4.md#2026-05-18-2150-bst---carry-over-smoke-systacean-7--systacean-8).
+
+* **systacean-8 (B19 scrollback retention) — FAIL on my
+  test**. Workaround for the xterm input flake: dispatch
+  `MouseEvent` (mousedown + mouseup + click) on
+  `.xterm-screen` to seat focus before typing. With that
+  in place, typed `echo SCROLL_TEST_VISIBLE_OUTPUT_AAAA`
+  + Return, confirmed pre-reload output is visible
+  (command + output + ✓ 7ms timing + fresh prompt).
+  After `location.reload()` and 9s wait, scrollback was
+  NOT replayed — `.xterm-rows` shows only the empty
+  prompt (37 chars, 1 row). Tab name `B19v2` was
+  preserved in the URL fragment so the SPA is supposed
+  to reattach by tab name. Three caveats / possible
+  explanations spelled out in the task appendix; concrete
+  diagnostic for whoever digs in is: rerun the recipe
+  with DevTools Network panel open and see whether
+  chan-server emits a replay payload over the WS on
+  reconnect, or only fresh PTY output going forward.
+  Filing as FAIL pending your call on whether this is a
+  regression or a misunderstanding of the fix's scope.
+* **systacean-7 (DMG build fix) — PASS by inspection**.
+  Cannot run `make -C desktop build` end-to-end this
+  turn — `cargo check` is blocked by @@Systacean's
+  uncommitted `systacean-9` WIP (`EventWatcherHandle`
+  missing `Debug` derive, clippy `-D warnings`). The
+  Makefile diff (two `ifneq` guards around
+  `APPLE_SIGNING_IDENTITY` / `APPLE_TEAM_ID` exports
+  plus an inline comment explaining the Tauri "no
+  identity found" failure mode) is correct and
+  scope-orthogonal to runtime behavior. Functional
+  re-confirm deferred until @@Systacean lands
+  `systacean-9` cleanly.
+
+Parked on Round 2 wave-A acceptance items 1-7 (watcher
+lifecycle, multi-tab dispatch, PTY poke format, end-to-
+end with the bubble overlay) until both `systacean-9`
+backend and `fullstack-13` frontend land.
+
+Side-note for @@Systacean's awareness: their in-progress
+`event_watcher.rs` needs the `Debug` derive before
+landing or the pre-push gate will block.
+
+## 2026-05-18 22:15 BST — poke (wave-A full cluster verdict)
+
+Both wave-A commits landed (`935d3ee` systacean-9
+backend, `1f2f6fc` fullstack-13 frontend substrate).
+Rebuilt + relaunched + ran the full webtest-b-4
+acceptance suite. Full writeup in
+[../webtest-b/webtest-b-4.md](../webtest-b/webtest-b-4.md#2026-05-18-2215-bst---wave-a-full-cluster-systacean-9--fullstack-13).
+
+Methodology: drove backend tests via a Python WebSocket
+client (sidesteps the browser xterm input flake from
+earlier sessions); drove the frontend tests via the SPA
+directly. The Python harness lives in
+`/tmp/chan-ws-test/wave_a_test.py` + `/tmp/chan-ws-venv`
+if you want to re-run.
+
+* **systacean-9 backend PASS** on items 1-6 of
+  webtest-b-4: watcher attach (204), `@@TabBeta`
+  dispatch writes literal `poke\n` to beta PTY,
+  `@@TabAlpha` (watcher owner) also dispatches cleanly,
+  PTY input format is literal `poke` + `\n`, replacement
+  watcher suppresses old-dir events + dispatches new-dir
+  events, DELETE drops watcher, `/health` exposes
+  `terminal_event_watcher.dropped_events` that
+  increments on no-match.
+* **fullstack-13 substrate PASS**. Rich-prompt folder
+  icon opens a "watch directory" modal (with absolute-
+  path rejection + drive-relative completion + overwrite
+  warning). Submitting attaches the watcher; status bar
+  shows `watching events` + `Stop watching`; folder icon
+  highlights blue; **blue bullet appears next to the tab
+  name** on the tab strip (matches the spec's tab-strip
+  indicator). Bubble overlay renders top-right with
+  sender + topic header, `stack/tray` toggle, refresh
+  icon. `tray` view collapses to `▾ N watcher event(s)`.
+* **fullstack-13 survey UI + reply path NOT YET**. The
+  commit landed is the "substrate" only — the bubble
+  body shows static `survey from @@<from>` text, with
+  no per-question text, no option buttons, no standing
+  options, no scope-grant selector, no Submit, no
+  `event-reply-<id>.md` written back. DOM probe of the
+  bubble overlay confirms only stack/tray/refresh/tray-
+  chip buttons. Suggest a follow-up task for the survey
+  rendering + reply path.
+
+Two implementation observations for follow-up cuts:
+
+1. **Dual dispatch on atomic temp+rename**: my
+   atomic-mv recipe (`.tmp-X` → `event-X.md`) produces
+   TWO fsnotify events that BOTH dispatch, so each
+   intended notification reaches the target tab TWICE.
+   Beta's t2 buffer shows two `poke\r\n` + two
+   `-bash: poke: command not found` + two prompts.
+   `/health` confirms: 1 atomic write of an un-targeted
+   event bumped `dropped_events` by 2, not 1. Suggest
+   filtering watcher events by filename pattern (drop
+   `.tmp-*` prefix) or by completed-JSON parse.
+2. **Absolute path policy mismatch**: SPA's "watch
+   directory" modal validates input and rejects absolute
+   paths with `× absolute paths are not allowed`. But
+   server-side `resolve_watcher_dir` accepts both
+   absolute and drive-relative. Tighten one or the
+   other — probably the UI is the right place to keep
+   the constraint (don't let agents watch outside the
+   drive root), but then the server-side should refuse
+   absolute too for defense-in-depth.
+
+Also: my earlier informative observation about bare
+`ws.close()` not dropping the watcher (item 7) is a
+non-issue under the spec's "On terminal close /
+restart / exit" wording — bare WS detach is a reconnect
+path, not a close. The session lives until idle prune
+(60s default) or explicit DELETE / shutdown.
+
+Test server stays up on 8810. Parked again until wave-B
+or the survey-UI follow-up cuts land.
+
+## 2026-05-18 23:00 BST — poke (late wave-A: B19 reattach + fullstack-18)
+
+Both late-wave-A commits picked up. Full writeup in
+[../webtest-b/webtest-b-4.md](../webtest-b/webtest-b-4.md#2026-05-18-2300-bst---late-wave-a-b19-reattach--fullstack-18).
+
+* **B19 reattach (`1cd4ef2`) — PASS**. Same recipe as
+  my earlier FAIL test: type `SCROLL_TEST_LATE_WAVE_A_SENTINEL`
+  + `PID_BEFORE=$$_marker` (PID 29277), reload. After
+  the reload, scrollback re-renders both prior lines,
+  and `PID_AFTER=$$_marker` returns the same `29277`.
+  Reattach by `(window_id, tab_name)` lands.
+  **Closes systacean-8 carry-over: PASS.**
+* **fullstack-18 simplified survey UI (`2d1c719`) —
+  PASS with one bug**.
+  * Numbered one-keystroke / click reply UI renders
+    cleanly: question text + numbered options
+    (`1 Red`, `2 Green`, `3 Blue`) + auto-appended
+    standing `4 Check my comments first`.
+  * Reply file lands at
+    `events/event-reply-<id>.md` with the spec'd JSON
+    shape (id mirrors original, `type: survey-reply`,
+    `from: @@Alex`, `to: <original_sender>`,
+    `answers[]`, `scope_grant: one-shot`).
+  * Locked schema gotcha (not in my earlier guess): the
+    SPA parser requires question `header` + `text`,
+    options `key` + `label`. Old shapes (`id`+`text` /
+    `id`+`label`) silently fail to parse and the bubble
+    shows only the header fallback (`survey from
+    @@<from>`). Worth mentioning in the schema doc so
+    downstream producers match exactly.
+  * **Bug: SPA/server watcher state divergence**. When
+    navigating between terminal-tab URL fragments
+    without first stopping the watcher (e.g. URL hash
+    moves from `B19v3` to `@@BubbleTab`), the SPA-side
+    state persists `watching events` + `Stop watching`
+    affordance but the server has no watcher for the
+    new session. All reply POSTs return **409 Conflict**
+    (confirmed via the network panel: 3 POSTs to
+    `/api/terminal/<sess>/event-reply` all 409'd).
+    Clicking "Stop watching" surfaces `× stop failed:
+    terminal watcher not found`. Re-attaching via the
+    dialog restored the path and the reply landed
+    correctly.
+  * Reproduces reliably across multiple tabs / reloads
+    in this session. Probably worth a follow-up bug task:
+    on tab/session-id change in the SPA, either clear
+    the stale `tab.watcher` state and force re-attach,
+    or auto-re-attach to the new session.
+
+Test server stays up. Parked again pending the watcher-
+divergence follow-up or the next wave.
+
+## 2026-05-18 23:25 BST — poke (small post-late-wave-A smokes)
+
+User poke without specific direction. New commits found
+on `main` since my last walkthrough:
+
+```
+e4f9d28 Add pane body tab detach substrate (fullstack-15)
+a2fb205 Migrate graph and file browser into tabs (fullstack-14)
+7bc2897 Route survey replies through terminal endpoint (fullstack-19)
+99eb89c Record systacean-10 handoff
+4ca7dc4 Revert SPA storage key scoping
+2fe9181 Record systacean-11 handoff
+530e30f Add terminal event-reply writer
+```
+
+No new webtest-b-N task cut for me. Picked two
+bounded, useful smokes:
+
+* **Drift post-systacean-6-revert — still PASS**.
+  Rebuilt + relaunched 8810. Headers still show
+  `cache-control: no-store + vary: Host` from
+  `systacean-3` (the revert only touched the
+  storage-scope code in `static_assets.rs`, not the
+  cache headers). Ran the Lane-A + Lane-B nav recipe
+  (8810 → 8801 → 8810 with multi-tab fragment URL); no
+  port hop, no cross-drive markers in the page body.
+  Confirms @@WebtestA's read in `webtest-a-4` that
+  `systacean-3` alone holds the line.
+* **fullstack-14 smoke — PASS**. `Files` and `Graph`
+  now render as first-class tabs in the tab strip
+  (URL fragment uses `k:b` for Files Browser and
+  `k:g` for Graph). Welcome state of a fresh 8810 nav
+  now opens with a `Files` tab by default instead of
+  the empty welcome screen. Tab strip layout: tab
+  icons (folder / graph), close button, no other
+  surprises. Quick visual screenshot in the task file.
+
+Did NOT separately smoke `fullstack-15` (pane detach
+substrate) — that's a deeper change deserving its own
+walkthrough; can pick it up if cut.
+
+**fullstack-19** (route survey replies through terminal
+endpoint) is what I already exercised in the late
+wave-A appendix — the reply POST to
+`/api/terminal/<sess>/event-reply` lands the JSON
+correctly. The 409-on-stale-watcher behavior I flagged
+is unchanged (it's a SPA-side state bug, not a server
+endpoint shape issue).
+
+Test server stays up. Parked again; happy to pick up
+`fullstack-15` or any other cut next.
+
+## 2026-05-19 00:35 BST — poke (fullstack-16 smoke)
+
+New commit `44d9749 Add transactional pane mode
+(fullstack-16)` landed about a minute after my last
+build. Rebuilt + relaunched, quick web-variant smoke.
+
+* **Cmd+K enters pane mode**. `.app` gets the
+  `pane-mode` class; status bar pill renders
+  `‹ • pane mode  Enter commit · Esc discard`; the pane
+  body switches to a centered draft summary
+  (`Smoke16 / terminal`).
+* **WASD moves focus in the draft**. Started in pane 1
+  (right), pressed `a` → focused=0 (left) inside the
+  draft. Started in pane 0, pressed `d` → focused=1 in
+  draft.
+* **Enter commits**. `pane-mode` class drops; the new
+  focus persists (focused=0 after `a` + Enter).
+* **Esc discards**. `pane-mode` class drops AND the
+  focus rolls back to the pre-mode state (focused
+  returned to 0 after `d` + Esc, despite the draft
+  having moved to 1).
+
+Net: transactional behavior matches the spec. The
+shortcut works on the web variant despite the task
+note "desktop-first" (`App.svelte` binds
+`Meta+KeyK` without sshift/alt unconditionally).
+
+Did NOT separately smoke `fullstack-15` (binary-tree
+pane substrate) — that's the deeper structural change
+under fullstack-16; the smoke above implicitly exercises
+the substrate via Split-right → Cmd+K → WASD. Happy to
+do a deeper walkthrough if cut.
+
+Test server stays up on 8810. Parked.

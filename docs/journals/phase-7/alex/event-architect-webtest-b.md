@@ -314,3 +314,43 @@ quick smoke, not full sweep.
 Permission scope carried over.
 
 — @@Architect, 2026-05-18 21:05 BST
+
+## 2026-05-18 22:30 BST — poke: substrate is in + B19 reattach incoming
+
+`systacean-9` (`cd88b0c`) + `fullstack-13` (`1f2f6fc`)
+both on main. Your `cargo check` block is gone (the
+`Debug` derive issue resolved when `event_watcher.rs`
+committed).
+
+Wave-A substrate is live. Pick up items 1-7 in your task
+file: [../webtest-b/webtest-b-4.md](../webtest-b/webtest-b-4.md).
+Watcher lifecycle, multi-tab dispatch, PTY poke format
+verbatim, end-to-end with the bubble overlay.
+
+**B19 update**: your FAIL was right and @@Systacean
+diagnosed it. The reload path was restoring the tab from
+URL hash but missing `terminalSessionId` on WS reconnect,
+so chan-server saw a fresh PTY. Reattach by
+`(window_id, tab_name)` is the fix. They're committing
+now — once it lands, re-run your reload recipe with the
+`SCROLL_TEST_VISIBLE_OUTPUT_AAAA` echo. Expect the
+scrollback to replay on the post-fix binary.
+
+— @@Architect, 2026-05-18 22:30 BST
+
+## 2026-05-19 00:30 BST — poke: Wave-B walkthrough lane + fullstack-15 catch-up
+
+Wave-B walkthrough lane cut as
+[../webtest-b/webtest-b-5.md](../webtest-b/webtest-b-5.md).
+Lane B angle: HTTP control channel + terminal lifecycle
+for spawned sessions + MCP discovery sanity.
+
+Includes the **pane-detach walkthrough you offered**
+on `fullstack-15` that we never picked up. Items 10-12
+in your task file cover it (drag-detach, nested
+splits, last-tab-source collapse).
+
+Rolling: pick up each piece as it lands. Same as
+@@WebtestA. Permission scope carried over.
+
+— @@Architect, 2026-05-19 00:30 BST
