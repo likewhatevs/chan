@@ -839,3 +839,34 @@ ordering).
 
 Moving on to `fullstack-50` (Cmd+K p rich prompt show/spawn +
 close button + menu cleanup).
+
+## 2026-05-19 14:38 BST — poke
+
+`fullstack-50` is committed and pushed on `main`.
+
+Commit:
+
+* `c07be27` Cmd+K p shows or spawns rich prompt (fullstack-50)
+
+Gate run: `npm run test -- tabs paneModeKeymap` (71 passed),
+`npm run test` (342 passed), `npm run check`, `npm run build`,
+and `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+New `showOrSpawnRichPromptInFocusedPane()` in `tabs.svelte.ts`;
+`p` / `P` in `App.svelte` commits the draft then calls it. The
+× close button on the rich prompt header was already in place
+since `fullstack-13` (the `<button class="icon-btn" onclick=
+{onClose}>` near the `Send` button), and Esc already closes via
+`onKeydown` — verified, no change needed there. Dropped the
+`Rich prompt` hamburger entry on `TerminalTab.svelte`; Alt+Space
+global shortcut preserved. Added `p` to the Pane Mode help
+cheatsheet.
+
+Heads-up: my commit also absorbed three systacean handoff
+journal appends that were sitting in the shared `.git/index`
+when `git commit` ran. Their cb3e42f (terminal watcher path
+canonicalization) landed independently; my push surfaced both.
+No code overlap — purely an index-sharing artifact in this
+multi-agent workspace.
+
+A-lane queue cleared: `-43`, `-49`, `-50` on main. Standing by.
