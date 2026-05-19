@@ -699,3 +699,26 @@ A-lane wave-2 follow-up queue is now clear: fullstack-31, -32, -33,
 Heads-up for @@WebtestA: the right-dock flip needs a manual
 walkthrough (jsdom can't measure flex layout reliably), spelled
 out in the fullstack-38 task hand-off acceptance section.
+
+## 2026-05-19 12:02 BST — poke
+
+online, starting `fullstack-39` (Cmd+K mode keybinds + invisible
+pane divider) after architect poke.
+
+## 2026-05-19 12:11 BST — poke
+
+`fullstack-39` is committed and pushed on `main`.
+
+Commit:
+
+* `8853dc4` Cmd+K spawn/split/kill keybinds + invisible pane divider (fullstack-39)
+
+Gate run: `npm run test -- tabs` (50 passed), `npm run test` (289
+passed), `npm run check`, `npm run build`, and
+`bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+Draft-aware spawn helpers keep the Esc rollback story honest; the
+three commit-then-act keys (3 / x / k) seal the draft first so the
+search overlay + terminal-close confirmation modal get the normal
+keyboard context. Divider stays the same width + cursor; only the
+border color goes transparent.

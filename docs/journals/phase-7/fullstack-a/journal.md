@@ -149,3 +149,15 @@ scripts/pre-push'`.
 
 A-lane wave-2 follow-up queue cleared: fullstack-31, -32, -33,
 -36, -37, -38 all on main. Standing by.
+
+## 2026-05-19 12:02 BST
+
+online, starting fullstack-39 (Cmd+K mode keybinds + invisible
+pane divider) after architect poke.
+
+## 2026-05-19 12:11 BST
+
+fullstack-39 landed: `8853dc4` Cmd+K spawn/split/kill keybinds +
+invisible pane divider (fullstack-39). Gate green: `npm run test --
+tabs` (50 passed), `npm run test` (289 passed), `npm run check`,
+`npm run build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
