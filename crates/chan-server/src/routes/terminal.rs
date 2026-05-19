@@ -725,6 +725,15 @@ fn resolve_watcher_dir(drive_root: &Path, raw: &str) -> Result<PathBuf, String> 
     }
     let path = Path::new(trimmed);
     let abs = if path.is_absolute() {
+        let root_canon = drive_root
+            .canonicalize()
+            .map_err(|e| format!("invalid watcher path: {e}"))?;
+        let path_canon = path
+            .canonicalize()
+            .map_err(|e| format!("invalid watcher path: {e}"))?;
+        if !path_canon.starts_with(root_canon) {
+            return Err("invalid watcher path: path escapes drive root".into());
+        }
         path.to_path_buf()
     } else {
         chan_drive::fs_ops::resolve_safe_strict(drive_root, trimmed)
@@ -848,12 +857,32 @@ mod tests {
     #[test]
     fn resolve_watcher_dir_rejects_empty_escape_and_files() {
         let tmp = tempfile::tempdir().expect("temp drive");
+        let outside = tempfile::tempdir().expect("outside drive");
         fs::create_dir_all(tmp.path().join("events")).expect("create dir");
         fs::write(tmp.path().join("events/event.json"), "{}").expect("create file");
 
         assert!(resolve_watcher_dir(tmp.path(), "").is_err());
         assert!(resolve_watcher_dir(tmp.path(), "../outside").is_err());
+        assert!(resolve_watcher_dir(tmp.path(), &outside.path().display().to_string()).is_err());
         assert!(resolve_watcher_dir(tmp.path(), "events/event.json").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_watcher_dir_rejects_absolute_symlink_escape() {
+        let tmp = tempfile::tempdir().expect("temp drive");
+        let outside = tempfile::tempdir().expect("outside drive");
+        fs::create_dir_all(tmp.path().join("events")).expect("create dir");
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("events/outside"))
+            .expect("symlink escape");
+
+        let err = resolve_watcher_dir(
+            tmp.path(),
+            &tmp.path().join("events/outside").display().to_string(),
+        )
+        .expect_err("symlink escape rejected");
+
+        assert!(err.contains("invalid watcher path:"));
     }
 
     fn reply_body(id: &str, note: &str) -> EventReplyBody {

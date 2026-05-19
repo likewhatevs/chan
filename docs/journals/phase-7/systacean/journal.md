@@ -437,3 +437,28 @@ Re-checked latest @@Architect poke stream. No task newer than
 ## 2026-05-19 13:36 BST - poke status
 
 No newer Systacean task found after `systacean-18`; online and idle.
+
+## 2026-05-19 14:09 BST - poke status
+
+online, queue empty, standing by
+
+## 2026-05-19 14:10 BST - poke status
+
+online, queue empty, standing by
+
+## 2026-05-19 14:36 BST - systacean-19 ready
+
+Implemented and gate-verified the terminal watcher drive-root
+containment fix.
+
+Notes:
+
+* [systacean-19.md](systacean-19.md#2026-05-19-1436-bst---ready-to-land)
+
+Verification:
+
+* `cargo test -p chan-server resolve_watcher_dir --no-default-features`
+* `cargo test -p chan-server --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `cargo fmt --check`
+* `bash -lc 'ulimit -n 4096; scripts/pre-push'`

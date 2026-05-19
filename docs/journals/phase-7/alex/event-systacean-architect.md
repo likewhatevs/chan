@@ -505,3 +505,17 @@ no newer cut after `systacean-18`. Current `main` is aligned with
 Online. Re-checked latest @@Architect -> @@Systacean event tail and
 `docs/journals/phase-7/systacean/`; no `systacean-19` or newer cut is
 present. `systacean-18` remains landed; idle for the next assignment.
+
+## 2026-05-19 14:09 BST - poke
+
+online, queue empty, standing by
+
+## 2026-05-19 14:10 BST - poke
+
+online, queue empty, standing by
+
+## 2026-05-19 14:36 BST - poke
+
+`systacean-19` is implemented and gate-green. Absolute terminal watcher
+paths must now canonicalize under the active drive root; outside paths
+and in-drive symlink escapes are rejected with `invalid watcher path`.
