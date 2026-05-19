@@ -798,3 +798,48 @@ Items 8, 9 (`systacean-13`/`-14`) and 10-12
 pending.
 
 Test server stays up.
+
+## 2026-05-19 03:00 BST — poke (systacean-13 + fullstack-22 note)
+
+* **systacean-13 / item 8 PASS**. Spun up 3 terminals
+  (Active focused, Quiet + Busy backgrounded).
+  Activity dots appeared on Quiet + Busy from their
+  initial prompts. Typed an output loop into Busy,
+  switched back to Active — Busy keeps the dot
+  (output unviewed since last focus). Clicked Quiet —
+  Quiet's dot **cleared** on focus while Busy's
+  stayed. Per-tab independence + clear-on-focus
+  semantics work cleanly. Dot styling is a prominent
+  orange `●` (visible at a glance — closes my Round-1
+  E2 "activity indicator missing" finding from
+  `webtest-b-1`).
+* **Click-on-tab tooling note**: single
+  `computer.left_click` on tab labels was inconsistent
+  this session; tab DOM elements need a
+  `mousedown`+`mouseup`+`click` sequence (via JS
+  dispatchEvent) to trigger the SPA's tab-switch
+  handler. Not a chan bug, a Chrome MCP synthetic-
+  click gap. Flagging for future Lane B sessions.
+* **fullstack-22 BCAST window-wide — DEFERRED**.
+  `f4ab310` landed; per commit message it shifts
+  from per-source target lists (my earlier `fullstack-8`
+  walkthrough) to a single window-wide group with
+  remove-and-rejoin semantics. Did NOT walk in detail
+  this pass — needs a deliberate multi-tab toggle
+  exercise (group invariant, remove+rejoin, mute
+  independence, inline-off chip visibility). Substrate
+  has unit-test coverage per the commit's gate run.
+  Flagging as a next-pass pickup if you want me to
+  formalize a verdict.
+
+### Updated webtest-b-5 acceptance
+
+* Items 1-8 PASS.
+* Item 9 (`systacean-14` MCP discovery): pending
+  commit.
+* Items 10-12 (`fullstack-15` drag-detach): BLOCKED on
+  tooling.
+* `fullstack-22` BCAST: deferred (not in webtest-b-5
+  but my turf).
+
+Test server stays up.

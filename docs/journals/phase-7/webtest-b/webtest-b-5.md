@@ -349,3 +349,93 @@ back to the same rich prompt.
   pending or tooling-blocked.
 
 Test server stays up.
+
+## 2026-05-19 02:55 BST - systacean-13 activity indicator (item 8)
+
+`1694041 Add terminal tab activity indicator
+(systacean-13)` landed. Rebuilt + relaunched. Walked
+item 8 directly.
+
+### Setup
+
+URL fragment spun up 3 terminals: `Active` (focused),
+`Quiet`, `Busy`. Initial state after init showed
+`Quiet  ●` and `Busy  ●` — both backgrounded tabs got
+the activity dot from their initial PTY output (bash
+printing the prompt). Active had no dot since it was
+focused while the prompt printed.
+
+### Output trigger + clear-on-focus
+
+1. Clicked into Busy's xterm, typed
+   `( for i in 1..5; do echo busy_$i; sleep 0.5; done ) &`,
+   Returned. Background loop produced 5 lines over
+   ~2.5s.
+2. Clicked back to Active. Verified: Active is
+   focused, no dot; Quiet still has `●` (never
+   visited); Busy still has `●` (output unviewed since
+   last focus).
+3. Clicked Quiet (via JS dispatchEvent — see "Click
+   note" below). Verified: Quiet is now focused, dot
+   **cleared**. Busy still has `●`. Active has no dot.
+
+### Verdict
+
+**PASS** on systacean-13 / item 8 acceptance:
+
+* Activity indicator appears on backgrounded tabs that
+  receive PTY output ✓
+* Indicator clears when the tab is focused ✓
+* Per-tab independence ✓ (Busy's dot stays while Quiet's
+  cleared; Active's never appeared)
+* Visual styling: bright orange/amber `●` dot (more
+  prominent than my earlier-flagged "no indicator"
+  from Round 1 E2)
+
+**Also closes my Round-1 E2 finding** from
+[`webtest-b-1.md`](./webtest-b-1.md#extra-finding---cross-drive-nav-drift)
+("E2 activity indicator missing").
+
+### Click note
+
+`computer.left_click` on a tab via coordinates was
+inconsistent in this session — the SPA's tab DOM
+elements appear to need a `mousedown` + `mouseup` +
+`click` event sequence (which `dispatchEvent` provides)
+rather than the single synthetic click that MCP's
+`computer.left_click` produces. Workaround: dispatch
+the three events via JS. Not a chan bug, just a tooling
+note for future Lane B sessions.
+
+## 2026-05-19 03:00 BST - fullstack-22 BCAST window-wide — DEFERRED
+
+`f4ab310 Make BCAST window-wide (fullstack-22)` landed.
+Per the commit message:
+
+* Single window-wide BCAST group (no longer per-source
+  target lists from `fullstack-8`).
+* Each tab's own toggle adds/removes only that tab.
+* Mute stays independent.
+* Inline `off` chip hidden for non-members.
+* Regression coverage for "remove tab then rejoin via
+  its own toggle".
+
+Did NOT walk this in detail this pass — needs a
+deliberate multi-tab toggle walkthrough exercising:
+the group invariant across tab additions, the
+remove-and-rejoin sequence, mute independence, and
+the inline-off chip visibility rule. Flagging as a
+next-pass pickup. Substrate is in code + has unit-
+test coverage per the commit's gate run.
+
+### Updated webtest-b-5 acceptance status
+
+* Items 1-7: PASS.
+* Item 8 (`systacean-13`): PASS this pass.
+* Item 9 (`systacean-14`): pending.
+* Items 10-12 (`fullstack-15` drag-detach): BLOCKED
+  on tooling.
+* `fullstack-22` BCAST (not strictly in webtest-b-5,
+  but my turf): deferred to next pass.
+
+Test server stays up.

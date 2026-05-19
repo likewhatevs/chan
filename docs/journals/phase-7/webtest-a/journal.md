@@ -529,3 +529,35 @@ Items 7-10 still blocked on `systacean-13` / `systacean-14`.
 
 8801 server up with multiple test tabs + the unparsed
 pre-flight event file in `events/` for inspection.
+
+## 2026-05-19 (resume) BST - systacean-13 + fullstack-21 cluster
+
+After @@Alex's `poke`. `1694041` (systacean-13 activity
+indicator) + `07a79d5` (fullstack-21 pane menu swap-back)
+landed.
+
+* **Item 7 activity indicator — PARTIAL**. Same pattern
+  as item 4 pre-flight: server-side tracking is in
+  (commit msg: `bytes_since_focus`, focus/activity WS
+  frames) and SPA render code exists in `Pane.svelte`
+  (`<span class="dirty activity">` with title "terminal
+  output since last focus"), but `t.terminalActivity`
+  isn't getting set from the WS frames. Output ran in
+  unfocused NoiseGen tab → no marker appeared.
+  Side observation: terminal-tab right-click menu has
+  a new `Focused` checkbox; manual focus override may
+  gate the auto-tracking.
+* **Item 8 marker distinction — PASS by code audit**.
+  Three separate spans: `.dirty.unsaved` / `.dirty.activity`
+  / `.dirty.watcher` with distinct titles. No visual
+  collision possible by markup.
+* **fullstack-21 PASS for all three items**: pane
+  right-click shows only `Reload + Toggle Web Inspector`;
+  hamburger structural-only (Split right/down, Close,
+  Next/Prev, Focus color); Split left/up removed from
+  visible UI.
+
+Items 9-10 (MCP discovery) still blocked on
+`systacean-14`.
+
+8801 server up; clean two-pane layout left.

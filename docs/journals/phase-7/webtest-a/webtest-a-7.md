@@ -421,3 +421,98 @@ Item                                                | Verdict
 * HostA watcher still attached.
 
 ## 2026-05-19 (resume) BST - fullstack-20 cluster complete
+
+## 2026-05-19 (resume) BST - systacean-13 + fullstack-21 cluster
+
+Build: head includes `1694041` (systacean-13 terminal-tab
+activity indicator) + `07a79d5` (fullstack-21 pane menus
+swap-back). Rebuilt + restarted 8801.
+
+### Per-item verdicts
+
+```
+Item                                                | Verdict
+----------------------------------------------------+--------
+7 Activity indicator on unfocused tab               | partial *
+8 Distinguished from dirty / watcher bullets        | pass **
+fullstack-21 Reload + Web Inspector → right-click   | pass
+fullstack-21 Hamburger structural-only              | pass
+fullstack-21 Split left/up removed from UI          | pass
+```
+
+`*` **Item 7 (activity indicator) — PARTIAL**.
+Two-pane layout: NoiseGen (left, pane-a) + Focused
+(right, pane-b). Focused pane focused. Ran
+`sleep 2; echo HELLO; sleep 2; echo HELLO2` in NoiseGen
+and immediately clicked Focused. Output landed in
+NoiseGen at 2s + 4s while pane-a stayed unfocused.
+
+The server-side substrate is in (per `1694041` commit:
+`bytes_since_focus`, focus/activity WS frames). But the
+SPA tab strip did NOT render the activity marker:
+DOM query for `.dirty.activity` returned false on both
+tabs across the 3s and 4.5s sample points. NoiseGen
+tab text was `NoiseGen ×` (no dot at all — once watcher
+was detached). HELLO + HELLO2 both visible in the
+unfocused pane's xterm but no tab marker.
+
+Same architectural pattern as item 4 pre-flight bubble:
+server has the data, render code exists in
+`Pane.svelte:887-893` (`{#if t.kind === "terminal" && t.terminalActivity}` →
+`<span class="dirty activity" title="terminal output since last focus">●</span>`),
+but the SPA isn't flipping `t.terminalActivity = true`
+from the WS frames. Likely the focus/blur signal
+emission or the activity frame ingestion is the gap.
+
+Side observation: the terminal-tab right-click menu
+gained a `Focused` checkbox at the bottom (manual focus
+override?). Existing automatic focus tracking may be
+gated on this.
+
+`**` **Item 8 (no visual collision)** — even without the
+activity marker firing, the rendering code clearly
+separates the three dot states by class:
+* `<span class="dirty unsaved">` for editor dirty
+  (unsaved file)
+* `<span class="dirty activity">` for terminal output
+  while unfocused
+* `<span class="dirty watcher">` for watcher attached
+  (with optional `blink` class for new bubble)
+Three separate spans, distinct titles. PASS by code
+audit; live confirmation gated on item 7's marker
+actually appearing.
+
+### fullstack-21 swap-back verdicts
+
+* **Pane right-click (empty tab strip area)** now shows
+  ONLY `Reload + Toggle Web Inspector`. Matches commit
+  message "Move Reload and Toggle Web Inspector back to
+  the pane right-click menu". PASS.
+* **Hamburger menu** (top-right three-dot) now contains
+  ONLY structural items: `Split right`, `Split down`,
+  `Close pane`, `Next pane (Cmd+Alt+])`,
+  `Previous pane (Cmd+Alt+[)`, `Focus border color`
+  (blue/green/pink). No Reload/Web Inspector here.
+  Matches commit message "Make the pane hamburger
+  structural-only". PASS.
+* **Split left/up removed from visible UI**: hamburger
+  shows only `Split right + Split down`; no `Split left
+  / Split up` entries. Underlying primitives still in
+  the codebase (tested via DOM presence). PASS.
+
+This is a clean reversal of the fullstack-6 decision
+from earlier — appropriately captured in `dda2d5c`
+(request.md pane-menu revision). The pane right-click
+is now scoped to the page-developer-level chrome
+(Reload / Web Inspector), and the hamburger holds the
+structural pane management.
+
+### State left on disk
+
+* 8801 server up. Tabs: NoiseGen (no watcher, no
+  activity dot) + Focused.
+* "watcher detached on reload" toast still visible at
+  bottom-left (fullstack-17 stale watcher cleanup —
+  bonus confirmation of that polish item working live).
+
+## 2026-05-19 (resume) BST - systacean-13/fullstack-21 cluster complete

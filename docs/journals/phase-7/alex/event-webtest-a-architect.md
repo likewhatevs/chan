@@ -724,3 +724,78 @@ State: 8801 server up. Tabs: HostA + @@SpawnEcho +
 still on disk for inspection at
 `/tmp/chan-webtest-a-1/events/pre-flight-f90ed024a46dc89a.md`.
 HostA watcher still attached.
+
+## 2026-05-19 (resume) BST - poke (systacean-13 + fullstack-21 cluster)
+
+After @@Alex's `poke`. `1694041` (systacean-13 activity
+indicator) + `07a79d5` (fullstack-21 pane menus swap-back)
+landed. Full detail at
+[../webtest-a/webtest-a-7.md](../webtest-a/webtest-a-7.md)
+"systacean-13 + fullstack-21 cluster" section.
+
+**Item 7 activity indicator — PARTIAL** (same pattern as
+item 4 pre-flight bubble):
+
+Two-pane layout NoiseGen (pane-a) + Focused (pane-b).
+Ran `sleep 2; echo HELLO; sleep 2; echo HELLO2` in
+NoiseGen, clicked Focused immediately. HELLO + HELLO2
+landed in NoiseGen's xterm while pane-a stayed
+unfocused. **Tab strip did NOT render the activity
+marker** — `.dirty.activity` span query returned false
+at 3s and 4.5s sample points.
+
+Server-side substrate is in (per `1694041` commit:
+`bytes_since_focus` + focus/activity WS frames). SPA
+render code exists in `Pane.svelte:887-893`:
+```
+{#if t.kind === "terminal" && t.terminalActivity}
+  <span class="dirty activity" title="terminal output since last focus">●</span>
+{/if}
+```
+But `t.terminalActivity` isn't flipping. Likely seam:
+the focus/blur event emission from the SPA isn't firing
+or the chan-server activity frame isn't being ingested
+by the SPA. Hand-off to @@FullStack + @@Systacean.
+
+Side observation: terminal tab right-click menu gained a
+`Focused` checkbox at the bottom — possibly a manual
+override that gates the auto-tracking. Worth a quick
+look from @@FullStack.
+
+**Item 8 marker distinction — PASS by code audit**. Three
+separate spans in `Pane.svelte`:
+* `<span class="dirty unsaved">` (editor unsaved)
+* `<span class="dirty activity">` (terminal output
+  unfocused)
+* `<span class="dirty watcher">` (watcher attached,
+  with optional `blink` class)
+Distinct titles, no visual collision possible by markup.
+Live confirmation gated on item 7's marker actually
+firing.
+
+**fullstack-21 — PASS for all three sub-items**:
+
+* **Pane right-click (empty tab strip area)** shows ONLY
+  `Reload + Toggle Web Inspector`. Clean.
+* **Hamburger menu** is structural-only: `Split right`,
+  `Split down`, `Close pane`, `Next pane (Cmd+Alt+])`,
+  `Previous pane (Cmd+Alt+[)`, `Focus border color`
+  (blue/green/pink). No Reload/Web Inspector here.
+* **Split left/up removed from visible UI** —
+  hamburger has only `Split right` + `Split down`. The
+  underlying split primitives stay per commit message.
+
+Clean reversal of the fullstack-6 decision per the
+`dda2d5c` request.md pane-menu revision.
+
+Bonus: the `‹ watcher detached on reload` toast from
+fullstack-17 polish bundle fired correctly this session
+when I navigated to a layout whose stored watcher state
+no longer matched the server — live confirmation of
+that polish item working.
+
+Items 9-10 (MCP auto-discovery) still blocked on
+`systacean-14`.
+
+State: 8801 server up. Clean two-pane layout left
+(NoiseGen + Focused, no test artifacts in events/).

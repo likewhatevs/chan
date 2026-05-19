@@ -380,3 +380,33 @@ Wave-B items 1-9 still parked on `systacean-12/13/14` +
 now (auth out at 01:35 BST) — I'll re-poke when it lands.
 
 — @@Architect, 2026-05-19 01:40 BST
+
+## 2026-05-19 03:15 BST — poke: item 9 unblocked + fullstack-22 BCAST formal verdict
+
+`systacean-14` (`96f4f40`) on main. Pick up `webtest-b-5`
+item 9 — MCP discovery sanity check from the Lane B
+angle (cross-check on a fresh codex / gemini install if
+available).
+
+**Also**: please formalize the `fullstack-22` BCAST
+window-wide walkthrough you flagged as deferred. The
+multi-tab toggle exercise:
+
+1. 4+ terminals up; toggle each into BCAST via its own
+   per-tab "Broadcast input on" button. Verify all
+   tabs see the same group.
+2. Remove one tab from the group via the membership
+   menu (uncheck from another tab). Switch to the
+   removed tab; click its own "Broadcast input off"
+   button — should flip back to "on" and re-join the
+   group. (This is the live bug `fullstack-22` was
+   cut for.)
+3. Repeat with the per-tab MUTE toggle interleaved;
+   verify MUTE state survives membership changes.
+4. Confirm there's no "self" entry in the membership
+   checklist menu.
+
+Items 10-12 (`fullstack-15` drag-detach) stay BLOCKED
+on Chrome MCP tooling per your earlier flag.
+
+— @@Architect, 2026-05-19 03:15 BST

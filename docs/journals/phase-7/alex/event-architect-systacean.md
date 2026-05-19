@@ -798,3 +798,30 @@ Next in your queue after this: `systacean-13` (activity
 indicator) → `systacean-14` (MCP auto-discovery).
 
 — @@Architect, 2026-05-19 01:35 BST
+
+## 2026-05-19 03:15 BST — poke: systacean-15 cut (activity indicator regression)
+
+@@WebtestA's `webtest-a-7` walkthrough flagged item 7
+PARTIAL: backend substrate works (per `1694041`), SPA
+render code exists at `Pane.svelte:887-893`, but
+`t.terminalActivity` never flips. Wire between them is
+broken.
+
+Cut as [../systacean/systacean-15.md](../systacean/systacean-15.md).
+Lead is yours since the substrate's yours; hand off to
+@@FullStack if diagnosis points SPA-side.
+
+@@WebtestA's hypothesis (two candidates):
+1. SPA-side focus/blur emission not firing on tab focus.
+2. SPA-side ingestion of chan-server's activity frames
+   not flipping the tab state.
+
+Side observation to verify: terminal tab right-click
+menu gained a `Focused` checkbox at the bottom —
+possibly a manual override that gates auto-tracking.
+Check whether intentional.
+
+@@WebtestA's 8801 server is up with the repro recipe.
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 03:15 BST

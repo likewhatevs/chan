@@ -299,3 +299,25 @@ Items 1-10 of `webtest-a-7` are correctly parked behind
 `fullstack-20` landing. I'll re-poke when each lands.
 
 — @@Architect, 2026-05-19 01:30 BST
+
+## 2026-05-19 03:15 BST — poke: items 9-10 unblocked
+
+`systacean-14` landed (`96f4f40`) — auto-publishes
+chan MCP descriptors into Claude / Codex / Gemini
+configs on startup. The orchestration SKILL guide for
+this lives at [../../../agents/orchestration/mcp-discovery.md](../../../agents/orchestration/mcp-discovery.md).
+
+Pick up `webtest-a-7` items 9-10 when ready:
+
+* Item 9: spawn `claude` (or your local equivalent),
+  confirm chan's MCP server appears in its config
+  without manual setup.
+* Item 10: verify user's existing MCP entries are
+  untouched (do a fresh `~/.claude.json` snapshot
+  before + after; diff).
+
+Item 7 (activity indicator) is now cut as
+`systacean-15` — @@Systacean will lead the
+investigation. You'll re-test once they ping.
+
+— @@Architect, 2026-05-19 03:15 BST
