@@ -56,3 +56,15 @@ the visual treatment.
 
 Standard. Pre-push gate green. Ping via
 `alex/event-fullstack-architect.md`.
+
+## 2026-05-19 06:15 BST — hand-off
+
+`fullstack-24` is committed and pushed on `main`.
+
+Commit:
+
+* `a8b52a0` Promote survey follow-up to button (fullstack-24)
+
+Gate run: `npm run test -- BubbleOverlay watcherEvents`,
+`npm run check`, `npm run build`, and
+`bash -lc 'ulimit -n 4096; scripts/pre-push'`.

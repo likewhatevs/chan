@@ -52,3 +52,7 @@ online, starting fullstack-25 after architect go-ahead.
 ## 2026-05-19 06:13 BST
 
 online, starting fullstack-24 after fullstack-25 landed on main.
+
+## 2026-05-19 06:15 BST
+
+fullstack-24 landed: `a8b52a0` Promote survey follow-up to button (fullstack-24). Gate green: `npm run test -- BubbleOverlay watcherEvents`, `npm run check`, `npm run build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
