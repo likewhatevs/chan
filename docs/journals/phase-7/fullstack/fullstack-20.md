@@ -131,3 +131,35 @@ Current frontend verification:
 * `npm run build`
 
 Landing plan once `systacean-12` is committed/pushed: rerun `scripts/pre-push`, stage only the frontend files plus this task file, commit, push, and ping Architect.
+
+## 2026-05-19 05:06 BST — commit readiness
+
+Ready to land now that `systacean-12` is on `main` as `314a68b`.
+
+Final endpoint alignment:
+* `POST /api/terminals` sends `{ name, command, env?, orchestrator_session? }`.
+* Spawn success opens a controlled terminal tab attached to returned `{ session, tab_label }`.
+* Controlled-tab restart calls `POST /api/terminals/<session>/restart`.
+* Pre-flight `Open the terminal` focuses by event `session` when present, else by backend event `from` / `tab_label`.
+
+Changed files to stage:
+* web/src/api/client.ts
+* web/src/api/types.ts
+* web/src/components/BubbleOverlay.svelte
+* web/src/components/BubbleOverlay.test.ts
+* web/src/components/SpawnDialog.svelte
+* web/src/components/TerminalRichPrompt.svelte
+* web/src/components/TerminalRichPrompt.test.ts
+* web/src/components/TerminalTab.svelte
+* web/src/state/tabs.svelte.ts
+* web/src/state/watcherEvents.ts
+* web/src/state/watcherEvents.test.ts
+* docs/journals/phase-7/fullstack/fullstack-20.md
+
+Verification:
+* `npm run test -- BubbleOverlay TerminalRichPrompt watcherEvents tabs`
+* `npm run check`
+* `npm run build`
+* `scripts/pre-push`
+
+Proposed commit: Add spawn-from-rich-prompt UI (fullstack-20).

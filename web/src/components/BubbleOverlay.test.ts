@@ -177,4 +177,53 @@ describe("BubbleOverlay", () => {
 
     expect(watcher.error).toBe("reply failed: watcher is no longer attached");
   });
+
+  test("pre-flight events render numbered spawn actions", async () => {
+    vi.useFakeTimers();
+    const { writeReply } = installReplySpies();
+    const watcher: TerminalWatcherState = {
+      path: "events",
+      seenIds: ["p1"],
+      unread: false,
+      events: [
+        {
+          id: "p1",
+          type: "pre-flight",
+          from: "@@Spawner",
+          to: "@@Alex",
+          path: "events/event-p1.md",
+          note: "Gemini needs login. What now?",
+          session: "spawn_session",
+        },
+      ],
+    };
+    const openTerminal = vi.fn();
+    drive.info = {
+      name: "test",
+      root: "/tmp/test",
+      preferences: { bubble_overlay_mode: "stack" },
+    } as any;
+    const target = document.createElement("div");
+    document.body.append(target);
+    const component = mount(BubbleOverlay, {
+      target,
+      props: {
+        watcher,
+        sessionId: "term_123",
+        onRefresh: vi.fn(),
+        onOpenTerminal: openTerminal,
+      },
+    });
+    mounted.push(component);
+    await tick();
+
+    expect(target.textContent).toContain("Gemini needs login");
+    buttonText(target, "Open the terminal").click();
+    await tick();
+
+    expect(openTerminal).toHaveBeenCalledWith(expect.objectContaining({ session: "spawn_session" }));
+    expect(writeReply.mock.calls[0]?.[1].answers).toEqual([
+      { question_index: 0, key: "open-terminal" },
+    ]);
+  });
 });

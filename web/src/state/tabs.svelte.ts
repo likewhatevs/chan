@@ -225,7 +225,9 @@ export type TerminalTab = {
   terminalEnvTabName?: string;
   terminalEnvNamePromptDismissed?: boolean;
   terminalSessionId?: string;
+  controlledTerminal?: boolean;
   lastSeq?: number;
+  terminalActivity?: boolean;
   cwd?: string;
   seedInput?: string;
   richPrompt?: TerminalRichPromptState;
@@ -284,6 +286,8 @@ export type WatcherEvent = {
   scope?: ScopeGrant;
   answers?: Array<{ question_index: number; key: string }>;
   scope_grant?: ScopeGrant;
+  session?: string;
+  tab_label?: string;
   note?: string;
   path: string;
 };
@@ -543,6 +547,7 @@ function tabForReopen(src: Tab): Tab {
   const tab = cloneTab(src);
   if (tab.kind === "terminal") {
     tab.terminalSessionId = undefined;
+    tab.controlledTerminal = undefined;
     tab.lastSeq = undefined;
     tab.sessionMcpEnv = undefined;
     tab.terminalEnvTabName = undefined;
@@ -617,30 +622,35 @@ export function openActiveTerminalRichPrompt(): void {
 export type OpenTerminalOptions = {
   cwd?: string;
   seedInput?: string;
+  title?: string;
+  sessionId?: string;
+  controlledTerminal?: boolean;
 };
 
-export function openTerminalInActivePane(opts: OpenTerminalOptions = {}): void {
-  openTerminalInPane(activePane().id, opts);
+export function openTerminalInActivePane(opts: OpenTerminalOptions = {}): TerminalTab | null {
+  return openTerminalInPane(activePane().id, opts);
 }
 
 export function openTerminalInPane(
   paneId: string,
   opts: OpenTerminalOptions = {},
-): void {
+): TerminalTab | null {
   const p = layout.nodes[paneId];
-  if (!p || p.kind !== "leaf") return;
+  if (!p || p.kind !== "leaf") return null;
   const cwd = opts.cwd?.trim();
   const seedInput = opts.seedInput?.trim();
+  const title = opts.title?.trim();
   const tab: TerminalTab = {
     kind: "terminal",
     id: id("term"),
-    title: nextTerminalTitle(),
+    title: title || nextTerminalTitle(),
     createdAt: Date.now(),
     broadcastEnabled: false,
     broadcastTargetIds: [],
     mcpEnv: true,
     sessionMcpEnv: undefined,
-    terminalSessionId: undefined,
+    terminalSessionId: opts.sessionId?.trim() || undefined,
+    controlledTerminal: opts.controlledTerminal || undefined,
     lastSeq: undefined,
     cwd: cwd || undefined,
     seedInput: seedInput || undefined,
@@ -649,6 +659,7 @@ export function openTerminalInPane(
   p.tabs.push(tab);
   p.activeTabId = tab.id;
   layout.activePaneId = p.id;
+  return tab;
 }
 
 export type OpenGraphOptions = Partial<
@@ -859,9 +870,14 @@ export function advanceTerminalSeq(tab: TerminalTab, bytes: number): void {
   tab.lastSeq = Math.max(0, Math.floor(tab.lastSeq ?? 0)) + Math.floor(bytes);
 }
 
+export function setTerminalActivity(tab: TerminalTab, active: boolean): void {
+  tab.terminalActivity = active || undefined;
+}
+
 export function clearTerminalSession(tab: TerminalTab): void {
   tab.terminalSessionId = undefined;
   tab.lastSeq = undefined;
+  tab.terminalActivity = undefined;
   tab.sessionMcpEnv = undefined;
   tab.terminalEnvTabName = undefined;
   tab.terminalEnvNamePromptDismissed = false;
@@ -1311,6 +1327,7 @@ function cloneTab(src: Tab): Tab {
       terminalEnvTabName: src.terminalEnvTabName,
       terminalEnvNamePromptDismissed: src.terminalEnvNamePromptDismissed,
       terminalSessionId: src.terminalSessionId,
+      controlledTerminal: src.controlledTerminal,
       lastSeq: src.lastSeq,
       cwd: src.cwd,
       seedInput: src.seedInput,
@@ -2045,6 +2062,9 @@ type SerTab = {
   /// Terminal PTY session id. Only emitted in the per-window
   /// session payload, never in the shareable URL hash.
   tsid?: string;
+  /// Terminal was created through the HTTP control channel; restart
+  /// uses the server-side restart endpoint.
+  tc?: 1;
   /// Legacy byte-sequence offset once persisted in session payloads.
   /// Restore ignores this so a browser reload replays the server
   /// ring into a fresh xterm buffer instead of asking for only bytes
@@ -2140,6 +2160,7 @@ function serializeNode(
             ? {
                 tsid: t.terminalSessionId,
                 ...(t.sessionMcpEnv === false ? { sme: 0 as const } : {}),
+                ...(t.controlledTerminal ? { tc: 1 as const } : {}),
               }
             : {}),
           ...(opts.terminalSessions && t.richPrompt
@@ -2316,6 +2337,7 @@ export async function restoreLayout(
             mcpEnv,
             sessionMcpEnv,
             terminalSessionId,
+            controlledTerminal: sertab.tc === 1 || savedTerm?.tc === 1,
             lastSeq: undefined,
             richPrompt,
             watcher: terminalSessionId && (sertab.twp ?? savedTerm?.twp)

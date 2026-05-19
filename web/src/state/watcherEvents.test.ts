@@ -84,4 +84,27 @@ describe("watcher event helpers", () => {
       ),
     ).toBeNull();
   });
+
+  test("parses pre-flight event metadata", () => {
+    const event = parseWatcherEvent(
+      "events/event-preflight.md",
+      JSON.stringify({
+        id: "preflight-1",
+        type: "pre-flight",
+        from: "@@Spawner",
+        to: "@@Alex",
+        note: "authentication required",
+        session: "spawn_session",
+        tab_label: "@@Pair",
+      }),
+    );
+
+    expect(event).toMatchObject({
+      id: "preflight-1",
+      type: "pre-flight",
+      note: "authentication required",
+      session: "spawn_session",
+      tab_label: "@@Pair",
+    });
+  });
 });

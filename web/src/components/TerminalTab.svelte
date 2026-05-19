@@ -25,7 +25,8 @@
   import { SerializeAddon } from "@xterm/addon-serialize";
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import "@xterm/xterm/css/xterm.css";
-  import { sessionWindowId, withTokenQuery } from "../api/client";
+  import { api, sessionWindowId, withTokenQuery } from "../api/client";
+  import type { TerminalSpawnResponse } from "../api/types";
   import { chordFor } from "../state/shortcuts";
   import {
     advanceTerminalSeq,
@@ -37,6 +38,7 @@
     clearTerminalSession,
     dismissTerminalEnvNamePrompt,
     layout,
+    openTerminalInActivePane,
     openTerminalInPane,
     registerTerminalCloseSink,
     registerTerminalInputSink,
@@ -46,6 +48,7 @@
     setTerminalBroadcastEnabled,
     setTerminalBroadcastMuted,
     setTerminalBroadcastTarget,
+    setTerminalActivity,
     setTerminalMcpEnv,
     setTerminalSession,
     splitActive,
@@ -93,7 +96,14 @@
 
   type ServerFrame =
     | { type: "ready"; cols: number; rows: number; cwd?: string | null }
-    | { type: "session"; id: string; seq: number; missed_bytes?: number }
+    | {
+        type: "session";
+        id: string;
+        seq: number;
+        missed_bytes?: number;
+        bytes_since_focus?: number;
+      }
+    | { type: "activity"; bytes_since_focus: number }
     | { type: "cwd"; cwd?: string | null }
     | { type: "resize_other"; cols: number; rows: number }
     | { type: "closed"; reason: CloseReason }
@@ -172,7 +182,14 @@
   $effect(() => {
     if (!active) return;
     queueFit();
+    setTerminalActivity(tab, false);
+    sendFocusState();
     queueMicrotask(() => term?.focus());
+  });
+
+  $effect(() => {
+    if (active) return;
+    sendFocusState();
   });
 
   $effect(() => {
@@ -315,6 +332,7 @@
       status = "connected";
       statusDetail = `${term?.cols ?? 0}x${term?.rows ?? 0}`;
       if (term) send({ type: "resize", cols: term.cols, rows: term.rows });
+      sendFocusState();
     };
     ws.onmessage = async (event) => {
       if (event.data instanceof ArrayBuffer) {
@@ -345,6 +363,7 @@
       } else if (frame.type === "session") {
         sawSessionControl = true;
         setTerminalSession(tab, frame.id, frame.seq, mcpEnvOn);
+        setTerminalActivity(tab, !active && (frame.bytes_since_focus ?? 0) > 0);
         scheduleTerminalSessionSave();
         missedBytes = Math.max(0, Math.floor(frame.missed_bytes ?? 0));
         status = "connected";
@@ -357,6 +376,8 @@
         statusDetail = `${frame.cols}x${frame.rows}`;
       } else if (frame.type === "cwd") {
         terminalCwdAbs = frame.cwd ?? null;
+      } else if (frame.type === "activity") {
+        setTerminalActivity(tab, !active && frame.bytes_since_focus > 0);
       } else if (frame.type === "closed") {
         sessionClosedReason = frame.reason;
         status = "exited";
@@ -395,6 +416,11 @@
   function recordOutputBytes(bytes: number): void {
     advanceTerminalSeq(tab, bytes);
     scheduleTerminalSessionSave();
+  }
+
+  function sendFocusState(): void {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    send({ type: "focus", focused: active });
   }
 
   function maybeSeedPrompt(): void {
@@ -490,6 +516,16 @@
         destructive: true,
       });
       if (!confirmed) return;
+    }
+    if (tab.controlledTerminal && tab.terminalSessionId) {
+      try {
+        await api.restartTerminal(tab.terminalSessionId);
+        status = "connecting";
+        statusDetail = "restart requested";
+      } catch (err) {
+        statusDetail = `restart failed: ${(err as Error).message}`;
+      }
+      return;
     }
     explicitCloseSession();
     teardown();
@@ -815,6 +851,28 @@
     }
   }
 
+  function focusTerminalSession(sessionId: string | undefined): void {
+    if (!sessionId) return;
+    const found = allTerminalTabs().find((candidate) => candidate.terminalSessionId === sessionId);
+    if (found) focusTerminalTab(found.id);
+  }
+
+  function focusTerminalName(name: string | undefined): void {
+    const target = name?.trim();
+    if (!target) return;
+    const found = allTerminalTabs().find((candidate) => terminalTabName(candidate) === target);
+    if (found) focusTerminalTab(found.id);
+  }
+
+  function spawnCreated(response: TerminalSpawnResponse, name: string): void {
+    openTerminalInActivePane({
+      title: response.tab_label || name,
+      sessionId: response.session,
+      controlledTerminal: true,
+    });
+    scheduleTerminalSessionSave();
+  }
+
   function removeBroadcastMember(memberId: string): void {
     removeTerminalFromBroadcastGroup(tab, memberId);
   }
@@ -1137,6 +1195,10 @@
         sessionId={tab.terminalSessionId}
         onRefresh={refreshWatcherEvents}
         onWatcherDetached={watcherDetached}
+        onOpenTerminal={(event) => {
+          focusTerminalSession(event.session);
+          focusTerminalName(event.tab_label ?? event.from);
+        }}
       />
     {/if}
     <TerminalRichPrompt
@@ -1147,6 +1209,7 @@
       watcherPath={tab.watcher?.path ?? null}
       onWatcherStarted={watcherStarted}
       onWatcherStopped={watcherStopped}
+      onSpawned={spawnCreated}
     />
   {/if}
   {#if broadcastMembers.length > 1}

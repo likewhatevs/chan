@@ -305,4 +305,61 @@ describe("TerminalRichPrompt", () => {
     expect(setWatcher).toHaveBeenCalledWith("term_123", "/tmp/events");
     expect(onWatcherStarted).toHaveBeenCalledWith("/tmp/events");
   });
+
+  test("Spawn agent opens dialog and posts terminal control request", async () => {
+    const spawn = vi.spyOn(api, "spawnTerminal").mockResolvedValue({
+      session: "spawn_session",
+      tab_label: "@@Pair",
+    });
+    const prompt: TerminalRichPromptState = {
+      buffer: "",
+      heightPx: 320,
+      open: true,
+      mode: "source",
+    };
+    const onSpawned = vi.fn();
+    installPointerCaptureStubs();
+    const target = document.createElement("div");
+    Object.assign(target.style, { position: "relative", height: "500px" });
+    document.body.append(target);
+    const component = mount(TerminalRichPrompt, {
+      target,
+      props: {
+        prompt,
+        onSubmit: vi.fn(),
+        onClose: vi.fn(),
+        terminalSessionId: "orchestrator_session",
+        onSpawned,
+      },
+    });
+    mounted.push(component);
+    await tick();
+
+    button(target, "Spawn agent").click();
+    await tick();
+    const dialog = document.body.querySelector<HTMLElement>(".spawn-dialog");
+    if (!dialog) throw new Error("spawn dialog not mounted");
+    const inputs = [...dialog.querySelectorAll<HTMLInputElement>("input")];
+    const textareas = [...dialog.querySelectorAll<HTMLTextAreaElement>("textarea")];
+    inputs[0]!.value = "@@Pair";
+    inputs[0]!.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+    textareas[0]!.value = "codex --model gpt-5";
+    textareas[0]!.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+    textareas[1]!.value = "FOO=bar";
+    textareas[1]!.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+
+    [...dialog.querySelectorAll("button")].find((el) => el.textContent?.includes("Spawn"))!.click();
+    await waitFor(() => onSpawned.mock.calls.length === 1);
+
+    expect(spawn).toHaveBeenCalledWith({
+      name: "@@Pair",
+      command: "codex --model gpt-5",
+      env: { FOO: "bar" },
+      orchestrator_session: "orchestrator_session",
+    });
+    expect(onSpawned).toHaveBeenCalledWith({ session: "spawn_session", tab_label: "@@Pair" }, "@@Pair");
+  });
 });

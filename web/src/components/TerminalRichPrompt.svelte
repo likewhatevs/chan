@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Code2, FilePlus, FolderSearch, GripHorizontal, Pilcrow, Send, Type, X } from "lucide-svelte";
+  import { Bot, Code2, FilePlus, FolderSearch, GripHorizontal, Pilcrow, Send, Type, X } from "lucide-svelte";
   import Source from "../editor/Source.svelte";
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import StyleToolbar from "./StyleToolbar.svelte";
@@ -14,6 +14,8 @@
     uiPathPrompt,
   } from "../state/store.svelte";
   import { openInActivePane } from "../state/tabs.svelte";
+  import type { TerminalSpawnResponse } from "../api/types";
+  import SpawnDialog from "./SpawnDialog.svelte";
 
   let {
     prompt,
@@ -23,6 +25,7 @@
     watcherPath,
     onWatcherStarted,
     onWatcherStopped,
+    onSpawned,
   }: {
     prompt: TerminalRichPromptState;
     onSubmit: (source: string) => void;
@@ -31,6 +34,7 @@
     watcherPath?: string | null;
     onWatcherStarted?: (path: string) => void;
     onWatcherStopped?: () => void;
+    onSpawned?: (response: TerminalSpawnResponse, name: string) => void;
   } = $props();
 
   const MIN_HEIGHT = 150;
@@ -41,6 +45,7 @@
   let menu = $state<{ x: number; y: number } | null>(null);
   let watcherError = $state("");
   let watcherBusy = $state(false);
+  let spawnOpen = $state(false);
   let dragging = false;
 
   function mode(): "wysiwyg" | "source" {
@@ -170,6 +175,11 @@
     }
   }
 
+  function openSpawnDialog(): void {
+    menu = null;
+    spawnOpen = true;
+  }
+
   async function stopWatching(): Promise<void> {
     menu = null;
     watcherError = "";
@@ -251,6 +261,15 @@
     <button
       type="button"
       class="icon-btn"
+      onclick={openSpawnDialog}
+      title="Spawn agent"
+      aria-label="Spawn agent"
+    >
+      <Bot size={16} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+    <button
+      type="button"
+      class="icon-btn"
       class:on={Boolean(watcherPath)}
       onclick={watchDirectory}
       disabled={watcherBusy}
@@ -315,6 +334,10 @@
         <FolderSearch size={15} strokeWidth={1.75} aria-hidden="true" />
         <span>Watch directory</span>
       </button>
+      <button type="button" onclick={openSpawnDialog}>
+        <Bot size={15} strokeWidth={1.75} aria-hidden="true" />
+        <span>Spawn agent</span>
+      </button>
       {#if watcherPath}
         <button type="button" onclick={stopWatching}>
           <FolderSearch size={15} strokeWidth={1.75} aria-hidden="true" />
@@ -331,6 +354,11 @@
       </button>
     </div>
   {/if}
+  <SpawnDialog
+    bind:open={spawnOpen}
+    orchestratorSessionId={terminalSessionId}
+    onSpawned={(response, name) => onSpawned?.(response, name)}
+  />
 </div>
 
 <style>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, ChevronUp, RefreshCw } from "lucide-svelte";
+  import { ChevronDown, ChevronUp, Loader2, RefreshCw } from "lucide-svelte";
   import type { BubbleOverlayMode } from "../api/types";
   import { openExternalUrl } from "../editor/external_links";
   import { drive } from "../state/store.svelte";
@@ -11,11 +11,13 @@
     sessionId,
     onRefresh,
     onWatcherDetached,
+    onOpenTerminal,
   }: {
     watcher: TerminalWatcherState;
     sessionId?: string;
     onRefresh: () => Promise<void> | void;
     onWatcherDetached?: () => void;
+    onOpenTerminal?: (event: WatcherEvent) => void;
   } = $props();
 
   type NumberedOption = SurveyOption & { n: number };
@@ -30,10 +32,13 @@
   let focusedQuestion = $state<Record<string, number>>({});
   let focusedBubbleId = $state<string | null>(null);
   let busyReply = $state<string | null>(null);
+  let now = $state(Date.now());
   const dismissTimers = new Set<ReturnType<typeof setTimeout>>();
 
   $effect(() => {
+    const ticker = setInterval(() => (now = Date.now()), 1000);
     return () => {
+      clearInterval(ticker);
       for (const timer of dismissTimers) clearTimeout(timer);
       dismissTimers.clear();
     };
@@ -61,6 +66,9 @@
   }
 
   function optionsFor(event: WatcherEvent, questionIndex: number): NumberedOption[] {
+    if (event.type === "pre-flight") {
+      return preFlightOptions().map((option, idx) => ({ ...option, n: idx + 1 }));
+    }
     const question = event.questions?.[questionIndex];
     const base = question?.options ?? [];
     const standing = normalizeStandingOptions(event.standing_options);
@@ -71,6 +79,9 @@
   }
 
   async function answer(event: WatcherEvent, questionIndex: number, option: SurveyOption): Promise<void> {
+    if (event.type === "pre-flight" && option.key === "open-terminal") {
+      onOpenTerminal?.(event);
+    }
     const byQuestion = { ...(answers[event.id] ?? {}), [questionIndex]: option.key };
     answers[event.id] = byQuestion;
     const total = event.questions?.length ?? 0;
@@ -182,7 +193,7 @@
   function onWindowKeydown(e: KeyboardEvent): void {
     if (editableTarget(e.target)) return;
     const event = keyTarget();
-    if (!event || event.type !== "survey" || !event.questions?.length) return;
+    if (!event || !isSurveyEvent(event)) return;
     if ((e.metaKey || e.ctrlKey) && e.key === "ArrowDown") {
       e.preventDefault();
       focusAdjacentBubble(1);
@@ -199,7 +210,7 @@
       return;
     }
     if (e.key === "Tab" || e.key === "ArrowRight" || e.key === "ArrowLeft") {
-      const total = event.questions.length;
+      const total = questionCount(event);
       if (total > 1) {
         e.preventDefault();
         const cur = focusedQuestion[event.id] ?? 0;
@@ -215,6 +226,50 @@
         void answer(event, qi, option);
       }
     }
+  }
+
+  function isSurveyEvent(event: WatcherEvent): boolean {
+    return event.type === "pre-flight" || (event.type === "survey" && Boolean(event.questions?.length));
+  }
+
+  function preFlightOptions(): SurveyOption[] {
+    return [
+      { key: "open-terminal", label: "Open the terminal" },
+      { key: "kill", label: "Kill the spawn" },
+      { key: "retry", label: "Retry now" },
+    ];
+  }
+
+  function questionText(event: WatcherEvent, idx: number): string {
+    if (event.type === "pre-flight") {
+      return event.note || "Spawn needs attention. What now?";
+    }
+    return event.questions?.[idx]?.text ?? "";
+  }
+
+  function questionHeader(event: WatcherEvent, idx: number): string {
+    if (event.type === "pre-flight") return "Spawn";
+    return event.questions?.[idx]?.header || `Q${idx + 1}`;
+  }
+
+  function questionCount(event: WatcherEvent): number {
+    return event.type === "pre-flight" ? 1 : (event.questions?.length ?? 0);
+  }
+
+  function elapsedLabel(event: WatcherEvent): string {
+    const started = Number(event.topic);
+    const base = Number.isFinite(started) && started > 0 ? started : event.id.match(/\d{10,}/)?.[0];
+    const startMs = typeof base === "number" ? base : Number(base);
+    const elapsed = Number.isFinite(startMs) && startMs > 0 ? Math.max(0, now - startMs) : 0;
+    const seconds = Math.floor(elapsed / 1000);
+    const mins = Math.floor(seconds / 60);
+    const rem = seconds % 60;
+    return `${mins}:${String(rem).padStart(2, "0")}`;
+  }
+
+  function preFlightTimedOut(event: WatcherEvent): boolean {
+    const [m, s] = elapsedLabel(event).split(":").map(Number);
+    return (m ?? 0) * 60 + (s ?? 0) >= 300;
   }
 </script>
 
@@ -253,27 +308,40 @@
                 </button>
               </div>
             </div>
-            {#if event.type === "survey" && event.questions?.length}
+            {#if isSurveyEvent(event)}
               {@const qi = focusedQuestion[event.id] ?? 0}
-              {@const question = event.questions[qi] ?? event.questions[0]}
-              <div class="survey" data-multitopic={event.questions.length > 1}>
-                {#if event.questions.length > 1}
+              {@const total = questionCount(event)}
+              <div class="survey" data-multitopic={total > 1}>
+                {#if total > 1}
                   <div class="topic-tabs" role="tablist" aria-label="survey topics">
-                    {#each event.questions as topic, idx}
+                    {#each event.questions ?? [] as topic, idx}
                       <button
                         type="button"
                         class:on={idx === qi}
                         class:answered={answers[event.id]?.[idx] !== undefined}
                         onclick={() => setFocusedQuestion(event, idx)}
                       >
-                        <span>{topic.header || `Q${idx + 1}`}</span>
+                        <span>{questionHeader(event, idx)}</span>
                       </button>
                     {/each}
                   </div>
                 {/if}
-                <p class="question">{question?.text ?? ""}</p>
-                <div class:option-row={event.questions.length === 1} class:option-stack={event.questions.length > 1}>
+                {#if event.type === "pre-flight"}
+                  <div class="preflight-status" class:timeout={preFlightTimedOut(event)}>
+                    {#if preFlightTimedOut(event)}
+                      <span>Spawn idle</span>
+                    {:else}
+                      <span class="spin">
+                        <Loader2 size={13} strokeWidth={1.8} aria-hidden="true" />
+                      </span>
+                      <span>{elapsedLabel(event)}</span>
+                    {/if}
+                  </div>
+                {/if}
+                <p class="question">{event.type === "pre-flight" && preFlightTimedOut(event) ? "Spawn idle - retry now?" : questionText(event, qi)}</p>
+                <div class:option-row={total === 1} class:option-stack={total > 1}>
                   {#each optionsFor(event, qi) as option (option.key)}
+                    {#if event.type !== "pre-flight" || !preFlightTimedOut(event) || option.key === "retry"}
                     <button
                       type="button"
                       class:on={answers[event.id]?.[qi] === option.key}
@@ -283,6 +351,7 @@
                       <kbd>{option.n}</kbd>
                       <span>{option.label}</span>
                     </button>
+                    {/if}
                   {/each}
                 </div>
               </div>
@@ -382,6 +451,23 @@
     margin: 0 0 8px;
     line-height: 1.35;
   }
+  .preflight-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-bottom: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+  .preflight-status.timeout {
+    color: var(--warn-text);
+  }
+  .spin {
+    animation: spin 900ms linear infinite;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
   .topic-tabs {
     display: flex;
     gap: 4px;
@@ -449,5 +535,8 @@
     color: var(--link);
     padding: 0;
     text-decoration: underline;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .spin { animation: none; }
   }
 </style>

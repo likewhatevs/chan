@@ -32,7 +32,12 @@ export function parseWatcherEvent(path: string, content: string): WatcherEvent |
   ) {
     return null;
   }
-  if (obj.type !== "survey" && obj.type !== "survey-reply" && obj.type !== "poke") {
+  if (
+    obj.type !== "survey" &&
+    obj.type !== "survey-reply" &&
+    obj.type !== "poke" &&
+    obj.type !== "pre-flight"
+  ) {
     return null;
   }
   const questions = Array.isArray(obj.questions)
@@ -50,6 +55,8 @@ export function parseWatcherEvent(path: string, content: string): WatcherEvent |
     questions,
     standing_options: standing,
     scope: parseScope(obj.scope),
+    session: typeof obj.session === "string" ? obj.session : undefined,
+    tab_label: typeof obj.tab_label === "string" ? obj.tab_label : undefined,
     note: typeof obj.note === "string" ? obj.note : undefined,
     path,
   };

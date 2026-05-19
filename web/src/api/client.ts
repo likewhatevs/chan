@@ -24,6 +24,8 @@ import type {
   ResetMode,
   ResetResponse,
   SearchHit,
+  TerminalSpawnRequest,
+  TerminalSpawnResponse,
   TreeEntry,
   DriveInfo,
   BubbleOverlayMode,
@@ -395,6 +397,12 @@ export const api = {
       `/api/terminal/${encodeURIComponent(sessionId)}/event-reply`,
       body,
     ),
+  spawnTerminal: (body: TerminalSpawnRequest) =>
+    req<TerminalSpawnResponse>("POST", "/api/terminals", body),
+  restartTerminal: (sessionId: string) =>
+    req<void>("POST", `/api/terminals/${encodeURIComponent(sessionId)}/restart`),
+  closeTerminal: (sessionId: string) =>
+    req<void>("DELETE", `/api/terminals/${encodeURIComponent(sessionId)}`),
   setBubbleOverlayMode: async (mode: BubbleOverlayMode): Promise<void> => {
     const cfg = await req<GlobalConfig>("GET", "/api/config");
     if (cfg.preferences.bubble_overlay_mode === mode) return;

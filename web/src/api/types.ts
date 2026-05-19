@@ -77,6 +77,18 @@ export type TerminalPreferences = {
 
 export type BubbleOverlayMode = "stack" | "tray";
 
+export type TerminalSpawnRequest = {
+  name: string;
+  command: string;
+  env?: Record<string, string>;
+  orchestrator_session?: string;
+};
+
+export type TerminalSpawnResponse = {
+  session: string;
+  tab_label: string;
+};
+
 export type Preferences = {
   editor_theme: EditorTheme;
   /// Where image uploads land (relative to drive root). Default
