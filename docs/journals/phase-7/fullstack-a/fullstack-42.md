@@ -10,10 +10,70 @@ Revise the Cmd+K mode key map from `fullstack-39` per
 @@Alex 2026-05-19 12:35 BST:
 
 * `3` → **Graph** tab (was Search in -39).
-* `4` → vacated (was Graph in -39).
+* `4` → **New file** (was vacated in the earlier
+  rev; @@Alex 12:50 BST assigns it).
 * `s` → **Search** overlay (moved off `3`).
-* `h` → **Help** — show an inline cheatsheet of the
-  Cmd+K bindings.
+* `h` → **Help** — show an OverlayShell-like window
+  with survey-like buttons for all Cmd+K bindings,
+  grouped (Move / Spawn / Split / Close / Resize /
+  Commit), responsive layout for large + small
+  screens.
+
+### Drop redundant menu items
+
+Since Pane Mode (`Cmd+K`) covers spawn/split/close
+with context-aware behavior (see `fullstack-43`),
+remove these from all menus:
+
+* `Graph from here` (file-tree right-click, doc-tab
+  right-click, etc.)
+* `Show Dir` (terminal tab right-click)
+* `Show Directory` / `Show File` (inspectors —
+  already fixed in `fullstack-29` to spawn the right
+  tab; now drop the buttons entirely since `Cmd+K 2`
+  + context covers it)
+* `Show in file browser` (doc-tab right-click)
+
+Audit and drop. The Cmd+K + context spawn (`fullstack-43`)
+is the replacement; the buttons just create choice
+paralysis.
+
+### Drop redundant standalone keyboard shortcuts
+
+@@Alex 2026-05-19 12:55 BST: any keyboard shortcut
+already covered by a Cmd+K action goes away. Pane
+Mode (`Cmd+K`) is the canonical surface; standalone
+duplicates are noise.
+
+Drop:
+
+| Standalone shortcut         | Cmd+K equivalent          |
+|-----------------------------|---------------------------|
+| `Cmd+T` (new terminal)      | `Cmd+K 1`                 |
+| `Cmd+Alt+T` (web variant)   | `Cmd+K 1`                 |
+| `Cmd+P` (file browser)      | `Cmd+K 2`                 |
+| `Cmd+Shift+M` (graph)       | `Cmd+K 3`                 |
+| `Cmd+N` (new file)          | `Cmd+K 4`                 |
+| `Cmd+Shift+F` (search)      | `Cmd+K s`                 |
+| `Cmd+]` / `Cmd+[` (pane nav)| `Cmd+K` + `→` / `←`       |
+| `Cmd+Alt+]` / `Cmd+Alt+[`   | `Cmd+K` + `→` / `←`       |
+
+Keep (different action, not a Cmd+K duplicate):
+
+* `Ctrl+D` (close current tab — `fullstack-41`).
+  Cmd+K `x` is "close all tabs in pane" + `k` is
+  "close pane", neither is the same as "close
+  current tab".
+* `Cmd+,` (Settings overlay). Not yet in Cmd+K.
+* `Cmd+S` (save). Not yet in Cmd+K.
+* `Cmd+F` (find in editor). Not yet in Cmd+K.
+* `Cmd+\`` if it's the new-terminal alias from
+  `fullstack-12` — drop as part of the `Cmd+T`
+  removal.
+
+Update `chan serve --help` output + any documented
+keymap references (e.g. `ui-exploration.md`) to
+match.
 
 ## Relevant links
 

@@ -116,3 +116,24 @@ in the meantime as a no-op slide 3 — that's fine; ship
 the rest.
 
 — @@Architect, 2026-05-19 11:30 BST
+
+## 2026-05-19 13:00 BST — poke: lane-B queue refilled (fullstack-44 / -45 / -46 / -47)
+
+Four new tasks for you while @@Alex visual-passes the
+carousel + waits on lane A's Cmd+K rework.
+
+| # | Task           | Scope                                                  |
+|---|----------------|--------------------------------------------------------|
+| 1 | `fullstack-44` | Carousel cycle/stop toggle (play-pause affordance, persisted preference) |
+| 2 | `fullstack-45` | Editor list mode triggers on first `- ` (one less keystroke); audit if there's a reason for the current delay before removing |
+| 3 | `fullstack-46` | British spelling sweep (`color`→`colour` etc.) + pane hamburger adds "Enter Pane Mode (Cmd+K)" entry; rename "Focus border color" → "Focus border colour" |
+| 4 | `fullstack-47` | Allow multiple File Browser + Graph tabs (drop dedup); verify tab DnD (reorder, move-to-pane, edge-drop) end-to-end on desktop |
+
+Standing topic-level commit clearance.
+
+Note: `fullstack-46`'s spelling sweep DOES NOT touch
+CSS property names (`background-color`, etc.) or JS
+variable names that map to web APIs — those stay
+American. Only user-facing strings flip to British.
+
+— @@Architect, 2026-05-19 13:00 BST

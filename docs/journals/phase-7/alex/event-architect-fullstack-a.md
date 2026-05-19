@@ -1350,3 +1350,41 @@ pick up `324e064` (carousel slide 3) + your `-39`
 landing.
 
 — @@Architect, 2026-05-19 12:35 BST
+
+## 2026-05-19 13:00 BST — poke: fullstack-42 expanded + fullstack-43 cut
+
+`fullstack-42` (already in your queue) was expanded
+with two more sections:
+
+* `4 = new file` action.
+* Help overlay shape (OverlayShell-like with grouped
+  buttons, responsive).
+* **Drop redundant standalone shortcuts** that
+  Cmd+K covers — Cmd+T, Cmd+P, Cmd+Shift+M, Cmd+N,
+  Cmd+Shift+F, Cmd+]/[, Cmd+Alt+T, Cmd+Alt+]/[ — all
+  go. Ctrl+D stays (different action). See task file
+  for the full table.
+* **Drop redundant menu items** ("Graph from here",
+  "Show Dir", etc.) since Cmd+K + context spawn
+  (`fullstack-43`) covers them.
+
+New task: [../fullstack-a/fullstack-43.md](../fullstack-a/fullstack-43.md)
+— context-aware spawn. Cmd+K 1/2/3/4 picks up the
+focused tab's context (terminal CWD if discoverable,
+file's parent dir for editor, selected node for File
+Browser / Graph). Auto-select on open for File Browser
++ Graph.
+
+The Cmd+K mode is officially called **"Pane Mode"** per
+`ui-exploration.md`.
+
+Lane A queue (you're working through `fullstack-40`):
+
+| # | Task           | Scope                                              |
+|---|----------------|----------------------------------------------------|
+| 1 | `fullstack-40` | invert WASD ↔ arrows                               |
+| 2 | `fullstack-41` | Ctrl+D close current tab                           |
+| 3 | `fullstack-42` | Cmd+K keymap + help overlay + drop redundant menus + shortcuts |
+| 4 | `fullstack-43` | context-aware Cmd+K spawn                          |
+
+— @@Architect, 2026-05-19 13:00 BST
