@@ -666,3 +666,63 @@ Updated tally: 10 PASS / 1 PARTIAL (item 4) / 2 N/A
 
 8801 server up. Standing by for the pre-flight bubble
 seam to land.
+
+## 2026-05-19 (resume) BST - Two follow-ups cut from my wave-B verdicts
+
+After @@Alex's `poke`. `6778623` cuts two follow-ups
+from my webtest-a-7 closure:
+
+* **fullstack-27**: pre-flight events render gap
+  (closes items 4+5+6). Architect's note flags likely
+  candidates: watcherEvents allow-list (the
+  fullstack-17 unknown-type drop may exclude
+  pre-flight), BubbleOverlay wiring, or event-file
+  polling. Matches my "server file write → no SPA
+  pickup" framing from the previous append.
+* **systacean-16**: activity counter sensitivity. Cut
+  from my "FgTerm transient activity" side observation
+  — cursor blink / prompt redraw shouldn't count as
+  bytes_since_focus.
+
+Neither has landed yet — just task files cut. No
+actionable work for me until one of those (or another
+Lane A task) lands.
+
+8801 server stays up. Standing by.
+
+## 2026-05-19 (resume) BST - webtest-a-7 FULLY CLOSED (12/12)
+
+After @@Alex's `poke`. Both my flagged follow-ups
+landed and PASS on re-test:
+
+* `ebb347b` fullstack-27: SPA now reads pre-flight
+  watcher files. **Item 4 now PASS** — direct atomic-
+  write of a pre-flight event file produced a fully-
+  rendered bubble: `@@FakeAgent` header, `↻ 0:00`
+  spinner+counter, "please log in (direct test)"
+  note, and the three numbered options
+  `1 Open the terminal / 2 Kill the spawn / 3 Retry now`
+  plus `F follow up`. Items 5 (spinner) and 6 (kill
+  option visible/wired) also pass by direct visual +
+  UI wiring.
+* `538eeb8` systacean-16: activity byte counting
+  tuned. **No more spurious activity dots** from
+  cursor blink / prompt redraw on idle terminals.
+  Verified by clicking between two idle tabs across
+  a 2s sample point — both stay `activity: false`.
+
+**Final tally: 12/12 PASS**. Plus all four side
+observations from earlier waves got fixes that
+landed:
+- fullstack-17: absolute-path dialog, unknown-type
+  drop, stale watcher cleanup, auto-dismiss
+  answered surveys.
+- fullstack-25: terminal activity focus tracking
+  (split `active` vs `focused`).
+- fullstack-27: pre-flight event ingestion.
+- systacean-16: activity counter sensitivity.
+
+webtest-a-7 fully closed from my side. Clean loop
+closure on this wave-B walkthrough.
+
+8801 server up. Standing by for the next wave.

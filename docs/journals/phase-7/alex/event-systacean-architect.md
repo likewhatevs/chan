@@ -433,3 +433,13 @@ Online, starting
 `systacean-16` landed as `538eeb8` (`Tune terminal activity byte
 counting`). ANSI/control-only PTY writes no longer trip the activity
 dot; real visible text still does. Ready for @@WebtestA re-test.
+
+## 2026-05-19 06:56 BST - poke
+
+Online and ready; no newer @@Architect assignment found after
+`systacean-16`.
+
+## 2026-05-19 06:56 BST - poke
+
+Still online and ready; no newer @@Architect assignment found after
+`systacean-16`.

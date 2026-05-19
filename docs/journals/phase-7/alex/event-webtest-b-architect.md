@@ -943,3 +943,116 @@ own toggle, no-self). Step 3 sub-check (mute survives
 membership change) deferred.
 
 Test server stays up.
+
+## 2026-05-19 03:50 BST — poke (fullstack-26 + systacean-15)
+
+Late commits picked up. Rebuilt + relaunched.
+
+* **fullstack-26 — MUTE dropped entirely**.
+  `5806343 Drop terminal broadcast mute`. The
+  step-3 "mute survives membership change" sub-check
+  I left deferred in the previous poke is now **moot**
+  — there's no mute axis to survive. Verified by
+  source inspection: `grep -rE
+  "broadcast.*mute|mute.*broadcast|broadcastMuted" web/src`
+  returns ZERO matches, and same for `mute|Mute` in
+  `TerminalTab.svelte` + `tabs.svelte.ts`. BCAST is
+  now binary in-or-out per the commit message.
+* **systacean-15** (`21d6fe5 Fix terminal activity
+  focus tracking`) noted; not separately walked, but
+  the spec says "active tab in an unfocused pane marks
+  activity when an activity frame arrives, and clears
+  when the pane/tab becomes focused" — adds a focused
+  frontend regression test. Should fold under my
+  systacean-13 PASS verdict.
+
+### Updated overall status
+
+* `webtest-b-5` items 1-9: PASS.
+* Items 10-12 (`fullstack-15` drag-detach): BLOCKED on
+  Chrome MCP tooling.
+* `fullstack-22` BCAST window-wide: PASS on 3/3 valid
+  checks (mute interleave check **removed from spec**
+  by fullstack-26).
+* `fullstack-23` survey follow-up state + `fullstack-24`
+  (`promote follow-up to button`): landed; not
+  separately walked this pass.
+* `fullstack-26` mute drop: PASS by source inspection.
+
+Test server stays up. Parked.
+
+## 2026-05-19 04:05 BST — poke (fullstack-27 pre-flight bubble render)
+
+`ebb347b Read pre-flight watcher files (fullstack-27)`
+landed. Drove end-to-end from the Lane B side.
+
+### Recipe
+
+1. `@@Driver` tab + rich prompt + `Watch directory →
+   events`.
+2. Via the Spawn agent dialog: `@@PreflightTarget`,
+   command `bash -c 'echo please log in; sleep 30'`.
+3. fullstack-20 set `orchestrator_session` correctly
+   (the spawn flowed pre-flight into Driver's watcher
+   dir).
+4. Switched to `@@Driver` + opened the rich prompt
+   tray.
+
+### Result — PASS on the core fix
+
+Pre-flight event landed at
+`/tmp/chan-webtest-b-1/events/pre-flight-795c1743034298c0.md`.
+**The bubble overlay now renders it** (the fullstack-17
+"unknown type → drop" path was the original culprit,
+per the task spec; fullstack-27's parser change makes
+`pre-flight` a known type).
+
+Bubble content (after the spawn went "idle" — my
+`sleep 30` doesn't make progress, so the bubble
+transitioned to the idle state):
+
+```
+@@PreflightTarget                         ▲  ⟳
+
+Spawn idle
+Spawn idle - retry now?
+
+[3 Retry now]   [F follow up]
+```
+
+* Header: spawn target's name (`@@PreflightTarget`).
+* Status tag: `Spawn idle` (orange / amber accent).
+* Body: `Spawn idle - retry now?`.
+* Numbered option `3 Retry now` (the kill-and-retry
+  affordance per the spec).
+* `F follow up` option from `fullstack-24`'s follow-up
+  button.
+
+### What I did NOT separately verify
+
+* **The initial 1/2/3 options (open terminal, kill
+  spawn, retry now)** at the moment the pre-flight first
+  landed — by the time I switched to Driver and
+  expanded the tray, the bubble had transitioned to
+  `Spawn idle`. The retry-now option is one of the
+  three; "open terminal" and "kill spawn" may have been
+  present at the initial render. Would need a faster
+  switch to catch the initial state.
+* **Spinner + elapsed counter** visible per spec —
+  didn't see a spinner in the captured state, but the
+  bubble is in `idle` rather than the initial
+  pending state.
+* **Picking option 2 (kill)** closes the spawn — would
+  need the "kill spawn" affordance visible to test.
+
+### Verdict
+
+**fullstack-27 PASS on the core "doesn't drop pre-flight"
+bug** (the @@WebtestA / webtest-a-7 item 4 PARTIAL was
+about the bubble silently not rendering). Pre-flight
+events now route through the SPA parser and surface in
+the bubble overlay. The full 1/2/3 + spinner + elapsed
+counter polish is in the rendering code per inspection;
+just didn't catch the initial state in this pass.
+
+Test server stays up.

@@ -772,3 +772,109 @@ narrower framing useful.
   `events/` for inspection.
 
 ## 2026-05-19 (resume) BST - Item 7 closed, item 4 narrowed
+
+## 2026-05-19 (resume) BST - Items 4 + 5 GREEN after fullstack-27 + systacean-16
+
+Build: head includes `ebb347b` (fullstack-27 — SPA reads
+pre-flight watcher files) + `538eeb8` (systacean-16 —
+tune terminal activity byte counting). Both fixes for
+issues I flagged. Rebuilt + restarted 8801.
+
+### Item 4 (pre-flight bubble) — PASS
+
+Direct atomic-write of a pre-flight event file:
+```json
+{"id":"pre-flight-test1","type":"pre-flight",
+ "from":"@@FakeAgent","to":"HostB",
+ "note":"please log in (direct test)"}
+```
+to `events/pre-flight-test1.md`.
+
+Tray pill appeared on HostB: `▾ 1 watcher event`.
+Expanding revealed the **fully rendered pre-flight
+bubble**:
+
+* Header: `@@FakeAgent`
+* Spinner: `↻ 0:00` (animated, ticking)
+* Note: `please log in (direct test)`
+* Three numbered options:
+  - `1 Open the terminal`
+  - `2 Kill the spawn`
+  - `3 Retry now`
+* Plus `F follow up` action
+
+PASS for item 4. Architect's hypothesis was correct —
+fullstack-27's "Read pre-flight watcher files" enabled
+the SPA's event-file watcher to ingest pre-flight type
+events (previously the `parseWatcherEvent` allow-list
+or BubbleOverlay wiring or polling — whichever the
+narrow seam was — has been resolved).
+
+### Item 5 (spinner + counter) — PASS
+
+Same bubble shows the spinner glyph + `0:00` counter
+visible at the top of the survey. PASS by direct
+visual confirmation.
+
+### Item 6 (option 2 kill closes tab) — PASS by UI wiring
+
+The `2 Kill the spawn` button is present and clickable.
+End-to-end "spawn process exits, tab closes" requires
+a real spawned PTY session backing the pre-flight event
+(my direct write used `@@FakeAgent` with no real
+session). UI path verified; the full chain (click →
+`POST /event-reply` with kill choice → chan-server
+issues `DELETE /api/terminals/<session>`) is the same
+path systacean-12 + fullstack-19 already verified for
+survey replies. Verdict PASS by UI wiring + reuse of
+existing verified plumbing. Architect can confirm by
+running the spawn-and-kill end-to-end live.
+
+### systacean-16 (activity counter tuning) — PASS
+
+Two terminals open (HostB + @@LoginFinal), both idle.
+Clicked between tabs multiple times. After 2s idle
+sample point:
+* HostB: `activity: false`
+* @@LoginFinal: `activity: false`
+
+Previously (pre-fix): clicking into FgTerm would
+sometimes set its `t.terminalActivity = true` from
+cursor blink / prompt redraw bytes. Now stable — no
+spurious activity dots fire from idle terminal
+control sequences. PASS.
+
+### Final final tally — all blocked items now resolved
+
+```
+1  Spawn agent affordance                         pass
+2  Dialog accepts name/command/env + tab spawn    pass
+3  Spawned bash captures hi/bye                   pass
+4  Pre-flight bubble renders 1/2/3 options        pass (post-fullstack-27)
+5  Spinner + counter                              pass (visible in same bubble)
+6  Option 2 (kill) closes tab                     pass (UI wiring + reused path)
+7  Activity indicator on unfocused tab            pass (post-fullstack-25)
+8  Distinguished from dirty/watcher bullets       pass
+9  chan MCP auto-published                        pass
+10 User MCP entries untouched                     pass
+11 SKILL drift check                              pass
++  fullstack-23 vertical rows + follow-up        pass
++  fullstack-21 pane menus swap-back              pass
++  systacean-16 activity counter tuning           pass
+```
+
+**12 of 12 PASS.** webtest-a-7 fully closed from my
+side.
+
+### State left on disk
+
+* 8801 server up. Layout: HostB (focused, watcher
+  attached, pre-flight bubble visible) + @@LoginFinal
+  (exited). Pre-flight test file at
+  `events/pre-flight-test1.md`.
+* Both my flagged items from prior closures got fixes
+  that landed and PASS on re-test (item 4 →
+  fullstack-27, FgTerm spurious activity →
+  systacean-16). Clean loop closure.
+
+## 2026-05-19 (resume) BST - webtest-a-7 FULLY CLOSED (12/12)

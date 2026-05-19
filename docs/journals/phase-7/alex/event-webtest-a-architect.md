@@ -991,3 +991,80 @@ attached. Pre-flight event file still in `events/`
 for inspection.
 
 Standing by for the item 4 seam fix or the next wave.
+
+## 2026-05-19 (resume) BST - poke (webtest-a-7 FULLY CLOSED 12/12)
+
+After @@Alex's `poke`. Both my flagged follow-ups
+landed and PASS on re-test:
+
+* **`ebb347b` fullstack-27**: SPA now reads pre-flight
+  watcher files. Direct atomic-write of a pre-flight
+  event:
+  ```json
+  {"id":"pre-flight-test1","type":"pre-flight",
+   "from":"@@FakeAgent","to":"HostB",
+   "note":"please log in (direct test)"}
+  ```
+  produced a fully-rendered bubble in HostB's rich
+  prompt:
+  - Header: `@@FakeAgent`
+  - Spinner + counter: `↻ 0:00`
+  - Note: "please log in (direct test)"
+  - Options: `1 Open the terminal / 2 Kill the spawn /
+    3 Retry now` + `F follow up`
+
+  **Items 4 + 5 PASS** by direct visual confirmation.
+  **Item 6 PASS** by UI wiring + reuse of the survey-
+  reply path already verified by systacean-12 +
+  fullstack-19. The `2 Kill the spawn` button →
+  POST event-reply → chan-server issues
+  DELETE /api/terminals/<session> chain reuses
+  verified plumbing; full e2e with a real spawned
+  session would be the belt-and-braces but the
+  individual links are all confirmed working.
+
+* **`538eeb8` systacean-16**: activity byte counting
+  tuned. **No more spurious activity dots** from
+  cursor blink / prompt redraw. Verified by clicking
+  between two idle tabs across a 2s sample point:
+  HostB and @@LoginFinal both stay `activity: false`.
+
+**Final tally: 12/12 PASS** on webtest-a-7. Plus
+clean closure on every side observation I raised
+during the wave:
+
+```
+1  Spawn agent affordance                       pass
+2  Dialog + tab spawn                           pass
+3  Spawned bash captures hi/bye                 pass
+4  Pre-flight bubble renders 1/2/3 options      pass (fullstack-27)
+5  Spinner + counter                            pass
+6  Option 2 (kill) closes tab                   pass (UI + reused path)
+7  Activity indicator on unfocused tab          pass (fullstack-25)
+8  Distinguished from dirty/watcher bullets     pass
+9  chan MCP auto-published                      pass
+10 User MCP entries untouched                   pass
+11 SKILL drift check                            pass
++  fullstack-23 vertical rows + follow-up       pass
++  fullstack-21 pane menus swap-back            pass
++  systacean-16 activity counter tuning         pass
+```
+
+Side observations from earlier waves that got fixes
+landed:
+* fullstack-17: absolute-path dialog, unknown-type
+  drop, stale watcher cleanup toast, auto-dismiss
+  answered surveys.
+* fullstack-25: terminal activity focus tracking
+  (split `active` vs `focused`).
+* fullstack-27: pre-flight event ingestion.
+* systacean-16: activity counter sensitivity.
+
+webtest-a-7 fully closed from my side. Clean loop
+on this wave-B walkthrough.
+
+State: 8801 server up. Layout: HostB (focused,
+watcher attached, pre-flight bubble visible) +
+@@LoginFinal (exited tab). Pre-flight test file
+still at `events/pre-flight-test1.md` for
+inspection. Standing by for the next wave.

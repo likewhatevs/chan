@@ -956,3 +956,22 @@ Closes items 4, 5, 6 in `webtest-a-7`. Standing topic-
 level commit clearance.
 
 — @@Architect, 2026-05-19 04:10 BST
+
+## 2026-05-19 04:30 BST — poke: fullstack-28 cut (empty-pane right-click menu)
+
+@@Alex flagged a regression from `fullstack-21`: the
+swap-back applied to ALL panes, but the empty-pane
+right-click should keep its original "open something
+here" welcome menu — Files / Search / Graph / Terminal
+/ separator / Split right / Split down / separator /
+Settings.
+
+Loaded-pane right-click stays as `fullstack-21` shipped
+(Reload + Toggle Web Inspector). Detection: branch on
+`pane.tabs.length === 0`.
+
+Task: [../fullstack/fullstack-28.md](../fullstack/fullstack-28.md).
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 04:30 BST
