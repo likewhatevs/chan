@@ -389,6 +389,7 @@ export const api = {
       to: string;
       answers: Array<{ question_index: number; key: string }>;
       scope_grant: "one-shot" | "topic-session" | "topic-phase";
+      follow_up?: boolean;
       note?: string;
     },
   ) =>

@@ -29,6 +29,7 @@
   const orderedEvents = $derived([...visibleEvents].reverse());
   const collapsed = $derived(mode === "tray" && !watcher.trayExpanded);
   let answers = $state<Record<string, Record<number, string>>>({});
+  let followUps = $state<Record<string, boolean>>({});
   let focusedQuestion = $state<Record<string, number>>({});
   let focusedBubbleId = $state<string | null>(null);
   let busyReply = $state<string | null>(null);
@@ -66,16 +67,28 @@
   }
 
   function optionsFor(event: WatcherEvent, questionIndex: number): NumberedOption[] {
-    if (event.type === "pre-flight") {
-      return preFlightOptions().map((option, idx) => ({ ...option, n: idx + 1 }));
-    }
+    const base = optionCandidates(event, questionIndex);
+    return base.slice(0, 3).map((option, idx) => ({ ...option, n: idx + 1 }));
+  }
+
+  function optionCandidates(event: WatcherEvent, questionIndex: number): SurveyOption[] {
+    if (event.type === "pre-flight") return preFlightOptions();
     const question = event.questions?.[questionIndex];
     const base = question?.options ?? [];
     const standing = normalizeStandingOptions(event.standing_options);
-    return [...base, ...standing].slice(0, 9).map((option, idx) => ({
-      ...option,
-      n: idx + 1,
-    }));
+    return [...base, ...standing];
+  }
+
+  function optionOverflowCount(event: WatcherEvent, questionIndex: number): number {
+    return Math.max(0, optionCandidates(event, questionIndex).length - 3);
+  }
+
+  function visibleQuestions(event: WatcherEvent) {
+    return (event.questions ?? []).slice(0, 4);
+  }
+
+  function questionOverflowCount(event: WatcherEvent): number {
+    return event.type === "pre-flight" ? 0 : Math.max(0, (event.questions?.length ?? 0) - 4);
   }
 
   async function answer(event: WatcherEvent, questionIndex: number, option: SurveyOption): Promise<void> {
@@ -86,25 +99,30 @@
     answers[event.id] = byQuestion;
     const total = event.questions?.length ?? 0;
     if (total <= 1) {
-      await commit(event, byQuestion, 600);
+      await commit(event, byQuestion, 600, false);
       return;
     }
     const next = nextUnanswered(total, byQuestion, questionIndex);
     if (next === null) {
-      await commit(event, byQuestion, 600);
+      await commit(event, byQuestion, 600, false);
     } else {
       focusedQuestion[event.id] = next;
     }
   }
 
   async function skip(event: WatcherEvent): Promise<void> {
-    await commit(event, {}, 0);
+    await commit(event, {}, 0, false);
+  }
+
+  async function markFollowUp(event: WatcherEvent): Promise<void> {
+    await commit(event, {}, -1, true);
   }
 
   async function commit(
     event: WatcherEvent,
     byQuestion: Record<number, string>,
     dismissDelayMs: number,
+    followUp: boolean,
   ): Promise<void> {
     if (busyReply) return;
     if (!sessionId) {
@@ -118,8 +136,13 @@
         question_index: Number(idx),
         key,
       }));
-      await writeSurveyReply(sessionId, event, replyAnswers, "one-shot");
-      dismissEvent(event.id, dismissDelayMs);
+      await writeSurveyReply(sessionId, event, replyAnswers, "one-shot", followUp);
+      if (followUp) {
+        followUps[event.id] = true;
+      } else {
+        followUps[event.id] = false;
+        dismissEvent(event.id, dismissDelayMs);
+      }
     } catch (err) {
       watcher.error = replyError(err);
     } finally {
@@ -209,6 +232,11 @@
       void skip(event);
       return;
     }
+    if (e.key === "f" || e.key === "F") {
+      e.preventDefault();
+      void markFollowUp(event);
+      return;
+    }
     if (e.key === "Tab" || e.key === "ArrowRight" || e.key === "ArrowLeft") {
       const total = questionCount(event);
       if (total > 1) {
@@ -253,7 +281,7 @@
   }
 
   function questionCount(event: WatcherEvent): number {
-    return event.type === "pre-flight" ? 1 : (event.questions?.length ?? 0);
+    return event.type === "pre-flight" ? 1 : visibleQuestions(event).length;
   }
 
   function elapsedLabel(event: WatcherEvent): string {
@@ -298,6 +326,9 @@
             <div class="bubble-head">
               <span>{event.from}</span>
               <div class="bubble-head-actions">
+                {#if followUps[event.id]}
+                  <span class="follow-badge">follow up</span>
+                {/if}
                 {#if mode === "tray"}
                   <button type="button" class="icon" onclick={() => (watcher.trayExpanded = false)} aria-label="Collapse watcher tray" title="Collapse">
                     <ChevronUp size={14} strokeWidth={1.8} aria-hidden="true" />
@@ -314,7 +345,7 @@
               <div class="survey" data-multitopic={total > 1}>
                 {#if total > 1}
                   <div class="topic-tabs" role="tablist" aria-label="survey topics">
-                    {#each event.questions ?? [] as topic, idx}
+                    {#each visibleQuestions(event) as topic, idx}
                       <button
                         type="button"
                         class:on={idx === qi}
@@ -339,7 +370,7 @@
                   </div>
                 {/if}
                 <p class="question">{event.type === "pre-flight" && preFlightTimedOut(event) ? "Spawn idle - retry now?" : questionText(event, qi)}</p>
-                <div class:option-row={total === 1} class:option-stack={total > 1}>
+                <div class="option-list">
                   {#each optionsFor(event, qi) as option (option.key)}
                     {#if event.type !== "pre-flight" || !preFlightTimedOut(event) || option.key === "retry"}
                     <button
@@ -354,6 +385,22 @@
                     {/if}
                   {/each}
                 </div>
+                {#if questionOverflowCount(event) > 0 || optionOverflowCount(event, qi) > 0}
+                  <p class="truncation">
+                    {#if questionOverflowCount(event) > 0}
+                      {questionOverflowCount(event)} extra topic{questionOverflowCount(event) === 1 ? "" : "s"} hidden.
+                    {/if}
+                    {#if optionOverflowCount(event, qi) > 0}
+                      {optionOverflowCount(event, qi)} extra option{optionOverflowCount(event, qi) === 1 ? "" : "s"} hidden.
+                    {/if}
+                  </p>
+                {/if}
+                <button
+                  type="button"
+                  class="follow-link"
+                  disabled={busyReply === event.id}
+                  onclick={() => void markFollowUp(event)}
+                >follow up</button>
               </div>
             {:else}
               <p class="bubble-text">
@@ -387,8 +434,7 @@
   .bubble-overlay :where(button, article) { pointer-events: auto; }
   .tray-chip,
   .icon,
-  .option-row button,
-  .option-stack button,
+  .option-list button,
   .topic-tabs button {
     border: 1px solid var(--border);
     background: color-mix(in srgb, var(--bg-card) 92%, transparent);
@@ -490,32 +536,29 @@
     margin-left: 4px;
     color: var(--success-text, var(--link));
   }
-  .option-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .option-stack {
+  .option-list {
     display: flex;
     flex-direction: column;
     gap: 6px;
   }
-  .option-row button,
-  .option-stack button {
-    min-height: 28px;
-    display: inline-flex;
-    align-items: center;
+  .option-list button {
+    min-height: 32px;
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr);
+    align-items: start;
     gap: 7px;
-    padding: 0 9px;
+    padding: 6px 9px;
     text-align: left;
-  }
-  .option-stack button {
     justify-content: flex-start;
   }
-  .option-row button.on,
-  .option-stack button.on {
+  .option-list button.on {
     color: var(--link);
     border-color: var(--link);
+  }
+  .option-list button span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    line-height: 1.3;
   }
   kbd {
     min-width: 18px;
@@ -528,6 +571,35 @@
     background: var(--bg);
     color: var(--text);
     font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .follow-link {
+    margin-top: 7px;
+    border: 0;
+    background: transparent;
+    color: var(--text-secondary);
+    padding: 0;
+    font: inherit;
+    font-size: 12px;
+    text-decoration: underline;
+  }
+  .follow-link:hover,
+  .follow-link:focus-visible {
+    color: var(--link);
+  }
+  .follow-badge {
+    min-height: 18px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 6px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--warn-text, var(--text-secondary));
+    font-size: 11px;
+  }
+  .truncation {
+    margin: 6px 0 0;
+    color: var(--warn-text, var(--text-secondary));
+    font-size: 12px;
   }
   .link {
     border: 0;

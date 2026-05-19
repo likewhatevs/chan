@@ -459,3 +459,7 @@ Commit:
 
 Gate run: `npm run test -- tabs`, `npm run check`,
 `npm run build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+## 2026-05-19 05:32 BST — poke
+
+online, starting `fullstack-23` after `fullstack-22` landed.

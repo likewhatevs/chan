@@ -133,3 +133,30 @@ Standard. Pre-push gate green. Coordinate with @@WebtestA
 for the layout walkthrough. Insert after `fullstack-22`
 in your queue. Ping via
 `alex/event-fullstack-architect.md`.
+
+## Result
+
+2026-05-19 05:35 BST — Implemented in `web/src/components/BubbleOverlay.svelte`,
+`web/src/state/watcherEvents.ts`, and `web/src/api/client.ts`.
+Survey options now render as vertical numbered rows with wrapping labels.
+Multi-topic surveys keep a top tab strip and render the focused topic's
+question above the vertical options. Oversized surveys are defensively
+bounded to four topics and three visible options with a one-line hidden
+item hint.
+
+Added the async follow-up state: pressing `F` or clicking `follow up`
+writes an immediate `survey-reply` with `follow_up: true`, leaves the
+bubble visible, and shows a `follow up` badge. A later option pick or
+Esc writes a normal superseding reply and dismisses the bubble.
+
+Verification:
+
+* `npm run test -- BubbleOverlay watcherEvents`
+* `npm run check`
+* `npm run build`
+* `bash -lc 'ulimit -n 4096; scripts/pre-push'` in a clean temporary
+  worktree with only the `fullstack-23` patch applied.
+
+Note: the shared live worktree had unrelated Systacean MCP-discovery
+files dirty and failing `cargo fmt --check`, so the full gate was run
+from a clean worktree to avoid touching another lane's files.

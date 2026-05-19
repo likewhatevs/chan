@@ -86,6 +86,7 @@ export async function writeSurveyReply(
   event: WatcherEvent,
   answers: Array<{ question_index: number; key: string }>,
   scopeGrant: ScopeGrant,
+  followUp = false,
 ): Promise<void> {
   await api.writeTerminalEventReply(sessionId, {
     id: event.id,
@@ -94,6 +95,7 @@ export async function writeSurveyReply(
     to: event.from,
     answers,
     scope_grant: scopeGrant,
+    ...(followUp ? { follow_up: true } : {}),
   });
 }
 

@@ -100,6 +100,132 @@ describe("BubbleOverlay", () => {
     });
   });
 
+  test("single-topic survey renders vertical numbered rows with wrapping labels", async () => {
+    const watcher: TerminalWatcherState = {
+      path: "events",
+      seenIds: ["layout-1"],
+      unread: false,
+      events: [
+        {
+          id: "layout-1",
+          type: "survey",
+          from: "@@Architect",
+          to: "@@Alex",
+          path: "events/event-layout-1.md",
+          questions: [
+            {
+              header: "Mode",
+              text: "Pick mode",
+              options: [
+                {
+                  key: "1",
+                  label: "Use the conservative option with enough detail to wrap cleanly.",
+                },
+                { key: "2", label: "Use the fast option." },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const { target } = await renderOverlay(watcher);
+
+    const rows = target.querySelectorAll(".option-list button");
+    expect(rows).toHaveLength(3);
+    expect(rows[0]?.querySelector("kbd")?.textContent).toBe("1");
+    expect(rows[0]?.textContent).toContain("Use the conservative option");
+  });
+
+  test("follow-up click writes async reply and keeps the bubble visible", async () => {
+    const { writeReply } = installReplySpies();
+    const watcher: TerminalWatcherState = {
+      path: "events",
+      seenIds: ["follow-1"],
+      unread: false,
+      events: [
+        {
+          id: "follow-1",
+          type: "survey",
+          from: "@@Architect",
+          to: "@@Alex",
+          path: "events/event-follow-1.md",
+          questions: [
+            {
+              header: "Mode",
+              text: "Pick mode",
+              options: [{ key: "1", label: "Fast" }],
+            },
+          ],
+        },
+      ],
+    };
+    const { target } = await renderOverlay(watcher);
+
+    buttonText(target, "follow up").click();
+    await tick();
+    await waitFor(() => writeReply.mock.calls.length === 1);
+
+    expect(watcher.events).toHaveLength(1);
+    expect(target.textContent).toContain("follow up");
+    expect(writeReply).toHaveBeenCalledWith("term_123", {
+      id: "follow-1",
+      type: "survey-reply",
+      from: "@@Alex",
+      to: "@@Architect",
+      answers: [],
+      scope_grant: "one-shot",
+      follow_up: true,
+    });
+  });
+
+  test("F marks the focused survey as follow-up and a later answer supersedes it", async () => {
+    vi.useFakeTimers();
+    const { writeReply } = installReplySpies();
+    const watcher: TerminalWatcherState = {
+      path: "events",
+      seenIds: ["follow-key"],
+      unread: false,
+      events: [
+        {
+          id: "follow-key",
+          type: "survey",
+          from: "@@Architect",
+          to: "@@Alex",
+          path: "events/event-follow-key.md",
+          questions: [
+            {
+              header: "Mode",
+              text: "Pick mode",
+              options: [{ key: "1", label: "Fast" }],
+            },
+          ],
+        },
+      ],
+    };
+    const { target } = await renderOverlay(watcher);
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "F" }));
+    await waitFor(() => writeReply.mock.calls.length === 1);
+    await waitFor(() => !buttonText(target, "Fast").disabled);
+
+    buttonText(target, "Fast").click();
+    await tick();
+    await vi.advanceTimersByTimeAsync(600);
+    await waitFor(() => writeReply.mock.calls.length === 2);
+    await waitFor(() => watcher.events.length === 0);
+
+    expect(writeReply.mock.calls).toHaveLength(2);
+    expect(writeReply.mock.calls[0]?.[1]).toMatchObject({ follow_up: true, answers: [] });
+    expect(writeReply.mock.calls[1]?.[1]).toEqual({
+      id: "follow-key",
+      type: "survey-reply",
+      from: "@@Alex",
+      to: "@@Architect",
+      answers: [{ question_index: 0, key: "1" }],
+      scope_grant: "one-shot",
+    });
+  });
+
   test("number key answers the focused multi-topic tab and auto-commits when complete", async () => {
     vi.useFakeTimers();
     const { writeReply } = installReplySpies();
@@ -145,6 +271,39 @@ describe("BubbleOverlay", () => {
       { question_index: 0, key: "1" },
       { question_index: 1, key: "2" },
     ]);
+  });
+
+  test("oversized surveys render bounded topics and options with a truncation hint", async () => {
+    const watcher: TerminalWatcherState = {
+      path: "events",
+      seenIds: ["big-1"],
+      unread: false,
+      events: [
+        {
+          id: "big-1",
+          type: "survey",
+          from: "@@Architect",
+          to: "@@Alex",
+          path: "events/event-big-1.md",
+          questions: Array.from({ length: 5 }, (_, idx) => ({
+            header: `T${idx + 1}`,
+            text: `Topic ${idx + 1}?`,
+            options: [
+              { key: "1", label: "One" },
+              { key: "2", label: "Two" },
+              { key: "3", label: "Three" },
+              { key: "4", label: "Four" },
+            ],
+          })),
+        },
+      ],
+    };
+    const { target } = await renderOverlay(watcher);
+
+    expect(target.querySelectorAll(".topic-tabs button")).toHaveLength(4);
+    expect(target.querySelectorAll(".option-list button")).toHaveLength(3);
+    expect(target.textContent).toContain("1 extra topic hidden");
+    expect(target.textContent).toContain("2 extra options hidden");
   });
 
   test("409 reply failure clears stale watcher state through callback", async () => {
