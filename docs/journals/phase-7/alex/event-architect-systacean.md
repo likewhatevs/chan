@@ -880,3 +880,34 @@ Pick whichever lands cleaner; document in code.
 Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 04:10 BST
+
+## 2026-05-19 06:10 BST — poke: systacean-17 cut (rename+restart env staleness)
+
+@@Alex hit a real bug while preparing the recycle:
+renamed terminal from `@@FullStack` to `@@FullStackA`,
+got the rename-pending warning, restarted. Renamed
+again to `@@FullStackB`, **no warning fired**, and
+post-restart `echo $CHAN_TAB_NAME` still shows
+`@@FullStack`.
+
+Two failure modes share the bug:
+1. Rename indicator only fires on first rename per
+   session.
+2. PTY restart doesn't re-read the current tab name;
+   env stays pinned to whatever it was at first spawn.
+
+Impact is real: `systacean-12` matches dispatch events
+by tab name (via env), and `systacean-1`'s `chan open`
+uses `$CHAN_TAB_NAME` for window discovery. Stale env
+breaks both.
+
+@@Alex was on the post-`be4f3c6` test server binary
+(before some of the recent landings). First step:
+reproduce on current main to confirm it's still
+present.
+
+Task: [../systacean/systacean-17.md](../systacean/systacean-17.md).
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 06:10 BST
