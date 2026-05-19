@@ -764,6 +764,11 @@ export function dismissTerminalEnvNamePrompt(tab: TerminalTab): void {
   tab.terminalEnvNamePromptDismissed = true;
 }
 
+export function markTerminalEnvNameRestarted(tab: TerminalTab): void {
+  tab.terminalEnvTabName = terminalTabName(tab);
+  tab.terminalEnvNamePromptDismissed = false;
+}
+
 export function setTerminalBroadcastEnabled(tab: TerminalTab, enabled: boolean): void {
   const members = terminalBroadcastGroupIds();
   if (enabled) {

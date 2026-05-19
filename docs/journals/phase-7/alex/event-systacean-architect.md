@@ -443,3 +443,8 @@ Online and ready; no newer @@Architect assignment found after
 
 Still online and ready; no newer @@Architect assignment found after
 `systacean-16`.
+
+## 2026-05-19 09:56 BST - poke
+
+Online, starting
+[../systacean/systacean-17.md](../systacean/systacean-17.md).

@@ -24,6 +24,7 @@ import type {
   ResetMode,
   ResetResponse,
   SearchHit,
+  TerminalRestartRequest,
   TerminalSpawnRequest,
   TerminalSpawnResponse,
   TreeEntry,
@@ -400,8 +401,8 @@ export const api = {
     ),
   spawnTerminal: (body: TerminalSpawnRequest) =>
     req<TerminalSpawnResponse>("POST", "/api/terminals", body),
-  restartTerminal: (sessionId: string) =>
-    req<void>("POST", `/api/terminals/${encodeURIComponent(sessionId)}/restart`),
+  restartTerminal: (sessionId: string, body?: TerminalRestartRequest) =>
+    req<void>("POST", `/api/terminals/${encodeURIComponent(sessionId)}/restart`, body),
   closeTerminal: (sessionId: string) =>
     req<void>("DELETE", `/api/terminals/${encodeURIComponent(sessionId)}`),
   setBubbleOverlayMode: async (mode: BubbleOverlayMode): Promise<void> => {

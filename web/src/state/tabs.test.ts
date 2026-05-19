@@ -34,6 +34,7 @@ import {
   removeTerminalFromBroadcastGroup,
   registerTerminalInputSink,
   markLocalTabDrop,
+  markTerminalEnvNameRestarted,
   renameTerminalTab,
   reopenClosedTab,
   reorderTab,
@@ -421,6 +422,27 @@ describe("terminal session serialization", () => {
 
     setTerminalActivity(tab, false);
     expect(tab.terminalActivity).toBeUndefined();
+  });
+
+  test("terminal rename staleness resets after restart marker update", () => {
+    const tab = terminalTab({
+      terminalSessionId: "term_123",
+      terminalEnvTabName: "first",
+    });
+
+    renameTerminalTab(tab, "second");
+    expect(terminalEnvTabNameStale(tab)).toBe(true);
+
+    dismissTerminalEnvNamePrompt(tab);
+    expect(tab.terminalEnvNamePromptDismissed).toBe(true);
+
+    markTerminalEnvNameRestarted(tab);
+    expect(terminalEnvTabNameStale(tab)).toBe(false);
+    expect(tab.terminalEnvNamePromptDismissed).toBe(false);
+
+    renameTerminalTab(tab, "third");
+    expect(terminalEnvTabNameStale(tab)).toBe(true);
+    expect(tab.terminalEnvNamePromptDismissed).toBe(false);
   });
 
   test("clearing a terminal session clears activity state", () => {

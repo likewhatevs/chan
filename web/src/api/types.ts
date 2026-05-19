@@ -89,6 +89,11 @@ export type TerminalSpawnResponse = {
   tab_label: string;
 };
 
+export type TerminalRestartRequest = {
+  name?: string;
+  window_id?: string;
+};
+
 export type Preferences = {
   editor_theme: EditorTheme;
   /// Where image uploads land (relative to drive root). Default

@@ -374,3 +374,9 @@ Verification:
 * `cargo test -p chan-server --no-default-features`
 * `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
 * `scripts/pre-push`
+
+## 2026-05-19 09:56 BST - systacean-17 started
+
+New regression assignment started:
+[systacean-17.md](systacean-17.md), terminal rename plus PTY
+restart env staleness.

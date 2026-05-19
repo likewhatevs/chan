@@ -183,7 +183,12 @@ impl Registry {
         Ok(session.attach(Some(0)))
     }
 
-    pub fn restart(&self, id: &str) -> Result<bool, CreateError> {
+    pub fn restart(
+        &self,
+        id: &str,
+        tab_name: Option<String>,
+        window_id: Option<String>,
+    ) -> Result<bool, CreateError> {
         let old = self
             .sessions
             .lock()
@@ -196,7 +201,13 @@ impl Registry {
         if old.closed.load(Ordering::Relaxed) {
             return Ok(false);
         }
-        let opts = old.restart_options();
+        let mut opts = old.restart_options();
+        if tab_name.is_some() {
+            opts.tab_name = tab_name;
+        }
+        if window_id.is_some() {
+            opts.window_id = window_id;
+        }
         let session = Session::spawn(id.to_string(), self.config.clone(), opts)
             .map_err(CreateError::Spawn)?;
         let mut sessions = self.sessions.lock().expect("terminal registry poisoned");

@@ -58,6 +58,12 @@ pub struct CreateTerminalResponse {
     tab_label: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RestartTerminalBody {
+    name: Option<String>,
+    window_id: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct EventReplyBody {
     id: String,
@@ -281,11 +287,39 @@ pub async fn api_create_terminal(
 pub async fn api_restart_terminal(
     State(state): State<Arc<AppState>>,
     AxumPath(session): AxumPath<String>,
+    body: Option<Json<RestartTerminalBody>>,
 ) -> Response {
     if state.tunnel_public {
         return err_tunnel_public_locked();
     }
-    match state.terminal_sessions.restart(&session) {
+    let (tab_name, window_id) = if let Some(Json(body)) = body {
+        let tab_name = match body.name.as_deref() {
+            Some(name) => match normalize_tab_name(name) {
+                Some(name) => Some(name),
+                None => {
+                    return (StatusCode::BAD_REQUEST, "terminal name is required").into_response()
+                }
+            },
+            None => None,
+        };
+        let window_id = match body.window_id.as_deref() {
+            Some(id) => match normalize_window_id(id) {
+                Some(id) => Some(id),
+                None => {
+                    return (StatusCode::BAD_REQUEST, "terminal window id is required")
+                        .into_response()
+                }
+            },
+            None => None,
+        };
+        (tab_name, window_id)
+    } else {
+        (None, None)
+    };
+    match state
+        .terminal_sessions
+        .restart(&session, tab_name, window_id)
+    {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, "terminal session not found").into_response(),
         Err(CreateError::Capped) => {
@@ -926,7 +960,8 @@ mod tests {
     async fn terminal_control_endpoints_return_not_found_for_missing_session() {
         let state = crate::state::test_support::make_test_state(false, false);
 
-        let restart = api_restart_terminal(State(state.clone()), AxumPath("missing".into())).await;
+        let restart =
+            api_restart_terminal(State(state.clone()), AxumPath("missing".into()), None).await;
         let delete = api_delete_terminal(State(state), AxumPath("missing".into())).await;
 
         assert_eq!(restart.status(), StatusCode::NOT_FOUND);
@@ -948,7 +983,8 @@ mod tests {
         let out = collect_until(&mut handle, "restart-one", Duration::from_secs(5)).await;
         assert!(out.contains("restart-one"), "missing first output: {out:?}");
 
-        let response = api_restart_terminal(State(state.clone()), AxumPath(session.clone())).await;
+        let response =
+            api_restart_terminal(State(state.clone()), AxumPath(session.clone()), None).await;
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         let mut restarted = state
             .terminal_sessions
@@ -958,6 +994,59 @@ mod tests {
         assert!(
             out.contains("restart-one"),
             "missing restarted output: {out:?}"
+        );
+        state
+            .terminal_sessions
+            .close(&session, CloseReason::Explicit);
+    }
+
+    #[tokio::test]
+    async fn api_restart_terminal_updates_chan_tab_name_env() {
+        let state = crate::state::test_support::make_test_state(false, false);
+        let mut body =
+            create_terminal_body("printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; sleep 1");
+        body.name = "@@First".into();
+        let response = api_create_terminal(State(state.clone()), Ok(Json(body))).await;
+        let json = response_json(response).await;
+        let session = json["session"].as_str().expect("session id").to_string();
+        let mut handle = state
+            .terminal_sessions
+            .attach(&session, Some(0))
+            .expect("spawned session");
+        let out = collect_until(
+            &mut handle,
+            "<CHAN_TAB_NAME=@@First>",
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(
+            out.contains("<CHAN_TAB_NAME=@@First>"),
+            "missing first tab name: {out:?}"
+        );
+
+        let response = api_restart_terminal(
+            State(state.clone()),
+            AxumPath(session.clone()),
+            Some(Json(RestartTerminalBody {
+                name: Some("@@Second".into()),
+                window_id: None,
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let mut restarted = state
+            .terminal_sessions
+            .attach(&session, Some(0))
+            .expect("restarted session");
+        let out = collect_until(
+            &mut restarted,
+            "<CHAN_TAB_NAME=@@Second>",
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(
+            out.contains("<CHAN_TAB_NAME=@@Second>"),
+            "missing restarted tab name: {out:?}"
         );
         state
             .terminal_sessions

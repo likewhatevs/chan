@@ -93,3 +93,53 @@ Standard. Pre-push gate green. Coordinate with
 @@FullStackA/B if any frontend state needs to reset on
 restart. Ping via
 `alex/event-systacean-architect.md`.
+
+## 2026-05-19 10:00 BST - ready to land
+
+Reproduced by code inspection on current `main`: controlled terminal
+restart reused `Session::tab_name`, which was captured at first spawn,
+and the frontend restart call sent no current tab name. The frontend
+env-name marker also only refreshed when a session id changed, so a
+same-id restart could not make a second rename stale again.
+
+Implemented:
+
+* `POST /api/terminals/:session/restart` accepts optional `name` and
+  `window_id` JSON fields.
+* chan-server restart uses those overrides when respawning the PTY, so
+  `CHAN_TAB_NAME` is derived from the current tab title supplied by the
+  frontend.
+* Controlled-terminal restart sends `terminalTabName(tab)` and
+  `sessionWindowId()`.
+* After a successful restart request, frontend state records the
+  current tab name as the active env name, so the next rename triggers
+  the warning again.
+
+Audit: no `CHAN_DRIVE_NAME` injection exists in the current PTY env
+path. The per-tab injected values on this path are `CHAN_TAB_NAME` and
+`CHAN_WINDOW_ID`; `CHAN_CONTROL_SOCKET` and MCP env are server-scoped
+and already recomputed on each spawn.
+
+Regression coverage:
+
+* chan-server route test proves restart can update
+  `CHAN_TAB_NAME` for the respawned PTY.
+* frontend state test proves rename staleness resets after restart and
+  fires again on a subsequent rename.
+
+Verification:
+
+* `cargo test -p chan-server api_restart_terminal_updates_chan_tab_name_env --no-default-features`
+* `npm run test -- src/state/tabs.test.ts`
+* `cargo test -p chan-server --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `npm run check`
+* `npm run build`
+* `scripts/pre-push`
+
+Known risk: did not drive the browser manually; coverage exercises the
+two failing seams directly.
+
+Proposed commit message:
+
+`Refresh terminal env name on restart`

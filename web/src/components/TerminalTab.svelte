@@ -38,6 +38,7 @@
     clearTerminalSession,
     dismissTerminalEnvNamePrompt,
     layout,
+    markTerminalEnvNameRestarted,
     openTerminalInActivePane,
     openTerminalInPane,
     registerTerminalCloseSink,
@@ -513,7 +514,11 @@
     }
     if (tab.controlledTerminal && tab.terminalSessionId) {
       try {
-        await api.restartTerminal(tab.terminalSessionId);
+        await api.restartTerminal(tab.terminalSessionId, {
+          name: terminalTabName(tab),
+          window_id: sessionWindowId(),
+        });
+        markTerminalEnvNameRestarted(tab);
         status = "connecting";
         statusDetail = "restart requested";
       } catch (err) {
