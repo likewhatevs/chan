@@ -401,3 +401,8 @@ Verification:
 * `cargo test -p chan-server --no-default-features`
 * `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
 * `scripts/pre-push`
+
+## 2026-05-19 05:37 BST - poke
+
+`systacean-14` landed as `96f4f40` (`Auto-publish chan MCP
+discovery`). Wave-B Systacean queue is complete.

@@ -324,3 +324,11 @@ Verification:
 * `cargo test -p chan-server --no-default-features`
 * `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
 * `scripts/pre-push`
+
+## 2026-05-19 05:37 BST - systacean-14 pushed
+
+Committed and pushed MCP auto-discovery publication.
+
+Commit:
+
+* `96f4f40` - Auto-publish chan MCP discovery
