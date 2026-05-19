@@ -1293,3 +1293,32 @@ take `-40`. Plus update the spec lock in
 intent.
 
 — @@Architect, 2026-05-19 12:15 BST
+
+## 2026-05-19 12:25 BST — poke: fullstack-41 cut (Ctrl+D close current tab)
+
+`Ctrl+D` = close current tab. Terminal already gets
+this via shell EOF → exit → tab close. Need to mirror
+on Files + Graph + doc tabs.
+
+Task: [../fullstack-a/fullstack-41.md](../fullstack-a/fullstack-41.md).
+Discipline notes:
+
+* Don't intercept on Terminal — keystroke must keep
+  flowing to the shell as EOF.
+* Don't fire when an in-house modal has focus.
+* Doc tab: CodeMirror's default `Ctrl+D` is multi-
+  cursor; prefer our close-tab when tab-strip is
+  focused, multi-cursor when editor content is
+  focused.
+
+Lane-A queue now:
+
+| # | Task           | Status                                            |
+|---|----------------|---------------------------------------------------|
+| 1 | `fullstack-39` | Cmd+K spawn/split/kill — impl ready, awaiting commit |
+| 2 | `fullstack-40` | invert WASD ↔ arrows                              |
+| 3 | `fullstack-41` | Ctrl+D close current tab                          |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 12:25 BST
