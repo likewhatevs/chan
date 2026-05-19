@@ -476,3 +476,7 @@ Gate run: `npm run test -- BubbleOverlay watcherEvents`,
 `npm run check`, `npm run build`, and
 `bash -lc 'ulimit -n 4096; scripts/pre-push'` in a clean temporary
 worktree with only the `fullstack-23` patch applied.
+
+## 2026-05-19 06:11 BST — poke
+
+online, starting `fullstack-25` after architect go-ahead.

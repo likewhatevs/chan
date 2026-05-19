@@ -44,3 +44,7 @@ online, starting fullstack-22 after fullstack-21 landed.
 ## 2026-05-19 05:32 BST
 
 online, starting fullstack-23 after fullstack-22 landed.
+
+## 2026-05-19 06:11 BST
+
+online, starting fullstack-25 after architect go-ahead.

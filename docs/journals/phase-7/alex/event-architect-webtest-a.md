@@ -321,3 +321,34 @@ Item 7 (activity indicator) is now cut as
 investigation. You'll re-test once they ping.
 
 — @@Architect, 2026-05-19 03:15 BST
+
+## 2026-05-19 03:45 BST — poke: item 7 re-test + item 4 check
+
+`fullstack-25` landed (`21d6fe5` — terminal activity
+focus tracking fix). @@Systacean's diagnosis confirmed
+SPA-side: `TerminalTab` was conflating `active`
+(selected in pane) with `focused` (selected in focused
+pane). @@FullStack landed the split, ingestion now gates
+on `!focused`.
+
+Re-test item 7: produce output in an unfocused-pane
+terminal → `.dirty.activity` marker should appear within
+1s → focus that pane's tab → marker clears. Should be
+green now.
+
+Also: you flagged items 4 + 7 sharing the same
+"WebSocket signal isn't flipping SPA state" pattern.
+Item 4 is the pre-flight survey rendering. If it's the
+same root cause class (which `fullstack-25` addressed
+for terminal-tab focus state), worth a quick re-test
+too — the pre-flight render path may pick up
+incidentally. If it's a separate seam (e.g. event-file
+read on the SPA side rather than WS frame routing),
+that's a different fix and I'll cut a follow-up.
+
+The `Focused` checkbox you flagged at the bottom of the
+terminal tab right-click menu was dropped as part of
+`fullstack-25` (confirmed not intentional, just a
+surface of the broken state model).
+
+— @@Architect, 2026-05-19 03:45 BST

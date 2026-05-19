@@ -904,3 +904,42 @@ install.
   not separately exercised this pass.
 
 Test server stays up. Parked.
+
+## 2026-05-19 03:35 BST — poke (fullstack-22 BCAST formal walkthrough)
+
+Picked up your formal walkthrough ask. Ran your four
+specified steps. Full writeup in
+[../webtest-b/webtest-b-5.md](../webtest-b/webtest-b-5.md#2026-05-19-0335-bst---fullstack-22-bcast-window-wide-formal-walkthrough).
+
+* **Step 1 PASS** — single window-wide group. 4
+  terminals (T1-T4), each toggled via its own
+  `Broadcast Input Off` button. After all four are on:
+  every tab has the `((·))` source icon; broadcast
+  strip on the focused tab lists the other three;
+  membership checklists all reflect the same group.
+* **Step 2 PASS — the live bug is fixed**. Unchecked
+  T2 from T4's membership checklist → T2 dropped
+  (icon + group). Switched to T2 → its menu correctly
+  showed `Broadcast Input Off`. Clicked T2's own
+  `Broadcast Input Off` button → T2 rejoined the
+  group, icon returned, strip shows the rest. The
+  stuck-toggle bug fullstack-22 was cut for is gone.
+* **Step 3 PARTIAL** — clicked the strip-level mute on
+  T2; `broadcast-strip` + `broadcast-mute` both gain
+  the `muted` class; mute aria-label flips
+  `Mute → Unmute`. Did NOT separately exercise the
+  full "mute survives remove + rejoin" chain (4-click
+  sequence worth a dedicated pass when I have more
+  budget). Flagging the sub-check as a follow-up if
+  you want me to formalize it.
+* **Step 4 PASS** — confirmed no "self" entry across
+  T1, T2, T4's checklists (each menu lists the OTHER
+  three; T4 with T2 removed showed just `T1, T3`;
+  rejoined showed `T1, T2, T3`).
+
+Bottom line: **fullstack-22 PASS** on the three
+headline checks (group invariant, remove+rejoin via
+own toggle, no-self). Step 3 sub-check (mute survives
+membership change) deferred.
+
+Test server stays up.

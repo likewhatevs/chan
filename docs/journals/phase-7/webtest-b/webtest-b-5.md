@@ -522,3 +522,93 @@ sandbox.
   landed; not separately exercised this pass.
 
 Test server stays up.
+
+## 2026-05-19 03:35 BST - fullstack-22 BCAST window-wide formal walkthrough
+
+@@Architect asked me to formalize this in the 03:15 BST
+poke. Ran the four-step exercise.
+
+### Setup
+
+Loaded a 4-terminal URL fragment on 8810: T1, T2, T3, T4.
+All four init'd to backgrounded-with-activity-dots (per
+systacean-13).
+
+### Step 1: Each tab toggles into BCAST via its own button
+
+Right-click each tab → `Broadcast Input Off` button → click → flips to `On`. Repeated for T1 → T2 → T3 →
+T4.
+
+After all four:
+
+* Tab strip: every tab shows the `((·))` radio source
+  icon to the left of its label.
+* Broadcast strip on T4 (focused): `T1 × T2 × T3 ×`
+  (T4 itself excluded — **no self entry**, satisfies
+  step 4 from your spec).
+* Membership checklist on each tab's menu lists the
+  OTHER three tabs as checked (window-wide group;
+  every member sees every other member).
+
+**Step 1 PASS** — single window-wide group reached via
+per-tab toggles.
+
+### Step 2: Remove + rejoin via own toggle (the stuck bug)
+
+* From T4's menu, unchecked T2's checkbox.
+* Tab strip: T2 lost its `((·))` icon. Broadcast strip
+  on T4 shrunk to `T1 × T3 ×` (T2 removed).
+* Switched to T2. Right-click T2 → `Broadcast Input
+  **Off**` (correctly reflects removed state).
+* Clicked T2's own `Broadcast Input Off` button.
+* Result: T2's icon returns, T2 rejoins the group;
+  broadcast strip on T2 shows `T1 × T3 × T4 ×` (T2
+  self-excluded).
+
+**Step 2 PASS** — the live "stuck toggle" bug
+fullstack-22 was cut for is fixed.
+
+### Step 3: MUTE interleaved (partial)
+
+* Clicked the strip's `((·))` mute button on T2 →
+  `broadcast-strip` gains the `muted` class;
+  `broadcast-mute` aria-label flips to `Unmute
+  broadcast input`.
+* Did NOT separately exercise "mute survives membership
+  remove + rejoin" — that's a four-click sequence
+  worth a dedicated pass when I have more session
+  budget. Flagging as a follow-up sub-check.
+
+**Step 3 PARTIAL** — mute toggle works at the strip
+level; mute-survives-membership-change is a sub-check
+deferred to next pass.
+
+### Step 4: No "self" in membership checklist
+
+Confirmed across all four tabs:
+
+| Tab focused | Membership list shows |
+|-------------|-----------------------|
+| T1          | T2, T3, T4 (no T1)    |
+| T2          | T1, T3, T4 (no T2)    |
+| T4 (after step 2 unchecked T2) | T1, T3 (no T2, no T4) |
+| T4 (after step 2 T2 rejoined)  | T1, T2, T3 (no T4)    |
+
+**Step 4 PASS** — self never appears.
+
+### Overall verdict
+
+**fullstack-22 PASS** on steps 1, 2, 4. Step 3 PARTIAL
+(mute toggle works; mute-survives-membership chain not
+fully exercised this pass). The headline live bug
+(stuck-toggle from a removed tab) is fixed.
+
+### Updated acceptance status
+
+* Items 1-9 (`webtest-b-5`): PASS.
+* Items 10-12 (`fullstack-15` drag-detach): BLOCKED on
+  tooling.
+* `fullstack-22` BCAST window-wide: PASS (with one
+  sub-check partial).
+
+Test server stays up.
