@@ -380,18 +380,37 @@ fn normalize_drive_rel(p: &std::path::Path) -> Option<String> {
     Some(parts.join("/"))
 }
 
-/// Collect drive image files (non-directory, image extension).
+/// Collect every regular file under the drive root, drive-relative
+/// POSIX paths. Used as the link-resolution oracle: a markdown link
+/// pointing at any on-disk file (LICENSE, .rs source, .sh, ...)
+/// resolves to that real file instead of synthesizing a ghost.
+///
 /// Returns an empty set on `list_tree` failure so callers degrade to
-/// the old ghost-rendering path instead of failing the request.
-fn drive_image_files(drive: &chan_drive::Drive) -> std::collections::BTreeSet<String> {
+/// the previous graph-files-only behaviour instead of failing the
+/// request.
+fn drive_disk_files(drive: &chan_drive::Drive) -> std::collections::BTreeSet<String> {
     match drive.list_tree() {
         Ok(entries) => entries
             .into_iter()
-            .filter(|e| !e.is_dir && is_image_path(&e.path))
+            .filter(|e| !e.is_dir)
             .map(|e| e.path)
             .collect(),
         Err(_) => std::collections::BTreeSet::new(),
     }
+}
+
+/// Image subset of `drive_disk_files`. Kept as its own predicate so
+/// images stay distinguishable from other non-graph files (they get
+/// the Media node kind; other on-disk files become regular File
+/// nodes).
+fn image_subset(
+    disk_files: &std::collections::BTreeSet<String>,
+) -> std::collections::BTreeSet<String> {
+    disk_files
+        .iter()
+        .filter(|p| is_image_path(p))
+        .cloned()
+        .collect()
 }
 
 /// True only for regular files under the drive root.
@@ -784,12 +803,17 @@ pub async fn api_graph(
         }
     }
 
-    // Image files aren't graph nodes (the indexer skips non-text
-    // files), so a markdown `![alt](pic.png)` would otherwise resolve
-    // to a ghost. Image files merged into the resolution set so an
-    // existing image lands on a real file node (the frontend then
-    // styles file-kind nodes by extension via classifyFile).
-    let image_files = drive_image_files(&drive);
+    // Image files (and other non-markdown regular files: LICENSE,
+    // source files, scripts) aren't graph nodes because the indexer
+    // skips non-markdown content. Without enumerating them here, any
+    // `[text](LICENSE)` or `[code](src/lib.rs)` link would land on a
+    // ghost "file does not exist" node even when the file is right
+    // there on disk. We walk the drive once and use the result as the
+    // link resolver's universe; images are the image subset of that
+    // walk (Media node kind) while everything else gets the regular
+    // File treatment further down.
+    let disk_files = drive_disk_files(&drive);
+    let image_files = image_subset(&disk_files);
     let present_files: std::collections::BTreeSet<&str> = files
         .iter()
         .filter(|path| indexed_file_exists(drive.root(), path))
@@ -838,13 +862,21 @@ pub async fn api_graph(
         }
     }
 
-    let mut file_set: std::collections::BTreeSet<&str> = files.iter().map(String::as_str).collect();
-    for img in &image_files {
-        file_set.insert(img.as_str());
+    // `graph_file_set` is the indexed-only view; `file_set` is the
+    // full link-resolution oracle (graph + all on-disk files). Keep
+    // both: graph_file_set drives the "is this a real graph node?"
+    // gate used when synthesizing referenced-disk-file nodes, while
+    // file_set is what resolve_link_dst and ghost classification
+    // consult.
+    let graph_file_set: std::collections::BTreeSet<&str> =
+        files.iter().map(String::as_str).collect();
+    let mut file_set = graph_file_set.clone();
+    for f in &disk_files {
+        file_set.insert(f.as_str());
     }
     let mut present_file_set = present_files.clone();
-    for img in &image_files {
-        present_file_set.insert(img.as_str());
+    for f in &disk_files {
+        present_file_set.insert(f.as_str());
     }
 
     // Rewrite link-edge targets so URL-encoded / source-relative
@@ -874,15 +906,28 @@ pub async fn api_graph(
         }
     }
 
-    // Track which image files are actually referenced by an edge so
-    // we only emit nodes for images that participate in the graph.
-    // Unreferenced images would inflate the node count without
-    // adding any edges — purely visual noise.
+    // Track which image / other-disk files are actually referenced
+    // by a link edge so we only emit nodes for ones that participate
+    // in the graph. Unreferenced files would inflate the node count
+    // without adding any edges — purely visual noise.
+    //
+    // `referenced_disk_files` covers the bug repro from
+    // docs/journals/phase-8/systacean/systacean-2.md: a markdown link
+    // to LICENSE / a .rs source / a shell script lands on a real
+    // file node here instead of falling through to ghost_set as a
+    // "missing" target.
     let mut referenced_images: std::collections::BTreeSet<String> =
         std::collections::BTreeSet::new();
+    let mut referenced_disk_files: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
     for e in &all_edges {
-        if matches!(e.kind, EdgeKind::Link) && image_files.contains(&e.dst) {
+        if !matches!(e.kind, EdgeKind::Link) {
+            continue;
+        }
+        if image_files.contains(&e.dst) {
             referenced_images.insert(e.dst.clone());
+        } else if disk_files.contains(&e.dst) && !graph_file_set.contains(e.dst.as_str()) {
+            referenced_disk_files.insert(e.dst.clone());
         }
     }
 
@@ -920,6 +965,26 @@ pub async fn api_graph(
                 label: file_label(img),
                 path: img.clone(),
                 path_class: path_class_for_graph(&drive, img),
+                missing: false,
+            },
+        );
+    }
+    // Existing non-markdown, non-image files (LICENSE, source code,
+    // shell scripts) referenced by a link. Treated as regular File
+    // nodes so the canvas renders them solid (not ghost-stroked) and
+    // the inspector treats them as real files. `merge_filesystem_layer`
+    // would otherwise add these too, but only at depth <= the
+    // request's depth cap; emitting them here makes the resolution
+    // depth-independent.
+    for f in &referenced_disk_files {
+        nodes.insert(
+            f.clone(),
+            GraphNodeView::File {
+                id: f.clone(),
+                label: file_label(f),
+                path: f.clone(),
+                path_class: path_class_for_graph(&drive, f),
+                node_kind: None,
                 missing: false,
             },
         );
@@ -1071,10 +1136,14 @@ pub async fn api_backlinks(
         Ok(f) => f,
         Err(e) => return err_from(&e),
     };
-    let image_files = drive_image_files(&drive);
+    // Same resolver universe as `api_graph`: graph files + every
+    // regular on-disk file. Without this, `[link](LICENSE)` from a
+    // README would not show up in LICENSE's backlinks because the
+    // resolver couldn't tell that "LICENSE" was a real file.
+    let disk_files = drive_disk_files(&drive);
     let mut file_set: std::collections::BTreeSet<&str> = files.iter().map(String::as_str).collect();
-    for img in &image_files {
-        file_set.insert(img.as_str());
+    for f in &disk_files {
+        file_set.insert(f.as_str());
     }
 
     let mut out: Vec<ApiBacklinkEdge> = Vec::new();
@@ -1156,6 +1225,97 @@ mod tests {
                     | ("mention", GraphNodeView::Mention { .. })
             )
         })
+    }
+
+    #[test]
+    fn drive_disk_files_includes_non_markdown_targets() {
+        // The link resolver in `api_graph` walks the drive once via
+        // `drive_disk_files` and uses the result as the universe of
+        // valid link targets. Without this, a `[mit](LICENSE)` or
+        // `[code](src/lib.rs)` link from a markdown file would fall
+        // through to the ghost path, even though both files are
+        // sitting on disk. Pin the contract: every regular file the
+        // user might link to has to show up here.
+        let (_cfg, root, drive) = open_drive();
+        put(root.path(), "LICENSE", b"MIT\n");
+        put(root.path(), "src/lib.rs", b"pub fn x() {}\n");
+        put(root.path(), "scripts/build.sh", b"#!/bin/sh\n");
+        put(root.path(), "notes/a.md", b"# A\n");
+
+        let disk = drive_disk_files(&drive);
+        assert!(disk.contains("LICENSE"), "got {disk:?}");
+        assert!(disk.contains("src/lib.rs"));
+        assert!(disk.contains("scripts/build.sh"));
+        assert!(disk.contains("notes/a.md"));
+    }
+
+    #[test]
+    fn link_to_non_markdown_disk_file_resolves_to_real_file() {
+        // Regression for systacean-2: a markdown file linking to a
+        // non-graph regular file (LICENSE, src/lib.rs, ...) was being
+        // classified as a broken link, with a synthesized ghost
+        // File { missing: true } overriding the FS layer's real entry.
+        // After the fix, disk_files participates in file_set so
+        // ghost_set stays empty for the LICENSE case, and the
+        // referenced-disk-files set picks up a `File { missing: false }`
+        // node instead.
+        let (_cfg, root, drive) = open_drive();
+        // Use a wiki link so the dst lands on drive-rooted "LICENSE"
+        // rather than the source-relative "notes/LICENSE" that bare
+        // markdown semantics would produce.
+        put(root.path(), "notes/intro.md", b"# Intro\n\n[[LICENSE]]\n");
+        put(root.path(), "LICENSE", b"MIT\n");
+        drive.index_file("notes/intro.md").unwrap();
+
+        let graph = drive.graph().unwrap();
+        let edges = graph.neighbors("notes/intro.md").unwrap();
+        let link = edges
+            .iter()
+            .find(|e| matches!(e.kind, EdgeKind::Link))
+            .expect("indexed markdown link edge");
+        // chan-drive stores the verbatim authored target on the edge.
+        assert_eq!(link.dst, "LICENSE");
+
+        let disk = drive_disk_files(&drive);
+        assert!(disk.contains("LICENSE"), "got {disk:?}");
+
+        let graph_files = graph.files().unwrap();
+        let graph_file_set: std::collections::BTreeSet<&str> =
+            graph_files.iter().map(String::as_str).collect();
+        assert!(!graph_file_set.contains("LICENSE"));
+
+        // Mirror the file_set construction in api_graph: graph files
+        // plus every regular on-disk file. LICENSE has to land in the
+        // union so the resolver does not synthesize a ghost.
+        let mut file_set = graph_file_set.clone();
+        for f in &disk {
+            file_set.insert(f.as_str());
+        }
+        assert!(file_set.contains("LICENSE"));
+
+        // referenced_disk_files trigger: disk_files contains LICENSE,
+        // graph_file_set does not, and it is not an image. So the
+        // bug-fix branch in api_graph will emit a File { missing:
+        // false } node for it instead of the previous ghost.
+        assert!(disk.contains("LICENSE"));
+        assert!(!graph_file_set.contains("LICENSE"));
+        assert!(!is_image_path("LICENSE"));
+    }
+
+    #[test]
+    fn image_subset_picks_image_extensions_only() {
+        let mut disk = std::collections::BTreeSet::new();
+        disk.insert("notes/intro.md".to_string());
+        disk.insert("assets/logo.png".to_string());
+        disk.insert("assets/diagram.SVG".to_string());
+        disk.insert("LICENSE".to_string());
+        disk.insert("src/lib.rs".to_string());
+        let images = image_subset(&disk);
+        assert!(images.contains("assets/logo.png"));
+        assert!(images.contains("assets/diagram.SVG"));
+        assert!(!images.contains("notes/intro.md"));
+        assert!(!images.contains("LICENSE"));
+        assert!(!images.contains("src/lib.rs"));
     }
 
     #[test]
