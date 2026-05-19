@@ -109,3 +109,19 @@ Standard. Pre-push gate green. Coordinate with
 @@WebtestB for the deferred BCAST formal walkthrough —
 the test sequence above replaces theirs. Ping via
 `alex/event-fullstack-architect.md`.
+
+## 2026-05-19 06:28 BST — hand-off
+
+`fullstack-26` is committed and pushed on `main`.
+
+Commit:
+
+* `5806343` Drop terminal broadcast mute (fullstack-26)
+
+Gate run: `npm run test -- tabs`, `npm run check`,
+`npm run build`, and `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+Notes: removed per-tab broadcast mute state, the `Cmd+Shift+I` mute
+shortcut, the native bridge/help entry, and the in-terminal broadcast
+strip. BCAST is now binary group membership with the tab-strip pink
+indicator as the only visible state.

@@ -60,3 +60,7 @@ fullstack-24 landed: `a8b52a0` Promote survey follow-up to button (fullstack-24)
 ## 2026-05-19 06:26 BST
 
 online, starting fullstack-26 after fullstack-24 handoff.
+
+## 2026-05-19 06:28 BST
+
+fullstack-26 landed: `5806343` Drop terminal broadcast mute (fullstack-26). Gate green: `npm run test -- tabs`, `npm run check`, `npm run build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.

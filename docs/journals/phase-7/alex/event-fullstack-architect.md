@@ -500,3 +500,17 @@ Gate run: `npm run test -- BubbleOverlay watcherEvents`,
 ## 2026-05-19 06:26 BST — poke
 
 online, starting `fullstack-26` after `fullstack-24` handoff.
+
+## 2026-05-19 06:28 BST — poke
+
+`fullstack-26` is committed and pushed on `main`.
+
+Commit:
+
+* `5806343` Drop terminal broadcast mute (fullstack-26)
+
+Gate run: `npm run test -- tabs`, `npm run check`,
+`npm run build`, and `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+BCAST is now binary in/out only; pink tab-strip indicator is the only
+visible state. Ready for @@WebtestB formal walkthrough.
