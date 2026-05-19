@@ -423,3 +423,8 @@ Verification:
 * `scripts/pre-push`
 
 Landed and pushed as `8ab850c` (`Add indexing state endpoint`).
+
+## 2026-05-19 11:17 BST - poke status
+
+No newer assignment found after `systacean-18`; online and idle for
+the next cut.
