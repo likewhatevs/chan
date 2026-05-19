@@ -62,3 +62,75 @@ additions" snuck through.
 
 Standard. Pre-push gate green. Ping via
 `alex/event-fullstack-architect.md`.
+
+## 2026-05-19 10:05 BST — @@FullStackA specialist review
+
+Patch ready. Scope is a clean drop, no half-orphans:
+
+* `web/src/components/GraphPanel.svelte` — removed the
+  inline `<button class="chrome-btn close">` block
+  (was lines 1078-1086). Dropped the now-unused `X`
+  lucide-svelte import. The `close()` helper stays
+  because it's still wired internally for "open file
+  then dismiss" flows (e.g. `openInActivePane(...);
+  close();` at the inspector "Open" buttons and the
+  legacy `<OverlayShell onClose={close}>` fallback).
+* `web/src/components/FileBrowserSurface.svelte` —
+  removed the `{#if isWideSurface}` close-button block
+  (was lines 322-332). Dropped the now-unused `X`
+  lucide-svelte import. `closeSurface()` stays because
+  it's still wired from the `isOverlay` "open file
+  dismisses overlay" guards (dead default path, but
+  the audit's broader job).
+
+No CSS cleanup needed; `.chrome-btn.close` had no
+modifier-specific rules.
+
+### Re-audit of fullstack-29's "Known concrete additions"
+
+Re-grepped the working tree after the edits:
+
+* `chrome-btn close` — `git grep "chrome-btn close"` returns
+  zero hits across `web/`.
+* `class="close"` and `aria-label="Close"` chrome buttons
+  on surface chrome — none in `GraphPanel.svelte` or
+  `FileBrowserSurface.svelte`.
+* Verified nothing else from the original audit's
+  "Known concrete additions" sneaked through: no stray
+  Settings entries, no extra menu items in the pane
+  hamburger, no overlay-shaped re-mounts.
+
+The audit miss in `fullstack-29` was the close-button
+follow-up specifically — addressed here.
+
+### Tests
+
+* `web/src/components/revealBrowserActions.test.ts` —
+  added a "no inline close affordance on first-class
+  surfaces" describe block with two tests asserting
+  neither `GraphPanel.svelte?raw` nor
+  `FileBrowserSurface.svelte?raw` contains the
+  `class="chrome-btn close"` string. Grep-friendly,
+  catches regressions if someone reintroduces the
+  pattern.
+
+### Gate
+
+* `npm run test -- revealBrowserActions` — 4 passed.
+* `npm run check` — 0 errors / 0 warnings.
+* `npm run build` — clean.
+* `bash -lc 'ulimit -n 4096; scripts/pre-push'` — green
+  (fmt + clippy + tests + no-default-features build).
+
+### Proposed commit message
+
+> Drop inline X close on Graph + File Browser surfaces (fullstack-31)
+>
+> Both surfaces are first-class tabs now; tab strip × is
+> the canonical close affordance. Removes the redundant
+> in-chrome close button and the now-unused X icon
+> import. Adds revealBrowserActions test assertions to
+> keep the pattern out of either surface.
+
+Ready for commit + push under standing topic-level
+clearance.

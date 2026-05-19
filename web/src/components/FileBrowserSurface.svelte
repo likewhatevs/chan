@@ -15,7 +15,6 @@
     Search,
     Settings,
     Users,
-    X,
   } from "lucide-svelte";
   import {
     overlayMaximized,
@@ -319,17 +318,6 @@
     >
       {@render menuItems()}
     </HamburgerMenu>
-    {#if isWideSurface}
-      <button
-        type="button"
-        class="chrome-btn close"
-        onclick={closeSurface}
-        title="Close"
-        aria-label="Close"
-      >
-        <X size={14} strokeWidth={1.75} aria-hidden="true" />
-      </button>
-    {/if}
   </header>
   <div class="body">
     <div class="tree-wrap">

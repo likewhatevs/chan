@@ -20,7 +20,6 @@
     Maximize2,
     Minimize2,
     Settings,
-    X,
   } from "lucide-svelte";
   import {
     overlayMaximized,
@@ -1075,15 +1074,6 @@
         {@render menuItems()}
       </HamburgerMenu>
     </span>
-    <button
-      type="button"
-      class="chrome-btn close"
-      onclick={close}
-      title="Close"
-      aria-label="Close"
-    >
-      <X size={14} strokeWidth={1.75} aria-hidden="true" />
-    </button>
   </div>
 
   <div class="body">

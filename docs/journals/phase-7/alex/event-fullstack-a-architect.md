@@ -590,3 +590,8 @@ Summary: focus border color is now stored once on the window layout,
 serialized as `wc`, legacy per-pane `pc` colors are ignored on restore,
 and the pane hamburger order is now color → next/previous → split
 right/down → close.
+
+## 2026-05-19 09:55 BST — poke
+
+online, starting `fullstack-31` (recycled @@FullStackA session). Queue
+in numerical order: `fullstack-31`, `-32`, `-33`, `-36`, `-37`, `-38`.

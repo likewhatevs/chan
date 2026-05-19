@@ -96,3 +96,9 @@ online, starting fullstack-30 focus color + pane hamburger reorder.
 ## 2026-05-19 08:27 BST
 
 fullstack-30 landed: `95aaef5` Make pane focus color window-wide (fullstack-30). Gate green: `npm run test -- tabs Pane`, `npm run check`, `npm run build`, `npm run test`, and `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+## 2026-05-19 09:55 BST
+
+online, starting fullstack-31. Recycled @@FullStackA session
+inheriting the pre-split FullStack history. Queue (numerical
+order): fullstack-31, -32, -33, -36, -37, -38.
