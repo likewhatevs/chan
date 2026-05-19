@@ -545,14 +545,16 @@
       // their terminal-confirmation modal. Commit the draft first so
       // the confirmation runs against the layout the user just
       // shaped; the modal needs the normal app keyboard context.
+      // `fullstack-77`: kill-pane moved from `k` / `K` to
+      // `Backspace` — backspace = delete is the intuitive shape
+      // for "delete this pane" and frees `k` for a future binding.
       case "x":
       case "X":
         commitPaneMode();
         scheduleSessionSave();
         void closeTabsInPane(layout.activePaneId);
         return;
-      case "k":
-      case "K":
+      case "Backspace":
         commitPaneMode();
         scheduleSessionSave();
         void closePane(layout.activePaneId);

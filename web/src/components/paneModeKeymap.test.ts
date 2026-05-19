@@ -97,6 +97,20 @@ describe("Cmd+K pane mode rich-prompt binding (fullstack-50)", () => {
   });
 });
 
+describe("Cmd+K Backspace kill-pane (fullstack-77)", () => {
+  test("Backspace closes the focused pane; k no longer bound to kill-pane", () => {
+    // `fullstack-77`: kill-pane moved from `k` / `K` to
+    // `Backspace`. The old letter is unbound (not repurposed) so
+    // the previous case block disappears from the dispatch.
+    expect(app).toMatch(
+      /case "Backspace":[\s\S]*?commitPaneMode\(\);[\s\S]*?closePane\(layout\.activePaneId\);/,
+    );
+    expect(app).not.toMatch(
+      /case "k":\s*\n\s*case "K":\s*\n\s*commitPaneMode\(\);[\s\S]*?closePane\(layout\.activePaneId\);/,
+    );
+  });
+});
+
 describe("Cmd+K dock toggles (fullstack-69)", () => {
   test("< toggles the right-side file browser dock", () => {
     // Mapping per @@Alex's verbatim spec: less-than (right-facing

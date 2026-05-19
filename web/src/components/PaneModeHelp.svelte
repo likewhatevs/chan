@@ -99,7 +99,9 @@
       title: "Close",
       rows: [
         { caps: [{ label: "x", key: "x" }], action: "Close all tabs in pane" },
-        { caps: [{ label: "k", key: "k" }], action: "Kill pane" },
+        // `fullstack-77`: kill-pane moved from `k` to Backspace
+        // (delete-shaped key for the delete-shaped action).
+        { caps: [{ label: "⌫", key: "Backspace" }], action: "Kill pane" },
       ],
     },
     {
