@@ -1195,3 +1195,36 @@ Queue:
 Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 06:25 BST
+
+## 2026-05-19 06:40 BST — poke: fullstack-37 cut (last native dialog + guard)
+
+@@Alex remembered an old `alert()` call that fails
+silently in WKWebView (same class as the link-open bug
+from `fullstack-36`). Audited the SPA — the in-house
+dialog system is already in place (`uiConfirm` /
+`ConfirmModal` / `PromptModal`), and only one stray
+native call survives:
+
+* `web/src/editor/commands/format.ts:476` →
+  `window.prompt("URL")` for the insert-link flow.
+
+Cut as `fullstack-37`: replace that one + add an
+ESLint guard so future code can't reintroduce native
+dialogs. Also re-audit the "Rebuild index" path
+end-to-end to confirm nothing slipped through.
+
+Task: [../fullstack-a/fullstack-37.md](../fullstack-a/fullstack-37.md).
+
+Final A-lane queue:
+
+| # | Task           | Scope                                              |
+|---|----------------|----------------------------------------------------|
+| 1 | `fullstack-31` | inline X drop on Graph + File Browser              |
+| 2 | `fullstack-32` | Graph behavior + inspector "Open" rename           |
+| 3 | `fullstack-33` | editor indent guide at deep nesting                |
+| 4 | `fullstack-36` | desktop link open silent failure + no-browser fallback |
+| 5 | `fullstack-37` | last `window.prompt` + native-dialog ESLint guard  |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 06:40 BST
