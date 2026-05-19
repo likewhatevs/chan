@@ -33,7 +33,7 @@
     formatChord,
     renderTable,
   } from "../state/shortcuts";
-  import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-svelte";
+  import { ChevronLeft, ChevronRight, Locate, Pause, Play } from "lucide-svelte";
 
   type Props = {
     /// Right-click forwarder. Same handler the empty pane uses to
@@ -327,6 +327,118 @@
     }
   }
 
+  // ---- indexing chart pan / zoom (fullstack-b-4) --------------------------
+
+  /// SVG-space transform for the indexing graph. The chart used to
+  /// render at a fixed `viewBox="0 0 280 280"` and clipped any drive
+  /// whose hierarchy extended past the viewport. Wrapping the
+  /// edges + nodes groups in a transform-driven `<g>` plus a
+  /// pointer drag + wheel zoom on the SVG gives parity with the
+  /// main GraphCanvas's gestures, without dragging in the whole
+  /// d3-force / Canvas stack for a static hierarchical layout.
+  let chartTransform = $state({ tx: 0, ty: 0, scale: 1 });
+  // `$state` because the `class:panning={panStart !== null}` binding
+  // on the SVG needs to flip when a drag starts/ends.
+  let panStart = $state<{ x: number; y: number; tx: number; ty: number } | null>(null);
+  let chartSvg: SVGSVGElement | undefined = $state();
+
+  function recenterChart(): void {
+    chartTransform = { tx: 0, ty: 0, scale: 1 };
+  }
+
+  /// Resetting the transform whenever the user leaves the indexing
+  /// slide keeps the next return-to-slide-3 visit on a fitted view
+  /// rather than picking up wherever the user left it after a
+  /// minutes-long carousel rotation. Selection is scoped the same
+  /// way so a leftover highlight doesn't confuse the next visit.
+  $effect(() => {
+    if (slideIndex !== 2) {
+      recenterChart();
+      panStart = null;
+    }
+  });
+
+  /// Map a client-coords pointer event into SVG-viewBox coords so the
+  /// transform math runs in the same space as the node positions.
+  function chartLocalCoords(e: { clientX: number; clientY: number }): {
+    x: number;
+    y: number;
+  } {
+    if (!chartSvg) return { x: 0, y: 0 };
+    const rect = chartSvg.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return { x: 0, y: 0 };
+    return {
+      x: ((e.clientX - rect.left) * VIEW_SIZE) / rect.width,
+      y: ((e.clientY - rect.top) * VIEW_SIZE) / rect.height,
+    };
+  }
+
+  function onChartPointerDown(e: PointerEvent): void {
+    // Left button only. Right click stays available for the empty-
+    // pane context menu (it bubbles up through the carousel).
+    if (e.button !== 0) return;
+    // Pointerdown on a node: let the node's click handler win so
+    // selection still works. The threshold-less pan-start would
+    // otherwise capture the gesture and the click event never
+    // reaches the node.
+    const target = e.target as Element | null;
+    if (target?.closest(".node")) return;
+    e.preventDefault();
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    panStart = {
+      x: e.clientX,
+      y: e.clientY,
+      tx: chartTransform.tx,
+      ty: chartTransform.ty,
+    };
+  }
+
+  function onChartPointerMove(e: PointerEvent): void {
+    if (!panStart || !chartSvg) return;
+    const rect = chartSvg.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const xRatio = VIEW_SIZE / rect.width;
+    const yRatio = VIEW_SIZE / rect.height;
+    chartTransform = {
+      ...chartTransform,
+      tx: panStart.tx + (e.clientX - panStart.x) * xRatio,
+      ty: panStart.ty + (e.clientY - panStart.y) * yRatio,
+    };
+  }
+
+  function onChartPointerUp(e: PointerEvent): void {
+    if (!panStart) return;
+    try {
+      (e.currentTarget as Element).releasePointerCapture(e.pointerId);
+    } catch {
+      // Pointer may already be gone.
+    }
+    panStart = null;
+  }
+
+  function onChartWheel(e: WheelEvent): void {
+    e.preventDefault();
+    // stopPropagation so the surrounding carousel + page don't
+    // also scroll while the user is zooming the chart.
+    e.stopPropagation();
+    const p = chartLocalCoords(e);
+    // Wheel deltas vary by device (mouse ~100, trackpad ~3-15);
+    // map through exp(-delta * SENSITIVITY) for smooth across-
+    // device zoom. Matches GraphCanvas's tuning so the two views
+    // feel the same under the wheel.
+    const SENSITIVITY = 0.0015;
+    const factor = Math.exp(-e.deltaY * SENSITIVITY);
+    const k = Math.min(6, Math.max(0.5, chartTransform.scale * factor));
+    // Anchor the world point under the cursor across the zoom:
+    //   world = (svg - tx) / scale must be invariant, so
+    //   tx' = svg - (svg - tx) * (k / scale).
+    chartTransform = {
+      tx: p.x - ((p.x - chartTransform.tx) * k) / chartTransform.scale,
+      ty: p.y - ((p.y - chartTransform.ty) * k) / chartTransform.scale,
+      scale: k,
+    };
+  }
+
   // ---- carousel state ----------------------------------------------------
 
   const slideCount = 3;
@@ -525,55 +637,81 @@
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <svg
+            bind:this={chartSvg}
             class="indexing-graph"
+            class:panning={panStart !== null}
             viewBox={`0 0 ${VIEW_SIZE} ${VIEW_SIZE}`}
             role="img"
             aria-label="directory indexing graph"
+            onpointerdown={onChartPointerDown}
+            onpointermove={onChartPointerMove}
+            onpointerup={onChartPointerUp}
+            onpointercancel={onChartPointerUp}
+            onwheel={onChartWheel}
           >
-            <g class="edges">
-              {#each edges as e, i (i)}
-                <line
-                  x1={e.fromX}
-                  y1={e.fromY}
-                  x2={e.toX}
-                  y2={e.toY}
-                  stroke="var(--border)"
-                  stroke-width="1"
-                  opacity="0.6"
-                />
-              {/each}
-            </g>
-            <g class="nodes">
-              {#each placed as p (p.path)}
-                {@const node = hierarchy?.byPath.get(p.path)}
-                {#if node}
-                  <g
-                    class="node"
-                    class:pulsate={node.state === "indexing"}
-                    class:selected={selectedPath === p.path}
-                    transform={`translate(${p.x} ${p.y})`}
-                    onclick={() =>
-                      (selectedPath = selectedPath === p.path ? null : p.path)}
-                  >
-                    <circle
-                      r={p.depth === 0 ? 8 : 5}
-                      fill={nodeFill(node.state)}
-                      stroke="var(--bg)"
-                      stroke-width="1.5"
-                    />
-                    {#if labeledPaths.has(p.path)}
-                      <text
-                        x={0}
-                        y={(p.depth === 0 ? -14 : -10)}
-                        text-anchor="middle"
-                        class="node-label"
-                      >{basename(p.path) || "/"}</text>
-                    {/if}
-                  </g>
-                {/if}
-              {/each}
+            <!-- `fullstack-b-4`: edges + nodes wrapped in a
+                 transform-driven group so the user can drag-pan and
+                 wheel-zoom into a clipped hierarchy. Anchors at the
+                 same SVG origin as before (the layout is centered
+                 inside `VIEW_SIZE`), so the default transform shows
+                 the previously-rendered framing unchanged. -->
+            <g
+              transform={`translate(${chartTransform.tx} ${chartTransform.ty}) scale(${chartTransform.scale})`}
+            >
+              <g class="edges">
+                {#each edges as e, i (i)}
+                  <line
+                    x1={e.fromX}
+                    y1={e.fromY}
+                    x2={e.toX}
+                    y2={e.toY}
+                    stroke="var(--border)"
+                    stroke-width="1"
+                    opacity="0.6"
+                  />
+                {/each}
+              </g>
+              <g class="nodes">
+                {#each placed as p (p.path)}
+                  {@const node = hierarchy?.byPath.get(p.path)}
+                  {#if node}
+                    <g
+                      class="node"
+                      class:pulsate={node.state === "indexing"}
+                      class:selected={selectedPath === p.path}
+                      transform={`translate(${p.x} ${p.y})`}
+                      onclick={() =>
+                        (selectedPath = selectedPath === p.path ? null : p.path)}
+                    >
+                      <circle
+                        r={p.depth === 0 ? 8 : 5}
+                        fill={nodeFill(node.state)}
+                        stroke="var(--bg)"
+                        stroke-width="1.5"
+                      />
+                      {#if labeledPaths.has(p.path)}
+                        <text
+                          x={0}
+                          y={(p.depth === 0 ? -14 : -10)}
+                          text-anchor="middle"
+                          class="node-label"
+                        >{basename(p.path) || "/"}</text>
+                      {/if}
+                    </g>
+                  {/if}
+                {/each}
+              </g>
             </g>
           </svg>
+          <button
+            class="recenter-btn"
+            type="button"
+            onclick={recenterChart}
+            aria-label="recenter graph"
+            title="Recenter graph"
+          >
+            <Locate size={14} strokeWidth={1.75} aria-hidden="true" />
+          </button>
           <div class="indexing-legend" aria-hidden="true">
             <span class="legend-pair">
               <span class="dot" style="background: var(--accent);"></span>
@@ -803,9 +941,43 @@
     width: min(100%, 320px);
     height: auto;
     aspect-ratio: 1 / 1;
+    /* `fullstack-b-4`: drag-to-pan + wheel-zoom on the chart.
+       Hint the gesture with cursor + suppress browser scroll/zoom
+       pinch on touch. The svg owns the gesture (setPointerCapture)
+       and the wheel listener stopPropagation()s. */
+    cursor: grab;
+    touch-action: none;
+  }
+  .indexing-graph.panning {
+    cursor: grabbing;
   }
   .indexing-graph .node {
     cursor: pointer;
+  }
+  /* Recenter affordance, matching the carousel-controls icon style:
+     subtle when idle, full-opacity on hover/focus. Pinned over the
+     bottom-right of the chart so it doesn't displace the layout. */
+  .recenter-btn {
+    position: absolute;
+    right: 8px;
+    bottom: 32px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    padding: 4px;
+    border-radius: 4px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.55;
+    transition: opacity 120ms ease, background 120ms ease;
+  }
+  .recenter-btn:hover,
+  .recenter-btn:focus-visible {
+    opacity: 1;
+    color: var(--text);
+    background: var(--hover-bg, var(--bg-elev));
   }
   .indexing-graph .node-label {
     font-size: 10px;

@@ -90,15 +90,13 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   ---
   Settings                Cmd+,
   Terminal rich prompt    Alt+Space
+  New terminal            Cmd+Alt+T   (macOS only on web; native everywhere)
   Dismiss overlay         Esc
 
   Panes
   -----
-  Enter Pane Mode         Cmd+K
-
-  File
-  ----
-  Save                    Cmd+S
+  Enter Hybrid NAV        Cmd+.
+  Flip Hybrid             Cmd+. Tab
 
   Tabs
   ----
