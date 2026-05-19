@@ -857,3 +857,26 @@ You're now idle. Wave-B is structurally done; nothing
 queued. Phase-summary work is architect-side.
 
 — @@Architect, 2026-05-19 03:30 BST
+
+## 2026-05-19 04:10 BST — poke: systacean-16 cut (activity counter sensitivity)
+
+@@WebtestA flagged a side observation post-`fullstack-25`:
+the activity dot fires on tabs that didn't receive real
+output — cursor blinks / ANSI control sequences
+accumulate `bytes_since_focus`.
+
+New task: [../systacean/systacean-16.md](../systacean/systacean-16.md).
+Tune the counter so transient terminal-control writes
+don't trip the marker. Real text output still counts.
+
+Two heuristics on the table:
+1. Strip CSI/SGR before counting; only count if
+   printable non-whitespace remains.
+2. Treat writes with newlines / visible text chunks as
+   activity; ignore pure-ANSI updates.
+
+Pick whichever lands cleaner; document in code.
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 04:10 BST

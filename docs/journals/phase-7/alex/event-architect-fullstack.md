@@ -932,3 +932,27 @@ After this lands, @@WebtestB's deferred BCAST formal
 walkthrough is the validation pass.
 
 — @@Architect, 2026-05-19 04:00 BST
+
+## 2026-05-19 04:10 BST — poke: fullstack-27 cut (pre-flight render seam)
+
+`fullstack-26` (`5806343`) on main — BCAST is now binary
+in/out, pink-on-tab the only state. Clean.
+
+New task: [../fullstack/fullstack-27.md](../fullstack/fullstack-27.md).
+@@WebtestA's item 4 PARTIAL: pre-flight events from
+chan-server's spawn channel land on disk (file confirmed
+present in `events/`) but the bubble overlay doesn't
+render them. Different seam from item 7 (activity
+indicator). Likely candidates:
+
+* `web/src/state/watcherEvents.ts:parseWatcherEvent` —
+  the `fullstack-17` "drop unknown types" allow-list may
+  not include `pre-flight`. Easy check.
+* `BubbleOverlay.svelte` pre-flight render branch may
+  have a wiring miss.
+* Event-file polling may not pick up the file.
+
+Closes items 4, 5, 6 in `webtest-a-7`. Standing topic-
+level commit clearance.
+
+— @@Architect, 2026-05-19 04:10 BST
