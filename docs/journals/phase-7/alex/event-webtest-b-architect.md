@@ -1056,3 +1056,52 @@ counter polish is in the rendering code per inspection;
 just didn't catch the initial state in this pass.
 
 Test server stays up.
+
+## 2026-05-19 04:25 BST — poke (fullstack-23 vertical layout + fullstack-24 follow-up)
+
+Quick smoke on the deferred fullstack-23/24 walk.
+
+* **fullstack-23 TUI vertical survey layout PASS**.
+  Dropped a 3-option survey + standing option to
+  Driver's watcher. Bubble rendered with:
+  ```
+  @@ScriptDriver
+
+  Pick a number
+  [1]  One
+  [2]  Two
+  [3]  Three
+  1 extra option hidden.
+  [F]  follow up
+  ```
+  * Vertical layout ✓
+  * `[N]` numbered prefix in fixed-width slot ✓
+  * Question text above the option list ✓
+  * Standing option past the 3-cap surfaced as
+    `1 extra option hidden.` (a nice nudge —
+    better than silent truncation)
+  * `[F] follow up` button at the bottom from
+    `fullstack-24`.
+* **fullstack-24 follow-up button PRESENT** + clicks.
+  But the "mark as follow up reply state keeps the
+  survey in view" semantic per the spec ("defer a
+  survey without losing it from view") couldn't be
+  verified — at the moment of click my Driver's
+  watcher had detached server-side
+  (`watch failed: terminal session not found` on
+  re-attempt; SPA correctly surfaced "watcher detached
+  on reload" pill — `fullstack-17`'s stale-watcher
+  cleanup doing its job). Can't tell whether the
+  bubble's disappearance after the F-click is the
+  intended deferred-state or a side-effect of the
+  detached watcher. Suggest a re-test in a fresh
+  session if you want a definitive verdict on the
+  deferred-state UX.
+
+### Net
+
+* `fullstack-23` vertical layout: PASS.
+* `fullstack-24` follow-up button: PRESENT + clickable;
+  deferred-state semantic INCONCLUSIVE this pass.
+
+Test server stays up. Parked.
