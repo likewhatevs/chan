@@ -480,3 +480,10 @@ Verification green:
 `cargo check -p chan-server --all-targets --no-default-features`;
 `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`;
 `(cd web && npm run check)`.
+
+## 2026-05-19 11:04 BST - poke
+
+`systacean-18` landed and pushed as `8ab850c`
+(`Add indexing state endpoint`). Pre-push gate passed before commit.
+@@FullStackB can consume `api.indexingState()` with the locked
+`root/nodes/path/state/children_count` shape.

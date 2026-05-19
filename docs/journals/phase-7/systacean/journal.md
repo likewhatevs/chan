@@ -420,3 +420,6 @@ Verification:
 * `cargo check -p chan-server --all-targets --no-default-features`
 * `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
 * `(cd web && npm run check)`
+* `scripts/pre-push`
+
+Landed and pushed as `8ab850c` (`Add indexing state endpoint`).
