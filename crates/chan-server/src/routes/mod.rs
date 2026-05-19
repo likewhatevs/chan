@@ -44,6 +44,7 @@ pub use search::{api_index_rebuild, api_index_status, api_search_content, api_se
 pub use sessions::{api_delete_session, api_get_session, api_list_sessions, api_put_session};
 pub use storage::api_storage_reset;
 pub use terminal::{
-    api_set_terminal_watcher, api_terminal_event_reply, api_terminal_ws, api_unset_terminal_watcher,
+    api_create_terminal, api_delete_terminal, api_restart_terminal, api_set_terminal_watcher,
+    api_terminal_event_reply, api_terminal_ws, api_unset_terminal_watcher,
 };
 pub use ws::ws_upgrade;

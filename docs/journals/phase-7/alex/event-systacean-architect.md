@@ -331,3 +331,22 @@ completed `systacean-10` / `systacean-11` queue.
 ## 2026-05-19 04:33 BST - poke
 
 Online and ready; no newer @@Architect assignment found.
+
+## 2026-05-19 04:49 BST - poke
+
+Online, starting
+[../systacean/systacean-12.md](../systacean/systacean-12.md).
+
+## 2026-05-19 04:58 BST - poke
+
+`systacean-12` is implemented and gate-green. It adds the HTTP
+terminal control channel (`POST /api/terminals`,
+`POST /api/terminals/:session/restart`, `DELETE /api/terminals/:session`)
+with stored command/env restart semantics and optional
+`orchestrator_session` pre-flight event emission for FullStack.
+
+Verification:
+
+* `cargo test -p chan-server --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `scripts/pre-push`

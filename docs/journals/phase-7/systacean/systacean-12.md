@@ -122,3 +122,32 @@ Standard. Pre-push gate green. Coordinate with
 @@FullStack on the endpoint shape before they build the
 spawn UI. Ping via
 `alex/event-systacean-architect.md`.
+
+## 2026-05-19 04:58 BST - ready to land
+
+Implemented the chan-server HTTP terminal control channel.
+
+Endpoints:
+
+* `POST /api/terminals` accepts `{ name, command, env }` and returns
+  `201 { session, tab_label }`.
+* `POST /api/terminals/:session/restart` respawns the same session id
+  with the stored name, command, env, and terminal size.
+* `DELETE /api/terminals/:session` closes the session.
+
+Notes for @@FullStack:
+
+* `orchestrator_session` is accepted as an optional extra body field.
+  When it names an active terminal watcher, login/setup matches from
+  the spawned PTY write a `pre-flight` event into that watcher dir.
+* The backend creates the PTY session and preserves the tab label for
+  watcher dispatch. The visible tab insertion in the active pane stays
+  with `fullstack-20`.
+* Agent commands are launched through the platform shell (`-lc` on
+  Unix), so the body command is a CLI string rather than an argv array.
+
+Verification:
+
+* `cargo test -p chan-server --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `scripts/pre-push`

@@ -247,3 +247,17 @@ Commit:
 New Wave-B assignment received. Starting
 [systacean-12.md](systacean-12.md): HTTP agent control
 channel for terminal spawn / restart / close.
+
+## 2026-05-19 04:58 BST - systacean-12 ready
+
+Implemented and gate-verified the HTTP terminal control channel.
+
+Notes:
+
+* [systacean-12.md](systacean-12.md#2026-05-19-0458-bst---ready-to-land)
+
+Verification:
+
+* `cargo test -p chan-server --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `scripts/pre-push`

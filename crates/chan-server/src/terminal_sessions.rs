@@ -4,7 +4,7 @@
 //! replay ring, and lifecycle policy live here so browser reloads can
 //! detach and reattach without killing the shell.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
@@ -54,6 +54,16 @@ pub struct CreateOptions {
     pub window_id: Option<String>,
     pub mcp_env: bool,
     pub cwd: Option<PathBuf>,
+    pub command: Option<String>,
+    pub env: BTreeMap<String, String>,
+    pub preflight: Option<PreflightConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreflightConfig {
+    pub dir: PathBuf,
+    pub from: String,
+    pub to: String,
 }
 
 #[derive(Debug)]
@@ -162,6 +172,35 @@ impl Registry {
             Session::spawn(id.clone(), self.config.clone(), opts).map_err(CreateError::Spawn)?;
         sessions.insert(id.clone(), session.clone());
         Ok(session.attach(Some(0)))
+    }
+
+    pub fn restart(&self, id: &str) -> Result<bool, CreateError> {
+        let old = self
+            .sessions
+            .lock()
+            .expect("terminal registry poisoned")
+            .get(id)
+            .cloned();
+        let Some(old) = old else {
+            return Ok(false);
+        };
+        if old.closed.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
+        let opts = old.restart_options();
+        let session = Session::spawn(id.to_string(), self.config.clone(), opts)
+            .map_err(CreateError::Spawn)?;
+        let mut sessions = self.sessions.lock().expect("terminal registry poisoned");
+        match sessions.get(id) {
+            Some(current) if Arc::ptr_eq(current, &old) => {
+                sessions.insert(id.to_string(), session);
+                drop(sessions);
+                old.close(CloseReason::Explicit);
+                Ok(true)
+            }
+            Some(_) => Ok(false),
+            None => Ok(false),
+        }
     }
 
     pub fn attach(&self, id: &str, since: Option<u64>) -> Option<AttachHandle> {
@@ -337,6 +376,30 @@ impl Registry {
         dir
     }
 
+    pub fn watcher_preflight_config(&self, id: &str, from: String) -> Option<PreflightConfig> {
+        let session = self
+            .sessions
+            .lock()
+            .expect("terminal registry poisoned")
+            .get(id)
+            .cloned()?;
+        if session
+            .watcher
+            .lock()
+            .expect("terminal watcher poisoned")
+            .is_none()
+        {
+            return None;
+        }
+        let dir = session
+            .watcher_dir
+            .lock()
+            .expect("terminal watcher dir poisoned")
+            .clone()?;
+        let to = session.tab_name.clone().unwrap_or_else(|| id.to_string());
+        Some(PreflightConfig { dir, from, to })
+    }
+
     pub fn watcher_dropped_events(&self) -> u64 {
         self.watcher_dropped_events.load(Ordering::Relaxed)
     }
@@ -452,6 +515,7 @@ struct Session {
     tab_name: Option<String>,
     window_id: Option<String>,
     drive_root: PathBuf,
+    spawn_opts: CreateOptions,
     child_pid: Option<u32>,
     command_tx: std::sync::mpsc::Sender<PtyCommand>,
     output_tx: broadcast::Sender<SessionEvent>,
@@ -464,6 +528,7 @@ struct Session {
     alt_screen_tail: Mutex<Vec<u8>>,
     watcher: Mutex<Option<EventWatcherHandle>>,
     watcher_dir: Mutex<Option<PathBuf>>,
+    preflight: Mutex<Option<PreflightMonitor>>,
     closed: AtomicBool,
 }
 
@@ -471,9 +536,12 @@ impl Session {
     fn spawn(id: String, config: RegistryConfig, opts: CreateOptions) -> anyhow::Result<Arc<Self>> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(opts.size)?;
-        let mut cmd = CommandBuilder::new_default_prog();
+        let mut cmd = command_builder(opts.command.as_deref());
         let cwd = opts.cwd.unwrap_or_else(|| config.drive_root.clone());
-        cmd.cwd(cwd);
+        cmd.cwd(&cwd);
+        for (key, value) in &opts.env {
+            cmd.env(key, value);
+        }
         if let Some(home) = terminal_home_dir() {
             cmd.env("HOME", &home);
             #[cfg(windows)]
@@ -522,6 +590,16 @@ impl Session {
             tab_name,
             window_id,
             drive_root: config.drive_root.clone(),
+            spawn_opts: CreateOptions {
+                size: opts.size,
+                tab_name: None,
+                window_id: None,
+                mcp_env: opts.mcp_env,
+                cwd: Some(cwd),
+                command: opts.command,
+                env: opts.env,
+                preflight: opts.preflight.clone(),
+            },
             child_pid,
             command_tx,
             output_tx,
@@ -534,6 +612,7 @@ impl Session {
             alt_screen_tail: Mutex::new(Vec::new()),
             watcher: Mutex::new(None),
             watcher_dir: Mutex::new(None),
+            preflight: Mutex::new(opts.preflight.map(PreflightMonitor::new)),
             closed: AtomicBool::new(false),
         });
 
@@ -670,6 +749,14 @@ impl Session {
         path_inside_root(&cwd, &self.drive_root).then_some(cwd)
     }
 
+    fn restart_options(&self) -> CreateOptions {
+        let mut opts = self.spawn_opts.clone();
+        opts.size = *self.winsize.lock().expect("terminal winsize poisoned");
+        opts.tab_name = self.tab_name.clone();
+        opts.window_id = self.window_id.clone();
+        opts
+    }
+
     fn close(&self, reason: CloseReason) {
         if self.closed.swap(true, Ordering::Relaxed) {
             return;
@@ -693,6 +780,22 @@ impl Session {
         self.last_activity
             .store(now_unix_secs() as i64, Ordering::Relaxed);
         self.update_alt_screen(bytes);
+        let preflight = {
+            let mut monitor = self.preflight.lock().expect("terminal preflight poisoned");
+            let event = monitor.as_mut().and_then(|monitor| monitor.observe(bytes));
+            let exhausted = monitor
+                .as_ref()
+                .is_some_and(|monitor| monitor.lines_seen >= 8);
+            if event.is_some() || exhausted {
+                monitor.take();
+            }
+            event
+        };
+        if let Some(preflight) = preflight {
+            if let Err(e) = write_preflight_event(&preflight) {
+                tracing::warn!("failed to write terminal pre-flight event: {e}");
+            }
+        }
         let end_seq = {
             let mut ring = self.ring.lock().expect("terminal ring poisoned");
             ring.push(bytes);
@@ -794,6 +897,125 @@ enum PtyCommand {
     Resize(PtySize),
     Redraw,
     Kill,
+}
+
+fn command_builder(command: Option<&str>) -> CommandBuilder {
+    let Some(command) = command.map(str::trim).filter(|command| !command.is_empty()) else {
+        return CommandBuilder::new_default_prog();
+    };
+    #[cfg(windows)]
+    {
+        let mut cmd = CommandBuilder::new("cmd");
+        cmd.args(["/C", command]);
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
+        let mut cmd = CommandBuilder::new(shell);
+        cmd.args(["-lc", command]);
+        cmd
+    }
+}
+
+#[derive(Debug)]
+struct PreflightMonitor {
+    config: PreflightConfig,
+    pending: String,
+    lines_seen: usize,
+}
+
+#[derive(Debug)]
+struct PreflightEvent {
+    config: PreflightConfig,
+    line: String,
+}
+
+impl PreflightMonitor {
+    fn new(config: PreflightConfig) -> Self {
+        Self {
+            config,
+            pending: String::new(),
+            lines_seen: 0,
+        }
+    }
+
+    fn observe(&mut self, bytes: &[u8]) -> Option<PreflightEvent> {
+        self.pending.push_str(&String::from_utf8_lossy(bytes));
+        while let Some(pos) = self.pending.find('\n') {
+            let mut line: String = self.pending.drain(..=pos).collect();
+            line = line.trim_matches(&['\r', '\n'][..]).to_string();
+            self.lines_seen += 1;
+            if preflight_line_matches(&line) {
+                return Some(PreflightEvent {
+                    config: self.config.clone(),
+                    line,
+                });
+            }
+            if self.lines_seen >= 8 {
+                return None;
+            }
+        }
+        if self.pending.len() > 4096 {
+            self.lines_seen += 1;
+            let line = std::mem::take(&mut self.pending);
+            if preflight_line_matches(&line) {
+                return Some(PreflightEvent {
+                    config: self.config.clone(),
+                    line,
+                });
+            }
+        }
+        None
+    }
+}
+
+fn preflight_line_matches(line: &str) -> bool {
+    let line = line.to_ascii_lowercase();
+    [
+        "please log in",
+        "authentication required",
+        "not authenticated",
+        "gemini setup required",
+        "claude setup",
+        "login required",
+    ]
+    .iter()
+    .any(|needle| line.contains(needle))
+}
+
+#[derive(Serialize)]
+struct PreflightEventBody<'a> {
+    id: String,
+    #[serde(rename = "type")]
+    event_type: &'static str,
+    from: &'a str,
+    to: &'a str,
+    note: &'a str,
+}
+
+fn write_preflight_event(event: &PreflightEvent) -> std::io::Result<()> {
+    let id = format!("pre-flight-{:016x}", rand::random::<u64>());
+    let body = PreflightEventBody {
+        id: id.clone(),
+        event_type: "pre-flight",
+        from: &event.config.from,
+        to: &event.config.to,
+        note: &event.line,
+    };
+    let bytes = serde_json::to_vec(&body)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+    let final_path = event.config.dir.join(format!("{id}.md"));
+    let tmp_path = event
+        .config
+        .dir
+        .join(format!(".{id}-{:016x}.tmp", rand::random::<u64>()));
+    let result = (|| {
+        std::fs::write(&tmp_path, bytes)?;
+        std::fs::rename(&tmp_path, &final_path)
+    })();
+    let _ = std::fs::remove_file(&tmp_path);
+    result
 }
 
 fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
@@ -979,6 +1201,16 @@ mod tests {
             tab_name: None,
             window_id: None,
             drive_root: PathBuf::from("/"),
+            spawn_opts: CreateOptions {
+                size: test_size(),
+                tab_name: None,
+                window_id: None,
+                mcp_env: true,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
+            },
             child_pid: None,
             command_tx,
             output_tx,
@@ -991,6 +1223,7 @@ mod tests {
             alt_screen_tail: Mutex::new(Vec::new()),
             watcher: Mutex::new(None),
             watcher_dir: Mutex::new(None),
+            preflight: Mutex::new(None),
             closed: AtomicBool::new(false),
         })
     }
@@ -1121,6 +1354,9 @@ mod tests {
                 window_id: None,
                 mcp_env: true,
                 cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
             })
             .unwrap();
         let id = handle.id().to_string();
@@ -1141,6 +1377,9 @@ mod tests {
                 window_id: None,
                 mcp_env: true,
                 cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
             })
             .unwrap();
         let err = registry
@@ -1150,6 +1389,9 @@ mod tests {
                 window_id: None,
                 mcp_env: true,
                 cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
             })
             .unwrap_err();
         assert!(matches!(err, CreateError::Capped));
@@ -1165,6 +1407,9 @@ mod tests {
                 window_id: Some("window-a".into()),
                 mcp_env: true,
                 cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
             })
             .unwrap();
         let first_id = first.id().to_string();
@@ -1179,6 +1424,9 @@ mod tests {
                     window_id: Some("window-a".into()),
                     mcp_env: true,
                     cwd: None,
+                    command: None,
+                    env: Default::default(),
+                    preflight: None,
                 },
             )
             .unwrap();
@@ -1198,6 +1446,9 @@ mod tests {
                 window_id: Some("window-a".into()),
                 mcp_env: true,
                 cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
             })
             .unwrap();
         let second = registry
@@ -1207,6 +1458,9 @@ mod tests {
                 window_id: Some("window-a".into()),
                 mcp_env: true,
                 cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
             })
             .unwrap();
 
@@ -1220,6 +1474,9 @@ mod tests {
                     window_id: Some("window-a".into()),
                     mcp_env: true,
                     cwd: None,
+                    command: None,
+                    env: Default::default(),
+                    preflight: None,
                 },
             )
             .unwrap();
@@ -1242,6 +1499,9 @@ mod tests {
                 window_id: Some("window-a".into()),
                 mcp_env: true,
                 cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
             })
             .unwrap();
         let id = handle.id().to_string();
@@ -1267,6 +1527,9 @@ mod tests {
                 window_id: None,
                 mcp_env: true,
                 cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
             })
             .unwrap();
 
@@ -1324,6 +1587,9 @@ mod tests {
                 window_id: None,
                 mcp_env: true,
                 cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
             })
             .unwrap();
         let id = handle.id().to_string();
@@ -1347,6 +1613,9 @@ mod tests {
                 window_id: None,
                 mcp_env: true,
                 cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
             })
             .unwrap();
         let mut second = registry.attach(first.id(), Some(first.seq)).unwrap();
@@ -1380,6 +1649,9 @@ mod tests {
                 window_id: None,
                 mcp_env: true,
                 cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
             })
             .unwrap();
         let mut second = registry.attach(first.id(), Some(first.seq)).unwrap();

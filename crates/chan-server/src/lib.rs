@@ -46,15 +46,16 @@ pub use routes::{build_fs_graph, FsGraphResponse, FsGraphScope};
 use auth::{auth_middleware, load_or_create_token};
 use bus::{make_progress_broadcast, make_watch_bridge};
 use routes::{
-    api_backlinks, api_build_info, api_cloud_drives, api_create_file, api_delete_file,
-    api_delete_session, api_fs_graph, api_get_config, api_get_contacts, api_get_drive,
-    api_get_server_config, api_get_session, api_graph, api_headings, api_health, api_index_rebuild,
-    api_index_status, api_inspector, api_language_graph, api_link_targets, api_links,
-    api_list_files, api_list_sessions, api_move, api_patch_config, api_patch_drive,
-    api_patch_server_config, api_post_attachment, api_post_contacts_import, api_put_session,
-    api_read_file, api_report_file, api_report_prefix, api_resolve_link, api_search_content,
-    api_search_files, api_set_terminal_watcher, api_storage_reset, api_terminal_event_reply,
-    api_terminal_ws, api_unset_terminal_watcher, api_write_file, ws_upgrade,
+    api_backlinks, api_build_info, api_cloud_drives, api_create_file, api_create_terminal,
+    api_delete_file, api_delete_session, api_delete_terminal, api_fs_graph, api_get_config,
+    api_get_contacts, api_get_drive, api_get_server_config, api_get_session, api_graph,
+    api_headings, api_health, api_index_rebuild, api_index_status, api_inspector,
+    api_language_graph, api_link_targets, api_links, api_list_files, api_list_sessions, api_move,
+    api_patch_config, api_patch_drive, api_patch_server_config, api_post_attachment,
+    api_post_contacts_import, api_put_session, api_read_file, api_report_file, api_report_prefix,
+    api_resolve_link, api_restart_terminal, api_search_content, api_search_files,
+    api_set_terminal_watcher, api_storage_reset, api_terminal_event_reply, api_terminal_ws,
+    api_unset_terminal_watcher, api_write_file, ws_upgrade,
 };
 use signal::{now_unix_secs, print_qr_if_tty, spawn_idle_watcher, spawn_signal_watcher};
 use state::{AppState, DriveCell};
@@ -77,7 +78,7 @@ use std::time::Duration;
 
 use axum::extract::DefaultBodyLimit;
 use axum::middleware;
-use axum::routing::{get, patch, post};
+use axum::routing::{delete, get, patch, post};
 use axum::Router;
 use chan_drive::{Drive, Library, SearchAggression, WatchEvent};
 use tokio::net::TcpListener;
@@ -832,6 +833,12 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/health", get(api_health))
         .route("/api/terminal/ws", get(api_terminal_ws))
+        .route("/api/terminals", post(api_create_terminal))
+        .route("/api/terminals/:session", delete(api_delete_terminal))
+        .route(
+            "/api/terminals/:session/restart",
+            post(api_restart_terminal),
+        )
         .route(
             "/api/terminal/:session/watcher",
             post(api_set_terminal_watcher).delete(api_unset_terminal_watcher),

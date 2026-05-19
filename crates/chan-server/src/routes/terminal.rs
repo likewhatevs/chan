@@ -1,5 +1,6 @@
-//! GET /api/terminal/ws - interactive PTY-backed terminal sessions.
+//! Interactive PTY-backed terminal sessions and terminal control APIs.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -40,6 +41,21 @@ pub struct TerminalQuery {
 #[derive(Debug, Deserialize)]
 pub struct WatcherBody {
     path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateTerminalBody {
+    name: String,
+    command: String,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
+    orchestrator_session: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateTerminalResponse {
+    session: String,
+    tab_label: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -194,6 +210,107 @@ pub async fn api_unset_terminal_watcher(
     }
 }
 
+pub async fn api_create_terminal(
+    State(state): State<Arc<AppState>>,
+    body: Result<Json<CreateTerminalBody>, JsonRejection>,
+) -> Response {
+    if state.tunnel_public {
+        return err_tunnel_public_locked();
+    }
+    let Json(body) = match body {
+        Ok(body) => body,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("invalid terminal create: {e}"),
+            )
+                .into_response()
+        }
+    };
+    let name = match normalize_terminal_name(&body.name) {
+        Some(name) => name,
+        None => return (StatusCode::BAD_REQUEST, "terminal name is required").into_response(),
+    };
+    let command = match normalize_terminal_command(&body.command) {
+        Some(command) => command,
+        None => return (StatusCode::BAD_REQUEST, "terminal command is required").into_response(),
+    };
+    if let Err(message) = validate_terminal_env(&body.env) {
+        return (StatusCode::BAD_REQUEST, message).into_response();
+    }
+    let preflight = body.orchestrator_session.as_deref().and_then(|id| {
+        state
+            .terminal_sessions
+            .watcher_preflight_config(id, name.clone())
+    });
+    let opts = CreateOptions {
+        size: pty_size(None, None),
+        tab_name: Some(name.clone()),
+        window_id: None,
+        mcp_env: true,
+        cwd: None,
+        command: Some(command),
+        env: body.env,
+        preflight,
+    };
+    match state.terminal_sessions.create(opts) {
+        Ok(handle) => (
+            StatusCode::CREATED,
+            Json(CreateTerminalResponse {
+                session: handle.id().to_string(),
+                tab_label: name,
+            }),
+        )
+            .into_response(),
+        Err(CreateError::Capped) => {
+            (StatusCode::CONFLICT, "terminal session cap reached").into_response()
+        }
+        Err(CreateError::Spawn(e)) => (
+            StatusCode::BAD_REQUEST,
+            format!("failed to start terminal: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn api_restart_terminal(
+    State(state): State<Arc<AppState>>,
+    AxumPath(session): AxumPath<String>,
+) -> Response {
+    if state.tunnel_public {
+        return err_tunnel_public_locked();
+    }
+    match state.terminal_sessions.restart(&session) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "terminal session not found").into_response(),
+        Err(CreateError::Capped) => {
+            (StatusCode::CONFLICT, "terminal session cap reached").into_response()
+        }
+        Err(CreateError::Spawn(e)) => (
+            StatusCode::BAD_REQUEST,
+            format!("failed to restart terminal: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn api_delete_terminal(
+    State(state): State<Arc<AppState>>,
+    AxumPath(session): AxumPath<String>,
+) -> Response {
+    if state.tunnel_public {
+        return err_tunnel_public_locked();
+    }
+    if state
+        .terminal_sessions
+        .close(&session, CloseReason::Explicit)
+    {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        (StatusCode::NOT_FOUND, "terminal session not found").into_response()
+    }
+}
+
 pub async fn api_terminal_event_reply(
     State(state): State<Arc<AppState>>,
     AxumPath(session): AxumPath<String>,
@@ -251,6 +368,36 @@ fn validate_event_reply(body: &EventReplyBody) -> Result<(), String> {
     Ok(())
 }
 
+fn normalize_terminal_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.chars().take(128).collect())
+}
+
+fn normalize_terminal_command(command: &str) -> Option<String> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn validate_terminal_env(env: &BTreeMap<String, String>) -> Result<(), String> {
+    for key in env.keys() {
+        if key.trim().is_empty() || key.contains('=') || key.contains('\0') {
+            return Err(format!("invalid terminal env key: {key:?}"));
+        }
+    }
+    for value in env.values() {
+        if value.contains('\0') {
+            return Err("invalid terminal env value: contains NUL".into());
+        }
+    }
+    Ok(())
+}
+
 async fn write_event_reply_atomic(dir: &Path, body: &EventReplyBody) -> std::io::Result<()> {
     let file_id = event_reply_file_id(&body.id);
     let final_path = dir.join(format!("event-reply-{file_id}.md"));
@@ -296,6 +443,9 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
         window_id: opts.window_id,
         mcp_env: opts.mcp_env,
         cwd: opts.cwd,
+        command: None,
+        env: Default::default(),
+        preflight: None,
     };
     let mut session = match state.terminal_sessions.get_or_create(
         opts.session_id.as_deref(),
@@ -543,7 +693,7 @@ mod tests {
     use super::*;
     use crate::config::TerminalConfig;
     use crate::terminal_sessions::{AttachHandle, Registry, RegistryConfig};
-    use axum::body::Body;
+    use axum::body::{to_bytes, Body};
     use axum::http::Request;
     use axum::routing::post;
     use axum::Router;
@@ -587,6 +737,9 @@ mod tests {
                     window_id: Some("window-test".into()),
                     mcp_env,
                     cwd: None,
+                    command: None,
+                    env: Default::default(),
+                    preflight: None,
                 })
                 .expect("spawn pty");
             Self {
@@ -678,6 +831,197 @@ mod tests {
                 name.starts_with(".event-reply-").then_some(name)
             })
             .collect()
+    }
+
+    async fn response_json(response: Response) -> serde_json::Value {
+        let (parts, body) = response.into_parts();
+        assert!(
+            parts.status.is_success(),
+            "response was not success: {}",
+            parts.status
+        );
+        let bytes = to_bytes(body, 8192).await.expect("read body");
+        serde_json::from_slice(&bytes).expect("response json")
+    }
+
+    fn create_terminal_body(command: &str) -> CreateTerminalBody {
+        CreateTerminalBody {
+            name: "@@Spawned".into(),
+            command: command.into(),
+            env: BTreeMap::new(),
+            orchestrator_session: None,
+        }
+    }
+
+    #[test]
+    fn validate_terminal_env_rejects_bad_keys_and_values() {
+        let mut env = BTreeMap::new();
+        env.insert("OK".into(), "1".into());
+        assert!(validate_terminal_env(&env).is_ok());
+        env.insert("BAD=KEY".into(), "x".into());
+        assert!(validate_terminal_env(&env).is_err());
+
+        let mut env = BTreeMap::new();
+        env.insert("BAD_VALUE".into(), "x\0y".into());
+        assert!(validate_terminal_env(&env).is_err());
+    }
+
+    #[tokio::test]
+    async fn api_create_terminal_spawns_command_and_returns_session() {
+        let state = crate::state::test_support::make_test_state(false, false);
+        let response = api_create_terminal(
+            State(state.clone()),
+            Ok(Json(create_terminal_body("printf 'hi from spawn\\n'"))),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = response_json(response).await;
+        assert_eq!(body["tab_label"], "@@Spawned");
+        let session = body["session"].as_str().expect("session id");
+        let mut handle = state
+            .terminal_sessions
+            .attach(session, Some(0))
+            .expect("spawned session");
+        let out = collect_until(&mut handle, "hi from spawn", Duration::from_secs(5)).await;
+        assert!(out.contains("hi from spawn"), "missing output: {out:?}");
+        state
+            .terminal_sessions
+            .close(session, CloseReason::Explicit);
+    }
+
+    #[tokio::test]
+    async fn api_create_terminal_rejects_missing_command() {
+        let state = crate::state::test_support::make_test_state(false, false);
+        let response = api_create_terminal(
+            State(state),
+            Ok(Json(CreateTerminalBody {
+                name: "@@Spawned".into(),
+                command: " ".into(),
+                env: BTreeMap::new(),
+                orchestrator_session: None,
+            })),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn terminal_control_endpoints_return_not_found_for_missing_session() {
+        let state = crate::state::test_support::make_test_state(false, false);
+
+        let restart = api_restart_terminal(State(state.clone()), AxumPath("missing".into())).await;
+        let delete = api_delete_terminal(State(state), AxumPath("missing".into())).await;
+
+        assert_eq!(restart.status(), StatusCode::NOT_FOUND);
+        assert_eq!(delete.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn api_restart_terminal_respawns_same_session_command() {
+        let state = crate::state::test_support::make_test_state(false, false);
+        let mut body = create_terminal_body("printf \"restart-$SYSTACEAN_RESTART\\n\"; sleep 1");
+        body.env.insert("SYSTACEAN_RESTART".into(), "one".into());
+        let response = api_create_terminal(State(state.clone()), Ok(Json(body))).await;
+        let json = response_json(response).await;
+        let session = json["session"].as_str().expect("session id").to_string();
+        let mut handle = state
+            .terminal_sessions
+            .attach(&session, Some(0))
+            .expect("spawned session");
+        let out = collect_until(&mut handle, "restart-one", Duration::from_secs(5)).await;
+        assert!(out.contains("restart-one"), "missing first output: {out:?}");
+
+        let response = api_restart_terminal(State(state.clone()), AxumPath(session.clone())).await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let mut restarted = state
+            .terminal_sessions
+            .attach(&session, Some(0))
+            .expect("restarted session");
+        let out = collect_until(&mut restarted, "restart-one", Duration::from_secs(5)).await;
+        assert!(
+            out.contains("restart-one"),
+            "missing restarted output: {out:?}"
+        );
+        state
+            .terminal_sessions
+            .close(&session, CloseReason::Explicit);
+    }
+
+    #[tokio::test]
+    async fn api_delete_terminal_closes_session() {
+        let state = crate::state::test_support::make_test_state(false, false);
+        let response = api_create_terminal(
+            State(state.clone()),
+            Ok(Json(create_terminal_body("sleep 5"))),
+        )
+        .await;
+        let json = response_json(response).await;
+        let session = json["session"].as_str().expect("session id").to_string();
+
+        let response = api_delete_terminal(State(state.clone()), AxumPath(session.clone())).await;
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(state.terminal_sessions.attach(&session, None).is_none());
+    }
+
+    #[tokio::test]
+    async fn api_create_terminal_writes_preflight_event_to_orchestrator_watcher() {
+        let state = crate::state::test_support::make_test_state(false, false);
+        let orchestrator = state
+            .terminal_sessions
+            .create(CreateOptions {
+                size: pty_size(None, None),
+                tab_name: Some("@@Architect".into()),
+                window_id: None,
+                mcp_env: true,
+                cwd: None,
+                command: Some("sleep 5".into()),
+                env: Default::default(),
+                preflight: None,
+            })
+            .expect("orchestrator terminal");
+        let orchestrator_id = orchestrator.id().to_string();
+        let dir = tempfile::tempdir().expect("watch dir");
+        state
+            .terminal_sessions
+            .set_watcher(&orchestrator_id, dir.path().to_path_buf())
+            .expect("set watcher");
+        let body = CreateTerminalBody {
+            name: "@@Spawned".into(),
+            command: "printf 'please log in first\\n'; sleep 1".into(),
+            env: BTreeMap::new(),
+            orchestrator_session: Some(orchestrator_id.clone()),
+        };
+
+        let response = api_create_terminal(State(state.clone()), Ok(Json(body))).await;
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut found = None;
+        while Instant::now() < deadline {
+            found = std::fs::read_dir(dir.path())
+                .expect("read event dir")
+                .filter_map(|entry| entry.ok())
+                .find(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("pre-flight-")
+                });
+            if found.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let entry = found.expect("pre-flight event file");
+        let text = std::fs::read_to_string(entry.path()).expect("read event");
+        assert!(text.contains(r#""type":"pre-flight""#));
+        assert!(text.contains("please log in first"));
+        state
+            .terminal_sessions
+            .close(&orchestrator_id, CloseReason::Explicit);
     }
 
     #[tokio::test]
