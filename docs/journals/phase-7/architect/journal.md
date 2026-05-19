@@ -1176,3 +1176,116 @@ Reply, written atomically by @@Alex via the bubble UI:
   interaction (@@WebtestA's cosmetic note).
 
 — @@Architect, 2026-05-18 21:00 BST
+
+## 2026-05-19 00:45 BST — Round 2 substrate + Phase 1 + Phase 2 shipped, Wave-B queued
+
+Throughput milestone. Round 2 wave-A landed, Phase 1
+overlays-to-tabs landed, Phase 2 Hybrid pane model
+landed in two parts (substrate + Cmd+K transactional
+mode), polish bundle landed.
+
+### Round 2 + Phase 1/2 commits on main (today)
+
+| Commit  | Task           | What                                                       |
+|---------|----------------|------------------------------------------------------------|
+| cd88b0c | systacean-9    | fsnotify watcher + event ingestion + dispatch              |
+| 1f2f6fc | fullstack-13   | bubble overlay + watcher dialog + survey UI                |
+| 2d1c719 | fullstack-18   | TUI density simplification (numbered keys, drop Submit)    |
+| 530e30f | systacean-11   | event-reply atomic-write endpoint (bypasses drive gate)    |
+| 7bc2897 | fullstack-19   | SPA reply path switched to chan-server endpoint            |
+| 1cd4ef2 | systacean-8 v2 | PTY reattach by (window_id, tab_name) on reload            |
+| 4ca7dc4 | systacean-10   | revert systacean-6 (confirmed no-op vs systacean-3 alone)  |
+| a2fb205 | fullstack-14   | Phase 1 — Graph + File Browser as first-class tabs         |
+| e4f9d28 | fullstack-15   | Phase 2 substrate — binary-tree + drag-detach + persistence|
+| 44d9749 | fullstack-16   | Phase 2 Cmd+K transactional pane mode + WASD/arrows/resize |
+| 0c2faa7 | fullstack-17   | polish bundle (7 nits including watcher staleness)         |
+| dfcad1c | architect-1    | wave-B fan-out + orchestration SKILL initial drop          |
+
+Twelve commits in roughly six hours. Pre-recycle stamp
+was `v0.10.1` at `9e48367`; this entire run rides on top
+of `9e48367` post-recycle and post-docs-migration
+(`2fc286e`).
+
+### Round 2 wave-B queued
+
+| Task          | Owner       | Scope                                                                              |
+|---------------|-------------|------------------------------------------------------------------------------------|
+| systacean-12  | @@Systacean | HTTP agent control channel (spawn / name / execute / restart)                      |
+| systacean-13  | @@Systacean | Activity indicator on terminal tabs (PTY output-since-focus)                       |
+| systacean-14  | @@Systacean | MCP auto-discovery (claude / codex / gemini)                                       |
+| fullstack-20  | @@FullStack | Spawn-from-rich-prompt UI + pre-flight survey                                      |
+| architect-1   | @@Architect | Orchestration SKILL — README + atomic-writes + spawn-protocol shipped; mcp-discovery deferred to -14 |
+
+Walkthrough lanes: `webtest-a-7` (frontend angle),
+`webtest-b-5` (backend + deferred `fullstack-15`
+pane-detach catch-up).
+
+### Patterns that worked this round
+
+* **Standing topic-level commit clearance.** Once @@Alex
+  said "make intelligent decisions", I authorized agent
+  commits inline (still recording the auth in their
+  event log per the permission-approval mechanic). Saved
+  a per-commit ping-pong. 12 commits cleared this way
+  without surprise rollback.
+* **Cross-stack ownership where it makes sense.**
+  @@Systacean wrote SPA storage scoping in `systacean-6`
+  (then reverted in `-10` when @@WebtestA showed it
+  wasn't load-bearing) and the event-reply endpoint in
+  `-11`. @@FullStack switched the SPA reply caller in
+  `-19`. No lane-policing friction.
+* **Wider repro folding.** When @@WebtestB found the
+  watcher-staleness bug also fired on URL-hash nav
+  (not just reload), I appended the wider context to
+  the existing `fullstack-17` polish entry rather than
+  cutting a new task. Same fix, more thorough spec.
+
+### Subtle / non-obvious
+
+* **fsnotify-watcher in chan-server reads ONCE.** The
+  whole substrate trusts writer-side atomic temp+rename.
+  No defensive multi-read on the server. This is the
+  load-bearing engineering decision from the request.md
+  addendum — anyone touching the watcher must preserve
+  it.
+* **Survey-reply path bypasses chan-drive.** Event
+  files are infra traffic, not user content; they go
+  through `tokio::fs` in `systacean-11`'s endpoint, NOT
+  through `chan_drive::Drive::write_text`. The drive's
+  editable-text gate is correct for editor saves and
+  wrong for this surface. Keeping the drive boundary
+  clean was the architectural reason.
+* **systacean-6 was reverted** after @@WebtestA showed
+  `systacean-3`'s `Vary: Host` was sufficient. The
+  storage-key namespacing is gone; if drift surfaces
+  again, look at the welcome-state Files action path
+  next.
+* **Phase 2 was easier than expected.** Existing
+  layout model was already a binary-tree of splits with
+  URL/session persistence. `fullstack-15` was just the
+  drag-detach addition; `fullstack-16` was Cmd+K +
+  keybinds on top.
+* **TUI density survey UI** (`fullstack-18`) replaced
+  the v0 bubble overlay's Submit / Scope dropdown /
+  Skip / standing-option-row chrome. Multi-topic 4×3
+  gets a horizontal tab strip with auto-advance +
+  auto-commit. No Submit button anywhere.
+
+### Outstanding architect work
+
+* `architect-1` — `mcp-discovery.md` waits on
+  `systacean-14`'s per-agent investigation.
+* Phase-4 import from `~/Documents/ChanRoadmap/` —
+  needs explicit @@Alex go-ahead to read outside
+  repo (auto-mode blocks).
+* Eventual phase summary — wait until wave-B ships.
+
+### Recycle-prep note for next @@Architect
+
+If you boot fresh: read this entry, then `git log
+--oneline -25` to confirm the commit sequence above.
+Wave-B is in flight; the four pokes at the bottom of
+each event log (~22:30-00:30 BST appendices) are the
+authoritative dispatch.
+
+— @@Architect, 2026-05-19 00:45 BST
