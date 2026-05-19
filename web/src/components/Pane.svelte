@@ -34,9 +34,7 @@
 
   import {
     ArrowDown,
-    ArrowLeft,
     ArrowRight,
-    ArrowUp,
     Check,
     FilePlus,
     FileText,
@@ -270,17 +268,9 @@
     closePaneMenus();
     splitPane(pane.id, "row", "after");
   }
-  function onSplitLeft(): void {
-    closePaneMenus();
-    splitPane(pane.id, "row", "before");
-  }
   function onSplitDown(): void {
     closePaneMenus();
     splitPane(pane.id, "column", "after");
-  }
-  function onSplitUp(): void {
-    closePaneMenus();
-    splitPane(pane.id, "column", "before");
   }
   function onClosePane(): void {
     closePaneMenus();
@@ -931,48 +921,15 @@
       <HamburgerMenu
         bind:this={paneMenu}
         bind:open={paneMenuOpen}
-        width={220}
-        height={110}
-        onBeforeOpen={closePaneContextMenus}
-      >
-        <li>
-          <button role="menuitem" onclick={doReloadPane}>
-            <RefreshCw size={16} strokeWidth={1.75} aria-hidden="true" />
-            <span>Reload</span>
-          </button>
-        </li>
-        <li>
-          <button role="menuitem" onclick={doToggleInspector}>
-            <PanelRight size={16} strokeWidth={1.75} aria-hidden="true" />
-            <span>Toggle Web Inspector</span>
-          </button>
-        </li>
-      </HamburgerMenu>
-      <HamburgerMenu
-        bind:this={paneContextMenu}
-        bind:open={paneContextMenuOpen}
-        showTrigger={false}
         width={250}
         height={320}
-        onBeforeOpen={closePaneHamburgerMenu}
+        onBeforeOpen={closePaneContextMenus}
       >
         {#if splitsAllowed}
-          <li>
-            <button role="menuitem" onclick={onSplitLeft}>
-              <ArrowLeft size={16} strokeWidth={1.75} aria-hidden="true" />
-              <span>Split left</span>
-            </button>
-          </li>
           <li>
             <button role="menuitem" onclick={onSplitRight}>
               <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
               <span>Split right</span>
-            </button>
-          </li>
-          <li>
-            <button role="menuitem" onclick={onSplitUp}>
-              <ArrowUp size={16} strokeWidth={1.75} aria-hidden="true" />
-              <span>Split up</span>
             </button>
           </li>
           <li>
@@ -981,8 +938,14 @@
               <span>Split down</span>
             </button>
           </li>
-          <li class="sep" role="separator"></li>
         {/if}
+        <li>
+          <button role="menuitem" onclick={onClosePane}>
+            <X size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span>Close pane</span>
+          </button>
+        </li>
+        <li class="sep" role="separator"></li>
         <li>
           <button role="menuitem" onclick={doSelectNextPane}>
             <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -1013,11 +976,25 @@
             </button>
           </li>
         {/each}
-        <li class="sep" role="separator"></li>
+      </HamburgerMenu>
+      <HamburgerMenu
+        bind:this={paneContextMenu}
+        bind:open={paneContextMenuOpen}
+        showTrigger={false}
+        width={220}
+        height={110}
+        onBeforeOpen={closePaneHamburgerMenu}
+      >
         <li>
-          <button role="menuitem" onclick={onClosePane}>
-            <X size={16} strokeWidth={1.75} aria-hidden="true" />
-            <span>Close pane</span>
+          <button role="menuitem" onclick={doReloadPane}>
+            <RefreshCw size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span>Reload</span>
+          </button>
+        </li>
+        <li>
+          <button role="menuitem" onclick={doToggleInspector}>
+            <PanelRight size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span>Toggle Web Inspector</span>
           </button>
         </li>
       </HamburgerMenu>

@@ -82,3 +82,23 @@ already-bound `Cmd+[` / `Cmd+]` shortcut, not a split.
 Standard. Pre-push gate green. Insert in @@FullStack's
 queue right after `fullstack-20` (the spawn UI) lands.
 Ping via `alex/event-fullstack-architect.md`.
+
+## Result
+
+2026-05-19 05:16 BST — Implemented in `web/src/components/Pane.svelte`.
+Right-click pane menu is back to `Reload` + `Toggle Web Inspector`
+only. Pane hamburger now carries the structural menu in the requested
+order: `Split right`, `Split down`, `Close pane`, next/previous pane,
+and focus-border colors. Removed the visible split-left/up rows and
+their now-unused click wrappers/icons while leaving the underlying
+`splitPane` before-direction support untouched for drag-detach.
+
+Verification:
+
+* `npm run check`
+* `npm run build`
+* `bash -lc 'ulimit -n 4096; scripts/pre-push'`
+
+Note: first plain `scripts/pre-push` hit macOS fd limit 256 in
+`chan-drive` tests (`Too many open files`). Rerunning the same gate
+outside the sandbox with fd limit 4096 passed.
