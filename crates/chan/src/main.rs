@@ -4,9 +4,11 @@
 //
 //   chan add <path> [--name NAME]   register a directory as a chan
 //                                   drive in ~/.chan/config.toml
-//   chan list                       list registered drives,
-//                                   most-recent first
-//   chan remove <path>              drop a drive from the registry
+//   chan list [--json]              list registered drives,
+//                                   most-recent first. --json emits
+//                                   a stable machine-readable shape.
+//   chan remove <path> | --name N   drop a drive from the registry
+//                                   by path or by display name
 //                                   (filesystem contents untouched)
 //   chan rename <path> <name>       set / clear a drive's display
 //                                   name
@@ -43,7 +45,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chan_drive::{EdgeKind, Library, SearchAggression, SearchOpts, WalkFilter};
+use chan_drive::{EdgeKind, KnownDrive, Library, SearchAggression, SearchOpts, WalkFilter};
 use chan_server::{
     build_fs_graph, EditorPrefs, EditorTheme, FsGraphResponse, FsGraphScope as ServerFsGraphScope,
     LineSpacing, ServeConfig, ServerConfig, ThemeChoice, TunnelServeConfig,
@@ -152,7 +154,14 @@ enum Command {
         name: Option<String>,
     },
     /// List registered drives, most-recent first.
-    List,
+    List {
+        /// Emit machine-readable JSON: `{"drives":[{name,path,uuid,
+        /// last_opened},...]}`. `name` is null when the drive has
+        /// no display name; `last_opened` is RFC3339 UTC. The text
+        /// format is unchanged when this flag is omitted.
+        #[arg(long)]
+        json: bool,
+    },
     /// Open a path in the current chan window from a chan terminal.
     Open {
         /// File or directory path. Relative paths resolve against
@@ -167,7 +176,24 @@ enum Command {
     },
     /// Drop a drive from the registry. Does not delete the
     /// directory or its content; only forgets it on this machine.
-    Remove { path: PathBuf },
+    ///
+    /// Identify the drive by PATH or by `--name NAME`. Drive names
+    /// are not required to be unique; if two drives share a name
+    /// `--name` fails with a list of candidate paths and asks for
+    /// the path form instead.
+    #[command(group(
+        clap::ArgGroup::new("remove_target")
+            .required(true)
+            .args(["path", "name"]),
+    ))]
+    Remove {
+        #[arg(value_hint = clap::ValueHint::AnyPath)]
+        path: Option<PathBuf>,
+        /// Drop by display name. Fails when no registered drive
+        /// has this name, or when more than one does.
+        #[arg(long, conflicts_with = "path")]
+        name: Option<String>,
+    },
     /// Set or clear a drive's display name.
     ///
     /// Both PATH and NAME are required: defaulting PATH to the
@@ -457,7 +483,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Add { path, name } => cmd_add(path, name),
-        Command::List => cmd_list(),
+        Command::List { json } => cmd_list(json),
         Command::Open { path } => {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -466,7 +492,7 @@ fn main() -> Result<()> {
             rt.block_on(cmd_open(path))
         }
         Command::Completions { shell } => cmd_completions(shell),
-        Command::Remove { path } => cmd_remove(path),
+        Command::Remove { path, name } => cmd_remove(path, name),
         Command::Rename { path, name } => cmd_rename(path, name),
         Command::Serve {
             path,
@@ -808,8 +834,15 @@ fn cmd_add(path: PathBuf, name: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn cmd_list() -> Result<()> {
+fn cmd_list(json: bool) -> Result<()> {
     let drives = library()?.list_drives();
+    if json {
+        let out = DriveListOutput {
+            drives: drives.iter().map(DriveListEntry::from).collect(),
+        };
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
     if drives.is_empty() {
         println!("(no drives registered)");
         return Ok(());
@@ -833,16 +866,65 @@ fn cmd_completions(shell: Shell) -> Result<()> {
     Ok(())
 }
 
-fn cmd_remove(path: PathBuf) -> Result<()> {
-    let removed = library()?
-        .unregister_drive(&path)
-        .with_context(|| format!("unregistering {}", path.display()))?;
+fn cmd_remove(path: Option<PathBuf>, name: Option<String>) -> Result<()> {
+    let lib = library()?;
+    let target = match (path, name) {
+        (Some(p), _) => p,
+        (None, Some(name)) => {
+            let drives = lib.list_drives();
+            pick_drive_by_name(
+                drives.iter().map(|d| (d.name.as_deref(), d.path.as_path())),
+                &name,
+            )?
+        }
+        (None, None) => unreachable!("clap group `remove_target` requires path or --name"),
+    };
+    let removed = lib
+        .unregister_drive(&target)
+        .with_context(|| format!("unregistering {}", target.display()))?;
     if removed {
-        println!("unregistered: {}", path.display());
+        println!("unregistered: {}", target.display());
     } else {
-        println!("(not registered: {})", path.display());
+        println!("(not registered: {})", target.display());
     }
     Ok(())
+}
+
+/// Resolve a `chan remove --name NAME` to a registered drive path.
+///
+/// Drive names are not unique in the registry (see
+/// `crates/chan-drive/src/registry.rs`: neither `touch` nor
+/// `set_name` enforces uniqueness). Two `chan add ... --name foo`
+/// invocations at different paths happily coexist. So `--name`
+/// resolves to a path only when exactly one drive matches; on
+/// collision the user picks the path manually rather than letting
+/// chan guess.
+fn pick_drive_by_name<'a, I>(drives: I, name: &str) -> Result<PathBuf>
+where
+    I: Iterator<Item = (Option<&'a str>, &'a Path)>,
+{
+    let matches: Vec<PathBuf> = drives
+        .filter(|(n, _)| *n == Some(name))
+        .map(|(_, p)| p.to_path_buf())
+        .collect();
+    match matches.len() {
+        0 => anyhow::bail!(
+            "no registered drive named {name:?}; \
+             check `chan list` or pass the path to `chan remove`"
+        ),
+        1 => Ok(matches.into_iter().next().unwrap()),
+        _ => {
+            let list = matches
+                .iter()
+                .map(|p| format!("  {}", p.display()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            anyhow::bail!(
+                "multiple drives named {name:?}; chan does not enforce unique drive names. \
+                 Pick one with `chan remove <path>`:\n{list}"
+            )
+        }
+    }
 }
 
 fn cmd_rename(path: PathBuf, name: String) -> Result<()> {
@@ -1367,6 +1449,34 @@ fn cmd_search(path: PathBuf, query: String, limit: u32) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[derive(Serialize)]
+struct DriveListOutput {
+    drives: Vec<DriveListEntry>,
+}
+
+#[derive(Serialize)]
+struct DriveListEntry {
+    /// `null` when the drive has no display name (still unique by
+    /// path / uuid).
+    name: Option<String>,
+    path: String,
+    /// Stable per-drive identity (16 hex chars).
+    uuid: String,
+    /// RFC3339 UTC timestamp.
+    last_opened: String,
+}
+
+impl From<&KnownDrive> for DriveListEntry {
+    fn from(d: &KnownDrive) -> Self {
+        Self {
+            name: d.name.clone(),
+            path: d.path.display().to_string(),
+            uuid: d.uuid.clone(),
+            last_opened: d.last_opened.to_rfc3339(),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -2367,6 +2477,53 @@ mod tests {
         let mut server = ServerConfig::default();
         let err = write_server_config_key(&mut server, "server.attachments_dir", "").unwrap_err();
         assert!(err.to_string().contains("non-empty"));
+    }
+
+    #[test]
+    fn pick_drive_by_name_finds_unique_match() {
+        let drives = [
+            (Some("alpha"), Path::new("/tmp/a")),
+            (Some("beta"), Path::new("/tmp/b")),
+            (None, Path::new("/tmp/c")),
+        ];
+        let got = pick_drive_by_name(drives.iter().copied(), "beta").unwrap();
+        assert_eq!(got, PathBuf::from("/tmp/b"));
+    }
+
+    #[test]
+    fn pick_drive_by_name_errors_when_no_match() {
+        let drives = [(Some("alpha"), Path::new("/tmp/a"))];
+        let err = pick_drive_by_name(drives.iter().copied(), "ghost").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no registered drive"), "{msg}");
+        assert!(msg.contains("ghost"), "{msg}");
+    }
+
+    #[test]
+    fn pick_drive_by_name_errors_on_duplicate_with_candidate_paths() {
+        // Names are NOT required to be unique in the registry
+        // (registry::touch / set_name do not enforce uniqueness),
+        // so `chan remove --name` must refuse to guess and surface
+        // both candidates instead of removing the wrong one.
+        let drives = [
+            (Some("notes"), Path::new("/tmp/work-notes")),
+            (Some("notes"), Path::new("/tmp/personal-notes")),
+        ];
+        let err = pick_drive_by_name(drives.iter().copied(), "notes").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("multiple drives"), "{msg}");
+        assert!(msg.contains("/tmp/work-notes"), "{msg}");
+        assert!(msg.contains("/tmp/personal-notes"), "{msg}");
+    }
+
+    #[test]
+    fn pick_drive_by_name_ignores_unnamed_drives() {
+        let drives = [
+            (None, Path::new("/tmp/unnamed")),
+            (Some("alpha"), Path::new("/tmp/a")),
+        ];
+        let err = pick_drive_by_name(drives.iter().copied(), "unnamed").unwrap_err();
+        assert!(err.to_string().contains("no registered drive"));
     }
 
     #[test]
