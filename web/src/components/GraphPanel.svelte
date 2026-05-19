@@ -1101,9 +1101,18 @@
 
   {#if tab && tabMenuOpen}
     <!-- `fullstack-68`: Graph-tab right-click bubble. Anchored to
-         the tab-strip click position via clampMenu; carries the
-         former hamburger menu items at the top and the filter
-         chips at the bottom (terminal-tab broadcast pattern). -->
+         the tab-strip click position via clampMenu.
+         `fullstack-75`: row shape aligned with the standard
+         hamburger-menu pattern from other tabs (TerminalTab /
+         FileEditorTab / FileBrowserSurface) — `<button class="mbtn">`
+         rows with optional icon + label + chord on the right; filters
+         render vertically, one row per kind, with the kind colour as
+         a dot + on/off cue via the `.on` class. -->
+    {@const depthDisabled =
+      !languageMode &&
+      (!currentScope ||
+        currentScope.kind === "drive" ||
+        currentScope.kind === "global")}
     <div
       class="tab-menu-bubble"
       role="menu"
@@ -1112,13 +1121,84 @@
       use:clampMenu={tabMenuPos}
       onmousedown={(e) => e.stopPropagation()}
     >
-      <ul class="bubble-list" role="presentation">
-        {@render menuItems()}
-      </ul>
-      <div class="bubble-filters">
-        <div class="bubble-filters-label">Filters</div>
-        {@render filterChips()}
+      <button class="mbtn" onclick={toggleInspector}>
+        <span class="mbtn-icon" aria-hidden="true">
+          {#if graphState.inspectorOpen}
+            <ArrowRight size={16} strokeWidth={1.75} />
+          {:else}
+            <ArrowLeft size={16} strokeWidth={1.75} />
+          {/if}
+        </span>
+        <span class="mbtn-label">
+          {graphState.inspectorOpen ? "Hide Details" : "Show Details"}
+        </span>
+        <span class="mbtn-chord"></span>
+      </button>
+      <div class="msep" role="separator"></div>
+      <div class="mbtn depth-row" class:disabled={depthDisabled}>
+        <span class="mbtn-icon" aria-hidden="true"></span>
+        <span class="mbtn-label">Depth</span>
+        <input
+          type="range"
+          min={languageMode ? "0" : "1"}
+          max={depthCap}
+          step="1"
+          bind:value={graphState.depth}
+          disabled={depthDisabled}
+          onmousedown={(e) => e.stopPropagation()}
+          aria-label="depth"
+        />
+        <span class="depth-value">{languageMode && graphState.depth === 0 ? "max" : graphState.depth}</span>
       </div>
+      <div class="msep" role="separator"></div>
+      <button class="mbtn" onclick={reloadGraph}>
+        <span class="mbtn-icon" aria-hidden="true">↻</span>
+        <span class="mbtn-label">Reload</span>
+        <span class="mbtn-chord"></span>
+      </button>
+      <button class="mbtn" onclick={doOpenSettings}>
+        <span class="mbtn-icon" aria-hidden="true">
+          <Settings size={14} strokeWidth={1.75} />
+        </span>
+        <span class="mbtn-label">Settings</span>
+        <span class="mbtn-chord">{chordFor("app.settings.toggle") ?? ""}</span>
+      </button>
+      <div class="msep" role="separator"></div>
+      {#each ["link", "tag", "mention", "language", "img", "folder"] as const as kind (kind)}
+        {@const driveLike =
+          currentScope?.kind === "drive" || currentScope?.kind === "global"}
+        {#if (!filesystemMode || (kind !== "img" && kind !== "language")) && (languageMode ? kind === "language" : kind !== "language" || driveLike) && (kind !== "folder" || filesystemMode || driveLike)}
+          <button
+            type="button"
+            class="mbtn filter-row"
+            class:on={show[kind]}
+            onclick={() => (show[kind] = !show[kind])}
+            role="menuitemcheckbox"
+            aria-checked={show[kind]}
+          >
+            <span
+              class="filter-dot"
+              class:filter-dot-off={!show[kind]}
+              style="background:{show[kind] ? FILTER_COLORS[kind] : 'transparent'};border-color:{FILTER_COLORS[kind]}"
+              aria-hidden="true"
+            ></span>
+            <span class="mbtn-label">
+              {#if filesystemMode}
+                {kind === "link"
+                  ? "contains"
+                  : kind === "tag"
+                    ? "symlink"
+                    : kind === "mention"
+                      ? "hardlink"
+                      : "directory"}
+              {:else}
+                {kind === "mention" ? "contact" : kind === "img" ? "media" : kind}
+              {/if}
+            </span>
+            <span class="filter-count">{counts[kind]}</span>
+          </button>
+        {/if}
+      {/each}
     </div>
   {/if}
 
@@ -1623,10 +1703,12 @@
     font-style: normal;
   }
 
-  /* `fullstack-68`: tab right-click bubble. Same chrome as the
-     file-editor + terminal tab bubbles (clampMenu positions it
-     just below the tab strip). Carries the former hamburger menu
-     items at the top and the filter chips at the bottom. */
+  /* `fullstack-68`: tab right-click bubble.
+     `fullstack-75`: rows align with the standard hamburger-menu
+     shape (`.mbtn` + `.msep`) used by TerminalTab / FileEditorTab
+     / FileBrowserSurface. Filter rows pick up the same row chrome
+     with a kind-coloured dot on the left, label in the middle,
+     count on the right. */
   .tab-menu-bubble {
     position: fixed;
     z-index: 50;
@@ -1634,38 +1716,97 @@
     border: 1px solid var(--border);
     border-radius: 8px;
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
-    padding: 6px;
+    padding: 4px;
     min-width: 240px;
     max-width: calc(100vw - 16px);
     max-height: calc(100vh - 24px);
     overflow-y: auto;
     color: var(--text);
     font-size: 13px;
-  }
-  .tab-menu-bubble .bubble-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-  .tab-menu-bubble .bubble-filters {
-    border-top: 1px solid var(--border);
-    margin-top: 6px;
-    padding-top: 6px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
   }
-  .tab-menu-bubble .bubble-filters-label {
-    color: var(--text-secondary);
-    font-size: 11px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    padding: 0 4px;
-  }
-  .tab-menu-bubble .filters {
+  .tab-menu-bubble .mbtn {
     display: flex;
-    flex-wrap: wrap;
-    gap: 4px 6px;
-    padding: 0 4px;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    padding: 6px 8px;
+    text-align: left;
+  }
+  .tab-menu-bubble .mbtn:hover,
+  .tab-menu-bubble .mbtn.on {
+    background: var(--hover-bg);
+  }
+  .tab-menu-bubble .mbtn.disabled {
+    color: var(--text-secondary);
+    cursor: not-allowed;
+    opacity: 0.58;
+  }
+  .tab-menu-bubble .mbtn-icon {
+    width: 18px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .tab-menu-bubble .mbtn-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tab-menu-bubble .mbtn-chord {
+    margin-left: 1.5rem;
+    color: var(--text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+  }
+  .tab-menu-bubble .msep {
+    height: 1px;
+    background: var(--separator, var(--border));
+    margin: 4px 2px;
+  }
+  /* Depth row hosts a slider in the value slot; keep the row
+     height in line with the action rows by leaning on `.mbtn`. */
+  .tab-menu-bubble .depth-row input[type="range"] {
+    flex-shrink: 0;
+    width: 90px;
+  }
+  .tab-menu-bubble .depth-value {
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    width: 1.6em;
+    text-align: right;
+  }
+  /* Filter rows: kind-coloured dot left, label middle, count
+     right. On-state fills the dot; off-state shows a hollow ring
+     so the on/off cue reads at a glance without relying on the
+     row background hover. The `.mbtn.on` default background would
+     fill the row whenever a filter is toggled on; override it
+     here so multiple-on filters don't paint the whole bubble. */
+  .tab-menu-bubble .filter-row.on {
+    background: transparent;
+  }
+  .tab-menu-bubble .filter-row.on:hover {
+    background: var(--hover-bg);
+  }
+  .tab-menu-bubble .filter-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    flex-shrink: 0;
+  }
+  .tab-menu-bubble .filter-count {
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
   }
 </style>

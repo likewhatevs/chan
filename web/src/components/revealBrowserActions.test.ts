@@ -93,15 +93,24 @@ describe("no inline close affordance on first-class surfaces", () => {
     );
   });
 
-  test("GraphPanel renders a tab-menu-bubble carrying menuItems + filterChips", () => {
-    // Right-click on the Graph tab opens the bubble; bubble re-uses
-    // the existing `menuItems` snippet and a new `filterChips`
-    // snippet so chip toggles in the chrome bar AND in the bubble
-    // mutate the same `graphState.filters`.
-    expect(graph).toContain("{#snippet filterChips()}");
+  test("GraphPanel renders a tab-menu-bubble with mbtn rows + vertical filter rows", () => {
+    // `fullstack-68` introduced the bubble; `fullstack-75` aligned
+    // it with the standard hamburger-menu row shape (`.mbtn`) and
+    // moved the filter chips to vertical rows. The bubble inlines
+    // `<button class="mbtn">` for actions (Show Details, Reload,
+    // Settings) + a `.depth-row` + per-filter rows; toggles still
+    // mutate `graphState.filters` so `gf:` round-trip is intact.
     expect(graph).toMatch(/\{#if tab && tabMenuOpen\}[\s\S]*?class="tab-menu-bubble"/);
     expect(graph).toMatch(
-      /class="tab-menu-bubble"[\s\S]*?\{@render menuItems\(\)\}[\s\S]*?\{@render filterChips\(\)\}/,
+      /class="tab-menu-bubble"[\s\S]*?<button class="mbtn" onclick=\{toggleInspector\}/,
+    );
+    expect(graph).toMatch(
+      /class="tab-menu-bubble"[\s\S]*?class="mbtn filter-row"[\s\S]*?show\[kind\] = !show\[kind\]/,
+    );
+    // The horizontal flex `.filters` chip container belongs to the
+    // overlay variant's bar only; the bubble must NOT carry it.
+    expect(graph).not.toMatch(
+      /class="tab-menu-bubble"[\s\S]*?<div class="bubble-filters">/,
     );
   });
 
