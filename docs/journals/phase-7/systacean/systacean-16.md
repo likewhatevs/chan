@@ -83,3 +83,39 @@ counter path so future-us doesn't relitigate.
 Standard. Pre-push gate green. @@WebtestA re-tests
 after landing. Ping via
 `alex/event-systacean-architect.md`.
+
+## 2026-05-19 06:39 BST - ready to land
+
+Implemented the counter tuning in
+`crates/chan-server/src/terminal_sessions.rs`.
+
+Chosen heuristic:
+
+* Skip ANSI CSI sequences, OSC sequences, one-byte ESC controls, C0
+  controls, DEL, and ASCII whitespace.
+* Count remaining bytes as visible activity. This means real text
+  such as `echo hello\n` trips the dot, while cursor blink, SGR-only
+  color updates, OSC title updates, BEL, CR/LF, and whitespace-only
+  redraws do not.
+
+Tests added:
+
+* ANSI cursor-position / SGR / OSC / control-only writes do not
+  increment `bytes_since_focus`.
+* Plain visible text increments.
+* Mixed ANSI plus visible text increments by the visible-text bytes.
+
+Verification:
+
+* `cargo test -p chan-server activity_counter --no-default-features`
+* `cargo test -p chan-server --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `scripts/pre-push`
+
+Known risk: the heuristic intentionally ignores whitespace-only
+output. If a future workflow needs whitespace-only terminal output to
+trip activity, this should become a configurable policy.
+
+Proposed commit message:
+
+`Tune terminal activity byte counting`

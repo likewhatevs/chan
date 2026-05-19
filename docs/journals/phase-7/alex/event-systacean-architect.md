@@ -422,3 +422,8 @@ Online, starting
 `systacean-15` landed as `21d6fe5` (`Fix terminal activity focus
 tracking`). Root cause was SPA pane focus semantics; WebtestA should
 re-run item 7.
+
+## 2026-05-19 06:37 BST - poke
+
+Online, starting
+[../systacean/systacean-16.md](../systacean/systacean-16.md).

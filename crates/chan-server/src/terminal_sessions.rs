@@ -830,13 +830,17 @@ impl Session {
         };
         self.seq.store(end_seq, Ordering::Relaxed);
         if !self.focused.load(Ordering::Relaxed) {
-            let previous = self
-                .bytes_since_focus
-                .fetch_add(bytes.len() as u64, Ordering::Relaxed);
-            if previous == 0 {
-                self.broadcast(SessionEvent::Activity {
-                    bytes_since_focus: bytes.len() as u64,
-                });
+            // PTYs emit cursor motion, SGR, OSC title changes, BEL,
+            // and CR/LF redraw noise while idle. Only user-visible
+            // non-whitespace text should trip the tab activity dot.
+            let visible = visible_activity_bytes(bytes);
+            if visible > 0 {
+                let previous = self.bytes_since_focus.fetch_add(visible, Ordering::Relaxed);
+                if previous == 0 {
+                    self.broadcast(SessionEvent::Activity {
+                        bytes_since_focus: visible,
+                    });
+                }
             }
         }
         self.broadcast(SessionEvent::Output(bytes.to_vec()));
@@ -1201,6 +1205,54 @@ pub(crate) fn terminal_home_dir() -> Option<PathBuf> {
         .or_else(dirs::home_dir)
 }
 
+fn visible_activity_bytes(bytes: &[u8]) -> u64 {
+    let mut visible = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            0x1b => i = skip_ansi_escape(bytes, i + 1),
+            0x00..=0x1f | 0x7f => i += 1,
+            b if b.is_ascii_whitespace() => i += 1,
+            _ => {
+                visible += 1;
+                i += 1;
+            }
+        }
+    }
+    visible
+}
+
+fn skip_ansi_escape(bytes: &[u8], mut i: usize) -> usize {
+    if i >= bytes.len() {
+        return i;
+    }
+    match bytes[i] {
+        b'[' => {
+            i += 1;
+            while i < bytes.len() {
+                let b = bytes[i];
+                i += 1;
+                if (0x40..=0x7e).contains(&b) {
+                    break;
+                }
+            }
+            i
+        }
+        b']' => {
+            i += 1;
+            while i < bytes.len() {
+                match bytes[i] {
+                    0x07 => return i + 1,
+                    0x1b if i + 1 < bytes.len() && bytes[i + 1] == b'\\' => return i + 2,
+                    _ => i += 1,
+                }
+            }
+            i
+        }
+        _ => i + 1,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1299,6 +1351,35 @@ mod tests {
         session.set_focused(false);
         session.record_output(b"hidden");
         assert_eq!(session.bytes_since_focus(), 6);
+    }
+
+    #[test]
+    fn activity_counter_ignores_ansi_and_control_only_writes() {
+        let session = test_session_with_ring(1024);
+
+        session.record_output(b"\x1b[?25l\x1b[?25h\x1b[31m\x1b[0m\r\n\t \x07");
+        session.record_output(b"\x1b]0;chan\x07");
+        session.record_output(b"\x1b]2;title\x1b\\");
+
+        assert_eq!(session.bytes_since_focus(), 0);
+    }
+
+    #[test]
+    fn activity_counter_counts_plain_visible_text() {
+        let session = test_session_with_ring(1024);
+
+        session.record_output(b"echo hello\n");
+
+        assert_eq!(session.bytes_since_focus(), 9);
+    }
+
+    #[test]
+    fn activity_counter_counts_visible_text_inside_ansi_writes() {
+        let session = test_session_with_ring(1024);
+
+        session.record_output(b"\x1b[32mhello\x1b[0m\r\n");
+
+        assert_eq!(session.bytes_since_focus(), 5);
     }
 
     #[tokio::test]

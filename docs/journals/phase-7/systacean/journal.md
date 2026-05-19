@@ -353,3 +353,9 @@ Verification:
 * `npm run check`
 * `npm run build`
 * `scripts/pre-push`
+
+## 2026-05-19 06:37 BST - systacean-16 started
+
+New regression assignment started:
+[systacean-16.md](systacean-16.md), terminal activity counter
+sensitivity for ANSI/control-only PTY writes.
