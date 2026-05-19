@@ -72,3 +72,15 @@ describe("Cmd+K pane mode spawn context (fullstack-43)", () => {
     );
   });
 });
+
+describe("Cmd+K pane mode rich-prompt binding (fullstack-50)", () => {
+  test("p commits the draft and shows/spawns the rich prompt on the focused pane", () => {
+    // Commit-first ordering matches the `4` (new file) path so a
+    // spawned terminal survives any pane-mode rollback; the actual
+    // terminal lookup / spawn lives in
+    // showOrSpawnRichPromptInFocusedPane.
+    expect(app).toMatch(
+      /case "p":[\s\S]*?case "P":[\s\S]*?commitPaneMode\(\);[\s\S]*?showOrSpawnRichPromptInFocusedPane\(\);/,
+    );
+  });
+});

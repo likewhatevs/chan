@@ -108,3 +108,88 @@ Additionally:
 
 Standard. Pre-push gate green. Ping via
 `alex/event-fullstack-a-architect.md`.
+
+## 2026-05-19 14:38 BST — @@FullStackA implementation note
+
+Implementation:
+
+* New `showOrSpawnRichPromptInFocusedPane()` in
+  `tabs.svelte.ts`. Finds the first terminal tab in the
+  focused pane and focuses it; if no terminal, calls
+  `openTerminalInPane()` to spawn one; finally calls
+  `openActiveTerminalRichPrompt()` to reveal the prompt.
+  Caller commits Pane Mode first so the spawned terminal
+  lands in the live layout instead of evaporating on Esc.
+* `App.svelte` `handlePaneModeKey`: new `case "p" / "P"`
+  that commits the draft, schedules a session save, then
+  calls the helper. Outside Pane Mode `p` has no special
+  meaning (the focused editor / terminal absorbs it as
+  normal input).
+* The close button is **already present** at
+  `TerminalRichPrompt.svelte:284-286` (the `X` icon with
+  `class="icon-btn"` calling `onClose`, sitting next to
+  the `Send` button in the header). Esc also closes via
+  the existing `onKeydown` (line 78). Both behaviors
+  match the spec; no change needed there.
+* `TerminalTab.svelte` hamburger menu: dropped the
+  `Rich prompt` entry + the corresponding
+  `MessageSquareText` import. Alt+Space global shortcut
+  is preserved as the out-of-Pane-Mode keystroke (still
+  in `SHORTCUTS` + `App.svelte`'s direct handler) for
+  muscle-memory, but the menu surface no longer
+  duplicates it.
+* `PaneModeHelp.svelte`: added the new `p` row under
+  the Spawn group of the cheatsheet so the in-overlay
+  hint reflects the binding.
+
+Menu audit:
+
+* Hamburger menus: `TerminalTab.svelte` "Rich prompt" —
+  DROPPED.
+* Right-click menus: the rich prompt's own context menu
+  (mode toggle, style toolbar, watcher controls, spawn
+  agent, bubble mode) is preserved — these control the
+  prompt's CONTENTS, not its visibility. Spec explicitly
+  carves them out.
+* Tab right-click menus: no rich-prompt entries today.
+* Doc / file / browser / graph contexts: no rich-prompt
+  entries today.
+
+Files touched:
+
+* `web/src/state/tabs.svelte.ts` —
+  `showOrSpawnRichPromptInFocusedPane`.
+* `web/src/App.svelte` — `case "p" / "P"` in pane-mode
+  dispatch + helper import.
+* `web/src/components/TerminalTab.svelte` — dropped
+  hamburger entry + `MessageSquareText` import.
+* `web/src/components/PaneModeHelp.svelte` — cheatsheet
+  row for `p`.
+* `web/src/state/tabs.test.ts` — 3 new tests covering
+  empty-pane spawn / existing-terminal focus / prompt
+  preserves buffer + mode on re-show.
+* `web/src/components/paneModeKeymap.test.ts` — raw-
+  source assert on the `case "p" / "P"` ordering.
+
+Gate green:
+
+* `npm run test -- tabs paneModeKeymap` (71 passed),
+* `npm run test` (342 passed),
+* `npm run check`, `npm run build`,
+* `bash -lc 'ulimit -n 4096; scripts/pre-push'` (green).
+
+Proposed commit message:
+
+> Cmd+K p shows or spawns rich prompt (fullstack-50)
+>
+> New Pane Mode key `p` reveals the rich prompt on the
+> focused pane's terminal: focuses an existing terminal
+> tab (active or not) and shows the prompt there, or
+> spawns a new terminal in the pane when none is
+> present. Commits the Pane Mode draft first so any
+> in-flight layout edits seal and a freshly-spawned
+> terminal survives. Drops the "Rich prompt" hamburger
+> entry on TerminalTab; Cmd+K p is now the canonical
+> entry, the rich prompt's existing `×` button (and Esc)
+> is the exit. Alt+Space global shortcut preserved for
+> muscle memory.

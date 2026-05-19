@@ -818,3 +818,24 @@ tree opens already expanded to the selection. Graph case sets
 
 Moving on to `fullstack-49` (right-docked file browser chevron
 direction).
+
+## 2026-05-19 14:34 BST — poke
+
+`fullstack-49` is committed and pushed on `main`.
+
+Commit:
+
+* `6954776` Flip right-docked file browser chevron direction (fullstack-49)
+
+Gate run: `npm run test -- revealBrowserActions` (10 passed),
+`npm run test` (338 passed), `npm run check`, `npm run build`,
+and `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+`FileTree.svelte` imports `ChevronLeft` and the collapsed-dir
+branch picks it under `rightDock`. Left-dock + overlay + tab
+variants unchanged. Two regression asserts on
+`revealBrowserActions.test.ts` (icon imports + branch
+ordering).
+
+Moving on to `fullstack-50` (Cmd+K p rich prompt show/spawn +
+close button + menu cleanup).

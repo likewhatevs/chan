@@ -8,7 +8,6 @@
     FolderOpen,
     History,
     Info,
-    MessageSquareText,
     Network,
     Pencil,
     Radio,
@@ -955,13 +954,10 @@
           <span class="mbtn-label">Paste</span>
           <span class="mbtn-chord"></span>
         </button>
-        <button class="mbtn" onclick={openRichPrompt}>
-          <span class="mbtn-icon">
-            <MessageSquareText size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Rich prompt</span>
-          <span class="mbtn-chord">Alt+Space</span>
-        </button>
+        <!-- `fullstack-50`: dropped the "Rich prompt" hamburger
+             entry; Cmd+K p is the canonical entry, the rich prompt's
+             own `×` button is the exit. Alt+Space still works as the
+             out-of-Pane-Mode shortcut for muscle-memory. -->
         <button class="mbtn" onclick={copyTerminalCwd}>
           <span class="mbtn-icon">
             <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />

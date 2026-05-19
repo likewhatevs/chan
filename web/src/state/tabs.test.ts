@@ -53,6 +53,7 @@ import {
   setWindowFocusColor,
   setTerminalSession,
   shouldCloseTabAfterDragEnd,
+  showOrSpawnRichPromptInFocusedPane,
   splitPane,
   tabLabelInPane,
   terminalBroadcastMemberIds,
@@ -560,6 +561,71 @@ describe("pane state", () => {
       expect(graph.scopeId).toBe("drive");
       expect(graph.pendingSelectId).toBeNull();
     }
+  });
+
+  test("showOrSpawnRichPromptInFocusedPane spawns a terminal in an empty pane (fullstack-50)", () => {
+    const seed = resetLayout([]);
+
+    showOrSpawnRichPromptInFocusedPane();
+
+    const pane = layout.nodes[seed.id] as LeafNode;
+    expect(pane.tabs).toHaveLength(1);
+    const terminal = pane.tabs[0];
+    expect(terminal.kind).toBe("terminal");
+    if (terminal.kind === "terminal") {
+      expect(terminal.richPrompt?.open).toBe(true);
+      expect(terminal.richPrompt?.mode).toBe("wysiwyg");
+    }
+    expect(pane.activeTabId).toBe(terminal.id);
+  });
+
+  test("showOrSpawnRichPromptInFocusedPane focuses an existing terminal in the pane (fullstack-50)", () => {
+    // Pane has a doc tab (active) plus a terminal further down.
+    // Cmd+K p should refocus the terminal AND show the rich prompt
+    // there, leaving the doc tab and the other tabs alone.
+    const doc = fileTab({ id: "doc-1", path: "notes/x.md" });
+    const terminal: TerminalTab = {
+      kind: "terminal",
+      id: "term-existing",
+      title: "Terminal",
+      createdAt: 1,
+      broadcastEnabled: false,
+      broadcastTargetIds: [],
+    };
+    const seed = resetLayout([doc, terminal]);
+    (layout.nodes[seed.id] as LeafNode).activeTabId = doc.id;
+
+    showOrSpawnRichPromptInFocusedPane();
+
+    const pane = layout.nodes[seed.id] as LeafNode;
+    // No new terminal — the existing one was reused.
+    expect(pane.tabs).toHaveLength(2);
+    expect(pane.activeTabId).toBe("term-existing");
+    const live = pane.tabs.find((t) => t.id === "term-existing") as TerminalTab;
+    expect(live.richPrompt?.open).toBe(true);
+  });
+
+  test("showOrSpawnRichPromptInFocusedPane reveals the prompt on an already-open prompt (fullstack-50)", () => {
+    const terminal: TerminalTab = {
+      kind: "terminal",
+      id: "term-1",
+      title: "Terminal",
+      createdAt: 1,
+      broadcastEnabled: false,
+      broadcastTargetIds: [],
+      richPrompt: { buffer: "draft", heightPx: 200, open: false, mode: "source" },
+    };
+    const seed = resetLayout([terminal]);
+    (layout.nodes[seed.id] as LeafNode).activeTabId = "term-1";
+
+    showOrSpawnRichPromptInFocusedPane();
+
+    const pane = layout.nodes[seed.id] as LeafNode;
+    const live = pane.tabs.find((t) => t.id === "term-1") as TerminalTab;
+    expect(live.richPrompt?.open).toBe(true);
+    // Existing mode + buffer preserved; the helper only opens.
+    expect(live.richPrompt?.mode).toBe("source");
+    expect(live.richPrompt?.buffer).toBe("draft");
   });
 
   test("repeated openBrowserInActivePane / openGraphInActivePane stack (fullstack-47)", () => {

@@ -77,6 +77,7 @@
     paneModeResize,
     paneModeSplit,
     paneModeSwap,
+    showOrSpawnRichPromptInFocusedPane,
   } from "./state/tabs.svelte";
   import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
   import {
@@ -454,6 +455,19 @@
       case "h":
       case "H":
         paneModeHelpVisible = !paneModeHelpVisible;
+        return;
+      // `fullstack-50`: `p` shows the rich prompt on the focused
+      // pane's terminal (or spawns a terminal and shows it there).
+      // Commit the draft first so any layout edits the user shaped
+      // before pressing `p` seal, AND so a freshly-spawned terminal
+      // lands in the live layout (not the draft that Esc could
+      // discard). Cmd+K p is the canonical entry; the rich prompt's
+      // own `×` button (and Esc) is the exit.
+      case "p":
+      case "P":
+        commitPaneMode();
+        scheduleSessionSave();
+        showOrSpawnRichPromptInFocusedPane();
         return;
       // `fullstack-48`: Tab flips the focused Hybrid. Stays inside
       // the pane-mode transaction so Esc can roll the flip back if

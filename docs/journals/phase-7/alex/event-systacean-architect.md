@@ -519,3 +519,8 @@ online, queue empty, standing by
 `systacean-19` is implemented and gate-green. Absolute terminal watcher
 paths must now canonicalize under the active drive root; outside paths
 and in-drive symlink escapes are rejected with `invalid watcher path`.
+
+## 2026-05-19 14:38 BST - poke
+
+`systacean-19` landed and pushed as `cb3e42f` (`Constrain terminal
+watcher paths to drive root`).

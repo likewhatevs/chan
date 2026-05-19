@@ -661,6 +661,32 @@ export function openActiveTerminalRichPrompt(): void {
   }
 }
 
+/// `fullstack-50` Cmd+K p binding: show the rich prompt on the
+/// focused pane's terminal.
+///
+/// * Focused pane already has a terminal tab (active or not):
+///   focus the first one and reveal the prompt on it.
+/// * Focused pane has tabs but no terminal: spawn a new
+///   terminal tab in the pane (per `openTerminalInPane`'s
+///   defaults) and show the prompt on it.
+/// * Focused pane is empty: same as above — spawn + show.
+///
+/// Caller is responsible for committing any active Pane Mode
+/// draft beforehand so the spawned terminal lands in the
+/// committed layout rather than evaporating on Esc.
+export function showOrSpawnRichPromptInFocusedPane(): void {
+  const p = activePane();
+  const terminal = p.tabs.find(
+    (t): t is TerminalTab => t.kind === "terminal",
+  );
+  if (terminal) {
+    p.activeTabId = terminal.id;
+  } else {
+    openTerminalInPane(p.id, {});
+  }
+  openActiveTerminalRichPrompt();
+}
+
 export type OpenTerminalOptions = {
   cwd?: string;
   seedInput?: string;

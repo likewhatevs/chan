@@ -107,3 +107,8 @@ Verification:
 * `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
 * `cargo fmt --check`
 * `bash -lc 'ulimit -n 4096; scripts/pre-push'`
+
+## 2026-05-19 14:38 BST - landed
+
+Landed and pushed as `cb3e42f` (`Constrain terminal watcher paths to
+drive root`).

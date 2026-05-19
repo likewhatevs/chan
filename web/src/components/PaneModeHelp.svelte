@@ -26,6 +26,7 @@
         { keys: "2", action: "File Browser" },
         { keys: "3", action: "Graph" },
         { keys: "4", action: "New file" },
+        { keys: "p", action: "Rich prompt (terminal)" },
         { keys: "s", action: "Search overlay" },
       ],
     },
