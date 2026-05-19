@@ -29,7 +29,11 @@ import {
   paneMode,
   paneModeEqualize,
   paneModeMoveFocus,
+  paneModeOpenBrowser,
+  paneModeOpenGraph,
+  paneModeOpenTerminal,
   paneModeResize,
+  paneModeSplit,
   paneModeSwap,
   removeTerminalFromBroadcastGroup,
   registerTerminalInputSink,
@@ -358,6 +362,105 @@ describe("pane state", () => {
     expect(paneMode.active).toBe(false);
     expect(layout.activePaneId).toBe(leftPane.id);
     expect(root.ratio).toBe(0.5);
+  });
+
+  test("pane mode spawn keys add tabs to the draft and Esc rolls them back", () => {
+    const left = fileTab({ id: "left", path: "notes/left.md" });
+    const leftPane = resetLayout([left]);
+    layout.activePaneId = leftPane.id;
+
+    enterPaneMode();
+    paneModeOpenTerminal();
+    paneModeOpenBrowser();
+    paneModeOpenGraph();
+
+    // Draft sees the three new tabs; the real layout is untouched.
+    const draftPane = paneMode.draft?.nodes[leftPane.id];
+    expect(draftPane?.kind).toBe("leaf");
+    if (draftPane?.kind !== "leaf") return;
+    expect(draftPane.tabs.map((t) => t.kind)).toEqual([
+      "file",
+      "terminal",
+      "browser",
+      "graph",
+    ]);
+    expect(layout.nodes[leftPane.id]?.kind).toBe("leaf");
+    expect((layout.nodes[leftPane.id] as LeafNode).tabs).toHaveLength(1);
+
+    cancelPaneMode();
+    expect((layout.nodes[leftPane.id] as LeafNode).tabs).toHaveLength(1);
+  });
+
+  test("pane mode commits the draft's spawned tabs into the real layout", () => {
+    const left = fileTab({ id: "left", path: "notes/left.md" });
+    const leftPane = resetLayout([left]);
+    layout.activePaneId = leftPane.id;
+
+    enterPaneMode();
+    paneModeOpenTerminal();
+    paneModeOpenBrowser();
+    commitPaneMode();
+
+    const committed = layout.nodes[leftPane.id];
+    expect(committed?.kind).toBe("leaf");
+    if (committed?.kind !== "leaf") return;
+    expect(committed.tabs.map((t) => t.kind)).toEqual([
+      "file",
+      "terminal",
+      "browser",
+    ]);
+    // Focus moves to the freshly-spawned browser tab (last in =
+    // paneModeOpenBrowser's activeTabId assignment carries through
+    // the commit).
+    expect(committed.activeTabId).toBe(
+      committed.tabs.find((t) => t.kind === "browser")?.id,
+    );
+  });
+
+  test("pane mode browser/graph spawn dedupes against existing tabs", () => {
+    const tab = fileTab({ id: "f", path: "notes/x.md" });
+    const pane = resetLayout([tab]);
+    openBrowserInActivePane();
+    openGraphInActivePane();
+    const beforeCount = activePane().tabs.length;
+
+    enterPaneMode();
+    paneModeOpenBrowser();
+    paneModeOpenGraph();
+    commitPaneMode();
+
+    // Both dedupe paths kick in; no new tabs are added.
+    expect(activePane().tabs).toHaveLength(beforeCount);
+    expect(pane.id).toBe(activePane().id);
+  });
+
+  test("pane mode split inserts a new pane to the right/down in the draft", () => {
+    const left = fileTab({ id: "left", path: "notes/left.md" });
+    const root = resetLayout([left]);
+    layout.activePaneId = root.id;
+
+    enterPaneMode();
+    paneModeSplit("row");
+    // Draft now has a split node at the root, focus on the new pane.
+    const draft = paneMode.draft;
+    expect(draft).not.toBeNull();
+    if (!draft) return;
+    const draftRoot = draft.nodes[draft.rootId];
+    expect(draftRoot?.kind).toBe("split");
+    if (draftRoot?.kind !== "split") return;
+    expect(draftRoot.direction).toBe("row");
+    // The original pane sits on the left ("a"); the new pane is "b"
+    // and grabs focus (placement: "after").
+    expect(draftRoot.a).toBe(root.id);
+    expect(draftRoot.b).toBe(draft.activePaneId);
+    // Real layout is still a single pane.
+    expect(layout.nodes[layout.rootId]?.kind).toBe("leaf");
+
+    commitPaneMode();
+    const committedRoot = layout.nodes[layout.rootId];
+    expect(committedRoot?.kind).toBe("split");
+    if (committedRoot?.kind !== "split") return;
+    expect(committedRoot.direction).toBe("row");
   });
 
   test("pane mode commits draft focus resize equalize and swaps", () => {

@@ -110,3 +110,103 @@ Standard. Pre-push gate green. Coordinate with
 @@WebtestA only if a walkthrough is wanted; otherwise
 this is bounded enough that the gate is sufficient.
 Ping via `alex/event-fullstack-a-architect.md`.
+
+## 2026-05-19 12:08 BST — @@FullStackA specialist review
+
+### Cmd+K mode keybinds
+
+* `web/src/state/tabs.svelte.ts` — new draft-aware
+  helpers:
+  * `paneModeSplit("row" | "column")` reuses a
+    refactored `insertSiblingPaneIn(state, ...)` so the
+    split lands inside the draft. Honors right/down only
+    via the call sites in App.svelte.
+  * `paneModeOpenTerminal()` spawns a `TerminalTab` on
+    the draft's focused pane. The terminal WebSocket
+    only connects when the tab mounts, so an Esc
+    rollback leaves no backend state behind.
+  * `paneModeOpenBrowser()` and `paneModeOpenGraph()`
+    mirror `openBrowserInActivePane` /
+    `openGraphInPane`'s dedup-by-existing semantics
+    against the draft pane, so pressing `2` or `4`
+    repeatedly doesn't pile duplicates.
+* `web/src/App.svelte:handlePaneModeKey` — added 8 cases
+  on top of the existing WASD/arrows/`[ ]`/`- =`/`0`/
+  Enter/Esc set:
+  * `1` / `2` / `4` → `paneModeOpenTerminal` /
+    `paneModeOpenBrowser` / `paneModeOpenGraph`. Stay
+    inside the transaction so Esc rolls the new tab
+    back along with any layout edits.
+  * `3` (Search) commits the draft + opens the existing
+    Search OverlayShell. Search isn't a tab type
+    (per @@Alex's Phase 1 call), and the overlay needs
+    normal keyboard context — staying inside the
+    pane-mode keydown handler would eat its input.
+  * `/` and `\\` → `paneModeSplit("row" | "column")`.
+    Right + down only, matching `fullstack-21`'s
+    hamburger menu constraint.
+  * `x` / `X` and `k` / `K` commit the draft + call
+    `closeTabsInPane(layout.activePaneId)` /
+    `closePane(layout.activePaneId)`. The existing
+    terminal-close confirmation modal lives in those
+    helpers — keystrokes don't bypass it.
+
+### Invisible pane divider
+
+* `web/src/components/Workspace.svelte` — the
+  `.divider` element keeps its dimensions (4px, 6px
+  hover), `flex-shrink: 0`, and `cursor: col-resize /
+  row-resize`, but now paints with
+  `background: transparent` instead of `var(--border)`.
+  Drag-to-resize still works invisibly on the same
+  gutter; the pane chrome's margin + shadow (from
+  `fullstack-34`) carries the visual separation
+  between halves.
+
+### Tests
+
+* `web/src/state/tabs.test.ts` — four new tests under
+  the existing pane-mode describe:
+  * "pane mode spawn keys add tabs to the draft and Esc
+    rolls them back" — asserts the draft sees the new
+    tabs while the real layout is untouched, and Esc
+    leaves the original tab count.
+  * "pane mode commits the draft's spawned tabs into
+    the real layout" — Enter commits, real layout
+    gains the new tabs in order, focus lands on the
+    most-recently-spawned tab.
+  * "pane mode browser/graph spawn dedupes against
+    existing tabs" — pressing the spawn keys with
+    matching tabs already in the focused pane is a
+    no-op on tab count.
+  * "pane mode split inserts a new pane to the right/
+    down in the draft" — asserts the draft gains a
+    SplitNode at the root with the new pane on side
+    "b" (placement: "after"), draft focus follows, and
+    Enter commits.
+
+### Gate
+
+* `npm run test -- tabs` — 50 passed (was 46; +4 new).
+* `npm run test` — 32 files / 289 tests, all pass.
+* `npm run check` — 0 errors / 0 warnings.
+* `npm run build` — clean.
+* `bash -lc 'ulimit -n 4096; scripts/pre-push'` — green
+  (fmt + clippy + tests + no-default-features build).
+
+### Proposed commit message
+
+> Cmd+K spawn/split/kill keybinds + invisible pane divider (fullstack-39)
+>
+> Extend the Phase 2 Cmd+K transactional pane mode with eight
+> new single-key bindings: 1/2/4 spawn terminal/files/graph in
+> the draft (Enter commits, Esc rolls back), 3 commits + opens
+> the Search overlay, / and \\ split right/down inside the draft,
+> x and k commit + delegate to the existing close-all-tabs /
+> close-pane affordances so the terminal-close confirmation
+> still fires. Drops the visible divider bar between panes
+> (the pane-chrome margin + shadow carries the separation);
+> hit area, cursor, and drag-resize behaviour are unchanged.
+
+Ready for commit + push under standing topic-level
+clearance.

@@ -110,8 +110,14 @@
   }
   .split.row > .half { flex-direction: row; }
   .split.column > .half { flex-direction: column; }
+  /* Pane divider: visually invisible per `fullstack-39`. The pane
+     chrome (margin + shadow from `fullstack-34`) already gives the
+     two halves their own visual frame, so a hard border between
+     them just adds noise. The hit area, cursor, and the grab-friendly
+     hover widening are preserved so drag-to-resize keeps the same
+     feel; only the painted bar goes away. */
   .divider {
-    background: var(--border);
+    background: transparent;
     flex-shrink: 0;
   }
   .split.row > .divider { width: 4px; cursor: col-resize; }

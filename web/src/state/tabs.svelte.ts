@@ -1576,6 +1576,148 @@ export function paneModeEqualize(): void {
   if (parent) parent.ratio = 0.5;
 }
 
+/// Insert `newPane` next to `originalId` inside a layout state. Same
+/// shape as the live-layout `insertSiblingPane` helper, but operates
+/// on any LayoutState so it works for the Cmd+K pane-mode draft.
+function insertSiblingPaneIn(
+  state: LayoutState,
+  originalId: string,
+  newPane: LeafNode,
+  direction: SplitNode["direction"],
+  placement: "before" | "after",
+): void {
+  const original = state.nodes[originalId];
+  if (!original || original.kind !== "leaf") return;
+  const entries = Object.values(state.nodes);
+  const parent = entries.find(
+    (n): n is SplitNode =>
+      n.kind === "split" && (n.a === original.id || n.b === original.id),
+  );
+  const split: SplitNode = {
+    kind: "split",
+    id: id("split"),
+    direction,
+    a: placement === "before" ? newPane.id : original.id,
+    b: placement === "before" ? original.id : newPane.id,
+    ratio: 0.5,
+  };
+  state.nodes[newPane.id] = newPane;
+  state.nodes[split.id] = split;
+  if (parent) {
+    if (parent.a === original.id) parent.a = split.id;
+    else parent.b = split.id;
+  } else {
+    state.rootId = split.id;
+  }
+}
+
+/// Cmd+K mode `/` and `\\` keybinds. Splits the focused pane in the
+/// draft tree only; Enter seals the split + any tabs spawned during
+/// the mode, Esc rolls everything back. Matches the right + down
+/// constraint @@Alex landed in `fullstack-21` for the hamburger
+/// menu's structural actions.
+export function paneModeSplit(direction: "row" | "column"): void {
+  const draft = draftLayout();
+  if (!draft) return;
+  const original = draft.nodes[draft.activePaneId];
+  if (!original || original.kind !== "leaf") return;
+  const newPane: LeafNode = {
+    kind: "leaf",
+    id: id("pane"),
+    tabs: [],
+    activeTabId: null,
+  };
+  insertSiblingPaneIn(draft, original.id, newPane, direction, "after");
+  draft.activePaneId = newPane.id;
+}
+
+/// Cmd+K mode `1`. Spawn a new terminal tab inside the draft's
+/// focused pane. The session WebSocket only opens once the tab
+/// mounts, so an Esc rollback leaves no backend state behind.
+export function paneModeOpenTerminal(): void {
+  const draft = draftLayout();
+  if (!draft) return;
+  const p = draft.nodes[draft.activePaneId];
+  if (!p || p.kind !== "leaf") return;
+  const tab: TerminalTab = {
+    kind: "terminal",
+    id: id("term"),
+    title: nextTerminalTitle(),
+    createdAt: Date.now(),
+    broadcastEnabled: false,
+    broadcastTargetIds: [],
+    mcpEnv: true,
+    sessionMcpEnv: undefined,
+    terminalSessionId: undefined,
+    controlledTerminal: undefined,
+    lastSeq: undefined,
+    cwd: undefined,
+    seedInput: undefined,
+    richPrompt: undefined,
+  };
+  p.tabs.push(tab);
+  p.activeTabId = tab.id;
+}
+
+/// Cmd+K mode `2`. Spawn a File Browser tab inside the draft's
+/// focused pane. Mirrors openBrowserInActivePane's dedup semantics:
+/// if the focused pane already has a browser tab, just activate it.
+export function paneModeOpenBrowser(): void {
+  const draft = draftLayout();
+  if (!draft) return;
+  const p = draft.nodes[draft.activePaneId];
+  if (!p || p.kind !== "leaf") return;
+  const existing = p.tabs.find(
+    (tab): tab is BrowserTab => tab.kind === "browser",
+  );
+  if (existing) {
+    p.activeTabId = existing.id;
+    return;
+  }
+  const tab: BrowserTab = {
+    kind: "browser",
+    id: id("browser"),
+    title: "Files",
+    inspectorOpen: defaultBrowserInspectorOpen(),
+  };
+  p.tabs.push(tab);
+  p.activeTabId = tab.id;
+}
+
+/// Cmd+K mode `4`. Spawn a Graph tab inside the draft's focused
+/// pane. Mirrors openGraphInPane's dedup-on-mode+scope behaviour
+/// so pressing `4` repeatedly doesn't pile graph tabs on top of
+/// each other.
+export function paneModeOpenGraph(): void {
+  const draft = draftLayout();
+  if (!draft) return;
+  const p = draft.nodes[draft.activePaneId];
+  if (!p || p.kind !== "leaf") return;
+  const mode: GraphTab["mode"] = "semantic";
+  const scopeId = "drive";
+  const existing = p.tabs.find(
+    (tab): tab is GraphTab =>
+      tab.kind === "graph" && tab.mode === mode && tab.scopeId === scopeId,
+  );
+  if (existing) {
+    p.activeTabId = existing.id;
+    return;
+  }
+  const tab: GraphTab = {
+    kind: "graph",
+    id: id("graph"),
+    title: graphTitle(mode, scopeId),
+    mode,
+    scopeId,
+    depth: 1,
+    filters: { ...DEFAULT_GRAPH_FILTERS },
+    inspectorOpen: false,
+    pendingSelectId: null,
+  };
+  p.tabs.push(tab);
+  p.activeTabId = tab.id;
+}
+
 /// Move a tab from one pane to another. If `toIndex` is omitted the tab
 /// is appended. Source pane collapses if it becomes empty.
 export function moveTab(

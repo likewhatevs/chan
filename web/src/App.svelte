@@ -42,7 +42,9 @@
     activeFileTab,
     activePane,
     closeFind,
+    closePane,
     closeTab,
+    closeTabsInPane,
     cancelPaneMode,
     commitPaneMode,
     enterPaneMode,
@@ -62,7 +64,11 @@
     paneMode,
     paneModeEqualize,
     paneModeMoveFocus,
+    paneModeOpenBrowser,
+    paneModeOpenGraph,
+    paneModeOpenTerminal,
     paneModeResize,
+    paneModeSplit,
     paneModeSwap,
   } from "./state/tabs.svelte";
   import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
@@ -370,6 +376,51 @@
         return;
       case "0":
         paneModeEqualize();
+        return;
+      // Cmd+K mode spawn keys: stay inside the transaction so Esc
+      // can roll the new tab back along with any layout edits.
+      case "1":
+        paneModeOpenTerminal();
+        return;
+      case "2":
+        paneModeOpenBrowser();
+        return;
+      case "4":
+        paneModeOpenGraph();
+        return;
+      // Search lives in an OverlayShell, not a tab type. Open the
+      // overlay outside the transaction so it can capture keyboard
+      // input cleanly; commit the draft first so any layout edits
+      // the user already made don't get dropped.
+      case "3":
+        commitPaneMode();
+        scheduleSessionSave();
+        searchPanel.open = true;
+        return;
+      // Split keybinds reuse the right/down constraint from
+      // `fullstack-21`'s hamburger menu. New pane lands as the focus
+      // so subsequent edits inside the same transaction target it.
+      case "/":
+        paneModeSplit("row");
+        return;
+      case "\\":
+        paneModeSplit("column");
+        return;
+      // Close-all / kill-pane reuse the existing affordances and
+      // their terminal-confirmation modal. Commit the draft first so
+      // the confirmation runs against the layout the user just
+      // shaped; the modal needs the normal app keyboard context.
+      case "x":
+      case "X":
+        commitPaneMode();
+        scheduleSessionSave();
+        void closeTabsInPane(layout.activePaneId);
+        return;
+      case "k":
+      case "K":
+        commitPaneMode();
+        scheduleSessionSave();
+        void closePane(layout.activePaneId);
         return;
     }
   }
