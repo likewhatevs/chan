@@ -64,11 +64,15 @@
       ],
     },
     {
+      // `fullstack-72`: 1/2/3 stage a spawn intent that fires on
+      // Enter; Esc clears it. Aligned with Tab's draft/commit
+      // model so the pill's "Enter commit · Esc discard" reads
+      // honest for every keystroke.
       title: "Spawn",
       rows: [
-        { caps: [{ label: "1", key: "1" }], action: "Terminal" },
-        { caps: [{ label: "2", key: "2" }], action: "File Browser" },
-        { caps: [{ label: "3", key: "3" }], action: "Graph" },
+        { caps: [{ label: "1", key: "1" }], action: "Stage: Terminal" },
+        { caps: [{ label: "2", key: "2" }], action: "Stage: File Browser" },
+        { caps: [{ label: "3", key: "3" }], action: "Stage: Graph" },
         { caps: [{ label: "4", key: "4" }], action: "New file" },
         { caps: [{ label: "p", key: "p" }], action: "Rich prompt (terminal)" },
         { caps: [{ label: "s", key: "s" }], action: "Search overlay" },

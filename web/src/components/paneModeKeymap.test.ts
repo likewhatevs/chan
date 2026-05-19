@@ -28,12 +28,13 @@ describe("Cmd+K pane mode keymap (fullstack-40 inversion)", () => {
 });
 
 describe("Cmd+K pane mode keymap (fullstack-42 — search / graph / new file / help)", () => {
-  test("3 spawns Graph; lowercase s opens the Search overlay", () => {
-    // `fullstack-43`: every spawn key now passes a context derived
-    // from the focused tab so the new tab anchors on the source's
-    // directory / file instead of the drive root.
+  test("3 stages a Graph spawn; lowercase s opens the Search overlay", () => {
+    // `fullstack-72`: spawn keys stage an intent into
+    // `paneMode.spawnIntent` instead of pushing a tab into the
+    // draft on keystroke. `commitPaneMode()` applies the intent
+    // when the user confirms with Enter.
     expect(app).toContain(
-      'case "3":\n        paneModeOpenGraph(resolveSpawnContext());',
+      'case "3":\n        paneModeStageSpawn("graph", resolveSpawnContext());',
     );
     expect(app).toMatch(
       /case "s":[\s\S]*commitPaneMode\(\);[\s\S]*searchPanel\.open = true;/,
@@ -59,16 +60,26 @@ describe("Cmd+K pane mode keymap (fullstack-42 — search / graph / new file / h
   });
 });
 
-describe("Cmd+K pane mode spawn context (fullstack-43)", () => {
-  test("1 spawns Terminal with the resolved context", () => {
+describe("Cmd+K pane mode spawn staging (fullstack-72)", () => {
+  test("1 stages a terminal spawn with the resolved context", () => {
     expect(app).toContain(
-      'case "1":\n        paneModeOpenTerminal(resolveSpawnContext());',
+      'case "1":\n        paneModeStageSpawn("terminal", resolveSpawnContext());',
     );
   });
 
-  test("2 primes the browser selection then spawns the File Browser", () => {
+  test("2 stages a browser spawn with the resolved context", () => {
+    expect(app).toContain(
+      'case "2":\n        paneModeStageSpawn("browser", resolveSpawnContext());',
+    );
+  });
+
+  test("Enter primes browserSelection only when a browser intent is staged", () => {
+    // Peek the staged intent before commit so a browser spawn's
+    // tree lands expanded to + selecting the contextual node. The
+    // peek must read `paneMode.spawnIntent` *before*
+    // commitPaneMode() clears it.
     expect(app).toMatch(
-      /case "2": \{[\s\S]*?const ctx = resolveSpawnContext\(\);[\s\S]*?if \(ctx\.file\) revealAndSelect\(ctx\.file\);[\s\S]*?else if \(ctx\.dir\) revealAndSelect\(ctx\.dir\);[\s\S]*?paneModeOpenBrowser\(ctx\);/,
+      /case "Enter": \{[\s\S]*?const intent = paneMode\.spawnIntent;[\s\S]*?if \(intent && intent\.kind === "browser"\)[\s\S]*?revealAndSelect\(intent\.ctx\.file\);[\s\S]*?revealAndSelect\(intent\.ctx\.dir\);[\s\S]*?commitPaneMode\(\);/,
     );
   });
 });

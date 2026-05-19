@@ -144,6 +144,14 @@
           <span class="section pane-mode-pill">
             <span class="dot working"></span>
             pane mode
+            {#if paneMode.spawnIntent}
+              <!-- `fullstack-72`: visible chip when a tab spawn is
+                   staged (Cmd+K 1/2/3). Telegraphs that Enter will
+                   actually create the tab and Esc will drop the
+                   intent; without this chip the "Enter commit"
+                   wording read as a no-op for the number keys. -->
+              <span class="muted">→ stage {paneMode.spawnIntent.kind}</span>
+            {/if}
             <span class="muted">Enter commit · Esc discard</span>
           </span>
         {/if}

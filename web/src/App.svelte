@@ -76,6 +76,7 @@
     paneModeOpenTerminal,
     paneModeResize,
     paneModeSplit,
+    paneModeStageSpawn,
     paneModeSwap,
     showOrSpawnRichPromptInFocusedPane,
   } from "./state/tabs.svelte";
@@ -366,11 +367,22 @@
   function handlePaneModeKey(e: KeyboardEvent): void {
     const large = e.shiftKey ? 0.1 : 0.02;
     switch (e.key) {
-      case "Enter":
+      case "Enter": {
+        // `fullstack-72`: prime the module-level browserSelection
+        // before commit when a browser spawn is staged so the new
+        // tab's tree lands already expanded to + selecting the
+        // contextual node. Peek the intent before commitPaneMode
+        // clears it. revealAndSelect is a no-op for empty paths.
+        const intent = paneMode.spawnIntent;
+        if (intent && intent.kind === "browser") {
+          if (intent.ctx.file) revealAndSelect(intent.ctx.file);
+          else if (intent.ctx.dir) revealAndSelect(intent.ctx.dir);
+        }
         commitPaneMode();
         scheduleSessionSave();
         paneModeHelpVisible = false;
         return;
+      }
       case "Escape":
         cancelPaneMode();
         paneModeHelpVisible = false;
@@ -423,33 +435,27 @@
       case "0":
         paneModeEqualize();
         return;
-      // Cmd+K mode spawn keys: stay inside the transaction so Esc
-      // can roll the new tab back along with any layout edits.
-      // `fullstack-43`: each spawn pulls a context from the
-      // focused tab (cwd of a terminal, parent dir of a doc, the
-      // file-browser selection, the graph's scope) so the new tab
-      // lands next to the user's current focus instead of always
-      // anchoring at the drive root.
+      // Hybrid NAV spawn keys: stage the intent and wait for
+      // Enter to commit it (alongside any other draft edits). Esc
+      // discards the intent. Pressing a different staging key
+      // replaces the intent — only the most recent one fires on
+      // commit. Matches Tab's draft/commit pattern so the pill's
+      // "Enter commit · Esc discard" promise holds for every key
+      // per `fullstack-72`. `fullstack-43`: context still resolves
+      // from the focused tab at staging time so the spawned tab
+      // anchors on the source's directory / file when the user
+      // confirms.
       case "1":
-        paneModeOpenTerminal(resolveSpawnContext());
+        paneModeStageSpawn("terminal", resolveSpawnContext());
         return;
-      case "2": {
-        const ctx = resolveSpawnContext();
-        // Browser tabs share a module-level `browserSelection`, so
-        // priming it before the spawn makes the new tab's tree
-        // land already expanded to and selecting the contextual
-        // node. revealAndSelect is a no-op when the path is empty,
-        // so the drive-root fallback (`ctx.dir === ""`) is safe.
-        if (ctx.file) revealAndSelect(ctx.file);
-        else if (ctx.dir) revealAndSelect(ctx.dir);
-        paneModeOpenBrowser(ctx);
+      case "2":
+        paneModeStageSpawn("browser", resolveSpawnContext());
         return;
-      }
       // `3` opened the Search overlay in `fullstack-39`; `fullstack-42`
       // reassigns it to Graph since Graph is a real tab type, while
       // Search remains an OverlayShell. Search now lives on `s`.
       case "3":
-        paneModeOpenGraph(resolveSpawnContext());
+        paneModeStageSpawn("graph", resolveSpawnContext());
         return;
       // `4` was vacated in -39 + -40; -42 wires it to the existing
       // new-file flow. Modal owns the keyboard, so commit the draft

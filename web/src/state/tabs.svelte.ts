@@ -540,12 +540,32 @@ export const layout = $state<{
 
 export type LayoutState = typeof layout;
 
+/// `fullstack-72`: staged spawn for the Hybrid NAV (Pane Mode)
+/// number keys. Tab already uses a draft/commit model — pressing
+/// Tab flips the Hybrid live, Enter keeps it, Esc reverses. The
+/// 1/2/3 keys used to push directly into the draft tab list which
+/// made it look like a committed change. They now stage a single
+/// intent here; `commitPaneMode()` reads it and pushes the tab
+/// into the draft as part of the seal, so the pill's
+/// "Enter commit · Esc discard" promise holds for every keystroke.
+///
+/// Replacement (`1` then `2`) overwrites the intent — only the
+/// most recent staging fires on commit. Esc / cancel clears the
+/// intent without spawning.
+export type PaneModeSpawnKind = "terminal" | "browser" | "graph";
+export type PaneModeSpawnIntent = {
+  kind: PaneModeSpawnKind;
+  ctx: SpawnContext;
+};
+
 export const paneMode = $state<{
   active: boolean;
   draft: LayoutState | null;
+  spawnIntent: PaneModeSpawnIntent | null;
 }>({
   active: false,
   draft: null,
+  spawnIntent: null,
 });
 
 /// Single-fire wobble bus. Each pane's entry holds a monotonic
@@ -1585,21 +1605,52 @@ export function enterPaneMode(): void {
   if (paneMode.active) return;
   paneMode.draft = cloneLayoutState(layout);
   paneMode.active = true;
+  paneMode.spawnIntent = null;
 }
 
 export function commitPaneMode(): void {
   if (!paneMode.active || !paneMode.draft) return;
+  // `fullstack-72`: apply any staged spawn intent into the draft
+  // before sealing the layout so the new tab lands as part of the
+  // same transaction. Callers that need to prime side effects
+  // for a staged spawn (e.g. App.svelte's Enter handler calling
+  // `revealAndSelect` for a browser intent) should peek the
+  // intent via `paneMode.spawnIntent` *before* calling commit.
+  if (paneMode.spawnIntent) {
+    const { kind, ctx } = paneMode.spawnIntent;
+    if (kind === "terminal") paneModeOpenTerminal(ctx);
+    else if (kind === "browser") paneModeOpenBrowser(ctx);
+    else if (kind === "graph") paneModeOpenGraph(ctx);
+  }
   const next = cloneLayoutState(paneMode.draft);
   layout.rootId = next.rootId;
   layout.nodes = next.nodes;
   layout.activePaneId = next.activePaneId;
   paneMode.active = false;
   paneMode.draft = null;
+  paneMode.spawnIntent = null;
 }
 
 export function cancelPaneMode(): void {
   paneMode.active = false;
   paneMode.draft = null;
+  paneMode.spawnIntent = null;
+}
+
+/// `fullstack-72`: stage a tab spawn for commit. Replaces any
+/// previously-staged intent — pressing `1` then `2` results in
+/// the second intent alone (no terminal spawned). Has no effect
+/// outside Pane Mode.
+export function paneModeStageSpawn(
+  kind: PaneModeSpawnKind,
+  ctx: SpawnContext,
+): void {
+  if (!paneMode.active) return;
+  paneMode.spawnIntent = { kind, ctx };
+}
+
+export function clearPaneModeSpawnIntent(): void {
+  paneMode.spawnIntent = null;
 }
 
 type Direction = "left" | "right" | "up" | "down";

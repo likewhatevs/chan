@@ -37,6 +37,7 @@ import {
   paneModeOpenTerminal,
   paneModeResize,
   paneModeSplit,
+  paneModeStageSpawn,
   paneModeSwap,
   removeTerminalFromBroadcastGroup,
   registerTerminalInputSink,
@@ -639,6 +640,93 @@ describe("pane state", () => {
       expect(graph.scopeId).toBe("drive");
       expect(graph.pendingSelectId).toBeNull();
     }
+  });
+
+  test("paneModeStageSpawn stores intent without modifying the draft (fullstack-72)", () => {
+    const f = fileTab({ id: "f", path: "notes/x.md" });
+    const seed = resetLayout([f]);
+
+    enterPaneMode();
+    paneModeStageSpawn("terminal", { dir: "notes" });
+
+    // Draft pane should still have just the original file tab —
+    // the spawn intent is staged, not applied.
+    const draftPane = paneMode.draft?.nodes[seed.id];
+    expect(draftPane?.kind).toBe("leaf");
+    if (draftPane?.kind === "leaf") {
+      expect(draftPane.tabs).toHaveLength(1);
+      expect(draftPane.tabs[0]?.kind).toBe("file");
+    }
+    expect(paneMode.spawnIntent).toEqual({
+      kind: "terminal",
+      ctx: { dir: "notes" },
+    });
+
+    cancelPaneMode();
+  });
+
+  test("staged spawn fires on commit and lands on the focused pane (fullstack-72)", () => {
+    const f = fileTab({ id: "f", path: "notes/x.md" });
+    const seed = resetLayout([f]);
+
+    enterPaneMode();
+    paneModeStageSpawn("graph", { file: "notes/x.md", dir: "notes" });
+    commitPaneMode();
+
+    const live = layout.nodes[seed.id];
+    expect(live?.kind).toBe("leaf");
+    if (live?.kind === "leaf") {
+      const graph = live.tabs.find((t) => t.kind === "graph");
+      expect(graph?.kind).toBe("graph");
+      if (graph?.kind === "graph") {
+        expect(graph.scopeId).toBe("file:notes/x.md");
+        expect(graph.pendingSelectId).toBe("notes/x.md");
+      }
+    }
+    // Intent is cleared on commit.
+    expect(paneMode.spawnIntent).toBeNull();
+  });
+
+  test("staging a second key replaces the intent (fullstack-72)", () => {
+    const f = fileTab({ id: "f", path: "notes/x.md" });
+    const seed = resetLayout([f]);
+
+    enterPaneMode();
+    paneModeStageSpawn("terminal", { dir: "" });
+    paneModeStageSpawn("browser", { dir: "notes" });
+    commitPaneMode();
+
+    const live = layout.nodes[seed.id];
+    expect(live?.kind).toBe("leaf");
+    if (live?.kind === "leaf") {
+      // Browser spawned, no terminal — replacement, not stacking.
+      expect(live.tabs.filter((t) => t.kind === "terminal")).toHaveLength(0);
+      expect(live.tabs.filter((t) => t.kind === "browser")).toHaveLength(1);
+    }
+  });
+
+  test("Esc / cancel discards a staged spawn (fullstack-72)", () => {
+    const f = fileTab({ id: "f", path: "notes/x.md" });
+    const seed = resetLayout([f]);
+    const initialTabCount = (layout.nodes[seed.id] as LeafNode).tabs.length;
+
+    enterPaneMode();
+    paneModeStageSpawn("terminal", { dir: "notes" });
+    cancelPaneMode();
+
+    const live = layout.nodes[seed.id];
+    expect(live?.kind).toBe("leaf");
+    if (live?.kind === "leaf") {
+      expect(live.tabs).toHaveLength(initialTabCount);
+      expect(live.tabs.find((t) => t.kind === "terminal")).toBeUndefined();
+    }
+    expect(paneMode.spawnIntent).toBeNull();
+  });
+
+  test("paneModeStageSpawn is a no-op outside Pane Mode (fullstack-72)", () => {
+    resetLayout([fileTab({ id: "f", path: "notes/x.md" })]);
+    paneModeStageSpawn("terminal", { dir: "" });
+    expect(paneMode.spawnIntent).toBeNull();
   });
 
   test("showOrSpawnRichPromptInFocusedPane spawns a terminal in an empty pane (fullstack-50)", () => {
