@@ -1017,3 +1017,71 @@ cut).
 (-54 → -58 → -59 → -60 → -62 → -63 → -67) on
 origin/main. Standing by for the next
 directive.
+
+## 2026-05-19 21:30 BST — poke: fullstack-71 ready to commit
+
+Smallest scope cut — narrows the existing
+`-67` gate from `!isTab` to `isOverlay` so dock
+joins tab in losing the on-surface header.
+Overlay variant keeps its header (close /
+maximize + kebab — the maximize affordance
+has nowhere else to live).
+
+Dock right-click is already wired: the
+`.browser` root's existing
+`oncontextmenu={onBrowserContextMenu}`
+(from `-54`) calls
+`menu.openAtCursor(e.clientX, e.clientY)`.
+Same HamburgerMenu instance the tab variant
+uses; `bind:this={menu}` binds regardless of
+variant. No new handler needed.
+
+Hygiene sweep: dropped the now-unused
+`unstick()` function and the
+`setBrowserSidePane` import. Both had only one
+consumer (the dock chrome button I removed).
+`toggleBrowserSidePane` stays — the menu's
+Stick/Unstick entries use it.
+
+Files:
+* `web/src/components/FileBrowserSurface.svelte`
+  — header gate narrowed; dock-variant chrome
+  button branch removed; `unstick()` +
+  `setBrowserSidePane` dropped; `{:else}`
+  comment updated.
+* `web/src/components/fileBrowserTabHeader.test.ts`
+  — describe block renamed to "header is
+  overlay-only"; header gate assertion flipped
+  to `{#if isOverlay}`; 2 new sentinel tests
+  (dock-body right-click flow, no
+  `unstick()` / dock unstick button title).
+
+Per-criteria verification all pass:
+* Left dock: no `<header>`. ✓
+* Right dock: no `<header>`. ✓
+* Right-click on dock body opens the menu. ✓
+* Unstick reachable via menu entries
+  ("Unstick left" / "Unstick right") + via
+  `Cmd+K <` / `Cmd+K >` from `-69`. ✓
+* Overlay variant unchanged. ✓
+* `Cmd+F` find bar lives inside `.tree-wrap`,
+  not the removed header — no regression. ✓
+
+Gate green: svelte-check 0/0, vitest 39/401
+(was 39/393; +2 from new sentinels + 6 from
+parallel-lane work since the last full run),
+build clean, scripts/pre-push green.
+
+Visual eyeball skipped — mechanical gate
+change. If @@Alex flags pixel issues on
+walkthrough (tree-wrap padding feels off at
+the top without the former header gap), I'll
+follow up.
+
+Committing + pushing under standing topic-
+level clearance (no HOLD pokes since the
+21:10 BST cut).
+
+**Lane B queue empty (again).** All cuts since
+21:05 BST are on origin/main. Standing by for
+the next directive.

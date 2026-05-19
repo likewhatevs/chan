@@ -45,7 +45,6 @@
     persistPaneWidths,
     refreshTree,
     searchPanel,
-    setBrowserSidePane,
     toggleBrowserSidePane,
     tree,
     treeExpanded,
@@ -281,11 +280,6 @@
     menu?.close();
   }
 
-  function unstick(): void {
-    if (!side) return;
-    setBrowserSidePane(side, false);
-  }
-
   function openOverlay(): void {
     openBrowserInActivePane();
     menu?.close();
@@ -358,37 +352,21 @@
   onkeydown={onBrowserKeydown}
   role="presentation"
 >
-  {#if !isTab}
+  {#if isOverlay}
     <header>
-      {#if isOverlay}
-        <button
-          type="button"
-          class="chrome-btn"
-          onclick={doToggleOverlayMaximized}
-          title={overlayMaximized.on ? "Restore size" : "Maximize"}
-          aria-label={overlayMaximized.on ? "Restore size" : "Maximize"}
-        >
-          {#if overlayMaximized.on}
-            <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-          {:else}
-            <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
-          {/if}
-        </button>
-      {:else if variant === "dock"}
-        <button
-          type="button"
-          class="chrome-btn"
-          onclick={unstick}
-          title={side === "right" ? "Unstick right" : "Unstick left"}
-          aria-label={side === "right" ? "Unstick right" : "Unstick left"}
-        >
-          {#if side === "right"}
-            <ArrowRight size={14} strokeWidth={1.75} aria-hidden="true" />
-          {:else}
-            <ArrowLeft size={14} strokeWidth={1.75} aria-hidden="true" />
-          {/if}
-        </button>
-      {/if}
+      <button
+        type="button"
+        class="chrome-btn"
+        onclick={doToggleOverlayMaximized}
+        title={overlayMaximized.on ? "Restore size" : "Maximize"}
+        aria-label={overlayMaximized.on ? "Restore size" : "Maximize"}
+      >
+        {#if overlayMaximized.on}
+          <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        {:else}
+          <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+        {/if}
+      </button>
       <span class="header-spacer" aria-hidden="true"></span>
       <HamburgerMenu
         bind:this={menu}
@@ -400,11 +378,14 @@
       </HamburgerMenu>
     </header>
   {:else}
-    <!-- `fullstack-67`: tab variant drops the on-surface header so
-         the pane Hybrid kebab is the only visible hamburger. The
-         FB hamburger items live on a hidden HamburgerMenu opened
-         at-cursor by the tab-strip right-click handler in
-         Pane.svelte (via tabMenu state + the $effect above). -->
+    <!-- `fullstack-67`/`fullstack-71`: tab + dock variants both drop
+         the on-surface header. Tab variant relies on the pane Hybrid
+         kebab (right-click on the Files tab → tabMenu state →
+         menu.openAtCursor via the $effect above). Dock variant
+         relies on the `oncontextmenu={onBrowserContextMenu}` handler
+         on the `.browser` root, which calls `menu.openAtCursor`
+         directly. Both share the same triggerless HamburgerMenu
+         mounted here. -->
     <HamburgerMenu
       bind:this={menu}
       bind:open={menuOpen}
@@ -478,7 +459,13 @@
         onClose={() => (browserState.inspectorOpen = false)}
       >
         {#if browserSelection.showDrive && !browserSelection.path}
-          <DriveInfoBody />
+          <!-- `fullstack-73`: parity with the file/dir inspector
+               surfaces. Click spawns a new Graph tab scoped to
+               drive root via `openFsGraphForDirectory("")` (matches
+               the convention `graphSelection()` uses for non-drive
+               selections — `openFsGraphForDirectory` / `openFsGraphForFile`
+               both spawn a fresh tab, never re-scope). -->
+          <DriveInfoBody onSetAsScope={() => openFsGraphForDirectory("")} />
         {:else}
           <FileInfoBody
             path={browserSelection.path}

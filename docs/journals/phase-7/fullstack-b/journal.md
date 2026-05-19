@@ -607,3 +607,40 @@ Committing + pushing. **Lane B queue empty.**
 All six remaining tasks shipped this session
 (-54 through -67). Standing by for the next
 directive.
+
+## 2026-05-19 21:30 BST
+
+Picked up `fullstack-71` (drop FB header in dock
+variant, both sides). Smallest scope — narrows
+the existing `-67` gate by one variant.
+
+Change: `{#if !isTab}` → `{#if isOverlay}` so
+only the overlay variant renders an on-surface
+header. Dock joins tab in falling through to
+the `{:else}` branch's triggerless HamburgerMenu.
+
+Dock right-click path was already wired:
+`.browser` root's existing
+`oncontextmenu={onBrowserContextMenu}` (from
+`-54`) calls `menu.openAtCursor(e.clientX,
+e.clientY)`. The HamburgerMenu instance is
+shared with the tab variant via the same
+`bind:this={menu}` binding. No new handler
+needed.
+
+Hygiene: dropped `unstick()` (only consumer was
+the removed dock chrome button) +
+`setBrowserSidePane` import (only consumer was
+`unstick`). `toggleBrowserSidePane` stays — the
+menu's Stick/Unstick entries use it.
+
+Test updates: renamed the existing -67 describe
+block to "header is overlay-only", flipped the
+header gate assertion to `{#if isOverlay}`,
+added 2 new sentinel tests (dock-body right-
+click flow + no unstick chrome button).
+
+Gate green: svelte-check 0/0, vitest 39/401,
+build clean, pre-push green.
+
+Committing + pushing. Lane B queue empty (again).
