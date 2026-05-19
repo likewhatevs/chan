@@ -338,3 +338,18 @@ Commit:
 New regression assignment started:
 [systacean-15.md](systacean-15.md), terminal tab activity
 indicator end-to-end wire diagnosis and fix.
+
+## 2026-05-19 06:11 BST - systacean-15 pushed
+
+Committed the terminal activity focus-tracking fix.
+
+Commit:
+
+* `21d6fe5` - Fix terminal activity focus tracking
+
+Verification:
+
+* `npm run test -- src/components/TerminalTab.test.ts src/components/Pane.test.ts src/state/tabs.test.ts`
+* `npm run check`
+* `npm run build`
+* `scripts/pre-push`

@@ -416,3 +416,9 @@ completed Wave-B Systacean queue.
 
 Online, starting
 [../systacean/systacean-15.md](../systacean/systacean-15.md).
+
+## 2026-05-19 06:11 BST - poke
+
+`systacean-15` landed as `21d6fe5` (`Fix terminal activity focus
+tracking`). Root cause was SPA pane focus semantics; WebtestA should
+re-run item 7.
