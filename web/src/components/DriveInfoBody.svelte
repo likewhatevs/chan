@@ -9,6 +9,17 @@
   import type { GlobalConfig } from "../api/types";
   import { drive } from "../state/store.svelte";
 
+  /// `fullstack-73`: optional "Graph from here" callback. Consumers
+  /// that host this body alongside an existing inspector convention
+  /// pass it; surfaces that don't (legacy callers) leave it unset
+  /// and the button doesn't render. The action's semantic differs
+  /// per consumer — FileBrowserSurface SPAWNS a new Graph tab while
+  /// GraphPanel's own inspector RE-SCOPES the current tab — so the
+  /// consumer wires the function and this body is callback-agnostic.
+  let {
+    onSetAsScope,
+  }: { onSetAsScope?: () => void } = $props();
+
   let globalConfig = $state<GlobalConfig | null>(null);
   let editedDefaultRoot = $state<string>("");
   let initialDefaultRoot = $state<string>("");
@@ -109,6 +120,15 @@
     <span class="v mono path" title={drive.info?.root}>{drive.info?.root ?? ""}</span>
   </div>
 
+  {#if onSetAsScope}
+    <!-- `fullstack-73`: parity with FileInfoBody so every inspector
+         surface offers the same "Graph from here" affordance. The
+         hosting surface decides whether the click spawns a new
+         Graph tab (file browser) or re-scopes the current one
+         (Graph inspector). -->
+    <button class="open" onclick={onSetAsScope}>Graph from here</button>
+  {/if}
+
   <section class="refs">
     <h4>Notes directories</h4>
     <p class="hint">
@@ -208,6 +228,21 @@
     text-align: left;
   }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  /* `fullstack-73`: mirrors the FileInfoBody `.open` styling so the
+     "Graph from here" affordance reads consistently across every
+     inspector body. */
+  .open {
+    width: 100%;
+    background: var(--btn-bg);
+    color: var(--text);
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    padding: 5px 0;
+    cursor: pointer;
+    font: inherit;
+    margin-top: 0.6rem;
+  }
+  .open:hover { border-color: var(--btn-hover); }
   .refs { margin: 0.8rem 0 0 0; }
   .refs h4 {
     font-size: 12px;

@@ -65,6 +65,34 @@ describe("no inline close affordance on first-class surfaces", () => {
     expect(graph).toMatch(/\{#if !tab\}[\s\S]*?<div class="bar">/);
   });
 
+  // fullstack-73: "Graph from here" affordance on DriveInfoBody so
+  // every inspector surface offers the same action when the drive
+  // root is selected.
+  test("DriveInfoBody renders 'Graph from here' only when onSetAsScope is provided", async () => {
+    const driveInfo = (
+      await import("./DriveInfoBody.svelte?raw")
+    ).default as string;
+    expect(driveInfo).toContain("onSetAsScope");
+    expect(driveInfo).toContain(
+      'onclick={onSetAsScope}>Graph from here',
+    );
+    // Button is gated on the prop being present, mirroring the
+    // FileInfoBody convention.
+    expect(driveInfo).toMatch(/\{#if onSetAsScope\}[\s\S]*?Graph from here/);
+  });
+
+  test("GraphPanel passes a re-scope callback to DriveInfoBody", async () => {
+    expect(graph).toMatch(
+      /<DriveInfoBody\s+onSetAsScope=\{[\s\S]*?scopeFsGraphFromHere\("", true\);[\s\S]*?graphState\.scopeId = "drive";/,
+    );
+  });
+
+  test("FileBrowserSurface spawns a Graph tab from DriveInfoBody", async () => {
+    expect(fileBrowserSurface).toContain(
+      'onSetAsScope={() => openFsGraphForDirectory("")}',
+    );
+  });
+
   test("GraphPanel renders a tab-menu-bubble carrying menuItems + filterChips", () => {
     // Right-click on the Graph tab opens the bubble; bubble re-uses
     // the existing `menuItems` snippet and a new `filterChips`

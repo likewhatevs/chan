@@ -1161,8 +1161,23 @@
              whole-drive config lives in one place across surfaces.
              Differentiated visually by GraphCanvas painting the
              "drive" sub-kind in a darker fill with the HardDrive
-             glyph. -->
-        <DriveInfoBody />
+             glyph.
+             `fullstack-73`: re-scope the current graph to drive
+             when the user clicks "Graph from here" — matches the
+             onSetAsScope convention used for file/dir inspector
+             rows below. Filesystem-mode graphs go through the same
+             `scopeFsGraphFromHere("", true)` entry; semantic-mode
+             graphs just set scopeId = "drive". -->
+        <DriveInfoBody
+          onSetAsScope={() => {
+            if (filesystemMode) {
+              scopeFsGraphFromHere("", true);
+            } else {
+              graphState.scopeId = "drive";
+            }
+            selectedId = "";
+          }}
+        />
       {:else if selectedFsNode && (isFsDirectory(selectedFsNode) || selectedFsNode.kind === "file") && selectedFsNode.path !== undefined && !selectedFsNode.broken}
         <!-- Real fs-mode file or directory: render the same body as the
              file browser / editor inspector (counts, size, code
