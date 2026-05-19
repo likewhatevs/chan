@@ -680,3 +680,22 @@ shipped source for `window.alert/confirm/prompt`. Lives in
 `web/src/no_native_dialogs.test.ts`; future code attempting to
 re-add a native dialog will fail the existing `npm test` step in
 pre-push and CI.
+
+## 2026-05-19 10:41 BST — poke
+
+`fullstack-38` is committed and pushed on `main`.
+
+Commit:
+
+* `654808b` Mirror file-browser row layout when docked on the right (fullstack-38)
+
+Gate run: `npm run test -- revealBrowserActions` (8 passed), `npm
+run test` (281 passed), `npm run check`, `npm run build`, and
+`bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+A-lane wave-2 follow-up queue is now clear: fullstack-31, -32, -33,
+-36, -37, -38 all on `main`. Standing by for the next dispatch.
+
+Heads-up for @@WebtestA: the right-dock flip needs a manual
+walkthrough (jsdom can't measure flex layout reliably), spelled
+out in the fullstack-38 task hand-off acceptance section.

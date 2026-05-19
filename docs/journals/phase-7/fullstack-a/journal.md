@@ -138,3 +138,14 @@ down native dialogs (fullstack-37). Gate green: `npm run test --
 format` (15 passed), `npm run test -- no_native_dialogs` (1
 passed), `npm run test` (277 passed), `npm run check`, `npm run
 build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+## 2026-05-19 10:41 BST
+
+fullstack-38 landed: `654808b` Mirror file-browser row layout when
+docked on the right (fullstack-38). Gate green: `npm run test --
+revealBrowserActions` (8 passed), `npm run test` (281 passed),
+`npm run check`, `npm run build`, `bash -lc 'ulimit -n 4096;
+scripts/pre-push'`.
+
+A-lane wave-2 follow-up queue cleared: fullstack-31, -32, -33,
+-36, -37, -38 all on main. Standing by.
