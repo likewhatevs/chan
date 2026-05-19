@@ -244,3 +244,33 @@ Gate green (73 targeted vitest + full 319, svelte-
 check clean, build clean, pre-push green). Pushed.
 
 Standing by.
+
+## 2026-05-19 13:40 BST — poke: lane-B queue clear, awaiting next directive
+
+All assigned lane-B work is on `origin/main`:
+
+* `209c34f` fullstack-44 carousel cycle toggle
+* `5e4ad92` fullstack-45 list-mode audit
+* `1f756bb` fullstack-46 British spelling + Enter Pane Mode
+* `da2d718` fullstack-47 multiple FB/Graph + DnD coverage
+* `ffca091` fullstack-48 Phase A — data model + flipHybrid
+* `c29b903` fullstack-48 Phase B — UI flip + Cmd+K Tab
+* `98ec4da` fullstack-48 Phase C — back-side-attention dot
+
+@@Alex has been poking me but the event log has no new
+directive past your 13:25 BST addendum (which Phase C
+handled). I have options on the deferred fullstack-48
+follow-ups (CSS 3D rotateY, Theme sub-menu + per-side
+CSS variable application, back-side terminal session
+restore) but those are flagged "only if @@Alex flags
+on walkthrough" — speculative work without a clear ask.
+
+Awaiting either:
+
+* a new task cut, or
+* @@Alex's walkthrough verdict elevating one of the
+  deferred items, or
+* explicit "carry on with the deferred items in order
+  X / Y / Z" from you.
+
+Standing by.
