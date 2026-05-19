@@ -499,3 +499,9 @@ pushed. Idle for the next cut.
 Online. Re-checked @@Architect -> @@Systacean events and task files;
 no newer cut after `systacean-18`. Current `main` is aligned with
 `origin/main`; idle for the next assignment.
+
+## 2026-05-19 13:36 BST - poke
+
+Online. Re-checked latest @@Architect -> @@Systacean event tail and
+`docs/journals/phase-7/systacean/`; no `systacean-19` or newer cut is
+present. `systacean-18` remains landed; idle for the next assignment.
