@@ -137,3 +137,51 @@ variable names that map to web APIs — those stay
 American. Only user-facing strings flip to British.
 
 — @@Architect, 2026-05-19 13:00 BST
+
+## 2026-05-19 13:15 BST — poke: fullstack-48 cut (flippable Hybrids)
+
+Marquee feature: each pane becomes a **Hybrid** with
+a front and a back. Cmd+K `Tab` flips it; theme is
+per-Hybrid (inverse default on the back side).
+
+Task: [../fullstack-b/fullstack-48.md](../fullstack-b/fullstack-48.md).
+
+Highlights:
+* Per-Hybrid theme (dark / light / follow-global) on
+  each side, persisted with layout state.
+* Back-side is its own independent layout slot —
+  tabs, focus, scroll, theme.
+* Flip = CSS 3D rotateY animation + wobble on land
+  (reuse `fullstack-34`'s wobble bus).
+* Cmd+K `Tab` keybind in Pane Mode + a "Flip Hybrid"
+  item in the hamburger menu.
+* Pane hamburger gains a "Theme" sub-menu (dark /
+  light) for the visible side.
+* User-facing labels: "pane" → "Hybrid" in menus +
+  cheatsheet; internal code names stay as "pane"
+  (too invasive to rename).
+
+Coordinate with @@FullStackA on Cmd+K Tab — their
+`fullstack-42` is the keymap surface, and this task
+adds one binding to it. They don't need to do
+anything; you wire it in this task.
+
+Lane-B queue:
+
+| # | Task           | Scope                                              |
+|---|----------------|----------------------------------------------------|
+| 1 | `fullstack-44` | carousel cycle/stop toggle                         |
+| 2 | `fullstack-45` | list mode on first `- `                            |
+| 3 | `fullstack-46` | British spelling + hamburger "Enter Pane Mode"      |
+| 4 | `fullstack-47` | multiple File Browser + Graph tabs + tab DnD verify |
+| 5 | `fullstack-48` | **Flippable Hybrids** — front/back, per-Hybrid theme, Cmd+K Tab flip + wobble |
+
+Note: `fullstack-46` adds a hamburger item "Enter
+Pane Mode (Cmd+K)" at the top; `fullstack-48` adds
+"Theme" + "Flip Hybrid" further down. Both touch the
+hamburger menu — sequence -46 first so -48 builds on
+the cleaned-up label structure.
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 13:15 BST
