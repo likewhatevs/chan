@@ -894,30 +894,17 @@
      approximated as 2ch (matches "- ", "1.", etc.); ordered or
      task markers >2ch will hang slightly inside but never flush
      left. See request.md "Multi-level indent ... long-sentence line". */
+  /* List-line guide rendering reads --cm-md-list-depth set inline by
+     listLineDecoration in editor/decorations/blocks.ts. The CSS is
+     depth-agnostic: padding + guide stripes both derive from the
+     variable so arbitrary nesting (capped at 20 in JS) renders
+     cleanly without per-depth selectors. */
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-line) {
     --cm-md-list-guide: color-mix(in srgb, var(--text-secondary, #888) 32%, transparent);
-    --cm-md-list-prefix: 2ch;
+    --cm-md-list-prefix: calc((var(--cm-md-list-depth, 0) + 1) * 2ch);
     padding-left: calc(32px + var(--cm-md-list-prefix)) !important;
     text-indent: calc(-1 * var(--cm-md-list-prefix));
     position: relative;
-  }
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-1) {
-    --cm-md-list-prefix: 4ch;
-  }
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-2) {
-    --cm-md-list-prefix: 6ch;
-  }
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-3) {
-    --cm-md-list-prefix: 8ch;
-  }
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-4) {
-    --cm-md-list-prefix: 10ch;
-  }
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-5) {
-    --cm-md-list-prefix: 12ch;
-  }
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-6) {
-    --cm-md-list-prefix: 14ch;
   }
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-line::before) {
     content: "";
@@ -925,8 +912,19 @@
     top: 0;
     bottom: 0;
     left: 10px;
-    width: 1px;
-    background: var(--cm-md-list-guide);
+    /* One 1px-wide stripe per indent level: anchor + N stamps at
+       2ch intervals = depth+1 vertical bars. repeating-linear-
+       gradient keeps the spacing exact at any depth, so the deep-
+       nesting drift seen in the old per-depth box-shadow rules
+       (capped at 6) is gone. */
+    width: calc(2ch * var(--cm-md-list-depth, 0) + 1px);
+    background: repeating-linear-gradient(
+      to right,
+      var(--cm-md-list-guide) 0,
+      var(--cm-md-list-guide) 1px,
+      transparent 1px,
+      transparent 2ch
+    );
     pointer-events: none;
     opacity: 1;
     transition: opacity 0.25s ease-out;
@@ -942,44 +940,6 @@
      prose rather than blinking out. */
   :global(.md-wysiwyg-cm6 .cm-editor[data-list-guides="off"] .cm-line.cm-md-list-line::before) {
     opacity: 0;
-  }
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-1::before) {
-    box-shadow: 2ch 0 0 var(--cm-md-list-guide);
-  }
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-2::before) {
-    box-shadow:
-      2ch 0 0 var(--cm-md-list-guide),
-      4ch 0 0 var(--cm-md-list-guide);
-  }
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-3::before) {
-    box-shadow:
-      2ch 0 0 var(--cm-md-list-guide),
-      4ch 0 0 var(--cm-md-list-guide),
-      6ch 0 0 var(--cm-md-list-guide);
-  }
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-4::before) {
-    box-shadow:
-      2ch 0 0 var(--cm-md-list-guide),
-      4ch 0 0 var(--cm-md-list-guide),
-      6ch 0 0 var(--cm-md-list-guide),
-      8ch 0 0 var(--cm-md-list-guide);
-  }
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-5::before) {
-    box-shadow:
-      2ch 0 0 var(--cm-md-list-guide),
-      4ch 0 0 var(--cm-md-list-guide),
-      6ch 0 0 var(--cm-md-list-guide),
-      8ch 0 0 var(--cm-md-list-guide),
-      10ch 0 0 var(--cm-md-list-guide);
-  }
-  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-depth-6::before) {
-    box-shadow:
-      2ch 0 0 var(--cm-md-list-guide),
-      4ch 0 0 var(--cm-md-list-guide),
-      6ch 0 0 var(--cm-md-list-guide),
-      8ch 0 0 var(--cm-md-list-guide),
-      10ch 0 0 var(--cm-md-list-guide),
-      12ch 0 0 var(--cm-md-list-guide);
   }
   :global(.md-wysiwyg-cm6 .cm-md-frontmatter) {
     color: var(--text-secondary, #888);

@@ -156,11 +156,31 @@ const HIDE = Decoration.replace({});
 const LIST_LINE_DECO = new Map<string, ReturnType<typeof Decoration.line>>();
 const MARKDOWN_IMAGE_RE = /(^|[^\\])!\[[^\]\n]*\]\([^)\n]*\)/;
 
-export function listDepthClass(text: string): string {
+// Soft cap on depth so the inline `--cm-md-list-depth` style can't be
+// abused into a pathological repeating-gradient width (e.g. pasted
+// content with 200 leading spaces). 20 covers the smoke-test target
+// and any sane nesting; deeper indents render at the 20-level guide
+// width without further visual change.
+const LIST_DEPTH_CAP = 20;
+
+/// Integer depth of a list line, computed from leading whitespace
+/// (2 columns = 1 depth level; tabs count as 2 columns). Capped at
+/// LIST_DEPTH_CAP so unbounded indentation can't blow up the cache or
+/// the rendered guide width.
+export function listDepth(text: string): number {
   const leading = text.match(/^[ \t]*/)?.[0] ?? "";
   let columns = 0;
   for (const ch of leading) columns += ch === "\t" ? 2 : 1;
-  return `cm-md-list-depth-${Math.min(6, Math.floor(columns / 2))}`;
+  return Math.min(LIST_DEPTH_CAP, Math.floor(columns / 2));
+}
+
+/// Stable class string for a list line at the given indent. Same
+/// `cm-md-list-depth-N` shape as before but no longer capped at 6;
+/// `N` can range 0..LIST_DEPTH_CAP. The class survives for CSS hooks
+/// + grep; the load-bearing depth value rides on the line's inline
+/// `--cm-md-list-depth` style.
+export function listDepthClass(text: string): string {
+  return `cm-md-list-depth-${listDepth(text)}`;
 }
 
 export function listLineClass(text: string): string {
@@ -173,8 +193,15 @@ function listLineDecoration(text: string): ReturnType<typeof Decoration.line> {
   const className = listLineClass(text);
   const cached = LIST_LINE_DECO.get(className);
   if (cached) return cached;
+  // Inline style carries the depth into CSS so the guide and prefix
+  // rules can render N stripes / 2N+2ch padding without per-depth
+  // selectors. Cache by class string; same string ⇒ same depth.
+  const depth = listDepth(text);
   const deco = Decoration.line({
-    attributes: { class: className },
+    attributes: {
+      class: className,
+      style: `--cm-md-list-depth: ${depth};`,
+    },
   });
   LIST_LINE_DECO.set(className, deco);
   return deco;

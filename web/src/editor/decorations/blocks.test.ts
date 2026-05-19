@@ -1,23 +1,43 @@
 import { describe, expect, test } from "vitest";
-import { listDepthClass, listLineClass } from "./blocks";
+import { listDepth, listDepthClass, listLineClass } from "./blocks";
 
-describe("listDepthClass", () => {
+describe("listDepth", () => {
   test("maps top-level list lines to depth zero", () => {
-    expect(listDepthClass("- item")).toBe("cm-md-list-depth-0");
-    expect(listDepthClass("1. item")).toBe("cm-md-list-depth-0");
+    expect(listDepth("- item")).toBe(0);
+    expect(listDepth("1. item")).toBe(0);
   });
 
   test("maps two-space indents to one visual guide level", () => {
-    expect(listDepthClass("  - child")).toBe("cm-md-list-depth-1");
-    expect(listDepthClass("    - grandchild")).toBe("cm-md-list-depth-2");
+    expect(listDepth("  - child")).toBe(1);
+    expect(listDepth("    - grandchild")).toBe(2);
   });
 
   test("treats a tab as one two-space list indent", () => {
-    expect(listDepthClass("\t- child")).toBe("cm-md-list-depth-1");
+    expect(listDepth("\t- child")).toBe(1);
   });
 
-  test("caps very deep indentation at the supported guide class", () => {
-    expect(listDepthClass("                - deep")).toBe("cm-md-list-depth-6");
+  test("walks past the old 6-level cap without losing alignment", () => {
+    // 14 spaces = 7 visual levels. Previously clamped to 6, which
+    // caused the deep-nesting guide drift fullstack-33 fixes.
+    expect(listDepth("              - level 7")).toBe(7);
+    // 22 spaces = 11 levels, still depth-agnostic.
+    expect(listDepth("                      - level 11")).toBe(11);
+  });
+
+  test("soft-caps pathological indentation at 20 levels", () => {
+    // 80 spaces would be 40 levels uncapped; cap keeps the guide
+    // width bounded and the decoration cache finite.
+    expect(listDepth(" ".repeat(80) + "- deep")).toBe(20);
+  });
+});
+
+describe("listDepthClass", () => {
+  test("returns the stable cm-md-list-depth-N class string", () => {
+    expect(listDepthClass("- item")).toBe("cm-md-list-depth-0");
+    expect(listDepthClass("  - child")).toBe("cm-md-list-depth-1");
+    expect(listDepthClass("              - level 7")).toBe(
+      "cm-md-list-depth-7",
+    );
   });
 });
 
@@ -38,5 +58,16 @@ describe("listLineClass", () => {
     expect(listLineClass("- Escaped \\![alt](pic.png)")).toBe(
       "cm-md-list-line cm-md-list-depth-0",
     );
+  });
+
+  test("emits a unique class per indent level past the legacy cap", () => {
+    // The 20-level smoke target from fullstack-33's acceptance
+    // criteria: each level renders one guide line.
+    for (let depth = 0; depth <= 20; depth++) {
+      const text = " ".repeat(depth * 2) + "- level";
+      expect(listLineClass(text)).toBe(
+        `cm-md-list-line cm-md-list-depth-${depth}`,
+      );
+    }
   });
 });
