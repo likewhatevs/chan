@@ -22,7 +22,6 @@
     paneWobble,
     reorderTab,
     reopenClosedTab,
-    saveTab,
     selectNextPane,
     selectPrevPane,
     setActivePane,
@@ -374,28 +373,17 @@
   /// already-active tab (only the latter pops the menu).
   let tabMouseDownPrevActive: string | null = null;
 
-  async function onSave(): Promise<void> {
-    if (!active || active.kind !== "file") return;
-    try {
-      await saveTab(active);
-    } catch (e) {
-      active.error = (e as Error).message;
-    }
-  }
+  // `fullstack-56`: removed `onSave()` + the Cmd+S keystroke
+  // interception. Autosave (debounced on idle + tab-close +
+  // visibility hooks) is the canonical write path; the explicit
+  // shortcut + action don't pull their weight. Cmd+Shift+S
+  // strikethrough is owned by the editor and unaffected since the
+  // plain-S gate is gone.
 
   function onKeyDown(e: KeyboardEvent): void {
     if (e.key === "Escape" && (paneMenuOpen || paneContextMenuOpen || emptyPaneMenuOpen)) {
       e.preventDefault();
       closePaneMenus();
-      return;
-    }
-    const meta = e.metaKey || e.ctrlKey;
-    // Plain Cmd/Ctrl+S only. Cmd/Ctrl+Shift+S is the editor's
-    // strikethrough toggle; without the shift gate this handler
-    // would swallow strike.
-    if (meta && !e.shiftKey && !e.altKey && e.key === "s") {
-      e.preventDefault();
-      void onSave();
       return;
     }
     if (

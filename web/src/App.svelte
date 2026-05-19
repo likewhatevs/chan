@@ -59,7 +59,6 @@
     openFind,
     openActiveTerminalRichPrompt,
     openInActivePane,
-    saveTab,
     scheduleAutosave,
     flipHybrid,
     selectNextPane,
@@ -641,12 +640,8 @@
         if (p.activeTabId) closeTab(p.id, p.activeTabId);
         return;
       }
-      case "app.save": {
-        const p = activePane();
-        const t = p.tabs.find((x) => x.id === p.activeTabId);
-        if (t) void saveTab(t);
-        return;
-      }
+      // `fullstack-56`: dropped `app.save` — autosave covers the
+      // write path; the keystroke + action surface is gone.
       case "app.file.new":
         void fileOps.createFile("");
         return;

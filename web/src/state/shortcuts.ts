@@ -115,14 +115,11 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Esc",
     group: "App",
   },
-  // File / save / create
-  {
-    id: "app.save",
-    label: "Save",
-    web: "Mod+S",
-    native: "Mod+S",
-    group: "File",
-  },
+  // `fullstack-56`: dropped `app.save` (Cmd+S) — autosave is the
+  // canonical write path (debounced on idle + tab-close + visibility
+  // hooks). No File→Save menu item existed, so dropping the keystroke
+  // collapses the surface entirely. Cmd+Shift+S strikethrough is
+  // owned by the editor and unaffected.
   // Tab navigation
   {
     id: "app.tab.close",
