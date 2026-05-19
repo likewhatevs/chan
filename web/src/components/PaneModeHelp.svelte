@@ -1,6 +1,7 @@
 <script lang="ts">
-  // Hybrid NAV cheatsheet. Shown while `h` is toggled inside Pane Mode
-  // (`Cmd+K`). Each key-cap is a clickable <button> in addition to the
+  // Hybrid NAV cheatsheet. Shown while `h` is toggled inside Hybrid
+  // NAV (entered via `Cmd+.` per `fullstack-a-7`). Each key-cap is a
+  // clickable <button> in addition to the
   // visible label, so the cheatsheet doubles as a mouse-driveable
   // command palette (per `fullstack-63`). Clicks dispatch a synthetic
   // KeyboardEvent on the document; App.svelte's onWindowKey listener

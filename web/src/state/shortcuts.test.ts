@@ -22,11 +22,13 @@ describe("shortcut table", () => {
     expect(table).not.toMatch(/^Terminal +Cmd\+Alt\+T\b/m);
   });
 
-  test("advertises Hybrid NAV (Cmd+K) as the canonical spawn surface", () => {
+  test("advertises Hybrid NAV (Cmd+.) as the canonical spawn surface", () => {
+    // Chord swapped to Cmd+. per `fullstack-a-7` so Cmd+, can own
+    // Settings (macOS preferences convention).
     const web = renderTable("web", "mac");
     const native = renderTable("native", "mac");
-    expect(web).toMatch(/^Enter Hybrid NAV\s+Cmd\+K$/m);
-    expect(native).toMatch(/^Enter Hybrid NAV\s+Cmd\+K$/m);
+    expect(web).toMatch(/^Enter Hybrid NAV\s+Cmd\+\.$/m);
+    expect(native).toMatch(/^Enter Hybrid NAV\s+Cmd\+\.$/m);
   });
 
   test("close-tab chord is Ctrl+D on both platforms (per fullstack-41)", () => {

@@ -326,7 +326,14 @@
       handlePaneModeKey(e);
       return;
     }
-    if (meta && !e.shiftKey && !e.altKey && e.code === "KeyK") {
+    // `fullstack-a-7`: swap the Hybrid NAV entry chord from
+    // Cmd+K to Cmd+. so Cmd+, can own Settings (macOS
+    // app-preferences convention; already wired via
+    // `app.settings.toggle` in `shortcuts.ts`). Cmd+. is not
+    // browser-reserved on macOS (Safari + Chrome both let JS
+    // intercept it), so the same chord works on the web SPA
+    // and the desktop shell. Cmd+K no longer triggers Hybrid.
+    if (meta && !e.shiftKey && !e.altKey && e.code === "Period") {
       e.preventDefault();
       enterPaneMode();
       return;

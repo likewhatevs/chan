@@ -97,18 +97,25 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Alt+Space",
     group: "App",
   },
+  // `fullstack-a-7`: Hybrid NAV chord swapped from Mod+K to
+  // Mod+. so Mod+, can own Settings (macOS preferences
+  // convention; `app.settings.toggle` above). Mod+. is not
+  // browser-reserved on macOS and survives both web + native
+  // dispatch through the same chord descriptor. The Flip
+  // chord (Mod+. Tab) follows the same swap so the chain
+  // stays internally consistent.
   {
     id: "app.pane.mode",
     label: "Enter Hybrid NAV",
-    web: "Mod+K",
-    native: "Mod+K",
+    web: "Mod+.",
+    native: "Mod+.",
     group: "Panes",
   },
   {
     id: "app.pane.flip",
     label: "Flip Hybrid",
-    web: "Mod+K Tab",
-    native: "Mod+K Tab",
+    web: "Mod+. Tab",
+    native: "Mod+. Tab",
     group: "Panes",
   },
   {
