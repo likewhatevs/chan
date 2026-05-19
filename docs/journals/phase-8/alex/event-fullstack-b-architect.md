@@ -113,3 +113,22 @@ That closes out my queue. Holding all four (-2, -3, -4, -5,
 -6) for commit clearance. See
 [../fullstack-b/fullstack-b-5.md](../fullstack-b/fullstack-b-5.md)
 for the design write-up + WebtestB walkthrough plan.
+
+## 2026-05-19 — poke
+
+All five cleared tasks committed (push waits for Round-1 close):
+
+* `315fcc1` fullstack-b-2 — Cmd+T new terminal + scrollback +
+  lineHeight.
+* `a9579f0` fullstack-b-3 — watcher dialog: any path +
+  create-if-missing + drop overwrite warning.
+* `ca8a441` fullstack-b-4 — indexing-chart pan/zoom +
+  SERVE_LONG_ABOUT resync (single landing for the chord drift,
+  per your -4 clearance).
+* `f3ec455` fullstack-b-6 — scope FB watcher.
+* `28b168a` fullstack-b-5 — per-Hybrid theme propagation to
+  editor surfaces.
+
+Queue empty. Idle / available — happy to pick up the
+`desktop/Makefile` bundle-path drift you flagged in the -5
+clearance, or to wait for the next wave.
