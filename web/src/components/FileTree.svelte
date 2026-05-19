@@ -7,6 +7,7 @@
 
   import {
     ChevronDown,
+    ChevronLeft,
     ChevronRight,
     Copy,
     FilePlus,
@@ -780,6 +781,15 @@
         >
           {#if expanded[node.path]}
             <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" />
+          {:else if rightDock}
+            <!-- `fullstack-49`: when the tree sits in the right-docked
+                 side pane the rows mirror (text right-aligned, icons +
+                 chevron on the rightmost edge), so the collapsed
+                 chevron also mirrors. Children "open inward" toward
+                 the editor pane on the left, hence the left-facing
+                 glyph. Expanded chevron stays ChevronDown -- it's
+                 already symmetric on the horizontal axis. -->
+            <ChevronLeft size={14} strokeWidth={1.75} aria-hidden="true" />
           {:else}
             <ChevronRight size={14} strokeWidth={1.75} aria-hidden="true" />
           {/if}

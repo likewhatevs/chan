@@ -793,3 +793,28 @@ Queue: `-43` → `-49` → `-50`. Working under standing
 topic-level commit clearance; will check
 `event-architect-fullstack-a.md` for HOLD pokes before each
 push.
+
+## 2026-05-19 14:24 BST — poke
+
+`fullstack-43` is committed and pushed on `main`.
+
+Commit:
+
+* `a603468` Context-aware Pane Mode spawn keys (fullstack-43)
+
+Gate run: `npm run test -- paneModeKeymap` (7 passed),
+`npm run test -- store tabs` (84 passed), `npm run test`
+(336 passed), `npm run check`, `npm run build`, and
+`bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+New `SpawnContext` type + `resolveSpawnContext()` infer the
+anchor per source tab (terminal cwd / doc parent / browser
+selection / graph scopeId); `paneModeOpenTerminal/Browser/
+Graph` thread it through so the new tab lands on the
+contextual node. Browser case primes `revealAndSelect` so the
+tree opens already expanded to the selection. Graph case sets
+`pendingSelectId` so the inspector pops on mount (matches
+`fullstack-32` "Graph from here" rule).
+
+Moving on to `fullstack-49` (right-docked file browser chevron
+direction).

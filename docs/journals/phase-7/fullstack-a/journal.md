@@ -193,3 +193,13 @@ menu / shortcut cleanup (fullstack-42). Gate green: `npm run test`
 online, starting fullstack-43 (context-aware Cmd+K spawn). Queue
 behind it: `-49` (right-dock chevron direction), `-50` (Cmd+K p
 rich prompt).
+
+## 2026-05-19 14:24 BST
+
+fullstack-43 landed: `a603468` Context-aware Pane Mode spawn
+keys (fullstack-43). Gate green: `npm run test -- paneModeKeymap`
+(7 passed), `npm run test -- store tabs` (84 passed), `npm run
+test` (336 passed), `npm run check`, `npm run build`, `bash -lc
+'ulimit -n 4096; scripts/pre-push'`.
+
+Moving on to fullstack-49 (right-dock chevron direction).

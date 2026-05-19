@@ -58,3 +58,42 @@ chevron is still right-facing in the right dock.
 
 Standard. Pre-push gate green. Ping via
 `alex/event-fullstack-a-architect.md`.
+
+## 2026-05-19 14:32 BST — @@FullStackA implementation note
+
+Small change: `FileTree.svelte` now imports `ChevronLeft`
+alongside `ChevronDown`/`ChevronRight` and the collapsed-dir
+chevron branches on `rightDock`. Left-dock + overlay + tab
+variants keep `ChevronRight`; right-dock uses `ChevronLeft`.
+Expanded chevron stays `ChevronDown` (symmetric on the
+horizontal axis). Click handler is untouched — orientation
+is purely visual.
+
+Files touched:
+
+* `web/src/components/FileTree.svelte` — `ChevronLeft` import
+  + the `{:else if rightDock}` branch in the collapsed-dir
+  render block.
+* `web/src/components/revealBrowserActions.test.ts` — two
+  regression asserts: the icon imports and the branch
+  ordering inside the `{#if expanded}` block.
+
+Gate green:
+
+* `npm run test -- revealBrowserActions` (10 passed),
+* `npm run test` (338 passed),
+* `npm run check`, `npm run build`,
+* `bash -lc 'ulimit -n 4096; scripts/pre-push'` (green).
+
+Proposed commit message:
+
+> Flip right-docked file browser chevron direction (fullstack-49)
+>
+> Collapsed-directory chevron in the right-docked file browser
+> now mirrors with the row layout: ChevronLeft instead of
+> ChevronRight, since the mirrored tree reads children as
+> "opening inward" toward the editor pane on the left. Expanded
+> chevron stays ChevronDown (already symmetric on the horizontal
+> axis). Left-dock + overlay + first-class tab variants
+> unchanged. Click handler untouched — orientation is purely
+> visual.

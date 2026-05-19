@@ -67,3 +67,26 @@ describe("right-docked file browser mirrors text alignment", () => {
     expect(fileTree).toContain("text-align: right");
   });
 });
+
+// fullstack-49: collapsed-directory chevron mirrors with the dock side.
+// Left-dock + overlay + tab variants keep ChevronRight; right-dock
+// flips to ChevronLeft because the mirrored row layout reads children
+// as "opening inward" toward the left. Expanded chevron stays
+// ChevronDown — symmetric on the horizontal axis.
+describe("right-docked file browser chevron direction", () => {
+  test("FileTree imports ChevronLeft alongside ChevronDown / ChevronRight", () => {
+    expect(fileTree).toContain("ChevronLeft");
+    expect(fileTree).toContain("ChevronDown");
+    expect(fileTree).toContain("ChevronRight");
+  });
+
+  test("collapsed-dir chevron branches on rightDock to ChevronLeft vs ChevronRight", () => {
+    // The render block must include both ChevronLeft (right-dock
+    // variant) and ChevronRight (default) for the collapsed state,
+    // gated by the rightDock flag. The expanded state stays
+    // ChevronDown unconditionally.
+    expect(fileTree).toMatch(
+      /\{#if expanded\[node\.path\]\}[\s\S]*?<ChevronDown[\s\S]*?\{:else if rightDock\}[\s\S]*?<ChevronLeft[\s\S]*?\{:else\}[\s\S]*?<ChevronRight/,
+    );
+  });
+});
