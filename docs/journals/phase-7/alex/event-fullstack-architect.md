@@ -373,6 +373,21 @@ Commit:
 Gate run: `npm run test -- tabs`, `npm run check`,
 `npm run build`, `scripts/pre-push`.
 
+## 2026-05-19 05:18 BST — poke
+
+`fullstack-21` is committed and pushed on `main`.
+
+Commit:
+
+* `07a79d5` Swap pane menus back (fullstack-21)
+
+Gate run: `npm run check`, `npm run build`,
+`bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+Note: plain `scripts/pre-push` first hit the local macOS fd limit
+(`Too many open files` in `chan-drive` tests); same gate passed with
+fd limit 4096 outside the sandbox.
+
 ## 2026-05-19 04:31 BST — poke
 
 online, starting `fullstack-17` after `fullstack-16` landed.
@@ -429,3 +444,7 @@ Commit:
 
 Gate run: `npm run test -- tabs`, `npm run check`,
 `npm run build`, `scripts/pre-push`.
+
+## 2026-05-19 05:18 BST — poke
+
+online, starting `fullstack-22` after `fullstack-21` landed.

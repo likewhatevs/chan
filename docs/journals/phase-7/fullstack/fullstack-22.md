@@ -92,3 +92,24 @@ stuck off with no way back in.
 Standard. Pre-push gate green. Insert in @@FullStack's
 queue after `fullstack-21`. Ping via
 `alex/event-fullstack-architect.md`.
+
+## Result
+
+2026-05-19 05:22 BST — Implemented window-wide BCAST membership in
+`web/src/state/tabs.svelte.ts` while preserving the existing persisted
+tab fields as a projection of the single group. A tab's own broadcast
+toggle now adds/removes only that tab from the shared group, the
+membership menu updates the same shared group for other tabs, and the
+terminal chip strip reflects shared membership across tabs. Tabs that
+are not currently members no longer render the inline `off` chip.
+
+Added regression coverage in `web/src/state/tabs.test.ts` for the live
+remove-then-rejoin bug: remove a terminal from the group, switch to that
+terminal's own toggle, and re-add it to the same window-wide group.
+
+Verification:
+
+* `npm run test -- tabs`
+* `npm run check`
+* `npm run build`
+* `bash -lc 'ulimit -n 4096; scripts/pre-push'`

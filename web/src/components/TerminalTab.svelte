@@ -1248,11 +1248,13 @@
           </span>
         {/each}
       </div>
-      <button
-        type="button"
-        class="broadcast-off"
-        onclick={() => removeBroadcastMember(tab.id)}
-      >off</button>
+      {#if tab.broadcastEnabled}
+        <button
+          type="button"
+          class="broadcast-off"
+          onclick={() => removeBroadcastMember(tab.id)}
+        >off</button>
+      {/if}
     </div>
   {/if}
   <div class="terminal-host" bind:this={host}></div>

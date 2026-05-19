@@ -766,18 +766,13 @@ export function dismissTerminalEnvNamePrompt(tab: TerminalTab): void {
 }
 
 export function setTerminalBroadcastEnabled(tab: TerminalTab, enabled: boolean): void {
+  const members = terminalBroadcastGroupIds();
   if (enabled) {
-    const members = new Set(tab.broadcastTargetIds);
-    if (members.size === 0) {
-      for (const candidate of allTerminalTabs()) {
-        if (candidate.id !== tab.id) members.add(candidate.id);
-      }
-    }
-    applyTerminalBroadcastMembers(tab, members);
+    members.add(tab.id);
   } else {
-    tab.broadcastEnabled = false;
-    tab.broadcastTargetIds = [];
+    members.delete(tab.id);
   }
+  applyTerminalBroadcastMembers(members);
 }
 
 export function toggleActiveTerminalBroadcast(): void {
@@ -800,45 +795,56 @@ export function setTerminalBroadcastTarget(
   targetId: string,
   enabled: boolean,
 ): void {
-  const next = new Set(terminalBroadcastMemberIds(tab));
-  next.add(tab.id);
+  void tab;
+  const next = terminalBroadcastGroupIds();
   if (enabled) next.add(targetId);
   else next.delete(targetId);
-  applyTerminalBroadcastMembers(tab, next);
+  applyTerminalBroadcastMembers(next);
 }
 
 export function terminalBroadcastMembers(tab: TerminalTab): TerminalTab[] {
+  void tab;
   const ids = new Set(terminalBroadcastMemberIds(tab));
   return allTerminalTabs().filter((candidate) => ids.has(candidate.id));
 }
 
 export function terminalBroadcastMemberIds(tab: TerminalTab): string[] {
-  if (!tab.broadcastEnabled) return [];
-  const ids = new Set(tab.broadcastTargetIds);
-  ids.add(tab.id);
-  return [...ids];
+  void tab;
+  return [...terminalBroadcastGroupIds()];
 }
 
 export function removeTerminalFromBroadcastGroup(tab: TerminalTab, memberId: string): void {
-  if (memberId === tab.id) {
-    tab.broadcastEnabled = false;
-    tab.broadcastTargetIds = [];
-    return;
-  }
-  const next = new Set(terminalBroadcastMemberIds(tab));
+  void tab;
+  const next = terminalBroadcastGroupIds();
   next.delete(memberId);
-  applyTerminalBroadcastMembers(tab, next);
+  applyTerminalBroadcastMembers(next);
 }
 
 export function setTerminalBroadcastMuted(tab: TerminalTab, muted: boolean): void {
   tab.broadcastMuted = muted || undefined;
 }
 
-function applyTerminalBroadcastMembers(anchor: TerminalTab, members: Set<string>): void {
+function terminalBroadcastGroupIds(): Set<string> {
+  const validIds = new Set(allTerminalTabs().map((tab) => tab.id));
+  const ids = new Set<string>();
+  for (const tab of allTerminalTabs()) {
+    if (tab.broadcastEnabled) ids.add(tab.id);
+    for (const targetId of tab.broadcastTargetIds) ids.add(targetId);
+  }
+  return new Set([...ids].filter((id) => validIds.has(id)));
+}
+
+function applyTerminalBroadcastMembers(members: Set<string>): void {
   const next = new Set(members);
-  next.delete(anchor.id);
-  anchor.broadcastEnabled = next.size > 0;
-  anchor.broadcastTargetIds = anchor.broadcastEnabled ? [...next] : [];
+  for (const tab of allTerminalTabs()) {
+    if (!next.has(tab.id)) {
+      tab.broadcastEnabled = false;
+      tab.broadcastTargetIds = [];
+      continue;
+    }
+    tab.broadcastEnabled = true;
+    tab.broadcastTargetIds = [...next].filter((id) => id !== tab.id);
+  }
 }
 
 export function terminalMcpEnvEnabled(tab: TerminalTab): boolean {
