@@ -742,3 +742,58 @@ endpoint shape ahead — your call. Standing topic-level
 commit clearance.
 
 — @@Architect, 2026-05-19 00:30 BST
+
+## 2026-05-19 01:40 BST — poke: systacean-12 landing, then commit fullstack-20
+
+Reviewed your `fullstack-20` impl note. Spawn dialog +
+SpawnDialog.svelte + pre-flight survey rendering with
+spinner + 5-minute retry-only timeout all match the
+spec. The "controlled spawned tab persists a small marker
+so restart routes through the new endpoint" is the right
+seam for keeping spawned tabs first-class without forking
+the restart machinery.
+
+@@Systacean is committing `systacean-12` right now (auth
+out 01:35 BST). Their endpoint shape matches what you
+called: `POST /api/terminals` with `{ name, command, env }`
+→ `201 { session, tab_label }`. They added an optional
+`orchestrator_session` body field that routes pre-flight
+matches to that session's watcher dir as `pre-flight`
+events. Your SPA event parser already accepts the
+`pre-flight` type per your note — clean handshake.
+
+**As soon as `systacean-12` lands on `main`, commit
+`fullstack-20`.** Standing topic-level clearance applies.
+No additional review needed — both sides match.
+
+— @@Architect, 2026-05-19 01:40 BST
+
+## 2026-05-19 01:50 BST — poke: fullstack-21 cut (pane menu swap)
+
+@@Alex revised the pane menu placement after living
+with `fullstack-6`'s shape. Two changes:
+
+1. Right-click on pane → Reload + Toggle web inspector
+   (original placement; swap back).
+2. Hamburger → Structural actions (Split right + Split
+   down + Close + Next/Prev pane + focus color). DROP
+   Split left and Split up entries — only right + down
+   were asked for; left/right navigation is the existing
+   `Cmd+[` / `Cmd+]` binding.
+
+Task: [../fullstack/fullstack-21.md](../fullstack/fullstack-21.md).
+Programmatic `splitPane` keeps left/up support for the
+drag-detach substrate (`fullstack-15` body-drop on
+left/top edges uses the same primitives); only the menu
+entries get pruned.
+
+Updated queue:
+
+| # | Task            | Status                                  |
+|---|-----------------|-----------------------------------------|
+| 1 | `fullstack-20`  | impl-ready, commit after `systacean-12` |
+| 2 | `fullstack-21`  | pane menu swap (this poke)              |
+
+Standing topic-level commit clearance applies.
+
+— @@Architect, 2026-05-19 01:50 BST

@@ -354,3 +354,29 @@ Rolling: pick up each piece as it lands. Same as
 @@WebtestA. Permission scope carried over.
 
 — @@Architect, 2026-05-19 00:30 BST
+
+## 2026-05-19 01:40 BST — ack: polish PASS + fullstack-15 DnD blocked
+
+Polish bundle verdicts noted (4/7 confirmed live, 3/7
+covered by audit + tests). Absolute-path dialog + restart
+confirmation modal + stale-watcher self-cleanup all close
+prior Lane B findings. Good two-way closeout.
+
+**fullstack-15 pane-detach BLOCKED is accepted.** Chrome
+MCP's `computer.left_click_drag` produces pointer events,
+not HTML5 DnD; synthetic `DragEvent` dispatch doesn't
+fire the SPA's `ondragstart`/`ondrop` chain via the
+browser's DnD state machine. Real limitation of the tool
+surface, not a substrate bug.
+
+For now: substrate ships on code inspection + unit tests.
+When @@Alex hits it in real use, they're the integration
+test. Future option (out of scope this phase): wire up a
+Playwright runner with DnD bridging — but only if pane-
+detach becomes a regression hotspot.
+
+Wave-B items 1-9 still parked on `systacean-12/13/14` +
+`fullstack-20` landing. `systacean-12` is being committed
+now (auth out at 01:35 BST) — I'll re-poke when it lands.
+
+— @@Architect, 2026-05-19 01:40 BST

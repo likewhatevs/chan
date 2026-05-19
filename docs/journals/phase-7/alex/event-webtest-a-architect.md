@@ -525,3 +525,87 @@ around. Earlier wave-B artifacts (Files/Graph tabs +
 reply files in `events/`) are preserved.
 
 Standing by for the next wave.
+
+## 2026-05-19 (resume) BST - poke (webtest-a-7 receipt + build break + polish/SKILL pass)
+
+After @@Alex's `poke`. `webtest-a-7` (wave-B walkthrough)
+received. Of the upstream pieces, only `fullstack-17`
+(polish bundle, `0c2faa7`) and `architect-1`
+(orchestration SKILL, `dfcad1c`) have landed. `fullstack-
+20` + `systacean-12/13/14` not yet on main, so items
+1-10 are gated.
+
+**Important blocker** — `cargo build -p chan` fails on
+the **in-progress** systacean-12 substrate in the
+working tree:
+
+```
+error[E0382]: use of moved value: `cwd`
+  --> crates/chan-server/src/terminal_sessions.rs:598:27
+540 | let cwd = opts.cwd.unwrap_or_else(|| config.drive_root.clone());
+541 | cmd.cwd(cwd);            // value moved here
+...
+598 |             cwd: Some(cwd),  // E0382
+```
+
+Fix: `cmd.cwd(cwd.clone())` on line 541 (or restructure
+to keep ownership). Real bug for @@Systacean's
+attention; the binary won't rebuild until it lands. My
+8801 server is DOWN because of this.
+
+**fullstack-17 polish — PASS by code-audit**
+(live retest deferred to post-rebuild):
+
+* **Absolute-path dialog**:
+  `PathPromptModal.svelte` now passes
+  `allowAbsolute: pathPromptState.allowAbsolute` into
+  `validatePath`, and `missingAncestors` early-returns
+  for `/`-prefixed paths. Closes my wave-A side
+  observation about the dialog rejecting
+  `/tmp/chan-test-events` despite the systacean-9 API
+  spec allowing absolute paths.
+* **Unknown-type bubble drop**:
+  `watcherEvents.ts:parseWatcherEvent` adds
+  `if (obj.type !== "survey" && ... !== "poke") return
+  null;`. The `futuristic-thing` event from my wave-A
+  would now drop silently on the SPA side, matching
+  backend log+ignore. Closes my wave-A side observation.
+* **Stale watcher cleanup, answered-survey auto-dismiss,
+  terminal rename keep-open + restart confirmation,
+  mutually-exclusive pane menus, light-mode ANSI white
+  contrast**: all listed in the commit message and
+  covered by the test set
+  `BubbleOverlay / TerminalRichPrompt / watcherEvents /
+  pathValidate`. Live retest after rebuild.
+
+**architect-1 orchestration SKILL — read; no drift to
+flag (yet)**:
+
+* `docs/agents/orchestration/README.md` — index. Routes
+  reader to atomic-writes + spawn-protocol; defers MCP
+  discovery to `systacean-14`. Matches shipping
+  reality.
+* `atomic-writes.md` — documents the watcher contract
+  exactly as systacean-9 enforces (temp + rename, single
+  read on Create/rename-final, no retries). Per-language
+  examples (bash / python / node / rust) follow the same
+  shape. Matches what my wave-A walkthrough exercised.
+  No drift.
+* `spawn-protocol.md` — forward-looking; explicitly
+  staked to systacean-12's design. Describes
+  `POST /api/terminals` (create with name + command +
+  env), `POST /api/terminals/<session>/restart`,
+  `DELETE /api/terminals/<session>`, plus a 1/2/3
+  preflight pattern (open terminal / kill / retry).
+  The in-progress chan-server tree adds
+  `Registry::restart` + `CreateOptions { command, env,
+  preflight: PreflightConfig { dir, from, to } }` —
+  names + shape align with the SKILL. Will re-verify
+  after systacean-12 lands.
+
+**Blocked on upstream**: items 1-6 (`fullstack-20` +
+`systacean-12`), 7-8 (`systacean-13`), 9-10
+(`systacean-14`).
+
+State: 8801 server is DOWN; can't rebuild the binary
+until the `cwd` move bug is fixed. Standing by.

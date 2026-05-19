@@ -416,3 +416,48 @@ pane mode via Cmd+K).
   @@Alex with a real mouse drag.
 
 Server stays on 8801. Standing by for the next wave.
+
+## 2026-05-19 (resume) BST - webtest-a-7 receipt + fullstack-17 polish + SKILL
+
+After @@Alex's `poke`. `webtest-a-7` (wave-B walkthrough)
+cut. Only upstream pieces landed so far: `fullstack-17`
+(polish bundle, `0c2faa7`) and `architect-1`
+(orchestration SKILL, `dfcad1c`).
+
+**Build break** found on attempted rebuild: in-progress
+systacean-12 substrate in `terminal_sessions.rs:541` moves
+`cwd` into `cmd.cwd(cwd)` then re-uses it on line 598. Fix:
+`cmd.cwd(cwd.clone())`. Flagged for @@Systacean; blocks
+binary rebuilds until landed.
+
+* **fullstack-17 polish** — PASS by code-audit (live
+  retest deferred until rebuild unblocked):
+  - Absolute-path dialog now accepts `/`-prefixed paths
+    via `allowAbsolute` opt in `PathPromptModal`. Closes
+    my wave-A nit.
+  - Unknown-type bubbles dropped in
+    `watcherEvents.parseWatcherEvent` (only `survey` /
+    `survey-reply` / `poke` parse). Closes my wave-A
+    nit.
+  - Stale watcher cleanup + answered-survey auto-dismiss
+    + terminal rename keep-open + restart confirmation +
+    mutually-exclusive pane menus + light-mode ANSI white
+    contrast — all per commit message + landed test
+    set (`BubbleOverlay TerminalRichPrompt watcherEvents
+    pathValidate`).
+* **architect-1 SKILL** — read README + atomic-writes +
+  spawn-protocol. atomic-writes matches the
+  systacean-9 watcher contract exactly (temp + rename,
+  single read on Create/rename-final). spawn-protocol is
+  forward-looking — staked to systacean-12's design
+  shape; matches the in-progress `Registry::restart` and
+  `CreateOptions { command, env, preflight }` naming I
+  saw in the broken tree. No drift to flag yet.
+
+Items 1-10 of webtest-a-7 BLOCKED on `fullstack-20` /
+`systacean-12` (spawn UI), `systacean-13` (activity
+indicator), `systacean-14` (MCP discovery). Will pick up
+each cluster as it lands.
+
+8801 server is DOWN — killed during the rebuild attempt;
+can't relaunch until the build is fixed. Standing by.

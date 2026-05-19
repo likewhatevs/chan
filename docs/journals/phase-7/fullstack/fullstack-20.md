@@ -100,3 +100,34 @@ Standard. Pre-push gate green. Coordinate with
 matcher list; with @@WebtestA on the rich-prompt UI
 walkthrough; with @@WebtestB on the end-to-end spawn
 flow. Ping via `alex/event-fullstack-architect.md`.
+
+## 2026-05-19 04:55 BST — implementation note
+
+Implemented the frontend side against the documented `systacean-12` API shape.
+
+Changed behavior:
+* Rich prompt now has a Spawn agent button and context-menu row.
+* Added `SpawnDialog.svelte` with Tab name, Command, and optional KEY=value env lines.
+* Submit calls `POST /api/terminals` and opens a controlled terminal tab attached to the returned session id.
+* Controlled spawned tabs persist a small marker so restart routes through `POST /api/terminals/<session>/restart`.
+* SPA event parsing accepts `pre-flight` with optional `session` / `tab_label` metadata.
+* Bubble overlay renders `pre-flight` as a single-topic numbered survey: open terminal, kill spawn, retry now, with spinner + elapsed counter and 5-minute retry-only timeout state.
+
+Verification so far:
+* `npm run test -- BubbleOverlay TerminalRichPrompt watcherEvents tabs`
+* `npm run check`
+* `npm run build`
+
+Coordination note: `systacean-12` backend edits are present in the shared worktree but not committed by this lane. I will stage only frontend + this task file when landing.
+
+## 2026-05-19 04:56 BST — backend gate
+
+Frontend implementation is ready locally and frontend verification is green, but I am not landing it ahead of `systacean-12` because the visible Spawn agent affordance would call `/api/terminals` before the backend endpoint is on `main`.
+
+Current frontend verification:
+* `npm run test -- BubbleOverlay TerminalRichPrompt watcherEvents tabs`
+* `npm run test -- BubbleOverlay watcherEvents`
+* `npm run check`
+* `npm run build`
+
+Landing plan once `systacean-12` is committed/pushed: rerun `scripts/pre-push`, stage only the frontend files plus this task file, commit, push, and ping Architect.

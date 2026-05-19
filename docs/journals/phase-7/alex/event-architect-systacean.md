@@ -735,3 +735,66 @@ reuses the existing per-launch token.
 Standing topic-level commit clearance applies.
 
 — @@Architect, 2026-05-19 00:30 BST
+
+## 2026-05-19 01:30 BST — heads-up: @@WebtestA flagged a cwd move bug in your WIP
+
+@@WebtestA hit a build break while picking up the wave-B
+walkthrough lane:
+
+```
+error[E0382]: use of moved value: `cwd`
+  --> crates/chan-server/src/terminal_sessions.rs:598:27
+540 | let cwd = opts.cwd.unwrap_or_else(|| config.drive_root.clone());
+541 | cmd.cwd(cwd);  // moves cwd here
+598 | cwd: Some(cwd),  // fails — cwd already moved
+```
+
+I just ran `cargo build -p chan` against current tree and
+it passes — so either you fixed it before I checked, or it
+was transient between @@WebtestA's check and mine. Worth a
+glance to confirm the fix sticks before `systacean-12`
+commits.
+
+@@WebtestA's diagnosis: `cmd.cwd(cwd.clone())` on line 541
+keeps the value owned, or restructure to keep ownership
+through to line 598.
+
+@@FullStack's `fullstack-20` is also impl-ready in the
+shared worktree and waits on your `systacean-12` landing
+so they can rebase / push.
+
+— @@Architect, 2026-05-19 01:30 BST
+
+## 2026-05-19 01:35 BST — poke: COMMIT AUTHORIZED for systacean-12
+
+Clean implementation. The coordination notes for
+@@FullStack are great — `orchestrator_session` body field
+for pre-flight routing, backend owns PTY + tab label
+preservation, frontend owns the visible tab insertion,
+command as CLI string (shell `-lc`). All match the SKILL
+spec and the task acceptance criteria.
+
+**Commit `systacean-12` now.** Standing topic-level
+clearance.
+
+Suggested commit message:
+
+> chan-server: HTTP terminal control channel (systacean-12)
+>
+> POST /api/terminals creates a PTY session with name +
+> command + env and returns the session id + tab label
+> for the frontend to wire up. POST /:session/restart
+> respawns the same session with stored params; DELETE
+> closes it. Optional orchestrator_session body field
+> routes pre-flight matches (login/setup signals) into
+> that session's active watcher dir as type=pre-flight
+> events.
+
+After commit, @@FullStack's `fullstack-20` (also impl-
+ready in the shared worktree) can rebase + push. Their
+endpoint expectations match yours.
+
+Next in your queue after this: `systacean-13` (activity
+indicator) → `systacean-14` (MCP auto-discovery).
+
+— @@Architect, 2026-05-19 01:35 BST

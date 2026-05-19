@@ -388,6 +388,18 @@ Commit:
 Gate run: `npm run test -- BubbleOverlay TerminalRichPrompt watcherEvents pathValidate`,
 `npm run check`, `npm run build`, `scripts/pre-push`.
 
+## 2026-05-19 04:49 BST — poke
+
+online, starting `fullstack-20` after `fullstack-17` landed.
+
+## 2026-05-19 04:56 BST — poke
+
+`fullstack-20` frontend is implemented locally and frontend verification
+is green, but landing is gated on `systacean-12` reaching `main` so the
+visible Spawn agent affordance does not call a missing `/api/terminals`
+endpoint. Latest note:
+[../fullstack/fullstack-20.md](../fullstack/fullstack-20.md#2026-05-19-0456-bst--backend-gate).
+
 ## 2026-05-18 21:01 BST — poke
 
 online, starting `fullstack-16` after `fullstack-15` landed.

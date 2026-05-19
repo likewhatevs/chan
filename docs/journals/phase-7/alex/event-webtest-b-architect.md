@@ -634,3 +634,62 @@ the substrate via Split-right → Cmd+K → WASD. Happy to
 do a deeper walkthrough if cut.
 
 Test server stays up on 8810. Parked.
+
+## 2026-05-19 00:50 BST — poke (webtest-b-5 first cluster)
+
+Picked up your `webtest-b-5` cut. Rebuilt + relaunched
+8810 on the late binary (post-`fullstack-17`). Full
+writeup in
+[../webtest-b/webtest-b-5.md](../webtest-b/webtest-b-5.md#2026-05-19-0050-bst---fullstack-17-polish--fullstack-15-detach).
+
+* **fullstack-17 polish — PASS on the items I'd flagged**.
+  * **Absolute paths in "watch directory" dialog**: now
+    accepted with green helper `→ moves to
+    /tmp/chan-webtest-b-1/events/`. Closes my prior
+    observation #3 about the abs/rel policy mismatch.
+  * **Restart confirmation modal**: right-click →
+    `Restart` now opens
+    `Restart terminal? The current terminal session
+    will be closed and replaced.` with `Cancel` / red
+    `Restart` buttons. No more silent PTY reset.
+    Closes E4 part 2 from `webtest-b-1`.
+  * **Stale watcher state self-cleanup** — claimed by
+    the commit message ("clear stale watcher state on
+    detached-reply failures"), addresses my late-wave-A
+    SPA/server divergence bug. NOT separately
+    re-exercised in this pass (the trigger was multi-
+    tab nav, fiddly to repro deterministically). Will
+    re-repro on next pass with a deliberate stale-
+    session sequence.
+  * **Light-mode `\e[97m`** claimed adjusted; not
+    separately re-tested in this pass — flag for next
+    sweep.
+* **fullstack-15 pane-detach (items 10-12) — BLOCKED by
+  Chrome MCP tooling**. Substrate is in code per
+  inspection (`Pane.svelte` has `onTabDrop`, `onBodyDrop`,
+  edge-zone math, `application/x-md-tab` +
+  `application/x-chan-tab+json` MIME types). Tried two
+  ways to drive the drag:
+  * `computer.left_click_drag` → mouse drag only, not
+    HTML5 DnD. SPA handlers don't fire.
+  * JS-dispatched synthetic `DragEvent`s with a
+    constructed `DataTransfer` → dragstart populates
+    types correctly, but dragover/drop don't trigger
+    the SPA's tab-move code path. (HTML5 DnD state
+    machine doesn't engage on synthetic events.)
+  Net: pane-detach behavior would need a real OS-level
+  human drag in a browser, or a Playwright-driven test
+  with proper DnD bridging. Code path looks complete
+  per inspection — filing as BLOCKED rather than FAIL.
+
+### Other items pending
+
+* Items 1-7 (`systacean-12` spawn API + `fullstack-20`
+  spawn UI): not yet committed.
+* Items 8, 9 (`systacean-13` / `systacean-14`): not yet
+  committed.
+
+Test server stays up. Will pick up the rest as they
+land — including a deliberate re-test of the stale-
+watcher cleanup if you want belt-and-braces on the
+fullstack-17 fix.

@@ -73,3 +73,149 @@ Report PASS / FAIL / PARTIAL per cluster.
 
 Ping after each cluster via
 `alex/event-webtest-a-architect.md`.
+
+## 2026-05-19 (resume) BST - Receipt + first cluster
+
+Wave-B task received. Of the upstream pieces, only
+`fullstack-17` (polish bundle, `0c2faa7`) and
+`architect-1` (`dfcad1c`, orchestration SKILL initial
+drop) have landed so far. `fullstack-20`,
+`systacean-12/13/14` not yet in `main`. Items 1-10 are
+gated on those.
+
+### Build break — blocker for live test
+
+Attempted `cargo build -p chan` against current HEAD +
+tree. Failed:
+
+```
+error[E0382]: use of moved value: `cwd`
+  --> crates/chan-server/src/terminal_sessions.rs:598:27
+   |
+540 |   let cwd = opts.cwd.unwrap_or_else(|| config.drive_root.clone());
+   |       --- move occurs because `cwd` has type `PathBuf`, which does
+   |           not implement the `Copy` trait
+541 |   cmd.cwd(cwd);
+   |           --- value moved here
+...
+598 |               cwd: Some(cwd),
+```
+
+The breakage is in the **in-progress** systacean-12
+spawn substrate uncommitted in the working tree
+(`CreateOptions` gained `command/env/preflight`,
+`PreflightConfig` struct, `Registry::restart`). After
+`cmd.cwd(cwd)` moves `cwd`, the `Some(cwd)` on line 598
+fails to compile. Fix is to `cmd.cwd(cwd.clone())` on
+line 541 (or restructure to keep ownership). Real bug
+flag for @@Systacean — blocks any rebuild of the binary
+until resolved.
+
+Consequence: I can't recompile to test fullstack-17
+live. The existing `target/debug/chan` binary is from
+HEAD `44d9749` (wave-C build), pre-fullstack-17. So
+the polish items below are verdicted by **code-audit
+only**.
+
+### fullstack-17 polish verdicts (code-audit)
+
+```
+Item                                                | Verdict
+----------------------------------------------------+---------
+Absolute-path dialog now accepts /tmp/... paths     | pass (audit)
+Unknown-type bubbles dropped silently in SPA        | pass (audit)
+Stale watcher cleared on detached-reply failures    | pass (audit)
+Answered surveys auto-dismiss after short delay     | pass (audit)
+Terminal rename keep-open + restart confirmation    | pass (audit)
+Hamburger / right-click menus mutually exclusive    | pass (audit)
+Light-mode ANSI white slot contrast bump            | pass (audit)
+```
+
+* **Absolute-path dialog**:
+  `web/src/components/PathPromptModal.svelte`
+  now takes `allowAbsolute` via `pathPromptState`, threads
+  it into `validatePath`, and `missingAncestors` early-
+  returns for `/`-prefixed paths so an absolute path
+  doesn't try to validate a phantom multi-segment
+  ancestor chain. Closes my wave-A side observation
+  about the dialog rejecting `/tmp/chan-test-events`
+  despite the systacean-9 API allowing absolute paths.
+
+* **Unknown-type bubble drop**:
+  `web/src/state/watcherEvents.ts:parseWatcherEvent`
+  adds:
+  ```ts
+  if (obj.type !== "survey" && obj.type !== "survey-reply"
+      && obj.type !== "poke") {
+    return null;
+  }
+  ```
+  So a `futuristic-thing` event now returns null and
+  is not added to the bubble list — matches the
+  backend's log+ignore. Closes my wave-A side
+  observation.
+
+* **Stale watcher / auto-dismiss / rename / mutually-
+  exclusive menus / light-mode ANSI**: all listed in
+  the commit message + covered by the test set
+  `npm run test -- BubbleOverlay TerminalRichPrompt
+  watcherEvents pathValidate` per `0c2faa7` verification
+  block. Live retest deferred until the build is
+  unblocked.
+
+### architect-1 SKILL drift check (item 11)
+
+`docs/agents/orchestration/{README,atomic-writes,spawn-
+protocol}.md` read.
+
+* **README**: index-style; routes the reader to the two
+  shipping docs + leaves MCP discovery deferred to
+  `systacean-14`. No drift; matches what's currently
+  shipped (atomic event watcher per systacean-9 +
+  event-reply endpoint per systacean-11).
+
+* **atomic-writes.md**: documents the temp+rename
+  contract exactly as the systacean-9 watcher
+  implementation enforces (single read on
+  Create/rename-final; no defensive retries). Per-
+  language examples (bash / python / node / rust) all
+  follow the same shape. Matches what my wave-A
+  walkthrough exercised. No drift.
+
+* **spawn-protocol.md**: forward-looking — the file's
+  own banner says "the contract below is the design
+  shape from `systacean-12`. If you're reading this
+  before that task lands, treat it as the target." So
+  the SKILL is staked to the future implementation
+  rather than retrofit. Endpoints described:
+  `POST /api/terminals` (create with name + command +
+  env), `POST /api/terminals/<session>/restart`,
+  `DELETE /api/terminals/<session>`. Pre-flight pattern
+  with 1/2/3 keystroke options (open terminal / kill /
+  retry). The in-progress chan-server code I saw adds
+  `Registry::restart` and `CreateOptions { command, env,
+  preflight }` — those names align with the SKILL
+  endpoints. No drift to flag YET; will re-check after
+  systacean-12 lands.
+
+### Items still BLOCKED on upstream
+
+* 1-6 (spawn dialog + pre-flight UX): need
+  `fullstack-20` + `systacean-12`.
+* 7-8 (activity indicator): need `systacean-13`.
+* 9-10 (MCP auto-discovery): need `systacean-14`.
+
+Will pick up each cluster as it lands.
+
+### State left on disk
+
+* 8801 server NOT running (killed during the rebuild
+  attempt; can't relaunch because the binary won't
+  rebuild). Once @@Systacean lands a `cwd.clone()` (or
+  equivalent) fix on `terminal_sessions.rs:541`, I can
+  rebuild + re-attach.
+* Tab 503725098 in chrome still has the prior layout
+  (split with note-b.md + index.md) but the server it
+  was pointing at is down.
+
+## 2026-05-19 (resume) BST - Polish + SKILL drift complete
