@@ -1208,3 +1208,29 @@ Committing + pushing under standing topic-
 level clearance (no HOLD pokes since the
 22:15 BST cut). Next on queue: `-80` (right-
 click trims + FB click-to-inspector).
+
+## 2026-05-19 23:10 BST — poke: -79 audit-trail correction
+
+Cross-lane absorption again (same shape as the
+`-58` / `d8ee2e8` case logged at 19:20 BST).
+My `9768123` commit (`-79`) doesn't include the
+`web/src/state/tabs.svelte.ts` changes:
+* `TerminalRichPromptState.focusNonce?: number`
+  field.
+* `openActiveTerminalRichPrompt` bump logic.
+
+Those landed in `7838c72`
+(`Graph tab title from selected node
+(fullstack-81)`), absorbed when Lane A
+committed in parallel. The functional code is on
+origin/main exactly as designed — my consumer
+wiring in `TerminalRichPrompt.svelte` ships in
+`9768123`; the state-layer plumbing ships in
+`7838c72` via the parallel-lane absorption.
+
+`git blame` on `focusNonce` will point to
+`7838c72 fullstack-81`, not `9768123
+fullstack-79`. Logged here so the audit trail
+documents what happened.
+
+Lane B queue continues: `-80`, `-82`.
