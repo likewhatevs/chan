@@ -495,6 +495,73 @@ describe("pane state", () => {
     expect(new Set(graphs.map((t) => t.id)).size).toBe(2);
   });
 
+  test("paneModeOpenTerminal/Browser/Graph honor a SpawnContext (fullstack-43)", () => {
+    const f = fileTab({ id: "f", path: "notes/sub/a.md" });
+    resetLayout([f]);
+
+    // Context with file + parent dir: terminal cwd = parent dir,
+    // browser inspector pops, graph scopes to file:* with the file
+    // pre-selected so its inspector opens on mount.
+    enterPaneMode();
+    paneModeOpenTerminal({ dir: "notes/sub", file: "notes/sub/a.md" });
+    paneModeOpenBrowser({ dir: "notes/sub", file: "notes/sub/a.md" });
+    paneModeOpenGraph({ dir: "notes/sub", file: "notes/sub/a.md" });
+    commitPaneMode();
+
+    const tabs = activePane().tabs;
+    const terminal = tabs.find((t) => t.kind === "terminal") as TerminalTab;
+    const browser = tabs.find((t) => t.kind === "browser");
+    const graph = tabs.find((t) => t.kind === "graph");
+    expect(terminal.cwd).toBe("notes/sub");
+    expect(browser?.kind).toBe("browser");
+    if (browser?.kind === "browser") {
+      expect(browser.inspectorOpen).toBe(true);
+    }
+    expect(graph?.kind).toBe("graph");
+    if (graph?.kind === "graph") {
+      expect(graph.scopeId).toBe("file:notes/sub/a.md");
+      expect(graph.pendingSelectId).toBe("notes/sub/a.md");
+    }
+  });
+
+  test("paneModeOpenGraph with a dir-only context scopes to dir:* (fullstack-43)", () => {
+    const f = fileTab({ id: "f", path: "notes/x.md" });
+    resetLayout([f]);
+
+    enterPaneMode();
+    paneModeOpenGraph({ dir: "notes" });
+    commitPaneMode();
+
+    const graph = activePane().tabs.find((t) => t.kind === "graph");
+    expect(graph?.kind).toBe("graph");
+    if (graph?.kind === "graph") {
+      expect(graph.scopeId).toBe("dir:notes");
+      // Per fullstack-32 "Graph from here" rule, the dir is itself
+      // the pre-selected node so the inspector pops on mount.
+      expect(graph.pendingSelectId).toBe("notes");
+    }
+  });
+
+  test("paneModeOpen* with empty context preserves drive-root defaults (fullstack-43)", () => {
+    const f = fileTab({ id: "f", path: "notes/x.md" });
+    resetLayout([f]);
+
+    enterPaneMode();
+    paneModeOpenTerminal({ dir: "" });
+    paneModeOpenGraph({ dir: "" });
+    commitPaneMode();
+
+    const tabs = activePane().tabs;
+    const terminal = tabs.find((t) => t.kind === "terminal") as TerminalTab;
+    const graph = tabs.find((t) => t.kind === "graph");
+    expect(terminal.cwd).toBeUndefined();
+    expect(graph?.kind).toBe("graph");
+    if (graph?.kind === "graph") {
+      expect(graph.scopeId).toBe("drive");
+      expect(graph.pendingSelectId).toBeNull();
+    }
+  });
+
   test("repeated openBrowserInActivePane / openGraphInActivePane stack (fullstack-47)", () => {
     const tab = fileTab({ id: "g", path: "notes/y.md" });
     resetLayout([tab]);

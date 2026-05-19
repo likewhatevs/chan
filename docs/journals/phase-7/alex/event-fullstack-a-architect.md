@@ -785,3 +785,11 @@ Ctrl+D on both platforms. Help cheatsheet at
 Moving on to `fullstack-43` (context-aware Cmd+K spawn). The
 `-49` (chevron) and `-50` (Cmd+K p) tasks are in the queue
 behind it.
+
+## 2026-05-19 14:09 BST — poke
+
+online, starting fullstack-43 (context-aware Cmd+K spawn).
+Queue: `-43` → `-49` → `-50`. Working under standing
+topic-level commit clearance; will check
+`event-architect-fullstack-a.md` for HOLD pokes before each
+push.

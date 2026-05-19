@@ -33,6 +33,8 @@
     reconnectWatcher,
     refreshDrive,
     refreshTree,
+    resolveSpawnContext,
+    revealAndSelect,
     scheduleSessionSave,
     searchStatusOverlay,
     searchPanel,
@@ -396,27 +398,45 @@
         return;
       // Cmd+K mode spawn keys: stay inside the transaction so Esc
       // can roll the new tab back along with any layout edits.
+      // `fullstack-43`: each spawn pulls a context from the
+      // focused tab (cwd of a terminal, parent dir of a doc, the
+      // file-browser selection, the graph's scope) so the new tab
+      // lands next to the user's current focus instead of always
+      // anchoring at the drive root.
       case "1":
-        paneModeOpenTerminal();
+        paneModeOpenTerminal(resolveSpawnContext());
         return;
-      case "2":
-        paneModeOpenBrowser();
+      case "2": {
+        const ctx = resolveSpawnContext();
+        // Browser tabs share a module-level `browserSelection`, so
+        // priming it before the spawn makes the new tab's tree
+        // land already expanded to and selecting the contextual
+        // node. revealAndSelect is a no-op when the path is empty,
+        // so the drive-root fallback (`ctx.dir === ""`) is safe.
+        if (ctx.file) revealAndSelect(ctx.file);
+        else if (ctx.dir) revealAndSelect(ctx.dir);
+        paneModeOpenBrowser(ctx);
         return;
+      }
       // `3` opened the Search overlay in `fullstack-39`; `fullstack-42`
       // reassigns it to Graph since Graph is a real tab type, while
       // Search remains an OverlayShell. Search now lives on `s`.
       case "3":
-        paneModeOpenGraph();
+        paneModeOpenGraph(resolveSpawnContext());
         return;
       // `4` was vacated in -39 + -40; -42 wires it to the existing
       // new-file flow. Modal owns the keyboard, so commit the draft
       // first; any pending layout edits are sealed before the dialog
-      // pops.
-      case "4":
+      // pops. `fullstack-43`: resolve the context (parent dir of the
+      // source tab) BEFORE the commit so we capture what was focused
+      // at the moment of the keypress.
+      case "4": {
+        const ctx = resolveSpawnContext();
         commitPaneMode();
         scheduleSessionSave();
-        void fileOps.createFile("");
+        void fileOps.createFile(ctx.dir);
         return;
+      }
       // Search lives in an OverlayShell, not a tab type. Open the
       // overlay outside the transaction so it can capture keyboard
       // input cleanly; commit the draft first so any layout edits

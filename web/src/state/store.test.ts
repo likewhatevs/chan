@@ -12,6 +12,7 @@ import {
   openFsGraphForDirectory,
   openFsGraphForFile,
   persistStateToHash,
+  resolveSpawnContext,
   revealPathInBrowser,
   scheduleSessionSave,
   scopeFsGraphFromHere,
@@ -23,10 +24,12 @@ import {
   activePane,
   layout,
   type BrowserTab,
+  type FileTab,
   type GraphTab,
   type LeafNode,
   type TerminalTab,
 } from "./tabs.svelte";
+import type { TreeEntry } from "../api/types";
 
 function setTerminalLayout(tab: Partial<TerminalTab> = {}): void {
   const terminal: TerminalTab = {
@@ -355,5 +358,221 @@ describe("filesystem graph entrypoints", () => {
     expect(graph.scopeId).toBe("file:notes/a.md");
     expect(graph.depth).toBe(1);
     expect(graph.pendingSelectId).toBe("notes/a.md");
+  });
+});
+
+describe("resolveSpawnContext (fullstack-43)", () => {
+  function placeTabs(tabs: Array<FileTab | TerminalTab | GraphTab | BrowserTab>): void {
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-spawn",
+      tabs,
+      activeTabId: tabs[0]?.id ?? null,
+    };
+    layout.rootId = pane.id;
+    layout.activePaneId = pane.id;
+    layout.nodes = { [pane.id]: pane };
+  }
+
+  function makeFileTab(path: string): FileTab {
+    return {
+      kind: "file",
+      fileKind: "document",
+      id: `file-${path}`,
+      path,
+      content: "",
+      saved: "",
+      savedMtime: 1,
+      mode: "wysiwyg",
+      loading: false,
+      error: null,
+      fileMissing: null,
+      inspectorOpen: false,
+      outlineOpen: false,
+      repoRoot: null,
+      readMode: false,
+      fsWritable: true,
+      styleToolbarOpen: false,
+      syntaxHighlight: true,
+      highlightTrailingWhitespace: false,
+      codeBlocksCollapsed: false,
+    };
+  }
+
+  test("empty pane falls back to drive root", () => {
+    placeTabs([]);
+    expect(resolveSpawnContext()).toEqual({ dir: "" });
+  });
+
+  test("file editor source -> parent dir + file", () => {
+    placeTabs([makeFileTab("notes/sub/a.md")]);
+    expect(resolveSpawnContext()).toEqual({
+      dir: "notes/sub",
+      file: "notes/sub/a.md",
+    });
+  });
+
+  test("root-level file -> drive root + file", () => {
+    placeTabs([makeFileTab("README.md")]);
+    expect(resolveSpawnContext()).toEqual({ dir: "", file: "README.md" });
+  });
+
+  test("terminal with cwd -> cwd as dir", () => {
+    const terminal: TerminalTab = {
+      kind: "terminal",
+      id: "term-1",
+      title: "Terminal",
+      createdAt: 1,
+      broadcastEnabled: false,
+      broadcastTargetIds: [],
+      cwd: "notes/sub",
+    };
+    placeTabs([terminal]);
+    expect(resolveSpawnContext()).toEqual({ dir: "notes/sub" });
+  });
+
+  test("terminal without cwd -> drive root", () => {
+    const terminal: TerminalTab = {
+      kind: "terminal",
+      id: "term-1",
+      title: "Terminal",
+      createdAt: 1,
+      broadcastEnabled: false,
+      broadcastTargetIds: [],
+    };
+    placeTabs([terminal]);
+    expect(resolveSpawnContext()).toEqual({ dir: "" });
+  });
+
+  test("browser selection of a file -> parent + file", () => {
+    placeTabs([
+      { kind: "browser", id: "br-1", title: "Files", inspectorOpen: false },
+    ]);
+    tree.entries = [
+      { path: "notes/a.md", is_dir: false, mtime: 1, size: 0 } as TreeEntry,
+    ];
+    browserSelection.path = "notes/a.md";
+    expect(resolveSpawnContext()).toEqual({
+      dir: "notes",
+      file: "notes/a.md",
+    });
+  });
+
+  test("browser selection of a directory -> dir only", () => {
+    placeTabs([
+      { kind: "browser", id: "br-1", title: "Files", inspectorOpen: false },
+    ]);
+    tree.entries = [
+      { path: "notes", is_dir: true, mtime: null, size: 0 } as TreeEntry,
+    ];
+    browserSelection.path = "notes";
+    expect(resolveSpawnContext()).toEqual({ dir: "notes" });
+  });
+
+  test("browser with no selection -> drive root", () => {
+    placeTabs([
+      { kind: "browser", id: "br-1", title: "Files", inspectorOpen: false },
+    ]);
+    browserSelection.path = null;
+    expect(resolveSpawnContext()).toEqual({ dir: "" });
+  });
+
+  test("graph file: scope -> parent + file", () => {
+    placeTabs([
+      {
+        kind: "graph",
+        id: "g-1",
+        title: "File Graph",
+        mode: "semantic",
+        scopeId: "file:notes/a.md",
+        depth: 1,
+        filters: {
+          link: true,
+          tag: true,
+          mention: true,
+          language: true,
+          img: true,
+          folder: true,
+        },
+        inspectorOpen: false,
+        pendingSelectId: null,
+      },
+    ]);
+    expect(resolveSpawnContext()).toEqual({
+      dir: "notes",
+      file: "notes/a.md",
+    });
+  });
+
+  test("graph dir: scope -> dir only", () => {
+    placeTabs([
+      {
+        kind: "graph",
+        id: "g-1",
+        title: "Dir Graph",
+        mode: "semantic",
+        scopeId: "dir:notes/sub",
+        depth: 1,
+        filters: {
+          link: true,
+          tag: true,
+          mention: true,
+          language: true,
+          img: true,
+          folder: true,
+        },
+        inspectorOpen: false,
+        pendingSelectId: null,
+      },
+    ]);
+    expect(resolveSpawnContext()).toEqual({ dir: "notes/sub" });
+  });
+
+  test("graph drive scope -> drive root", () => {
+    placeTabs([
+      {
+        kind: "graph",
+        id: "g-1",
+        title: "Graph",
+        mode: "semantic",
+        scopeId: "drive",
+        depth: 1,
+        filters: {
+          link: true,
+          tag: true,
+          mention: true,
+          language: true,
+          img: true,
+          folder: true,
+        },
+        inspectorOpen: false,
+        pendingSelectId: null,
+      },
+    ]);
+    expect(resolveSpawnContext()).toEqual({ dir: "" });
+  });
+
+  test("graph tag: scope -> drive root (no useful path anchor)", () => {
+    placeTabs([
+      {
+        kind: "graph",
+        id: "g-1",
+        title: "Tag Graph",
+        mode: "semantic",
+        scopeId: "tag:foo",
+        depth: 1,
+        filters: {
+          link: true,
+          tag: true,
+          mention: true,
+          language: true,
+          img: true,
+          folder: true,
+        },
+        inspectorOpen: false,
+        pendingSelectId: null,
+      },
+    ]);
+    expect(resolveSpawnContext()).toEqual({ dir: "" });
   });
 });

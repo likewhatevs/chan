@@ -1659,14 +1659,34 @@ export function paneModeSplit(direction: "row" | "column"): void {
   draft.activePaneId = newPane.id;
 }
 
+/// `fullstack-43` context for a Pane Mode spawn key. The Cmd+K
+/// 1/2/3/4 handlers in App.svelte resolve the focused tab into one
+/// of these shapes before calling the spawn helpers, so a new
+/// terminal lands on the source file's parent directory and a new
+/// Graph tab can scope itself to (and pre-select) the source node.
+///
+/// `dir` is the directory the spawn should anchor to (terminal cwd,
+/// new-file parent, graph dir-scope, file-browser fallback). `""`
+/// means drive root.
+///
+/// `file` is the file the source tab is currently pointing at, when
+/// applicable. File-Browser and Graph spawns prefer this for the
+/// "select this exact node" behavior; terminal / new-file always
+/// fall back to `dir` (the file's parent).
+export type SpawnContext = {
+  dir: string;
+  file?: string;
+};
+
 /// Cmd+K mode `1`. Spawn a new terminal tab inside the draft's
 /// focused pane. The session WebSocket only opens once the tab
 /// mounts, so an Esc rollback leaves no backend state behind.
-export function paneModeOpenTerminal(): void {
+export function paneModeOpenTerminal(ctx?: SpawnContext): void {
   const draft = draftLayout();
   if (!draft) return;
   const p = draft.nodes[draft.activePaneId];
   if (!p || p.kind !== "leaf") return;
+  const cwd = ctx?.dir?.trim();
   const tab: TerminalTab = {
     kind: "terminal",
     id: id("term"),
@@ -1679,7 +1699,7 @@ export function paneModeOpenTerminal(): void {
     terminalSessionId: undefined,
     controlledTerminal: undefined,
     lastSeq: undefined,
-    cwd: undefined,
+    cwd: cwd || undefined,
     seedInput: undefined,
     richPrompt: undefined,
   };
@@ -1690,30 +1710,46 @@ export function paneModeOpenTerminal(): void {
 /// Cmd+K mode `2`. Spawn a fresh File Browser tab inside the
 /// draft's focused pane. Per `fullstack-47` every press is a new
 /// tab — pile them up if the user wants multiple browser views.
-export function paneModeOpenBrowser(): void {
+/// When `ctx` carries a file or dir, the inspector pops open so the
+/// per-`fullstack-43` auto-selected node lands with its info pane
+/// already visible.
+export function paneModeOpenBrowser(ctx?: SpawnContext): void {
   const draft = draftLayout();
   if (!draft) return;
   const p = draft.nodes[draft.activePaneId];
   if (!p || p.kind !== "leaf") return;
+  const hasCtx = !!(ctx?.file || ctx?.dir);
   const tab: BrowserTab = {
     kind: "browser",
     id: id("browser"),
     title: "Files",
-    inspectorOpen: defaultBrowserInspectorOpen(),
+    inspectorOpen: hasCtx ? true : defaultBrowserInspectorOpen(),
   };
   p.tabs.push(tab);
   p.activeTabId = tab.id;
 }
 
-/// Cmd+K mode `4`. Spawn a fresh Graph tab inside the draft's
+/// Cmd+K mode `3`. Spawn a fresh Graph tab inside the draft's
 /// focused pane. Same no-dedup semantic as `paneModeOpenBrowser`.
-export function paneModeOpenGraph(): void {
+/// When `ctx` carries a file or dir, scope the new tab to that
+/// node and pre-select it — GraphPanel pops the inspector on
+/// pendingSelectId, matching `fullstack-32`'s "Graph from here"
+/// rule.
+export function paneModeOpenGraph(ctx?: SpawnContext): void {
   const draft = draftLayout();
   if (!draft) return;
   const p = draft.nodes[draft.activePaneId];
   if (!p || p.kind !== "leaf") return;
   const mode: GraphTab["mode"] = "semantic";
-  const scopeId = "drive";
+  let scopeId = "drive";
+  let pendingSelectId: string | null = null;
+  if (ctx?.file) {
+    scopeId = `file:${ctx.file}`;
+    pendingSelectId = ctx.file;
+  } else if (ctx?.dir) {
+    scopeId = `dir:${ctx.dir}`;
+    pendingSelectId = ctx.dir;
+  }
   const tab: GraphTab = {
     kind: "graph",
     id: id("graph"),
@@ -1723,7 +1759,7 @@ export function paneModeOpenGraph(): void {
     depth: 1,
     filters: { ...DEFAULT_GRAPH_FILTERS },
     inspectorOpen: false,
-    pendingSelectId: null,
+    pendingSelectId,
   };
   p.tabs.push(tab);
   p.activeTabId = tab.id;

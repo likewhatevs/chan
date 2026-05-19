@@ -29,15 +29,20 @@ describe("Cmd+K pane mode keymap (fullstack-40 inversion)", () => {
 
 describe("Cmd+K pane mode keymap (fullstack-42 — search / graph / new file / help)", () => {
   test("3 spawns Graph; lowercase s opens the Search overlay", () => {
-    expect(app).toContain('case "3":\n        paneModeOpenGraph();');
+    // `fullstack-43`: every spawn key now passes a context derived
+    // from the focused tab so the new tab anchors on the source's
+    // directory / file instead of the drive root.
+    expect(app).toContain(
+      'case "3":\n        paneModeOpenGraph(resolveSpawnContext());',
+    );
     expect(app).toMatch(
       /case "s":[\s\S]*commitPaneMode\(\);[\s\S]*searchPanel\.open = true;/,
     );
   });
 
-  test("4 commits the draft and opens the new-file dialog", () => {
+  test("4 commits the draft and opens the new-file dialog at the contextual dir", () => {
     expect(app).toMatch(
-      /case "4":[\s\S]*commitPaneMode\(\);[\s\S]*fileOps\.createFile\(""\);/,
+      /case "4": \{[\s\S]*?const ctx = resolveSpawnContext\(\);[\s\S]*?commitPaneMode\(\);[\s\S]*?fileOps\.createFile\(ctx\.dir\);/,
     );
   });
 
@@ -50,6 +55,20 @@ describe("Cmd+K pane mode keymap (fullstack-42 — search / graph / new file / h
     // affordance on top of the live draft.
     expect(app).toMatch(
       /case "h":[\s\S]*?case "H":[\s\S]*?paneModeHelpVisible = !paneModeHelpVisible;\s*\n\s*return;/,
+    );
+  });
+});
+
+describe("Cmd+K pane mode spawn context (fullstack-43)", () => {
+  test("1 spawns Terminal with the resolved context", () => {
+    expect(app).toContain(
+      'case "1":\n        paneModeOpenTerminal(resolveSpawnContext());',
+    );
+  });
+
+  test("2 primes the browser selection then spawns the File Browser", () => {
+    expect(app).toMatch(
+      /case "2": \{[\s\S]*?const ctx = resolveSpawnContext\(\);[\s\S]*?if \(ctx\.file\) revealAndSelect\(ctx\.file\);[\s\S]*?else if \(ctx\.dir\) revealAndSelect\(ctx\.dir\);[\s\S]*?paneModeOpenBrowser\(ctx\);/,
     );
   });
 });

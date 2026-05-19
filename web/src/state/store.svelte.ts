@@ -16,6 +16,7 @@ import {
   type WsStatus,
 } from "../api/client";
 import {
+  activeLayout,
   closeTab,
   hasBrowserTab,
   hasGraphTab,
@@ -27,6 +28,7 @@ import {
   restoreLayout,
   serializeLayout,
   type BrowserTab,
+  type SpawnContext,
 } from "./tabs.svelte";
 import { isEditableText } from "./fileTypes";
 import {
@@ -1487,6 +1489,70 @@ export function revealPathInBrowser(
     browserOverlay.inspectorOpen = true;
   }
   return tab;
+}
+
+/// `fullstack-43`: derive the spawn anchor for Cmd+K 1/2/3/4 from
+/// the focused tab. The returned shape (parent dir + optional
+/// file) is what `paneModeOpenTerminal/Browser/Graph` consume so a
+/// new terminal lands on the source doc's parent directory and a
+/// new Graph tab can pre-select the source node.
+///
+/// Reads from `activeLayout()` so it sees the draft mid-Pane Mode,
+/// not the committed layout — once the user moves focus to a
+/// freshly-split empty pane inside the same transaction, that
+/// empty pane has no context and the fallback (drive root) kicks
+/// in.
+///
+/// The browser branch consults the module-level `browserSelection`
+/// (shared across browser tabs by design); the graph branch parses
+/// `scopeId` since per-tab graph selection lives inside
+/// `GraphPanel.svelte` and isn't exposed at the layout level.
+export function resolveSpawnContext(): SpawnContext {
+  const snapshot = activeLayout();
+  const node = snapshot.nodes[snapshot.activePaneId];
+  if (!node || node.kind !== "leaf" || !node.activeTabId) return { dir: "" };
+  const tab = node.tabs.find((t) => t.id === node.activeTabId);
+  if (!tab) return { dir: "" };
+  switch (tab.kind) {
+    case "terminal":
+      return { dir: tab.cwd?.trim() ?? "" };
+    case "file":
+      return { dir: parentDirOf(tab.path), file: tab.path };
+    case "browser":
+      return resolveBrowserSpawnContext();
+    case "graph":
+      return resolveGraphSpawnContext(tab.scopeId);
+  }
+}
+
+function parentDirOf(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash > 0 ? path.slice(0, slash) : "";
+}
+
+function resolveBrowserSpawnContext(): SpawnContext {
+  const sel = browserSelection.path;
+  if (!sel) return { dir: "" };
+  // We need is_dir to know whether the selection is a file or
+  // directory. The tree snapshot is authoritative; missing entries
+  // (e.g. a stale selection pointing at a moved path) fall back to
+  // treating it as a file so we still get a useful parent dir.
+  const entry = tree.entries.find((e) => e.path === sel);
+  if (entry?.is_dir) return { dir: sel };
+  return { dir: parentDirOf(sel), file: sel };
+}
+
+function resolveGraphSpawnContext(scopeId: string): SpawnContext {
+  if (scopeId.startsWith("file:")) {
+    const file = scopeId.slice("file:".length);
+    return { dir: parentDirOf(file), file };
+  }
+  if (scopeId.startsWith("dir:")) {
+    return { dir: scopeId.slice("dir:".length) };
+  }
+  // "drive", "tag:...", and any future scope shapes have no useful
+  // path anchor — fall back to drive root.
+  return { dir: "" };
 }
 
 // ---- overlay z-order stack ----------------------------------------------

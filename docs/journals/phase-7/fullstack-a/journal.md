@@ -187,3 +187,9 @@ menu / shortcut cleanup (fullstack-42). Gate green: `npm run test`
 (312 passed), `npm run check`, `npm run build`, `bash -lc 'ulimit
 -n 4096; scripts/pre-push'`. Inspector buttons preserved per
 @@Architect's 13:40 refinement; only menu duplicates dropped.
+
+## 2026-05-19 14:09 BST
+
+online, starting fullstack-43 (context-aware Cmd+K spawn). Queue
+behind it: `-49` (right-dock chevron direction), `-50` (Cmd+K p
+rich prompt).
