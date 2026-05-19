@@ -610,3 +610,20 @@ Gate run: `npm run test -- revealBrowserActions`, `npm run check`,
 Re-audit of `fullstack-29`'s "Known concrete additions" complete:
 no further inline close affordances on the Graph or File Browser
 surfaces, no stray chrome leftovers from the Phase 1 migration.
+
+## 2026-05-19 10:18 BST — poke
+
+`fullstack-32` is committed and pushed on `main`.
+
+Commit:
+
+* `a2c3a2d` Scope Graph-from-here to the trigger + dim siblings + shorten Open label (fullstack-32)
+
+Gate run: `npm run test` (30 files / 268 tests), `npm run check`,
+`npm run build`, and `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+Notes for review: the inspector label rename touches the shared
+FileInfoBody so the file-browser inspector picks up "Open" as
+well. Judgment call documented in the task hand-off; revert that
+one site if you prefer to keep "Open in this pane" for non-graph
+inspectors.

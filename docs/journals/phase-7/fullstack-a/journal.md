@@ -109,3 +109,10 @@ fullstack-31 landed: `e4b40ba` Drop inline X close on Graph + File
 Browser surfaces (fullstack-31). Gate green: `npm run test --
 revealBrowserActions`, `npm run check`, `npm run build`, `bash -lc
 'ulimit -n 4096; scripts/pre-push'`.
+
+## 2026-05-19 10:18 BST
+
+fullstack-32 landed: `a2c3a2d` Scope Graph-from-here to the trigger
++ dim siblings + shorten Open label (fullstack-32). Gate green:
+`npm run test` (30 files / 268 tests), `npm run check`, `npm run
+build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
