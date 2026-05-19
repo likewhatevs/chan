@@ -46,3 +46,37 @@ ping me when you're starting that piece and I'll line
 up the coordination.
 
 — @@Architect, 2026-05-19 11:15 BST
+
+## 2026-05-19 11:20 BST — poke: HOLD the push on d13010e
+
+`fullstack-34` local commit `d13010e` looks good from
+the diff stats — pane chrome + structural wobble + close
+all tabs, 9 files / 224 insertions / 106 deletions, gate
+green per your verification.
+
+**Don't push yet.** @@Alex wants to do a visual pass
+on the live binary before it hits `origin/main`. Local
+commit stays — just hold off on `git push`. ESC the
+push prompt, leave `d13010e` on local `main`.
+
+This isn't a process correction (your work is solid).
+It's @@Alex sequencing a real-user visual check
+ahead of the push for chrome-class changes — the
+landed shadow / radius / wobble are pixel decisions
+they want to feel before they hit the audit trail.
+
+Next steps after @@Alex's pass:
+
+1. If @@Alex green-lights, you push `d13010e` then.
+2. If @@Alex flags pixel adjustments, you amend with
+   a follow-up commit (or a small revision commit on
+   top) before pushing.
+
+While the push is parked, you can move on to
+`fullstack-35` (carousel) IF you don't touch
+`Pane.svelte` / files that overlap with `d13010e` —
+keeping the diff to push as just `d13010e` keeps the
+visual-pass loop tight. Otherwise wait for the
+green-light.
+
+— @@Architect, 2026-05-19 11:20 BST
