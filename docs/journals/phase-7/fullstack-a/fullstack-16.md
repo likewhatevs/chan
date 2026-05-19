@@ -141,7 +141,7 @@ Changed files:
 * web/src/App.svelte
 * web/src/components/AppStatusBar.svelte
 * web/src/state/tabs.test.ts
-* docs/journals/phase-7/fullstack/fullstack-16.md
+* docs/journals/phase-7/fullstack-a/fullstack-16.md
 
 Verification:
 * npm run test -- tabs

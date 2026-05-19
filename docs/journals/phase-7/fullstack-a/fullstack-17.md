@@ -186,7 +186,7 @@ Changed files:
 * web/src/state/store.svelte.ts
 * web/src/state/watcherEvents.ts
 * web/src/state/watcherEvents.test.ts
-* docs/journals/phase-7/fullstack/fullstack-17.md
+* docs/journals/phase-7/fullstack-a/fullstack-17.md
 
 Verification:
 * `npm run test -- BubbleOverlay TerminalRichPrompt watcherEvents pathValidate`

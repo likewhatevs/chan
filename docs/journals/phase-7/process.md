@@ -31,6 +31,11 @@ This process replaces the phase-6 process in three main ways:
 | @@WebtestA      | Test-server + manual web walkthrough lane A.  |
 | @@WebtestB      | Test-server + manual web walkthrough lane B.  |
 
+Mid-phase split (2026-05-19): @@FullStack became
+@@FullStackA + @@FullStackB. Same profile both lanes;
+operational parallelism so a deep queue can run two-
+wide. @@Systacean stays single-lane (release runway).
+
 Agent skill anchors and contacts live under
 [`../../agents/`](../../agents/). Each agent has a top-
 level `<name>.md` card (handle, profile, skill links) and,

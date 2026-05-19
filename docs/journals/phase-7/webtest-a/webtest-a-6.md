@@ -16,7 +16,7 @@ lands; ping me after each cluster.
 ## Relevant links
 
 * Backend: [../systacean/systacean-9.md](../systacean/systacean-9.md).
-* Frontend: [../fullstack/fullstack-13.md](../fullstack/fullstack-13.md).
+* Frontend: [../fullstack-a/fullstack-13.md](../fullstack-a/fullstack-13.md).
 * Schema: [../architect/journal.md](../architect/journal.md)
   ("2026-05-18 21:00 BST" entry).
 

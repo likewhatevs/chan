@@ -22,12 +22,12 @@ rebuild.
 
 * [./webtest-b-1.md](./webtest-b-1.md) — your prior Lane B
   baseline + adjacent passes.
-* [../fullstack/fullstack-6.md](../fullstack/fullstack-6.md)
+* [../fullstack-a/fullstack-6.md](../fullstack-a/fullstack-6.md)
   — pane cluster (B15 click semantics, pane menu reorg,
   color, next/prev, doc tab menu).
-* [../fullstack/fullstack-7.md](../fullstack/fullstack-7.md)
+* [../fullstack-a/fullstack-7.md](../fullstack-a/fullstack-7.md)
   — light-mode terminal contrast.
-* [../fullstack/fullstack-2.md](../fullstack/fullstack-2.md)
+* [../fullstack-a/fullstack-2.md](../fullstack-a/fullstack-2.md)
   — external-link revision (tunnel-aware Tauri shell.open).
 
 ## Acceptance criteria

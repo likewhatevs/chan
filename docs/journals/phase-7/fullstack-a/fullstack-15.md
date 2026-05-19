@@ -136,7 +136,7 @@ Changed files:
 * `web/src/state/tabs.svelte.ts`
 * `web/src/components/Pane.svelte`
 * `web/src/state/tabs.test.ts`
-* `docs/journals/phase-7/fullstack/fullstack-15.md`
+* `docs/journals/phase-7/fullstack-a/fullstack-15.md`
 
 Verification:
 

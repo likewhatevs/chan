@@ -8,11 +8,12 @@ the phase journals (`docs/journals/phase-*/`).
 
 | Tag           | Contact                                  | Profile                              |
 |---------------|------------------------------------------|--------------------------------------|
-| @@Architect   | [architect.md](architect.md) | Plan, dispatch, decisions.       |
-| @@FullStack   | [fullstack.md](fullstack.md) | Backend + Frontend merged.       |
-| @@Systacean   | [systacean.md](systacean.md) | Syseng + Rustacean.              |
-| @@WebtestA    | [webtest-a.md](webtest-a.md) | Web test lane A.                 |
-| @@WebtestB    | [webtest-b.md](webtest-b.md) | Web test lane B.                 |
+| @@Architect   | [architect.md](architect.md)   | Plan, dispatch, decisions.       |
+| @@FullStackA  | [fullstack-a.md](fullstack-a.md) | FullStack lane A (smaller/faster).|
+| @@FullStackB  | [fullstack-b.md](fullstack-b.md) | FullStack lane B (bigger/cross-stack).|
+| @@Systacean   | [systacean.md](systacean.md)   | Syseng + Rustacean. Release runway. |
+| @@WebtestA    | [webtest-a.md](webtest-a.md)   | Web test lane A.                 |
+| @@WebtestB    | [webtest-b.md](webtest-b.md)   | Web test lane B.                 |
 
 ## Historical handles
 
@@ -24,9 +25,10 @@ the predecessor list on the active card.
 
 | Tag             | Active successor                | Contact                                                       |
 |-----------------|---------------------------------|---------------------------------------------------------------|
-| @@Backend       | @@FullStack                     | [backend.md](backend.md)                       |
-| @@Frontend      | @@FullStack                     | [frontend.md](frontend.md)                     |
-| @@Webdev        | @@FullStack                     | [webdev.md](webdev.md)                         |
+| @@Backend       | @@FullStackA + @@FullStackB     | [backend.md](backend.md)                       |
+| @@Frontend      | @@FullStackA + @@FullStackB     | [frontend.md](frontend.md)                     |
+| @@Webdev        | @@FullStackA + @@FullStackB     | [webdev.md](webdev.md)                         |
+| @@FullStack     | @@FullStackA + @@FullStackB     | [fullstack.md](fullstack.md)                   |
 | @@Syseng        | @@Systacean                     | [syseng.md](syseng.md)                         |
 | @@Rustacean     | @@Systacean                     | [rustacean.md](rustacean.md)                   |
 | @@Backsystacean | @@FullStack + @@Systacean       | [backsystacean.md](backsystacean.md)           |

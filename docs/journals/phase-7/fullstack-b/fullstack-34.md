@@ -45,6 +45,34 @@ menu, so bundle them.
 * Wobble is single-fire (not looping); duration matches
   the hover wobble.
 
+### Remove Split right / Split down from non-hamburger menus
+
+@@Alex 2026-05-19 05:45 BST: Split entries currently
+appear in multiple right-click menus (empty-pane
+welcome menu per `fullstack-28`, possibly elsewhere).
+Strip them from everywhere except the pane's hamburger
+menu. The hamburger is the canonical home for
+structural actions; redundant copies in other menus
+just create choice paralysis.
+
+* Audit: terminal tab right-click menu, doc tab right-
+  click menu, empty-pane welcome menu, any other
+  surface that exposes a Split affordance.
+* Drop Split right + Split down from each. Keep them
+  only in the pane hamburger menu.
+* `splitPane` programmatic API stays — drag-detach
+  (`fullstack-15`) uses it.
+
+### Empty-pane left-click opens the welcome menu (regression)
+
+@@Alex 2026-05-19 05:50 BST: clicking the empty pane's
+background with the LEFT mouse button also triggers
+the welcome (right-click) menu. Same class as B15 from
+`fullstack-6`; the welcome menu added in `fullstack-28`
+must have re-wired left-click. Fix: only right-click
+opens the welcome menu; left-click on empty-pane
+background is a no-op (or selects the pane).
+
 ### Hamburger menu: split "Close all tabs" from "Close pane"
 
 * Today the hamburger menu has a single combined "close

@@ -20,7 +20,7 @@ top (`fullstack-6` / `fullstack-7` / `systacean-3`).
 
 * [./webtest-a-1.md](./webtest-a-1.md) — Lane A baseline with
   the original B1/B2/B13/B20 repros.
-* [../fullstack/fullstack-4.md](../fullstack/fullstack-4.md)
+* [../fullstack-a/fullstack-4.md](../fullstack-a/fullstack-4.md)
   — the patch that should have closed B1/B2/B13.
 * [../request.md](../request.md) — source-of-truth for the bug
   IDs (Bugfixes section).

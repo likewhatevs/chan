@@ -2,40 +2,33 @@
 
 Author handle: `@@FullStack`
 Directory tag: `fullstack`
-Date: 2026-05-18
+Status: **historical** — split into @@FullStackA + @@FullStackB
+mid-phase-7.
 
-## Profile
+## Profile (historical)
 
-Owns the user-facing surface of chan end-to-end: axum HTTP
-routes in `crates/chan-server`, the Svelte frontend under
-`web/`, the embedded editor, and the embedded terminal.
-Touches the filesystem-facing seams that go through
-`chan_drive::Drive`.
+Owned the user-facing surface of chan end-to-end (axum HTTP
+routes, Svelte frontend, embedded editor, embedded terminal,
+filesystem-facing seams via `chan_drive::Drive`) during the
+single-FullStack-lane portion of phase 7.
 
-## Skills
+## Active successors
 
-* [webdev](skills/webdev.md) — frontend and web app work,
-  TypeScript / Svelte / Vite, browser APIs, SPA architecture.
-* [rustacean](skills/rustacean.md) — idiomatic Rust for the
-  axum / chan-server layer, async, error handling, tests.
-* [pythonic](skills/pythonic.md) — kept for ad-hoc Python
-  tooling and data wrangling around tests / dev scripts.
+* [@@FullStackA](fullstack-a.md) — phase 7+ FullStack lane A
+  (smaller / faster-cycling work in the queue).
+* [@@FullStackB](fullstack-b.md) — phase 7+ FullStack lane B
+  (bigger / cross-stack items).
+
+Both lanes carry the same skill set; the split is operational
+not skill-based.
 
 ## Predecessors
 
 * `@@Backend` — phases 1-5 backend slot.
 * `@@Frontend` — phases 1-6 frontend slot.
 
-Phase 7 merges Backend + Frontend into @@FullStack.
+## Where their work lives
 
-## History
-
-| Phase | Role(s) present                                    |
-|-------|----------------------------------------------------|
-| 1     | @@Backend, @@Frontend (separate)                   |
-| 2     | @@Backend, @@Frontend (separate)                   |
-| 3     | @@Backend, @@Frontend (separate)                   |
-| 5     | @@Backend, @@Frontend (separate)                   |
-| 6     | @@Backsystacean (backend rolled into syseng),      |
-|       | @@Frontend (separate)                              |
-| 7     | @@FullStack (merged)                               |
+* Phase 7 (pre-split) — `docs/journals/phase-7/fullstack-a/`
+  inherits the pre-split task history (fullstack-1 through
+  the era leading up to the split).

@@ -16,7 +16,7 @@ substrate (`fullstack-15`, deferred from earlier).
 
 * Wave-B tasks: see `webtest-a-7`'s links.
 * Earlier deferred:
-  [../fullstack/fullstack-15.md](../fullstack/fullstack-15.md)
+  [../fullstack-a/fullstack-15.md](../fullstack-a/fullstack-15.md)
   (pane body tab detach substrate — never walked from
   the terminal-pane angle).
 

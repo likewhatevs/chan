@@ -16,7 +16,7 @@ survey rendering, activity indicator UX on tab strip.
   * Backend: [../systacean/systacean-12.md](../systacean/systacean-12.md),
     [../systacean/systacean-13.md](../systacean/systacean-13.md),
     [../systacean/systacean-14.md](../systacean/systacean-14.md).
-  * Frontend: [../fullstack/fullstack-20.md](../fullstack/fullstack-20.md).
+  * Frontend: [../fullstack-a/fullstack-20.md](../fullstack-a/fullstack-20.md).
   * SKILL: [../architect/architect-1.md](../architect/architect-1.md).
 
 ## Acceptance criteria

@@ -7,27 +7,27 @@ Date: 2026-05-18
 ## 2026-05-18 11:29 — poke
 
 Layout proposal for docked file-browser panes is ready for sign-off:
-[fullstack/fullstack-1.md](../fullstack/fullstack-1.md).
+[fullstack-a/fullstack-1.md](../fullstack-a/fullstack-1.md).
 
 ## 2026-05-18 11:38 — poke
 
 `fullstack-1` implementation is ready for review:
-[fullstack/fullstack-1.md](../fullstack/fullstack-1.md).
+[fullstack-a/fullstack-1.md](../fullstack-a/fullstack-1.md).
 
 ## 2026-05-18 12:11 — poke
 
 `fullstack-2` icon and behavior audit is ready for sign-off:
-[fullstack/fullstack-2.md](../fullstack/fullstack-2.md).
+[fullstack-a/fullstack-2.md](../fullstack-a/fullstack-2.md).
 
 ## 2026-05-18 12:48 BST — poke
 
 `fullstack-2` implementation is ready for review:
-[fullstack/fullstack-2.md](../fullstack/fullstack-2.md).
+[fullstack-a/fullstack-2.md](../fullstack-a/fullstack-2.md).
 
 ## 2026-05-18 13:45 BST — poke
 
 `fullstack-5` implementation is ready for review:
-[fullstack/fullstack-5.md](../fullstack/fullstack-5.md).
+[fullstack-a/fullstack-5.md](../fullstack-a/fullstack-5.md).
 
 ## 2026-05-18 13:59 BST — poke
 
@@ -43,13 +43,13 @@ Commits:
 
 Partial `fullstack-3` slice is implemented and locally checked: Cmd+F re-focus plus explicit Find / `[[` / `![` empty-indexing-no-match states.
 
-Details in [fullstack/fullstack-3.md](../fullstack/fullstack-3.md). Remaining acceptance is the Find menu tooling + persisted auto-strip-on-save preference.
+Details in [fullstack-a/fullstack-3.md](../fullstack-a/fullstack-3.md). Remaining acceptance is the Find menu tooling + persisted auto-strip-on-save preference.
 
 ## 2026-05-18 14:21 BST — poke
 
 `fullstack-3` implementation is ready for review. The earlier Find / bubble state slice is now joined by the menu tooling and persisted auto-strip-on-save preference.
 
-Details and verification are in [fullstack/fullstack-3.md](../fullstack/fullstack-3.md).
+Details and verification are in [fullstack-a/fullstack-3.md](../fullstack-a/fullstack-3.md).
 
 No commit made. `fullstack-2` remains uncommitted pending the @@WebtestA external-link walkthrough gate.
 
@@ -59,7 +59,7 @@ No commit made. `fullstack-2` remains uncommitted pending the @@WebtestA externa
 The opener now uses local `window.__TAURI__.opener.openUrl` in desktop, keeps
 an invoke fallback, and uses `window.open` only in browser-served chan.
 
-Details and verification are in [fullstack/fullstack-2.md](../fullstack/fullstack-2.md).
+Details and verification are in [fullstack-a/fullstack-2.md](../fullstack-a/fullstack-2.md).
 No commit made. Ready for @@WebtestA `webtest-a-3` browser / desktop /
 tunnel-loop walkthrough.
 
@@ -108,12 +108,12 @@ No commit was made. Local edits currently touch:
 * `web/src/editor/commands/list.test.ts`
 
 Pausing now for @@Architect direction before continuing, reverting, or
-documenting the partial work in [fullstack/fullstack-4.md](../fullstack/fullstack-4.md).
+documenting the partial work in [fullstack-a/fullstack-4.md](../fullstack-a/fullstack-4.md).
 
 ## 2026-05-18 17:05 BST — poke
 
 `fullstack-4` verification is green and ready for commit authorization:
-[fullstack/fullstack-4.md](../fullstack/fullstack-4.md).
+[fullstack-a/fullstack-4.md](../fullstack-a/fullstack-4.md).
 
 Gate run:
 
@@ -138,7 +138,7 @@ Pushed `main` to `origin`. Ready for the next @@Architect poke.
 
 `fullstack-6` is implemented and ready for @@Architect review / commit
 authorization:
-[fullstack/fullstack-6.md](../fullstack/fullstack-6.md).
+[fullstack-a/fullstack-6.md](../fullstack-a/fullstack-6.md).
 
 Gate run:
 
@@ -181,7 +181,7 @@ Pushed `main` to `origin`.
 
 `fullstack-8` is implemented and ready to commit under the wave-2 standing
 clearance:
-[fullstack/fullstack-8.md](../fullstack/fullstack-8.md).
+[fullstack-a/fullstack-8.md](../fullstack-a/fullstack-8.md).
 
 Gate run:
 
@@ -205,7 +205,7 @@ Pushed `main` to `origin`. Starting `fullstack-9` next per @@Architect's
 
 `fullstack-9` is implemented and ready to commit under the wave-2 standing
 clearance:
-[fullstack/fullstack-9.md](../fullstack/fullstack-9.md).
+[fullstack-a/fullstack-9.md](../fullstack-a/fullstack-9.md).
 
 Gate run:
 
@@ -229,7 +229,7 @@ Pushed `main` to `origin`. Starting `fullstack-10` next per @@Architect's
 
 `fullstack-10` is implemented and ready to commit under the wave-2 standing
 clearance:
-[fullstack/fullstack-10.md](../fullstack/fullstack-10.md).
+[fullstack-a/fullstack-10.md](../fullstack-a/fullstack-10.md).
 
 Gate run:
 
@@ -252,7 +252,7 @@ Pushed `main` to `origin`. Next queued task is `fullstack-11`.
 
 `fullstack-11` is implemented and ready to commit under the wave-2 standing
 clearance:
-[fullstack/fullstack-11.md](../fullstack/fullstack-11.md).
+[fullstack-a/fullstack-11.md](../fullstack-a/fullstack-11.md).
 
 Gate run:
 
@@ -275,7 +275,7 @@ Pushed `main` to `origin`. Next queued task is `fullstack-12`.
 
 `fullstack-12` is implemented and ready to commit under the wave-2 standing
 clearance:
-[fullstack/fullstack-12.md](../fullstack/fullstack-12.md).
+[fullstack-a/fullstack-12.md](../fullstack-a/fullstack-12.md).
 
 Gate run:
 
@@ -299,7 +299,7 @@ in `event-architect-fullstack.md`.
 ## 2026-05-18 19:10 BST — poke
 
 online, starting fullstack-13:
-[fullstack/fullstack-13.md](../fullstack/fullstack-13.md).
+[fullstack-a/fullstack-13.md](../fullstack-a/fullstack-13.md).
 
 ## 2026-05-18 19:20 BST — poke
 
@@ -330,7 +330,7 @@ lane: `systacean-11` endpoint is not on `main` yet, and `scripts/pre-push`
 currently fails in dirty `crates/chan-server/src/terminal_sessions.rs`
 with `E0597: session does not live long enough`.
 
-Details: [fullstack/fullstack-19.md](../fullstack/fullstack-19.md).
+Details: [fullstack-a/fullstack-19.md](../fullstack-a/fullstack-19.md).
 
 ## 2026-05-18 20:33 BST — poke
 
@@ -413,7 +413,7 @@ online, starting `fullstack-20` after `fullstack-17` landed.
 is green, but landing is gated on `systacean-12` reaching `main` so the
 visible Spawn agent affordance does not call a missing `/api/terminals`
 endpoint. Latest note:
-[../fullstack/fullstack-20.md](../fullstack/fullstack-20.md#2026-05-19-0456-bst--backend-gate).
+[../fullstack-a/fullstack-20.md](../fullstack-a/fullstack-20.md#2026-05-19-0456-bst--backend-gate).
 
 ## 2026-05-19 05:07 BST — poke
 

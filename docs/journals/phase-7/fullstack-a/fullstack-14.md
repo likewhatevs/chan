@@ -117,7 +117,7 @@ Changed files:
 * `web/src/state/store.svelte.ts`
 * `web/src/state/tabs.test.ts`
 * `web/src/state/store.test.ts`
-* `docs/journals/phase-7/fullstack/fullstack-14.md`
+* `docs/journals/phase-7/fullstack-a/fullstack-14.md`
 
 Verification:
 

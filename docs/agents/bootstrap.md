@@ -102,12 +102,13 @@ Now start with step 1.
 
 ## Substitution pairs
 
-| Agent       | `<AgentName>` | `<agent-tag>` |
-|-------------|---------------|---------------|
-| @@FullStack | `FullStack`   | `fullstack`   |
-| @@Systacean | `Systacean`   | `systacean`   |
-| @@WebtestA  | `WebtestA`    | `webtest-a`   |
-| @@WebtestB  | `WebtestB`    | `webtest-b`   |
+| Agent        | `<AgentName>` | `<agent-tag>` |
+|--------------|---------------|---------------|
+| @@FullStackA | `FullStackA`  | `fullstack-a` |
+| @@FullStackB | `FullStackB`  | `fullstack-b` |
+| @@Systacean  | `Systacean`   | `systacean`   |
+| @@WebtestA   | `WebtestA`    | `webtest-a`   |
+| @@WebtestB   | `WebtestB`    | `webtest-b`   |
 
 ## Notes for @@Alex
 

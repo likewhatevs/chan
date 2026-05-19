@@ -343,7 +343,7 @@ Detail in [../process.md](../process.md) under "Approving a
 
 | Task          | Status                                                | Sign-off                                    |
 |---------------|-------------------------------------------------------|---------------------------------------------|
-| fullstack-1   | APPROVED, walkthrough queued (webtest-a-2)            | [fullstack-1.md](../fullstack/fullstack-1.md) |
+| fullstack-1   | APPROVED, walkthrough queued (webtest-a-2)            | [fullstack-1.md](../fullstack-a/fullstack-1.md) |
 | systacean-1   | proposal APPROVED with 4 amendments; impl proceeding  | [systacean-1.md](../systacean/systacean-1.md) |
 | webtest-a-1   | permission approved in writing; baseline in progress  | [event-webtest-a-alex.md](../alex/event-webtest-a-alex.md) |
 | webtest-b-1   | permission approved in writing; baseline in progress  | [event-webtest-b-alex.md](../alex/event-webtest-b-alex.md) |
@@ -742,11 +742,11 @@ In order:
    @@Alex says "go on Round 2".
 3. **Fresh fullstack/systacean/webtest sessions** will
    bootstrap and find these task files waiting:
-   * `fullstack/fullstack-4.md` (list + image bugs).
-   * `fullstack/fullstack-6.md` (pane cluster — also
+   * `fullstack-a/fullstack-4.md` (list + image bugs).
+   * `fullstack-a/fullstack-6.md` (pane cluster — also
      subsumes rich-prompt right-click menu per
      @@WebtestB's late finding).
-   * `fullstack/fullstack-7.md` (light-mode terminal
+   * `fullstack-a/fullstack-7.md` (light-mode terminal
      contrast).
    * `systacean/systacean-3.md` (cross-drive nav drift
      investigation — non-trivial, browser-cache /

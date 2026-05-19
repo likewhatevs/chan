@@ -7,12 +7,12 @@ Date: 2026-05-18
 ## 2026-05-18 12:05 — poke
 
 Layout proposal approved, decision on the open question
-appended: [../fullstack/fullstack-1.md](../fullstack/fullstack-1.md)
+appended: [../fullstack-a/fullstack-1.md](../fullstack-a/fullstack-1.md)
 ("2026-05-18 — @@Architect sign-off" section).
 
 Also: phase dirs were renamed from `chan-pre-release-phase-N`
 to `phase-N`. New working path:
-`docs/journals/phase-7/fullstack/`. Re-resolve any cached
+`docs/journals/phase-7/fullstack-a/`. Re-resolve any cached
 paths.
 
 Proceed with implementation of fullstack-1. fullstack-2,
@@ -22,7 +22,7 @@ directory.
 ## 2026-05-18 12:18 BST — poke
 
 `fullstack-1` implementation APPROVED. Sign-off appended at
-[../fullstack/fullstack-1.md](../fullstack/fullstack-1.md)
+[../fullstack-a/fullstack-1.md](../fullstack-a/fullstack-1.md)
 ("2026-05-18 — @@Architect review: APPROVED, walkthrough
 queued" section). Hold the commit until @@WebtestA's
 walkthrough is clean — they're picking up
@@ -89,7 +89,7 @@ Several updates queued for you:
   routing through the system browser. Hold the commit until
   that walkthrough lands.
 * **NEW: `fullstack-5`** —
-  [../fullstack/fullstack-5.md](../fullstack/fullstack-5.md)
+  [../fullstack-a/fullstack-5.md](../fullstack-a/fullstack-5.md)
   is a workspace tab D&D regression surfaced during
   `webtest-a-2`. Active-tab-dropped-onto-adjacent-inactive-tab
   = delete (should reorder or reject). Independent of
@@ -116,7 +116,7 @@ merge; resolve in favor of preserving both feature sets
 (side panes + window_command).
 
 Proposed commit message lives in
-[../fullstack/fullstack-1.md](../fullstack/fullstack-1.md)
+[../fullstack-a/fullstack-1.md](../fullstack-a/fullstack-1.md)
 under my "walkthrough cleared, commit cleared" review
 section.
 
@@ -127,7 +127,7 @@ in the running test server: tried to rearrange tabs in a
 pane, **tabs disappeared, no recovery**. Bumped from "small
 follow-up" to **wave 1 priority** in the task file (see the
 new "Priority bump" append at the end of
-[../fullstack/fullstack-5.md](../fullstack/fullstack-5.md)).
+[../fullstack-a/fullstack-5.md](../fullstack-a/fullstack-5.md)).
 Land this before the closeout patch ships.
 
 While fixing, also add a "Reopen closed tab" affordance
@@ -147,7 +147,7 @@ all three closeout commits land + patch bump.
 `fullstack-5` reviewed and **commit-cleared architect-side**;
 shortcut choices (Cmd+Shift+T native, Ctrl+Alt+T web) read
 correct given the constraint stack. Detail at
-[../fullstack/fullstack-5.md](../fullstack/fullstack-5.md)
+[../fullstack-a/fullstack-5.md](../fullstack-a/fullstack-5.md)
 "@@Architect review" section.
 
 @@Systacean committed `systacean-1` as `6c53c2d` at 13:42
@@ -179,7 +179,7 @@ Do NOT push yet.
 @@Alex hit fullstack-2's external-link path in the running
 Chan.app desktop: **clicks do nothing**, silent no-op. Detail
 + required fix + acceptance criteria expansion appended at
-[../fullstack/fullstack-2.md](../fullstack/fullstack-2.md)
+[../fullstack-a/fullstack-2.md](../fullstack-a/fullstack-2.md)
 ("@@Alex walkthrough finding" section).
 
 Key points:
@@ -208,7 +208,7 @@ move to `fullstack-3` (Find UX) — do them in parallel.
 
 `fullstack-3` reviewed and **commit-cleared architect-side**;
 gated on @@Alex. Detail at
-[../fullstack/fullstack-3.md](../fullstack/fullstack-3.md)
+[../fullstack-a/fullstack-3.md](../fullstack-a/fullstack-3.md)
 "@@Architect review" section. Proposed commit message included
 there too — use as-is.
 
@@ -277,7 +277,7 @@ ping me, then standby for closeout commit auth from
 
 @@WebtestA finished `webtest-a-3` walkthrough — verdict is
 GO. Detail at
-[../fullstack/fullstack-2.md](../fullstack/fullstack-2.md)
+[../fullstack-a/fullstack-2.md](../fullstack-a/fullstack-2.md)
 "walkthrough cleared, commit cleared" section.
 
 Scenario 1 (browser) live-tested clean. Scenarios 2 + 3
@@ -503,11 +503,11 @@ scope flag it before continuing.
 
 Task files:
 
-* [../fullstack/fullstack-8.md](../fullstack/fullstack-8.md)
-* [../fullstack/fullstack-9.md](../fullstack/fullstack-9.md)
-* [../fullstack/fullstack-10.md](../fullstack/fullstack-10.md)
-* [../fullstack/fullstack-11.md](../fullstack/fullstack-11.md)
-* [../fullstack/fullstack-12.md](../fullstack/fullstack-12.md)
+* [../fullstack-a/fullstack-8.md](../fullstack-a/fullstack-8.md)
+* [../fullstack-a/fullstack-9.md](../fullstack-a/fullstack-9.md)
+* [../fullstack-a/fullstack-10.md](../fullstack-a/fullstack-10.md)
+* [../fullstack-a/fullstack-11.md](../fullstack-a/fullstack-11.md)
+* [../fullstack-a/fullstack-12.md](../fullstack-a/fullstack-12.md)
 
 @@WebtestA + @@WebtestB are now in rolling walkthrough mode
 on `webtest-a-5` / `webtest-b-3` — they'll pick up each
@@ -539,7 +539,7 @@ auto-dismiss each other. Filed as carry-over polish in
 the architect journal.
 
 **Round 2 wave-A — substrate.** Task
-[../fullstack/fullstack-13.md](../fullstack/fullstack-13.md).
+[../fullstack-a/fullstack-13.md](../fullstack-a/fullstack-13.md).
 
 Scope: rich-prompt watcher-set affordance + bubble
 overlay + survey rendering + reply atomic write +
@@ -617,10 +617,10 @@ standing topic-level commit clearance.
 
 Task files:
 
-* [../fullstack/fullstack-14.md](../fullstack/fullstack-14.md)
-* [../fullstack/fullstack-15.md](../fullstack/fullstack-15.md)
-* [../fullstack/fullstack-16.md](../fullstack/fullstack-16.md)
-* [../fullstack/fullstack-17.md](../fullstack/fullstack-17.md)
+* [../fullstack-a/fullstack-14.md](../fullstack-a/fullstack-14.md)
+* [../fullstack-a/fullstack-15.md](../fullstack-a/fullstack-15.md)
+* [../fullstack-a/fullstack-16.md](../fullstack-a/fullstack-16.md)
+* [../fullstack-a/fullstack-17.md](../fullstack-a/fullstack-17.md)
 
 Phase 2 spec is in [../ui-exploration.md](../ui-exploration.md);
 both `-15` and `-16` reference it. @@Alex's call:
@@ -652,7 +652,7 @@ Standing options become "the next numbered option".
 Scope grant drops from UI (always one-shot for v1).
 Stack/tray pill moves into prefs.
 
-Task: [../fullstack/fullstack-18.md](../fullstack/fullstack-18.md).
+Task: [../fullstack-a/fullstack-18.md](../fullstack-a/fullstack-18.md).
 
 **Insert ahead of `fullstack-14` in your queue.** New
 order:
@@ -712,7 +712,7 @@ drop unknown types in SPA reader. → folded into
 `fullstack-19` waits on @@Systacean's `systacean-11`
 landing the endpoint, OR coordinate the API shape ahead
 of time and both land together. New task file:
-[../fullstack/fullstack-19.md](../fullstack/fullstack-19.md).
+[../fullstack-a/fullstack-19.md](../fullstack-a/fullstack-19.md).
 
 — @@Architect, 2026-05-18 23:10 BST
 
@@ -726,7 +726,7 @@ mode), and polish. Throughput's been great.
 Wave-B fan-out. Your lane gets one task; @@Systacean's
 got three; @@Architect takes the orchestration SKILL.
 
-* [../fullstack/fullstack-20.md](../fullstack/fullstack-20.md) —
+* [../fullstack-a/fullstack-20.md](../fullstack-a/fullstack-20.md) —
   Spawn-from-rich-prompt UI + pre-flight survey
   rendering.
 
@@ -781,7 +781,7 @@ with `fullstack-6`'s shape. Two changes:
    were asked for; left/right navigation is the existing
    `Cmd+[` / `Cmd+]` binding.
 
-Task: [../fullstack/fullstack-21.md](../fullstack/fullstack-21.md).
+Task: [../fullstack-a/fullstack-21.md](../fullstack-a/fullstack-21.md).
 Programmatic `splitPane` keeps left/up support for the
 drag-detach substrate (`fullstack-15` body-drop on
 left/top edges uses the same primitives); only the menu
@@ -811,7 +811,7 @@ model mismatch. Spec correction:
 3. Live bug: after removing a tab from the group, the
    tab's own toggle is stuck off, no way to re-join.
 
-Task: [../fullstack/fullstack-22.md](../fullstack/fullstack-22.md).
+Task: [../fullstack-a/fullstack-22.md](../fullstack-a/fullstack-22.md).
 Spec details + request.md sub-bullet at 02:00 BST.
 
 `fullstack-8` work stays (icon swap + membership-leak
@@ -852,7 +852,7 @@ Schema: `survey-reply` gains optional `follow_up: bool`.
 Backend `systacean-11` accepts opaque JSON — no backend
 change.
 
-Task: [../fullstack/fullstack-23.md](../fullstack/fullstack-23.md).
+Task: [../fullstack-a/fullstack-23.md](../fullstack-a/fullstack-23.md).
 
 Also: I've codified the design-lens framing in
 [../process.md](../process.md) ("The rich prompt +
@@ -880,7 +880,7 @@ Two new tasks:
   from a link to an explicit button. `F` keystroke
   unchanged; just the visual treatment. @@Alex called
   the link too subtle for a real third reply state.
-  Task: [../fullstack/fullstack-24.md](../fullstack/fullstack-24.md).
+  Task: [../fullstack-a/fullstack-24.md](../fullstack-a/fullstack-24.md).
 * `fullstack-25` — SPA-side fix for the activity-
   indicator regression. @@Systacean diagnosed it: split
   `focused` from `active` on terminal tabs. `focused`
@@ -888,7 +888,7 @@ Two new tasks:
   drives activity-frame ingestion. Drop the leaked
   `Focused` checkbox from the terminal tab right-click
   menu as part of the same change.
-  Task: [../fullstack/fullstack-25.md](../fullstack/fullstack-25.md).
+  Task: [../fullstack-a/fullstack-25.md](../fullstack-a/fullstack-25.md).
 
 Queue:
 
@@ -921,7 +921,7 @@ Test sequence is the spec: select-all → deselect-a-few
 → deselect-all → select-a-few. Pink indicator on the
 right tabs at each step, nothing else to verify.
 
-Task: [../fullstack/fullstack-26.md](../fullstack/fullstack-26.md).
+Task: [../fullstack-a/fullstack-26.md](../fullstack-a/fullstack-26.md).
 Supersedes the MUTE-related portions of `fullstack-8`
 and `fullstack-22`; the window-wide + per-tab-toggle
 + no-self-entry semantics from `-22` stay.
@@ -938,7 +938,7 @@ walkthrough is the validation pass.
 `fullstack-26` (`5806343`) on main — BCAST is now binary
 in/out, pink-on-tab the only state. Clean.
 
-New task: [../fullstack/fullstack-27.md](../fullstack/fullstack-27.md).
+New task: [../fullstack-a/fullstack-27.md](../fullstack-a/fullstack-27.md).
 @@WebtestA's item 4 PARTIAL: pre-flight events from
 chan-server's spawn channel land on disk (file confirmed
 present in `events/`) but the bubble overlay doesn't
@@ -970,7 +970,7 @@ Loaded-pane right-click stays as `fullstack-21` shipped
 (Reload + Toggle Web Inspector). Detection: branch on
 `pane.tabs.length === 0`.
 
-Task: [../fullstack/fullstack-28.md](../fullstack/fullstack-28.md).
+Task: [../fullstack-a/fullstack-28.md](../fullstack-a/fullstack-28.md).
 
 Standing topic-level commit clearance.
 
@@ -984,7 +984,7 @@ Dir` doesn't spawn a File Browser tab. Likely
 still calls the removed File Browser overlay path
 instead of the new tab-creation path.
 
-Task: [../fullstack/fullstack-29.md](../fullstack/fullstack-29.md).
+Task: [../fullstack-a/fullstack-29.md](../fullstack-a/fullstack-29.md).
 
 Insert in queue:
 
@@ -1028,7 +1028,7 @@ Hand-off includes an explicit **audit summary** append
 listing every call site + UI element you reviewed with
 fix/drop/keep verdicts. Don't skip it.
 
-Task: [../fullstack/fullstack-29.md](../fullstack/fullstack-29.md).
+Task: [../fullstack-a/fullstack-29.md](../fullstack-a/fullstack-29.md).
 
 Tone-wise: this isn't a punitive task. Sloppier-than-
 ideal Phase 1 implementation deserves a clean
@@ -1074,7 +1074,7 @@ Two changes:
    Split right → Split down → Close pane. Drops the
    current `fullstack-21` ordering.
 
-Task: [../fullstack/fullstack-30.md](../fullstack/fullstack-30.md).
+Task: [../fullstack-a/fullstack-30.md](../fullstack-a/fullstack-30.md).
 
 Insert in queue after `fullstack-29` (the audit), since
 that's the bigger discipline task and this is a focused
@@ -1106,7 +1106,7 @@ tree. Your audit summary said "no follow-up flags" but
 these were on the original list.
 
 Cut as
-[../fullstack/fullstack-31.md](../fullstack/fullstack-31.md).
+[../fullstack-a/fullstack-31.md](../fullstack-a/fullstack-31.md).
 Drop both buttons + clean up associated state hooks.
 Re-grep before the handoff to confirm nothing else from
 the original "Known concrete additions" snuck through.

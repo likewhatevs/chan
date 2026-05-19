@@ -66,7 +66,7 @@ with enough detail for @@FullStack to act on a fail.
 * `fullstack-8` (BCAST/mute cluster — B17/B18 + 6-terminal
   drift). Stress test with 6+ terminals; toggle BCAST + per-tab
   mute combinations; expect no drift. Spec in
-  [../fullstack/fullstack-8.md](../fullstack/fullstack-8.md).
+  [../fullstack-a/fullstack-8.md](../fullstack-a/fullstack-8.md).
 * `fullstack-9` (B20 markdown table crash). Test by
   opening `docs/journals/phase-7/alex/setup-1.md` Q3 or
   any pipe-table-containing doc.

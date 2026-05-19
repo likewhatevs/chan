@@ -154,7 +154,7 @@ Changed files to stage:
 * web/src/state/tabs.svelte.ts
 * web/src/state/watcherEvents.ts
 * web/src/state/watcherEvents.test.ts
-* docs/journals/phase-7/fullstack/fullstack-20.md
+* docs/journals/phase-7/fullstack-a/fullstack-20.md
 
 Verification:
 * `npm run test -- BubbleOverlay TerminalRichPrompt watcherEvents tabs`

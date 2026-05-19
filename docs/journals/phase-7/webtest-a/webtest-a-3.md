@@ -13,7 +13,7 @@ that the file-editor and rich-prompt toolbars match.
 
 ## Relevant links
 
-* [../fullstack/fullstack-2.md](../fullstack/fullstack-2.md)
+* [../fullstack-a/fullstack-2.md](../fullstack-a/fullstack-2.md)
   — task + implementation notes + my review (the "APPROVED
   conditional on walkthrough" section).
 * [../request.md](../request.md) Enhancements — style toolbar
@@ -99,7 +99,7 @@ completion. @@Architect folds the findings back into
 running Chan.app desktop (silent no-op). @@FullStack is
 revising `fullstack-2` to dispatch through the Tauri shell
 API for the desktop case; details at
-[../fullstack/fullstack-2.md](../fullstack/fullstack-2.md)
+[../fullstack-a/fullstack-2.md](../fullstack-a/fullstack-2.md)
 "@@Alex walkthrough finding" section.
 
 Your walkthrough now needs to cover **three** scenarios for

@@ -57,7 +57,7 @@ with enough detail for @@FullStack to act on a fail.
 * `fullstack-8` (BCAST/mute cluster — B17/B18 + 6-terminal
   drift). This is your turf. Spin up 6 terminals; run the
   bulk-toggle + per-tab mute mix; expect the spec from
-  [../fullstack/fullstack-8.md](../fullstack/fullstack-8.md).
+  [../fullstack-a/fullstack-8.md](../fullstack-a/fullstack-8.md).
 * `fullstack-9` (B20 markdown table crash). Lane B can skip
   unless @@WebtestA flags a terminal-side surprise.
 * `fullstack-11` (fs-move UX wedge). Reproduce external

@@ -13,7 +13,7 @@ ergonomic regressions before commit.
 
 ## Relevant links
 
-* [../fullstack/fullstack-1.md](../fullstack/fullstack-1.md)
+* [../fullstack-a/fullstack-1.md](../fullstack-a/fullstack-1.md)
   — feature task with implementation notes (the "2026-05-18
   11:38 — Specialist review requested" section).
 * [./webtest-a-1.md](./webtest-a-1.md) — your baseline
