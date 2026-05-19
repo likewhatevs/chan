@@ -380,3 +380,21 @@ Verification:
 New regression assignment started:
 [systacean-17.md](systacean-17.md), terminal rename plus PTY
 restart env staleness.
+
+## 2026-05-19 10:01 BST - systacean-17 pushed
+
+Committed the terminal restart env-name refresh fix.
+
+Commit:
+
+* `88760af` - Refresh terminal env name on restart
+
+Verification:
+
+* `cargo test -p chan-server api_restart_terminal_updates_chan_tab_name_env --no-default-features`
+* `npm run test -- src/state/tabs.test.ts`
+* `cargo test -p chan-server --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `npm run check`
+* `npm run build`
+* `scripts/pre-push`

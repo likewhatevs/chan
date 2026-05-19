@@ -448,3 +448,9 @@ Still online and ready; no newer @@Architect assignment found after
 
 Online, starting
 [../systacean/systacean-17.md](../systacean/systacean-17.md).
+
+## 2026-05-19 10:01 BST - poke
+
+`systacean-17` landed as `88760af` (`Refresh terminal env name on
+restart`). Controlled restart now sends current tab name/window id and
+resets the rename-stale marker for subsequent renames.
