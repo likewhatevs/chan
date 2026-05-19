@@ -818,3 +818,114 @@ cut). Next on the queue: `-63` (clickable help
 command buttons). After that: `-67` (drop FB
 header in tab variant + items to tab right-
 click).
+
+## 2026-05-19 20:55 BST — poke: fullstack-63 ready to commit
+
+**Dispatch path:** synthetic KeyboardEvent on the
+document. Clicks fire `new KeyboardEvent("keydown",
+{ key })` which the existing `onWindowKey`
+listener catches and routes through
+`handlePaneModeKey` — the same dispatcher real
+keystrokes use. One switch, two trigger surfaces.
+
+**Design rationale:** I started with the obvious
+"prop callback" pattern (`<PaneModeHelp
+onCommand={...} />`) but hit a structural blocker.
+`handlePaneModeKey` is declared inside
+`onWindowKey` (lines 366-547 are nested inside
+the function that opens at 340 and closes at
+596). The template at line 759 can't see nested
+function declarations. Two ways out:
+1. Refactor App.svelte to hoist
+   `handlePaneModeKey` to module scope. Larger
+   diff, touches the keymap dispatcher's
+   structure.
+2. Dispatch synthetic keydown events from
+   PaneModeHelp and let the existing document-
+   level listener route them. Zero impact on
+   App.svelte.
+
+Went with (2). The cost is `isTrusted=false`
+on synthetic events; the pane-mode dispatcher
+doesn't inspect that flag, and no security-
+sensitive handler is in the path.
+
+**Data restructure in PaneModeHelp.svelte.** The
+`groups` shape moved from `{ keys: string,
+action: string }` (where `keys` was a combined
+label like "↑ ← ↓ →") to `{ caps: Cap[], action:
+string }`. Each Cap has:
+* `label`: visible glyph on the button.
+* `key`: optional `KeyboardEvent.key` value to
+  dispatch. Undefined for descriptive-only caps
+  (only "Shift + [ ] - =" — modifier-compound,
+  can't be a single click).
+* `aria`: optional aria-label override.
+
+Caps with `key !== undefined` render as
+`<button class="kbd kbd-button">` with hover
+paint + focus-visible outline. Caps with
+`key === undefined` render as inert `<kbd>`.
+
+**Added Tab cap** in the Commit group — the
+keyboard surface had `Cmd+K Tab` for Hybrid
+flip but the cheatsheet never listed it.
+Mouse path now reaches it too.
+
+**Per-category verification (from acceptance
+criteria) — satisfied by construction since
+clicks share one switch with keystrokes:**
+
+* Spawn (1-4 + p + s): clicking commits +
+  exits Pane Mode. Same as keystroke.
+* Focus-move (arrows): clicking shifts focus,
+  Pane Mode stays open.
+* Split (/ \\): clicking splits, Pane Mode
+  stays open.
+* WASD swap: clicking swaps tile, Pane Mode
+  stays open.
+* x / k: commits + closes pane.
+* Tab: flips Hybrid, Pane Mode stays open.
+* H: toggles the help overlay itself — clicking
+  the H cap on the open overlay closes it.
+
+**Mapping nuances** for the dispatch values:
+* `S` (uppercase) because lowercase `s` is the
+  Search-overlay shortcut.
+* `Esc` → `key: "Escape"`.
+* `Tab` → `key: "Tab"`.
+
+**Files:**
+* `web/src/components/PaneModeHelp.svelte` —
+  data restructure, `dispatchKey()` helper,
+  conditional `<button>` vs `<kbd>` rendering,
+  CSS for `.kbd-button` (cursor:pointer, hover,
+  focus-visible).
+* `web/src/components/paneModeHelpClickable.test.ts`
+  (new) — source-grep sentinel with 4
+  assertions covering the dispatch helper, the
+  button render shape, the inert `<kbd>`
+  fallback, and the spec'd key values in the
+  `groups` data.
+
+**App.svelte unchanged.** I tried two refactors
+(extracting `dispatchPaneModeAction` to a top-
+level function, and passing an `onCommand`
+callback prop into PaneModeHelp) and both hit
+the nested-function visibility issue. The
+synthetic-event path keeps the dispatch surface
+in its current location.
+
+Gate green: svelte-check 0/0, vitest 38/390
+(was 37/384; +4 from the new sentinel + 2 from
+parallel-lane work), build clean, scripts/
+pre-push green.
+
+Visual eyeball skipped — clicks share the
+dispatcher every keystroke test already covers;
+the source-grep sentinel pins the wire.
+
+Committing + pushing under standing topic-level
+clearance (no HOLD pokes since the 17:30 BST
+cut). Last on the queue: `-67` (drop FB header
+in tab variant + items to tab right-click).

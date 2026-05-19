@@ -1,40 +1,84 @@
 <script lang="ts">
-  // Pane Mode cheatsheet. Shown while `h` is toggled inside Pane Mode
-  // (`Cmd+K`). Read-only overlay: lists every key + its action,
-  // grouped (Move / Spawn / Split / Close / Resize / Commit). Esc /
-  // pressing `h` again hides it without committing the draft.
+  // Hybrid NAV cheatsheet. Shown while `h` is toggled inside Pane Mode
+  // (`Cmd+K`). Each key-cap is a clickable <button> in addition to the
+  // visible label, so the cheatsheet doubles as a mouse-driveable
+  // command palette (per `fullstack-63`). Clicks dispatch a synthetic
+  // KeyboardEvent on the document; App.svelte's onWindowKey listener
+  // picks it up and routes through the same `handlePaneModeKey`
+  // dispatcher that handles real keystrokes — keystroke and click are
+  // two trigger surfaces over one switch.
   //
   // Visual style: small, dense, TUI-density per `fullstack-42`. Not
   // an OverlayShell to keep the focus / Escape semantics inside
   // App.svelte; this is purely a passive informational panel.
 
-  type Row = { keys: string; action: string };
+  type Cap = {
+    /// Visible label on the kbd-shaped button (e.g. "↑", "W", "Tab").
+    label: string;
+    /// Dispatch key — matches `KeyboardEvent.key`. `undefined` means
+    /// the cap is descriptive only (no action; renders as inert kbd).
+    /// Used for compound descriptors like "Shift + [ ] - =" that
+    /// can't be fired by a single click.
+    key?: string;
+    /// Optional aria-label override; defaults to "`label`: `action`".
+    aria?: string;
+  };
+  type Row = { caps: Cap[]; action: string };
   type Group = { title: string; rows: Row[] };
+
+  function dispatchKey(key: string): void {
+    // Synthetic KeyboardEvents are routed through the same document-
+    // level keydown listener (`App.svelte:onWindowKey`) that handles
+    // real keystrokes. `isTrusted` is false on synthetic events, but
+    // the pane-mode dispatcher doesn't inspect that flag.
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+    );
+  }
 
   const groups: Group[] = [
     {
       title: "Move",
       rows: [
-        { keys: "↑ ← ↓ →", action: "Move focus" },
-        { keys: "W A S D", action: "Swap tile with neighbour" },
+        {
+          caps: [
+            { label: "↑", key: "ArrowUp" },
+            { label: "←", key: "ArrowLeft" },
+            { label: "↓", key: "ArrowDown" },
+            { label: "→", key: "ArrowRight" },
+          ],
+          action: "Move focus",
+        },
+        {
+          caps: [
+            { label: "W", key: "w" },
+            { label: "A", key: "a" },
+            // Uppercase `S` here because lowercase `s` is the
+            // Search-overlay shortcut (per `fullstack-42`); only
+            // Shift+s keeps the WASD swap-down meaning.
+            { label: "S", key: "S" },
+            { label: "D", key: "d" },
+          ],
+          action: "Swap tile with neighbour",
+        },
       ],
     },
     {
       title: "Spawn",
       rows: [
-        { keys: "1", action: "Terminal" },
-        { keys: "2", action: "File Browser" },
-        { keys: "3", action: "Graph" },
-        { keys: "4", action: "New file" },
-        { keys: "p", action: "Rich prompt (terminal)" },
-        { keys: "s", action: "Search overlay" },
+        { caps: [{ label: "1", key: "1" }], action: "Terminal" },
+        { caps: [{ label: "2", key: "2" }], action: "File Browser" },
+        { caps: [{ label: "3", key: "3" }], action: "Graph" },
+        { caps: [{ label: "4", key: "4" }], action: "New file" },
+        { caps: [{ label: "p", key: "p" }], action: "Rich prompt (terminal)" },
+        { caps: [{ label: "s", key: "s" }], action: "Search overlay" },
       ],
     },
     {
       title: "Split",
       rows: [
-        { keys: "/", action: "Split right" },
-        { keys: "\\", action: "Split down" },
+        { caps: [{ label: "/", key: "/" }], action: "Split right" },
+        { caps: [{ label: "\\", key: "\\" }], action: "Split down" },
       ],
     },
     {
@@ -43,35 +87,63 @@
       // the dock on the right, `>` opens the dock on the left.
       title: "Dock",
       rows: [
-        { keys: "<", action: "Toggle right-side file browser dock" },
-        { keys: ">", action: "Toggle left-side file browser dock" },
+        { caps: [{ label: "<", key: "<" }], action: "Toggle right-side file browser dock" },
+        { caps: [{ label: ">", key: ">" }], action: "Toggle left-side file browser dock" },
       ],
     },
     {
       title: "Close",
       rows: [
-        { keys: "x", action: "Close all tabs in pane" },
-        { keys: "k", action: "Kill pane" },
+        { caps: [{ label: "x", key: "x" }], action: "Close all tabs in pane" },
+        { caps: [{ label: "k", key: "k" }], action: "Kill pane" },
       ],
     },
     {
       title: "Resize",
       rows: [
-        { keys: "[ ]", action: "Shrink / grow horizontally" },
-        { keys: "- =", action: "Shrink / grow vertically" },
-        { keys: "Shift + [ ] - =", action: "Larger nudge" },
-        { keys: "0", action: "Equalize siblings" },
+        {
+          caps: [
+            { label: "[", key: "[" },
+            { label: "]", key: "]" },
+          ],
+          action: "Shrink / grow horizontally",
+        },
+        {
+          caps: [
+            { label: "-", key: "-" },
+            { label: "=", key: "=" },
+          ],
+          action: "Shrink / grow vertically",
+        },
+        {
+          // Shift modifier can't be expressed as a single key click;
+          // leave this row descriptive-only so the user still sees
+          // the "larger nudge" affordance documented but can't
+          // mis-fire it from the mouse.
+          caps: [{ label: "Shift + [ ] - =" }],
+          action: "Larger nudge",
+        },
+        { caps: [{ label: "0", key: "0" }], action: "Equalize siblings" },
       ],
     },
     {
       title: "Commit",
       rows: [
-        { keys: "Enter", action: "Commit draft" },
-        { keys: "Esc", action: "Discard draft" },
-        { keys: "h", action: "Toggle this help" },
+        { caps: [{ label: "Enter", key: "Enter" }], action: "Commit draft" },
+        { caps: [{ label: "Esc", key: "Escape" }], action: "Discard draft" },
+        { caps: [{ label: "h", key: "h" }], action: "Toggle this help" },
+        { caps: [{ label: "Tab", key: "Tab" }], action: "Flip Hybrid" },
       ],
     },
   ];
+
+  function rowKey(row: Row): string {
+    return row.caps.map((c) => c.label).join(" ");
+  }
+
+  function capAria(cap: Cap, action: string): string {
+    return cap.aria ?? `${cap.label}: ${action}`;
+  }
 </script>
 
 <div class="pane-mode-help" aria-label="Hybrid NAV help" role="dialog">
@@ -81,8 +153,21 @@
       <section class="group">
         <h4>{g.title}</h4>
         <dl>
-          {#each g.rows as row (row.keys)}
-            <dt><kbd>{row.keys}</kbd></dt>
+          {#each g.rows as row (rowKey(row))}
+            <dt>
+              {#each row.caps as cap (cap.label)}
+                {#if cap.key !== undefined}
+                  <button
+                    type="button"
+                    class="kbd kbd-button"
+                    aria-label={capAria(cap, row.action)}
+                    onclick={() => dispatchKey(cap.key!)}
+                  >{cap.label}</button>
+                {:else}
+                  <kbd>{cap.label}</kbd>
+                {/if}
+              {/each}
+            </dt>
             <dd>{row.action}</dd>
           {/each}
         </dl>
@@ -141,12 +226,15 @@
   }
   dt {
     margin: 0;
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
   }
   dd {
     margin: 0;
     color: var(--text);
   }
-  kbd {
+  kbd, .kbd {
     display: inline-block;
     padding: 1px 6px;
     font: 11px/1.5 var(--chan-editor-code-family, ui-monospace, monospace);
@@ -155,6 +243,24 @@
     border: 1px solid var(--border);
     border-radius: 3px;
     white-space: nowrap;
+  }
+  .kbd-button {
+    /* Button reset against the inherited form styles + cursor for
+       affordance. Hover paints with the same accent the focus-border
+       toggle uses, so the cheatsheet's clickability is consistent
+       with the rest of the chrome chrome. */
+    cursor: pointer;
+    transition: background-color 0.12s ease, border-color 0.12s ease,
+      color 0.12s ease;
+  }
+  .kbd-button:hover {
+    background: var(--hover-bg);
+    border-color: var(--link);
+    color: var(--text);
+  }
+  .kbd-button:focus-visible {
+    outline: 2px solid var(--link);
+    outline-offset: 1px;
   }
   .hint {
     margin-top: 10px;

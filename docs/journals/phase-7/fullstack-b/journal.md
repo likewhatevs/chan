@@ -483,3 +483,78 @@ build clean, pre-push green.
 
 Committing + pushing. Lane B queue remaining:
 -63, -67.
+
+## 2026-05-19 20:55 BST
+
+Picked up `fullstack-63` (clickable command
+buttons in the Hybrid NAV help overlay).
+
+Dispatch path: synthetic KeyboardEvent on the
+document. Clicks fire `new KeyboardEvent("keydown",
+{ key, bubbles: true, cancelable: true })` which
+the existing `App.svelte:onWindowKey` listener
+catches and routes through `handlePaneModeKey`
+— the same dispatcher real keystrokes use.
+Keystroke and click share one switch.
+
+Tried two prior approaches:
+1. Refactor `handlePaneModeKey` into a
+   `dispatchPaneModeAction(key, shiftKey)` top-
+   level function. Hit `Cannot find name` at the
+   template scope because `handlePaneModeKey` is
+   nested inside `onWindowKey`. The brace
+   structure in App.svelte means everything
+   from line 366 (handlePaneModeKey) onward is
+   inside onWindowKey's body until line 596.
+2. Pass `onCommand` prop to PaneModeHelp. Same
+   nested-function issue — App.svelte can't
+   reach `handlePaneModeKey` from the template.
+
+The synthetic-event path is zero impact on
+App.svelte and keeps the dispatch surface where
+it always was. `isTrusted` is false on synthetic
+events, but the pane-mode dispatcher doesn't
+inspect that.
+
+Data restructure in PaneModeHelp:
+* Old: `{ keys: string, action: string }` —
+  combined labels like "↑ ← ↓ →".
+* New: `{ caps: Cap[], action: string }` where
+  each Cap has a visible `label` and an optional
+  `key` (the KeyboardEvent.key to dispatch).
+  Caps without a `key` render as inert `<kbd>`
+  (only "Shift + [ ] - =" — modifier-compound,
+  can't be a single click).
+
+Each clickable cap is a `<button class="kbd
+kbd-button">` with `aria-label="{label}:
+{action}"`. Hover paints with `--link` border;
+`:focus-visible` outlines for keyboard users
+tabbing through the cheatsheet.
+
+Tab cap added to the Commit group (Hybrid flip
+was reachable via keyboard but not clickable
+before).
+
+Tests: new `paneModeHelpClickable.test.ts`
+(source-grep sentinel, 4 assertions):
+1. `dispatchKey` function synthesises
+   KeyboardEvent on the document.
+2. Clickable cap → `<button>` with
+   `dispatchKey(cap.key!)`.
+3. Inert cap → `<kbd>` via {:else} branch.
+4. Spec'd keys (arrows, 1-4, Tab, Escape, Enter,
+   h) carry the right `KeyboardEvent.key` value
+   in the `groups` data.
+
+Gate green: svelte-check 0/0, vitest 38/390,
+build clean, pre-push green.
+
+Visual eyeball skipped — click handlers route
+through the same dispatcher every keystroke
+test already exercises; the source-grep sentinel
+pins the wire.
+
+Committing + pushing. Lane B queue remaining:
+-67 (drop FB header in tab variant + items to
+tab right-click).
