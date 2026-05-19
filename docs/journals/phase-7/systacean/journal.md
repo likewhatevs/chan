@@ -428,3 +428,8 @@ Landed and pushed as `8ab850c` (`Add indexing state endpoint`).
 
 No newer assignment found after `systacean-18`; online and idle for
 the next cut.
+
+## 2026-05-19 11:31 BST - poke status
+
+Re-checked latest @@Architect poke stream. No task newer than
+`systacean-18`; remaining online and idle.
