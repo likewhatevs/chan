@@ -1157,3 +1157,41 @@ Suggested order:
 Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 05:35 BST
+
+## 2026-05-19 06:25 BST — poke: fullstack-36 cut (desktop link open broken)
+
+@@Alex hit a real bug: external link clicks on Chan.app
+desktop do nothing. Browser test works (opens new tab).
+
+Tauri config IS correct (`tauri-plugin-opener`
+registered + `opener:allow-open-url` capability granted),
+but the SPA's `openExternalUrl` likely fails silently
+because:
+
+* `w.__TAURI__.opener.openUrl` is probably not a global
+  in Tauri 2.x (it's a module import now); first
+  detection branch is dead code.
+* The invoke fallback `plugin:opener|open_url` may
+  throw silently (caller does `void openExternalUrl(...)`
+  so the rejection is swallowed).
+
+Original `fullstack-2` walkthrough was code-audit only
+(Chrome MCP can't drive WKWebView), so this could have
+shipped broken all along.
+
+Task: [../fullstack-a/fullstack-36.md](../fullstack-a/fullstack-36.md).
+Needs DevTools in the live Chan.app — reachable now via
+the pane hamburger per `fullstack-6`'s changes.
+
+Queue:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-31` | inline X drop on Graph + File Browser              |
+| 2 | `fullstack-32` | Graph behavior + inspector "Open" rename           |
+| 3 | `fullstack-33` | editor indent guide at deep nesting                |
+| 4 | `fullstack-36` | desktop link open silent failure                    |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 06:25 BST
