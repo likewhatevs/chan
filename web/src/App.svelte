@@ -26,7 +26,9 @@
     openBrowser,
     openGraph,
     openSettings,
+    pathPromptState,
     persistLayoutToHash,
+    promptState,
     reconnectWatcher,
     refreshDrive,
     refreshTree,
@@ -38,6 +40,7 @@
     topOverlay,
     watchSystemTheme,
   } from "./state/store.svelte";
+  import { confirmState } from "./state/confirm.svelte";
   import {
     activeFileTab,
     activePane,
@@ -509,6 +512,42 @@
   }
   onMount(() => document.addEventListener("keydown", onWindowKey));
   onDestroy(() => document.removeEventListener("keydown", onWindowKey));
+
+  /// Ctrl+D: close the focused non-terminal tab. Per `fullstack-41`,
+  /// the keystroke is canonical "close current tab" for Files / Graph
+  /// / doc tabs; terminal tabs forward Ctrl+D to the shell as EOF
+  /// and we deliberately stay out of that path. The listener fires
+  /// at the document's CAPTURE phase so it pre-empts CodeMirror's
+  /// default `selectNextOccurrence` multi-cursor binding inside a
+  /// focused doc tab — the alternative (bubble) loses the race and
+  /// leaves a stale multi-selection behind every close.
+  function onCtrlDCapture(e: KeyboardEvent): void {
+    if (!e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    // e.key is lowercase "d" or uppercase "D" depending on
+    // caps-lock; e.code === "KeyD" is layout-agnostic and matches
+    // both. The keystroke we care about is the literal Ctrl + the
+    // physical D key, not a shifted variant or a Cmd-modified one.
+    if (e.code !== "KeyD") return;
+    // In-house modals + the Cmd+K pane-mode dispatcher own their
+    // own keyboard contexts; never close a tab from under them.
+    if (promptState.open || pathPromptState.open || confirmState.open) return;
+    if (paneMode.active) return;
+    const p = activePane();
+    const active = p.tabs.find((t) => t.id === p.activeTabId);
+    if (!active) return;
+    // Terminal: leave the event alone so xterm forwards Ctrl+D
+    // (EOF) to the shell. The shell exit collapses the tab through
+    // the existing terminal-session lifecycle.
+    if (active.kind === "terminal") return;
+    // Files / Graph / Doc tabs: pre-empt the default handler and
+    // close the tab. stopPropagation prevents CodeMirror's
+    // selectNextOccurrence from firing on the same keystroke.
+    e.preventDefault();
+    e.stopPropagation();
+    void closeTab(p.id, active.id);
+  }
+  onMount(() => document.addEventListener("keydown", onCtrlDCapture, true));
+  onDestroy(() => document.removeEventListener("keydown", onCtrlDCapture, true));
 
   /// Host-driven command bridge. Native wrappers (chan-desktop) and
   /// other embeddings dispatch a `chan:command` window event to
