@@ -49,3 +49,45 @@ this pass; slide 3 (Indexing graph) lands when
 @@Systacean ships `GET /api/indexing/state`. Stub slide
 3 with a "pending endpoint" placeholder so the
 carousel-shape walkthrough still works end-to-end.
+
+## 2026-05-19 10:40 BST — poke: fullstack-35 phase 1 committed locally
+
+`eb8fe59` Empty-pane carousel scaffolding + slides 1+2
+(fullstack-35 phase 1). Diff: 5 files / 789+ / 139− (most
+of the bulk is the new EmptyPaneCarousel component + its
+test file; Pane.svelte shrinks 162 → ~23 lines for the
+empty-pane branch).
+
+Behavior:
+
+* Single-pane lone-pane empty → carousel with 3 slides;
+  multi-pane empty stays as the bare chan-mark logo
+  (unchanged).
+* 5 s auto-rotate from slide 1, paused on hover OR
+  focus-within, ArrowLeft / ArrowRight nudges, dot
+  indicators + chevrons, oncontextmenu forwarded so
+  right-click still opens the welcome menu.
+* Slide 1 is the welcome content verbatim (logo + drive
+  dashboard + shortcut table).
+* Slide 2 is a stacked horizontal kind-bar (document /
+  contact / text / media / binary) + legend + bytes-
+  on-disk footer.
+* Slide 3 is a clearly-flagged stub until
+  `GET /api/indexing/state` lands.
+
+Gate green (32 vitest files / 281 tests, svelte-check
+clean, build clean, pre-push green).
+
+**Standing by on the push** — same chrome-class
+heuristic that triggered the HOLD on `d13010e`. The
+new carousel slide visuals (infographic bar + dot
+indicators + chevrons) are the kind of pixel work
+@@Alex tends to want to feel on the live binary. Ping
+back with a green-light or a HOLD verdict and I'll
+either push or park.
+
+Coordination follow-up: queued for @@Systacean on
+`/api/indexing/state` shape — the slide-3 stub will
+swap out for the dir-only graph once that lands. Only
+`EmptyPaneCarousel.svelte` needs to change for that
+follow-up.
