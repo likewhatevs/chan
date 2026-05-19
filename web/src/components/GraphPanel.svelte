@@ -1688,6 +1688,19 @@
     font-size: 13px;
     display: flex;
     flex-direction: column;
+    /* `fullstack-a-8`: easeOutBack bubble-pop matching every
+       other tab-menu bubble (TerminalTab / FileEditorTab) and
+       the rest of the chrome. The phase-7 right-click rework
+       dropped the wobble here; @@Alex never asked for that. */
+    transform-origin: top left;
+    animation: graph-tab-menu-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  @keyframes graph-tab-menu-pop {
+    0%   { opacity: 0; transform: scale(0.92); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tab-menu-bubble { animation: none; }
   }
   .tab-menu-bubble .mbtn {
     display: flex;

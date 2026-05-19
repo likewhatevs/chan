@@ -1145,6 +1145,18 @@
     display: flex;
     flex-direction: column;
     min-width: 180px;
+    /* `fullstack-a-8`: easeOutBack bubble-pop matching the rest
+       of the chrome (HamburgerMenu, tab-menu bubbles). The
+       phase-7 right-click rework dropped the wobble here. */
+    transform-origin: top left;
+    animation: ctx-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  @keyframes ctx-pop {
+    0%   { opacity: 0; transform: scale(0.92); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ctx { animation: none; }
   }
   .ctx button {
     display: flex;

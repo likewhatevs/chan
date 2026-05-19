@@ -500,6 +500,11 @@
     display: flex;
     --editor-top-pad: 16px;
   }
+  /* `fullstack-a-8`: easeOutBack bubble-pop matching every other
+     right-click surface (HamburgerMenu, TerminalTab / GraphPanel
+     tab-menu bubbles). Origin sits at top-left because the
+     bubble is anchored at the cursor position via `style:left`
+     / `style:top`. */
   .ctx {
     position: fixed;
     z-index: 26000;
@@ -510,6 +515,15 @@
     border: 1px solid var(--border);
     border-radius: 4px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    transform-origin: top left;
+    animation: ctx-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  @keyframes ctx-pop {
+    0%   { opacity: 0; transform: scale(0.92); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ctx { animation: none; }
   }
   .ctx button {
     display: flex;

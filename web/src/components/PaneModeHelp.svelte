@@ -185,6 +185,12 @@
 </div>
 
 <style>
+  /* `fullstack-a-8`: restore the easeOutBack bubble-pop the rest
+     of the chrome uses (OverlayShell, HamburgerMenu, tab-menu
+     bubbles). Phase-7 right-click rework dropped the wobble
+     here; @@Alex never asked for that. The transform-origin
+     stays on the centre so the centred panel scales out of its
+     own midpoint rather than pivoting on a corner. */
   .pane-mode-help {
     position: fixed;
     top: 50%;
@@ -202,6 +208,15 @@
     box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
     font-size: 13px;
     pointer-events: auto;
+    transform-origin: center;
+    animation: pane-mode-help-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  @keyframes pane-mode-help-pop {
+    0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.92); }
+    100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pane-mode-help { animation: none; }
   }
   .title {
     font-size: 14px;
