@@ -45,6 +45,8 @@
   import { type ScopeOption } from "../state/scope.svelte";
   import ResizeHandle from "./ResizeHandle.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
+  import { clampMenu } from "./menuClamp";
+  import { tabMenu, closeTabMenu } from "../state/tabMenu.svelte";
   import DriveInfoBody from "./DriveInfoBody.svelte";
   import Inspector from "./Inspector.svelte";
   import OverlayShell from "./OverlayShell.svelte";
@@ -198,16 +200,51 @@
   // opening a file from here.
   let selectedId = $state<string | null>(null);
 
-  /// Hamburger menu. Same affordance as the file browser / search
-  /// overlays. The depth slider, reload, and details toggle all
-  /// live inside it now so the bar above the canvas keeps only the
-  /// stateful selectors (scope, filter chips).
+  /// Hamburger menu used by the overlay variant's bar + by the
+  /// in-canvas right-click context menu. The depth slider, reload,
+  /// and details toggle all live inside it. The tab variant drops
+  /// the bar entirely per `fullstack-68`; the right-click bubble
+  /// re-uses the same `menuItems` snippet so the items stay one
+  /// source of truth.
   let menu: HamburgerMenu | undefined = $state();
   let menuOpen = $state(false);
   /// Bigger than the other overlays because the menu carries the
   /// scope-conditional depth slider on top of toggle + reload.
   const POPOVER_HEIGHT = 200;
   const POPOVER_WIDTH = 260;
+
+  /// `fullstack-68`: tab right-click bubble state. Open when the
+  /// shared tab-menu state addresses THIS tab; positioned via the
+  /// stored anchor through `clampMenu` so the bubble stays on-
+  /// screen even when the tab sits near the viewport edge.
+  const tabMenuOpen = $derived(tab !== undefined && tabMenu.openForTabId === tab.id);
+  const tabMenuPos = $derived.by(() => {
+    const a = tabMenu.anchor;
+    if (!a) return { x: 0, y: 0 };
+    return { x: Math.round(a.left), y: Math.round(a.bottom + 4) };
+  });
+
+  function onTabMenuKeydown(e: KeyboardEvent): void {
+    if (e.key === "Escape" && tabMenuOpen) {
+      e.preventDefault();
+      closeTabMenu();
+    }
+  }
+
+  /// Dismiss when the click lands outside the bubble AND outside
+  /// the tab strip (the tab row's own click handler toggles the
+  /// state; without this guard the global handler races the row
+  /// handler and closes the menu before the row can re-open it).
+  function onTabMenuPointerDown(e: PointerEvent): void {
+    if (!tabMenuOpen) return;
+    const t = e.target as Node | null;
+    if (!t) return;
+    const bubble = document.querySelector(".tab-menu-bubble");
+    if (bubble && bubble.contains(t)) return;
+    const trigger = (t as Element).closest?.(".tab");
+    if (trigger) return;
+    closeTabMenu();
+  }
   /// Cap matches the slider's `max` attribute below. Lifting it past
   /// 5 gave room for sparse drives where the seed file's neighborhood
   /// fans out wider than the previous limit allowed; 10 is well
@@ -1024,6 +1061,8 @@
   }
 </script>
 
+<svelte:window onkeydown={onTabMenuKeydown} onpointerdown={onTabMenuPointerDown} />
+
 {#if tab}
   {@render graphContent()}
 {:else}
@@ -1039,47 +1078,49 @@
 
 {#snippet graphContent()}
   <div class="graph-tab" oncontextmenu={onGraphContextMenu} role="presentation">
-  <div class="bar">
-    <!-- `fullstack-64`: dropped the maximize button (overlay-era
-         leftover; meaningless when Graph is a first-class tab) and
-         the scope-selector dropdown (Cmd+K 3 + Graph-from-here is
-         the canonical scope-setting path). The chrome now starts
-         with the filter chips and ends with the hamburger menu. -->
-    <div class="filters">
-      {#each ["link", "tag", "mention", "language", "img", "folder"] as const as kind (kind)}
-        {@const driveLike =
-          currentScope?.kind === "drive" || currentScope?.kind === "global"}
-        {#if (!filesystemMode || (kind !== "img" && kind !== "language")) && (languageMode ? kind === "language" : kind !== "language" || driveLike) && (kind !== "folder" || filesystemMode || driveLike)}
-          <label class="chip" class:on={show[kind]}>
-            <input type="checkbox" bind:checked={show[kind]} />
-            <span class="dot" style="background:{FILTER_COLORS[kind]}"></span>
-            {#if filesystemMode}
-              {kind === "link"
-                ? "contains"
-                : kind === "tag"
-                  ? "symlink"
-                  : kind === "mention"
-                    ? "hardlink"
-                    : "directory"}
-            {:else}
-              {kind === "mention" ? "contact" : kind === "img" ? "media" : kind}
-            {/if}
-            <span class="count">{counts[kind]}</span>
-          </label>
-        {/if}
-      {/each}
+  {#if !tab}
+    <!-- Overlay variant keeps the bar — there's no tab-strip
+         right-click affordance available in the overlay shell.
+         `fullstack-68` removes it from the tab variant; chips +
+         hamburger items relocate to the tab right-click bubble
+         below. -->
+    <div class="bar">
+      {@render filterChips()}
+      <span class="bar-menu">
+        <HamburgerMenu
+          bind:this={menu}
+          bind:open={menuOpen}
+          width={POPOVER_WIDTH}
+          height={POPOVER_HEIGHT}
+        >
+          {@render menuItems()}
+        </HamburgerMenu>
+      </span>
     </div>
-    <span class="bar-menu">
-      <HamburgerMenu
-        bind:this={menu}
-        bind:open={menuOpen}
-        width={POPOVER_WIDTH}
-        height={POPOVER_HEIGHT}
-      >
+  {/if}
+
+  {#if tab && tabMenuOpen}
+    <!-- `fullstack-68`: Graph-tab right-click bubble. Anchored to
+         the tab-strip click position via clampMenu; carries the
+         former hamburger menu items at the top and the filter
+         chips at the bottom (terminal-tab broadcast pattern). -->
+    <div
+      class="tab-menu-bubble"
+      role="menu"
+      tabindex="-1"
+      aria-label="graph tab menu"
+      use:clampMenu={tabMenuPos}
+      onmousedown={(e) => e.stopPropagation()}
+    >
+      <ul class="bubble-list" role="presentation">
         {@render menuItems()}
-      </HamburgerMenu>
-    </span>
-  </div>
+      </ul>
+      <div class="bubble-filters">
+        <div class="bubble-filters-label">Filters</div>
+        {@render filterChips()}
+      </div>
+    </div>
+  {/if}
 
   <div class="body">
   <div class="canvas">
@@ -1283,6 +1324,33 @@
       {filesystemMode ? "filesystem graph" : languageMode ? "language graph" : "semantic graph"} · drag to pan · scroll to zoom · click to inspect
     </span>
   </div>
+  </div>
+{/snippet}
+
+{#snippet filterChips()}
+  <div class="filters">
+    {#each ["link", "tag", "mention", "language", "img", "folder"] as const as kind (kind)}
+      {@const driveLike =
+        currentScope?.kind === "drive" || currentScope?.kind === "global"}
+      {#if (!filesystemMode || (kind !== "img" && kind !== "language")) && (languageMode ? kind === "language" : kind !== "language" || driveLike) && (kind !== "folder" || filesystemMode || driveLike)}
+        <label class="chip" class:on={show[kind]}>
+          <input type="checkbox" bind:checked={show[kind]} />
+          <span class="dot" style="background:{FILTER_COLORS[kind]}"></span>
+          {#if filesystemMode}
+            {kind === "link"
+              ? "contains"
+              : kind === "tag"
+                ? "symlink"
+                : kind === "mention"
+                  ? "hardlink"
+                  : "directory"}
+          {:else}
+            {kind === "mention" ? "contact" : kind === "img" ? "media" : kind}
+          {/if}
+          <span class="count">{counts[kind]}</span>
+        </label>
+      {/if}
+    {/each}
   </div>
 {/snippet}
 
@@ -1538,5 +1606,51 @@
   .placeholder.error {
     color: #d33;
     font-style: normal;
+  }
+
+  /* `fullstack-68`: tab right-click bubble. Same chrome as the
+     file-editor + terminal tab bubbles (clampMenu positions it
+     just below the tab strip). Carries the former hamburger menu
+     items at the top and the filter chips at the bottom. */
+  .tab-menu-bubble {
+    position: fixed;
+    z-index: 50;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+    padding: 6px;
+    min-width: 240px;
+    max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+    color: var(--text);
+    font-size: 13px;
+  }
+  .tab-menu-bubble .bubble-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .tab-menu-bubble .bubble-filters {
+    border-top: 1px solid var(--border);
+    margin-top: 6px;
+    padding-top: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .tab-menu-bubble .bubble-filters-label {
+    color: var(--text-secondary);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0 4px;
+  }
+  .tab-menu-bubble .filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    padding: 0 4px;
   }
 </style>

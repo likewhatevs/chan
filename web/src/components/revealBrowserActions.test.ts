@@ -57,6 +57,26 @@ describe("no inline close affordance on first-class surfaces", () => {
     expect(graph).toContain("synthesizeScope(graphState.scopeId)");
   });
 
+  // fullstack-68: kill the Graph tab's chrome bar; filter chips +
+  // hamburger items relocate to the tab right-click bubble.
+  test("GraphPanel hides the chrome bar when rendered as a tab", () => {
+    // The `<div class="bar">` block is now gated on `!tab` so the
+    // overlay variant keeps it; the tab variant body is canvas-only.
+    expect(graph).toMatch(/\{#if !tab\}[\s\S]*?<div class="bar">/);
+  });
+
+  test("GraphPanel renders a tab-menu-bubble carrying menuItems + filterChips", () => {
+    // Right-click on the Graph tab opens the bubble; bubble re-uses
+    // the existing `menuItems` snippet and a new `filterChips`
+    // snippet so chip toggles in the chrome bar AND in the bubble
+    // mutate the same `graphState.filters`.
+    expect(graph).toContain("{#snippet filterChips()}");
+    expect(graph).toMatch(/\{#if tab && tabMenuOpen\}[\s\S]*?class="tab-menu-bubble"/);
+    expect(graph).toMatch(
+      /class="tab-menu-bubble"[\s\S]*?\{@render menuItems\(\)\}[\s\S]*?\{@render filterChips\(\)\}/,
+    );
+  });
+
   test("FileBrowserSurface chrome has no chrome-btn.close button", () => {
     expect(fileBrowserSurface).not.toContain('class="chrome-btn close"');
   });
