@@ -65,3 +65,22 @@ gets a stub until @@Systacean ships
 `GET /api/indexing/state`; I'll wire it after the
 endpoint lands. Coordination ping with @@Systacean
 stays queued via @@Architect.
+
+## 2026-05-19 10:40 BST
+
+`fullstack-35` phase 1 ready: `<EmptyPaneCarousel>`
+component with slides 1 (Welcome verbatim) + 2
+(Metadata infographic — stacked kind bar + legend +
+bytes-on-disk footer) + 3 (Indexing graph stub). Auto-
+rotate 5 s, hover + focus-within pause, ArrowLeft /
+ArrowRight nudge, dot indicators + chevron arrows.
+Right-click on the carousel still opens the empty-pane
+welcome menu (oncontextmenu forwarded).
+
+Gate green (32 vitest files / 281 tests, svelte-check
+clean, build clean, pre-push green).
+
+Commit + push next. Slide 3 lands when @@Systacean
+ships the indexing-state endpoint; the
+`<EmptyPaneCarousel>` is the only file that has to
+change for that follow-up.

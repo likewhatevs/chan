@@ -52,24 +52,19 @@
     User,
     X,
   } from "lucide-svelte";
+  import EmptyPaneCarousel from "./EmptyPaneCarousel.svelte";
   import FileEditorTab from "./FileEditorTab.svelte";
   import FileBrowserSurface from "./FileBrowserSurface.svelte";
   import GraphPanel from "./GraphPanel.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import TerminalTab from "./TerminalTab.svelte";
-  import {
-    drive,
-    indexStatus,
-    refreshTree,
-    tree,
-  } from "../state/store.svelte";
+  import { refreshTree, tree } from "../state/store.svelte";
   import { tabLabel, tabLabelInPane, tabTooltip } from "../state/tabs.svelte";
   import {
     SHORTCUTS,
     currentOS,
     currentPlatform,
     formatChord,
-    renderTable,
   } from "../state/shortcuts";
   import { openTabMenu, tabMenu } from "../state/tabMenu.svelte";
   import { onDestroy, onMount } from "svelte";
@@ -78,37 +73,6 @@
   let { pane }: { pane: LeafNode } = $props();
 
   const active = $derived(pane.tabs.find((t) => t.id === pane.activeTabId) ?? null);
-
-  // ---- empty-pane dashboard summary --------------------------------------
-  // Per request.md, the empty-tab background is now the primary
-  // dashboard surface. These derivations give the placeholder a
-  // small, factual "your drive" header above the shortcut table
-  // without turning the surface into a marketing page.
-  const driveSummary = $derived.by(() => {
-    const entries = tree.entries;
-    let files = 0;
-    let folders = 0;
-    let contacts = 0;
-    for (const e of entries) {
-      if (e.is_dir) folders++;
-      else {
-        files++;
-        if (e.kind === "contact") contacts++;
-      }
-    }
-    return { files, folders, contacts };
-  });
-  const indexLabel = $derived.by<string | null>(() => {
-    const s = indexStatus.value;
-    if (!s) return null;
-    if (s.state === "building") {
-      if (s.total > 0) return `indexing ${s.current}/${s.total}`;
-      return "indexing…";
-    }
-    if (s.state === "reindexing") return "reindexing…";
-    if (s.state === "error") return "index error";
-    return null;
-  });
 
   /// Per-path "is this file a contact?" lookup. Drives the tab-strip
   /// icon (User glyph for contacts, FileText otherwise) so a row of
@@ -124,12 +88,12 @@
     ),
   );
 
-  /// ASCII shortcut table painted on the empty-pane background.
-  /// Picks the chord set (web vs native) and Mod label (Cmd vs Ctrl)
-  /// once at module init — these don't change at runtime.
+  /// Platform + OS settle once at module init: the chord set (web
+  /// vs native) and Mod label (Cmd vs Ctrl) don't change at runtime.
+  /// Used by the welcome-menu chord column below; the carousel
+  /// owns its own copy + the shortcut table.
   const platform = currentPlatform();
   const os = currentOS();
-  const shortcutTable = renderTable(platform, os);
   const paneFocusColors: FocusColor[] = ["blue", "green", "pink"];
 
   /// Empty-pane right-click menu, arranged into the canonical
@@ -1056,45 +1020,18 @@
         oncontextmenu={onEmptyPaneContextMenu}
         role="presentation"
       >
-        <div class="placeholder-stack">
-          <div class="placeholder-mark"></div>
-          <!-- Drive header + shortcut table only on the lone-pane
-               case. In a multi-pane layout the extra panes are
-               workspace setup (the user is about to drop files in),
-               so the dashboard chrome just gets in the way; the
-               logo alone is enough.
-
-               Per request.md, this surface is the primary
-               dashboard. The header keeps the dashboard factual
-               (drive name + counts + index state) instead of
-               marketing copy; the shortcut table below stays as
-               the discovery surface for chords. -->
-          {#if !multiPane}
-            {#if drive.info}
-              <div class="dashboard-header" aria-label="drive summary">
-                <div class="dashboard-name">{drive.info.name ?? "(unnamed)"}</div>
-                <div class="dashboard-stats">
-                  <span>{driveSummary.files} files</span>
-                  <span class="sep" aria-hidden="true">·</span>
-                  <span>{driveSummary.folders} directories</span>
-                  {#if driveSummary.contacts > 0}
-                    <span class="sep" aria-hidden="true">·</span>
-                    <span>{driveSummary.contacts} contacts</span>
-                  {/if}
-                  {#if indexLabel}
-                    <span class="sep" aria-hidden="true">·</span>
-                    <span class="dashboard-index">{indexLabel}</span>
-                  {/if}
-                </div>
-              </div>
-            {/if}
-            <p class="placeholder-hint">
-              Each pane's visible tab is part of the scope<br />
-              for Graph.
-            </p>
-            <pre class="placeholder-shortcuts">{shortcutTable}</pre>
-          {/if}
-        </div>
+        <!-- Single-pane lone-pane case renders the full carousel
+             (welcome + metadata + indexing graph). Multi-pane
+             empty panes are usually workspace setup ("about to
+             drop files here"), so the chrome stays minimal — just
+             the chan mark, no carousel. -->
+        {#if !multiPane}
+          <EmptyPaneCarousel oncontextmenu={onEmptyPaneContextMenu} />
+        {:else}
+          <div class="placeholder-stack">
+            <div class="placeholder-mark"></div>
+          </div>
+        {/if}
         <!-- Right-click menu. Triggerless: opens only via the
              contextmenu handler above. Same `chan:command` ids as
              the keymap layer so actions stay unified. -->
@@ -1410,14 +1347,11 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  /* Empty pane: muted chan logo watermark above the keyboard-
-     shortcut table, both centered. CSS mask paints the silhouette
-     in the current text-secondary color so it adapts to light /
-     dark themes; the image itself (web/public/chan-mark.png) is
-     alpha-only. The shortcut table comes from
-     state/shortcuts.ts so the surface stays in sync with the
-     `chan serve --help` text — resync via
-     `node web/scripts/shortcuts-table.mjs`. */
+  /* Empty pane shell. Single-pane lone-pane case is hosted by the
+     EmptyPaneCarousel component (welcome / metadata / indexing
+     slides) which owns its own layout. Multi-pane empty case
+     keeps the bare-logo placeholder-stack rhythm since adding
+     a full carousel to a setup pane would just clutter. */
   .placeholder {
     flex: 1;
     display: flex;
@@ -1441,56 +1375,6 @@
     -webkit-mask: url('/chan-mark.png') center / contain no-repeat;
             mask: url('/chan-mark.png') center / contain no-repeat;
     opacity: 0.45;
-  }
-  .placeholder-shortcuts {
-    margin: 0;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    line-height: 1.5;
-    white-space: pre;
-    color: var(--text-secondary);
-  }
-  .placeholder-hint {
-    margin: 0;
-    text-align: center;
-    color: var(--text-secondary);
-    font-size: 13px;
-    line-height: 1.4;
-    max-width: 360px;
-  }
-  /* Dashboard header: factual drive summary on the empty-pane
-     background. Reads above the shortcut table on the lone-pane
-     case only (multi-pane bg keeps the bare logo). Kept compact
-     so the surface still scans as a soft empty state rather
-     than a marketing splash. */
-  .dashboard-header {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    margin-top: -0.5rem;
-  }
-  .dashboard-name {
-    font-size: 18px;
-    color: var(--text);
-    opacity: 0.85;
-    letter-spacing: 0.01em;
-  }
-  .dashboard-stats {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 0.4rem;
-    color: var(--text-secondary);
-    font-size: 12px;
-  }
-  .dashboard-stats .sep {
-    opacity: 0.5;
-  }
-  /* Index activity pulls toward --warn-text so a building /
-     reindexing line draws the eye without becoming an error. */
-  .dashboard-index {
-    color: var(--warn-text);
   }
   @media (prefers-reduced-motion: reduce) {
     .tab,
