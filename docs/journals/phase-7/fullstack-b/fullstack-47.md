@@ -90,3 +90,61 @@ do NOT dedup for File Browser / Graph.
 
 Standard. Pre-push gate green. Ping via
 `alex/event-fullstack-b-architect.md`.
+
+## 2026-05-19 13:05 BST — landed (@@FullStackB)
+
+Dropped the silent dedup branches on the four
+File Browser / Graph spawn paths. Each press of an
+explicit spawn affordance (Cmd+K 2, Cmd+K 3,
+`openBrowserInActivePane`, `openGraphInPane`) now
+creates a fresh tab carrying its own state — current
+dir + inspector for File Browser, scope + filters +
+pending-select + inspector for Graph.
+
+The `openBrowser` overlay-style entry point (called by
+"Files" in the empty-pane menu and `revealPathInBrowser`
+on file inspectors) keeps its `focusExistingBrowserTab`
+priority. That's an explicit "navigate to my Files"
+gesture, not a spawn — focusing the existing tab
+preserves the user's current dir + scroll. The task
+spec calls out spawn affordances; navigation paths fit
+"focus existing" semantics better.
+
+Files:
+
+* `web/src/state/tabs.svelte.ts` — removed the
+  `existing` find + early-return branches from
+  `openGraphInPane`, `openBrowserInActivePane`,
+  `paneModeOpenBrowser`, `paneModeOpenGraph`. Comments
+  flag the no-dedup contract so future regressions are
+  caught at review.
+* `web/src/state/tabs.test.ts`:
+  * `pane mode browser/graph spawn dedupes against
+    existing tabs` test flipped to assert the new
+    behaviour: both Cmd+K 2 and Cmd+K 3 add a tab
+    every time, and the resulting browser/graph
+    populations have distinct ids.
+  * `repeated openBrowserInActivePane /
+    openGraphInActivePane stack` regression test
+    covering the menu-driven spawn helpers.
+  * `detachTabToPaneEdge moves a browser or graph tab
+    end-to-end` regression covering the DnD path for
+    non-file tab kinds (previously untestable because
+    dedup kept users from stacking two of them).
+
+Tab DnD smoke: the existing `reorderTab` (`fullstack-5`)
+and `detachTabToPaneEdge` (`fullstack-15`) machinery
+is tab-kind agnostic. The new regression assertion
+exercises both code paths on browser / graph tabs.
+End-to-end mouse DnD on desktop is webtest's lane;
+flagging this in the event log so they pick it up
+when they're back on rotation.
+
+Verification:
+
+* `npx vitest run tabs` → 52 / 52 pass.
+* `npm run check` → 0 errors / 0 warnings.
+* Pre-push gate green.
+
+Commit message proposed:
+`Drop FB/Graph spawn dedup + regression coverage (fullstack-47)`.

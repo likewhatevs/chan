@@ -697,20 +697,12 @@ export function openGraphInPane(paneId: string, opts: OpenGraphOptions = {}): Gr
   const p = pane(paneId);
   const mode = opts.mode ?? "semantic";
   const scopeId = opts.scopeId ?? "drive";
-  const existing = p.tabs.find(
-    (tab): tab is GraphTab =>
-      tab.kind === "graph" &&
-      tab.mode === mode &&
-      tab.scopeId === scopeId,
-  );
-  if (existing) {
-    existing.depth = opts.depth ?? existing.depth;
-    existing.pendingSelectId = opts.pendingSelectId ?? existing.pendingSelectId;
-    existing.title = opts.title ?? graphTitle(mode, scopeId);
-    p.activeTabId = existing.id;
-    layout.activePaneId = p.id;
-    return existing;
-  }
+  // `fullstack-47`: no dedup on spawn. Each invocation creates a
+  // fresh graph tab with its own scope, filters, and pending
+  // selection so the user can compare two views of the same
+  // graph side-by-side. If a caller really wants "activate the
+  // existing one", they can find it on `pane.tabs` and set
+  // `activeTabId` directly.
   const tab: GraphTab = {
     kind: "graph",
     id: id("graph"),
@@ -730,12 +722,9 @@ export function openGraphInPane(paneId: string, opts: OpenGraphOptions = {}): Gr
 
 export function openBrowserInActivePane(): BrowserTab {
   const p = activePane();
-  const existing = p.tabs.find((tab): tab is BrowserTab => tab.kind === "browser");
-  if (existing) {
-    p.activeTabId = existing.id;
-    layout.activePaneId = p.id;
-    return existing;
-  }
+  // `fullstack-47`: no dedup. Each press of the file-browser
+  // affordance spawns a new browser tab with its own current dir
+  // and inspector state.
   const tab: BrowserTab = {
     kind: "browser",
     id: id("browser"),
@@ -1659,21 +1648,14 @@ export function paneModeOpenTerminal(): void {
   p.activeTabId = tab.id;
 }
 
-/// Cmd+K mode `2`. Spawn a File Browser tab inside the draft's
-/// focused pane. Mirrors openBrowserInActivePane's dedup semantics:
-/// if the focused pane already has a browser tab, just activate it.
+/// Cmd+K mode `2`. Spawn a fresh File Browser tab inside the
+/// draft's focused pane. Per `fullstack-47` every press is a new
+/// tab — pile them up if the user wants multiple browser views.
 export function paneModeOpenBrowser(): void {
   const draft = draftLayout();
   if (!draft) return;
   const p = draft.nodes[draft.activePaneId];
   if (!p || p.kind !== "leaf") return;
-  const existing = p.tabs.find(
-    (tab): tab is BrowserTab => tab.kind === "browser",
-  );
-  if (existing) {
-    p.activeTabId = existing.id;
-    return;
-  }
   const tab: BrowserTab = {
     kind: "browser",
     id: id("browser"),
@@ -1684,10 +1666,8 @@ export function paneModeOpenBrowser(): void {
   p.activeTabId = tab.id;
 }
 
-/// Cmd+K mode `4`. Spawn a Graph tab inside the draft's focused
-/// pane. Mirrors openGraphInPane's dedup-on-mode+scope behaviour
-/// so pressing `4` repeatedly doesn't pile graph tabs on top of
-/// each other.
+/// Cmd+K mode `4`. Spawn a fresh Graph tab inside the draft's
+/// focused pane. Same no-dedup semantic as `paneModeOpenBrowser`.
 export function paneModeOpenGraph(): void {
   const draft = draftLayout();
   if (!draft) return;
@@ -1695,14 +1675,6 @@ export function paneModeOpenGraph(): void {
   if (!p || p.kind !== "leaf") return;
   const mode: GraphTab["mode"] = "semantic";
   const scopeId = "drive";
-  const existing = p.tabs.find(
-    (tab): tab is GraphTab =>
-      tab.kind === "graph" && tab.mode === mode && tab.scopeId === scopeId,
-  );
-  if (existing) {
-    p.activeTabId = existing.id;
-    return;
-  }
   const tab: GraphTab = {
     kind: "graph",
     id: id("graph"),

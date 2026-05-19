@@ -257,6 +257,50 @@ describe("pane state", () => {
     expect(layout.activePaneId).toBe(right.id);
   });
 
+  test("detachTabToPaneEdge moves a browser or graph tab end-to-end (fullstack-47)", () => {
+    // The DnD machinery from `fullstack-15` is tab-kind agnostic
+    // but earlier dedup logic on File Browser / Graph spawns meant
+    // users could never actually have two of them in the same
+    // window — so the cross-pane DnD path went untested for those
+    // kinds. Now that dedup is gone, lock in the contract:
+    // detaching a Browser tab and a Graph tab via edge-drop
+    // produces a new pane each, just like file tabs do.
+    const file = fileTab({ id: "file-host", path: "notes/host.md" });
+    const pane = resetLayout([file]);
+    const browser = openBrowserInActivePane();
+    const graph = openGraphInActivePane({
+      mode: "filesystem",
+      scopeId: "dir:notes",
+    });
+
+    detachTabToPaneEdge(pane.id, browser.id, pane.id, "right");
+    const afterBrowser = layout.nodes[layout.rootId];
+    expect(afterBrowser?.kind).toBe("split");
+    if (afterBrowser?.kind !== "split") return;
+    const browserPane = layout.nodes[afterBrowser.b];
+    expect(browserPane?.kind).toBe("leaf");
+    if (browserPane?.kind !== "leaf") return;
+    expect(browserPane.tabs.map((t) => t.kind)).toEqual(["browser"]);
+
+    // Re-detach the graph tab to the bottom of the original pane.
+    detachTabToPaneEdge(pane.id, graph.id, pane.id, "bottom");
+    const root = layout.nodes[layout.rootId];
+    expect(root?.kind).toBe("split");
+    if (root?.kind !== "split") return;
+    // The original split (row, browser on the right) is now nested
+    // under a new column split. Walk down to find the graph leaf.
+    const allLeaves = Object.values(layout.nodes).filter(
+      (n) => n.kind === "leaf",
+    );
+    const graphLeaf = allLeaves.find((n) => {
+      if (n.kind !== "leaf") return false;
+      return n.tabs.some((t) => t.kind === "graph");
+    });
+    expect(graphLeaf).toBeTruthy();
+    if (graphLeaf?.kind !== "leaf") return;
+    expect(graphLeaf.tabs[0]?.kind).toBe("graph");
+  });
+
   test("collapses the source pane after detaching its last tab", () => {
     const left = fileTab({ id: "left", path: "notes/left.md" });
     const right = fileTab({ id: "right", path: "notes/right.md" });
@@ -417,21 +461,59 @@ describe("pane state", () => {
     );
   });
 
-  test("pane mode browser/graph spawn dedupes against existing tabs", () => {
+  test("File Browser and Graph spawns always add a new tab (fullstack-47)", () => {
+    // Earlier behaviour deduplicated browser and graph spawns
+    // against existing tabs in the same pane so pressing Cmd+K 2
+    // or Cmd+K 3 twice would focus the first one. Per
+    // `fullstack-47` every spawn affordance now creates a fresh
+    // tab with its own state so users can compare two
+    // browser/graph views side-by-side.
     const tab = fileTab({ id: "f", path: "notes/x.md" });
     const pane = resetLayout([tab]);
     openBrowserInActivePane();
     openGraphInActivePane();
-    const beforeCount = activePane().tabs.length;
+    const before = activePane().tabs.length;
 
     enterPaneMode();
     paneModeOpenBrowser();
     paneModeOpenGraph();
     commitPaneMode();
 
-    // Both dedupe paths kick in; no new tabs are added.
-    expect(activePane().tabs).toHaveLength(beforeCount);
+    const after = activePane().tabs.length;
+    expect(after).toBe(before + 2);
     expect(pane.id).toBe(activePane().id);
+
+    const browsers = activePane().tabs.filter((t) => t.kind === "browser");
+    const graphs = activePane().tabs.filter((t) => t.kind === "graph");
+    expect(browsers).toHaveLength(2);
+    expect(graphs).toHaveLength(2);
+    // Each spawn carries its own identity, so the second browser
+    // and second graph live alongside their predecessors with
+    // independent ids.
+    expect(new Set(browsers.map((t) => t.id)).size).toBe(2);
+    expect(new Set(graphs.map((t) => t.id)).size).toBe(2);
+  });
+
+  test("repeated openBrowserInActivePane / openGraphInActivePane stack (fullstack-47)", () => {
+    const tab = fileTab({ id: "g", path: "notes/y.md" });
+    resetLayout([tab]);
+
+    const first = openBrowserInActivePane();
+    const second = openBrowserInActivePane();
+    expect(first.id).not.toBe(second.id);
+    expect(
+      activePane().tabs.filter((t) => t.kind === "browser"),
+    ).toHaveLength(2);
+
+    const g1 = openGraphInActivePane({ scopeId: "dir:notes" });
+    const g2 = openGraphInActivePane({ scopeId: "dir:notes" });
+    expect(g1.id).not.toBe(g2.id);
+    // Same scope is fine — each instance keeps its own filters
+    // and pending-select state.
+    expect(g1.scopeId).toBe(g2.scopeId);
+    expect(
+      activePane().tabs.filter((t) => t.kind === "graph"),
+    ).toHaveLength(2);
   });
 
   test("pane mode split inserts a new pane to the right/down in the draft", () => {
