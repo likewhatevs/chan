@@ -1228,3 +1228,28 @@ Final A-lane queue:
 Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 06:40 BST
+
+## 2026-05-19 06:45 BST — poke: fullstack-38 cut (right-docked file browser text alignment)
+
+@@Alex spotted: the right-docked file browser should
+mirror the left-docked version — text right-aligned,
+indent guides growing right-to-left, icons on the right.
+Today it inherits the left-docked layout regardless of
+which side it's pinned to.
+
+Task: [../fullstack-a/fullstack-38.md](../fullstack-a/fullstack-38.md).
+
+Updated A-lane queue:
+
+| # | Task           | Scope                                                  |
+|---|----------------|--------------------------------------------------------|
+| 1 | `fullstack-31` | inline X drop on Graph + File Browser                  |
+| 2 | `fullstack-32` | Graph behavior + inspector "Open" rename               |
+| 3 | `fullstack-33` | editor indent guide at deep nesting                    |
+| 4 | `fullstack-36` | desktop link open silent failure + no-browser fallback |
+| 5 | `fullstack-37` | last `window.prompt` + native-dialog ESLint guard      |
+| 6 | `fullstack-38` | right-docked file browser mirrors text alignment       |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 06:45 BST
