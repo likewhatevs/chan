@@ -693,3 +693,108 @@ Test server stays up. Will pick up the rest as they
 land — including a deliberate re-test of the stale-
 watcher cleanup if you want belt-and-braces on the
 fullstack-17 fix.
+
+## 2026-05-19 02:00 BST — poke (systacean-12 spawn API verdict)
+
+`314a68b Add HTTP terminal control channel` landed.
+Rebuilt + relaunched 8810. Drove tests via Python WS /
+HTTP harness. Full writeup with the verdict table in
+[../webtest-b/webtest-b-5.md](../webtest-b/webtest-b-5.md#2026-05-19-0200-bst---systacean-12-spawn-api-tests-items-1-6).
+
+* **Item 1 — POST /api/terminals**: PASS. `201` with
+  `{session, tab_label}`.
+* **Item 2 — Spawned tab appears in active pane**:
+  PARTIAL. Server creates the session (addressable via
+  HTTP) but the connected SPA doesn't auto-display the
+  new tab; reload after spawn didn't surface it either.
+  My read: this is part of the substrate / partner split
+  with `fullstack-20` — SPA needs a notification path
+  (WS push, SSE, or a fullstack-20-driven flow) before
+  the visible-tab semantic completes. Not flagging as a
+  systacean-12 bug.
+* **Item 3 — restart**: PASS (`204`).
+* **Item 4 — DELETE**: PASS (`204`); restart-after-
+  delete returns `404 terminal session not found`.
+* **Item 5 — Auth without bearer**: PASS (`401
+  missing or invalid token`).
+* **Item 6 — Pre-flight signal**: PASS after a schema
+  gotcha — initial attempt failed because I omitted
+  `orchestrator_session` from the spawn body. The
+  pre-flight routing is keyed off that field (NOT the
+  spawned tab's own watcher, despite the spec phrasing
+  "the orchestrating tab"). With `orchestrator_session`
+  set, the spawn's matching stdout (`please log in`)
+  landed an event in the orchestrator's watcher dir:
+  ```json
+  {"id":"pre-flight-...","type":"pre-flight",
+   "from":"@@PreFlightTarget","to":"@@Orchestrator",
+   "note":"...please log in"}
+  ```
+* **Small nit on pre-flight `note`**: includes the
+  bash/PS1 escape sequences (`\x1b[?1034h`...).
+  Downstream consumers likely want stripped text;
+  suggest filtering control codes before populating
+  `note`.
+
+### Two recommendations
+
+1. **Document `orchestrator_session` in the systacean-12
+   acceptance criteria** — without it, item 6 doesn't
+   route. A caller who reads only the bullet list would
+   miss it.
+2. **Reconcile item 2 wording** with the substrate /
+   partner split: spec says "appears in the active
+   pane", which doesn't happen until `fullstack-20`
+   ships. Either weaken to "creates an addressable
+   session in the registry" for the systacean-12
+   substrate, or note the fullstack-20 dependency
+   explicitly.
+
+Items 7-9 (`fullstack-20` end-to-end + `systacean-13` /
+`systacean-14`) still parked pending those landings.
+Test server stays up.
+
+## 2026-05-19 02:25 BST — poke (fullstack-20 spawn UI verdict)
+
+`f2094c3 Add spawn-from-rich-prompt UI (fullstack-20)`
+landed. Walked end-to-end. Full writeup at
+[../webtest-b/webtest-b-5.md](../webtest-b/webtest-b-5.md#2026-05-19-0225-bst---fullstack-20-end-to-end-spawn-item-7).
+
+* **Item 7 PASS**. Rich prompt toolbar grows a robot
+  (`🤖`) icon (`aria-label="Spawn agent"`). Click →
+  modal with Tab name / Command (textarea) / Env
+  (textarea) fields + Cancel / Spawn buttons. Submit
+  → dialog closes, new tab `@@UIspawn` appears in the
+  active pane next to the source tab, focus switches
+  to the new tab, command's stdout `SPAWNED_VIA_UI`
+  renders in xterm.
+* **Item 2 upgraded to PASS via fullstack-20**. The
+  SPA notification path I flagged as missing on the
+  HTTP-only test is owned by the spawn UI — the rich
+  prompt initiates the spawn locally, gets the session
+  id back, and adds the tab to its pane state in one
+  go. External HTTP spawns (e.g. from a watcher
+  dispatcher) still don't auto-display in a connected
+  SPA, but that's a separate concern, not a
+  fullstack-20 gap.
+
+### Follow-up I'd suggest
+
+Verify the spawn dialog wires `orchestrator_session =
+<current_session>` on the POST body so the pre-flight
+survey routes back to the same rich prompt. Didn't
+exercise this in the smoke (would need a spawn that
+prints a matching login string). Without it, pre-flight
+events from agent-driven spawns wouldn't reach the
+intended rich prompt; with it, the full F2 flow
+(spawn → pre-flight → user replies via numbered
+keystroke) lights up.
+
+### Updated webtest-b-5 acceptance
+
+Items 1-7 all PASS (full or fullstack-20-route).
+Items 8, 9 (`systacean-13`/`-14`) and 10-12
+(`fullstack-15` drag-detach BLOCKED on tooling) still
+pending.
+
+Test server stays up.

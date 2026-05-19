@@ -356,3 +356,52 @@ phases later, makes it explicit who owns what artifact,
 removes the "two-way task" ambiguity from phase 6, and gives
 us a typed event log that a future fsnotify-driven dispatcher
 can act on.
+
+## The rich prompt + watcher + protocol are one feature
+
+Three things look separate but evolve as a unit:
+
+1. **`process.md` (this file)** — the protocol. What event
+   types exist, how agents communicate, what an atomic
+   event write looks like, recycle and permission
+   semantics, survey shape constraints. Chan-specific for
+   now; generalises over time.
+2. **The fsnotify watcher** (chan-server side) — the
+   engine that reads event files written into a watched
+   dir, dispatches `poke\n` to the matching agent's PTY,
+   and surfaces events to the bubble overlay. The
+   watcher's behavior must match the protocol exactly,
+   or things fail silently.
+3. **The rich prompt + bubble overlay** — the
+   human-facing surface. Inbox-like: surveys arrive,
+   user replies via numbered keystrokes, deferred items
+   stay around. The whole thing hides when the prompt
+   hides.
+
+When we change one, we think about the other two:
+
+* New event type in this file → watcher must parse +
+  dispatch it → overlay must render or ignore it
+  consistently.
+* New overlay shape (e.g. follow-up state) → reply
+  schema gains a field → watcher (+ producer agents)
+  must handle the new field gracefully.
+* New protocol rule (e.g. atomic write) → watcher
+  enforces it → external writer docs (orchestration
+  SKILL) must instruct it.
+
+Treat the trio as one feature when planning, reviewing,
+or hardening. Don't ship a watcher change without
+checking the overlay, and don't ship an overlay change
+without checking the protocol it serves.
+
+### Survey shape constraints
+
+* **Single-topic surveys**: 1-3 numbered options.
+* **Multi-topic surveys**: 2-4 topics, each with 1-3
+  numbered options.
+* If a decision has more options or topics, the
+  producer (most often @@Architect) is asked to split
+  it into multiple surveys or fold scope down before
+  emitting. The TUI density of the overlay only works
+  at these bounds.

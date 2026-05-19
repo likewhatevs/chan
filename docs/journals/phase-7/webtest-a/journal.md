@@ -487,3 +487,45 @@ Items 1-10 of webtest-a-7 still blocked on
 indicator), `systacean-14` (MCP discovery).
 
 8801 server back up. Standing by.
+
+## 2026-05-19 (resume) BST - fullstack-20 spawn UI cluster
+
+After @@Alex's `poke`. `f2094c3` fullstack-20 landed.
+Rebuilt + restarted 8801.
+
+**Items 1-3 PASS**:
+* Spawn agent affordance in rich-prompt context menu (and
+  a toolbar shortcut).
+* Dialog with Tab name / Command / Env / Cancel / Spawn.
+  Submit creates the tab in the active pane.
+* Spawned `bash -c 'echo hi; sleep 5; echo bye'` captured
+  both lines + clean `process exited (0)` epilogue.
+
+**Items 4-6 PARTIAL — server emits, SPA doesn't render**:
+* chan-server detected `please log in` pattern + wrote
+  `events/pre-flight-f90ed024a46dc89a.md` with the right
+  type/from/to/note shape.
+* HostA's rich prompt did NOT render a bubble — no tray
+  pill, no article, no notification.
+* Both `parseWatcherEvent` (allowlist) and
+  `BubbleOverlay` (render branches) are wired. So
+  parsing + rendering are ready; the **delivery path
+  from the server-written event file to the SPA bubble
+  list is broken**. Two likely causes (untested):
+  1. `self_writes` suppression too aggressive — the
+     watcher silences echoes for chan-server's own
+     writes, including the pre-flight one.
+  2. Schema drift between SKILL (`questions`+`options`)
+     and chan-server emit (`{id,type,from,to,note}`).
+     BubbleOverlay hardcodes options for pre-flight
+     type so this isn't the immediate blocker, but it
+     IS a documentation/implementation drift.
+
+Hand-off to @@FullStack / @@Systacean to wire the SPA-
+side subscription path or carve out pre-flight from
+the self-write suppression.
+
+Items 7-10 still blocked on `systacean-13` / `systacean-14`.
+
+8801 server up with multiple test tabs + the unparsed
+pre-flight event file in `events/` for inspection.

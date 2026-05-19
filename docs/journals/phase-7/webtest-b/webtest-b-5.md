@@ -191,3 +191,161 @@ limitation, not a substrate bug.
 Test server stays up at
 `http://127.0.0.1:8810/?t=WQjau4Eyyqo3bP337duxscRvq2un3RMn`
 on `/private/tmp/chan-webtest-b-1`.
+
+## 2026-05-19 02:00 BST - systacean-12 spawn API tests (items 1-6)
+
+`314a68b Add HTTP terminal control channel (systacean-12)`
+landed. Rebuilt + relaunched 8810. Drove tests via
+`/tmp/chan-ws-test/spawn_api_test.py` +
+`/tmp/chan-ws-test/preflight_test.py`.
+
+| # | Item                                        | Result |
+|---|---------------------------------------------|--------|
+| 1 | `POST /api/terminals` accepts body + 201    | **PASS** — `201 Created`, body `{"session":"<id>","tab_label":"@@SpawnAlpha"}`. |
+| 2 | Spawned tab appears in active pane          | **PARTIAL** — session created on the server (addressable via HTTP), but the *connected SPA does not auto-display* the new tab. Reloaded the SPA after spawn; tab list unchanged. Implementation completes when `fullstack-20` lands (SPA needs to be told about new sessions). |
+| 3 | `POST /api/terminals/<sess>/restart` works  | **PASS** — `204 No Content`. |
+| 4 | `DELETE /api/terminals/<sess>` works        | **PASS** — `204 No Content`. Follow-up `restart` on the deleted session returns `404 terminal session not found` (clean error). |
+| 5 | Auth: no bearer = 401/403                   | **PASS** — `401 missing or invalid token` (matches the existing auth convention). |
+| 6 | Pre-flight signal on matching stdout        | **PASS after schema fix** — initial attempt FAILED because I omitted `orchestrator_session` from the spawn body. The pre-flight routing is keyed off that field, not the spawning tab's own watcher. With `orchestrator_session: <orchestrator>` set, the spawn's first matching stdout line landed an event in `<orchestrator>`'s watcher dir. |
+
+### Pre-flight event shape
+
+```json
+{
+  "id": "pre-flight-532f4b5f0cb17c4a",
+  "type": "pre-flight",
+  "from": "@@PreFlightTarget",
+  "to": "@@Orchestrator",
+  "note": "[?1034h[?1034h[?1034hplease log in"
+}
+```
+
+Two observations on the shape:
+
+* **`from` = spawned tab, `to` = orchestrator tab**.
+  Correct routing: the watcher-holding orchestrator gets
+  notified that the spawn needs attention.
+* **`note` field includes terminal escape sequences**
+  (`\x1b[?1034h` = bash enable-keypad-application-mode).
+  Downstream consumers may want stripped text — small
+  UX nit. Suggest filtering control codes before
+  matching / before populating `note`.
+
+### Item 2 framing for the architect
+
+The systacean-12 task spec says "POST /api/terminals
+creates a new terminal tab **in the active pane**". The
+server side creates the session in the registry, but
+delivering it as a visible tab in a connected SPA needs
+the SPA to be notified (WebSocket push, SSE, or a
+fullstack-20-driven flow). My read: this is part of the
+substrate / partner split with `fullstack-20`, not a
+systacean-12 bug.
+
+### Verdict cluster summary
+
+* **systacean-12 endpoint surface: PASS** (5 of 6
+  acceptance items full PASS; item 2 PARTIAL with
+  framing above).
+* **Pre-flight matcher**: works as spec'd; small UX nit
+  on `note` carrying terminal control codes.
+* **Schema gotcha for downstream callers**:
+  `orchestrator_session` must be set on the spawn body
+  if pre-flight routing is desired. Not strictly
+  required by item 1 (spawn succeeds without it), but
+  required for item 6.
+
+Test server still up.
+
+## 2026-05-19 02:25 BST - fullstack-20 end-to-end spawn (item 7)
+
+`f2094c3 Add spawn-from-rich-prompt UI (fullstack-20)`
+landed; rebuilt + relaunched. Walked the end-to-end
+flow.
+
+### Spawn affordance
+
+* Rich prompt toolbar (`Alt+Space`) grows a new robot
+  icon (`🤖`) next to the file / folder / send / × row.
+* `find` matches the button with `aria-label="Spawn
+  agent"` (so `find:"Spawn agent button"` reliably hits
+  it).
+
+### Dialog UI
+
+Clicking the robot opens a centered modal:
+
+```
+🤖  Spawn agent                                   [×]
+
+Tab name
+[ @@Agent                                          ]
+
+Command
+[                                                  ]
+[                                                  ]
+[                                                  ]
+
+Env
+[ KEY=value                                        ]
+[                                                  ]
+[                                                  ]
+
+                              [ Cancel ]   [ Spawn ]
+```
+
+* `Tab name` pre-filled with `@@Agent` placeholder; I
+  changed to `@@UIspawn`.
+* `Command` is a multi-line textarea; entered
+  `bash -c 'echo SPAWNED_VIA_UI; sleep 120'`.
+* `Env` is a multi-line textarea with `KEY=value`
+  placeholder.
+* `Spawn` button is the blue primary; `Cancel` is the
+  secondary.
+
+### End-to-end behavior
+
+Submit (`Spawn` button) → dialog closes → **`@@UIspawn`
+tab immediately appears in the active pane next to
+`@@Driver`**, focus switches to the new tab, and the
+command's stdout `SPAWNED_VIA_UI` renders in the xterm.
+
+This **also closes systacean-12 item 2** ("Spawned tab
+appears in active pane"), which was PARTIAL on the
+HTTP-only test — the SPA notification path is owned by
+`fullstack-20` (the rich-prompt UI initiates the spawn
+locally, so it has the session id immediately and can
+add the tab to the pane state without needing a
+server-side push). HTTP spawns from external callers
+(e.g. a watcher dispatcher) still don't auto-display
+in a connected SPA without UI cooperation — that's a
+separate concern, not a fullstack-20 gap.
+
+### Item 7 verdict
+
+**PASS** — end-to-end spawn from rich prompt works:
+dialog renders cleanly, submission creates the tab in
+the active pane via the `POST /api/terminals`
+endpoint, focus + output routing all work.
+
+Did NOT separately exercise the pre-flight survey
+rendering inside this UI (would need a spawn that
+prints `please log in` and the orchestrating tab
+needs to be the rich-prompt source — `fullstack-20`
+should wire `orchestrator_session` automatically per
+the systacean-12 schema). Flagging as a follow-up:
+**verify the UI sets `orchestrator_session=<current_session>`
+on the spawn body** so the pre-flight survey routes
+back to the same rich prompt.
+
+### Updated webtest-b-5 acceptance status
+
+* Items 1, 3, 4, 5, 6: PASS (systacean-12 HTTP surface).
+* Item 2: PASS via fullstack-20 (was PARTIAL on
+  HTTP-only test).
+* Item 7: PASS (end-to-end spawn).
+* Items 8 (`systacean-13`), 9 (`systacean-14`),
+  10-12 (`fullstack-15` drag-detach BLOCKED): still
+  pending or tooling-blocked.
+
+Test server stays up.

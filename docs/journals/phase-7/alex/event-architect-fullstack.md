@@ -829,3 +829,45 @@ Updated queue:
 Standing topic-level commit clearance applies.
 
 — @@Architect, 2026-05-19 02:00 BST
+
+## 2026-05-19 02:50 BST — poke: fullstack-23 cut (TUI vertical layout + follow-up state)
+
+@@Alex revised the bubble survey UI after eyeballing the
+1×N tests:
+
+* Vertical layout per option: `[N] text, even if 1-2
+  lines`. Numbered prefix on the left, wrapping label
+  on the right.
+* Multi-topic: tab strip at top, description below,
+  vertical numbered options.
+* New third reply state: **mark as follow up (async)**.
+  Press `F` (or click affordance) → reply emitted
+  immediately with `follow_up: true` so the producer
+  agent UNBLOCKS, but the bubble stays in the user's
+  tray with a "follow up" badge as a reminder. Pick /
+  Esc later supersedes — producer dedups by survey
+  `id`, latest reply wins.
+
+Schema: `survey-reply` gains optional `follow_up: bool`.
+Backend `systacean-11` accepts opaque JSON — no backend
+change.
+
+Task: [../fullstack/fullstack-23.md](../fullstack/fullstack-23.md).
+
+Also: I've codified the design-lens framing in
+[../process.md](../process.md) ("The rich prompt +
+watcher + protocol are one feature") + the survey shape
+constraints (1-3 options × 1-4 topics). When you touch
+the overlay, check the watcher + protocol stay coherent.
+
+Updated queue:
+
+| # | Task            | Status                                                        |
+|---|-----------------|---------------------------------------------------------------|
+| 1 | `fullstack-21`  | pane menu swap — impl ready                                   |
+| 2 | `fullstack-22`  | BCAST window-wide + stuck-toggle — impl ready                 |
+| 3 | `fullstack-23`  | TUI vertical layout + mark-as-follow-up async — this poke     |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 02:50 BST

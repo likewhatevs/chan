@@ -297,3 +297,127 @@ ready; SPA listener is the gap.**
   cleaned up via DELETE.
 
 ## 2026-05-19 (resume) BST - systacean-12 backend complete
+
+## 2026-05-19 (resume) BST - fullstack-20 spawn UI cluster
+
+Build: head includes `f2094c3` (fullstack-20 spawn-from-
+rich-prompt UI). Rebuilt + restarted 8801. HostA terminal
+with watcher on `events/` as the orchestrator.
+
+### Per-item verdicts
+
+```
+Item                                                | Verdict
+----------------------------------------------------+--------
+1 Spawn agent affordance in rich-prompt context     | pass
+2 Dialog accepts name + command + env, tab appears  | pass
+3 Spawned bash captures stdout (hi, bye)            | pass
+4 Pre-flight bubble renders with 1/2/3 options      | partial *
+5 Spinner + counter visible next to bubble          | n/a *
+6 Picking option 2 (kill) closes tab                | n/a *
+```
+
+### Notes
+
+* **Item 1**: Right-click in the rich-prompt editor area
+  → context menu now includes "Spawn agent" (icon-bot
+  glyph) alongside Show source code / Hide style toolbar
+  / New File from here / Watch directory / Stop watching /
+  Bubble stack / Bubble tray. Also a toolbar shortcut
+  icon (top-right of the prompt) — `find` returned 2 refs
+  for "Spawn agent" (menu + toolbar). Two ways into the
+  same dialog.
+
+* **Item 2**: Dialog opens with title `🤖 Spawn agent`,
+  fields Tab name (default `@@Agent`), Command (textarea),
+  Env (textarea with `KEY=value` placeholder), Cancel +
+  Spawn buttons. Submitting fired
+  `POST /api/terminals` from the SPA with the
+  orchestrator_session header → 201, new tab named
+  `@@SpawnEcho` appeared in the tab strip + auto-active.
+
+* **Item 3**: With command
+  `bash -c 'echo hi; sleep 5; echo bye'`, the
+  spawned tab shows:
+  ```
+  hi
+  bye
+
+  process exited (0); press Ctrl+D to close this tab
+  ```
+  Both stdout lines captured, exit message clean, PTY
+  exit code visible.
+
+* `*` **Items 4-6 (pre-flight): PARTIAL — server emits
+  the event, SPA does not render the bubble.**
+
+  Recipe: HostA orchestrator (watcher on `events/`) +
+  Spawn agent `@@AuthNeeded` with command
+  `bash -c 'echo please log in; sleep 60'`. The spawned
+  tab printed `please log in` (matching chan-server's
+  preflight pattern, terminal_sessions.rs:1010-1022).
+  chan-server **did** write the pre-flight event file:
+  ```
+  /tmp/chan-webtest-a-1/events/pre-flight-f90ed024a46dc89a.md
+  {"id":"pre-flight-f90ed024a46dc89a",
+   "type":"pre-flight","from":"@@AuthNeeded","to":"HostA",
+   "note":"[?1034h... please log in"}
+  ```
+  But **no bubble rendered** in HostA's rich prompt. No
+  tray pill, no article, no notification.
+
+  Code paths inspected:
+  * `web/src/state/watcherEvents.ts:35-42` allows
+    `pre-flight` in the parse allowlist (per the
+    fullstack-20 commit). Parses to a valid
+    `WatcherEvent`.
+  * `web/src/components/BubbleOverlay.svelte:69-344`
+    has explicit `event.type === "pre-flight"` branches —
+    knows to render single question with options,
+    handles `preFlightTimedOut`, "Spawn idle - retry
+    now?" prompt, etc.
+  * `web/src/state/watcherEvents.test.ts:88` has a
+    parser test for the type that passes.
+
+  So parsing + rendering are wired; **what's broken
+  is the event delivery path**. Two likely causes
+  (untested):
+  1. **chan-server's `self_writes` mechanism may be
+     suppressing the watcher echo** for files chan-
+     server itself wrote (`write_preflight_event`).
+     The watcher dispatches on `Create` events, but a
+     self-write should be silenced to avoid loops. The
+     pre-flight event is supposed to be EXEMPT (it's
+     for the orchestrator, not the watcher dispatch
+     itself) — needs a carve-out.
+  2. **Schema shape mismatch from the SKILL**. The
+     spawn-protocol.md SKILL says pre-flight events
+     carry `topic`, `questions` (with 3 options:
+     open/kill/retry), `scope` — i.e. the same shape
+     as a regular survey. The actual chan-server emit
+     is minimal: `{id, type, from, to, note}` with no
+     questions/options. The SPA's BubbleOverlay
+     hardcodes the 3 options for pre-flight type
+     (line 251 sets `Spawn` topic; line 256 returns
+     `1` for question count), so the schema mismatch
+     might not be the immediate issue — but it IS a
+     drift between SKILL and chan-server emit.
+
+  Items 5 + 6 (spinner + kill action) gated on item 4
+  rendering. N/A until the delivery path is wired.
+
+  Hand-off to @@FullStack / @@Systacean. The
+  filesystem evidence + working chan-server pattern
+  detection means most of the substrate is in;
+  just the SPA-side subscription/dispatch hook is
+  missing (or self-write suppression is too aggressive).
+
+### State left on disk
+
+* 8801 server up. Tabs visible: HostA + @@SpawnEcho +
+  @@LoginNeeded + @@AuthNeeded (the latter two still
+  running `sleep 60` until the bash exits). Pre-flight
+  event file still in `events/`.
+* HostA watcher still attached.
+
+## 2026-05-19 (resume) BST - fullstack-20 cluster complete

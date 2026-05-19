@@ -648,3 +648,79 @@ State: 8801 server back up at
 `http://127.0.0.1:8801/?t=9UWmi4wMtSzcpaCESRhVBZAQPHWmiJbY`.
 Both test terminals (@@SpawnTest, @@SpawnB) cleaned up
 via DELETE. Standing by for next landing.
+
+## 2026-05-19 (resume) BST - poke (fullstack-20 spawn UI: items 1-3 PASS, 4-6 PARTIAL)
+
+After @@Alex's `poke`. `f2094c3` fullstack-20 landed.
+Rebuilt + restarted 8801; HostA orchestrator with
+watcher on `events/`.
+
+**Items 1-3 PASS:**
+* **Item 1** — Right-click in rich-prompt editor area
+  surfaces a `Spawn agent` entry alongside the existing
+  context items. Also a toolbar shortcut at the prompt
+  top-right (two ways into the dialog).
+* **Item 2** — Dialog renders with title `🤖 Spawn
+  agent`, fields: **Tab name** (default `@@Agent`),
+  **Command** (textarea), **Env** (textarea,
+  `KEY=value` placeholder), **Cancel** + **Spawn**
+  buttons. Submit POSTs to
+  `/api/terminals` from the SPA → 201, new tab
+  `@@SpawnEcho` lands in the active pane and becomes
+  active.
+* **Item 3** — `bash -c 'echo hi; sleep 5; echo bye'`
+  captured both lines + the clean epilogue
+  `process exited (0); press Ctrl+D to close this
+  tab`.
+
+**Items 4-6 PARTIAL — server emits, SPA does not
+render the pre-flight bubble:**
+
+Recipe: HostA orchestrator + Spawn `@@AuthNeeded` with
+command `bash -c 'echo please log in; sleep 60'`.
+
+* chan-server **did** detect the `please log in`
+  pattern (per `terminal_sessions.rs:1010-1022`
+  preflight_line_matches) and wrote the file
+  `events/pre-flight-f90ed024a46dc89a.md`:
+  ```json
+  {"id":"pre-flight-f90ed024a46dc89a",
+   "type":"pre-flight","from":"@@AuthNeeded",
+   "to":"HostA","note":"...please log in"}
+  ```
+* HostA's rich prompt **did not render a bubble** for
+  the pre-flight — no tray pill, no article, no
+  notification.
+* `watcherEvents.ts:35-42` parser allowlist includes
+  `pre-flight`. `BubbleOverlay.svelte:69-344` has
+  explicit `event.type === "pre-flight"` render
+  branches (with `preFlightTimedOut`, "Spawn idle -
+  retry now?", hardcoded options). So parsing +
+  rendering are wired; the **delivery path** from
+  the server-written file to the SPA bubble list is
+  the gap. Two likely seams (untested):
+  1. `self_writes` suppression is silencing
+     chan-server's own pre-flight write (the watcher
+     normally ignores chan-server echoes to avoid
+     loops; pre-flight needs an exemption).
+  2. Schema drift — SKILL spawn-protocol.md says
+     pre-flight carries `topic` / `questions` /
+     `options` / `scope` like a regular survey, but
+     the actual emit is minimal
+     `{id,type,from,to,note}`. BubbleOverlay hardcodes
+     the 3 options for pre-flight type so this isn't
+     immediately blocking, but it's drift worth
+     reconciling either in the SKILL prose or the
+     server emit.
+
+Items 5 + 6 (spinner + kill action) gated on item 4
+rendering. Hand-off to @@FullStack + @@Systacean.
+
+Items 7-10 still blocked on `systacean-13` (activity
+indicator) + `systacean-14` (MCP discovery).
+
+State: 8801 server up. Tabs: HostA + @@SpawnEcho +
+@@LoginNeeded + @@AuthNeeded. Pre-flight event file
+still on disk for inspection at
+`/tmp/chan-webtest-a-1/events/pre-flight-f90ed024a46dc89a.md`.
+HostA watcher still attached.
