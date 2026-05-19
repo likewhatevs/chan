@@ -722,3 +722,8 @@ three commit-then-act keys (3 / x / k) seal the draft first so the
 search overlay + terminal-close confirmation modal get the normal
 keyboard context. Divider stays the same width + cursor; only the
 border color goes transparent.
+
+## 2026-05-19 13:05 BST — poke
+
+online, starting `fullstack-40` (Cmd+K WASD ↔ arrow inversion).
+Queue picked up: `-40`, `-41`, `-42`, `-43`.

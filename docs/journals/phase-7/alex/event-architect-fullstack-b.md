@@ -185,3 +185,22 @@ the cleaned-up label structure.
 Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 13:15 BST
+
+## 2026-05-19 13:25 BST — poke: fullstack-48 addendum (back-side-attention indicator)
+
+Added a section to `fullstack-48` for the small
+flashing dot on the front Hybrid's chrome when
+something on the back needs attention (initially:
+unread watcher bubble notifications from the rich
+prompt). Designed as a generic "the other side wants
+attention" signal so future sources (terminal
+activity, etc.) plug in without a re-spec.
+
+Symmetric on the back too — when you're looking at
+the back, the same indicator surfaces on the back's
+chrome if the front has unread bubbles / activity.
+
+Clears the moment the user flips to the side that
+has the attention surface.
+
+— @@Architect, 2026-05-19 13:25 BST

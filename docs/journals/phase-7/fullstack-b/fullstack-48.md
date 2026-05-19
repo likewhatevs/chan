@@ -103,6 +103,40 @@ Hybrid that has two surfaces.
   Hybrid root element — the global theme provides
   defaults, the per-Hybrid override wins when set.
 
+### Back-side-attention indicator
+
+* When the back side has something that needs the
+  user's attention — initially: an unread bubble
+  notification from the rich prompt's watcher (per
+  `fullstack-13` / `-17`) — show a small **flashing
+  dot** on the front Hybrid's chrome as a hint to
+  flip.
+* Position: on the chrome edge of the Hybrid (e.g.
+  top-right corner, near where the hamburger lives),
+  small enough to not crowd, visible enough to
+  notice peripherally.
+* Behavior:
+  * Steady when nothing on the back needs attention.
+  * Flashes (~1.5s cycle, low-amplitude alpha pulse)
+    when the back has something unread.
+  * Clears as soon as the user flips to the back
+    (the attention surface is now visible).
+* Sources of "attention" for v1:
+  * Unread bubble notifications in the watcher
+    overlay on the back's rich prompt.
+  * Future hooks (terminal activity per
+    `fullstack-25` if back has a terminal with
+    unfocused output, etc.) — design the indicator
+    as a generic "any side wants attention" signal,
+    not bubble-specific. Sub-source counters live on
+    the back's state.
+* Symmetric: when on the back, the same indicator
+  shows on the back's chrome if the front has
+  attention.
+* Use the same wobble bus pattern from `fullstack-34`
+  for any one-shot animations; the flashing dot is
+  a CSS-only loop.
+
 ### Out of scope
 
 * Per-tab theme.
