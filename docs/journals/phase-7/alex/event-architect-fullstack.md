@@ -997,3 +997,45 @@ Both are small `fullstack-14`/`-21` regression
 follow-ups. Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 04:40 BST
+
+## 2026-05-19 04:55 BST — poke: fullstack-29 reframed (audit + cleanup)
+
+`fullstack-28` (`06739a9`) on main. Good.
+
+@@Alex flagged the broader pattern: Phase 1 / pane-menu
+work shipped fast and drifted both ways — things added
+that weren't asked, things asked that aren't actually
+working. Re-cutting `fullstack-29` as an audit task,
+not a single-bug fix.
+
+Two directions to handle in this pass:
+
+1. **Drop**: every UI element you added in
+   `fullstack-14`/`-6`/`-21`/`-28` that isn't in the
+   matching task file's acceptance criteria or
+   `request.md`. If it has user impact and you want
+   to keep it, surface to me with a one-line rationale
+   for sign-off.
+2. **Complete**: every "show this path in File
+   Browser" action across every surface (terminal Show
+   Dir, Graph inspector Show Directory/File, doc-tab
+   "Show in file browser", any other inspector with
+   that button) must spawn the new first-class
+   FileBrowser tab. No OverlayShell calls anywhere for
+   File Browser.
+
+Hand-off includes an explicit **audit summary** append
+listing every call site + UI element you reviewed with
+fix/drop/keep verdicts. Don't skip it.
+
+Task: [../fullstack/fullstack-29.md](../fullstack/fullstack-29.md).
+
+Tone-wise: this isn't a punitive task. Sloppier-than-
+ideal Phase 1 implementation deserves a clean
+remediation pass; we do it once and we set the model
+for how scope drift gets handled in future work. The
+phase summary will note this discipline check.
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 04:55 BST
