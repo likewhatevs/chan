@@ -224,3 +224,23 @@ on walkthrough):
 
 All five lane-B tasks (44 / 45 / 46 / 47 / 48)
 landed. Standing by for the next round.
+
+## 2026-05-19 13:35 BST — poke: fullstack-48 Phase C shipped
+
+`98ec4da` Back-side-attention indicator (fullstack-48
+phase C). Implements the 13:25 BST addendum: small
+flashing dot in the pane chrome's `.actions` area
+when the hidden side has unread / active content.
+Generic derived check covers terminal `watcher.unread`
+and `terminalActivity` today; future sources plug into
+the same predicate without re-spec. Pulse animation
+respects `prefers-reduced-motion`.
+
+Symmetric by construction (flipHybrid swaps tabs ↔
+back.tabs so flipping to the attention surface
+naturally clears the indicator).
+
+Gate green (73 targeted vitest + full 319, svelte-
+check clean, build clean, pre-push green). Pushed.
+
+Standing by.
