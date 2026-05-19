@@ -65,7 +65,8 @@
  * We keep the editor bg sourced from the app theme; only the editor
  * tokens shift.
  */
-:root[data-editor-theme="google_docs"][data-theme="dark"] {
+:root[data-editor-theme="google_docs"][data-theme="dark"],
+:root[data-editor-theme="google_docs"] .pane[data-theme="dark"] {
   --chan-editor-body-color: #e8eaed;
 
   --chan-editor-heading-color: #e8eaed;
@@ -84,4 +85,31 @@
   --chan-editor-table-border: #3c4043;
   --chan-editor-table-header-bg: #2d2e30;
   --chan-editor-table-stripe-bg: #28292b;
+}
+
+/*
+ * `fullstack-b-5`: per-pane light override — see github.css for
+ * the design rationale. Mirrors the light values from the base
+ * block so a Hybrid flipped to light inside a globally-dark app
+ * re-asserts these tokens for the pane's subtree.
+ */
+:root[data-editor-theme="google_docs"] .pane[data-theme="light"] {
+  --chan-editor-body-color: #202124;
+
+  --chan-editor-heading-color: #202124;
+  --chan-editor-h6-color: #5f6368;
+
+  --chan-editor-inline-code-bg: #f1f3f4;
+  --chan-editor-inline-code-color: #202124;
+  --chan-editor-code-block-bg: #f8f9fa;
+  --chan-editor-code-block-color: #202124;
+
+  --chan-editor-link-color: #1a73e8;
+
+  --chan-editor-quote-color: #5f6368;
+  --chan-editor-quote-border: #dadce0;
+  --chan-editor-hr-color: #dadce0;
+  --chan-editor-table-border: #dadce0;
+  --chan-editor-table-header-bg: #f1f3f4;
+  --chan-editor-table-stripe-bg: #f8f9fa;
 }

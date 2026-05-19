@@ -72,7 +72,8 @@
  * (illegible on dark) for a brighter cyan-blue picked from Word's
  * dark-mode accent.
  */
-:root[data-editor-theme="word"][data-theme="dark"] {
+:root[data-editor-theme="word"][data-theme="dark"],
+:root[data-editor-theme="word"] .pane[data-theme="dark"] {
   --chan-editor-body-color: #ededed;
 
   --chan-editor-heading-color: #8ab4f8;
@@ -92,4 +93,32 @@
   --chan-editor-table-border: #3a3a3a;
   --chan-editor-table-header-bg: #2b2b2b;
   --chan-editor-table-stripe-bg: #232323;
+}
+
+/*
+ * `fullstack-b-5`: per-pane light override — see github.css for
+ * the design rationale. Mirrors the light values from the base
+ * block so a Hybrid flipped to light inside a globally-dark app
+ * re-asserts these tokens for the pane's subtree.
+ */
+:root[data-editor-theme="word"] .pane[data-theme="light"] {
+  --chan-editor-body-color: #000000;
+
+  --chan-editor-heading-color: #2f5496;
+  --chan-editor-h6-color: #1f3864;
+
+  --chan-editor-inline-code-bg: #f2f2f2;
+  --chan-editor-inline-code-color: #000000;
+  --chan-editor-code-block-bg: #f7f7f7;
+  --chan-editor-code-block-color: #000000;
+  --chan-editor-code-block-border: #d4d4d4;
+
+  --chan-editor-link-color: #0563c1;
+
+  --chan-editor-quote-color: #595959;
+  --chan-editor-quote-border: #d4d4d4;
+  --chan-editor-hr-color: #d4d4d4;
+  --chan-editor-table-border: #bfbfbf;
+  --chan-editor-table-header-bg: #f2f2f2;
+  --chan-editor-table-stripe-bg: #fafafa;
 }

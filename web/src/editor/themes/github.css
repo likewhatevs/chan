@@ -74,8 +74,14 @@
  * and link #4493f8 are the load-bearing tokens; code-block bg
  * #151b23 is GitHub's current dark fenced-block color (older
  * builds used #161b22).
+ *
+ * `fullstack-b-5` paired the per-pane selector with the root one
+ * so a Hybrid flipped to its dark side inside a globally-light
+ * app re-asserts these tokens for the pane's subtree. The pane
+ * selector wins by specificity over the global default block.
  */
-:root[data-editor-theme="github"][data-theme="dark"] {
+:root[data-editor-theme="github"][data-theme="dark"],
+:root[data-editor-theme="github"] .pane[data-theme="dark"] {
   --chan-editor-body-color: #f0f6fc;
 
   --chan-editor-heading-color: #f0f6fc;
@@ -94,4 +100,35 @@
   --chan-editor-table-border: #3d444d;
   --chan-editor-table-header-bg: #151b23;
   --chan-editor-table-stripe-bg: #151b23;
+}
+
+/*
+ * `fullstack-b-5`: per-pane light override. Re-asserts the light
+ * editor tokens for a Hybrid pane flipped to its light side
+ * inside a globally-dark app. Without this block the dark-variant
+ * rule above cascades into the pane and the editor renders with
+ * dark-palette text on the light pane background (the visible
+ * "white on white" repro). Values mirror the base block above so
+ * `.pane[data-theme="light"]` always lands at the same look as
+ * the global-light render.
+ */
+:root[data-editor-theme="github"] .pane[data-theme="light"] {
+  --chan-editor-body-color: #1f2328;
+
+  --chan-editor-heading-color: #1f2328;
+  --chan-editor-h6-color: #59636e;
+
+  --chan-editor-inline-code-bg: rgba(175, 184, 193, 0.2);
+  --chan-editor-code-block-bg: #f6f8fa;
+  --chan-editor-code-block-color: #1f2328;
+  --chan-editor-code-block-border: transparent;
+
+  --chan-editor-link-color: #0969da;
+
+  --chan-editor-quote-color: #59636e;
+  --chan-editor-quote-border: #d0d7de;
+  --chan-editor-hr-color: #d0d7de;
+  --chan-editor-table-border: #d0d7de;
+  --chan-editor-table-header-bg: #f6f8fa;
+  --chan-editor-table-stripe-bg: #f6f8fa;
 }
