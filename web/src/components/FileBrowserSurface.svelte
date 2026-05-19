@@ -51,7 +51,6 @@
   } from "../state/store.svelte";
   import { openBrowserInActivePane, openInActivePane } from "../state/tabs.svelte";
   import type { BrowserTab } from "../state/tabs.svelte";
-  import { fileBrowserTitlePath } from "../terminal/fromHere";
 
   type Variant = "overlay" | "dock" | "tab";
   type Side = "left" | "right";
@@ -72,9 +71,6 @@
   const isTab = $derived(variant === "tab");
   const isWideSurface = $derived(isOverlay || isTab);
   const browserState = $derived(tab ?? browserOverlay);
-  const browserTitle = $derived(
-    fileBrowserTitlePath(browserSelection.path, drive.info?.root ?? drive.info?.name ?? "drive"),
-  );
   const fullyExpanded = $derived.by(() => {
     void tree.entries;
     return isFullyExpanded();
@@ -309,7 +305,7 @@
         {/if}
       </button>
     {/if}
-    <span class="name" title={browserTitle}>{browserTitle}</span>
+    <span class="header-spacer" aria-hidden="true"></span>
     <HamburgerMenu
       bind:this={menu}
       bind:open={menuOpen}
@@ -561,7 +557,7 @@
   .dock header {
     padding-inline: 0.45rem;
   }
-  .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .header-spacer { flex: 1; }
   .chrome-btn {
     display: inline-flex;
     align-items: center;

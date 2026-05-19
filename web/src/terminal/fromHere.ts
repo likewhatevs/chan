@@ -5,14 +5,6 @@ export type TerminalFromHereTarget = {
 
 const RAW_SAFE = /^[A-Za-z0-9/_.-]+$/;
 
-export function fileBrowserTitlePath(
-  selectedPath: string | null,
-  rootLabel = "drive",
-): string {
-  if (selectedPath) return selectedPath;
-  return rootLabel.trim() || "drive";
-}
-
 export function terminalFromHereTarget(
   path: string,
   isDir: boolean,

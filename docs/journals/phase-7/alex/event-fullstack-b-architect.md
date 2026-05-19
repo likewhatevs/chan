@@ -378,3 +378,84 @@ ship.
 
 Lane-B queue empty. Deferred fullstack-48
 follow-ups still parked. Standing by.
+
+## 2026-05-19 18:30 BST — poke: catching up + picking up fullstack-54
+
+Mea culpa: missed your 15:35 BST cut on
+`fullstack-54` plus the 17:20 / 17:30 / 18:00 BST
+queue refills (-58, -59, -60, -62, -63 plus the
+hash round-trip directive) on the prior three
+pokes — was tailing the arch->me file with too
+few lines and reading "nothing new" when there
+was. Standing by != not checking. Lesson saved to
+journal: when a poke arrives, walk the full event
+file and check `ls -t fullstack-b/` for new task
+files; the tail alone is not enough.
+
+Picking up the queue in cut-order. Starting with
+`-54` (smallest scope, oldest cut, marked "in
+flight" by you).
+
+## 2026-05-19 18:45 BST — poke: fullstack-54 ready to commit
+
+Approach: dropped the path span + slimmed the
+chrome row in all three variants (per the matrix's
+permitted alternative). Reason: the file-browser
+hamburger carries FB-specific items (toggle
+inspector, new file/dir here, search, reload, etc.)
+that are NOT on the Pane tab-strip kebab. Wiring
+them onto the tab kebab is bigger scope than this
+task and risks regressing the dock + overlay
+paths that already work. The slim chrome strip
+(~38px) with just the hamburger is clearly chrome,
+not a path-display row.
+
+Files:
+* `web/src/components/FileBrowserSurface.svelte` —
+  dropped import + `browserTitle` derived +
+  `<span class="name">` + `.name` CSS rule.
+  Replaced span with `<span class="header-spacer"
+  aria-hidden="true">` to keep hamburger
+  right-anchored.
+* `web/src/terminal/fromHere.ts` — removed
+  `fileBrowserTitlePath` (only consumer was the
+  surface).
+* `web/src/terminal/fromHere.test.ts` — removed
+  the helper's describe block.
+* `web/src/components/revealBrowserActions.test.ts`
+  — new sentinel: `class="name"`,
+  `fileBrowserTitlePath`, `browserTitle` all
+  absent from the compiled surface source.
+
+Visual eyeball (ad-hoc chan serve on a throwaway
+drive, new Chrome MCP tab; did NOT touch the
+persistent webtest tabs at 8801 / 8810):
+* Tab variant header: spacer + hamburger,
+  `headerText.trim() === "⋮"`.
+* Dock variant header: unstick + spacer +
+  hamburger, height 37.8px, same `"⋮"` content.
+* Overlay variant uses the same header block with
+  Maximize2 in place of unstick — symmetric by
+  construction, not separately repro'd.
+* Hamburger still surfaces 12 FB-specific items.
+
+Teardown done: chan serve killed (PID 268), drive
+unregistered + rm'd, MCP tab closed. Webtest
+tabs untouched.
+
+Gate green: svelte-check 0/0; vitest 35 / 343
+(net 0 — two helper tests gone, two sentinel
+tests added); build clean; scripts/pre-push
+green.
+
+Re-walk flag (matching your 15:35 BST note):
+`webtest-b-6` item 6 needs the FB chrome
+screenshots refreshed — slimmer chrome strip in
+all variants, no path bar. Forward to @@WebtestB
+when convenient.
+
+Committing + pushing under standing topic-level
+clearance (no HOLD pokes since the 15:35 BST
+cut). Next item from the queue: `-58` (per-tab
+BrowserTab state) — that one's larger so I'll
+plan in the event thread before I ship.

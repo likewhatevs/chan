@@ -37,6 +37,21 @@ describe("no inline close affordance on first-class surfaces", () => {
   });
 });
 
+// fullstack-54: FileBrowserSurface drops the path-display header span
+// (the `/private/tmp/...` row that duplicated the tab-strip context).
+// The chrome row collapses to a slim strip with the kebab on the
+// right; no path text in any variant.
+describe("fullstack-54: no path-display header on FileBrowserSurface", () => {
+  test('no <span class="name"> in the header', () => {
+    expect(fileBrowserSurface).not.toContain('class="name"');
+  });
+
+  test("no fileBrowserTitlePath import or browserTitle derived", () => {
+    expect(fileBrowserSurface).not.toContain("fileBrowserTitlePath");
+    expect(fileBrowserSurface).not.toContain("browserTitle");
+  });
+});
+
 // fullstack-38: right-docked file browser mirrors row layout so the
 // tree visually anchors against whichever viewport edge it sits on.
 describe("right-docked file browser mirrors text alignment", () => {

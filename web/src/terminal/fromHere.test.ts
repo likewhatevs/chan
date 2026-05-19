@@ -1,20 +1,5 @@
 import { describe, expect, test } from "vitest";
-import {
-  fileBrowserTitlePath,
-  shellQuotePath,
-  terminalFromHereTarget,
-} from "./fromHere";
-
-describe("fileBrowserTitlePath", () => {
-  test("uses the selected drive-relative path", () => {
-    expect(fileBrowserTitlePath("notes/today.md", "/tmp/drive")).toBe("notes/today.md");
-  });
-
-  test("falls back to the drive root label", () => {
-    expect(fileBrowserTitlePath(null, "/tmp/drive")).toBe("/tmp/drive");
-    expect(fileBrowserTitlePath(null, "")).toBe("drive");
-  });
-});
+import { shellQuotePath, terminalFromHereTarget } from "./fromHere";
 
 describe("terminalFromHereTarget", () => {
   test("opens directories as cwd without prompt seed", () => {
