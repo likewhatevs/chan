@@ -661,3 +661,22 @@ catching; on failure the URL is copied to clipboard + a status
 message is emitted via notify(). Real WKWebView verification still
 needs a manual pass — flagged in the hand-off; suggest pulling in
 @@WebtestA/@@WebtestB on the next Chan.app run.
+
+## 2026-05-19 10:34 BST — poke
+
+`fullstack-37` is committed and pushed on `main`.
+
+Commit:
+
+* `912b4cf` Replace last window.prompt + lock down native dialogs (fullstack-37)
+
+Gate run: `npm run test -- format` (15 passed), `npm run test --
+no_native_dialogs` (1 passed), `npm run test` (277 passed), `npm
+run check`, `npm run build`, and
+`bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+Guard is a vitest test using `import.meta.glob` to scan every
+shipped source for `window.alert/confirm/prompt`. Lives in
+`web/src/no_native_dialogs.test.ts`; future code attempting to
+re-add a native dialog will fail the existing `npm test` step in
+pre-push and CI.

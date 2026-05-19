@@ -130,3 +130,11 @@ fullstack-36 landed: `7b593bd` Surface external-link open failures
 on desktop (fullstack-36). Gate green: `npm run test --
 external_links` (8 passed), `npm run test` (274 passed), `npm run
 check`, `npm run build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
+
+## 2026-05-19 10:34 BST
+
+fullstack-37 landed: `912b4cf` Replace last window.prompt + lock
+down native dialogs (fullstack-37). Gate green: `npm run test --
+format` (15 passed), `npm run test -- no_native_dialogs` (1
+passed), `npm run test` (277 passed), `npm run check`, `npm run
+build`, `bash -lc 'ulimit -n 4096; scripts/pre-push'`.
