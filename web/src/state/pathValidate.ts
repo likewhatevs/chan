@@ -26,7 +26,7 @@ const WIN_RESERVED = new Set([
 /// Validate a relative path that the user typed for create / move
 /// / rename. Returns a structured result so the caller can show
 /// the reason inline instead of a generic "invalid".
-export function validatePath(raw: string): PathCheck {
+export function validatePath(raw: string, opts: { allowAbsolute?: boolean } = {}): PathCheck {
   if (raw === "") return { ok: false, reason: "path is empty" };
   const trimmed = raw.trim();
   if (trimmed === "") return { ok: false, reason: "path is empty" };
@@ -39,7 +39,7 @@ export function validatePath(raw: string): PathCheck {
   if (trimmed.length > MAX_TOTAL) {
     return { ok: false, reason: `path too long (>${MAX_TOTAL} chars)` };
   }
-  if (trimmed.startsWith("/")) {
+  if (trimmed.startsWith("/") && !opts.allowAbsolute) {
     return { ok: false, reason: "absolute paths are not allowed" };
   }
   if (trimmed.endsWith("/")) {
@@ -61,7 +61,7 @@ export function validatePath(raw: string): PathCheck {
   if (trimmed.includes("\\")) {
     return { ok: false, reason: "use / as the path separator" };
   }
-  const segments = trimmed.split("/");
+  const segments = trimmed.startsWith("/") ? trimmed.slice(1).split("/") : trimmed.split("/");
   for (const seg of segments) {
     const segCheck = validateSegment(seg);
     if (!segCheck.ok) return segCheck;

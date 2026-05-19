@@ -289,6 +289,16 @@
   function closePaneMenus(): void {
     paneMenu?.close();
     paneContextMenu?.close();
+    emptyPaneMenu?.close();
+  }
+
+  function closePaneContextMenus(): void {
+    paneContextMenu?.close();
+    emptyPaneMenu?.close();
+  }
+
+  function closePaneHamburgerMenu(): void {
+    paneMenu?.close();
   }
 
   function doReloadPane(): void {
@@ -327,6 +337,7 @@
   function openPaneContextAt(e: MouseEvent): void {
     e.preventDefault();
     setActivePane(pane.id);
+    closePaneHamburgerMenu();
     paneContextMenu?.openAtCursor(e.clientX, e.clientY);
   }
 
@@ -391,6 +402,11 @@
   }
 
   function onKeyDown(e: KeyboardEvent): void {
+    if (e.key === "Escape" && (paneMenuOpen || paneContextMenuOpen || emptyPaneMenuOpen)) {
+      e.preventDefault();
+      closePaneMenus();
+      return;
+    }
     const meta = e.metaKey || e.ctrlKey;
     // Plain Cmd/Ctrl+S only. Cmd/Ctrl+Shift+S is the editor's
     // strikethrough toggle; without the shift gate this handler
@@ -906,6 +922,7 @@
         bind:open={paneMenuOpen}
         width={220}
         height={110}
+        onBeforeOpen={closePaneContextMenus}
       >
         <li>
           <button role="menuitem" onclick={doReloadPane}>
@@ -926,6 +943,7 @@
         showTrigger={false}
         width={250}
         height={320}
+        onBeforeOpen={closePaneHamburgerMenu}
       >
         {#if splitsAllowed}
           <li>
@@ -1096,6 +1114,7 @@
           showTrigger={false}
           width={280}
           height={260}
+          onBeforeOpen={closePaneHamburgerMenu}
         >
           <!-- Canonical section order shared with the file-tab and
                overlay menus: content actions, navigation, pane

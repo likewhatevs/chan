@@ -32,6 +32,9 @@ export function parseWatcherEvent(path: string, content: string): WatcherEvent |
   ) {
     return null;
   }
+  if (obj.type !== "survey" && obj.type !== "survey-reply" && obj.type !== "poke") {
+    return null;
+  }
   const questions = Array.isArray(obj.questions)
     ? obj.questions.map(parseQuestion).filter((q): q is SurveyQuestion => q !== null).slice(0, 4)
     : undefined;

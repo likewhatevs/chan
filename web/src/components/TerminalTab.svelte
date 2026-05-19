@@ -70,6 +70,7 @@
   import { terminalWsPath } from "../terminal/session";
   import { handleTerminalMetaKey } from "../terminal/keymap";
   import { injectShowMcpEnvCommand } from "../terminal/mcpEnv";
+  import { uiConfirm } from "../state/confirm.svelte";
   import { clampMenu } from "./menuClamp";
   import {
     closeTabMenu,
@@ -214,7 +215,7 @@
         blue: "#0969da",
         magenta: "#8250df",
         cyan: "#1b7c83",
-        white: "#6e7781",
+        white: "#4b5563",
         brightBlack: "#57606a",
         brightRed: "#a40e26",
         brightGreen: "#116329",
@@ -222,7 +223,7 @@
         brightBlue: "#0550ae",
         brightMagenta: "#6639ba",
         brightCyan: "#0a6b73",
-        brightWhite: "#24292f",
+        brightWhite: "#6e7781",
       };
     }
     return {
@@ -479,8 +480,17 @@
     serialize = null;
   }
 
-  function restart(): void {
+  async function restart(): Promise<void> {
     closeTabMenu();
+    if (tab.terminalSessionId) {
+      const confirmed = await uiConfirm({
+        title: "Restart terminal?",
+        message: "The current terminal session will be closed and replaced.",
+        confirmLabel: "Restart",
+        destructive: true,
+      });
+      if (!confirmed) return;
+    }
     explicitCloseSession();
     teardown();
     void tick().then(start);
@@ -648,6 +658,12 @@
 
   function watcherStopped(): void {
     tab.watcher = undefined;
+    scheduleTerminalSessionSave();
+  }
+
+  function watcherDetached(): void {
+    tab.watcher = undefined;
+    ui.status = "watcher detached on reload";
     scheduleTerminalSessionSave();
   }
 
@@ -870,8 +886,7 @@
           onkeydown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
-              closeTabMenu();
-              term?.focus();
+              (e.currentTarget as HTMLInputElement).blur();
             }
           }}
         />
@@ -890,13 +905,13 @@
       {#if showStaleEnvPrompt}
         <div class="env-stale-row">
           <span>Tab name changed. $CHAN_TAB_NAME will stay at {tab.terminalEnvTabName} until restart.</span>
-          <button type="button" onclick={restart}>Restart now</button>
+          <button type="button" onclick={() => void restart()}>Restart now</button>
           <button type="button" onclick={() => dismissTerminalEnvNamePrompt(tab)}>Later</button>
         </div>
       {/if}
       <div class="action-list">
         {#if sessionClosedReason}
-          <button class="mbtn" onclick={restart}>
+          <button class="mbtn" onclick={() => void restart()}>
             <span class="mbtn-icon">
               <RotateCcw size={16} strokeWidth={1.75} aria-hidden="true" />
             </span>
@@ -961,7 +976,7 @@
           <span class="mbtn-label">Copy Scrollback</span>
           <span class="mbtn-chord"></span>
         </button>
-        <button class="mbtn" onclick={restart}>
+        <button class="mbtn" onclick={() => void restart()}>
           <span class="mbtn-icon">
             <RotateCcw size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
@@ -1121,6 +1136,7 @@
         watcher={tab.watcher}
         sessionId={tab.terminalSessionId}
         onRefresh={refreshWatcherEvents}
+        onWatcherDetached={watcherDetached}
       />
     {/if}
     <TerminalRichPrompt

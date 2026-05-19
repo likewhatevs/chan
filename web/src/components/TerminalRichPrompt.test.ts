@@ -297,11 +297,12 @@ describe("TerminalRichPrompt", () => {
     await tick();
     expect(pathPromptState.open).toBe(true);
     expect(pathPromptState.kind).toBe("folder");
+    expect(pathPromptState.allowAbsolute).toBe(true);
 
-    resolvePathPrompt("events");
+    resolvePathPrompt("/tmp/events");
     await waitFor(() => onWatcherStarted.mock.calls.length === 1);
 
-    expect(setWatcher).toHaveBeenCalledWith("term_123", "events");
-    expect(onWatcherStarted).toHaveBeenCalledWith("events");
+    expect(setWatcher).toHaveBeenCalledWith("term_123", "/tmp/events");
+    expect(onWatcherStarted).toHaveBeenCalledWith("/tmp/events");
   });
 });

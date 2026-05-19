@@ -10,10 +10,12 @@
     watcher,
     sessionId,
     onRefresh,
+    onWatcherDetached,
   }: {
     watcher: TerminalWatcherState;
     sessionId?: string;
     onRefresh: () => Promise<void> | void;
+    onWatcherDetached?: () => void;
   } = $props();
 
   type NumberedOption = SurveyOption & { n: number };
@@ -28,6 +30,14 @@
   let focusedQuestion = $state<Record<string, number>>({});
   let focusedBubbleId = $state<string | null>(null);
   let busyReply = $state<string | null>(null);
+  const dismissTimers = new Set<ReturnType<typeof setTimeout>>();
+
+  $effect(() => {
+    return () => {
+      for (const timer of dismissTimers) clearTimeout(timer);
+      dismissTimers.clear();
+    };
+  });
 
   $effect(() => {
     const ids = new Set(orderedEvents.map((event) => event.id));
@@ -65,22 +75,26 @@
     answers[event.id] = byQuestion;
     const total = event.questions?.length ?? 0;
     if (total <= 1) {
-      await commit(event, byQuestion);
+      await commit(event, byQuestion, 600);
       return;
     }
     const next = nextUnanswered(total, byQuestion, questionIndex);
     if (next === null) {
-      await commit(event, byQuestion);
+      await commit(event, byQuestion, 600);
     } else {
       focusedQuestion[event.id] = next;
     }
   }
 
   async function skip(event: WatcherEvent): Promise<void> {
-    await commit(event, {});
+    await commit(event, {}, 0);
   }
 
-  async function commit(event: WatcherEvent, byQuestion: Record<number, string>): Promise<void> {
+  async function commit(
+    event: WatcherEvent,
+    byQuestion: Record<number, string>,
+    dismissDelayMs: number,
+  ): Promise<void> {
     if (busyReply) return;
     if (!sessionId) {
       watcher.error = "reply failed: terminal session is not ready";
@@ -94,7 +108,7 @@
         key,
       }));
       await writeSurveyReply(sessionId, event, replyAnswers, "one-shot");
-      watcher.events = watcher.events.filter((candidate) => candidate.id !== event.id);
+      dismissEvent(event.id, dismissDelayMs);
     } catch (err) {
       watcher.error = replyError(err);
     } finally {
@@ -105,12 +119,27 @@
   function replyError(err: unknown): string {
     const raw = (err as Error).message || "unknown error";
     if (/409|watcher|not attached|conflict/i.test(raw)) {
+      onWatcherDetached?.();
       return "reply failed: watcher is no longer attached";
     }
     if (/400|invalid|bad request|schema/i.test(raw)) {
       return "reply failed: invalid survey reply";
     }
     return `reply failed: ${raw}`;
+  }
+
+  function dismissEvent(id: string, delayMs: number): void {
+    let timer: ReturnType<typeof setTimeout>;
+    const remove = () => {
+      watcher.events = watcher.events.filter((candidate) => candidate.id !== id);
+      dismissTimers.delete(timer);
+    };
+    if (delayMs <= 0) {
+      watcher.events = watcher.events.filter((candidate) => candidate.id !== id);
+      return;
+    }
+    timer = setTimeout(remove, delayMs);
+    dismissTimers.add(timer);
   }
 
   function nextUnanswered(

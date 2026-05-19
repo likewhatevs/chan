@@ -11,13 +11,14 @@ import BubbleOverlay from "./BubbleOverlay.svelte";
 const mounted: Array<Record<string, any>> = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const component of mounted.splice(0)) unmount(component);
   document.body.innerHTML = "";
   drive.info = null;
   vi.restoreAllMocks();
 });
 
-async function renderOverlay(watcher: TerminalWatcherState) {
+async function renderOverlay(watcher: TerminalWatcherState, onWatcherDetached = vi.fn()) {
   drive.info = {
     name: "test",
     root: "/tmp/test",
@@ -27,11 +28,11 @@ async function renderOverlay(watcher: TerminalWatcherState) {
   document.body.append(target);
   const component = mount(BubbleOverlay, {
     target,
-    props: { watcher, sessionId: "term_123", onRefresh: vi.fn() },
+    props: { watcher, sessionId: "term_123", onRefresh: vi.fn(), onWatcherDetached },
   });
   mounted.push(component);
   await tick();
-  return { target };
+  return { target, onWatcherDetached };
 }
 
 function buttonText(target: ParentNode, text: string): HTMLButtonElement {
@@ -57,6 +58,7 @@ function installReplySpies() {
 
 describe("BubbleOverlay", () => {
   test("single-topic numbered click replies immediately with one-shot scope", async () => {
+    vi.useFakeTimers();
     const { writeReply } = installReplySpies();
     const watcher: TerminalWatcherState = {
       path: "events",
@@ -83,6 +85,9 @@ describe("BubbleOverlay", () => {
     const { target } = await renderOverlay(watcher);
 
     buttonText(target, "Fast").click();
+    await tick();
+    expect(watcher.events.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(600);
     await waitFor(() => watcher.events.length === 0);
 
     expect(writeReply).toHaveBeenCalledWith("term_123", {
@@ -96,6 +101,7 @@ describe("BubbleOverlay", () => {
   });
 
   test("number key answers the focused multi-topic tab and auto-commits when complete", async () => {
+    vi.useFakeTimers();
     const { writeReply } = installReplySpies();
     const watcher: TerminalWatcherState = {
       path: "events",
@@ -130,11 +136,45 @@ describe("BubbleOverlay", () => {
     expect(watcher.events.length).toBe(1);
 
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "1" }));
+    await tick();
+    expect(watcher.events.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(600);
     await waitFor(() => watcher.events.length === 0);
 
     expect(writeReply.mock.calls[0]?.[1].answers).toEqual([
       { question_index: 0, key: "1" },
       { question_index: 1, key: "2" },
     ]);
+  });
+
+  test("409 reply failure clears stale watcher state through callback", async () => {
+    vi.spyOn(api, "writeTerminalEventReply").mockRejectedValue(new Error("409 watcher is no longer attached"));
+    const watcher: TerminalWatcherState = {
+      path: "events",
+      seenIds: ["s3"],
+      unread: false,
+      events: [
+        {
+          id: "s3",
+          type: "survey",
+          from: "@@Architect",
+          to: "@@Alex",
+          path: "events/event-s3.md",
+          questions: [
+            {
+              header: "Mode",
+              text: "Pick mode",
+              options: [{ key: "1", label: "Fast" }],
+            },
+          ],
+        },
+      ],
+    };
+    const { target, onWatcherDetached } = await renderOverlay(watcher);
+
+    buttonText(target, "Fast").click();
+    await waitFor(() => onWatcherDetached.mock.calls.length === 1);
+
+    expect(watcher.error).toBe("reply failed: watcher is no longer attached");
   });
 });

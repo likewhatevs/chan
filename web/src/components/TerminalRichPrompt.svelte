@@ -156,6 +156,7 @@
       defaultValue: watcherPath ?? "",
       kind: "folder",
       mode: "move",
+      allowAbsolute: true,
     });
     if (!path) return;
     watcherBusy = true;
@@ -181,6 +182,11 @@
       await api.clearTerminalWatcher(terminalSessionId);
       onWatcherStopped?.();
     } catch (err) {
+      if (/409|404|watcher|not found|not attached|conflict/i.test((err as Error).message || "")) {
+        onWatcherStopped?.();
+        ui.status = "watcher detached on reload";
+        return;
+      }
       watcherError = `stop failed: ${(err as Error).message}`;
     } finally {
       watcherBusy = false;

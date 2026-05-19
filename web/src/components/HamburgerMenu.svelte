@@ -42,6 +42,7 @@
     width = 240,
     height = 256,
     showTrigger = true,
+    onBeforeOpen,
     children,
   }: {
     open?: boolean;
@@ -52,6 +53,7 @@
     /// The bubble still portals to <body> and dismisses on outside
     /// click as usual.
     showTrigger?: boolean;
+    onBeforeOpen?: () => void;
     children?: Snippet;
   } = $props();
 
@@ -98,14 +100,17 @@
       return;
     }
     if (!triggerEl) {
+      onBeforeOpen?.();
       open = true;
       return;
     }
+    onBeforeOpen?.();
     placeUnderTrigger(triggerEl.getBoundingClientRect());
     open = true;
   }
 
   export function openAtCursor(x: number, y: number): void {
+    onBeforeOpen?.();
     placeNearCursor(x, y);
     open = true;
   }

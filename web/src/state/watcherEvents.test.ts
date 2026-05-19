@@ -70,4 +70,18 @@ describe("watcher event helpers", () => {
       scope_grant: "one-shot",
     });
   });
+
+  test("drops unknown event types like the server watcher", () => {
+    expect(
+      parseWatcherEvent(
+        "events/event-future.md",
+        JSON.stringify({
+          id: "future",
+          type: "futuristic-thing",
+          from: "@@TestAgent",
+          to: "@@Alex",
+        }),
+      ),
+    ).toBeNull();
+  });
 });

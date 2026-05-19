@@ -97,10 +97,12 @@
   const validation = $derived.by(() => {
     const trimmed = value.trim();
     if (trimmed === "") return { ok: true as const };
-    const rawCheck = validatePath(trimmed);
+    const rawCheck = validatePath(trimmed, { allowAbsolute: pathPromptState.allowAbsolute });
     if (!rawCheck.ok) return rawCheck;
     if (effectiveValue && effectiveValue !== trimmed) {
-      const effCheck = validatePath(effectiveValue);
+      const effCheck = validatePath(effectiveValue, {
+        allowAbsolute: pathPromptState.allowAbsolute,
+      });
       if (!effCheck.ok) return effCheck;
     }
     // Caller-supplied validator (e.g. "must be editable text") runs
@@ -194,6 +196,7 @@
   /// only the immediate parent (which used to hide multi-segment
   /// chains like `a/b/c/d` from the user).
   function missingAncestors(path: string): string[] {
+    if (path.startsWith("/")) return [];
     const segs = path.split("/");
     segs.pop(); // drop basename; we want the ancestor chain
     if (segs.length === 0) return [];
@@ -285,9 +288,14 @@
   function pathSegments(
     s: Extract<Status, { kind: "creates" }>,
   ): Array<{ text: string; isNew: boolean; auto?: boolean }> {
-    const parts = s.target.path.split("/");
+    const parts = s.target.path.startsWith("/")
+      ? s.target.path.slice(1).split("/")
+      : s.target.path.split("/");
     const out: Array<{ text: string; isNew: boolean; auto?: boolean }> = [];
     let acc = "";
+    if (s.target.path.startsWith("/")) {
+      out.push({ text: "/", isNew: false });
+    }
     for (let i = 0; i < parts.length - 1; i++) {
       acc = acc ? `${acc}/${parts[i]}` : parts[i];
       out.push({ text: `${parts[i]}/`, isNew: !folderSet.has(acc) });

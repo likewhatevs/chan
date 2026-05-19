@@ -22,6 +22,9 @@ describe("validatePath", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toMatch(/absolute/);
   });
+  test("absolute path can be allowed by the caller", () => {
+    expect(validatePath("/tmp/events", { allowAbsolute: true })).toEqual({ ok: true });
+  });
   test("dot segments are rejected", () => {
     expect(validatePath("a/./b").ok).toBe(false);
     expect(validatePath("a/../b").ok).toBe(false);

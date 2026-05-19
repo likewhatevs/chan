@@ -1938,6 +1938,7 @@ type PathPromptState = {
   /// closes. Used today by createFile to enforce the .md/.txt
   /// editable-text gate up front.
   validate: ((effectivePath: string) => string | null) | null;
+  allowAbsolute: boolean;
   resolve: ((value: string | null) => void) | null;
 };
 
@@ -1949,6 +1950,7 @@ export const pathPromptState = $state<PathPromptState>({
   mode: "create",
   sourcePath: null,
   validate: null,
+  allowAbsolute: false,
   resolve: null,
 });
 
@@ -1959,6 +1961,7 @@ export function uiPathPrompt(opts: {
   mode: PathPromptMode;
   sourcePath?: string | null;
   validate?: (effectivePath: string) => string | null;
+  allowAbsolute?: boolean;
 }): Promise<string | null> {
   return new Promise((resolve) => {
     pathPromptState.resolve?.(null);
@@ -1968,6 +1971,7 @@ export function uiPathPrompt(opts: {
     pathPromptState.mode = opts.mode;
     pathPromptState.sourcePath = opts.sourcePath ?? null;
     pathPromptState.validate = opts.validate ?? null;
+    pathPromptState.allowAbsolute = opts.allowAbsolute ?? false;
     pathPromptState.resolve = resolve;
     pathPromptState.open = true;
   });
@@ -1977,6 +1981,7 @@ export function resolvePathPrompt(value: string | null): void {
   const r = pathPromptState.resolve;
   pathPromptState.resolve = null;
   pathPromptState.validate = null;
+  pathPromptState.allowAbsolute = false;
   pathPromptState.open = false;
   r?.(value);
 }
