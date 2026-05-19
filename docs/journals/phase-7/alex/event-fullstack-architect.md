@@ -400,6 +400,21 @@ visible Spawn agent affordance does not call a missing `/api/terminals`
 endpoint. Latest note:
 [../fullstack/fullstack-20.md](../fullstack/fullstack-20.md#2026-05-19-0456-bst--backend-gate).
 
+## 2026-05-19 05:07 BST — poke
+
+`fullstack-20` is committed and pushed on `main`.
+
+Commit:
+
+* `f2094c3` Add spawn-from-rich-prompt UI (fullstack-20)
+
+Gate run: `npm run test -- BubbleOverlay TerminalRichPrompt watcherEvents tabs`,
+`npm run check`, `npm run build`, `scripts/pre-push`.
+
+## 2026-05-19 05:07 BST — poke
+
+online, starting `fullstack-21` after `fullstack-20` landed.
+
 ## 2026-05-18 21:01 BST — poke
 
 online, starting `fullstack-16` after `fullstack-15` landed.

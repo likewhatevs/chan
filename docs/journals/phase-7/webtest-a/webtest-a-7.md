@@ -219,3 +219,81 @@ Will pick up each cluster as it lands.
   was pointing at is down.
 
 ## 2026-05-19 (resume) BST - Polish + SKILL drift complete
+
+## 2026-05-19 (resume) BST - systacean-12 backend verified
+
+Build is unblocked — `cargo build -p chan` passes (likely
+the `cwd.clone()` fix landed on `terminal_sessions.rs:541`
+between my pokes). Rebuilt + relaunched 8801.
+`systacean-12` HTTP control channel (`314a68b` "Add HTTP
+terminal control channel") tested directly via curl.
+
+### Per-endpoint verdicts
+
+```
+Endpoint                                            | Verdict
+----------------------------------------------------+--------
+POST /api/terminals                                 | pass
+POST /api/terminals/<session>/restart               | pass
+DELETE /api/terminals/<session>                     | pass
+DELETE same session (idempotency)                   | pass
+```
+
+Concrete results:
+
+* `POST /api/terminals` with body
+  `{"name":"@@SpawnTest","command":"bash -c '\''echo hi;
+  sleep 5; echo bye'\''","env":{}}` →
+  `201 Created` +
+  `{"session":"84b5e0a3b3fbe47843e28eb1dea66564",
+   "tab_label":"@@SpawnTest"}`. Body shape matches the
+  `spawn-protocol.md` SKILL contract.
+
+* `POST /api/terminals/<session>/restart` → `204 No
+  Content`.
+
+* `DELETE /api/terminals/<session>` → `204 No Content`.
+  Second DELETE for the same session →
+  `404 terminal session not found`. Idempotent error
+  shape.
+
+* Spawn a fresh `@@SpawnB` with a longer-running
+  `for i in 1 2 3; do echo OUT-$i; sleep 1; done; sleep 99`
+  → `201` again, then DELETE → `204`. The backend lifecycle
+  is clean.
+
+### SPA bridge gap — needs `fullstack-20`
+
+The spawn-protocol SKILL promises the tab is created "in
+the active pane". Backend does create the PTY session,
+but reloading the chan SPA does NOT make the new tab
+appear in the tab strip — the SPA's tab layout is
+client-only (URL hash + sessionStorage) and the
+HTTP-spawned terminal isn't pushed to the SPA over any
+existing channel. Tabs stay at `[note-b.md, index.md]`
+even after spawning two terminals via curl.
+
+This is expected per the staged plan (`fullstack-20`
+hasn't landed yet — visible as in-progress in the
+working tree: `SpawnDialog.svelte`, modified
+`web/src/api/client.ts`, etc.). Backend ↔ SPA bridge
+will close when fullstack-20 lands. **Backend is
+ready; SPA listener is the gap.**
+
+### Items still blocked
+
+* webtest-a-7 items 1-6 (spawn dialog + pre-flight UX +
+  spinner + kill option): blocked on `fullstack-20`.
+* webtest-a-7 items 7-8 (activity indicator): blocked
+  on `systacean-13`.
+* webtest-a-7 items 9-10 (MCP auto-discovery): blocked
+  on `systacean-14`.
+
+### State left on disk
+
+* 8801 server back up at
+  `http://127.0.0.1:8801/?t=9UWmi4wMtSzcpaCESRhVBZAQPHWmiJbY`.
+* Both spawned test terminals (`@@SpawnTest`, `@@SpawnB`)
+  cleaned up via DELETE.
+
+## 2026-05-19 (resume) BST - systacean-12 backend complete

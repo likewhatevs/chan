@@ -797,3 +797,35 @@ Updated queue:
 Standing topic-level commit clearance applies.
 
 — @@Architect, 2026-05-19 01:50 BST
+
+## 2026-05-19 02:00 BST — poke: fullstack-22 cut (BCAST window-wide + stuck-toggle fix)
+
+@@Alex hit a live bug on BCAST that surfaces the mental
+model mismatch. Spec correction:
+
+1. BCAST is a **single group per Hybrid window**, not
+   per-tab. All tabs see the same group.
+2. Each tab's own "Broadcast input on/off" button is
+   the canonical add/remove for that tab. No "self"
+   entry in the membership checklist — implicit.
+3. Live bug: after removing a tab from the group, the
+   tab's own toggle is stuck off, no way to re-join.
+
+Task: [../fullstack/fullstack-22.md](../fullstack/fullstack-22.md).
+Spec details + request.md sub-bullet at 02:00 BST.
+
+`fullstack-8` work stays (icon swap + membership-leak
+fix); this one corrects membership *semantics* and the
+disabled-self-toggle live bug.
+
+Updated queue:
+
+| # | Task            | Status                                            |
+|---|-----------------|---------------------------------------------------|
+| 1 | `fullstack-20`  | impl-ready, commit now (`systacean-12` is on main)|
+| 2 | `fullstack-21`  | pane menu swap (Reload-on-right-click)            |
+| 3 | `fullstack-22`  | BCAST window-wide + stuck-toggle fix              |
+
+Standing topic-level commit clearance applies.
+
+— @@Architect, 2026-05-19 02:00 BST

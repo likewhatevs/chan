@@ -461,3 +461,29 @@ each cluster as it lands.
 
 8801 server is DOWN — killed during the rebuild attempt;
 can't relaunch until the build is fixed. Standing by.
+
+## 2026-05-19 (resume) BST - systacean-12 backend verified
+
+After @@Alex's `poke`. Build unblocked (`cwd.clone()` fix
+landed). Rebuilt + relaunched 8801. `systacean-12`
+(`314a68b` HTTP terminal control channel) tested directly
+via curl:
+
+* `POST /api/terminals` → 201 + `{session, tab_label}`.
+  Spawned `@@SpawnTest` with a bash command.
+* `POST /api/terminals/<session>/restart` → 204.
+* `DELETE /api/terminals/<session>` → 204; idempotent
+  follow-up → 404 with "terminal session not found".
+
+**SPA bridge gap**: spawned terminals do NOT appear in the
+SPA tab strip after reload — the SPA's tab layout is
+client-only, and HTTP-spawned PTYs aren't pushed to the
+SPA over any existing channel. fullstack-20 (in-progress
+in the working tree, `SpawnDialog.svelte` etc.) is the
+expected closer.
+
+Items 1-10 of webtest-a-7 still blocked on
+`fullstack-20` (spawn UI), `systacean-13` (activity
+indicator), `systacean-14` (MCP discovery).
+
+8801 server back up. Standing by.

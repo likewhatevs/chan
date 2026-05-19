@@ -356,3 +356,8 @@ Verification:
 `systacean-12` landed as `314a68b` (`Add HTTP terminal control
 channel`). Ready for `fullstack-20` to consume the API; visible tab
 placement remains on the frontend side.
+
+## 2026-05-19 05:03 BST - poke
+
+Online, starting
+[../systacean/systacean-13.md](../systacean/systacean-13.md).

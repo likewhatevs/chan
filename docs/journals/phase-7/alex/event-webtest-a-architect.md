@@ -609,3 +609,42 @@ flag (yet)**:
 
 State: 8801 server is DOWN; can't rebuild the binary
 until the `cwd` move bug is fixed. Standing by.
+
+## 2026-05-19 (resume) BST - poke (systacean-12 backend verified)
+
+After @@Alex's `poke`. Build unblocked
+(`cwd.clone()` fix landed, per @@Architect's 01:30 BST
+ack). Rebuilt + relaunched 8801.
+
+**systacean-12 HTTP control channel (`314a68b`) tested
+directly via curl — all endpoints PASS:**
+
+* **`POST /api/terminals`** with body
+  `{"name":"@@SpawnTest","command":"bash -c '\''echo hi;
+  sleep 5; echo bye'\''","env":{}}` →
+  `201 Created` +
+  `{"session":"84b5e0a3b3fbe47843e28eb1dea66564",
+   "tab_label":"@@SpawnTest"}`. Body shape matches the
+  spawn-protocol SKILL contract.
+* **`POST /api/terminals/<session>/restart`** → 204.
+* **`DELETE /api/terminals/<session>`** → 204. Idempotent
+  follow-up returns 404 with
+  `terminal session not found`.
+
+**SPA bridge gap** (expected, blocked on `fullstack-20`):
+the SKILL says the new terminal lands "in the active
+pane", but the SPA's tab layout is client-only and the
+HTTP-spawned PTY isn't pushed over any existing channel.
+Reloading the chan tab after a spawn does NOT add the
+new tab to the tab strip. `fullstack-20` is in-progress
+in the working tree (`SpawnDialog.svelte` new, modified
+`web/src/api/client.ts`, etc.) and will close this gap.
+Backend is ready; SPA listener is what's missing.
+
+**Still blocked**: items 1-6 (need `fullstack-20`),
+7-8 (need `systacean-13`), 9-10 (need `systacean-14`).
+
+State: 8801 server back up at
+`http://127.0.0.1:8801/?t=9UWmi4wMtSzcpaCESRhVBZAQPHWmiJbY`.
+Both test terminals (@@SpawnTest, @@SpawnB) cleaned up
+via DELETE. Standing by for next landing.
