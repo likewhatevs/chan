@@ -357,11 +357,27 @@ export function truncateTabTitle(label: string): string {
 /// full path is reachable via `tabTooltip` for disambiguation.
 export function tabLabel(t: Tab): string {
   if (t.kind === "terminal") return terminalTabName(t);
-  if (t.kind === "graph" || t.kind === "browser") return t.title;
+  if (t.kind === "graph") return t.title;
+  if (t.kind === "browser") return browserTabLabel(t);
   const p = t.path;
   if (!p) return p;
   const slash = p.lastIndexOf("/");
   return slash < 0 ? p : p.slice(slash + 1);
+}
+
+/// `fullstack-65`: Files tab title derives from the per-tab
+/// `selected` path (added by `fullstack-58`) so the tab strip
+/// reads as "the thing you're looking at" — file basename when a
+/// file is selected, dir basename when a directory is selected.
+/// Falls back to the literal `Files` string (the tab's default
+/// `title`) when no selection. Trailing slashes are stripped so
+/// `notes/` and `notes` render identically.
+export function browserTabLabel(t: BrowserTab): string {
+  const selected = t.selected?.trim();
+  if (!selected) return t.title;
+  const parts = selected.split("/").filter(Boolean);
+  const base = parts.pop();
+  return base || t.title;
 }
 
 /// Pane-local display label. Most tabs keep the basename. Duplicate
@@ -421,7 +437,13 @@ function commonSuffixLength(groups: string[][]): number {
 export function tabTooltip(t: Tab): string {
   if (t.kind === "terminal") return terminalTabName(t);
   if (t.kind === "graph") return `Graph: ${t.scopeId}`;
-  if (t.kind === "browser") return "File Browser";
+  if (t.kind === "browser") {
+    // `fullstack-65`: surface the per-tab selection so hover
+    // disambiguates two Files tabs whose basenames collide
+    // (e.g. `index.md` in different dirs). No selection → keep
+    // the generic label.
+    return t.selected ? `File Browser: ${t.selected}` : "File Browser";
+  }
   return t.path;
 }
 

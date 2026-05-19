@@ -19,6 +19,7 @@ import {
   enterPaneMode,
   flipHybrid,
   focusColorForWindow,
+  browserTabLabel,
   graphTitle,
   hydrateTerminalSessionsFromLayout,
   isMissingFileError,
@@ -56,11 +57,13 @@ import {
   shouldCloseTabAfterDragEnd,
   showOrSpawnRichPromptInFocusedPane,
   splitPane,
+  tabLabel,
   tabLabelInPane,
   TAB_TITLE_MAX_LENGTH,
   terminalBroadcastMemberIds,
   terminalEnvTabNameStale,
   truncateTabTitle,
+  type BrowserTab,
   type FileTab,
   type LeafNode,
   type TerminalTab,
@@ -1624,5 +1627,46 @@ describe("graphTitle (fullstack-64)", () => {
     expect(graphTitle("semantic", "weird:abc")).toBe("abc");
     // Truly unknown shape (no colon) falls through to the raw value.
     expect(graphTitle("semantic", "raw-thing")).toBe("raw-thing");
+  });
+});
+
+describe("browserTabLabel (fullstack-65)", () => {
+  function browserTab(overrides: Partial<BrowserTab> = {}): BrowserTab {
+    return {
+      kind: "browser",
+      id: "br-1",
+      title: "Files",
+      inspectorOpen: false,
+      ...overrides,
+    };
+  }
+
+  test("no selection falls back to the tab's own title (default 'Files')", () => {
+    expect(browserTabLabel(browserTab({ selected: null }))).toBe("Files");
+    expect(browserTabLabel(browserTab({ selected: undefined }))).toBe("Files");
+    expect(browserTabLabel(browserTab({ selected: "" }))).toBe("Files");
+    expect(browserTabLabel(browserTab({ selected: "   " }))).toBe("Files");
+  });
+
+  test("file selection renders the basename", () => {
+    expect(browserTabLabel(browserTab({ selected: "foo/bar/baz.md" }))).toBe("baz.md");
+    expect(browserTabLabel(browserTab({ selected: "README.md" }))).toBe("README.md");
+  });
+
+  test("dir selection renders the basename (trailing slash tolerated)", () => {
+    expect(browserTabLabel(browserTab({ selected: "notes/sub" }))).toBe("sub");
+    expect(browserTabLabel(browserTab({ selected: "notes/sub/" }))).toBe("sub");
+  });
+
+  test("two browser tabs with different selections produce different labels", () => {
+    const a = browserTab({ id: "br-a", selected: "a.md" });
+    const b = browserTab({ id: "br-b", selected: "notes/b.md" });
+    expect(browserTabLabel(a)).toBe("a.md");
+    expect(browserTabLabel(b)).toBe("b.md");
+  });
+
+  test("tabLabel routes browser tabs through browserTabLabel", () => {
+    expect(tabLabel(browserTab({ selected: "notes/today.md" }))).toBe("today.md");
+    expect(tabLabel(browserTab({ selected: null }))).toBe("Files");
   });
 });
