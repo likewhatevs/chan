@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import {
     ArrowLeft,
     ArrowRight,
@@ -47,6 +47,7 @@
     setBrowserSidePane,
     toggleBrowserSidePane,
     tree,
+    treeExpanded,
     drive,
   } from "../state/store.svelte";
   import { openBrowserInActivePane, openInActivePane } from "../state/tabs.svelte";
@@ -84,6 +85,7 @@
   }
 
   let treeRef: TreeRef | undefined = $state();
+  let treeWrapEl: HTMLDivElement | undefined = $state();
   let findOpen = $state(false);
   let findQuery = $state("");
   let findCount = $state({ total: 0, current: -1 });
@@ -91,6 +93,71 @@
   let menu: HamburgerMenu | undefined = $state();
   let menuOpen = $state(false);
   let importContactsOpen = $state(false);
+
+  /// `fullstack-58`: per-tab File Browser view state.
+  /// When this surface renders for a tab (variant === "tab"), the
+  /// active tab "owns" the module-level singletons (browserSelection,
+  /// treeExpanded, treeWrap scroll). On tab swap, we snapshot the
+  /// current singletons onto the deactivating tab record and restore
+  /// the activating tab's saved state. The dock + overlay variants
+  /// keep their existing shared-state behaviour (drive-wide selection
+  /// + expansion is the intent there).
+  function snapshotIntoTab(target: BrowserTab): void {
+    target.selected = browserSelection.path ?? undefined;
+    target.showDrive = browserSelection.showDrive ? true : undefined;
+    const map = treeExpanded.map;
+    const expanded = Object.keys(map).filter((p) => p.length > 0 && map[p]);
+    target.expanded = expanded.length > 0 ? expanded : undefined;
+    const scroll = treeWrapEl?.scrollTop ?? 0;
+    target.scroll = scroll > 0 ? Math.round(scroll) : undefined;
+  }
+
+  function restoreFromTab(source: BrowserTab): void {
+    browserSelection.path = source.selected ?? null;
+    browserSelection.showDrive = source.showDrive ?? false;
+    const map: Record<string, boolean> = { "": true };
+    for (const p of source.expanded ?? []) map[p] = true;
+    treeExpanded.map = map;
+    const target = source.scroll ?? 0;
+    queueMicrotask(() => {
+      if (treeWrapEl) treeWrapEl.scrollTop = target;
+    });
+  }
+
+  $effect(() => {
+    if (!isTab || !tab) return;
+    const captured = tab;
+    void captured.id;
+    untrack(() => restoreFromTab(captured));
+    return () => untrack(() => snapshotIntoTab(captured));
+  });
+
+  $effect(() => {
+    if (!isTab || !tab) return;
+    const captured = tab;
+    const path = browserSelection.path;
+    const showDrive = browserSelection.showDrive;
+    untrack(() => {
+      captured.selected = path ?? undefined;
+      captured.showDrive = showDrive ? true : undefined;
+    });
+  });
+
+  $effect(() => {
+    if (!isTab || !tab) return;
+    const captured = tab;
+    const map = treeExpanded.map;
+    const expanded = Object.keys(map).filter((p) => p.length > 0 && map[p]);
+    untrack(() => {
+      captured.expanded = expanded.length > 0 ? expanded : undefined;
+    });
+  });
+
+  function onTreeWrapScroll(ev: Event): void {
+    if (!isTab || !tab) return;
+    const top = (ev.currentTarget as HTMLElement).scrollTop;
+    tab.scroll = top > 0 ? Math.round(top) : undefined;
+  }
 
   const POPOVER_HEIGHT = 420;
   const POPOVER_WIDTH = 240;
@@ -316,7 +383,7 @@
     </HamburgerMenu>
   </header>
   <div class="body">
-    <div class="tree-wrap">
+    <div class="tree-wrap" bind:this={treeWrapEl} onscroll={onTreeWrapScroll}>
       {#if findOpen}
         <div class="find-bar" role="search" aria-label="find in file browser">
           <input

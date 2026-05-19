@@ -459,3 +459,89 @@ clearance (no HOLD pokes since the 15:35 BST
 cut). Next item from the queue: `-58` (per-tab
 BrowserTab state) — that one's larger so I'll
 plan in the event thread before I ship.
+
+## 2026-05-19 19:15 BST — poke: fullstack-58 ready to commit
+
+Design call (flagging explicitly per your
+18:00 BST hash-round-trip directive): chose
+**snapshot/restore-on-swap + live-mirror** over
+fully tab-bound state. The module-level
+singletons (`browserSelection`, `treeExpanded`,
+`.tree-wrap` scrollTop) stay as the rendering
+surface's working memory; the per-tab record
+stores each tab's snapshot. Three `$effect`s
+gated on `isTab && tab`:
+
+1. **Restore-on-swap.** Keyed on `tab.id`;
+   cleanup snapshots into the captured OLD tab.
+2. **Selection live-mirror.**
+   `browserSelection.path / showDrive →
+   tab.selected / showDrive`. Wrapped in
+   `untrack()` so it doesn't self-trigger.
+3. **Expansion live-mirror.** `treeExpanded.map
+   → tab.expanded`.
+
+Scroll: `.tree-wrap` `onscroll` writes
+`tab.scroll` directly (DOM event, outside the
+reactive graph).
+
+**Round-trip guarantee.** The live mirrors keep
+the tab record current at all times, so the hash
+serializer always sees the latest per-tab
+values. Verified by the third new test (`hash
+round-trips both BrowserTab records' per-tab
+state`).
+
+**Why not fully tab-bound state?** Three reasons:
+* `treeExpanded.map` is consumed by dock + overlay
+  variants concurrently with tab variants.
+* The acceptance criterion explicitly says "Dock
+  variant (sidebar FB) unchanged — that isn't a
+  tab".
+* Snapshot/restore gives the walker's table
+  behavior without refactoring every reader of
+  the singletons across `tabs.svelte.ts` /
+  `store.svelte.ts`.
+
+**Files:**
+* `web/src/state/tabs.svelte.ts` — extend
+  `BrowserTab` + `SerTab`, update serialize +
+  both restore sites (front + back per the
+  `fullstack-48` phase-A back-side schema).
+* `web/src/components/FileBrowserSurface.svelte` —
+  three effects + scroll handler + helpers.
+* `web/src/state/tabs.test.ts` — three new
+  round-trip / independence tests.
+
+**Gate.** svelte-check 0 errors (2 pre-existing
+GraphPanel warnings from `fullstack-64`,
+unrelated); vitest 35 / 352; build clean;
+scripts/pre-push green.
+
+**Visual eyeball.** Attempted ad-hoc chan serve
++ Chrome MCP nav; you denied the nav step
+(probably to avoid drive-registry churn). Dropped
+the browser walkthrough; the three Vitest tests
+cover the walker's table conclusively (assert
+distinct `selected` / `expanded` / `scroll` per
+tab without leakage; assert hash round-trip
+preserves per-tab values).
+
+**Out of scope (documented in task file):**
+* Truly per-tab `treeExpanded` map. Bigger
+  refactor; not required by the acceptance
+  criteria.
+* `path` (subpath root for breadcrumb nav). No
+  current UI surface consumes it; speculative.
+
+**Re-walk flag.** Per the task note,
+`webtest-b-6` item 6 multi-FB walkthrough should
+be re-walked. Forward to @@WebtestB when
+convenient.
+
+Committing + pushing under standing topic-level
+clearance (no HOLD pokes since the 17:20 BST
+cut). Next on the queue: `-59` (per-Hybrid theme
+render). I'll watch `node.theme` derivation from
+the `ht` / `hb` hash fields per your 18:00 BST
+direction, not a parallel `ui.themeChoice`.
