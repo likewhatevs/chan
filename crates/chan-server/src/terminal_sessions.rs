@@ -108,6 +108,7 @@ impl CloseReason {
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
     Output(Vec<u8>),
+    Activity { bytes_since_focus: u64 },
     Resize(PtySize),
     Exit(u32),
     Error(String),
@@ -136,6 +137,14 @@ impl AttachHandle {
 
     pub fn resize(&self, size: PtySize) {
         self.session.resize(size);
+    }
+
+    pub fn set_focused(&self, focused: bool) {
+        self.session.set_focused(focused);
+    }
+
+    pub fn bytes_since_focus(&self) -> u64 {
+        self.session.bytes_since_focus()
     }
 
     pub fn request_redraw(&self) {
@@ -524,6 +533,8 @@ struct Session {
     last_activity: AtomicI64,
     attach_count: AtomicUsize,
     winsize: Mutex<PtySize>,
+    focused: AtomicBool,
+    bytes_since_focus: AtomicU64,
     in_alt_screen: AtomicBool,
     alt_screen_tail: Mutex<Vec<u8>>,
     watcher: Mutex<Option<EventWatcherHandle>>,
@@ -608,6 +619,8 @@ impl Session {
             last_activity: AtomicI64::new(now_unix_secs() as i64),
             attach_count: AtomicUsize::new(0),
             winsize: Mutex::new(opts.size),
+            focused: AtomicBool::new(false),
+            bytes_since_focus: AtomicU64::new(0),
             in_alt_screen: AtomicBool::new(false),
             alt_screen_tail: Mutex::new(Vec::new()),
             watcher: Mutex::new(None),
@@ -740,6 +753,20 @@ impl Session {
         let _ = self.command_tx.send(PtyCommand::Resize(size));
     }
 
+    fn set_focused(&self, focused: bool) {
+        self.focused.store(focused, Ordering::Relaxed);
+        if focused {
+            self.bytes_since_focus.store(0, Ordering::Relaxed);
+            self.broadcast(SessionEvent::Activity {
+                bytes_since_focus: 0,
+            });
+        }
+    }
+
+    fn bytes_since_focus(&self) -> u64 {
+        self.bytes_since_focus.load(Ordering::Relaxed)
+    }
+
     fn request_redraw(&self) {
         let _ = self.command_tx.send(PtyCommand::Redraw);
     }
@@ -802,6 +829,16 @@ impl Session {
             ring.end_seq()
         };
         self.seq.store(end_seq, Ordering::Relaxed);
+        if !self.focused.load(Ordering::Relaxed) {
+            let previous = self
+                .bytes_since_focus
+                .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+            if previous == 0 {
+                self.broadcast(SessionEvent::Activity {
+                    bytes_since_focus: bytes.len() as u64,
+                });
+            }
+        }
         self.broadcast(SessionEvent::Output(bytes.to_vec()));
     }
 
@@ -1219,6 +1256,8 @@ mod tests {
             last_activity: AtomicI64::new(now_unix_secs() as i64),
             attach_count: AtomicUsize::new(0),
             winsize: Mutex::new(test_size()),
+            focused: AtomicBool::new(false),
+            bytes_since_focus: AtomicU64::new(0),
             in_alt_screen: AtomicBool::new(false),
             alt_screen_tail: Mutex::new(Vec::new()),
             watcher: Mutex::new(None),
@@ -1240,6 +1279,65 @@ mod tests {
                 Ok(Ok(SessionEvent::Output(data))) => out.push_str(&String::from_utf8_lossy(&data)),
                 Ok(Ok(_)) => {}
                 Ok(Err(_)) | Err(_) => return out,
+            }
+        }
+    }
+
+    #[test]
+    fn activity_counter_tracks_output_since_focus() {
+        let session = test_session_with_ring(1024);
+
+        session.record_output(b"background");
+        assert_eq!(session.bytes_since_focus(), 10);
+
+        session.set_focused(true);
+        assert_eq!(session.bytes_since_focus(), 0);
+
+        session.record_output(b"visible");
+        assert_eq!(session.bytes_since_focus(), 0);
+
+        session.set_focused(false);
+        session.record_output(b"hidden");
+        assert_eq!(session.bytes_since_focus(), 6);
+    }
+
+    #[tokio::test]
+    async fn activity_event_fires_on_first_unfocused_output_and_clears_on_focus() {
+        let session = test_session_with_ring(1024);
+        let mut attached = session.clone().attach(Some(0));
+
+        session.record_output(b"one");
+        let event = tokio::time::timeout(Duration::from_secs(1), attached.rx.recv())
+            .await
+            .expect("activity event")
+            .expect("activity frame");
+        assert!(matches!(
+            event,
+            SessionEvent::Activity {
+                bytes_since_focus: 3
+            }
+        ));
+
+        session.record_output(b"two");
+        let event = tokio::time::timeout(Duration::from_secs(1), attached.rx.recv())
+            .await
+            .expect("output event")
+            .expect("output frame");
+        assert!(matches!(event, SessionEvent::Output(_)));
+
+        session.set_focused(true);
+        loop {
+            let event = tokio::time::timeout(Duration::from_secs(1), attached.rx.recv())
+                .await
+                .expect("focus clear event")
+                .expect("focus clear frame");
+            if matches!(
+                event,
+                SessionEvent::Activity {
+                    bytes_since_focus: 0
+                }
+            ) {
+                break;
             }
         }
     }

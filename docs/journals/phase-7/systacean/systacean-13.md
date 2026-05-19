@@ -66,3 +66,27 @@ idle.
 
 Standard. Pre-push gate green. Ping via
 `alex/event-systacean-architect.md`.
+
+## 2026-05-19 05:10 BST - ready to land
+
+Implemented terminal activity indication across the PTY session and
+tab strip.
+
+Details:
+
+* chan-server tracks `bytes_since_focus` per PTY session and broadcasts
+  `activity` frames on first unfocused output plus clear-on-focus.
+* Terminal clients send a small `focus` WebSocket frame as active tabs
+  change.
+* The tab strip renders a subtle activity dot for terminals with fresh
+  output since last focus, and clears it immediately on tab focus.
+
+Verification:
+
+* `cargo test -p chan-server activity --no-default-features`
+* `cargo test -p chan-server --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `npm run test -- src/components/Pane.test.ts src/state/tabs.test.ts`
+* `npm run check`
+* `npm run build`
+* `scripts/pre-push`

@@ -275,3 +275,22 @@ Commit:
 New Wave-B queue item started:
 [systacean-13.md](systacean-13.md), terminal tab activity
 indicator for output since last focus.
+
+## 2026-05-19 05:10 BST - systacean-13 ready
+
+Implemented and gate-verified terminal activity indication for
+PTY output since last focus.
+
+Notes:
+
+* [systacean-13.md](systacean-13.md#2026-05-19-0510-bst---ready-to-land)
+
+Verification:
+
+* `cargo test -p chan-server activity --no-default-features`
+* `cargo test -p chan-server --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `npm run test -- src/components/Pane.test.ts src/state/tabs.test.ts`
+* `npm run check`
+* `npm run build`
+* `scripts/pre-push`

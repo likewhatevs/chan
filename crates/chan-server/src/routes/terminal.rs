@@ -100,6 +100,8 @@ enum ClientFrame {
     Resize { cols: u16, rows: u16 },
     #[serde(rename = "cwd")]
     Cwd,
+    #[serde(rename = "focus")]
+    Focus { focused: bool },
     #[serde(rename = "close")]
     Close,
 }
@@ -112,7 +114,10 @@ enum ServerFrame {
         id: String,
         seq: u64,
         missed_bytes: u64,
+        bytes_since_focus: u64,
     },
+    #[serde(rename = "activity")]
+    Activity { bytes_since_focus: u64 },
     #[serde(rename = "ready")]
     Ready {
         cols: u16,
@@ -490,6 +495,7 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
             id: session.id().to_owned(),
             seq: session.seq,
             missed_bytes: session.missed_bytes,
+            bytes_since_focus: session.bytes_since_focus(),
         },
     )
     .await;
@@ -548,6 +554,10 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                                 let cwd = session.cwd().map(path_to_wire);
                                 let _ = send_frame(&mut socket, ServerFrame::Cwd { cwd }).await;
                             }
+                            Ok(ClientFrame::Focus { focused }) => {
+                                session.set_focused(focused);
+                                state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
+                            }
                             Ok(ClientFrame::Close) => {
                                 let id = session.id().to_owned();
                                 state.terminal_sessions.close(&id, CloseReason::Explicit);
@@ -576,6 +586,11 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                             break;
                         }
                         state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
+                    }
+                    Ok(SessionEvent::Activity { bytes_since_focus }) => {
+                        if send_frame(&mut socket, ServerFrame::Activity { bytes_since_focus }).await.is_err() {
+                            break;
+                        }
                     }
                     Ok(SessionEvent::Resize(size)) => {
                         if send_frame(&mut socket, ServerFrame::Resize { cols: size.cols, rows: size.rows }).await.is_err() {

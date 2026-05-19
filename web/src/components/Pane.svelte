@@ -24,6 +24,7 @@
     selectPrevPane,
     setActivePane,
     setPaneFocusColor,
+    setTerminalActivity,
     shouldCloseTabAfterDragEnd,
     splitPane,
     type LeafNode,
@@ -804,6 +805,7 @@
           // it below.
           tabMouseDownPrevActive = pane.activeTabId;
           pane.activeTabId = t.id;
+          if (t.kind === "terminal") setTerminalActivity(t, false);
         }}
         onclick={() => {
           tabMouseDownPrevActive = null;
@@ -812,6 +814,7 @@
           e.preventDefault();
           e.stopPropagation();
           pane.activeTabId = t.id;
+          if (t.kind === "terminal") setTerminalActivity(t, false);
           layout.activePaneId = pane.id;
           openTabMenu(t.id, {
             left: e.clientX,
@@ -878,6 +881,7 @@
             e.preventDefault();
             e.stopPropagation();
             pane.activeTabId = t.id;
+            if (t.kind === "terminal") setTerminalActivity(t, false);
             layout.activePaneId = pane.id;
             openTabMenu(t.id, {
               left: e.clientX,
@@ -889,6 +893,13 @@
         >{tabLabelInPane(t, pane.tabs)}</span>
         {#if isDirty(t)}
           <span class="dirty unsaved" title="unsaved changes">●</span>
+        {/if}
+        {#if t.kind === "terminal" && t.terminalActivity}
+          <span
+            class="dirty activity"
+            title="terminal output since last focus"
+            aria-label="terminal output since last focus"
+          >●</span>
         {/if}
         {#if t.kind === "terminal" && t.watcher}
           <span
@@ -1316,6 +1327,9 @@
   }
   .dirty.watcher {
     color: var(--success-text, var(--link));
+  }
+  .dirty.activity {
+    color: var(--warning-text, #d29922);
   }
   .dirty.watcher.blink {
     animation: watcher-blink 850ms steps(2, start) infinite;

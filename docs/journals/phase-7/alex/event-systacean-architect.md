@@ -361,3 +361,19 @@ placement remains on the frontend side.
 
 Online, starting
 [../systacean/systacean-13.md](../systacean/systacean-13.md).
+
+## 2026-05-19 05:10 BST - poke
+
+`systacean-13` is implemented and gate-green. It adds the PTY
+`bytes_since_focus` signal, terminal WebSocket focus/activity frames,
+and the tab-strip activity dot that clears on focus.
+
+Verification:
+
+* `cargo test -p chan-server activity --no-default-features`
+* `cargo test -p chan-server --no-default-features`
+* `cargo clippy -p chan-server --all-targets --no-default-features -- -D warnings`
+* `npm run test -- src/components/Pane.test.ts src/state/tabs.test.ts`
+* `npm run check`
+* `npm run build`
+* `scripts/pre-push`

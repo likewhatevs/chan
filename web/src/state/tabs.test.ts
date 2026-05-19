@@ -9,6 +9,7 @@ import {
   beginMissingFileReopen,
   broadcastTerminalInput,
   canReopenClosedTab,
+  clearTerminalSession,
   clearRecentlyClosedTabsForTest,
   closeTab,
   cancelPaneMode,
@@ -40,6 +41,7 @@ import {
   saveTab,
   scheduleAutosave,
   serializeLayout,
+  setTerminalActivity,
   setTerminalBroadcastMuted,
   setTerminalBroadcastTarget,
   setPaneFocusColor,
@@ -404,6 +406,30 @@ describe("find state", () => {
 });
 
 describe("terminal session serialization", () => {
+  test("terminal activity marker is ephemeral session state", () => {
+    const tab = terminalTab();
+
+    setTerminalActivity(tab, true);
+    expect(tab.terminalActivity).toBe(true);
+
+    setTerminalActivity(tab, false);
+    expect(tab.terminalActivity).toBeUndefined();
+  });
+
+  test("clearing a terminal session clears activity state", () => {
+    const tab = terminalTab({
+      terminalSessionId: "term_123",
+      lastSeq: 99,
+      terminalActivity: true,
+    });
+
+    clearTerminalSession(tab);
+
+    expect(tab.terminalSessionId).toBeUndefined();
+    expect(tab.lastSeq).toBeUndefined();
+    expect(tab.terminalActivity).toBeUndefined();
+  });
+
   test("keeps terminal session ids out of shareable layout hashes", () => {
     resetLayout([
       terminalTab({
