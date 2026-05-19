@@ -232,3 +232,10 @@ commits to origin.
 
 A-lane queue cleared: `-43`, `-49`, `-50` all on main.
 Standing by.
+
+## 2026-05-19 15:00 BST
+
+online, starting fullstack-53 (desktop launcher refresh —
+drop Name column, italic tagline, reorder header buttons,
+computer-glyph for outside-home paths). Tauri shell
+(`desktop/src/`), not the embedded Svelte editor.

@@ -99,6 +99,16 @@ header.bar {
   letter-spacing: .08em;
   font-size: 14px;
 }
+/* `fullstack-53`: subtle italic tagline next to the brand title.
+   Muted to keep the brand title primary; DRIVE stays uppercase
+   via the markup (no text-transform). */
+.brand .brand-tagline {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-style: italic;
+  letter-spacing: .01em;
+  white-space: nowrap;
+}
 
 .actions { display: flex; gap: 6px; align-items: center; }
 
@@ -165,7 +175,6 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
 
 .path-cell {
   color: var(--text-secondary);
-  max-width: 280px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -173,7 +182,8 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
   user-select: none;
 }
 .path-cell:hover { color: var(--brand); }
-.path-cell .ic-home {
+.path-cell .ic-home,
+.path-cell .ic-computer {
   vertical-align: -2px;
   margin-right: 2px;
 }
@@ -183,8 +193,6 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
   opacity: 0.6;
 }
 .path-cell:hover .path-sep { color: var(--brand); }
-
-.name-cell { color: var(--text); }
 
 /* Split button: primary "Open" + caret that toggles a small menu
    anchored to the row. The menu is absolutely positioned to the

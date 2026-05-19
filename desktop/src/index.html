@@ -12,8 +12,15 @@
     <div class="brand">
       <span class="enso" aria-hidden="true"></span>
       <b class="brand-title">Drives</b>
+      <!-- fullstack-53: subtle italic tagline next to the brand. DRIVE
+           stays uppercase in the markup; don't text-transform it. -->
+      <em class="brand-tagline">what are we going to DRIVE today?</em>
     </div>
     <div class="actions">
+      <button class="btn primary" id="open-drive">Open drive</button>
+      <button class="btn primary" id="tunnel-btn" title="Attach a drive from another machine over an SSH tunnel">Attach</button>
+      <!-- Sign-in kept in the DOM but hidden. -->
+      <button class="btn" id="auth-btn" title="Sign in to chan.app" hidden>Sign in</button>
       <button class="btn icon" id="theme-toggle" title="Toggle light/dark mode" aria-label="Toggle theme">
         <!-- Sun: shown in dark mode (click switches to light) -->
         <svg class="ic-sun" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
@@ -25,10 +32,6 @@
           <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
         </svg>
       </button>
-      <button class="btn primary" id="tunnel-btn" title="Attach a drive from another machine over an SSH tunnel">Attach</button>
-      <!-- Sign-in kept in the DOM but hidden. -->
-      <button class="btn" id="auth-btn" title="Sign in to chan.app" hidden>Sign in</button>
-      <button class="btn primary" id="open-drive">Open drive</button>
     </div>
   </header>
 

@@ -119,8 +119,10 @@ async function refresh() {
 
 /// Render a drive's filesystem path with the user's home folder
 /// collapsed to a house glyph. Paths outside the home dir render
-/// verbatim. Returns an HTML string; caller injects into a clickable
-/// cell that calls `reveal_in_finder` with the full path.
+/// with a sibling computer glyph in front so the user has a visual
+/// cue that this is somewhere on the machine but outside `$HOME`.
+/// Returns an HTML string; caller injects into a clickable cell
+/// that calls `reveal_in_finder` with the full path.
 function renderPath(full) {
   if (homeDir && (full === homeDir || full.startsWith(homeDir + '/'))) {
     const rest = full.slice(homeDir.length).replace(/^\//, '');
@@ -130,7 +132,13 @@ function renderPath(full) {
     if (!rest) return house;
     return `${house}<span class="path-sep">/</span>${escapeHtml(rest)}`;
   }
-  return escapeHtml(full);
+  // `fullstack-53`: symmetric computer-glyph branch. Matches the
+  // home variant's 13x13 viewBox + currentColor stroke so theme
+  // switches keep visual parity. There's no canonical "computer
+  // root" to trim (unlike `$HOME`), so render the full path after
+  // the glyph + separator.
+  const computer = `<svg class="ic-computer" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="computer"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M9 20h6M12 16v4"/></svg>`;
+  return `${computer}<span class="path-sep">/</span>${escapeHtml(full.replace(/^\//, ''))}`;
 }
 
 async function boot() {
@@ -259,6 +267,9 @@ function render(drives) {
         d.public ? 'public' : null,
         d.connected_at ? `connected ${d.connected_at}` : null,
       ].filter(Boolean).join(' · ');
+      // `fullstack-53`: dropped the name cell. Path + actions are
+      // enough; the rename display surface was leftover from a
+      // previous launcher iteration.
       return `
       <tr data-kind="tunneled"
           data-tunnel-label="${escapeAttr(d.label || '')}"
@@ -266,7 +277,6 @@ function render(drives) {
           data-url="${urlAttr}">
         <td><span class="tag tag-tunnel" title="${escapeAttr(tip)}">tunnel</span></td>
         <td class="path-cell muted">${escapeHtml(d.label || '')}</td>
-        <td class="name-cell">${escapeHtml(d.drive || d.name)}</td>
         <td>
           <div class="row-actions">
             ${renderOpenSplit({ hasUrl, includeForget: false, disabledAttr })}
@@ -283,7 +293,6 @@ function render(drives) {
         </label>
       </td>
       <td class="path-cell" data-act="reveal" title="${escapeAttr(d.path)} — click to open in Finder">${renderPath(d.path)}</td>
-      <td class="name-cell" title="set via &#96;chan rename&#96;">${escapeHtml(d.name)}</td>
       <td>
         <div class="row-actions">
           ${renderOpenSplit({ hasUrl, includeForget: true, disabledAttr })}
@@ -298,7 +307,6 @@ function render(drives) {
         <tr>
           <th style="width:60px">On</th>
           <th>Path</th>
-          <th style="width:200px">Name</th>
           <th style="width:150px"></th>
         </tr>
       </thead>
