@@ -1,6 +1,11 @@
 <script lang="ts">
   import { tick } from "svelte";
   import { Bot, ChevronDown, ChevronUp, Code2, FilePlus, FolderSearch, GripHorizontal, Pilcrow, Send, Type, X } from "lucide-svelte";
+  import {
+    PAGE_WIDTH_MAX_PCT,
+    PAGE_WIDTH_MIN_PCT,
+    PAGE_WIDTH_STEP_PCT,
+  } from "../state/pageWidth.svelte";
   import Source from "../editor/Source.svelte";
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import StyleToolbar from "./StyleToolbar.svelte";
@@ -82,16 +87,19 @@
     });
   });
 
-  // `fullstack-a-29`: track the prompt's actual rendered height so
-  // the terminal-host's reserved-space reactor in TerminalTab can
-  // shrink to the collapsed-pill height (~44 px) when the user
-  // clicks the chevron from `fullstack-a-24`. `heightPx` only
-  // reflects the user-resized EXPANDED height; CSS `height: auto`
-  // takes over in the collapsed branch and leaves heightPx stale.
-  // ResizeObserver is the natural source of truth for "whatever the
-  // browser actually painted." Writes the live offsetHeight onto
-  // the non-persisted `measuredHeightPx` state field; TerminalTab
-  // prefers it over `heightPx` for the margin formula.
+  // `fullstack-a-29` + `fullstack-a-30`: track the prompt's actual
+  // rendered height AND width so two downstream reactors stay in
+  // sync with whatever the browser painted:
+  //   - height feeds the terminal-host reserved-space reactor in
+  //     TerminalTab.svelte (covers the `fullstack-a-24` collapse
+  //     transition where `heightPx` is stale).
+  //   - width feeds the per-prompt page-width clamp in
+  //     `richPromptPageWidthPx` below — needed so the cap is
+  //     relative to THIS prompt's painted width, not the pane's
+  //     editor wrapper.
+  // ResizeObserver is the natural source of truth here; both
+  // values land on non-persisted state fields and repopulate on
+  // every mount.
   $effect(() => {
     const el = rootEl;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -99,10 +107,52 @@
       const entry = entries[0];
       if (!entry) return;
       prompt.measuredHeightPx = Math.round(entry.contentRect.height);
+      prompt.measuredWidthPx = Math.round(entry.contentRect.width);
     });
     observer.observe(el);
     return () => observer.disconnect();
   });
+
+  // `fullstack-a-30`: per-prompt page-width override. Computes a
+  // pixel cap relative to the prompt's current painted width and
+  // OVERRIDES the inherited `--chan-page-max-width` set by
+  // Pane.svelte on the editor wrapper. Result: narrowing the
+  // editor's page-width slider in pane A no longer cascades onto
+  // pane B's rich prompt — each prompt carries its own.
+  //
+  // Absent / undefined ratio reads as "no cap" (the prompt's
+  // composer uses 100% of the painted width). Explicit ratio in
+  // [0.25, 1.0); 1.0 / 100% rounds to absent on serialize so the
+  // no-cap default keeps the persisted shape short.
+  function richPromptPageWidthPx(): string {
+    // `none` is the documented sentinel both Wysiwyg.svelte and
+    // Source.svelte recognise via `max-width: var(--chan-page-max-width, none);`
+    // — overriding the pane-level value with `none` is what
+    // achieves the cross-tile decoupling. Default = `none`
+    // (composer fills the prompt's painted width) so the prompt
+    // does not inherit the editor's narrow cap. The explicit
+    // ratio branch swaps in a pixel cap relative to THIS
+    // prompt's painted width.
+    const ratio = prompt.pageWidthRatio;
+    if (!ratio || ratio >= 1) return "none";
+    const width = prompt.measuredWidthPx;
+    if (!width || width <= 0) return "none";
+    return `${Math.max(240, Math.round(width * ratio))}px`;
+  }
+
+  function onRichPromptPageWidthSlider(e: Event): void {
+    const pct = Number((e.currentTarget as HTMLInputElement).value);
+    if (!Number.isFinite(pct)) return;
+    const clamped = Math.min(PAGE_WIDTH_MAX_PCT, Math.max(PAGE_WIDTH_MIN_PCT, pct));
+    const ratio = clamped / 100;
+    prompt.pageWidthRatio = ratio >= 1 ? undefined : ratio;
+  }
+
+  function richPromptPageWidthPct(): number {
+    const ratio = prompt.pageWidthRatio;
+    if (!ratio || ratio >= 1) return PAGE_WIDTH_MAX_PCT;
+    return Math.round(ratio * 100);
+  }
 
   function mode(): "wysiwyg" | "source" {
     return prompt.mode ?? "wysiwyg";
@@ -315,6 +365,7 @@
   class:collapsed={collapsed()}
   bind:this={rootEl}
   style:height={collapsed() ? null : `${prompt.heightPx ?? 320}px`}
+  style:--chan-page-max-width={richPromptPageWidthPx()}
   role="dialog"
   tabindex="-1"
   aria-label="rich terminal prompt"
@@ -438,6 +489,27 @@
   </div>
   {#if menu}
     <div class="ctx" style:left={`${menu.x}px`} style:top={`${menu.y}px`}>
+      <!-- `fullstack-a-30`: per-prompt page-width slider, mirrors
+           the editor's tab-menu slider. Sets `prompt.pageWidthRatio`
+           directly — does not touch the global `pageWidth.ratio`,
+           so narrowing this prompt does not cascade onto the
+           editor's wrap or onto sibling tiles. 100 % unsets the
+           per-prompt ratio (rounds to absent on serialize). -->
+      <div class="page-width-row">
+        <span class="page-width-label">Page width</span>
+        <input
+          class="page-width-slider"
+          type="range"
+          min={PAGE_WIDTH_MIN_PCT}
+          max={PAGE_WIDTH_MAX_PCT}
+          step={PAGE_WIDTH_STEP_PCT}
+          value={richPromptPageWidthPct()}
+          oninput={onRichPromptPageWidthSlider}
+          onmousedown={(e) => e.stopPropagation()}
+          aria-label="rich prompt page width"
+        />
+        <span class="page-width-value">{richPromptPageWidthPct()}%</span>
+      </div>
       <button type="button" onclick={toggleMode}>
         {#if mode() === "source"}
           <Pilcrow size={15} strokeWidth={1.75} aria-hidden="true" />
@@ -674,5 +746,31 @@
   }
   .ctx button:hover {
     background: var(--hover-bg);
+  }
+  /* `fullstack-a-30`: per-prompt page-width slider in the
+     context menu. Same shape as the editor's tab-menu slider in
+     FileEditorTab.svelte so both surfaces read alike. */
+  .page-width-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--separator, var(--border));
+  }
+  .page-width-label {
+    color: var(--text-secondary);
+    font-size: 12px;
+    min-width: 64px;
+  }
+  .page-width-slider {
+    flex: 1;
+    accent-color: var(--btn-hover);
+  }
+  .page-width-value {
+    min-width: 40px;
+    text-align: right;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
   }
 </style>

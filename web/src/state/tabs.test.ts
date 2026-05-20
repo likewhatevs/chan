@@ -1390,6 +1390,57 @@ describe("terminal session serialization", () => {
     });
   });
 
+  test("round-trips per-prompt page-width via SerTab.rppw (fullstack-a-30)", async () => {
+    // Each rich prompt carries its own page-width ratio so
+    // narrowing one prompt does not cascade onto a sibling tile.
+    // Value persists across session restore.
+    resetLayout([
+      terminalTab({
+        terminalSessionId: "term_rppw",
+        richPrompt: {
+          buffer: "narrow prompt draft",
+          heightPx: 320,
+          open: true,
+          mode: "wysiwyg",
+          pageWidthRatio: 0.55,
+        },
+      }),
+    ]);
+
+    const shareable = serializeLayout();
+    expect(JSON.stringify(shareable)).not.toContain("\"rppw\"");
+
+    const sessionSnapshot = serializeLayout({ terminalSessions: true });
+    expect(JSON.stringify(sessionSnapshot)).toContain("\"rppw\":0.55");
+
+    await restoreLayout(sessionSnapshot!);
+
+    const [tab] = activePane().tabs;
+    expect(tab?.kind).toBe("terminal");
+    if (tab?.kind !== "terminal") return;
+    expect(tab.richPrompt?.pageWidthRatio).toBe(0.55);
+  });
+
+  test("omits rppw from SerTab when pageWidthRatio is unset or 100% (fullstack-a-30)", async () => {
+    // 100% / 1.0 is the "no cap" sentinel — rounds to absent so
+    // the persisted shape stays short for the common case.
+    resetLayout([
+      terminalTab({
+        terminalSessionId: "term_full",
+        richPrompt: {
+          buffer: "default prompt",
+          heightPx: 320,
+          open: true,
+          mode: "wysiwyg",
+          pageWidthRatio: 1.0,
+        },
+      }),
+    ]);
+
+    const sessionSnapshot = serializeLayout({ terminalSessions: true });
+    expect(JSON.stringify(sessionSnapshot)).not.toContain("\"rppw\"");
+  });
+
   test("hydrates terminal session ids onto hash-restored terminal tabs", async () => {
     resetLayout([
       terminalTab({

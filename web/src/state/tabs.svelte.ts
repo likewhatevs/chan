@@ -359,6 +359,19 @@ export type TerminalRichPromptState = {
   /// shrinks to header-only and `heightPx` is stale). Not
   /// persisted to SerTab — repopulated on every mount.
   measuredHeightPx?: number;
+  /// `fullstack-a-30`: actual rendered width (px) of the
+  /// rich-prompt root, written by the same ResizeObserver. Feeds
+  /// the per-prompt page-width clamp on the composer-editor so
+  /// the cap is computed relative to THIS prompt's painted
+  /// width, not the pane's editor wrapper. Not persisted.
+  measuredWidthPx?: number;
+  /// `fullstack-a-30`: per-prompt page-width ratio in (0.25, 1.0].
+  /// `1.0` (or absent) reads as "no cap" — the composer fills
+  /// the prompt's painted width. Set via the slider in the
+  /// rich-prompt context menu. Decouples the prompt's line width
+  /// from the global `pageWidth.ratio` so narrowing the editor
+  /// in one tile does not cascade onto a sibling tile's prompt.
+  pageWidthRatio?: number;
 };
 
 export type Tab = FileTab | TerminalTab | GraphTab | BrowserTab;
@@ -2682,6 +2695,12 @@ type SerTab = {
   /// user collapsed the prompt to its minimal-height bar; absent
   /// otherwise. Sticks across close → re-open within a session.
   rpc?: 1;
+  /// `fullstack-a-30`: per-prompt page-width ratio in (0.25, 1.0).
+  /// Conditional spread on serialize so the unconfigured / 100 %
+  /// case keeps the persisted shape short; absence on deserialize
+  /// reads as "no cap" (decoupled from the global
+  /// `pageWidth.ratio`).
+  rppw?: number;
   /// Terminal watcher path + unread bit. Session-scoped like the
   /// terminal id; the server owns the real watcher lifecycle.
   twp?: string;
@@ -2819,6 +2838,12 @@ function serializeTab(
             ...(t.richPrompt.open ? { rpo: 1 as const } : {}),
             ...(t.richPrompt.mode === "source" ? { rpm: "s" as const } : {}),
             ...(t.richPrompt.collapsed ? { rpc: 1 as const } : {}),
+            ...(typeof t.richPrompt.pageWidthRatio === "number" &&
+            Number.isFinite(t.richPrompt.pageWidthRatio) &&
+            t.richPrompt.pageWidthRatio > 0 &&
+            t.richPrompt.pageWidthRatio < 1
+              ? { rppw: t.richPrompt.pageWidthRatio }
+              : {}),
           }
         : {}),
       ...(opts.terminalSessions && t.watcher
@@ -3330,7 +3355,8 @@ function richPromptFromSer(
     tab?.rph !== undefined ||
     tab?.rpo ||
     tab?.rpm ||
-    tab?.rpc
+    tab?.rpc ||
+    tab?.rppw !== undefined
       ? tab
       : fallback;
   if (!src) return undefined;
@@ -3339,7 +3365,8 @@ function richPromptFromSer(
     src.rph === undefined &&
     !src.rpo &&
     !src.rpm &&
-    !src.rpc
+    !src.rpc &&
+    src.rppw === undefined
   ) {
     return undefined;
   }
@@ -3357,6 +3384,13 @@ function richPromptFromSer(
     // existing exact-shape assertions don't regress on the extra
     // field.
     ...(src.rpc === 1 ? { collapsed: true } : {}),
+    // `fullstack-a-30`: per-prompt page-width ratio. Only emit when
+    // the persisted value is a finite number strictly inside the
+    // clamped (0, 1) range — `1.0` means "no cap" and rounds to
+    // omitted, matching the conditional-spread on serialize.
+    ...(typeof src.rppw === "number" && Number.isFinite(src.rppw) && src.rppw > 0 && src.rppw < 1
+      ? { pageWidthRatio: src.rppw }
+      : {}),
   };
 }
 
