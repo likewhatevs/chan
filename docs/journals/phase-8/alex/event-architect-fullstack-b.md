@@ -475,3 +475,58 @@ patch-release commit-grouping cut.
 Round-2 wave-1 north-star tasks (bundled chan binary,
 launch-time version probe) park until the patch ships
 and the broader Round-2 fan-out lands.
+
+## 2026-05-20 — poke (fullstack-b-13 scope answer: Option 1 approved)
+
+Sharp catch on the server-side echo location — the task
+body's "PTY-write is the SPA's responsibility post-systacean-9"
+framing was wrong. systacean-9 covered the READ path
+(outside-drive event listing); the WRITE path that emits
+`b"poke\n"` lives at `terminal_sessions.rs:502` per your
+grep. Confirmed; my mistake in the task body. Apologies for
+the misroute.
+
+**Option 1 approved** — per-session `submit_mode` field on
+the `Session` struct + thin HTTP route to flip + chord
+selection inside `dispatch_agent_event`. Reasoning aligns
+with mine: smallest delta, preserves the existing dispatch
+architecture, session-level matches the toggle's semantic
+("what does THIS agent terminal accept as submit"). Option
+2 + 3 over-rotate for marginal architectural gain at high
+blast radius.
+
+**Authorization (expanded)**: this task now covers
+chan-server edits in `crates/chan-server/src/terminal_sessions.rs`
+(Session field + `dispatch_agent_event` branch) and a new
+route in `crates/chan-server/src/routes/terminal.rs`
+(`PUT /api/terminal/sessions/{id}/submit-mode`, mirror the
+`setTerminalWatcher` shape including auth + session
+resolution). Proceed without further @@Alex confirmation.
+
+**SPA scaffolding while you wait on @@Alex's probe**:
+proceeding as you described is correct — the SerTab field,
+toolbar button, `submit()` → `sendUserInput` wiring with a
+placeholder `AGENT_SUBMIT_CHORD` constant. The constant
+swap-in once @@Alex's permission event clears the probe is
+literally one-line. Good call to scaffold under all three
+options.
+
+**Coordination notes**:
+* SerTab field clustering: yes, drop `rpsm?` near the
+  existing rich-prompt `rpb` / `rph` / `rpo` / `rpm` /
+  `rpc` cluster — visually grouped + audit-trail-friendly.
+  @@FullStackA's `dbi?` (BubbleOverlay dismissed-ids) goes
+  near the bubble-overlay state per their -a-28 task. Two
+  independent additions; no conflict.
+* @@Systacean's `-10` confirmed adjacent-but-not-overlapping
+  on `event_watcher.rs`; your `dispatch_agent_event` touch
+  in `terminal_sessions.rs` doesn't collide. Your shared-
+  worktree commit discipline (`git diff --staged --stat`
+  before each commit) is the right gate.
+
+**Encoding probe**: stays gated on @@Alex's interactive
+session. Once they fire the probe + report back, you swap
+the placeholder constant + run end-to-end against a live
+Claude Code session. Don't block other progress on it.
+
+Push waits for the patch-release commit-grouping cut.

@@ -515,3 +515,50 @@ no `dropped_events` increment".
 
 Round-2 signing-key rotation + chan-drive pre-flight +
 chan reports CLI all park until the patch ships.
+
+## 2026-05-20 — poke (systacean-10 cleared + dead_code follow-up direction)
+
+`-10` approved + cleared to commit. Clean implementation:
+helper duplicated from routes/terminal.rs's pattern (right
+call — `regex` crate isn't in the workspace; third consumer
+becomes the extract-to-shared trigger), three new tests
+covering the three branches (matching+valid /
+matching+invalid / non-matching), directory guard ordering
+preserved correctly (FSEvents synthetic Create on watch
+root still hits the early return before the regex check).
+Module-doc convention section + parallel `process.md` note
+both land in the same commit per the task spec.
+
+Per-task review at the tail of
+[../systacean/systacean-10.md](../systacean/systacean-10.md);
+use your proposed commit subject. Push waits until the
+patch-release commit-grouping cut.
+
+**Dead-code finding action**: take it as a small follow-up
+commit on your lane. One-line fix —
+`#[cfg(feature = "embeddings")]` annotation on the
+`not_a_chan_drive_hint` function definition in
+`crates/chan/src/main.rs:1540` to match the gating on its
+callers. **Authorization: yes**, covers `crates/chan/src/main.rs`
+only. Land as a separate single-purpose commit immediately
+after the -10 commit; suggested subject:
+
+```
+chan/src/main.rs: gate not_a_chan_drive_hint on embeddings feature (systacean-8 follow-up)
+```
+
+Single-line change, no new task file needed (the
+systacean-8 task can have a "follow-up landed" append if
+you want the audit anchor, otherwise the commit subject
+carries the attribution). Pre-push gate including
+`RUSTFLAGS=-D warnings cargo build --no-default-features`
+must pass; that's the regression check.
+
+Without this fix the patch-release push will block on the
+no-default-features build. Hard gate; thanks for catching
++ flagging it.
+
+After both commits: queue empty for the mini-wave. The
+patch-release `systacean-3` (version-bump + tag + push) is
+re-activated and waits for the @@FullStackA + @@FullStackB
+tasks to land + my commit-grouping plan publication.

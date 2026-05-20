@@ -785,3 +785,63 @@ the terminal tab's hamburger menu or a sibling overlay; grep
 `broadcastTerminalInput` to find the selector file.
 
 Updated queue: -28, -29, -30, -31 (any commit order).
+
+## 2026-05-20 — poke (queue addition: -32 chord migration with context-aware spawns + -33 graph "from here" default)
+
+@@Alex pulled the Round-2-planned chord migration forward
+into this mini-wave + added a new graph-inspector default-
+mode task. Two more tasks on your queue, both ride the
+patch release.
+
+* [../fullstack-a/fullstack-a-32.md](../fullstack-a/fullstack-a-32.md) —
+  **Chord migration + context-aware spawn semantics +
+  surface unification.** Pulls the round-2-plan chord
+  migration (`Cmd+O` FB, `Cmd+P` rich prompt, `Cmd+Shift+M`
+  graph + web fallbacks + Hybrid NAV universals + drop
+  `Cmd+K 1/2/3/4/p`), expanded with @@Alex's 2026-05-20
+  refinement: spawn chords pick up CONTEXT from the
+  focused surface — `Cmd+T` uses the focused doc's parent
+  dir (or focused terminal's cwd); `Cmd+O` opens FB at
+  the focused dir; `Cmd+Shift+M` graphs rooted at the
+  focused doc (or terminal cwd). Single context-resolution
+  helper used by all four chord handlers. Plus surface
+  unification: empty-pane carousel slide 1 + pane
+  hamburger + empty-pane right-click all show the four
+  spawn entries in identical order.
+
+* [../fullstack-a/fullstack-a-33.md](../fullstack-a/fullstack-a-33.md) —
+  **Graph "from here" as default mode + parent-inspector
+  ancestor navigation.** Today the graph requires an
+  explicit button click to engage "from here" mode;
+  @@Alex wants that to be the default. Parent inspector
+  renders the ancestor breadcrumb chain back to drive
+  root; click any ancestor → re-scope graph to "from
+  here" rooted at that ancestor. Drop the explicit
+  button (default means no button needed).
+
+**Hard pair**: -32's `Cmd+Shift+M` handler depends on
+-33's default-mode rendering. Land -33 first, OR commit
+-32 and -33 together. If -33 lands first, -32 just calls
+the graph spawn with a context node and the default
+rendering takes over.
+
+**Authorization on shared infra**: -32 touches
+`shortcuts.ts` (chord registry) + `PaneModeHelp` +
+`SERVE_LONG_ABOUT` (cheatsheets) + carousel + pane
+hamburger + empty-pane right-click — wide blast radius
+but all SPA. **Authorization: yes**, proceed without
+further @@Alex confirmation. -33 may touch
+`routes/graph.rs::api_graph` if a rooted-scope query
+parameter doesn't already exist; chan-server route is
+in scope.
+
+Updated queue: -28, -29, -30, -31, -32, -33. Commit
+order suggestion: land smaller / independent ones first
+(-29 / -30 / -31) so the bigger -28 / -32 / -33 cluster
+gets attention later. -33 before -32 per the hard-pair.
+
+@@WebtestA verifies on lane-A. The seeded chan-source
+drive is the right ancestor-navigation reproducer for
+-33 (deep directory tree).
+
+Push held for patch-release commit-grouping cut.

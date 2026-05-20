@@ -272,6 +272,15 @@
   - flagged 2026-05-20 by @@WebtestB during a proactive lane-B walk: attaching the watcher to an absolute outside-drive path succeeds (post `fullstack-b-3` + `systacean-5`), but reading events from that path errors with `watch read failed: io error: No such file or directory (os error 2)`. The read path enforces drive-sandbox resolution; absolute outside-drive paths fail the sandbox lookup
   - want: read path applies the same in-drive-vs-outside-drive split as the attach path's resolver
   - dispatched as `systacean-9`
+- Graph: "graph from here" should be default; parent inspector should render ancestor scope navigation
+  - flagged 2026-05-20 by @@Alex: today's graph view requires an explicit button click to engage "graph from here" mode (scope to subtree rooted at current selection). @@Alex wants this to be the default behaviour — open graph, render scoped to the active context, no button needed. The parent / breadcrumb inspector should render the ancestor chain so the user can navigate back up to the drive root scope, clicking ancestors to re-scope to "from here" rooted at each one
+  - verbatim ask: "i want the graph's parent inspector to show the graph from here, enabling to go all the way back to drive where graph from here is the default and dont need a button"
+  - pairs with the chord-migration task (Cmd+Shift+M from a doc spawns graph rooted at the doc, etc.)
+  - dispatched as `fullstack-a-33`
+- Chord migration: Cmd+T, Cmd+O, Cmd+P, Cmd+Shift+M with context-aware spawn semantics + surface unification
+  - originally drafted in [`architect/round-2-plan.md`](architect/round-2-plan.md) "Chord migration + surface unification"; pulled forward into the rich-prompt mini-wave per @@Alex 2026-05-20
+  - 2026-05-20 refinement (@@Alex): "e.g. from a doc, cmd+shift+m does graph from here using the doc; or cmd+t new terminal from current cwd or doc's parent dir" — each spawn chord picks up context from the focused surface (terminal cwd / doc parent dir / drive root fallback)
+  - dispatched as `fullstack-a-32`
 - Terminal broadcast selector: missing self entry + confusing on/off toggle shape
   - flagged 2026-05-20 by @@Alex: the terminal's broadcast-input selector (the UI that picks which terminal tabs receive the broadcast forwarded by `broadcastTerminalInput`) does not list the current tab itself in the selectable list. Also the current on/off toggle UI for the per-tab broadcast state is confusing
   - want, three parts:
