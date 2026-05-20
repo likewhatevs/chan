@@ -31,7 +31,6 @@
     Search as SearchIcon,
     Settings as SettingsIcon,
     Square,
-    SquareCheck,
     SquareSplitHorizontal,
     SquareSplitVertical,
     Table2,
@@ -70,10 +69,6 @@
     type FileTab,
   } from "../state/tabs.svelte";
   import WikiStatusBar from "./WikiStatusBar.svelte";
-  import {
-    editorToolsPrefs,
-    persistStripTrailingWhitespaceOnSave,
-  } from "../state/editorTools.svelte";
   import {
     renderedCaretForSourceCaret,
     sourceCaretForRenderedCaret,
@@ -346,12 +341,6 @@
     closeTabMenu();
   }
 
-  function doToggleAutoStripWhitespace(): void {
-    void persistStripTrailingWhitespaceOnSave(
-      !editorToolsPrefs.stripTrailingWhitespaceOnSave,
-    );
-  }
-
   // ---- right-click context menu --------------------------------------
   // Re-uses the existing tab menu bubble (the same one that opens
   // from the tab dot). The bubble carries Duplicate / Rename /
@@ -580,21 +569,11 @@
           <span class="mbtn-label">Remove trailing whitespace</span>
           <span class="mbtn-chord"></span>
         </button>
-        <button
-          class="mbtn"
-          onclick={doToggleAutoStripWhitespace}
-          class:on={editorToolsPrefs.stripTrailingWhitespaceOnSave}
-        >
-          <span class="mbtn-icon">
-            {#if editorToolsPrefs.stripTrailingWhitespaceOnSave}
-              <SquareCheck size={16} strokeWidth={1.75} aria-hidden="true" />
-            {:else}
-              <Square size={16} strokeWidth={1.75} aria-hidden="true" />
-            {/if}
-          </span>
-          <span class="mbtn-label">Run automatically on save / auto-save</span>
-          <span class="mbtn-chord"></span>
-        </button>
+        <!-- `fullstack-a-25`: the "Run automatically on save"
+             checkbox for trailing-whitespace strip lived here as
+             a menu entry. Moved to the Settings page where editor
+             preferences belong; the manual one-shot "Remove
+             trailing whitespace" button above stays. -->
         <div class="msep" role="separator"></div>
         <button class="mbtn" onclick={doToggleOutline} class:on={tab.outlineOpen}>
           <span class="mbtn-icon">

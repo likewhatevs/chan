@@ -32,6 +32,7 @@
     setOverlayMaximized,
   } from "../state/pageWidth.svelte";
   import { DATE_FORMATS } from "../editor/dateFormats";
+  import { editorToolsPrefs } from "../state/editorTools.svelte";
   import OverlayShell from "./OverlayShell.svelte";
 
   function doToggleOverlayMaximized(): void {
@@ -219,6 +220,19 @@
       "data-editor-theme",
       editing.editor_theme,
     );
+  });
+
+  // `fullstack-a-25`: keep the local editor-tools snapshot in sync
+  // with the in-flight `editing.strip_trailing_whitespace_on_save`
+  // value so save() (which checks editorToolsPrefs before stripping)
+  // sees the new value the moment the user toggles in Settings,
+  // without waiting for the autosave PATCH + the next /api/config
+  // round-trip to refresh the snapshot. The autosave still
+  // persists the value to the server in the background.
+  $effect(() => {
+    if (!editing) return;
+    editorToolsPrefs.stripTrailingWhitespaceOnSave =
+      editing.strip_trailing_whitespace_on_save;
   });
 
   async function loadBuildInfo(): Promise<void> {
@@ -491,6 +505,31 @@
             <option value={f.id}>{f.label}</option>
           {/each}
         </select>
+      </label>
+    </section>
+
+    <!-- `fullstack-a-25`: trailing-whitespace toggle moved from
+         the editor's right-click / hamburger menu (where it was
+         a checkbox `Run automatically on save / auto-save`) to
+         Settings, where editor preferences belong. Binding goes
+         through `editing.strip_trailing_whitespace_on_save`
+         (autosave handles persistence) + a sibling $effect that
+         keeps `editorToolsPrefs.stripTrailingWhitespaceOnSave`
+         in sync so save() sees the new value immediately. -->
+    <section>
+      <h3>On save</h3>
+      <p class="hint">
+        Strip trailing whitespace from each line when the file is
+        saved. Affects every editable text buffer (.md, .txt, source
+        files). The one-shot "Remove trailing whitespace" action in
+        the editor menu still works for manual cleanup.
+      </p>
+      <label class="theme-opt semantic-toggle" class:on={editing.strip_trailing_whitespace_on_save}>
+        <input
+          type="checkbox"
+          bind:checked={editing.strip_trailing_whitespace_on_save}
+        />
+        <span>Strip trailing whitespace on save</span>
       </label>
     </section>
     </div>
