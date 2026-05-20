@@ -660,6 +660,22 @@ export function requestPaneWobble(paneId: string): void {
   paneWobble.versions[paneId] = (paneWobble.versions[paneId] ?? 0) + 1;
 }
 
+/// `fullstack-a-22`: separate event bus for the Hybrid pane flip
+/// animation. `paneWobble` is the structural-change cue (split /
+/// close / swap → scale bounce); `paneFlip` is the orientation-
+/// change cue (Hybrid flip → Y-axis rotation). Two distinct
+/// visual signals for two distinct kinds of state change. Same
+/// versioned-counter shape so Pane.svelte's subscription pattern
+/// works identically for both.
+export const paneFlip = $state<{ versions: Record<string, number> }>({
+  versions: {},
+});
+
+export function requestPaneFlip(paneId: string): void {
+  if (!paneId) return;
+  paneFlip.versions[paneId] = (paneFlip.versions[paneId] ?? 0) + 1;
+}
+
 export function activeLayout(): LayoutState {
   return paneMode.active && paneMode.draft ? paneMode.draft : layout;
 }
@@ -2291,7 +2307,13 @@ export function flipHybrid(paneId: string): void {
   node.theme = back.theme;
   back.theme = tmpTheme;
   node.showingBack = !node.showingBack;
-  requestPaneWobble(node.id);
+  // `fullstack-a-22`: switch the post-flip cue from the structural
+  // wobble (scale bounce, used for split / close / swap) to the
+  // orientation-change flip (Y-axis rotation). Two distinct visual
+  // signals for two distinct kinds of state change — the wobble
+  // is "this pane reshaped"; the flip is "this pane changed which
+  // side it's showing".
+  requestPaneFlip(node.id);
 }
 
 /// `null` / `undefined` (no override → follow global) inverts to

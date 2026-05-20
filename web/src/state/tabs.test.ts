@@ -1155,15 +1155,22 @@ describe("Hybrid flip (fullstack-48 phase A)", () => {
     expect(live.theme).toBe("dark");
   });
 
-  test("flipHybrid bumps the wobble bus", async () => {
+  test("flipHybrid bumps the flip bus (fullstack-a-22)", async () => {
+    // `fullstack-a-22` switched the post-flip cue from the
+    // structural wobble (scale bounce, used for split / close /
+    // swap) to the orientation-change flip (Y-axis rotation).
+    // The wobble bus stays untouched on flip so the two visual
+    // signals don't compound into a single muddled animation.
     const front = fileTab({ id: "fw", path: "wobble.md" });
     const seed = resetLayout([front]);
-    const { paneWobble } = await import("./tabs.svelte");
-    const before = paneWobble.versions[seed.id] ?? 0;
+    const { paneFlip, paneWobble } = await import("./tabs.svelte");
+    const beforeFlip = paneFlip.versions[seed.id] ?? 0;
+    const beforeWobble = paneWobble.versions[seed.id] ?? 0;
 
     flipHybrid(seed.id);
 
-    expect(paneWobble.versions[seed.id]).toBe(before + 1);
+    expect(paneFlip.versions[seed.id]).toBe(beforeFlip + 1);
+    expect(paneWobble.versions[seed.id]).toBe(beforeWobble);
   });
 
   test("flipHybrid no-ops when the pane id doesn't resolve to a leaf", () => {

@@ -14,6 +14,7 @@
     openInPane,
     openBrowserInActivePane,
     openTerminalInPane,
+    paneFlip,
     paneMode,
     paneWobble,
     reorderTab,
@@ -273,6 +274,23 @@
     wobbleActive = false;
     requestAnimationFrame(() => {
       wobbleActive = true;
+    });
+  });
+
+  /// `fullstack-a-22`: parallel subscription on the paneFlip bus,
+  /// which `flipHybrid()` bumps in place of the structural wobble.
+  /// Same rAF-double-tap so the keyframe re-fires across consecutive
+  /// flips without the class going stale on a single class toggle.
+  const flipVersion = $derived(paneFlip.versions[pane.id] ?? 0);
+  let flipActive = $state(false);
+  let lastFlipVersion = 0;
+  $effect(() => {
+    if (flipVersion === lastFlipVersion) return;
+    lastFlipVersion = flipVersion;
+    if (flipVersion === 0) return;
+    flipActive = false;
+    requestAnimationFrame(() => {
+      flipActive = true;
     });
   });
 
@@ -746,11 +764,13 @@
   class="pane"
   class:focused={isFocused}
   class:wobble={wobbleActive}
+  class:flipping={flipActive}
   data-focus-color={focusColorForWindow()}
   data-theme={pane.theme}
   onmousedown={() => setActivePane(pane.id)}
   onanimationend={(e) => {
     if (e.animationName === "pane-wobble-once") wobbleActive = false;
+    if (e.animationName === "pane-flip-once") flipActive = false;
   }}
   role="region"
   aria-label="editor pane"
@@ -1170,6 +1190,33 @@
     0%   { transform: scale(1); }
     40%  { transform: scale(1.012); }
     100% { transform: scale(1); }
+  }
+  /* `fullstack-a-22`: Hybrid flip animation. The Hybrid model
+     swaps content on flipHybrid (front + back state are already
+     siblings on the LeafNode); the animation here is the visual
+     cue that the swap happened. A half-flip on the Y-axis takes
+     the pane to edge-on at ~50% (invisible because of
+     `backface-visibility: hidden`) and back to front-facing — the
+     reactive content swap has already landed by then, so the
+     user perceives the flip as "card spins, content changed".
+     Not a true two-face card flip (the architect's spec
+     allowed for either a structural refactor or a single-face
+     wobble; we picked the latter to avoid touching every reader
+     of pane.tabs across the codebase). Y-axis matches the
+     reference style; cubic-bezier(0.4, 0, 0.2, 1) is the
+     Material standard for UI motion. */
+  .pane.flipping {
+    animation: pane-flip-once 400ms cubic-bezier(0.4, 0, 0.2, 1);
+    backface-visibility: hidden;
+    transform-style: preserve-3d;
+  }
+  @keyframes pane-flip-once {
+    0%   { transform: perspective(1200px) rotateY(0deg); }
+    50%  { transform: perspective(1200px) rotateY(90deg); }
+    100% { transform: perspective(1200px) rotateY(0deg); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pane.flipping { animation: none; }
   }
   /* iTerm-style strip: a dark bar with no per-tab dividers. The
      active tab is a rounded pill sitting on the bar rather than a
