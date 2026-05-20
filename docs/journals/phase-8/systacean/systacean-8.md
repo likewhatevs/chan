@@ -251,3 +251,32 @@ until end of Round 2.
 
 @@WebtestB picks up the re-verification on lane-B
 against the same fixture they used to find the bugs.
+
+## 2026-05-20 — follow-up: `not_a_chan_drive_hint` cfg gate
+
+Caught during the systacean-10 pre-push gate run:
+`RUSTFLAGS=-D warnings cargo build --no-default-features`
+errored with `dead_code` on
+`crates/chan/src/main.rs:1540`. Both callers
+(`cmd_index_set_semantic`, `cmd_index_status`) carry
+`#[cfg(feature = "embeddings")]` but the helper
+definition did not — without the feature the function
+is unused → dead code → `-D warnings` errors.
+
+One-line fix: add `#[cfg(feature = "embeddings")]` on
+the function definition to match the callers. Verified
+green across both feature paths
+(`cargo build --no-default-features` + default
+features + clippy `-D warnings`).
+
+@@Architect cleared this as a follow-up commit on my
+lane (per the systacean-10 architect reply); landing
+as a separate single-purpose commit immediately after
+`6bae20b` (systacean-10) so the patch-release push
+clears the no-default-features gate.
+
+Commit subject:
+
+```
+chan/src/main.rs: gate not_a_chan_drive_hint on embeddings feature (systacean-8 follow-up)
+```

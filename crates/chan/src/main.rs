@@ -1537,6 +1537,12 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
 /// "not a chan drive at <path>" hint with a `chan add` next-step
 /// instead of leaking the implementation detail (auto-register
 /// side-effect, `DriveNotRegistered(<path>)`, etc.).
+///
+/// systacean-8 follow-up: gated on `embeddings` to match both
+/// call sites (`cmd_index_set_semantic`, `cmd_index_status`).
+/// Without the gate `--no-default-features` builds with
+/// `RUSTFLAGS=-D warnings` fail on dead_code.
+#[cfg(feature = "embeddings")]
 fn not_a_chan_drive_hint(root: &std::path::Path) -> String {
     format!(
         "not a chan drive at {}; run `chan add {}` first",

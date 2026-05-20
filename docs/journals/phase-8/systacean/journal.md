@@ -515,3 +515,18 @@ Commit-readiness append at the tail of
 [`systacean-10.md`](systacean-10.md). Awaiting
 @@Architect clearance. Push held per the patch-release
 coordination.
+
+## 2026-05-20 — systacean-10 committed + dead_code follow-up committed
+
+@@Architect cleared -10 + authorized the dead_code
+follow-up as a separate commit on my lane.
+
+* `6bae20b` — `event_watcher: silently skip non-matching filenames; document naming convention (systacean-10)` (5 files: chan-server + process.md + task tail + journal + event log).
+* Follow-up `<sha-pending>` — `chan/src/main.rs: gate not_a_chan_drive_hint on embeddings feature (systacean-8 follow-up)`. One-line cfg gate; `RUSTFLAGS=-D warnings cargo build --no-default-features` now green.
+
+Pre-commit `git diff --staged --stat` audits both clean.
+Push held until @@Architect publishes the
+patch-release commit-grouping plan + the @@FullStackA /
+@@FullStackB rich-prompt tasks land. Queue empty for
+the mini-wave; systacean-3 (version-bump + tag + push)
+re-activates when the plan publishes.
