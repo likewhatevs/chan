@@ -25,6 +25,7 @@ import type {
   ResetMode,
   ResetResponse,
   SearchHit,
+  SemanticState,
   TerminalRestartRequest,
   TerminalSpawnRequest,
   TerminalSpawnResponse,
@@ -423,6 +424,17 @@ export const api = {
       preferences: { ...cfg.preferences, empty_pane_carousel_cycling: cycling },
     });
   },
+  /// `systacean-7` semantic-search endpoints. Surface is open-read
+  /// (state) + settings-gated mutations (download / enable / disable).
+  /// The download endpoint is synchronous in v1 — the POST blocks
+  /// until the resolver has the bytes on disk, then returns. The
+  /// Settings UI polls `/state` in parallel to detect the
+  /// `model_present` transition without depending on per-byte
+  /// progress events.
+  semanticState: () => req<SemanticState>("GET", "/api/index/semantic/state"),
+  semanticDownload: () => req<SemanticState>("POST", "/api/index/semantic/download"),
+  semanticEnable: () => req<SemanticState>("POST", "/api/index/semantic/enable"),
+  semanticDisable: () => req<SemanticState>("POST", "/api/index/semantic/disable"),
 };
 
 /// Encode a path as a sequence of percent-encoded segments. We keep `/`

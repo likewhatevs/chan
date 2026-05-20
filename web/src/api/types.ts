@@ -475,6 +475,22 @@ export type BuildInfo = {
   };
 };
 
+/// Semantic-search state surface. `systacean-7` shape; consumed by
+/// the Settings UI (`fullstack-a-21`) to drive the opt-in toggle +
+/// status row. `mode` is derived server-side as `"hybrid"` iff
+/// `semantic_enabled AND model_present`; the
+/// flag-on-but-model-deleted case falls back to `"bm25"`.
+/// `model_size_bytes` is null pre-download (the resolver only
+/// knows the size after the bundle lands on disk).
+export type SemanticState = {
+  mode: "bm25" | "hybrid";
+  model_present: boolean;
+  model_name: string;
+  model_path: string;
+  model_size_bytes: number | null;
+  semantic_enabled: boolean;
+};
+
 /// Drive reset modes, in increasing destructiveness. See
 /// `crates/chan-core/src/storage.rs` for the per-mode contract.
 export type ResetMode = "drive" | "everything";

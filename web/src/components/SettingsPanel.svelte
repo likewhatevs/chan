@@ -8,7 +8,7 @@
   //
   // Auto-saves on change (500 ms debounce).
 
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { api } from "../api/client";
   import type {
     BuildInfo,
@@ -16,6 +16,7 @@
     GlobalConfig,
     LineSpacing,
     Preferences,
+    SemanticState,
   } from "../api/types";
   import { Maximize2, Minimize2, X } from "lucide-svelte";
   import {
@@ -229,11 +230,109 @@
     }
   }
 
+  /// `fullstack-a-21` semantic-search opt-in. Snapshot of the
+  /// server's `systacean-7` state plus a downloading flag the UI
+  /// owns (we don't store it server-side; it lives in the
+  /// in-flight POST). Error sticks until the next user action.
+  let semanticState = $state<SemanticState | null>(null);
+  let semanticDownloading = $state(false);
+  let semanticEnabling = $state(false);
+  let semanticError = $state<string | null>(null);
+  /// Polling handle used during downloads. The download endpoint
+  /// is synchronous in v1 (no per-byte progress events), so we
+  /// poll `/api/index/semantic/state` every few seconds during
+  /// the wait to detect the `model_present` transition out-of-band
+  /// from the awaited POST. Cleared on success / failure / unmount.
+  let semanticPollTimer: ReturnType<typeof setInterval> | null = null;
+  const SEMANTIC_POLL_INTERVAL_MS = 3000;
+
+  async function loadSemanticState(): Promise<void> {
+    try {
+      semanticState = await api.semanticState();
+    } catch {
+      // Older servers without the endpoint surface as a no-op; the
+      // section just renders the "not available" placeholder.
+      semanticState = null;
+    }
+  }
+
+  function stopSemanticPoll(): void {
+    if (semanticPollTimer !== null) {
+      clearInterval(semanticPollTimer);
+      semanticPollTimer = null;
+    }
+  }
+
+  async function semanticToggle(next: boolean): Promise<void> {
+    if (!semanticState) return;
+    semanticError = null;
+    if (next) {
+      if (semanticState.model_present) {
+        // Model already on disk — just enable. No download wait.
+        semanticEnabling = true;
+        try {
+          semanticState = await api.semanticEnable();
+        } catch (err) {
+          semanticError = (err as Error).message;
+        } finally {
+          semanticEnabling = false;
+        }
+        return;
+      }
+      // First-time download. Kick off the synchronous POST and
+      // start polling state in parallel so the spinner reflects
+      // the model_present transition even before the POST returns.
+      semanticDownloading = true;
+      stopSemanticPoll();
+      semanticPollTimer = setInterval(() => {
+        void loadSemanticState();
+      }, SEMANTIC_POLL_INTERVAL_MS);
+      try {
+        semanticState = await api.semanticDownload();
+        stopSemanticPoll();
+        // Server returns the post-download state; auto-enable on
+        // top so the toggle lands ON rather than leaving the user
+        // a second click on a freshly-downloaded model.
+        semanticEnabling = true;
+        try {
+          semanticState = await api.semanticEnable();
+        } finally {
+          semanticEnabling = false;
+        }
+      } catch (err) {
+        stopSemanticPoll();
+        semanticError = (err as Error).message;
+        // Refresh state so the toggle reflects whatever the server
+        // ended up with (the download may have partially landed).
+        await loadSemanticState();
+      } finally {
+        semanticDownloading = false;
+      }
+    } else {
+      try {
+        semanticState = await api.semanticDisable();
+      } catch (err) {
+        semanticError = (err as Error).message;
+      }
+    }
+  }
+
+  function formatModelSize(bytes: number | null): string {
+    if (bytes === null || bytes <= 0) return "size unknown";
+    const mb = bytes / (1024 * 1024);
+    return `${mb.toFixed(1)} MB`;
+  }
+
   onMount(() => {
     // Make sure we have the latest server state when the tab opens.
     void refreshDrive();
     void loadGlobalConfig();
     void loadBuildInfo();
+    void loadSemanticState();
+  });
+
+  onDestroy(() => {
+    stopSemanticPoll();
   });
 </script>
 
@@ -395,6 +494,72 @@
       </label>
     </section>
     </div>
+
+    <!-- `fullstack-a-21`: opt-in to Hybrid search (BM25 + dense
+         vectors via BGE-small). The model is no longer bundled in
+         the default binary (`systacean-6` cargo feature gate); the
+         user downloads it on demand from this row. v1 uses a
+         spinner + polling pattern rather than a per-byte progress
+         bar because hf-hub doesn't expose progress callbacks
+         (per @@Systacean's `systacean-7` constraint); the
+         downloading endpoint is synchronous and the UI polls
+         `/state` in parallel to surface the model_present
+         transition. -->
+    <section>
+      <h3>Semantic search</h3>
+      {#if buildInfo && !buildInfo.features.embeddings}
+        <p class="hint">
+          Semantic search isn't compiled into this binary. Rebuild
+          with <code>--features embed-model</code> (or install a
+          chan release that includes it) to enable Hybrid search.
+        </p>
+      {:else if semanticState === null}
+        <p class="hint muted">Loading semantic-search state…</p>
+      {:else}
+        <p class="hint">
+          Hybrid search blends BM25 keyword scoring with dense-vector
+          similarity from
+          <code>{semanticState.model_name}</code>
+          ({formatModelSize(semanticState.model_size_bytes)}). The
+          model file is shared across drives.
+        </p>
+        <label class="theme-opt semantic-toggle" class:on={semanticState.semantic_enabled}>
+          <input
+            type="checkbox"
+            checked={semanticState.semantic_enabled}
+            disabled={semanticDownloading || semanticEnabling}
+            onchange={(e) =>
+              void semanticToggle((e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span>
+            Enable semantic search (Hybrid mode)
+          </span>
+        </label>
+        {#if semanticDownloading}
+          <p class="hint muted">
+            <span class="spinner" aria-hidden="true"></span>
+            Downloading model… this may take a few minutes.
+          </p>
+        {:else if semanticEnabling}
+          <p class="hint muted">Enabling…</p>
+        {/if}
+        <div class="grid semantic-info">
+          <span class="k">Active</span>
+          <span class="v">
+            {#if semanticState.mode === "hybrid"}
+              <span class="ok">Hybrid (BM25 + semantic)</span>
+            {:else}
+              <span class="muted">BM25</span>
+            {/if}
+          </span>
+          <span class="k">Stored at</span>
+          <span class="v mono" title="Shared across drives">{semanticState.model_path}</span>
+        </div>
+        {#if semanticError}
+          <p class="hint err" role="alert">{semanticError}</p>
+        {/if}
+      {/if}
+    </section>
 
     <section class="about">
       <h3>About</h3>
@@ -598,6 +763,48 @@
     background: var(--hover-bg);
   }
   .v .ok { color: var(--accent); }
+  .hint.err { color: #d33; }
+  /* `fullstack-a-21`: re-use the theme-opt chip shape for the
+     semantic-search toggle so it visually matches the rest of
+     the Settings chips. The checkbox is a distinct input shape
+     (vs the radios theme-opt was built for), so a few resets
+     undo the generic `input { width: 100% }` rule above. */
+  .semantic-toggle {
+    margin-bottom: 0.5rem;
+  }
+  .semantic-toggle input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .semantic-toggle input[type="checkbox"]:disabled,
+  .semantic-toggle:has(input[type="checkbox"]:disabled) {
+    cursor: not-allowed;
+    opacity: 0.7;
+  }
+  .semantic-info {
+    margin-top: 0.5rem;
+    font-size: 13px;
+  }
+  .spinner {
+    display: inline-block;
+    width: 0.85em;
+    height: 0.85em;
+    margin-right: 0.25em;
+    vertical-align: -0.1em;
+    border: 2px solid var(--border);
+    border-top-color: var(--link);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .spinner { animation: none; border-top-color: var(--border); }
+  }
   /* Tab-bar autosave indicator. Sits between the title and the
      actions strip. Empty when idle (no extra padding). */
   .save-status { font-size: 14px; min-width: 60px; text-align: right; }
