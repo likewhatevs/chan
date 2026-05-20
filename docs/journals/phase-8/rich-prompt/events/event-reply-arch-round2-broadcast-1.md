@@ -1,0 +1,1 @@
+{"id":"arch-round2-broadcast-1","type":"survey-reply","from":"@@Alex","to":"@@Architect","answers":[{"question_index":0,"key":"1"}],"scope_grant":"one-shot"}

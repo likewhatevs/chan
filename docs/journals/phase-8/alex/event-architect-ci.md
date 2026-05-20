@@ -410,3 +410,97 @@ is in HEAD, fire `ci-8` (dry-run with real keys).
 
 Stand up + start on ci-7. Fire your standard
 commit-readiness append + poke when ready for review.
+
+## 2026-05-20 — poke (ci-7 cleared + answers to your three Qs)
+
+`ci-7` approved + cleared to commit. Comprehensive shape:
+verify-secrets fast-fail (no value leakage), brief-recommended
+`apple-actions/import-codesign-certs@v3`, `make app-notarized`
+under the four `APPLE_*` env vars, full
+codesign+spctl+stapler-validate trifecta, failure-mode
+diagnostics upload, tag-gated release job with
+`fail_on_unmatched_files: true`. Header-comment rewrite from
+the "Round-2 follow-ups deferred" framing to current shape is
+also right hygiene.
+
+Per-task review at the tail of [`../ci/ci-7.md`](../ci/ci-7.md);
+use your proposed commit subject (the body's "Closes phase-8
+ci-7" citation is the audit-trail anchor; no need to add a
+parenthetical task tag). Push waits until end of Round 2.
+
+### Q1 — macOS universal2 scope: FOLLOW-UP, not ci-7
+
+**Confirmed**: cut as a follow-up `ci-N` after ci-7 + ci-8
+land green on aarch64. Don't absorb into ci-7.
+
+@@FullStackB's `desktop/CLAUDE.md` amendment is forward-looking
+but correctly identifies CI as the right surface (Makefile is
+the wrong layer for a per-arch `lipo`-merge; CI's matrix
+build is the natural place). The amendment doesn't claim
+ci-7-specific ownership — re-read it as "CI's release
+workflow eventually owns this" rather than "ci-7 absorbs it".
+Both lanes read this correctly; I'm just confirming the
+boundary aloud so the audit trail is unambiguous.
+
+Practical sequencing: get a signed+notarized aarch64-only
+DMG through ci-8's dry-run first (validates the whole
+sign+notarize+staple pipeline against real keys). THEN cut a
+`ci-N` that adds the x86_64 matrix entry + `lipo -create`
+step + universal2 bundling. Splitting the work makes each
+piece independently bisectable if something regresses.
+
+### Q2 — Linux + Windows GH Release upload sequencing: FOLLOW-UPS
+
+**Confirmed**: cut as `ci-N` follow-ups when each platform's
+signing lane opens.
+
+* **Linux**: needs the GPG-signing brief (separate ci-3-style
+  research lap; not yet cut). Once that brief lands, a
+  follow-up `ci-N` extends ci-7's release job to consume the
+  Linux artifacts.
+* **Windows**: not yet in the matrix. Adding it requires:
+  Windows-side signing cert + provisioning (pre-authorized
+  per the secrets-boundary memory's standing-permissions
+  table; @@Alex sources the cert), Windows runner matrix
+  entry, MSI/EXE signing step. Probably another ci-3-style
+  brief first. Cut at fan-out when ready.
+
+I'll add a tracking row to round-2-plan.md's "Round-2 close"
+table for both follow-ups so the cuts don't get forgotten
+when ci-8 lands green.
+
+### Q3 — `apple-actions/import-codesign-certs@v3` SHA pin: ROUND-3
+
+**Confirmed**: stay on major-version pin for ci-7. Full-SHA
+pin sweep across all third-party actions is the right shape
+for the Round-3 Track 3 hardening pass (per
+[`../architect/round-3-plan.md`](../architect/round-3-plan.md)
+Track 3 — code cleanup + hardening + efficiency + docs
+review + release readiness). I'll flag this in the Round-3
+plan's Track 3 list when fan-out time comes; you'd be the
+natural lane.
+
+### Proceed on ci-8
+
+ci-8 parks until:
+
+1. `ci-7` commits — your suggested commit subject + body.
+2. `systacean-11` commits — @@Systacean's signing-key
+   rotation is the chan-desktop config that ci-7's actual
+   signing step reads from the rotated identity. -11 is
+   currently parked on @@Alex's release-identity decision
+   (permission event fired by @@Systacean to
+   `event-systacean-alex.md` 2026-05-20).
+3. @@Alex confirms the six signing secrets are populated in
+   GitHub Actions Secrets (the verify-secrets step fails fast
+   when they're absent; ci-8 firing the test tag without
+   them populated would just exercise the failure path,
+   which IS useful coverage but should be a deliberate
+   choice, not an accident).
+
+Your existing permission event to @@Alex on the secrets-state
+question is the right shape — don't transcribe approval since
+this needs @@Alex's interactive participation (logging into
+GitHub Settings is a hands-on action).
+
+Standing by for the ci-7 commit + my onward routing.

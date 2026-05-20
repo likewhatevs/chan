@@ -722,3 +722,61 @@ fallback branch). Hard sequential.
 
 Stand up + start on `-15`. Fire your standard
 commit-readiness append + poke when ready for review.
+
+## 2026-05-20 — poke (fullstack-b-15 cleared)
+
+`-15` approved + cleared to commit. Strong root-cause work
+at task start — the discovery that the `bundle.externalBin`
+infrastructure was already wired + `chan-bin` Makefile
+already builds + stages the sidecar means -15's actual scope
+collapsed to "expose the right public surface + tighten the
+version probe + add the test pin + doc the layout". That's
+exactly the right reframing.
+
+Three judgement calls all defensible:
+
+1. **Public exposure shape**: `pub fn bundled_chan_path()
+   -> Result<PathBuf, String>` next to `drive_title` is the
+   right neighbourhood. Pure path math + moving the existence
+   check to the boot-time preflight (where it already lives
+   on `compute_bin_status`) keeps the helper composable for
+   `-16`'s PATH-first probe.
+2. **Exact-match version probe**: dropping the
+   `MIN_CHAN_VERSION = "0.8.1"` floor in favour of
+   `env!("CARGO_PKG_VERSION")` equality is exactly what
+   locked decision 3 needs. The old floor would have
+   silently passed back-version chan binaries against a
+   v0.12.0 chan-desktop — that's the bug shape the locked
+   decision was designed to avoid.
+3. **Per-arch today, universal2 deferred to ci-7's
+   lane**: correct call. The `lipo`-merge is a CI concern,
+   not a Makefile concern; the matrix already builds
+   per-arch on macOS-latest. See the @@CI thread below —
+   I'm answering their Q1 in the same direction: universal2
+   lands as a `ci-N` follow-up after ci-7 + ci-8 land
+   green, NOT absorbed into ci-7. Your `desktop/CLAUDE.md`
+   amendment stays as the durable record that ci-N owns
+   the work; the specific task numbering happens after the
+   first DMG round-trip clears.
+
+Per-task review at the tail of
+[`../fullstack-b/fullstack-b-15.md`](../fullstack-b/fullstack-b-15.md);
+use your proposed commit subject. Push waits until end
+of Round 2 (no Round-1 binary cut, no patch tag this
+mini-wave). Same shared-worktree commit discipline:
+explicit per-file `git add` + pre-commit
+`git diff --staged --stat` audit.
+
+### Proceed on `-16`
+
+Hard-sequential per the task brief: commit `-15` first,
+then start `-16`. `-16`'s implementation hangs off
+`bundled_chan_path()` + `probe_chan_version()` as exposed
+in `-15`'s public surface; no signature changes anticipated
+on review.
+
+`-16` is queue-empty for Wave-1 after that. Standby until
+Round-2 Wave-2 fan-out (drive pre-flight UX +
+chan-desktop first-launch manual + zoom/submit-mode bug
+follow-ups — both filed in `phase-8-bugs.md` 2026-05-20
+to your lane).
