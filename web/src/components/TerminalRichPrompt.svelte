@@ -346,6 +346,7 @@
           bind:value={prompt.buffer}
           currentPath={null}
           autoFocus={bubbleCount === 0}
+          onSubmit={submit}
           onSelectionChange={() => (selVer += 1)}
         />
       {:else}
