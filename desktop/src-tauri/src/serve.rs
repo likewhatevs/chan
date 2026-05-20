@@ -356,16 +356,12 @@ pub fn new_drive_window_label(key: &str) -> String {
     format!("{}-{}", drive_window_prefix(key), next_window_seq())
 }
 
-/// Best-effort window title: drive folder basename, fall back to the
-/// full key. Only used to label the webview window we open for a
-/// running serve.
+/// Window title for a local-drive webview: the drive path verbatim.
+/// `fullstack-b-14` swapped the earlier "chan drive: <basename>"
+/// shape after @@Alex flagged that the path is the more useful
+/// signal in the OS window switcher than the prefix + basename.
 fn drive_title(key: &str) -> String {
-    let base = Path::new(key)
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| key.to_string());
-    format!("chan drive: {base}")
+    key.to_string()
 }
 
 /// Stable window-label prefix for a tunneled drive, namespaced
@@ -429,7 +425,10 @@ pub fn spawn_tunneled_drive_window(
         None => new_tunnel_window_label(tenant_label, drive),
     };
     let url_hash = restore.map(|c| c.url_hash).unwrap_or_default();
-    let title = format!("chan drive: {tenant_label} \u{00b7} {drive}");
+    // `fullstack-b-14`: matches the local-drive title shape; the
+    // tunneled drive has no local filesystem path, so we use the
+    // closest analog ("<tenant>·<drive>") with no prefix.
+    let title = format!("{tenant_label} \u{00b7} {drive}");
     build_drive_window(app, &label, &title, url, &url_hash, config_key)
 }
 
@@ -772,6 +771,22 @@ mod tests {
         assert!(KEY_BRIDGE_JS.contains("app.tab.jump"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.next"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.prev"));
+    }
+
+    #[test]
+    fn drive_title_is_the_path_verbatim() {
+        // `fullstack-b-14`: titles are the drive path so the OS
+        // window switcher surfaces the disambiguating signal.
+        // Earlier shape "chan drive: <basename>" lost the path
+        // detail and collided when two drives shared a basename.
+        assert_eq!(
+            drive_title("/Users/alex/dev/github.com/fiorix/chan"),
+            "/Users/alex/dev/github.com/fiorix/chan",
+        );
+        // Trailing slash, edge case, etc. are passed through; we
+        // don't sanitize — the caller's path is the source of truth.
+        assert_eq!(drive_title("/tmp/scratch/"), "/tmp/scratch/");
+        assert_eq!(drive_title(""), "");
     }
 
     #[cfg(unix)]

@@ -67,3 +67,61 @@ current shape before editing.
   permission already in effect from the prior session
   per `event-webtest-b-alex.md`).
 * Push held for the patch-release commit-grouping cut.
+
+## 2026-05-20 — implemented (@@FullStackB)
+
+Two-line + one-test change.
+
+* `drive_title(key)` in `desktop/src-tauri/src/serve.rs:362`
+  now returns `key.to_string()` directly. The earlier
+  `Path::new(key).file_name() ... "chan drive: {base}"`
+  shape is gone. `Path` import stays (still used as a
+  function parameter type at line 105).
+* `spawn_tunneled_drive_window` (same file, line 432)
+  swapped `"chan drive: {tenant_label} \u{00b7} {drive}"`
+  for `"{tenant_label} \u{00b7} {drive}"` — same shape as
+  the local-drive title (no prefix). Tunneled drives have
+  no local filesystem path, so the closest analog is the
+  existing tenant·drive label.
+* New unit test `drive_title_is_the_path_verbatim`
+  pins three cases: typical absolute path, trailing slash,
+  empty string. Catches an accidental revert of the prefix.
+
+### LRU restore path verification
+
+`spawn_local_drive_window` always calls `drive_title(key)`
+regardless of whether `pop_compatible_config` returns a
+restored entry; the title is derived from the live `key`
+each open, not stored in `WindowConfig`. With my change the
+restored window's title is the same path as a fresh window.
+LRU restore behaviour unchanged.
+
+### Pre-push gate
+
+* `cargo fmt --check` — clean.
+* `cargo test -p chan-desktop --bin chan-desktop` — 20/20
+  green (19 baseline + 1 new).
+* `cargo clippy -p chan-desktop --all-targets -- -D warnings`
+  — clean.
+
+Workspace-wide gate (svelte-check, npm build, vitest, full
+clippy, full test) holds until I'm ready to commit; the
+isolated chan-desktop slice is green.
+
+### Suggested commit subject
+
+```
+chan-desktop: window title = drive path verbatim (fullstack-b-14)
+```
+
+### Coordination footprint
+
+* `desktop/src-tauri/src/serve.rs` is currently unmodified
+  by other lanes in `git status`; my edit is the only
+  uncommitted change to this file.
+* Independent of -b-13 (different file). Land in any order.
+
+### Status
+
+Commit-ready. Holding for @@Architect commit clearance.
+@@WebtestB verifies on lane-B per the task body.
