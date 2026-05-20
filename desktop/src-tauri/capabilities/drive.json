@@ -4,6 +4,8 @@
   "description": "Capabilities for per-drive webview windows: drive-* are locally-supervised chan serves, tunnel-* are remote drives reached over chan-tunnel.",
   "windows": ["drive-*", "tunnel-*"],
   "permissions": [
-    "core:webview:allow-set-webview-zoom"
+    "core:webview:allow-set-webview-zoom",
+    "opener:default",
+    "opener:allow-open-url"
   ]
 }

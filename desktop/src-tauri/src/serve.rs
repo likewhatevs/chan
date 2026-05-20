@@ -786,4 +786,75 @@ mod tests {
         let still_alive = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok();
         assert!(!still_alive, "child process should be gone");
     }
+
+    // `fullstack-b-7`: drive and tunnel webviews host the SPA, which
+    // routes external http(s) link clicks through tauri-plugin-opener
+    // via the `plugin:opener|open_url` IPC. Without these permissions
+    // the IPC denies, the SPA falls back to the clipboard-copy notify
+    // branch, and "click external link" looks like a no-op to the
+    // user (the bug Alex reported on 2026-05-20). Pin the capability
+    // shape here so a future capability-file edit can't silently drop
+    // the permissions without the test catching it.
+    const DRIVE_CAPABILITY_JSON: &str = include_str!("../capabilities/drive.json");
+    const DEFAULT_CAPABILITY_JSON: &str = include_str!("../capabilities/default.json");
+
+    fn capability_permissions(raw: &str) -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_str(raw).expect("capability JSON parses");
+        v["permissions"]
+            .as_array()
+            .expect("permissions is an array")
+            .iter()
+            .map(|p| p.as_str().expect("permission is a string").to_string())
+            .collect()
+    }
+
+    fn capability_windows(raw: &str) -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_str(raw).expect("capability JSON parses");
+        v["windows"]
+            .as_array()
+            .expect("windows is an array")
+            .iter()
+            .map(|w| w.as_str().expect("window glob is a string").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn drive_capability_grants_opener_to_drive_and_tunnel_windows() {
+        let windows = capability_windows(DRIVE_CAPABILITY_JSON);
+        assert!(
+            windows.iter().any(|w| w == "drive-*"),
+            "drive capability must target drive-* windows: {windows:?}",
+        );
+        assert!(
+            windows.iter().any(|w| w == "tunnel-*"),
+            "drive capability must target tunnel-* windows: {windows:?}",
+        );
+        let perms = capability_permissions(DRIVE_CAPABILITY_JSON);
+        assert!(
+            perms.iter().any(|p| p == "opener:allow-open-url"),
+            "drive capability must include opener:allow-open-url: {perms:?}",
+        );
+    }
+
+    #[test]
+    fn default_capability_covers_extra_launcher_windows() {
+        // `fullstack-83` lets Cmd+N spawn `main-N` launcher windows.
+        // They must inherit the same capability as `main`, or
+        // external link handling and other plugin IPCs break for the
+        // user the moment they open a second launcher.
+        let windows = capability_windows(DEFAULT_CAPABILITY_JSON);
+        assert!(
+            windows.iter().any(|w| w == "main"),
+            "default capability must still target main: {windows:?}",
+        );
+        assert!(
+            windows.iter().any(|w| w == "main-*"),
+            "default capability must target additional main-N launchers: {windows:?}",
+        );
+        let perms = capability_permissions(DEFAULT_CAPABILITY_JSON);
+        assert!(
+            perms.iter().any(|p| p == "opener:allow-open-url"),
+            "default capability must include opener:allow-open-url: {perms:?}",
+        );
+    }
 }
