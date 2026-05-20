@@ -282,3 +282,149 @@ Per-fix audit trail at docs/journals/phase-8/<agent>/.
   ships when they do.
 * A scope-creep gate. New bugs surfaced post-publish slip
   to v0.11.2 (or roll into Round 2 if substantive).
+
+## RE-ACTIVATED 2026-05-20 — patch release with rich-prompt mini-wave
+
+@@Alex re-activated the patch release with a tighter
+scope: Round-1 commits already in HEAD + the rich-prompt
+mini-wave (`-a-28..-35`, `-b-13` server + SPA, `-b-14`,
+`-s-10` + dead_code follow-up). The signed-DMG north
+star with real keys stays parked behind it (Round-2
+work). Tag fires as **v0.11.1** per the original Round-1
+versioning intent.
+
+### Commit set (canonical, in landing order)
+
+The Round-1 closeout commits already in HEAD (per the
+original list above, frozen at the 2026-05-20 Round-1
+close) are the baseline. The mini-wave layers on top:
+
+#### Mini-wave additions (in landing order, all unpushed)
+
+| Subject                                                                                                     | Commit          | Owner          |
+|-------------------------------------------------------------------------------------------------------------|-----------------|----------------|
+| Rich prompt: ResizeObserver-driven margin reactor for collapse + drag-resize parity (fullstack-a-29)        | `3d708a2`       | @@FullStackA   |
+| Rich prompt: per-prompt page-width slider + cross-tile decoupling (fullstack-a-30)                          | `20ece30`       | @@FullStackA   |
+| BubbleOverlay: explicit dismiss + dismissedIds persistence + Loading flicker fix (fullstack-a-28)           | `1a83050`       | @@FullStackA   |
+| Terminal broadcast selector: drop umbrella toggle + include self + label (fullstack-a-31)                   | `18811e0`       | @@FullStackA   |
+| event_watcher: silently skip non-matching filenames; document naming convention (systacean-10)              | `6bae20b`       | @@Systacean    |
+| chan/src/main.rs: gate not_a_chan_drive_hint on embeddings feature (systacean-8 follow-up)                  | `c1e9c41`       | @@Systacean    |
+| chan-server: per-session shell/agent submit-mode toggle + dispatch_agent_event chord branch (fullstack-b-13 server-side) | `e24b931` | @@FullStackB |
+| chan-desktop: window title = drive path verbatim (fullstack-b-14)                                           | `8dbaaed`       | @@FullStackB   |
+| Rich prompt: shell/agent submit-mode toolbar toggle + SerTab roundtrip + agent-chord submit path (fullstack-b-13 SPA-side) | `dce2373` | @@FullStackB |
+| Graph from here default + ancestor breadcrumb navigation (fullstack-a-33)                                   | TBD             | @@FullStackA   |
+| Chord migration + context-aware spawn + surface unification (fullstack-a-32)                                | TBD             | @@FullStackA   |
+| Wysiwyg: paste markdown unescaped via turndown identity escape (fullstack-a-34)                             | TBD             | @@FullStackA   |
+| File editor: inline rename band above page-width cap (fullstack-a-35)                                       | TBD             | @@FullStackA   |
+
+The TBD rows are sitting in @@FullStackA's working tree
+ready to commit per the batch clearance at the tail of
+[`../alex/event-architect-fullstack-a.md`](../alex/event-architect-fullstack-a.md).
+Recommended order in their commit pass: `-33` → `-32` →
+`-34` → `-35` (hard-pair sequencing for the chord
+handler's dependence on the default-mode graph render).
+
+### Gating verifications before tag
+
+* @@FullStackA commits `-32 / -33 / -34 / -35` (the
+  four TBD rows). Pre-commit `git diff --staged --stat`
+  + post-commit `git show --stat HEAD` per
+  multi-agent-tree discipline.
+* @@WebtestA + @@WebtestB walkthroughs on the rebuilt
+  binary:
+  * @@WebtestA — bubble overlay regressions (-28),
+    collapse dead space (-29), page-width tile
+    decoupling (-30), broadcast selector self+checkbox
+    shape (-31), chord migration + context-aware spawn
+    (-32), graph from-here default + breadcrumb (-33),
+    Wysiwyg paste-unescaped (-34), file rename band
+    (-35).
+  * @@WebtestB — submit-mode toggle against a live
+    Claude Code session (-13 end-to-end), chan-desktop
+    title (-14), event_watcher silent-skip on a
+    stray non-event file (-10).
+* @@CI standby (no signing work this wave; tag is
+  unsigned).
+* Permission events that stayed parked from prior
+  recycle (`-b-7` runtime click, `-b-1` empirical LRU
+  walk) — @@Alex's call whether to clear before tag
+  or roll to v0.11.2.
+
+### Push order
+
+1. @@FullStackA commits the four TBD rows (per the
+   recommended order above) in their session — each as
+   single-purpose, push held.
+2. @@Architect publishes the final commit list in this
+   plan once all 13 mini-wave commits are in HEAD.
+3. @@Systacean re-activates `systacean-3` with the
+   version-bump + tag draft below + executes the push.
+
+### Tag draft (v0.11.1)
+
+Subject line (under 50 chars):
+
+```
+chan v0.11.1 — rich-prompt mini-wave + bug sweep
+```
+
+Body (under 72 chars/line):
+
+```
+First Round-1 patch release after the bug-sweep + detour.
+
+Rich-prompt mini-wave:
+* BubbleOverlay regression cluster (filter + dismiss + flicker).
+* Collapse/expand dead-space recompute.
+* Per-prompt page-width slider + cross-tile decoupling.
+* Terminal broadcast selector polish (self in list +
+  checkboxes + label).
+* Shell/agent submit-mode toolbar toggle + chord encoding
+  for Claude Code (`\x1b[27;9;13~`).
+* Chord migration: Cmd+O / Cmd+P / Cmd+Shift+M with
+  context-aware spawn semantics + surface unification.
+* Graph "from here" as default + ancestor breadcrumb
+  navigation back to drive root.
+* Wysiwyg paste-as-markdown (no escape).
+* Inline file rename band above the page-width cap.
+
+Plus:
+* chan-desktop window title = drive path.
+* event_watcher silent-skip on non-matching filenames.
+* CLI dead_code gate (no-default-features build clean).
+* Round-1 closeout (27 bug fixes + detour tasks).
+
+Known known: codex submit-chord diverges (`\r`); single-
+chord ship with Claude Code's encoding per the
+acceptance directive. Per-agent encoding map locked as
+Round-3 Track 5.
+
+Push held until @@Alex says "cut it".
+```
+
+### After v0.11.1 lands
+
+* @@Systacean's `systacean-3` task closes with the push
+  confirmation; commit-readiness append records the
+  tag SHA.
+* @@WebtestA / @@WebtestB run post-release smoke tests
+  against the cut binary (full chrome walk on the
+  rebuilt SPA + new chord set + agent submit-mode).
+* Round-2 broader fan-out resumes per
+  [`./round-2-plan.md`](./round-2-plan.md) — sequencing
+  decisions still open at the head of that plan.
+* Round-3 Track 5 (per-agent submit-chord encoding map)
+  locked + listed for the eventual Round-3 fan-out.
+* chan-desktop drive-onboarding redesign sits as
+  separate-team work in
+  [`./chan-desktop-onboarding-redesign.md`](./chan-desktop-onboarding-redesign.md).
+
+### What this re-activated plan is NOT
+
+* A re-grouping of the existing 13 mini-wave commits.
+  They're at the right granularity — single-purpose
+  per commit. No squashing.
+* A signed-DMG release. v0.11.1 ships unsigned; the
+  signed-DMG north star with real keys is Round 2.
+* A push trigger. Push happens only when @@Alex says
+  "cut it" after the gating verifications land.

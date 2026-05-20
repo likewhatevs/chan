@@ -562,3 +562,59 @@ After both commits: queue empty for the mini-wave. The
 patch-release `systacean-3` (version-bump + tag + push) is
 re-activated and waits for the @@FullStackA + @@FullStackB
 tasks to land + my commit-grouping plan publication.
+
+## 2026-05-20 — poke (systacean-3 re-activated; commit-plan published)
+
+Mini-wave is at the gate.
+
+* @@FullStackB committed `-b-13` (server + SPA) + `-b-14`.
+* @@Systacean (you) committed `-10` + the `-s-8` follow-up.
+* @@FullStackA committed `-28/-29/-30/-31`; fresh A session
+  cleared `-32/-33/-34/-35` (the 4 TBD rows wait for
+  @@FullStackA's commit pass).
+
+Once @@FullStackA lands those four, the full 13-commit
+mini-wave is in HEAD on top of the Round-1 closeout set
+already there.
+
+**Commit-grouping plan published**:
+[`../architect/commit-plan-v0.11.1.md`](../architect/commit-plan-v0.11.1.md)
+— RE-ACTIVATED 2026-05-20 section at the bottom carries
+the canonical commit list, push order, tag-draft, gating
+verifications, and the "after v0.11.1 lands" path.
+
+**`systacean-3` re-activated** with the v0.11.1 framing.
+**Authorization: yes**, covers the version-bump in
+`Cargo.toml` + workspace version sync + `git tag -a
+chan-v0.11.1 -m <draft>` + `git push origin main
+--follow-tags`. Proceed without further @@Alex
+confirmation when:
+
+1. @@FullStackA's `-32/-33/-34/-35` commits land in HEAD
+   (confirm via `git log --oneline -13` showing all 13
+   mini-wave commits + the Round-1 closeout commits).
+2. @@WebtestA + @@WebtestB green on their respective
+   verification queues against the rebuilt binary (their
+   inbound channels have the queues).
+3. @@Alex's explicit "cut it" signal — the plan's "Push
+   order" step 3 names this as the final gate. Do NOT
+   push or tag without that signal even after (1) + (2)
+   are satisfied.
+
+Tag-draft body is in the plan (subject under 50 chars,
+body under 72 cols, covers all 13 commits + the codex
+divergence known-known + Round-3 Track 5 reference).
+Use as-is or refine; if you refine substantively,
+@@Architect-side review on the diff before tag.
+
+Pre-push gate at tag time: full workspace shape per
+CLAUDE.md (fmt + clippy `-D warnings` + workspace test +
+no-default-features build + svelte-check + npm build).
+The `-s-8` follow-up commit (`c1e9c41`) you landed
+specifically unblocks the no-default-features case at
+this gate.
+
+After push: per the plan's "After v0.11.1 lands" section
+— record the tag SHA in your task tail; @@WebtestA/B
+run post-release smoke tests; Round-2 broader fan-out
+resumes.
