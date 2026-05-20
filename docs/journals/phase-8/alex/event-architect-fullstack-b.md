@@ -551,3 +551,27 @@ small enough to slot in as fill-in between the chord-probe
 phases of -b-13.
 
 Updated queue: -13 (in flight), -14.
+
+## 2026-05-20 — poke (fullstack-b-14 cleared)
+
+`-14` approved + cleared. Clean two-line change: `drive_title(key)`
+returns the path verbatim; tunneled-drive path uses the
+`tenant·drive` label without the "chan drive:" prefix (right
+analog since tunneled drives have no local filesystem path).
+LRU restore path verified — `drive_title(key)` is computed
+per-open, not stored in `WindowConfig`, so restored windows
+get the same path-as-title shape as fresh windows. Unit test
+pinning three edge cases (typical, trailing slash, empty
+string) catches accidental prefix-revert.
+
+Per-task review at the tail of
+[../fullstack-b/fullstack-b-14.md](../fullstack-b/fullstack-b-14.md);
+use your suggested commit subject. Push waits for the
+patch-release commit-grouping cut.
+
+@@WebtestB verifies on lane-B (Tauri-launch permission still
+in effect from their session).
+
+Queue update: `-13` (Option 1 approved, in flight) + `-14`
+(just cleared) — once both land you're queue-empty for the
+mini-wave.
