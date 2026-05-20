@@ -18,7 +18,7 @@ use crate::event_watcher::{SurveyAnswer, SurveyScope};
 use crate::signal::now_unix_secs;
 use crate::state::AppState;
 use crate::terminal_sessions::{
-    CloseReason, CreateError, CreateOptions, SessionEvent, ALT_SCREEN_ATTACH_PRELUDE,
+    CloseReason, CreateError, CreateOptions, SessionEvent, SubmitMode, ALT_SCREEN_ATTACH_PRELUDE,
 };
 
 const DEFAULT_COLS: u16 = 80;
@@ -41,6 +41,15 @@ pub struct TerminalQuery {
 #[derive(Debug, Deserialize)]
 pub struct WatcherBody {
     path: String,
+}
+
+/// `fullstack-b-13`: per-session shell-vs-agent submit-mode flip.
+/// Accepts `"shell"` or `"agent"`; any other value is a 400. SPA
+/// flips this whenever the rich-prompt toolbar toggle changes
+/// state.
+#[derive(Debug, Deserialize)]
+pub struct SubmitModeBody {
+    mode: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -218,6 +227,37 @@ pub async fn api_unset_terminal_watcher(
         StatusCode::NO_CONTENT.into_response()
     } else {
         (StatusCode::NOT_FOUND, "terminal watcher not found").into_response()
+    }
+}
+
+/// `fullstack-b-13`: flip a session's submit-mode (shell ↔ agent).
+/// SPA hits this whenever the rich-prompt toolbar toggle changes
+/// state. Mirrors the `set_terminal_watcher` shape (path-bound
+/// session id, JSON body, 204 on success, 404 when the session id
+/// is unknown).
+pub async fn api_set_terminal_submit_mode(
+    State(state): State<Arc<AppState>>,
+    AxumPath(session): AxumPath<String>,
+    Json(body): Json<SubmitModeBody>,
+) -> Response {
+    if state.tunnel_public {
+        return err_tunnel_public_locked();
+    }
+    let mode = match body.mode.as_str() {
+        "shell" => SubmitMode::Shell,
+        "agent" => SubmitMode::Agent,
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("unknown submit mode: {other:?} (expected \"shell\" or \"agent\")"),
+            )
+                .into_response();
+        }
+    };
+    if state.terminal_sessions.set_submit_mode(&session, mode) {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        (StatusCode::NOT_FOUND, "terminal session not found").into_response()
     }
 }
 
@@ -1864,5 +1904,69 @@ mod tests {
                 && out.contains("<CHAN_CONTROL_SOCKET=/tmp/chan-control-test.sock>"),
             "mcp_env=false should not affect chan control env vars, got {out:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn api_set_terminal_submit_mode_flips_session_field() {
+        // `fullstack-b-13`: PUT /api/terminal/:session/submit-mode
+        // mirrors set_terminal_watcher: 204 on success, 404 when the
+        // session is unknown, 400 on a body the parser doesn't
+        // recognise.
+        let state = crate::state::test_support::make_test_state(false, false);
+        let response = api_create_terminal(
+            State(state.clone()),
+            Ok(Json(create_terminal_body("sleep 60"))),
+        )
+        .await;
+        let json = response_json(response).await;
+        let session = json["session"].as_str().expect("session id").to_string();
+
+        // shell → agent.
+        let response = api_set_terminal_submit_mode(
+            State(state.clone()),
+            AxumPath(session.clone()),
+            Json(SubmitModeBody {
+                mode: "agent".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        // agent → shell.
+        let response = api_set_terminal_submit_mode(
+            State(state.clone()),
+            AxumPath(session.clone()),
+            Json(SubmitModeBody {
+                mode: "shell".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        // Unknown mode value → 400.
+        let response = api_set_terminal_submit_mode(
+            State(state.clone()),
+            AxumPath(session.clone()),
+            Json(SubmitModeBody {
+                mode: "bogus".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // Unknown session → 404.
+        let response = api_set_terminal_submit_mode(
+            State(state.clone()),
+            AxumPath("nonexistent".into()),
+            Json(SubmitModeBody {
+                mode: "agent".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        state
+            .terminal_sessions
+            .close(&session, CloseReason::Explicit);
     }
 }

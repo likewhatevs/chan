@@ -32,6 +32,42 @@ const REDRAW_WOBBLE_DELAY: Duration = Duration::from_millis(50);
 
 pub const ALT_SCREEN_ATTACH_PRELUDE: &[u8] = b"\x1b[?1049h\x1b[2J\x1b[H";
 
+/// `fullstack-b-13`: per-session submit-mode toggle. Drives the
+/// trailing-byte choice when `dispatch_agent_event` writes a
+/// reply-notification "poke" into the receiving session's PTY.
+///
+/// * `Shell` (default): `b"poke\n"`. Today's behaviour. A shell
+///   sees the trailing `\n` as Enter and submits the line.
+/// * `Agent`: `b"poke\x1b[27;9;13~"`. Claude Code v2.1.145 reads
+///   `\x1b[27;9;13~` (xterm modifyOtherKeys CSI for Cmd+Enter) as
+///   the submit chord; bare `\n` lands as a newline in its
+///   multi-line draft and never submits. Probed live 2026-05-20;
+///   reproducer + data table at
+///   `docs/journals/phase-8/fullstack-b/fullstack-b-13.md`.
+///
+/// codex v0.130.0 diverges (submits on `\r`, ignores
+/// `\x1b[27;9;13~` silently). Per @@Alex's "if codex fails it's
+/// fine, just want the signal" directive, we ship single-chord
+/// with Claude Code's encoding; per-agent encoding map is deferred
+/// to Round-3 Track 5.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
+pub enum SubmitMode {
+    #[default]
+    Shell,
+    Agent,
+}
+
+impl SubmitMode {
+    /// Trailing-byte sequence appended after the "poke" notification
+    /// literal in `dispatch_agent_event`.
+    fn submit_chord(self) -> &'static [u8] {
+        match self {
+            SubmitMode::Shell => b"\n",
+            SubmitMode::Agent => b"\x1b[27;9;13~",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RegistryConfig {
     pub drive_root: PathBuf,
@@ -499,7 +535,32 @@ impl Registry {
         };
         // TODO: wire /clear, /effort, and /fast automation here once
         // @@Alex's richer control commands are cut for a later task.
-        session.send_input(b"poke\n");
+        //
+        // `fullstack-b-13`: trailing chord depends on the receiving
+        // session's submit-mode. Shell mode → `\n` (the original
+        // behaviour). Agent mode → `\x1b[27;9;13~` (Claude Code's
+        // xterm modifyOtherKeys Cmd+Enter chord, probed live
+        // 2026-05-20). The "poke" literal itself is unchanged.
+        let mode = session.submit_mode();
+        let mut bytes = Vec::with_capacity(4 + mode.submit_chord().len());
+        bytes.extend_from_slice(b"poke");
+        bytes.extend_from_slice(mode.submit_chord());
+        session.send_input(&bytes);
+    }
+
+    /// `fullstack-b-13`: SPA-driven flip of a session's submit-mode.
+    /// Returns `true` when the session was found and updated;
+    /// `false` when the session id is unknown (the SPA may have a
+    /// stale handle after a session close + restart).
+    pub fn set_submit_mode(&self, session_id: &str, mode: SubmitMode) -> bool {
+        let sessions = self.sessions.lock().expect("terminal registry poisoned");
+        match sessions.get(session_id) {
+            Some(session) => {
+                session.set_submit_mode(mode);
+                true
+            }
+            None => false,
+        }
     }
 
     fn find_agent_session(&self, target: &str) -> Option<Arc<Session>> {
@@ -552,6 +613,12 @@ struct Session {
     watcher_dir: Mutex<Option<PathBuf>>,
     preflight: Mutex<Option<PreflightMonitor>>,
     closed: AtomicBool,
+    /// `fullstack-b-13`: per-session shell-vs-agent submit-mode
+    /// toggle. `true` ⇒ Agent; `false` ⇒ Shell (default). Set via
+    /// the SPA-driven `PUT /api/terminal/:session/submit-mode`
+    /// route; read by `dispatch_agent_event` to pick the trailing
+    /// chord bytes after the "poke" notification.
+    agent_mode: AtomicBool,
 }
 
 impl Session {
@@ -643,6 +710,7 @@ impl Session {
             watcher_dir: Mutex::new(None),
             preflight: Mutex::new(opts.preflight.map(PreflightMonitor::new)),
             closed: AtomicBool::new(false),
+            agent_mode: AtomicBool::new(false),
         });
 
         {
@@ -781,6 +849,19 @@ impl Session {
 
     fn bytes_since_focus(&self) -> u64 {
         self.bytes_since_focus.load(Ordering::Relaxed)
+    }
+
+    fn submit_mode(&self) -> SubmitMode {
+        if self.agent_mode.load(Ordering::Relaxed) {
+            SubmitMode::Agent
+        } else {
+            SubmitMode::Shell
+        }
+    }
+
+    fn set_submit_mode(&self, mode: SubmitMode) {
+        self.agent_mode
+            .store(matches!(mode, SubmitMode::Agent), Ordering::Relaxed);
     }
 
     fn request_redraw(&self) {
@@ -1333,6 +1414,7 @@ mod tests {
             watcher_dir: Mutex::new(None),
             preflight: Mutex::new(None),
             closed: AtomicBool::new(false),
+            agent_mode: AtomicBool::new(false),
         })
     }
 
@@ -1780,6 +1862,117 @@ mod tests {
         );
         assert_eq!(registry.watcher_dropped_events(), 0);
         registry.close(handle.id(), CloseReason::Explicit);
+    }
+
+    #[tokio::test]
+    async fn dispatch_agent_event_uses_chord_in_agent_mode() {
+        // `fullstack-b-13`: when the receiving session is in
+        // submit-mode = Agent, dispatch_agent_event appends Claude
+        // Code's xterm modifyOtherKeys Cmd+Enter chord
+        // (\x1b[27;9;13~) instead of a trailing \n. Probed live
+        // 2026-05-20 against Claude Code v2.1.145.
+        let registry = Arc::new(Registry::new(test_config(4096, 4, 60)));
+        let mut handle = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: Some("FullStackB".into()),
+                window_id: None,
+                mcp_env: true,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
+            })
+            .unwrap();
+        let id = handle.id().to_string();
+
+        assert!(registry.set_submit_mode(&id, SubmitMode::Agent));
+
+        registry.dispatch_agent_event(AgentEvent {
+            id: "event-1".into(),
+            event_type: crate::event_watcher::AgentEventType::Poke,
+            from: "@@Architect".into(),
+            to: "@@FullStackB".into(),
+            topic: None,
+            questions: None,
+            standing_options: None,
+            scope: None,
+            answers: None,
+            scope_grant: None,
+            note: None,
+        });
+
+        // The PTY echoes the input we wrote, so the chord bytes
+        // show up in the output ring. The default shell line
+        // discipline renders ESC as the caret-notation pair `^[`,
+        // so the visible echo is `poke^[[27;9;13~`. Searching for
+        // the chord's `[27;9;13~` fingerprint and the absence of a
+        // `poke\n` (shell-mode shape) catches both halves: the
+        // chord landed, AND it replaced the `\n` (not appended to
+        // it).
+        let out = collect_until(&mut handle, "27;9;13~", Duration::from_secs(5)).await;
+        assert!(
+            out.contains("[27;9;13~"),
+            "agent-mode dispatch did not emit the chord bytes; got {out:?}",
+        );
+        assert!(
+            !out.contains("poke\n"),
+            "agent-mode dispatch still emitted poke+\\n; got {out:?}",
+        );
+        assert_eq!(registry.watcher_dropped_events(), 0);
+        registry.close(&id, CloseReason::Explicit);
+    }
+
+    #[test]
+    fn set_submit_mode_flips_field_and_handles_missing_session() {
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let handle = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: None,
+                window_id: None,
+                mcp_env: false,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
+            })
+            .unwrap();
+        let id = handle.id().to_string();
+
+        // Default is Shell.
+        let session = {
+            let sessions = registry.sessions.lock().expect("registry poisoned");
+            sessions.get(&id).cloned().expect("session in registry")
+        };
+        assert_eq!(session.submit_mode(), SubmitMode::Shell);
+
+        // Flip to Agent.
+        assert!(registry.set_submit_mode(&id, SubmitMode::Agent));
+        assert_eq!(session.submit_mode(), SubmitMode::Agent);
+
+        // Flip back to Shell.
+        assert!(registry.set_submit_mode(&id, SubmitMode::Shell));
+        assert_eq!(session.submit_mode(), SubmitMode::Shell);
+
+        // Unknown session id returns false (the SPA may carry a stale
+        // handle after a session close + restart; the route surfaces
+        // the false as a 404).
+        assert!(!registry.set_submit_mode("nonexistent", SubmitMode::Agent));
+
+        registry.close(&id, CloseReason::Explicit);
+    }
+
+    #[test]
+    fn submit_mode_chord_constants_match_probe_findings() {
+        // `fullstack-b-13`: shell chord is `\n` (Enter); agent chord
+        // is `\x1b[27;9;13~` (Claude Code v2.1.145 modifyOtherKeys
+        // Cmd+Enter). codex's `\r` is documented divergence; not
+        // tested here since the single-chord ship pins Claude Code's
+        // encoding.
+        assert_eq!(SubmitMode::Shell.submit_chord(), b"\n");
+        assert_eq!(SubmitMode::Agent.submit_chord(), b"\x1b[27;9;13~");
+        assert_eq!(SubmitMode::default(), SubmitMode::Shell);
     }
 
     #[test]

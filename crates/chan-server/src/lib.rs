@@ -55,9 +55,9 @@ use routes::{
     api_list_sessions, api_move, api_patch_config, api_patch_drive, api_patch_server_config,
     api_post_attachment, api_post_contacts_import, api_put_session, api_read_file, api_report_file,
     api_report_prefix, api_resolve_link, api_restart_terminal, api_search_content,
-    api_search_files, api_set_terminal_watcher, api_storage_reset, api_terminal_event_reply,
-    api_terminal_watcher_events, api_terminal_ws, api_unset_terminal_watcher, api_write_file,
-    ws_upgrade,
+    api_search_files, api_set_terminal_submit_mode, api_set_terminal_watcher, api_storage_reset,
+    api_terminal_event_reply, api_terminal_watcher_events, api_terminal_ws,
+    api_unset_terminal_watcher, api_write_file, ws_upgrade,
 };
 #[cfg(feature = "embeddings")]
 use routes::{
@@ -84,7 +84,7 @@ use std::time::Duration;
 
 use axum::extract::DefaultBodyLimit;
 use axum::middleware;
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use chan_drive::{Drive, Library, SearchAggression, WatchEvent};
 use tokio::net::TcpListener;
@@ -871,6 +871,15 @@ fn router(state: Arc<AppState>) -> Router {
         .route(
             "/api/terminal/:session/event-reply",
             post(api_terminal_event_reply),
+        )
+        // `fullstack-b-13`: per-session shell-vs-agent submit-mode
+        // flip. SPA hits this whenever the rich-prompt toolbar
+        // toggle changes; the server reads the field in
+        // `dispatch_agent_event` to pick the trailing chord bytes
+        // after the "poke" notification.
+        .route(
+            "/api/terminal/:session/submit-mode",
+            put(api_set_terminal_submit_mode),
         )
         .route("/ws", get(ws_upgrade))
         // `fullstack-b-12`: bundled font assets (Source Code Pro
