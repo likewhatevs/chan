@@ -5,6 +5,7 @@
     activeLayout,
     closeTab,
     enterPaneMode,
+    flipHybrid,
     focusColorForWindow,
     isDirty,
     detachTabToPaneEdge,
@@ -32,6 +33,7 @@
   import {
     Check,
     FileText,
+    FlipHorizontal2,
     Folder,
     LayoutGrid,
     Moon,
@@ -936,25 +938,12 @@
           title="back side has unread activity (Cmd+K Tab to flip)"
         ></span>
       {/if}
-      <!-- fullstack-59: per-Hybrid theme override toggle. Icon
-           shows the theme the click WILL apply (Sun in dark mode
-           offers a switch to light; Moon in light mode offers a
-           switch to dark). When the pane already has an override,
-           a second click clears it back to "follow global". -->
-      <button
-        type="button"
-        class="pane-theme-toggle"
-        class:overridden={pane.theme !== undefined}
-        title={paneThemeTooltip()}
-        aria-label={paneThemeTooltip()}
-        onclick={togglePaneTheme}
-      >
-        {#if paneEffectiveTheme() === "dark"}
-          <Sun size={14} strokeWidth={1.75} aria-hidden="true" />
-        {:else}
-          <Moon size={14} strokeWidth={1.75} aria-hidden="true" />
-        {/if}
-      </button>
+      <!-- `fullstack-a-27`: the per-Hybrid theme toggle button used
+           to live here as standalone chrome (`fullstack-59`); @@Alex
+           asked to move it into the hamburger so the pane chrome
+           stays leaner. The togglePaneTheme + paneThemeTooltip
+           helpers below stay — the hamburger menu entry calls
+           them. -->
       <!-- Pane-only controls live inside a single hamburger menu
            to match the file browser / search / graph overlays.
            Split rows hide when the platform doesn't allow any splits
@@ -974,6 +963,44 @@
             <span class="menu-row-chord">{chordLabel("app.pane.mode")}</span>
           </button>
         </li>
+        <!-- `fullstack-a-27`: Hybrid-specific operations. Theme
+             toggle moved from the standalone pane-chrome button
+             into this menu; flip is the new click affordance for
+             the existing `Cmd+. Tab` chord (`fullstack-a-7`).
+             Both gated on `pane.back !== undefined` — a pane
+             only becomes a Hybrid once flipped at least once
+             (the chord lazy-creates back; this menu surface is
+             for already-Hybrid panes). -->
+        {#if pane.back !== undefined}
+          <li class="sep" role="separator"></li>
+          <li>
+            <button
+              role="menuitem"
+              onclick={togglePaneTheme}
+              title={paneThemeTooltip()}
+            >
+              {#if paneEffectiveTheme() === "dark"}
+                <Sun size={16} strokeWidth={1.75} aria-hidden="true" />
+              {:else}
+                <Moon size={16} strokeWidth={1.75} aria-hidden="true" />
+              {/if}
+              <span class="menu-row-label">
+                {paneEffectiveTheme() === "dark" ? "Light mode" : "Dark mode"}
+              </span>
+            </button>
+          </li>
+          <li>
+            <button
+              role="menuitem"
+              onclick={() => { flipHybrid(pane.id); closePaneHamburgerMenu(); }}
+              title="Flip Hybrid front/back"
+            >
+              <FlipHorizontal2 size={16} strokeWidth={1.75} aria-hidden="true" />
+              <span class="menu-row-label">Flip pane</span>
+              <span class="menu-row-chord">{chordLabel("app.pane.mode")} Tab</span>
+            </button>
+          </li>
+        {/if}
         <li class="sep" role="separator"></li>
         <li class="menu-label">
           <Palette size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -1390,32 +1417,10 @@
   @media (prefers-reduced-motion: reduce) {
     .back-attention { animation: none; }
   }
-  /* fullstack-59: per-Hybrid theme toggle. Same chrome footprint
-     as the hamburger so the two read as a pair; coloured swatch
-     ring when the override is active so it's visible at a glance
-     that this pane diverges from the global theme. */
-  .pane-theme-toggle {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    padding: 0;
-    background: transparent;
-    color: var(--text-secondary);
-    border: 1px solid transparent;
-    border-radius: 4px;
-    cursor: pointer;
-    flex-shrink: 0;
-  }
-  .pane-theme-toggle:hover {
-    background: var(--hover-bg);
-    color: var(--text);
-  }
-  .pane-theme-toggle.overridden {
-    color: var(--link);
-    border-color: var(--link);
-  }
+  /* `fullstack-a-27` removed the standalone `.pane-theme-toggle`
+     chrome button (per `fullstack-59`); the theme toggle now lives
+     as a hamburger menu entry on Hybrid panes. The button CSS
+     went with it. */
   :global(.hamburger-menu .menu-label) {
     display: flex;
     align-items: center;

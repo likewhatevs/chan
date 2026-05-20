@@ -11,8 +11,12 @@ describe("fullstack-59: per-Hybrid theme render wiring", () => {
     expect(pane).toContain("data-theme={pane.theme}");
   });
 
-  test("Pane chrome renders the theme-toggle button", () => {
-    expect(pane).toContain("class=\"pane-theme-toggle\"");
+  test("Pane hamburger renders the theme-toggle entry (fullstack-a-27 relocation)", () => {
+    // `fullstack-a-27` moved the theme toggle from a standalone
+    // `class="pane-theme-toggle"` button in the pane chrome into
+    // the hamburger menu (Hybrid panes only). The handler reference
+    // is the load-bearing pin — wherever the toggle lives, this
+    // string must appear so the function itself stays wired.
     expect(pane).toContain("togglePaneTheme");
   });
 
