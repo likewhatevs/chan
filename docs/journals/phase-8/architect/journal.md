@@ -901,3 +901,77 @@ narrowly scoped).
 Standby for @@Alex to spawn fresh agent sessions via the
 bootstrap prompt; I'll cut Wave-1 task files at fan-out
 time.
+
+## 2026-05-21 — design decision: Hybrid back-side becomes per-surface config
+
+@@Alex's [`../alex/hybrid-revisited.md`](../alex/hybrid-revisited.md)
+lands a substantial Hybrid pane semantic change for phase-8.
+
+### What changes
+
+Back side of a Hybrid pane stops being "another collection of
+content tabs" and becomes a **per-surface configuration
+surface** scoped to the type of the currently-active front
+tab. Inspiration: Propellerheads Reason flip-the-rack UX.
+
+| Front-tab type        | Back-side content                                       |
+|-----------------------|---------------------------------------------------------|
+| Hybrid Terminal       | Terminal settings (scrollback, TERM, font, etc.)        |
+| Hybrid Editor         | Editor settings (Theme, Layout, Date Pills, On Save)    |
+| Hybrid Graph          | Node-type legend grid `[Node] [Colour]`                 |
+| Hybrid File Browser   | Placeholder for v1                                       |
+
+Theme propagation simplifies: drop front/back independent
+theme (was `-b-5`); both sides of a Hybrid share the single
+per-Hybrid theme value. `-a-27` hamburger theme toggle flips
+that single value.
+
+### Settings overlay residue
+
+`Cmd+,` Settings overlay stays as the home for drive-level +
+app-level settings (semantic search per `-a-21`, future
+Reports, window-config per `-b-1`, About / attribution). The
+surface-specific settings (Terminal + Editor) MIGRATE OUT
+into the Hybrid back-sides. UI-only relocation; storage
+shape unchanged.
+
+### Recently-landed work that gets relocated
+
+* `-b-11` Terminal section (scrollback + TERM) → Hybrid
+  Terminal back.
+* `-a-25` On Save toggle → Hybrid Editor back.
+
+Acceptable churn — `Preferences` shape unchanged, autosave
+wire unchanged, only the mounting point of the UI changes.
+
+### Implementation breakdown (preliminary)
+
+5 tasks across @@FullStackA's lane (preliminary numbering at
+fan-out):
+
+* Task A — Hybrid back-side architecture refactor.
+* Task B — Terminal Settings migration.
+* Task C — Editor Settings migration.
+* Task D — Hybrid Graph legend grid.
+* Task E — Drop front/back independent theme.
+
+Recommended sequencing: Task A rides Wave 2 as a hard-prereq;
+Tasks B/C/D/E land in Wave 3. Or all five in Wave 3 if Wave 2
+feels full. Locked at fan-out per @@Alex's preference.
+
+### Open questions surveyed at fan-out
+
+* Hybrid File Browser back: empty placeholder for v1 (recommend)
+  vs minimal first config (e.g., default watcher-scope mode
+  per `-b-6`)?
+* Search overlay: stays out-of-Hybrid (recommend) vs eventually
+  joins as a 5th Hybrid surface?
+* Wave 2 vs Wave 3 split for the 5 tasks?
+
+### Plan artifact
+
+Full section added to
+[`round-2-plan.md`](round-2-plan.md) §"Hybrid back-side
+revisited" (between the metadata import/export scope sketch
+and the Wave-2 dispatch table). Cross-references this journal
+entry as the decisions-log anchor.

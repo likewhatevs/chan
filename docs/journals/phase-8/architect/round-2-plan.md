@@ -785,6 +785,169 @@ Round 2; pairs with items 2 (pre-flight + BOOT) + 4
 (Infographics tab) so it composes naturally with the
 two structural changes in this round.
 
+### Hybrid back-side revisited — flip becomes per-surface configuration (added 2026-05-21)
+
+Source: [`../alex/hybrid-revisited.md`](../alex/hybrid-revisited.md).
+@@Alex's spec for the Hybrid back-side semantics change. The
+back of a Hybrid pane stops being "more tabs" and becomes a
+**per-surface configuration surface** scoped to the type of
+the currently-selected front tab. Inspiration: Propellerheads
+Reason (90s music software) — flip the rack to see the wiring
+behind the front panel.
+
+#### Design summary
+
+* **Front side**: still the content tabs (terminals, files,
+  FB, graph). Unchanged from today.
+* **Back side**: a configuration surface specific to the type
+  of the currently-active front tab. NOT another collection
+  of content tabs.
+* **Flip semantic**: flip reveals settings for the surface
+  family the user is in. Switching front tab while flipped
+  swaps the back's content to the new tab's settings.
+* **Theme**: drop front/back independent theme (the override
+  landed in `-b-5`). Both sides of a Hybrid share the same
+  per-Hybrid theme. The hamburger theme toggle from `-a-27`
+  flips both sides at once; per-pane theme still differs
+  from other panes.
+* **Flip animation**: keep `-a-22`'s half-flip animation.
+  Only the WHAT-IS-BEHIND changes; the HOW-IT-LOOKS-FLIPPING
+  stays.
+
+#### Per-surface back-side scope
+
+| Front-tab type | Back-side content                                                                                        |
+|----------------|----------------------------------------------------------------------------------------------------------|
+| Hybrid Terminal | All terminal settings currently in the Settings overlay (scrollback MB, default TERM, font, etc.). Carries an explicit warning: "these settings apply to ALL terminals, not just this one". |
+| Hybrid Editor   | Editor settings currently in Settings: Theme, Layout, Date Pills, On Save (per `-a-25`).                |
+| Hybrid Graph    | Legend grid: `[Node] [Colour]` rows for each node type chan supports — `Dir`, `File (Regular, Code, Document, Contact)`, `Hashtag`, `Mention`, `Language (Code)`. |
+| Hybrid File Browser | Placeholder for now ("FB has no per-surface configuration; reserved for future use" or similar). |
+
+Each back-side surface carries the family name as its title
+band (e.g., "Hybrid Terminal" / "Hybrid Editor" / "Hybrid
+Graph" / "Hybrid File Browser"). The title is the visual
+anchor that confirms which surface's settings the user is
+looking at after the flip.
+
+#### Settings-overlay residue
+
+The Settings overlay is NOT going away entirely — drive-level
++ app-level settings stay there. What MOVES:
+
+* **Out of Settings, into Hybrid Terminal back**:
+  scrollback MB (from `-b-11`), default TERM (from `-b-11`),
+  any future font controls (from the deferred bundled-font
+  work).
+* **Out of Settings, into Hybrid Editor back**:
+  Theme, Layout, Date Pills, On Save (from `-a-25`).
+* **Stays in Settings**: drive-level toggles (semantic search
+  per `-a-21`, future per-drive Reports), app-level config
+  (window state per `-b-1`), About / attribution (Source Code
+  Pro OFL from `-b-12`, future markmap MIT).
+
+Settings overlay still spawns via `Cmd+,` per macOS convention
+(established by `-a-7`).
+
+#### Churn note — v0.11.1 work partially relocates
+
+Several v0.11.1-landed Settings entries get migrated out of
+the Settings overlay into their respective Hybrid back-sides:
+
+* `-b-11` Terminal section (scrollback MB + default TERM)
+  → Hybrid Terminal back.
+* `-a-25` On Save toggle → Hybrid Editor back.
+* Future editor settings (Theme, Layout, Date Pills if any
+  of those entries exist or land later) → Hybrid Editor back.
+
+This is acceptable churn — the Settings entries themselves
+keep their persistence shape (same `Preferences` fields,
+same autosave wire); only the UI mounting point changes.
+Worth flagging in the migration task that the
+storage-vs-presentation split makes this a UI-only relocation
+in code, not a data migration.
+
+#### Implementation breakdown (preliminary)
+
+Substantial. Likely 3-5 tasks across `-a-N` slots:
+
+* **Task A — Hybrid back-side architecture refactor**
+  (@@FullStackA): introduce the back-side configuration-
+  surface concept. New per-surface component type
+  (`HybridTerminalConfig.svelte` / `HybridEditorConfig.svelte` /
+  `HybridGraphConfig.svelte` / placeholder). Pane.svelte's
+  flip behaviour reads the active front-tab type + mounts the
+  matching back-side component. Drop front/back independent
+  theme + tabs collections; back side becomes single config
+  view, not a tab strip.
+* **Task B — Terminal Settings migration** (@@FullStackA):
+  move `-b-11`'s Terminal section out of `SettingsPanel.svelte`
+  into `HybridTerminalConfig.svelte`. Settings storage shape
+  unchanged. Warning copy about "applies to all terminals"
+  added.
+* **Task C — Editor Settings migration** (@@FullStackA):
+  move the Editor section (Theme / Layout / Date Pills / On
+  Save) out of `SettingsPanel.svelte` into
+  `HybridEditorConfig.svelte`. Settings storage shape
+  unchanged.
+* **Task D — Hybrid Graph legend grid** (@@FullStackA): build
+  the `[Node] [Colour]` legend grid for the 6 node-type
+  families in `HybridGraphConfig.svelte`. Read colour tokens
+  from the graph's existing colour-scheme map. Composes with
+  `-a-33`'s graph-from-here default + ancestor breadcrumb
+  work.
+* **Task E — Drop front/back independent theme**
+  (@@FullStackA): simplify `-b-5`'s per-Hybrid theme override
+  to be SINGLE per-Hybrid value (no front/back split). Update
+  `-a-27` hamburger theme toggle to flip the single value.
+  Documentation / test updates.
+
+#### Open questions for @@Alex (survey at scoping time)
+
+1. **Per-tab vs per-surface scope**: confirmed per the bug
+   bullet "settings impact all terminals, not just the
+   current terminal" — settings are PER-TYPE (one terminal
+   config back applies to every terminal in this Hybrid),
+   not PER-TAB. Confirmed.
+2. **Where does Hybrid File Browser back land in v1**: empty
+   placeholder ("reserved for future use" message), or a
+   minimal first config (e.g., default watcher-scope mode
+   per `-b-6`)? Recommend placeholder for v1; add config
+   later if affordances emerge.
+3. **Hybrid Search back**: search overlay isn't a Hybrid
+   surface today (it's a global overlay, spawn via `Cmd+K F`).
+   Does it ever become one? @@Alex's spec lists 4 (5 with
+   markmap if/when it lands as a tab type) Hybrid surfaces +
+   the search overlay separately. Recommend: search overlay
+   stays out-of-Hybrid for now; revisit only if it earns the
+   per-Hybrid scope.
+4. **Sequencing within Round-2**: Wave 2 or Wave 3? This is
+   a major SPA architecture change; pairing with the
+   rich-prompt session-evolution wave 2 might be too much
+   surface area in one wave. Recommend: split — Task A
+   (architecture refactor) rides Wave 2 as a hard-prereq;
+   Tasks B/C/D/E land in Wave 3. Or all 5 in Wave 3 if Wave 2
+   feels full.
+
+#### Cross-impact with this session's Round-2 Wave-1 work
+
+* **No conflict** with Wave-1's signed-DMG pipeline (CI +
+  Systacean + chan-desktop bundling) — Wave-1 is build-
+  pipeline work, Hybrid-revisited is SPA UI architecture.
+* **Composes with `-a-32`'s chord migration** — chord set
+  unchanged; only the back-side behaviour shifts.
+* **Composes with `-a-22`'s flip animation** — animation
+  unchanged; only the destination changes.
+* **Simplifies `-b-5`** — front/back theme split was load-
+  bearing for the prior "back is another tab collection"
+  shape; under the new shape, single per-Hybrid theme is
+  sufficient.
+* **Markmap feature** (filed earlier today) — third StyleToolbar
+  mode (wysiwyg / source / markmap) is orthogonal to the
+  Hybrid back-side refactor. Markmap is read-only content
+  within the Hybrid Editor front; Hybrid Editor back keeps the
+  same config surface regardless of which front-side mode is
+  active.
+
 ### Wave 2 — feature track (sequenced after wave 1 stabilises)
 
 | Task           | Owner        | Source                                                                              |

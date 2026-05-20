@@ -404,6 +404,193 @@
   - lane: @@FullStackA (BubbleOverlay rendering owner; same lane as `-a-28` which last touched this surface). Single-file fix likely in `web/src/components/BubbleOverlay.svelte` — find the spinner / `0:00` markup, gate on a timing-data-present check
   - dispatched for v0.11.2 mini-wave (if cut) OR Round-2 wave-2 against @@FullStackA; task cut when v0.11.2 scoping firms up
 
+- File browser tab loses expand/collapse state across tab switches
+  - flagged 2026-05-20 by @@Alex dogfooding v0.11.1: open an FB tab, expand a few directories down a few levels, switch to another tab (terminal / editor / graph / search), switch back to the FB → the tree resets to the default expansion (drive root only or whatever the default initial-expand state is). Every previously-expanded dir is collapsed again
+  - root cause hypothesis: the FB tab's expanded-dirs set lives in component-local state (`Set<string>` keyed by directory path, scoped to the `FileBrowserSurface.svelte` / `FileTree.svelte` component instance). Svelte tab-switch pattern unmounts the inactive tab's component subtree; on re-activation the component remounts with a fresh state object. Persistence to SerTab was never wired
+  - want: persist the per-FB-tab expanded-dirs set across tab activation. Same SerTab shape as the other state-restoration work this phase (`rpsm` / `rpc` / `dbi` / `rppw` etc. — short-form conditional-spread field, restore on deserialize, persist on serialize). Multiple FB tabs each keep their own expansion state (keyed at SerTab level since each tab has its own SerTab payload)
+  - fix shape: new `SerTab` field — suggest `fbe?: string[]` (FB Expanded; array of absolute / drive-relative paths). Conditional spread on serialize (`fbe.length > 0`); range-guarded on deserialize; `FileBrowserSurface.svelte` (or wherever the `expandedDirs` Set lives) reads from + writes to `tab.<expandedDirsField>` instead of component-local state
+  - related work that informs the shape:
+    * `-a-28`'s `dbi?: string[]` (BubbleOverlay dismissed-ids) is the closest precedent — same shape (array of string ids in SerTab), same conditional-spread persistence pattern. Use that file as the reference template
+    * `-b-6` (FB watcher scope) is per-tab too; the scope already persists per-tab so the SerTab plumbing for FB tabs exists. The new field rides alongside the scope field
+  - acceptance: open FB at drive root, expand 3 directories, switch to a terminal tab, switch back — all three remain expanded. Add a vitest pin in `tabs.test.ts` for SerTab round-trip of the new field
+  - lane: @@FullStackA (SPA + FileBrowserSurface + tabs.svelte.ts). Small task, single-PR shape; rides the same band of "remember-state-across-tab-switch" work that already covers rich-prompt height / collapse / page-width
+  - dispatched for v0.11.2 patch (if cut) OR Round-2 wave-2 against @@FullStackA; task cut when scoping firms up
+
+- Cmd+O semantics: rebind FB to Cmd+Shift+E, make Cmd+O a context-aware "Open file" dialog
+  - flagged 2026-05-20 by @@Alex dogfooding v0.11.1 + the `fullstack-a-32` chord migration that just landed. Three coupled pieces:
+    1. **Chord rebind**: today Cmd+O opens the File Browser (per `-a-32`'s new chord set). Move FB to `Cmd+Shift+E` (matches VSCode's "Focus on Files Explorer" mental model). Free Cmd+O for the new behaviour
+    2. **New "Open file" dialog**: Cmd+O surfaces a modal/dialog similar in shape to the existing "New file" dialog (built on `PathPromptModal.svelte`). The dialog accepts a path, validates it against chan-drive's editable-text gate + sandbox boundary, opens the file in the editor on confirm
+    3. **Context-aware pre-population**: the dialog opens with the path field pre-filled based on the focused surface:
+       * **Focused FB**: pre-fill with the path of the currently-selected node IF it's a regular file we can open in the editor (drop directory selections, drop binary / non-editable selections — chan-drive's editable-text gate is the rule)
+       * **Focused terminal**: read the xterm.js selection. If the selected text parses as a path (relative or absolute) that resolves to an editable regular file inside the drive sandbox, pre-fill that. Example user flow: `echo ./docs/something-that-exists.md` in the terminal → user mouse-selects the path text in the terminal output → `Cmd+O` → dialog opens with `docs/something-that-exists.md` pre-filled → Enter opens the file
+       * **No actionable focused surface**: dialog opens with the field empty (drive-root-relative); user types the path manually
+  - composes with `-a-32`'s `resolveSpawnContext()` helper — the context-resolution logic for "what's the focused surface and its context?" is exactly what this enhancement extends. New helper `resolveOpenFileCandidate()` (or similar) that returns `{ path: string, source: "fb" | "terminal" | "none" }` based on the focused surface + the editable-text gate
+  - Hybrid NAV mnemonic stability: `Mod+. o` stays as FB spawn (the universal in-mode mnemonic from `-a-32` lives alongside the new top-level chord). Mnemonic reads as "o for **o**pen browser" inside NAV mode; top-level `Cmd+O` reads as "Open file" outside NAV mode. The mnemonic divergence is acceptable since NAV mode is opt-in
+  - cheatsheet + chan-desktop accelerator updates (PaneModeHelp + SERVE_LONG_ABOUT + Tauri `KEY_BRIDGE_JS`): same shape as the `-a-32` resync. Single commit covers all surfaces
+  - cross-impact: this is a partial revert / refinement of `-a-32`'s chord set. Audit-trail readable as "the chord migration landed first; Cmd+O for FB was the right v1 shape; @@Alex dogfooded + flagged that Cmd+O wants the open-file semantic the rest of the editor world uses". Not a regression
+  - terminal-selection path-parsing edge cases (worth investigating at task-cut):
+    * Quoted paths (`"foo bar.md"` with spaces; backtick-wrapped paths)
+    * Trailing whitespace / line-noise (selection grabbed `./foo.md\n  $`)
+    * Relative-to-cwd-of-terminal vs relative-to-drive-root (if the terminal's cwd differs from the drive root, resolve via the terminal's last-known cwd from `-a-32`'s context resolution)
+    * URLs that look path-shaped (`https://example.com/foo.md` — should NOT match; gate on file-existence check)
+    * Symlinks pointing outside the drive sandbox (chan-drive's existing path-sandbox refusal handles cleanly)
+  - lane: @@FullStackA (chord migration + dialog component + context resolution all SPA-side). Coordinates with the `-a-32` `resolveSpawnContext()` shape so both helpers compose cleanly. No chan-server / chan-drive work expected (existing `/api/files/{*path}` GET handles the actual file open via the editor's existing load path)
+  - sequencing thoughts: small-to-medium task, mostly SPA. Could land in v0.11.2 patch (if cut) but the terminal-selection path-parser is the novel piece + worth a careful walkthrough. Recommending Round-2 wave-2 against @@FullStackA with the rich-prompt session-evolution stack (similar lane, similar surface)
+  - dispatched for Round-2 wave-2 against @@FullStackA; task cut at Round-2 wave-2 fan-out
+
+- **CRITICAL UX**: Editor falsely flips to "File moved or deleted" while file is still on disk (repeated; interrupts writing)
+  - flagged 2026-05-20 by @@Alex with screenshot, third+ occurrence: editing `docs/journals/phase-8/alex/hybrid-revisited.md`, editor surface flips to a centered "File moved or deleted" panel with Re-open / Find / Close buttons. File is NOT actually moved or deleted — the docked FB on the left still shows it, double-clicking the FB entry reopens normally. Re-open button on the panel routes to the FB with nothing selected (broken path; should restore the same file in place since it IS still at the recorded path)
+  - **impact**: breaks concentration during active writing. @@Alex's framing: "we don't want users to have this kind of experience". Hard UX regression on a daily-driver flow
+  - root cause hypothesis space (implementer narrows during repro):
+    a) **chan-drive atomic-write race**: chan-drive's `write_text` uses temp + rename. If the editor's path-existence watcher catches the brief unlink window during the rename, it fires "file moved" falsely. Should be microseconds but inotify / FSEvents can fire spuriously
+    b) **`self_writes.rs` suppression miss**: chan-server's self-writes suppression de-noises the watcher for chan's own writes. If the suppression key doesn't match (e.g., path canonicalisation `/tmp` ↔ `/private/tmp` on macOS, or pathbuf vs string mismatch, or normalisation around `.` segments), the editor sees a phantom delete for chan's own save
+    c) **Concurrent-write events from sibling files in the same directory**: this session's @@Architect terminal does lots of `Edit`-tool writes to siblings (`event-architect-*.md` in the same `phase-8/alex/` dir). If the editor's watcher is directory-scoped and not file-scoped, sibling-file write events could trigger a spurious "did my file change?" check that returns the wrong answer briefly
+    d) **`fullstack-b-6` FB watcher scope leak into the editor's path check**: -b-6 scoped FB watcher to selection, but the editor's "is my file still there?" check may share infrastructure with the FB watcher + inherit the scope filtering wrongly
+    e) **Editor's mtime / stat cache going stale**: editor reads file mtime + size at open; on watcher event, compares to cached. If chan-drive's rewrite produces a smaller file or same mtime (clock skew), the check may interpret "file changed" as "file gone"
+  - want, three pieces:
+    1. **Stop the false detection** — root-cause the spurious "moved or deleted" trigger and fix it. Should be impossible to surface this panel while the file is on disk at the recorded path. Add a recovery check: when the panel is about to fire, run `stat` on the recorded path with a 100-200ms debounce; if the file is back, dismiss the panel without UI flash
+    2. **Fix the Re-open button** — currently routes to FB with nothing selected. Should restore the same file in place (re-read content + reset cursor / scroll state). This is broken even when the panel IS legitimately surfacing for a real moved-or-deleted file
+    3. **Improve the "file moved" UX (the Find suggestion @@Alex proposed)** — when the panel surfaces, run a backend search by basename (and optionally content-fingerprint of the cached file contents) across the drive. If a unique match is found at a different path, present inline: "File seems to have moved to `docs/elsewhere/hybrid-revisited.md` — Reopen there?" with a one-click reopen. Currently the Find button takes the user out of context entirely; the inline suggestion keeps the writing flow intact
+  - lane: primary @@FullStackA (editor + file-tab + "moved or deleted" panel UI). Secondary investigation by @@FullStackB / @@Systacean if root cause is in chan-server `self_writes.rs` or chan-drive's `write_text` atomic boundary (need to coordinate at task-cut once the root cause narrows)
+  - escalation: **v0.11.2 patch candidate** — recommend cutting a small patch wave if root cause is contained + fix is low-risk. The interruption-during-writing impact is severe; this is the kind of bug that erodes user trust quickly
+  - dispatched for v0.11.2 patch (if cut) OR Round-2 wave-2 hard-front against @@FullStackA; task cut once @@Architect confirms with @@Alex whether v0.11.2 patching is in scope
+
+- **Enhancement (companion to the critical bug above)**: usability-test coverage for daily-driver writing workflows
+  - flagged 2026-05-20 by @@Alex on the same turn as the critical bug above: "I want to include some usability tests that try out workflows like this"
+  - target workflows to cover end-to-end (each test exercises the full editor + FB + watcher + indexer + Find chain):
+    1. **Edit + image + table workflow**: open a file → edit a paragraph → add an image (paste or drag) → copy-paste a markdown table from another source → save. Assertion: file content persists correctly, no spurious "moved or deleted" panel, image atom inserts cleanly, table renders without escaping (`-a-34` paste-unescape regression check)
+    2. **FB-driven rename workflow**: open a file → edit a bit → rename via FB context menu → continue editing the renamed file in the same tab. Assertion: tab title updates, file content persists, no panel surfaces, FB tree reflects the new name, watcher state migrates cleanly
+    3. **Shell-`mv` workflow**: open a file → edit a bit → open a terminal → `mv` the file to a new path → return to the editor. Assertion: editor detects the move (legitimate this time), surfaces the panel with the "file seems to have moved to {newpath} — reopen?" suggestion (the new UX from the bug above), one-click reopen restores the editor at the new path
+    4. **Concurrent-write workflow**: open file A in pane 1 → open file B (sibling of A in the same dir) in pane 2 → edit both → save both. Assertion: neither editor flips to "moved or deleted" from the other's save events; both saves complete; both files contain the typed content
+    5. **Find-after-rename workflow**: rename a file via FB or shell → open the search overlay → type the original basename. Assertion: Find returns the renamed file (chan's indexer picks up the rename + re-indexes cleanly under the new path)
+  - implementation shape options:
+    * Vitest end-to-end harness against a synthetic drive (small fixture set; runs in CI as part of the existing `web/ vitest run` gate). Pros: fast, reproducible. Cons: mocks the FS layer, may miss real-watcher bugs
+    * Playwright or similar against a real chan server backed by a real drive directory. Pros: catches actual watcher / indexer races. Cons: slower, flakier in CI, needs orchestration
+  - recommendation: hybrid — Vitest for the deterministic shape (DOM + state assertions); a separate Playwright suite that runs less often (release-gate only?) for the watcher / race-sensitive paths. The webtest lanes already do this manually; codifying it catches regressions before they reach @@Alex
+  - lane: @@FullStackA + @@WebtestA / @@WebtestB joint task. @@WebtestA/B own the manual walkthrough patterns + could help shape the test fixtures; @@FullStackA implements the harness. New `web/tests-e2e/` (or similar) directory shape proposed; investigate at task-cut
+  - dispatched for Round-3 Track 3 (cleanup + hardening + release readiness) against @@FullStackA + @@WebtestA/B; the critical bug fix above lands first via -a-N (v0.11.2 / Round-2 wave-2) and is one of the regression scenarios this test suite codifies
+
+- **Feature**: markmap support in the editor (https://github.com/markmap/markmap)
+  - flagged 2026-05-20 by @@Alex: "add support for markmap in our editor". markmap renders a markdown document's heading + list hierarchy as an interactive SVG mindmap. Existing implementations in Obsidian / VSCode / JetBrains plugins all share the same UX pattern: take the current doc, parse heading levels + list nesting, render as a radial tree, let the user pan / zoom / collapse branches
+  - npm packages (canonical):
+    * `markmap-lib` — markdown → JSON tree parser. Small (~30 KB minified).
+    * `markmap-view` — SVG renderer. Pulls D3 (~70 KB). Bundle-size impact to measure at task-cut
+    * `markmap-toolbar` (optional) — built-in controls (fit / save / reset). May be redundant if chan provides its own toolbar surface
+  - **surface options** (implementer picks at task-cut; recommendation in 1):
+    1. **Third mode in the existing StyleToolbar** (RECOMMENDED) — alongside the wysiwyg / source toggle landed in `-a-26`. Toggle reads as "wysiwyg ↔ source ↔ markmap". Markmap is read-only; editing happens in wysiwyg or source modes. Pane-pair pattern: open the same file in two Hybrid panes, one in wysiwyg / source, the other in markmap, with `fullstack-b-5` per-Hybrid theme override applying to both — gives live-preview reading without bidirectional-edit complexity
+    2. **New tab type** alongside file / terminal / FB / graph / search. Tab spawned via a new chord (`Cmd+Shift+K` for "kmap"? — needs chord-namespace check against `-a-32`'s migration). Opens a doc as a markmap view in its own pane. Heavier UX surface, more flexible composability but more code
+    3. **Pane-mode action** (Hybrid NAV `m` mnemonic) that spawns a markmap view from the current doc into the back side of a Hybrid. Composes with `-a-22`'s flip animation — flip front/back to swap source ↔ markmap. Cute, but ad-hoc compared to a first-class toolbar toggle
+  - **read-only vs editable**: v1 read-only. Most markmap implementations don't attempt to write back to the source doc on user interaction. Editing happens in wysiwyg / source; markmap view re-renders on doc change with a debounce (typical: 250-500 ms after last keystroke). Bidirectional editing is a research project — out of scope for v1
+  - **live-update vs static**: live-update with debounce. Background re-parse on doc change; SVG re-render on parse complete. Should compose cleanly with the existing CM6 + Wysiwyg edit pipeline (subscribe to document-change events)
+  - **theming**: markmap-view exposes a CSS variable surface for colours / fonts. Wire chan's theme tokens (`--text-fg`, `--accent`, font-family) into the renderer config. Composes with `-b-5`'s per-Hybrid theme override (light / dark per pane). Box-drawing font fallback story from the now-deferred bundled-font work doesn't apply here (SVG text rendering uses the page's font stack directly)
+  - **toolbar actions** (in the markmap view's chrome):
+    * Fit-to-pane (auto-zoom + recenter)
+    * Expand / collapse all
+    * Save as SVG (uses markmap-view's built-in serializer)
+    * Optional: save as PNG (needs canvas conversion; defer if scope-creeps)
+    * Optional: save as standalone HTML (markmap's "export to file" mode; useful for sharing a doc's mindmap independent of chan)
+  - **bundle-size budget**: measure markmap-lib + markmap-view + D3 transitive deps with `web/ npm run build` before committing. If it pushes the chan-server embedded bundle materially (say > 100 KB compressed delta), consider:
+    * Lazy-loading: `markmap` deps live in a separate bundle chunk loaded only when the user first toggles to markmap mode
+    * The same lazy-load pattern semantic search uses for the BGE model (per `systacean-6` / `systacean-7`)
+  - **license check**: markmap is MIT (per the upstream repo). Compatible with chan's Apache 2.0. Include a row in the SettingsPanel About section attributions (mirroring the Source Code Pro OFL.txt row from `fullstack-b-12`) for proper third-party-dep credit
+  - **composes with**:
+    * `-a-26` StyleToolbar mode toggle (the third mode lands here)
+    * `-b-5` per-Hybrid theme propagation (markmap picks up theme tokens correctly)
+    * Future Infographics tab (round-2-plan item 4) — markmap could be one of the Infographics tab's content types if it ever wants per-drive "show me the structure of this doc" surfaces beyond the per-file view
+  - lane: @@FullStackA (editor + StyleToolbar + new view component, all SPA-side). No chan-server / chan-drive work expected (parsing happens client-side on the loaded doc content)
+  - sizing: medium task — new dep, new component, debounce wiring, toolbar actions, theme integration, bundle-size measurement. Could be split into a strict-v1 (read-only viewer + fit-to-pane only) + follow-up polish (export actions, theme refinement). Implementer picks the carve at task-cut
+  - dispatched for Round-2 wave-2 against @@FullStackA. Pairs naturally with the rich-prompt session-evolution stack (both extend the SPA's content-surface vocabulary); fan out together when wave-2 dispatches
+
+- FB spawn chord focuses existing FB instead of spawning a new tab
+  - flagged 2026-05-20 by @@Alex: "im currently not capable of opening more than 1 file browser with cmd+o (which is moving to cmd+shift+e); when i hit this chord the focus goes to the 1 existing FB instead of creating a new FB tab"
+  - current behaviour (post `-a-32` chord migration): pressing `Cmd+O` when an FB tab already exists anywhere in the layout shifts focus to that existing FB instead of spawning a fresh FB tab. User cannot open multiple FBs via the chord
+  - root cause hypothesis: the FB-spawn helper in `store.svelte.ts` (or wherever `-a-32`'s context-aware spawn machinery lives) likely has a "find-existing-FB-tab → focus" fall-through that's the wrong shape for FB. The pattern probably matches Cmd+P's intentional toggle behavior ("if on terminal, toggle; if not on terminal, open one") but FB doesn't have that toggle semantic — FB should spawn new every time, matching Cmd+T's "new terminal every time" convention
+  - chord-convention table (current vs intended):
+    | Chord            | Current behaviour                                | Should be                            |
+    |------------------|--------------------------------------------------|--------------------------------------|
+    | `Cmd+T` (new term) | Spawns a new terminal every time               | Same (correct)                       |
+    | `Cmd+O` (FB)     | Focuses existing FB if present, else spawns new | **Always spawn new** — fix this      |
+    | `Cmd+P` (rich p) | Toggles if on terminal, opens if not             | Same (intentional toggle)            |
+    | `Cmd+Shift+M` (graph) | Spawns new every time                       | Same (correct)                       |
+  - want: FB-spawn always creates a new FB tab. Each FB tab has its own selection / expansion state per the per-tab pattern `-b-6` (watcher scope) + the FB-expansion-state bug filed earlier today (`fbe?` SerTab field). Multiple FBs in the same pane / across panes is the natural affordance for tree-comparison workflows
+  - coupling with the Cmd+O rebind enhancement filed earlier today: the rebind moves FB to `Cmd+Shift+E` + makes `Cmd+O` an Open-file dialog. THIS bug applies to whichever chord ends up bound to FB-spawn — fix the helper, the chord move just changes which key triggers it. The two changes could land in the same -a-N task (one commit covering both) since they touch the same code path
+  - acceptance: press the FB-spawn chord 3 times → 3 FB tabs in the layout, each with independent selection / expansion / scope. Each FB tab's title differentiable (likely numbered: `Files`, `Files 2`, `Files 3` — match the terminal-tab numbering pattern from `-b-2`)
+  - small task; same lane as the Cmd+O rebind work (@@FullStackA, chord-handler + spawn helper). Both rides Round-2 wave-2 against @@FullStackA; cut as a single task at fan-out OR fold the bug-fix into the rebind task's scope (the simpler commit shape)
+  - dispatched for Round-2 wave-2 against @@FullStackA, paired with the Cmd+O rebind enhancement
+
+- ~~Cmd+F find-in-page UX is subpar~~ — **WITHDRAWN 2026-05-21 by @@Alex**: find-in-page is actually working. The earlier symptoms (subtle highlight + scroll-to-match desync) traced to a stuck chan-desktop UI state; closing + reopening the desktop-native cleared the staleness. Not a real bug. Original entry struck through to preserve the audit trail of "we looked at this + ruled out a Cmd+F-specific issue"
+  - separately worth tracking as a stretch observation: chan-desktop UI state stuck-until-relaunch may be a real but distinct bug (a category of UX glitches that need a refresh-the-webview cure). NOT cutting a separate entry; if it surfaces again under any other symptom, add a new entry then
+
+- Tab right-click "Reload" + "Open Inspector" entries no-op on chan-desktop (macOS)
+  - flagged 2026-05-21 by @@Alex: right-clicking a tab in chan-desktop / Tauri webview on macOS surfaces a context menu with "Reload" + "Open Inspector" entries; clicking either does nothing. Both entries work (or have an analogue) in the web build via the browser's own Reload / Inspect Element behaviour
+  - **dev-workflow severity**: Open Inspector is the gating affordance for debugging EVERY chan-desktop-specific bug. Without it, @@Alex can't DevTools-inspect the Cmd+F highlight CSS (just-filed bug), can't see why "File moved or deleted" surfaces (just-filed critical bug), can't profile the spinner-stuck-at-0:00 bubble, etc. This bug is a meta-blocker for the rest of the desktop-native UX bugs
+  - root cause hypothesis: the SPA's tab context menu defines "Reload" + "Open Inspector" entries unconditionally (designed against the web build's browser-default surface), but on chan-desktop the entries don't have a Tauri IPC equivalent wired through. Two paths likely missing:
+    1. **Reload**: should call Tauri 2's `WebviewWindow::reload()` (or `eval("location.reload()")` as a fallback). The SPA-side click handler probably calls `window.location.reload()` directly, which MIGHT work in the Tauri webview but is being silently dropped or — more likely — the menu entry's click handler is no-op'd for chan-desktop because the menu was built for web. Verify which by inspecting the entry's `on:click` in the SPA source
+    2. **Open Inspector**: needs Tauri 2's `WebviewWindow::open_devtools()`. This requires the `devtools` feature in `tauri.conf.json` (or per-crate Cargo feature). chan-desktop may not have that feature enabled — `tauri.conf.json` `app.devTools` (or similar) must be `true`. Or the dev build has it, the release build doesn't. Confirm at task-cut whether chan-desktop's release config exposes devtools at all
+  - want: both entries work on chan-desktop with the same UX as the web build:
+    * **Reload**: re-fetches the current tab's content. For a file tab, re-reads the file from chan-drive (composes with the "File moved or deleted" detection fix). For a terminal tab, conceptually means "clear + restart" — but that may be a separate, surfacing question; v1 of this fix can just no-op the Reload entry for non-file tabs OR scope the menu to file tabs only
+    * **Open Inspector**: opens Tauri's DevTools for the chan-desktop window. Standard webview inspector — element tree, console, network, etc.
+  - first investigation steps:
+    1. Audit `tauri.conf.json` for `app.devTools` (or whichever Tauri 2 key gates devtools). If false in release config, flip to true (gated on a build profile if shipping-with-devtools is undesirable for end users)
+    2. Grep the SPA source for the tab context menu definition (likely in `Pane.svelte` or `TabStrip.svelte` adjacent). Find "Reload" + "Open Inspector" entries; check their click handlers
+    3. For chan-desktop, add Tauri IPC commands in `desktop/src-tauri/src/main.rs` (or wherever IPC handlers live): `reload_window`, `open_devtools`. The SPA detects chan-desktop via the existing runtime check + invokes IPC; web build keeps using `window.location.reload()` + a no-op-or-instructional message for inspector
+  - chord-binding consideration: Chrome uses `Cmd+R` for reload + `Cmd+Opt+I` for inspector. chan-desktop's `KEY_BRIDGE_JS` (from `-a-32`) should bind these accelerators to the same IPC commands so keyboard users get reload/inspector without the right-click. Check whether either chord works today as a separate axis
+  - lane: @@FullStackB primary (Tauri config + IPC commands + KEY_BRIDGE_JS bindings — chan-desktop side is the load-bearing piece). @@FullStackA secondary (SPA tab context menu + runtime-aware dispatch). Coordinate at task-cut on which side cuts first; the SPA-side click handler should compose with the IPC commands @@FullStackB exposes
+  - escalation: **v0.11.2 patch candidate** — even though this isn't user-facing UX itself, it's the **debugging affordance** that lets @@Alex (and webtest lanes with chan-desktop runtime permission) investigate the OTHER user-facing chan-desktop bugs. Bumps v0.11.2 patch scope from 4 → 5 items. Strong case for inclusion: meta-blocker for everything else
+  - dispatched for v0.11.2 patch (if cut) OR Round-2 wave-2 hard-front against @@FullStackB primary + @@FullStackA secondary
+
+- Source-code editor mode auto-intervenes with list typing (it shouldn't)
+  - flagged 2026-05-21 by @@Alex: typing in source-mode (the raw CodeMirror view, not the wysiwyg renderer) still triggers list-continuation behaviour — e.g., typing `1.` + space + Enter auto-inserts `2.` on the next line; same for `-` / `*` bullets. Source mode should be 100% raw; no auto-continuation, no auto-renumber, no bullet smarts. The wysiwyg mode is where rendering intelligence lives; source mode is where the user reads / edits the raw markdown
+  - root cause hypothesis: the editor's CM6 extension stack for source mode likely includes the same markdown-language extension that wysiwyg uses, OR shares a list-continuation keymap that fires regardless of mode. The mode toggle from `-a-26` swaps the RENDERER but the input keymap may not get stripped down to source-mode-appropriate behaviour
+  - want: source mode is editor-plain (no list-handling, no auto-anything; just raw text with standard editor affordances — undo, multi-cursor, find-in-file). The list-aware behaviour stays in wysiwyg mode where it belongs
+  - fix shape: at source-mode mount, load a stripped extension set — no `markdownLanguage` extension's list extensions, no chan-specific list keymaps. Or gate every list keymap on a "is-wysiwyg" flag at the keymap-handler level. Implementer picks
+  - composes with the next bug (markdown wysiwyg sub-list numbering) — both touch the list-extension wiring; could land together as one editor-list-handling refactor task. Each is also independently shippable
+  - lane: @@FullStackA (editor extensions + mode-toggle from `-a-26`)
+  - escalation: paper-cut severity but daily for source-mode users. v0.11.2 candidate IF the patch wave gets cut (bumps scope to 6); otherwise Round-2 wave-2
+  - dispatched for v0.11.2 (if cut) OR Round-2 wave-2 against @@FullStackA
+
+- Markdown wysiwyg enumerated-list nested numbering: want outline-style dotted notation
+  - flagged 2026-05-21 by @@Alex: nested numbered lists in wysiwyg currently use independent counters per depth (standard markdown spec):
+    ```
+    1. item
+        1. sub-item   ← independent counter at depth 1
+    2. another item
+    ```
+    @@Alex wants outline-style dotted numbering — depth carries forward as `1.N.`, `2.N.`, etc.:
+    ```
+    1. item
+       1.1. sub-item
+       1.2. another sub
+    2. another item
+       2.1. sub
+    ```
+    Multi-level nesting follows the same pattern: depth-3 would be `1.1.1.`, `1.1.2.`, etc.
+  - context: outline-style dotted numbering is a real convention (used in technical specs, legal docs, RFC sections). It's NOT standard markdown — most renderers / GitHub / Obsidian use independent per-depth counters. @@Alex's preference is a custom rendering choice
+  - two implementation shapes to pick between (flag for implementer + @@Alex confirmation):
+    1. **Pure visual (CSS counters)**: underlying markdown source stays standard (`1. text\n   1. sub`). Render layer (wysiwyg) applies CSS `counter-reset` + `counter-increment` + `::marker content: counters(...)` to produce the dotted display. Pros: source stays portable across markdown tools (GitHub still renders cleanly with its own per-depth counters); chan's distinctive display lives only in chan's renderer. Cons: when user toggles to source mode, they see standard `1. / 1.` not dotted — could be confusing if they expect WYSIWYG-source parity
+    2. **Source change**: when user types nested numbered list in wysiwyg, the editor literally inserts `1.1.` / `1.2.` / etc. as text content. Source view shows the dotted form too. Pros: WYSIWYG-source parity. Cons: breaks markdown standard — other tools (GitHub, Obsidian) won't render this correctly; treats `1.1.` as a literal heading rather than a list item marker
+  - **architect recommendation**: option 1 (pure visual / CSS counters). Source portability is more valuable than WYSIWYG-source-view exact parity; @@Alex's source-view nuance can be a documentation point ("source view shows standard markdown; the dotted display is a chan render-time convention")
+  - confirm @@Alex's preference before task-cut — the choice meaningfully affects how chan-authored docs render in other tools (notably: docs in `docs/journals/` are read by agents via filesystem, so the literal characters in source matter)
+  - composes with the previous bug (source-mode list intervention) — both touch the list-extension wiring
+  - lane: @@FullStackA (markdown renderer + wysiwyg extensions + CSS)
+  - escalation: not patch-worthy (cosmetic / preference, not broken UX); Round-2 wave-2 against @@FullStackA. Cut as a single task with the source-mode list-intervention bug above OR as a paired task with clear coordination
+  - dispatched for Round-2 wave-2 against @@FullStackA
+
+- "Copied path" status-bar notification persists too long (doesn't auto-dismiss)
+  - flagged 2026-05-21 by @@Alex (screenshot): triggering the "copy path" action surfaces a "Copied path" notification in the status bar that stays visible for an unusually long time, well past the expected toast-style auto-dismiss window. User has to wait it out or possibly click to dismiss
+  - related context: `-a-2` (Round-1) reworked the status-bar click semantics (removed most click handlers; kept only notification expand/collapse) + flipped the notification flash colour blue → yellow. Per `-a-2`'s landed shape, status-bar notifications are surface-only with an expand-collapse affordance — auto-dismiss timing wasn't part of that fix's scope
+  - root cause hypothesis:
+    1. **Timeout duration too long**: the dismiss timer constant for "Copied path" (and probably every status-bar transient toast) is set to a value much higher than typical OS toast conventions (~3-5 s). Could be 30+ s or even no auto-dismiss at all (only manual). One-line constant fix
+    2. **Timer not firing / getting reset**: the auto-dismiss `setTimeout` registers correctly but a re-render / state-update clears + re-registers the timer repeatedly, so the dismiss never actually fires. Common pattern when `$effect` reactivity treats the timer registration as a side-effect that re-runs on every poll
+    3. **Status-bar notifications conflated with the persistent watcher-events panel**: status bar has BOTH transient toasts (copy path, save complete, etc.) AND persistent watcher-event notifications (unread events). If "Copied path" rides on the persistent-event channel, it stays until manually dismissed — wrong channel for a transient action
+  - want, two pieces:
+    1. **Auto-dismiss "Copied path" + similar transient toasts after a short window** (~3 s recommended; 4-5 s acceptable). Standard toast conventions: short enough to not crowd the UI, long enough to be read
+    2. **Audit the status-bar notification taxonomy** at task-cut: which notifications are TRANSIENT (auto-dismiss after timeout) vs PERSISTENT (stay until user dismisses)? "Copied path" / "Saved" / "Build complete" are transient by convention. Watcher-event counts / error notifications are persistent. The distinction should be explicit in the data model + render path, not implicit in the timeout-or-not behavior
+  - first investigation step: grep for "Copied path" string in the SPA source; find the emission call site + the status-bar notification-list datastructure; trace whether transient vs persistent channels exist or whether everything's on one path
+  - lane: @@FullStackA (status-bar UI; same lane that owns `-a-2`)
+  - severity: paper-cut UX (not blocking work; just visual clutter); v0.11.2 patch candidate if the patch wave gets cut (bumps scope from 5/6 → 6/7)
+  - dispatched for v0.11.2 patch (if cut) OR Round-2 wave-2 against @@FullStackA
+
 ## Round 2 — needs deeper change
 
 - Large markdown files block the editor with a spinner while loading

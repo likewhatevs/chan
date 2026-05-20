@@ -783,3 +783,133 @@ ci-8 if you have bandwidth; independent work).
 
 Stand up + start on `-11`. Fire your standard
 commit-readiness append + poke when ready for review.
+
+## 2026-05-20 — poke (new task: systacean-13 — Keychain-driven make app-notarized)
+
+@@Alex flagged 2026-05-20 that they've already completed the
+ci-3 brief checklist on their workstation in a previous chan
+incarnation: cert imported to macOS Keychain, app-specific
+password stored in a Keychain item (likely named `chan`). They
+want `make app-notarized` to consume the password from
+Keychain rather than requiring env-var exports each run.
+
+Cut [`../systacean/systacean-13.md`](../systacean/systacean-13.md).
+Single-file change (mostly) to `desktop/Makefile` adding a
+Keychain-profile-first / env-fallback precedence rule.
+Apple's blessed mechanism is `xcrun notarytool
+store-credentials <profile-name>` → Makefile calls with
+`--keychain-profile <profile-name>` when the profile exists.
+
+**Authorization: yes** on this task — covers
+`desktop/Makefile` + a new "Local notarization setup" section
+in `desktop/CLAUDE.md`. Proceed without further in-chat
+confirmation.
+
+### Fits naturally as your current fill-in
+
+Your `-11` is parked on @@Alex's release-identity decision +
+your `-12` is in flight (tauri-plugin-updater verify). `-13`
+is independent of both — local-dev ergonomics for the
+notarization Makefile. Slot it as fill-in between `-12`
+investigation phases, or after `-12` completes.
+
+### Permission event to fire before edits
+
+Step 3 of the task's "How to start" says to confirm the
+Keychain profile NAME with @@Alex (default `chan` per their
+reference, but `chan-notary-ci` from the ci-3 brief is also
+reasonable — confirm before hardcoding). Fire a one-line
+permission event to `event-systacean-alex.md`.
+
+### Composes with the existing -11 ask
+
+@@Alex's confirmation that they've completed the cert work
+means `-11` is effectively branch (a) of your ask — they
+just need to provide the actual identity string. Once they
+do, `-11` can commit the JSON rotation; `-13` lands in
+parallel. The two `desktop/CLAUDE.md` sections (your `-11`
+"Apple Developer ID signing" + `-13` "Local notarization
+setup") cover orthogonal facets — sign-on-the-cert (`-11`)
+vs how-the-Makefile-finds-credentials (`-13`).
+
+### Updated queue
+
+* `-11` — parked on @@Alex's identity-string answer.
+* `-12` — in flight (tauri-plugin-updater cross-platform).
+* `-13` — NEW, pick up as fill-in / after -12.
+
+Round-2 Wave-1 cumulative slot count grows from 2 to 3 on
+your lane. Acceptable widening since the work is small +
+high-value for @@Alex's local workflow.
+
+## 2026-05-20 — follow-up (in-chat approval; skip the permission event for -13)
+
+@@Alex confirmed in chat 2026-05-20: "ok about systacean-13:
+the blessed mechanism is right, this is what we used before
+/ ok let's go".
+
+This pre-answers the open piece in `-13`'s "How to start"
+step 3 (the profile-name confirmation). Skip the permission
+event; the answer is already in.
+
+* **Mechanism**: `xcrun notarytool store-credentials` profile
+  → Makefile reads via `--keychain-profile <name>`. Approved.
+* **Profile name**: **`chan`** (matching @@Alex's verbatim
+  reference "the secret called chan" in their original ask).
+  Use this as the hardcoded name in the Makefile +
+  `desktop/CLAUDE.md` setup snippet.
+* **Env-fallback path**: kept intact for CI's GH-Secrets flow
+  per the task body. Precedence rule: env vars override the
+  Keychain profile when both present.
+
+Proceed directly to the implementation without firing the
+permission event. Standard commit-readiness append + poke
+when ready for review.
+
+## 2026-05-21 — poke (systacean-13 cleared)
+
+`-13` approved + cleared to commit. Excellent root-cause
+discovery on the tauri-bundler constraint: bundler 2.8.1's
+`notarize_auth` only accepts `APPLE_ID/PASSWORD/TEAM_ID` or
+`APPLE_API_KEY/ISSUER/KEY_PATH` shapes — no
+`APPLE_KEYCHAIN_PROFILE` env var to honour. Splitting build
+from notarize (cargo tauri build runs unsigned-ish, then
+`xcrun notarytool submit` + `stapler staple` direct invocation
+with the appropriate auth flag) is the clean shape under
+that constraint. CI path stays identical to the env-var-driven
+flow; local-dev path picks up the Keychain profile transparently.
+
+Per-task review at the tail of [`../systacean/systacean-13.md`](../systacean/systacean-13.md);
+use your proposed commit subject:
+
+```
+desktop/Makefile: notarytool keychain-profile path for local make app-notarized (systacean-13)
+```
+
+Push waits until end of Round 2 (no patch tag cut yet —
+@@Alex still deciding on v0.11.2 scope per
+[`../architect/round-2-open-questions.md`](../architect/round-2-open-questions.md)
+A.5; if they cut, -13 doesn't ride that patch — it's
+Makefile-local-dev ergonomics, no user-visible runtime
+change). Same shared-worktree commit discipline as always:
+explicit per-file `git add` + pre-commit
+`git diff --staged --stat` audit.
+
+### Smoke test status
+
+@@Alex's optional smoke test on the bare-shell
+`make app-notarized` flow is parked in
+[`../architect/round-2-open-questions.md`](../architect/round-2-open-questions.md)
+§B.3. Does NOT block your commit; can land in parallel /
+afterward. If the smoke test fails for any reason, surface
+in a follow-up poke.
+
+### After -13 commits
+
+* `-11` resumes IF @@Alex provides the identity string
+  (parked in §B.1 of the open-questions file).
+* `-12` (tauri-plugin-updater verify) continues per your
+  current in-flight state.
+* No new tasks queued for you right now. Standby once -12
+  + -11 + -13 all settle. Round-2 wave-2 might add
+  signing-related polish tasks once ci-8 dry-run lands.
