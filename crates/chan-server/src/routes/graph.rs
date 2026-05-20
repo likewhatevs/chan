@@ -399,6 +399,27 @@ fn drive_disk_files(drive: &chan_drive::Drive) -> std::collections::BTreeSet<Str
     }
 }
 
+/// Drive-relative directory paths from the same walk
+/// `drive_disk_files` uses. Used to recognise markdown links whose
+/// target is a directory (doc-navigation links like
+/// `[notes](../alex/)`); those don't carry between-file graph
+/// semantics and would otherwise fall through to ghost emission as
+/// `kind: file` missing nodes.
+///
+/// Returns an empty set on `list_tree` failure so callers degrade
+/// to "no directory filtering" — i.e. the pre-fix behaviour — rather
+/// than failing the request.
+fn drive_disk_dirs(drive: &chan_drive::Drive) -> std::collections::BTreeSet<String> {
+    match drive.list_tree() {
+        Ok(entries) => entries
+            .into_iter()
+            .filter(|e| e.is_dir)
+            .map(|e| e.path)
+            .collect(),
+        Err(_) => std::collections::BTreeSet::new(),
+    }
+}
+
 /// Image subset of `drive_disk_files`. Kept as its own predicate so
 /// images stay distinguishable from other non-graph files (they get
 /// the Media node kind; other on-disk files become regular File
@@ -814,6 +835,13 @@ pub async fn api_graph(
     // File treatment further down.
     let disk_files = drive_disk_files(&drive);
     let image_files = image_subset(&disk_files);
+    // Directory entries from the same walk. Markdown links whose
+    // target is a directory (e.g. `[notes](../alex/)` from a phase
+    // journal pointing at the lane's `alex/` directory) used to
+    // fall through to ghost emission as `kind: file` missing nodes;
+    // we filter them out of the ghost path and drop the corresponding
+    // edges below. See systacean-4.
+    let disk_dirs = drive_disk_dirs(&drive);
     let present_files: std::collections::BTreeSet<&str> = files
         .iter()
         .filter(|path| indexed_file_exists(drive.root(), path))
@@ -1022,7 +1050,7 @@ pub async fn api_graph(
                 }
             }
             EdgeKind::Link => {
-                if !file_set.contains(e.dst.as_str()) {
+                if !file_set.contains(e.dst.as_str()) && !disk_dirs.contains(&e.dst) {
                     ghost_set.insert(e.dst.clone());
                 }
             }
@@ -1059,7 +1087,25 @@ pub async fn api_graph(
         // (ghosts / mentions / tags filter empty dsts), and
         // Cytoscape errors on empty source/target ids the same as
         // empty node ids.
-        .filter(|e| !e.src.is_empty() && !e.dst.is_empty())
+        //
+        // Also drop link edges whose dst is a directory on disk:
+        // the ghost-set loop above skips ghost emission for those,
+        // so the edge would otherwise dangle against a non-existent
+        // node. Non-link edges (mention, tag) can't have a directory
+        // dst (mention dsts are `@@name`, tag dsts are `#name`),
+        // so the filter only matters for the link kind.
+        .filter(|e| {
+            if e.src.is_empty() || e.dst.is_empty() {
+                return false;
+            }
+            // systacean-4: drop link edges whose dst is a directory
+            // — they have no node to point at after the ghost-set
+            // guard above.
+            if matches!(e.kind, EdgeKind::Link) && disk_dirs.contains(&e.dst) {
+                return false;
+            }
+            true
+        })
         .map(|e| GraphEdgeView {
             source: e.src.clone(),
             // chan-drive stores the leading `#` / `@@` sigil on the
@@ -1300,6 +1346,106 @@ mod tests {
         assert!(disk.contains("LICENSE"));
         assert!(!graph_file_set.contains("LICENSE"));
         assert!(!is_image_path("LICENSE"));
+    }
+
+    #[test]
+    fn drive_disk_dirs_includes_directory_entries() {
+        // Pin the systacean-4 helper contract: every regular directory
+        // the user might link to has to show up here so api_graph can
+        // recognise `[label](some/dir/)` targets and keep them out of
+        // ghost emission. The companion `drive_disk_files` set is
+        // unaffected (it filters `is_dir` out the other way).
+        let (_cfg, root, drive) = open_drive();
+        put(root.path(), "docs/intro.md", b"# Intro\n");
+        put(root.path(), "docs/agents/alice.md", b"# alice\n");
+        put(root.path(), "notes/inner/deep.md", b"# deep\n");
+
+        let dirs = drive_disk_dirs(&drive);
+        assert!(dirs.contains("docs"), "got {dirs:?}");
+        assert!(dirs.contains("docs/agents"));
+        assert!(dirs.contains("notes"));
+        assert!(dirs.contains("notes/inner"));
+        // Files should not appear in the dirs set.
+        assert!(!dirs.contains("docs/intro.md"));
+        assert!(!dirs.contains("docs/agents/alice.md"));
+
+        // Files set stays clean of directories — the two helpers split
+        // the same walk; pin that the split is exclusive.
+        let files = drive_disk_files(&drive);
+        assert!(files.contains("docs/intro.md"));
+        assert!(!files.contains("docs"));
+        assert!(!files.contains("docs/agents"));
+    }
+
+    #[test]
+    fn link_to_directory_does_not_synthesize_ghost_file_node() {
+        // Regression for systacean-4: a markdown link whose target is
+        // a directory (e.g. `[notes](../alex/)` from a phase journal)
+        // used to fall through `file_set` (graph_files filters to
+        // markdown / contact; disk_files filters `!is_dir`) and land
+        // in ghost_set as `File { missing: true }`. After the fix,
+        // disk_dirs participates in the ghost-set guard so the
+        // directory target is skipped entirely; the corresponding
+        // link edge is dropped by the edge filter so Cytoscape never
+        // sees a dangling target.
+        let (_cfg, root, drive) = open_drive();
+        // Source link: bare `some-dir` resolves drive-rooted under
+        // the wiki convention. `some-dir/` exists as a real
+        // directory on disk (created by `put` writing a file under
+        // it). Mirrors the live-repo shape where
+        // `docs/journals/phase-7/architect/journal.md` links
+        // `../alex/` and `docs/journals/phase-7/alex/` is a real
+        // directory.
+        put(root.path(), "notes/intro.md", b"# Intro\n\n[[some-dir]]\n");
+        put(root.path(), "some-dir/contents.md", b"# contents\n");
+        drive.index_file("notes/intro.md").unwrap();
+
+        let graph = drive.graph().unwrap();
+        let edges = graph.neighbors("notes/intro.md").unwrap();
+        let link = edges
+            .iter()
+            .find(|e| matches!(e.kind, EdgeKind::Link))
+            .expect("indexed markdown link edge");
+        assert_eq!(link.dst, "some-dir");
+
+        let disk_files = drive_disk_files(&drive);
+        let disk_dirs = drive_disk_dirs(&drive);
+        assert!(disk_dirs.contains("some-dir"), "got {disk_dirs:?}");
+        // The link target is NOT a file on disk (it's the directory)
+        // — pinning this rules out the systacean-2 path accidentally
+        // covering the symptom.
+        assert!(!disk_files.contains("some-dir"));
+
+        // Simulate the api_graph ghost-set check: file_set is
+        // graph_files ∪ disk_files. disk_dirs entries are absent
+        // from file_set, so the pre-fix path would have inserted
+        // `some-dir` into ghost_set. The new guard skips that.
+        let graph_files = graph.files().unwrap();
+        let graph_file_set: std::collections::BTreeSet<&str> =
+            graph_files.iter().map(String::as_str).collect();
+        let mut file_set = graph_file_set.clone();
+        for f in &disk_files {
+            file_set.insert(f.as_str());
+        }
+        assert!(!file_set.contains(link.dst.as_str()));
+        // Pre-fix: would synthesize ghost. Post-fix: directory check
+        // wins, ghost stays empty.
+        let would_be_ghost =
+            !file_set.contains(link.dst.as_str()) && !disk_dirs.contains(&link.dst);
+        assert!(
+            !would_be_ghost,
+            "directory target should not become a ghost file node"
+        );
+
+        // Mirror the api_graph edge filter: link edges whose dst is
+        // a directory get dropped so Cytoscape never sees them.
+        let drop_for_empty = link.src.is_empty() || link.dst.is_empty();
+        let drop_for_dir_dst = matches!(link.kind, EdgeKind::Link) && disk_dirs.contains(&link.dst);
+        let keep_edge = !drop_for_empty && !drop_for_dir_dst;
+        assert!(
+            !keep_edge,
+            "edge with dst pointing at a directory should be dropped"
+        );
     }
 
     #[test]
