@@ -56,7 +56,7 @@ describe("fullstack-63: PaneModeHelp key-caps are clickable buttons", () => {
     // and arbitrary whitespace between cap entries to survive
     // prettier reformats.
     expect(paneModeHelp).toMatch(
-      /caps:\s*\[\s*\{\s*label:\s*"1",\s*key:\s*"1"\s*\},\s*\{\s*label:\s*"t",\s*key:\s*"t"\s*\},?\s*\][\s\S]*?action:\s*"Stage: Terminal"/,
+      /caps:\s*\[\s*\{\s*label:\s*"1",\s*key:\s*"1"\s*\},\s*\{\s*label:\s*"t",\s*key:\s*"t"\s*\},?\s*\][\s\S]*?action:\s*"Spawn Terminal"/,
     );
   });
 });

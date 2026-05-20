@@ -65,10 +65,12 @@
       ],
     },
     {
-      // `fullstack-72`: 1/2/3 stage a spawn intent that fires on
-      // Enter; Esc clears it. Aligned with Tab's draft/commit
-      // model so the pill's "Enter commit · Esc discard" reads
-      // honest for every keystroke.
+      // `fullstack-a-3` collapsed the stage-then-commit two-step on
+      // 1/2/3 to a single immediate-commit keystroke: pressing the
+      // number spawns the target right then, no Enter needed (Esc
+      // still aborts the surrounding Pane Mode session). Help copy
+      // mirrors that — "Spawn …" is the immediate-effect verb,
+      // matching the section title.
       title: "Spawn",
       rows: [
         // `fullstack-b-9`: `t` is an alphabetic alias for `1` so
@@ -80,10 +82,10 @@
             { label: "1", key: "1" },
             { label: "t", key: "t" },
           ],
-          action: "Stage: Terminal",
+          action: "Spawn Terminal",
         },
-        { caps: [{ label: "2", key: "2" }], action: "Stage: File Browser" },
-        { caps: [{ label: "3", key: "3" }], action: "Stage: Graph" },
+        { caps: [{ label: "2", key: "2" }], action: "Spawn File Browser" },
+        { caps: [{ label: "3", key: "3" }], action: "Spawn Graph" },
         { caps: [{ label: "4", key: "4" }], action: "New file" },
         { caps: [{ label: "p", key: "p" }], action: "Rich prompt (terminal)" },
         { caps: [{ label: "f", key: "f" }], action: "Search overlay" },
