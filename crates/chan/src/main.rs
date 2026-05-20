@@ -499,10 +499,17 @@ enum ConfigAction {
 enum IndexAction {
     /// Rebuild the search index + graph for a drive. Was `chan
     /// index <path>` pre-systacean-7; the explicit verb keeps it
-    /// alongside the model/semantic actions.
+    /// alongside the model/semantic actions. Accepts either the
+    /// positional `<PATH>` (backwards-compat) OR `--path <PATH>`
+    /// (uniform with the other four subcommands so wrappers can
+    /// pass `--path` to all of them; systacean-8). At least one
+    /// must be supplied.
     Rebuild {
-        /// Drive root.
-        path: PathBuf,
+        /// Drive root, positional form.
+        path: Option<PathBuf>,
+        /// Drive root, flag form (synonym for the positional).
+        #[arg(long = "path", value_name = "PATH")]
+        path_flag: Option<PathBuf>,
     },
     /// Download the embedding model into
     /// `<user-config>/chan/models/<model-name>/`. Idempotent: a
@@ -1257,7 +1264,18 @@ async fn cmd_serve(
 
 fn cmd_index(action: IndexAction) -> Result<()> {
     match action {
-        IndexAction::Rebuild { path } => cmd_index_rebuild(path),
+        IndexAction::Rebuild { path, path_flag } => {
+            // Either form works (systacean-8). Both supplied → the
+            // flag wins; users have to be explicit anyway and the
+            // flag is the canonical shape going forward. Neither
+            // supplied → clean error, not a clap-default panic.
+            let resolved = path_flag.or(path).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "`chan index rebuild` requires a drive path (positional or `--path`)"
+                )
+            })?;
+            cmd_index_rebuild(resolved)
+        }
         IndexAction::DownloadModel { model } => cmd_index_download_model(&model),
         IndexAction::EnableSemantic { path } => cmd_index_set_semantic(path, true),
         IndexAction::DisableSemantic { path } => cmd_index_set_semantic(path, false),
@@ -1395,6 +1413,11 @@ fn cmd_index_download_model(model: &str) -> Result<()> {
 /// refuses if the model isn't downloaded; the user is pointed at
 /// `chan index download-model`. On disable, always succeeds (the
 /// underlying `set_semantic_enabled` is idempotent).
+///
+/// systacean-8 fix: no longer auto-registers an unregistered path.
+/// Refusing here surfaces a clean "not a chan drive at <path>"
+/// instead of a registration side-effect that leaks the
+/// implementation detail.
 #[cfg(feature = "embeddings")]
 fn cmd_index_set_semantic(path: Option<PathBuf>, enabled: bool) -> Result<()> {
     use chan_drive::index::embeddings::resolve_model;
@@ -1402,8 +1425,9 @@ fn cmd_index_set_semantic(path: Option<PathBuf>, enabled: bool) -> Result<()> {
     let root = path
         .or_else(|| lib.default_drive_root())
         .unwrap_or_else(|| lib.effective_default_drive_root());
-    ensure_drive_named(&lib, &root, None)?;
-    let drive = lib.open_drive(&root)?;
+    let drive = lib
+        .open_drive(&root)
+        .with_context(|| not_a_chan_drive_hint(&root))?;
     if enabled {
         let model = drive.semantic_model().context("reading drive's model id")?;
         if let Err(err) = resolve_model(&model) {
@@ -1427,6 +1451,16 @@ fn cmd_index_set_semantic(path: Option<PathBuf>, enabled: bool) -> Result<()> {
 /// default; `--json` emits a `{drives:[{...}]}`-style object for
 /// scripting (single drive in the response; the shape is plural so
 /// a future multi-drive variant lands as a pure extension).
+///
+/// systacean-8 fix: read-only access, lock-free + no auto-register.
+/// The pre-fix path took the writer lock via `Drive::open` and
+/// auto-registered missing paths; against a live-served drive that
+/// surfaced as "drive is locked by another process", and against an
+/// unregistered path it leaked "Error: registering <path>". Now the
+/// helper looks up the registered drive's index dir directly and
+/// loads `IndexConfig` from disk — no Drive handle, no flock, no
+/// side-effects. Missing-from-registry → clean
+/// "not a chan drive at <path>".
 #[cfg(feature = "embeddings")]
 fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
     use chan_drive::index::embeddings::{global_models_dir, repo_dir_name, resolve_model};
@@ -1434,12 +1468,23 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
     let root = path
         .or_else(|| lib.default_drive_root())
         .unwrap_or_else(|| lib.effective_default_drive_root());
-    ensure_drive_named(&lib, &root, None)?;
-    let drive = lib.open_drive(&root)?;
-    let model = drive.semantic_model().context("reading drive's model id")?;
-    let semantic_enabled = drive
-        .semantic_enabled()
-        .context("reading semantic_enabled flag")?;
+    let drive_paths = lib
+        .drive_paths_for(&root)
+        .ok_or_else(|| anyhow::anyhow!(not_a_chan_drive_hint(&root)))?;
+    // Canonical path comes back from the registry entry; falls back
+    // to the user-supplied root if the registry lookup somehow
+    // races (impossible while we hold a Library handle, but the
+    // ladder keeps the display correct without panicking).
+    let canonical_root = lib
+        .list_drives()
+        .into_iter()
+        .find(|d| same_path(&d.path, &root))
+        .map(|d| d.path)
+        .unwrap_or(root);
+    let cfg = chan_drive::index::config::load(&drive_paths.index)
+        .with_context(|| format!("reading index config at {}", drive_paths.index.display()))?;
+    let model = cfg.model;
+    let semantic_enabled = cfg.semantic_enabled;
     let expected_dir = global_models_dir().join(repo_dir_name(&model));
     let model_present = resolve_model(&model).is_ok();
     let model_size_bytes = if model_present {
@@ -1454,7 +1499,7 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
     };
     if json {
         let body = serde_json::json!({
-            "drive": drive.root().display().to_string(),
+            "drive": canonical_root.display().to_string(),
             "mode": mode,
             "model_present": model_present,
             "model_name": model,
@@ -1464,7 +1509,7 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&body)?);
     } else {
-        println!("drive:            {}", drive.root().display());
+        println!("drive:            {}", canonical_root.display());
         println!("mode:             {mode}");
         println!("model:            {model}");
         println!("model path:       {}", expected_dir.display());
@@ -1485,6 +1530,19 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// systacean-8: user-facing message when a CLI subcommand is
+/// pointed at a path the registry doesn't know. Surfaces a clear
+/// "not a chan drive at <path>" hint with a `chan add` next-step
+/// instead of leaking the implementation detail (auto-register
+/// side-effect, `DriveNotRegistered(<path>)`, etc.).
+fn not_a_chan_drive_hint(root: &std::path::Path) -> String {
+    format!(
+        "not a chan drive at {}; run `chan add {}` first",
+        root.display(),
+        root.display()
+    )
 }
 
 /// Recursive size of every regular file under `dir`. Mirrors the

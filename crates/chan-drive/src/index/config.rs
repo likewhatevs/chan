@@ -193,6 +193,32 @@ mod tests {
     }
 
     #[test]
+    fn load_works_while_drive_lock_is_held() {
+        // systacean-8: chan index status reads IndexConfig without
+        // opening a Drive (so no writer lock acquired), which means
+        // a running `chan serve` against the drive no longer blocks
+        // the CLI. Pin the invariant: `config::load` doesn't touch
+        // any lock file and returns successfully even while another
+        // holder (simulating the chan serve process) has acquired
+        // the per-drive writer flock.
+        use crate::lock::DriveLock;
+        let tmp = TempDir::new().unwrap();
+        let index_dir = tmp.path().join("index");
+        let lock_dir = tmp.path().join("lock");
+        std::fs::create_dir_all(&index_dir).unwrap();
+        let on_disk = IndexConfig {
+            model: "BAAI/bge-m3".to_owned(),
+            semantic_enabled: true,
+            ..IndexConfig::default()
+        };
+        save(&index_dir, &on_disk).unwrap();
+        let _holder = DriveLock::acquire(&lock_dir).unwrap();
+        let loaded = load(&index_dir).unwrap();
+        assert_eq!(loaded.model, "BAAI/bge-m3");
+        assert!(loaded.semantic_enabled);
+    }
+
+    #[test]
     fn semantic_enabled_absent_in_old_file_loads_as_false() {
         // Existing drives whose config.toml predates systacean-7 don't
         // have the field at all. Pin that they load cleanly with the
