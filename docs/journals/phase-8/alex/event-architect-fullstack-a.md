@@ -957,3 +957,70 @@ Mini-wave is getting wider; if your context is filling up
 or you'd prefer to land in two waves to keep the queue
 tractable, flag it + we can carve off -34 / -35 to a
 second sub-wave after the patch ships.
+
+## 2026-05-20 — poke (-31 cleared + session-recycle acknowledged)
+
+`-31` approved + cleared (already committed at `18811e0`).
+Clean single-file landing in `TerminalTab.svelte`:
+
+* Self in the list, sorted to top with italic "(self)"
+  suffix — readable visual marker without an icon swap.
+* Per-row checkbox drives `tab.broadcastEnabled` on the
+  self row; `setTerminalBroadcastEnabled` vs
+  `setTerminalBroadcastTarget` split keeps the state-
+  shape clean.
+* Umbrella rocker dropped + `toggleBroadcast` helper
+  deleted (unused) — no dead-code drift.
+* Container label "broadcast input on/off" verbatim;
+  Radio icon relocated into the section label.
+* Bonus consistency on Select All / Deselect All —
+  walks self alongside other rows so bulk action stays
+  uniform.
+
+Right call to pivot -33 → -31 — single-file fit in the
+remaining session context was the better path than
+opening the -33 multi-file surface mid-session. Audit-
+trail reads cleanly.
+
+**Session-recycle acknowledged.** -32 (chord migration —
+wide blast radius across shortcuts.ts + carousel +
+hamburger + empty-pane right-click + cheatsheet resync)
+and -33 (graph from-here default + ancestor breadcrumbs,
+hard-paired with -32) are correctly carved off as
+fresh-session work. -34 (Wysiwyg paste) and -35 (file
+rename UX) also reasonable fresh-session candidates per
+your framing.
+
+### Queue handoff state for the fresh session
+
+When @@Alex spawns a fresh @@FullStackA session, they
+bootstrap into:
+
+| Task | State |
+|------|-------|
+| `-32` | Cut, dispatched, hard-pair after `-33`. Read [`fullstack-a-32.md`](../fullstack-a/fullstack-a-32.md) — context-aware spawn semantics in the task body. |
+| `-33` | Cut, dispatched, hard-pair before `-32`. Read [`fullstack-a-33.md`](../fullstack-a/fullstack-a-33.md). |
+| `-34` | Cut, dispatched. Read [`fullstack-a-34.md`](../fullstack-a/fullstack-a-34.md). |
+| `-35` | Cut, dispatched. Read [`fullstack-a-35.md`](../fullstack-a/fullstack-a-35.md). |
+
+Recommended order for the fresh session: -33 → -32
+(hard-pair) → -34 → -35. -33 unblocks -32's
+`Cmd+Shift+M` context-aware spawn target.
+
+### Handover anchor for the fresh @@FullStackA
+
+* Mini-wave commits landed in HEAD: -28/-29/-30/-31.
+* The seeded chan-source drive for -33 ancestor
+  navigation needs spinning up on the fresh session
+  (lane-A's previous server torn down at recycle; pick
+  a fresh `/tmp/chan-test-...` path).
+* No uncommitted code in the working tree from your
+  session (just journal/task-file appends recording
+  state).
+* Push held for patch-release commit-grouping cut;
+  @@Systacean cuts the tag once -32/-33/-34/-35 land.
+
+Standing down. Your session's footprint clean for the
+recycle. Thanks for the disciplined hand-off; the
+context-fill flag was the right call rather than
+muscling through and risking quality.
