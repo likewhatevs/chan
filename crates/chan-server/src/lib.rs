@@ -65,7 +65,7 @@ use routes::{
 };
 use signal::{now_unix_secs, print_qr_if_tty, spawn_idle_watcher, spawn_signal_watcher};
 use state::{AppState, DriveCell};
-use static_assets::serve_static;
+use static_assets::{serve_font, serve_static};
 use terminal_sessions::{Registry as TerminalRegistry, RegistryConfig as TerminalRegistryConfig};
 
 /// Tunnel drive-name helpers re-exported from chan-tunnel-proto so
@@ -872,7 +872,14 @@ fn router(state: Arc<AppState>) -> Router {
             "/api/terminal/:session/event-reply",
             post(api_terminal_event_reply),
         )
-        .route("/ws", get(ws_upgrade));
+        .route("/ws", get(ws_upgrade))
+        // `fullstack-b-12`: bundled font assets (Source Code Pro
+        // Regular + OFL.txt) served from chan-server's rust-embed.
+        // The SPA's `@font-face` declaration points at this path; a
+        // future expansion (italic / bold weights, additional faces)
+        // drops more entries into `crates/chan-server/resources/fonts/`
+        // and the same `:name` segment serves them.
+        .route("/static/fonts/:name", get(serve_font));
     // systacean-7: read-only semantic-search state. Gated on
     // `embeddings` because the SemanticState payload + the
     // `chan-drive` resolver behind it only exist when the candle

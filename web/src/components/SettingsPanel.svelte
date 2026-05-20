@@ -782,6 +782,16 @@
             <span class="muted">off (BM25 only)</span>
           {/if}
         </span>
+        <!-- `fullstack-b-12`: Source Code Pro attribution. Ships
+             with chan under the SIL Open Font License 1.1; the OFL
+             notice is at /static/fonts/OFL.txt next to the .woff2. -->
+        <span class="k">terminal font</span>
+        <span class="v">
+          Source Code Pro Regular
+          <span class="muted">
+            (<a href="/static/fonts/OFL.txt" target="_blank" rel="noopener">SIL OFL 1.1</a>)
+          </span>
+        </span>
       </div>
     </section>
 

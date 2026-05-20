@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use rust_embed::RustEmbed;
@@ -28,6 +28,17 @@ use crate::state::AppState;
 #[derive(RustEmbed)]
 #[folder = "../../web/dist/"]
 struct WebAssets;
+
+/// Server-side resource bundle for runtime fonts (`fullstack-b-12`).
+/// Files at `crates/chan-server/resources/fonts/` are baked in via
+/// rust-embed and served under `/static/fonts/<name>`. The folder
+/// always exists in the source tree (Source Code Pro Regular +
+/// `OFL.txt`); no feature gate because the bundle is small (~80 KB
+/// total) and we want guaranteed availability across every build
+/// profile, including `--no-default-features`.
+#[derive(RustEmbed)]
+#[folder = "resources/fonts/"]
+struct FontAssets;
 
 const SPA_CACHE_CONTROL: HeaderValue = HeaderValue::from_static("no-store");
 const ASSET_CACHE_CONTROL: HeaderValue =
@@ -165,6 +176,26 @@ pub fn content_type_for(path: &str) -> &'static str {
     }
 }
 
+/// Serve a bundled font asset under `/static/fonts/<name>`
+/// (`fullstack-b-12`). Path traversal is impossible because the
+/// inner `name` is matched as a single segment by axum's `:name`
+/// pattern (no `/` allowed); we still reject anything that isn't a
+/// known embed entry rather than papering over with a generic 200.
+/// The `immutable` cache-control mirrors the SPA's hashed-asset
+/// policy: the font filename is stable per release and the bytes
+/// for that filename never change.
+pub async fn serve_font(Path(name): Path<String>) -> Response {
+    let Some(file) = FontAssets::get(&name) else {
+        return (StatusCode::NOT_FOUND, "font not bundled").into_response();
+    };
+    let body = file.data.into_owned();
+    let mut response = ([(header::CONTENT_TYPE, content_type_for(&name))], body).into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::CACHE_CONTROL, ASSET_CACHE_CONTROL);
+    headers.insert(header::VARY, HOST_VARY);
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,5 +263,61 @@ mod tests {
             Some(&ASSET_CACHE_CONTROL)
         );
         assert_eq!(response.headers().get(header::VARY), Some(&HOST_VARY));
+    }
+
+    #[test]
+    fn font_bundle_includes_source_code_pro_and_ofl_notice() {
+        // `fullstack-b-12`: the binary must ship Source Code Pro and
+        // its OFL license notice. Anyone who removes either file from
+        // the resources directory must explicitly update this test +
+        // the SettingsPanel attribution.
+        let font = FontAssets::get("SourceCodePro-Regular.otf.woff2")
+            .expect("Source Code Pro Regular woff2 must be bundled");
+        assert!(
+            font.data.len() > 1024,
+            "font payload looks empty: {}",
+            font.data.len()
+        );
+        let ofl = FontAssets::get("OFL.txt").expect("OFL.txt must ship alongside the font");
+        let text = std::str::from_utf8(&ofl.data).expect("OFL.txt is UTF-8");
+        assert!(
+            text.contains("SIL OPEN FONT LICENSE"),
+            "OFL.txt header missing: first 80 chars = {:?}",
+            text.chars().take(80).collect::<String>()
+        );
+    }
+
+    #[test]
+    fn font_content_type_for_woff2() {
+        assert_eq!(
+            content_type_for("SourceCodePro-Regular.otf.woff2"),
+            "font/woff2"
+        );
+    }
+
+    #[tokio::test]
+    async fn serve_font_returns_bundled_bytes_with_immutable_cache() {
+        // The handler is path-only (no AppState), so we can drive it
+        // directly. The `Path<String>` extractor wants the matched
+        // segment; we feed the same value axum would.
+        let response = serve_font(Path("SourceCodePro-Regular.otf.woff2".into())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let headers = response.headers();
+        assert_eq!(
+            headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("font/woff2")
+        );
+        assert_eq!(
+            headers.get(header::CACHE_CONTROL),
+            Some(&ASSET_CACHE_CONTROL)
+        );
+    }
+
+    #[tokio::test]
+    async fn serve_font_returns_404_for_unknown_name() {
+        let response = serve_font(Path("does-not-exist.woff2".into())).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

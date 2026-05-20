@@ -317,13 +317,20 @@
     // a user gets from iTerm. xterm.js's 1.0 default packs ascender
     // glyphs against the next row's descenders; visible regression
     // captured in `docs/journals/phase-8/attachments/image-{3,4}.png`.
+    // `fullstack-b-12`: visual parity with iTerm2's defaults.
+    // Source Code Pro Regular at 14 pt is bundled with chan
+    // (rust-embed via /static/fonts) so the family resolves to a
+    // known face on every install; the fallback chain catches the
+    // case where the @font-face load is still in flight or the
+    // browser declines woff2. Cursor goes to a non-blinking block,
+    // matching iTerm's defaults captured in the task spec.
     term = new Terminal({
       allowTransparency: false,
-      cursorBlink: true,
+      cursorBlink: false,
       cursorStyle: "block",
       fontFamily:
-        'SFMono-Regular, ui-monospace, Menlo, Consolas, "Liberation Mono", monospace',
-      fontSize: 13,
+        '"Source Code Pro", "SF Mono", SFMono-Regular, ui-monospace, Menlo, Consolas, "Liberation Mono", monospace',
+      fontSize: 14,
       lineHeight: 1.2,
       macOptionIsMeta: true,
       scrollback: scrollbackLines,
