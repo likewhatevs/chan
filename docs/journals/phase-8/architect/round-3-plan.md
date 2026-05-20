@@ -247,6 +247,27 @@ in Round 3: lands alongside the cleanup + hardening pass
 (Track 3) so the benchmark numbers feed the same
 release-readiness audit.
 
+## Separate-team work — chan-desktop drive-onboarding redesign
+
+@@Alex 2026-05-20: noted a substantial redesign of the
+chan-desktop launcher onboarding flow + drives-list UI
+(replace "Open drive" + "Attach" with a single `[new]`
+entry branching by local / remote-outbound / remote-
+inbound; windows-open column; Boot rename + gear
+config dialog; forget-drive affordance). @@Alex's call:
+"it's fine, i can spin up separate team to work on the
+desktop part."
+
+Full spec at
+[`chan-desktop-onboarding-redesign.md`](chan-desktop-onboarding-redesign.md).
+Decomposed into six sequenced steps; the separate
+team's bootstrap reads that artifact + the related
+chan-tunnel-{proto,client,server} crate designs.
+
+NOT part of the main six-agent roster's queue. Listed
+here so the Round-3 status snapshot surfaces it for
+the desktop team's spawn.
+
 ## Idea parking lot — report extensions
 
 [`report-extensions-ideas.md`](report-extensions-ideas.md)
