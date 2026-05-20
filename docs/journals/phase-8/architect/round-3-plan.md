@@ -258,6 +258,117 @@ tracking, markdown-specific report dimensions,
 cross-drive aggregation). Not in scope until @@Alex picks
 which ones become Round-3 tasks.
 
+## Idea parking lot — per-agent submit-chord encoding map
+
+Captured 2026-05-20 from `fullstack-b-13`'s probe finding +
+@@Alex's "let's make it work for now, revise later" call.
+
+### The finding
+
+Patch-release ships `AGENT_SUBMIT_CHORD = "\x1b[27;9;13~"`
+(xterm modifyOtherKeys) as the single chord for agent-mode
+submit. The probe surfaced one divergence:
+
+| Agent          | Submit chord     | `\n` effect            |
+|----------------|------------------|------------------------|
+| Claude Code    | `\x1b[27;9;13~`  | Newline in multi-line draft |
+| Codex          | `\r` (raw CR)    | Silent / ignored       |
+| Gemini         | not probed       | not probed             |
+
+Claude Code is chan's primary user (chan's own development
+is Claude Code), so the single-chord ship targets it. Codex
+users in agent mode would need to flip back to shell mode
+(which sends `\n` — but codex silently drops `\n` too, so
+shell mode is also wrong for codex). Effectively codex
+doesn't work cleanly in either mode today; documented as
+known-known.
+
+### Risk analysis ("what would this break, if other agents pick up on this")
+
+| Consumer of the bytes               | Behaviour                                              |
+|-------------------------------------|--------------------------------------------------------|
+| Claude Code                         | Submits — intended behaviour                            |
+| Codex                               | No effect — bytes silently consumed; draft sits unsubmitted |
+| Gemini                              | Unknown until probed; likely no effect (silent consumption) |
+| Raw shell (bash / zsh / fish)       | No effect — most shells don't bind the modifyOtherKeys CSI; bytes silently consumed |
+| TUI programs (htop, less, mc, nvim) | No effect for most; nvim with modifyOtherKeys enabled MIGHT interpret as an arbitrary mapping (low probability of a destructive binding by default) |
+| Programs that explicitly bind the CSI sequence | Unknown — possible to fire an unintended action. No known offenders in chan's typical workflow. |
+
+**Worst plausible outcome**: a shell user in agent mode
+sends the chord, nvim's modifyOtherKeys binding fires some
+unexpected mapping. Low-impact: the user can recover with
+Ctrl-C / Esc. The TUI's own keybindings still work.
+
+**Most likely outcome for non-Claude-Code consumers**:
+silent consumption. No data loss, no destructive action;
+the user just notices "agent mode doesn't submit here" and
+flips back to shell mode.
+
+### Round-3 candidate solutions
+
+Picking what shape the per-agent encoding takes depends on
+how chan detects which agent runs in a given terminal:
+
+1. **Static per-prompt agent picker** — extend the
+   shell/agent toggle from `fullstack-b-13` into a
+   three-way picker: shell / claude-code / codex
+   (gemini etc. added as their chords are probed). User
+   picks the agent at terminal spawn / rich-prompt open.
+   * Pros: simplest; explicit; matches user intent.
+   * Cons: extra friction on first use per session.
+
+2. **Auto-detection via process-tree probe** —
+   chan-server walks the PTY child's process tree
+   periodically; matches process name against a known
+   list (`claude` → Claude Code; `codex` → codex;
+   `gemini` → gemini). Sets the chord encoding
+   automatically.
+   * Pros: zero user friction.
+   * Cons: process-walk per session; potential
+     mismatch if the agent rebrands or runs under a
+     wrapper.
+
+3. **Agent self-announce on spawn** — agents that
+   integrate with chan write a `event-agent-hello-<id>.md`
+   event file announcing their identity + accepted
+   chord. chan picks up the encoding from the
+   announcement.
+   * Pros: explicit + extensible; agents opt in to the
+     protocol.
+   * Cons: requires agent-side cooperation; doesn't
+     help legacy / closed-source agents.
+
+4. **Heuristic fallback chord chain** — agent mode
+   tries Claude Code's chord first; if no echo of
+   "submitted" within N ms, tries codex's chord. Too
+   magical, but cheap to implement.
+   * Pros: zero user friction.
+   * Cons: timing-sensitive; produces double-submission
+     on race conditions; brittle.
+
+Recommendation when this lands: combine #1 (manual picker
+as the user-facing surface + escape hatch) with #2
+(auto-detection as the default that fills the picker's
+initial value). #3 is the right long-term shape if /
+when an `agent-hello` event becomes part of chan's
+spawn-handshake protocol — sits naturally alongside the
+identity-broadcast work from
+[`rich-prompt-session-evolution.md`](rich-prompt-session-evolution.md)
+item D.
+
+### Sequencing
+
+* Patch-release: ships single-chord (`\x1b[27;9;13~`).
+* Round-3 Track-5 (NEW): per-agent encoding map.
+  Pre-requisite: confirm gemini's chord (cheap probe,
+  same shape as fullstack-b-13's). Then dispatch the
+  picker + auto-detect work alongside the cleanup +
+  hardening pass in Track 3, since the changes touch
+  the same `Session::submit_mode` field and the same
+  `dispatch_agent_event` branch.
+* No task cuts until Round-3 fan-out; this parking-lot
+  entry is the spec sketch.
+
 ## Capacity assumptions for Round 3
 
 Same six slots + @@Architect dispatcher. The bottomless-
