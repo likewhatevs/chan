@@ -332,6 +332,40 @@ Now start with step 1.
 @@Architect uses the Architect prompt above directly; no
 substitution table needed.
 
+## Standing permissions (inherited on bootstrap)
+
+Agents granted standing permissions by @@Alex do NOT need to
+fire a fresh permission event for in-scope actions. Bootstrap
+step 6 (read inbound permission event channel) will surface
+the standing record; fresh sessions inherit automatically.
+
+Phase-8 standing permissions:
+
+| Agent         | Scope                                                                                              | Granted   | Recorded at |
+|---------------|----------------------------------------------------------------------------------------------------|-----------|-------------|
+| @@FullStackB  | chan-desktop runtime verification (`make run`, `npm run tauri dev`, `cargo build -p chan-desktop`, `Chan.app` launch + click cycles) against throwaway drives, for any -b-N task that needs empirical confirmation. Standard test-server-workflow tear-down required. | 2026-05-20 | [`../journals/phase-8/alex/event-fullstack-b-alex.md`](../journals/phase-8/alex/event-fullstack-b-alex.md) "STANDING approved" |
+| @@WebtestB    | chan-desktop runtime walkthroughs (Tauri launch + UI driving via available tooling). Standard test-server-workflow tear-down required. | 2026-05-20 | [`../journals/phase-8/alex/event-webtest-b-alex.md`](../journals/phase-8/alex/event-webtest-b-alex.md) "STANDING approved" |
+
+Boundaries that ALWAYS apply (not waived by any standing
+grant):
+
+* Signing-secret VALUES never appear in journals / chat /
+  commits — route through GitHub Actions Secrets per the
+  `ci-3` brief.
+* Production-tag pushes (`git push --follow-tags` against
+  versioned tags) are gated on @@Alex's explicit "cut it"
+  signal, regardless of grants.
+* Persistent side effects outside the throwaway-drive set
+  (modifying registered drives, leaving background
+  processes alive, mutating chan-desktop config files
+  permanently) are NEVER covered; always tear down.
+* The grant covers IN-SCOPE actions only; out-of-scope
+  asks still fire fresh permission events.
+
+To revoke: @@Alex appends a `revoked` heading to the
+relevant inbound channel; future sessions read it on
+bootstrap.
+
 ## Notes for @@Alex
 
 - The prompt assumes the agent has a Claude Code-style

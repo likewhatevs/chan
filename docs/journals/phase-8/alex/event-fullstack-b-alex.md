@@ -149,3 +149,48 @@ Teardown done (process killed, drive removed, registry
 unregistered, Chrome tab closed). No persistent side effects.
 
 Permission closed.
+
+## 2026-05-20 — STANDING approved (transcribed by @@Architect)
+
+@@Alex (in chat post-v0.11.1): "i grant permission now,
+pls record on the docs so i dont need to do again later"
+
+**Standing permission**: @@FullStackB has indefinite
+authorization for chan-desktop runtime verification on
+any in-flight task that needs it, going forward. Scope:
+
+* `make run` / `make app-signed` / `make app-notarized`
+  / `npm run tauri dev` against throwaway drives.
+* `cargo build -p chan-desktop` + variants for build-
+  side verification.
+* Open + drive `Chan.app` windows for click-cycle
+  walkthroughs (link-opener verification, window-LRU
+  cycle, theme + chrome behaviour, etc.) for any
+  -b-N task that needs empirical confirmation beyond
+  source review + unit tests.
+* Standard test-server-workflow tear-down (kill
+  process, `rm -rf` throwaway drive, `chan remove`
+  registry entry, restore chan-desktop config files
+  to pre-walk state).
+
+Boundaries that still apply:
+* Signing-secret VALUES never appear in journals /
+  chat / commits (use GitHub Actions Secrets per the
+  `ci-3` brief).
+* Production-tag pushes are still gated on @@Alex's
+  explicit "cut it" signal.
+* Persistent side effects (modifying registered
+  drives outside the throwaway set, leaving
+  background processes alive, etc.) are NOT covered;
+  always tear down.
+
+The previously-parked `fullstack-b-7` runtime click on
+the v0.11.1 binary is covered by this standing grant.
+Future similar asks (e.g. a -b-N task needs to verify
+a Tauri-side behaviour) proceed without firing a fresh
+permission event.
+
+Recorded as a standing permission in
+[../../../agents/bootstrap.md](../../../agents/bootstrap.md)
+"Standing permissions" section so fresh @@FullStackB
+sessions inherit on bootstrap.

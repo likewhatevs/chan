@@ -304,6 +304,20 @@ each drive type).
   (window-config LRU, opener IPC, title format,
   Source Code Pro bundle, etc.) but does NOT carry
   this redesign.
+* @@Alex 2026-05-20 (post-v0.11.1): "yes I will spin
+  up a separate architect under the ./desktop dir and
+  work from there without conflicting with the rest,
+  will work on the details in the next session."
+  **Separate architect role + working directory
+  (`./desktop`)** confirmed. The chan-desktop team
+  operates from `./desktop` with its own architect
+  (distinct identity from `@@Architect`); coordination
+  with the main six-agent roster is via the canonical
+  phase journal + cross-references in this artifact,
+  not via shared event channels (to avoid the
+  multi-agent-tree commit-discipline overhead). Details
+  for the separate-team bootstrap + scope boundary
+  land in the next session.
 * Cross-reference added to
   [`round-3-plan.md`](round-3-plan.md) so any future
   Round-3 fan-out surfaces it for the separate

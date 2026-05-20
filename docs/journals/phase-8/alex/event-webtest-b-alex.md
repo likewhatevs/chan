@@ -76,3 +76,44 @@ You may pick up `fullstack-b-1`'s runtime walkthrough on lane
 B with this extension. Append your verdict to
 [`../webtest-b/webtest-b-1.md`](../webtest-b/webtest-b-1.md)
 when done.
+
+## 2026-05-20 — STANDING approved (transcribed by @@Architect)
+
+@@Alex (in chat post-v0.11.1): "i grant permission now,
+pls record on the docs so i dont need to do again later"
+
+**Tauri-launch extension upgraded to STANDING (indefinite
+scope)**: the prior "through Round-1 close" framing is
+replaced. @@WebtestB has standing authorization for
+chan-desktop runtime walkthroughs going forward. Scope:
+
+* `npm run tauri dev` / `cargo build -p chan-desktop` /
+  launching `Chan.app` against throwaway drives for any
+  per-task verification queue.
+* Driving the chan-desktop UI (click cycles, drive
+  open / close, window LRU restore behaviour, etc.) to
+  the extent the available tooling allows (Chrome MCP
+  doesn't reach Tauri's WKWebView; `osascript` blocked
+  by Accessibility — these are still tooling
+  limitations, not permission limitations).
+* Standard test-server-workflow tear-down (kill
+  process, `rm -rf` throwaway drive, `chan remove`
+  registry entry, chan-desktop config restored to
+  pre-walk state).
+
+Boundaries that still apply:
+* Production-tag pushes still gated on @@Alex.
+* Persistent side effects outside the throwaway set
+  are NOT covered; always tear down.
+
+The previously-parked `fullstack-b-1` empirical LRU
+click cycle remains tooling-blocked (Chrome MCP +
+Accessibility); permission isn't the gate, but if
+@@Alex grants Accessibility OR adds a chan-desktop
+`--drive <path>` CLI arg (Round-3 polish), this
+permission covers the walk.
+
+Recorded as a standing permission in
+[../../../agents/bootstrap.md](../../../agents/bootstrap.md)
+"Standing permissions" section so fresh @@WebtestB
+sessions inherit on bootstrap.
