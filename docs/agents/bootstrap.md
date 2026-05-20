@@ -13,11 +13,38 @@ up any working agent on chan. Two flavours:
   files; reads every working agent's inbound + outbound event
   log).
 
-If you only type the agent name and point at this file
-(`you are @@FullStackA; read from ./docs/agents/bootstrap.md
-and confirm your identity`), that also works — the prompts
-are self-contained once the agent identity is known. The agent
-will ask for clarification if the name is unclear.
+### Recommended one-liner (works for any agent spawned in chan)
+
+```
+you are $CHAN_TAB_NAME. confirm your identity then read from docs/agents/bootstrap.md
+```
+
+chan-server sets `CHAN_TAB_NAME` on every terminal spawned via
+the spawn-agent dialog (the tab label flows from
+`CreateOptions::tab_name` to `cmd.env("CHAN_TAB_NAME", tab_name)`
+in `crates/chan-server/src/terminal_sessions.rs`). The agent
+shell expands the variable; the agent confirms identity first,
+then reads the bootstrap doc + walks the appropriate
+Working-agent / Architect block below. One prompt fits all
+six (or seven) agents — no per-agent substitution needed.
+
+**Why confirm-first matters**: the confirmation response is a
+natural pause beat between the identity declaration and the
+multi-step bootstrap walk. If `$CHAN_TAB_NAME` is wrong (the
+env didn't propagate, the spawn name was mistyped, the wrong
+session was activated), @@Alex sees the wrong identity in the
+confirmation and can ESC to redirect BEFORE the agent commits
+to reading + acting on the bootstrap chain. Don't change the
+order to "read then confirm" — that costs the intervention
+window.
+
+If the agent is spawned outside chan (e.g. for a one-off test
+session without chan-server in the loop), either export
+`CHAN_TAB_NAME` manually before launching or use the
+explicit-name form (`you are @@FullStackA; confirm your
+identity then read from ./docs/agents/bootstrap.md`). Either
+way the prompts below are self-contained once the agent
+identity is known.
 
 ## Working-agent prompt (copy from the fenced block below)
 
