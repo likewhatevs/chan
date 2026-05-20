@@ -20,7 +20,6 @@ use config::{Config, ConfigStore, WindowConfig};
 use serve::ServeHandle;
 use tunnel::TunnelState;
 
-const MIN_CHAN_VERSION: &str = "0.8.1";
 const CHAN_BUSY_CHANGED: &str = "chan-busy";
 const SYSTEM_NOTICE: &str = "system-notice";
 
@@ -247,7 +246,7 @@ async fn add_drive(
 ) -> Result<(), String> {
     require_bin(&state.bin_status)?;
     let path = canonical_key(Path::new(&path));
-    let bin = chan_bin()?;
+    let bin = serve::bundled_chan_path()?;
     emit_chan_busy(&app, true, "add", &path);
     let out = Command::new(&bin)
         .args(["add", &path])
@@ -284,7 +283,7 @@ async fn remove_drive(
     serve::stop(&state, &key);
 
     emit_chan_busy(&app, true, "remove", &key);
-    let out = Command::new(chan_bin()?)
+    let out = Command::new(serve::bundled_chan_path()?)
         .args(["remove", &key])
         .kill_on_drop(true)
         .output()
@@ -316,7 +315,7 @@ fn set_drive_on(
     let key = canonical_key(Path::new(&path));
     if on {
         require_bin(&state.bin_status)?;
-        serve::start(app, Arc::clone(&state), key, &chan_bin()?)?;
+        serve::start(app, Arc::clone(&state), key, &serve::bundled_chan_path()?)?;
     } else {
         serve::stop(&state, &key);
     }
@@ -592,33 +591,6 @@ fn basename(p: &Path) -> Option<String> {
     p.file_name().map(|s| s.to_string_lossy().into_owned())
 }
 
-/// Resolve the bundled `chan` sidecar binary. Tauri's `externalBin`
-/// takes `binaries/chan-<target-triple>` at build time and stages it
-/// next to chan-desktop's own binary with the triple suffix stripped:
-/// `target/debug/chan` in dev, `Contents/MacOS/chan` in the bundled
-/// .app. Hard requirement — chan-desktop ships with chan; no
-/// `$PATH` fallback. A user who swaps the bundled binary owns the
-/// consequences.
-fn chan_bin() -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("locating chan-desktop binary: {e}"))?;
-    let dir = exe
-        .parent()
-        .ok_or_else(|| "chan-desktop binary has no parent directory".to_string())?;
-    let name = if cfg!(target_os = "windows") {
-        "chan.exe"
-    } else {
-        "chan"
-    };
-    let path = dir.join(name);
-    if !path.exists() {
-        return Err(format!(
-            "bundled chan sidecar not found at {}",
-            path.display()
-        ));
-    }
-    Ok(path)
-}
-
 /// Detect macOS App Translocation. When Gatekeeper sees an unsigned
 /// or quarantined app launched from outside `/Applications` (e.g.
 /// double-clicked inside a mounted .dmg), it runs the bundle from a
@@ -637,8 +609,8 @@ fn is_app_translocated() -> bool {
 
 /// Boot-time preflight. Runs once before `AppState` is built and the
 /// result is stored verbatim. Order matters: translocation is
-/// checked before the bundle-path check because in the translocated
-/// case the file *is* present, but spawning it is futile.
+/// checked first because in the translocated case the bundled file
+/// *is* present, but spawning it is futile.
 fn compute_bin_status() -> BinStatus {
     #[cfg(target_os = "macos")]
     {
@@ -655,53 +627,31 @@ fn compute_bin_status() -> BinStatus {
             };
         }
     }
-    match chan_bin() {
-        Ok(bin) => match probe_chan_version(&bin) {
-            Ok(()) => BinStatus::ok_status(),
-            Err(e) => BinStatus {
+    let bin = match serve::bundled_chan_path() {
+        Ok(p) => p,
+        Err(e) => {
+            return BinStatus {
                 ok: false,
-                kind: "version-mismatch",
+                kind: "missing",
                 reason: e,
-            },
-        },
-        Err(e) => BinStatus {
+            };
+        }
+    };
+    if !bin.exists() {
+        return BinStatus {
             ok: false,
             kind: "missing",
+            reason: format!("bundled chan sidecar not found at {}", bin.display()),
+        };
+    }
+    match serve::probe_chan_version(&bin) {
+        Ok(()) => BinStatus::ok_status(),
+        Err(e) => BinStatus {
+            ok: false,
+            kind: "version-mismatch",
             reason: e,
         },
     }
-}
-
-fn probe_chan_version(bin: &Path) -> Result<(), String> {
-    let out = std::process::Command::new(bin)
-        .arg("--version")
-        .output()
-        .map_err(|e| format!("probing bundled chan version: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "bundled chan at {} failed `--version`: {}",
-            bin.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let version = stdout
-        .split_whitespace()
-        .find_map(|part| semver::Version::parse(part.trim_start_matches('v')).ok())
-        .ok_or_else(|| {
-            format!(
-                "could not parse bundled chan version from {:?}",
-                stdout.trim()
-            )
-        })?;
-    let min = semver::Version::parse(MIN_CHAN_VERSION)
-        .map_err(|e| format!("invalid desktop minimum chan version: {e}"))?;
-    if version < min {
-        return Err(format!(
-            "Bundled chan is {version}, but Chan Desktop requires {MIN_CHAN_VERSION} or newer."
-        ));
-    }
-    Ok(())
 }
 
 #[tauri::command]

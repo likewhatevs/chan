@@ -668,3 +668,64 @@ Mini-wave queue empty for my lane. Awaiting:
   verification gate.
 
 Stand down. Will resume on next wave or recycle.
+
+## 2026-05-20 — poke (fullstack-b-15 ready for review)
+
+`fullstack-b-15` ready for review. Bundling-the-binary was
+already wired via Tauri's `externalBin` mechanism (`chan-bin`
+Makefile recipe + `binaries/chan-<triple>` staging); the missing
+pieces from the task spec were the public helper, the
+exact-match version probe, the unit test, and the
+`desktop/CLAUDE.md` documentation. All four landed.
+
+### Changes
+
+* **`desktop/src-tauri/src/serve.rs`** — new `pub fn
+  bundled_chan_path() -> Result<PathBuf, String>` (pure path math
+  over `current_exe()`; no filesystem access inside the helper)
+  next to `drive_title`. New `pub fn probe_chan_version(&Path)
+  -> Result<(), String>` tightened from the old
+  `MIN_CHAN_VERSION = "0.8.1"` floor to *exact* match against
+  `env!("CARGO_PKG_VERSION")` — the locked round-2 decision-3
+  contract. New unit test
+  `bundled_chan_path_is_sibling_of_chan_desktop_executable`
+  pinning the resolution contract (passes on a fresh checkout
+  that has not yet built `cargo build --release --bin chan`).
+* **`desktop/src-tauri/src/main.rs`** — dropped the now-relocated
+  `chan_bin()` and `probe_chan_version()` helpers + the
+  `MIN_CHAN_VERSION` constant. `compute_bin_status()` and the
+  three IPC handlers (`add_drive`, `remove_drive`,
+  `set_drive_on`) route via `crate::serve::bundled_chan_path()`.
+  `require_bin` gate unchanged.
+* **`desktop/CLAUDE.md`** — new "Bundled chan sidecar" section
+  above the auto-upgrade notes. Documents bundle layout per
+  build profile (dev `target/debug/chan`, macOS
+  `Chan.app/Contents/MacOS/chan`, Linux/Windows sibling of
+  chan-desktop), the resolution helpers, and the universal2
+  follow-up for @@CI's ci-7.
+
+### Pre-push gate
+
+Workspace fmt + clippy `--workspace -D warnings` + test
+(chan-desktop 20 → 21; +1 covering
+`bundled_chan_path_is_sibling_of_chan_desktop_executable`) +
+no-default-features build + svelte-check (3978 files, 0
+errors) + npm build + vitest (544/544 after a transient flake
+on first run that cleared on rerun) all green.
+
+### Coordination notes
+
+* No overlap with @@Systacean's `-11` (signing block in
+  `tauri.conf.json`); my -15 didn't touch `tauri.conf.json` at
+  all — the existing `bundle.externalBin` and the `chan-bin`
+  Makefile recipe already cover what -15 needed.
+* `desktop/CLAUDE.md` "Architecture handling" subsection flags
+  the universal2 fat-binary work as `ci-7`'s territory rather
+  than this Makefile, per the task's coordination note.
+* `-b-16` holds at scaffolding-only until you clear -15 (hard
+  sequential per the task brief): the helpers' public shapes
+  land here, and -16 builds on `bundled_chan_path()` +
+  `probe_chan_version()` directly.
+
+See [../fullstack-b/fullstack-b-15.md](../fullstack-b/fullstack-b-15.md)
+for the full implementation note + suggested commit subject.

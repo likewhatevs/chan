@@ -22,7 +22,7 @@ use std::collections::VecDeque;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -362,6 +362,77 @@ pub fn new_drive_window_label(key: &str) -> String {
 /// signal in the OS window switcher than the prefix + basename.
 fn drive_title(key: &str) -> String {
     key.to_string()
+}
+
+/// Resolve the absolute path of the bundled `chan` sidecar binary.
+///
+/// Tauri's `externalBin` mechanism in `tauri.conf.json` declares
+/// `binaries/chan` at build time and the bundler stages a copy of
+/// the per-target-triple binary next to chan-desktop's own
+/// executable with the triple suffix stripped:
+///
+///   * dev (`cargo tauri dev`):    `target/debug/chan`
+///   * release bundle on macOS:    `Chan.app/Contents/MacOS/chan`
+///   * release on Linux/Windows:   sibling of `chan-desktop` in the
+///     packaged binary directory.
+///
+/// The resolver is pure path math over `current_exe()`; it does NOT
+/// check that the sidecar actually exists on disk. The boot-time
+/// preflight in `crate::compute_bin_status` performs the existence
+/// and version check exactly once and stores the verdict in
+/// `AppState::bin_status`, gating every IPC that would spawn chan.
+pub fn bundled_chan_path() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("locating chan-desktop binary: {e}"))?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| "chan-desktop binary has no parent directory".to_string())?;
+    let name = if cfg!(target_os = "windows") {
+        "chan.exe"
+    } else {
+        "chan"
+    };
+    Ok(dir.join(name))
+}
+
+/// Probe the bundled `chan` binary's `--version` output and confirm
+/// it matches chan-desktop's own version exactly.
+///
+/// Bundled chan ships from the same workspace checkout as
+/// chan-desktop, so the two versions are always identical in a
+/// clean build. A mismatch indicates either a tampered bundle or a
+/// build-system fault and is treated as a hard failure: the
+/// frontend disables every spawn path.
+///
+/// Locked decision: PATH-first w/ bundled fallback + version match
+/// (round-2-plan decisions table, item 3). Exact-match here is the
+/// contract that the PATH-resolution layer in `fullstack-b-16`
+/// builds on.
+pub fn probe_chan_version(bin: &Path) -> Result<(), String> {
+    let out = std::process::Command::new(bin)
+        .arg("--version")
+        .output()
+        .map_err(|e| format!("probing chan version at {}: {e}", bin.display()))?;
+    if !out.status.success() {
+        return Err(format!(
+            "chan at {} failed `--version`: {}",
+            bin.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let version = stdout
+        .split_whitespace()
+        .find_map(|part| semver::Version::parse(part.trim_start_matches('v')).ok())
+        .ok_or_else(|| format!("could not parse chan version from {:?}", stdout.trim()))?;
+    let expected = semver::Version::parse(env!("CARGO_PKG_VERSION"))
+        .map_err(|e| format!("invalid chan-desktop version: {e}"))?;
+    if version != expected {
+        return Err(format!(
+            "chan at {} reports v{version}, but Chan Desktop expects v{expected}.",
+            bin.display()
+        ));
+    }
+    Ok(())
 }
 
 /// Stable window-label prefix for a tunneled drive, namespaced
@@ -781,6 +852,35 @@ mod tests {
         assert!(KEY_BRIDGE_JS.contains("app.tab.jump"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.next"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.prev"));
+    }
+
+    #[test]
+    fn bundled_chan_path_is_sibling_of_chan_desktop_executable() {
+        // `fullstack-b-15`: Tauri's `externalBin` stages the chan
+        // sidecar next to chan-desktop's own binary, with the
+        // per-target-triple suffix stripped. Pin that contract here
+        // so a future capability or layout change can't silently
+        // shift where chan-desktop expects to find the sidecar.
+        // Pure path math: the helper does NOT touch the filesystem,
+        // so the test passes even when target/debug/chan does not
+        // exist (e.g. on a fresh CI checkout that has not built
+        // `cargo build --release --bin chan` yet).
+        let path = bundled_chan_path().expect("bundled_chan_path resolves");
+        let exe = std::env::current_exe().expect("current_exe");
+        assert_eq!(
+            path.parent(),
+            exe.parent(),
+            "bundled chan must sit next to chan-desktop's binary",
+        );
+        let expected_name = if cfg!(target_os = "windows") {
+            "chan.exe"
+        } else {
+            "chan"
+        };
+        assert_eq!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some(expected_name),
+        );
     }
 
     #[test]

@@ -133,3 +133,121 @@ from @@Alex.
 ## Open questions
 
 (populated as you investigate)
+
+## 2026-05-20 — implementation note
+
+**Pre-existing infrastructure**: bundling-the-binary is already
+wired. `tauri.conf.json` declares
+`bundle.externalBin = ["binaries/chan"]`, and the `chan-bin`
+recipe in `desktop/Makefile` builds `target/release/chan` and
+copies it to `src-tauri/binaries/chan-<target-triple>` before
+every `cargo tauri dev` / `cargo tauri build`. `build.rs` writes
+an empty executable placeholder when the staged binary is
+absent so `cargo check` succeeds against a fresh checkout.
+Tauri strips the target-triple suffix at bundle time and places
+the sidecar at:
+
+* `target/debug/chan` (dev)
+* `Chan.app/Contents/MacOS/chan` (packaged macOS)
+* sibling of `chan-desktop[.exe]` (packaged Linux / Windows)
+
+What was missing for the round-2 north-star contract was:
+
+1. A public, callable helper exposed to the launcher code — the
+   existing `chan_bin()` was private in `main.rs`.
+2. A version probe that matched chan-desktop's own version
+   exactly — the existing probe used `MIN_CHAN_VERSION = "0.8.1"`
+   as a floor, which silently passes any chan back to that
+   version. The locked round-2 decision-3 contract is *exact
+   match*; the PATH resolver in `fullstack-b-16` builds on that
+   shape.
+3. A unit test pinning the helper's path-resolution contract.
+4. Documentation of the bundle layout in `desktop/CLAUDE.md`.
+
+### Changes landed
+
+* **`desktop/src-tauri/src/serve.rs`**
+  * New `pub fn bundled_chan_path() -> Result<PathBuf, String>` next
+    to `drive_title`. Pure path math over `current_exe()`; the
+    existence check moved to the boot-time preflight.
+  * New `pub fn probe_chan_version(&Path) -> Result<(), String>`.
+    Runs `chan --version`, parses with `semver`, asserts
+    *exact* equality against `env!("CARGO_PKG_VERSION")`. Drops
+    the old `MIN_CHAN_VERSION` floor.
+  * New unit test `bundled_chan_path_is_sibling_of_chan_desktop_executable`
+    pinning the resolution contract (sibling of `current_exe()`,
+    correct name per `target_os`). Pure path math, no filesystem
+    access — the test passes on a fresh checkout that has not yet
+    run `cargo build --release --bin chan`.
+
+* **`desktop/src-tauri/src/main.rs`**
+  * Removed the now-relocated `chan_bin()` and
+    `probe_chan_version()` helpers + the `MIN_CHAN_VERSION`
+    constant.
+  * `compute_bin_status()` now calls
+    `serve::bundled_chan_path()` for the path,
+    `path.exists()` for the existence check, and
+    `serve::probe_chan_version()` for the version check. Same
+    three-way verdict (`ok` / `translocated` / `missing` /
+    `version-mismatch`) preserved.
+  * Three IPC handlers (`add_drive`, `remove_drive`,
+    `set_drive_on`) now resolve via
+    `serve::bundled_chan_path()?`. The `require_bin` gate is
+    unchanged: every spawn path still checks
+    `state.bin_status.ok` before resolving the path.
+
+* **`desktop/CLAUDE.md`**
+  * New "Bundled chan sidecar" section above the auto-upgrade
+    notes. Documents the bundle layout per build profile, the
+    sidecar placement rationale (macOS notarization scope), the
+    public resolution + version-probe helpers, and the
+    universal2 follow-up that belongs in `ci-7` (per the task
+    body's "coordinate with @@CI" coordination note).
+
+### Acceptance criteria — verification
+
+| Criterion                                                              | State                                                                                          |
+|------------------------------------------------------------------------|------------------------------------------------------------------------------------------------|
+| Debug build produces `Chan.app` with chan inside                       | Pre-existing via `externalBin`; unchanged this commit.                                         |
+| Release build embeds chan + signs both under same Developer ID         | Pre-existing via `externalBin` + `cargo tauri build --bundles app,dmg`; unchanged.             |
+| Right arch for target (universal2 preferred, per-arch acceptable)      | Per-arch today (host triple). Universal2 deferred to `ci-7` per task body's coordination note. |
+| `bundled_chan_path()` helper exposed to launcher code                  | Landed in `serve.rs` as `pub fn`; called from `main.rs` IPC handlers + `compute_bin_status`.   |
+| Helper robust against bundle relocation                                | Uses `current_exe()` which Tauri / Tauri-Mac resolve correctly across drag-to-Applications.    |
+| Unit test pinning the helper returns a path under app bundle root      | `bundled_chan_path_is_sibling_of_chan_desktop_executable`. chan-desktop 20 → 21 tests.         |
+| `chan --version` against bundled matches chan-desktop's version        | `probe_chan_version` checks exact match against `env!("CARGO_PKG_VERSION")`.                   |
+| `desktop/CLAUDE.md` updated                                            | New "Bundled chan sidecar" section.                                                            |
+| Pre-push gate                                                          | Workspace fmt + clippy `-D warnings` + test (chan-desktop 20 → 21) + no-default-features build + svelte-check (3978 files / 0 errors) + npm build + vitest (544/544) all green. |
+
+### Coordination footprint for @@CI
+
+The Makefile's per-target-triple chan-bin recipe is the right
+shape for local builds today, but a single universal2 fat binary
+on macOS is the natural next step for distributing one DMG that
+runs on both Apple Silicon and Intel. The `lipo`-merge belongs
+in the GitHub Actions release workflow (`ci-7`) rather than in
+this Makefile because CI already does per-arch matrix builds.
+
+Documented in `desktop/CLAUDE.md` "Architecture handling"
+subsection so @@CI's ci-7 work has a written reference.
+
+### Suggested commit subject
+
+```
+chan-desktop: expose bundled_chan_path() + exact-match version probe (fullstack-b-15)
+```
+
+Touches:
+* `desktop/src-tauri/src/serve.rs`
+* `desktop/src-tauri/src/main.rs`
+* `desktop/CLAUDE.md`
+
+Holding for @@Architect commit clearance. Push held for the
+Round-2 release tag (end of Round 2, not v0.11.x).
+
+Next in queue: `fullstack-b-16` — PATH-first probe that consumes
+`bundled_chan_path()` as the fallback branch. Holding the
+implementation until @@Architect clears `-15` (hard-sequential
+per the task brief): the public shape of `bundled_chan_path()` /
+`probe_chan_version()` lands here, and `-16`'s implementation
+hangs off both. If review changes either signature, `-16`
+rebases trivially.
