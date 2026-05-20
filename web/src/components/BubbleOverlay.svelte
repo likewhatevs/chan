@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, ChevronUp, Loader2, RefreshCw } from "lucide-svelte";
+  import { ChevronDown, ChevronUp, Loader2, RefreshCw, X } from "lucide-svelte";
   import type { BubbleOverlayMode } from "../api/types";
   import { openExternalUrl } from "../editor/external_links";
   import { drive } from "../state/store.svelte";
@@ -25,18 +25,29 @@
   const mode = $derived<BubbleOverlayMode>(
     drive.info?.preferences.bubble_overlay_mode === "tray" ? "tray" : "stack",
   );
-  // `fullstack-a-5`: surveys with a sibling `survey-reply` event
-  // sharing the same `id` are already answered. The watcher dir
-  // keeps both the original survey JSON and the reply file as
-  // sibling tombstones (audit trail), but the bubble queue must
-  // hide the original on the next refresh so the bubble does not
-  // re-pop on every poll.
+  // `fullstack-a-5` + `fullstack-a-28`: hide any source event with
+  // a sibling `survey-reply` (same id, audit tombstone) so a
+  // replied bubble does not re-pop on the next poll. Predicate is
+  // intentionally type-agnostic on the source side — pre-flight
+  // + poke replies (e.g. the auto-appended standing "Check my
+  // comments first" option) dismiss the source bubble the same
+  // way surveys do.
+  //
+  // `fullstack-a-28` also honours the per-tab `dismissedIds` set
+  // populated by the per-bubble close affordance. That set
+  // persists across polls (and across session restore via
+  // SerTab.dbi), so explicitly-dismissed bubbles stay gone even
+  // when the source file is still on disk.
   const visibleEvents = $derived.by(() => {
     const repliedIds = new Set(
       watcher.events.filter((event) => event.type === "survey-reply").map((event) => event.id),
     );
+    const dismissedIds = new Set(watcher.dismissedIds ?? []);
     return watcher.events.filter(
-      (event) => event.type !== "survey-reply" && !repliedIds.has(event.id),
+      (event) =>
+        event.type !== "survey-reply" &&
+        !repliedIds.has(event.id) &&
+        !dismissedIds.has(event.id),
     );
   });
   const orderedEvents = $derived([...visibleEvents].reverse());
@@ -189,6 +200,19 @@
     dismissTimers.add(timer);
   }
 
+  // `fullstack-a-28`: explicit-close path. Adds the bubble id to
+  // the per-tab `dismissedIds` set so the filter hides it on
+  // subsequent polls even when the source file is still on disk.
+  // Used for poke + pre-flight bubbles that have no reply path,
+  // and as a universal escape hatch for any bubble.
+  function dismissExplicit(id: string): void {
+    const current = watcher.dismissedIds ?? [];
+    if (!current.includes(id)) {
+      watcher.dismissedIds = [...current, id];
+    }
+    watcher.events = watcher.events.filter((candidate) => candidate.id !== id);
+  }
+
   function nextUnanswered(
     total: number,
     byQuestion: Record<number, string>,
@@ -321,7 +345,11 @@
     {#if watcher.error}
       <div class="bubble error">{watcher.error}</div>
     {/if}
-    {#if watcher.loading}
+    {#if watcher.loading && visibleEvents.length === 0}
+      <!-- `fullstack-a-28`: only show the Loading placeholder on the
+           initial fetch (no events yet). On subsequent polls, keep
+           the bubble list visible so a poke / pre-flight bubble does
+           not flicker out on every refresh. -->
       <div class="bubble muted">Loading...</div>
     {:else if collapsed}
       <button type="button" class="tray-chip" onclick={() => (watcher.trayExpanded = true)}>
@@ -349,6 +377,15 @@
                 {/if}
                 <button type="button" class="icon" onclick={() => void onRefresh()} aria-label="Refresh watcher events" title="Refresh">
                   <RefreshCw size={14} strokeWidth={1.8} aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  class="icon"
+                  onclick={() => dismissExplicit(event.id)}
+                  aria-label="Dismiss bubble"
+                  title="Dismiss"
+                >
+                  <X size={14} strokeWidth={1.8} aria-hidden="true" />
                 </button>
               </div>
             </div>

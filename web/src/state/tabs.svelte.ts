@@ -330,6 +330,15 @@ export type TerminalWatcherState = {
   loading?: boolean;
   error?: string;
   trayExpanded?: boolean;
+  /// `fullstack-a-28`: ids the user explicitly dismissed via the
+  /// per-bubble close affordance. Survives watcher polls so a
+  /// dismissed bubble does not re-surface when its source file is
+  /// still on disk. Reply-based dismissal (writing
+  /// `event-reply-<id>.md`) remains the preferred path for
+  /// surveys + pre-flight standing options; explicit close is the
+  /// universal escape hatch (poke bubbles + any bubble the user
+  /// wants to hide without replying). Persisted on `SerTab.dbi`.
+  dismissedIds?: string[];
 };
 
 export type TerminalRichPromptState = {
@@ -1669,6 +1678,9 @@ function cloneTab(src: Tab): Tab {
             loading: src.watcher.loading,
             error: src.watcher.error,
             trayExpanded: src.watcher.trayExpanded,
+            ...(src.watcher.dismissedIds
+              ? { dismissedIds: [...src.watcher.dismissedIds] }
+              : {}),
           }
         : undefined,
     };
@@ -2705,6 +2717,11 @@ type SerTab = {
   /// terminal id; the server owns the real watcher lifecycle.
   twp?: string;
   twu?: 1;
+  /// `fullstack-a-28`: ids the user explicitly dismissed from the
+  /// bubble overlay via the per-bubble close affordance. Conditional
+  /// spread on serialize so the empty case keeps the persisted shape
+  /// short; absence on deserialize reads as "no dismissals."
+  dbi?: string[];
   /// Graph tab state.
   gm?: "s" | "f" | "l";
   gs?: string;
@@ -2850,6 +2867,9 @@ function serializeTab(
         ? {
             twp: t.watcher.path,
             ...(t.watcher.unread ? { twu: 1 as const } : {}),
+            ...(t.watcher.dismissedIds && t.watcher.dismissedIds.length > 0
+              ? { dbi: [...t.watcher.dismissedIds] }
+              : {}),
           }
         : {}),
       ...active,
@@ -3104,6 +3124,10 @@ export async function restoreLayout(
                   events: [],
                   seenIds: [],
                   unread: sertab.twu === 1 || savedTerm?.twu === 1,
+                  ...((sertab.dbi ?? savedTerm?.dbi) &&
+                  (sertab.dbi ?? savedTerm?.dbi)!.length > 0
+                    ? { dismissedIds: [...(sertab.dbi ?? savedTerm?.dbi)!] }
+                    : {}),
                 }
               : undefined,
           };
@@ -3425,6 +3449,9 @@ export function hydrateTerminalSessionsFromLayout(sessionLayout: SerNode | null)
           events: [],
           seenIds: [],
           unread: savedTerm.twu === 1,
+          ...(savedTerm.dbi && savedTerm.dbi.length > 0
+            ? { dismissedIds: [...savedTerm.dbi] }
+            : {}),
         };
       }
     }

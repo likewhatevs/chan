@@ -1390,6 +1390,54 @@ describe("terminal session serialization", () => {
     });
   });
 
+  test("round-trips watcher dismissedIds via SerTab.dbi (fullstack-a-28)", async () => {
+    // Explicit-close dismissals on bubble overlay survive session
+    // restore so the user does not have to re-dismiss the same
+    // poke / pre-flight bubble after a reload.
+    resetLayout([
+      terminalTab({
+        terminalSessionId: "term_dbi",
+        watcher: {
+          path: "events",
+          events: [],
+          seenIds: [],
+          unread: false,
+          dismissedIds: ["sticky-poke", "sticky-preflight"],
+        },
+      }),
+    ]);
+
+    const shareable = serializeLayout();
+    expect(JSON.stringify(shareable)).not.toContain("\"dbi\"");
+
+    const sessionSnapshot = serializeLayout({ terminalSessions: true });
+    expect(JSON.stringify(sessionSnapshot)).toContain("\"dbi\":[\"sticky-poke\",\"sticky-preflight\"]");
+
+    await restoreLayout(sessionSnapshot!);
+
+    const [tab] = activePane().tabs;
+    expect(tab?.kind).toBe("terminal");
+    if (tab?.kind !== "terminal") return;
+    expect(tab.watcher?.dismissedIds).toEqual(["sticky-poke", "sticky-preflight"]);
+  });
+
+  test("omits dbi from SerTab when dismissedIds is empty (fullstack-a-28)", async () => {
+    resetLayout([
+      terminalTab({
+        terminalSessionId: "term_empty",
+        watcher: {
+          path: "events",
+          events: [],
+          seenIds: [],
+          unread: false,
+        },
+      }),
+    ]);
+
+    const sessionSnapshot = serializeLayout({ terminalSessions: true });
+    expect(JSON.stringify(sessionSnapshot)).not.toContain("\"dbi\"");
+  });
+
   test("round-trips per-prompt page-width via SerTab.rppw (fullstack-a-30)", async () => {
     // Each rich prompt carries its own page-width ratio so
     // narrowing one prompt does not cascade onto a sibling tile.

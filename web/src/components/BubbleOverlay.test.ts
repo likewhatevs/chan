@@ -422,6 +422,159 @@ describe("BubbleOverlay", () => {
     expect(bubbles).toHaveLength(1);
   });
 
+  test("pre-flight paired with a sibling survey-reply is filtered out (fullstack-a-28)", async () => {
+    // Pre-flight bubbles with a standing-option reply (e.g. the
+    // auto-appended "Check my comments first") must dismiss the
+    // source bubble the same way surveys do. Before -a-28 the
+    // visibleEvents predicate was thought to be survey-only;
+    // pinning the actual generalized contract here.
+    const watcher: TerminalWatcherState = {
+      path: "events",
+      seenIds: ["preflight-replied", "preflight-fresh"],
+      unread: false,
+      events: [
+        {
+          id: "preflight-replied",
+          type: "pre-flight",
+          from: "@@Spawner",
+          to: "@@Alex",
+          path: "events/pre-flight-replied.md",
+          note: "Already-answered spawn note",
+          session: "spawn_a",
+        },
+        {
+          id: "preflight-replied",
+          type: "survey-reply",
+          from: "@@Alex",
+          to: "@@Spawner",
+          path: "events/event-reply-preflight-replied.md",
+        },
+        {
+          id: "preflight-fresh",
+          type: "pre-flight",
+          from: "@@Spawner",
+          to: "@@Alex",
+          path: "events/pre-flight-fresh.md",
+          note: "Fresh spawn note",
+          session: "spawn_b",
+        },
+      ],
+    };
+    const { target } = await renderOverlay(watcher);
+
+    expect(target.textContent).not.toContain("Already-answered spawn note");
+    expect(target.textContent).toContain("Fresh spawn note");
+    expect(target.querySelectorAll(".bubble")).toHaveLength(1);
+  });
+
+  test("poke paired with a sibling survey-reply is filtered out (fullstack-a-28)", async () => {
+    // Same predicate, third source-event type. Pokes that surface
+    // a standing-options reply get the same dismissal path as
+    // surveys + pre-flights.
+    const watcher: TerminalWatcherState = {
+      path: "events",
+      seenIds: ["poke-replied", "poke-fresh"],
+      unread: false,
+      events: [
+        {
+          id: "poke-replied",
+          type: "poke",
+          from: "@@Architect",
+          to: "@@Alex",
+          path: "events/event-poke-replied.md",
+          note: "Already-answered poke",
+        },
+        {
+          id: "poke-replied",
+          type: "survey-reply",
+          from: "@@Alex",
+          to: "@@Architect",
+          path: "events/event-reply-poke-replied.md",
+        },
+        {
+          id: "poke-fresh",
+          type: "poke",
+          from: "@@Architect",
+          to: "@@Alex",
+          path: "events/event-poke-fresh.md",
+          note: "Fresh poke text",
+        },
+      ],
+    };
+    const { target } = await renderOverlay(watcher);
+
+    expect(target.textContent).not.toContain("Already-answered poke");
+    expect(target.textContent).toContain("Fresh poke text");
+    expect(target.querySelectorAll(".bubble")).toHaveLength(1);
+  });
+
+  test("explicit Dismiss button populates dismissedIds and drops the event (fullstack-a-28)", async () => {
+    // Universal escape hatch: bubbles with no reply path (poke
+    // without standing options, future notification types) get a
+    // Dismiss icon that mutates the per-tab `dismissedIds` set
+    // AND immediately filters the event out of `watcher.events`
+    // so the bubble disappears on the next reactive cycle.
+    const watcher: TerminalWatcherState = {
+      path: "events",
+      seenIds: ["sticky-poke"],
+      unread: false,
+      events: [
+        {
+          id: "sticky-poke",
+          type: "poke",
+          from: "@@Architect",
+          to: "@@Alex",
+          path: "events/event-sticky.md",
+          note: "Sticky poke text",
+        },
+      ],
+    };
+    const { target } = await renderOverlay(watcher);
+
+    expect(target.textContent).toContain("Sticky poke text");
+    const dismissButton = [...target.querySelectorAll("button")].find(
+      (b) => b.getAttribute("aria-label") === "Dismiss bubble",
+    );
+    if (!dismissButton) throw new Error("Dismiss button missing on bubble");
+    dismissButton.click();
+    await tick();
+
+    // State mutation: dismissedIds carries the id forward for
+    // subsequent polls; the event itself drops from the array so
+    // production-side Svelte reactivity unmounts the bubble.
+    expect(watcher.dismissedIds).toEqual(["sticky-poke"]);
+    expect(watcher.events).toHaveLength(0);
+  });
+
+  test("dismissedIds hides a re-emerged source event on the next poll (fullstack-a-28)", async () => {
+    // Companion to the dismiss-button test: a watcher state that
+    // already has `dismissedIds` populated must not render the
+    // matching source event even when the server returns it
+    // (source file still on disk; reply path not taken). Mounts
+    // fresh so we exercise the derived predicate at first render
+    // rather than relying on intra-component mutation.
+    const watcher: TerminalWatcherState = {
+      path: "events",
+      seenIds: ["sticky-poke"],
+      unread: false,
+      dismissedIds: ["sticky-poke"],
+      events: [
+        {
+          id: "sticky-poke",
+          type: "poke",
+          from: "@@Architect",
+          to: "@@Alex",
+          path: "events/event-sticky.md",
+          note: "Sticky poke text",
+        },
+      ],
+    };
+    const { target } = await renderOverlay(watcher);
+
+    expect(target.textContent ?? "").not.toContain("Sticky poke text");
+    expect(target.querySelectorAll(".bubble")).toHaveLength(0);
+  });
+
   test("pre-flight events render numbered spawn actions", async () => {
     vi.useFakeTimers();
     const { writeReply } = installReplySpies();
