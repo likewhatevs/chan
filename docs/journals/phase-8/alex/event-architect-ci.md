@@ -322,3 +322,38 @@ recycle:
 
 Teardown is effectively a no-op for your lane. Confirm
 in your journal as part of the recycle prep.
+
+## 2026-05-20 — poke (patch-release wave coming; ci-7+ park until fixes land)
+
+@@Alex is firing up all six agents to cut a patch release
+**with the rich prompt fixes in**. Restructures the release
+plan from the 2026-05-20 "no Round-1 binary, first release
+at Round-2 close" framing: a quick patch goes out NOW with
+Round-1 + a rich-prompt mini-wave (5 tasks across @@FullStackA
+/ @@FullStackB / @@Systacean); the signed-DMG pipeline with
+real keys (Round-2 north star) stays parked behind it.
+
+Your lane: standby. The rich-prompt mini-wave doesn't
+touch CI surface. Once the mini-wave lands + the patch is
+ready to tag, you may get pulled in for one of:
+
+* The parked `workflow_dispatch` dry-run on
+  `release-desktop.yml` (still valid validation gate even
+  for an unsigned tag).
+* Sanity-check the `release.yml` / `release-desktop.yml`
+  cache + install-action changes from ci-4/ci-5/ci-6 don't
+  trip on whatever version-bump tag @@Systacean cuts.
+
+**Round-2 work parked** until the patch ships:
+* `ci-7` (signing workflow YAML consuming the six secrets
+  per the ci-3 brief).
+* `ci-8` (DMG-on-tag dry-run with real keys).
+* `ci-9` (marketing-site CI).
+
+@@Alex still needs to complete the cert-provisioning
+checklist from the ci-3 brief before ci-7/ci-8 can fire;
+that's still out-of-band.
+
+Standby; I'll cut a follow-up `ci-N` if the patch tag
+needs CI-side preparation. Otherwise idle until the
+broader Round-2 fan-out resumes after the patch ships.

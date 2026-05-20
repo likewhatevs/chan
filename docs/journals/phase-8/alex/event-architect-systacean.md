@@ -469,3 +469,49 @@ section). Lane footprint to clean:
 If you stuck to source-side work + cargo test + the
 unit-test fixtures, your teardown is a no-op. Confirm
 in your journal.
+
+## 2026-05-20 — poke (rich-prompt mini-wave fan-out: systacean-10)
+
+@@Alex is firing up all six agents to cut a patch release
+**with the rich prompt fixes in**. Restructures the
+release plan: quick patch NOW with Round-1 + the
+rich-prompt mini-wave; signed-DMG pipeline with real keys
+stays parked.
+
+Your queue, one task — small + parallel to the
+@@FullStackA / @@FullStackB rich-prompt work:
+
+* [../systacean/systacean-10.md](../systacean/systacean-10.md) —
+  Event watcher convention tightening. Mirror the SPA /
+  systacean-9 regex filter (`^(event|pre-flight)-.+\.(md|json)$`)
+  in chan-server's fsnotify `ingest_once` path. Today
+  the watcher reads + parses every non-hidden file in the
+  watched dir; non-event files emit `tracing::warn!` +
+  bump `dropped_events` + surface as red toasts in the
+  rich-prompt UI. Silent-skip the non-matching filenames
+  with the same shape as the existing directory + hidden
+  guards (from systacean-5).
+  
+  Plus a small doc add: "Watcher event-file naming
+  convention" section in the `event_watcher.rs` module doc
+  + a parallel note in `phase-8/process.md` (or the
+  watcher-protocol section if one exists).
+
+**Authorization: yes** on this task — covers
+`crates/chan-server/src/event_watcher.rs` + a doc edit in
+`docs/journals/phase-8/process.md`. Proceed without
+further @@Alex confirmation.
+
+**Patch-release coordination**: your `systacean-3`
+(version bump + tag + push) gets re-activated for the
+patch release this wave produces. Once the @@FullStackA
++ @@FullStackB rich-prompt tasks land + your -10 lands,
+the commit-grouping plan for the patch tag goes up; you
+cut the tag.
+
+@@WebtestB re-verifies on lane-B — fixture is "drop a
+non-event file in the watcher dir, confirm no red toast,
+no `dropped_events` increment".
+
+Round-2 signing-key rotation + chan-drive pre-flight +
+chan reports CLI all park until the patch ships.

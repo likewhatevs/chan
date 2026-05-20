@@ -669,3 +669,50 @@ decisions in `round-2-plan.md` (item-6 hosting, item-7
 storage layout, item-3 PIN hash, manual home). The
 rich-prompt evolution stack adds 5 tasks to the Round-2
 plan but does not change the open decisions there.
+
+## 2026-05-20 — Rich-prompt mini-wave fanned out + patch release re-activated
+
+Live broadcast smoke test with @@Alex surfaced four
+bubble-overlay + survey-reply bugs (flicker, non-survey
+replies don't dismiss, no explicit close, `poke<Enter>`
+echo). Combined with the prior page-width tile-cascade
+and collapse-chevron dead-space findings, @@Alex called
+the play: cut a patch release with the rich-prompt fixes
+in **before** the broader Round-2 fan-out.
+
+This restructures the 2026-05-20 "no Round-1 binary; first
+release at Round-2 close" framing: a v0.11.x patch goes
+out NOW (Round-1 + this mini-wave); the signed-DMG north
+star with real keys stays parked behind it.
+
+### Mini-wave dispatch
+
+| Task             | Owner        | Scope                                                              |
+|------------------|--------------|--------------------------------------------------------------------|
+| `fullstack-a-28` | @@FullStackA | BubbleOverlay regression: filter generalization + explicit dismiss + refresh diff-merge |
+| `fullstack-a-29` | @@FullStackA | Collapse chevron dead-space: terminal-host margin recompute on the -a-24 collapse transition |
+| `fullstack-a-30` | @@FullStackA | Per-prompt page-width + slider in textbox right-click menu        |
+| `fullstack-b-13` | @@FullStackB | Shell/agent submit-mode toggle + survey-reply echo consumer (PTY chord encoding research front-loaded) |
+| `systacean-10`   | @@Systacean  | Event-watcher fsnotify path: silent-skip non-matching filenames + module-doc + process.md convention note |
+
+@@CI on standby; @@WebtestA / @@WebtestB have
+verification queues queued.
+
+### Watching for
+
+* @@FullStackB's chord-encoding empirical result (likely
+  `\x1b[27;9;13~` xterm modifier-other-keys; could be
+  `\x0d`). Pin in -b-13 task tail at the top of the work.
+* Cross-lane touch between -a-28 and -b-13 — the
+  survey-reply echo call site that emits "poke<Enter>"
+  today may live in the same file as the bubble-overlay
+  dismissal code. Both agents flagged the coordination
+  in their inbound pokes.
+* Patch-release commit-grouping plan publication once
+  the mini-wave produces commit-ready batches. Likely
+  `commit-plan-v0.11.x.md` shape; @@Systacean cuts the
+  tag once everything is green.
+
+Round-2 broader fan-out (carousel, Infographics, BOOT,
+manual, signing-pipeline-with-real-keys, etc.) parks
+until the patch ships.

@@ -171,3 +171,49 @@ Standing permission from
 [event-webtest-a-alex.md](event-webtest-a-alex.md)
 covers the `chan remove` + `rm -rf` actions through
 Round-1 close.
+
+## 2026-05-20 — poke (rich-prompt mini-wave verification queue)
+
+@@Alex is firing up all six agents to cut a patch release
+**with the rich prompt fixes in**. Five tasks fanned out
+across @@FullStackA / @@FullStackB / @@Systacean; your
+lane-A coverage owns the SPA-side verifications.
+
+Verification queue (verify in order as fixes land):
+
+* **`fullstack-a-28`** (BubbleOverlay regression cluster:
+  filter generalization + explicit dismiss + refresh
+  diff-merge). Repro fixtures live at
+  `docs/journals/phase-8/rich-prompt/events/`. Confirm:
+  (a) survey reply still dismisses the survey bubble,
+  (b) pre-flight reply now dismisses the pre-flight
+  bubble, (c) explicit close button works on every bubble
+  type, (d) no flicker across two watcher poll cycles
+  on any bubble type.
+* **`fullstack-a-29`** (rich-prompt collapse dead space).
+  Confirm: collapsing the rich prompt grows the terminal
+  output downward so the bottom of the terminal sits
+  just above the collapsed pill (no dead band).
+  Expanding restores the existing behaviour.
+* **`fullstack-a-30`** (per-prompt page-width + slider).
+  Confirm: tile two panes, narrow the editor's page width
+  in one, observe the rich prompt in the other is
+  unaffected. Right-click the rich-prompt textbox →
+  slider appears + works + persists across reload.
+* **`fullstack-b-13`** (shell/agent submit-mode toggle) —
+  this is @@WebtestB's lane primarily (live Claude Code
+  in a terminal), but if you can repro the rich-prompt
+  Cmd+Enter side cleanly on lane-A, double-coverage
+  welcomed.
+
+Lane-A test server: stand it up fresh after the rebuild
+(@@Systacean will note when the patch-release binary is
+ready). The throwaway drive at `/tmp/chan-test-phase8-wa/`
+was torn down at recycle; pick a fresh one.
+
+Push held for the patch-release commit-grouping cut
+(@@Systacean lands the tag once the wave is green +
+your verdicts are in).
+
+Round-2 broader fan-out (carousel, Infographics, BOOT,
+manual, signing, etc.) parks until the patch ships.

@@ -219,3 +219,46 @@ in [`../architect/journal.md`](../architect/journal.md).
 Five Round-2 tasks shaped (3 wave-2, 2 wave-3 paired)
 ready for fan-out alongside the rest of Round-2 once
 sequencing is confirmed.
+
+## 2026-05-20 — poke (rich-prompt mini-wave dispatched + patch release re-activated)
+
+Live broadcast smoke test with you surfaced four bugs in
+the rich-prompt bubble overlay + survey-reply path
+(flicker, non-survey replies don't dismiss, no explicit
+close affordance, survey-reply echoes `poke<Enter>` when
+agents need `poke<Cmd+Enter>`) plus the prior page-width
+and collapse-dead-space findings. You called the play:
+cut a patch release **with the rich-prompt fixes in**
+before the broader Round 2 resumes.
+
+Five tasks fanned out:
+
+| Task             | Owner        | Scope                                                              |
+|------------------|--------------|--------------------------------------------------------------------|
+| `fullstack-a-28` | @@FullStackA | BubbleOverlay regression: filter generalization + explicit dismiss + refresh diff-merge |
+| `fullstack-a-29` | @@FullStackA | Collapse chevron dead-space: terminal-host margin recompute on the -a-24 collapse transition |
+| `fullstack-a-30` | @@FullStackA | Per-prompt page-width + slider in textbox right-click menu        |
+| `fullstack-b-13` | @@FullStackB | Shell/agent submit-mode toggle + survey-reply echo consumer (PTY chord encoding research front-loaded) |
+| `systacean-10`   | @@Systacean  | Event-watcher fsnotify path: silent-skip non-matching filenames + module-doc + process.md convention note |
+
+Dispatch pokes fired to each agent's inbound channel +
+to @@WebtestA / @@WebtestB for verification queues. @@CI
+on standby (no signing-pipeline work this wave).
+
+Patch-release re-activation: the originally-cancelled
+v0.11.1 tag effectively comes back as the patch-release
+target (or v0.11.x depending on what @@Systacean cuts).
+Signed-DMG north star with real keys stays parked
+behind it.
+
+**Commit-grouping plan TBD**: I'll publish
+`commit-plan-v0.11.x.md` (final version TBD) once the
+mini-wave produces commit-ready batches. The Round-1
+work already in HEAD + this mini-wave + @@Systacean's
+version-bump + tag form the patch-release set.
+
+Permission asks that stayed parked at recycle (the
+`fullstack-b-7` runtime click + `fullstack-b-1`
+empirical LRU walk) carry forward to this cycle — they
+still need your interactive participation; not blocking
+the patch tag if you decide to ship without them.

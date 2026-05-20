@@ -710,3 +710,58 @@ checks. Verify + tear down before the recycle:
 
 If you didn't spin anything up for the wave-3 / detour
 work, this is a no-op — just confirm in your journal.
+
+## 2026-05-20 — poke (rich-prompt mini-wave fan-out: -28 / -29 / -30)
+
+@@Alex is firing up all six agents to cut a patch release
+**with the rich prompt fixes in**. This restructures the
+release plan: a quick patch goes out NOW with Round-1 work
++ the rich-prompt mini-wave; the signed-DMG pipeline with
+real keys (Round-2 north star) stays parked.
+
+Your queue, three coupled tasks on the rich-prompt surface:
+
+* [../fullstack-a/fullstack-a-28.md](../fullstack-a/fullstack-a-28.md) —
+  BubbleOverlay regression cluster: filter generalization
+  (today only `type === "survey"` gets dismissed by sibling
+  reply; pre-flight + poke with replies don't), explicit
+  close affordance for every bubble (today only surveys
+  have a dismissal path), refresh diff-merge to kill the
+  per-poll flicker @@Alex caught on the smoke test.
+* [../fullstack-a/fullstack-a-29.md](../fullstack-a/fullstack-a-29.md) —
+  Rich-prompt collapse leaves dead space above the
+  collapsed pill. Mirror `fullstack-a-4`'s margin-recompute
+  on the `fullstack-a-24` collapse transition.
+* [../fullstack-a/fullstack-a-30.md](../fullstack-a/fullstack-a-30.md) —
+  Per-prompt page-width + slider in the textbox right-click
+  menu. Today the rich-prompt composer inherits the
+  editor's CodeMirror page-width across tiles.
+
+Recommended order: -28 → -29 → -30. -28 is the load-bearing
+fix (everything else builds on the bubble overlay layer
+being stable); -29 + -30 are smaller and can interleave.
+
+**Smoke-test fixtures** live at
+`docs/journals/phase-8/rich-prompt/events/` — surviving
+files document the exact reply JSON shape the SPA emits.
+@@Alex reproduced the bugs by pointing a rich-prompt
+watcher at that dir.
+
+**Cross-lane coordination** with `fullstack-b-13`:
+@@FullStackB owns the PTY-write side of the survey-reply
+echo (changes `poke<Enter>` → `poke<Cmd+Enter>` per a
+shell/agent submit-mode toggle). Your -28 owns the
+rendering/dismissal side. The call site that emits the
+"poke" string today might be inside the bubble-overlay
+code path; coordinate at task-cut if you and @@FullStackB
+need to touch the same file. Recommended split: -28
+changes WHAT triggers the reply (dismissal), -b-13 changes
+WHAT bytes hit the PTY in response.
+
+@@WebtestA verifies on lane-A once the wave lands.
+Push held for the patch-release commit-grouping cut
+(@@Systacean lands the tag once the wave is green).
+
+Wave-2 / wave-3 broader Round-2 fan-out (carousel,
+Infographics, BOOT, manual, signing, etc.) parks until
+this mini-wave + the patch release ship.

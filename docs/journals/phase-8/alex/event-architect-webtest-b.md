@@ -228,3 +228,53 @@ Standing permission from
 [event-webtest-b-alex.md](event-webtest-b-alex.md)
 covers the `chan remove` + `rm -rf` + chan-desktop
 launch/kill actions through Round-1 close.
+
+## 2026-05-20 — poke (rich-prompt mini-wave verification queue — agent terminal focus)
+
+@@Alex is firing up all six agents to cut a patch release
+**with the rich prompt fixes in**. Five tasks fanned out
+across @@FullStackA / @@FullStackB / @@Systacean; your
+lane-B coverage owns the terminal-PTY-consumer verifications.
+
+Verification queue (verify in order as fixes land):
+
+* **`fullstack-b-13`** (shell/agent submit-mode toggle +
+  survey-reply echo consumer) — **your highest-value
+  verification**. Set up a live Claude Code session
+  inside a chan terminal (or codex / gemini). Repro:
+  (a) flip the per-prompt toggle to "Agent", type a
+  multi-line command, Cmd+Enter — confirm the buffer
+  arrives as a single submitted message in Claude
+  Code's input box; (b) trigger a survey-reply bubble
+  (drop an event file in a watcher dir, click an option)
+  — confirm the reply echo arrives as
+  `poke<agent-chord>` and submits in Claude Code rather
+  than wedging in the input draft. Shell mode regression
+  check: same flows in shell mode should preserve
+  today's byte-for-byte behaviour.
+* **`systacean-10`** (event watcher convention tightening
+  — silent skip on non-matching filenames). Repro: drop a
+  non-event file (e.g. `notes.txt` or `README.md`) into
+  a watched dir. Pre-fix: red toast + `dropped_events`
+  bump in `/api/health`. Post-fix: no toast, no counter
+  movement.
+* **`fullstack-a-28`** / `-29` / `-30` (rich-prompt SPA
+  side) — primarily @@WebtestA's lane on lane-A;
+  double-coverage on lane-B welcomed if you have
+  bandwidth.
+
+Lane-B test server: stand it up fresh after the rebuild
+(@@Systacean will note when the patch-release binary is
+ready). Your throwaway drive at `/tmp/chan-test-phase8-wb`
+was torn down at recycle; pick a fresh one.
+
+**Standing permission carries forward**: the Tauri-launch
+extension from the prior session is still in effect per
+[event-webtest-b-alex.md](event-webtest-b-alex.md). The
+`fullstack-b-1` empirical click cycle stays parked
+pending macOS Accessibility / @@Alex's manual click /
+`--drive <path>` polish.
+
+Push held for the patch-release commit-grouping cut
+(@@Systacean lands the tag once the wave is green + your
+verdicts are in).

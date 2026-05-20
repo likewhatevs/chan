@@ -419,3 +419,59 @@ recycle:
 If you stuck to source-side checks + the lane-B server
 @@WebtestB owns, your teardown is a no-op — just
 confirm in your journal.
+
+## 2026-05-20 — poke (rich-prompt mini-wave fan-out: fullstack-b-13)
+
+@@Alex is firing up all six agents to cut a patch release
+**with the rich prompt fixes in**. Restructures the release
+plan: quick patch NOW with Round-1 + the rich-prompt
+mini-wave; signed-DMG pipeline with real keys (Round-2
+north star) stays parked.
+
+Your queue, one task — biggest design call of the mini-wave:
+
+* [../fullstack-b/fullstack-b-13.md](../fullstack-b/fullstack-b-13.md) —
+  Shell/agent submit-mode toggle + survey-reply echo
+  consumer. Two consumer sites end up writing to the
+  PTY with literal Enter today: (a) the rich-prompt
+  Cmd+Enter submit path, (b) the survey-reply echo path
+  that emits `poke<Enter>` after a bubble reply. Agents
+  running in the terminal need Cmd+Enter to submit; Enter
+  just inserts a newline into the agent's input draft.
+  @@Alex's verbatim ask: "poke<cmd+enter> not
+  poke<enter>".
+
+**Front-loaded design call**: the agent-submit chord
+encoding isn't universal. Likely candidates are xterm
+modifier-other-keys `\x1b[27;9;13~`, raw `\x0d`, or some
+bracketed-paste-mode terminator. Run a one-line empirical
+test against a live Claude Code session first; pin the
+choice in the task tail before designing the toggle. The
+task body has the reproducer shape.
+
+**Authorization: yes** on this task — covers
+`web/src/components/TerminalRichPrompt.svelte`,
+`web/src/components/TerminalTab.svelte` (submit path),
+possibly `web/src/components/BubbleOverlay.svelte` (reply
+echo call site — grep for the "poke" literal first),
+SerTab field add in `web/src/state/tabs.svelte.ts`. Server
+side likely unchanged (the PTY-write is the SPA's
+responsibility post-systacean-9). Proceed without further
+@@Alex confirmation.
+
+**Cross-lane coordination** with `fullstack-a-28`:
+@@FullStackA owns the rendering/dismissal side of the
+bubble overlay regression. Your -13 owns the PTY-write
+side of the reply echo. The "poke" string emission call
+site might live inside the bubble-overlay code path;
+coordinate if you both need to touch the same file.
+Recommended split: -a-28 changes WHAT triggers the reply,
+-b-13 changes WHAT bytes hit the PTY.
+
+@@WebtestB verifies on lane-B against a live Claude Code
+session in a chan terminal. Push held for the
+patch-release commit-grouping cut.
+
+Round-2 wave-1 north-star tasks (bundled chan binary,
+launch-time version probe) park until the patch ships
+and the broader Round-2 fan-out lands.
