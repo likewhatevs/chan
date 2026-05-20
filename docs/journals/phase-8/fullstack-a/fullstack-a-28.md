@@ -128,3 +128,142 @@ Related code:
 * @@WebtestA verifies on lane-A once landed; the smoke-test
   fixtures under `docs/journals/phase-8/rich-prompt/events/`
   are the repro set.
+
+## 2026-05-20 — implementation note + ready for review
+
+Three-area landing in one commit covering the three task
+goals plus the cross-lane seam-mapping with `fullstack-b-13`.
+
+### Cross-lane seam-mapping (start-of-task)
+
+@@Alex flagged at session bootstrap: "if you are working on
+fullstack-a-13 or fullstack-b-28, make sure to coordinate
+well before you edit the same file." -a-13 was already
+committed (`887d19c`); -b-28 does not exist. Closest live
+peer is `fullstack-b-13` (Shell/Agent submit-mode toggle).
+
+Grepped the "poke" emitter before editing anything:
+* SPA `web/src/components/TerminalTab.svelte:765-769`
+  CONSUMES `poke<Enter>` from the PTY output stream as a
+  watcher-refresh trigger.
+* Server `crates/chan-server/src/terminal_sessions.rs:502`
+  EMITS `b"poke\n"` to the PTY after a reply lands.
+
+The "poke<Enter> vs poke<Cmd+Enter>" mismatch flagged in
+the bug list lives in the SERVER's `send_input` call,
+which is @@FullStackB's territory in -b-13. My -a-28
+touches none of that path. Shared SerTab fields are
+non-overlapping (my `dbi`, their `rpsm`). Clean split.
+
+### Filter generalization (goal 1)
+
+The `BubbleOverlay.visibleEvents` predicate from
+`fullstack-a-5` already filtered any non-reply source
+event whose `id` had a sibling `survey-reply` — the
+comment above said "surveys" but the code was already
+type-agnostic. Refreshed the comment to match reality
+and added two test pins to lock the predicate against
+silent regressions on pre-flight + poke source types.
+
+(The bug-list note "Root cause confirmed: filter only
+matches `type === 'survey'`" was a misread of the code
+comment; the actual predicate was already general. The
+visible bug @@Alex saw — pre-flight bubble not
+dismissing — was the per-poll `Loading...` flicker
+hiding the post-reply filter outcome. Fixed in goal 3
+below.)
+
+### Explicit dismiss affordance (goal 2)
+
+New `X` icon button on every bubble's
+`.bubble-head-actions` row (after refresh, before any
+future header chrome). aria-label "Dismiss bubble".
+Click → `dismissExplicit(event.id)`:
+
+* Appends id to `watcher.dismissedIds` (new field on
+  `TerminalWatcherState`).
+* Immediately filters the event out of `watcher.events`
+  so the bubble drops on the next reactive cycle.
+
+`visibleEvents` honours the per-tab `dismissedIds` set
+in addition to the existing reply-based filter. Reply-
+based dismissal stays the preferred path for
+surveys + pre-flight standing options; explicit close
+is the universal escape hatch (poke + any bubble the
+user wants gone without replying).
+
+Persisted on `SerTab.dbi: string[]` with conditional
+spread (empty case keeps the persisted shape short;
+shareable URL hash excludes the field via the existing
+`opts.terminalSessions` gate).
+
+### Diff-merge / flicker (goal 3)
+
+Profiled the per-poll flicker. The atomic
+`tab.watcher.events = events` reassignment in
+`TerminalTab.svelte:754` is fine — Svelte 5's
+`#each (event.id)` keyed iteration preserves DOM
+identity. The actual flicker source is the template's
+`{#if watcher.loading} Loading... {:else}` branch: every
+poll flips `watcher.loading` true then false, which
+swaps the bubble list OUT for a `Loading...` placeholder
+and back IN. For ~50ms on every poll cycle, the bubble
+column visibly empties.
+
+Surveys did NOT flicker for @@Alex because the survey
+path took the `dismissEvent(id, 600)` fast path and the
+bubble was gone before the next poll's Loading swap fired.
+Poke + pre-flight stayed on screen across polls, so the
+swap was visible.
+
+One-line tightening: only render the Loading placeholder
+when `visibleEvents.length === 0`. Subsequent polls keep
+the bubble list visible during the watcher refresh
+roundtrip. Documented inline with the rationale.
+
+Skipped the full diff-merge restructure in
+`TerminalTab.svelte` — not needed once the Loading-swap
+is gated, and the atomic reassignment keeps the data
+path simpler than a manual splice. If a future surface
+exposes per-event identity churn (e.g. animated entry /
+exit), revisit.
+
+### Files touched
+
+* `web/src/state/tabs.svelte.ts`
+  * `TerminalWatcherState`: new `dismissedIds?: string[]`.
+  * `SerTab`: new `dbi?: string[]` with conditional spread
+    on serialize; deserialize at both restore sites + clone.
+* `web/src/components/BubbleOverlay.svelte`
+  * Filter honours `dismissedIds`; comment refreshed.
+  * New `dismissExplicit(id)` + `X` button per bubble.
+  * Loading placeholder gated on `visibleEvents.length === 0`.
+* `web/src/components/BubbleOverlay.test.ts` (+3 tests)
+  * Pre-flight + survey-reply siblings → filtered.
+  * Poke + survey-reply siblings → filtered.
+  * Dismiss button populates `dismissedIds` + drops event;
+    companion mount asserts the predicate at first render.
+* `web/src/state/tabs.test.ts` (+2 tests)
+  * SerTab.dbi round-trip with non-empty `dismissedIds`.
+  * Empty `dismissedIds` omits `dbi` from the persisted shape.
+
+### Gate
+
+* `vitest`: 512/512 (+5 from baseline 507).
+* `svelte-check`: 0 errors / 0 warnings / 3974 files.
+* `npm run build`: clean.
+* Rust gate: no Rust changes; not run.
+
+### Suggested commit subject
+
+`BubbleOverlay: explicit dismiss + dismissedIds persistence + Loading flicker fix (fullstack-a-28)`
+
+### Cross-lane handoff for fullstack-b-13
+
+If @@FullStackB ends up extending the
+`writeTerminalEventReply` request shape with a
+`submit_mode` field, my `BubbleOverlay.commit()` is the
+sole SPA call site for that API surface — easy single
+threading. SerTab additions land in distinct fields
+(`dbi` vs `rpsm`) with no collision risk on commit
+ordering.

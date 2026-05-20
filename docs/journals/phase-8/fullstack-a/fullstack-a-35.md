@@ -116,3 +116,164 @@ since `rename(2)` is itself atomic within a filesystem.
 * @@WebtestA verifies on lane-A: happy-path rename +
   collision-refused + Esc-cancel paths.
 * Push held for the patch-release commit-grouping cut.
+
+## 2026-05-20 — impl note + ready for review
+
+Three-file change. chan-drive + chan-server already had
+everything in place; this lands the SPA UI shape.
+
+### Pre-existing infrastructure (no Rust changes)
+
+* `chan-drive`: `Drive::rename` (line 1027 of `drive.rs`)
+  and the richer `Drive::rename_with_link_rewrite` (line
+  1093) already provide the atomic-rename + reference-
+  rewrite seam this task needed. No new chan-drive op.
+* `chan-server`: `POST /api/move` (`api_move` in
+  `routes/files.rs`, line 437) wraps
+  `rename_with_link_rewrite` with the `tokio::spawn_blocking`
+  + `self_writes.note` echo-suppression dance + outcome
+  payload. Already wired into the router at
+  `lib.rs:804`.
+* SPA: `api.move` (`web/src/api/client.ts`) calls
+  `/api/move`; `performMove` (in `store.svelte.ts`,
+  line 2285) is the load-bearing helper that runs the
+  overwrite confirm, the moving-status indicator, the
+  `rekeyTabsForRename` re-key pass, the link-rewrite
+  status string, and the watcher echo-suppression. Both
+  the modal-driven `fileOps.rename` and the new
+  inline-rename path go through it.
+
+So the only new code is the inline-rename UX (header
+band + state + entry point that bypasses the modal).
+
+### Files touched
+
+* `web/src/state/store.svelte.ts` — new
+  `fileOps.renameInPlace(path, next, isDir)` exported
+  alongside the existing `fileOps.rename`. Same
+  preserveExtension logic + same `performMove` machinery;
+  just takes `next` as an argument instead of popping the
+  uiPathPrompt modal.
+* `web/src/components/FileEditorTab.svelte`:
+  * State block: `renameActive` / `renameDraft` /
+    `renameInputEl`.
+  * `doRename()` rewritten — flips the state on (priming
+    `renameDraft = tab.path`) + queueMicrotask focus +
+    select-all on the input. No more modal pop.
+  * New `commitRename()` / `cancelRename()` /
+    `onRenameKeydown` helpers.
+  * Header-band markup `{#if renameActive}` block above
+    the `{#if tab.fileMissing/.error}` toolbar blocks.
+    Lives outside the editor body's
+    `--chan-page-max-width` cap.
+  * CSS for `.rename-band` + `.rename-label` +
+    `.rename-input`.
+* `web/src/components/fileRenameBand.test.ts` — NEW,
+  six raw-source pins covering: doRename flips state
+  (not modal); commit / cancel wiring; keydown binding
+  (Enter / Esc); band markup ordering above editor
+  toolbars; `width: 100%` + `flex: 1` for the no-cap
+  width; `fileOps.renameInPlace` shape in store.
+
+### UX shape
+
+Trigger: tab right-click menu's "Rename File" row
+(unchanged from pre-`-a-35`; the row's onclick handler
+flips into the new band instead of popping the modal).
+
+Active state:
+
+```
+[Rename] [____________current/path/foo.md_______________]
+─────────────── editor body (page-width capped) ─────────
+```
+
+Input gets the focus + selects the whole path so typing
+replaces it. Enter commits via `fileOps.renameInPlace`
+(which goes through `performMove` for the overwrite
+confirm + link rewrite + watcher echo suppression + tab
+re-key). Esc cancels with no filesystem side effect.
+Blur cancels — same shape as the terminal's hamburger
+input (the rename is an explicit user action; an
+accidental tab-away shouldn't commit a half-typed path).
+
+### Acceptance criteria check
+
+* Rename trigger matches the terminal's affordance shape
+  (right-click menu's existing Rename row). ✓ Same
+  trigger surface; same inline-input commit/cancel
+  semantics.
+* Rename input renders in a header band above the editor
+  content. ✓ Band sits outside the editor-wrap
+  (where `--chan-page-max-width` is applied), spans
+  the full pane width.
+* Enter commits via the chan-server route → chan-drive
+  rename op. ✓ Goes through the existing performMove
+  → api.move → `POST /api/move` →
+  `Drive::rename_with_link_rewrite` chain. Tab label
+  updates via `rekeyTabsForRename`; file tree updates
+  via `refreshTree`; graph index re-resolves through the
+  server's existing watcher pass.
+* Esc cancels without filesystem side effects. ✓
+  `cancelRename` flips state to false; no API call
+  fired.
+* Refuses cleanly on:
+  * Target path collision → `performMove`'s existing
+    overwrite-confirm modal handles it (user can confirm
+    or cancel). ✓
+  * Path-traversal attempts → chan-drive's sandbox
+    rejects via `ChanError`; chan-server returns the
+    error → SPA surfaces in `ui.status` (existing
+    handler in `performMove`). ✓
+  * Invalid filename → same chain. ✓
+* Pre-push gate green; new pinned tests cover the SPA
+  wiring shape. chan-drive rename op + chan-server
+  route are pre-existing and have their own tests.
+  ✓
+
+### Composition
+
+* Independent of `-32` / `-33` / `-34`: file editor UI
+  concern (`FileEditorTab` chrome) vs chord layer / graph
+  inspector / paste handler. No shared file conflicts.
+* Composes with `fullstack-a-30`'s page-width override:
+  the rename band is a SIBLING of the editor body, not
+  a descendant; the page-width cap doesn't apply.
+* Composes with `fullstack-a-1` (FB tab name = parent-
+  dir + slash): when the active file gets renamed, the
+  file-browser tab's parent-dir derivation picks up the
+  new name automatically through `rekeyTabsForRename`.
+* No regression on the modal-driven `fileOps.rename` —
+  it stays exported in case any other surface (FB
+  context menu, etc.) wants the modal flow. Today only
+  `doRename` in FileEditorTab called it; the new
+  inline path replaces that call site.
+
+### v1 scope
+
+Out of scope per the task's v1 framing:
+
+* Audit / refresh stale references in OTHER documents
+  that point at the renamed path. `performMove` already
+  surfaces a "N links updated" status string post-move
+  via chan-drive's link-rewrite pass; that's the v1
+  bound. Cross-doc stale-reference highlighting is a
+  future enhancement (could surface in graph
+  inspector).
+
+### Gate
+
+* vitest **544 / 544** (+6 net from `-34`'s 538, all
+  new pins in `fileRenameBand.test.ts`).
+* svelte-check 0 errors / 0 warnings across 3977 files.
+* npm build clean (existing chunk-size warnings only).
+* No Rust changes; cargo gate skipped (chan-drive +
+  chan-server pieces were pre-existing).
+
+### Suggested commit subject
+
+```
+File editor: inline rename band above page-width cap (fullstack-a-35)
+```
+
+Push held for the patch-release commit-grouping cut.

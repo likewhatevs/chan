@@ -99,3 +99,131 @@ Relevant code:
   that doesn't cascade across tiles either; this task's
   scoping pattern should generalise.
 * @@WebtestA verifies on lane-A once landed.
+
+## 2026-05-20 — implementation note + ready for review
+
+Confirmed at start: the editor-side page-width slider DOES
+exist today (`FileEditorTab.svelte:466-480` — page-width row
+inside the tab-menu bubble, opened by right-click on the
+editor body via `onEditorContext` synthesizing into the
+shared menu). So this task is the "add the same slider to
+the rich-prompt textbox's right-click menu" mirror, no new
+editor-side wiring.
+
+### Decoupling approach
+
+The page-width plumbing currently flows through a single
+CSS variable `--chan-page-max-width` set by
+`Pane.svelte:226` (via `applyPageWidthToElement`) on the
+pane's editor wrapper. The rich-prompt's
+composer-editor (Wysiwyg / Source) reads that variable via
+`max-width: var(--chan-page-max-width, none);`. Because
+the prompt is a descendant of the wrapper, the cap
+cascades — which is exactly the coupling @@Alex caught.
+
+Per-prompt fix: override `--chan-page-max-width` INLINE on
+the `.rich-prompt` element. Descendants see the override
+instead of the inherited pane value. Two branches:
+
+* `pageWidthRatio` absent or ≥ 1.0 → set `none` inline.
+  The composer fills the prompt's painted width. This is
+  the new default behaviour: a user who hasn't touched the
+  per-prompt slider now sees the prompt uncapped, fully
+  decoupled from the editor's pane-level slider. Visible
+  but intentional change — chat-style composers want
+  near-full-width by default.
+* `pageWidthRatio` in [0.25, 1.0) → set
+  `${Math.max(240, width * ratio)}px` inline, where `width`
+  is the prompt's measured painted width
+  (ResizeObserver-driven, same observer as `fullstack-a-29`).
+
+Width measurement extends the `fullstack-a-29` ResizeObserver
+to also write `prompt.measuredWidthPx` alongside
+`measuredHeightPx`. One observer, two reactors.
+
+### Slider in textbox right-click menu
+
+The existing `onContextMenu` opened the `.ctx` menu with
+mode + toolbar + new-file + watch + spawn buttons. Added a
+new `.page-width-row` at the top of the menu (same shape
+as `FileEditorTab.svelte`'s tab-menu slider — Page-width
+label + range input + value readout). The input's
+`oninput` calls `onRichPromptPageWidthSlider`, which
+mutates `prompt.pageWidthRatio` directly (does NOT touch
+the global `setPageWidth`). Reads `richPromptPageWidthPct`
+for the slider's current value (100 % when unset). 100 %
+unsets to absent so the persisted shape stays minimal.
+
+### Persistence
+
+`pageWidthRatio?: number` on `TerminalRichPromptState`.
+SerTab field `rppw?: number` with conditional spread on
+serialize (only emitted when 0 < ratio < 1; 1.0 / "no cap"
+rounds to absent). Deserialize on both restore paths,
+with the same range guard so a corrupted value falls
+through to the default. Round-trip pinned + 100 % omission
+pinned in `tabs.test.ts`.
+
+### Why not extend the global `pageWidth`
+
+Considered extending `pageWidth.svelte.ts` with a
+per-instance helper that takes an element + custom ratio.
+Decided against: the global module is keyed on
+`window.innerWidth` + the `chan.pageWidth.ratio`
+localStorage key, neither of which captures "this
+specific prompt." The override at the
+`.rich-prompt` level is cleaner — it's a one-liner
+inline style backed by `prompt.measuredWidthPx`, and
+doesn't risk polluting the global state surface.
+
+### Files touched
+
+* `web/src/state/tabs.svelte.ts`
+  * `TerminalRichPromptState`: new `measuredWidthPx?` +
+    `pageWidthRatio?`.
+  * `SerTab`: new `rppw?` with conditional spread on
+    serialize; deserialize via `richPromptFromSer` with
+    range guard.
+* `web/src/components/TerminalRichPrompt.svelte`
+  * Extended ResizeObserver tracks width.
+  * New `richPromptPageWidthPx()` / `richPromptPageWidthPct()`
+    + slider event handler.
+  * Inline `style:--chan-page-max-width` override on
+    `.rich-prompt`.
+  * New `.page-width-row` at top of `.ctx` menu.
+  * CSS for `.page-width-row`/`-label`/`-slider`/`-value`
+    mirrors the editor's tab-menu slider verbatim so both
+    surfaces read alike.
+* `web/src/state/tabs.test.ts` (+2 tests)
+  * SerTab `rppw` round-trip with a < 1 ratio.
+  * `rppw` omission when ratio is 1.0.
+
+### Test pin notes
+
+Skipped a vitest pin on the actual visual page-width
+override — ResizeObserver doesn't fire in jsdom, so
+`measuredWidthPx` would never populate in unit tests.
+The behavioural contract (composer caps to prompt-relative
+width, decoupled from sibling tiles) requires real
+browser layout. @@WebtestA's lane-A walkthrough is the
+authoritative verification. SerTab persistence + the
+range-guard contract IS unit-pinned.
+
+### Gate
+
+* `vitest`: 514/514 (+2 from -28's 512 baseline).
+* `svelte-check`: 0 errors / 0 warnings / 3974 files.
+* `npm run build`: clean.
+* Rust gate: no Rust changes; not run.
+
+### Suggested commit subject
+
+`Rich prompt: per-prompt page-width slider + cross-tile decoupling (fullstack-a-30)`
+
+### Cross-lane coordination
+
+No conflicts with `fullstack-b-13` — different files
+entirely. -a-30 stays in `tabs.svelte.ts` (SerTab `rppw`,
+TerminalRichPromptState) + `TerminalRichPrompt.svelte`
+(observer + slider + inline override). -b-13 touches the
+header toolbar + chan-server `terminal_sessions.rs`.

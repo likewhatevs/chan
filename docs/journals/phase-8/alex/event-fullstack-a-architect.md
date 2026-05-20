@@ -867,3 +867,480 @@ Round-1 detour set fully landed on my lane: -21 / -22 /
 (push held for Round-2 close per protocol). Standing
 down for the session per your "queue empty, standby
 until Round-2 fan-out" closing note.
+
+## 2026-05-20 — poke
+
+Picked up the rich-prompt mini-wave dispatch. Starting
+with `fullstack-a-28` per your recommended order.
+
+### Cross-lane seam-mapping before edit (per @@Alex's
+prompt: "if you are working on fullstack-a-13 or
+fullstack-b-28, make sure to coordinate well before you
+edit the same file"). -a-13 was already committed
+`887d19c` long ago and -b-28 doesn't exist — closest live
+peer is `fullstack-b-13`. Grepped the "poke" emitter:
+
+* SPA `TerminalTab.svelte:765-769` CONSUMES `poke<Enter>`
+  from PTY output as a watcher-refresh trigger.
+* Server `terminal_sessions.rs:502` EMITS `b"poke\n"` to
+  the PTY after a reply lands.
+
+The bug @@Alex flagged ("poke<Enter> vs poke<Cmd+Enter>")
+lives in the server's `send_input` call — pure -b-13
+territory. My -a-28 touches BubbleOverlay + watcherEvents
+filter + SerTab `dbi` field only. SerTab additions are
+non-overlapping (`dbi` vs `rpsm`). Clean split, no shared
+files to coordinate on.
+
+### fullstack-a-28 ready for review
+
+Three-area landing in one commit:
+
+* **Filter generalization**: the `BubbleOverlay.visibleEvents`
+  predicate from `fullstack-a-5` was already type-agnostic on
+  the source side (the COMMENT said "surveys" but the actual
+  predicate filtered any non-reply source whose id matched a
+  reply). Refreshed the comment + added pre-flight + poke
+  test pins so the predicate stays general under future
+  refactors.
+* **Explicit dismiss affordance**: new `X` icon on every
+  bubble. Click → appends to per-tab `dismissedIds` (new
+  `TerminalWatcherState` field) + drops the event. Persisted
+  via SerTab `dbi?: string[]` with conditional spread.
+  Universal escape hatch for poke / pre-flight without
+  reply paths.
+* **Loading flicker fix** (root-caused part 3): profiled
+  the per-poll flicker. NOT the atomic
+  `tab.watcher.events = events` reassignment (Svelte 5's
+  keyed `#each` preserves DOM identity). The actual cause
+  was the `{#if watcher.loading} Loading... {:else}` branch
+  swapping the entire bubble list out for ~50ms on every
+  poll. Surveys didn't flicker because the
+  `dismissEvent(id, 600)` fast path removed them before the
+  next poll's Loading swap. Poke + pre-flight stayed across
+  polls and got the flicker. One-line tightening: only
+  render Loading when `visibleEvents.length === 0`. Skipped
+  the full diff-merge restructure — not needed once the
+  Loading swap is gated.
+
+Gate green: vitest 512/512 (+5 from baseline 507),
+svelte-check 0/0 across 3974 files, npm build clean.
+See [../fullstack-a/fullstack-a-28.md](../fullstack-a/fullstack-a-28.md)
+for the full impl note + suggested commit subject.
+
+Moving on to `fullstack-a-29` (terminal-host margin
+recompute on collapse) next.
+
+## 2026-05-20 — poke
+
+`fullstack-a-29` ready for review. Root cause exactly as
+the task body described — the `fullstack-a-4` reactor
+read `heightPx` (user-resized expanded height) and that
+field stayed stale across the `fullstack-a-24` collapse
+transition while CSS swapped to `height: auto`.
+
+Chose a `ResizeObserver` on the prompt's `rootEl` over a
+hard-coded collapsed constant: the observer auto-adapts
+to future header-chrome changes (StyleToolbar mounts /
+collapse chevron / etc.) AND mirrors the expanded
+drag-resize one frame later, so a single source of truth
+covers every margin trigger path uniformly.
+
+New non-persisted `measuredHeightPx?: number` field on
+`TerminalRichPromptState`; `TerminalTab.svelte` prefers
+it over `heightPx` for the margin formula, falling back
+to `heightPx` then 320 for the brief pre-observer-tick
+window. Skipped persisting to SerTab — repopulates
+within one tick of remount and persisting would
+introduce stale-on-restore risk.
+
+Skipped a vitest pin because `ResizeObserver` isn't in
+jsdom; the field never populates in unit tests. The
+behavioural contract needs real browser layout —
+@@WebtestA's lane-A walkthrough verifies. Component
+wiring is exercised by the existing TerminalRichPrompt
++ TerminalTab tests (gate stays 512/512).
+
+Gate green: vitest 512/512, svelte-check 0/0 across
+3974 files, build clean.
+See [../fullstack-a/fullstack-a-29.md](../fullstack-a/fullstack-a-29.md)
+for the full impl note + suggested commit subject.
+
+Moving on to `fullstack-a-30` (per-prompt page-width +
+slider in textbox right-click menu) next.
+
+## 2026-05-20 — poke
+
+`fullstack-a-30` ready for review — closes the rich-prompt
+mini-wave from my side.
+
+Confirmed at start: the editor-side tab-menu IS where the
+existing page-width slider lives (right-click on editor
+body → tab-menu bubble → slider at the top). This task
+mirrors that affordance into the rich-prompt's existing
+`.ctx` right-click menu.
+
+### Decoupling shape
+
+Single CSS variable today (`--chan-page-max-width` set by
+Pane on the editor wrapper) drives ALL composer caps via
+inheritance. Override the variable INLINE on `.rich-prompt`
+to break the cascade:
+
+* `pageWidthRatio` absent / ≥ 1.0 → set `none` → prompt's
+  composer fills the prompt's painted width.
+* `pageWidthRatio` < 1.0 → set computed pixel cap
+  relative to THIS prompt's `measuredWidthPx` (from the
+  extended `fullstack-a-29` ResizeObserver — one observer
+  now tracks both height and width).
+
+**User-visible change worth flagging**: the default
+behaviour shifts. Before, every rich prompt inherited the
+pane's global cap (e.g. 80 %). Now, rich prompts default
+to no cap and the user opts back into a narrow look via
+the new slider. Chat-style composers feel less cramped
+under tiling; users who liked the narrow inherited cap
+can dial it back per-prompt. Documenting in the impl
+note as intentional.
+
+### Persistence
+
+SerTab `rppw?: number` with conditional spread (1.0
+rounds to absent so the common case stays short).
+Round-trip pinned, omission pinned. Range-guarded on
+deserialize so a corrupted value falls through.
+
+Gate green: vitest 514/514 (+2 from baseline), svelte-check
+0/0 across 3974 files, build clean.
+See [../fullstack-a/fullstack-a-30.md](../fullstack-a/fullstack-a-30.md)
+for the full impl note + suggested commit subject.
+
+### Wave queue status
+
+Rich-prompt mini-wave complete on my lane: -28 / -29 / -30
+all ready for review. No commits yet (push protocol unchanged
+— wait for batch clearance + commit-grouping plan). Three
+standalone commits, each in its own scope:
+
+* -28: BubbleOverlay filter generalization + explicit dismiss
+  + Loading-flicker fix.
+* -29: ResizeObserver-driven margin reactor for the prompt's
+  height (covers collapse + drag-resize).
+* -30: per-prompt page-width override + slider.
+
+Cross-lane handoff for `fullstack-b-13`: no shared files
+to coordinate on. -b-13 owns `terminal_sessions.rs:502`
+(`send_input(b"poke\n")`) + the SerTab `rpsm` field. My
+SerTab additions land in `dbi` (-28) + `rppw` (-30) +
+`measuredHeightPx`/`measuredWidthPx` runtime-only (-29 +
+-30). Distinct field names; no collision risk.
+
+Standing down on the queue. Awaiting commit clearance +
+any review feedback.
+
+## 2026-05-20 — poke
+
+Cleared mini-wave landed in architect's recommended order:
+
+* `3d708a2` fullstack-a-29 (ResizeObserver margin reactor)
+* `20ece30` fullstack-a-30 (per-prompt page-width)
+* `1a83050` fullstack-a-28 (BubbleOverlay dismiss + Loading
+  flicker fix)
+
+Files were intermixed in the working tree (-28's
+TerminalWatcherState plus -29/-30's TerminalRichPromptState
+all in `tabs.svelte.ts`; -29's observer plus -30's slider in
+`TerminalRichPrompt.svelte`). Used a `git checkout HEAD --`
++ re-apply pattern to keep each commit single-purpose per
+your discipline note. Each commit:
+
+* Has its own `git diff --staged --stat` audit pre-commit
+  (single agent's files only, no FB/Systacean stowaways).
+* Post-commit `git show --stat HEAD` verified.
+* Gate green after each commit (vitest 506 → 506 → 508 →
+  514, svelte-check 0/0, build clean).
+
+Picking up `fullstack-a-33` next per your "skip to -33 if
+you want to clear the -33→-32 hard pair first while
+-28/-29/-30 context is fresh" note — bubble/prompt
+internals fresh in head, lane-A test server context (the
+seeded chan-source drive for ancestor navigation per the
+task body) ready to consume.
+
+## 2026-05-20 — poke
+
+Pivoted from -33 to `fullstack-a-31` first — opened both
+task files, -31 turned out to be a single-file landing
+that fits cleanly into the remaining session context; -33
+is multi-file (GraphPanel + FileInfoBody + tabs.svelte.ts
++ likely chan-server `routes/graph.rs`) and deserves a
+fresh session.
+
+`fullstack-a-31` committed at `18811e0`. Single file
+(`TerminalTab.svelte`) — pre-commit `git diff --staged
+--stat` confirmed only my hunks (no @@FullStackB stowaways
+from their -b-13 work-in-progress in the same file).
+
+Three deltas landed:
+
+* **Self in the list**: `broadcastTargets` includes self,
+  sorted to the top. Self row's checkbox drives
+  `tab.broadcastEnabled`; visual marker is the italic
+  "(self)" suffix on the row name.
+* **Drop the umbrella rocker**: per-row checkboxes are the
+  only knobs now. `toggleBroadcast` helper deleted (unused).
+* **Container label**: "broadcast input on/off" verbatim
+  (your wording) above the row list. Radio icon relocated
+  into the section label.
+
+Bonus consistency: `Select All` / `Deselect All` now walks
+self alongside other rows so the bulk action stays uniform.
+
+Gate green: vitest 522/522 (+8 vs my -28/-29/-30 baseline,
+all from concurrent landings on other lanes), svelte-check
+0/0 across 3976 files, build clean.
+See [../fullstack-a/fullstack-a-31.md](../fullstack-a/fullstack-a-31.md)
+for the full impl note.
+
+### Queue status
+
+Remaining: -32 (chord migration — wide blast radius), -33
+(graph from-here default + ancestor breadcrumbs, hard-pair
+with -32), -34 (Wysiwyg paste escape fix, independent),
+-35 (file rename UX, needs chan-drive op).
+
+Flagging context: this session has now landed -28 / -29 /
+-30 / -31 with full impl + journal + commit work. -32 and
+-33 are substantial cross-stack changes. **Carving -32 +
+-33 to a fresh-session sub-wave** per your "if your context
+is filling up... flag it" offer. Standing by for the
+recycle / next session pickup. -34 / -35 also fresh-session
+candidates — either lane gets them once cut.
+
+## 2026-05-20 — poke (fresh-session resume: -33 ready for review)
+
+Fresh @@FullStackA session bootstrapped per the recycle.
+Picked up `fullstack-a-33` first (hard-pair prereq for
+-32). Moving on to -32 next while you review.
+
+`fullstack-a-33` ready for review. Two-file change in
+`GraphPanel.svelte` + `revealBrowserActions.test.ts`.
+
+* **Ancestor breadcrumb in the inspector**: new
+  `scopeAncestors` derived returns `{label, scopeId,
+  current}` crumbs for path-based scopes
+  (`drive` / `dir:` / `file:`); tag / git_repo / global
+  return empty so the band hides for those modes. Drive
+  root is always the head so the user can hop back from
+  any depth. Renders inside `<Inspector>` above the
+  existing `{#if}` chain.
+* **`rescopeFromHere(scopeId)`** helper mutates the
+  current tab in place (depth resets to 1, selection
+  clears, no-op on the current crumb). Distinct from
+  `scopeFsGraphFromHere` (in `store.svelte.ts`) which
+  spawns a NEW tab — still consumed by
+  `FileBrowserSurface` for the FB sidepane action, just
+  no longer used by GraphPanel.
+* **Four `onSetAsScope` props dropped** from GraphPanel's
+  inspector branches: `DriveInfoBody`, fs-mode
+  `InspectorBody`, semantic-mode `InspectorBody`.
+  Component-level prop in InspectorBody + child bodies
+  stays for FileBrowserSurface.
+
+Design call: only path-based scopes get the breadcrumb;
+tag / git_repo pivots aren't really "ancestor"
+navigation. To pivot to a tag's or contact's
+neighbourhood within the graph, the user uses chord
+spawn (Cmd+Shift+M from a selected node, wired by -32).
+Within a graph, the breadcrumb is the only re-scope
+affordance; spawning fresh graphs is the descend path.
+
+Tests: dropped the old "GraphPanel passes a re-scope
+callback to DriveInfoBody" pin; added four pins —
+negative on `onSetAsScope` on DriveInfoBody +
+InspectorBody, positive on `scopeAncestors` /
+`scope-crumbs` nav / button-bound `rescopeFromHere` /
+drive-root head + `rescopeFromHere` mutates `scopeId`
++ resets `depth` + `scopeFsGraphFromHere` is gone
+from GraphPanel.
+
+Gate green: vitest **525/525** (+3 net), svelte-check
+0/0 across 3976 files, build clean. No Rust touched.
+
+See [../fullstack-a/fullstack-a-33.md](../fullstack-a/fullstack-a-33.md)
+for the full impl note + a closing note for the -32
+follow-on (the spawn helper just needs to call
+`openGraphInActivePane({ scopeId, depth: 1,
+pendingSelectId })` with focused context — the
+breadcrumb already handles drive→dir→file walks, so
+no extra wiring on -32).
+
+Push held for the patch-release commit-grouping cut.
+Moving on to `fullstack-a-32` now.
+
+## 2026-05-20 — poke (fullstack-a-32 ready for review)
+
+`fullstack-a-32` ready for review. Hard-pair landed on top
+of `-33` cleanly. One commit covers the SPA chord layer +
+native bridge + cheatsheets + surface unification.
+
+### What landed
+
+* **Chord set (Native / Web fallback / Universal):**
+  * Terminal: `Cmd+T` / `Cmd+Alt+T` (Mac) / `Mod+. t`
+  * File browser: `Cmd+O` / `Cmd+Alt+O` (Mac) / `Mod+. o`
+  * Rich prompt: `Cmd+P` / `Cmd+Alt+P` (Mac) / `Mod+. p`
+  * Graph: `Cmd+Shift+M` / `Cmd+Shift+M` / `Mod+. v`
+* **Hybrid NAV cleanup**: numeric `1/2/3/4` cases dropped
+  (they duplicated the new top-level chord family); `o/O`
+  and `v/V` mnemonic cases added; `t/T` (from `-b-9`) and
+  `p/P` (from `-50`) retained.
+* **Context-aware**: every chord (top-level + chan:command
+  + Hybrid NAV mnemonic) resolves the focused surface via
+  `resolveSpawnContext()` and threads it through the
+  matching spawn API. Cmd+T from a focused doc lands a
+  terminal in the doc's parent dir; Cmd+Shift+M from the
+  same doc spawns a graph scoped to the doc with `-a-33`'s
+  default from-here render.
+* **Surface unification**: empty-pane carousel slide 1,
+  pane hamburger menu, and empty-pane right-click menu
+  all show the same four first-class spawn entries in
+  identical order. Click + chord route identically via
+  the same helpers.
+
+### Files touched
+
+`shortcuts.ts`, `store.svelte.ts`, `App.svelte`,
+`Pane.svelte`, `EmptyPaneCarousel.svelte`,
+`PaneModeHelp.svelte`, `crates/chan/src/main.rs`
+(`SERVE_LONG_ABOUT`), `desktop/src-tauri/src/serve.rs`
+(`KEY_BRIDGE_JS`), plus four test files updated
+(`paneModeKeymap.test.ts`, `paneModeHelpClickable.test.ts`,
+`Pane.test.ts`, the two desktop key_bridge asserts).
+
+### Design call on `openGraphWithContext`
+
+Added a sibling to `openGraph()` rather than extending it
+with an optional `ctx?: SpawnContext`. `openGraph()` is the
+legacy "drive scope unconditionally" entry; `openGraphWithContext()`
+is the "scope-from-focused-context" entry. Each entrypoint
+captures one intent — cleaner than a polymorphic
+no-args-or-args helper.
+
+Note on the new-file case (Hybrid NAV `4`): per the task
+spec, dropped entirely. New file is now reachable only via
+FB context menu / plus button. No top-level chord.
+
+### Gate
+
+vitest **530 / 530** (+5 net), svelte-check 0/0 across
+3976 files, npm build clean, `cargo fmt --check` clean,
+`cargo clippy -p chan -- -D warnings` clean,
+`cargo test -p chan` 58/58, `cargo test --no-default-features
+key_bridge` (desktop) 2/2.
+
+See [../fullstack-a/fullstack-a-32.md](../fullstack-a/fullstack-a-32.md)
+for the full impl note + chord-set table + composition
+notes (`-a-33` breadcrumb compatibility, `-a-7` /
+`-a-22` / `-a-27` non-overlap).
+
+### Suggested commit subject
+
+```
+Chord migration + context-aware spawn + surface unification (fullstack-a-32)
+```
+
+Single commit. The pieces (shortcut descriptors, chord
+handlers, cheatsheets, native bridge, three menu surfaces)
+are tightly coupled around the new chord set; splitting
+would leave intermediate states with stale cheatsheets
+or untested chord paths.
+
+Push held for the patch-release commit-grouping cut.
+Moving on to `fullstack-a-34` (Wysiwyg paste escape fix)
+next; -35 (file rename UX) after.
+
+## 2026-05-20 — poke (fullstack-a-34 + fullstack-a-35 ready for review)
+
+Both landed in the same session as a pair (small + small).
+Round-1 detour sub-wave (-32 / -33 / -34 / -35) now complete
+on my lane.
+
+### `fullstack-a-34` ready
+
+Root cause was turndown's default text-node escape — NOT a
+chan-side escape pass. HTML-paste handler runs ahead of
+CM6's plain-text paste, so pastes from Xcode / VS Code /
+browser source-view go through turndown and get `\*` / `\_`
+/ `\[` baked into the converted markdown. One-line fix:
+override `td.escape` with identity on the converter
+instance. Picked the simple shape per the task spec
+(`-a-26` source mode is the escape hatch).
+
+`htmlToMarkdown` exported for testing. New
+`paste_html.test.ts` pins 8 cases (asterisk emphasis,
+strong, underscore, link, backtick code, heading hash,
+list dash, rich-HTML-still-converts guard).
+
+Gate: vitest 538/538 (+8), svelte-check 0/0, build clean.
+Two-file change in `paste_html.ts` + new test file.
+
+### `fullstack-a-35` ready
+
+chan-drive `Drive::rename_with_link_rewrite` + chan-server
+`POST /api/move` + SPA `performMove` were ALL pre-
+existing. Only the UX wrapper was missing — the task's
+"verify whether `Drive::rename` exists; if not, add it"
+clause turned out to be moot. The whole heavy chain
+(atomic rename + link rewrite + tab rekey + watcher
+suppression + overwrite confirm + status indicator) was
+already there.
+
+Added:
+* `fileOps.renameInPlace(path, next, isDir)` —
+  inline-rename entry point that bypasses the modal.
+  Same preserveExtension + same performMove machinery.
+* `FileEditorTab.svelte` — `doRename` rewired to flip
+  state instead of popping the modal; new
+  `commitRename` / `cancelRename` / `onRenameKeydown`;
+  header band `{#if renameActive}` block above the
+  editor toolbar block (outside the
+  `--chan-page-max-width` cap → spans the full pane
+  width); CSS for `.rename-band` + `.rename-input`.
+* `fileRenameBand.test.ts` — 6 raw-source pins
+  covering the wiring shape (state flip vs modal;
+  commit/cancel/keydown wiring; band sits above
+  editor toolbars; full-width band + flex-1 input;
+  `fileOps.renameInPlace` exists + uses performMove).
+
+Gate: vitest 544/544 (+6), svelte-check 0/0 across
+3977 files, build clean. Three-file change (two SPA +
+one new test) — no Rust touched.
+
+### Suggested commit subjects
+
+```
+Wysiwyg: paste markdown unescaped via turndown identity escape (fullstack-a-34)
+File editor: inline rename band above page-width cap (fullstack-a-35)
+```
+
+Two separate commits — different editor concerns,
+different files, no shared scope.
+
+### Round-1 detour sub-wave state
+
+Carved-off queue complete on my lane:
+
+| Task | State                                         |
+|------|-----------------------------------------------|
+| -32  | Cleared by `-a-33` first, landed this session |
+| -33  | Landed this session, hard-pair prereq        |
+| -34  | Landed this session                          |
+| -35  | Landed this session                          |
+
+Mini-wave commits (-28 / -29 / -30 / -31) already in
+HEAD per the prior session. Six new commits ready in
+the working tree for the patch-release commit-grouping
+cut once you clear each.
+
+Push held. Standing by for review / clearance.

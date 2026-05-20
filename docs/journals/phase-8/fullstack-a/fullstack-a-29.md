@@ -83,3 +83,100 @@ the `fullstack-a-24` collapsed-state plumbing.
   work; the history backlog band needs accurate
   collapsed-state heights.
 * @@WebtestA verifies on lane-A once landed.
+
+## 2026-05-20 — implementation note + ready for review
+
+Root cause exactly as the task spec described: the
+`fullstack-a-4` margin reactor on `.terminal-host` reads
+`tab.richPrompt.heightPx`, which is the user-resized
+EXPANDED height. On collapse, CSS `height: auto` shrinks
+the visible prompt to header-only (~44 px) but
+`heightPx` stays at its old expanded value, so the
+reserved-space band over-reserves and leaves the dead
+band @@Alex caught.
+
+### Approach
+
+Introduced a non-persisted `measuredHeightPx?: number`
+field on `TerminalRichPromptState`. A new `$effect` in
+`TerminalRichPrompt.svelte` attaches a `ResizeObserver`
+to the prompt's `rootEl`; every layout tick writes
+`Math.round(entry.contentRect.height)` into the field.
+The terminal-host margin formula in `TerminalTab.svelte`
+prefers `measuredHeightPx` over `heightPx`, falling back
+to the existing `320` default for the brief mount
+window before the first observer tick fires.
+
+ResizeObserver is the right source of truth here: it
+fires on the collapse transition AND on the expanded
+drag-resize AND on viewport-driven max-height clamps
+(the `max-height: calc(100% - 48px)` rule), so the
+margin tracks ALL paths uniformly. Drag-resize already
+updates `heightPx` synchronously and CSS uses that for
+`height:`, so on the expanded path the observer simply
+mirrors `heightPx` one frame later — no behaviour drift.
+
+### Why not the alternatives
+
+* **Constant collapsed-pill height (~44 px)**: brittle
+  under future header chrome changes (StyleToolbar,
+  collapse chevron, future control icons). The
+  observer auto-adapts.
+* **Mutate `heightPx` directly on collapse**: would
+  clobber the user's persisted expanded-height
+  preference; expanding would land at the wrong size.
+* **Separate `expandedHeightPx` + `collapsedHeightPx`
+  fields**: more state to round-trip; the observer is a
+  single source of truth that subsumes both.
+
+`measuredHeightPx` is deliberately NOT persisted to
+SerTab — it repopulates within one observer tick of
+remount, and persisting would introduce stale-on-restore
+risk.
+
+### Files touched
+
+* `web/src/state/tabs.svelte.ts`
+  * `TerminalRichPromptState`: new `measuredHeightPx?:
+    number` field (non-persisted; runtime-only).
+* `web/src/components/TerminalRichPrompt.svelte`
+  * New `$effect` registers a `ResizeObserver` on the
+    prompt's `rootEl`. Bails cleanly when
+    `ResizeObserver` is undefined (jsdom test env).
+* `web/src/components/TerminalTab.svelte`
+  * Margin formula prefers `measuredHeightPx` over
+    `heightPx`. Comment refreshed.
+
+### Test pin
+
+Skipped a vitest pin: the collapse formula lives in the
+template-side ternary (style attribute), and
+`ResizeObserver` isn't available in jsdom — the field
+would never populate in unit tests. The behavioral
+contract requires a real browser layout pass.
+@@WebtestA's lane-A walkthrough is the authoritative
+verification per the task body.
+
+The component-level wiring IS exercised by the existing
+TerminalRichPrompt + TerminalTab tests (gate
+unchanged: 512/512).
+
+### Gate
+
+* `vitest`: 512/512 (no regression).
+* `svelte-check`: 0 errors / 0 warnings / 3974 files.
+* `npm run build`: clean.
+* Rust gate: no Rust changes; not run.
+
+### Suggested commit subject
+
+`Rich prompt: ResizeObserver-driven margin reactor for collapse + drag-resize parity (fullstack-a-29)`
+
+### Cross-lane coordination
+
+No conflicts with `fullstack-b-13` — different files
+entirely. -a-29 stays in `tabs.svelte.ts`'s
+`TerminalRichPromptState` + `TerminalRichPrompt.svelte`
+mount-time effects + `TerminalTab.svelte`'s style
+attribute. -b-13 touches header toolbar + chan-server
+`terminal_sessions.rs`.

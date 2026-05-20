@@ -198,3 +198,186 @@ or clicks a menu item.
   native-chan-desktop chord verification (`Cmd+Shift+M`
   capture under Tauri).
 * Push held for the patch-release commit-grouping cut.
+
+## 2026-05-20 — impl note + ready for review (fresh @@FullStackA session)
+
+Landed in one commit-ready bundle. Files touched:
+
+| File | Reason |
+|------|--------|
+| `web/src/state/shortcuts.ts` | Three new chord descriptors (`app.files.toggle` / `app.terminal.richPrompt` chord update / `app.graph.toggle`); registry comment refreshed to record `fullstack-a-32`'s new spawn family. |
+| `web/src/state/store.svelte.ts` | New `openGraphWithContext(ctx)` mirrors `paneModeOpenGraph` for the live layout. Live-layout sibling of the draft-only Hybrid NAV path. |
+| `web/src/App.svelte` | Context-aware spawn helpers (`spawnTerminal/Browser/RichPrompt/GraphFromContext`); top-level chord handlers for `Cmd+Alt+O/P` + `Cmd+Shift+M`; existing `Cmd+Alt+T` rewired through helper; `Alt+Space` legacy alias kept; `runCommand` chan:command bridge routes through helpers; Hybrid NAV numeric `1/2/3/4` cases dropped; `o/O` and `v/V` mnemonic cases added; `t/T` and `p/P` retained. |
+| `web/src/components/Pane.svelte` | New `spawnActions` list = single source of truth for the four first-class items. Pane hamburger menu prepends the four entries + separator above Enter Hybrid NAV. Empty-pane right-click menu uses the same list + extras (Search) below the separator. |
+| `web/src/components/EmptyPaneCarousel.svelte` | Slide 1 (Welcome) gains a 4-up `spawn-row` of clickable spawn buttons above the ASCII shortcut table; dispatches via `chan:command` so it goes through the context-aware helpers. |
+| `web/src/components/PaneModeHelp.svelte` | Spawn group cheatsheet: drop numeric caps (1/2/3/4), surface letter mnemonics (t/o/p/v) only. |
+| `crates/chan/src/main.rs` | `SERVE_LONG_ABOUT` regenerated from `renderTable("web", "mac")`; Hybrid NAV section updated to `t / o / p / v` mnemonics. |
+| `desktop/src-tauri/src/serve.rs` | `KEY_BRIDGE_JS` gains native bindings for `Cmd+O` (`app.files.toggle`), `Cmd+P` (`app.terminal.richPrompt`), `Cmd+Shift+M` (`app.graph.toggle`); legacy negative-assertion + positive-assertion tests updated. |
+| `web/src/components/paneModeKeymap.test.ts` | Existing 1/2/3/4 case pins replaced with t/o/p/v + numeric-absence assertions; new top-level chord handler pins for `Cmd+Alt+O/P` + `Cmd+Shift+M` + `chan:command` bridge. |
+| `web/src/components/paneModeHelpClickable.test.ts` | Cheatsheet pins updated: numeric caps absent; letter mnemonics present. |
+| `web/src/components/Pane.test.ts` | Pane right-click + hamburger menu pins updated for the new ordered set. |
+
+### Chord set (after -a-32)
+
+| Action          | Native (Chan.app) | Web fallback     | Universal (Hybrid NAV) |
+|-----------------|-------------------|------------------|------------------------|
+| New terminal    | Cmd+T             | Cmd+Alt+T (Mac)  | Mod+. t                |
+| File browser    | Cmd+O             | Cmd+Alt+O (Mac)  | Mod+. o                |
+| Rich prompt     | Cmd+P             | Cmd+Alt+P (Mac)  | Mod+. p                |
+| Graph           | Cmd+Shift+M       | Cmd+Shift+M      | Mod+. v                |
+
+Note on Cmd+Shift+M: browsers don't reserve it, so the same
+chord works in web + native; no Cmd+Alt+M fallback needed.
+
+Hybrid NAV `1/2/3/4` removed entirely. `4` (new file) was a
+Hybrid-only chord with no top-level equivalent; per the task
+spec, new-file is now reachable only via the FB context menu /
+plus button. `Alt+Space` stays bound as a secondary rich-prompt
+alias (legacy muscle memory; not advertised in the registry to
+avoid duplicate rows in the chord table).
+
+### Context-aware spawn semantics
+
+Single helper `resolveSpawnContext()` (already shipped in
+`fullstack-43`) returns `{ dir, file? }` based on the focused
+tab kind:
+
+* terminal → `{ dir: cwd }`
+* file → `{ dir: parentDir(path), file: path }`
+* browser → from `browserSelection`
+* graph → from `scopeId`
+
+Each new chord handler resolves the context fresh at keypress
+time and threads it through the matching spawn API:
+
+* `Cmd+T` → `openTerminalInActivePane({ cwd: ctx.dir })`
+* `Cmd+O` → `revealAndSelect(ctx.file || ctx.dir)` + `openBrowser()`
+* `Cmd+P` → `showOrSpawnRichPromptInFocusedPane()` (already
+  context-bound — talks to the focused pane's terminal)
+* `Cmd+Shift+M` → `openGraphWithContext(ctx)` →
+  `openGraphInActivePane({ mode: "semantic", scopeId,
+  depth: 1, pendingSelectId })`. `fullstack-a-33`'s default
+  "from here" rendering means the new graph spawns already
+  scoped + the breadcrumb above the inspector body renders
+  the ancestor chain.
+
+### Surface unification
+
+Four first-class spawn entries appear in three surfaces with
+identical ordering:
+
+| Surface                             | Where |
+|-------------------------------------|-------|
+| Empty-pane carousel slide 1         | `EmptyPaneCarousel.svelte` `spawnEntries` |
+| Pane hamburger menu                 | `Pane.svelte` `spawnActions` prepended above Enter Hybrid NAV |
+| Empty-pane right-click menu         | `Pane.svelte` `emptyPaneActions` (= `spawnActions`) + extras + Settings |
+
+Each surface dispatches the same `chan:command` events so the
+context-aware helpers route uniformly. Click + chord behaviour
+is identical down to the resolved spawn destination.
+
+### `openGraphWithContext` — why a new function
+
+`openGraph()` (no args) is the legacy "open at drive scope"
+entrypoint with a single in-app caller. Adding an optional
+`ctx?: SpawnContext` parameter to it would have:
+
+1. Changed the signature for the caller (chan:command bridge)
+   to require an argument-resolution branch.
+2. Mixed the "no context, drive scope" path with the
+   "context-aware, file/dir scope" path — two distinct
+   intentions in one function.
+
+A sibling `openGraphWithContext(ctx)` keeps each entrypoint's
+intent clear. `openGraph()` stays for any future "open at
+drive scope unconditionally" caller; `openGraphWithContext()`
+is the one the chord layer / chan:command bridge now use.
+
+### Native-side hot path
+
+`KEY_BRIDGE_JS` intercepts the OS-reserved chords (Cmd+O,
+Cmd+P) BEFORE the browser eats them. Tauri 2 webviews don't
+reserve those chords at the OS level, so a plain JS keymap
+captures them just fine — the bridge fires the matching
+`chan:command` event back at the same window, which lands in
+`runCommand` on the SPA side and routes through the same
+helpers the web chords use.
+
+Cmd+Shift+M wasn't browser-reserved historically (the pre-
+`fullstack-42` binding worked on web directly), but the
+KEY_BRIDGE_JS branch covers it anyway for parity. Chrome /
+Safari / Firefox don't claim Cmd+Shift+M as of 2026-05-20.
+
+### Tests
+
+Three test files updated, one new shape pinned:
+
+* `paneModeKeymap.test.ts`: numeric `1/2/3/4` cases
+  asserted ABSENT; letter mnemonic cases (`t/o/p/v`) asserted
+  PRESENT with the matching `paneModeStageSpawn` /
+  `commitPaneMode` shape. New section pins the top-level
+  chord handlers (`Cmd+Alt+T/O/P` + `Cmd+Shift+M`) and the
+  chan:command bridge wiring.
+* `paneModeHelpClickable.test.ts`: cheatsheet caps now
+  pinned as `t/o/p/v`; `1/2/3/4` asserted absent.
+* `Pane.test.ts`: hamburger menu labels expected to include
+  the four spawn entries at the top; empty-pane right-click
+  labels include the same four + Search + Settings.
+* `desktop/src-tauri/src/serve.rs::tests`: negative
+  assertions slimmed (the four spawn commands no longer
+  asserted absent — they're now in KEY_BRIDGE_JS);
+  positive assertions added for the three new commands
+  (`app.files.toggle`, `app.terminal.richPrompt`,
+  `app.graph.toggle`).
+
+### Composition
+
+* Hard-pair follow-on of [`fullstack-a-33`](fullstack-a-33.md):
+  the breadcrumb + default from-here mode let `Cmd+Shift+M`
+  spawn a graph already scoped + ancestor-navigable. -33
+  was committed first; -32 layers cleanly on top.
+* Coexists with [`fullstack-a-28`](fullstack-a-28.md) /
+  [`-29`](fullstack-a-29.md) / [`-30`](fullstack-a-30.md) /
+  [`-31`](fullstack-a-31.md): no shared file edits (chord
+  layer vs bubble overlay vs rich-prompt internals vs
+  terminal broadcast). The cheatsheet sync was a single-
+  file change in PaneModeHelp; no overlap.
+* `fullstack-b-9`'s `Cmd+T` native + `Mod+. t` universal
+  preserved exactly — extended pattern to `o`, `p`, `v`.
+* `fullstack-a-7`'s `Cmd+.` Hybrid NAV entry chord unchanged.
+* `fullstack-a-22`'s pane flip animation chord (`Cmd+. Tab`)
+  unchanged.
+* `fullstack-a-27`'s Hybrid hamburger entries (Theme /
+  Flip) sit below the new spawn block in the pane
+  hamburger menu, gated on `pane.back !== undefined` as
+  before.
+
+### Gate
+
+* vitest: **530 / 530** (+5 net from `-33`'s 525, all
+  from new positive pins on the chord layer).
+* svelte-check: 0 errors / 0 warnings across 3976 files.
+* npm build: clean.
+* `cargo fmt --check`: clean.
+* `cargo clippy -p chan -- -D warnings`: clean.
+* `cargo test -p chan`: 58 / 58 passed.
+* `cargo test --no-default-features key_bridge` (desktop):
+  2 / 2 passed.
+
+### Suggested commit subject
+
+```
+Chord migration + context-aware spawn + surface unification (fullstack-a-32)
+```
+
+Single commit covering the SPA chord layer, the native
+KEY_BRIDGE_JS, the SERVE_LONG_ABOUT cheatsheet, the
+PaneModeHelp cheatsheet, the three menu surfaces (pane
+hamburger, empty-pane right-click, carousel slide 1), and
+all test updates. The pieces are tightly coupled (shortcut
+descriptors, chord handlers, cheatsheets, surface unification
+all share the new chord set); splitting would leave the
+intermediate state with stale cheatsheets or untested chord
+paths.
+
+Push held for the patch-release commit-grouping cut.
