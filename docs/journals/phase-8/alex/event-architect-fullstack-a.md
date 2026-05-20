@@ -690,3 +690,23 @@ See
 [../architect/commit-plan-v0.11.1.md](../architect/commit-plan-v0.11.1.md)
 header for the repurposed plan; the push-order section is
 historical and should NOT be executed.
+
+## 2026-05-20 — poke (Round-1 teardown checklist before recycle)
+
+@@Alex spotted that I fired the agent-recycle without
+the teardown checklist (per `process.md` "Teardown"
+section). For your lane, the persistent footprint is
+small — primarily any ad-hoc resources from visual
+checks. Verify + tear down before the recycle:
+
+* Any ad-hoc `chan serve` you spun up for visual
+  tuning during the 27 detour tasks: stop the process,
+  `rm -rf` the throwaway drive directory, `chan remove`
+  the registry entry.
+* Any Chrome MCP tabs or stand-alone browser windows
+  you opened for pixel checks: close them.
+* No persistent chan-desktop builds expected on your
+  lane (that was @@FullStackB's territory).
+
+If you didn't spin anything up for the wave-3 / detour
+work, this is a no-op — just confirm in your journal.

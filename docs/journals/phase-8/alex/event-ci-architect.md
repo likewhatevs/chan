@@ -194,3 +194,20 @@ parked workflow_dispatch dry-run. Round-2 fan-out for
 ci-7 (signing workflow) + ci-8 (DMG dry-run) + ci-9
 (marketing-site CI) parks until @@Alex's cert checklist
 lands.
+
+## 2026-05-20 — poke (teardown confirmed, ready for recycle)
+
+Teardown sweep ran per the checklist; confirmed no-op
+for my lane (all five items clean — no `chan serve`
+from CI, no `/tmp/chan-test-*` from CI, no Chrome MCP
+tabs, `act` not installed, working tree of CI files
+clean). Full sweep table + final Round-1 summary at
+[../ci/journal.md](../ci/journal.md) under
+"2026-05-20 — Round-1 teardown".
+
+Handover for the next @@CI session also noted in the
+journal: ci-3 brief + ci-5/ci-6 cache-and-gate pair are
+the load-bearing reference points for everything
+Round-2 will touch.
+
+Ready for recycle.

@@ -586,3 +586,59 @@ variant track.
 
 Lane summary now seven commits across six tasks. Idle
 pending Round-2 fan-out for `ci-7` + `ci-8` + `ci-9`.
+
+## 2026-05-20 — Round-1 teardown (no-op for my lane)
+
+@@Alex caught that @@Architect fired the agent-recycle
+without a teardown checklist; @@Architect cut one and
+predicted my lane would be the lightest of the six.
+Sweep confirms — teardown is effectively a no-op:
+
+| Check                                      | Result                                 |
+|--------------------------------------------|----------------------------------------|
+| `chan serve` processes from my lane        | none (the running serves are webtest-a / webtest-b / @@Alex's ChanRoadmap, not mine) |
+| Throwaway drives in `/tmp/chan-test-*`     | none from my lane (existing dirs are webtest's `phase8-wa` / `phase8-wb` plus historical leftovers) |
+| Chrome MCP tabs                            | none (never invoked Chrome MCP this session) |
+| `act` install                              | not installed (per the ci-4 + ci-5 + ci-6 dry-run gap)  |
+| Working tree of CI-lane files              | clean (all changes committed at 6d5d8ac / 97b82df / 97ca38a / 141aa4d / 385da20 / 0c076f0 / 747b7be) |
+
+No state to clean. Ready for recycle.
+
+### Final Round-1 lane summary
+
+| Task | Topic                                          | Commit  |
+|------|------------------------------------------------|---------|
+| ci-1 | web/ gate per-PR                               | 6d5d8ac |
+| ci-2 | tag-triggered chan-desktop release scaffold    | 97b82df |
+| ci-2 | drop stranded desktop/.github/workflows/ci.yml | 97ca38a |
+| ci-3 | macOS signing + notarization brief             | 141aa4d |
+| ci-4 | swap `cargo install` → taiki-e/install-action  | 385da20 |
+| ci-5 | cache encoded BGE-small bundle                 | 0c076f0 |
+| ci-6 | gate ci-5 on `--features embed-model`          | 747b7be |
+
+Seven commits across six tasks. All unpushed; first
+GitHub Release fires at Round-2 close per the
+2026-05-20 structural change. ci-2 + ci-4 + ci-5 + ci-6
+bundle at the parked `workflow_dispatch` dry-run pair
+with @@Systacean's `systacean-3` (still valid validation
+gate even with v0.11.1 cancelled).
+
+### Open Round-2 / Round-3 lane (handover)
+
+* **ci-7** — signing workflow YAML consuming the six
+  secrets from the `ci-3` brief. Cuts post-recycle once
+  @@Alex completes the cert provisioning checklist.
+* **ci-8** — DMG-on-tag dry-run with real keys
+  provisioned in GitHub Actions Secrets. Cuts after
+  ci-7 lands.
+* **ci-9** — marketing-site CI (item 6 from
+  next-phase-backlog).
+* **Round-3 ci-N** — workflow audit + release pipeline
+  final verification + CHANGELOG generation per
+  round-3-plan.md.
+
+Standing by for the recycle. Future @@CI session reads
+this journal first per the bootstrap protocol; the
+ci-3 brief + the ci-5/ci-6 cache-and-gate pair are the
+load-bearing reference points for everything Round-2
+will touch.

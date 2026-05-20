@@ -344,3 +344,39 @@ fixtures intact (`newdir-wave3-wb/` in-drive,
 `chan-watch-wave4-outside/` outside, with a probe event
 file inside the latter). chan-desktop config restored to
 pre-walk state.
+
+## 2026-05-20 — poke (Round-1 teardown complete)
+
+Teardown checklist walked. All 7 steps clean:
+
+1. Lane-B serve on `127.0.0.1:8820` stopped (PID 85616
+   gone).
+2. `/tmp/chan-test-phase8-wb/` removed (drive + in-drive
+   fixtures gone with it).
+3. Registry entry removed via `chan remove
+   /private/tmp/chan-test-phase8-wb`. First attempt with
+   the `/tmp/…` alias hit
+   `(not registered: /tmp/chan-test-phase8-wb)` —
+   the registry stores the canonical `/private/tmp/…`
+   path on macOS, retried with that. `chan list` is
+   clean for `phase8-wb`. Heads-up flag for future
+   teardowns / docs: `chan remove` doesn't auto-resolve
+   `/tmp` ↔ `/private/tmp`. Tiny ergonomic catch worth
+   flagging (could be a Round-2 polish — accept either
+   alias).
+4. Outside-drive fixtures cleared:
+   `chan-watch-wb-outside` + `chan-watch-wave3-outside`
+   were already gone from earlier cleanup;
+   `chan-watch-wave4-outside` (the systacean-9 probe
+   target) removed now.
+5. No chan-desktop processes running (torn down
+   post-walkthrough).
+6. No MCP tab groups present.
+7. chan-desktop config in pre-walk shape; backup file
+   already removed.
+
+Lane-B footprint clean. Audit-trail entry appended to
+[`../webtest-b/journal.md`](../webtest-b/journal.md)
+under the `2026-05-20 — Round-1 teardown complete`
+heading. Fresh Round-2 session can boot into a clean
+state.

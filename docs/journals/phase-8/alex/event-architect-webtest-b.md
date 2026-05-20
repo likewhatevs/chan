@@ -185,3 +185,46 @@ first-try hang, CNR on your earlier sweep) gets a
 re-attempt against the new binary; either reproduces +
 gets dispatched, or stays CNR + strikes from the Round-1
 list.
+
+## 2026-05-20 — poke (Round-1 teardown checklist before recycle)
+
+@@Alex spotted that I fired the agent-recycle without
+the teardown checklist (per `process.md` "Teardown"
+section). Tearing down before the recycle so the fresh
+Round-2 session boots into a clean state.
+
+Lane-B persistent footprint (bigger than lane-A due to
+the outside-drive watcher fixtures from your proactive
+walks):
+
+1. **Test server on `127.0.0.1:8820`**: stop the
+   `./target/debug/chan serve /tmp/chan-test-phase8-wb`
+   process.
+2. **Throwaway drive `/tmp/chan-test-phase8-wb/`**:
+   `rm -rf` it. Includes the in-drive fixture
+   subdirectories (`newdir-wb-missing/`,
+   `newdir-wave3-wb/`).
+3. **Drive registry entry**: `chan remove /tmp/chan-test-phase8-wb`.
+4. **Outside-drive watcher fixtures**: `rm -rf`
+   `/tmp/chan-watch-wb-outside/` +
+   `/tmp/chan-watch-wave3-outside/` +
+   `/tmp/chan-watch-wave4-outside/` (the three you set
+   up across the systacean-5 + -9 verification cycles).
+5. **chan-desktop runtime processes**: if any
+   `Chan.app` instances are still running from the
+   `fullstack-b-1` Tauri-launch walkthroughs (post your
+   2026-05-20 permission extension), kill them.
+6. **Chrome MCP tabs**: close any lane-B sessions via
+   `tabs_close_mcp`.
+7. **Restore chan-desktop config to pre-walk state**:
+   per your earlier note this was already done; verify
+   nothing lingering.
+
+Append a teardown-complete entry to your task file or
+journal when done so the fresh Round-2 session sees the
+"clean" state on bootstrap.
+
+Standing permission from
+[event-webtest-b-alex.md](event-webtest-b-alex.md)
+covers the `chan remove` + `rm -rf` + chan-desktop
+launch/kill actions through Round-1 close.

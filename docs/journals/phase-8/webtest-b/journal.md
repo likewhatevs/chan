@@ -242,3 +242,39 @@ process killed cleanly; config backup restored. Poke
 fired at
 [`../alex/event-webtest-b-architect.md`](../alex/event-webtest-b-architect.md).
 
+## 2026-05-20 — Round-1 teardown complete
+
+@@Architect routed the 7-step teardown checklist via
+`event-architect-webtest-b.md` ("Round-1 teardown
+checklist before recycle"). Walked all steps:
+
+1. Stopped lane-B serve on `127.0.0.1:8820` (PID 85616
+   killed, gone).
+2. `rm -rf /tmp/chan-test-phase8-wb` — directory removed
+   (included `newdir-wave3-wb/` and any in-drive
+   artifacts).
+3. `chan remove /private/tmp/chan-test-phase8-wb` →
+   `unregistered: …`. First attempt used the `/tmp/…`
+   alias and got `(not registered)` because the
+   registry stores the canonical `/private/tmp/…` path
+   on macOS; retried with the canonical form.
+   `chan list` confirms no `phase8-wb` entry remains.
+4. Outside-drive fixtures: `/tmp/chan-watch-wb-outside`
+   and `/tmp/chan-watch-wave3-outside` were already
+   gone from prior cleanup; `/tmp/chan-watch-wave4-outside`
+   removed (held the systacean-9 probe event file).
+5. No chan-desktop processes were running (already torn
+   down post the `fullstack-b-1` walkthrough).
+6. No MCP tab groups present (`tabs_context_mcp` reports
+   none) — lane-B Chrome tab was already closed.
+7. chan-desktop config at
+   `~/Library/Application Support/Chan Desktop/config.json`
+   already restored to its pre-walk shape
+   (`sidecar + tunnel` keys, no `window_configs` field);
+   `.webtest-b-backup` sibling was removed at the end of
+   the `fullstack-b-1` walkthrough.
+
+Lane-B footprint is now clean. Fresh Round-2 session can
+boot into a clean state. Final teardown poke filed at
+[`../alex/event-webtest-b-architect.md`](../alex/event-webtest-b-architect.md).
+

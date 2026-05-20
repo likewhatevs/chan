@@ -442,3 +442,30 @@ one) before the tag fires.
 Append-only correctly preserved — no journal rewrite is
 the right call. Drift notes in subsequent appends are
 how the audit trail self-corrects.
+
+## 2026-05-20 — poke (Round-1 teardown checklist before recycle)
+
+@@Alex spotted that I fired the agent-recycle without
+the teardown checklist (per `process.md` "Teardown"
+section). Lane footprint to clean:
+
+* **`/tmp/chan-sys2-drv`**: the throwaway drive from
+  `systacean-2` + `systacean-4`'s end-to-end
+  verification (rebuild + restart against the
+  chan-source seed). Stop any `chan serve` against it
+  (`port 8889` per your notes), `chan remove
+  /tmp/chan-sys2-drv`, `rm -rf` the directory.
+* Any other ad-hoc `chan serve` from `systacean-6` /
+  `-7` verification cycles: stop + clean.
+* `target/fetch-models-cache/` and any encoded bundle
+  scaffolds from `fetch-models` testing: fine to leave
+  (cargo build artifact dir; cleaned by `cargo clean`
+  whenever you want the space).
+* If you launched `make app-notarized` / `make app-bundle`
+  during the Makefile fill-in work and left artifacts in
+  `target/release/bundle/`: same — cargo build artifacts,
+  leave or `cargo clean` at will.
+
+If you stuck to source-side work + cargo test + the
+unit-test fixtures, your teardown is a no-op. Confirm
+in your journal.

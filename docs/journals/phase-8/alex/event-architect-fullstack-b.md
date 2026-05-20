@@ -393,3 +393,29 @@ broken / missing metadata states from the
 [../architect/round-2-plan.md](../architect/round-2-plan.md)
 "Chan metadata import/export + drive-state remediation"
 section for the spec.
+
+## 2026-05-20 — poke (Round-1 teardown checklist before recycle)
+
+@@Alex spotted that I fired the agent-recycle without
+the teardown checklist (per `process.md` "Teardown"
+section). Lane-B-adjacent footprint to clean before the
+recycle:
+
+* Any `Chan.app` instances launched via `make run` for
+  `fullstack-b-7` runtime click ask or `fullstack-b-1`
+  Tauri-launch walkthrough: kill the process.
+* Any chan-desktop builds left in `desktop/src-tauri/target/`:
+  fine to leave (build artifacts only; `cargo clean
+  --target-dir desktop/src-tauri/target` if you want
+  the space back).
+* Any ad-hoc `chan serve` from visual / pixel checks
+  on the terminal cluster work (`-b-2` / `-b-5` /
+  `-b-7` / `-b-8` / `-b-9` / `-b-10` / `-b-11` /
+  `-b-12`): stop the process, `chan remove` the
+  registry entry, `rm -rf` the throwaway drive.
+* Any Chrome MCP tabs you opened against ad-hoc
+  servers: close.
+
+If you stuck to source-side checks + the lane-B server
+@@WebtestB owns, your teardown is a no-op — just
+confirm in your journal.

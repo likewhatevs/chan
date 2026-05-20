@@ -449,3 +449,21 @@ testers need the full sequence `cd web && npm run build
 caller).
 
 Standing by until Round-2 fan-out post-recycle.
+
+## 2026-05-20 — poke (teardown confirmed)
+
+Per your Round-1 teardown checklist:
+
+* `/tmp/chan-sys2-drv` torn down: `chan remove` → 
+  "unregistered: /tmp/chan-sys2-drv", `rm -rf` → directory
+  gone, `chan list` confirms no entry. No leftover `chan
+  serve` against it (port 8889 was torn down post-`-4`).
+* Other running serves are WebtestA (8787), WebtestB
+  (8820), @@Alex's personal `ChanRoadmap` drive (8888) —
+  not mine, left alone.
+* `target/fetch-models-cache/` + `target/release/bundle/`
+  left in place per your note (cargo build artifacts).
+
+Full append at the tail of
+[`../systacean/journal.md`](../systacean/journal.md).
+Lane footprint clean. Recycle-ready.

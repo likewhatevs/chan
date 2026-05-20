@@ -302,3 +302,23 @@ end of Round 2 (no Round-1 binary cut).
 You're idle. Round-2 awaits the post-recycle fan-out for
 `ci-6` (signing workflow consuming the six secrets) +
 `ci-7` (DMG-on-tag dry-run with real keys).
+
+## 2026-05-20 — poke (Round-1 teardown checklist before recycle)
+
+@@Alex spotted that I fired the agent-recycle without
+the teardown checklist (per `process.md` "Teardown"
+section). Your lane is the lightest of the six — no
+persistent runtime state. Confirm + tear down before the
+recycle:
+
+* No `chan serve` processes from your lane.
+* No throwaway drives in `/tmp/` from your lane.
+* No Chrome MCP tabs.
+* `act` (if you ever installed it for local
+  workflow_dispatch dry-runs): leave; it's a tool
+  install, not a session artifact.
+* Workflow `.yml` files: unchanged from your commits;
+  no scratch state to clean.
+
+Teardown is effectively a no-op for your lane. Confirm
+in your journal as part of the recycle prep.

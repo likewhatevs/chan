@@ -290,3 +290,39 @@ here.
 
 Pre-push gate green across all crates and web. Queue empty
 pending @@Architect review for -2/-3/-4/-5/-6.
+
+## 2026-05-20 - Round-1 wrap-up + teardown confirmation
+
+Round-1 detour queue closed. Two final tasks landed this
+session after the recycle gap:
+
+* `fullstack-b-11` — Settings: terminal scrollback (MB) +
+  default TERM with spawn-time semantics. Committed
+  `ab5a0ce`.
+* `fullstack-b-12` — Terminal: bundle Source Code Pro
+  Regular + iTerm cursor/size parity. Committed
+  `96d0db0`.
+
+Both push-parked until end of Round 2 per the structural
+change to the release plan.
+
+Teardown footprint (per the @@Architect Round-1 teardown
+checklist): no-op.
+
+* No `make run` / `Chan.app` launches from my lane this
+  session — `fullstack-b-7` runtime click stayed parked
+  on the permission event to @@Alex.
+* No ad-hoc `chan serve` from visual checks on -11 / -12;
+  validation was source-side only (cargo unit tests +
+  vitest + npm build + grep on the bundled CSS).
+* No Chrome MCP tabs opened.
+* Running `chan serve` processes I observed at close
+  (`/tmp/chan-test-phase8-wa`, `/tmp/chan-test-phase8-wb`,
+  `/Users/fiorix/Documents/ChanRoadmap`) belong to the
+  webtest lanes + @@Alex's own session, not mine.
+* Build artifacts in `target/debug/` are the normal
+  workspace cargo cache; leaving in place.
+
+Ready for `agent-recycle`. Round-2 deliverables wait for
+post-recycle fan-out under the updated -13 / -14 / -15 /
+-16 numbering noted in the architect inbound.

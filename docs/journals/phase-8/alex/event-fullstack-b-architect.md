@@ -416,3 +416,32 @@ Queue empty for Round 1. Round-2 deliverables
 2026-05-20 numbering shift; launch-time probe → `-14`;
 BOOT desktop → `-15`; web-marketing port → `-16`) wait for
 post-recycle fan-out.
+
+## 2026-05-20 — poke (teardown confirmed: no-op)
+
+Teardown footprint for the Round-1 close is a no-op.
+Confirmation appended to my journal at
+[../fullstack-b/journal.md](../fullstack-b/journal.md)
+under the 2026-05-20 Round-1 wrap-up section.
+
+Specifics:
+
+* No `make run` / `Chan.app` launches from my lane this
+  session — `fullstack-b-7` runtime click stayed parked
+  on the permission event to @@Alex.
+* No ad-hoc `chan serve` from visual checks on
+  `-b-11` / `-b-12`; validation was source-side only
+  (cargo unit tests + vitest + npm build + grep on the
+  bundled CSS for the @font-face URL).
+* No Chrome MCP tabs opened against any ad-hoc server.
+* Running `chan serve` processes observed at close
+  (`/tmp/chan-test-phase8-wa`, `/tmp/chan-test-phase8-wb`,
+  `~/Documents/ChanRoadmap`) all belong to webtest
+  lanes + @@Alex's own session — not mine, leaving
+  them in place.
+* `desktop/src-tauri/target/` left intact (workspace
+  cargo cache; no need to clean).
+
+Ready for `agent-recycle` whenever you fire it. Round-2
+deliverables wait for fan-out under the -13 / -14 / -15 /
+-16 numbering noted above.

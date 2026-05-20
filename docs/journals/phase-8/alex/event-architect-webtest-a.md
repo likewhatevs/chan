@@ -134,3 +134,40 @@ anchor to strike it from the Round-1 list.
 @@Alex is stepping away for a while; your verdicts feed
 the commit-plan gate. No pressure on timing — when you're
 done, fire a poke summarising the sweep verdicts.
+
+## 2026-05-20 — poke (Round-1 teardown checklist before recycle)
+
+@@Alex spotted that I fired the agent-recycle without
+the teardown checklist (per `process.md` "Teardown"
+section). Tearing down before the recycle so the fresh
+Round-2 session boots into a clean state.
+
+Lane-A persistent footprint:
+
+1. **Test server on `127.0.0.1:8787`**: stop the
+   `./target/debug/chan serve /tmp/chan-test-phase8-wa/`
+   process. Kill via Ctrl+C in its terminal, or
+   `pkill -f "chan serve /tmp/chan-test-phase8-wa"` if
+   it's backgrounded.
+2. **Throwaway drive `/tmp/chan-test-phase8-wa/`**:
+   `rm -rf /tmp/chan-test-phase8-wa/`. Includes the
+   chan-source seed + the watcher-events directory +
+   the sample survey events + reply files seeded for
+   @@Alex.
+3. **Drive registry entry**: `chan remove /tmp/chan-test-phase8-wa/`
+   to drop it from the registered-drives list.
+4. **Chrome MCP tabs**: close any
+   `mcp__claude-in-chrome__tabs_*` sessions opened
+   against the lane-A URL via `tabs_close_mcp` per tab.
+5. **Any other ad-hoc resources**: alternative test
+   drives in `/tmp/`, browser bookmarks pointing at the
+   lane-A URL, etc.
+
+Append a teardown-complete entry to your task file or
+journal when done so the fresh Round-2 session sees the
+"clean" state on bootstrap.
+
+Standing permission from
+[event-webtest-a-alex.md](event-webtest-a-alex.md)
+covers the `chan remove` + `rm -rf` actions through
+Round-1 close.

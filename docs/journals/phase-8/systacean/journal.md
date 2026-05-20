@@ -446,3 +446,28 @@ binary + web bundle are in place.
 
 Both Round-1 polish tasks done. Back to idle until next
 task or recycle.
+
+## 2026-05-20 — Round-1 teardown confirmation
+
+Per @@Architect's teardown-checklist poke (Round-1 close /
+pre-recycle):
+
+* `/tmp/chan-sys2-drv` — removed:
+  * `chan remove /tmp/chan-sys2-drv` → "unregistered:
+    /tmp/chan-sys2-drv".
+  * `rm -rf /tmp/chan-sys2-drv` → directory gone.
+  * `chan list` confirms no `chan-sys2-drv` entry remains.
+* No leftover `chan serve` against `/tmp/chan-sys2-drv`
+  (port 8889) — already torn down post-`systacean-4`
+  verification. `pgrep -fl "chan serve"` shows three
+  running serves and none are mine: WebtestA on 8787,
+  WebtestB on 8820, and @@Alex's `ChanRoadmap` personal
+  drive on 8888.
+* `target/fetch-models-cache/` and any
+  `target/release/bundle/` artifacts: left as-is per
+  @@Architect's note (cargo build artifacts, cleaned by
+  `cargo clean` when @@Alex wants the space).
+* No webtest lane footprint to clean (my lane is code-only;
+  the webtest lanes own their own throwaways).
+
+Lane footprint clean. Standing by for the recycle event.
