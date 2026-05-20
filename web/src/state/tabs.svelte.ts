@@ -350,6 +350,15 @@ export type TerminalRichPromptState = {
   /// the same session via the serialized payload. Default
   /// expanded (`undefined` reads as `false`).
   collapsed?: boolean;
+  /// `fullstack-a-29`: actual rendered height (px) of the
+  /// rich-prompt root, written by a ResizeObserver in
+  /// `TerminalRichPrompt.svelte`. The terminal-host margin
+  /// reactor reads this in preference to `heightPx` so the
+  /// reserved space tracks both the expanded drag-resize AND
+  /// the `fullstack-a-24` collapse transition (where the prompt
+  /// shrinks to header-only and `heightPx` is stale). Not
+  /// persisted to SerTab — repopulated on every mount.
+  measuredHeightPx?: number;
 };
 
 export type Tab = FileTab | TerminalTab | GraphTab | BrowserTab;

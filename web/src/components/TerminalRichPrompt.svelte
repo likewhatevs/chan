@@ -82,6 +82,28 @@
     });
   });
 
+  // `fullstack-a-29`: track the prompt's actual rendered height so
+  // the terminal-host's reserved-space reactor in TerminalTab can
+  // shrink to the collapsed-pill height (~44 px) when the user
+  // clicks the chevron from `fullstack-a-24`. `heightPx` only
+  // reflects the user-resized EXPANDED height; CSS `height: auto`
+  // takes over in the collapsed branch and leaves heightPx stale.
+  // ResizeObserver is the natural source of truth for "whatever the
+  // browser actually painted." Writes the live offsetHeight onto
+  // the non-persisted `measuredHeightPx` state field; TerminalTab
+  // prefers it over `heightPx` for the margin formula.
+  $effect(() => {
+    const el = rootEl;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      prompt.measuredHeightPx = Math.round(entry.contentRect.height);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  });
+
   function mode(): "wysiwyg" | "source" {
     return prompt.mode ?? "wysiwyg";
   }

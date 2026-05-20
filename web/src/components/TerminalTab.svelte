@@ -1192,15 +1192,26 @@
   {/if}
   <!-- `fullstack-a-4`: when the rich prompt is open we reserve
        space at the bottom of the terminal-host equal to the
-       prompt's current height (heightPx) plus the resize-handle
-       gap. The xterm ResizeObserver picks the new size up and
-       calls `fit()`, so the bottom-most rendered line stays
-       visible above the prompt instead of being painted over. -->
+       prompt's current height plus the resize-handle gap. The
+       xterm ResizeObserver picks the new size up and calls
+       `fit()`, so the bottom-most rendered line stays visible
+       above the prompt instead of being painted over.
+
+       `fullstack-a-29`: prefer the prompt's measured runtime
+       height (written by a ResizeObserver in TerminalRichPrompt)
+       over the user-resized `heightPx` so the reactor tracks the
+       `fullstack-a-24` collapse transition. When collapsed the
+       CSS `height: auto` branch shrinks the prompt to header-
+       only (~44 px) but `heightPx` stays at the expanded value;
+       reading `measuredHeightPx` collapses the reserved space
+       in lockstep with the visible pill. Falls back to
+       `heightPx` for the brief mount window before the first
+       observer tick fires. -->
   <div
     class="terminal-host"
     bind:this={host}
     style:margin-bottom={tab.richPrompt?.open
-      ? `${(tab.richPrompt.heightPx ?? 320) + 12}px`
+      ? `${(tab.richPrompt.measuredHeightPx ?? tab.richPrompt.heightPx ?? 320) + 12}px`
       : null}
   ></div>
 </div>
