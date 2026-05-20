@@ -14,13 +14,23 @@
   aria-label={side === "left" ? "left file browser" : "right file browser"}
 >
   {#if side === "right"}
-    <ResizeHandle bind:width={paneWidths.browser} side="right" onChange={persistPaneWidths} />
+    <ResizeHandle
+      bind:width={paneWidths.browser}
+      side="right"
+      idleVisible={false}
+      onChange={persistPaneWidths}
+    />
   {/if}
   <div class="surface">
     <FileBrowserSurface variant="dock" {side} />
   </div>
   {#if side === "left"}
-    <ResizeHandle bind:width={paneWidths.browser} side="left" onChange={persistPaneWidths} />
+    <ResizeHandle
+      bind:width={paneWidths.browser}
+      side="left"
+      idleVisible={false}
+      onChange={persistPaneWidths}
+    />
   {/if}
 </aside>
 
