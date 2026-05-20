@@ -125,6 +125,21 @@ fn ingest_once(
     dropped_events: &AtomicU64,
     seen: &Mutex<SeenEventIds>,
 ) {
+    // notify (FSEvents on macOS, inotify on Linux) can deliver events
+    // whose path is a directory rather than a regular file:
+    //   * Create events for the watch root itself on first attach to a
+    //     freshly-created dir (macOS FSEvents synthetic emit).
+    //   * Rename events whose final side is a subdirectory.
+    // `read_to_string` on a directory errors with EISDIR
+    // ("Is a directory"), which the per-error branch below would log
+    // and count as a dropped event. The /api/health
+    // `terminal_event_watcher.dropped_events` counter then surfaces as
+    // a red toast in the rich-prompt UI on a perfectly valid attach.
+    // Skip directory paths silently: they aren't event-file payloads,
+    // so dropping them isn't a dropped event. systacean-5.
+    if std::fs::metadata(&path).is_ok_and(|m| m.is_dir()) {
+        return;
+    }
     if path
         .file_name()
         .and_then(|name| name.to_str())
@@ -258,6 +273,49 @@ mod tests {
         let unknown = parse_agent_event(r#"{"id":"1","type":"future","from":"@@A","to":"@@B"}"#)
             .expect("unknown types stay parseable");
         assert_eq!(unknown.event_type, AgentEventType::Unknown);
+    }
+
+    #[test]
+    fn ingest_once_skips_directory_paths_silently() {
+        // Regression for systacean-5: notify (FSEvents on macOS) can
+        // deliver a Create event whose path is the watch root itself
+        // on first attach to a freshly-created empty dir. The pre-fix
+        // path then `read_to_string`'d the dir, errored with EISDIR
+        // ("Is a directory"), incremented `dropped_events`, and the
+        // counter surfaced as a red toast via /api/health on a
+        // perfectly valid attach. After the fix, directory paths are
+        // skipped silently — no event dispatched, no counter bump.
+        let dir = tempfile::tempdir().expect("temp event dir");
+        let subdir = dir.path().join("nested");
+        std::fs::create_dir(&subdir).expect("create subdir");
+
+        let dropped = Arc::new(AtomicU64::new(0));
+        let seen = Mutex::new(SeenEventIds::default());
+        let (tx, rx) = mpsc::channel();
+        let dispatch: Arc<EventDispatch> = Arc::new(move |event: AgentEvent| {
+            tx.send(event).expect("send event");
+        });
+
+        // Case 1: watch root itself (the FSEvents-on-fresh-dir shape).
+        ingest_once(
+            dir.path(),
+            dir.path().to_path_buf(),
+            &dispatch,
+            &dropped,
+            &seen,
+        );
+        // Case 2: a subdirectory inside the watch root.
+        ingest_once(dir.path(), subdir, &dispatch, &dropped, &seen);
+
+        assert_eq!(
+            dropped.load(Ordering::Relaxed),
+            0,
+            "directory paths must not count as dropped events"
+        );
+        assert!(
+            rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "no event should dispatch for a directory path"
+        );
     }
 
     #[test]
