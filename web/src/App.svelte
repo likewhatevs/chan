@@ -27,6 +27,7 @@
     graphOverlay,
     openBrowser,
     openGraph,
+    openGraphWithContext,
     openSettings,
     pathPromptState,
     persistLayoutToHash,
@@ -285,17 +286,60 @@
     document.addEventListener("visibilitychange", onVisibility);
   });
 
+  /// `fullstack-a-32`: context-aware spawn helpers shared by every
+  /// chord entry path (top-level chords on `onWindowKey`, Hybrid
+  /// NAV cases in `handlePaneModeKey`, and `chan:command` events
+  /// fired from chan-desktop's KEY_BRIDGE_JS). Each helper resolves
+  /// the focused surface's context (parent dir of a focused doc;
+  /// cwd of a focused terminal; scope path of a focused graph)
+  /// through `resolveSpawnContext` and threads it into the matching
+  /// spawn API. Single source of truth means the four surfaces
+  /// (chord / Hybrid NAV / hamburger menu / right-click) all
+  /// behave identically.
+  function spawnTerminalFromContext(): void {
+    const ctx = resolveSpawnContext();
+    openTerminalInActivePane({ cwd: ctx.dir });
+    scheduleSessionSave();
+  }
+  function spawnBrowserFromContext(): void {
+    const ctx = resolveSpawnContext();
+    // Reveal-and-select primes the module-level `browserSelection`
+    // BEFORE the new browser tab mounts. Same pattern Hybrid NAV
+    // `2` uses (App.svelte case `2` calls revealAndSelect before
+    // commitPaneMode) — the new tab's tree picks up the prime on
+    // mount.
+    if (ctx.file) revealAndSelect(ctx.file);
+    else if (ctx.dir) revealAndSelect(ctx.dir);
+    openBrowser();
+    scheduleSessionSave();
+  }
+  function spawnRichPromptFromContext(): void {
+    showOrSpawnRichPromptInFocusedPane();
+    scheduleSessionSave();
+  }
+  function spawnGraphFromContext(): void {
+    const ctx = resolveSpawnContext();
+    openGraphWithContext(ctx);
+  }
+
   /// App-level keyboard shortcuts. Layout follows VS Code where
   /// possible so users carry intuition in from any code editor.
   ///
+  /// `fullstack-a-32` spawn-chord family (each context-aware via
+  /// `resolveSpawnContext`):
+  ///
+  ///   Cmd+T          -> Terminal (native; Cmd+Alt+T on web Mac)
+  ///   Cmd+O          -> File Browser (native; Cmd+Alt+O on web Mac)
+  ///   Cmd+P          -> Rich Prompt (native; Cmd+Alt+P on web Mac)
+  ///   Cmd+Shift+M    -> Graph (native + web)
+  ///   Mod+. t/o/p/v  -> universal aliases via Hybrid NAV
+  ///
+  /// Other app chords:
+  ///
   ///   Cmd/Ctrl+,             -> Settings (open)
-  ///   Cmd/Ctrl+P             -> Files (toggle)            [VS Code Quick Open]
-  ///   Cmd/Ctrl+Shift+F       -> Search across files       [VS Code Find in Files]
-  ///   Cmd/Ctrl+Shift+M       -> Graph (toggle)
-  ///   Cmd+Alt+T              -> Terminal (toggle, web)
+  ///   Alt+Space              -> Rich Prompt (legacy alias)
   ///   Alt+Shift+[ / ]        -> previous / next tab       (web fallback)
   ///   Ctrl+Alt+1..9          -> jump to tab N             (web fallback)
-  ///   Ctrl+Alt+N             -> new file                  (web fallback)
   ///
   /// Native (chan-desktop) layers VS Code's browser-reserved chords
   /// on top via its init script: Cmd+T / Cmd+` (terminal), Cmd+W (close tab), Cmd+N (new),
@@ -423,33 +467,30 @@
       case "0":
         paneModeEqualize();
         return;
-      // `fullstack-a-3`: Hybrid NAV spawn keys commit immediately.
-      // Previously 1/2/3 staged the intent and waited for Enter to
-      // seal it (per `fullstack-72`), but the number rows are the
-      // common-action shortcuts — pressing `1`/`2`/`3` is the user
-      // saying "do this now". We stage the intent and commit in the
-      // same step. `revealAndSelect` still primes the module-level
-      // browser selection for browser spawns so the new tab's tree
-      // lands already expanded. `fullstack-43`: context resolves
-      // from the focused tab at the moment of the keypress.
+      // `fullstack-a-32`: Hybrid NAV spawn keys are mnemonic now —
+      // `t` (terminal), `o` (file browser), `p` (rich prompt), `v`
+      // (graph). The pre-`-a-32` numeric `1/2/3/4` cases drop;
+      // they duplicated the top-level Cmd+T / Cmd+O / Cmd+P /
+      // Cmd+Shift+M chord set and added noise to the chord-table.
+      // `4` (new file) had no top-level chord either — accessible
+      // via the FB context menu / plus button per the task spec.
       //
-      // `fullstack-b-9`: `t` / `T` falls into the same case so the
-      // mnemonic chord (Mod+. t) is reachable on every platform
-      // including Win/Linux web, where `Cmd+Alt+T` isn't a thing
-      // and `Ctrl+Alt+T` is already owned by `app.tab.reopenClosed`.
-      // The chord stack now is: native = Cmd+T (direct, via the
-      // chan-desktop key bridge); web Mac = Cmd+Alt+T (direct);
-      // every platform = Mod+. t through Hybrid NAV.
+      // `fullstack-b-9` introduced `t`/`T` as the terminal alias;
+      // -a-32 extends the pattern with `o/O`, `v/V`. `p/P` was
+      // added by `fullstack-50` and stays. All four commit
+      // immediately (matching `fullstack-a-3`'s "press a digit /
+      // letter = do it now" intent) and route through the same
+      // context-aware spawn helpers the top-level chords use.
       case "t":
-      case "T":
-      case "1": {
+      case "T": {
         paneModeStageSpawn("terminal", resolveSpawnContext());
         commitPaneMode();
         scheduleSessionSave();
         paneModeHelpVisible = false;
         return;
       }
-      case "2": {
+      case "o":
+      case "O": {
         const ctx = resolveSpawnContext();
         paneModeStageSpawn("browser", ctx);
         if (ctx.file) revealAndSelect(ctx.file);
@@ -459,27 +500,12 @@
         paneModeHelpVisible = false;
         return;
       }
-      // `3` opened the Search overlay in `fullstack-39`; `fullstack-42`
-      // reassigns it to Graph since Graph is a real tab type, while
-      // Search remains an OverlayShell. Search now lives on `s`.
-      case "3": {
+      case "v":
+      case "V": {
         paneModeStageSpawn("graph", resolveSpawnContext());
         commitPaneMode();
         scheduleSessionSave();
         paneModeHelpVisible = false;
-        return;
-      }
-      // `4` was vacated in -39 + -40; -42 wires it to the existing
-      // new-file flow. Modal owns the keyboard, so commit the draft
-      // first; any pending layout edits are sealed before the dialog
-      // pops. `fullstack-43`: resolve the context (parent dir of the
-      // source tab) BEFORE the commit so we capture what was focused
-      // at the moment of the keypress.
-      case "4": {
-        const ctx = resolveSpawnContext();
-        commitPaneMode();
-        scheduleSessionSave();
-        void fileOps.createFile(ctx.dir);
         return;
       }
       // Search lives in an OverlayShell, not a tab type. Open the
@@ -581,20 +607,51 @@
     }
     if (e.altKey && !meta && !e.shiftKey && e.code === "Space") {
       e.preventDefault();
-      openActiveTerminalRichPrompt();
-      scheduleSessionSave();
+      // Alt+Space is the legacy rich-prompt chord; `fullstack-a-32`
+      // promotes the rich-prompt action to the spawn-chord family
+      // (Cmd+P native / Cmd+Alt+P web Mac) but keeps Alt+Space
+      // bound here for muscle memory. Both routes go through the
+      // same context-aware helper.
+      spawnRichPromptFromContext();
       return;
     }
-    // `fullstack-b-2`: Cmd+Alt+T web → new terminal in active pane.
-    // Mac-only: require metaKey explicitly (not the meta shorthand)
-    // so Ctrl+Alt+T on Win/Linux stays exclusively bound to
-    // `app.tab.reopenClosed` via Pane.svelte. Native chan-desktop
-    // uses `Cmd+T` (Ctrl+T on Win/Linux) through
-    // `KEY_BRIDGE_JS` in `desktop/src-tauri/src/serve.rs`.
+    // `fullstack-a-32`: spawn-chord family. Each Cmd+Alt+<letter>
+    // chord is the macOS web fallback for the matching native
+    // Cmd+<letter> chord that browsers reserve at the OS level
+    // (Cmd+T new tab, Cmd+O open file, Cmd+P print). Chan-desktop's
+    // KEY_BRIDGE_JS intercepts the native chords and replays them
+    // as `chan:command` events, which `runCommand` below routes
+    // through the same context-aware helpers.
+    //
+    // Mac-only: require metaKey explicitly (not the `meta` shorthand
+    // that includes Ctrl) so Ctrl+Alt+<letter> on Win/Linux stays
+    // free for other bindings (`Ctrl+Alt+T` is owned by
+    // `app.tab.reopenClosed`; Ctrl+Alt+O / P aren't used yet but
+    // we don't want to claim them either). Hybrid NAV `o`/`p`/`v`
+    // is the universal fallback on every platform.
     if (e.metaKey && e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyT") {
       e.preventDefault();
-      openTerminalInActivePane();
-      scheduleSessionSave();
+      spawnTerminalFromContext();
+      return;
+    }
+    if (e.metaKey && e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyO") {
+      e.preventDefault();
+      spawnBrowserFromContext();
+      return;
+    }
+    if (e.metaKey && e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyP") {
+      e.preventDefault();
+      spawnRichPromptFromContext();
+      return;
+    }
+    // `fullstack-a-32`: Cmd+Shift+M spawns a context-aware graph on
+    // both web and native. Browsers don't reserve this chord, so
+    // no Cmd+Alt+M fallback is needed. KEY_BRIDGE_JS still fires
+    // `app.graph.toggle` on native Cmd+Shift+M for parity with
+    // the chan-desktop chord catalog.
+    if (e.metaKey && !e.altKey && e.shiftKey && !e.ctrlKey && e.code === "KeyM") {
+      e.preventDefault();
+      spawnGraphFromContext();
       return;
     }
     if (e.altKey && e.shiftKey && !meta) {
@@ -678,21 +735,24 @@
         if (settingsOverlay.open) closeOverlay("settings");
         else openSettings();
         return;
+      // `fullstack-a-32`: chan-desktop's KEY_BRIDGE_JS fires these
+      // ids on native Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M. Route
+      // them through the same context-aware helpers the web
+      // chords use so native + web behave identically.
       case "app.files.toggle":
-        openBrowser();
+        spawnBrowserFromContext();
         return;
       case "app.search.toggle":
         searchPanel.open = !searchPanel.open;
         return;
       case "app.graph.toggle":
-        openGraph();
+        spawnGraphFromContext();
         return;
       case "app.terminal.toggle":
-        openTerminalInActivePane();
+        spawnTerminalFromContext();
         return;
       case "app.terminal.richPrompt":
-        openActiveTerminalRichPrompt();
-        scheduleSessionSave();
+        spawnRichPromptFromContext();
         return;
       case "app.pane.next":
         selectNextPane();

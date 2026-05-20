@@ -89,7 +89,9 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   App
   ---
   Settings                Cmd+,
-  Terminal rich prompt    Alt+Space
+  Terminal rich prompt    Cmd+Alt+P   (macOS web + native everywhere; all platforms via Mod+. p (Hybrid NAV); legacy Alt+Space alias still bound)
+  File browser            Cmd+Alt+O   (macOS web + native everywhere; all platforms via Mod+. o (Hybrid NAV))
+  Graph                   Cmd+Shift+M   (or Mod+. v (Hybrid NAV))
   New terminal            Cmd+Alt+T   (macOS web + native everywhere; all platforms via Mod+. t (Hybrid NAV))
   Dismiss overlay         Esc
 
@@ -110,9 +112,7 @@ Hybrid NAV (Cmd+.), keys are unprefixed:
 
   Arrows                  Move focus
   W A S D                 Swap with neighbour
-  1 / 2 / 3 / 4           Spawn Terminal / Files / Graph / New file
-  t                       Spawn Terminal (mnemonic alias for 1)
-  p                       Rich prompt (focused pane's terminal)
+  t / o / p / v           Spawn Terminal / File Browser / Rich Prompt / Graph
   f                       Search overlay
   h                       Help (this list, in-app overlay)
   /                       Split focused pane right

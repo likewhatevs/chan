@@ -33,7 +33,17 @@
     formatChord,
     renderTable,
   } from "../state/shortcuts";
-  import { ChevronLeft, ChevronRight, Locate, Pause, Play } from "lucide-svelte";
+  import {
+    ChevronLeft,
+    ChevronRight,
+    Folder,
+    Locate,
+    MessageSquare,
+    Network,
+    Pause,
+    Play,
+    Terminal,
+  } from "lucide-svelte";
 
   type Props = {
     /// Right-click forwarder. Same handler the empty pane uses to
@@ -56,6 +66,52 @@
     const chord = s[platform];
     if (!chord) return "";
     return formatChord(chord, os);
+  }
+
+  // `fullstack-a-32`: first-class spawn entries on the welcome
+  // slide. Same four items + ordering as the pane hamburger menu
+  // (Pane.svelte::spawnActions) + the empty-pane right-click
+  // menu, so the user sees a unified affordance surface no matter
+  // where they enter from. Clicks dispatch the `chan:command`
+  // event the chord layer also fires, routing through the
+  // context-aware spawn helpers in App.svelte.
+  type SpawnRow = {
+    label: string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    icon: any;
+    command: string;
+    chordId: string;
+  };
+  const spawnEntries: SpawnRow[] = [
+    {
+      label: "Terminal",
+      icon: Terminal,
+      command: "app.terminal.toggle",
+      chordId: "app.terminal.toggle",
+    },
+    {
+      label: "File Browser",
+      icon: Folder,
+      command: "app.files.toggle",
+      chordId: "app.files.toggle",
+    },
+    {
+      label: "Rich Prompt",
+      icon: MessageSquare,
+      command: "app.terminal.richPrompt",
+      chordId: "app.terminal.richPrompt",
+    },
+    {
+      label: "Graph",
+      icon: Network,
+      command: "app.graph.toggle",
+      chordId: "app.graph.toggle",
+    },
+  ];
+  function dispatchSpawn(command: string): void {
+    window.dispatchEvent(
+      new CustomEvent("chan:command", { detail: { name: command } }),
+    );
   }
 
   // ---- drive summary -----------------------------------------------------
@@ -548,10 +604,12 @@
 >
   <div class="slide-stage">
     {#if slideIndex === 0}
-      <!-- Slide 1 — Welcome. Lifted verbatim from the pre-
-           fullstack-35 placeholder so the dashboard rhythm
-           (logo + drive summary + shortcut table) stays
-           identical to what users already know. -->
+      <!-- Slide 1 — Welcome. Logo + drive summary + first-class
+           spawn buttons (`fullstack-a-32`) + ASCII shortcut
+           table. The spawn buttons mirror the four items in
+           Pane.svelte's `spawnActions` so the user sees the
+           same surface across the carousel + pane hamburger +
+           empty-pane right-click. -->
       <div class="slide slide-welcome" aria-label="Welcome">
         <div class="placeholder-mark"></div>
         {#if drive.info}
@@ -563,6 +621,21 @@
             <div class="dashboard-name">{drive.info.name ?? "(unnamed)"}</div>
           </div>
         {/if}
+        <div class="spawn-row" aria-label="spawn">
+          {#each spawnEntries as row (row.command)}
+            {@const Icon = row.icon}
+            <button
+              type="button"
+              class="spawn-btn"
+              onclick={() => dispatchSpawn(row.command)}
+              title="{row.label} ({chordLabel(row.chordId)})"
+            >
+              <Icon size={18} strokeWidth={1.75} aria-hidden="true" />
+              <span class="spawn-label">{row.label}</span>
+              <span class="spawn-chord">{chordLabel(row.chordId)}</span>
+            </button>
+          {/each}
+        </div>
         <p class="placeholder-hint">
           Each pane's visible tab is part of the scope<br />
           for Graph.
@@ -825,6 +898,53 @@
     opacity: 0.7;
   }
   /* --- Slide 1 (Welcome) bits, ported from Pane.svelte --- */
+  /* `fullstack-a-32`: first-class spawn buttons. Four-up grid
+     sized to comfortable click targets without dominating the
+     slide. Hovers paint with the link accent so the row reads
+     as "click me" against the otherwise-quiet welcome surface. */
+  .spawn-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(110px, 1fr));
+    gap: 8px;
+    width: min(560px, 90%);
+    margin: 0;
+  }
+  .spawn-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 10px 8px;
+    background: var(--bg-card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    font: inherit;
+    transition: background-color 120ms ease, border-color 120ms ease,
+      color 120ms ease;
+  }
+  .spawn-btn:hover {
+    background: var(--hover-bg);
+    border-color: var(--link);
+  }
+  .spawn-btn:focus-visible {
+    outline: 2px solid var(--link);
+    outline-offset: 1px;
+  }
+  .spawn-label {
+    font-size: 13px;
+    color: var(--text);
+  }
+  .spawn-chord {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    color: var(--text-secondary);
+    opacity: 0.85;
+    text-align: center;
+    line-height: 1.2;
+  }
   .placeholder-mark {
     width: 160px;
     height: 160px;

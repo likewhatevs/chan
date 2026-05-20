@@ -36,6 +36,7 @@
     FlipHorizontal2,
     Folder,
     LayoutGrid,
+    MessageSquare,
     Moon,
     Network,
     PanelRight,
@@ -135,18 +136,29 @@
     command: string;
     chordId?: string;
   };
-  const emptyPaneActions: EmptyMenuRow[] = [
+  // `fullstack-a-32`: unified spawn entries. Same four first-class
+  // items + ordering across the empty-pane right-click menu, the
+  // pane hamburger menu, and the empty-pane carousel slide 1.
+  // Anything else (Search etc.) lives below the separator inside
+  // each menu surface — these four are the first-class spawn set.
+  const spawnActions: EmptyMenuRow[] = [
     {
-      label: "Files",
+      label: "Terminal",
+      icon: Terminal,
+      command: "app.terminal.toggle",
+      chordId: "app.terminal.toggle",
+    },
+    {
+      label: "File Browser",
       icon: Folder,
       command: "app.files.toggle",
       chordId: "app.files.toggle",
     },
     {
-      label: "Search",
-      icon: Search,
-      command: "app.search.toggle",
-      chordId: "app.search.toggle",
+      label: "Rich Prompt",
+      icon: MessageSquare,
+      command: "app.terminal.richPrompt",
+      chordId: "app.terminal.richPrompt",
     },
     {
       label: "Graph",
@@ -154,11 +166,14 @@
       command: "app.graph.toggle",
       chordId: "app.graph.toggle",
     },
+  ];
+  const emptyPaneActions: EmptyMenuRow[] = spawnActions;
+  const emptyPaneExtraActions: EmptyMenuRow[] = [
     {
-      label: "Terminal",
-      icon: Terminal,
-      command: "app.terminal.toggle",
-      chordId: "app.terminal.toggle",
+      label: "Search",
+      icon: Search,
+      command: "app.search.toggle",
+      chordId: "app.search.toggle",
     },
   ];
   function chordLabel(id: string | undefined): string {
@@ -953,9 +968,31 @@
         bind:this={paneMenu}
         bind:open={paneMenuOpen}
         width={250}
-        height={360}
+        height={420}
         onBeforeOpen={closePaneContextMenus}
       >
+        <!-- `fullstack-a-32`: first-class spawn entries unified
+             across the pane hamburger, empty-pane right-click,
+             and the empty-pane carousel slide 1. Click any row
+             to spawn the matching surface in the active pane;
+             chord hints reflect the canonical chord for each
+             action (Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M). The
+             dispatchCommand call routes through the same
+             context-aware helper the chord layer uses, so the
+             new surface lands on the focused tab's context
+             (parent dir of a focused doc, cwd of a focused
+             terminal, etc.). -->
+        {#each spawnActions as row (row.command)}
+          {@const Icon = row.icon}
+          <li>
+            <button role="menuitem" onclick={() => { dispatchCommand(row.command); closePaneHamburgerMenu(); }}>
+              <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
+              <span class="menu-row-label">{row.label}</span>
+              <span class="menu-row-chord">{chordLabel(row.chordId)}</span>
+            </button>
+          </li>
+        {/each}
+        <li class="sep" role="separator"></li>
         <li>
           <button role="menuitem" onclick={onEnterPaneMode}>
             <LayoutGrid size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -1128,6 +1165,16 @@
             </li>
           {/each}
           <li class="sep" role="separator"></li>
+          {#each emptyPaneExtraActions as row (row.command)}
+            {@const Icon = row.icon}
+            <li>
+              <button role="menuitem" onclick={() => dispatchCommand(row.command)}>
+                <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
+                <span class="menu-row-label">{row.label}</span>
+                <span class="menu-row-chord">{chordLabel(row.chordId)}</span>
+              </button>
+            </li>
+          {/each}
           <li>
             <button
               role="menuitem"

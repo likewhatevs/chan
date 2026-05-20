@@ -26,25 +26,21 @@ describe("Cmd+K pane mode keymap (fullstack-40 inversion)", () => {
   });
 });
 
-describe("Cmd+K pane mode keymap (fullstack-42 — search / graph / new file / help)", () => {
-  test("3 commits a Graph spawn immediately; lowercase f opens the Search overlay", () => {
-    // `fullstack-a-3`: 1/2/3 commit on keypress rather than wait
-    // for Enter. The stage call is followed by commitPaneMode()
-    // in the same case so the spawn lands on the same press.
-    // `fullstack-74` moved Search from `s` (which now rejoins
-    // WASD swap-down) to `f` / `F` so WASD can fully own
-    // swap-tile.
+// `fullstack-a-32` reshaped the Hybrid NAV spawn cases. The numeric
+// 1/2/3/4 cases are gone (they duplicated the new top-level chord
+// set Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M). The letter mnemonics
+// `t/T` (terminal), `o/O` (browser), `p/P` (rich prompt — kept
+// from -50), `v/V` (graph) are the in-Hybrid-NAV path; each
+// commits immediately and routes through the same context-aware
+// helper as the matching top-level chord. `f/F` (Search) and
+// `h/H` (Help) are unchanged.
+describe("Cmd+K pane mode keymap (fullstack-a-32 — mnemonic spawn)", () => {
+  test("v commits a Graph spawn immediately; lowercase f opens the Search overlay", () => {
     expect(app).toMatch(
-      /case "3": \{[\s\S]*?paneModeStageSpawn\("graph", resolveSpawnContext\(\)\);[\s\S]*?commitPaneMode\(\);/,
+      /case "v":\s*\n\s*case "V": \{[\s\S]*?paneModeStageSpawn\("graph", resolveSpawnContext\(\)\);[\s\S]*?commitPaneMode\(\);/,
     );
     expect(app).toMatch(
       /case "f":[\s\S]*?case "F":[\s\S]*?commitPaneMode\(\);[\s\S]*?searchPanel\.open = true;/,
-    );
-  });
-
-  test("4 commits the draft and opens the new-file dialog at the contextual dir", () => {
-    expect(app).toMatch(
-      /case "4": \{[\s\S]*?const ctx = resolveSpawnContext\(\);[\s\S]*?commitPaneMode\(\);[\s\S]*?fileOps\.createFile\(ctx\.dir\);/,
     );
   });
 
@@ -52,51 +48,103 @@ describe("Cmd+K pane mode keymap (fullstack-42 — search / graph / new file / h
     expect(app).toContain(
       'case "h":\n      case "H":\n        paneModeHelpVisible = !paneModeHelpVisible;',
     );
-    // The help block must not call commitPaneMode or
-    // scheduleSessionSave near its own case — it's a read-only
-    // affordance on top of the live draft.
     expect(app).toMatch(
       /case "h":[\s\S]*?case "H":[\s\S]*?paneModeHelpVisible = !paneModeHelpVisible;\s*\n\s*return;/,
     );
   });
+
+  test("numeric 1 / 2 / 3 / 4 cases are gone", () => {
+    // `fullstack-a-32`: the four numeric shortcuts dropped in
+    // favour of t/o/p/v + the matching top-level Cmd+T/O/P/
+    // Cmd+Shift+M chords. The dispatcher must not declare them
+    // any more.
+    expect(app).not.toMatch(/case "1": \{[\s\S]{0,60}paneModeStageSpawn/);
+    expect(app).not.toMatch(/case "2": \{[\s\S]{0,60}paneModeStageSpawn/);
+    expect(app).not.toMatch(/case "3": \{[\s\S]{0,60}paneModeStageSpawn/);
+    expect(app).not.toMatch(/case "4": \{[\s\S]{0,60}fileOps\.createFile/);
+  });
 });
 
-describe("Cmd+K pane mode spawn commit (fullstack-a-3)", () => {
-  test("1 commits a terminal spawn immediately", () => {
-    // `fullstack-a-3`: pressing `1` stages + commits the terminal
-    // spawn in the same case so the new tab lands without the user
-    // having to press Enter afterwards.
+describe("Cmd+K pane mode spawn commit (fullstack-a-32)", () => {
+  test("t / T commits a terminal spawn immediately", () => {
+    // `fullstack-a-32`: terminal mnemonic stands alone — the
+    // pre-`-a-32` `case "1"` fall-through is gone.
     expect(app).toMatch(
-      /case "1": \{[\s\S]*?paneModeStageSpawn\("terminal", resolveSpawnContext\(\)\);[\s\S]*?commitPaneMode\(\);/,
+      /case "t":\s*\n\s*case "T": \{[\s\S]*?paneModeStageSpawn\("terminal", resolveSpawnContext\(\)\);[\s\S]*?commitPaneMode\(\);/,
     );
   });
 
-  test("fullstack-b-9: `t` / `T` falls through to the same terminal spawn case", () => {
-    // The universal web chord is Mod+. t (Hybrid NAV + `t`
-    // mnemonic). `t` and `T` must share the `1` case body so a
-    // Win/Linux web user — who has no direct `Cmd+T` / `Cmd+Alt+T`
-    // path — can still spawn a terminal from within Hybrid NAV.
-    expect(app).toMatch(
-      /case "t":\s*\n\s*case "T":\s*\n\s*case "1": \{[\s\S]*?paneModeStageSpawn\("terminal", resolveSpawnContext\(\)\);[\s\S]*?commitPaneMode\(\);/,
-    );
-  });
-
-  test("2 commits a browser spawn immediately + primes browserSelection", () => {
+  test("o / O commits a browser spawn immediately + primes browserSelection", () => {
     // Browser case must call `revealAndSelect` BEFORE
     // `commitPaneMode()` so the new tab's tree lands already
     // expanded to + selecting the contextual node.
     expect(app).toMatch(
-      /case "2": \{[\s\S]*?const ctx = resolveSpawnContext\(\);[\s\S]*?paneModeStageSpawn\("browser", ctx\);[\s\S]*?revealAndSelect\(ctx\.file\);[\s\S]*?revealAndSelect\(ctx\.dir\);[\s\S]*?commitPaneMode\(\);/,
+      /case "o":\s*\n\s*case "O": \{[\s\S]*?const ctx = resolveSpawnContext\(\);[\s\S]*?paneModeStageSpawn\("browser", ctx\);[\s\S]*?revealAndSelect\(ctx\.file\);[\s\S]*?revealAndSelect\(ctx\.dir\);[\s\S]*?commitPaneMode\(\);/,
+    );
+  });
+
+  test("v / V commits a graph spawn immediately + context-aware", () => {
+    expect(app).toMatch(
+      /case "v":\s*\n\s*case "V": \{[\s\S]*?paneModeStageSpawn\("graph", resolveSpawnContext\(\)\);[\s\S]*?commitPaneMode\(\);/,
     );
   });
 
   test("Enter still peeks a staged intent before commit (defensive)", () => {
-    // 1/2/3 commit on the keypress now, so the Enter path rarely
-    // sees a staged intent in practice. The peek stays as
-    // defensive code: if a future affordance stages without
+    // The mnemonic cases commit on keypress, so the Enter path
+    // rarely sees a staged intent in practice. The peek stays
+    // as defensive code: if a future affordance stages without
     // committing, Enter still primes `browserSelection`.
     expect(app).toMatch(
       /case "Enter": \{[\s\S]*?const intent = paneMode\.spawnIntent;[\s\S]*?if \(intent && intent\.kind === "browser"\)[\s\S]*?revealAndSelect\(intent\.ctx\.file\);[\s\S]*?revealAndSelect\(intent\.ctx\.dir\);[\s\S]*?commitPaneMode\(\);/,
+    );
+  });
+});
+
+describe("Cmd+T / O / P / Cmd+Shift+M top-level chords (fullstack-a-32)", () => {
+  test("Cmd+Alt+T (web Mac) routes through context-aware spawn helper", () => {
+    // pre-`-a-32` handler called `openTerminalInActivePane()` with
+    // no args. -a-32 routes through `spawnTerminalFromContext`
+    // which threads `resolveSpawnContext().dir` as `cwd`.
+    expect(app).toMatch(
+      /e\.metaKey && e\.altKey && !e\.shiftKey && !e\.ctrlKey && e\.code === "KeyT"[\s\S]*?spawnTerminalFromContext\(\)/,
+    );
+  });
+
+  test("Cmd+Alt+O (web Mac) spawns file browser with context", () => {
+    expect(app).toMatch(
+      /e\.metaKey && e\.altKey && !e\.shiftKey && !e\.ctrlKey && e\.code === "KeyO"[\s\S]*?spawnBrowserFromContext\(\)/,
+    );
+  });
+
+  test("Cmd+Alt+P (web Mac) spawns rich prompt with context", () => {
+    expect(app).toMatch(
+      /e\.metaKey && e\.altKey && !e\.shiftKey && !e\.ctrlKey && e\.code === "KeyP"[\s\S]*?spawnRichPromptFromContext\(\)/,
+    );
+  });
+
+  test("Cmd+Shift+M (web + native) spawns graph with context", () => {
+    expect(app).toMatch(
+      /e\.metaKey && !e\.altKey && e\.shiftKey && !e\.ctrlKey && e\.code === "KeyM"[\s\S]*?spawnGraphFromContext\(\)/,
+    );
+  });
+
+  test("chan:command bridge routes through context-aware helpers", () => {
+    // chan-desktop's KEY_BRIDGE_JS fires `app.terminal.toggle` /
+    // `app.files.toggle` / `app.terminal.richPrompt` /
+    // `app.graph.toggle` on native Cmd+T / Cmd+O / Cmd+P /
+    // Cmd+Shift+M. -a-32 routes them through the same helpers
+    // the web chords use so native + web behave identically.
+    expect(app).toMatch(
+      /case "app\.terminal\.toggle":\s*\n\s*spawnTerminalFromContext\(\);/,
+    );
+    expect(app).toMatch(
+      /case "app\.files\.toggle":\s*\n\s*spawnBrowserFromContext\(\);/,
+    );
+    expect(app).toMatch(
+      /case "app\.terminal\.richPrompt":\s*\n\s*spawnRichPromptFromContext\(\);/,
+    );
+    expect(app).toMatch(
+      /case "app\.graph\.toggle":\s*\n\s*spawnGraphFromContext\(\);/,
     );
   });
 });

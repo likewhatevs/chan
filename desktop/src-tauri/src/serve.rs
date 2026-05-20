@@ -667,8 +667,13 @@ const KEY_BRIDGE_JS: &str = r#"
   // Cmd+1..9 (jump to tab), Cmd+Shift+T (reopen closed),
   // Cmd+Shift+[/] (tab nav), Cmd+Shift+G (find prev).
   // `fullstack-b-2`: Cmd+T comes back as a direct chord for
-  // "new terminal in active pane"; Pane Mode (Cmd+K 1) still works
-  // unchanged as the menu-driven equivalent.
+  // "new terminal in active pane".
+  // `fullstack-a-32`: Cmd+O / Cmd+P / Cmd+Shift+M added as direct
+  // chords for File Browser / Rich Prompt / Graph (with the
+  // matching `app.files.toggle` / `app.terminal.richPrompt` /
+  // `app.graph.toggle` commands routed through the context-aware
+  // helpers in App.svelte). Universal Hybrid NAV `t/o/p/v` covers
+  // the web/Win/Linux fallback path.
   function onKey(e) {
     const meta = e.metaKey || e.ctrlKey;
     if (!meta || e.altKey) return;
@@ -677,6 +682,8 @@ const KEY_BRIDGE_JS: &str = r#"
     if (!shift) {
       switch (code) {
         case 'KeyT': fire(e, 'app.terminal.toggle'); return;
+        case 'KeyO': fire(e, 'app.files.toggle');    return;
+        case 'KeyP': fire(e, 'app.terminal.richPrompt'); return;
         case 'KeyW': fire(e, 'app.tab.close');        return;
         case 'KeyF': fire(e, 'app.find.open');        return;
         case 'KeyG': fire(e, 'app.find.next');        return;
@@ -690,6 +697,7 @@ const KEY_BRIDGE_JS: &str = r#"
       switch (code) {
         case 'KeyG':         fire(e, 'app.find.prev');     return;
         case 'KeyT':         fire(e, 'app.tab.reopenClosed'); return;
+        case 'KeyM':         fire(e, 'app.graph.toggle');  return;
         case 'BracketLeft':  fire(e, 'app.tab.prev');      return;
         case 'BracketRight': fire(e, 'app.tab.next');      return;
       }
@@ -742,15 +750,13 @@ mod tests {
     #[test]
     fn key_bridge_drops_chords_covered_by_pane_mode() {
         // `fullstack-42` pruned every native chord that now has a
-        // Pane Mode (Cmd+K …) equivalent. Asserting the absence of
-        // each one catches an accidental revert.
-        // `fullstack-b-2` re-introduced `app.terminal.toggle` as a
-        // direct Cmd+T chord on top of the Pane Mode equivalent; the
-        // assertion on it is therefore intentionally removed here
-        // and the positive case is covered by
-        // `key_bridge_keeps_independent_chords`.
-        assert!(!KEY_BRIDGE_JS.contains("app.files.toggle"));
-        assert!(!KEY_BRIDGE_JS.contains("app.graph.toggle"));
+        // Pane Mode equivalent. `fullstack-b-2` brought
+        // `app.terminal.toggle` back (Cmd+T). `fullstack-a-32`
+        // brings back `app.files.toggle` (Cmd+O), `app.graph.toggle`
+        // (Cmd+Shift+M), and `app.terminal.richPrompt` (Cmd+P) as
+        // direct chords with context-aware semantics. The
+        // remaining absences below catch accidental reverts of
+        // chords that should still go through Pane Mode only.
         assert!(!KEY_BRIDGE_JS.contains("app.search.toggle"));
         assert!(!KEY_BRIDGE_JS.contains("app.file.new"));
         assert!(!KEY_BRIDGE_JS.contains("app.pane.prev"));
@@ -762,9 +768,13 @@ mod tests {
     fn key_bridge_keeps_independent_chords() {
         // Tab close + reopen + Find on page + tab nav + tab jump
         // are NOT duplicated by Pane Mode and must stay reachable
-        // through the native bridge. Cmd+T (new terminal) is
-        // re-bound per `fullstack-b-2`.
+        // through the native bridge. Cmd+T / Cmd+O / Cmd+P /
+        // Cmd+Shift+M are the `fullstack-a-32` context-aware
+        // spawn chord family.
         assert!(KEY_BRIDGE_JS.contains("app.terminal.toggle"));
+        assert!(KEY_BRIDGE_JS.contains("app.files.toggle"));
+        assert!(KEY_BRIDGE_JS.contains("app.terminal.richPrompt"));
+        assert!(KEY_BRIDGE_JS.contains("app.graph.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.close"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.reopenClosed"));
         assert!(KEY_BRIDGE_JS.contains("app.find.open"));

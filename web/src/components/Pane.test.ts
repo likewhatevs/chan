@@ -117,11 +117,19 @@ describe("Pane right-click menus", () => {
       "Focus border colour",
     );
     // fullstack-60: pane hamburger trimmed to just Enter Pane Mode +
-    // the colour swatches. Pane Mode keystrokes carry every other
-    // action (next/prev pane, split, flip, close, close all).
+    // the colour swatches.
     // fullstack-62: user-facing label flipped from "Pane Mode" to
     // "Hybrid NAV"; the internal `paneMode*` symbols stay.
+    // `fullstack-a-32`: four first-class spawn entries land at the
+    // top of the hamburger menu (Terminal / File Browser / Rich
+    // Prompt / Graph), separator, then Enter Hybrid NAV + focus-
+    // border palette. Same set + ordering as the empty-pane right-
+    // click menu and the carousel slide 1.
     expect(menuLabels()).toEqual([
+      "Terminal",
+      "File Browser",
+      "Rich Prompt",
+      "Graph",
       "Enter Hybrid NAV",
       "blue",
       "green",
@@ -177,11 +185,16 @@ describe("Pane right-click menus", () => {
     );
     await tick();
 
+    // `fullstack-a-32`: spawn set unified. Four first-class entries
+    // (Terminal / File Browser / Rich Prompt / Graph), separator,
+    // then extras (Search), then Settings. Same set + ordering as
+    // the pane hamburger and the carousel slide 1.
     expect(menuLabels()).toEqual([
-      "Files",
-      "Search",
-      "Graph",
       "Terminal",
+      "File Browser",
+      "Rich Prompt",
+      "Graph",
+      "Search",
       "Settings",
     ]);
   }, 15000);

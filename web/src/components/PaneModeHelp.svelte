@@ -66,29 +66,21 @@
       ],
     },
     {
-      // `fullstack-a-3` collapsed the stage-then-commit two-step on
-      // 1/2/3 to a single immediate-commit keystroke: pressing the
-      // number spawns the target right then, no Enter needed (Esc
-      // still aborts the surrounding Pane Mode session). Help copy
-      // mirrors that — "Spawn …" is the immediate-effect verb,
-      // matching the section title.
+      // `fullstack-a-32`: numeric 1/2/3/4 caps dropped — they
+      // duplicated the new top-level chord set
+      // (Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M, with
+      // Cmd+Alt+<letter> as the web-Mac fallback). The letter
+      // mnemonics t / o / p / v are the universal in-Hybrid-NAV
+      // path and the only spawn affordance the cheatsheet
+      // surfaces now; each commits immediately ("Spawn …" is
+      // the verb on the keypress). `f` keeps Search; new-file
+      // is reachable via the FB context menu / plus button.
       title: "Spawn",
       rows: [
-        // `fullstack-b-9`: `t` is an alphabetic alias for `1` so
-        // there's a single chord for "new terminal" on Win/Linux
-        // web (where Cmd+Alt+T isn't reachable). Both caps fire
-        // the same Hybrid NAV spawn path.
-        {
-          caps: [
-            { label: "1", key: "1" },
-            { label: "t", key: "t" },
-          ],
-          action: "Spawn Terminal",
-        },
-        { caps: [{ label: "2", key: "2" }], action: "Spawn File Browser" },
-        { caps: [{ label: "3", key: "3" }], action: "Spawn Graph" },
-        { caps: [{ label: "4", key: "4" }], action: "New file" },
-        { caps: [{ label: "p", key: "p" }], action: "Rich prompt (terminal)" },
+        { caps: [{ label: "t", key: "t" }], action: "Spawn Terminal" },
+        { caps: [{ label: "o", key: "o" }], action: "Spawn File Browser" },
+        { caps: [{ label: "p", key: "p" }], action: "Spawn Rich Prompt" },
+        { caps: [{ label: "v", key: "v" }], action: "Spawn Graph" },
         { caps: [{ label: "f", key: "f" }], action: "Search overlay" },
       ],
     },

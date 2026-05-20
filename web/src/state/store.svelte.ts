@@ -1367,6 +1367,33 @@ export function openGraph(): void {
   scheduleSessionSave();
 }
 
+/** `fullstack-a-32`: spawn a graph tab rooted at the focused
+ *  surface's context. Mirrors `paneModeOpenGraph` (which targets
+ *  the Hybrid NAV draft); this variant spawns in the live layout
+ *  for top-level chords (`Cmd+Shift+M`, `chan:command
+ *  app.graph.toggle`). `fullstack-a-33` makes "from here" the
+ *  default rendering mode, so passing `file:` / `dir:` here lands
+ *  the new graph already scoped + the breadcrumb above the
+ *  inspector body renders the ancestor chain.
+ *
+ *  Falls back to drive scope when no context is available. */
+export function openGraphWithContext(ctx: SpawnContext): void {
+  const scopeId = ctx.file
+    ? `file:${ctx.file}`
+    : ctx.dir
+      ? `dir:${ctx.dir}`
+      : "drive";
+  const pendingSelectId = ctx.file ?? (ctx.dir || null);
+  const tab = openGraphInActivePane({
+    mode: "semantic",
+    scopeId,
+    depth: 1,
+    pendingSelectId,
+  });
+  mirrorGraphTabToOverlay(tab);
+  scheduleSessionSave();
+}
+
 /** Open the semantic graph for the whole drive. Drive scope renders
  *  the full graph, so the depth knob is reset to its neutral value. */
 export function openGraphForDrive(): void {

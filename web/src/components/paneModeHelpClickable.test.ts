@@ -30,33 +30,45 @@ describe("fullstack-63: PaneModeHelp key-caps are clickable buttons", () => {
   });
 
   test("data carries the dispatch key for every clickable spawn / move / split cap", () => {
-    // Spawn keys (1-4 + p + f) exit Hybrid NAV on commit; focus-move
-    // arrows + split (/, \\) + WASD swap keep Hybrid NAV open. The
-    // mapping lives in PaneModeHelp's `groups` data; spot-check the
-    // key fields the spec calls out.
+    // `fullstack-a-32` reshaped the Spawn group: numeric 1/2/3/4
+    // caps dropped (duplicated the new Cmd+T/O/P/Shift+M chord
+    // family); letter mnemonics t/o/p/v are the universal in-
+    // Hybrid-NAV path. Other groups (Move, Split, WASD, Commit)
+    // unchanged.
     expect(paneModeHelp).toContain('key: "ArrowUp"');
     expect(paneModeHelp).toContain('key: "ArrowLeft"');
     expect(paneModeHelp).toContain('key: "ArrowDown"');
     expect(paneModeHelp).toContain('key: "ArrowRight"');
-    expect(paneModeHelp).toContain('key: "1"');
-    expect(paneModeHelp).toContain('key: "2"');
-    expect(paneModeHelp).toContain('key: "3"');
-    expect(paneModeHelp).toContain('key: "4"');
+    expect(paneModeHelp).toContain('key: "t"');
+    expect(paneModeHelp).toContain('key: "o"');
+    expect(paneModeHelp).toContain('key: "p"');
+    expect(paneModeHelp).toContain('key: "v"');
     expect(paneModeHelp).toContain('key: "Tab"');
     expect(paneModeHelp).toContain('key: "Escape"');
     expect(paneModeHelp).toContain('key: "Enter"');
     expect(paneModeHelp).toContain('key: "h"');
+    // Numeric caps gone.
+    expect(paneModeHelp).not.toMatch(/key:\s*"1"/);
+    expect(paneModeHelp).not.toMatch(/key:\s*"2"/);
+    expect(paneModeHelp).not.toMatch(/key:\s*"3"/);
+    expect(paneModeHelp).not.toMatch(/key:\s*"4"/);
   });
 
-  test("fullstack-b-9: terminal spawn row also surfaces `t` as a mnemonic cap", () => {
-    // The terminal-spawn row carries two caps (`1` and `t`) so the
-    // cheatsheet teaches the alphabetic alias alongside the numeric
-    // chord. App.svelte's pane-mode dispatcher routes both to the
-    // same case body. The regex tolerates optional trailing commas
-    // and arbitrary whitespace between cap entries to survive
-    // prettier reformats.
+  test("fullstack-a-32: spawn group uses letter mnemonics (t/o/p/v) only", () => {
+    // Single-cap rows per spawn target; chord hint lives on the
+    // top-level chord family (Cmd+T/O/P/Shift+M), not duplicated
+    // in the cheatsheet.
     expect(paneModeHelp).toMatch(
-      /caps:\s*\[\s*\{\s*label:\s*"1",\s*key:\s*"1"\s*\},\s*\{\s*label:\s*"t",\s*key:\s*"t"\s*\},?\s*\][\s\S]*?action:\s*"Spawn Terminal"/,
+      /caps:\s*\[\s*\{\s*label:\s*"t",\s*key:\s*"t"\s*\}\s*\],?\s*action:\s*"Spawn Terminal"/,
+    );
+    expect(paneModeHelp).toMatch(
+      /caps:\s*\[\s*\{\s*label:\s*"o",\s*key:\s*"o"\s*\}\s*\],?\s*action:\s*"Spawn File Browser"/,
+    );
+    expect(paneModeHelp).toMatch(
+      /caps:\s*\[\s*\{\s*label:\s*"p",\s*key:\s*"p"\s*\}\s*\],?\s*action:\s*"Spawn Rich Prompt"/,
+    );
+    expect(paneModeHelp).toMatch(
+      /caps:\s*\[\s*\{\s*label:\s*"v",\s*key:\s*"v"\s*\}\s*\],?\s*action:\s*"Spawn Graph"/,
     );
   });
 });
