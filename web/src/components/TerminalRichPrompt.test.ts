@@ -154,6 +154,36 @@ describe("TerminalRichPrompt", () => {
     expect(prompt.buffer).toBe("one **two**\n![alt](attachments/a.png)");
   });
 
+  test("Cmd+Enter with defaultPrevented does NOT re-submit (fullstack-a-20)", async () => {
+    // `fullstack-a-18` threaded `onSubmit={submit}` to the Wysiwyg
+    // child. Wysiwyg's CM6 keymap has its own Mod-Enter binding that
+    // calls `submit()` and returns true; CM's keymap runner then
+    // calls `preventDefault()` on the DOM event. Pre-`-a-20` the
+    // wrapper's `onKeydown` ignored `defaultPrevented` and called
+    // `submit()` again — `pwd` reached the PTY as `pwdpwd`. The
+    // wrapper now bails on `defaultPrevented`; source mode is
+    // unaffected because Source has no Mod-Enter binding.
+    const prompt: TerminalRichPromptState = {
+      buffer: "pwd",
+      heightPx: 320,
+      open: true,
+      mode: "wysiwyg",
+    };
+    const { root, onSubmit } = await renderPrompt(prompt);
+
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    event.preventDefault();
+    root.dispatchEvent(event);
+    await tick();
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   test("send button submits the same raw source as the keyboard path", async () => {
     const prompt: TerminalRichPromptState = {
       buffer: "# prompt\n\nbody",

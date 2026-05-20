@@ -109,6 +109,16 @@
   }
 
   function onKeydown(e: KeyboardEvent): void {
+    // `fullstack-a-20`: respect children that already handled the
+    // chord. Wysiwyg's CM6 keymap has its own Mod-Enter binding
+    // (`fullstack-a-18` threaded `onSubmit` to it), and CM's keymap
+    // runner calls `preventDefault()` when its handler returns true.
+    // Without this guard the chord triggers submit twice: once from
+    // the CM keymap, once from the wrapper after the event bubbles —
+    // `pwd` arrives in the PTY as `pwdpwd`. Source mode has no
+    // Mod-Enter binding so it still reaches this wrapper unhandled
+    // and dispatches once.
+    if (e.defaultPrevented) return;
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
