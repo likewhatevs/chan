@@ -471,3 +471,47 @@ pre-recycle):
   the webtest lanes own their own throwaways).
 
 Lane footprint clean. Standing by for the recycle event.
+
+## 2026-05-20 — systacean-10 ready (rich-prompt mini-wave patch)
+
+Picked up [`systacean-10`](systacean-10.md) on resume:
+event watcher convention tightening. Mirror the SPA /
+systacean-9 regex `^(event|pre-flight)-.+\.(md|json)$`
+in `event_watcher::ingest_once`, document the
+convention in the module doc + `phase-8/process.md`.
+
+Two-file change in my lane:
+
+* `crates/chan-server/src/event_watcher.rs` (+158 / -5):
+  module doc, `is_watcher_event_filename` helper,
+  filter call in `ingest_once`, three new tests
+  (matching-regex pin, silent-skip non-matching name,
+  warn-on-bad-JSON-with-matching-name).
+* `docs/journals/phase-8/process.md` (+28 / -0): new
+  "Watcher event-file naming convention" section
+  cross-referencing the three filter sites.
+
+Full gate green for my work: fmt, clippy
+`-D warnings`, workspace test (8/8 event_watcher tests
+including the 3 new ones), no-default-features build,
+svelte-check (0e 0w), vitest (506/506), npm build.
+Working tree audit: pre-commit `git diff` will stage
+exactly my two files; three @@FullStackB files showing
+as modified belong to that lane and stay un-staged
+(systacean-4 lesson).
+
+### Pre-existing gate finding (flagged separately)
+
+`RUSTFLAGS=-D warnings cargo build --no-default-features`
+fails on `not_a_chan_drive_hint` in
+`crates/chan/src/main.rs:1540` — pre-existing dead_code
+from systacean-8. Both callers are
+`#[cfg(feature = "embeddings")]`-gated but the function
+definition isn't. Will block the patch-release push.
+Flagging to @@Architect; one-line `#[cfg]` add fixes
+it. Out of systacean-10's scope.
+
+Commit-readiness append at the tail of
+[`systacean-10.md`](systacean-10.md). Awaiting
+@@Architect clearance. Push held per the patch-release
+coordination.

@@ -7,6 +7,29 @@
 //! directory; dispatch is structurally a PTY write. If a future
 //! feature must emit files in the watched tree, route it through
 //! `self_writes.rs`-style suppression instead of adding writes here.
+//!
+//! # Watcher event-file naming convention
+//!
+//! Filenames in a watched directory MUST match the regex
+//! `^(event|pre-flight)-<id>\.(md|json)$`. Recommended extension is
+//! `.md` (existing event files all use `.md` despite the content
+//! being JSON, for `chan view`-friendly readability); `.json` is
+//! accepted for compatibility. Content is JSON conforming to
+//! `AgentEvent`.
+//!
+//! Anything else in the watched directory (non-matching filenames,
+//! hidden files, directories) is silently ignored: no read, no
+//! parse, no `tracing::warn!`, no `dropped_events.fetch_add`. Parse
+//! failures for files whose names DO match the pattern keep their
+//! warn + counter-bump behaviour (a producer wrote bad JSON; that
+//! IS a dropped event).
+//!
+//! The SPA-side filter (`web/src/state/watcherEvents.ts`) and the
+//! server-side read endpoint
+//! (`routes/terminal.rs::is_watcher_event_filename`, from
+//! systacean-9) apply the same regex. The fsnotify ingestion path
+//! here mirrors that filter so the rich-prompt UI doesn't surface
+//! red toasts for non-event files in the watched dir.
 
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -140,11 +163,18 @@ fn ingest_once(
     if std::fs::metadata(&path).is_ok_and(|m| m.is_dir()) {
         return;
     }
-    if path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with('.'))
-    {
+    // systacean-10: the SPA filter + the systacean-9 server read
+    // endpoint both apply the regex `^(event|pre-flight)-.+\.(md|json)$`.
+    // Mirror it here so non-event files (and hidden files, which the
+    // helper rejects via its leading-dot guard) are skipped silently:
+    // no read, no parse, no warn, no `dropped_events` bump. A parse
+    // failure on a matching filename still counts (a producer wrote
+    // bad JSON), so only the filename filter is silenced; bad content
+    // keeps the existing per-error branch below.
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return;
+    };
+    if !is_watcher_event_filename(name) {
         return;
     }
     let text = match std::fs::read_to_string(&path) {
@@ -184,6 +214,32 @@ fn ingest_once(
 
 pub(crate) fn parse_agent_event(text: &str) -> serde_json::Result<AgentEvent> {
     serde_json::from_str(text)
+}
+
+/// systacean-10: mirror the SPA / routes::terminal regex
+/// `^(event|pre-flight)-.+\.(md|json)$` so the fsnotify ingest path
+/// silently skips files that don't match the watcher event-file
+/// naming convention. Hidden files (leading dot) are rejected here
+/// too, so callers don't need a separate hidden-file guard.
+fn is_watcher_event_filename(name: &str) -> bool {
+    if name.starts_with('.') {
+        return false;
+    }
+    let stem = if let Some(rest) = name.strip_prefix("event-") {
+        rest
+    } else if let Some(rest) = name.strip_prefix("pre-flight-") {
+        rest
+    } else {
+        return false;
+    };
+    let Some(dot_idx) = stem.rfind('.') else {
+        return false;
+    };
+    if dot_idx == 0 {
+        return false;
+    }
+    let ext = &stem[dot_idx + 1..];
+    matches!(ext, "md" | "json")
 }
 
 #[derive(Default)]
@@ -315,6 +371,102 @@ mod tests {
         assert!(
             rx.recv_timeout(Duration::from_millis(100)).is_err(),
             "no event should dispatch for a directory path"
+        );
+    }
+
+    #[test]
+    fn is_watcher_event_filename_matches_spa_regex() {
+        // systacean-10: stay in lockstep with the SPA's
+        // `web/src/state/watcherEvents.ts::eventFilename` and the
+        // server-side read endpoint's `is_watcher_event_filename`
+        // (regex `^(event|pre-flight)-.+\.(md|json)$`). Three-site
+        // drift would silently re-introduce the non-event red-toast
+        // bug.
+        assert!(is_watcher_event_filename("event-1.json"));
+        assert!(is_watcher_event_filename("event-survey.md"));
+        assert!(is_watcher_event_filename("pre-flight-abc.md"));
+        assert!(is_watcher_event_filename("pre-flight-x.json"));
+        assert!(is_watcher_event_filename("event-reply-arch-survey-1.md"));
+        // Empty id between the prefix and the extension.
+        assert!(!is_watcher_event_filename("event-.md"));
+        assert!(!is_watcher_event_filename("pre-flight-.json"));
+        // Wrong extension.
+        assert!(!is_watcher_event_filename("event-1.txt"));
+        // Wrong prefix.
+        assert!(!is_watcher_event_filename("notes-x.md"));
+        assert!(!is_watcher_event_filename("survey.json"));
+        // Hidden files (leading dot, includes atomic-rename temps
+        // like `.event-1.tmp`).
+        assert!(!is_watcher_event_filename(".event-1.json"));
+        assert!(!is_watcher_event_filename(".event-1.tmp"));
+        // No extension at all.
+        assert!(!is_watcher_event_filename("event-1"));
+    }
+
+    #[test]
+    fn ingest_once_silently_skips_nonmatching_filename() {
+        // systacean-10: a non-event file dropped into the watched
+        // dir (e.g. a user's `notes.md` or a stray `README.txt`)
+        // must not bump `dropped_events`, not warn, not dispatch.
+        // Producers + the protocol own the (event|pre-flight)-*.{md,json}
+        // namespace; everything else is silently ignored, matching
+        // the SPA-side filter.
+        let dir = tempfile::tempdir().expect("temp event dir");
+        let stray = dir.path().join("notes.md");
+        std::fs::write(
+            &stray,
+            r#"{"id":"x","type":"poke","from":"@@A","to":"@@B"}"#,
+        )
+        .expect("write stray file");
+
+        let dropped = Arc::new(AtomicU64::new(0));
+        let seen = Mutex::new(SeenEventIds::default());
+        let (tx, rx) = mpsc::channel();
+        let dispatch: Arc<EventDispatch> = Arc::new(move |event: AgentEvent| {
+            tx.send(event).expect("send event");
+        });
+
+        ingest_once(dir.path(), stray, &dispatch, &dropped, &seen);
+
+        assert_eq!(
+            dropped.load(Ordering::Relaxed),
+            0,
+            "non-matching filenames must not count as dropped events"
+        );
+        assert!(
+            rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "non-matching filenames must not dispatch"
+        );
+    }
+
+    #[test]
+    fn ingest_once_warns_and_bumps_dropped_for_invalid_json_with_matching_name() {
+        // systacean-10: filename-filter silencing must NOT swallow
+        // legitimate dropped-event signals. A file whose NAME matches
+        // the convention but whose CONTENT is bad JSON IS a dropped
+        // event — the producer wrote a malformed payload. Counter
+        // bumps + tracing::warn! fires per the existing branch.
+        let dir = tempfile::tempdir().expect("temp event dir");
+        let bad = dir.path().join("event-bad.json");
+        std::fs::write(&bad, "this is not json").expect("write bad payload");
+
+        let dropped = Arc::new(AtomicU64::new(0));
+        let seen = Mutex::new(SeenEventIds::default());
+        let (tx, rx) = mpsc::channel();
+        let dispatch: Arc<EventDispatch> = Arc::new(move |event: AgentEvent| {
+            tx.send(event).expect("send event");
+        });
+
+        ingest_once(dir.path(), bad, &dispatch, &dropped, &seen);
+
+        assert_eq!(
+            dropped.load(Ordering::Relaxed),
+            1,
+            "matching filename + bad JSON IS a dropped event"
+        );
+        assert!(
+            rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "bad-JSON files must not dispatch"
         );
     }
 

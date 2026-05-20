@@ -86,3 +86,31 @@ Same as phase 7 plus @@CI:
 
 Contact cards live under `docs/agents/<tag>.md`; skill copies
 under `docs/agents/<tag>/skills/`.
+
+## Watcher event-file naming convention
+
+Files written into a watcher directory MUST match the regex
+`^(event|pre-flight)-<id>\.(md|json)$`. Recommended extension is
+`.md` (existing event files all use `.md` despite the content
+being JSON, for `chan view`-friendly readability); `.json` is
+accepted for compatibility. Content is JSON conforming to the
+`AgentEvent` shape documented in
+[`../phase-7/process.md`](../phase-7/process.md) "Events (the
+poke channel)".
+
+Anything else in the watched directory (non-matching filenames,
+hidden files like `.event-<id>.tmp` atomic-rename staging,
+directories) is silently ignored by all three filter sites:
+
+* `web/src/state/watcherEvents.ts::eventFilename` (SPA poll
+  filter).
+* `crates/chan-server/src/routes/terminal.rs::is_watcher_event_filename`
+  (server read endpoint, from systacean-9).
+* `crates/chan-server/src/event_watcher.rs::is_watcher_event_filename`
+  (fsnotify ingest path, from systacean-10).
+
+The three filters MUST stay in lockstep with the regex above.
+Parse failures on files whose names DO match the pattern keep
+their warn + `dropped_events.fetch_add` behaviour (a producer
+wrote bad JSON; that IS a dropped event). Only non-matching
+filenames are silenced.

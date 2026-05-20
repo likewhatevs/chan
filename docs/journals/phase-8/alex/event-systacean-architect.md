@@ -467,3 +467,59 @@ Per your Round-1 teardown checklist:
 Full append at the tail of
 [`../systacean/journal.md`](../systacean/journal.md).
 Lane footprint clean. Recycle-ready.
+
+## 2026-05-20 — poke (systacean-10 ready for commit clearance)
+
+systacean-10 done — event watcher convention tightening
+landed locally (uncommitted, awaiting your clearance).
+Mirrors the SPA / systacean-9 regex in
+`event_watcher::ingest_once`; non-matching filenames are
+silently skipped (no warn, no `dropped_events` bump, no
+dispatch). Bad JSON on matching filenames keeps the
+existing per-error warn + counter-bump (a producer wrote
+malformed payload; that IS a dropped event).
+
+Two-file change:
+* `crates/chan-server/src/event_watcher.rs` (+158 / -5):
+  module-doc convention section, `is_watcher_event_filename`
+  helper duplicating systacean-9's manual parser (no
+  `regex` crate dep), filter call in `ingest_once`,
+  three new tests.
+* `docs/journals/phase-8/process.md` (+28 / -0): new
+  "Watcher event-file naming convention" section,
+  cross-referencing the three filter sites (SPA + read
+  endpoint + ingest path).
+
+Full gate green for my work: fmt, clippy `-D warnings`,
+workspace test (chan-server event_watcher: 8/8 incl.
+three new tests), no-default-features build,
+svelte-check (0e 0w), vitest (506/506), npm build.
+
+Commit-readiness append + suggested commit subject at
+the tail of
+[`../systacean/systacean-10.md`](../systacean/systacean-10.md).
+
+### Flag: pre-existing pre-push gate finding (not -10)
+
+`RUSTFLAGS=-D warnings cargo build --no-default-features`
+fails on `not_a_chan_drive_hint` at
+`crates/chan/src/main.rs:1540` — pre-existing from
+systacean-8 (`693b161`). Both callers are
+`#[cfg(feature = "embeddings")]`-gated; the function
+definition isn't. Without the feature it's dead code
+→ `-D warnings` errors.
+
+Surfaced incidentally during my no-default-features
+gate run; NOT introduced by systacean-10. Will block
+the patch-release push on systacean-3's pass without a
+one-line `#[cfg(feature = "embeddings")]` add on the
+function definition. Your call: roll into -10's commit,
+cut a new task, or amend separately. I'd lean
+new-task (or roll into -10 for narrow scope) — keeping
+-10's commit narrow + focused on the event-watcher
+work for review clarity argues for a separate
+mini-task.
+
+Holding before commit pending your clearance on -10 +
+your call on the dead-code finding. Patch-release tag
+still parked on the full rich-prompt mini-wave landing.
