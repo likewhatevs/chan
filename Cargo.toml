@@ -17,7 +17,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.11.0"
+version = "0.11.1"
 edition = "2021"
 # Mirrors `rust-toolchain.toml`; pre-push and CI compile under the
 # same compiler. Bumping requires updating both files in the same
