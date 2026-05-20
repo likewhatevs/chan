@@ -1469,3 +1469,906 @@ Lane-A queue:
 Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 14:00 BST
+
+## 2026-05-19 14:30 BST — ack: fullstack-43 landed, continue on -49 + -50
+
+@@Architect recycled mid-floor; picking up your
+stream now. `fullstack-43` (`a603468`) ack'd —
+`SpawnContext` + `resolveSpawnContext()` reads
+cleanly, and the Browser-case `revealAndSelect`
+prime + Graph-case `pendingSelectId` are the
+right hooks (matches the `fullstack-32` "Graph
+from here" rule). Gate green, on `main`. Good ship.
+
+Continue on `fullstack-49` (right-dock chevron)
+and then `fullstack-50` (Cmd+K p — rich prompt).
+Queue unchanged from the 14:00 BST update:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-49` | right-dock chevron direction — in flight (yours)    |
+| 2 | `fullstack-50` | Cmd+K p — rich prompt show/spawn + close button     |
+
+Standing topic-level commit clearance carries over.
+No HOLD pokes queued.
+
+— @@Architect, 2026-05-19 14:30 BST
+
+## 2026-05-19 14:45 BST — ack: fullstack-49 + fullstack-50 landed, Lane A queue clear
+
+Both ships ack'd in one go.
+
+* `6954776` (`-49` chevron direction): clean.
+  `ChevronLeft` import + `rightDock` branch on the
+  collapsed-dir case, left-dock / overlay / tab
+  variants untouched, two regression asserts on
+  `revealBrowserActions.test.ts`. Right shape.
+* `c07be27` (`-50` Cmd+K p rich prompt):
+  `showOrSpawnRichPromptInFocusedPane()` in
+  `tabs.svelte.ts` + `p` / `P` binding in
+  `App.svelte` is the right factoring. Glad the
+  × close button was already there from
+  `fullstack-13` (no diff churn). Hamburger entry
+  dropped per the cleanup direction; Alt+Space
+  global preserved as expected.
+
+Both gate-green. Lane A queue (`-40` → `-50`) is
+now fully on main.
+
+On the systacean handoff appends getting absorbed
+into `c07be27` — that's a normal multi-agent
+workspace artifact and `cb3e42f` is the code
+authority for the watcher fix. No action needed.
+
+You're idle. Stand by; next cut when @@Alex
+surfaces one or when the next walkthrough flushes
+something out.
+
+— @@Architect, 2026-05-19 14:45 BST
+
+## 2026-05-19 14:55 BST — poke: fullstack-53 cut (desktop launcher refresh)
+
+@@Alex flagged four small refinements to the
+chan-desktop Tauri launcher (the drive picker, not
+the embedded editor):
+
+1. Drop the "Name" column from the drives table —
+   path + On + actions are enough.
+2. Italic tagline beside the "Drives" brand title:
+   `what are we going to DRIVE today?` (DRIVE
+   uppercase as written).
+3. Reorder the header action bar to
+   `[Open drive] [Attach] [theme toggle]` — Open
+   drive moves to the leftmost slot, theme toggle
+   moves to the rightmost.
+4. Computer-glyph for outside-home paths in
+   `renderPath()` — symmetric with the existing
+   `$HOME` → house glyph; so `/private/tmp/...`
+   renders `<computer>/private/tmp/...` instead of
+   the verbatim noisy string.
+
+Task: [../fullstack-a/fullstack-53.md](../fullstack-a/fullstack-53.md).
+
+All four land in `desktop/src/` (vanilla HTML + JS
++ CSS, not the embedded Svelte editor). Code anchors:
+
+* `desktop/src/index.html:11-33` (brand title +
+  action buttons).
+* `desktop/src/main.js:228-309` (table render,
+  Name cells at `:269` + `:286`).
+* `desktop/src/main.js:120-134` (renderPath, else-
+  branch is the one to change).
+* `desktop/src/styles.css` for the tagline + a
+  sibling `.ic-computer` (or shared `.ic`) class to
+  match the existing `.ic-home` sizing.
+
+Visual eyeball worth doing here — the tagline + the
+button reorder + the new glyph are all
+presentation. Lane-boundary rule allows
+`cargo tauri dev` for it; teardown after.
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 14:55 BST
+
+## 2026-05-19 15:40 BST — ack: fullstack-53 landed
+
+`639b98a` (`Desktop launcher refresh`) on main. All
+four refinements ack'd:
+
+* Name column dropped (`<th>` + `.name-cell <td>`
+  + `.name-cell` CSS rule), path column absorbs
+  the freed width.
+* `<em class="brand-tagline">` italic tagline
+  beside the Drives title; muted 12px.
+* Header actions reordered to
+  `[Open drive] [Attach] [theme-toggle]` (hidden
+  auth-btn keeps its slot between Attach and
+  theme; user never sees it).
+* `renderPath()` else-branch emits the computer
+  glyph mirroring the home shape; `.ic-computer`
+  shares alignment + margin with `.ic-home`.
+
+Good call deferring the visual eyeball — Chrome MCP
+can't drive WKWebView anyway. @@Alex owns the Tauri
+visual pass; flagging in the architect journal so
+the release-tag decision waits on that.
+
+Idle. Stand by; if anything surfaces from @@Alex's
+Tauri eyeball or from the walkthrough clusters, I'll
+re-poke.
+
+— @@Architect, 2026-05-19 15:40 BST
+
+## 2026-05-19 15:50 BST — poke: fullstack-55 + fullstack-56 cut (carousel stats + Cmd+S drop)
+
+Two small cuts queued in order. You're idle after
+`-53`, so both land on Lane A serially.
+
+### `fullstack-55` — drop carousel dashboard-stats row
+
+Task: [../fullstack-a/fullstack-55.md](../fullstack-a/fullstack-55.md).
+
+Code anchor: `EmptyPaneCarousel.svelte:457-469`,
+the `<div class="dashboard-stats">` block under
+the Chan logo on slide 1 (Welcome). Keeps
+`dashboard-name` (drive label); drops the
+files / directories / contacts / index-label
+inline row. Affects `webtest-b-6` item 1 walk;
+re-walk cost noted in the task file.
+
+### `fullstack-56` — drop Cmd+S + Save action
+
+Task: [../fullstack-a/fullstack-56.md](../fullstack-a/fullstack-56.md).
+
+Code anchors:
+* `shortcuts.ts:120-123` — drop `app.save` entry.
+* `App.svelte:644-649` — drop the case handler.
+* `Pane.svelte:377-400` — drop `onSave()` +
+  direct keystroke interception.
+
+Audit confirmed: there's no actual File→Save menu
+item in the codebase; Cmd+S is keyboard-only.
+Autosave (already wired) is canonical. Cmd+Shift+S
+strikethrough still owned by the editor, survives
+the drop.
+
+Judgement call called out in the task: keep a
+preventDefault for the browser-SPA case, or just
+remove everything. Recommended (1) — simpler,
+matches "drop the surface" framing. Pick whichever
+lands cleaner.
+
+### Order
+
+`-55` first (carousel slide 1 visible surface),
+then `-56` (keyboard binding). Standing topic-level
+commit clearance for both.
+
+— @@Architect, 2026-05-19 15:50 BST
+
+## 2026-05-19 16:25 BST — poke: fullstack-57 added to queue (Graph scope reset bug)
+
+`webtest-a-8` caught a real defect on item 6 that
+slots onto your queue behind `-55` + `-56`.
+
+`paneModeOpenGraph` correctly sets
+`scopeId = "file:<doc-path>"` + `pendingSelectId`,
+but `GraphPanel.svelte` resets `scopeId` to drive
+root on mount when the `scopeOptions` lookup
+misses. Contextual scope lost before the user
+sees it.
+
+Two fix shapes in the task file — defer the reset
+until options populate, OR accept `file:` /
+`dir:` prefixes as valid even when not in
+options. Pick whichever lands cleaner.
+
+Task: [../fullstack-a/fullstack-57.md](../fullstack-a/fullstack-57.md).
+
+Updated queue:
+
+| # | Task           | Status                                                   |
+|---|----------------|----------------------------------------------------------|
+| 1 | `fullstack-55` | drop carousel dashboard-stats row                        |
+| 2 | `fullstack-56` | drop Cmd+S + app.save action                             |
+| 3 | `fullstack-57` | defer GraphPanel scope reset until scopeOptions populate |
+
+This is v0.11.0 blocking — Pane Mode context-aware
+spawn is marquee surface. Standing topic-level
+commit clearance.
+
+— @@Architect, 2026-05-19 16:25 BST
+
+## 2026-05-19 17:30 BST — poke: fullstack-61 cut (flash "H for help" centre on Pane Mode entry)
+
+@@Alex flagged Pane Mode discoverability needs
+a beat: most users press Cmd+K and see the
+pill but don't realise `H` opens the help
+cheatsheet. Add a 0.7s centre-screen flash
+saying `H for help` on every Pane Mode entry.
+
+Task: [../fullstack-a/fullstack-61.md](../fullstack-a/fullstack-61.md).
+
+Spec details:
+* Trigger: every `paneMode.draft` `null` → set
+  transition.
+* Location: centre of chan window (not pane).
+* Duration: 0.7s total (~100ms in / 400ms hold
+  / 200ms out — your shaping call).
+* Non-blocking — the flash never intercepts
+  keystrokes; pressing `H` during the flash
+  still opens help.
+
+Coordinate with `-62` (Pane Mode → Hybrid NAV
+rename): use post-rename wording if `-62`
+ships first; original wording if not — `-62`
+sweeps this surface too.
+
+Updated Lane A queue:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-55` | drop carousel dashboard-stats row                   |
+| 2 | `fullstack-56` | drop Cmd+S + app.save                               |
+| 3 | `fullstack-57` | defer GraphPanel scope reset                        |
+| 4 | `fullstack-61` | flash H-for-help centre on Pane Mode entry          |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 17:30 BST
+
+## 2026-05-19 17:40 BST — poke: fullstack-64 cut (Graph tab chrome trim + smart title), supersedes -57
+
+@@Alex flagged Graph tab needs three changes:
+
+1. Drop the maximize button (overlay-era
+   leftover; meaningless in tab variant).
+2. Drop the scope selector dropdown (no one
+   uses it; canonical scope-setting is
+   "Graph from here" + context-aware spawn).
+3. Tab title becomes the basename of the
+   selected element (file basename, dir name,
+   contact, `#tag`, etc.) instead of the raw
+   `Graph: <scopeId>`.
+
+Task: [../fullstack-a/fullstack-64.md](../fullstack-a/fullstack-64.md).
+
+**Supersedes `-57`** — the GraphPanel scope-
+reset bug only exists because the validator
+checks `scopeOptions` membership. With the
+selector gone, the validator loses its
+purpose; drop it as part of this cut. Skip
+`-57` from your queue.
+
+Title resolution map in the task file covers
+drive / file: / dir: / contact: / tag: /
+unknown prefixes.
+
+Updated Lane A queue:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-55` | drop carousel dashboard-stats row                   |
+| 2 | `fullstack-56` | drop Cmd+S + app.save                               |
+| 3 | `fullstack-64` | Graph chrome trim + smart title (was -57's slot)    |
+| 4 | `fullstack-61` | flash H-for-help centre on Pane Mode entry          |
+
+`-57` task file stays as audit trail. Mark
+"superseded by -64" in your commit / impl note.
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 17:40 BST
+
+## 2026-05-19 17:50 BST — poke: fullstack-65 cut (Files tab title from selection)
+
+Same principle as `-64` but for the Files tab:
+title becomes the basename of the selected
+element (file basename or dir name) instead of
+the literal `Files` string.
+
+**Dependency**: this task is gated on
+`fullstack-58` shipping from Lane B (per-tab
+`selected` field on `BrowserTab`). Until `-58`
+lands, Files tabs share `selected` across the
+pane so a per-tab title from selection can't
+render correctly.
+
+Task: [../fullstack-a/fullstack-65.md](../fullstack-a/fullstack-65.md).
+
+By the time your queue (`-55` → `-56` → `-64`
+→ `-61` → `-65`) reaches `-65`, Lane B should
+have shipped `-58`. If not, idle / pick
+another / come back.
+
+Updated Lane A queue:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-55` | drop carousel dashboard-stats row                   |
+| 2 | `fullstack-56` | drop Cmd+S + app.save                               |
+| 3 | `fullstack-64` | Graph chrome trim + smart title (supersedes -57)    |
+| 4 | `fullstack-61` | flash H-for-help centre on Pane Mode entry          |
+| 5 | `fullstack-65` | Files tab title from selection (gated on -58)        |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 17:50 BST
+
+## 2026-05-19 18:35 BST — ack: -55 + -56 landed
+
+Two ships in quick succession:
+
+* `beb3479` (`-55` carousel dashboard-stats
+  drop) — `driveSummary` derived dropped along
+  with the rendered block; `indexLabel` kept
+  for slide 3. CSS rules swept. Regression
+  assertion in `EmptyPaneCarousel.test.ts`.
+  Gate green.
+* `dbbba84` (`-56` Cmd+S drop) — `app.save`
+  entry + handler + `Pane.svelte` interception
+  all dropped. Went with the option (1)
+  recommendation (no `preventDefault`
+  swallower; SPA-in-browser users get the
+  browser's Save Page As gesture, matches every
+  other web app). Tauri shell suppresses it
+  itself. Audit clean.
+
+`webtest-a-10` cut to verify both on Lane A's
+8801 (alongside `-54` from Lane B). Next on
+your queue: `-66` (tab-title truncation
+utility) → `-64` (Graph chrome trim) → `-61`
+(Pane Mode entry flash) → `-65` (Files title
+from selection, gated on `-58`).
+
+— @@Architect, 2026-05-19 18:35 BST
+
+## 2026-05-19 18:50 BST — poke: fullstack-68 cut (kill Graph bar, items to right-click)
+
+@@Alex flagged the Graph chrome cleanup needs
+to go further than `-64`: after `-64` drops
+the maximize + scope selector + smart title,
+the bar still carries filter chips and the
+hamburger. `-68` kills the bar entirely:
+
+* Filter chips → right-click context menu on
+  the Graph tab (pattern: terminal tab's
+  broadcast items at bottom).
+* Hamburger items → tab right-click (matches
+  file-browser / editor / terminal tab
+  convention).
+
+Task: [../fullstack-a/fullstack-68.md](../fullstack-a/fullstack-68.md).
+
+End state: Graph tab body has no chrome bar
+at all. Only the canvas. Discoverability via
+right-click.
+
+Order matters: `-64` ships first (still
+removes its targeted items + reworks title),
+then `-68` finishes the chrome rearchitecture
+on top.
+
+Updated Lane A queue:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-66` | tab-title truncation utility (in flight / done)     |
+| 2 | `fullstack-64` | Graph chrome trim + smart title                     |
+| 3 | `fullstack-68` | kill Graph bar; chips / hamburger → tab right-click |
+| 4 | `fullstack-61` | flash H-for-help on Pane Mode entry                 |
+| 5 | `fullstack-65` | Files title from selection (gated on -58)           |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 18:50 BST
+
+## 2026-05-19 19:25 BST — ack: -66 + -64 landed; queue locked
+
+* `44ecd9c` (`-66` truncation utility):
+  `truncateTabTitle()` + `TAB_TITLE_MAX_LENGTH`
+  constant on `tabs.svelte.ts`, code-point
+  counting via `Array.from`, surrogate-pair
+  safe. Both `Pane.svelte` display call sites
+  wrapped; `tabLabel` / dedup logic kept
+  untruncated. 6 new vitest cases including
+  the multi-codepoint case. Clean.
+* `d8ee2e8` (`-64` Graph chrome trim +
+  basename title): chrome trimmed, smart
+  title from `scopeId` prefix, scope-reset
+  bug supersession (the `-57` bug it
+  inherited) handled by removing the
+  validator-against-scopeOptions path.
+
+Queue order confirmed via @@Alex: `-68` (in
+flight) → `-61` → `-65`. `-65`'s dependency on
+`-58` is now satisfied (`dc1ff46` on main).
+
+`webtest-a-11` cut for the re-walks on `-58`/
+`-64`/`-66`. Lane A 8801 carries through.
+
+— @@Architect, 2026-05-19 19:25 BST
+
+## 2026-05-19 19:50 BST — poke: fullstack-69 cut (Cmd+K < / > dock toggles)
+
+@@Alex flagged two more Pane Mode bindings for
+the docked File Browser surfaces:
+
+* `Cmd+K <` → toggle the **right-side** sticky
+  FB dock.
+* `Cmd+K >` → toggle the **left-side** sticky
+  FB dock.
+
+Mapping is verbatim per @@Alex — the arrow
+direction is opposite to the dock side it
+controls. Preserve as spec'd; flag in your
+impl if @@Alex flips it pre-implementation.
+
+Task: [../fullstack-a/fullstack-69.md](../fullstack-a/fullstack-69.md).
+
+Same semantics as the spawn keys (1-4) — Pane
+Mode exits after the toggle commits. Add `<`
+and `>` rows to PaneModeHelp.svelte under a
+sensible section (Layout / Dock).
+
+Updated Lane A queue:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-68` | kill Graph bar; right-click bubble (in flight)      |
+| 2 | `fullstack-61` | flash H-for-help on Pane Mode entry (impl-staged)   |
+| 3 | `fullstack-65` | Files title from selection                          |
+| 4 | `fullstack-69` | Cmd+K < / > dock toggles                            |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 19:50 BST
+
+## 2026-05-19 20:45 BST — poke: fullstack-70 cut (split-side preservation)
+
+@@WebtestA's ad-hoc with @@Alex during
+`webtest-a-12` caught a real defect:
+splitting a back-side pane leaves the new
+pane on the front. User loses orientation
+silently.
+
+Walker wrote a candidate patch + two unit
+tests directly into the working tree (they
+correctly didn't commit — webtest lanes don't
+commit code; routed to me, routing to you).
+
+Task: [../fullstack-a/fullstack-70.md](../fullstack-a/fullstack-70.md).
+
+Working-tree diff at:
+* `web/src/state/tabs.svelte.ts`
+* `web/src/state/tabs.test.ts`
+
+Pre-existing blocker to resolve first: a
+`Cannot find name 'dispatchPaneModeAction'`
+error in App.svelte:759 that's UNRELATED to
+the walker's patch (verified by stashing the
+walker's files). Probably stale WIP from
+your recent run; finish or revert before
+running the gate.
+
+v0.11.0-blocking-soft — Hybrid splits across
+the back/front axis are marquee surface.
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 20:45 BST
+
+## 2026-05-19 21:20 BST — poke: fullstack-72 cut (spawn keys → draft/commit)
+
+@@Alex flagged a UX inconsistency in Hybrid
+NAV: Tab uses a draft/commit model (`webtest-a-12`
+item 9 confirmed: Tab → preview → Enter
+commits / Esc discards), but the 1/2/3 spawn
+keys commit immediately on the keystroke.
+The pane-mode pill ("Enter commit · Esc
+discard") is honest for Tab and lies for
+the spawn keys.
+
+Align spawn keys (1/2/3 + 4 if present) with
+Tab's pattern:
+
+1. Press key → stage spawn intent in
+   `paneMode.draft`, show preview, Pane Mode
+   stays open.
+2. Enter → commit (spawn).
+3. Esc → discard (no spawn).
+4. Replacing draft (`1` then `2`) → only the
+   latest stays staged.
+
+Task: [../fullstack-a/fullstack-72.md](../fullstack-a/fullstack-72.md).
+
+Out of scope (stay immediate-commit per
+current semantics): WASD splits, arrow
+focus-moves, `<` / `>` dock toggles, `Q`
+close, `p` rich prompt, `h` help. All
+reversible enough that staging adds friction.
+
+Coordinate with `-63` (clickable help
+buttons): clicking the `1` cap in the
+cheatsheet should stage the same draft as
+the keystroke — parity behaviour.
+
+Updated Lane A queue:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-70` | preserve back-side state across splitPane           |
+| 2 | `fullstack-72` | spawn keys → draft/commit (Enter accepts / Esc dismisses) |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 21:20 BST
+
+## 2026-05-19 21:30 BST — poke: fullstack-73 cut (Graph from here on DriveInfoBody)
+
+@@Alex flagged that clicking the drive root
+node in the Graph tab shows the drive
+inspector (`DriveInfoBody`) but offers no
+"Graph from here" action — inconsistent with
+other inspectors that have it. Same gap
+exists on the FB inspector's drive-root
+branch.
+
+Fix: add the action to `DriveInfoBody`
+itself (optional `onSetAsScope` prop;
+renders the button when provided). Each
+consumer (`GraphPanel.svelte:1165`,
+`FileBrowserSurface.svelte:385`) passes the
+callback matching its convention:
+
+* **Graph tab**: re-scopes current tab
+  (mirrors line 1184-1192's existing
+  fs-graph pattern).
+* **FB inspector**: spawns new Graph tab
+  (mirrors `FileInfoBody`'s "Graph from
+  here" pattern + `fullstack-43`
+  context-aware spawn).
+
+Task: [../fullstack-a/fullstack-73.md](../fullstack-a/fullstack-73.md).
+
+Drive-scope edge case noted (button is
+no-op when already at drive scope) —
+recommended: show always for consistency.
+
+Updated Lane A queue:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-70` | preserve back-side state across splitPane           |
+| 2 | `fullstack-72` | spawn keys → draft/commit                           |
+| 3 | `fullstack-73` | "Graph from here" on DriveInfoBody                  |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 21:30 BST
+
+## 2026-05-19 21:40 BST — poke: fullstack-74 cut (move Search to Cmd+K f; free `s` for swap)
+
+@@Alex caught a keymap conflict. Current
+state from `-63`'s impl note:
+* `s` lowercase → Search overlay.
+* `S` (Shift) → swap-tile-down.
+
+Case-sensitivity is fragile disambiguation.
+@@Alex's fix: move Search to `Cmd+K + f`;
+WASD (any case) belongs to swap-tile.
+
+Task: [../fullstack-a/fullstack-74.md](../fullstack-a/fullstack-74.md).
+
+Surfaces:
+* `shortcuts.ts` `app.search.toggle` chord
+  flips from `Mod+K s` to `Mod+K f`.
+* `App.svelte` Pane Mode dispatch: collapse
+  `s`/`S` into swap-tile-down (matching
+  w/W, a/A, d/D); add `f`/`F` for Search.
+* `PaneModeHelp.svelte`: swap-row label
+  unchanged (already shows `W A S D`);
+  Search row flips to `f`.
+
+v0.11.0-blocking. Keymap consistency is
+marquee Hybrid NAV polish — should ship
+before tag.
+
+Coordination with `-63` (already shipped):
+the help overlay's `s` cap becomes a swap
+button; new `f` cap opens Search.
+
+Updated Lane A queue:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-70` | preserve back-side state across splitPane           |
+| 2 | `fullstack-72` | spawn keys → draft/commit                           |
+| 3 | `fullstack-73` | "Graph from here" on DriveInfoBody                  |
+| 4 | `fullstack-74` | move Search to Cmd+K f; free `s` for swap           |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 21:40 BST
+
+## 2026-05-19 21:50 BST — poke: fullstack-75 cut (Graph right-click consistency + vertical filters)
+
+@@Alex flagged the Graph tab's right-click
+menu from `-68` is visually inconsistent with
+other tabs' right-click menus, and the filter
+chips are laid horizontally.
+
+Fix:
+* Restyle the bubble to match the standard
+  HamburgerMenu shape (each row a
+  `<button class="mbtn">`, icon + label +
+  chord). Terminal tab's right-click is a
+  good template.
+* Filter chips become individual rows, one
+  per filter, with toggle state visible.
+  Click toggles persist to `gf:` URL hash
+  same as today.
+* `Show Details` toggle / `Depth` slider /
+  `Reload` / `Settings` keep their
+  functions; row visual weight matches the
+  others.
+* Section dividers separate action group
+  from filters group.
+
+Task: [../fullstack-a/fullstack-75.md](../fullstack-a/fullstack-75.md).
+
+v0.11.0-blocking-soft. UX consistency win;
+visual gap is conspicuous enough to ship in
+v0.11.0 if your queue has runway.
+
+Updated Lane A queue:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-70` | preserve back-side state across splitPane           |
+| 2 | `fullstack-72` | spawn keys → draft/commit                           |
+| 3 | `fullstack-73` | "Graph from here" on DriveInfoBody                  |
+| 4 | `fullstack-74` | Search to Cmd+K f; free `s` for swap                |
+| 5 | `fullstack-75` | Graph right-click consistency + vertical filters    |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 21:50 BST
+
+## 2026-05-19 21:55 BST — poke: fullstack-76 cut (flash duration 0.7s → 2s)
+
+@@Alex tested `-61`'s H-for-help flash and
+called 0.7s too short. Bump to 2s.
+
+Task: [../fullstack-a/fullstack-76.md](../fullstack-a/fullstack-76.md).
+
+One-constant change: `PANE_MODE_FLASH_MS`
+700 → 2000. Keyframe shape stays
+proportional (split your way; 150/1600/250
+or similar reads fine). `pointer-events:
+none` discipline + reduced-motion variant
+both carry forward.
+
+Updated Lane A queue:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-70` | preserve back-side state across splitPane           |
+| 2 | `fullstack-72` | spawn keys → draft/commit                           |
+| 3 | `fullstack-73` | "Graph from here" on DriveInfoBody                  |
+| 4 | `fullstack-74` | Search to Cmd+K f; free `s` for swap                |
+| 5 | `fullstack-75` | Graph right-click consistency + vertical filters    |
+| 6 | `fullstack-76` | flash duration 0.7s → 2s                            |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 21:55 BST
+
+## 2026-05-19 22:00 BST — poke: fullstack-77 cut (kill-pane → Backspace)
+
+@@Alex flagged: kill-pane binding moves to
+`Cmd+K + Backspace`. Intuitive (delete-key =
+kill pane).
+
+Heads-up on audit: @@Alex's framing was
+"cmd+k k → cmd+k backspace", but my read of
+the current keymap is that kill-pane lives
+on `Q` (per `fullstack-39` + `webtest-a-8`
+item 2). Implementer audits and reports back
+in the impl note — either `Q`, `k`, or both
+get unbound in favour of `Backspace`.
+
+Task: [../fullstack-a/fullstack-77.md](../fullstack-a/fullstack-77.md).
+
+PaneModeHelp picks up a new `⌫` row in the
+Close group; old letter row drops. Click
+parity from `-63` carries through to the
+Backspace cap.
+
+Coordinates cleanly with `-72` (draft/commit
+spawn keys — Backspace stays immediate-commit
+like the current kill binding) and `-74`
+(Search → f — different key, no collision).
+
+Also: ack `-70` shipping per your 18:23 impl
+note. Walker's patch + tests adopted as-is;
+the App.svelte `dispatchPaneModeAction`
+working-tree blocker is gone (cleaned up by
+earlier landings). Good ship.
+
+Updated Lane A queue:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-72` | spawn keys → draft/commit                           |
+| 2 | `fullstack-73` | "Graph from here" on DriveInfoBody                  |
+| 3 | `fullstack-74` | Search to Cmd+K f; free `s` for swap                |
+| 4 | `fullstack-75` | Graph right-click consistency + vertical filters    |
+| 5 | `fullstack-76` | flash duration 0.7s → 2s                            |
+| 6 | `fullstack-77` | kill-pane → Cmd+K Backspace                         |
+
+(`-70` shipping per your impl note.)
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 22:00 BST
+
+## 2026-05-19 22:15 BST — acks (-70/-72/-73)
+
+Three Lane A ships landed in quick succession:
+
+* `6bbe368` `-70` split-side preservation —
+  walker's patch adopted as-is; the
+  `dispatchPaneModeAction` blocker was
+  already gone.
+* `96185cb` `-72` spawn-key staging — new
+  `paneMode.spawnIntent` field on the state
+  machine; spawn keys stage into it; Enter
+  commits + spawns + clears; Esc clears.
+  Pill grows a "→ stage <kind>" muted span
+  when an intent is staged. PaneModeHelp
+  rows reworded "Stage: Terminal" /
+  "Stage: File Browser" / "Stage: Graph".
+* `33618aa` `-73` DriveInfoBody "Graph from
+  here" — optional `onSetAsScope` prop;
+  GraphPanel passes a re-scope callback,
+  FileBrowserSurface passes a spawn-new-tab
+  callback. Drive-scope edge case shown
+  always per the recommendation (harmless
+  no-op).
+
+Lane A queue continues:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-74` | Search to Cmd+K f; free `s` for swap                |
+| 2 | `fullstack-75` | Graph right-click consistency + vertical filters    |
+| 3 | `fullstack-76` | flash duration 0.7s → 2s                            |
+| 4 | `fullstack-77` | kill-pane → Cmd+K Backspace                         |
+
+Strong pace.
+
+— @@Architect, 2026-05-19 22:15 BST
+
+## 2026-05-19 22:25 BST — ack: -74 landed
+
+Search → `Cmd+K + f` shipping per your impl
+note. Clean `case "s": case "S":` collapse on
+the swap-down branch + `case "f": case "F":`
+for Search. PaneModeHelp + tests + the
+shortcuts.ts comment trail all flipped.
+
+Lane A queue remaining:
+`-75` → `-76` → `-77`.
+
+— @@Architect, 2026-05-19 22:25 BST
+
+## 2026-05-19 22:30 BST — poke: fullstack-81 cut (Graph tab title from selected node)
+
+@@Alex confirmed: yes, Graph tab title
+should mirror `fullstack-65`'s pattern for
+Files — title reflects the currently-selected
+node, with scope as fallback when nothing's
+selected.
+
+Selection mapping:
+* `file:foo/bar/baz.md` → `baz.md`
+* `dir:foo/bar` → `bar` (or `bar/`)
+* `tag:foo` → `#foo`
+* `contact:Miguel` → `Miguel`
+* `language:rust` → `rust`
+* Other prefixes → human-readable label.
+* No selection → fall back to scope
+  basename (current `-64` behaviour).
+
+Task: [../fullstack-a/fullstack-81.md](../fullstack-a/fullstack-81.md).
+
+Coordinate with `-65` (Files title) for any
+shared basename helper, and `-66` for the
+truncation at the tab-strip call site.
+
+Hash round-trip: if selection isn't already
+serialized, add a hash slot so the title
+round-trips via reload (per @@Alex's
+"reload restores exactly" directive).
+
+Updated Lane A queue:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-75` | Graph right-click consistency + vertical filters    |
+| 2 | `fullstack-76` | flash duration 0.7s → 2s                            |
+| 3 | `fullstack-77` | kill-pane → Cmd+K Backspace                         |
+| 4 | `fullstack-81` | Graph tab title from selected node                  |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 22:30 BST
+
+## 2026-05-19 22:40 BST — ack: -76 landed
+
+Flash duration bump shipping per your impl
+note. `PANE_MODE_FLASH_MS` 700 → 2000 +
+keyframe stops rebalanced to 7.5% / 87.5%
+(≈150ms in / 1.6s hold / 250ms out).
+Reduced-motion variant matches the new
+duration. Clean.
+
+Lane A queue remaining:
+`-75` → `-77` → `-81`.
+
+— @@Architect, 2026-05-19 22:40 BST
+
+## 2026-05-19 22:50 BST — poke: fullstack-83 cut (Cmd+N → new window, desktop-only)
+
+Last cut for this session. Cmd+N → new
+chan-desktop window via Tauri menu accelerator.
+Web SPA running in a browser unaffected
+(browser-default Cmd+N stays). Recommend the
+menu-item-with-accelerator path over global
+shortcut for discoverability.
+
+Task: [../fullstack-a/fullstack-83.md](../fullstack-a/fullstack-83.md).
+
+Tauri visual eyeball is the canonical
+verification (same pattern as `-53`).
+
+Updated Lane A queue (final):
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-75` | Graph right-click consistency + vertical filters    |
+| 2 | `fullstack-77` | kill-pane → Cmd+K Backspace                         |
+| 3 | `fullstack-81` | Graph tab title from selected node                  |
+| 4 | `fullstack-83` | Cmd+N → new window (desktop only)                   |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 22:50 BST
+
+## 2026-05-19 23:10 BST — ack: -81 + poke: fullstack-85 cut (empty-pane border thickness)
+
+`-81` Graph tab title from selected node
+shipping per your impl note. `selectedNodeId`
++ `selectedNodeLabel` fields, `gn` + `gnl`
+hash keys, `setSelected` writes back +
+restore seeds `pendingSelectId`. Clean
+mirror of `-65`'s Files-tab pattern.
+
+`-85`: empty pane has thicker focus border
+around the body than the top bar — both
+should be the thin variant. Small CSS fix.
+
+Task: [../fullstack-a/fullstack-85.md](../fullstack-a/fullstack-85.md).
+
+Updated Lane A queue:
+
+| # | Task           | Status                                              |
+|---|----------------|-----------------------------------------------------|
+| 1 | `fullstack-83` | Cmd+N → new window (desktop only)                   |
+| 2 | `fullstack-85` | empty-pane border thickness consistency             |
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 23:10 BST

@@ -150,3 +150,15 @@ Verification:
 * `npm run build` in `web/`
 * `bash -lc 'ulimit -n 4096; scripts/pre-push'`
 * `target/release/chan --version` -> `chan 0.11.0`
+
+## 2026-05-19 20:05 BST - landed
+
+Committed and pushed `main`, then created and pushed tag `v0.11.0`.
+
+Commit:
+
+* `18bdb34` - Release v0.11.0
+
+Tag:
+
+* `v0.11.0` -> `18bdb3492df99966307d74bed7f4505318929a52`

@@ -539,3 +539,8 @@ online, queue empty, standing by
 v0.11.0 across Cargo, Cargo.lock, chan-web, and Tauri config; release
 build/tests, web build, pre-push, and binary version spot-check are
 green.
+
+## 2026-05-19 20:05 BST - poke
+
+`systacean-20` landed. `main` is pushed at `18bdb34` (`Release
+v0.11.0`) and tag `v0.11.0` is pushed at the same commit.

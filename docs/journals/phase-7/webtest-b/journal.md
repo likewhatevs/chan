@@ -546,3 +546,84 @@ Full writeup in
 Test server stays up. Parked again pending the SPA/
 server watcher divergence follow-up cut or next wave
 work.
+
+## 2026-05-19 14:11 BST — online, standing by
+
+Fresh @@WebtestB session up. Read contact card, webdev
+skill, [process.md](../process.md),
+[request.md](../request.md), this journal, and the
+architect → webtest-b event log bottom-up.
+
+State of the world on boot:
+
+* Last architect poke (03:15 BST, `webtest-b-5` item 9
+  MCP discovery + `fullstack-22` BCAST walkthrough) was
+  picked up by the predecessor — verdicts landed in
+  [../alex/event-webtest-b-architect.md](../alex/event-webtest-b-architect.md)
+  through 04:25 BST. Predecessor's later journal
+  appends from that arc are missing here (only the
+  event log got them); not retroactively writing them
+  in — append-only means new sessions add new entries.
+* `chan serve` still listening on 127.0.0.1:8810
+  (Lane B, PID 60733) and 127.0.0.1:8801 (Lane A,
+  PID 82585) from prior sessions. Not touching either.
+* Per boot brief: do not spin up a test server; wait
+  for an architect poke when a Lane B walkthrough
+  cluster is ready. Chrome MCP HTML5 DnD limitation
+  + flippable-Hybrid visual flip remain audit-only.
+
+Online, standing by.
+
+## 2026-05-19 15:15 BST — webtest-b-6 cut
+
+Architect cut [webtest-b-6](webtest-b-6.md) — 13-item
+pre-release walkthrough across the content/visual
+surface (fullstack-44/45/46/47/48/51). Lane A takes
+keyboard/menu side in parallel (`webtest-a-8`).
+
+Rebuilding + relaunching 8810 fresh on current main
+(`cd4ad26`). Inherited PID 60733 (8h old) killed.
+
+## 2026-05-19 16:55 BST — Items 7/8/13 reassigned to Lane A
+
+Hit a chunk of API/classifier blips early; architect
+caught a near-miss (I'd just started item 7 — multi
+Graph tabs — when they were redistributing). Per the
+new memory note "Redistribute from queue tail, not
+head", architect pulled items 7, 8, 13 onto Lane A
+(`webtest-a-9`). My remaining queue: items 1-6 + 9-12,
+plus the write-up. Item 7 work mid-flight backed out
+cleanly (no commits, just observation state).
+
+## 2026-05-19 17:10 BST — walkthrough closeout
+
+10 items walked across 2 hours. Final tally in
+[webtest-b-6.md](webtest-b-6.md#2026-05-19-1608-bst-verdicts-post-redistribution):
+
+* **7 PASS**: items 1-5, 9, 10.
+* **3 PARTIAL**: items 6, 11, 12 — each with a real
+  finding worth follow-up (schema gaps for items 6
+  + 11, live-driving difficulty for item 12).
+
+Headline observations:
+* `fullstack-47` multi-FB tabs ships the spawn (PASS
+  on stacking) but not the per-tab state isolation
+  the task asks for (schema gap in `BrowserTab`).
+* `fullstack-48` per-Hybrid theme model is in place
+  (lazy init + serialization) but no consumer reads
+  `HybridSide.theme` for rendering — Pane.svelte
+  needs the equivalent of `data-focus-color` for
+  theme too.
+* `fullstack-48` back-side attention dot code +
+  unit-tests are solid (rendering path verified by
+  inspection + Pane.test.ts), but the live trigger
+  via external fsnotify events to a back-side
+  terminal's watcher didn't reproduce in this lane.
+
+Test server stays up on 8810 with the walkthrough
+artifacts (list-mode-test.md, Terminal-1 with
+watcher, ~1500 burst files in events/+sub/) for
+future debugging.
+
+Firing poke on
+[../alex/event-webtest-b-architect.md](../alex/event-webtest-b-architect.md).

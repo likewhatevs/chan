@@ -1466,3 +1466,1715 @@ verdicts, code lanes can eyeball with teardown) is
 load-bearing for how the floor operates.
 
 — @@Architect, 2026-05-19 11:50 BST
+
+## 2026-05-19 14:30 BST — Architect recycled mid-floor; pickup + systacean-19 cut
+
+@@Architect session closed unexpectedly between the
+14:30 BST `fullstack-51` cut to @@FullStackB and the
+acks for that ship + the queued idle pings. @@Alex
+reseated the chair; this entry captures the pickup
+state so a future recycle can read it.
+
+### State at pickup (read from event tails + journals)
+
+**Lane A — @@FullStackA**: through `fullstack-43`
+(`a603468` on main, Pane Mode context-aware spawn).
+Mid-flight on `fullstack-49` (chevron direction) —
+unstaged `web/src/components/FileTree.svelte` +
+`revealBrowserActions.test.ts` are their WIP. Queue
+after: `fullstack-50` (Cmd+K p rich prompt). Ack
+posted on their event thread.
+
+**Lane B — @@FullStackB**: shipped `fullstack-51`
+(`0b0c919` xterm `lineHeight: 1.0`, recorded by
+`bb3183a`) at ~14:20 BST per file mtime. Lane-B
+queue empty. Deferred `fullstack-48` follow-ups
+remain parked. Ack posted.
+
+**@@Systacean**: idle since `systacean-18`
+(`8ab850c` indexing-state endpoint). Pinged 11:17 →
+14:10 BST. New cut posted (see below).
+
+**@@WebtestA / @@WebtestB**: both online + parked
+since ~14:10 BST. Marquee-landings walkthrough
+cluster (flippable Hybrids, Cmd+K rework, carousel,
+BCAST window-wide, British spelling, multi-File-
+Browser tabs) is queued in spirit but not formally
+cut. Holding pending @@Alex's signal.
+
+### New cut: systacean-19 (watcher must stay under drive root)
+
+@@Alex flagged on pickup: the watcher directory
+must NOT be outside the drive's root.
+`resolve_watcher_dir` in
+`crates/chan-server/src/routes/terminal.rs:721`
+sandboxes relative paths via
+`resolve_safe_strict` but the absolute-path
+branch (line 727-728) passes the caller's path
+through without checking drive containment.
+
+Task: [../systacean/systacean-19.md](../systacean/systacean-19.md).
+Acceptance criteria include canonicalize-before-
+compare for symlink escape + test extensions.
+Defense-in-depth on a load-bearing invariant
+(see CLAUDE.md "Drive is the boundary"), not a
+remote-exploit fix in our single-user threat
+model — but the invariant is load-bearing for
+the same reason every other fs op in the codebase
+respects it.
+
+### Outstanding at this checkpoint
+
+* @@FullStackA on -49 (in flight) → -50.
+* @@Systacean on -19 (newly cut).
+* Lanes A/B webtest: holding on marquee-landings
+  walkthrough cluster, @@Alex to signal.
+* FullStackB queue empty (post -51); `fullstack-48`
+  follow-ups still parked.
+
+### Recycle-prep note for the next architect (if I get recycled too)
+
+Read this entry, then yesterday's wrap-up ("2026-05-19
+11:50 BST — Wave-A + Wave-B substrate + Phase 1 +
+Phase 2 + polish") for the morning context. Today's
+cuts (`fullstack-39` through `-43`, `-44` through
+`-48`, `-49`, `-50`, `-51`, `systacean-19`) all live
+on `origin/main` or as event-thread pokes. Pickup
+discipline: read event tails first, then per-agent
+journals, then `git log --oneline` for the last
+~30 commits.
+
+— @@Architect, 2026-05-19 14:30 BST
+
+## 2026-05-19 14:40 BST — systacean-19 landed, fullstack-52 cut
+
+* `cb3e42f` (`Constrain terminal watcher paths to
+  drive root`) on main. @@Systacean canonicalized
+  both the drive root + absolute watcher path
+  before comparing, so in-drive symlink escapes
+  also get rejected. Gate green. Acked.
+* `fullstack-52` cut to Lane B: drop "New Terminal"
+  from the terminal-tab menu (Cmd+K 1 is canonical
+  per `fullstack-42`; menu copy is leftover) and
+  sharpen the `restart()` `uiConfirm` message so
+  the shell-kill + running-command-terminated
+  impact lands explicitly. Mis-click hazard: the
+  two buttons are adjacent at
+  `TerminalTab.svelte:988` (Restart) and `:995`
+  (New Terminal); dropping the latter eliminates
+  the proximity problem and the prompt sharpening
+  is defense-in-depth.
+
+— @@Architect, 2026-05-19 14:40 BST
+
+## 2026-05-19 14:45 BST — Lane A cleared (-49 + -50 shipped)
+
+* `6954776` (`fullstack-49` chevron direction) and
+  `c07be27` (`fullstack-50` Cmd+K p rich prompt) on
+  main. Both gate-green. Lane A queue empty.
+* `fullstack-52` (Restart prompt + drop "New
+  Terminal") still in flight on Lane B — no
+  inbound from @@FullStackB yet.
+* Standing rosters at this checkpoint:
+  - @@FullStackA: idle, queue clear.
+  - @@FullStackB: on `-52`.
+  - @@Systacean: idle.
+  - @@WebtestA / @@WebtestB: idle, awaiting
+    walkthrough cluster.
+
+— @@Architect, 2026-05-19 14:45 BST
+
+## 2026-05-19 14:55 BST — fullstack-53 cut (desktop launcher refresh)
+
+Four-point cut to Lane A on the chan-desktop Tauri
+launcher chrome:
+
+1. Drop "Name" column from the drives table.
+2. Italic tagline `what are we going to DRIVE
+   today?` beside "Drives" brand title.
+3. Reorder header buttons to
+   `[Open drive] [Attach] [theme]`.
+4. Computer-glyph for outside-home paths in
+   `renderPath()`, symmetric with the existing
+   `$HOME` → house collapse.
+
+User amended (4) onto the original three-point
+cut before the poke went out, so it's a single
+unified task (-53) rather than a split. The
+"in-flight-no-amendments" rule kicks in once an
+agent has started; the cut had not been posted
+yet, so amendment was clean.
+
+@@FullStackA: queue empty, picks up `-53`.
+@@FullStackB: still on `-52` (audit + new test
+already drafted per their 14:50 BST event-thread
+implementation note; pre-commit).
+
+— @@Architect, 2026-05-19 14:55 BST
+
+## 2026-05-19 15:05 BST — fullstack-52 landed
+
+`93dc538` (`Drop "New Terminal" menu entry and
+sharpen Restart prompt`) on main. Mis-click hazard
+resolved: the "New Terminal" `mbtn` row + its
+handler + dead imports gone; `restart()` confirm
+body bumped from "session closed and replaced" to
+explicit "shell will be killed... running command
+will be terminated". `5a37a76` is the audit-trail
+correction note (their event entry crossed my
+"pre-commit" journal snapshot in flight).
+
+Rosters at this checkpoint:
+* @@FullStackA: on `fullstack-53` (no inbound
+  yet — event thread quiet since 14:39 BST).
+* @@FullStackB: idle, queue empty.
+* @@Systacean: idle.
+* @@WebtestA / @@WebtestB: idle, awaiting
+  walkthrough cluster.
+
+— @@Architect, 2026-05-19 15:05 BST
+
+## 2026-05-19 15:15 BST — pre-release walkthrough clusters cut
+
+@@Alex called "wrap all before release". Walkthrough
+clusters cut to both lanes in parallel for audit-trail
+coverage of today's marquee landings before the
+release tag:
+
+* **`webtest-a-8`** — keyboard / menu surface:
+  `-39` divider + spawn keys, `-40` WASD↔arrows,
+  `-41` Ctrl+D, `-42` keymap + menu cleanup, `-43`
+  context spawn, `-49` chevron, `-50` Cmd+K p,
+  `-52` Restart prompt + "New Terminal" gone.
+* **`webtest-b-6`** — content / visual surface:
+  `-44` carousel, `-45` list mode, `-46` British
+  spelling + hamburger, `-47` multi-FB/Graph tabs,
+  `-48` flippable Hybrids (A/B/C), `-51` xterm row
+  metrics.
+
+Skipped from the cluster:
+* `fullstack-53` — Tauri shell, Chrome MCP can't
+  drive it; @@Alex's visual eyeball.
+* `systacean-19` — server-side; unit test covers it.
+
+Both lanes get standalone test servers (8801 + 8810).
+Cross-lane no-overlap confirmed at the item level.
+
+Code lanes remain idle and parked through the
+walkthrough verdicts; deferred `fullstack-48`
+follow-ups still parked.
+
+Next decision point: after both verdicts land,
+fold any follow-ups into final cuts, then tag.
+Today added 12 user-visible features on top of
+yesterday's wave-A/wave-B substrate; v0.10.2 vs
+v0.11.0 call still open (lean minor — Hybrid flip
++ Pane Mode rework are real feature class).
+
+— @@Architect, 2026-05-19 15:15 BST
+
+## 2026-05-19 15:20 BST — webtest-a-8 amended + v0.10.2 call
+
+* **`systacean-19` re-added to webtest-a-8**. @@Alex
+  caught the bad exclusion — backend invariant
+  changes still warrant an end-to-end audit pass
+  even when the unit test is green. Items 15-17
+  on the Lane A walk cover in-drive attach,
+  out-of-drive rejection, and symlink-escape
+  canonicalization. Curl-fallback noted if the
+  attach-dialog input isn't easy via Chrome MCP.
+* **Release call**: `v0.10.2` (patch). @@Alex's
+  call — overrides my "lean minor" read. Today's
+  landings get framed as polish on top of
+  yesterday's v0.10.1, not a feature minor.
+  Release cut waits on both walkthrough verdicts;
+  cut + tag is @@Systacean's lane when we're
+  ready.
+
+— @@Architect, 2026-05-19 15:20 BST
+
+## 2026-05-19 15:25 BST — release call locked: v0.11.0
+
+@@Alex flexed on the version call; I leaned 0.11.0
+on the Flippable Hybrids + Pane Mode + carousel
+slide 3 surface (real feature class, not patch
+polish). @@Alex agreed.
+
+**Locked: `v0.11.0`** when walkthroughs land green.
+
+Holding the release-cut task for @@Systacean until
+both `webtest-a-8` and `webtest-b-6` return
+verdicts; cutting the version bump + tag + release
+notes premature would put @@Systacean on a task
+that's blocked anyway. They stay idle; I'll cut
+the release task at verdict-land time with the
+walkthrough findings folded into the release
+notes.
+
+Rosters at this checkpoint unchanged:
+* @@FullStackA: on `-53` (no inbound since 14:55
+  BST cut, but the task file's implementation
+  note from 15:05 BST suggests they may be near
+  done — pending their event-thread ping).
+* @@FullStackB: idle.
+* @@Systacean: idle.
+* @@WebtestA: on `webtest-a-8`.
+* @@WebtestB: on `webtest-b-6`.
+
+— @@Architect, 2026-05-19 15:25 BST
+
+## 2026-05-19 15:35 BST — fullstack-54 cut (drop FileBrowserSurface path header)
+
+@@Alex pointed at the path bar at the top of the
+File Browser surface as redundant — the tab strip
+carries "Files" + close + (implied) kebab path
+already. Cut to Lane B (idle).
+
+Scope: drop the `<span class="name">` path display
+in all three variants of `FileBrowserSurface.svelte`.
+Tab variant: drop the whole header (tab strip
+carries everything). Dock + Overlay: keep the
+chrome row, drop just the path span.
+
+**Re-walk cost flagged**: `webtest-b-6` item 6
+(multi-FB tabs walkthrough) needs a small re-walk
+on the FB chrome once `-54` lands. We're mid
+release-prep; if Lane B ships promptly, the
+re-walk happens in the same Chrome MCP session and
+costs minutes.
+
+Rosters at this checkpoint:
+* @@FullStackA: on `-53` (Tauri launcher refresh;
+  pending event-thread ping).
+* @@FullStackB: on `-54` (FB header drop).
+* @@Systacean: idle, holding for release-cut task.
+* @@WebtestA: on `webtest-a-8`.
+* @@WebtestB: on `webtest-b-6`.
+
+— @@Architect, 2026-05-19 15:35 BST
+
+## 2026-05-19 15:50 BST — fullstack-55 + fullstack-56 cut (Lane A)
+
+Two small cuts queued for @@FullStackA in order:
+
+* **`-55`** — drop the carousel's `dashboard-stats`
+  row (files / directories / contacts / index
+  inline under the Chan logo on slide 1). Drive
+  name above stays. Re-walk cost on `webtest-b-6`
+  item 1 noted.
+* **`-56`** — drop the explicit Save surface
+  (Cmd+S binding + `app.save` action + Pane.svelte
+  keystroke intercept). Autosave is canonical.
+  Audit confirmed there's no File→Save menu item
+  in the codebase; keyboard-only. Cmd+Shift+S
+  strikethrough preserved (editor-owned).
+
+Both small, both standing-clearance.
+
+Rosters at this checkpoint:
+* @@FullStackA: queue `-55` → `-56`.
+* @@FullStackB: on `-54` (FB header drop).
+* @@Systacean: idle, holding for release-cut task.
+* @@WebtestA: on `webtest-a-8` (15:15 BST cut,
+  not yet acked).
+* @@WebtestB: on `webtest-b-6` (same).
+
+Hold-the-tag count: the desktop launcher (`-53`)
+visual eyeball is still on @@Alex, and the two
+walkthrough verdicts are still pending. Adding
+`-54` + `-55` + `-56` to the wait list before
+the v0.11.0 cut.
+
+— @@Architect, 2026-05-19 15:50 BST
+
+## 2026-05-19 16:05 BST — architect-2 design doc (carousel redesign)
+
+@@Alex flagged the current carousel slide 2 as
+poor and wants a richer drive-metadata story: a
+"dashboard moment" pulling drive overview, code
+language breakdown, markdown breakdown, and chan's
+own outside-the-drive metadata footprint
+(`~/.chan` paths, BM25 / graph / report index
+sizes).
+
+Wrote scoping doc at
+[architect-2.md](architect-2.md) covering:
+
+* Existing data sources (most of it's already
+  surfaced via `/api/inspector`, `/api/report/prefix`,
+  `/api/contacts`, `/api/indexing/state`).
+* One new backend endpoint needed:
+  `GET /api/chan_meta` for the outside-the-drive
+  metadata footprint. To be cut as `systacean-20`.
+* Frontend redesign proposal: 5 slides (Welcome /
+  Drive overview + indexing / Markdown breakdown /
+  Code stats / Chan metadata).
+* Release-tag impact: recommended **Path B** —
+  ship v0.11.0 with the current carousel + tag
+  the redesign as **v0.11.1** follow-up. The
+  current carousel isn't broken, just
+  underwhelming; folding the redesign into
+  v0.11.0 delays the tag for a half-day of work
+  with walkthrough re-walks.
+
+Holding implementation cuts (`systacean-20`,
+`fullstack-57`) until @@Alex acks the design or
+edits the slide structure.
+
+Pre-release state unchanged from 15:50 BST:
+@@FullStackA queue `-55` → `-56`,
+@@FullStackB on `-54`,
+@@Systacean idle (could pick up `-20` once
+design is acked),
+both webtest lanes on walkthroughs (15:15 cuts
+not yet acked at this point).
+
+— @@Architect, 2026-05-19 16:05 BST
+
+## 2026-05-19 16:15 BST — phase-8 backlog seeded (carousel + drive BOOT)
+
+@@Alex called both items out as next-phase scope,
+not for v0.11.0 or any current-phase follow-up.
+Created [`../next-phase-backlog.md`](../next-phase-backlog.md)
+to accumulate phase-8 items so the next architect
+inherits the scope without re-doing the recon.
+
+Items captured:
+
+1. **Drive metadata carousel redesign** — moved
+   `architect-2.md` from "ack-then-cut" to phase-8
+   scope memory. No `systacean-20` or
+   `fullstack-57` cut from this phase.
+2. **Drive pre-flight checks + BOOT process** —
+   add a structured pre-flight pass (perms, size
+   class, media class, SCM detection, can-we-create
+   check) before a new drive registers, followed
+   by a deliberate async BOOT stage that fills
+   indexes in the background and surfaces progress
+   to the UI. Defines a real "boot complete"
+   signal even with live filesystem churn.
+   Coordinates with the carousel redesign — the
+   indexing-graph slide is the natural progress
+   surface.
+
+@@Alex flagged more is coming for phase 8; the
+backlog file has an "append new items below"
+convention so future phase-7 architects (if I get
+recycled) can keep adding cleanly.
+
+**v0.11.0 wait list unchanged**: walkthrough
+verdicts (`webtest-a-8` + `webtest-b-6`), plus
+`-53` Tauri eyeball, `-54` FB header drop,
+`-55` carousel stats drop, `-56` Cmd+S drop. No
+new items added to the v0.11.0 gate from this
+session's scoping.
+
+— @@Architect, 2026-05-19 16:15 BST
+
+## 2026-05-19 16:25 BST — webtest-a-8 wrapped (16/17 PASS), fullstack-57 cut
+
+@@WebtestA delivered: 17 items closed, 16 PASS, 1
+PARTIAL on item 6 (doc→Graph scope reset). Clean
+walk on Pane Mode core, Cmd+K p, menu cleanup,
+right-dock chevron, and all three watcher-
+containment items end-to-end (in-drive attach
+PASS, /etc reject PASS, symlink-escape reject
+PASS with canonicalize-before-compare verified
+on both pre-walk and post-walk paths).
+
+Real regression caught: `GraphPanel.svelte`
+resets `scopeId` to drive on mount when
+`scopeOptions` lookup misses the contextual
+`file:<path>` set by `paneModeOpenGraph`. Cut as
+`fullstack-57` to Lane A queue behind `-55`/`-56`.
+v0.11.0 blocking (Pane Mode is marquee surface).
+
+Side observations from the walk:
+* Terminal live cwd not tracked — phase 8.
+* Restart silent on no-shell — phase 8.
+* Cross-port tab hijack — coordination flag with
+  Lane B; not a chan bug.
+* Task wording nits — descriptor lag, no defect.
+
+Wait list for v0.11.0:
+* `-53` Tauri eyeball (yours).
+* `-54` FB header drop (FullStackB in flight).
+* `-55` carousel stats drop (queued).
+* `-56` Cmd+S drop (queued).
+* `-57` GraphPanel scope reset (newly queued).
+* `webtest-b-6` verdicts (in flight; @@Alex flagged
+  6 items still pending — pace is fine).
+
+— @@Architect, 2026-05-19 16:25 BST
+
+## 2026-05-19 16:35 BST — phase-8 backlog item 3 added (screensaver + Cmd+K L)
+
+Screensaver feature scoped to phase 8:
+
+* Inactivity timeout setting + optional 4-8
+  alphanum PIN (hashed; recommended SHA-256 over
+  MD5 — same cost, drops the "ships MD5" smell).
+* Two themes: Matrix (default) + Castaway. Both
+  external repos need feasibility audit during
+  phase 8 — Matrix one is Python+curses, won't
+  port; we'd write our own canvas implementation
+  (~200 LOC TS) citing dcragusa as inspiration.
+* Manual lock binding: **`Cmd+K L`** under Pane
+  Mode. Locks regardless of the inactivity
+  timer. Adds `L` to the PaneModeHelp cheatsheet.
+
+Full scope at
+[`../next-phase-backlog.md`](../next-phase-backlog.md)
+item 3. Phase-8 cut decomposition proposed:
+fullstack overlay+settings+Matrix, systacean PIN
+hash + config schema, fullstack Castaway after
+repo audit.
+
+Phase-7 unchanged. No code-lane impact from this
+scoping; @@FullStackA still on the `-55`→`-56`→`-57`
+queue, @@FullStackB on `-54`, webtests on the
+walkthroughs.
+
+— @@Architect, 2026-05-19 16:35 BST
+
+## 2026-05-19 16:45 BST — phase-8 backlog item 4 added (Infographics tabs + Hybrid Nav rename)
+
+Bundled scope captured as backlog item 4:
+
+* **Infographics tab** — lift
+  `EmptyPaneCarousel.svelte` into a first-class
+  tab kind. Spawn via `Cmd+K 9`. Multi-instance
+  (pattern from `fullstack-47` multi-FB / multi-
+  Graph).
+* **Minimal empty pane** — drop the carousel
+  from the empty-pane surface; just chan logo
+  + hint pointing at Hybrid Nav.
+* **`Pane Mode` → `Hybrid Nav` rename** in user-
+  facing copy (hamburger menu entry, help
+  overlay, pill text). Internal symbols
+  (`paneMode*`) stay. Wording options table in
+  the backlog; recommended `Hybrid NAV` (10ch,
+  matches @@Alex's uppercase hint).
+
+**Coupling note**: item 4 (container refactor)
+should land BEFORE item 1 (carousel content
+redesign) — otherwise the redesign happens
+against a moving target. Phase-8 sequencing
+suggestion baked into the backlog.
+
+@@Alex confirmed all of this is phase 8 scope.
+Phase-7 wait list unchanged (`-53` Tauri eyeball,
+`-54`, `-55`, `-56`, `-57`, `webtest-b-6`
+verdicts).
+
+Phase-8 backlog now has four items:
+1. Drive metadata carousel redesign (content).
+2. Drive pre-flight + BOOT process.
+3. Screensaver + PIN unlock + Cmd+K L lock.
+4. Infographics tabs + minimal empty pane +
+   Hybrid Nav rename (container).
+
+— @@Architect, 2026-05-19 16:45 BST
+
+## 2026-05-19 16:55 BST — Lane B overflow redistribution
+
+@@WebtestB hitting API overload; @@Alex flagged
+and asked for redistribution. Moved 3 independent
+Lane B items (7 multi-Graph, 8 tab DnD, 13 xterm
+metrics) to a new `webtest-a-9` continuation
+on Lane A. Kept the Hybrid-flip cluster (9-12) on
+Lane B since those phases verify in sequence.
+
+Combined coverage now: Lane A walks
+`webtest-a-8` (done, 17 items) + `webtest-a-9`
+(3 items overflow). Lane B walks `webtest-b-6`
+items 1-6 (done) + 9-12 (remaining 4 items).
+Total: 17 + 3 + 6 + 4 = 30 verdicts, matches
+the 17 + 13 task surface (covering all 13
+original Lane B items + the 17 Lane A items).
+
+Pre-staging release-cut work for @@Systacean was
+on my mind but the redistribution took priority;
+will cut `systacean-20` (release prep) next if
+the lane work doesn't surface anything more
+urgent.
+
+— @@Architect, 2026-05-19 16:55 BST
+
+## 2026-05-19 17:05 BST — redistribution near-miss (caught by @@Alex)
+
+Confirmed evidence: when I redistributed Lane B
+items 7 + 8 + 13 to Lane A at 16:55 BST, Lane B
+had **already started item 7** — they'd opened
+two Graph tabs (semantic + FS Graph) and were
+switching modes when @@Alex intervened at the
+orchestration layer to make them pause and read
+my updates. Quote from Lane B's log:
+
+> Two Graph tabs spawn distinctly: "Graph"
+> (semantic mode) + "FS Graph" (filesystem mode),
+> different gm in URL hash. Switching to FS
+> Graph.
+
+Without the intervention, both lanes would have
+walked item 7 in parallel → duplicate verdicts,
+audit-trail drift.
+
+**Lesson saved as memory**
+`feedback_redistribution_queue_head`: when
+redistributing off a slow lane, skip their
+next-up item — they're already moving toward it.
+Pull from further down the queue. The collision
+seam is exactly at the slow lane's queue head,
+because that's where they're already advancing.
+
+In future redistributions, the right move would
+have been: keep item 7 with Lane B (they were
+already starting it), pull items 8, 11, 13 (or
+similar back-of-queue picks). But the Hybrid-
+flip cluster justification (9-12 stays together)
+still holds; the failure mode here is "moved
+something they were already starting", not
+"moved too many".
+
+Lane B confirmed the redistribution and is now
+moving to item 9. Lane A's `webtest-a-9` waits
+for them to pick it up.
+
+— @@Architect, 2026-05-19 17:05 BST
+
+## 2026-05-19 17:20 BST — both walkthroughs wrapped; 3 follow-up cuts
+
+Lane A overflow (`webtest-a-9`): 3/3, clean
+(1 PASS, 1 INCONCLUSIVE-live/PASS-code, 1 PASS).
+Lane B (`webtest-b-6`): 10 items closed, 5 PASS
++ 3 PARTIAL.
+
+Two PARTIALs are real schema-gap defects in
+marquee surfaces:
+
+* **Item 6** — `BrowserTab` missing
+  `path`/`selected`/`scroll`/`expanded` per-tab
+  state. `fullstack-47` shipped half. Cut as
+  `fullstack-58` to Lane B.
+* **Item 11** — `HybridSide.theme` written +
+  serialized but no render consumer.
+  `fullstack-48` phase B shipped half. Cut as
+  `fullstack-59` to Lane B.
+
+Third PARTIAL (item 12 back-side dot live
+trigger) accepted — code path + unit tests
+verified, only Chrome MCP live drive was flaky.
+
+Plus `fullstack-60` cut for the pane-hamburger
+trim @@Alex flagged from the screenshot.
+
+Updated Lane B queue: `-54` → `-58` → `-59` →
+`-60`. All v0.11.0 blocking (the trim less
+critical but cheap to land in the same
+deploy).
+
+Re-walk obligations queued:
+* `webtest-b-6` item 6 after `-58` ships.
+* `webtest-b-6` item 11 after `-59` ships.
+Both can run on Lane A's 8801 if Lane B is
+wound down (same drive shape, same SPA).
+
+v0.11.0 wait list at this checkpoint:
+* `-53` Tauri eyeball (yours).
+* `-54` FB header drop (in flight).
+* `-55` carousel stats drop (queued, Lane A).
+* `-56` Cmd+S drop (queued, Lane A).
+* `-57` GraphPanel scope reset (queued, Lane A).
+* `-58` BrowserTab per-tab state (queued, Lane B).
+* `-59` per-Hybrid theme render (queued, Lane B).
+* `-60` pane hamburger trim (queued, Lane B).
+* Re-walks on `-58` + `-59` ships.
+
+After all queues drain + re-walks land,
+@@Systacean cuts v0.11.0.
+
+— @@Architect, 2026-05-19 17:20 BST
+
+## 2026-05-19 17:30 BST — three more cuts (-61 / -62 / -63), phase-8 rename pulled forward
+
+@@Alex's "enter hybrid nav!!!" was a directive,
+not just a wording suggestion: rename pulled
+forward from phase-8 backlog (item 4) into the
+v0.11.0 wrap. Container refactor + minimal
+empty pane stay in phase 8.
+
+Three new cuts:
+
+* **`-61`** — flash "H for help" centre 0.7s
+  on Pane Mode entry. Discoverability beat
+  pointing at the help overlay. Lane A.
+* **`-62`** — Pane Mode → Hybrid NAV rename
+  sweep, user-facing copy only. Lane B.
+* **`-63`** — clickable command buttons in the
+  help overlay. Click = key + Enter. Lane B.
+
+Lane B queue is now 6 deep
+(`-54`/`-58`/`-59`/`-60`/`-62`/`-63`). Lane A
+is 4 deep (`-55`/`-56`/`-57`/`-61`).
+
+Asked Lane A about @@Alex's "outdated test
+server" question implicitly answered in the
+poke: no, test server isn't outdated; the
+rename hasn't shipped yet (just queued as
+`-62`).
+
+v0.11.0 wait list growing — pulling stop on
+new feature additions and gating the next ask
+on "is this v0.11.0 or phase-8?" before
+adding to wait list.
+
+— @@Architect, 2026-05-19 17:30 BST
+
+## 2026-05-19 17:40 BST — fullstack-64 cut, supersedes -57
+
+@@Alex flagged Graph tab maximize button +
+scope selector both useless; title should
+reflect the basename of the selected element.
+Cut as `-64` to Lane A.
+
+Important interaction: `-64` supersedes
+`-57`. The GraphPanel scope-reset bug
+`-57` was meant to fix exists only because
+`scopeOptions` drives a dropdown the user
+never uses. Removing the dropdown (per `-64`)
+makes the validator pointless; drop the
+reset path entirely. `-57` skipped on Lane
+A's queue; task file stays as audit trail.
+
+@@Alex also responded to my "should new asks
+default to phase-8?" with "it's fine, we
+will refine 0.11.0 before we go into the
+next big features of phase 8". Pass continues
+— don't gate refinements behind phase 8.
+
+Updated Lane A queue:
+`-55` → `-56` → `-64` → `-61`.
+Lane B queue unchanged at
+`-54` → `-58` → `-59` → `-60` → `-62` → `-63`.
+
+— @@Architect, 2026-05-19 17:40 BST
+
+## 2026-05-19 17:50 BST — fullstack-65 cut (Files tab title from selection)
+
+Same principle as `-64` Graph title; cross-
+tab consistency: a tab is named after what
+you're looking at. Cut to Lane A end of
+queue.
+
+**Dependency**: gated on `-58` (per-tab
+`selected`) shipping from Lane B before
+implementation. Noted in the task file +
+poke. By the time Lane A walks through
+`-55`/`-56`/`-64`/`-61`, Lane B should have
+delivered `-58`.
+
+Updated Lane A queue:
+`-55` → `-56` → `-64` → `-61` → `-65`.
+
+— @@Architect, 2026-05-19 17:50 BST
+
+## 2026-05-19 18:00 BST — fullstack-66 cut + round-trip directive
+
+`fullstack-66` cut: shared tab-title truncation
+utility + sweep across all tab kinds. Max 15
+chars, `head[..]tail` shape (6 + 4 + 5), bias
+toward extension visibility. Tooltip carries
+full untruncated name. Lands before `-64`/`-65`
+on Lane A so both consume the utility.
+
+Updated Lane A queue:
+`-55` → `-56` → `-66` → `-64` → `-61` → `-65`.
+
+@@Alex's hash round-trip directive captured:
+"reload my screen → tabs come back exactly
+the same, including the graph". Current task
+surface already honors it (Graph rounds-trip
+per `-47` + `webtest-a-9` verdict; Files is
+gated on `-58` which mandates hash; per-Hybrid
+theme on `-59` reads from hash-serialized
+`node.theme`). Poked Lane B as a reminder to
+keep the discipline tight.
+
+Post-`-58`/`-59` re-walk: explicit
+reload-and-restore verification across all
+tab kinds + Hybrid per-side theme + per-tab
+Files state. Whoever runs the re-walk (Lane
+A or Lane B) folds the round-trip check into
+the same session as the schema-gap re-tests.
+
+— @@Architect, 2026-05-19 18:00 BST
+
+## 2026-05-19 18:35 BST — three ships, webtest-a-10 dispatched
+
+Quick-fire status update:
+
+* `beb3479` (`-55`) carousel dashboard-stats
+  row dropped from slide 1.
+* `207256e` (`-54`) FileBrowserSurface header
+  trimmed (slim chrome strip in all three
+  variants; @@FullStackB chose the
+  task's permitted alternative).
+* `dbbba84` (`-56`) Cmd+S + `app.save` action
+  dropped. @@FullStackA went with the no-
+  preventDefault judgement call (option 1).
+
+All three gate-green on the implementer side.
+`webtest-a-10` cut for Lane A to verify all
+three read cleanly on the 8801 server. Quick
+walk; informal round-trip spot-check folded
+in (formal one comes post-`-58`/`-59`).
+
+FullStackB went idle after `-54` ship; their
+event-thread mtime (16:32) predates my
+`-58`/`-59`/`-60`/`-62`/`-63` pokes. @@Alex
+poking them at the orchestration layer to
+pick up `-58`.
+
+v0.11.0 wait list:
+* Lane A queue: `-66` → `-64` → `-61` → `-65`.
+* Lane B queue: `-58` → `-59` → `-60` → `-62`
+  → `-63`.
+* `webtest-a-10` re-walk (in flight).
+* Post-`-58` re-walk for `webtest-b-6` item 6.
+* Post-`-59` re-walk for `webtest-b-6` item 11.
+* Final reload-round-trip re-walk.
+* `-53` Tauri eyeball (yours).
+
+— @@Architect, 2026-05-19 18:35 BST
+
+## 2026-05-19 18:50 BST — two follow-up cuts (-67 / -68) — chrome bars off
+
+@@Alex eyeballing the Lane A re-walk caught
+two related chrome surfaces still leaking
+visual noise:
+
+* Files tab still has the slim chrome strip
+  `-54` kept (FullStackB's permitted
+  alternative). Two stacked hamburgers
+  visible: pane Hybrid kebab + FB kebab one
+  row below the Files tab. Path forward:
+  drop the header entirely in tab variant;
+  FB hamburger → Files tab right-click.
+  Cut as `-67` to Lane B.
+* Graph tab will still have a chrome bar
+  after `-64` lands (filter chips +
+  hamburger). Same treatment: bar gone,
+  filter chips → right-click (pattern:
+  terminal broadcast items at bottom),
+  hamburger → tab right-click. Cut as
+  `-68` to Lane A, after `-64`.
+
+Both build on existing in-flight / queued
+work — no rework of shipped commits.
+
+Lane A queue:
+`-66✓` (likely) → `-64` → `-68` → `-61` →
+`-65`.
+Lane B queue:
+`-58` → `-59` → `-60` → `-62` → `-63` →
+`-67`.
+
+— @@Architect, 2026-05-19 18:50 BST
+
+## 2026-05-19 19:25 BST — three ships, webtest-a-11 dispatched
+
+Quick-fire status:
+
+* `44ecd9c` `-66` truncation utility.
+* `d8ee2e8` `-64` Graph chrome trim +
+  basename title.
+* `dc1ff46` `-58` per-tab BrowserTab state +
+  hash round-trip.
+* `986d77c` `-58` audit-trail correction
+  (cross-lane absorption).
+
+All three gate-green. Lane A is on `-68` next
+(@@Alex confirmed order: `-68` → `-61` → `-65`).
+Lane B idle awaiting orchestration-layer
+nudge from @@Alex; queue continues `-59` →
+`-60` → `-62` → `-63` → `-67`.
+
+`webtest-a-10` wrapped 3/3 PASS + clean
+round-trip spot-check. Side observation: "Open
+overlay" menu label on dock FB hamburger is
+misleading (the menuitem calls `openBrowser()`
+which actually opens a tab, not the overlay
+variant). Small post-release follow-up
+candidate; not blocking.
+
+`webtest-a-11` cut to re-walk `-58`/`-64`/
+`-66`. Item 1 (multi-FB per-tab state) closes
+the `webtest-b-6` item 6 PARTIAL via Lane A's
+re-walk; Lane B doesn't need to re-engage.
+
+v0.11.0 wait list:
+* Lane A queue: `-68` → `-61` → `-65`.
+* Lane B queue: `-59` → `-60` → `-62` → `-63`
+  → `-67`.
+* `webtest-a-11` re-walk pending poke.
+* Post-`-59` re-walk for per-Hybrid theme
+  rendering.
+* Post-`-67` re-walk for FB tab right-click.
+* `-53` Tauri eyeball (yours).
+
+Pace is brisk. Every ship green so far.
+
+— @@Architect, 2026-05-19 19:25 BST
+
+## 2026-05-19 19:30 BST — phase-8 backlog item 5 added (config currency + screensaver settings)
+
+@@Alex flagged the chan config schema needs a
+currency audit + accommodation for the new
+screensaver settings from backlog item 3.
+Captured as item 5: audit existing schema for
+drift, identify config-driven settings the
+app reads but doesn't expose (and vice-versa),
+fold in screensaver fields
+(`screensaver.enabled` / `inactivity_minutes`
+/ `theme` / `pin_hash` / `pin_salt`), produce
+`docs/config.md` as the source of truth.
+
+Phase-8 backlog now has five items:
+1. Drive metadata carousel redesign (content).
+2. Drive pre-flight + BOOT process.
+3. Screensaver + PIN + Cmd+K L lock.
+4. Infographics tabs + minimal empty pane +
+   Hybrid NAV rename (rename pulled forward
+   to `-62` in phase 7; container refactor +
+   minimal empty pane stay in phase 8).
+5. Chan config currency audit + screensaver
+   schema additions.
+
+— @@Architect, 2026-05-19 19:30 BST
+
+## 2026-05-19 19:40 BST — phase-8 backlog item 2 extended (async chan serve + Linux benchmark)
+
+@@Alex extended phase-8 backlog item 2 (drive
+pre-flight + BOOT) with:
+
+* **Async `chan serve`**: HTTP server accepts
+  connections immediately; boot sequence runs
+  in background. UI never blocks on indexing.
+* **Boot API**: new `/api/boot` endpoint (or
+  extension of `/api/indexing/state`) exposing
+  phase + per-subsystem progress + ETAs.
+* **Correctness discipline**: partial results
+  during boot self-describe as partial, not
+  silently-ranked-against-empty. Audit
+  chan-drive for places where half-built
+  state produces wrong answers vs partial
+  ones.
+* **Linux kernel as benchmark**:
+  shallow-clone, drive-add, watch the
+  indexing graph + search + carousel
+  populate live. Numbers to log: time-to-
+  first-paint, time-to-first-non-empty-
+  search, time-to-BOOT_COMPLETE, memory
+  footprint, watcher throughput during boot.
+
+The kernel benchmark is rich — ~70k files,
+deep hierarchies, multi-language, dense
+includes. Catches both scale issues and
+"does it feel right" UX problems during the
+boot window. Coordinates tightly with the
+carousel redesign (backlog item 1) since the
+visible UX signal during boot lives there.
+
+— @@Architect, 2026-05-19 19:40 BST
+
+## 2026-05-19 19:50 BST — fullstack-69 cut (Cmd+K < / > dock toggles)
+
+@@Alex flagged two more Pane Mode bindings:
+`<` → right-side sticky FB toggle, `>` →
+left-side sticky FB toggle. Mapping inverted
+from the geometric arrow direction (cap'd in
+the task file in case @@Alex meant to flip it).
+
+Cut to Lane A end of queue.
+
+Updated Lane A queue:
+`-68` → `-61` → `-65` → `-69`.
+Lane B queue unchanged:
+`-59` → `-60` → `-62` → `-63` → `-67`.
+
+— @@Architect, 2026-05-19 19:50 BST
+
+## 2026-05-19 20:00 BST — phase-8 backlog item 6 added (website + manual + first-launch + CI)
+
+Four coupled sub-projects captured as item 6:
+
+1. **Website migration**: chan.app from VPS to
+   GitHub hosting. @@Alex will share the
+   current source when phase 8 opens; copy
+   into the chan repo under
+   `web-marketing/`. DNS cutover with VPS
+   fallback soak window. TLS via GitHub
+   Pages or Cloudflare front.
+2. **Manual** (`docs/manual/`): user-facing
+   docs covering drives, editor, Hybrid Nav,
+   FB / Graph / Search, terminal + watcher,
+   settings, MCP, tunnel. Markdown source
+   lives in the main chan repo; static site
+   builds from it.
+3. **First-launch UX** in chan-desktop:
+   download/open the manual on initial
+   install. Default browser vs Tauri webview
+   call left to phase-8 architect.
+4. **CI**: chan repo → marketing repo, →
+   GitHub Pages, → release-bundle manual
+   with the chan-desktop installer.
+
+Sequencing notes captured: DNS first
+(soak window), manual content can drift in
+parallel, first-launch UX depends on URL
+stability but not manual completeness.
+
+Phase-8 backlog now has six items:
+1. Drive metadata carousel redesign.
+2. Drive pre-flight + BOOT process
+   (+ async chan serve + Linux benchmark).
+3. Screensaver + PIN + Cmd+K L lock.
+4. Infographics tabs + minimal empty pane
+   (rename already pulled forward).
+5. Chan config currency audit + screensaver
+   schema.
+6. Website migration + manual +
+   first-launch UX + CI.
+
+— @@Architect, 2026-05-19 20:00 BST
+
+## 2026-05-19 20:05 BST — Tauri eyeball dropped from v0.11.0 gate
+
+@@Alex called it: skip the Tauri visual
+verification for `-53` (desktop launcher
+refresh). Chrome MCP can't drive WKWebView,
+so the verification path was always going to
+be manual eyeball. @@Alex is accepting the
+risk: if the launcher chrome doesn't render
+right in the Tauri shell, they'll report in
+phase 8 and we test/fix there.
+
+Incidental coverage: the act of using
+chan-desktop to open a tunneled drive (clicking
+through the test-server link from the launcher
+to the SPA in an external browser) exercises
+the launcher chrome organically. If something's
+visibly wrong, @@Alex catches it that way.
+
+**`-53` removed from the v0.11.0 wait list.**
+Don't re-add as a blocker.
+
+Updated v0.11.0 wait list:
+* Lane A queue: `-68` → `-61` → `-65` → `-69`.
+* Lane B queue: `-59` → `-60` → `-62` → `-63`
+  → `-67`.
+* `webtest-a-11` re-walk (pending poke).
+* Post-`-59` re-walk for per-Hybrid theme
+  rendering.
+* Post-`-67` re-walk for FB tab right-click.
+
+Once those drain, @@Systacean cuts v0.11.0
+(version sweep + tag + release notes).
+
+— @@Architect, 2026-05-19 20:05 BST
+
+## 2026-05-19 20:10 BST — Lane A done, Lane B still has 5 items + backlog item 7 captured
+
+### Lane state
+
+* **Lane A**: all 4 queued items shipped —
+  `-68` (`ecc312d`), `-61` (`86c729c`),
+  `-65` (`9ffbeaa`), `-69` (`ad49cf5`).
+  Handoff at `aff543a`. Idle.
+* **Lane B**: idle but 5 items still queued:
+  `-59` / `-60` / `-62` / `-63` / `-67`.
+  Of these, `-59` / `-62` / `-67` are
+  v0.11.0-blocking; `-60` / `-63` could slip
+  if needed.
+
+@@Alex asked "can I poke systacean to cut the
+release?" — answer: not yet. Lane B's
+remaining work + outstanding webtest re-walks
+(`webtest-a-11` cut but unpoked; post-`-59` +
+post-`-67` re-walks queued) need to land
+first. Recommended @@Alex poke @@WebtestA on
+`webtest-a-11` in parallel with @@FullStackB
+working through Lane B.
+
+### Phase-8 backlog item 7 added
+
+Upgrade model captured:
+
+* `chan` binary self-upgrade stays
+  (battle-tested).
+* `chan-desktop` self-updates via existing
+  tauri-plugin-updater (verify
+  cross-platform during phase 8).
+* `chan-desktop` ships with a bundled
+  `chan` binary AND probes
+  `which chan` / `where chan` on launch;
+  runs whichever of {bundled, system} has
+  the higher `--version`. No user picker,
+  no settings UI. Tie → bundled wins.
+
+Edge cases noted (no system chan, system
+older, system newer, bundled-chan self-
+upgrade scope inside the Tauri bundle).
+Phase-8 cuts proposed:
+verify-tauri-updater-cross-platform,
+bundled-chan-in-resources +
+launch-time-selection,
+CI-bundles-matching-release.
+
+Phase-8 backlog now has seven items:
+1. Drive metadata carousel redesign.
+2. Drive pre-flight + BOOT (+ async chan
+   serve + Linux benchmark).
+3. Screensaver + PIN + Cmd+K L.
+4. Infographics tabs + minimal empty pane.
+5. Chan config currency audit +
+   screensaver schema.
+6. Website migration + manual +
+   first-launch UX + CI.
+7. chan-desktop upgrade model + bundled
+   chan binary + version-based selection.
+
+— @@Architect, 2026-05-19 20:10 BST
+
+## 2026-05-19 20:25 BST — Lane B mid-progress, webtest-a-12 dispatched
+
+* `ec26939` `-59` per-Hybrid theme render
+  (UX option 2: per-side toggle on chrome).
+* `01fe97c` `-60` pane hamburger trim.
+
+`webtest-a-11` wrapped 4/4 PASS. `-58` per-tab
+state closes `webtest-b-6` item 6 PARTIAL.
+Side observation: tab title display layer
+now derives from per-tab state for FB +
+Graph; changelog mention worth flagging.
+
+`webtest-a-12` cut to re-walk `-59` + `-60`.
+`-59` converts `webtest-b-6` item 11 PARTIAL
+→ PASS. Awaits @@Alex orchestration poke.
+
+Lane B remaining: `-62` rename, `-63`
+clickable help, `-67` FB header tab variant.
+`-62` and `-67` v0.11.0-blocking; `-63`
+blocking-soft (could slip).
+
+@@Alex flagged "everyone's idling now" —
+agents have shipped + gone quiet again,
+need orchestration nudges to continue. Lane A
+clear (queue empty); Lane B has 3 left;
+@@Systacean still idle.
+
+v0.11.0 wait list at this checkpoint:
+* Lane B: `-62` → `-63` → `-67`.
+* `webtest-a-12` re-walk (cut, awaiting poke).
+* Post-`-67` re-walk (when it lands).
+* Then @@Systacean cuts the tag.
+
+— @@Architect, 2026-05-19 20:25 BST
+
+## 2026-05-19 20:45 BST — Lane A back in flight (-70), Lane B on -63
+
+* `3b270d0` `-62` rename shipped. Lane B now
+  on `-63` (clickable help buttons) → `-67`
+  (FB header tab variant).
+* `webtest-a-11` 4/4 PASS, `webtest-a-12`
+  2/2 PASS. Both PARTIALs from `webtest-b-6`
+  now closed (item 6 via Lane A's `-58` walk,
+  item 11 via Lane A's `-59` walk).
+* `webtest-a-12` ad-hoc with @@Alex found a
+  real split-side defect: back-side splits
+  drop to front silently. Walker wrote
+  patch + 2 unit tests into working tree
+  (correctly didn't commit). Cut as
+  `fullstack-70` for Lane A.
+* Pre-existing blocker in working tree
+  flagged: App.svelte:759
+  `dispatchPaneModeAction` ref — UNRELATED
+  to walker's diff. @@FullStackA to resolve
+  before gating `-70`.
+
+v0.11.0 wait list:
+* Lane B: `-63` (in flight) → `-67`.
+* Lane A: `-70` (just cut).
+* Post-`-67` re-walk for FB tab right-click.
+* Then @@Systacean cuts the tag.
+
+— @@Architect, 2026-05-19 20:45 BST
+
+## 2026-05-19 20:55 BST — phase-8 backlog item 8 added (open-source + CI lane)
+
+Captured as backlog item 8: flip the repo
+public + stand up CI in a separate test lane
+that iterates against the v0.11.0 phase-7
+outcome.
+
+Open-source plumbing scope:
+* License pick (recommend dual MIT/Apache-2.0
+  per Rust convention).
+* `LICENSE` file(s) + license audit pass.
+* Secrets / internal-reference / PII audit
+  before flipping public (gitleaks /
+  truffleHog).
+* `CONTRIBUTING.md` / `CODE_OF_CONDUCT.md` /
+  `SECURITY.md` + GitHub issue/PR templates.
+* Decision: archive phase journals under
+  `docs/journals/private/` (the multi-agent
+  orchestration vocabulary doesn't translate
+  for public contributors) OR write a
+  `docs/coordination.md` explaining the
+  pattern. Phase-8 architect's call.
+
+CI scope:
+* New `@@CI` agent lane (separate contact +
+  journal). GitHub Actions for the Rust
+  build matrix (Linux / macOS / Windows),
+  lint + test on PR, release-artifact
+  builds on `chan-v*` tag.
+* Starts against v0.11.0 baseline.
+* Secrets: minisign signing keys + Apple
+  Developer ID notarization (coordinate
+  with `desktop/CLAUDE.md`'s
+  dev-key-rotation prerequisite).
+
+Coordinates with item 6 (website + manual)
+and item 7 (chan-desktop bundled chan +
+upgrade model) — all three converge on CI
+infrastructure. Probably ship as a
+coordinated v1-public cutover.
+
+Phase-8 backlog now has eight items:
+1. Drive metadata carousel redesign.
+2. Drive pre-flight + BOOT (async + Linux
+   benchmark).
+3. Screensaver + PIN + Cmd+K L.
+4. Infographics tabs + minimal empty pane.
+5. Chan config currency audit + screensaver
+   schema.
+6. Website migration + manual +
+   first-launch UX + CI.
+7. chan-desktop upgrade model + bundled
+   chan binary.
+8. Open-source the repo + CI test lane.
+
+— @@Architect, 2026-05-19 20:55 BST
+
+## 2026-05-19 21:00 BST — fullstack-67 amended (dock variant joins tab variant in header drop)
+
+@@Alex flagged docked FBs still show a chrome
+bar — both left + right docks. Wants "free
+space like in between panes". Amended `-67`
+(still queued, not started) to extend the
+header drop to dock variant on both sides.
+
+Final shape:
+* Tab variant: header gone, items to tab
+  right-click.
+* Dock variant (left + right): header gone,
+  items to dock-body right-click. Unstick
+  covered by existing Cmd+K `<` / `>`
+  bindings from `-69`.
+* Overlay variant: unchanged (close +
+  maximize stay; load-bearing for a floating
+  panel).
+
+`-54`'s slim-chrome-strip for dock is being
+superseded — overlay keeps it.
+
+Lane B currently on `-63` (just shipped per
+impl note); `-67` next. Lane A still has
+`-70` queued.
+
+— @@Architect, 2026-05-19 21:00 BST
+
+## 2026-05-19 21:10 BST — process correction: -71 cut, -67 amendment reverted in spirit
+
+@@Alex called out the mid-flight amendment
+of `-67`. They're right — even "queued not
+started" counts as in-flight; the agent has
+already parsed the task file as part of
+their queue planning.
+
+Strengthened the
+`feedback_inflight_task_amendments` memory:
+**don't amend any already-cut task, ever.
+In doubt → new task.**
+
+Cut `fullstack-71` for the dock-variant work
+that I improperly tried to fold into `-67`.
+`-67` is shipping per the agent's 21:05 BST
+impl note (tab variant covered). `-71` picks
+up the dock variant cleanly as Lane B's next
+queue item.
+
+v0.11.0 wait list:
+* Lane B: `-67` (shipping) → `-71`.
+* Lane A: `-70` (split-side preservation).
+* Re-walks: post-`-67` FB tab right-click,
+  post-`-71` FB dock right-click,
+  post-`-70` split-side.
+* Then @@Systacean cuts the tag.
+
+— @@Architect, 2026-05-19 21:10 BST
+
+## 2026-05-19 21:20 BST — fullstack-72 cut (spawn keys → draft/commit)
+
+@@Alex flagged the pane-mode pill's
+"Enter commit · Esc discard" wording is
+honest for Tab (draft/commit) but lies for
+the 1/2/3 spawn keys (immediate commit).
+Cut `-72` to align spawn keys with Tab's
+pattern.
+
+Out of scope: WASD splits, arrow focus-moves,
+dock toggles, `Q` close, `p` rich prompt,
+`h` help — all immediate-commit by design
+(reversibility argument). The pill stays
+honest by virtue of staging only the
+"effectful, non-reversible" actions.
+
+v0.11.0-blocking-soft. Lane A queue:
+`-70` → `-72`.
+
+— @@Architect, 2026-05-19 21:20 BST
+
+## 2026-05-19 21:30 BST — fullstack-73 cut ("Graph from here" on DriveInfoBody)
+
+Drive root inspector gets a "Graph from here"
+action button — closes a small symmetry gap
+across all inspector surfaces. Implementation
+adds the prop to `DriveInfoBody`; each
+consumer wires its own callback (re-scope in
+Graph tab, spawn new tab in FB inspector).
+
+Lane A queue:
+`-70` → `-72` → `-73`.
+
+— @@Architect, 2026-05-19 21:30 BST
+
+## 2026-05-19 21:40 BST — fullstack-74 cut (Search → Cmd+K f, free `s` for swap)
+
+@@Alex caught the case-sensitivity conflict
+where `s` opens Search and `S` swaps tile.
+Fix: Search moves to `Cmd+K + f`; WASD any
+case dispatches swap-tile. Marquee Hybrid
+NAV polish.
+
+Lane A queue: `-70` → `-72` → `-73` → `-74`.
+
+— @@Architect, 2026-05-19 21:40 BST
+
+## 2026-05-19 21:50 BST — fullstack-75 cut (Graph right-click consistency)
+
+`-68`'s Graph right-click bubble landed but
+its row shape diverged from the standard
+HamburgerMenu pattern used elsewhere, and the
+filter chips render horizontally. `-75`
+aligns: standard `.mbtn` row layout, filters
+one-per-row, dividers between groups.
+
+Lane A queue now 5 deep:
+`-70` → `-72` → `-73` → `-74` → `-75`.
+
+— @@Architect, 2026-05-19 21:50 BST
+
+## 2026-05-19 21:55 BST — fullstack-76 cut (flash 0.7s → 2s)
+
+@@Alex tested `-61`'s flash and called 0.7s
+too short. Cut `-76` as a clean follow-up
+(not an amendment, per the
+`feedback_inflight_task_amendments`
+discipline). One-constant change.
+
+Lane A queue now 6 deep:
+`-70` → `-72` → `-73` → `-74` → `-75` → `-76`.
+
+— @@Architect, 2026-05-19 21:55 BST
+
+## 2026-05-19 22:00 BST — fullstack-77 cut (kill-pane → Backspace), -70 shipping
+
+@@Alex called out the kill-pane binding move
+to `Cmd+K + Backspace`. Framing was "cmd+k k
+→ cmd+k backspace" but the current binding I
+know about is `Q` (per fullstack-39). Task
+spec asks implementer to audit and report.
+
+`fullstack-70` shipping per @@FullStackA's
+18:23 impl note. Walker's patch + 2 tests
+adopted as-is. The pre-existing `dispatchPaneModeAction`
+working-tree blocker is gone (cleaned up by
+earlier landings on Lane A).
+
+Lane A queue (6 deep, -70 shipping):
+`-72` → `-73` → `-74` → `-75` → `-76` → `-77`.
+
+— @@Architect, 2026-05-19 22:00 BST
+
+## 2026-05-19 22:15 BST — bulk acks + 2 new cuts
+
+Shipping flurry:
+* `6bbe368` `-70` split-side preservation.
+* `96185cb` `-72` spawn-key draft/commit
+  staging.
+* `33618aa` `-73` DriveInfoBody Graph-from-here.
+* `74c7d01` `-67` FB tab variant header drop.
+* `33c93c9` `-71` FB dock variant header drop
+  (both sides).
+
+@@Alex caught two new defects:
+* xterm.js terminal body doesn't pick up
+  `-59` per-pane theme toggle (canvas
+  renders outside CSS cascade). Cut `-78`
+  to Lane B. v0.11.0-blocking.
+* Rich prompt doesn't auto-focus on entry.
+  Cut `-79` to Lane B. v0.11.0-blocking-soft.
+
+Lane B queue (was clear) now: `-78` → `-79`.
+Lane A queue: `-74` → `-75` → `-76` → `-77`.
+
+Open question to @@Alex (unanswered):
+Graph tab title — selection-driven (like
+Files post-`-65`) vs scope-driven (current
+post-`-64`). Recommended selection-wins with
+scope fallback; awaiting their call.
+
+— @@Architect, 2026-05-19 22:15 BST
+
+## 2026-05-19 22:25 BST — fullstack-80 cut + -74 acked
+
+`-74` Search → `Cmd+K f` shipping per
+@@FullStackA's impl note. Lane A queue now
+`-75` → `-76` → `-77`.
+
+`-80` cut for Lane B: four coupled UX
+changes bundled (Terminal / FB / Graph
+right-click trims + FB click-to-inspector
+in tab/overlay variants but not dock).
+Coordinates with `-75` (Graph row shape)
+landing first on Lane A.
+
+Rationale captured: Search + Settings are
+global (`Cmd+K f` / `Cmd+,`); duplicating
+them in every per-tab right-click menu is
+noise. `Show/Hide Details` becomes redundant
+once clicking auto-opens the inspector.
+
+Lane B queue: `-78` → `-79` → `-80` (3
+items). Lane A queue: `-75` → `-76` → `-77`
+(3 items). Balance restored.
+
+— @@Architect, 2026-05-19 22:25 BST
+
+## 2026-05-19 22:30 BST — fullstack-81 cut (Graph tab title from selection)
+
+@@Alex confirmed the selection-driven naming
+direction for Graph tabs. Cut `-81` to Lane A.
+Mirrors `-65`'s Files-tab pattern: selection
+wins; scope is fallback when nothing
+selected.
+
+Title resolution per node kind: file basename
+/ dir name / `#tag` / contact name / language
+name / etc. Hash round-trip required (per
+@@Alex's reload-restores-exactly directive).
+
+Lane A queue: `-75` → `-76` → `-77` → `-81`.
+Lane B queue: `-78` → `-79` → `-80`.
+
+— @@Architect, 2026-05-19 22:30 BST
+
+## 2026-05-19 22:40 BST — fullstack-82 cut + -76 acked
+
+`-76` flash duration 0.7s → 2s shipping
+per @@FullStackA's impl note. Keyframe
+proportions rebalanced; reduced-motion
+extends to 2s plain fade.
+
+`-82` cut for Lane B: drop the dock-variant
+`Open overlay` entry that survived `-80`'s
+sweep (because it's `variant === "dock"`
+gated). Also closes the `webtest-a-10`
+side observation about the misleading
+menuitem label.
+
+Lane B queue 4 deep: `-78` → `-79` → `-80`
+→ `-82`. Lane A queue 3 deep: `-75` → `-77`
+→ `-81`.
+
+— @@Architect, 2026-05-19 22:40 BST
+
+## 2026-05-19 22:50 BST — final cut for session + close-out
+
+`fullstack-83` cut: Cmd+N → new
+chan-desktop window via Tauri menu
+accelerator. Web SPA in browser
+unaffected. Documents the first
+Tauri-only UX binding pattern.
+
+@@Alex called the session — this is it.
+
+### Final pokes (@@Alex orchestration layer)
+
+1. **@@FullStackA**: 4 items queued.
+   `-75` → `-77` → `-81` → `-83`.
+2. **@@FullStackB**: 4 items queued.
+   `-78` → `-79` → `-80` → `-82`.
+3. **@@WebtestA** (after both lanes ship):
+   final comprehensive re-walk. I'll cut
+   when both queues drain — no point
+   walking against a moving target.
+4. **@@Systacean** (after webtest re-walk
+   green): release cut for v0.11.0
+   (version sweep across Cargo.toml +
+   web/package.json, tag, push, release
+   notes).
+
+### Wrap criteria
+
+If everything lands green:
+* Lane A 4 ships + Lane B 4 ships on main.
+* Final webtest re-walk all PASS (or
+  acceptable PARTIAL with code-audit
+  cover, same shape as prior partials).
+* No new blockers surface during the
+  walk.
+
+@@Alex tags v0.11.0 — phase 7 wraps.
+
+If anything FAILs in the re-walk → cut
+follow-up to v0.11.1 follow-up list, tag
+v0.11.0 without the failing piece (per
+the established blocking-soft / phase-8
+deferral discipline).
+
+— @@Architect, 2026-05-19 22:50 BST
+
+## 2026-05-19 23:00 BST — -78 acked, fullstack-84 cut (per-tab inspector width)
+
+`-78` shipping. Both core fixes (xterm
+re-theme, GraphCanvas observer extension)
+landed clean. CM6 syntax palette branch
+deferred — small visible impact, follow-up
+if @@Alex flags. Cleaner-than-expected ship
+for what looked like a tricky cross-system
+bug.
+
+`-84` cut for Lane B: per-tab inspector
+width. Drag-resize inspector in one tab →
+all tabs of the kind flip. Module-level
+`paneWidths.<kind>` singletons need
+per-tab override fields on BrowserTab /
+GraphTab / FileTab. Mirrors `-58`'s
+schema-gap pattern. v0.11.0-blocking.
+
+Also noted in my session-close summary
+above (one extra entry on Lane B's queue).
+
+Final Lane B queue: `-79` → `-80` → `-82`
+→ `-84`.
+Lane A queue unchanged: `-75` → `-77` →
+`-81` → `-83` (plus -77 shipping per
+@@FullStackA's impl note at 18:50 — also
+worth noting the audit confirmed kill-pane
+was on `k`, not `Q` as I'd journalled).
+
+— @@Architect, 2026-05-19 23:00 BST
+
+### Architect-journal audit-trail correction
+
+Earlier journal entries (16:25 BST,
+22:00 BST) referenced "Q kills the focused
+pane" per fullstack-39 / webtest-a-8. The
+`-77` audit confirmed actual binding was
+`k` / `K`, with `Q` / `q` unbound.
+`webtest-a-8` item 2's "Q kills the
+focused pane" verdict was either against
+a build that's since changed, or a
+mis-transcription. Backwards-correcting
+isn't worth chasing this late — flagging
+here for any future recycle reading the
+journal.
+
+— @@Architect, 2026-05-19 23:00 BST
+
+## 2026-05-19 23:10 BST — -79 + -81 shipping, fullstack-85 cut
+
+* `-79` rich prompt auto-focus shipping.
+  Focus-nonce mirrors the find-bar pattern.
+* `-81` Graph tab title from selected node
+  shipping. `selectedNodeId` /
+  `selectedNodeLabel` on GraphTab; hash
+  keys `gn` / `gnl`.
+
+`-85` cut for Lane A: empty-pane focus
+border thickness consistency. Body has a
+thicker border than the top bar; should
+both be the thin variant. Small CSS fix.
+
+Lane A queue: `-83` → `-85`.
+Lane B queue: `-80` → `-82` → `-84`.
+
+— @@Architect, 2026-05-19 23:10 BST
+
+## 2026-05-19 23:30 BST — phase-8 backlog item 9 added (scope FB watcher to current dir)
+
+@@Alex hit this live during phase 7: FB
+open on `docs/journals/`, code landing in
+`src/` triggered constant FB tree
+reloads → disrupted navigation. Scope the
+FB's watcher to the currently-selected
+directory (or parent of selected file) so
+unrelated churn doesn't disrupt browsing.
+
+Spec direction captured:
+* Selection is a dir → watch that dir.
+* Selection is a file → watch the parent.
+* No selection → drive root (current).
+* Per-tab attach (selection is already
+  per-tab per `-58`).
+* Detach on tab close / selection change.
+
+Edge cases noted: expanded siblings outside
+the scope (strict vs scope+expansion —
+recommend strict first), watcher API
+extension in chan-drive (`subscribe-by-prefix`
+or similar), search index keeps drive-wide
+(background process), carousel slide 3
+also drive-wide (by design).
+
+Coordinates with backlog item 2 (BOOT
+process) + `-58` (per-tab schema) +
+`systacean-19` (watcher boundary
+discipline).
+
+Phase-8 backlog now has nine items:
+1. Drive metadata carousel redesign.
+2. Drive pre-flight + BOOT (+ async chan
+   serve + Linux benchmark).
+3. Screensaver + PIN + Cmd+K L.
+4. Infographics tabs + minimal empty pane.
+5. Chan config currency audit + screensaver
+   schema.
+6. Website migration + manual + first-launch
+   UX + CI.
+7. chan-desktop upgrade model + bundled
+   chan binary.
+8. Open-source the repo + CI test lane.
+9. Scope FB watcher to current dir.
+
+— @@Architect, 2026-05-19 23:30 BST
+
+## 2026-05-19 23:40 BST — systacean-20 cut (release cut)
+
+@@Alex poked Systacean at the orchestration
+layer; they reported back "no new tasks" —
+the task file was written but the event-
+thread poke wasn't on file yet. Posted the
+formal poke now (event-architect-systacean.md
+at 23:40 BST) so their next cycle picks up
+`systacean-20`.
+
+Phase 7 wrap criteria met:
+* All Lane A + Lane B ships landed
+  (`-39` through `-85`, plus `systacean-19`
+  watcher fix; phase 6 `-50` / `-51` / `-52`
+  earlier).
+* All PARTIAL verdicts from `webtest-b-6`
+  closed via Lane A re-walks.
+* Final comprehensive walk skipped per
+  @@Alex's call (per-task green gates +
+  unit-test coverage cover).
+
+After `v0.11.0` lands → phase 8 opens
+against the 9-item backlog.
+
+— @@Architect, 2026-05-19 23:40 BST
+
+## 2026-05-19 23:50 BST — v0.11.0 LANDED — phase 7 wraps
+
+`18bdb34` Release v0.11.0 on `main`. Tag
+`v0.11.0` → `18bdb3492df99966307d74bed7f4505318929a52`.
+
+Per-task tally for phase 7:
+* **47 fullstack ships** (`-39` through `-85`).
+* **2 systacean ships** (`-19` watcher
+  containment, `-20` release cut).
+* **3 webtest comprehensive walks**
+  (`webtest-a-7` wave-B finale,
+  `webtest-a-8` + `webtest-b-6` + the
+  `webtest-a-9`/`-10`/`-11`/`-12` re-walk
+  series).
+* All marquee surfaces landed:
+  Hybrid NAV, flippable Hybrids + per-side
+  themes, multi-FB/multi-Graph tabs,
+  carousel + indexing graph, watcher
+  containment, desktop launcher refresh,
+  Cmd+N new window.
+
+**Phase 8 backlog** (9 items, ready when
+@@Alex opens it):
+1. Drive metadata carousel redesign.
+2. Drive pre-flight + BOOT (async +
+   Linux benchmark).
+3. Screensaver + PIN + Cmd+K L.
+4. Infographics tabs + minimal empty pane.
+5. Chan config currency + screensaver
+   schema.
+6. Website migration + manual +
+   first-launch UX + CI.
+7. chan-desktop upgrade model + bundled
+   chan binary.
+8. Open-source the repo + CI test lane.
+9. Scope FB watcher to current dir.
+
+Phase prerequisites flagged for first
+public release: chan-desktop signing key
+rotation (per `desktop/CLAUDE.md`), DNS
+cutover (item 6), and the open-source
+audit (item 8).
+
+— @@Architect, 2026-05-19 23:50 BST
+
+## 2026-05-19 23:55 BST — phase-8 headline deliverable locked
+
+@@Alex called the phase-8 exit criterion:
+**ship a notarized macOS `.dmg` (and signed
+Windows + Linux equivalents) that users can
+download and install without Gatekeeper /
+SmartScreen friction.**
+
+Added a "Phase 8 headline deliverable"
+section at the top of
+[`../next-phase-backlog.md`](../next-phase-backlog.md)
+so the next architect opens it with this
+front-and-centre. Cross-references items 6
+(Website + CI), 7 (chan-desktop upgrade
+model + bundled chan), 8 (open-source + CI
+test lane).
+
+Coordinated cut shape proposed:
+* systacean-N: key audit + rotation +
+  Apple Developer ID provisioning + CI
+  secrets handling.
+* systacean-N+1: GitHub Actions
+  tag-triggered workflow → `make build` →
+  notarize → upload to GitHub Release.
+* systacean-N+2: cross-platform polish
+  (Windows Authenticode, Linux packaging).
+* architect-led release-process docs.
+
+Existing items 6/7/8 fuse into this
+through-line; they stay separable scopes
+but the DMG-on-tag flow is the unified
+target.
+
+— @@Architect, 2026-05-19 23:55 BST

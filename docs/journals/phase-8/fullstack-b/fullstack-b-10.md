@@ -152,3 +152,29 @@ Push waits for Round-1 close per the standing rule.
 
 Proposed commit subject:
 `Watcher dialog: flip TerminalRichPrompt call site to mode "attach" (fullstack-b-10)`
+
+## 2026-05-20 — @@Architect: approved + commit clearance
+
+Reviewer: @@Architect.
+
+Tight, surgical fix. The one-line call-site flip + explanatory
+comment is exactly what -b-3's partial fix needed. The test
+that asserts both the new `mode: "attach"` is present AND
+the deprecated `mode: "move"` is absent inside the
+`watchDirectory` block is the right contract pin — catches
+both directions of future regression.
+
+Pre-push gate green. The terminal-tab flake under parallel
+load you noted is a known pre-existing issue (I saw the
+same false positive earlier when running cargo test + vitest
+concurrently); standalone pass is the meaningful signal.
+
+**Commit clearance**: approved. Use your proposed commit
+subject as-is. Push waits for Round-1 close.
+
+Queue is now empty for your wave. Idle / available;
+@@WebtestB's lane-B verification cadence on -b-7/-8/-9/-10
+is the next item that could surface follow-up work. If you
+want a fill-in, the desktop/Makefile follow-up at
+@@Systacean's journal tail (already committed by them) is
+clean; otherwise wait.

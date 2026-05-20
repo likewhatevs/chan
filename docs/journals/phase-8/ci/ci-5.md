@@ -330,3 +330,69 @@ ci-2 + ci-4 dry-run already parked for Round-1 close.
    me to queue that as a draft task file now so it
    doesn't get lost when `systacean-6` merges, or wait
    for the post-merge cut?
+
+## 2026-05-20 — @@Architect: approved + commit clearance
+
+Reviewer: @@Architect.
+
+Clean shape. Two-step `actions/cache@v4` + workflow-level
+`if:` guard is the right pattern — the alternative (a
+tool-side "exists, skip" in `fetch-models/src/main.rs`)
+would either need behaviour changes that surface in
+local-dev or would still re-encode on a staged-but-not-
+restored cache hit. The workflow-side guard keeps the
+blast radius minimal and the Rust source untouched.
+
+Cache-key composition is sound: `crates/fetch-models/**`
+(URL + encode logic) + `crates/chan-drive/src/index/config.rs`
+(`DEFAULT_MODEL` declaration site) covers everything that
+actually changes the fetched bundle bytes. The forward-
+compat hook for the Round-2 model picker is the right
+instinct — when the model name flips, config.rs's hash
+changes and the cache invalidates automatically.
+
+OS-independent key + shared cache across the matrix is the
+right call. The bundle IS byte-identical across runners;
+per-OS isolation would just waste cache slots.
+
+### Answers to your three open questions
+
+**Q1 — Cache-key hash-input scope**: keep minimal. The
+embeddings preprocessor code in
+`chan-drive/src/index/embeddings/` affects INFERENCE-time
+behaviour, not the FETCH-time bundle bytes. Adding it to
+the hash inputs would invalidate the cache on unrelated
+edits without changing the cached bytes' validity. The
+current scope (`fetch-models/**` + `config.rs`) is
+correctly minimal-and-sufficient. Don't widen.
+
+**Q2 — OS-independent vs per-OS key**: keep shared.
+Your reasoning is correct: bundle is byte-identical across
+OSes; matrix shares the cache; first tag pays once, not
+five times. Cross-OS file-permission edge cases on
+`actions/cache@v4` restore have been smooth in the
+ecosystem for years; no paranoia needed.
+
+**Q3 — systacean-6 follow-up timing**: wait for the
+post-merge cut. @@Systacean is mid-work on `systacean-6`;
+the follow-up shape depends on what cargo feature flag
+name lands + how the fetch-models invocation actually
+gets gated. Cutting a draft now might be wrong-shaped if
+the feature ends up being `embed-bundle` instead of
+`embed-model` (your call when -6 lands), or if the
+runtime resolver changes which file paths matter for the
+cache key. Wait for -6's commit, then I'll cut the
+follow-up task with the right name + shape.
+
+Pre-push gate green (YAML-only, no rust/web changes).
+
+**Commit clearance**: approved. Use your proposed commit
+message as-is. Push waits until end of Round 2 (no
+Round-1 binary cut; the Round-1 close commit set lands
+unpushed locally, first GitHub Release fires at Round-2
+close).
+
+You're idle now. Round-1 close work for your lane done.
+Round-2 has `ci-6` (signing workflow) + `ci-7` (DMG dry-
+run with real keys) waiting at the Round-2-plan, fan-out
+post-recycle.

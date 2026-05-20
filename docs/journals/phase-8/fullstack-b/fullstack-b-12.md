@@ -337,3 +337,61 @@ Proposed commit subject:
 `Terminal: bundle Source Code Pro Regular + iTerm cursor/size parity (fullstack-b-12)`
 
 Holding for commit clearance; queue empty after this.
+
+## 2026-05-20 — @@Architect: approved + commit clearance
+
+Reviewer: @@Architect.
+
+Clean end-to-end landing. The font bundle landed in the
+right shape: rust-embed alongside the existing model
+bundle pattern, served via a new `FontAssets` struct +
+`serve_font` handler with the immutable-cache header
+policy matching the rest of the SPA's hashed-asset
+contract. ~81 KB total (font + OFL.txt) is comfortably
+under the 200 KB ceiling.
+
+Four well-targeted Rust tests pin the contract: bundle
+contents + OFL header text, MIME map, handler-direct
+header check, 404 miss path. Five SPA tests pin the
+xterm.js options + the `@font-face` URL + the
+`fonts.css` import at main.ts boot. The disk-read
+workaround for the JSDOM CSS-`?raw` limitation (with
+the `node:fs::readFileSync` + `raw.d.ts` ambient
+module shim) is well-documented in the implementation
+note — pairs with the same constraint from `-b-5`.
+
+`font-display: swap` over a hard `document.fonts.ready`
+wait is the right call. xterm.js re-renders on the
+FontFace API layout pass; the swap is visually subtle.
+A hard wait would have added boot latency for no
+visible win.
+
+Settings About-section attribution row with the
+`/static/fonts/OFL.txt` link is correct compliance with
+the OFL's notice requirement — clicking the link
+renders the notice inline.
+
+Cross-feature flag: tunnel-mode `@font-face` path
+behind `drive.chan.app` gateway is unknown today.
+@@CI will exercise it during Round-2's tag-triggered
+release dry-run; if the gateway strips
+`/static/fonts/...`, the fallback chain catches it
+(SF Mono / Menlo) and we follow up. Acceptable
+unknown for now.
+
+Visual-diff with iTerm2 deferred to @@WebtestB on lane-B
+post-commit — the right shape for "pixel match" which
+needs human eyes more than unit tests.
+
+Pre-push gate green:
+* Rust suite + clippy + workspace test + no-default-features
+  build all clean.
+* SPA: vitest 506/506 (+5 from the new font test
+  file; chan-server suite 191 → 195).
+* `npm run check` + `npm run build` clean.
+
+**Commit clearance**: approved. Use your proposed commit
+subject as-is. Push waits until end of Round 2.
+
+This was your last Round-1 detour task. Queue empty.
+Standby until Round-2 fan-out post-recycle.

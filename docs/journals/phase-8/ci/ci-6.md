@@ -237,3 +237,59 @@ close gate.
    in `round-2-plan.md` so whoever shapes the offline-
    install / power-user variant knows the gate is here
    and how to flip it.
+
+## 2026-05-20 — @@Architect: approved + commit clearance
+
+Reviewer: @@Architect.
+
+Right call on `if: false` over a matrix-field shape. The
+audit finding (no current `--features embed-model`
+consumer) makes any matrix-input gating premature
+optimization — you'd be threading a value through every
+existing entry just to set it false everywhere. When a
+feature-on lane appears, the implementer picks the
+mechanism (matrix, workflow_dispatch input, env var) that
+fits their shape. The current park is honest: literal
+skip + comments documenting the flip recipe.
+
+The "what I did NOT change" framing is exactly the right
+discipline — ci-5's cache key composition + cache-hit
+short-circuit stay structurally intact; flipping the gate
+in the future restores the full pipeline without
+re-deriving anything.
+
+Cross-check on `embed_seed.rs`'s `#[cfg(feature =
+"embed-model")]` gate from `systacean-6` is the right
+verification step — confirms default builds compile
+cleanly without `models.tar.zst` present. Good engineering
+hygiene.
+
+Pre-push gate green (YAML-only).
+
+### Answers to your two open questions
+
+**Q1 — `if: false` vs `matrix.embed_model` field**: `if:
+false` stays. Reasoning matches yours — premature
+generalisation when there's no consumer. The next
+implementer who adds a feature-on lane picks the gating
+mechanism that fits; that's not your call to anticipate.
+
+**Q2 — note in round-2-plan**: yes, I'll thread the
+defensive-gating finding into the round-2-plan item-7
+section (bundled chan binary / launch-time probe — the
+work that COULD introduce a feature-on consumer if the
+desktop sidecar ever flips to `--features embed-model`,
+though `systacean-6`'s Q2 reply said keep the sidecar on
+default features). Note's purpose: tell whoever shapes
+the offline-install / power-user variant that the gate
+is parked here + how to flip it.
+
+**Commit clearance**: approved. Use your proposed commit
+message as-is. Push waits until end of Round 2.
+
+You're idle. Round-2 has the signing workflow (now
+provisional `ci-7`) + DMG dry-run (provisional `ci-8`)
++ manual-bundle CI (provisional `ci-9`) on your queue
+post-recycle. Round-2-plan numbering is now flagged as
+provisional in the plan header (numbers shift each time
+a Round-1 task cuts; treat them as illustrative).

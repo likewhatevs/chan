@@ -935,3 +935,125 @@ Queue after `systacean-17`:
 Standing topic-level commit clearance.
 
 — @@Architect, 2026-05-19 11:30 BST
+
+## 2026-05-19 14:30 BST — poke: recycle ack + systacean-19 cut (watcher must stay under drive root)
+
+@@Architect recycled mid-floor (previous session
+closed unexpectedly). Re-reading state from the
+journals. Your idle pings (11:17 → 14:10) acked —
+sorry for the silence on my side; that was the
+recycle, not me leaving you hanging.
+
+New task: [../systacean/systacean-19.md](../systacean/systacean-19.md).
+
+The terminal-tab watcher resolver
+(`crates/chan-server/src/routes/terminal.rs:721`)
+sandboxes relative paths through
+`resolve_safe_strict` but the absolute-path branch
+passes the caller's path straight through without
+checking it lives under the drive root. @@Alex
+flagged: the watcher dir must NOT be outside the
+drive's root. Defense-in-depth + invariant hygiene
+(same boundary every other filesystem op respects).
+
+Task file has acceptance criteria including
+canonicalize-before-compare for symlink escape, and
+test extensions. Wire the absolute branch through
+`resolve_safe_strict` if its contract lines up, or
+add a sibling check; pick whichever lands cleaner.
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 14:30 BST
+
+## 2026-05-19 14:40 BST — ack: systacean-19 landed
+
+`cb3e42f` (`Constrain terminal watcher paths to drive
+root`) on main. Ack'd. Canonicalize-before-compare
+covers the symlink-escape vector cleanly; relative
+branch still routes through `resolve_safe_strict`
+unchanged. Gate green.
+
+Queue empty again. Stand by.
+
+— @@Architect, 2026-05-19 14:40 BST
+
+## 2026-05-19 15:05 BST — ack: standby noted
+
+14:42 BST ping absorbed. Nothing in flight on your
+side. Stand by.
+
+— @@Architect, 2026-05-19 15:05 BST
+
+## 2026-05-19 23:40 BST — poke: systacean-20 cut (cut v0.11.0 release)
+
+@@Alex called the tag — phase 7 wraps with
+v0.11.0. All Lane A + Lane B queues drained;
+final comprehensive walk skipped (per-task
+green gates + unit-test coverage suffice).
+
+Task: [../systacean/systacean-20.md](../systacean/systacean-20.md).
+
+### Version bumps
+
+* `Cargo.toml:20` workspace
+  `version = "0.10.1"` → `"0.11.0"`
+  (cascades to all `version.workspace =
+  true` crates).
+* `web/package.json:3`
+  `"version": "0.10.1"` → `"0.11.0"`.
+* `Cargo.lock` regenerates; stage the diff.
+* Audit `desktop/src-tauri/tauri.conf.json`
+  for a separate version pin.
+
+### Tag + push
+
+```bash
+git tag v0.11.0
+git push origin v0.11.0
+```
+
+Tag signing: @@Alex's call. chan-desktop
+dev-key rotation is a phase-8 prereq for
+first public release per `desktop/CLAUDE.md`;
+NOT blocking for v0.11.0 (internal signing
+scope).
+
+### Release notes
+
+Marquee surface enumerated in the task file —
+Hybrid NAV (renamed from Pane Mode), flippable
+Hybrids + per-side themes, multi-FB/multi-Graph
+tabs, carousel + indexing slide, British
+spelling, smart tab titles, menu cleanups,
+watcher containment, desktop launcher,
+Cmd+N → new window, Cmd+S drop.
+
+Standing topic-level commit clearance.
+
+— @@Architect, 2026-05-19 23:40 BST
+
+## 2026-05-19 23:50 BST — ack: v0.11.0 landed
+
+`18bdb34` Release v0.11.0 on `main`. Tag
+`v0.11.0` pushed. Clean ship across:
+* workspace `Cargo.toml`
+* `Cargo.lock` regenerated
+* `web/package.json` + `web/package-lock.json`
+* `desktop/src-tauri/tauri.conf.json`
+
+Verification chain green
+(`cargo build --release`, `cargo test
+--release`, `web/npm run build`,
+`scripts/pre-push`, `chan --version`).
+
+Desktop signing dev-key rotation correctly
+deferred to phase 8 prereq (internal scope
+for v0.11.0 is fine).
+
+**Phase 7 wraps.** When phase 8 opens, the
+9-item backlog at
+[`../next-phase-backlog.md`](../next-phase-backlog.md)
+is the queue.
+
+— @@Architect, 2026-05-19 23:50 BST

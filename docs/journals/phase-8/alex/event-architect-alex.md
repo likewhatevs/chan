@@ -1,0 +1,166 @@
+# event-architect-alex.md
+
+From: @@Architect
+To: @@Alex
+Date: 2026-05-20
+
+## 2026-05-20 — poke (Round-1 test-server URL hand-off)
+
+@@WebtestA cleared the lane-A walkthrough and parked a live
+test server for you to click around. URL with bearer token:
+
+```
+http://127.0.0.1:8787/?t=Am6NjQ7pSNeH2ibHCyaftLu8m8MuNntm
+```
+
+Drive: `/tmp/chan-test-phase8-wa/` (chan repo seeded as the
+drive). Watcher attached to `watcher-events/` with sample
+survey events + a reply file in place if you want to inspect
+the bubble overlay path.
+
+Coverage already verified by @@WebtestA: bugs 1, 2, 4, 5, 7,
+9, 10, 18, 19, 21 hold on HEAD. Active repros that still need
+fixes: bug 8 (graph false-missing, 8/1102 nodes), bug 11
+(image-insert pushes cursor + view doesn't roll). Partials:
+bug 6 (Cmd+T blocked on web; native viable), bug 20 (re-open
+with bubble present focuses prompt input). Could-not-
+reproduce: bug 14 (watcher first-try hang).
+
+Full sweep summary at the tail of
+[../webtest-a/webtest-a-1.md](../webtest-a/webtest-a-1.md)
+under "Round-1 bug-sweep summary (curated)". @@WebtestB has a
+parallel lane-B server up at `127.0.0.1:8820` against
+`/tmp/chan-test-phase8-wb` if you want to A/B against a
+different drive seed.
+
+Webtests will keep their servers up through Round-1 close. No
+action gated on this; surfacing per the test-server URL hand-
+off step in `process.md`.
+
+## 2026-05-20 — poke (WebtestB blocker — needs your call)
+
+@@WebtestB cleared every bug in their coverage cluster
+*except* `fullstack-b-1` (chan-desktop window-config LRU).
+They source-verified the change (17 chan-desktop tests pass,
+source matches the plan) but the runtime walkthrough needs
+`Chan.app` launched on real macOS — and that sits outside
+their standing webtest permission (terminal exec scoped to
+`chan serve` + Chrome MCP; not Tauri bundle launch).
+
+Two options. I recommend (a):
+
+1. **(a) Extend @@WebtestB's standing permission for the rest
+   of Round 1** to include `npm run tauri dev` / `Chan.app`
+   launch against a throwaway drive. Minimal disruption — both
+   webtest lanes are already standing through Round 1; this
+   adds one runtime command + window-launch to lane B's
+   existing scope. Lane B picks up the runtime walkthrough
+   on `fullstack-b-1` directly.
+2. **(b) Route the runtime walkthrough to a code lane with
+   existing Tauri launch capability** (@@FullStackB built the
+   feature, so they could self-verify). This breaks the
+   "webtests own audit-trail walkthroughs" lane boundary — a
+   code lane doesn't normally produce verdict appends.
+
+If (a), the approval can be transcribed straight into
+[event-webtest-b-alex.md](event-webtest-b-alex.md) with the
+existing standing-approval format ("approved (transcribed by
+@@Architect)") — scope add-on: `npm run tauri dev` /
+`Chan.app` runtime launch against a throwaway drive, through
+Round-1 close.
+
+## 2026-05-20 — agent-recycle (@@FullStackA)
+
+@@Alex called Round 1 closed. Recycle @@FullStackA.
+
+Handover anchor: most-recent entry in
+[../fullstack-a/journal.md](../fullstack-a/journal.md);
+queue empty after `-27` clearance. Last commit in HEAD
+is up through `-26` (Hybrid editor toolbar parity);
+`-27` (Hybrid hamburger polish) sits uncommitted in
+working tree (Pane.svelte + perHybridTheme.test.ts).
+Fresh session should pick up the `git status` working
+tree + commit -27 first, then standby until Round-2
+fan-out.
+
+### Amendment 2026-05-20 — hold recycle until -27 commits
+
+@@Alex poked the current @@FullStackA session; they
+picked up the `-27` commit themselves. Hold the fresh-
+session spawn until the current session lands the
+commit, otherwise two sessions would both try to
+commit the same files (Pane.svelte + perHybridTheme
+.test.ts).
+
+Recycle proceeds AFTER `-27` is in HEAD. The current
+session's bootstrap context is already correct +
+queue-empty; they commit + standby. When @@Alex is
+ready (or when a context-window pressure surfaces),
+spawn the fresh session against an already-clean
+working tree.
+
+## 2026-05-20 — agent-recycle (@@FullStackB)
+
+@@Alex called Round 1 closed. Recycle @@FullStackB.
+
+Handover anchor: most-recent entry in
+[../fullstack-b/journal.md](../fullstack-b/journal.md);
+queue empty after `-12` clearance. All 12 tasks
+committed in HEAD up through `-12` (terminal Source
+Code Pro + cursor parity). Standby for Round-2
+signing pipeline + bundled-chan-binary work.
+
+## 2026-05-20 — agent-recycle (@@Systacean)
+
+@@Alex called Round 1 closed. Recycle @@Systacean.
+
+Handover anchor: most-recent entry in
+[../systacean/journal.md](../systacean/journal.md);
+queue empty after `-9` clearance. All Round-1 tasks
+committed (`-1`/`-2`/`-4`/`-5`/`-6`/`-7`/`-8`/`-9` +
+Makefile fill-in). `-3` cancelled per the no-Round-1-
+binary restructure. Standby for Round-2 signing-key
+rotation + chan-drive pre-flight + `chan reports
+enable/disable` CLI.
+
+## 2026-05-20 — agent-recycle (@@CI)
+
+@@Alex called Round 1 closed. Recycle @@CI.
+
+Handover anchor: most-recent entry in
+[../ci/journal.md](../ci/journal.md); queue empty after
+`ci-6` clearance. Six commits across five task IDs
+(`ci-1` / `ci-2` ×2 / `ci-3` / `ci-4` / `ci-5` / `ci-6`).
+Standby for Round-2 signing workflow (provisional
+`ci-7`) + DMG dry-run with real keys (provisional
+`ci-8`). Cert provisioning per the `ci-3` brief is the
+prerequisite @@Alex is dogfooding in parallel.
+
+## 2026-05-20 — agent-recycle (@@WebtestA)
+
+@@Alex called Round 1 closed. Recycle @@WebtestA.
+
+Handover anchor: most-recent entry in
+[../webtest-a/journal.md](../webtest-a/journal.md);
+last activity is the Round-1 sweep + per-fix verdicts
+at the tail of `webtest-a-1.md`. Wave-2/-3 verification
+cadence partial — @@Alex's call to roll the remaining
+verifications into Round 2's BOOT + pre-flight work
+since those changes rebuild the binary. Standby for
+Round-2 walkthroughs against the new signed-DMG
+artifacts.
+
+## 2026-05-20 — agent-recycle (@@WebtestB)
+
+@@Alex called Round 1 closed. Recycle @@WebtestB.
+
+Handover anchor: most-recent entry in
+[../webtest-b/journal.md](../webtest-b/journal.md);
+last activity is the wave-1 verifications + proactive
+walks on `systacean-7` (caught `systacean-8` + `-9`).
+Tauri-launch permission extension granted +
+transcribed in
+[event-webtest-b-alex.md](event-webtest-b-alex.md);
+fresh session inherits the extension. Standby for
+Round-2 walkthroughs against the new signed-DMG +
+chan-desktop work.

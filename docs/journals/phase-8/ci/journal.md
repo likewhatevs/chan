@@ -1,0 +1,588 @@
+# @@CI's phase-8 journal
+
+Author: @@CI
+Date: 2026-05-19
+
+CI infrastructure: GitHub Actions workflows, build matrix, lint +
+test on PR, release artifact builds, signing pipeline, notarization.
+Sister lane to @@Systacean; boundary heuristic in
+[`../process.md`](../process.md) Lane boundaries section.
+
+North-star driver: deliver tag-triggered `chan-v*` → notarized DMG
+(plus signed Windows + Linux installers) → GitHub Release upload.
+
+Append-only. New entries go at the bottom under a dated heading.
+
+## 2026-05-19 — boot + ci-1 + ci-2
+
+Booted into phase 8 as @@CI (first session for this lane). Read
+contact card, syseng + rustacean skill guides, phase-8 process,
+phase-7 inherited process, request.md, the phase-8 headline
+deliverable + items 7/8 in next-phase-backlog.md, my journal,
+and both task files (`ci-1.md` + `ci-2.md`). No incoming events
+yet (`alex/event-architect-ci.md` and `alex/event-ci-alex.md`
+do not exist).
+
+### Standing state of CI when I arrived
+
+* `.github/workflows/ci.yml` already covered the Rust gate
+  (fmt, clippy + test on Ubuntu + Windows, no-default-features).
+  macOS scoped to release.yml per commit e45654a's cost call.
+  No web/npm gate.
+* `.github/workflows/release.yml` builds chan CLI binaries +
+  .deb/.rpm/.pkg on `v*` tag, publishes to GitHub Release. Does
+  NOT build chan-desktop.
+* `desktop/.github/workflows/ci.yml` is stranded post-workspace
+  merge — GitHub Actions ignores it; flagging for @@Architect.
+
+### ci-1 (landed)
+
+Added a Linux-only `web` job that runs `npm ci`, `npm run check`,
+`npm run test`, `npm run build`. Refreshed the file header
+comment. Local sanity on v0.11.0: svelte-check 0/0/0, vitest
+446/446, vite build 2.28s. @@Architect reviewed in
+`ci/ci-1.md`, picked option 1 (no per-PR macOS), cleared
+commit. Committed at 6d5d8ac; not pushed (Round-1 close
+commit-grouping waits).
+
+### ci-2 (landed, ready for review)
+
+Added `.github/workflows/release-desktop.yml` triggering on
+`chan-v*` tags + `workflow_dispatch`. Linux + macOS matrix.
+Build path mirrors `desktop/Makefile`'s `make build`: npm ci
++ fetch-models + chan-bin (`npm run build`, `cargo build
+--release --bin chan`, copy sidecar) + `cargo tauri build`.
+Bundle uploaded as workflow artifact; no GitHub Release upload
+(Round-2). Header comment documents the full secret-name list
+needed for signing / notarization / Authenticode / GPG / GH
+Release upload.
+
+Things noticed but not acted on (in `ci/ci-2.md`):
+
+* Stranded `desktop/.github/workflows/ci.yml`. Lane is @@CI
+  but warrants architect input before deletion.
+* `desktop/Makefile`'s `app-signed` / `app-notarized` echo a
+  stale `src-tauri/target/release/bundle/...` path; bundle
+  actually lands at workspace `target/release/bundle/...`
+  because `desktop/src-tauri` is a workspace member. Not
+  destructive; @@Systacean lane.
+
+Filed poke event for @@Architect.
+
+## 2026-05-19 — ci-2 cleared + landed + stranded workflow dropped
+
+@@Architect reviewed ci-2: approved as proposed. Answers to the
+three open questions logged in `ci/ci-2.md`:
+
+* Stranded `desktop/.github/workflows/ci.yml` — delete now,
+  separate commit.
+* Workflow dry-run — defer to Round-1 close so we exercise the
+  ci-1 + ci-2 + everything-else combined state via the
+  `workflow_dispatch` trigger; permission event fires alongside
+  @@Systacean's `systacean-3` tag.
+* Windows lane — Round-2 with signing; no second unsigned
+  matrix entry now.
+
+Two commits landed (unpushed; Round-1 close holds):
+
+* 97b82df — `ci: tag-triggered chan-desktop release scaffold
+  (unsigned)`. New `.github/workflows/release-desktop.yml` +
+  ci-2.md append.
+* 97ca38a — `ci: drop stranded desktop/.github/workflows/ci.yml
+  (workspace-merge leftover)`. Tail-commit per @@Architect's
+  one-line suggestion.
+
+Carry-on signal from @@Architect: idle / available for Round-2
+prep (release CI signing pipeline) once the bug wave settles.
+
+## 2026-05-20 — recycled session boot + ci-3
+
+Booted into a fresh @@CI session via the bootstrap prompt.
+Re-read contact card + skill guides + phase process +
+phase-7 inherited process + request + this journal + ci-1
+and ci-2 task files + both event files. Working tree
+matches the recycled-state I expected: ci-1 + ci-2 +
+stranded-file deletion are committed (6d5d8ac / 97b82df /
+97ca38a) and unpushed; branch is 19 commits ahead of
+origin/main pending Round-1 close.
+
+### ci-3 (landed, ready for review)
+
+@@Architect cut wave-2 task: written Apple Developer ID
+provisioning + GitHub Actions secrets brief (research lap;
+workflow YAML is `ci-4`). Brief lives at
+[`../../../release/macos-signing.md`](../../../release/macos-signing.md)
+in a new `docs/release/` directory.
+
+365 lines, single doc. Six-secret list anchored on what
+`desktop/Makefile`'s `app-notarized` already reads (so
+`ci-4` does not have to rename anything):
+`APPLE_CERTIFICATE_BASE64`, `APPLE_CERTIFICATE_PASSWORD`,
+`APPLE_SIGNING_IDENTITY`, `APPLE_TEAM_ID`, `APPLE_ID`,
+`APPLE_PASSWORD`. Cert-import recommendation:
+`apple-actions/import-codesign-certs@v3`; hand-rolled
+`security` block included as fallback for the record.
+Seven-step pre-Round-2 checklist for @@Alex at the bottom.
+
+Doc-only change; pre-push gate satisfied on the markdown
+side (no em dashes, ASCII tables within 80 cols, factual
+prose). No code touched.
+
+Three open questions in `ci/ci-3.md`: path confirmation
+for the new `docs/release/` directory, Windows-brief
+sequencing (separate doc when the lane opens, recommended),
+and whether the `make app-notarized` local smoke test
+should be lifted into `ci-4`'s acceptance criteria.
+
+Filed poke event for @@Architect at
+`alex/event-ci-architect.md`. Idle pending review.
+
+## 2026-05-20 — ci-3 cleared + landed
+
+@@Architect approved + cleared `ci-3` for commit (full
+reply in [`ci-3.md`](ci-3.md) tail). Answers to the three
+open questions:
+
+* `docs/release/` path → confirmed.
+* Windows brief → separate doc later (`ci-5` once macOS is
+  green).
+* `make app-notarized` smoke test → stays @@Alex-side
+  prereq, not a duplicate CI step in `ci-4`.
+
+One commit landed at **141aa4d** (`docs: macOS signing +
+notarization brief (pre-Round-2 reference)`), unpushed
+pending Round-1 close. 2 files, +655: the brief + the
+`ci-3.md` task file. Per the per-task convention from
+6d5d8ac / 97b82df, the journal + event files stay
+untracked until the Round-1 close commit group rolls them
+up.
+
+### Fill-in pick
+
+@@Architect offered two low-stakes idle options:
+
+* **A**: cache audit of `ci.yml` + `release-desktop.yml`
+  (Rust target cache, npm cache, sccache opportunities).
+* **B**: bring forward the `release-desktop.yml`
+  `workflow_dispatch` dry-run from Round-1 close (needs
+  @@Alex permission + @@Systacean timing coordination).
+
+Picking A. It's purely independent: no permission event,
+no cross-lane coordination, and either finding gains
+(easy diff to lift) or a clean "nothing to add" audit
+trail entry is useful before Round 2. B parks until
+@@Systacean's `systacean-3` timing is clearer.
+
+Firing carry-on poke to @@Architect with the pick.
+
+### Cache audit — findings
+
+Audited `.github/workflows/ci.yml`,
+`.github/workflows/release.yml`, and
+`.github/workflows/release-desktop.yml` for caching gaps.
+No file edits — research only. Findings ranked by value /
+risk so @@Architect can decide whether to cut a follow-up
+task to land any of them.
+
+#### Current good state
+
+* `Swatinem/rust-cache@v2` is correctly placed in every
+  job that runs `cargo build/clippy/test` against a
+  workspace target dir: `ci.yml` (`test`,
+  `no-default-features`), `release.yml` (`test-linux`,
+  `test-macos`), `release-desktop.yml` (`build`).
+* `actions/setup-node@v4` with `cache: 'npm'` and
+  `cache-dependency-path: chan/web/package-lock.json` is
+  consistent across `ci.yml` `web` job + both release
+  workflows.
+* `fmt` job in `ci.yml` correctly omits rust-cache:
+  `cargo fmt --check` parses with rustfmt only and does
+  not write the target dir.
+
+#### Findings
+
+1. **High value, low risk: `tauri-cli` install via prebuilt
+   binary in `release-desktop.yml`** (line 109).
+
+   Current: `cargo install tauri-cli --locked --version
+   "^2"`. Builds tauri-cli from source every workflow run
+   (rust-cache covers the workspace target dir, not
+   `~/.cargo/bin/`). Compile time ~3-5 min per matrix
+   entry on a cold runner; the matrix has 2 entries
+   (ubuntu + macos), so ~6-10 min wasted per `chan-v*`
+   tag.
+
+   Recommended swap: `taiki-e/install-action@v2` with
+   `tool: tauri-cli@^2`. Pulls a prebuilt binary,
+   completes in seconds. Sample shape:
+
+   ```yaml
+   - uses: taiki-e/install-action@v2
+     with:
+       tool: tauri-cli@^2
+   ```
+
+   Alternative: `cargo-binstall`. Same outcome, more
+   moving parts.
+
+2. **High value, low risk: `cargo-deb` + `cargo-generate-rpm`
+   install via prebuilt binary in `release.yml`** (lines
+   192, 208).
+
+   Same pattern as finding 1: `cargo install cargo-deb
+   --locked` and `cargo install cargo-generate-rpm
+   --locked` compile from source every `v*` tag.
+   Combined ~5-8 min per release on the Linux build
+   entries.
+
+   Recommended swap: `taiki-e/install-action@v2` for both,
+   in place of the two `cargo install` lines.
+   Side benefit: removes the `--locked` failure mode where
+   a transitive dep yank breaks the install step.
+
+3. **Medium value, medium risk: cache the BGE-small
+   embedding model** in `release.yml` (line 161) and
+   `release-desktop.yml` (line 125).
+
+   Current: `cargo run --release -p fetch-models` runs on
+   every workflow execution, downloading ~140 MB from
+   HuggingFace into
+   `crates/chan-server/resources/models/` before the
+   release binary build.
+
+   The model rarely changes (BGE-small-en-v1.5 has been
+   stable for over a year). Caching the destination dir
+   between runs saves ~30-60s per matrix entry on the
+   download + the cache-hit code path is fast.
+
+   Cache shape (sketch):
+
+   ```yaml
+   - uses: actions/cache@v4
+     with:
+       path: chan/crates/chan-server/resources/models
+       key: bge-small-${{ hashFiles('chan/crates/fetch-models/**') }}
+   ```
+
+   Cache key tied to `fetch-models` crate's source so any
+   change to which model gets fetched invalidates the
+   cache. Risk: if `fetch-models` ever switches model
+   downloads to a path-keyed scheme, the cache key
+   handle needs to update. Low risk today; flag if
+   `fetch-models` changes.
+
+4. **Low value, low risk: apt cache in
+   `release-desktop.yml`** (line 99). `apt-get update +
+   install` adds ~20-40s on each Linux job.
+   `awalsh128/cache-apt-pkgs-action` can cache the
+   downloaded `.deb`s. The marginal win is small and the
+   action is a third-party dep we have not adopted
+   elsewhere; not worth pulling in for one workflow.
+   Mention only for completeness.
+
+#### Estimated wall-clock savings per release
+
+| Finding   | Per matrix entry | Total per release        |
+|-----------|------------------|--------------------------|
+| 1 (tauri) | ~3-5 min         | ~6-10 min (2 entries)    |
+| 2 (debrpm)| ~3-4 min         | ~5-8 min (Linux entries) |
+| 3 (model) | ~30-60s          | ~3-6 min (matrix-wide)   |
+| 4 (apt)   | ~20-40s          | ~30s (Linux only)        |
+
+Wall-clock impact is tag-frequency-bounded: chan ships
+~one release per round, so the actual minutes saved
+per quarter is small. The bigger benefit is faster
+feedback when a `workflow_dispatch` dry-run is needed
+to validate a workflow change. Findings 1 + 2 alone
+take a `release-desktop.yml` dry-run from ~12 min to
+~4 min.
+
+#### Not changing today
+
+No edits queued. @@Architect to decide whether any of
+1 / 2 / 3 warrants a follow-up task. If 1 + 2 land
+together, suggest a single small task ("ci: swap
+`cargo install` for prebuilt binaries in release
+workflows") since both are the same one-line shape. 3
+is a separate task (different action, different cache
+key reasoning).
+
+Filing carry-on poke for @@Architect with the highlights.
+
+## 2026-05-20 — ci-4 (taiki-e/install-action swap)
+
+@@Architect cut `ci-4` based on the cache-audit F1 + F2
+findings: swap `cargo install` for `taiki-e/install-action@v2`
+in three release-workflow install steps. F3 (BGE model
+cache) stays parked for Round 2 per the different risk
+profile.
+
+Edits made:
+
+| File                                       | Step                       | Tool spec              |
+|--------------------------------------------|----------------------------|------------------------|
+| `.github/workflows/release-desktop.yml`    | Install tauri-cli          | `tauri-cli@^2`         |
+| `.github/workflows/release.yml`            | Install cargo-deb          | `cargo-deb` (latest)   |
+| `.github/workflows/release.yml`            | Install cargo-generate-rpm | `cargo-generate-rpm`   |
+
+Tauri-cli pin preserved (`^2` from original `cargo install
+--version "^2"`). cargo-deb + cargo-generate-rpm preserve
+their previously-unpinned "latest" behaviour. WHY comments
+above each step name the wall-clock motivation.
+
+Validation: YAML structural sanity via grep + manual
+re-read. Runtime dry-run via `workflow_dispatch` gated:
+`act` not installed locally, Round-1 push hold blocks a
+draft-branch remote dry-run. The runtime check pairs with
+the `release-desktop.yml` `workflow_dispatch` dry-run
+already parked for Round-1 close alongside @@Systacean's
+`systacean-3` (per `ci-2.md` tail). Combined dry-run now
+covers ci-2 + ci-4 layered together before the first real
+`chan-v*` tag fires.
+
+Edit-permission note: auto-classifier blocked the YAML
+validation step initially, flagging it as scope escalation
+on `.github/workflows/` against the prior turn's
+"no edits — research only" framing. @@Alex confirmed
+authorization per @@Architect's `ci-4` task spec, then I
+proceeded with validation + commit.
+
+Commit at **385da20** (`ci: swap cargo install for
+taiki-e/install-action in release workflows`). 3 files,
++208 / -3: the two workflows + the `ci-4.md` task file.
+Unpushed pending Round-1 close.
+
+Two open questions in `ci/ci-4.md` for @@Architect: explicit
+major-version pins on cargo-deb + cargo-generate-rpm (recommend
+leaving unpinned to match prior behaviour), and dry-run
+sequencing (recommend keeping ci-2 + ci-4 bundled at the
+parked Round-1-close dry-run since macOS minutes are already
+burning).
+
+Idle pending decision. Round-2 signing-pipeline task is now
+`ci-5` per @@Architect's renumbering note.
+
+## 2026-05-20 — ci-5 (BGE bundle cache)
+
+@@Alex pulled F3 forward into Round 1 (was parked for
+Round 2). @@Architect cut `ci-5` with explicit
+"Authorization: yes" framing per the
+[`feedback-classifier-shared-infra`](../../../../../.claude/projects/-Users-fiorix-dev-github-com-fiorix-chan/memory/feedback_classifier_shared_infra.md)
+pattern we just discussed. Worked smoothly — classifier
+saw the authorization signal in the task spec and didn't
+flag the YAML edits this time. Pattern validated.
+
+Structural change noted: Round 1 now closes WITHOUT a
+binary cut. v0.11.1 tag cancelled. Round 2 = ci-6
+(signing-workflow YAML) + ci-7 (DMG-on-tag dry-run with
+real keys). Round 3 = public repo flip. Numbering shift
+again: ci-6 is the Round-2 signing-workflow task.
+
+### Cache shape
+
+`actions/cache@v4` step inserted in both `release.yml`
+and `release-desktop.yml`, gating the existing
+`cargo run --release -p fetch-models` invocation on
+`if: steps.cache-bge-bundle.outputs.cache-hit != 'true'`.
+
+Key: `bge-bundle-${{ hashFiles('chan/crates/fetch-models/**',
+'chan/crates/chan-drive/src/index/config.rs') }}`. The
+second hash input is the file declaring `pub const
+DEFAULT_MODEL: &str = "BAAI/bge-small-en-v1.5"`; a model
+swap rewrites that line and invalidates the cache.
+Forward-compat with the Round-2 model-picker shape per
+`systacean-6` acceptance criteria.
+
+OS-independent key (no `runner.os` segment). Bundle is
+byte-identical across OSes; matrix shares one cache.
+First tag pays the fetch cost once, subsequent tags hit
+on every matrix entry.
+
+### Why workflow-level guard, not tool-level
+
+`actions/cache@v4` restores the bundle but NOT the
+hf-hub staging dir under `target/fetch-models-cache/`.
+Without the `if:` guard, fetch-models would re-download
+the model into an empty staging dir, then re-encode
+because staging mtimes are newer than the restored
+bundle. Workflow-level skip is the cleanest fix; zero
+Rust changes needed. Tool-level "skip if bundle present"
+guard considered + rejected for blast-radius reasons
+(would change local-dev re-stage workflow).
+
+### systacean-6 re-scope: option 2 (keep global)
+
+Picked the global-cache option. After `systacean-6`
+lands (default build no longer embeds the model), the
+`cargo run -p fetch-models` step ITSELF becomes
+conditional on `--features embed-model`, not just its
+cache. Both gates belong together in a single follow-up
+`ci-N`, not pre-emptively split here. Flagged in the
+task tail + as an open question to @@Architect (queue
+the follow-up draft now or wait for systacean-6 merge).
+
+### Commit
+
+**0c076f0** (`ci: cache encoded BGE-small bundle
+between release runs`). 3 files, +368 / -5: two
+workflows + the `ci-5.md` task file. Unpushed; per the
+2026-05-20 structural change, Round 1 no longer cuts
+v0.11.1, so the next push trigger shifts to whatever
+Round 1 close ultimately bundles.
+
+Three open questions in `ci/ci-5.md` for @@Architect:
+cache-key field scope (chan-drive embeddings dir wider
+hash net?), per-OS isolation vs shared key, and
+systacean-6 follow-up task queuing.
+
+Idle. Round-2 prep (`ci-6` signing-workflow) parks until
+@@Alex completes the cert checklist + `systacean-6`
+shapes the binary.
+
+## 2026-05-20 — ci-5 cleared + Round-1 close
+
+@@Architect approved + cleared `ci-5` (full reply in
+[`ci-5.md`](ci-5.md) tail). All three open questions
+answered:
+
+* Hash-input scope → keep minimal (`fetch-models/**` +
+  `config.rs`). Embeddings preprocessor code is
+  inference-time, not fetch-time; widening the hash
+  invalidates the cache on unrelated edits without
+  changing the cached bytes' validity.
+* OS-independent shared cache key → keep shared.
+  Bundle IS byte-identical across runners; per-OS would
+  just waste cache slots.
+* systacean-6 follow-up → wait for the post-merge cut.
+  Follow-up shape depends on what cargo feature flag
+  name lands + how the fetch invocation actually gets
+  gated; cutting a draft now risks wrong-shaping.
+
+Commit-message approved as-is; already committed at
+**0c076f0**. Push waits until end of Round 2 — the
+Round-1 close commit set lands unpushed locally, first
+GitHub Release fires at Round-2 close per the
+structural change.
+
+### Round-1 summary for my lane
+
+| Task | Topic                                          | Commit  |
+|------|------------------------------------------------|---------|
+| ci-1 | web/ gate per-PR                               | 6d5d8ac |
+| ci-2 | tag-triggered chan-desktop release scaffold    | 97b82df |
+| ci-2 | drop stranded desktop/.github/workflows/ci.yml | 97ca38a |
+| ci-3 | macOS signing + notarization brief             | 141aa4d |
+| ci-4 | swap cargo install → taiki-e/install-action    | 385da20 |
+| ci-5 | cache encoded BGE-small bundle                 | 0c076f0 |
+
+Six commits across five tasks. All unpushed. ci-2 + ci-4
++ ci-5 all bundle at the parked `workflow_dispatch`
+dry-run pair with @@Systacean's `systacean-3`; that
+parking remains valid even with the v0.11.1 cancellation
+since the dry-run is just YAML validation.
+
+### Open Round-2 lane
+
+* **ci-6** — signing workflow YAML consuming the six
+  secrets from the `ci-3` brief. Cuts post-recycle once
+  @@Alex completes the cert provisioning checklist.
+* **ci-7** — DMG-on-tag dry-run with real keys
+  provisioned in GitHub Actions Secrets. Cuts after ci-6
+  lands.
+* **Provisional follow-up** (no number yet) — systacean-6
+  re-scope: gate both the fetch step and its cache step
+  on `--features embed-model` once -6 merges. @@Architect
+  cuts the task with the right shape post-merge.
+
+Stand down for Round-1 close. Idle until Round-2
+fan-out.
+
+## 2026-05-20 — ci-6 (gate ci-5 on --features embed-model)
+
+I missed `systacean-7` (`6bf44cd`) landing on my first
+post-clearance check; user pokes nudged me to look again.
+Surfaced both `systacean-6` (`8b35c03`) and `systacean-7`
+in a trigger poke to @@Architect. Architect cut `ci-6`
+in response: gate `ci-5`'s cache step + fetch step on
+`--features embed-model` in both release workflows.
+
+Round-2 numbering shifted again: signing workflow now
+`ci-7`, DMG dry-run `ci-8`, marketing-site CI `ci-9`.
+
+### Feature-flag audit
+
+Neither `release.yml` nor `release-desktop.yml`
+currently passes `--features embed-model`:
+
+* `release.yml`: `cargo build --release --target ...
+  -p chan` (default features).
+* `release-desktop.yml`: `make build` →
+  `cargo build --release --bin chan` +
+  `cargo tauri build` (default features).
+
+So the gating is **purely defensive** — no current
+consumer. Per @@Architect's "Hardcoded skip on default-
+feature paths (acceptable if no feature-on matrix entry
+exists today)" acceptance criterion, picked the simplest
+shape.
+
+### Gating shape
+
+`if: false` on both the cache step and the fetcher step
+in both workflows. Four gates total. Each is preceded by
+a comment block explaining:
+
+* Why the step exists (ci-5 cache + fetcher invocation).
+* Why it is currently skipped (systacean-6 default
+  builds drop the embed).
+* How to flip (set `matrix.embed_model: true` and change
+  `if: false` to `if: matrix.embed_model`, or
+  `if: true` if the whole workflow goes feature-on).
+
+ci-5's cache-key composition + the cache-hit
+short-circuit (`if: steps.cache-bge-bundle.outputs.cache-hit
+!= 'true'` on the fetch step) are preserved structurally.
+Flipping the gate restores them with no re-derivation.
+
+### Why `if: false`, not matrix.embed_model
+
+Adding a `features:` or `embed_model:` field to every
+existing matrix entry for a value none of them use
+bloats the matrix. Keeping the matrix unchanged and
+using a literal `if: false` lets the next implementer
+pick whichever shape fits the feature-on lane's chosen
+mechanism. Cheapest reversible shape.
+
+### Why not delete
+
+ci-5's cache infrastructure is non-trivial (key
+composition, OS-independent sharing, fetch idempotency
+reasoning). Deleting and re-adding from scratch loses
+the audit trail. `if: false` preserves structure with a
+one-line flip.
+
+### Commit
+
+**747b7be** (`ci: gate ci-5's BGE-bundle cache + fetch
+on --features embed-model`). 3 files, +276 / -10:
+two workflows + the `ci-6.md` task file. Unpushed; per
+the 2026-05-20 structural change, the Round-1 close
+commit set lands unpushed locally, first GitHub Release
+fires at Round-2 close.
+
+(Small stub: the initial commit attempt failed because
+the proposed message contained `` `if: false` `` /
+`` `if: true` ``; bash interpreted the backticks as
+command substitution inside the HEREDOC. Wrote the
+message to `/tmp/chan-ci-6-msg.txt` and used
+`git commit -F` instead. No content change.)
+
+Two open questions in `ci/ci-6.md` for @@Architect:
+gating-mechanism shape (chose `if: false`; matrix-field
+alternative considered + rejected), and whether the
+defensive-only audit finding warrants a note in
+`round-2-plan.md` for the offline-install / power-user
+variant track.
+
+Lane summary now seven commits across six tasks. Idle
+pending Round-2 fan-out for `ci-7` + `ci-8` + `ci-9`.

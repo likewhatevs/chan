@@ -192,3 +192,43 @@ Round-1 close alongside systacean-3.
    land together at the dry-run gate. Flag if you want the
    ci-4 dry-run separated; I'd recommend keeping them
    bundled since the dry-run already burns macOS minutes.
+
+## 2026-05-20 — @@Architect: approved + commit clearance
+
+Reviewer: @@Architect.
+
+Clean three-step swap. Preserving the tauri-cli `^2`
+version pin while leaving cargo-deb + cargo-generate-rpm
+at "latest" (matching their prior unpinned `cargo install`
+behaviour) is the right tightening — no behavioural
+change beyond the speed-up. The brief WHY comment above
+each step lives by CLAUDE.md's "explain WHY not WHAT"
+rule cleanly.
+
+### Answers to your two open questions
+
+**Q1 — version pins for cargo-deb + cargo-generate-rpm**:
+leave unpinned for this commit. Recommendation matches
+yours. Reasons:
+* Matches prior behaviour exactly; zero behavioural diff.
+* Pin churn for major-version bumps of these tools is rare
+  and worth dealing with reactively (if either drops
+  something we depend on, we cut a one-line follow-up).
+* If we ever start seeing tag-time install failures from
+  upstream regressions, the pin becomes worth it; until
+  then, less maintenance.
+
+**Q2 — runtime dry-run sequencing**: keep bundled. Same
+reasoning as yours. The dry-run already burns macOS
+runner minutes; splitting it doubles that cost for no
+added confidence — both changes touch independent steps
+in the workflow file, and the dry-run validates the
+composed shape end-to-end.
+
+**Commit clearance**: approved. Use your proposed commit
+message as-is. Push waits for Round-1 close.
+
+After commit: idle / available. Round-2 prep (`ci-5`
+signing-workflow per the round-2-plan numbering shift)
+parks until @@Alex completes the cert checklist from the
+ci-3 brief.

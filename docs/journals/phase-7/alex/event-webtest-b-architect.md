@@ -1105,3 +1105,83 @@ Quick smoke on the deferred fullstack-23/24 walk.
   deferred-state semantic INCONCLUSIVE this pass.
 
 Test server stays up. Parked.
+
+## 2026-05-19 14:11 BST — poke: online, standing by
+
+Fresh @@WebtestB session bootstrapped. Read contact,
+webdev skill, process, request, my journal, and your
+event log bottom-up. No queued Lane B walkthrough task
+on top of the 03:15 BST cluster (predecessor closed
+that arc through 04:25 BST). Inherited `chan serve`
+listeners on 8810 (Lane B) and 8801 (Lane A) untouched.
+
+Standing by for the next Lane B walkthrough cluster.
+
+## 2026-05-19 17:10 BST — poke: webtest-b-6 verdicts
+
+Walked items 1-6 + 9-12 (items 7/8/13 handed to
+Lane A per your 16:55 BST overflow note). Full
+tally + per-item evidence in
+[../webtest-b/webtest-b-6.md](../webtest-b/webtest-b-6.md#2026-05-19-1608-bst-verdicts-post-redistribution).
+
+Tldr: **7 PASS / 3 PARTIAL** of my 10 items.
+
+* PASS: 1-5 (carousel cycle/stop, indexing graph
+  with live orange capture, immediate list-mode
+  trigger, British spelling sweep clean, hamburger
+  Enter Pane Mode), 9 + 10 (flip action + wobble
+  animation ~1s).
+* PARTIAL with **schema gaps worth a follow-up**:
+  * **Item 6 (`-47` multi FB tabs)**: spawn works,
+    per-tab state isolation FAILS — `BrowserTab`
+    schema has no path/selected/scroll fields.
+    View state shared across tabs. Mismatch
+    between task ask and what shipped (commit body
+    only promises drop-dedup, not isolation).
+  * **Item 11 (`-48` per-Hybrid theme)**: model +
+    serialization (`hb`/`ht`) + lazy inverse on
+    flip — all present. But no Svelte consumer
+    reads `HybridSide.theme` to drive rendering;
+    Settings → Appearance only flips global. Both
+    sides track global theme regardless of
+    override. Probable fix: add per-pane
+    `data-theme` consumer mirroring
+    `data-focus-color`.
+* PARTIAL with **automation limit**:
+  * **Item 12 (`-48` back-side dot)**: code path
+    + unit tests verified. Live trigger via
+    external atomic-write to `events/` of an
+    event addressed `to:"@@Terminal-1"` did NOT
+    surface `.back-attention` on the visible
+    chrome. Initial watcher scan picks up stale
+    survey bubbles fine; fresh fsnotify-driven
+    routing to back-side terminal didn't bring
+    up the dot. Similar shape to
+    `fullstack-15` DnD — code is right,
+    automated drive is brittle.
+
+Two follow-up cuts worth considering:
+* Add per-tab subpath/selection/scroll to
+  `BrowserTab` (item 6 gap).
+* Wire `node.theme` to a `data-theme` per-pane
+  consumer (item 11 gap).
+
+Test server stays up on 8810 (drive
+`/tmp/chan-webtest-b-1/`, list-mode-test.md
+seeded, Terminal-1 back-side with watcher,
+~1500 burst files in events/+sub/). Walkthrough
+artifacts preserved for re-test.
+
+Standing by.
+
+## 2026-05-19 17:25 BST — ack: triage absorbed, available for re-walks
+
+Triage absorbed. Item 12 → ACCEPTED noted.
+`fullstack-58` (item 6 schema gap) +
+`fullstack-59` (item 11 theme rendering hookup)
+queued for Lane B re-walk on landing — I'm
+**available**, not wound down. Test server +
+artifacts on 8810 stay up. Default-route to me
+unless Lane A is faster to dispatch.
+
+Standing by.

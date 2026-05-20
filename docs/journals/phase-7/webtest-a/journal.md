@@ -726,3 +726,409 @@ webtest-a-7 fully closed from my side. Clean loop
 closure on this wave-B walkthrough.
 
 8801 server up. Standing by for the next wave.
+
+## 2026-05-19 14:10 BST - Online, standing by
+
+Fresh @@WebtestA session. Boot order completed:
+contact card, webdev skill, phase process, request
+(skim), this journal, and the inbound architect
+event file bottom-up.
+
+Latest architect poke on file is 2026-05-19 03:45 BST
+(item 7 re-test + item 4 check). Both items closed
+in my prior session — webtest-a-7 fully closed at
+12/12 PASS, follow-ups `fullstack-27` + `systacean-16`
+landed and verified.
+
+No queued walkthrough task. Per @@Alex's note in the
+boot prompt: the marquee landings (flippable Hybrids,
+Cmd+K rework, carousel, BCAST window-wide, British
+spelling, multi-File-Browser tabs) are still unwalked
+from a Chrome MCP audit-trail perspective — likely
+the shape of the next cluster — but @@Alex has been
+doing manual visual passes since Chrome MCP can't
+reach the Tauri Chan.app surface.
+
+Not spinning up a test server yet (per boot
+instruction). Will wait for an architect poke to cut
+a walkthrough cluster.
+
+Online, standing by.
+
+## 2026-05-19 15:36 BST - webtest-a-8 closed (16 PASS / 1 PARTIAL)
+
+Cut at 15:15 BST by @@Architect — pre-release
+keyboard/menu cluster + watcher containment. 17
+items across Pane Mode core / tab closing + spawn /
+Cmd+K p / menu cleanup / right-dock chevron /
+systacean-19 watcher path validation.
+
+Rebuilt against head `cd4ad26`, bounced 8801,
+drove the SPA via Chrome MCP tab 503725239 +
+`curl` for the watcher API.
+
+**16 PASS, 1 PARTIAL** (full per-item write-up at
+[webtest-a-8.md](webtest-a-8.md)):
+
+* Pane Mode core (items 1-4): all PASS. `-39`
+  divider is 4px transparent + col-resize; `-39`
+  spawn/split/kill verified, with task description
+  drift called out (`-42` reshaped: WASD=swap not
+  split, /\=split, k=kill, Q unbound, 1/2/3/4 =
+  Terminal/FB/Graph/NewFile). `-40` inversion +
+  `-42` cheatsheet (`PaneModeHelp.svelte` on `h`)
+  render every binding inc. `p`; Esc discards
+  cleanly.
+* Tab closing + spawn (items 5-6): item 5 PASS
+  (Ctrl+D non-terminal closes, terminal passes
+  through). **Item 6 PARTIAL**: doc→terminal +
+  FB-selection→terminal PASS; terminal cwd
+  limited (no shell-integration tracking of live
+  `cd`); **doc→Graph FAIL** — scope reset to
+  drive on mount even though spawn intent sets
+  `scopeId = "file:<path>"` and title = "File
+  Graph". Likely `GraphPanel.svelte:88-89`
+  defaultScopeId fallback running before
+  scopeOptions populates.
+* Cmd+K p (items 7-10): all PASS. Show-on-terminal
+  works, spawn-then-show on empty pane works,
+  × + Esc dismiss (Esc when focus is in prompt),
+  no "Rich prompt" entry on terminal-tab kebab,
+  Alt+Space still works.
+* Menu cleanup (items 11-13): all PASS.
+  File-tree, doc-tab, terminal-tab, pane right-
+  click all clean of removed entries; inspector
+  retains "Open / Graph from here". Restart
+  prompt body has both required phrases
+  ("shell will be killed" + "any running command
+  will be terminated"). "New Terminal" entry
+  gone.
+* Right-dock chevron (item 14): PASS with all
+  three variants live in DOM simultaneously
+  (left-dock + right-dock + tab). Collapsed
+  chevron flips ONLY in right-dock (`<`); all
+  others (`>`); expanded always (`v`).
+* Watcher containment (items 15-17): all PASS
+  via curl against `/api/terminal/<session>/watcher`.
+  In-drive absolute + relative paths → 204.
+  Out-of-drive `/etc`, `/private/tmp` → 400
+  `invalid watcher path: path escapes drive root`.
+  Symlink escape via in-drive `escape-test -> /etc`
+  → 400 with the explicit
+  `path resolves through a symlink that escapes
+  drive root: ...` message. Symlink cleaned up
+  post-test.
+
+Side observations folded into the task append:
+doc→Graph scope reset (item 6 sub-bug), terminal
+live cwd not tracked (item 6 limitation), Cmd+K
+help wording nit (item 4), New File neighbour
+after Restart (item 13 task-wording nit),
+cross-port tab sibling re-appeared
+(`503725243` opened to 8810), no-session
+Restart silently no-ops on freshly spawned
+terminals.
+
+Server stays up on 8801. Layout intact for any
+re-tests: 2-pane split (a: many tabs, b:
+Terminal-4) plus all three FB dock variants
+visible. Standing by for the next wave or fixes
+on item 6.
+
+## 2026-05-19 16:09 BST - webtest-a-9 closed (3 items, all PASS)
+
+Lane B overflow cluster cut by @@Architect at
+16:55 BST per @@Alex's note that @@WebtestB was
+hitting API overload on `webtest-b-6`. Pulled 3
+independent items off Lane B (their items 7/8/13).
+Continued in the same 8801/cd4ad26 session as
+`webtest-a-8`; no fresh boot.
+
+**3 of 3 PASS** (one with a code-audit fallback
+per the task's anticipated tool limit):
+
+* **Item 1 `fullstack-47` multiple Graph tabs —
+  PASS**. Spawned 2 Graph tabs in pane-b via
+  Cmd+K + 3 twice; toggled `folder` chip OFF on
+  Graph #2 (gf:ltmai), Graph #1 stayed gf:ltmaif.
+  Tab-switch round-trip verified state isolation
+  in both the DOM (chip class flip) and the
+  persisted hash (per-tab gf field). Dedup drop
+  is observable end-to-end.
+* **Item 2 `fullstack-47` tab DnD —
+  INCONCLUSIVE (live) + PASS (code+tests)**.
+  `computer.left_click_drag` fires pointer
+  events not HTML5 DnD; the SPA's
+  `ondragstart`/`ondrop` chain doesn't fire
+  through the MCP. Same MCP limit as
+  `fullstack-15`'s prior pass. `da2d718` ships
+  a `detachTabToPaneEdge` regression test for
+  browser/graph tab kinds that locks the
+  cross-pane path at unit-test level.
+* **Item 3 `fullstack-51` xterm row metrics —
+  PASS**. Unstuck both FB docks for pane-b
+  width, ran a shell script with 8 block-char
+  rows. Measured row containers in
+  `.xterm-screen`: every consecutive row pair
+  has **0px gap** (rows are 15px tall, each
+  next y matches previous bottom). Matches
+  iTerm-style zero leading. `0b0c919` shows
+  `lineHeight: 1.15 → 1.0` flip.
+
+Side observations folded into the task append:
+* Chrome MCP `find` refs go stale on
+  tab-switch clicks; workaround = live
+  `getBoundingClientRect()` + raw
+  `computer.left_click`. Worth a SKILL note.
+* `computer.type` interleaves keystrokes into
+  narrow xterm cols (~25). Workaround =
+  shell script on disk + `bash <path>`.
+* Fresh-spawn terminals (no session yet) drop
+  initial keystrokes before WS handshake
+  attaches the PTY — minor edge.
+* Trusted architect's redistribution per the
+  queue-tail rule (`feedback_redistribution_queue_head.md`);
+  didn't double-walk against @@WebtestB.
+
+Test server stays up on 8801. Layout: pane-a (8
+tabs, narrow due to tab strip pressure), pane-b
+(Terminal-4 with block-render output visible + 2
+Graph tabs with differentiated filter state).
+Both docks unstuck. Drive clean (test script
+removed). Standing by.
+
+## 2026-05-19 16:51 BST - webtest-a-10 closed (3/3 PASS + spot-check)
+
+Quick re-walk of three ships (`fullstack-54` FB
+header drop / `-55` carousel dashboard-stats
+drop / `-56` Cmd+S drop) plus informal
+round-trip spot-check.
+
+Rebuilt to head `dbbba84`, bounced 8801. Chrome
+MCP tab from `webtest-a-9` died over the recycle
+gap, opened a fresh tab `503725263`.
+
+**3/3 PASS** (full per-item write-up at
+[webtest-a-10.md](webtest-a-10.md)):
+
+* **Item 1 fullstack-54 FB header drop — PASS**
+  across all three variants. Tab + dock verified
+  live (header text = `⋮` only; no path text;
+  Unstick chrome-btn icon on dock); overlay
+  PASS by code audit. Overlay variant code path
+  exists in `FileBrowserSurface.svelte` but is
+  unreachable in current SPA — the dock
+  hamburger's "Open overlay" actually opens a
+  Files tab via `openBrowser()`. Side
+  observation flagged.
+* **Item 2 fullstack-55 carousel slide 1 —
+  PASS**. Slide 1 (Welcome) renders drive name
+  + keyboard cheatsheet only, NO inline
+  `N files · N dirs · N contacts` row. Slide 2
+  (Drive metadata) still carries tallies
+  (`documents 6 · 2 directories · 25 KB on
+  disk`) as the canonical surface.
+* **Item 3 fullstack-56 Cmd+S drop — PASS**.
+  Cmd+S → no chan-side action (no toast / no
+  saving spinner), dirty marker cleared via
+  autosave debounce within 500ms. File on disk
+  contains the inserted TEST_DIRTY_LINE.
+  Browser-native Cmd+S still fires (Chrome
+  opened a Save Page As intent sibling tab —
+  expected per `-56`'s no-preventDefault call).
+  No "Save" entry anywhere in pane hamburger
+  or doc-editor right-click menu (21 items
+  enumerated). Cmd+Shift+S strikethrough not
+  testable via synthesized KeyboardEvents (CM6
+  input pipeline); PASS by code audit
+  (`Pane.svelte:381-386` explicit comment).
+* **Spot-check round-trip — PASS**. Pre-reload
+  state with note-a.md (wysiwyg + cursor
+  c:[215,215]) + Graph (gs:drive, gf:ltmaif,
+  gp:note-a.md, a:1). Post-reload: all of cursor
+  position, mode, active tab, filter chips,
+  pane layout, pending-select consumption all
+  intact. `gp:note-a.md` was consumed cleanly
+  on mount → `gi:1` (graph inspector open) per
+  the pendingSelectId contract.
+
+Side observations folded into the task append:
+"Open overlay" menu label mismatch (label says
+overlay but spawns a tab); Cmd+S triggers
+browser Save Page As (sibling tab opened);
+fullstack-43 gp:note-a.md cross-confirms my
+webtest-a-8 item 6 diagnosis (already cut as
+fullstack-57); carousel auto-rotate (5s) needed
+slide-dot navigation back to Welcome;
+TEST_DIRTY_LINE typing landed mid-table
+(cursor artifact, not a defect); Style Toolbar
+hidden by default in this drive.
+
+Test server stays up on 8801. Drive has the
+TEST_DIRTY_LINE edit on note-a.md per the
+system note; otherwise clean. Standing by.
+
+## 2026-05-19 17:29 BST - webtest-a-11 closed (4/4 PASS + bonus closure)
+
+Re-walk of three ships (`fullstack-58` per-tab
+BrowserTab state / `-64` Graph chrome trim /
+`-66` truncation utility). Rebuilt to head
+`986d77c`, bounced 8801, reused MCP tab.
+
+**4/4 PASS** (full per-item write-up at
+[webtest-a-11.md](webtest-a-11.md)):
+
+* **Item 1 fullstack-58 multi-FB per-tab state
+  — PASS**. Two Files tabs in same pane, each
+  with independent `bs` selection. Cross-
+  switched several times, persistence and
+  visible state both isolated per-tab.
+  Schema for `be` / `bsc` / `bd` wired in
+  code (`tabs.svelte.ts:2598-2608`) but
+  conditional-emit (default state omits the
+  field); single-click row select sets `bs`
+  only, not `be`. PASS-as-spec for what's
+  exercisable in this drive.
+* **Item 2 fullstack-58 hash round-trip —
+  PASS**. Set `{bs:"img"}, {bs:"index.md",a:1}`,
+  navigated to the same hash, post-reload
+  state restored exactly. Per-tab `bs` fields
+  survive the round-trip per the 18:00 BST
+  directive.
+* **Item 3 fullstack-64 Graph chrome trim —
+  PASS**. Maximize button gone, scope
+  selector dropdown gone. Title derivation
+  verified for `drive` ("drive"), `file:` (file
+  basename), spawn-from-doc-tab (doc basename).
+  Did not live-test `dir:` / `#tag` /
+  `contact` scope kinds — drive has no fixtures
+  for them. `graphTitle()` code has the
+  matching clauses.
+* **Item 4 fullstack-66 truncation utility —
+  PASS** on all sub-points. Long name
+  (`this-is-a-very-long-filename-for-truncation-testing.md`,
+  54 chars) → visible text `this-i[..]ng.md`
+  (6+4+5=15 chars exact). Exact-15 name
+  (`exact15chars.md`) unchanged. Dirty marker
+  `●` renders AFTER the truncated name and is
+  not in the 15-char budget. Tooltip (title
+  attr) always shows the untruncated name.
+
+**Bonus closure**: `webtest-b-6` item 6
+(PARTIAL that gated us) converts to **PASS**
+via my items 1+2. Lane B doesn't need to
+re-walk that one.
+
+**fullstack-43/57 cross-confirmation**:
+spawning a Graph from a doc tab now persists
+`gs:"file:<doc-path>"` — the reset-to-drive
+bug I caught in webtest-a-8 item 6 is closed.
+Verified by spawning a Graph from note-a.md
+doc tab; hash showed `gs:"file:note-a.md"`,
+title `note-a.md`.
+
+Side observations folded:
+* Tab visible text now reflects per-tab state
+  (FB tab with `bs` displays the basename of
+  the selection; Graph tab displays scope
+  basename). Static "Files"/"Graph" labels
+  only appear when no per-tab state is set.
+  Nice clarity improvement.
+* Empty-layout navigation always bootstraps a
+  Files tab via `App.svelte:259`. Means
+  `#s={k:l,t:[],f:1}` doesn't actually yield
+  zero-tab state; the auto-open kicks in.
+
+Test server stays up on 8801. Drive clean
+(test files removed). State preserved for
+any re-tests. Standing by.
+
+## 2026-05-19 17:49 BST - webtest-a-12 closed (2/2 PASS + @@Alex ad-hoc bug + fix)
+
+Re-walk of `fullstack-59` per-Hybrid theme +
+`-60` pane hamburger trim. Rebuilt to head
+`986d77c`, bounced 8801. Mid-walk `fullstack-62`
+(`3b270d0` rename Pane Mode → Hybrid NAV)
+landed; menu text now reads "Enter Hybrid NAV".
+
+**2/2 PASS** (full per-item write-up at
+[webtest-a-12.md](webtest-a-12.md)):
+
+* **Item 1 fullstack-59 per-Hybrid theme —
+  PASS**. Per-pane `data-theme` attribute on
+  `.pane`, toggle button cycles undefined →
+  light → undefined, hash `ht:"l"` field appears
+  when set / omitted when default, hash
+  round-trip preserves the override, multi-pane
+  layout shows true per-pane independence
+  (one pane override doesn't affect another).
+  Active override paints with `--link` blue +
+  `overridden` class. Sun-in-dark / Moon-in-light
+  icon convention matches commit text.
+  **Closes `webtest-b-6` item 11 PARTIAL →
+  PASS**.
+* **Item 2 fullstack-60 pane hamburger trim —
+  PASS**. Menu now reads exactly
+  `Enter Hybrid NAV / Cmd+K / Focus border
+  colour / blue / green / pink` (4 buttons
+  total). No `Next/Prev pane / Split / Flip
+  Hybrid / Close` trailing entries. Keystroke
+  equivalents exhaustively verified in
+  webtest-a-8.
+
+### @@Alex's mid-walk ad-hoc + fix
+
+@@Alex stepped in: "try to flip, split the
+pane, see if the split one follows same
+pattern - back vs front". Tested live:
+
+* **Bug confirmed**: `splitPane()` creates the
+  new pane with `tabs:[], activeTabId:null`
+  only — doesn't inherit `showingBack` from
+  the source. Splitting from a back-side pane
+  drops the new split on the front, losing
+  user orientation.
+
+@@Alex's follow-up: "you can prob write the
+small fix for this: when we split we preserve
+the side."
+
+* **Fix written + tests added** (NOT committed
+  by webtest lane):
+  - `web/src/state/tabs.svelte.ts:splitPane`:
+    spread `{showingBack: true, back: {tabs:[],
+    activeTabId:null}}` into `newPane` when
+    `original.showingBack`.
+  - Two new tests under
+    `describe("splitPane side preservation")`
+    in `web/src/state/tabs.test.ts`:
+    front→front + back→back assertions.
+  - Gate: `npx vitest run src/state/tabs.test.ts`
+    → 87/87 pass (+2 from my new tests).
+
+* **`npm run check` is broken on an UNRELATED
+  in-flight WIP**: `App.svelte:759` references
+  `dispatchPaneModeAction` which isn't declared
+  (looks like @@FullStack mid-rename of the
+  Pane Mode → Hybrid NAV machinery, paired
+  with `PaneModeHelp.svelte` edits in WIP).
+  Verified by stashing my two files only and
+  re-running — check passes 0 errors. NOT my
+  bug; needs to be finished/stashed before
+  the next build. Flagging to architect.
+
+* **Handoff** to @@Architect → @@FullStack:
+  diff is in the working tree at
+  `web/src/state/tabs.svelte.ts` +
+  `web/src/state/tabs.test.ts`. Webtest lane
+  doesn't commit code per process. Plumbing
+  this through the event channel for proper
+  routing.
+
+@@Alex stepped away after the ad-hoc with
+"carry on with the regular process. cheers!".
+Continuing.
+
+Test server stays up on 8801. Drive clean.
+Layout has the back-side experiment artifacts
+from the ad-hoc.

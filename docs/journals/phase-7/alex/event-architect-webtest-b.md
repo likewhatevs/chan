@@ -410,3 +410,146 @@ Items 10-12 (`fullstack-15` drag-detach) stay BLOCKED
 on Chrome MCP tooling per your earlier flag.
 
 — @@Architect, 2026-05-19 03:15 BST
+
+## 2026-05-19 14:30 BST — ack: online, holding
+
+@@Architect recycled mid-floor; your 14:11 BST
+boot-ack absorbed. Lane B audit trail through
+04:25 BST remains canonical from your
+predecessor's pass. Inherited `chan serve`
+listeners on 8810 (Lane B) + 8801 (Lane A) noted
+— leave both untouched.
+
+Holding on the marquee-landings walkthrough
+cluster until @@Alex signals an audit-trail run.
+Chrome-MCP-HTML5-DnD + Tauri-visual-flip blockers
+stay audit-only per your prior note. Permission
+scope carries.
+
+Stand by; I'll cut the Lane B cluster when ready.
+
+— @@Architect, 2026-05-19 14:30 BST
+
+## 2026-05-19 15:15 BST — poke: webtest-b-6 cut (pre-release content/visual walkthrough)
+
+Pre-release audit-trail walkthrough cut. Lane B
+takes the content / visual surface; Lane A takes
+the keyboard / menu surface in parallel
+(`webtest-a-8`). No overlap on items.
+
+Task: [../webtest-b/webtest-b-6.md](../webtest-b/webtest-b-6.md).
+
+Coverage:
+
+| # | Cluster                | Items                                                                  |
+|---|------------------------|------------------------------------------------------------------------|
+| 1 | Empty-pane carousel    | `-44` cycle/stop toggle, slide 3 indexing graph                        |
+| 2 | List mode              | `-45` immediate first-`- ` trigger                                     |
+| 3 | British spelling       | `-46` user-visible copy sweep + hamburger "Enter Pane Mode" entry      |
+| 4 | Multi-FB / Graph tabs  | `-47` independent state per tab, tab DnD (Chrome MCP DnD may fall short — INCONCLUSIVE is OK) |
+| 5 | Flippable Hybrids      | `-48` A/B/C — flip action, animation, per-side theme, back-side dot     |
+| 6 | Terminal rendering     | `-51` xterm `lineHeight: 1.0` row-metric audit                         |
+
+PASS / FAIL / PARTIAL per item. The `fullstack-15`
+DnD class limit may bite item 8 — same INCONCLUSIVE
+shape as before is fine; note the tool limit.
+
+Out of scope here: `fullstack-53` (Tauri launcher,
+Chrome MCP can't reach it — @@Alex's eyeball);
+`systacean-19` (server-side, unit test covers it);
+deferred `-23`/`-24` deferred-state INCONCLUSIVE
+from your last pass.
+
+Bring `chan serve` up on 8810 with `target/debug/chan`
+freshly rebuilt from current main. Inherited 8810
+listener can be re-used or torn-down-and-respawned,
+your call. Test server stays up after the walk.
+
+Permission scope carries.
+
+— @@Architect, 2026-05-19 15:15 BST
+
+## 2026-05-19 16:55 BST — overflow redistribution: items 7, 8, 13 moved to Lane A
+
+@@Alex flagged you're hitting API overload. Pulled
+3 independent items off your queue and onto Lane A
+(`webtest-a-9`) so the v0.11.0 wait list keeps
+moving:
+
+* Item 7 (`fullstack-47` multiple Graph tabs) →
+  Lane A item 1.
+* Item 8 (`fullstack-47` tab DnD across panes) →
+  Lane A item 2.
+* Item 13 (`fullstack-51` xterm row metrics) →
+  Lane A item 3.
+
+Kept the Hybrid-flip cluster (items 9-12) on your
+side since those phases verify in sequence and
+splitting them costs more than the parallelism
+saves.
+
+Your remaining scope: items 1-6 (completed) + 9-12
+(pending) = 4 items still to walk on
+`webtest-b-6`. The combined verdict across Lane A
++ Lane B will cover all 13 original items.
+
+Pace is fine; keep moving when you can.
+
+— @@Architect, 2026-05-19 16:55 BST
+
+## 2026-05-19 17:20 BST — ack: webtest-b-6 verdicts (10 items closed)
+
+Walk wrapped with 5 PASS + 3 PARTIAL on items
+1-6 + 9-12. (Items 7, 8, 13 covered by Lane A's
+`webtest-a-9` overflow.)
+
+| # | Verdict   |
+|---|-----------|
+| 1 | PASS      |
+| 2 | PASS      |
+| 3 | PASS      |
+| 4 | PASS      |
+| 5 | PASS      |
+| 6 | PARTIAL   |
+| 9 | PASS      |
+| 10| PASS      |
+| 11| PARTIAL   |
+| 12| PARTIAL   |
+
+Triage:
+
+* **Item 6 PARTIAL → `fullstack-58` cut** to
+  Lane B. `BrowserTab` schema gap is real;
+  shipping the half-version isn't acceptable
+  for marquee multi-FB. v0.11.0 blocking.
+* **Item 11 PARTIAL → `fullstack-59` cut** to
+  Lane B. Per-Hybrid theme is half-written-half-
+  rendered; walker's recipe (`data-theme={node.theme ??
+  ui.theme}` in Pane.svelte, mirror
+  `data-focus-color`) is the fix. v0.11.0
+  blocking.
+* **Item 12 PARTIAL → ACCEPTED**. Code path +
+  unit tests verified; live trigger was flaky
+  in Chrome MCP. Same shape as `fullstack-15`
+  DnD INCONCLUSIVE on prior Lane B passes.
+
+Side observations folded:
+
+* **Reindexing pill + welcome-carousel inline
+  indexing chip** — nice surfaces, no defect.
+* **Stale ScriptDriver bubbles in `events/`**
+  — phase-8 backlog (sweep tooling or
+  "process new events only" mode).
+
+Lane B test server stays up on 8810. After
+`fullstack-58` ships, item 6 wants a re-walk;
+if you're wound down for the day, Lane A can
+re-run on 8801. Same for item 11 after
+`fullstack-59` ships.
+
+Excellent walk overall. The schema-gap
+diagnoses (item 6 + item 11) are the kind of
+findings that justify the audit-trail
+discipline.
+
+— @@Architect, 2026-05-19 17:20 BST
