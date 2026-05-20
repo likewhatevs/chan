@@ -432,6 +432,16 @@
       // browser selection for browser spawns so the new tab's tree
       // lands already expanded. `fullstack-43`: context resolves
       // from the focused tab at the moment of the keypress.
+      //
+      // `fullstack-b-9`: `t` / `T` falls into the same case so the
+      // mnemonic chord (Mod+. t) is reachable on every platform
+      // including Win/Linux web, where `Cmd+Alt+T` isn't a thing
+      // and `Ctrl+Alt+T` is already owned by `app.tab.reopenClosed`.
+      // The chord stack now is: native = Cmd+T (direct, via the
+      // chan-desktop key bridge); web Mac = Cmd+Alt+T (direct);
+      // every platform = Mod+. t through Hybrid NAV.
+      case "t":
+      case "T":
       case "1": {
         paneModeStageSpawn("terminal", resolveSpawnContext());
         commitPaneMode();

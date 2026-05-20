@@ -71,6 +71,16 @@ describe("Cmd+K pane mode spawn commit (fullstack-a-3)", () => {
     );
   });
 
+  test("fullstack-b-9: `t` / `T` falls through to the same terminal spawn case", () => {
+    // The universal web chord is Mod+. t (Hybrid NAV + `t`
+    // mnemonic). `t` and `T` must share the `1` case body so a
+    // Win/Linux web user — who has no direct `Cmd+T` / `Cmd+Alt+T`
+    // path — can still spawn a terminal from within Hybrid NAV.
+    expect(app).toMatch(
+      /case "t":\s*\n\s*case "T":\s*\n\s*case "1": \{[\s\S]*?paneModeStageSpawn\("terminal", resolveSpawnContext\(\)\);[\s\S]*?commitPaneMode\(\);/,
+    );
+  });
+
   test("2 commits a browser spawn immediately + primes browserSelection", () => {
     // Browser case must call `revealAndSelect` BEFORE
     // `commitPaneMode()` so the new tab's tree lands already

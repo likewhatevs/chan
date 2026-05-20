@@ -103,13 +103,19 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // variant uses `Cmd+Alt+T` — Mac-only; `Ctrl+Alt+T` on
   // Win/Linux web is already owned by `app.tab.reopenClosed` and
   // we'd rather leave Pane Mode as the fallback than collide.
+  //
+  // `fullstack-b-9`: `Mod+. t` (Hybrid NAV `t` mnemonic) is the
+  // universal chord — works on every web platform including
+  // Win/Linux where `Cmd+Alt+T` isn't a thing. Surfaces in the
+  // PaneModeHelp cheatsheet as an alias for `1` so the discovery
+  // path stays inside the Hybrid NAV overlay.
   {
     id: "app.terminal.toggle",
     label: "New terminal",
     web: "Cmd+Alt+T",
     native: "Mod+T",
     group: "App",
-    note: "macOS only on web; native everywhere",
+    note: "macOS web + native everywhere; all platforms via Mod+. t (Hybrid NAV)",
   },
   // `fullstack-a-7`: Hybrid NAV chord swapped from Mod+K to
   // Mod+. so Mod+, can own Settings (macOS preferences

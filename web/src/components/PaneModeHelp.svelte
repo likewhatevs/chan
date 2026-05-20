@@ -71,7 +71,17 @@
       // honest for every keystroke.
       title: "Spawn",
       rows: [
-        { caps: [{ label: "1", key: "1" }], action: "Stage: Terminal" },
+        // `fullstack-b-9`: `t` is an alphabetic alias for `1` so
+        // there's a single chord for "new terminal" on Win/Linux
+        // web (where Cmd+Alt+T isn't reachable). Both caps fire
+        // the same Hybrid NAV spawn path.
+        {
+          caps: [
+            { label: "1", key: "1" },
+            { label: "t", key: "t" },
+          ],
+          action: "Stage: Terminal",
+        },
         { caps: [{ label: "2", key: "2" }], action: "Stage: File Browser" },
         { caps: [{ label: "3", key: "3" }], action: "Stage: Graph" },
         { caps: [{ label: "4", key: "4" }], action: "New file" },

@@ -47,4 +47,16 @@ describe("fullstack-63: PaneModeHelp key-caps are clickable buttons", () => {
     expect(paneModeHelp).toContain('key: "Enter"');
     expect(paneModeHelp).toContain('key: "h"');
   });
+
+  test("fullstack-b-9: terminal spawn row also surfaces `t` as a mnemonic cap", () => {
+    // The terminal-spawn row carries two caps (`1` and `t`) so the
+    // cheatsheet teaches the alphabetic alias alongside the numeric
+    // chord. App.svelte's pane-mode dispatcher routes both to the
+    // same case body. The regex tolerates optional trailing commas
+    // and arbitrary whitespace between cap entries to survive
+    // prettier reformats.
+    expect(paneModeHelp).toMatch(
+      /caps:\s*\[\s*\{\s*label:\s*"1",\s*key:\s*"1"\s*\},\s*\{\s*label:\s*"t",\s*key:\s*"t"\s*\},?\s*\][\s\S]*?action:\s*"Stage: Terminal"/,
+    );
+  });
 });

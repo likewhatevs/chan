@@ -90,7 +90,7 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   ---
   Settings                Cmd+,
   Terminal rich prompt    Alt+Space
-  New terminal            Cmd+Alt+T   (macOS only on web; native everywhere)
+  New terminal            Cmd+Alt+T   (macOS web + native everywhere; all platforms via Mod+. t (Hybrid NAV))
   Dismiss overlay         Esc
 
   Panes
@@ -111,6 +111,7 @@ Pane Mode (Cmd+K), keys are unprefixed:
   Arrows                  Move focus
   W A S D                 Swap with neighbour
   1 / 2 / 3 / 4           Spawn Terminal / Files / Graph / New file
+  t                       Spawn Terminal (mnemonic alias for 1)
   s                       Search overlay
   h                       Help (this list, in-app overlay)
   /                       Split focused pane right
