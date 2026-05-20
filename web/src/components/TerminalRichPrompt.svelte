@@ -194,7 +194,15 @@
       title: "watch directory",
       defaultValue: watcherPath ?? "",
       kind: "folder",
-      mode: "move",
+      // `fullstack-b-10`: the watcher dialog ATTACHES an event-file
+      // listener; it never overwrites the target dir. Passing
+      // `mode: "attach"` routes the modal through the
+      // `PathPromptMode = "attach"` branches landed in
+      // `fullstack-b-3` so the misleading
+      // `⚠ overwrites existing directory <name>/` warning stays
+      // hidden and the hint reads "attach watcher to X/" instead
+      // of "moves to X/".
+      mode: "attach",
       allowAbsolute: true,
     });
     if (!path) return;

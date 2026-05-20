@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import modal from "./PathPromptModal.svelte?raw";
+import terminalRichPrompt from "./TerminalRichPrompt.svelte?raw";
 
 // `fullstack-b-3`: the rich-prompt watcher dialog needed a path
 // prompt that is neither "create" nor "move" / "rename". An
@@ -39,5 +40,25 @@ describe("fullstack-b-3: PathPromptModal attach mode", () => {
     // `tailIsExisting` flips the "new" colouring off so the visible
     // chunk reads as context, not as a fresh-create cue.
     expect(modal).toMatch(/const tailIsExisting =\s+s\.mode === "attach"/);
+  });
+});
+
+describe("fullstack-b-10: TerminalRichPrompt watcher dialog uses attach mode", () => {
+  test("watchDirectory passes mode: 'attach' to uiPathPrompt", () => {
+    // `fullstack-b-3` introduced the `PathPromptMode = "attach"`
+    // branches in PathPromptModal but the watcher-dialog call
+    // site still passed `mode: "move"`, leaving the misleading
+    // `⚠ overwrites existing directory <name>/` warning live for
+    // existing in-drive dirs (@@WebtestB wave-1 verification on
+    // 2026-05-20). The fix flips the call site so the new
+    // branches are actually reached.
+    expect(terminalRichPrompt).toMatch(
+      /async function watchDirectory\(\): Promise<void> \{[\s\S]*?title: "watch directory",[\s\S]*?mode: "attach",[\s\S]*?\}\);/,
+    );
+    // Belt-and-suspenders: the old `mode: "move"` must not be
+    // back in the watcher-dialog block.
+    expect(terminalRichPrompt).not.toMatch(
+      /async function watchDirectory\(\): Promise<void> \{[\s\S]*?mode: "move"/,
+    );
   });
 });
