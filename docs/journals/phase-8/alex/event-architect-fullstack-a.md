@@ -1024,3 +1024,109 @@ Standing down. Your session's footprint clean for the
 recycle. Thanks for the disciplined hand-off; the
 context-fill flag was the right call rather than
 muscling through and risking quality.
+
+## 2026-05-20 — poke (batch clearance: -32 / -33 / -34 / -35)
+
+Fresh @@FullStackA session cleared the queue. All four
+approved + cleared. Six commits ready (-33 + -32 + -34 +
+-35 + the two earlier ones if not yet landed). Per-task
+notes:
+
+**`-33` cleared.** Strong design read on the scope-system
+shape: graph scopes are `drive` / `dir:path` / `file:path`
+/ `tag:nodeId` / `git_repo:root` / `global`; the
+breadcrumb correctly renders only for the first three
+(path-based) and hides the band for tag / git_repo /
+global. `scopeAncestors` derivation is clean — drive
+root entry always first (so the user can hop back from
+any depth), final entry is the current scope rendered as
+plain-text (no-op click avoided). Right call to drop
+`onSetAsScope` from the four GraphPanel call sites
+(Drive / fs-mode file+dir / semantic-mode) while
+keeping the prop on the shared `InfoBody` components so
+`FileBrowserSurface`'s "open a graph from here" still
+has its action. Composes with -32's `Cmd+Shift+M`
+spawn-context handler. Use your suggested commit subject.
+
+**`-32` cleared.** Single-commit decision is right —
+shortcut descriptors + chord handlers + cheatsheets +
+native bridge + three menu surfaces (carousel slide 1 +
+pane hamburger + empty-pane right-click) are tightly
+coupled around the new chord set. Splitting would
+produce intermediate states with stale cheatsheets or
+untested chord paths. The context-resolution helper
+unifies the four chord handlers per spec — single source
+of truth for "what's the focused surface and its
+context?". `SERVE_LONG_ABOUT` resync + Tauri accelerator
+binding (Cmd+Shift+M overriding Chrome's people menu)
+both in scope per the task authorization. Use your
+suggested commit subject.
+
+**`-34` cleared.** Sharp root-cause find: turndown's
+default text-node escape was the culprit, not a
+chan-side escape pass. The HTML-paste handler runs
+AHEAD of CM6's plain-text paste path, so source-view
+pastes from Xcode / VS Code / browser sources go through
+turndown which bakes the `\*` / `\_` / `\[` into the
+converted markdown. One-line `td.escape = identity`
+override is the simple-shape fix per the task spec.
+`htmlToMarkdown` export-for-testing + 8 cases pinned in
+`paste_html.test.ts` (asterisk emphasis, strong,
+underscore, link, backtick code, heading hash, list
+dash, rich-HTML-still-converts guard) — the last one is
+the regression-pin against an over-broad identity escape
+that would let actual HTML markup leak through. Use
+your suggested commit subject.
+
+**`-35` cleared.** Excellent infrastructure audit at
+task start — the task body asked "verify whether
+`Drive::rename` exists; if not, add it"; you found that
+chan-drive's `Drive::rename_with_link_rewrite` +
+chan-server's `POST /api/move` + the SPA's `performMove`
+were ALL pre-existing, so the whole heavy chain (atomic
+rename + link rewrite + tab rekey + watcher suppression
++ overwrite confirm + status indicator) just needed a
+new UX entry point. `fileOps.renameInPlace` bypasses the
+modal cleanly; header-band markup correctly sits OUTSIDE
+the `--chan-page-max-width` cap per @@Alex's ask. 6-pin
+test file locks the wiring contract. Use your suggested
+commit subject.
+
+### Suggested commit order
+
+Each is single-purpose / single-scope; pre-commit
+`git diff --staged --stat` audit per the multi-agent-tree
+discipline. Recommended:
+
+1. `-33` (graph from-here default + breadcrumb) — the
+   hard-pair prereq; lands first so -32's chord handler
+   reads the established default mode.
+2. `-32` (chord migration + context-aware spawn +
+   surface unification) — the load-bearing rebind; -33
+   in HEAD makes its Cmd+Shift+M handler land into a
+   working default.
+3. `-34` (Wysiwyg paste unescape) — independent.
+4. `-35` (file rename band) — independent.
+
+### Round-1 mini-wave status
+
+All landings now in your lane:
+
+| Task | Commit (pending) | Subject                                                                                  |
+|------|------------------|------------------------------------------------------------------------------------------|
+| -28  | `1a83050`        | BubbleOverlay: explicit dismiss + dismissedIds persistence + Loading flicker fix         |
+| -29  | `3d708a2`        | Rich prompt: ResizeObserver-driven margin reactor for collapse + drag-resize parity      |
+| -30  | `20ece30`        | Rich prompt: per-prompt page-width slider + cross-tile decoupling                        |
+| -31  | `18811e0`        | Terminal broadcast selector: drop umbrella toggle + include self + label                 |
+| -32  | TBD              | Chord migration + context-aware spawn + surface unification                              |
+| -33  | TBD              | Graph from here default + ancestor breadcrumb navigation                                 |
+| -34  | TBD              | Wysiwyg: paste markdown unescaped via turndown identity escape                           |
+| -35  | TBD              | File editor: inline rename band above page-width cap                                     |
+
+Push held until @@Systacean cuts the patch-release tag
+per the commit-grouping plan I'm publishing next.
+
+Your lane is queue-empty for the mini-wave after these
+4 commits land. Standby until Round-2 broader fan-out
+(carousel + Infographics + BOOT + manual + signing
+pipeline with real keys, per `round-2-plan.md`).
