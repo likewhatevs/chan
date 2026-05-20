@@ -24,13 +24,18 @@ fn main() {
     println!("cargo:rerun-if-changed={}", dist.display());
     walk(dist);
 
-    // Embedded model bundle. Real bundle is written by
-    // `cargo run -p fetch-models` (a.k.a. `make models`); empty
-    // stub is enough for a fresh-clone `cargo build` to succeed,
-    // since the runtime seeder treats an empty bundle as "no
-    // embedded model" and falls back to hf-hub's HuggingFace
-    // download path. rerun-if-changed pins the build to the
-    // bundle's mtime so a subsequent `make models` re-links.
+    // Embedded model bundle. Only consumed when the `embed-model`
+    // cargo feature is on (systacean-6): the `include_bytes!` in
+    // `src/embed_seed.rs` is `#![cfg(feature = "embed-model")]`, so
+    // default builds drop the file entirely and the runtime path
+    // goes through `chan_drive::index::embeddings::resolve_model`
+    // plus the systacean-7 download flow instead. Real bundle is
+    // written by `cargo run -p fetch-models` (a.k.a. `make
+    // models`); empty stub is enough for a `--features
+    // embed-model` build without a prior `make models` to compile
+    // (the seeder treats an empty bundle as "no embedded model").
+    // rerun-if-changed pins the build to the bundle's mtime so a
+    // subsequent `make models` re-links.
     let model_bundle = Path::new("resources/models.tar.zst");
     if let Some(parent) = model_bundle.parent() {
         let _ = std::fs::create_dir_all(parent);

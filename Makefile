@@ -9,12 +9,19 @@
 #   make all       same as `make`
 #   make web       npm install + npm run build (frontend bundle)
 #   make models    pre-fetch the default embedding model into
-#                  crates/chan-server/resources/models/ so the
-#                  release binary can bundle it (idempotent; reads
-#                  HTTPS_PROXY / HTTP_PROXY for restricted networks)
-#   make build     cargo build --release -p chan
-#   make build-release  models + web + build (single command for a
-#                  fully-bundled release binary)
+#                  crates/chan-server/resources/models.tar.zst so a
+#                  `--features embed-model` build can bundle it.
+#                  Idempotent; reads HTTPS_PROXY / HTTP_PROXY.
+#                  ONLY needed for `make build-release`; plain
+#                  `make build` skips the bundle (systacean-6 split).
+#   make build     cargo build --release -p chan (~26 MB; no embedded
+#                  model — runtime resolver looks for one at
+#                  <user-config>/chan/models/ or surfaces a
+#                  "model not downloaded" error on Hybrid search)
+#   make build-release  models + web + `cargo build --release
+#                  --features embed-model` (~89 MB; bundles the
+#                  default BGE-small model so search works offline
+#                  out of the box; matches pre-systacean-6 behaviour)
 #   make test      cargo test --workspace
 #   make lint      cargo fmt + cargo clippy (mirrors pre-push)
 #   make hooks     install the pre-push git hook (one-time)
@@ -66,13 +73,21 @@ build:
 models:
 	$(CARGO) run --release -p fetch-models
 
-# One-shot release build: ensures the embedding model is on disk
-# AND the frontend bundle is fresh AND the binary is rebuilt with
-# both included. Use this for distribution; `make build` alone
-# will pick up whatever models/web bundle happen to be present
-# from a prior run.
+# One-shot release build that bundles the embedding model. systacean-6
+# split this from the default `make build` path: the model add ~63 MB
+# to the binary and most users either don't need Hybrid search or
+# would rather fetch the model on demand (chan-drive runtime resolver
+# + systacean-7 download flow). Use `make build-release` for
+# distribution where Hybrid should work offline immediately; use
+# `make build` for the default lean binary.
+#
+# `--features embed-model` implies `embeddings`; the workspace
+# feature graph wires `chan-server/embed-model` →
+# `dep:tar + dep:zstd + embeddings`, which is what `embed_seed.rs`
+# needs for the bundle decode.
 .PHONY: build-release
-build-release: models web build
+build-release: models web
+	$(CARGO) build --release --features embed-model -p chan
 
 .PHONY: test
 test:
@@ -103,7 +118,7 @@ uninstall:
 
 .PHONY: rpm
 rpm: models web
-	$(CARGO) zigbuild --release --target $(RPM_TARGET) -p chan
+	$(CARGO) zigbuild --release --features embed-model --target $(RPM_TARGET) -p chan
 	# cargo-generate-rpm reads asset paths verbatim from the
 	# [package.metadata.generate-rpm] block (../../target/release/chan)
 	# and does not rewrite them when --target is passed, so stage

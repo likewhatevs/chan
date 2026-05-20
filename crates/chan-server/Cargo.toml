@@ -15,7 +15,18 @@ default = ["embeddings"]
 # Forwards to chan-drive's `embeddings` feature so the about-pane's
 # "embeddings on" badge reflects the actual build. Opt out via
 # `--no-default-features` along the rest of the stack.
-embeddings = ["chan-drive/embeddings", "dep:tar", "dep:zstd"]
+embeddings = ["chan-drive/embeddings"]
+# Bundle the default BGE-small model into the binary via
+# `include_bytes!`. Opt-in (default-off) so a plain `cargo build`
+# produces a ~26 MB binary instead of ~89 MB. With the feature off
+# the chan-drive runtime resolver looks for the model under
+# `<user-config>/chan/models/<model-name>/`; the CLI / API layer
+# (systacean-7) downloads it on demand. With the feature on
+# `make models` prefetches the tarball into
+# `resources/models.tar.zst` and the seeder extracts it into the
+# per-machine cache on first server launch. Implies `embeddings`:
+# bundling a model is meaningless without the embedding code.
+embed-model = ["embeddings", "dep:tar", "dep:zstd"]
 # Pass-throughs for chan-drive's GPU backends. The chan binary's
 # target-conditional dep wiring auto-flips `metal` on macOS; `cuda`
 # stays opt-in on Linux.

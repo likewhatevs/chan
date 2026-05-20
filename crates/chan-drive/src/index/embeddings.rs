@@ -54,6 +54,19 @@ pub enum EmbedError {
     Config(String),
     #[error("operation cancelled")]
     Cancelled,
+    /// systacean-6: model not present on disk and the binary wasn't
+    /// built with `--features embed-model`. Surfaces to the CLI / API
+    /// layer (systacean-7) so the user sees "model not downloaded;
+    /// run `chan index download-model` or enable in Settings"
+    /// instead of a silent hf-hub network fetch.
+    #[error(
+        "embedding model '{model_id}' not downloaded; expected at {expected_dir:?}. \
+         Run `chan index download-model` or rebuild with `--features embed-model`."
+    )]
+    ModelNotDownloaded {
+        model_id: String,
+        expected_dir: PathBuf,
+    },
 }
 
 fn candle_err<E: std::fmt::Display>(e: E) -> EmbedError {
@@ -393,6 +406,84 @@ pub fn global_models_dir() -> PathBuf {
         .join("models")
 }
 
+/// Translate a HuggingFace model id (`"<org>/<name>"`) into the
+/// directory name hf-hub uses inside its cache root: `models--`
+/// prefix, slashes replaced with `--`. Mirrors hf-hub's own scheme
+/// (`hf_hub::cache::Cache::repo_path`) so the seeder, the runtime
+/// resolver, and `Embedder::open`'s cache lookup all agree on where
+/// a downloaded model lives.
+pub fn repo_dir_name(model_id: &str) -> String {
+    format!("models--{}", model_id.replace('/', "--"))
+}
+
+/// True when `repo_dir` holds a usable copy of `model_id`'s files:
+/// `refs/main` present, plus at least one `snapshots/<hash>/`
+/// directory containing `config.json`, `tokenizer.json`, and
+/// `model.safetensors`. Anything weaker (stray lockfile, half-
+/// downloaded snapshot, blobs-only state from an aborted hf-hub
+/// fetch) fails the check.
+fn model_files_present(repo_dir: &Path) -> bool {
+    if !repo_dir.join("refs").join("main").is_file() {
+        return false;
+    }
+    let snapshots = repo_dir.join("snapshots");
+    let Ok(it) = std::fs::read_dir(&snapshots) else {
+        return false;
+    };
+    for entry in it.flatten() {
+        let Ok(ft) = entry.file_type() else {
+            continue;
+        };
+        if !ft.is_dir() {
+            continue;
+        }
+        let dir = entry.path();
+        if dir.join("config.json").is_file()
+            && dir.join("tokenizer.json").is_file()
+            && dir.join("model.safetensors").is_file()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// systacean-6: runtime resolver for the embedding model. Indexes by
+/// model name (not a hardcoded path) so a Round-2 multi-model picker
+/// can swap the active model without changing this function.
+///
+/// Returns the repo directory under `global_models_dir()` when the
+/// model is laid out and ready (matches the same predicate
+/// `embed_seed.rs::default_model_present` uses on the seed path —
+/// either source can populate the cache). Returns
+/// `EmbedError::ModelNotDownloaded` otherwise; callers propagate it
+/// to the API / CLI surface so the user sees "model not downloaded;
+/// run `chan index download-model` or rebuild with `--features
+/// embed-model`".
+///
+/// Rejects unknown model ids first (mirrors `Embedder::open_once`'s
+/// `lookup_model` gate) so the error path stays consistent
+/// regardless of cache state.
+pub fn resolve_model(model_id: &str) -> Result<PathBuf, EmbedError> {
+    resolve_model_in(model_id, &global_models_dir())
+}
+
+/// `resolve_model` against an explicit cache root. Production callers
+/// use the no-arg `resolve_model`; tests inject a tempdir so they
+/// don't read or mutate the user's real cache.
+fn resolve_model_in(model_id: &str, cache_dir: &Path) -> Result<PathBuf, EmbedError> {
+    let _ = lookup_model(model_id)?;
+    let repo_dir = cache_dir.join(repo_dir_name(model_id));
+    if model_files_present(&repo_dir) {
+        Ok(repo_dir)
+    } else {
+        Err(EmbedError::ModelNotDownloaded {
+            model_id: model_id.to_owned(),
+            expected_dir: repo_dir,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,6 +498,94 @@ mod tests {
     fn known_models_resolve() {
         assert!(lookup_model("BAAI/bge-small-en-v1.5").is_ok());
         assert!(lookup_model("BAAI/bge-m3").is_ok());
+    }
+
+    fn seeded_repo(repo: &Path) {
+        std::fs::create_dir_all(repo.join("refs")).unwrap();
+        std::fs::write(repo.join("refs").join("main"), b"deadbeef").unwrap();
+        let snap = repo.join("snapshots").join("deadbeef");
+        std::fs::create_dir_all(&snap).unwrap();
+        std::fs::write(snap.join("config.json"), b"{}").unwrap();
+        std::fs::write(snap.join("tokenizer.json"), b"{}").unwrap();
+        std::fs::write(snap.join("model.safetensors"), b"weights").unwrap();
+    }
+
+    #[test]
+    fn repo_dir_name_matches_hf_hub_layout() {
+        assert_eq!(
+            repo_dir_name("BAAI/bge-small-en-v1.5"),
+            "models--BAAI--bge-small-en-v1.5"
+        );
+        assert_eq!(repo_dir_name("BAAI/bge-m3"), "models--BAAI--bge-m3");
+    }
+
+    #[test]
+    fn resolve_model_returns_path_when_files_present() {
+        // systacean-6: pin the happy path. When refs/main + a
+        // complete snapshot trio are present, the resolver returns
+        // the repo dir; callers proceed to `Embedder::open` against
+        // the cached files without an hf-hub network round-trip.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join(repo_dir_name("BAAI/bge-small-en-v1.5"));
+        seeded_repo(&repo);
+        let resolved = resolve_model_in("BAAI/bge-small-en-v1.5", tmp.path()).unwrap();
+        assert_eq!(resolved, repo);
+    }
+
+    #[test]
+    fn resolve_model_errors_when_dir_empty() {
+        // Default-build runtime path: feature `embed-model` off + no
+        // prior systacean-7 download → resolver surfaces
+        // ModelNotDownloaded with the expected path. The CLI / API
+        // layer turns this into the "run `chan index download-model`"
+        // hint instead of triggering an hf-hub network fetch.
+        let tmp = tempfile::tempdir().unwrap();
+        let err = resolve_model_in("BAAI/bge-small-en-v1.5", tmp.path()).unwrap_err();
+        match err {
+            EmbedError::ModelNotDownloaded {
+                model_id,
+                expected_dir,
+            } => {
+                assert_eq!(model_id, "BAAI/bge-small-en-v1.5");
+                assert_eq!(
+                    expected_dir,
+                    tmp.path().join("models--BAAI--bge-small-en-v1.5")
+                );
+            }
+            other => panic!("expected ModelNotDownloaded, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_model_errors_when_snapshot_incomplete() {
+        // Half-downloaded state: refs/main present, but the
+        // snapshot is missing one of the trio. Rejecting this is
+        // load-bearing — a hf-hub download interrupted mid-flight
+        // can leave the dir in this shape, and we don't want the
+        // embedder to open a partial model and crash mid-forward-
+        // pass. ModelNotDownloaded is the right signal: the caller
+        // re-runs the download.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join(repo_dir_name("BAAI/bge-small-en-v1.5"));
+        seeded_repo(&repo);
+        std::fs::remove_file(
+            repo.join("snapshots")
+                .join("deadbeef")
+                .join("tokenizer.json"),
+        )
+        .unwrap();
+        let err = resolve_model_in("BAAI/bge-small-en-v1.5", tmp.path()).unwrap_err();
+        assert!(matches!(err, EmbedError::ModelNotDownloaded { .. }));
+    }
+
+    #[test]
+    fn resolve_model_rejects_unknown_id_before_filesystem_check() {
+        // Even if the unknown id had a plausibly-laid-out dir on
+        // disk, the resolver rejects it up front. Keeps the error
+        // path consistent with `Embedder::open_once`'s gate.
+        let tmp = tempfile::tempdir().unwrap();
+        let err = resolve_model_in("not-a-model", tmp.path()).unwrap_err();
+        assert!(matches!(err, EmbedError::UnknownModel(_)));
     }
 
     #[test]

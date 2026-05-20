@@ -280,10 +280,12 @@ async fn build_app(
     };
 
     // Seed the per-machine model cache from the embedded bundle if
-    // a default-model build (release) shipped one. Cheap on every
-    // launch: skipped if any file is already present at the target.
-    // No-op when the binary was built without `embeddings`.
-    #[cfg(feature = "embeddings")]
+    // this build shipped one (`--features embed-model`). Cheap on
+    // every launch: skipped if the default model is already laid out
+    // at the target. No-op (compile-gated out) on default builds —
+    // they ship without the bundle and rely on the chan-drive
+    // runtime resolver + the systacean-7 download flow instead.
+    #[cfg(feature = "embed-model")]
     embed_seed::seed_models_from_bundle();
 
     // Server config: same fall-back-on-malformed policy as the

@@ -285,20 +285,30 @@ impl Index {
     }
 
     /// Get-or-init the embedder. Errors propagate (e.g. unknown
-    /// model id, model download failure, candle device init). The
-    /// init step holds the Mutex across `Embedder::open`, which can
-    /// take seconds on a cold cache (model download from
-    /// HuggingFace), so concurrent first-callers serialize and only
-    /// one download happens. Once populated, every call returns a
-    /// cheap Arc clone and never enters the slow path again.
+    /// model id, model not downloaded, candle device init). The
+    /// init step holds the Mutex across `Embedder::open` so
+    /// concurrent first-callers serialize and only one load
+    /// happens. Once populated, every call returns a cheap Arc
+    /// clone and never enters the slow path again.
+    ///
+    /// systacean-6 / runtime resolver: `resolve_model` is called
+    /// before `Embedder::open`. When the model isn't present on
+    /// disk (`--features embed-model` off AND no prior download),
+    /// the caller receives a structured `ModelNotDownloaded` error
+    /// instead of `Embedder::open` triggering an hf-hub network
+    /// fetch. When the model IS on disk (either bundled-and-seeded
+    /// or pre-downloaded via systacean-7's CLI / API), `resolve_model`
+    /// returns the repo dir and `Embedder::open` finds the same
+    /// path through hf-hub's cache lookup with no network.
     #[cfg(feature = "embeddings")]
     fn embedder(&self) -> Result<Arc<Embedder>, IndexError> {
         let mut guard = self.embedder.lock().unwrap();
         if let Some(e) = guard.as_ref() {
             return Ok(Arc::clone(e));
         }
-        let cache_dir = embeddings::global_models_dir();
         let model_id = self.config.lock().unwrap().model.clone();
+        let _ = embeddings::resolve_model(&model_id)?;
+        let cache_dir = embeddings::global_models_dir();
         let e = Arc::new(Embedder::open(&model_id, &cache_dir)?);
         *guard = Some(Arc::clone(&e));
         Ok(e)

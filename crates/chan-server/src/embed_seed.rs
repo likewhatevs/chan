@@ -3,14 +3,17 @@
 //! The release build embeds a zstd-encoded tar of the hf-hub cache layout
 //! at `resources/models.tar.zst` (produced by the `fetch-models` helper).
 //! On first server launch we extract it into the global model cache so
-//! users never block on a HuggingFace download. Plain `cargo build`
-//! ships an empty stub: the seeder treats that as "no embedded model"
-//! and falls back to hf-hub's network path.
+//! users never block on a HuggingFace download.
 //!
-//! Whole module gated on `embeddings`; without the feature, neither the
-//! bytes nor the decoder land in the binary.
+//! Whole module gated on `embed-model` (systacean-6 split):
+//! `embeddings` controls the candle stack; `embed-model` controls
+//! whether the bundle ships in the binary. With `embeddings` on but
+//! `embed-model` off, `chan-drive::index::embeddings::resolve_model`
+//! looks for an already-downloaded model under
+//! `<user-config>/chan/models/<model-name>/` and the CLI / API layer
+//! (systacean-7) handles on-demand download.
 
-#![cfg(feature = "embeddings")]
+#![cfg(feature = "embed-model")]
 
 use std::path::Path;
 
