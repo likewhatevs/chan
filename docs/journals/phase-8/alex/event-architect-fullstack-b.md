@@ -530,3 +530,24 @@ the placeholder constant + run end-to-end against a live
 Claude Code session. Don't block other progress on it.
 
 Push waits for the patch-release commit-grouping cut.
+
+## 2026-05-20 — poke (queue addition: fullstack-b-14 chan-desktop title format)
+
+@@Alex flagged 2026-05-20: "the tauri title: 'chan drive:
+<name>' should be <path> instead". Cut as
+[../fullstack-b/fullstack-b-14.md](../fullstack-b/fullstack-b-14.md).
+
+One- or two-line change in `desktop/src-tauri/src/serve.rs`
+(or wherever `WebviewWindowBuilder::title(...)` lands).
+Title becomes the drive's full path; drop the `chan drive: `
+prefix. If you have a reason to keep the prefix, surface a
+scope question.
+
+**Authorization: yes**, covers `desktop/src-tauri/`. Proceed
+without further @@Alex confirmation.
+
+Independent of -b-13 (different file). Land in any order;
+small enough to slot in as fill-in between the chord-probe
+phases of -b-13.
+
+Updated queue: -13 (in flight), -14.

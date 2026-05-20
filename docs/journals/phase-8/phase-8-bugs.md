@@ -272,6 +272,11 @@
   - flagged 2026-05-20 by @@WebtestB during a proactive lane-B walk: attaching the watcher to an absolute outside-drive path succeeds (post `fullstack-b-3` + `systacean-5`), but reading events from that path errors with `watch read failed: io error: No such file or directory (os error 2)`. The read path enforces drive-sandbox resolution; absolute outside-drive paths fail the sandbox lookup
   - want: read path applies the same in-drive-vs-outside-drive split as the attach path's resolver
   - dispatched as `systacean-9`
+- chan-desktop Tauri window title: shows "chan drive: <name>", should be "<path>" instead
+  - flagged 2026-05-20 by @@Alex: "note for next build, the tauri title: 'chan drive: <name>' should be <path> instead". The current chan-desktop window title is formed as `chan drive: <drive-name>` (e.g. "chan drive: chan"); @@Alex wants the title to be the full drive path instead (e.g. `/Users/fiorix/dev/github.com/fiorix/chan`)
+  - read of the ask: replace the entire title string with the path — no "chan drive:" prefix. If implementer disagrees on dropping the prefix (e.g. for menubar discoverability), surface a scope question; otherwise default to path-only
+  - lives in chan-desktop / `desktop/src-tauri/` window-creation path; per-window state is keyed by `w=<window-label>` URL parameter per CLAUDE.md, so the title swap happens at window-build-time alongside the existing label-derivation logic
+  - dispatched as `fullstack-b-14` — small change, rides the patch release
 - Graph: "graph from here" should be default; parent inspector should render ancestor scope navigation
   - flagged 2026-05-20 by @@Alex: today's graph view requires an explicit button click to engage "graph from here" mode (scope to subtree rooted at current selection). @@Alex wants this to be the default behaviour — open graph, render scoped to the active context, no button needed. The parent / breadcrumb inspector should render the ancestor chain so the user can navigate back up to the drive root scope, clicking ancestors to re-scope to "from here" rooted at each one
   - verbatim ask: "i want the graph's parent inspector to show the graph from here, enabling to go all the way back to drive where graph from here is the default and dont need a button"
