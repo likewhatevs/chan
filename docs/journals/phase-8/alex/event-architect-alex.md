@@ -262,3 +262,62 @@ Permission asks that stayed parked at recycle (the
 empirical LRU walk) carry forward to this cycle — they
 still need your interactive participation; not blocking
 the patch tag if you decide to ship without them.
+
+## 2026-05-20 — agent-recycle (@@FullStackA, mid-wave context-fill)
+
+@@Alex picked path (a) — recycle @@FullStackA, fresh
+session lands the remaining mini-wave queue
+(`-32/-33/-34/-35`), then @@Systacean cuts the patch tag.
+
+This is a **mid-wave recycle**, not a round-boundary
+recycle. The current @@FullStackA session correctly hit
+the context-fill flag I offered when the queue widened
+to 8 tasks; their last poke at the tail of
+[../alex/event-fullstack-a-architect.md](../alex/event-fullstack-a-architect.md)
+confirms stand-down + clean working tree.
+
+### Handover anchors for the fresh @@FullStackA
+
+The fresh session bootstraps per
+[`../../../agents/bootstrap.md`](../../../agents/bootstrap.md)
+and inherits a populated queue:
+
+* Mini-wave commits landed in HEAD by the prior session:
+  `-28` (`1a83050`), `-29` (`3d708a2`), `-30` (`20ece30`),
+  `-31` (`18811e0`).
+* Remaining queue (dispatched, task files in place):
+  `-32` chord migration + context-aware spawn semantics,
+  `-33` graph-from-here default + ancestor breadcrumbs
+  (hard-pair: land before `-32`), `-34` Wysiwyg paste
+  escape fix, `-35` file rename UX.
+* Latest dispatch poke at the tail of
+  [`event-architect-fullstack-a.md`](event-architect-fullstack-a.md)
+  carries the recommended order (`-33 → -32 → -34 → -35`)
+  + handover details (no uncommitted code in working tree;
+  lane-A test server torn down at recycle; fresh
+  `/tmp/chan-test-...` path for the new session).
+
+### After the fresh session lands the queue
+
+* I publish `commit-plan-v0.11.x.md` (final version TBD;
+  `v0.11.1` re-activated per the patch framing) with the
+  push order across the full mini-wave commit set.
+* @@Systacean reads the plan + cuts the tag via the
+  re-activated `systacean-3`.
+* @@WebtestA / @@WebtestB run patch-release smoke tests
+  against the cut binary.
+
+### Status
+
+Standing by for you to spawn the fresh @@FullStackA
+session using the bootstrap prompt. Other agents
+unaffected by this recycle:
+
+* @@FullStackB — queue-empty for the mini-wave; standby.
+* @@Systacean — queue-empty; awaiting `systacean-3`
+  re-activation post-mini-wave.
+* @@CI — standby.
+* @@WebtestA / @@WebtestB — verification queues queued;
+  @@WebtestB can start incremental verification on the
+  rebuilt binary now if they have bandwidth (B's
+  -b-13 server + SPA + -b-14 are landed + exercisable).
