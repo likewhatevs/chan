@@ -554,3 +554,75 @@ Queue empty for the rich-prompt mini-wave. Standby on
 @@FullStackA / @@FullStackB tasks land + you publish
 the patch-release commit-grouping plan. Push held per
 the standing policy.
+
+## 2026-05-20 — poke (chan v0.11.1 pushed)
+
+GO received + executed. `systacean-3` complete.
+
+### Pushed refs
+
+```
+2c6680b6a6ff1e77abeee0f0ebca18641a030237  refs/heads/main
+33dfd63da0f720587f1e4a329d2f10643e6a8dae  refs/tags/chan-v0.11.1
+```
+
+`git push origin main --follow-tags` output:
+
+```
+   18bdb34..2c6680b  main -> main
+ * [new tag]         chan-v0.11.1 -> chan-v0.11.1
+```
+
+### Sequence executed
+
+1. Pre-push gate green workspace-wide: fmt + clippy
+   `-D warnings` + workspace test + `RUSTFLAGS=-D
+   warnings cargo build --no-default-features` (the
+   `-s-8` follow-up `c1e9c41` unblocked this case) +
+   svelte-check (0e 0w) + vitest (544/544) + vite
+   build.
+2. Version bump `0.11.0` → `0.11.1` across the five
+   manifests: `Cargo.toml`, `Cargo.lock` (refreshed
+   via `cargo build -p chan`), `desktop/src-tauri/tauri.conf.json`,
+   `web/package.json`, `web/package-lock.json`
+   (chan-web entry only). Runtime confirmation:
+   `./target/debug/chan --version` → `chan 0.11.1`.
+3. Release commit `2c6680b` — `chan v0.11.1`
+   (5 files, +15 / -15). Pre-commit `git diff
+   --staged --stat` + post-commit `git show --stat
+   HEAD` audits clean; no multi-agent stowaways.
+4. Annotated tag `chan-v0.11.1` at `33dfd63` pointing
+   to `2c6680b`. Body verbatim from the plan's "Tag
+   draft (v0.11.1)" section (used `git tag -a -F
+   <file>` because heredoc `-m` choked on the embedded
+   single quotes in the chord-encoding note).
+5. `git push origin main --follow-tags` — single
+   command pushes branch + tag; tag-triggered
+   `release-desktop.yml` fires automatically on the
+   `chan-v*` matcher.
+
+### Audit trail
+
+* Full append at the tail of
+  [`../systacean/systacean-3.md`](../systacean/systacean-3.md).
+* Journal entry at the tail of
+  [`../systacean/journal.md`](../systacean/journal.md).
+* No SHA volatility caught at push time (pre-push
+  `git log` matched the architect's GO-poke list
+  exactly).
+
+### Standing by
+
+* @@WebtestA / @@WebtestB walk the cut binary against
+  their per-task verification queues (already in their
+  inbound channels).
+* `release-desktop.yml` produces unsigned matrix
+  artifacts; signing pipeline + real Apple Developer
+  ID keys remain Round-2 work per request.md.
+* Round-2 broader fan-out resumes per
+  [`../architect/round-2-plan.md`](../architect/round-2-plan.md);
+  Round-3 Track 5 (per-agent submit-chord encoding map)
+  remains queued for the eventual Round-3 fan-out.
+
+Recycle-eligible per the agent-recycle protocol.
+Awaiting your next signal.

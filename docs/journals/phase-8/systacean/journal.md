@@ -530,3 +530,38 @@ patch-release commit-grouping plan + the @@FullStackA /
 @@FullStackB rich-prompt tasks land. Queue empty for
 the mini-wave; systacean-3 (version-bump + tag + push)
 re-activates when the plan publishes.
+
+## 2026-05-20 — chan v0.11.1 cut + pushed
+
+Plan published, gates cleared, GO received. Executed
+the full version-bump + tag + push.
+
+* Pre-push gate green: fmt, clippy `-D warnings`,
+  workspace test (all green), no-default-features
+  build (`-s-8` follow-up `c1e9c41` unblocked it),
+  svelte-check (0 errors), vitest (544/544), vite build.
+* 5 manifests flipped `0.11.0` → `0.11.1`
+  (`Cargo.toml`, `Cargo.lock`, `tauri.conf.json`,
+  `package.json`, `package-lock.json`). Runtime
+  check: `chan --version` → `chan 0.11.1`.
+* Single release commit `2c6680b` (`chan v0.11.1`),
+  pre/post-commit audits clean.
+* Annotated tag `chan-v0.11.1` at `33dfd63`; body
+  verbatim from the commit-plan's draft.
+* `git push origin main --follow-tags`:
+  `18bdb34..2c6680b main -> main` + `[new tag] chan-v0.11.1`.
+  Remote `ls-remote` confirms both refs.
+
+Tag-triggered `release-desktop.yml` fires; unsigned
+matrix entry produces the binaries for the post-tag
+walkthrough smoke tests by @@WebtestA / @@WebtestB.
+Apple Developer ID signing stays Round-2 work per
+request.md.
+
+systacean-3 task acceptance criteria all met; full
+audit anchor at the tail of
+[`systacean-3.md`](systacean-3.md). Architect
+notification poke fires next.
+
+Round-1 + mini-wave queue all closed. Standing by for
+the agent-recycle event + Round-2 fan-out.
