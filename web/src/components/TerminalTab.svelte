@@ -60,6 +60,7 @@
   import { terminalWsPath } from "../terminal/session";
   import { handleTerminalMetaKey } from "../terminal/keymap";
   import { injectShowMcpEnvCommand } from "../terminal/mcpEnv";
+  import { AGENT_SUBMIT_CHORD } from "../terminal/submitMode";
   import {
     clampScrollbackMb,
     scrollbackLinesFromMb,
@@ -710,7 +711,20 @@
   }
 
   function submitRichPrompt(source: string): void {
-    sendUserInput(source);
+    // `fullstack-b-13`: when the prompt is in Agent submit-mode,
+    // strip any trailing newline the editor left on the buffer
+    // and append the agent-submit chord. Claude Code v2.1.145
+    // reads `\x1b[27;9;13~` (xterm modifyOtherKeys Cmd+Enter)
+    // as submit; a stray `\n` before the chord would land as a
+    // newline in the agent's multi-line draft. Shell mode keeps
+    // the buffer byte-for-byte (today's behaviour: the shell
+    // sees the editor's trailing `\n` as Enter).
+    if (tab.richPrompt?.submitMode === "agent") {
+      const stripped = source.replace(/\n+$/, "");
+      sendUserInput(stripped + AGENT_SUBMIT_CHORD);
+    } else {
+      sendUserInput(source);
+    }
     scheduleTerminalSessionSave();
     // `fullstack-a-4`: caret stays in the rich prompt after
     // Cmd+Enter so consecutive prompts are fluid. Previously we

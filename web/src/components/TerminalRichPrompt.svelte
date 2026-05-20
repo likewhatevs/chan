@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { Bot, ChevronDown, ChevronUp, Code2, FilePlus, FolderSearch, GripHorizontal, Pilcrow, Send, Type, X } from "lucide-svelte";
+  import { Bot, ChevronDown, ChevronUp, Code2, FilePlus, FolderSearch, GripHorizontal, Pilcrow, Send, Terminal, Type, X } from "lucide-svelte";
   import {
     PAGE_WIDTH_MAX_PCT,
     PAGE_WIDTH_MIN_PCT,
@@ -342,6 +342,43 @@
     }
   }
 
+  /// `fullstack-b-13`: read the per-prompt submit-mode with a
+  /// safe default of `"shell"` for the absent / new-prompt case.
+  function submitMode(): "shell" | "agent" {
+    return prompt.submitMode ?? "shell";
+  }
+
+  let submitModeBusy = $state(false);
+
+  /// `fullstack-b-13`: flip the per-prompt submit-mode AND
+  /// propagate the new mode to chan-server via
+  /// `PUT /api/terminal/:session/submit-mode`. The server uses
+  /// the value in `dispatch_agent_event` so the survey-reply
+  /// "poke" notification picks the right trailing chord bytes
+  /// for THIS session. If the PUT fails (404 stale session,
+  /// 5xx server error), the SPA-side flip is rolled back so
+  /// the toggle matches reality.
+  async function toggleSubmitMode(): Promise<void> {
+    menu = null;
+    const next = submitMode() === "agent" ? "shell" : "agent";
+    const previous = submitMode();
+    prompt.submitMode = next;
+    if (!terminalSessionId) {
+      // No live session yet — the SPA-side flip is the source
+      // of truth until the next attach + propagation.
+      return;
+    }
+    submitModeBusy = true;
+    try {
+      await api.setTerminalSubmitMode(terminalSessionId, next);
+    } catch (err) {
+      prompt.submitMode = previous;
+      ui.status = `submit-mode flip failed: ${(err as Error).message}`;
+    } finally {
+      submitModeBusy = false;
+    }
+  }
+
   async function setBubbleMode(mode: "stack" | "tray"): Promise<void> {
     menu = null;
     if (drive.info) {
@@ -421,6 +458,37 @@
     </button>
     <button type="button" class="icon-btn" onclick={submit} title="Send prompt" aria-label="Send prompt">
       <Send size={16} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+    <!-- `fullstack-b-13`: shell-vs-agent submit-mode toggle.
+         Shell mode (default; button off): Cmd+Enter sends the
+         buffer as-is, the shell sees the editor's trailing
+         newline as Enter. Agent mode (button on): Cmd+Enter
+         strips trailing newlines, appends the agent-submit
+         chord so a Claude Code / codex / gemini session running
+         in the terminal treats the buffer as a submitted
+         message instead of multi-line draft input. The same
+         toggle drives chan-server's `dispatch_agent_event`
+         path so survey-reply "poke" notifications pick the
+         right trailing bytes. -->
+    <button
+      type="button"
+      class="icon-btn"
+      class:on={submitMode() === "agent"}
+      onclick={toggleSubmitMode}
+      disabled={submitModeBusy}
+      title={submitMode() === "agent"
+        ? "Submit mode: agent (Cmd+Enter sends Claude Code's submit chord)"
+        : "Submit mode: shell (Cmd+Enter sends a trailing newline)"}
+      aria-label={submitMode() === "agent"
+        ? "Switch submit mode to shell"
+        : "Switch submit mode to agent"}
+      aria-pressed={submitMode() === "agent"}
+    >
+      {#if submitMode() === "agent"}
+        <Bot size={16} strokeWidth={1.75} aria-hidden="true" />
+      {:else}
+        <Terminal size={16} strokeWidth={1.75} aria-hidden="true" />
+      {/if}
     </button>
     <!-- `fullstack-a-24`: collapse/expand the prompt to a minimal
          bar so chat / survey bubbles above get more vertical room.

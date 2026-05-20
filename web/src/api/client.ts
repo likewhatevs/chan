@@ -384,6 +384,12 @@ export const api = {
     req<void>("POST", `/api/terminal/${encodeURIComponent(sessionId)}/watcher`, { path }),
   clearTerminalWatcher: (sessionId: string) =>
     req<void>("DELETE", `/api/terminal/${encodeURIComponent(sessionId)}/watcher`),
+  /// `fullstack-b-13`: flip the receiving session's submit-mode
+  /// (drives the trailing chord bytes after a "poke" notification
+  /// from `dispatch_agent_event`). Mirrors `setTerminalWatcher` —
+  /// 204 on success, 404 on unknown session, 400 on bad mode.
+  setTerminalSubmitMode: (sessionId: string, mode: "shell" | "agent") =>
+    req<void>("PUT", `/api/terminal/${encodeURIComponent(sessionId)}/submit-mode`, { mode }),
   writeTerminalEventReply: (
     sessionId: string,
     body: {

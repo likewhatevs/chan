@@ -517,3 +517,115 @@ Server-side commit-ready. Holding for @@Architect clearance.
 SPA side stays parked until @@FullStackA's tabs.svelte.ts
 work commits (then I add the SerTab + toolbar toggle + API
 client call as a second commit).
+
+## 2026-05-20 — SPA-side implemented (second commit on -b-13)
+
+Server-side committed as `e24b931`. @@FullStackA's
+`-a-28/-29/-30` committed cleanly (commits `1a83050`,
+`20ece30`, `3d708a2`), leaving `tabs.svelte.ts` at HEAD —
+SPA-side unblocked per @@Architect's clearance.
+
+### SPA-side files changed
+
+* `web/src/state/tabs.svelte.ts`
+  * New `submitMode?: "shell" | "agent"` field on
+    `TerminalRichPromptState`. Documented inline citing the
+    chord-probe finding + the server-side mirror.
+  * New `rpsm?: "a"` field on `SerTab`. Short-form (`"a"`)
+    minimises persisted-shape bloat; absent reads as shell.
+  * `serializeTab` extended with `...(t.richPrompt.submitMode === "agent" ? { rpsm: "a" as const } : {})`
+    spread inside the existing `richPrompt` block.
+  * `richPromptFromSer` extended both the source-detection
+    guard and the empty-check; restore emits `{ submitMode:
+    "agent" }` when `rpsm === "a"`, absent otherwise.
+* `web/src/api/client.ts`
+  * New `api.setTerminalSubmitMode(sessionId, mode)` ⇒
+    `PUT /api/terminal/:session/submit-mode` body
+    `{ mode: "shell"|"agent" }`. Mirrors the
+    `setTerminalWatcher` shape.
+* `web/src/terminal/submitMode.ts` (NEW)
+  * `AGENT_SUBMIT_CHORD = "\x1b[27;9;13~"` constant with the
+    full probe-citation comment.
+  * `encodeForAgentSubmit(buffer)` helper: strips trailing
+    newlines + appends chord. Pure function; pinned-source
+    tests cover the edge cases.
+* `web/src/components/TerminalRichPrompt.svelte`
+  * Added `Terminal` icon import from `lucide-svelte`.
+  * `submitMode()` reader + `submitModeBusy` state +
+    `toggleSubmitMode()` async handler that flips the field
+    AND hits `api.setTerminalSubmitMode`. Optimistic-update
+    pattern: flip the SPA-side state first, roll back on
+    server error.
+  * New header-toolbar button between Send and Collapse
+    chevron. `Terminal` icon when in Shell mode, `Bot` icon
+    when in Agent mode; `class:on={submitMode() === "agent"}`
+    follows the watcher's pattern. Title + aria-label spell
+    out the current mode and what the click switches to.
+* `web/src/components/TerminalTab.svelte`
+  * Added `AGENT_SUBMIT_CHORD` import.
+  * `submitRichPrompt` branches on `tab.richPrompt?.submitMode`:
+    Shell mode is byte-for-byte today's behaviour
+    (`sendUserInput(source)`); Agent mode strips trailing
+    newlines + appends the chord (`sendUserInput(stripped +
+    AGENT_SUBMIT_CHORD)`).
+
+### Tests added
+
+* `web/src/state/tabs.test.ts`
+  * `round-trips rich-prompt submitMode via SerTab.rpsm` —
+    end-to-end: set `submitMode: "agent"`, serialize, assert
+    `"rpsm":"a"` lands, restore, assert the shape comes back.
+  * `omits rpsm from SerTab when submitMode is shell or absent` —
+    both the default (absent) and the explicit `"shell"` case
+    omit `rpsm` from the persisted shape. Pins the absence-
+    reads-as-shell contract.
+* `web/src/terminal/submitMode.test.ts` (NEW, 6 cases)
+  * Chord constant matches the probe (`\x1b[27;9;13~`).
+  * Trailing newline stripping (single + multiple newlines).
+  * Interior newlines preserved (multi-paragraph drafts).
+  * No-op on a buffer with no trailing newline.
+  * Empty buffer ⇒ chord only.
+
+### Pre-push gate
+
+* `npx svelte-check --threshold error` — 3976 files,
+  0 errors, 0 warnings.
+* `npx vitest run` — 522/522 passing (514 baseline + 8 new:
+  2 SerTab round-trip + 6 submitMode helper).
+* `npm run build` — clean (existing chunk-size warnings are
+  pre-existing baseline; no new warnings from this slice).
+
+Rust side already green from the server-side commit's gate;
+this slice doesn't touch any Rust crate.
+
+### Suggested commit subject
+
+```
+Rich prompt: shell/agent submit-mode toolbar toggle + SerTab roundtrip + agent-chord submit path (fullstack-b-13 SPA-side)
+```
+
+### Coordination footprint
+
+* `tabs.svelte.ts` — at HEAD (no other lane has uncommitted
+  edits here). My additions sit in separate regions from
+  @@FullStackA's recent `dbi` / `rppw` / `measuredHeightPx`
+  / `measuredWidthPx` adds.
+* `TerminalRichPrompt.svelte` — at HEAD per `git status`.
+* `TerminalTab.svelte` — at HEAD per `git status`.
+* `api/client.ts` — at HEAD per `git status`.
+* `terminal/submitMode.ts` + `terminal/submitMode.test.ts` —
+  new files.
+
+### What's intentionally NOT in this slice
+
+* @@WebtestB's lane-B walkthrough against a live Claude Code
+  session — that's their verification per the task body. Not
+  blocking the commit.
+* Per-agent encoding map for codex's `\r` divergence — parked
+  for Round-3 Track 5 per @@Alex 2026-05-20.
+
+### Status
+
+SPA-side commit-ready. Server side already committed at
+`e24b931`. Pre-push gate green across both halves. Holding
+for @@Architect's clearance on the SPA-side commit.

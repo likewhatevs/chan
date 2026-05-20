@@ -381,6 +381,18 @@ export type TerminalRichPromptState = {
   /// from the global `pageWidth.ratio` so narrowing the editor
   /// in one tile does not cascade onto a sibling tile's prompt.
   pageWidthRatio?: number;
+  /// `fullstack-b-13`: per-prompt shell-vs-agent submit-mode
+  /// toggle. `"shell"` (default; absent reads as shell) keeps
+  /// today's behaviour: Cmd+Enter sends the buffer with a
+  /// trailing `\n`. `"agent"` sends Claude Code's xterm
+  /// modifyOtherKeys Cmd+Enter chord (`\x1b[27;9;13~`) so the
+  /// buffer submits inside an agent (Claude Code / codex /
+  /// gemini) running in the terminal. Persisted on `SerTab.rpsm`;
+  /// the same toggle drives the server-side `dispatch_agent_event`
+  /// path via `PUT /api/terminal/:session/submit-mode` so survey-
+  /// reply echoes ("poke" notifications) also pick the right
+  /// trailing bytes.
+  submitMode?: "shell" | "agent";
 };
 
 export type Tab = FileTab | TerminalTab | GraphTab | BrowserTab;
@@ -2713,6 +2725,11 @@ type SerTab = {
   /// reads as "no cap" (decoupled from the global
   /// `pageWidth.ratio`).
   rppw?: number;
+  /// `fullstack-b-13`: per-prompt shell-vs-agent submit-mode
+  /// toggle. `"a"` ⇒ Agent; absent ⇒ Shell (default). Conditional
+  /// spread on serialize so the default case keeps the persisted
+  /// shape short.
+  rpsm?: "a";
   /// Terminal watcher path + unread bit. Session-scoped like the
   /// terminal id; the server owns the real watcher lifecycle.
   twp?: string;
@@ -2861,6 +2878,7 @@ function serializeTab(
             t.richPrompt.pageWidthRatio < 1
               ? { rppw: t.richPrompt.pageWidthRatio }
               : {}),
+            ...(t.richPrompt.submitMode === "agent" ? { rpsm: "a" as const } : {}),
           }
         : {}),
       ...(opts.terminalSessions && t.watcher
@@ -3380,7 +3398,8 @@ function richPromptFromSer(
     tab?.rpo ||
     tab?.rpm ||
     tab?.rpc ||
-    tab?.rppw !== undefined
+    tab?.rppw !== undefined ||
+    tab?.rpsm
       ? tab
       : fallback;
   if (!src) return undefined;
@@ -3390,7 +3409,8 @@ function richPromptFromSer(
     !src.rpo &&
     !src.rpm &&
     !src.rpc &&
-    src.rppw === undefined
+    src.rppw === undefined &&
+    !src.rpsm
   ) {
     return undefined;
   }
@@ -3415,6 +3435,10 @@ function richPromptFromSer(
     ...(typeof src.rppw === "number" && Number.isFinite(src.rppw) && src.rppw > 0 && src.rppw < 1
       ? { pageWidthRatio: src.rppw }
       : {}),
+    // `fullstack-b-13`: only emit submitMode when the user picked
+    // Agent. Absence reads as Shell, matching the conditional
+    // spread on serialize.
+    ...(src.rpsm === "a" ? { submitMode: "agent" as const } : {}),
   };
 }
 

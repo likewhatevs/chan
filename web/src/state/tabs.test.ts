@@ -1421,6 +1421,71 @@ describe("terminal session serialization", () => {
     expect(tab.watcher?.dismissedIds).toEqual(["sticky-poke", "sticky-preflight"]);
   });
 
+  test("round-trips rich-prompt submitMode via SerTab.rpsm (fullstack-b-13)", async () => {
+    // Per-prompt shell-vs-agent toggle survives session restore.
+    // Agent mode emits the short-form "a"; shell mode omits the
+    // field entirely so the persisted shape stays clean.
+    resetLayout([
+      terminalTab({
+        terminalSessionId: "term_rpsm",
+        richPrompt: {
+          buffer: "ship it",
+          heightPx: 200,
+          open: true,
+          mode: "wysiwyg",
+          submitMode: "agent",
+        },
+      }),
+    ]);
+
+    const sessionSnapshot = serializeLayout({ terminalSessions: true });
+    expect(JSON.stringify(sessionSnapshot)).toContain("\"rpsm\":\"a\"");
+
+    await restoreLayout(sessionSnapshot!);
+
+    const [tab] = activePane().tabs;
+    expect(tab?.kind).toBe("terminal");
+    if (tab?.kind !== "terminal") return;
+    expect(tab.richPrompt?.submitMode).toBe("agent");
+  });
+
+  test("omits rpsm from SerTab when submitMode is shell or absent (fullstack-b-13)", async () => {
+    // Shell is the default; omitting the field keeps the persisted
+    // shape compact and lets a future per-agent encoding map land
+    // additively without breaking the absence-reads-as-shell
+    // contract.
+    resetLayout([
+      terminalTab({
+        terminalSessionId: "term_rpsm_default",
+        richPrompt: {
+          buffer: "default prompt",
+          heightPx: 200,
+          open: true,
+          mode: "wysiwyg",
+        },
+      }),
+    ]);
+
+    const sessionSnapshot = serializeLayout({ terminalSessions: true });
+    expect(JSON.stringify(sessionSnapshot)).not.toContain("\"rpsm\"");
+
+    resetLayout([
+      terminalTab({
+        terminalSessionId: "term_rpsm_shell",
+        richPrompt: {
+          buffer: "explicit shell",
+          heightPx: 200,
+          open: true,
+          mode: "wysiwyg",
+          submitMode: "shell",
+        },
+      }),
+    ]);
+
+    const sessionSnapshot2 = serializeLayout({ terminalSessions: true });
+    expect(JSON.stringify(sessionSnapshot2)).not.toContain("\"rpsm\"");
+  });
+
   test("omits dbi from SerTab when dismissedIds is empty (fullstack-a-28)", async () => {
     resetLayout([
       terminalTab({
