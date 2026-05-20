@@ -31,7 +31,6 @@
     paneWidths,
     persistPaneWidths,
     revealPathInBrowser,
-    scopeFsGraphFromHere,
     tree,
   } from "../state/store.svelte";
   import { onDestroy } from "svelte";
@@ -107,6 +106,60 @@
       return { id: scopeId, kind: "git_repo", label: root, root };
     }
     return null;
+  }
+
+  /// `fullstack-a-33`: ancestor breadcrumb for the current scope. Each
+  /// entry is one clickable hop in the path from the drive root down
+  /// to the current scope's root. Click an ancestor → mutate
+  /// `graphState.scopeId` in place (no new tab). The chain renders
+  /// only for path-based scopes (`drive` / `dir:` / `file:`); tag /
+  /// git_repo / global scopes return an empty list so the breadcrumb
+  /// band is hidden for those modes.
+  ///
+  /// The list always starts with the drive root so the user can hop
+  /// back up to drive scope from anywhere. The final entry is the
+  /// CURRENT scope, rendered as the active step (not clickable).
+  type Crumb = { label: string; scopeId: string; current: boolean };
+  const scopeAncestors = $derived.by<Crumb[]>(() => {
+    if (!currentScope) return [];
+    if (currentScope.kind === "drive" || currentScope.kind === "global") {
+      return [{ label: "drive", scopeId: "drive", current: true }];
+    }
+    if (currentScope.kind !== "file" && currentScope.kind !== "dir") {
+      return [];
+    }
+    const path = currentScope.path;
+    if (!path) {
+      return [{ label: "drive", scopeId: "drive", current: true }];
+    }
+    const out: Crumb[] = [{ label: "drive", scopeId: "drive", current: false }];
+    const segments = path.split("/");
+    for (let i = 0; i < segments.length; i++) {
+      const sub = segments.slice(0, i + 1).join("/");
+      const isLast = i === segments.length - 1;
+      // Intermediate hops are always directory scopes; the leaf
+      // mirrors the current scope's kind so a file-scoped graph
+      // ends on `file:`, a dir-scoped one on `dir:`.
+      const scopeId =
+        isLast && currentScope.kind === "file"
+          ? `file:${sub}`
+          : `dir:${sub}`;
+      out.push({ label: segments[i], scopeId, current: isLast });
+    }
+    return out;
+  });
+
+  /// Re-scope the current graph in place. Mirrors the existing
+  /// semantic-mode `onSetAsScope` handler: depth resets to 1 so a
+  /// freshly-scoped graph starts tight; selection clears so the
+  /// inspector lands on the new scope's body. Used by the
+  /// breadcrumb's click handler.
+  function rescopeFromHere(scopeId: string): void {
+    if (scopeId === graphState.scopeId) return;
+    graphState.scopeId = scopeId;
+    graphState.depth = 1;
+    graphState.pendingSelectId = null;
+    selectedId = null;
   }
 
   function close(): void {
@@ -1221,6 +1274,31 @@
       onResize={persistPaneWidths}
       onClose={() => (graphState.inspectorOpen = false)}
     >
+      {#if scopeAncestors.length > 0}
+        <!-- `fullstack-a-33`: ancestor breadcrumb. Replaces the
+             explicit "Graph from here" button that used to live on
+             every inspector body. Default render mode is "from
+             here", so navigating back up the path is the load-
+             bearing affordance; the breadcrumb provides it for
+             every path-based scope (drive / dir: / file:). Click
+             a prior segment to re-scope in place. -->
+        <nav class="scope-crumbs" aria-label="graph scope ancestors">
+          {#each scopeAncestors as crumb, i (i + ":" + crumb.scopeId)}
+            {#if i > 0}
+              <span class="crumb-sep" aria-hidden="true">/</span>
+            {/if}
+            {#if crumb.current}
+              <span class="crumb current" aria-current="true">{crumb.label}</span>
+            {:else}
+              <button
+                type="button"
+                class="crumb"
+                onclick={() => rescopeFromHere(crumb.scopeId)}
+              >{crumb.label}</button>
+            {/if}
+          {/each}
+        </nav>
+      {/if}
       {#if (selectedFsNode && isFsDirectory(selectedFsNode) && selectedFsNode.id === "") || (selectedNode?.kind === "folder" && selectedNode.id === "")}
         <!-- Drive root: same body the file browser hamburger
              menu's Directory row pops (DriveInfoBody) so the
@@ -1228,31 +1306,23 @@
              Differentiated visually by GraphCanvas painting the
              "drive" sub-kind in a darker fill with the HardDrive
              glyph.
-             `fullstack-73`: re-scope the current graph to drive
-             when the user clicks "Graph from here" — matches the
-             onSetAsScope convention used for file/dir inspector
-             rows below. Filesystem-mode graphs go through the same
-             `scopeFsGraphFromHere("", true)` entry; semantic-mode
-             graphs just set scopeId = "drive". -->
-        <DriveInfoBody
-          onSetAsScope={() => {
-            if (filesystemMode) {
-              scopeFsGraphFromHere("", true);
-            } else {
-              graphState.scopeId = "drive";
-            }
-            selectedId = "";
-          }}
-        />
+             `fullstack-a-33`: stop passing `onSetAsScope` from
+             the graph. The breadcrumb above is the in-graph path
+             to drive-root scope; the button on DriveInfoBody is
+             still used by FileBrowserSurface (which spawns a new
+             graph instead of re-scoping). -->
+        <DriveInfoBody />
       {:else if selectedFsNode && (isFsDirectory(selectedFsNode) || selectedFsNode.kind === "file") && selectedFsNode.path !== undefined && !selectedFsNode.broken}
         <!-- Real fs-mode file or directory: render the same body as the
              file browser / editor inspector (counts, size, code
              report; tags / refs / backlinks for files) by routing
              through InspectorBody. FileInfoBody dispatches on
              entry.is_dir so the "file" selection variant covers both
-             shapes. Both file and directory nodes can re-scope the
-             filesystem graph from here; file keeps the "Open"
-             as the extra editor action. -->
+             shapes. File keeps the "Open" extra editor action.
+             `fullstack-a-33`: dropped `onSetAsScope` — the
+             breadcrumb above handles upward navigation; new
+             from-here graphs come from chord spawn (Cmd+Shift+M,
+             wired in `fullstack-a-32`). -->
         {@const fsPath = selectedFsNode.path}
         {@const fsKind = selectedFsNode.kind}
         <InspectorBody
@@ -1262,15 +1332,6 @@
             ? () => { void openInActivePane(fsPath); close(); }
             : undefined}
           onReveal={revealSelectedFsEntry}
-          onSetAsScope={fsKind === "file" || isFsDirectory(selectedFsNode)
-            ? () => {
-                // Re-scope the current fs graph to this node's
-                // neighbourhood. Depth resets to 1; the caller can
-                // widen via the slider.
-                scopeFsGraphFromHere(fsPath, isFsDirectory(selectedFsNode!));
-                selectedId = selectedFsNode!.id;
-              }
-            : undefined}
           onNavigate={(p) => {
             const peer = fsNodes.find((n) => n.path === p);
             if (peer) {
@@ -1328,6 +1389,11 @@
           <div class="missing">{hint}</div>
         </div>
       {:else}
+        <!-- `fullstack-a-33`: dropped `onSetAsScope`. Path-based
+             re-scope is the breadcrumb's job; pivoting to a tag /
+             mention / file's neighbourhood now goes through chord
+             spawn (Cmd+Shift+M with the focused node as context,
+             wired in `fullstack-a-32`). -->
         <InspectorBody
           selection={inspectorSelection}
           onOpen={
@@ -1347,49 +1413,6 @@
           onReveal={revealSelectedFile}
           onNavigate={selectByPath}
           onContactNavigate={selectByPath}
-          onSetAsScope={
-            selectedNode?.kind === "tag" ||
-            (selectedNode?.kind === "mention" && selectedContactPath) ||
-            (selectedNode?.kind === "file" && !selectedNode.missing)
-              ? () => {
-                  // "Graph from here" inside the graph re-scopes the
-                  // current graph. Tag: to the tag's neighbourhood.
-                  // Mention: to the resolved contact's file so the
-                  // user can use a contact as a graph anchor without
-                  // leaving the overlay. File (incl. images): to
-                  // that file's own neighbourhood, with the file
-                  // pinned as the focal node. Depth resets to 1 so
-                  // a freshly-scoped graph always starts tight; the
-                  // user can widen it back via the slider.
-                  graphState.depth = 1;
-                  if (selectedNode?.kind === "tag") {
-                    graphState.scopeId = `tag:${selectedNode.id}`;
-                    graphState.pendingSelectId = selectedNode.id;
-                  } else if (
-                    selectedNode?.kind === "mention" &&
-                    selectedContactPath
-                  ) {
-                    graphState.scopeId = `file:${selectedContactPath}`;
-                    const fileNode = nodes.find(
-                      (n) =>
-                        n.kind === "file" &&
-                        n.path === selectedContactPath,
-                    );
-                    if (fileNode) {
-                      graphState.pendingSelectId = fileNode.id;
-                      selectedId = fileNode.id;
-                    }
-                  } else if (
-                    selectedNode?.kind === "file" &&
-                    !selectedNode.missing
-                  ) {
-                    graphState.scopeId = `file:${selectedNode.path}`;
-                    graphState.pendingSelectId = selectedNode.id;
-                    selectedId = selectedNode.id;
-                  }
-                }
-              : undefined
-          }
           documentsOverride={selectionDocumentsInScope}
         />
       {/if}
@@ -1618,6 +1641,50 @@
   }
   .cy.dim {
     opacity: 0.4;
+  }
+  /* `fullstack-a-33`: ancestor breadcrumb band. Sits at the top
+     of the inspector body, always visible for path-based scopes.
+     Wraps on narrow inspector widths; clickable hops dim until
+     hover. The current segment renders as plain text (no button)
+     since clicking it would be a no-op. */
+  .scope-crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 0.5rem 0.7rem 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    font-size: 12.5px;
+    font-family: ui-monospace, monospace;
+    color: var(--text-secondary);
+    background: var(--bg-card);
+  }
+  .scope-crumbs .crumb {
+    background: transparent;
+    border: 0;
+    padding: 1px 4px;
+    margin: 0;
+    color: var(--link);
+    cursor: pointer;
+    border-radius: 4px;
+    font: inherit;
+    line-height: 1.3;
+    text-decoration: none;
+    word-break: break-all;
+  }
+  .scope-crumbs .crumb:hover {
+    background: var(--btn-hover);
+    color: var(--text);
+  }
+  .scope-crumbs .crumb.current {
+    color: var(--text);
+    cursor: default;
+    font-weight: 600;
+  }
+  .scope-crumbs .crumb-sep {
+    color: var(--text-secondary);
+    opacity: 0.6;
+    user-select: none;
   }
   /* Inline ghost branch for nodes that exist in the graph but
      not in the tree (FileInfoBody can't render those). Mounted

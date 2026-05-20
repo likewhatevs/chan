@@ -81,10 +81,48 @@ describe("no inline close affordance on first-class surfaces", () => {
     expect(driveInfo).toMatch(/\{#if onSetAsScope\}[\s\S]*?Graph from here/);
   });
 
-  test("GraphPanel passes a re-scope callback to DriveInfoBody", async () => {
-    expect(graph).toMatch(
-      /<DriveInfoBody\s+onSetAsScope=\{[\s\S]*?scopeFsGraphFromHere\("", true\);[\s\S]*?graphState\.scopeId = "drive";/,
-    );
+  // `fullstack-a-33`: the explicit "Graph from here" button on the
+  // graph's inspector goes away. DriveInfoBody / FileInfoBody /
+  // TagInfoBody still ship the button (FileBrowserSurface consumes
+  // it), but the GraphPanel no longer passes `onSetAsScope` from
+  // any of its inspector branches. The ancestor breadcrumb above
+  // the inspector body is the in-graph re-scope path.
+  test("GraphPanel does not pass onSetAsScope to DriveInfoBody", () => {
+    expect(graph).not.toMatch(/<DriveInfoBody\s+onSetAsScope=/);
+  });
+
+  test("GraphPanel does not pass onSetAsScope on any InspectorBody", () => {
+    // The fs-mode and semantic-mode branches both used to wire
+    // `onSetAsScope` against `scopeFsGraphFromHere` / inline
+    // `graphState.scopeId = ...` blocks. `fullstack-a-33` drops
+    // both; the breadcrumb (scope-crumbs nav below) is the
+    // replacement.
+    expect(graph).not.toMatch(/<InspectorBody[\s\S]*?onSetAsScope=/);
+  });
+
+  test("GraphPanel renders the scope-crumbs ancestor breadcrumb", () => {
+    // Breadcrumb band sits inside the Inspector children, gated
+    // on `scopeAncestors.length > 0` so tag / git_repo / global
+    // scopes (no path) hide it. Each non-current segment is a
+    // `<button class="crumb">` wired to `rescopeFromHere(...)`.
+    expect(graph).toContain("scopeAncestors");
+    expect(graph).toMatch(/class="scope-crumbs"/);
+    expect(graph).toMatch(/class="crumb"[\s\S]*?onclick=\{\(\) => rescopeFromHere\(crumb\.scopeId\)\}/);
+    // Drive root is always the head of the chain so the user
+    // can hop back to drive scope from any depth.
+    expect(graph).toMatch(/scopeId: "drive", current: true/);
+  });
+
+  test("GraphPanel rescopeFromHere mutates the current tab (no new spawn)", () => {
+    // The breadcrumb's click handler must NOT spawn a new graph
+    // tab; it mutates `graphState.scopeId` in place so the same
+    // tab follows the user back up the path. The previous
+    // `scopeFsGraphFromHere` import is gone for the same reason
+    // (still used by FileBrowserSurface, not by GraphPanel).
+    expect(graph).toContain("function rescopeFromHere(scopeId: string)");
+    expect(graph).toContain("graphState.scopeId = scopeId;");
+    expect(graph).toContain("graphState.depth = 1;");
+    expect(graph).not.toContain("scopeFsGraphFromHere");
   });
 
   test("FileBrowserSurface spawns a Graph tab from DriveInfoBody", async () => {
