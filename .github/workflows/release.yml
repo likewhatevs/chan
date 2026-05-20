@@ -187,9 +187,13 @@ jobs:
           Compress-Archive -Path staging/* -DestinationPath chan-${{ matrix.target }}.zip
 
       # ----- linux .deb -----
+      # Prebuilt binary; `cargo install cargo-deb` was a few minutes
+      # of compile time on every Linux matrix entry.
       - name: Install cargo-deb
         if: matrix.deb_arch
-        run: cargo install cargo-deb --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
       - name: Build .deb
         if: matrix.deb_arch
         run: cargo deb --no-build --no-strip --target ${{ matrix.target }} -p chan
@@ -203,9 +207,12 @@ jobs:
           echo "path=chan-${{ matrix.deb_arch }}.deb" >> "$GITHUB_OUTPUT"
 
       # ----- linux .rpm -----
+      # Prebuilt binary; same wall-clock motivation as cargo-deb.
       - name: Install cargo-generate-rpm
         if: matrix.rpm
-        run: cargo install cargo-generate-rpm --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-generate-rpm
       - name: Stage binary for cargo-generate-rpm
         if: matrix.rpm
         # cargo-generate-rpm reads asset paths verbatim from the
