@@ -803,6 +803,21 @@ export function activeTerminalTab(): TerminalTab | null {
 export function openActiveTerminalRichPrompt(): void {
   const tab = activeTerminalTab();
   if (!tab) return;
+  // `fullstack-b-8`: the rich-prompt editor is a child component
+  // that focuses inside `onMount` (Source / Wysiwyg). Until Svelte
+  // flushes the open-state update + the editor child mounts and
+  // focuses, whatever previously held focus (typically xterm's
+  // helper-textarea since the user was just looking at a terminal)
+  // is still the keyboard target. A fast typer who starts typing
+  // immediately after Alt+Space hits that race window: the first
+  // keystroke lands on xterm-helper-textarea, fires
+  // `term.onData -> sendUserInput`, and is sent to the PTY behind
+  // the user's back. The dispatch they later trigger from the
+  // prompt is short the first character and the terminal appears
+  // to "drop" it. Blurring up front parks focus on `<body>` until
+  // the editor mounts, so the missed keystroke goes nowhere
+  // visible instead of into the live shell.
+  blurTerminalHelperTextarea();
   if (!tab.richPrompt) {
     tab.richPrompt = {
       buffer: "",
@@ -818,6 +833,26 @@ export function openActiveTerminalRichPrompt(): void {
     // is already open) so the input re-focuses even if the user
     // had clicked away.
     tab.richPrompt.focusNonce = (tab.richPrompt.focusNonce ?? 0) + 1;
+  }
+}
+
+/// Blur the active element when it is xterm's helper textarea. We
+/// only blur known terminal-input surfaces so non-terminal flows
+/// (e.g. an editor that calls this state module indirectly) keep
+/// their focus. The class `xterm-helper-textarea` is the textarea
+/// xterm.js inserts inside `.xterm-screen` to capture keystrokes
+/// and IME composition; if the user clicks elsewhere on the xterm
+/// element xterm reassigns focus there too. Both share the
+/// `.xterm` ancestor.
+function blurTerminalHelperTextarea(): void {
+  if (typeof document === "undefined") return;
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement)) return;
+  if (
+    active.classList.contains("xterm-helper-textarea") ||
+    active.closest(".xterm")
+  ) {
+    active.blur();
   }
 }
 

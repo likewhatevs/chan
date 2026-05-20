@@ -44,6 +44,7 @@ import {
   registerTerminalInputSink,
   markLocalTabDrop,
   markTerminalEnvNameRestarted,
+  openActiveTerminalRichPrompt,
   renameTerminalTab,
   reopenClosedTab,
   reorderTab,
@@ -905,6 +906,72 @@ describe("pane state", () => {
     // Existing mode + buffer preserved; the helper only opens.
     expect(live.richPrompt?.mode).toBe("source");
     expect(live.richPrompt?.buffer).toBe("draft");
+  });
+
+  test("openActiveTerminalRichPrompt blurs the focused xterm helper textarea (fullstack-b-8)", () => {
+    // The race: between Alt+Space and the rich-prompt editor child
+    // mounting + focusing, xterm-helper-textarea still owns focus.
+    // Keystrokes typed in that window fire `term.onData` and reach
+    // the live PTY, leaving the dispatched buffer short its first
+    // character. Blurring the helper textarea up front parks focus
+    // on `<body>` so the racing keystroke is dropped on the floor
+    // instead of going to the shell.
+    const terminal: TerminalTab = {
+      kind: "terminal",
+      id: "term-blur",
+      title: "Terminal",
+      createdAt: 1,
+      broadcastEnabled: false,
+      broadcastTargetIds: [],
+    };
+    const seed = resetLayout([terminal]);
+    (layout.nodes[seed.id] as LeafNode).activeTabId = "term-blur";
+
+    const xtermRoot = document.createElement("div");
+    xtermRoot.className = "xterm";
+    const helper = document.createElement("textarea");
+    helper.className = "xterm-helper-textarea";
+    xtermRoot.appendChild(helper);
+    document.body.appendChild(xtermRoot);
+    helper.focus();
+    expect(document.activeElement).toBe(helper);
+
+    openActiveTerminalRichPrompt();
+
+    expect(document.activeElement).not.toBe(helper);
+    const pane = layout.nodes[seed.id] as LeafNode;
+    const live = pane.tabs.find((t) => t.id === "term-blur") as TerminalTab;
+    expect(live.richPrompt?.open).toBe(true);
+
+    document.body.removeChild(xtermRoot);
+  });
+
+  test("openActiveTerminalRichPrompt leaves non-xterm focus alone (fullstack-b-8)", () => {
+    // The blur is scoped to xterm-owned elements. A user invoking
+    // the prompt from a code editor or any other input keeps their
+    // focus until the editor child takes over — we don't want to
+    // strip focus globally.
+    const terminal: TerminalTab = {
+      kind: "terminal",
+      id: "term-keep",
+      title: "Terminal",
+      createdAt: 1,
+      broadcastEnabled: false,
+      broadcastTargetIds: [],
+    };
+    const seed = resetLayout([terminal]);
+    (layout.nodes[seed.id] as LeafNode).activeTabId = "term-keep";
+
+    const someInput = document.createElement("input");
+    document.body.appendChild(someInput);
+    someInput.focus();
+    expect(document.activeElement).toBe(someInput);
+
+    openActiveTerminalRichPrompt();
+
+    expect(document.activeElement).toBe(someInput);
+
+    document.body.removeChild(someInput);
   });
 
   test("repeated openBrowserInActivePane / openGraphInActivePane stack (fullstack-47)", () => {
