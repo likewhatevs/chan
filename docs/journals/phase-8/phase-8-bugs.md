@@ -272,6 +272,16 @@
   - flagged 2026-05-20 by @@WebtestB during a proactive lane-B walk: attaching the watcher to an absolute outside-drive path succeeds (post `fullstack-b-3` + `systacean-5`), but reading events from that path errors with `watch read failed: io error: No such file or directory (os error 2)`. The read path enforces drive-sandbox resolution; absolute outside-drive paths fail the sandbox lookup
   - want: read path applies the same in-drive-vs-outside-drive split as the attach path's resolver
   - dispatched as `systacean-9`
+- File browser misses external file-creation events; only updates on manual right-click reload
+  - flagged 2026-05-20 by @@Alex ("bug for later"): @@Alex had an assistant (terminal agent) create files inside the drive. The file browser did NOT pick the new files up; @@Alex had to right-click → reload to see them
+  - hypothesis space:
+    a) `fullstack-b-6` scoped the FB watcher to the selection (current dir / parent-of-file); external file-creation events MAY be arriving via chan-drive's watcher but the SPA-side scope filter rejects them as "out of scope" even when they fall under the active scope
+    b) The chan-drive filesystem-watcher path may not be firing for terminal-side writes (PTY-driven `echo > file` / `touch` etc. — writes happen via the shell, not through chan-drive's `Drive::write_*` API). If the watcher relies on chan-drive-mediated writes only, external writes are invisible to the SPA
+    c) `self_writes.rs` suppression may be over-eager and dropping external writes that share a temp-path or atomic-rename pattern
+    d) Path-derivation mismatch: the assistant created files at a slightly different absolute path than what the FB scope's `tree.entries` keys on (canonical `/private/tmp` vs `/tmp` alias surfaced in @@WebtestB's teardown finding; symlinks; case-sensitivity)
+  - first investigation step: spin up a test drive, open the FB pointed at a subtree, externally `touch /path/to/subtree/newfile.md` from a terminal, observe whether: (i) chan-drive watcher fires (server log), (ii) the SPA receives the event, (iii) the FB scope filter passes it. Each "no" narrows to the root cause
+  - dispatch direction: @@FullStackA first (SPA-side FB watcher + refresh path is the most likely owner); escalate to @@Systacean if root cause is in `chan-drive/src/watch` or `chan-server/src/self_writes.rs`
+  - parked for Round-2 wave-2 (or post-patch follow-up); not blocking the patch-release tag
 - File rename UX: parity with terminal rename, input box positioned above the page-width-constrained content
   - flagged 2026-05-20 by @@Alex (feature, "next build"): chan already supports inline rename on terminal tabs; want the same affordance for file tabs / file rows. Verbatim ask: "same way we can rename terminal, we should be able to rename files.. place the input box above the page width"
   - read of the ask:
