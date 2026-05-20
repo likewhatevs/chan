@@ -44,10 +44,15 @@
           pathPromptState.mode === "create" &&
           pathPromptState.defaultValue.endsWith(`${DEFAULT_NEW_FILENAME_STEM}.md`)
         ) {
+          // `fullstack-a-15`: select the whole filename (stem + `.md`),
+          // not just the stem, so typing a name that includes the
+          // extension replaces both rather than producing `foo.md.md`.
+          // The directory prefix stays unselected so Tab-completed
+          // parents survive a one-keystroke replace.
           const stemStart = pathPromptState.defaultValue.lastIndexOf("/") + 1;
           inputEl?.setSelectionRange(
             stemStart,
-            stemStart + DEFAULT_NEW_FILENAME_STEM.length,
+            pathPromptState.defaultValue.length,
           );
         } else {
           inputEl?.select();
