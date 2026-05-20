@@ -50,6 +50,7 @@
     syntaxHighlight = true,
     highlightTrailingWhitespace = false,
     initialCaret = null,
+    autoFocus = true,
     onCaretChange,
   }: {
     value: string;
@@ -62,6 +63,10 @@
     syntaxHighlight?: boolean;
     highlightTrailingWhitespace?: boolean;
     initialCaret?: { from: number; to: number } | null;
+    /// When false, skip the mount-time `view.focus()`. Mirrors the
+    /// same prop on `Wysiwyg.svelte` so the rich-prompt's bubble-gated
+    /// focus policy in `fullstack-a-14` works in source mode too.
+    autoFocus?: boolean;
     onCaretChange?: (from: number, to: number) => void;
   } = $props();
 
@@ -174,7 +179,7 @@
     // pass (below) will move it again once the persisted caret is
     // available and the doc is non-empty.
     view.dispatch({ selection: { anchor: 0 } });
-    view.focus();
+    if (autoFocus) view.focus();
     maybeRestoreCaret();
     // Kick off the async resolve for text-class langs. No-op for
     // markdown (already seeded) and for "no extension" / unknown

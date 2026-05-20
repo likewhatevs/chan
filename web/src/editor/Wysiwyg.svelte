@@ -83,6 +83,7 @@
     wikiPickerPrefix = null,
     highlightTrailingWhitespace = false,
     initialCaret = null,
+    autoFocus = true,
     onSubmit,
     onSelectionChange,
     onCaretChange,
@@ -97,6 +98,12 @@
     wikiPickerPrefix?: string | null;
     highlightTrailingWhitespace?: boolean;
     initialCaret?: { from: number; to: number } | null;
+    /// When false, the editor skips the mount-time `view.focus()`.
+    /// Hosts that own their own focus policy (e.g. the rich prompt
+    /// gating focus on bubble state in `fullstack-a-14`) pass false
+    /// to keep the editor unfocused on mount; otherwise the unconditional
+    /// mount focus would race past the host's gate.
+    autoFocus?: boolean;
     onSubmit?: () => void;
     onSelectionChange?: () => void;
     onCaretChange?: (from: number, to: number) => void;
@@ -464,7 +471,7 @@
     });
     view = new EditorView({ state, parent: host });
     view.dispatch({ selection: { anchor: 0 } });
-    view.focus();
+    if (autoFocus) view.focus();
     maybeRestoreCaret();
   });
 

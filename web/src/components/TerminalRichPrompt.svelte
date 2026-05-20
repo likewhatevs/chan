@@ -337,6 +337,7 @@
           bind:this={wysiwygRef}
           bind:value={prompt.buffer}
           currentPath={null}
+          autoFocus={bubbleCount === 0}
           onSelectionChange={() => (selVer += 1)}
         />
       {:else}
@@ -345,6 +346,7 @@
           bind:value={prompt.buffer}
           path="prompt.md"
           syntaxHighlight
+          autoFocus={bubbleCount === 0}
         />
       {/if}
     {/key}
