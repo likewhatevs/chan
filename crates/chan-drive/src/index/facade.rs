@@ -251,6 +251,26 @@ impl Index {
         Ok(self.bm25.known_paths()?)
     }
 
+    /// systacean-7: flip the per-drive Hybrid-search opt-in.
+    /// Idempotent — re-setting to the same value is a no-op (no
+    /// config write). On change, writes `<index_dir>/config.toml`
+    /// atomically so a `chan serve` restart honours the new
+    /// preference. The CLI exposes this as
+    /// `chan index enable-semantic` / `disable-semantic`; the API
+    /// exposes it under `/api/index/semantic/{enable,disable}`.
+    pub fn set_semantic_enabled(&self, enabled: bool) -> Result<(), IndexError> {
+        let to_save = {
+            let mut cfg = self.config.lock().unwrap();
+            if cfg.semantic_enabled == enabled {
+                return Ok(());
+            }
+            cfg.semantic_enabled = enabled;
+            cfg.clone()
+        };
+        config::save(&self.index_dir, &to_save)?;
+        Ok(())
+    }
+
     /// Persist a (possibly mutated) config. Used by the CLI when
     /// the user passes `--model X`. Switching model invalidates the
     /// existing vectors (different dim / different semantics) so
@@ -1347,6 +1367,7 @@ mod tests {
             chunking: config::Chunking::default(),
             vectors_model: Some("BAAI/bge-large-en-v1.5".to_owned()),
             vectors_dim: Some(1024),
+            semantic_enabled: false,
         };
         config::save(&dir, &cfg_on_disk).unwrap();
         drop(idx);
@@ -1381,6 +1402,7 @@ mod tests {
             chunking: config::Chunking::default(),
             vectors_model: Some(model.clone()),
             vectors_dim: Some(384),
+            semantic_enabled: false,
         };
         std::fs::create_dir_all(&dir).unwrap();
         config::save(&dir, &cfg_on_disk).unwrap();
@@ -1413,6 +1435,7 @@ mod tests {
             chunking: config::Chunking::default(),
             vectors_model: Some("BAAI/bge-small-en-v1.5".to_owned()),
             vectors_dim: Some(384),
+            semantic_enabled: false,
         };
         config::save(&dir, &cfg_on_disk).unwrap();
         let _idx = Index::open(tmp.path(), &dir).unwrap();

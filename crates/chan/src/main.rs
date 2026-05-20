@@ -308,8 +308,15 @@ enum Command {
         #[arg(long, requires = "tunnel_token")]
         tunnel_public: bool,
     },
-    /// Rebuild the search index + graph for a drive.
-    Index { path: PathBuf },
+    /// Rebuild the search index + graph; manage the embedding
+    /// model + per-drive Hybrid-search opt-in. systacean-7 restructured
+    /// this from a flat `chan index <path>` into a subcommand-driven
+    /// shape so the model + semantic-toggle controls live alongside
+    /// the rebuild action; mirrors `chan config <action>`.
+    Index {
+        #[command(subcommand)]
+        action: IndexAction,
+    },
     /// Query the BM25 search index.
     Search {
         path: PathBuf,
@@ -479,6 +486,63 @@ enum ConfigAction {
     },
 }
 
+/// systacean-7: subcommands for `chan index`. Restructured from the
+/// flat `chan index <path>` into a subcommand-driven shape that
+/// covers rebuild, model download, semantic-search toggle, and
+/// state inspection. Breaking change: `chan index <path>` is now
+/// `chan index rebuild <path>`.
+///
+/// Symmetric naming forward-compats the Round-2 `chan reports
+/// enable/disable` parallel pair so scripted callers can pattern-
+/// match `<feature> enable / disable` across the surface.
+#[derive(Subcommand, Debug)]
+enum IndexAction {
+    /// Rebuild the search index + graph for a drive. Was `chan
+    /// index <path>` pre-systacean-7; the explicit verb keeps it
+    /// alongside the model/semantic actions.
+    Rebuild {
+        /// Drive root.
+        path: PathBuf,
+    },
+    /// Download the embedding model into
+    /// `<user-config>/chan/models/<model-name>/`. Idempotent: a
+    /// re-run with the model already present is a fast no-op.
+    /// Default model is `BAAI/bge-small-en-v1.5`; the
+    /// `--model` flag forward-compats the Round-3 multi-model
+    /// picker.
+    DownloadModel {
+        /// HuggingFace model id, e.g. `BAAI/bge-small-en-v1.5`.
+        #[arg(long, default_value = "BAAI/bge-small-en-v1.5")]
+        model: String,
+    },
+    /// Flip the drive's Hybrid-search opt-in. Refuses if the model
+    /// isn't downloaded; the error points at `chan index
+    /// download-model`. The flag persists in
+    /// `<index_dir>/config.toml` so it survives `chan serve`
+    /// restarts.
+    EnableSemantic {
+        /// Drive root. Defaults to the registered default drive.
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
+    /// Flip the drive back to BM25-only.
+    DisableSemantic {
+        /// Drive root. Defaults to the registered default drive.
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
+    /// Print the semantic-search state: current mode, model
+    /// presence, model path + size, opt-in flag.
+    Status {
+        /// Drive root. Defaults to the registered default drive.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
@@ -547,7 +611,7 @@ fn main() -> Result<()> {
             rt.shutdown_background();
             res
         }
-        Command::Index { path } => cmd_index(path),
+        Command::Index { action } => cmd_index(action),
         Command::Search { path, query, limit } => cmd_search(path, query, limit),
         Command::Graph {
             path,
@@ -1191,13 +1255,23 @@ async fn cmd_serve(
         .context("running server")
 }
 
-fn cmd_index(path: PathBuf) -> Result<()> {
+fn cmd_index(action: IndexAction) -> Result<()> {
+    match action {
+        IndexAction::Rebuild { path } => cmd_index_rebuild(path),
+        IndexAction::DownloadModel { model } => cmd_index_download_model(&model),
+        IndexAction::EnableSemantic { path } => cmd_index_set_semantic(path, true),
+        IndexAction::DisableSemantic { path } => cmd_index_set_semantic(path, false),
+        IndexAction::Status { path, json } => cmd_index_status(path, json),
+    }
+}
+
+fn cmd_index_rebuild(path: PathBuf) -> Result<()> {
     let lib = library()?;
     // Idempotent: registering an already-known drive only touches
-    // last_opened. CLI users expect `chan index /some/path` to work
-    // without a prior `chan add`. First-touch defaults the name to
-    // the directory's basename (or prompts on conflict) so the
-    // file browser doesn't show "(unnamed)" later.
+    // last_opened. CLI users expect `chan index rebuild /some/path`
+    // to work without a prior `chan add`. First-touch defaults the
+    // name to the directory's basename (or prompts on conflict) so
+    // the file browser doesn't show "(unnamed)" later.
     ensure_drive_named(&lib, &path, None)?;
     let drive = lib.open_drive(&path)?;
 
@@ -1265,6 +1339,193 @@ fn cmd_index(path: PathBuf) -> Result<()> {
         eprintln!("  error: {path}: {e}");
     }
     Ok(())
+}
+
+/// systacean-7: stub when the binary is built without
+/// `--features embeddings`. The candle + hf-hub stack is gated
+/// behind that feature; without it there's nothing to download.
+/// Bail with a clear message instead of a missing-symbol error.
+#[cfg(not(feature = "embeddings"))]
+fn cmd_index_download_model(_model: &str) -> Result<()> {
+    anyhow::bail!("chan was built without `--features embeddings`; semantic search is unavailable")
+}
+
+#[cfg(not(feature = "embeddings"))]
+fn cmd_index_set_semantic(_path: Option<PathBuf>, _enabled: bool) -> Result<()> {
+    anyhow::bail!("chan was built without `--features embeddings`; semantic search is unavailable")
+}
+
+#[cfg(not(feature = "embeddings"))]
+fn cmd_index_status(_path: Option<PathBuf>, _json: bool) -> Result<()> {
+    anyhow::bail!("chan was built without `--features embeddings`; semantic search is unavailable")
+}
+
+/// systacean-7: download the embedding model into the per-machine
+/// cache. Blocking; the hf-hub backend prints its own progress to
+/// stderr when stderr is a TTY. Idempotent — if the model is
+/// already laid out in the cache the call returns immediately.
+#[cfg(feature = "embeddings")]
+fn cmd_index_download_model(model: &str) -> Result<()> {
+    use chan_drive::index::embeddings::{
+        global_models_dir, repo_dir_name, resolve_model, Embedder,
+    };
+    let cache_dir = global_models_dir();
+    let expected_dir = cache_dir.join(repo_dir_name(model));
+    if resolve_model(model).is_ok() {
+        println!(
+            "model {} already present at {}",
+            model,
+            expected_dir.display()
+        );
+        return Ok(());
+    }
+    std::fs::create_dir_all(&cache_dir)
+        .with_context(|| format!("create model cache {}", cache_dir.display()))?;
+    eprintln!(
+        "downloading {} into {} (this may take a few minutes)",
+        model,
+        cache_dir.display()
+    );
+    Embedder::open(model, &cache_dir).with_context(|| format!("download model {model}"))?;
+    println!("downloaded {} into {}", model, expected_dir.display());
+    Ok(())
+}
+
+/// systacean-7: flip the per-drive Hybrid-search opt-in. On enable,
+/// refuses if the model isn't downloaded; the user is pointed at
+/// `chan index download-model`. On disable, always succeeds (the
+/// underlying `set_semantic_enabled` is idempotent).
+#[cfg(feature = "embeddings")]
+fn cmd_index_set_semantic(path: Option<PathBuf>, enabled: bool) -> Result<()> {
+    use chan_drive::index::embeddings::resolve_model;
+    let lib = library()?;
+    let root = path
+        .or_else(|| lib.default_drive_root())
+        .unwrap_or_else(|| lib.effective_default_drive_root());
+    ensure_drive_named(&lib, &root, None)?;
+    let drive = lib.open_drive(&root)?;
+    if enabled {
+        let model = drive.semantic_model().context("reading drive's model id")?;
+        if let Err(err) = resolve_model(&model) {
+            return Err(anyhow::anyhow!(
+                "{err}\nrun `chan index download-model` to fetch it"
+            ));
+        }
+    }
+    drive
+        .set_semantic_enabled(enabled)
+        .context("persisting semantic_enabled flag")?;
+    let verb = if enabled { "enabled" } else { "disabled" };
+    println!(
+        "semantic search {verb} for drive at {}",
+        drive.root().display()
+    );
+    Ok(())
+}
+
+/// systacean-7: print the per-drive semantic-search state. Text by
+/// default; `--json` emits a `{drives:[{...}]}`-style object for
+/// scripting (single drive in the response; the shape is plural so
+/// a future multi-drive variant lands as a pure extension).
+#[cfg(feature = "embeddings")]
+fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
+    use chan_drive::index::embeddings::{global_models_dir, repo_dir_name, resolve_model};
+    let lib = library()?;
+    let root = path
+        .or_else(|| lib.default_drive_root())
+        .unwrap_or_else(|| lib.effective_default_drive_root());
+    ensure_drive_named(&lib, &root, None)?;
+    let drive = lib.open_drive(&root)?;
+    let model = drive.semantic_model().context("reading drive's model id")?;
+    let semantic_enabled = drive
+        .semantic_enabled()
+        .context("reading semantic_enabled flag")?;
+    let expected_dir = global_models_dir().join(repo_dir_name(&model));
+    let model_present = resolve_model(&model).is_ok();
+    let model_size_bytes = if model_present {
+        Some(dir_total_size(&expected_dir))
+    } else {
+        None
+    };
+    let mode = if semantic_enabled && model_present {
+        "hybrid"
+    } else {
+        "bm25"
+    };
+    if json {
+        let body = serde_json::json!({
+            "drive": drive.root().display().to_string(),
+            "mode": mode,
+            "model_present": model_present,
+            "model_name": model,
+            "model_path": expected_dir.display().to_string(),
+            "model_size_bytes": model_size_bytes,
+            "semantic_enabled": semantic_enabled,
+        });
+        println!("{}", serde_json::to_string_pretty(&body)?);
+    } else {
+        println!("drive:            {}", drive.root().display());
+        println!("mode:             {mode}");
+        println!("model:            {model}");
+        println!("model path:       {}", expected_dir.display());
+        println!(
+            "model present:    {}",
+            if model_present {
+                "yes"
+            } else {
+                "no (run `chan index download-model`)"
+            }
+        );
+        if let Some(bytes) = model_size_bytes {
+            println!("model size:       {}", humanize_bytes(bytes));
+        }
+        println!(
+            "semantic enabled: {}",
+            if semantic_enabled { "yes" } else { "no" }
+        );
+    }
+    Ok(())
+}
+
+/// Recursive size of every regular file under `dir`. Mirrors the
+/// helper in `chan-server::routes::index` so the CLI status output
+/// agrees with the API's `model_size_bytes` field.
+#[cfg(feature = "embeddings")]
+fn dir_total_size(dir: &std::path::Path) -> u64 {
+    fn walk(dir: &std::path::Path, total: &mut u64) {
+        let Ok(it) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in it.flatten() {
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            if ft.is_dir() {
+                walk(&entry.path(), total);
+            } else if ft.is_file() {
+                if let Ok(meta) = entry.metadata() {
+                    *total += meta.len();
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    walk(dir, &mut total);
+    total
+}
+
+#[cfg(feature = "embeddings")]
+fn humanize_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    let b = bytes as f64;
+    if b >= MB {
+        format!("{:.1} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.1} KB", b / KB)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 /// Run chan-llm's MCP server on stdio against `path`. Spawned by

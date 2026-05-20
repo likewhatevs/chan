@@ -58,6 +58,10 @@ use routes::{
     api_search_files, api_set_terminal_watcher, api_storage_reset, api_terminal_event_reply,
     api_terminal_ws, api_unset_terminal_watcher, api_write_file, ws_upgrade,
 };
+#[cfg(feature = "embeddings")]
+use routes::{
+    api_semantic_disable, api_semantic_download, api_semantic_enable, api_semantic_state,
+};
 use signal::{now_unix_secs, print_qr_if_tty, spawn_idle_watcher, spawn_signal_watcher};
 use state::{AppState, DriveCell};
 use static_assets::serve_static;
@@ -766,11 +770,20 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/config", patch(api_patch_config))
         .route("/api/server/config", patch(api_patch_server_config))
         .route("/api/storage/reset", post(api_storage_reset))
-        .route("/api/index/rebuild", post(api_index_rebuild))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            tunnel_guard::settings_guard,
-        ));
+        .route("/api/index/rebuild", post(api_index_rebuild));
+    // systacean-7: per-drive semantic-search write endpoints. Same
+    // settings-gated lane as `/api/index/rebuild` since flipping
+    // the drive's `semantic_enabled` is a settings change and the
+    // download path mutates the per-machine model cache.
+    #[cfg(feature = "embeddings")]
+    let settings_writes = settings_writes
+        .route("/api/index/semantic/enable", post(api_semantic_enable))
+        .route("/api/index/semantic/disable", post(api_semantic_disable))
+        .route("/api/index/semantic/download", post(api_semantic_download));
+    let settings_writes = settings_writes.route_layer(middleware::from_fn_with_state(
+        state.clone(),
+        tunnel_guard::settings_guard,
+    ));
 
     // ---- Open routes ------------------------------------------------
     //
@@ -854,8 +867,15 @@ fn router(state: Arc<AppState>) -> Router {
             "/api/terminal/:session/event-reply",
             post(api_terminal_event_reply),
         )
-        .route("/ws", get(ws_upgrade))
-        .merge(settings_writes);
+        .route("/ws", get(ws_upgrade));
+    // systacean-7: read-only semantic-search state. Gated on
+    // `embeddings` because the SemanticState payload + the
+    // `chan-drive` resolver behind it only exist when the candle
+    // stack compiles in. Write routes (`enable` / `disable` /
+    // `download`) sit in `settings_writes` and merge below.
+    #[cfg(feature = "embeddings")]
+    let api = api.route("/api/index/semantic/state", get(api_semantic_state));
+    let api = api.merge(settings_writes);
     Router::new()
         .merge(api)
         .fallback(serve_static)

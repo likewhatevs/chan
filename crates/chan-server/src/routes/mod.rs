@@ -13,6 +13,8 @@ mod files;
 mod fs_graph;
 mod graph;
 mod health;
+#[cfg(feature = "embeddings")]
+mod index;
 mod inspector;
 mod preferences;
 mod report;
@@ -35,6 +37,10 @@ pub use graph::{
     api_resolve_link,
 };
 pub use health::api_health;
+#[cfg(feature = "embeddings")]
+pub use index::{
+    api_semantic_disable, api_semantic_download, api_semantic_enable, api_semantic_state,
+};
 pub use inspector::api_inspector;
 pub use preferences::{
     api_get_config, api_get_server_config, api_patch_config, api_patch_server_config,

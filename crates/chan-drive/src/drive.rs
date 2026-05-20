@@ -1673,6 +1673,33 @@ impl Drive {
         Ok(self.index()?.known_paths()?)
     }
 
+    /// systacean-7: read the per-drive Hybrid-search preference.
+    /// Mirrors `IndexConfig::semantic_enabled`; default-false on a
+    /// drive that has never been touched by systacean-7's CLI / API.
+    /// Query-path callers consult this when no explicit `Mode` is
+    /// passed.
+    pub fn semantic_enabled(&self) -> Result<bool> {
+        Ok(self.index()?.config().semantic_enabled)
+    }
+
+    /// systacean-7: flip the per-drive Hybrid-search preference.
+    /// Idempotent — re-setting the current value is a no-op. The
+    /// `chan index enable-semantic` / `disable-semantic` CLI and the
+    /// `/api/index/semantic/{enable,disable}` endpoints both route
+    /// here; the change persists to `<index_dir>/config.toml` so a
+    /// `chan serve` restart honours it.
+    pub fn set_semantic_enabled(&self, enabled: bool) -> Result<()> {
+        self.index()?.set_semantic_enabled(enabled)?;
+        Ok(())
+    }
+
+    /// systacean-7: read the configured embedding model id from the
+    /// per-drive index config. Used by the resolver so the model
+    /// name flows through the same source as `set_model`.
+    pub fn semantic_model(&self) -> Result<String> {
+        Ok(self.index()?.config().model)
+    }
+
     /// Re-index a single file. Reads, parses, updates the search
     /// index and graph for just this path. Used by the watcher
     /// consumer when a file changes.

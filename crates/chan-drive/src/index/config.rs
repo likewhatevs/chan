@@ -79,6 +79,15 @@ pub struct IndexConfig {
     /// embedder's `dim()` before writing more shards.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vectors_dim: Option<u32>,
+    /// systacean-7: per-drive Hybrid-search opt-in. Default-false so
+    /// drives stay BM25-only after the systacean-6 model split unless
+    /// the user explicitly flips it on via
+    /// `chan index enable-semantic` (CLI) or the Settings UI
+    /// (`fullstack-a-21`). The query path reads this flag to decide
+    /// whether Hybrid is the default mode for the drive; explicit
+    /// `Mode::Hybrid` overrides on `search` still work regardless.
+    #[serde(default)]
+    pub semantic_enabled: bool,
 }
 
 impl Default for IndexConfig {
@@ -89,6 +98,7 @@ impl Default for IndexConfig {
             chunking: Chunking::default(),
             vectors_model: None,
             vectors_dim: None,
+            semantic_enabled: false,
         }
     }
 }
@@ -160,6 +170,45 @@ mod tests {
         let loaded = load(tmp.path()).unwrap();
         assert_eq!(loaded.model, "BAAI/bge-m3");
         assert!(matches!(loaded.chunking, Chunking::Fixed { chars: 512 }));
+    }
+
+    #[test]
+    fn semantic_enabled_defaults_false_and_round_trips_true() {
+        // systacean-7: pin the per-drive Hybrid opt-in field. Default
+        // matches post-systacean-6 behaviour (BM25-only) so an existing
+        // drive whose config.toml predates this field stays BM25 on
+        // upgrade. Round-tripping with the field set to true
+        // verifies the toml shape is preserved across save/load.
+        let tmp = TempDir::new().unwrap();
+        let cfg = load(tmp.path()).unwrap();
+        assert!(!cfg.semantic_enabled, "default must be false");
+
+        let cfg = IndexConfig {
+            semantic_enabled: true,
+            ..IndexConfig::default()
+        };
+        save(tmp.path(), &cfg).unwrap();
+        let loaded = load(tmp.path()).unwrap();
+        assert!(loaded.semantic_enabled);
+    }
+
+    #[test]
+    fn semantic_enabled_absent_in_old_file_loads_as_false() {
+        // Existing drives whose config.toml predates systacean-7 don't
+        // have the field at all. Pin that they load cleanly with the
+        // default (false) rather than failing with a missing-field
+        // error.
+        let tmp = TempDir::new().unwrap();
+        let path = config_path(tmp.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "schema_version = 3\nmodel = \"BAAI/bge-small-en-v1.5\"\n",
+        )
+        .unwrap();
+        let cfg = load(tmp.path()).unwrap();
+        assert!(!cfg.semantic_enabled);
+        assert_eq!(cfg.model, "BAAI/bge-small-en-v1.5");
     }
 
     #[test]
