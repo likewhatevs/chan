@@ -716,3 +716,51 @@ verification queues queued.
 Round-2 broader fan-out (carousel, Infographics, BOOT,
 manual, signing-pipeline-with-real-keys, etc.) parks
 until the patch ships.
+
+## 2026-05-20 — Decision: Round-3 Track 5 (per-agent submit-chord encoding map)
+
+@@FullStackB's `-b-13` probe found that codex
+diverges from Claude Code on the submit-chord
+encoding (`\r` vs `\x1b[27;9;13~`). Patch-release
+ships single-chord (Claude Code's encoding) per
+@@Alex's "make it work now" directive.
+
+@@Alex 2026-05-20: "ok i will take your
+recommendation now and remind me we need to revisit
+this later" — locked Round-3 Track 5 with the
+recommended shape:
+
+* **Manual picker** as the user-facing surface (shell
+  / claude-code / codex / future agents). Becomes
+  the user's escape hatch + explicit override.
+* **Process-tree probe** as the auto-detect default
+  that fills the picker's initial value (chan-server
+  walks the PTY child's process tree, matches
+  against a known list).
+* **Agent self-announce** (item D in the rich-prompt
+  session-evolution) remains the cleanest long-term
+  shape; it lands naturally when the
+  identity-broadcast spawn-handshake protocol ships.
+
+Round-3 Track 5 section in
+[`round-3-plan.md`](round-3-plan.md) carries the
+locked spec + the four-candidate analysis as the
+recap. Pre-requisite at fan-out: cheap gemini probe
+(same shape as `fullstack-b-13`'s) to confirm or
+deny universality of the `\r` vs
+`\x1b[27;9;13~` split.
+
+### Reminder mechanism
+
+Any future @@Architect session reading
+[`round-3-plan.md`](round-3-plan.md) on bootstrap
+sees Track 5 in the locked-tracks list. The
+architect-prompt bootstrap step 5 explicitly reads
+the round-N-plan artifacts, so this can't be
+missed at Round-3 open.
+
+When Round-3 opens and architect-side dispatch
+begins, surface Track 5 explicitly to @@Alex
+("revisiting the codex divergence from -b-13") as
+part of the Round-3 status snapshot — that's the
+"remind me later" mechanism @@Alex asked for.

@@ -258,10 +258,26 @@ tracking, markdown-specific report dimensions,
 cross-drive aggregation). Not in scope until @@Alex picks
 which ones become Round-3 tasks.
 
-## Idea parking lot — per-agent submit-chord encoding map
+## Track 5 — Per-agent submit-chord encoding map (LOCKED 2026-05-20)
 
-Captured 2026-05-20 from `fullstack-b-13`'s probe finding +
-@@Alex's "let's make it work for now, revise later" call.
+Promoted from parking-lot to confirmed Round-3 track on
+2026-05-20 after @@Alex picked the recommended shape:
+**manual picker (user-facing surface + escape hatch) +
+process-tree probe (auto-detect default that fills the
+picker's initial value)**. @@Alex's framing: "ok i will
+take your recommendation now and remind me we need to
+revisit this later."
+
+The agent-self-announce path (#3 in the parking-lot
+analysis below) remains the cleanest long-term shape;
+it lands naturally when the identity-broadcast work
+from
+[`rich-prompt-session-evolution.md`](rich-prompt-session-evolution.md)
+item D ships, since that work already establishes the
+spawn-handshake protocol agents would announce
+themselves through.
+
+### Recap from parking-lot analysis
 
 ### The finding
 
