@@ -123,7 +123,16 @@ jobs:
       # models step below skips on warm cache. Same shape as
       # release.yml; key is content-derived from the fetcher
       # source + DEFAULT_MODEL constant site.
-      - name: Cache BGE-small bundle
+      #
+      # Gated on `--features embed-model` (systacean-6 made the
+      # model embed opt-in). The chan-desktop sidecar builds
+      # default-feature today, so this step + the fetcher
+      # invocation below are hardcoded-skipped. When the desktop
+      # bundle starts shipping the embedded model (offline-install
+      # variant, etc.), flip `if: false` to the appropriate
+      # matrix-input or workflow-input expression.
+      - if: false
+        name: Cache BGE-small bundle
         id: cache-bge-bundle
         uses: actions/cache@v4
         with:
@@ -134,10 +143,13 @@ jobs:
       # rust-embed bakes it into the sidecar chan binary. Adds
       # ~140 MB to the artifact but matches release.yml's chan
       # CLI behaviour: end users get hybrid search with no
-      # network round-trip on first launch. Skipped on cache hit
-      # (bundle restored); on cache miss, fetch-models re-
-      # downloads + re-encodes from scratch.
-      - if: steps.cache-bge-bundle.outputs.cache-hit != 'true'
+      # network round-trip on first launch.
+      #
+      # Same `--features embed-model` gate as the cache step
+      # above. When the gate flips, restore the composite
+      # `if: steps.cache-bge-bundle.outputs.cache-hit != 'true'`
+      # condition so the ci-5 warm-cache short-circuit returns.
+      - if: false
         name: Pre-fetch embedded model
         working-directory: chan
         run: cargo run --release -p fetch-models
