@@ -807,10 +807,20 @@
             }}
           />
           {#if tab.styleToolbarOpen}
+            <!-- `fullstack-a-26`: parity with the rich-prompt
+                 toolbar — separator + rendered/source toggle next
+                 to the formatting buttons. `mode` + `onModeToggle`
+                 are passed through to the shared StyleToolbar
+                 component (which already supports the toggle, gated
+                 on these props being defined). The toggle calls
+                 `doToggleMode()` which swaps between source and the
+                 tab's rendered mode (wysiwyg / pretty / table). -->
             <StyleToolbar
               wysiwyg={wysiwygRef}
               selVer={selVer}
               disabled={readOnly}
+              mode="wysiwyg"
+              onModeToggle={hasRenderedMode ? () => doToggleMode() : undefined}
             />
           {/if}
           {#if tab.find?.open}
@@ -866,6 +876,26 @@
             initialCaret={tab.caret ?? null}
             onCaretChange={(from, to) => setTabCaret(tab, from, to)}
           />
+          {#if tab.styleToolbarOpen && hasRenderedMode}
+            <!-- `fullstack-a-26`: also mount the StyleToolbar in
+                 source mode so the rendered/source toggle stays
+                 reachable from inside source mode. `disabled` is
+                 on (the formatting row collapses) but the toggle
+                 sits OUTSIDE the formatting row (per the
+                 StyleToolbar's own design comment around its
+                 `.fbtn-row`) and stays clickable. Only mount for
+                 tabs with a rendered mode (markdown / JSON /
+                 CSV) — plain `.py` / `.toml` source has no
+                 rendered counterpart, so there's no useful
+                 toggle direction. -->
+            <StyleToolbar
+              wysiwyg={undefined}
+              selVer={selVer}
+              disabled={true}
+              mode="source"
+              onModeToggle={() => doToggleMode()}
+            />
+          {/if}
           {#if tab.find?.open}
             <FindBar
               find={tab.find}
