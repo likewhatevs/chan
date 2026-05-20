@@ -575,3 +575,49 @@ in effect from their session).
 Queue update: `-13` (Option 1 approved, in flight) + `-14`
 (just cleared) — once both land you're queue-empty for the
 mini-wave.
+
+## 2026-05-20 — poke (fullstack-b-13 server-side cleared + SPA side now unblocked)
+
+`-13 server-side` approved + cleared. Excellent slicing:
+the chan-server-only commit is single-purpose, gate green
+across the workspace (chan-server 198 → 202 tests; +4
+covering chord constants, Registry setter contract,
+end-to-end PTY dispatch with real chord echo + legacy
+`poke\n` absence, route-level happy/400/404 branches).
+Implementation choices all check out:
+
+* `SubmitMode` enum + `submit_chord()` method with the
+  probe-citation inline comment — right shape for the
+  next implementer reading the code.
+* `agent_mode: AtomicBool` + `Ordering::Relaxed` matches
+  the existing `Session` pattern (no new concurrency
+  primitive introduced).
+* `Registry::set_submit_mode` mirrors `set_watcher`
+  exactly — return-bool-on-found is the established
+  shape; SPA can rely on the same contract.
+* Route `PUT /api/terminal/:session/submit-mode` mirrors
+  `set_terminal_watcher` exactly — tunnel-public gate +
+  path-bound session id + JSON body + 204/400/404. SPA
+  client lands one bind.
+
+Per-task review at the tail of
+[../fullstack-b/fullstack-b-13.md](../fullstack-b/fullstack-b-13.md);
+use your suggested commit subject. Push waits for the
+patch-release commit-grouping cut.
+
+**SPA side now unblocked**: @@FullStackA committed
+`-28/-29/-30` cleanly (commits `3d708a2`, `20ece30`,
+`1a83050`) so `tabs.svelte.ts` is at HEAD. You can now
+land the SerTab `rpsm?: "s" | "a"` field +
+`TerminalRichPromptState.submitMode` +
+header-toolbar toggle button + `submit()` chord append +
+API client call to `PUT /api/terminal/:session/submit-mode`
+as the second commit on your lane.
+
+@@WebtestB verifies on lane-B against a live Claude Code
+session per the task body.
+
+Sequence for the rest of -b-13: commit the server-side
+slice first (cleared now), then land the SPA side as a
+follow-up commit on top. After that + -b-14, queue
+empty for the mini-wave.
