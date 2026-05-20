@@ -272,6 +272,20 @@
   - flagged 2026-05-20 by @@WebtestB during a proactive lane-B walk: attaching the watcher to an absolute outside-drive path succeeds (post `fullstack-b-3` + `systacean-5`), but reading events from that path errors with `watch read failed: io error: No such file or directory (os error 2)`. The read path enforces drive-sandbox resolution; absolute outside-drive paths fail the sandbox lookup
   - want: read path applies the same in-drive-vs-outside-drive split as the attach path's resolver
   - dispatched as `systacean-9`
+- Rich prompt collapse / expand chevrons leave dead vertical space under the terminal
+  - flagged 2026-05-20 by @@Alex dogfooding with screenshot: collapsing the rich prompt (`v` chevron from `fullstack-a-24`) drops the prompt to its header-only pill, but the terminal-host above it stays at its expanded-state height — leaving a tall empty band between the bottom of the terminal output and the top of the collapsed prompt pill. Expanding back (`^` chevron) works correctly because `fullstack-a-4`'s `.terminal-host` margin-bottom recompute fires on open
+  - root cause hypothesis: the `.terminal-host` dynamic `margin-bottom = heightPx + 12px` from `fullstack-a-4` was wired to the prompt's open/close + height-resize transitions, but the new collapsed state from `fullstack-a-24` produces a different effective height (collapsed pill is header-only) that the margin-recompute path doesn't observe. xterm.js's ResizeObserver isn't re-firing on the collapse transition, so the terminal stays at its previous fit
+  - want: `v` (collapse) reduces the reserved space to `collapsed-pill-height + 12px` and xterm re-fits to grow downward, sitting just above the collapsed pill. `^` (expand) restores the expanded behaviour as today. Both transitions trigger the same recompute path
+  - related: `fullstack-a-4` (open path), `fullstack-a-24` (collapse / expand chevron introduction)
+  - dispatched for Round-2 wave-1 against @@FullStackA (rich-prompt lane); small task, single-file scope likely (`TerminalRichPrompt.svelte` + `TerminalTab.svelte` margin-recompute reactor). Cut at Round-2 fan-out
+- Rich prompt page-width is shared/inherited from the editor; breaks under tiling
+  - flagged 2026-05-20 by @@Alex dogfooding with screenshot: in a tiled layout (multiple panes splitting the viewport horizontally), shrinking the editor's document-page width causes the rich prompt's composer to render badly at narrow widths
+  - root cause hypothesis: the rich prompt's composer (Wysiwyg / Source) inherits the same CodeMirror page-width / max-content-width constraint that the markdown editor uses, OR shares a global page-width setting. The constraint is global / cross-pane; in a tiled layout the rich prompt of pane A is being squeezed by the page-width set for the editor in pane B (or a global setting)
+  - want, two parts:
+    1. **Each terminal's rich prompt has its own page width**, independent from the editor's and independent from sibling tiles. Persists per-rich-prompt-session (SerTab field, similar shape to the new `rpc` / `rph`)
+    2. **Page-width slider lives in the rich-prompt textbox right-click context menu** in addition to the editor's existing surface — symmetric affordance so the user reaches the slider from whichever surface they're in
+  - assumption to verify at task-cut: the page-width slider already exists in the markdown editor's right-click menu (per @@Alex's framing "add the slider … as well"). If it doesn't, the editor-side wire-up is part of the task scope
+  - dispatched for Round-2 wave-2 against @@FullStackA (rich-prompt + editor lane); task cut at Round-2 fan-out. Couples with the rich-prompt session evolution work in [`architect/rich-prompt-session-evolution.md`](architect/rich-prompt-session-evolution.md) since both extend the rich-prompt surface in the same band of work
 
 ## Round 2 — needs deeper change
 

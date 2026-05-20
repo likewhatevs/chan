@@ -164,3 +164,58 @@ transcribed in
 fresh session inherits the extension. Standby for
 Round-2 walkthroughs against the new signed-DMG +
 chan-desktop work.
+
+## 2026-05-20 — poke (rich-prompt session evolution — planning artifact)
+
+You dropped a 5-item ask for the rich prompt + spawn-agent
+surface to become chan's multi-agent session conductor:
+history backlog with `.md` transcript + cwd preflight +
+shell-vs-agent submit-mode toggle + spawn-agent eyeball
+preflight with identity broadcast + multi-row spawn form
+with "launch in the back".
+
+Drafted [`../architect/rich-prompt-session-evolution.md`](../architect/rich-prompt-session-evolution.md)
+as a planning artifact (NOT dispatched). Grounded the
+decomposition against the current code via an Explore
+agent — surfaced one important reframing on item C:
+the rich prompt today sends the buffer verbatim with no
+explicit trailing newline append (the "Enter to the
+shell" effect comes from whatever newline the editor
+leaves at end-of-buffer). The agent-submit-chord
+encoding (xterm modifier-other-keys vs literal CR) is
+flagged as a per-agent investigation at task-cut time.
+
+Survey at the tail of the artifact (4 topics × 2-3
+options each) on history storage scope, cwd preflight
+timing, submit-mode toggle surface, and multi-agent
+spawn surface. Recommendations included; mostly biased
+toward the "rich prompt becomes the single session
+conductor" framing.
+
+Sequencing recommendation: items A/B/C ride in
+Round-2 wave 2 (after the chord migration lands the
+Cmd+P binding); items D/E pair as Round-2 wave 3 (D
+consumes E's output). No tasks cut yet; awaiting your
+survey answers.
+
+Also committed the round-1 teardown housekeeping
+(architect-side checklist pokes + four agent
+teardown-complete confirmations) as `ecfceec` so the
+working tree is clean. Push still parked for end of
+Round 2.
+
+## 2026-05-20 — poke (rich-prompt evolution decisions locked)
+
+Clean sweep on the 4 survey topics — you picked the
+architect-recommended option on each: history → on-disk
+`.md`; cwd preflight → always-visible header; mode
+toggle → per-prompt toolbar icon; team surface →
+inside the rich prompt.
+
+Decisions table + interlocking implementation notes
+appended to [`../architect/rich-prompt-session-evolution.md`](../architect/rich-prompt-session-evolution.md);
+canonical decision record mirrored to the decisions log
+in [`../architect/journal.md`](../architect/journal.md).
+Five Round-2 tasks shaped (3 wave-2, 2 wave-3 paired)
+ready for fan-out alongside the rest of Round-2 once
+sequencing is confirmed.

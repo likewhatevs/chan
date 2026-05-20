@@ -607,3 +607,65 @@ Validates that fullstack-a-9/-10/-11 commits + systacean-2
 commit + the uncommitted fullstack-b-7 capability changes
 + the uncommitted desktop/Makefile drift all coexist
 cleanly. No inter-agent integration issue surfaced.
+
+## 2026-05-20 — Round-1 teardown + housekeeping committed
+
+`ecfceec` "docs: phase-8 round-1 teardown checklist +
+agent confirmations" — 14-file journal-only commit
+bundling the architect-side teardown checklist pokes
+(fired to all six agents after @@Alex flagged the
+omission) plus the four agent-side teardown-complete
+confirmations (@@CI, @@FullStackB, @@Systacean,
+@@WebtestB). Push remains parked for end of Round 2.
+
+Working tree clean. Round-1 fully in HEAD.
+
+## 2026-05-20 — Round-2 rich-prompt session evolution: decisions locked
+
+@@Alex dropped a 5-item ask for the rich prompt + spawn-
+agent surface to become chan's multi-agent session
+conductor. Drafted [`rich-prompt-session-evolution.md`](rich-prompt-session-evolution.md)
+as a planning artifact; surveyed 4 design decisions and
+got clean-sweep agreement on the architect-recommended
+options:
+
+| Decision             | Locked                                                                          |
+|----------------------|---------------------------------------------------------------------------------|
+| History storage      | On-disk `.md` per drive under `.chan/rich-prompt-history/<tab>/`                |
+| Cwd preflight        | Always-visible header field inside the rich prompt                              |
+| Submit-mode toggle   | Per-prompt toolbar icon (shell / agent)                                         |
+| Team-spawn surface   | Inside the rich prompt as a new conductor band (cwd + team + eyeball + broadcast) |
+
+Five tasks shaped (provisional numbering at fan-out
+time):
+
+* `fullstack-a-N` — Rich prompt clear-buffer-on-submit
+  + on-disk `.md` history backlog + history panel
+  rendering above the composer.
+* `fullstack-a-N+1` — Always-visible cwd header field +
+  validator + SerTab `rpd` persistence.
+* `fullstack-b-N` — Submit-mode toggle (shell / agent)
+  + chord encoding for the agent-submit path. Owned by
+  @@FullStackB because the encoding research sits next
+  to the terminal / PTY work they've been doing.
+* `fullstack-a-N+2` — Multi-row team-spawn band inside
+  the rich prompt: agent-name + command + env rows +
+  `+`/`-` + "launch in back" checkbox. Includes
+  net-new "spawn to back of Hybrid" wiring in
+  `tabs.svelte.ts`.
+* `fullstack-a-N+3` — Eyeball preflight (per-tab output
+  snapshot + ready checkbox) + identity broadcast (canned
+  message fan-out to all confirmed terminal sessions).
+
+Sequencing: items A/B/C ride Round-2 wave 2 (after the
+chord-migration wave-1 task lands Cmd+P); items D/E pair
+as wave 3 (D consumes E's spawned tabs). All five tasks
+form a coherent rich-prompt evolution arc that ships as
+a unit; release notes at Round-2 close should describe
+it as "rich prompt becomes the session conductor."
+
+Round-2 fan-out still gated on the broader sequencing
+decisions in `round-2-plan.md` (item-6 hosting, item-7
+storage layout, item-3 PIN hash, manual home). The
+rich-prompt evolution stack adds 5 tasks to the Round-2
+plan but does not change the open decisions there.
